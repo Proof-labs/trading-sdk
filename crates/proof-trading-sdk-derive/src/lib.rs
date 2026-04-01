@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, Type, parse_macro_input};
+use syn::{parse_macro_input, Data, DeriveInput, Fields, Type};
 
 /// Derive macro that generates `fn encode_abci(&self, w: &mut AbciEventWriter)`
 /// for an enum where each variant has named fields.
@@ -35,10 +35,7 @@ pub fn derive_abci_event(input: TokenStream) -> TokenStream {
                 _ => panic!("AbciEvent variants must have named fields"),
             };
 
-            let field_names: Vec<_> = fields
-                .iter()
-                .map(|f| f.ident.as_ref().unwrap())
-                .collect();
+            let field_names: Vec<_> = fields.iter().map(|f| f.ident.as_ref().unwrap()).collect();
 
             let attr_count = field_names.len() as u16;
 

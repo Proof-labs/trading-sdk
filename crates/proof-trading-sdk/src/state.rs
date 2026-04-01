@@ -20,7 +20,10 @@ pub trait StateStore {
     /// Return only keys matching a prefix. Implementations should prefer this
     /// when callers do not need values.
     fn scan_prefix_keys(&self, prefix: &[u8]) -> Vec<Vec<u8>> {
-        self.scan_prefix(prefix).into_iter().map(|(key, _)| key).collect()
+        self.scan_prefix(prefix)
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect()
     }
 }
 
@@ -76,11 +79,9 @@ impl fmt::Display for StateError {
                 "missing required state {name} at key 0x{}",
                 format_key(key)
             ),
-            StateError::InvalidKeyLayout { key, message } => write!(
-                f,
-                "invalid key layout at 0x{}: {message}",
-                format_key(key)
-            ),
+            StateError::InvalidKeyLayout { key, message } => {
+                write!(f, "invalid key layout at 0x{}: {message}", format_key(key))
+            }
             StateError::ArithmeticInvariantViolation { name, message } => {
                 write!(f, "arithmetic invariant violated for {name}: {message}")
             }
@@ -106,11 +107,13 @@ pub trait StateStoreExt: StateStore {
             None => return Ok(None),
         };
 
-        rmp_serde::from_slice(&bytes).map(Some).map_err(|err| StateError::DecodeFailure {
-            key: key.to_vec(),
-            type_name: core::any::type_name::<T>(),
-            message: err.to_string(),
-        })
+        rmp_serde::from_slice(&bytes)
+            .map(Some)
+            .map_err(|err| StateError::DecodeFailure {
+                key: key.to_vec(),
+                type_name: core::any::type_name::<T>(),
+                message: err.to_string(),
+            })
     }
 
     fn get_required<T: DeserializeOwned>(
