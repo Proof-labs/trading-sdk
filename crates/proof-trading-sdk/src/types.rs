@@ -50,6 +50,32 @@ pub struct TxContext {
 }
 
 // ---------------------------------------------------------------------------
+// Position & margin types
+// ---------------------------------------------------------------------------
+
+/// Persistent position state per owner per market.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Position {
+    pub owner: [u8; 20],
+    pub market: MarketId,
+    pub side: Side,
+    /// Weighted-average entry price (in quote units, same scale as order prices).
+    pub entry_price: u64,
+    /// Absolute size (always > 0 while position exists).
+    pub size: u64,
+}
+
+/// Per-market risk parameters. Stored on-chain via `CreateMarket` admin action.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MarketConfig {
+    pub market: MarketId,
+    /// Initial margin ratio in basis points (e.g. 1000 = 10% → 10x leverage).
+    pub im_bps: u32,
+    /// Maintenance margin ratio in basis points (e.g. 500 = 5%).
+    pub mm_bps: u32,
+}
+
+// ---------------------------------------------------------------------------
 // Actions (wire types — field order is the MessagePack wire layout)
 // ---------------------------------------------------------------------------
 
@@ -59,6 +85,9 @@ pub enum Action {
     CancelOrder(CancelOrder),
     OracleUpdate(OracleUpdate),
     MarketOrder(MarketOrder),
+    Deposit(Deposit),
+    Withdraw(Withdraw),
+    CreateMarket(CreateMarket),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -93,6 +122,26 @@ pub struct OracleUpdate {
     pub signer: [u8; 20],
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Deposit {
+    pub owner: [u8; 20],
+    pub amount: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Withdraw {
+    pub owner: [u8; 20],
+    pub amount: u64,
+}
+
+/// Admin action to register a market with its risk parameters.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateMarket {
+    pub market: MarketId,
+    pub im_bps: u32,
+    pub mm_bps: u32,
+}
+
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
@@ -102,6 +151,7 @@ pub enum CancelReason {
     UserRequested,
     Expired,
     AdminForce,
+    Liquidation,
 }
 
 impl fmt::Display for CancelReason {
@@ -110,6 +160,7 @@ impl fmt::Display for CancelReason {
             CancelReason::UserRequested => f.write_str("user_requested"),
             CancelReason::Expired => f.write_str("expired"),
             CancelReason::AdminForce => f.write_str("admin_force"),
+            CancelReason::Liquidation => f.write_str("liquidation"),
         }
     }
 }
@@ -144,6 +195,45 @@ pub enum Event {
         maker_side: Side,
         taker_owner: [u8; 20],
     },
+    Deposited {
+        owner: [u8; 20],
+        amount: u64,
+        new_balance: u64,
+    },
+    Withdrawn {
+        owner: [u8; 20],
+        amount: u64,
+        new_balance: u64,
+    },
+    PositionUpdated {
+        owner: [u8; 20],
+        market: MarketId,
+        side: Side,
+        entry_price: u64,
+        size: u64,
+    },
+    PositionClosed {
+        owner: [u8; 20],
+        market: MarketId,
+        realized_pnl: i64,
+    },
+    MarketCreated {
+        market: MarketId,
+        im_bps: u32,
+        mm_bps: u32,
+    },
+    AccountLiquidated {
+        owner: [u8; 20],
+        market: MarketId,
+        side: Side,
+        size: u64,
+        mark_price: u64,
+        realized_pnl: i64,
+    },
+    InsuranceFundUpdated {
+        balance: i64,
+        delta: i64,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +251,8 @@ pub enum ExecError {
     InvalidQuantity,
     InvalidSide,
     UnknownMarket(MarketId),
+    InsufficientBalance,
+    InsufficientMargin,
     StateCorruption(String),
     InternalError(String),
 }
@@ -177,6 +269,8 @@ impl ExecError {
             ExecError::InvalidQuantity => 7,
             ExecError::InvalidSide => 8,
             ExecError::UnknownMarket(_) => 9,
+            ExecError::InsufficientBalance => 11,
+            ExecError::InsufficientMargin => 12,
             ExecError::StateCorruption(_) => 10,
             ExecError::InternalError(_) => 255,
         }
@@ -195,6 +289,8 @@ impl fmt::Display for ExecError {
             ExecError::InvalidQuantity => write!(f, "invalid quantity"),
             ExecError::InvalidSide => write!(f, "invalid side"),
             ExecError::UnknownMarket(id) => write!(f, "unknown market: {id}"),
+            ExecError::InsufficientBalance => write!(f, "insufficient balance"),
+            ExecError::InsufficientMargin => write!(f, "insufficient margin"),
             ExecError::StateCorruption(msg) => write!(f, "state corruption: {msg}"),
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }

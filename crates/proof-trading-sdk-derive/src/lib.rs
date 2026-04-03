@@ -7,10 +7,10 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields, Type};
 ///
 /// Variant names are converted to snake_case event types.
 /// Field types determine encoding:
-///   - `u64`, `u32` → decimal string
-///   - `[u8; N]`    → hex string
-///   - `Side`       → "buy"/"sell" via Display
-///   - enums with Display → `.to_string()`
+///   - `u64`, `u32`, `i64` → decimal string
+///   - `[u8; N]`            → hex string
+///   - `Side`               → "buy"/"sell" via Display
+///   - enums with Display   → `.to_string()`
 ///   - anything else with Display → `.to_string()`
 ///
 /// Fields named with a leading underscore are skipped.
@@ -52,6 +52,9 @@ pub fn derive_abci_event(input: TokenStream) -> TokenStream {
                         quote! { w.write_attr_u64(#key, *#fname); }
                     } else if is_u32(ty) {
                         quote! { w.write_attr_u64(#key, *#fname as u64); }
+                    } else if is_i64(ty) {
+                        // Signed integers: encode via Display to preserve the sign.
+                        quote! { w.write_attr_display(#key, #fname); }
                     } else {
                         // Fallback: anything with Display (enums like Side, CancelReason)
                         quote! { w.write_attr_display(#key, #fname); }
@@ -107,6 +110,10 @@ fn is_u64(ty: &Type) -> bool {
 
 fn is_u32(ty: &Type) -> bool {
     matches_ident(ty, "u32")
+}
+
+fn is_i64(ty: &Type) -> bool {
+    matches_ident(ty, "i64")
 }
 
 fn matches_ident(ty: &Type, name: &str) -> bool {

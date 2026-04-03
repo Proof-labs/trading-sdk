@@ -1,4 +1,7 @@
-use crate::types::{Action, CancelOrder, ExecError, MarketOrder, OracleUpdate, PlaceOrder};
+use crate::types::{
+    Action, CancelOrder, CreateMarket, Deposit, ExecError, MarketOrder, OracleUpdate, PlaceOrder,
+    Withdraw,
+};
 use serde::{Deserialize, Serialize};
 
 const CURRENT_VERSION: u8 = 1;
@@ -7,6 +10,9 @@ pub const ACTION_PLACE_ORDER: u8 = 0x01;
 pub const ACTION_CANCEL_ORDER: u8 = 0x02;
 pub const ACTION_ORACLE_UPDATE: u8 = 0x03;
 pub const ACTION_MARKET_ORDER: u8 = 0x04;
+pub const ACTION_DEPOSIT: u8 = 0x05;
+pub const ACTION_WITHDRAW: u8 = 0x06;
+pub const ACTION_CREATE_MARKET: u8 = 0x07;
 
 /// Wire envelope: [version, action_type, seq, payload_bytes]
 /// Encoded as a positional MessagePack array for deterministic serialization.
@@ -51,6 +57,21 @@ pub fn decode_tx(bytes: &[u8]) -> Result<(Action, u64), ExecError> {
                 .map_err(|e| ExecError::DecodeError(e.to_string()))?;
             Action::MarketOrder(cmd)
         }
+        ACTION_DEPOSIT => {
+            let cmd: Deposit = rmp_serde::from_slice(&envelope.payload)
+                .map_err(|e| ExecError::DecodeError(e.to_string()))?;
+            Action::Deposit(cmd)
+        }
+        ACTION_WITHDRAW => {
+            let cmd: Withdraw = rmp_serde::from_slice(&envelope.payload)
+                .map_err(|e| ExecError::DecodeError(e.to_string()))?;
+            Action::Withdraw(cmd)
+        }
+        ACTION_CREATE_MARKET => {
+            let cmd: CreateMarket = rmp_serde::from_slice(&envelope.payload)
+                .map_err(|e| ExecError::DecodeError(e.to_string()))?;
+            Action::CreateMarket(cmd)
+        }
         other => {
             return Err(ExecError::DecodeError(format!(
                 "unknown action_type: {other:#x}"
@@ -78,6 +99,18 @@ pub fn encode_tx(action: &Action, seq: u64) -> Result<Vec<u8>, ExecError> {
         ),
         Action::MarketOrder(cmd) => (
             ACTION_MARKET_ORDER,
+            rmp_serde::to_vec(cmd).map_err(|e| ExecError::InternalError(e.to_string()))?,
+        ),
+        Action::Deposit(cmd) => (
+            ACTION_DEPOSIT,
+            rmp_serde::to_vec(cmd).map_err(|e| ExecError::InternalError(e.to_string()))?,
+        ),
+        Action::Withdraw(cmd) => (
+            ACTION_WITHDRAW,
+            rmp_serde::to_vec(cmd).map_err(|e| ExecError::InternalError(e.to_string()))?,
+        ),
+        Action::CreateMarket(cmd) => (
+            ACTION_CREATE_MARKET,
             rmp_serde::to_vec(cmd).map_err(|e| ExecError::InternalError(e.to_string()))?,
         ),
     };
