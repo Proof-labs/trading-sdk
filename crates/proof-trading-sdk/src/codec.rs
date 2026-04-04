@@ -132,6 +132,13 @@ pub fn peek_action_type(bytes: &[u8]) -> Option<u8> {
     Some(envelope.action_type)
 }
 
+/// Extract the seq number from a wire tx without deserializing the payload action.
+/// The payload bytes are read but not interpreted.
+pub fn peek_seq(bytes: &[u8]) -> Option<u64> {
+    let envelope: WireTxEnvelope = rmp_serde::from_slice(bytes).ok()?;
+    Some(envelope.seq)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
