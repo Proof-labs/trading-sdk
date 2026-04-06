@@ -464,6 +464,28 @@ pub enum Event {
         equity: i64,
         maintenance_margin: u64,
     },
+    /// Emitted exactly once at the end of every market-order tx that passes
+    /// envelope checks, regardless of how many fills happened.
+    ///
+    /// Market orders use IOC semantics — any unfilled remainder is silently
+    /// dropped. Without this event, callers would have to count downstream
+    /// `TradeExecuted` events to learn whether a market order actually moved
+    /// any quantity, and could not distinguish "no counterparty" from "fully
+    /// filled and the trade events arrived in a different stream view".
+    ///
+    /// Off-chain monitors and SDKs should treat this as the authoritative
+    /// "did my market order do anything?" signal:
+    ///   - `filled_quantity == requested_quantity` → fully filled
+    ///   - `0 < filled_quantity < requested_quantity` → partial fill, rest dropped
+    ///   - `filled_quantity == 0` → no counterparty (or all counterparties were
+    ///     the taker themselves and got rejected by self-match prevention)
+    MarketOrderProcessed {
+        market: MarketId,
+        owner: [u8; 20],
+        side: Side,
+        requested_quantity: u64,
+        filled_quantity: u64,
+    },
 }
 
 // ---------------------------------------------------------------------------
