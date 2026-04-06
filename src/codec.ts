@@ -49,7 +49,14 @@ export function encodeTxV2(
 ): Uint8Array {
   const [actionType, payload] = encodePayload(action);
   const payloadBytes = encode(payload);
-  return encode([2, actionType, seq, payloadBytes, pubkey, signature]) as Uint8Array;
+  return encode([
+    2,
+    actionType,
+    seq,
+    payloadBytes,
+    pubkey,
+    signature,
+  ]) as Uint8Array;
 }
 
 /**
@@ -66,7 +73,14 @@ export function signAndEncode(
   const msg = signingMessage(actionType, seq, payloadBytes);
   const signature = sign(privateKey, msg);
   const pubkey = getPublicKey(privateKey);
-  return encode([2, actionType, seq, payloadBytes, pubkey, signature]) as Uint8Array;
+  return encode([
+    2,
+    actionType,
+    seq,
+    payloadBytes,
+    pubkey,
+    signature,
+  ]) as Uint8Array;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,7 +156,14 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       const d = action.data;
       return [
         ActionType.PlaceOrder,
-        [d.market, toBytes(d.owner), sideStr(d.side), d.price, d.quantity, d.clientOrderId ?? null],
+        [
+          d.market,
+          toBytes(d.owner),
+          sideStr(d.side),
+          d.price,
+          d.quantity,
+          d.clientOrderId ?? null,
+        ],
       ];
     }
     case "CancelOrder": {
@@ -157,7 +178,13 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       const d = action.data;
       return [
         ActionType.MarketOrder,
-        [d.market, toBytes(d.owner), sideStr(d.side), d.quantity, d.clientOrderId ?? null],
+        [
+          d.market,
+          toBytes(d.owner),
+          sideStr(d.side),
+          d.quantity,
+          d.clientOrderId ?? null,
+        ],
       ];
     }
     case "Deposit": {
@@ -172,32 +199,59 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       const d = action.data;
       return [
         ActionType.CreateMarket,
-        [d.market, d.imBps, d.mmBps, d.takerFeeBps, d.makerFeeBps, toBytes(d.signer), d.fundingIntervalMs, d.maxFundingRateBps],
+        [
+          d.market,
+          d.imBps,
+          d.mmBps,
+          d.takerFeeBps,
+          d.makerFeeBps,
+          toBytes(d.signer),
+          d.fundingIntervalMs,
+          d.maxFundingRateBps,
+        ],
       ];
     }
     case "WithdrawRequest": {
       const d = action.data;
-      return [ActionType.WithdrawRequest, [toBytes(d.owner), d.amount, d.solanaDestination]];
+      return [
+        ActionType.WithdrawRequest,
+        [toBytes(d.owner), d.amount, d.solanaDestination],
+      ];
     }
     case "ConfirmDeposit": {
       const d = action.data;
-      return [ActionType.ConfirmDeposit, [toBytes(d.owner), d.amount, d.solanaTxSig, toBytes(d.signer)]];
+      return [
+        ActionType.ConfirmDeposit,
+        [toBytes(d.owner), d.amount, d.solanaTxSig, toBytes(d.signer)],
+      ];
     }
     case "ConfirmWithdrawal": {
       const d = action.data;
-      return [ActionType.ConfirmWithdrawal, [d.withdrawalId, d.solanaTxSig, toBytes(d.signer)]];
+      return [
+        ActionType.ConfirmWithdrawal,
+        [d.withdrawalId, d.solanaTxSig, toBytes(d.signer)],
+      ];
     }
     case "FailWithdrawal": {
       const d = action.data;
-      return [ActionType.FailWithdrawal, [d.withdrawalId, d.reason, toBytes(d.signer)]];
+      return [
+        ActionType.FailWithdrawal,
+        [d.withdrawalId, d.reason, toBytes(d.signer)],
+      ];
     }
     case "ApproveAgent": {
       const d = action.data;
-      return [ActionType.ApproveAgent, [toBytes(d.owner), toBytes(d.agentPubkey)]];
+      return [
+        ActionType.ApproveAgent,
+        [toBytes(d.owner), toBytes(d.agentPubkey)],
+      ];
     }
     case "RevokeAgent": {
       const d = action.data;
-      return [ActionType.RevokeAgent, [toBytes(d.owner), toBytes(d.agentPubkey)]];
+      return [
+        ActionType.RevokeAgent,
+        [toBytes(d.owner), toBytes(d.agentPubkey)],
+      ];
     }
   }
 }

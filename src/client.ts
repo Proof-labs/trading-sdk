@@ -1,6 +1,13 @@
 import { signAndEncode } from "./codec.js";
 import { getPublicKey, pubkeyToOwner, ownerToHex } from "./crypto.js";
-import type { Action, TxResult, AccountInfo, Orderbook, OrderbookLevel, PositionInfo } from "./types.js";
+import type {
+  Action,
+  TxResult,
+  AccountInfo,
+  Orderbook,
+  OrderbookLevel,
+  PositionInfo,
+} from "./types.js";
 import { Decoder } from "@msgpack/msgpack";
 
 const msgpackDecoder = new Decoder({ useBigInt64: true });
@@ -65,9 +72,7 @@ export class ExchangeClient {
   async fetchNonce(addressHex?: string): Promise<bigint> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) throw new Error("No address available");
-    const res = await fetch(
-      `${this.apiUrl}/v1/nonce/${hex}`,
-    );
+    const res = await fetch(`${this.apiUrl}/v1/nonce/${hex}`);
     const json = await res.json();
     if (json.error) throw new Error(json.error);
     const bytes = fromBase64(json.data);
@@ -156,7 +161,7 @@ export class ExchangeClient {
     const deadline = Date.now() + 9_000;
     let pollDelay = 200;
     while (Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, pollDelay));
+      await new Promise((r) => setTimeout(r, pollDelay));
       pollDelay = Math.min(pollDelay + 100, 600);
       try {
         const res = await fetch(`${this.rpcUrl}/tx?hash=0x${txHash}`);
@@ -184,7 +189,9 @@ export class ExchangeClient {
     }
     // Timed out waiting for inclusion. We don't know whether it landed.
     // Resync nonce from chain so the caller is in a sane state.
-    try { await this.syncNonce(); } catch {}
+    try {
+      await this.syncNonce();
+    } catch {}
     return {
       code: -1,
       hash: txHash,
@@ -222,16 +229,16 @@ export class ExchangeClient {
     const bytes = fromBase64(json.data);
     const raw = msgpackDecoder.decode(bytes) as unknown[];
     const balance = BigInt(raw[0] as number | bigint);
-    const positions: PositionInfo[] = (
-      (raw[1] ?? []) as unknown[][]
-    ).map((p) => ({
-      owner: p[0] as Uint8Array,
-      market: Number(p[1]),
-      side: p[2] as "Buy" | "Sell",
-      entryPrice: BigInt(p[3] as number | bigint),
-      size: BigInt(p[4] as number | bigint),
-      lastFundingIndex: BigInt((p[5] as number | bigint) ?? 0),
-    }));
+    const positions: PositionInfo[] = ((raw[1] ?? []) as unknown[][]).map(
+      (p) => ({
+        owner: p[0] as Uint8Array,
+        market: Number(p[1]),
+        side: p[2] as "Buy" | "Sell",
+        entryPrice: BigInt(p[3] as number | bigint),
+        size: BigInt(p[4] as number | bigint),
+        lastFundingIndex: BigInt((p[5] as number | bigint) ?? 0),
+      }),
+    );
     const equity = BigInt((raw[2] as number | bigint) ?? 0);
     const totalMm = BigInt((raw[3] as number | bigint) ?? 0);
     const totalIm = BigInt((raw[4] as number | bigint) ?? 0);
@@ -258,24 +265,20 @@ export class ExchangeClient {
     };
   }
 
-  async getBlock(
-    height?: number,
-  ): Promise<Record<string, unknown>> {
+  async getBlock(height?: number): Promise<Record<string, unknown>> {
     const params = height != null ? `?height=${height}` : "";
     const res = await fetch(`${this.rpcUrl}/block${params}`);
     const json = await res.json();
-    if (json.error) throw new Error(json.error.message ?? JSON.stringify(json.error));
+    if (json.error)
+      throw new Error(json.error.message ?? JSON.stringify(json.error));
     return json.result;
   }
 
-  async getBlockResults(
-    height: number,
-  ): Promise<Record<string, unknown>> {
-    const res = await fetch(
-      `${this.rpcUrl}/block_results?height=${height}`,
-    );
+  async getBlockResults(height: number): Promise<Record<string, unknown>> {
+    const res = await fetch(`${this.rpcUrl}/block_results?height=${height}`);
     const json = await res.json();
-    if (json.error) throw new Error(json.error.message ?? JSON.stringify(json.error));
+    if (json.error)
+      throw new Error(json.error.message ?? JSON.stringify(json.error));
     return json.result;
   }
 

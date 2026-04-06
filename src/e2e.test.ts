@@ -33,9 +33,9 @@ async function waitForTx(
       if (seen.has(h)) continue;
       seen.add(h);
       const block = await client.getBlock(h);
-      const txs =
-        ((block.block as Record<string, unknown>).data as Record<string, unknown>)
-          .txs as string[] | null;
+      const txs = (
+        (block.block as Record<string, unknown>).data as Record<string, unknown>
+      ).txs as string[] | null;
       if (txs && txs.length > 0) return h;
     }
     await new Promise((r) => setTimeout(r, 300));
@@ -67,8 +67,10 @@ describeE2E("e2e: SDK → CometBFT", () => {
     const { latestHeight } = await client.status();
     if (latestHeight < 1) return;
     const result = await client.getBlock(1);
-    const header = (result.block as Record<string, unknown>)
-      .header as Record<string, unknown>;
+    const header = (result.block as Record<string, unknown>).header as Record<
+      string,
+      unknown
+    >;
     expect(Number(header.height)).toBe(1);
   });
 
@@ -141,8 +143,10 @@ describeE2E("e2e: SDK → CometBFT", () => {
 
     const height = await waitForTx(client, result.hash);
     const block = await client.getBlock(height);
-    const data = (block.block as Record<string, unknown>)
-      .data as Record<string, unknown>;
+    const data = (block.block as Record<string, unknown>).data as Record<
+      string,
+      unknown
+    >;
     const txs = data.txs as string[];
     expect(txs.length).toBeGreaterThan(0);
   }, 10_000);

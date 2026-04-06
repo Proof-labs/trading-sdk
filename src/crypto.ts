@@ -90,10 +90,7 @@ export function signingMessage(
 }
 
 /** Sign a message with Ed25519. Returns 64-byte signature. */
-export function sign(
-  privateKey: Uint8Array,
-  message: Uint8Array,
-): Uint8Array {
+export function sign(privateKey: Uint8Array, message: Uint8Array): Uint8Array {
   return ed_sign(message, privateKey);
 }
 

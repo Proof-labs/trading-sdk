@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { encodeTx, decodeTx, peekActionType, signAndEncode, encodeTxV2 } from "./codec.js";
+import {
+  encodeTx,
+  decodeTx,
+  peekActionType,
+  signAndEncode,
+  encodeTxV2,
+} from "./codec.js";
 import {
   generateKeypair,
   getPublicKey,
@@ -86,7 +92,13 @@ describe("codec v1", () => {
   it("encodes side as string to match Rust serde wire format", () => {
     const action: Action = {
       type: "PlaceOrder",
-      data: { market: 1, owner: OWNER, side: Side.Buy, price: 100n, quantity: 10n },
+      data: {
+        market: 1,
+        owner: OWNER,
+        side: Side.Buy,
+        price: 100n,
+        quantity: 10n,
+      },
     };
     const bytes = encodeTx(action, 1n);
     const hex = bytesToHex(bytes);
@@ -103,7 +115,13 @@ describe("codec v1", () => {
   it("encoding is deterministic", () => {
     const action: Action = {
       type: "PlaceOrder",
-      data: { market: 1, owner: OWNER, side: Side.Buy, price: 100n, quantity: 10n },
+      data: {
+        market: 1,
+        owner: OWNER,
+        side: Side.Buy,
+        price: 100n,
+        quantity: 10n,
+      },
     };
     const a = encodeTx(action, 1n);
     const b = encodeTx(action, 1n);
@@ -117,25 +135,77 @@ describe("codec v1", () => {
 
 describe("codec v1 all action types", () => {
   const allActions: Action[] = [
-    { type: "PlaceOrder", data: { market: 1, owner: OWNER, side: Side.Buy, price: 100n, quantity: 10n } },
+    {
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: OWNER,
+        side: Side.Buy,
+        price: 100n,
+        quantity: 10n,
+      },
+    },
     { type: "CancelOrder", data: { orderId: 42n, owner: OWNER } },
-    { type: "OracleUpdate", data: { market: 1, price: 50000n, signer: SIGNER } },
-    { type: "MarketOrder", data: { market: 1, owner: OWNER, side: Side.Sell, quantity: 5n } },
+    {
+      type: "OracleUpdate",
+      data: { market: 1, price: 50000n, signer: SIGNER },
+    },
+    {
+      type: "MarketOrder",
+      data: { market: 1, owner: OWNER, side: Side.Sell, quantity: 5n },
+    },
     { type: "Deposit", data: { owner: OWNER, amount: 1000000n } },
     { type: "Withdraw", data: { owner: OWNER, amount: 500n } },
     {
       type: "CreateMarket",
       data: {
-        market: 2, imBps: 1000, mmBps: 500, takerFeeBps: 5, makerFeeBps: 2,
-        signer: SIGNER, fundingIntervalMs: 3600000n, maxFundingRateBps: 100,
+        market: 2,
+        imBps: 1000,
+        mmBps: 500,
+        takerFeeBps: 5,
+        makerFeeBps: 2,
+        signer: SIGNER,
+        fundingIntervalMs: 3600000n,
+        maxFundingRateBps: 100,
       },
     },
-    { type: "WithdrawRequest", data: { owner: OWNER, amount: 1000n, solanaDestination: new Uint8Array(32).fill(0x01) } },
-    { type: "ConfirmDeposit", data: { owner: OWNER, amount: 5000n, solanaTxSig: new Uint8Array(64).fill(0xAB), signer: SIGNER } },
-    { type: "ConfirmWithdrawal", data: { withdrawalId: 7n, solanaTxSig: new Uint8Array(64).fill(0xCD), signer: SIGNER } },
-    { type: "FailWithdrawal", data: { withdrawalId: 8n, reason: "tx failed", signer: SIGNER } },
-    { type: "ApproveAgent", data: { owner: OWNER, agentPubkey: new Uint8Array(32).fill(0x02) } },
-    { type: "RevokeAgent", data: { owner: OWNER, agentPubkey: new Uint8Array(32).fill(0x02) } },
+    {
+      type: "WithdrawRequest",
+      data: {
+        owner: OWNER,
+        amount: 1000n,
+        solanaDestination: new Uint8Array(32).fill(0x01),
+      },
+    },
+    {
+      type: "ConfirmDeposit",
+      data: {
+        owner: OWNER,
+        amount: 5000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        signer: SIGNER,
+      },
+    },
+    {
+      type: "ConfirmWithdrawal",
+      data: {
+        withdrawalId: 7n,
+        solanaTxSig: new Uint8Array(64).fill(0xcd),
+        signer: SIGNER,
+      },
+    },
+    {
+      type: "FailWithdrawal",
+      data: { withdrawalId: 8n, reason: "tx failed", signer: SIGNER },
+    },
+    {
+      type: "ApproveAgent",
+      data: { owner: OWNER, agentPubkey: new Uint8Array(32).fill(0x02) },
+    },
+    {
+      type: "RevokeAgent",
+      data: { owner: OWNER, agentPubkey: new Uint8Array(32).fill(0x02) },
+    },
   ];
 
   for (const action of allActions) {
@@ -158,11 +228,23 @@ describe("codec v2 signing", () => {
     const { privateKey } = generateKeypair();
     const action: Action = {
       type: "PlaceOrder",
-      data: { market: 1, owner: OWNER, side: Side.Buy, price: 100n, quantity: 10n },
+      data: {
+        market: 1,
+        owner: OWNER,
+        side: Side.Buy,
+        price: 100n,
+        quantity: 10n,
+      },
     };
 
     const bytes = signAndEncode(action, 1n, privateKey);
-    const { version, pubkey, signature, action: decoded, seq } = decodeTx(bytes);
+    const {
+      version,
+      pubkey,
+      signature,
+      action: decoded,
+      seq,
+    } = decodeTx(bytes);
 
     expect(version).toBe(2);
     expect(seq).toBe(1n);
@@ -197,30 +279,88 @@ describe("codec v2 signing", () => {
     const { privateKey } = generateKeypair();
 
     const allActions: Action[] = [
-      { type: "PlaceOrder", data: { market: 1, owner: OWNER, side: Side.Buy, price: 100n, quantity: 10n } },
+      {
+        type: "PlaceOrder",
+        data: {
+          market: 1,
+          owner: OWNER,
+          side: Side.Buy,
+          price: 100n,
+          quantity: 10n,
+        },
+      },
       { type: "CancelOrder", data: { orderId: 42n, owner: OWNER } },
-      { type: "OracleUpdate", data: { market: 1, price: 50000n, signer: SIGNER } },
-      { type: "MarketOrder", data: { market: 1, owner: OWNER, side: Side.Sell, quantity: 5n } },
+      {
+        type: "OracleUpdate",
+        data: { market: 1, price: 50000n, signer: SIGNER },
+      },
+      {
+        type: "MarketOrder",
+        data: { market: 1, owner: OWNER, side: Side.Sell, quantity: 5n },
+      },
       { type: "Deposit", data: { owner: OWNER, amount: 1000000n } },
       { type: "Withdraw", data: { owner: OWNER, amount: 500n } },
       {
         type: "CreateMarket",
         data: {
-          market: 2, imBps: 1000, mmBps: 500, takerFeeBps: 5, makerFeeBps: 2,
-          signer: SIGNER, fundingIntervalMs: 3600000n, maxFundingRateBps: 100,
+          market: 2,
+          imBps: 1000,
+          mmBps: 500,
+          takerFeeBps: 5,
+          makerFeeBps: 2,
+          signer: SIGNER,
+          fundingIntervalMs: 3600000n,
+          maxFundingRateBps: 100,
         },
       },
-      { type: "WithdrawRequest", data: { owner: OWNER, amount: 1000n, solanaDestination: new Uint8Array(32).fill(0x01) } },
-      { type: "ConfirmDeposit", data: { owner: OWNER, amount: 5000n, solanaTxSig: new Uint8Array(64).fill(0xAB), signer: SIGNER } },
-      { type: "ConfirmWithdrawal", data: { withdrawalId: 7n, solanaTxSig: new Uint8Array(64).fill(0xCD), signer: SIGNER } },
-      { type: "FailWithdrawal", data: { withdrawalId: 8n, reason: "tx failed", signer: SIGNER } },
-      { type: "ApproveAgent", data: { owner: OWNER, agentPubkey: new Uint8Array(32).fill(0x02) } },
-      { type: "RevokeAgent", data: { owner: OWNER, agentPubkey: new Uint8Array(32).fill(0x02) } },
+      {
+        type: "WithdrawRequest",
+        data: {
+          owner: OWNER,
+          amount: 1000n,
+          solanaDestination: new Uint8Array(32).fill(0x01),
+        },
+      },
+      {
+        type: "ConfirmDeposit",
+        data: {
+          owner: OWNER,
+          amount: 5000n,
+          solanaTxSig: new Uint8Array(64).fill(0xab),
+          signer: SIGNER,
+        },
+      },
+      {
+        type: "ConfirmWithdrawal",
+        data: {
+          withdrawalId: 7n,
+          solanaTxSig: new Uint8Array(64).fill(0xcd),
+          signer: SIGNER,
+        },
+      },
+      {
+        type: "FailWithdrawal",
+        data: { withdrawalId: 8n, reason: "tx failed", signer: SIGNER },
+      },
+      {
+        type: "ApproveAgent",
+        data: { owner: OWNER, agentPubkey: new Uint8Array(32).fill(0x02) },
+      },
+      {
+        type: "RevokeAgent",
+        data: { owner: OWNER, agentPubkey: new Uint8Array(32).fill(0x02) },
+      },
     ];
 
     for (const action of allActions) {
       const bytes = signAndEncode(action, 42n, privateKey);
-      const { version, action: decoded, seq, pubkey, signature } = decodeTx(bytes);
+      const {
+        version,
+        action: decoded,
+        seq,
+        pubkey,
+        signature,
+      } = decodeTx(bytes);
       expect(version).toBe(2);
       expect(seq).toBe(42n);
       expect(decoded.type).toBe(action.type);
@@ -233,7 +373,13 @@ describe("codec v2 signing", () => {
     const { privateKey } = generateKeypair();
     const action: Action = {
       type: "PlaceOrder",
-      data: { market: 1, owner: OWNER, side: Side.Buy, price: 100n, quantity: 10n },
+      data: {
+        market: 1,
+        owner: OWNER,
+        side: Side.Buy,
+        price: 100n,
+        quantity: 10n,
+      },
     };
     const a = signAndEncode(action, 1n, privateKey);
     const b = signAndEncode(action, 1n, privateKey);
@@ -295,19 +441,23 @@ describe("crypto", () => {
   it("ownerToHex produces 40-char hex string", () => {
     const owner = new Uint8Array(20).fill(0xab);
     const hex = ownerToHex(owner);
-    expect(hex).toBe("abababababababababababababababababababababab".slice(0, 40));
+    expect(hex).toBe(
+      "abababababababababababababababababababababab".slice(0, 40),
+    );
     expect(hex.length).toBe(40);
   });
 
   it("hexToBytes and bytesToHex are inverses", () => {
-    const original = new Uint8Array([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]);
+    const original = new Uint8Array([
+      0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+    ]);
     const hex = bytesToHex(original);
     const roundTripped = hexToBytes(hex);
     expect(roundTripped).toEqual(original);
   });
 
   it("signingMessage includes domain prefix", () => {
-    const msg = signingMessage(0x01, 1n, new Uint8Array([0xAA]));
+    const msg = signingMessage(0x01, 1n, new Uint8Array([0xaa]));
     const prefix = new TextEncoder().encode("ProofExchange-v2");
     for (let i = 0; i < prefix.length; i++) {
       expect(msg[i]).toBe(prefix[i]);
@@ -323,7 +473,7 @@ describe("crypto", () => {
 
   it("sign and verify round-trip", () => {
     const { privateKey, publicKey } = generateKeypair();
-    const msg = signingMessage(0x01, 1n, new Uint8Array([0xFF]));
+    const msg = signingMessage(0x01, 1n, new Uint8Array([0xff]));
     const sig = sign(privateKey, msg);
     expect(sig.length).toBe(64);
     expect(verify(publicKey, sig, msg)).toBe(true);
@@ -332,16 +482,16 @@ describe("crypto", () => {
   it("wrong key fails verification", () => {
     const k1 = generateKeypair();
     const k2 = generateKeypair();
-    const msg = signingMessage(0x01, 1n, new Uint8Array([0xFF]));
+    const msg = signingMessage(0x01, 1n, new Uint8Array([0xff]));
     const sig = sign(k1.privateKey, msg);
     expect(verify(k2.publicKey, sig, msg)).toBe(false);
   });
 
   it("tampered message fails verification", () => {
     const { privateKey, publicKey } = generateKeypair();
-    const msg = signingMessage(0x01, 1n, new Uint8Array([0xFF]));
+    const msg = signingMessage(0x01, 1n, new Uint8Array([0xff]));
     const sig = sign(privateKey, msg);
-    const tampered = signingMessage(0x01, 2n, new Uint8Array([0xFF]));
+    const tampered = signingMessage(0x01, 2n, new Uint8Array([0xff]));
     expect(verify(publicKey, sig, tampered)).toBe(false);
   });
 });
