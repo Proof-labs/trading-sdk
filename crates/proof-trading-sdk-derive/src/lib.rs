@@ -48,6 +48,8 @@ pub fn derive_abci_event(input: TokenStream) -> TokenStream {
 
                     if is_byte_array(ty) {
                         quote! { w.write_attr_hex(#key, #fname); }
+                    } else if is_vec_u8(ty) {
+                        quote! { w.write_attr_hex(#key, #fname); }
                     } else if is_u64(ty) {
                         quote! { w.write_attr_u64(#key, *#fname); }
                     } else if is_u32(ty) {
@@ -114,6 +116,11 @@ fn is_u32(ty: &Type) -> bool {
 
 fn is_i64(ty: &Type) -> bool {
     matches_ident(ty, "i64")
+}
+
+fn is_vec_u8(ty: &Type) -> bool {
+    let s = quote!(#ty).to_string();
+    s == "Vec < u8 >" || s == "Vec<u8>"
 }
 
 fn matches_ident(ty: &Type, name: &str) -> bool {
