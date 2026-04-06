@@ -428,6 +428,33 @@ export interface AgentRevokedEvent {
   agentPubkey: string;
 }
 
+/**
+ * Emitted exactly once at the end of every market-order tx that passes
+ * envelope checks, regardless of how many fills happened.
+ *
+ * This is the authoritative "did my market order do anything?" signal:
+ *   - `filledQuantity == requestedQuantity`  → fully filled
+ *   - `0 < filledQuantity < requestedQuantity` → partial fill, IOC remainder dropped
+ *   - `filledQuantity == 0` → no counterparty (or all counterparties were
+ *      the taker themselves and got rejected by self-match prevention)
+ *
+ * Without this event, callers would have to count downstream `TradeExecuted`
+ * events and could not distinguish "no counterparty" from "trade events
+ * arrived in a different stream view".
+ */
+export interface MarketOrderProcessedEvent {
+  type: "MarketOrderProcessed";
+  market: string;
+  /** Hex-encoded owner address. */
+  owner: string;
+  /** Side of the original market order ("Buy" or "Sell"). */
+  side: string;
+  /** Quantity originally requested (integer lots). */
+  requestedQuantity: string;
+  /** Quantity actually filled before IOC drop (integer lots). */
+  filledQuantity: string;
+}
+
 /** Union of all exchange events. */
 export type ExchangeEvent =
   | OrderPlacedEvent
@@ -444,7 +471,8 @@ export type ExchangeEvent =
   | FundingAppliedEvent
   | FundingSettledEvent
   | AgentApprovedEvent
-  | AgentRevokedEvent;
+  | AgentRevokedEvent
+  | MarketOrderProcessedEvent;
 
 // ---------------------------------------------------------------------------
 // Result types

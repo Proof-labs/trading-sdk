@@ -32,6 +32,19 @@ export class ExchangeClient {
   private nonce = 0n;
   private ws: WebSocket | null = null;
   private eventListeners: Array<(event: Record<string, unknown>) => void> = [];
+  /**
+   * In-flight DeliverTx verification promises spawned by submitTx. When a
+   * verification detects a silent DeliverTx failure it calls syncNonce() to
+   * recover from the optimistic local-nonce drift. Awaiting this set lets
+   * callers serialize against background reconciliation when they need to.
+   */
+  private pendingVerifies = new Set<Promise<void>>();
+  /**
+   * When true, submitTx is the safe-by-default fire-and-spawn-verifier mode.
+   * Callers that need maximum throughput and don't care about silent drift
+   * can flip this off via setUnsafeFastSubmit(true).
+   */
+  private autoVerifyDelivery = true;
 
   constructor(opts: ExchangeClientOptions = {}) {
     this.rpcUrl = opts.rpcUrl ?? "http://localhost:26657";
@@ -91,9 +104,43 @@ export class ExchangeClient {
 
   /**
    * Sign and submit a transaction via broadcast_tx_sync.
-   * Auto-increments nonce. Call syncNonce() first if nonce is unknown.
+   *
+   * On `CheckTx code=0`, the local nonce is optimistically incremented and a
+   * fire-and-forget background verifier is spawned. The verifier polls
+   * `/tx?hash=...` for the actual `DeliverTx` result; if `DeliverTx` later
+   * silently fails, the verifier calls `syncNonce()` to recover from drift.
+   *
+   * This means the fast path stays fast (one HTTP round-trip) while still
+   * being self-healing — sustained drift was the failure mode that caused
+   * cascading `InvalidNonce` errors in the market maker. Callers that need
+   * to know definitively whether a tx landed should still use
+   * `submitTxCommit`, which awaits the same verification synchronously.
+   *
+   * Callers needing to serialize against in-flight verifications (e.g. before
+   * issuing a tx that depends on the previous tx's effect) can call
+   * `awaitPendingVerifies()` first.
+   *
+   * Call `syncNonce()` once before the first transaction so the local
+   * counter is initialized.
    */
   async submitTx(action: Action): Promise<TxResult> {
+    const r = await this.broadcastSigned(action);
+    // On CheckTx success, spawn the background DeliverTx verifier so silent
+    // DeliverTx failures self-heal via syncNonce(). Skipped when the caller
+    // has opted into unsafe fast mode.
+    if (r.code === 0 && r.hash && this.autoVerifyDelivery) {
+      this.spawnDeliveryVerifier(r.hash);
+    }
+    return r;
+  }
+
+  /**
+   * Internal: sign + broadcast_tx_sync, manage local nonce. Does NOT spawn
+   * a background verifier — the public submitTx adds that. submitTxCommit
+   * uses this directly so it can run its own synchronous verification
+   * without two pollers racing for the same tx hash.
+   */
+  private async broadcastSigned(action: Action): Promise<TxResult> {
     if (!this.privateKey) throw new Error("No private key set");
 
     const seq = this.nonce;
@@ -118,8 +165,12 @@ export class ExchangeClient {
 
     const r = json.result;
     if (r.code === 0) {
-      // Only increment nonce on successful CheckTx
+      // Only increment nonce on successful CheckTx.
       this.nonce++;
+    } else if (r.code === 21) {
+      // CheckTx rejected with InvalidNonce — local cache is stale, resync
+      // immediately so the next call starts from a clean slate.
+      this.syncNonce().catch(() => {});
     }
 
     return {
@@ -127,6 +178,88 @@ export class ExchangeClient {
       hash: r.hash,
       log: r.log,
     };
+  }
+
+  /**
+   * Internal: spawn a fire-and-forget verifier that polls /tx?hash for the
+   * DeliverTx result and calls syncNonce() on failure to reconcile drift.
+   * The promise is added to `pendingVerifies` so callers can await it via
+   * `awaitPendingVerifies()` when they need synchronization.
+   *
+   * The cleanup (Set deletion) is performed INSIDE the verifier's finally
+   * block rather than via a chained .finally() so there's no microtask race
+   * between p settling and the awaitPendingVerifies() loop seeing size==0.
+   */
+  private spawnDeliveryVerifier(txHash: string): void {
+    let self: Promise<void>;
+    const verify = async (): Promise<void> => {
+      try {
+        // Poll up to 5 s — enough for normal block time (~1 s).
+        const deadline = Date.now() + 5_000;
+        let pollDelay = 250;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, pollDelay));
+          pollDelay = Math.min(pollDelay + 100, 600);
+          try {
+            const res = await fetch(`${this.rpcUrl}/tx?hash=0x${txHash}`);
+            const json = await res.json();
+            const txResult = json.result?.tx_result;
+            if (txResult) {
+              const code = txResult.code ?? 0;
+              if (code !== 0) {
+                // DeliverTx silently failed. Resync from chain. We don't
+                // decrement directly because subsequent submits may have
+                // moved the nonce.
+                try {
+                  await this.syncNonce();
+                } catch {
+                  /* tolerate transient network errors — next call will retry */
+                }
+              }
+              return;
+            }
+            // Tx not yet indexed — keep polling.
+          } catch {
+            // Network blip — retry.
+          }
+        }
+        // Timed out without seeing the result. Resync defensively.
+        try {
+          await this.syncNonce();
+        } catch {
+          /* swallow */
+        }
+      } finally {
+        this.pendingVerifies.delete(self);
+      }
+    };
+    self = verify();
+    this.pendingVerifies.add(self);
+  }
+
+  /**
+   * Wait for every in-flight DeliverTx verifier spawned by submitTx to settle.
+   * Call this before a tx that depends on a previous tx's state having
+   * actually landed (e.g. a cancel that depends on a place that may have
+   * silently failed at DeliverTx time).
+   */
+  async awaitPendingVerifies(): Promise<void> {
+    // Snapshot then await — verifiers self-remove from the set in their
+    // finally blocks, but new ones could be spawned mid-wait. Loop until
+    // the set is genuinely empty.
+    while (this.pendingVerifies.size > 0) {
+      const snapshot = Array.from(this.pendingVerifies);
+      await Promise.allSettled(snapshot);
+    }
+  }
+
+  /**
+   * Opt out of background DeliverTx verification. Only use this for
+   * high-throughput stress workloads that knowingly accept silent drift and
+   * reconcile via their own out-of-band syncNonce() schedule.
+   */
+  setUnsafeFastSubmit(unsafe: boolean): void {
+    this.autoVerifyDelivery = !unsafe;
   }
 
   /**
@@ -143,15 +276,17 @@ export class ExchangeClient {
   async submitTxCommit(action: Action): Promise<TxResult> {
     if (!this.privateKey) throw new Error("No private key set");
 
-    // Step 1: submit via sync (returns after CheckTx)
-    const sync = await this.submitTx(action);
+    // Step 1: broadcast via sync (returns after CheckTx). Use the internal
+    // path so we don't double-spawn a background verifier — we're going to
+    // do our own synchronous verification below.
+    const sync = await this.broadcastSigned(action);
     if (sync.code !== 0) {
       // CheckTx rejected (envelope-level failure). No DeliverTx will run.
-      // submitTx already left this.nonce unchanged in this case.
+      // broadcastSigned already left this.nonce unchanged in this case.
       return sync;
     }
-    // submitTx already incremented this.nonce optimistically. We'll undo
-    // the increment if DeliverTx turns out to have failed.
+    // broadcastSigned already incremented this.nonce optimistically. We'll
+    // undo the increment if DeliverTx turns out to have failed.
 
     // Step 2: poll /tx?hash=... until found or timeout (~9 seconds)
     const txHash = sync.hash;
