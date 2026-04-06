@@ -501,7 +501,10 @@ pub enum ExecError {
     AgentNotAuthorized,
     /// Agent wallets may trade but are forbidden from withdrawing funds.
     AgentCannotWithdraw,
-    InvalidNonce { expected: u64, got: u64 },
+    InvalidNonce {
+        expected: u64,
+        got: u64,
+    },
     MarketAlreadyExists(MarketId),
     InvalidMarketConfig(String),
 }

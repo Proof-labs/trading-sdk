@@ -57,20 +57,46 @@ pub struct DecodedTx {
 fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
     let de = |e: rmp_serde::decode::Error| ExecError::DecodeError(e.to_string());
     match action_type {
-        ACTION_PLACE_ORDER => Ok(Action::PlaceOrder(rmp_serde::from_slice(payload).map_err(de)?)),
-        ACTION_CANCEL_ORDER => Ok(Action::CancelOrder(rmp_serde::from_slice(payload).map_err(de)?)),
-        ACTION_ORACLE_UPDATE => Ok(Action::OracleUpdate(rmp_serde::from_slice(payload).map_err(de)?)),
-        ACTION_MARKET_ORDER => Ok(Action::MarketOrder(rmp_serde::from_slice(payload).map_err(de)?)),
+        ACTION_PLACE_ORDER => Ok(Action::PlaceOrder(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_CANCEL_ORDER => Ok(Action::CancelOrder(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_ORACLE_UPDATE => Ok(Action::OracleUpdate(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_MARKET_ORDER => Ok(Action::MarketOrder(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
         ACTION_DEPOSIT => Ok(Action::Deposit(rmp_serde::from_slice(payload).map_err(de)?)),
-        ACTION_WITHDRAW => Ok(Action::Withdraw(rmp_serde::from_slice(payload).map_err(de)?)),
-        ACTION_CREATE_MARKET => Ok(Action::CreateMarket(rmp_serde::from_slice(payload).map_err(de)?)),
-        ACTION_WITHDRAW_REQUEST => Ok(Action::WithdrawRequest(rmp_serde::from_slice(payload).map_err(de)?)),
-        ACTION_CONFIRM_DEPOSIT => Ok(Action::ConfirmDeposit(rmp_serde::from_slice(payload).map_err(de)?)),
-        ACTION_CONFIRM_WITHDRAWAL => Ok(Action::ConfirmWithdrawal(rmp_serde::from_slice(payload).map_err(de)?)),
-        ACTION_FAIL_WITHDRAWAL => Ok(Action::FailWithdrawal(rmp_serde::from_slice(payload).map_err(de)?)),
-        ACTION_APPROVE_AGENT => Ok(Action::ApproveAgent(rmp_serde::from_slice(payload).map_err(de)?)),
-        ACTION_REVOKE_AGENT => Ok(Action::RevokeAgent(rmp_serde::from_slice(payload).map_err(de)?)),
-        other => Err(ExecError::DecodeError(format!("unknown action_type: {other:#x}"))),
+        ACTION_WITHDRAW => Ok(Action::Withdraw(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_CREATE_MARKET => Ok(Action::CreateMarket(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_WITHDRAW_REQUEST => Ok(Action::WithdrawRequest(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_CONFIRM_DEPOSIT => Ok(Action::ConfirmDeposit(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_CONFIRM_WITHDRAWAL => Ok(Action::ConfirmWithdrawal(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_FAIL_WITHDRAWAL => Ok(Action::FailWithdrawal(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_APPROVE_AGENT => Ok(Action::ApproveAgent(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_REVOKE_AGENT => Ok(Action::RevokeAgent(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        other => Err(ExecError::DecodeError(format!(
+            "unknown action_type: {other:#x}"
+        ))),
     }
 }
 
@@ -88,21 +114,21 @@ pub fn decode_tx(bytes: &[u8]) -> Result<DecodedTx, ExecError> {
         b if b & 0xF0 == 0x90 => (b & 0x0F) as usize,
         _ => {
             // Not a fixarray — try full decode as v1 for better error message
-            let envelope: WireTxEnvelope = rmp_serde::from_slice(bytes)
-                .map_err(|e| ExecError::DecodeError(e.to_string()))?;
+            let envelope: WireTxEnvelope =
+                rmp_serde::from_slice(bytes).map_err(|e| ExecError::DecodeError(e.to_string()))?;
             return decode_v1_envelope(envelope);
         }
     };
 
     match arr_len {
         4 => {
-            let envelope: WireTxEnvelope = rmp_serde::from_slice(bytes)
-                .map_err(|e| ExecError::DecodeError(e.to_string()))?;
+            let envelope: WireTxEnvelope =
+                rmp_serde::from_slice(bytes).map_err(|e| ExecError::DecodeError(e.to_string()))?;
             decode_v1_envelope(envelope)
         }
         6 => {
-            let envelope: WireTxEnvelopeV2 = rmp_serde::from_slice(bytes)
-                .map_err(|e| ExecError::DecodeError(e.to_string()))?;
+            let envelope: WireTxEnvelopeV2 =
+                rmp_serde::from_slice(bytes).map_err(|e| ExecError::DecodeError(e.to_string()))?;
             decode_v2_envelope(envelope)
         }
         _ => Err(ExecError::DecodeError(format!(
@@ -171,16 +197,32 @@ fn encode_action(action: &Action) -> Result<(u8, Vec<u8>), ExecError> {
     match action {
         Action::PlaceOrder(cmd) => Ok((ACTION_PLACE_ORDER, rmp_serde::to_vec(cmd).map_err(enc)?)),
         Action::CancelOrder(cmd) => Ok((ACTION_CANCEL_ORDER, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::OracleUpdate(cmd) => Ok((ACTION_ORACLE_UPDATE, rmp_serde::to_vec(cmd).map_err(enc)?)),
+        Action::OracleUpdate(cmd) => {
+            Ok((ACTION_ORACLE_UPDATE, rmp_serde::to_vec(cmd).map_err(enc)?))
+        }
         Action::MarketOrder(cmd) => Ok((ACTION_MARKET_ORDER, rmp_serde::to_vec(cmd).map_err(enc)?)),
         Action::Deposit(cmd) => Ok((ACTION_DEPOSIT, rmp_serde::to_vec(cmd).map_err(enc)?)),
         Action::Withdraw(cmd) => Ok((ACTION_WITHDRAW, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::CreateMarket(cmd) => Ok((ACTION_CREATE_MARKET, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::WithdrawRequest(cmd) => Ok((ACTION_WITHDRAW_REQUEST, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::ConfirmDeposit(cmd) => Ok((ACTION_CONFIRM_DEPOSIT, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::ConfirmWithdrawal(cmd) => Ok((ACTION_CONFIRM_WITHDRAWAL, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::FailWithdrawal(cmd) => Ok((ACTION_FAIL_WITHDRAWAL, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::ApproveAgent(cmd) => Ok((ACTION_APPROVE_AGENT, rmp_serde::to_vec(cmd).map_err(enc)?)),
+        Action::CreateMarket(cmd) => {
+            Ok((ACTION_CREATE_MARKET, rmp_serde::to_vec(cmd).map_err(enc)?))
+        }
+        Action::WithdrawRequest(cmd) => Ok((
+            ACTION_WITHDRAW_REQUEST,
+            rmp_serde::to_vec(cmd).map_err(enc)?,
+        )),
+        Action::ConfirmDeposit(cmd) => {
+            Ok((ACTION_CONFIRM_DEPOSIT, rmp_serde::to_vec(cmd).map_err(enc)?))
+        }
+        Action::ConfirmWithdrawal(cmd) => Ok((
+            ACTION_CONFIRM_WITHDRAWAL,
+            rmp_serde::to_vec(cmd).map_err(enc)?,
+        )),
+        Action::FailWithdrawal(cmd) => {
+            Ok((ACTION_FAIL_WITHDRAWAL, rmp_serde::to_vec(cmd).map_err(enc)?))
+        }
+        Action::ApproveAgent(cmd) => {
+            Ok((ACTION_APPROVE_AGENT, rmp_serde::to_vec(cmd).map_err(enc)?))
+        }
         Action::RevokeAgent(cmd) => Ok((ACTION_REVOKE_AGENT, rmp_serde::to_vec(cmd).map_err(enc)?)),
     }
 }
@@ -288,7 +330,11 @@ mod tests {
         });
 
         let encoded = encode_tx(&action, 100).unwrap();
-        let DecodedTx { action: decoded, seq, auth } = decode_tx(&encoded).unwrap();
+        let DecodedTx {
+            action: decoded,
+            seq,
+            auth,
+        } = decode_tx(&encoded).unwrap();
         assert!(auth.is_none()); // v1 is unsigned
 
         assert_eq!(seq, 100);
@@ -313,7 +359,11 @@ mod tests {
         });
 
         let encoded = encode_tx(&action, 200).unwrap();
-        let DecodedTx { action: decoded, seq, .. } = decode_tx(&encoded).unwrap();
+        let DecodedTx {
+            action: decoded,
+            seq,
+            ..
+        } = decode_tx(&encoded).unwrap();
 
         assert_eq!(seq, 200);
         match decoded {
@@ -727,10 +777,7 @@ mod tests {
                     quantity: i + 1,
                     client_order_id: if i % 3 == 0 { Some(i) } else { None },
                 }),
-                Action::CancelOrder(CancelOrder {
-                    order_id: i,
-                    owner,
-                }),
+                Action::CancelOrder(CancelOrder { order_id: i, owner }),
                 Action::OracleUpdate(OracleUpdate {
                     market,
                     price: i * 50,
@@ -1001,37 +1048,75 @@ mod tests {
         let key = test_signing_key();
         let actions: Vec<Action> = vec![
             Action::PlaceOrder(PlaceOrder {
-                market: 1, owner: [0; 20], side: Side::Buy,
-                price: 1, quantity: 1, client_order_id: None,
-            }),
-            Action::CancelOrder(CancelOrder { order_id: 1, owner: [0; 20] }),
-            Action::OracleUpdate(OracleUpdate { market: 1, price: 100, signer: [0; 20] }),
-            Action::MarketOrder(MarketOrder {
-                market: 1, owner: [0; 20], side: Side::Sell, quantity: 1,
+                market: 1,
+                owner: [0; 20],
+                side: Side::Buy,
+                price: 1,
+                quantity: 1,
                 client_order_id: None,
             }),
-            Action::Deposit(Deposit { owner: [0; 20], amount: 1 }),
-            Action::Withdraw(Withdraw { owner: [0; 20], amount: 1 }),
+            Action::CancelOrder(CancelOrder {
+                order_id: 1,
+                owner: [0; 20],
+            }),
+            Action::OracleUpdate(OracleUpdate {
+                market: 1,
+                price: 100,
+                signer: [0; 20],
+            }),
+            Action::MarketOrder(MarketOrder {
+                market: 1,
+                owner: [0; 20],
+                side: Side::Sell,
+                quantity: 1,
+                client_order_id: None,
+            }),
+            Action::Deposit(Deposit {
+                owner: [0; 20],
+                amount: 1,
+            }),
+            Action::Withdraw(Withdraw {
+                owner: [0; 20],
+                amount: 1,
+            }),
             Action::CreateMarket(CreateMarket {
-                market: 1, im_bps: 1000, mm_bps: 500, taker_fee_bps: 0, maker_fee_bps: 0, signer: [0xEE; 20], funding_interval_ms: 0, max_funding_rate_bps: 0,
+                market: 1,
+                im_bps: 1000,
+                mm_bps: 500,
+                taker_fee_bps: 0,
+                maker_fee_bps: 0,
+                signer: [0xEE; 20],
+                funding_interval_ms: 0,
+                max_funding_rate_bps: 0,
             }),
             Action::WithdrawRequest(WithdrawRequest {
-                owner: [0; 20], amount: 1, solana_destination: [0; 32],
+                owner: [0; 20],
+                amount: 1,
+                solana_destination: [0; 32],
             }),
             Action::ConfirmDeposit(ConfirmDeposit {
-                owner: [0; 20], amount: 1, solana_tx_sig: vec![0; 64], signer: [0; 20],
+                owner: [0; 20],
+                amount: 1,
+                solana_tx_sig: vec![0; 64],
+                signer: [0; 20],
             }),
             Action::ConfirmWithdrawal(ConfirmWithdrawal {
-                withdrawal_id: 1, solana_tx_sig: vec![0; 64], signer: [0; 20],
+                withdrawal_id: 1,
+                solana_tx_sig: vec![0; 64],
+                signer: [0; 20],
             }),
             Action::FailWithdrawal(FailWithdrawal {
-                withdrawal_id: 1, reason: "test".into(), signer: [0; 20],
+                withdrawal_id: 1,
+                reason: "test".into(),
+                signer: [0; 20],
             }),
             Action::ApproveAgent(ApproveAgent {
-                owner: [0xAA; 20], agent_pubkey: [0xBB; 32],
+                owner: [0xAA; 20],
+                agent_pubkey: [0xBB; 32],
             }),
             Action::RevokeAgent(RevokeAgent {
-                owner: [0xAA; 20], agent_pubkey: [0xBB; 32],
+                owner: [0xAA; 20],
+                agent_pubkey: [0xBB; 32],
             }),
         ];
 
@@ -1046,14 +1131,21 @@ mod tests {
     #[test]
     fn test_v2_signature_verifies() {
         let key = test_signing_key();
-        let action = Action::Deposit(Deposit { owner: [0xCC; 20], amount: 5000 });
+        let action = Action::Deposit(Deposit {
+            owner: [0xCC; 20],
+            amount: 5000,
+        });
         let encoded = sign_and_encode(&action, 99, &key).unwrap();
         let decoded = decode_tx(&encoded).unwrap();
 
         let auth = decoded.auth.unwrap();
         // Signature should verify against the signing message
         let result = crate::crypto::verify_signature(
-            &auth.pubkey, &auth.signature, auth.action_type, decoded.seq, &auth.payload,
+            &auth.pubkey,
+            &auth.signature,
+            auth.action_type,
+            decoded.seq,
+            &auth.payload,
         );
         assert!(result.is_ok(), "signature should verify");
     }
@@ -1062,7 +1154,10 @@ mod tests {
     fn test_v2_wrong_key_fails_verification() {
         let key = test_signing_key();
         let wrong_key = ed25519_dalek::SigningKey::from_bytes(&[0x99; 32]);
-        let action = Action::Deposit(Deposit { owner: [0xCC; 20], amount: 5000 });
+        let action = Action::Deposit(Deposit {
+            owner: [0xCC; 20],
+            amount: 5000,
+        });
         let encoded = sign_and_encode(&action, 99, &key).unwrap();
         let decoded = decode_tx(&encoded).unwrap();
 
@@ -1070,7 +1165,11 @@ mod tests {
         // Verify with the wrong key's pubkey should fail
         let wrong_pubkey = wrong_key.verifying_key().to_bytes();
         let result = crate::crypto::verify_signature(
-            &wrong_pubkey, &auth.signature, auth.action_type, decoded.seq, &auth.payload,
+            &wrong_pubkey,
+            &auth.signature,
+            auth.action_type,
+            decoded.seq,
+            &auth.payload,
         );
         assert!(result.is_err(), "wrong key should fail verification");
     }
@@ -1083,16 +1182,24 @@ mod tests {
             action_type: ACTION_PLACE_ORDER,
             seq: 1,
             payload: rmp_serde::to_vec(&PlaceOrder {
-                market: 1, owner: [0; 20], side: Side::Buy,
-                price: 1, quantity: 1, client_order_id: None,
-            }).unwrap(),
+                market: 1,
+                owner: [0; 20],
+                side: Side::Buy,
+                price: 1,
+                quantity: 1,
+                client_order_id: None,
+            })
+            .unwrap(),
             pubkey: vec![0u8; 16], // wrong: should be 32
             signature: vec![0u8; 64],
         };
         let encoded = rmp_serde::to_vec(&envelope).unwrap();
         let result = decode_tx(&encoded);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("pubkey must be 32 bytes"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("pubkey must be 32 bytes"));
     }
 
     #[test]
@@ -1102,16 +1209,24 @@ mod tests {
             action_type: ACTION_PLACE_ORDER,
             seq: 1,
             payload: rmp_serde::to_vec(&PlaceOrder {
-                market: 1, owner: [0; 20], side: Side::Buy,
-                price: 1, quantity: 1, client_order_id: None,
-            }).unwrap(),
+                market: 1,
+                owner: [0; 20],
+                side: Side::Buy,
+                price: 1,
+                quantity: 1,
+                client_order_id: None,
+            })
+            .unwrap(),
             pubkey: vec![0u8; 32],
             signature: vec![0u8; 32], // wrong: should be 64
         };
         let encoded = rmp_serde::to_vec(&envelope).unwrap();
         let result = decode_tx(&encoded);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("signature must be 64 bytes"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("signature must be 64 bytes"));
     }
 
     #[test]
@@ -1120,8 +1235,12 @@ mod tests {
         // They are rejected at the engine level in production builds
         // and at the Go CheckTx mempool gate.
         let action = Action::PlaceOrder(PlaceOrder {
-            market: 1, owner: [0xAA; 20], side: Side::Buy,
-            price: 100, quantity: 10, client_order_id: None,
+            market: 1,
+            owner: [0xAA; 20],
+            side: Side::Buy,
+            price: 100,
+            quantity: 10,
+            client_order_id: None,
         });
         let encoded = encode_tx(&action, 50).unwrap();
         let decoded = decode_tx(&encoded).unwrap();
@@ -1133,16 +1252,31 @@ mod tests {
     fn test_peek_action_type_v2() {
         let key = test_signing_key();
         let actions_and_types = vec![
-            (Action::PlaceOrder(PlaceOrder {
-                market: 1, owner: [0; 20], side: Side::Buy,
-                price: 1, quantity: 1, client_order_id: None,
-            }), ACTION_PLACE_ORDER),
-            (Action::ApproveAgent(ApproveAgent {
-                owner: [0; 20], agent_pubkey: [0; 32],
-            }), ACTION_APPROVE_AGENT),
-            (Action::RevokeAgent(RevokeAgent {
-                owner: [0; 20], agent_pubkey: [0; 32],
-            }), ACTION_REVOKE_AGENT),
+            (
+                Action::PlaceOrder(PlaceOrder {
+                    market: 1,
+                    owner: [0; 20],
+                    side: Side::Buy,
+                    price: 1,
+                    quantity: 1,
+                    client_order_id: None,
+                }),
+                ACTION_PLACE_ORDER,
+            ),
+            (
+                Action::ApproveAgent(ApproveAgent {
+                    owner: [0; 20],
+                    agent_pubkey: [0; 32],
+                }),
+                ACTION_APPROVE_AGENT,
+            ),
+            (
+                Action::RevokeAgent(RevokeAgent {
+                    owner: [0; 20],
+                    agent_pubkey: [0; 32],
+                }),
+                ACTION_REVOKE_AGENT,
+            ),
         ];
 
         for (action, expected_type) in actions_and_types {
@@ -1155,7 +1289,10 @@ mod tests {
     #[test]
     fn test_v2_encode_decode_deterministic() {
         let key = test_signing_key();
-        let action = Action::CancelOrder(CancelOrder { order_id: 42, owner: [0xDD; 20] });
+        let action = Action::CancelOrder(CancelOrder {
+            order_id: 42,
+            owner: [0xDD; 20],
+        });
         let a = sign_and_encode(&action, 1, &key).unwrap();
         let b = sign_and_encode(&action, 1, &key).unwrap();
         assert_eq!(a, b, "v2 encoding must be deterministic");
@@ -1191,8 +1328,13 @@ mod tests {
             // Verify signature through crypto module
             assert!(
                 crate::crypto::verify_signature(
-                    &auth.pubkey, &auth.signature, auth.action_type, decoded.seq, &auth.payload,
-                ).is_ok(),
+                    &auth.pubkey,
+                    &auth.signature,
+                    auth.action_type,
+                    decoded.seq,
+                    &auth.payload,
+                )
+                .is_ok(),
                 "signature verification failed at i={i}"
             );
         }
@@ -1204,7 +1346,10 @@ mod tests {
         let owner = crate::crypto::pubkey_to_owner(&key.verifying_key().to_bytes());
 
         for i in 0u64..500 {
-            let action = Action::Deposit(Deposit { owner, amount: i + 1 });
+            let action = Action::Deposit(Deposit {
+                owner,
+                amount: i + 1,
+            });
 
             if i % 2 == 0 {
                 // v1 unsigned
@@ -1235,50 +1380,96 @@ mod tests {
             for seq in 0u64..100 {
                 let action = match action_idx {
                     0 => Action::PlaceOrder(PlaceOrder {
-                        market: 1, owner, side: Side::Buy,
-                        price: seq + 1, quantity: seq + 1, client_order_id: None,
+                        market: 1,
+                        owner,
+                        side: Side::Buy,
+                        price: seq + 1,
+                        quantity: seq + 1,
+                        client_order_id: None,
                     }),
-                    1 => Action::CancelOrder(CancelOrder { order_id: seq, owner }),
-                    2 => Action::OracleUpdate(OracleUpdate { market: 1, price: seq + 1, signer: owner }),
+                    1 => Action::CancelOrder(CancelOrder {
+                        order_id: seq,
+                        owner,
+                    }),
+                    2 => Action::OracleUpdate(OracleUpdate {
+                        market: 1,
+                        price: seq + 1,
+                        signer: owner,
+                    }),
                     3 => Action::MarketOrder(MarketOrder {
-                        market: 1, owner, side: Side::Sell,
-                        quantity: seq + 1, client_order_id: None,
+                        market: 1,
+                        owner,
+                        side: Side::Sell,
+                        quantity: seq + 1,
+                        client_order_id: None,
                     }),
-                    4 => Action::Deposit(Deposit { owner, amount: seq + 1 }),
-                    5 => Action::Withdraw(Withdraw { owner, amount: seq + 1 }),
+                    4 => Action::Deposit(Deposit {
+                        owner,
+                        amount: seq + 1,
+                    }),
+                    5 => Action::Withdraw(Withdraw {
+                        owner,
+                        amount: seq + 1,
+                    }),
                     6 => Action::CreateMarket(CreateMarket {
-                        market: seq as u32 + 1, im_bps: 1000, mm_bps: 500, taker_fee_bps: 0, maker_fee_bps: 0, signer: owner, funding_interval_ms: 0, max_funding_rate_bps: 0,
+                        market: seq as u32 + 1,
+                        im_bps: 1000,
+                        mm_bps: 500,
+                        taker_fee_bps: 0,
+                        maker_fee_bps: 0,
+                        signer: owner,
+                        funding_interval_ms: 0,
+                        max_funding_rate_bps: 0,
                     }),
                     7 => Action::WithdrawRequest(WithdrawRequest {
-                        owner, amount: seq + 1, solana_destination: [0x11; 32],
+                        owner,
+                        amount: seq + 1,
+                        solana_destination: [0x11; 32],
                     }),
                     8 => Action::ConfirmDeposit(ConfirmDeposit {
-                        owner, amount: seq + 1, solana_tx_sig: vec![seq as u8; 64], signer: owner,
+                        owner,
+                        amount: seq + 1,
+                        solana_tx_sig: vec![seq as u8; 64],
+                        signer: owner,
                     }),
                     9 => Action::ConfirmWithdrawal(ConfirmWithdrawal {
-                        withdrawal_id: seq, solana_tx_sig: vec![seq as u8; 64], signer: owner,
+                        withdrawal_id: seq,
+                        solana_tx_sig: vec![seq as u8; 64],
+                        signer: owner,
                     }),
                     10 => Action::FailWithdrawal(FailWithdrawal {
-                        withdrawal_id: seq, reason: format!("reason-{seq}"), signer: owner,
+                        withdrawal_id: seq,
+                        reason: format!("reason-{seq}"),
+                        signer: owner,
                     }),
                     11 => Action::ApproveAgent(ApproveAgent {
-                        owner, agent_pubkey: [seq as u8; 32],
+                        owner,
+                        agent_pubkey: [seq as u8; 32],
                     }),
                     12 => Action::RevokeAgent(RevokeAgent {
-                        owner, agent_pubkey: [seq as u8; 32],
+                        owner,
+                        agent_pubkey: [seq as u8; 32],
                     }),
                     _ => unreachable!(),
                 };
 
                 let encoded = sign_and_encode(&action, seq, &key).unwrap();
                 let decoded = decode_tx(&encoded).unwrap();
-                assert!(decoded.auth.is_some(), "missing auth for action_idx={action_idx} seq={seq}");
+                assert!(
+                    decoded.auth.is_some(),
+                    "missing auth for action_idx={action_idx} seq={seq}"
+                );
 
                 let auth = decoded.auth.as_ref().unwrap();
                 assert!(
                     crate::crypto::verify_signature(
-                        &auth.pubkey, &auth.signature, auth.action_type, decoded.seq, &auth.payload,
-                    ).is_ok(),
+                        &auth.pubkey,
+                        &auth.signature,
+                        auth.action_type,
+                        decoded.seq,
+                        &auth.payload,
+                    )
+                    .is_ok(),
                     "verify failed for action_idx={action_idx} seq={seq}"
                 );
             }
@@ -1306,8 +1497,11 @@ mod tests {
                         if let Some(ref auth) = decoded.auth {
                             // Decoded but signature should fail
                             let verified = crate::crypto::verify_signature(
-                                &auth.pubkey, &auth.signature,
-                                auth.action_type, decoded.seq, &auth.payload,
+                                &auth.pubkey,
+                                &auth.signature,
+                                auth.action_type,
+                                decoded.seq,
+                                &auth.payload,
                             );
                             // It's fine if tampered action_type/seq matches by accident
                             // but the signature should almost always fail
@@ -1325,9 +1519,22 @@ mod tests {
     #[test]
     fn stress_boundary_seq_values() {
         let key = test_signing_key();
-        let action = Action::CancelOrder(CancelOrder { order_id: 1, owner: [0xAA; 20] });
+        let action = Action::CancelOrder(CancelOrder {
+            order_id: 1,
+            owner: [0xAA; 20],
+        });
 
-        for seq in [0, 1, 255, 256, 65535, 65536, u32::MAX as u64, u64::MAX / 2, u64::MAX] {
+        for seq in [
+            0,
+            1,
+            255,
+            256,
+            65535,
+            65536,
+            u32::MAX as u64,
+            u64::MAX / 2,
+            u64::MAX,
+        ] {
             let encoded = sign_and_encode(&action, seq, &key).unwrap();
             let decoded = decode_tx(&encoded).unwrap();
             assert_eq!(decoded.seq, seq, "seq mismatch for {seq}");

@@ -45,8 +45,8 @@ pub fn verify_signature(
     seq: u64,
     payload: &[u8],
 ) -> Result<(), ExecError> {
-    let verifying_key = VerifyingKey::from_bytes(pubkey)
-        .map_err(|_| ExecError::InvalidSignature)?;
+    let verifying_key =
+        VerifyingKey::from_bytes(pubkey).map_err(|_| ExecError::InvalidSignature)?;
 
     let sig = Signature::from_bytes(signature);
 
@@ -191,10 +191,7 @@ mod tests {
             seed[0..4].copy_from_slice(&i.to_le_bytes());
             let key = SigningKey::from_bytes(&seed);
             let owner = pubkey_to_owner(&key.verifying_key().to_bytes());
-            assert!(
-                seen.insert(owner),
-                "address collision at i={i}"
-            );
+            assert!(seen.insert(owner), "address collision at i={i}");
         }
         assert_eq!(seen.len(), 10_000);
     }
@@ -204,7 +201,9 @@ mod tests {
         let key = test_keypair();
         let pubkey = key.verifying_key().to_bytes();
 
-        for size in [0, 1, 15, 16, 31, 32, 63, 64, 127, 128, 255, 256, 512, 1024, 4096, 8192] {
+        for size in [
+            0, 1, 15, 16, 31, 32, 63, 64, 127, 128, 255, 256, 512, 1024, 4096, 8192,
+        ] {
             let payload: Vec<u8> = (0..size).map(|i| (i & 0xFF) as u8).collect();
             let sig = sign(&key, 0x03, 99, &payload);
             assert!(
@@ -230,7 +229,11 @@ mod tests {
                     "failed for action={action_type:#x} seq={seq}"
                 );
                 // Wrong action_type should fail
-                let wrong_at = if action_type == 0x0D { 0x01 } else { action_type + 1 };
+                let wrong_at = if action_type == 0x0D {
+                    0x01
+                } else {
+                    action_type + 1
+                };
                 assert!(
                     verify_signature(&pubkey, &sig, wrong_at, seq, payload).is_err(),
                     "should fail with wrong action_type at={action_type:#x}"
