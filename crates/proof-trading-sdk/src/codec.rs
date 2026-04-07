@@ -31,8 +31,10 @@ struct WireTxEnvelopeV2 {
     action_type: u8,
     seq: u64,
     payload: Vec<u8>,
-    pubkey: Vec<u8>,
-    signature: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    pubkey: [u8; 32],
+    #[serde(with = "serde_bytes")]
+    signature: [u8; 64],
 }
 
 /// Authentication data extracted from a v2 envelope.
@@ -159,32 +161,15 @@ fn decode_v2_envelope(envelope: WireTxEnvelopeV2) -> Result<DecodedTx, ExecError
             envelope.version
         )));
     }
-    if envelope.pubkey.len() != 32 {
-        return Err(ExecError::DecodeError(format!(
-            "pubkey must be 32 bytes, got {}",
-            envelope.pubkey.len()
-        )));
-    }
-    if envelope.signature.len() != 64 {
-        return Err(ExecError::DecodeError(format!(
-            "signature must be 64 bytes, got {}",
-            envelope.signature.len()
-        )));
-    }
 
     let action = decode_action(envelope.action_type, &envelope.payload)?;
-
-    let mut pubkey = [0u8; 32];
-    pubkey.copy_from_slice(&envelope.pubkey);
-    let mut signature = [0u8; 64];
-    signature.copy_from_slice(&envelope.signature);
 
     Ok(DecodedTx {
         action,
         seq: envelope.seq,
         auth: Some(TxAuth {
-            pubkey,
-            signature,
+            pubkey: envelope.pubkey,
+            signature: envelope.signature,
             action_type: envelope.action_type,
             payload: envelope.payload,
         }),
@@ -256,8 +241,8 @@ pub fn encode_tx_v2(
         action_type,
         seq,
         payload,
-        pubkey: pubkey.to_vec(),
-        signature: signature.to_vec(),
+        pubkey: *pubkey,
+        signature: *signature,
     };
     rmp_serde::to_vec(&envelope).map_err(|e| ExecError::InternalError(e.to_string()))
 }
@@ -282,8 +267,8 @@ pub fn sign_and_encode(
         action_type,
         seq,
         payload,
-        pubkey: pubkey.to_vec(),
-        signature: signature.to_vec(),
+        pubkey,
+        signature,
     };
     rmp_serde::to_vec(&envelope).map_err(|e| ExecError::InternalError(e.to_string()))
 }
@@ -1176,8 +1161,18 @@ mod tests {
 
     #[test]
     fn test_v2_wrong_pubkey_length_rejected() {
-        // Manually build a v2 envelope with wrong pubkey length
-        let envelope = WireTxEnvelopeV2 {
+        // Build a valid v2 envelope, then re-encode with a wrong-length pubkey
+        // using a helper struct that allows Vec<u8> for pubkey.
+        #[derive(Serialize)]
+        struct BadEnvelope {
+            version: u8,
+            action_type: u8,
+            seq: u64,
+            payload: Vec<u8>,
+            pubkey: Vec<u8>,
+            signature: Vec<u8>,
+        }
+        let encoded = rmp_serde::to_vec(&BadEnvelope {
             version: 2,
             action_type: ACTION_PLACE_ORDER,
             seq: 1,
@@ -1192,19 +1187,24 @@ mod tests {
             .unwrap(),
             pubkey: vec![0u8; 16], // wrong: should be 32
             signature: vec![0u8; 64],
-        };
-        let encoded = rmp_serde::to_vec(&envelope).unwrap();
+        })
+        .unwrap();
         let result = decode_tx(&encoded);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("pubkey must be 32 bytes"));
     }
 
     #[test]
     fn test_v2_wrong_signature_length_rejected() {
-        let envelope = WireTxEnvelopeV2 {
+        #[derive(Serialize)]
+        struct BadEnvelope {
+            version: u8,
+            action_type: u8,
+            seq: u64,
+            payload: Vec<u8>,
+            pubkey: Vec<u8>,
+            signature: Vec<u8>,
+        }
+        let encoded = rmp_serde::to_vec(&BadEnvelope {
             version: 2,
             action_type: ACTION_PLACE_ORDER,
             seq: 1,
@@ -1219,14 +1219,10 @@ mod tests {
             .unwrap(),
             pubkey: vec![0u8; 32],
             signature: vec![0u8; 32], // wrong: should be 64
-        };
-        let encoded = rmp_serde::to_vec(&envelope).unwrap();
+        })
+        .unwrap();
         let result = decode_tx(&encoded);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("signature must be 64 bytes"));
     }
 
     #[test]
