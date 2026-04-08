@@ -3,6 +3,7 @@ import {
   type Action,
   ActionType,
   type ActionTypeValue,
+  Outcome,
   Side,
 } from "./types.js";
 import { signingMessage, sign, getPublicKey } from "./crypto.js";
@@ -233,6 +234,17 @@ function sideStr(s: Side): string {
   return s === Side.Buy ? "Buy" : "Sell";
 }
 
+function outcomeStr(o: Outcome): string {
+  switch (o) {
+    case Outcome.Yes:
+      return "Yes";
+    case Outcome.No:
+      return "No";
+    case Outcome.Void:
+      return "Void";
+  }
+}
+
 /** Ensure an owner/signer field is a Uint8Array (not a hex string). */
 function toBytes(v: Uint8Array | string): Uint8Array {
   if (v instanceof Uint8Array) return v;
@@ -374,6 +386,34 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       return [
         ActionType.RevokeAgent,
         [toByteSeq(d.owner), toByteSeq(d.agentPubkey)],
+      ];
+    }
+    case "CreateImpactMarket": {
+      const d = action.data;
+      return [
+        ActionType.CreateImpactMarket,
+        [
+          d.impactMarketId,
+          d.underlyingMarket,
+          d.childMarketBase,
+          d.question,
+          d.deadlineMs,
+          d.resolutionWindowMs,
+          d.imBps,
+          d.mmBps,
+          d.takerFeeBps,
+          d.makerFeeBps,
+          d.fundingIntervalMs,
+          d.maxFundingRateBps,
+          toByteSeq(d.signer),
+        ],
+      ];
+    }
+    case "ResolveEvent": {
+      const d = action.data;
+      return [
+        ActionType.ResolveEvent,
+        [d.impactMarketId, outcomeStr(d.outcome), toByteSeq(d.signer)],
       ];
     }
   }
@@ -539,7 +579,42 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           agentPubkey: bytesField(f[1]),
         },
       };
+    case ActionType.CreateImpactMarket:
+      return {
+        type: "CreateImpactMarket",
+        data: {
+          impactMarketId: Number(bi(f[0])),
+          underlyingMarket: Number(bi(f[1])),
+          childMarketBase: Number(bi(f[2])),
+          question: String(f[3]),
+          deadlineMs: bi(f[4]),
+          resolutionWindowMs: bi(f[5]),
+          imBps: Number(bi(f[6])),
+          mmBps: Number(bi(f[7])),
+          takerFeeBps: Number(bi(f[8])),
+          makerFeeBps: Number(bi(f[9])),
+          fundingIntervalMs: bi(f[10]),
+          maxFundingRateBps: Number(bi(f[11])),
+          signer: bytesField(f[12]),
+        },
+      };
+    case ActionType.ResolveEvent:
+      return {
+        type: "ResolveEvent",
+        data: {
+          impactMarketId: Number(bi(f[0])),
+          outcome: parseOutcome(f[1]),
+          signer: bytesField(f[2]),
+        },
+      };
     default:
       throw new Error(`unknown action_type: ${actionType}`);
   }
+}
+
+function parseOutcome(v: unknown): Outcome {
+  if (v === "Yes" || v === Outcome.Yes) return Outcome.Yes;
+  if (v === "No" || v === Outcome.No) return Outcome.No;
+  if (v === "Void" || v === Outcome.Void) return Outcome.Void;
+  throw new Error(`invalid outcome: ${String(v)}`);
 }

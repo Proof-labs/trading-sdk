@@ -41,6 +41,10 @@ export const ActionType = {
   ApproveAgent: 0x0c,
   /** Revoke a previously approved agent wallet. */
   RevokeAgent: 0x0d,
+  /** Create a 5-book impact-market family (admin). */
+  CreateImpactMarket: 0x0e,
+  /** Resolve an impact-market event with an outcome (admin). */
+  ResolveEvent: 0x0f,
 } as const;
 
 /** Union of all valid action type byte values. */
@@ -195,6 +199,65 @@ export interface RevokeAgent {
   agentPubkey: Uint8Array; // 32 bytes
 }
 
+/** Branch of a binary event. */
+export enum Branch {
+  Yes = 1,
+  No = 2,
+}
+
+/** Outcome of an impact-market event. */
+export enum Outcome {
+  Yes = 1,
+  No = 2,
+  Void = 3,
+}
+
+/** Create an impact-market family with 4 child books (CPY/CPN/EBY/EBN). */
+export interface CreateImpactMarket {
+  impactMarketId: number;
+  underlyingMarket: number;
+  childMarketBase: number;
+  question: string;
+  deadlineMs: bigint;
+  resolutionWindowMs: bigint;
+  imBps: number;
+  mmBps: number;
+  takerFeeBps: number;
+  makerFeeBps: number;
+  fundingIntervalMs: bigint;
+  maxFundingRateBps: number;
+  signer: Address;
+}
+
+/** Resolve an impact-market event. */
+export interface ResolveEvent {
+  impactMarketId: number;
+  outcome: Outcome;
+  signer: Address;
+}
+
+/** Lifecycle status of an impact-market family. */
+export type ImpactMarketStatus =
+  | { kind: "Trading" }
+  | { kind: "PreResolution" }
+  | { kind: "Resolved"; outcome: Outcome };
+
+/** On-chain info for an impact-market family. */
+export interface ImpactMarketInfo {
+  impactMarketId: number;
+  underlyingMarket: number;
+  cpyMarket: number;
+  cpnMarket: number;
+  ebyMarket: number;
+  ebnMarket: number;
+  question: string;
+  deadlineMs: bigint;
+  resolutionWindowMs: bigint;
+  status: ImpactMarketStatus;
+  createdMs: bigint;
+  resolvedMs: bigint;
+}
+
 // ---------------------------------------------------------------------------
 // Action union type
 // ---------------------------------------------------------------------------
@@ -213,7 +276,9 @@ export type Action =
   | { type: "ConfirmWithdrawal"; data: ConfirmWithdrawal }
   | { type: "FailWithdrawal"; data: FailWithdrawal }
   | { type: "ApproveAgent"; data: ApproveAgent }
-  | { type: "RevokeAgent"; data: RevokeAgent };
+  | { type: "RevokeAgent"; data: RevokeAgent }
+  | { type: "CreateImpactMarket"; data: CreateImpactMarket }
+  | { type: "ResolveEvent"; data: ResolveEvent };
 
 // ---------------------------------------------------------------------------
 // Event types (emitted by engine, delivered via ABCI/WebSocket)

@@ -17,7 +17,7 @@ import {
   hexToBytes,
   bytesToHex,
 } from "./crypto.js";
-import { ActionType, Side, type Action } from "./types.js";
+import { ActionType, Outcome, Side, type Action } from "./types.js";
 
 const OWNER = new Uint8Array(20).fill(0xaa);
 const SIGNER = new Uint8Array(20).fill(0xff);
@@ -206,6 +206,28 @@ describe("codec v1 all action types", () => {
       type: "RevokeAgent",
       data: { owner: OWNER, agentPubkey: new Uint8Array(32).fill(0x02) },
     },
+    {
+      type: "CreateImpactMarket",
+      data: {
+        impactMarketId: 42,
+        underlyingMarket: 1,
+        childMarketBase: 100,
+        question: "BTC above $100k on Apr 30",
+        deadlineMs: 4_000_000_000_000n,
+        resolutionWindowMs: 3_600_000n,
+        imBps: 1000,
+        mmBps: 500,
+        takerFeeBps: 5,
+        makerFeeBps: 2,
+        fundingIntervalMs: 60_000n,
+        maxFundingRateBps: 3000,
+        signer: SIGNER,
+      },
+    },
+    {
+      type: "ResolveEvent",
+      data: { impactMarketId: 42, outcome: Outcome.Yes, signer: SIGNER },
+    },
   ];
 
   for (const action of allActions) {
@@ -275,7 +297,7 @@ describe("codec v2 signing", () => {
     expect(signature!.length).toBe(64);
   });
 
-  it("V2 round-trips all 13 action types", () => {
+  it("V2 round-trips all 15 action types", () => {
     const { privateKey } = generateKeypair();
 
     const allActions: Action[] = [
