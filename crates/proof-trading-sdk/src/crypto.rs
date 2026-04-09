@@ -219,8 +219,8 @@ mod tests {
         let pubkey = key.verifying_key().to_bytes();
         let payload = b"test";
 
-        // All 13 action types
-        for action_type in 0x01u8..=0x0D {
+        // All 15 action types (0x01..=0x0F, including 0x0E CreateImpactMarket + 0x0F ResolveEvent)
+        for action_type in 0x01u8..=0x0F {
             // Boundary seq values
             for seq in [0u64, 1, u64::MAX / 2, u64::MAX - 1, u64::MAX] {
                 let sig = sign(&key, action_type, seq, payload);
@@ -229,7 +229,7 @@ mod tests {
                     "failed for action={action_type:#x} seq={seq}"
                 );
                 // Wrong action_type should fail
-                let wrong_at = if action_type == 0x0D {
+                let wrong_at = if action_type == 0x0F {
                     0x01
                 } else {
                     action_type + 1

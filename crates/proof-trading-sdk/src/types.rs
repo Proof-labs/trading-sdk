@@ -20,9 +20,158 @@ pub type OrderId = u64;
 pub type MarketId = u32;
 /// Auto-incrementing fill identifier, unique across all trades.
 pub type FillId = u64;
+/// Impact market family identifier (1 family owns 4 child markets — CPY/CPN/EBY/EBN).
+pub type ImpactMarketId = u32;
 
 /// Well-known market ID for the BTC-USD perpetual.
 pub const MARKET_BTC_USD_PERP: MarketId = 1;
+
+/// Maximum price (in micro-USDC) for a prediction-binary share. $1.00 = 1_000_000 µUSDC.
+pub const BINARY_PRICE_MAX: u64 = 1_000_000;
+
+// ---------------------------------------------------------------------------
+// Impact market enums
+// ---------------------------------------------------------------------------
+
+/// Which branch of a binary event a conditional/prediction book represents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Branch {
+    Yes = 1,
+    No = 2,
+}
+
+impl fmt::Display for Branch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Branch::Yes => f.write_str("yes"),
+            Branch::No => f.write_str("no"),
+        }
+    }
+}
+
+/// Outcome of an impact-market event resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Outcome {
+    Yes = 1,
+    No = 2,
+    /// Auto-voided (neither branch won — e.g., resolver timeout under the auto-void policy).
+    Void = 3,
+}
+
+impl fmt::Display for Outcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Outcome::Yes => f.write_str("yes"),
+            Outcome::No => f.write_str("no"),
+            Outcome::Void => f.write_str("void"),
+        }
+    }
+}
+
+/// Kind of market stored on-chain. Stored on [`MarketConfig`].
+///
+/// The existing engine paths (matching, funding, liquidation) only care that a
+/// market has a CLOB. The kind affects: (a) margin computation — conditional
+/// books get branch-conditional max instead of per-book sum; (b) price-range
+/// validation — binaries must trade inside `[0, BINARY_PRICE_MAX]`; (c)
+/// resolution — conditional books freeze at resolution, binaries settle to
+/// `$1` or `$0`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MarketKind {
+    /// Regular perpetual future (BTC-PERP, ETH-PERP, SOL-PERP, etc.).
+    Perp,
+    /// Conditional perpetual — trades like a perp until the parent event
+    /// resolves, then settles (if branch wins) or voids (if branch loses).
+    ConditionalPerp {
+        impact_market_id: ImpactMarketId,
+        branch: Branch,
+    },
+    /// Prediction-binary token — trades on [0, BINARY_PRICE_MAX] µUSDC.
+    /// Settles to $1 if the branch wins at resolution, $0 otherwise.
+    PredictionBinary {
+        impact_market_id: ImpactMarketId,
+        branch: Branch,
+    },
+}
+
+impl Default for MarketKind {
+    fn default() -> Self {
+        MarketKind::Perp
+    }
+}
+
+impl MarketKind {
+    /// Returns the impact market family ID this market belongs to, if any.
+    pub fn impact_market_id(&self) -> Option<ImpactMarketId> {
+        match self {
+            MarketKind::Perp => None,
+            MarketKind::ConditionalPerp {
+                impact_market_id, ..
+            }
+            | MarketKind::PredictionBinary {
+                impact_market_id, ..
+            } => Some(*impact_market_id),
+        }
+    }
+
+    /// Returns the branch this market is tied to, if any.
+    pub fn branch(&self) -> Option<Branch> {
+        match self {
+            MarketKind::Perp => None,
+            MarketKind::ConditionalPerp { branch, .. }
+            | MarketKind::PredictionBinary { branch, .. } => Some(*branch),
+        }
+    }
+
+    pub fn is_conditional_perp(&self) -> bool {
+        matches!(self, MarketKind::ConditionalPerp { .. })
+    }
+
+    pub fn is_prediction_binary(&self) -> bool {
+        matches!(self, MarketKind::PredictionBinary { .. })
+    }
+}
+
+/// Lifecycle status of an impact-market family.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ImpactMarketStatus {
+    /// Open for trading on all 5 books.
+    Trading,
+    /// Past deadline, awaiting resolver signatures. New orders on child books rejected.
+    PreResolution,
+    /// Fully resolved. Winning conditional perp settled; losing voided.
+    /// Binaries settled to $1 (winner) or $0 (loser).
+    Resolved(Outcome),
+}
+
+/// Stored on-chain record for an impact-market family. Owns pointers to the
+/// 4 child markets (CPY, CPN, EBY, EBN) plus the underlying perp.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ImpactMarketInfo {
+    pub impact_market_id: ImpactMarketId,
+    /// Underlying perp market (unconditional book 1). Must already exist.
+    pub underlying_market: MarketId,
+    /// Conditional-perp YES child book.
+    pub cpy_market: MarketId,
+    /// Conditional-perp NO child book.
+    pub cpn_market: MarketId,
+    /// Prediction-binary YES child book.
+    pub eby_market: MarketId,
+    /// Prediction-binary NO child book.
+    pub ebn_market: MarketId,
+    /// Human-readable question (hashed into the market metadata).
+    pub question: String,
+    /// Event deadline in milliseconds since Unix epoch.
+    pub deadline_ms: u64,
+    /// Grace period after `deadline_ms` before the auto-void path fires.
+    pub resolution_window_ms: u64,
+    /// Current lifecycle status.
+    pub status: ImpactMarketStatus,
+    /// Block timestamp when the impact market was created (ms since epoch).
+    pub created_ms: u64,
+    /// Block timestamp when the impact market was resolved (ms since epoch), 0 if unresolved.
+    pub resolved_ms: u64,
+}
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -105,6 +254,12 @@ pub struct MarketConfig {
     pub funding_interval_ms: u64,
     /// Maximum absolute funding rate in basis points per interval.
     pub max_funding_rate_bps: u32,
+    /// Market kind (perp / conditional perp / prediction binary).
+    ///
+    /// `#[serde(default)]` so existing on-chain `MarketConfig` records written
+    /// before impact markets existed decode cleanly as `MarketKind::Perp`.
+    #[serde(default)]
+    pub kind: MarketKind,
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +282,8 @@ pub enum Action {
     FailWithdrawal(FailWithdrawal),
     ApproveAgent(ApproveAgent),
     RevokeAgent(RevokeAgent),
+    CreateImpactMarket(CreateImpactMarket),
+    ResolveEvent(ResolveEvent),
 }
 
 /// Immediate-or-cancel order that crosses the book at the best available price.
@@ -259,6 +416,45 @@ pub struct RevokeAgent {
     pub agent_pubkey: [u8; 32],
 }
 
+/// Admin action to create a new impact market family. Atomically registers
+/// the 4 child markets (CPY / CPN / EBY / EBN) with sequential IDs starting
+/// at `child_market_base` and writes the [`ImpactMarketInfo`] record.
+/// Requires relayer authorization.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateImpactMarket {
+    pub impact_market_id: ImpactMarketId,
+    /// Underlying perp market (book 1). Must already exist with `kind = Perp`.
+    pub underlying_market: MarketId,
+    /// Starting ID for the 4 child markets. They are allocated as:
+    /// `child_market_base+0` = CPY, `+1` = CPN, `+2` = EBY, `+3` = EBN.
+    /// None of these market IDs may already exist.
+    pub child_market_base: MarketId,
+    pub question: String,
+    pub deadline_ms: u64,
+    pub resolution_window_ms: u64,
+    /// Initial margin ratio for the 2 conditional-perp child books (basis points).
+    /// Prediction-binary books don't use bps IM — their IM is computed from payoff.
+    pub im_bps: u32,
+    /// Maintenance margin ratio for conditional-perp child books.
+    pub mm_bps: u32,
+    pub taker_fee_bps: u32,
+    pub maker_fee_bps: u32,
+    /// Funding interval for the conditional-perp child books (ms). 0 = disabled.
+    pub funding_interval_ms: u64,
+    pub max_funding_rate_bps: u32,
+    pub signer: [u8; 20],
+}
+
+/// Admin action to resolve an impact-market event. Settles the winning
+/// conditional-perp book and voids the loser; cash-settles both binary books
+/// to $1 (winner) / $0 (loser). Requires relayer authorization.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ResolveEvent {
+    pub impact_market_id: ImpactMarketId,
+    pub outcome: Outcome,
+    pub signer: [u8; 20],
+}
+
 /// Status of a pending withdrawal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WithdrawalStatus {
@@ -377,6 +573,65 @@ pub enum Event {
         maker_fee_bps: u32,
         funding_interval_ms: u64,
         max_funding_rate_bps: u32,
+    },
+    /// Impact-market family was registered. Emitted once; the 5 underlying
+    /// `MarketCreated` events follow (1 reused existing perp + 4 new children).
+    ImpactMarketCreated {
+        impact_market_id: ImpactMarketId,
+        underlying_market: MarketId,
+        cpy_market: MarketId,
+        cpn_market: MarketId,
+        eby_market: MarketId,
+        ebn_market: MarketId,
+        question: String,
+        deadline_ms: u64,
+        resolution_window_ms: u64,
+    },
+    /// Event was resolved with a definitive outcome. Emitted once per family.
+    EventResolved {
+        impact_market_id: ImpactMarketId,
+        outcome: Outcome,
+        /// Oracle price of the underlying at resolution time (micro-USDC).
+        /// Used as the settlement mark for the winning conditional perp.
+        settlement_price: u64,
+        timestamp_ms: u64,
+    },
+    /// A conditional-perp position was cash-settled to an owner's balance
+    /// because its branch won the resolution.
+    ConditionalSettled {
+        impact_market_id: ImpactMarketId,
+        market: MarketId,
+        owner: [u8; 20],
+        side: Side,
+        size: u64,
+        entry_price: u64,
+        settlement_price: u64,
+        realized_pnl: i64,
+    },
+    /// A conditional-perp position was voided because its branch lost. The
+    /// position holder's reserved IM is released (effectively: position deleted,
+    /// no balance change, as IM is equity-based not locked collateral).
+    ConditionalVoided {
+        impact_market_id: ImpactMarketId,
+        market: MarketId,
+        owner: [u8; 20],
+        side: Side,
+        size: u64,
+    },
+    /// A prediction-binary position was cash-settled. Longs receive
+    /// `payoff_per_share * size` credited to their balance; shorts have
+    /// `(1.0 - payoff_per_share) * size` debited. Payoff is $1 for the winner
+    /// and $0 for the loser.
+    PredictionSettled {
+        impact_market_id: ImpactMarketId,
+        market: MarketId,
+        owner: [u8; 20],
+        side: Side,
+        size: u64,
+        /// Payoff per share in micro-USDC ($1.00 = 1_000_000, $0.00 = 0).
+        payoff_per_share: u64,
+        /// Signed cash delta applied to owner balance (micro-USDC).
+        cash_delta: i64,
     },
     /// Position forcibly closed by the end-of-block liquidation sweep.
     AccountLiquidated {
@@ -529,6 +784,15 @@ pub enum ExecError {
     },
     MarketAlreadyExists(MarketId),
     InvalidMarketConfig(String),
+    ImpactMarketAlreadyExists(ImpactMarketId),
+    ImpactMarketNotFound(ImpactMarketId),
+    /// Attempted to place an order on a conditional/binary book whose parent
+    /// impact market is already resolved or voided.
+    MarketClosedForTrading(MarketId),
+    /// Binary-book order outside the [0, BINARY_PRICE_MAX] range.
+    BinaryPriceOutOfRange,
+    /// ResolveEvent called with an invalid outcome for the current state.
+    InvalidResolution(String),
 }
 
 impl ExecError {
@@ -557,6 +821,11 @@ impl ExecError {
             ExecError::InvalidNonce { .. } => 21,
             ExecError::MarketAlreadyExists(_) => 22,
             ExecError::InvalidMarketConfig(_) => 23,
+            ExecError::ImpactMarketAlreadyExists(_) => 24,
+            ExecError::ImpactMarketNotFound(_) => 25,
+            ExecError::MarketClosedForTrading(_) => 26,
+            ExecError::BinaryPriceOutOfRange => 27,
+            ExecError::InvalidResolution(_) => 28,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -596,6 +865,19 @@ impl fmt::Display for ExecError {
             }
             ExecError::MarketAlreadyExists(id) => write!(f, "market already exists: {id}"),
             ExecError::InvalidMarketConfig(msg) => write!(f, "invalid market config: {msg}"),
+            ExecError::ImpactMarketAlreadyExists(id) => {
+                write!(f, "impact market already exists: {id}")
+            }
+            ExecError::ImpactMarketNotFound(id) => write!(f, "impact market not found: {id}"),
+            ExecError::MarketClosedForTrading(id) => {
+                write!(f, "market closed for trading: {id}")
+            }
+            ExecError::BinaryPriceOutOfRange => write!(
+                f,
+                "prediction-binary price must be in [0, {}]",
+                BINARY_PRICE_MAX
+            ),
+            ExecError::InvalidResolution(msg) => write!(f, "invalid resolution: {msg}"),
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
     }

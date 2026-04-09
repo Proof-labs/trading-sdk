@@ -14,6 +14,8 @@ pub const ACTION_CONFIRM_WITHDRAWAL: u8 = 0x0A;
 pub const ACTION_FAIL_WITHDRAWAL: u8 = 0x0B;
 pub const ACTION_APPROVE_AGENT: u8 = 0x0C;
 pub const ACTION_REVOKE_AGENT: u8 = 0x0D;
+pub const ACTION_CREATE_IMPACT_MARKET: u8 = 0x0E;
+pub const ACTION_RESOLVE_EVENT: u8 = 0x0F;
 
 /// V1 wire envelope: [version=1, action_type, seq, payload_bytes]
 #[derive(Serialize, Deserialize)]
@@ -94,6 +96,12 @@ fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_REVOKE_AGENT => Ok(Action::RevokeAgent(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_CREATE_IMPACT_MARKET => Ok(Action::CreateImpactMarket(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_RESOLVE_EVENT => Ok(Action::ResolveEvent(
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         other => Err(ExecError::DecodeError(format!(
@@ -209,6 +217,13 @@ fn encode_action(action: &Action) -> Result<(u8, Vec<u8>), ExecError> {
             Ok((ACTION_APPROVE_AGENT, rmp_serde::to_vec(cmd).map_err(enc)?))
         }
         Action::RevokeAgent(cmd) => Ok((ACTION_REVOKE_AGENT, rmp_serde::to_vec(cmd).map_err(enc)?)),
+        Action::CreateImpactMarket(cmd) => Ok((
+            ACTION_CREATE_IMPACT_MARKET,
+            rmp_serde::to_vec(cmd).map_err(enc)?,
+        )),
+        Action::ResolveEvent(cmd) => {
+            Ok((ACTION_RESOLVE_EVENT, rmp_serde::to_vec(cmd).map_err(enc)?))
+        }
     }
 }
 
