@@ -18,11 +18,19 @@ pub const ACTION_CREATE_IMPACT_MARKET: u8 = 0x0E;
 pub const ACTION_RESOLVE_EVENT: u8 = 0x0F;
 
 /// V1 wire envelope: [version=1, action_type, seq, payload_bytes]
+///
+/// `payload` uses `serde_bytes` so rmp-serde emits it as a msgpack `bin`
+/// (0xc4/c5/c6) rather than an array of u8 (0xdc). This matches what the
+/// SDK produces and what the Go validator's CheckTx parser expects. Before
+/// this attribute, Rust-built wire bytes had `payload` as an array, which
+/// the SDK can read (it accepts both) but the Go validator rejects with
+/// "invalid payload: expected bin format, got msgpack type 0xdc".
 #[derive(Serialize, Deserialize)]
 struct WireTxEnvelope {
     version: u8,
     action_type: u8,
     seq: u64,
+    #[serde(with = "serde_bytes")]
     payload: Vec<u8>,
 }
 
@@ -32,6 +40,7 @@ struct WireTxEnvelopeV2 {
     version: u8,
     action_type: u8,
     seq: u64,
+    #[serde(with = "serde_bytes")]
     payload: Vec<u8>,
     #[serde(with = "serde_bytes")]
     pubkey: [u8; 32],
