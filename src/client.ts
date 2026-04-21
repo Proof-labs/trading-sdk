@@ -77,6 +77,35 @@ export class ExchangeClient {
     return this.publicKey;
   }
 
+  /**
+   * Return the private key the client is signing with. Exposed so
+   * adjacent ops tools (e.g. `scripts/lib/redis-submit.ts`) can build a
+   * signed envelope without re-loading the key from disk. Callers that
+   * don't need to bypass the normal `submitTx` path should not use this.
+   */
+  getPrivateKey(): Uint8Array | null {
+    return this.privateKey;
+  }
+
+  /**
+   * Return the current local (next-to-use) nonce. Same caveat as
+   * `getPrivateKey` — only for ops tools that submit via a side channel
+   * (Redis stream, gateway bypass) and need to tell the client which
+   * nonce to increment past on success.
+   */
+  getNonce(): bigint {
+    return this.nonce;
+  }
+
+  /**
+   * Increment the local nonce. Only callers submitting outside of the
+   * built-in `submitTx` / `submitTxCommit` paths need this — normal
+   * submit methods bump the nonce internally on CheckTx success.
+   */
+  bumpNonce(): void {
+    this.nonce++;
+  }
+
   // -----------------------------------------------------------------------
   // Nonce management
   // -----------------------------------------------------------------------
