@@ -1,6 +1,8 @@
 {
   "name": "@exchange/sdk",
   "version": "0.1.0",
+  "description": "TypeScript SDK for Proof Exchange — signing, encoding, querying, and submitting actions.",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

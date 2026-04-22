@@ -416,6 +416,26 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
         [d.impactMarketId, outcomeStr(d.outcome), toByteSeq(d.signer)],
       ];
     }
+    case "UpdateMarketFees": {
+      const d = action.data;
+      // Field order MUST match the Rust struct: market, signer,
+      // taker_fee_bps, maker_fee_bps, max_funding_rate_bps,
+      // funding_interval_ms, max_position_size. Each optional field
+      // encodes as its value or null (rmp-serde accepts null for
+      // `Option<T>` via serde(default) / Option deserialization).
+      return [
+        ActionType.UpdateMarketFees,
+        [
+          d.market,
+          toByteSeq(d.signer),
+          d.takerFeeBps ?? null,
+          d.makerFeeBps ?? null,
+          d.maxFundingRateBps ?? null,
+          d.fundingIntervalMs ?? null,
+          d.maxPositionSize ?? null,
+        ],
+      ];
+    }
   }
 }
 
@@ -607,6 +627,26 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           signer: bytesField(f[2]),
         },
       };
+    case ActionType.UpdateMarketFees: {
+      // Field order mirrors the Rust struct. Each optional u32/u64 is
+      // either null (unchanged) or a number/bigint from msgpack.
+      const optNum = (v: unknown): number | null =>
+        v === null || v === undefined ? null : Number(bi(v));
+      const optBig = (v: unknown): bigint | null =>
+        v === null || v === undefined ? null : bi(v);
+      return {
+        type: "UpdateMarketFees",
+        data: {
+          market: Number(bi(f[0])),
+          signer: bytesField(f[1]),
+          takerFeeBps: optNum(f[2]),
+          makerFeeBps: optNum(f[3]),
+          maxFundingRateBps: optNum(f[4]),
+          fundingIntervalMs: optBig(f[5]),
+          maxPositionSize: optBig(f[6]),
+        },
+      };
+    }
     default:
       throw new Error(`unknown action_type: ${actionType}`);
   }

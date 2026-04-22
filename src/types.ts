@@ -45,6 +45,10 @@ export const ActionType = {
   CreateImpactMarket: 0x0e,
   /** Resolve an impact-market event with an outcome (admin). */
   ResolveEvent: 0x0f,
+  /** Update a subset of `MarketConfig` tunables on a live market (admin).
+   *  Fee tiering, funding-rate cap tightening, position-limit updates
+   *  without a chain rebase. */
+  UpdateMarketFees: 0x10,
 } as const;
 
 /** Union of all valid action type byte values. */
@@ -236,6 +240,35 @@ export interface ResolveEvent {
   signer: Address;
 }
 
+/**
+ * Update a subset of `MarketConfig` fields on an existing market.
+ * Every tunable is optional; `null`/`undefined` leaves the current
+ * value untouched. Requires relayer authorization.
+ *
+ * Built 2026-04-21 when we observed BTC funding spikes to −1608 bps
+ * under the seed-time max_funding_rate_bps = 3000 cap on a live
+ * chain we couldn't rebase. This is the engine-level lever to tighten
+ * parameters on a running market.
+ *
+ * Fields deliberately absent from this update path: `im_bps`,
+ * `mm_bps`, `kind`. Changing them on a live market would require
+ * re-margining every open position, out of scope here.
+ */
+export interface UpdateMarketFees {
+  market: number;
+  signer: Address;
+  /** New taker fee in basis points. Omit to leave unchanged. */
+  takerFeeBps?: number | null;
+  /** New maker fee in basis points. Omit to leave unchanged. */
+  makerFeeBps?: number | null;
+  /** New max funding rate cap in basis points per interval. 0 = disable funding. */
+  maxFundingRateBps?: number | null;
+  /** New funding interval in ms. Omit to leave unchanged. */
+  fundingIntervalMs?: bigint | null;
+  /** New per-account position cap in contracts. 0 = disable cap. */
+  maxPositionSize?: bigint | null;
+}
+
 /** Lifecycle status of an impact-market family. */
 export type ImpactMarketStatus =
   | { kind: "Trading" }
@@ -278,7 +311,8 @@ export type Action =
   | { type: "ApproveAgent"; data: ApproveAgent }
   | { type: "RevokeAgent"; data: RevokeAgent }
   | { type: "CreateImpactMarket"; data: CreateImpactMarket }
-  | { type: "ResolveEvent"; data: ResolveEvent };
+  | { type: "ResolveEvent"; data: ResolveEvent }
+  | { type: "UpdateMarketFees"; data: UpdateMarketFees };
 
 // ---------------------------------------------------------------------------
 // Event types (emitted by engine, delivered via ABCI/WebSocket)

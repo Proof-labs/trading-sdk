@@ -228,6 +228,34 @@ describe("codec v1 all action types", () => {
       type: "ResolveEvent",
       data: { impactMarketId: 42, outcome: Outcome.Yes, signer: SIGNER },
     },
+    {
+      // All fields set — the common "tighten everything" admin call.
+      type: "UpdateMarketFees",
+      data: {
+        market: 7,
+        signer: SIGNER,
+        takerFeeBps: 8,
+        makerFeeBps: 1,
+        maxFundingRateBps: 100,
+        fundingIntervalMs: 3_600_000n,
+        maxPositionSize: 50n,
+      },
+    },
+    {
+      // Partial update — only the funding cap changes, everything else
+      // left unchanged. Should round-trip with null/undefined preserved
+      // as `null` on the decoded side.
+      type: "UpdateMarketFees",
+      data: {
+        market: 7,
+        signer: SIGNER,
+        takerFeeBps: null,
+        makerFeeBps: null,
+        maxFundingRateBps: 100,
+        fundingIntervalMs: null,
+        maxPositionSize: null,
+      },
+    },
   ];
 
   for (const action of allActions) {
@@ -239,6 +267,55 @@ describe("codec v1 all action types", () => {
       expect(decoded.type).toBe(action.type);
     });
   }
+
+  // Deeper round-trip: field-by-field equality for UpdateMarketFees
+  // (the shape the shallow type-name check doesn't cover). Catches
+  // silent serialization drift in the Option<T> fields.
+  it("round-trips UpdateMarketFees field values (all set)", () => {
+    const action: Action = {
+      type: "UpdateMarketFees",
+      data: {
+        market: 42,
+        signer: SIGNER,
+        takerFeeBps: 8,
+        makerFeeBps: 1,
+        maxFundingRateBps: 250,
+        fundingIntervalMs: 28_800_000n,
+        maxPositionSize: 1000n,
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 1n));
+    expect(decoded.type).toBe("UpdateMarketFees");
+    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
+    expect(decoded.data.market).toBe(42);
+    expect(decoded.data.takerFeeBps).toBe(8);
+    expect(decoded.data.makerFeeBps).toBe(1);
+    expect(decoded.data.maxFundingRateBps).toBe(250);
+    expect(decoded.data.fundingIntervalMs).toBe(28_800_000n);
+    expect(decoded.data.maxPositionSize).toBe(1000n);
+  });
+
+  it("round-trips UpdateMarketFees with None fields preserved as null", () => {
+    const action: Action = {
+      type: "UpdateMarketFees",
+      data: {
+        market: 42,
+        signer: SIGNER,
+        takerFeeBps: null,
+        makerFeeBps: null,
+        maxFundingRateBps: 100,
+        fundingIntervalMs: null,
+        maxPositionSize: null,
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 1n));
+    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
+    expect(decoded.data.takerFeeBps).toBeNull();
+    expect(decoded.data.makerFeeBps).toBeNull();
+    expect(decoded.data.maxFundingRateBps).toBe(100);
+    expect(decoded.data.fundingIntervalMs).toBeNull();
+    expect(decoded.data.maxPositionSize).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
