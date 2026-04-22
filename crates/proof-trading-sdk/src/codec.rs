@@ -16,6 +16,7 @@ pub const ACTION_APPROVE_AGENT: u8 = 0x0C;
 pub const ACTION_REVOKE_AGENT: u8 = 0x0D;
 pub const ACTION_CREATE_IMPACT_MARKET: u8 = 0x0E;
 pub const ACTION_RESOLVE_EVENT: u8 = 0x0F;
+pub const ACTION_UPDATE_MARKET_FEES: u8 = 0x10;
 
 /// V1 wire envelope: [version=1, action_type, seq, payload_bytes]
 ///
@@ -111,6 +112,9 @@ fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_RESOLVE_EVENT => Ok(Action::ResolveEvent(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_UPDATE_MARKET_FEES => Ok(Action::UpdateMarketFees(
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         other => Err(ExecError::DecodeError(format!(
@@ -233,6 +237,10 @@ fn encode_action(action: &Action) -> Result<(u8, Vec<u8>), ExecError> {
         Action::ResolveEvent(cmd) => {
             Ok((ACTION_RESOLVE_EVENT, rmp_serde::to_vec(cmd).map_err(enc)?))
         }
+        Action::UpdateMarketFees(cmd) => Ok((
+            ACTION_UPDATE_MARKET_FEES,
+            rmp_serde::to_vec(cmd).map_err(enc)?,
+        )),
     }
 }
 

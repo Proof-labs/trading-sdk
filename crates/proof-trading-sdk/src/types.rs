@@ -260,6 +260,17 @@ pub struct MarketConfig {
     /// before impact markets existed decode cleanly as `MarketKind::Perp`.
     #[serde(default)]
     pub kind: MarketKind,
+    /// Maximum absolute position size per account, in contracts. Enforced
+    /// at order-placement time: a fill that would push the taker's net
+    /// position (signed) beyond ±max_position_size gets rejected with
+    /// `ExecError::PositionLimitExceeded`. Zero means "no limit" — which
+    /// is also what existing on-chain MarketConfig records (written
+    /// before this field existed) decode as thanks to serde(default).
+    ///
+    /// Set this via CreateMarket or UpdateMarketFees for new markets;
+    /// existing markets keep `0` until explicitly updated.
+    #[serde(default)]
+    pub max_position_size: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +295,7 @@ pub enum Action {
     RevokeAgent(RevokeAgent),
     CreateImpactMarket(CreateImpactMarket),
     ResolveEvent(ResolveEvent),
+    UpdateMarketFees(UpdateMarketFees),
 }
 
 /// Immediate-or-cancel order that crosses the book at the best available price.
@@ -455,6 +467,51 @@ pub struct ResolveEvent {
     pub signer: [u8; 20],
 }
 
+/// Update a subset of `MarketConfig` fields on an existing market.
+/// Every tunable is `Option<T>` so the caller only supplies the fields
+/// they mean to change; `None` leaves the current value untouched.
+///
+/// This is the admin lever that lets us tighten the funding cap, set
+/// position limits, or calibrate fees on a live market — previously
+/// the only way to change those was a chain rebase, which surfaced on
+/// 2026-04-20 when we saw BTC funding spike to −1608 bps under the
+/// seed-time `max_funding_rate_bps = 3000` cap and had no way to
+/// dampen it without wiping state.
+///
+/// Requires relayer authorization. Fields that would violate an
+/// invariant of the existing market (e.g. `mm_bps > im_bps`) are
+/// rejected with `ExecError::InvalidMarketConfig`.
+///
+/// Fields left intentionally immutable (not exposed here):
+///   * `market` — identity
+///   * `kind` — changing a market's kind would break the
+///     book's accounting model (perp vs conditional perp vs binary).
+///   * `im_bps` / `mm_bps` — tempting to tune but too risky without a
+///     migration path for existing positions. Add if/when we have a
+///     well-tested position-re-margin routine.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateMarketFees {
+    pub market: MarketId,
+    pub signer: [u8; 20],
+    /// New taker fee in basis points. `None` = leave unchanged.
+    #[serde(default)]
+    pub taker_fee_bps: Option<u32>,
+    /// New maker fee in basis points. `None` = leave unchanged.
+    #[serde(default)]
+    pub maker_fee_bps: Option<u32>,
+    /// New max funding rate cap in basis points per interval.
+    /// `None` = leave unchanged. Setting to 0 disables funding.
+    #[serde(default)]
+    pub max_funding_rate_bps: Option<u32>,
+    /// New funding interval in ms. `None` = leave unchanged.
+    #[serde(default)]
+    pub funding_interval_ms: Option<u64>,
+    /// New per-account position cap in contracts. `None` = leave
+    /// unchanged. Setting to 0 disables the cap.
+    #[serde(default)]
+    pub max_position_size: Option<u64>,
+}
+
 /// Status of a pending withdrawal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WithdrawalStatus {
@@ -573,6 +630,25 @@ pub enum Event {
         maker_fee_bps: u32,
         funding_interval_ms: u64,
         max_funding_rate_bps: u32,
+    },
+    /// Admin updated one or more tunable fields on an existing market.
+    /// Event carries the FULL post-update set of mutable fields so
+    /// consumers see the live config after the tx; no need to diff
+    /// against prior state. Immutable fields (im_bps, mm_bps, kind)
+    /// are not included because they're not what UpdateMarketFees
+    /// can change.
+    ///
+    /// ABCI event derivation requires Display on every attribute, so
+    /// Option<T> would break the codegen — we emit the whole config
+    /// snapshot instead. Callers that only care about the delta can
+    /// compare to the previous MarketConfigUpdated for the same market.
+    MarketConfigUpdated {
+        market: MarketId,
+        taker_fee_bps: u32,
+        maker_fee_bps: u32,
+        max_funding_rate_bps: u32,
+        funding_interval_ms: u64,
+        max_position_size: u64,
     },
     /// Impact-market family was registered. Emitted once; the 5 underlying
     /// `MarketCreated` events follow (1 reused existing perp + 4 new children).
@@ -793,6 +869,15 @@ pub enum ExecError {
     BinaryPriceOutOfRange,
     /// ResolveEvent called with an invalid outcome for the current state.
     InvalidResolution(String),
+    /// A fill would push the taker's absolute net position past
+    /// `MarketConfig.max_position_size`. Engine-level cap enforced at
+    /// placement time so a single whale can't accumulate unbounded
+    /// exposure past protocol limits, regardless of margin.
+    PositionLimitExceeded {
+        market: MarketId,
+        limit: u64,
+        would_be: u64,
+    },
 }
 
 impl ExecError {
@@ -826,6 +911,7 @@ impl ExecError {
             ExecError::MarketClosedForTrading(_) => 26,
             ExecError::BinaryPriceOutOfRange => 27,
             ExecError::InvalidResolution(_) => 28,
+            ExecError::PositionLimitExceeded { .. } => 29,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -878,6 +964,14 @@ impl fmt::Display for ExecError {
                 BINARY_PRICE_MAX
             ),
             ExecError::InvalidResolution(msg) => write!(f, "invalid resolution: {msg}"),
+            ExecError::PositionLimitExceeded {
+                market,
+                limit,
+                would_be,
+            } => write!(
+                f,
+                "position limit exceeded on market {market}: would be {would_be}, cap {limit}"
+            ),
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
     }
