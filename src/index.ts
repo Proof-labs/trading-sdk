@@ -55,6 +55,13 @@ export {
   peekActionType,
 } from "./codec.js";
 
+// Error decoder
+export {
+  type ExecErrorInfo,
+  decodeExecError,
+  execErrorName,
+} from "./errors.js";
+
 // Crypto
 export {
   generateKeypair,
