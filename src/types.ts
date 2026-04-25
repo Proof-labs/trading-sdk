@@ -908,7 +908,7 @@ export type MarketKind =
 
 /** Configuration for a perpetual / conditional / binary market. The wire
  *  form is a MessagePack positional array; indices below mirror the
- *  Rust struct field order in services/exchange-core/src/types.rs.
+ *  Rust struct field order in exchange-core/src/types.rs.
  *  Fields 7–10 were appended 2026-04-23..25 with `#[serde(default)]`
  *  so older on-chain records decode unchanged. */
 export interface MarketConfig {

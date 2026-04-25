@@ -16,7 +16,7 @@ npx tsx scripts/seed.ts setup     # first time only
 npx tsx scripts/seed.ts           # every time the chain is reset
 
 # Run scenarios with the canonical seeded keys
-cd packages/sdk
+cd sdk
 RELAYER_KEY=$(jq -r .relayer ~/.exchanged/seed-keys.json)
 ORACLE_KEY=$(jq -r .oracle ~/.exchanged/seed-keys.json)
 
