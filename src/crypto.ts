@@ -15,8 +15,31 @@ etc.sha512Sync = (...msgs: Uint8Array[]) => {
   return h.digest();
 };
 
-/** Domain separator matching Rust: b"ProofExchange-v2" (16 bytes) */
-const DOMAIN_PREFIX = new TextEncoder().encode("ProofExchange-v2");
+/**
+ * Domain separator matching Rust: `b"ProofExchange-v3"` (16 bytes).
+ * Bumped from v2 on 2026-04-23 (audit finding B4) when the envelope
+ * gained a 32-byte `chain_id` binding. A v2-signed tx submitted to a
+ * v3 engine verifies against different message bytes and fails —
+ * protects against cross-chain and post-wipe replay.
+ */
+const DOMAIN_PREFIX = new TextEncoder().encode("ProofExchange-v3");
+
+/**
+ * 32-byte zero chain_id — unbound chain. Production signers MUST
+ * use a real chain_id (typically `keccak256(cometbft_chain_id_string)`)
+ * or their signatures are trivially replayable on any other
+ * zero-chain_id deployment.
+ */
+export const UNBOUND_CHAIN_ID = new Uint8Array(32);
+
+/**
+ * Hash a CometBFT chain_id string into the 32-byte binding used by
+ * the v3 signing envelope. Matches `chain_id_from_string` in Rust
+ * `crypto.rs` byte-for-byte.
+ */
+export function chainIdFromString(chainId: string): Uint8Array {
+  return keccak_256(new TextEncoder().encode(chainId));
+}
 
 /** Generate a new Ed25519 keypair. */
 export function generateKeypair(): {
@@ -68,18 +91,30 @@ export function bytesToHex(bytes: Uint8Array): string {
 
 /**
  * Construct the deterministic signing message for a transaction.
- * Layout: DOMAIN_PREFIX || action_type(1) || seq_be(8) || payload
- * Matches Rust `signing_message()` in crypto.rs.
+ *
+ * V3 layout: `DOMAIN_PREFIX(16) || chain_id(32) || action_type(1) || seq_be(8) || payload`
+ *
+ * Matches Rust `signing_message()` in `crypto.rs`. The `chainId`
+ * argument must be 32 bytes — usually `chainIdFromString(cometbft_chain_id)`
+ * or `UNBOUND_CHAIN_ID` for unit-test-only use.
  */
 export function signingMessage(
+  chainId: Uint8Array,
   actionType: number,
   seq: bigint,
   payload: Uint8Array,
 ): Uint8Array {
-  const msg = new Uint8Array(DOMAIN_PREFIX.length + 1 + 8 + payload.length);
+  if (chainId.length !== 32) {
+    throw new Error(`chain_id must be 32 bytes, got ${chainId.length}`);
+  }
+  const msg = new Uint8Array(
+    DOMAIN_PREFIX.length + 32 + 1 + 8 + payload.length,
+  );
   let offset = 0;
   msg.set(DOMAIN_PREFIX, offset);
   offset += DOMAIN_PREFIX.length;
+  msg.set(chainId, offset);
+  offset += 32;
   msg[offset++] = actionType;
   // seq as big-endian u64
   const view = new DataView(msg.buffer, msg.byteOffset + offset, 8);

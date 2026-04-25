@@ -6,7 +6,12 @@ import {
   Outcome,
   Side,
 } from "./types.js";
-import { signingMessage, sign, getPublicKey } from "./crypto.js";
+import {
+  signingMessage,
+  sign,
+  getPublicKey,
+  UNBOUND_CHAIN_ID,
+} from "./crypto.js";
 
 // ---------------------------------------------------------------------------
 // MessagePack encoder/decoder configured for BigInt
@@ -68,7 +73,7 @@ const decoder = new Decoder({ useBigInt64: true });
  * types use signed integers, so this branch is effectively dead code, but
  * keeping it preserves correctness if a signed field is added later.
  */
-const U32_MAX_BIGINT = 0xFFFF_FFFFn; // 2^32 - 1
+const U32_MAX_BIGINT = 0xffff_ffffn; // 2^32 - 1
 
 function minimizeBigInts(value: unknown): unknown {
   if (typeof value === "bigint") {
@@ -139,17 +144,21 @@ export function encodeTxV2(
 }
 
 /**
- * Sign an action and encode as V2 wire bytes.
- * This is the primary function the frontend should use.
+ * Sign an action and encode as V2 wire bytes, binding the signature
+ * to a specific `chainId`. Per audit B4 (2026-04-23), production
+ * signers MUST pass a real 32-byte chain_id — typically
+ * `chainIdFromString(cometbftChainId)` — or signatures are replayable
+ * across chains. Pass `UNBOUND_CHAIN_ID` only for unit tests.
  */
-export function signAndEncode(
+export function signAndEncodeWithChain(
+  chainId: Uint8Array,
   action: Action,
   seq: bigint,
   privateKey: Uint8Array,
 ): Uint8Array {
   const [actionType, payload] = encodePayload(action);
   const payloadBytes = encode(payload);
-  const msg = signingMessage(actionType, seq, payloadBytes);
+  const msg = signingMessage(chainId, actionType, seq, payloadBytes);
   const signature = sign(privateKey, msg);
   const pubkey = getPublicKey(privateKey);
   return encode([
@@ -160,6 +169,21 @@ export function signAndEncode(
     pubkey,
     signature,
   ]) as Uint8Array;
+}
+
+/**
+ * Legacy entry point — signs with `UNBOUND_CHAIN_ID`. Retained for
+ * existing test callers and as a lower-friction migration path;
+ * production paths should use `signAndEncodeWithChain`. Any operator
+ * deploying a real chain MUST switch to the explicit variant or risk
+ * cross-chain replay.
+ */
+export function signAndEncode(
+  action: Action,
+  seq: bigint,
+  privateKey: Uint8Array,
+): Uint8Array {
+  return signAndEncodeWithChain(UNBOUND_CHAIN_ID, action, seq, privateKey);
 }
 
 // ---------------------------------------------------------------------------
@@ -302,7 +326,13 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
     }
     case "OracleUpdate": {
       const d = action.data;
-      return [ActionType.OracleUpdate, [d.market, d.price, toByteSeq(d.signer)]];
+      // Field order MUST match Rust: market, price, signer, publish_time_ms.
+      // `publish_time_ms` added 2026-04-23 (B3) — replay guard on the
+      // relayer-signed oracle feed.
+      return [
+        ActionType.OracleUpdate,
+        [d.market, d.price, toByteSeq(d.signer), d.publishTimeMs],
+      ];
     }
     case "MarketOrder": {
       const d = action.data;
@@ -319,11 +349,21 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
     }
     case "Deposit": {
       const d = action.data;
-      return [ActionType.Deposit, [toByteSeq(d.owner), d.amount]];
+      // Audit B1 (2026-04-23): signer field required. Engine enforces
+      // envelope pubkey's derived address === signer AND signer on the
+      // relayer allowlist.
+      return [
+        ActionType.Deposit,
+        [toByteSeq(d.owner), d.amount, toByteSeq(d.signer)],
+      ];
     }
     case "Withdraw": {
       const d = action.data;
-      return [ActionType.Withdraw, [toByteSeq(d.owner), d.amount]];
+      // Audit B2 (2026-04-23): same relayer gate as Deposit.
+      return [
+        ActionType.Withdraw,
+        [toByteSeq(d.owner), d.amount, toByteSeq(d.signer)],
+      ];
     }
     case "CreateMarket": {
       const d = action.data;
@@ -420,9 +460,10 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       const d = action.data;
       // Field order MUST match the Rust struct: market, signer,
       // taker_fee_bps, maker_fee_bps, max_funding_rate_bps,
-      // funding_interval_ms, max_position_size. Each optional field
-      // encodes as its value or null (rmp-serde accepts null for
-      // `Option<T>` via serde(default) / Option deserialization).
+      // funding_interval_ms, max_position_size, default_ttl_ms,
+      // net_delta_margin. Each optional field encodes as its value or
+      // null (rmp-serde accepts null for `Option<T>` via
+      // serde(default) / Option deserialization).
       return [
         ActionType.UpdateMarketFees,
         [
@@ -433,6 +474,8 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           d.maxFundingRateBps ?? null,
           d.fundingIntervalMs ?? null,
           d.maxPositionSize ?? null,
+          d.defaultTtlMs ?? null,
+          d.netDeltaMargin ?? null,
         ],
       ];
     }
@@ -503,6 +546,12 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           market: f[0] as number,
           price: bi(f[1]),
           signer: bytesField(f[2]),
+          // publish_time_ms added 2026-04-23 (B3). Legacy records
+          // written before that field existed decode as nil via
+          // serde's `#[serde(default)]`, which is `null` on the
+          // msgpack side. Map both shapes (absent, null) to 0n.
+          publishTimeMs:
+            f.length > 3 && f[3] !== null && f[3] !== undefined ? bi(f[3]) : 0n,
         },
       };
     case ActionType.MarketOrder:
@@ -522,6 +571,10 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
         data: {
           owner: bytesField(f[0]),
           amount: bi(f[1]),
+          // Audit B1: signer required. Legacy txs that pre-date B1 serialized
+          // only owner+amount — tolerate absence by defaulting to 20 zero bytes
+          // so decoding never throws; the engine rejects such txs anyway.
+          signer: f.length > 2 ? bytesField(f[2]) : new Uint8Array(20),
         },
       };
     case ActionType.Withdraw:
@@ -530,6 +583,8 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
         data: {
           owner: bytesField(f[0]),
           amount: bi(f[1]),
+          // Audit B2: same defensive decode as Deposit.
+          signer: f.length > 2 ? bytesField(f[2]) : new Uint8Array(20),
         },
       };
     case ActionType.CreateMarket:
@@ -634,6 +689,8 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
         v === null || v === undefined ? null : Number(bi(v));
       const optBig = (v: unknown): bigint | null =>
         v === null || v === undefined ? null : bi(v);
+      const optBool = (v: unknown): boolean | null =>
+        v === null || v === undefined ? null : Boolean(v);
       return {
         type: "UpdateMarketFees",
         data: {
@@ -644,6 +701,8 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           maxFundingRateBps: optNum(f[4]),
           fundingIntervalMs: optBig(f[5]),
           maxPositionSize: optBig(f[6]),
+          defaultTtlMs: optBig(f[7]),
+          netDeltaMargin: optBool(f[8]),
         },
       };
     }

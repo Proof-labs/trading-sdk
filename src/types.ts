@@ -90,6 +90,14 @@ export interface OracleUpdate {
   price: bigint;
   /** Authorized oracle signer address (20 bytes). */
   signer: Address;
+  /**
+   * Oracle publish timestamp in ms since Unix epoch. Must be strictly
+   * greater than the last accepted update on this market (engine
+   * rejects with code 30 `OracleTimestampNotMonotonic` otherwise).
+   * Added 2026-04-23 per audit B3 as replay protection for the
+   * relayer-signed oracle feed.
+   */
+  publishTimeMs: bigint;
 }
 
 /** Place a market order that crosses immediately against resting orders. */
@@ -106,20 +114,39 @@ export interface MarketOrder {
   clientOrderId?: bigint | null;
 }
 
-/** Credit USDC to an account (legacy action, prefer ConfirmDeposit). */
+/**
+ * Credit USDC to an account (dev/bootstrap action).
+ *
+ * Per audit B1 (2026-04-23) this action requires a relayer-authorized
+ * signer — the envelope signer's derived address must equal `signer`,
+ * and `signer` must be on the on-chain relayer allowlist. Clients
+ * outside the allowlist see `UnauthorizedRelayer` at the engine.
+ * Prefer `ConfirmDeposit` for production flows tied to Solana bridge
+ * events.
+ */
 export interface Deposit {
   /** Account address to credit (20 bytes). */
   owner: Address;
   /** Deposit amount in microUSDC (6 decimal places, e.g., 100_000_000 = $100). */
   amount: bigint;
+  /** Authorized relayer signer (20 bytes). Must match the envelope pubkey's derived owner. */
+  signer: Address;
 }
 
-/** Debit USDC from an account (direct withdraw, checks margin requirements). */
+/**
+ * Debit USDC from an account (direct withdraw, checks margin requirements).
+ *
+ * Per audit B2 (2026-04-23) same relayer-authorization contract as
+ * `Deposit`: the envelope signer must equal `signer` and that address
+ * must be on the relayer allowlist.
+ */
 export interface Withdraw {
   /** Account address to debit (20 bytes). */
   owner: Address;
   /** Withdrawal amount in microUSDC (6 decimal places, e.g., 100_000_000 = $100). */
   amount: bigint;
+  /** Authorized relayer signer (20 bytes). Must match the envelope pubkey's derived owner. */
+  signer: Address;
 }
 
 /** Register a new perpetual market with its risk and fee parameters (admin action). */
@@ -267,6 +294,24 @@ export interface UpdateMarketFees {
   fundingIntervalMs?: bigint | null;
   /** New per-account position cap in contracts. 0 = disable cap. */
   maxPositionSize?: bigint | null;
+  /**
+   * New default order TTL in milliseconds. Omit to leave unchanged.
+   * 0 disables the end-of-block order-expiry sweep for this market.
+   * Added 2026-04-23 (see `run_order_expiry` in the engine): gives
+   * operators a live lever to auto-cancel stale MM quotes instead of
+   * requiring `make repair`.
+   */
+  defaultTtlMs?: bigint | null;
+  /**
+   * Flip net-delta portfolio margin on this market. Omit to leave
+   * unchanged. true = firing legs with the same underlying group into
+   * a single net position for MM/IM (|Σ signed_size| × settle ×
+   * weighted_bps); false = per-leg scenario margin. See
+   * `MarketConfig.netDeltaMargin` and `docs/margin-engine.md §6`.
+   * Safe to flip on at any time; flipping off can push accounts
+   * under MM.
+   */
+  netDeltaMargin?: boolean | null;
 }
 
 /** Lifecycle status of an impact-market family. */
@@ -621,52 +666,281 @@ export interface Orderbook {
   asks: OrderbookLevel[];
 }
 
-/** Information about a single open position. */
-export interface PositionInfo {
-  /** Owner address (20 bytes). */
+/** One row of the auto-deleveraging queue for a market. Returned
+ *  sorted by `adlScore` desc (front of the queue first). Used by the
+ *  trading UI to compute a real per-position ADL percentile rather
+ *  than relying on the per-account score alone.
+ *
+ *  Wire shape: 6-tuple `[owner, market, side, size, upnlNow, adlScore]`.
+ *  Endpoint: `GET /v1/adl/queue/{market}`. Added 2026-04-25 with the
+ *  Tier-3 ADL force-close path.
+ */
+export interface AdlQueueEntry {
+  /** 20-byte owner address. */
   owner: Uint8Array;
-  /** Market identifier. */
   market: number;
-  /** Position side: "Buy" (long) or "Sell" (short). */
+  /** Position side: "Buy" = long, "Sell" = short. */
   side: "Buy" | "Sell";
-  /** Weighted-average entry price in cents (2 dp). */
-  entryPrice: bigint;
-  /** Absolute position size in contracts (integer lots). */
+  /** Position size in contracts. */
   size: bigint;
-  /** Cumulative funding index at the time the position was last settled. */
+  /** Unrealized PnL at the current mark, signed. Always positive
+   *  here (only profitable positions are queued). */
+  upnlNow: bigint;
+  /** `max(0, upnlNow) × leverage_bps`. Higher = closer to the front
+   *  of the ADL queue. Tied with `PositionInfo.adlScore` for the
+   *  same position. */
+  adlScore: bigint;
+}
+
+/** Information about a single open position.
+ *
+ * Fields 0-5 are the raw `Position` state; fields 6-11 (the "now"/
+ * "if_fires"/"if_dies"/"since" fields) are response-only enrichments
+ * computed by `query_account` in the node. Indices are stable with
+ * the msgpack wire tuple returned by `/v1/account/{address}` — older
+ * SDK versions that only read indices 0-5 continue to work; indices
+ * 6+ are undefined on older responses (gateway returns them as of
+ * commit `[Sprint 1 Day 1]` / 2026-04-24).
+ */
+export interface PositionInfo {
+  /** [0] Owner address (20 bytes). */
+  owner: Uint8Array;
+  /** [1] Market identifier. */
+  market: number;
+  /** [2] Position side: "Buy" (long) or "Sell" (short). */
+  side: "Buy" | "Sell";
+  /** [3] Weighted-average entry price in cents (2 dp). */
+  entryPrice: bigint;
+  /** [4] Absolute position size in contracts (integer lots). */
+  size: bigint;
+  /** [5] Cumulative funding index at the time the position was last settled. */
   lastFundingIndex: bigint;
+
+  // ── Response-only enrichment (indices 6-11, absent on legacy responses) ──
+
+  /** [6] Unrealized P&L at the current mark, unconditional. Perp + CP use
+   * the oracle as the current mark; binaries return 0 (no deterministic
+   * current mark — use pnlIfFires/pnlIfDies for binary payoffs). */
+  upnlNow?: bigint;
+  /** [7] Maintenance margin this position contributes when its firing
+   * branch is active. For Perp = always; for CP/Binary = zero under
+   * the non-firing branch. */
+  mmNow?: bigint;
+  /** [8] Initial margin contribution, same semantics as mmNow. */
+  imNow?: bigint;
+  /** [9] Position value if its branch fires (μ = 1):
+   *   `sign(side) × (settle × size − entry × size)`
+   * Perp always fires. CP fires when event resolves to its branch.
+   * Binary fires + settles to BINARY_PRICE_MAX × size. */
+  pnlIfFires?: bigint;
+  /** [10] Position value if its branch does NOT fire (μ = 0):
+   *   `sign(side) × (0 − entry × size)`
+   * Perp: equal to upnlNow (perps never die; reported for UI column
+   * symmetry). CP/Binary: the non-firing payoff. */
+  pnlIfDies?: bigint;
+  /** [11] Funding accrued since the position's last settled funding index.
+   * Positive = credit, negative = debit.
+   *   `-sign(side) × (cumulative − lastFundingIndex) × size / FUNDING_SCALE`
+   */
+  fundingSince?: bigint;
+  /** [12] ADL queue score: `max(0, upnlNow) × leverage_used`. Higher
+   *  = closer to the front of the auto-deleveraging queue (Tier 3 of
+   *  the bad-debt waterfall). Only profitable positions have a
+   *  non-zero score; losers are liquidated long before they're at
+   *  risk of being ADL'd.
+   *
+   *  Formula: `(positiveUpnl × notional × 10_000) / imNow`, with the
+   *  10_000 factor expressing leverage in basis points so the product
+   *  fits in i64 cleanly. Returned as 0 for losing or non-firing
+   *  positions.
+   *
+   *  UIs should rank positions by `adlScore` desc to compute a
+   *  per-market percentile and warn at >90th percentile (the v3
+   *  design-doc threshold). Added 2026-04-25. */
+  adlScore?: bigint;
+}
+
+/** One entry per active impact market the account touches. Tuple of
+ * (impactMarketId, branch) where branch is "Yes" or "No". Ordering is
+ * ascending by impactMarketId (deterministic across nodes).
+ *
+ * See AccountInfo.bindingScenario for semantics. */
+export interface BindingScenarioEntry {
+  impactMarketId: number;
+  branch: "Yes" | "No";
+}
+
+/** One-round-trip market summary for the Markets-page card rail and
+ * Perp trade ticker bar. Bundles trade-derived summary stats (from
+ * history.db, JSON) with pass-through base64 msgpack blobs for
+ * funding + orderbook top-of-book.
+ *
+ * Returned by `GET /v1/ticker/{market}` and the `ticker` InfoRequest.
+ * Sprint 2 Day 5 (Jesse's P2 #4). */
+export interface Ticker {
+  /** Market id as decimal string. */
+  market: string;
+  /** Last fill price in the 24h window (empty/"0" if no trades). */
+  lastPrice: string;
+  /** Σ quantity across the 24h window (integer contracts). */
+  volume24hContracts: string;
+  /** Signed 24h change in basis points. Empty/"0" if no trades. */
+  change24hBps: string;
+  /** Base64 msgpack FundingInfo (mark EWMA, oracle, funding rate,
+   * interval). Decode with @msgpack/msgpack. */
+  fundingMsgpackB64: string;
+  /** Base64 msgpack OrderbookSnapshot at depth=1. Empty for fresh
+   * markets with no orders. */
+  orderbookMsgpackB64: string;
+  /** Always null today — the engine doesn't track open interest yet.
+   * UIs should render "—" / "coming soon" for this column. */
+  openInterest: string | null;
+}
+
+/** One row of the per-user deposit/withdraw cash-flow log. Covers four
+ * event kinds — see the `kind` field. Feeds the Portfolio EquityChart
+ * "equity over time" reconstruction (Jesse's P2 #6).
+ *
+ * Returned by `GET /v1/history/deposits/{address}` and `GET
+ * /v1/history/withdrawals/{address}`, and by the `historyDeposits` /
+ * `historyWithdrawals` InfoRequests. Shipped 2026-04-24. */
+export interface HistoryCashFlow {
+  /** One of the four Rust event kinds. */
+  kind:
+    | "deposit_confirmed"
+    | "withdraw_requested"
+    | "withdrawal_confirmed"
+    | "withdrawal_failed";
+  /** 20-byte owner address as hex. */
+  owner: string;
+  /** Amount in µUSDC (always positive). Use `signedDelta` for signed
+   * balance-change reconstruction. May be empty for
+   * `withdrawal_confirmed` (engine doesn't emit amount on ack). */
+  amount: string;
+  /** Signed balance delta for this event:
+   *   +amount for deposit_confirmed + withdrawal_failed (credit)
+   *   -amount for withdraw_requested                    (debit)
+   *   "0"     for withdrawal_confirmed                  (no change) */
+  signedDelta: string;
+  /** Post-event balance. Available for deposit/request/failed;
+   * empty for confirmed (no balance change on that event). */
+  newBalance: string;
+  /** Present on withdrawal events (request, confirmed, failed). */
+  withdrawalId: string;
+  /** Present on deposit_confirmed + withdrawal_confirmed. */
+  solanaTxSig: string;
+  /** Present on withdraw_requested only. */
+  solanaDestination: string;
+  /** Present on withdrawal_failed only. */
+  reason: string;
+  /** Block height at which the event landed. */
+  blockHeight: number;
+  /** Unix milliseconds. */
+  timestamp: number;
+}
+
+/** One row of the per-user position-at-resolution log. Covers three
+ * kinds — see `kind` field. Feeds Portfolio Resolved tab + Impact /
+ * Prediction resolved-state "your outcome" block.
+ *
+ * Returned by `GET /v1/history/resolutions/{address}` and the
+ * `historyResolutions` InfoRequest. Shipped 2026-04-24 (see Jesse's
+ * P2 #7 in docs/api-scope.md). */
+export interface HistoryResolution {
+  /** One of "conditional_settled" | "conditional_voided" | "prediction_settled". */
+  kind: "conditional_settled" | "conditional_voided" | "prediction_settled";
+  /** Impact-market family ID the resolved position belonged to. */
+  impactMarketId: string;
+  /** Child market ID (CPY/CPN or EBY/EBN). */
+  market: string;
+  /** 20-byte owner address as hex. */
+  owner: string;
+  /** Position side at resolution: "Buy" = long, "Sell" = short. */
+  side: string;
+  /** Position size at resolution, integer lots. String to preserve BIGINT. */
+  size: string;
+  /** Weighted-average entry price of the resolved position. */
+  entryPrice: string;
+  /** Settlement price. conditional_settled → mark_price;
+   *  prediction_settled → payoff_per_share (BINARY_PRICE_MAX winner, 0 loser);
+   *  conditional_voided → "" (no mark; void path returns margin, no cash movement). */
+  settlementPrice: string;
+  /** Signed realized PnL in µUSDC. conditional_voided → "0". */
+  realizedPnl: string;
+  /** Block height at which the resolution landed. */
+  blockHeight: number;
+  /** Unix milliseconds. */
+  timestamp: number;
 }
 
 /** Full account information including balance, positions, and margin state. */
 export interface AccountInfo {
-  /** Available USDC balance in microUSDC (6 dp, e.g., 100_000_000_000 = $100,000). */
+  /** [0] Available USDC balance in microUSDC (6 dp, e.g., 100_000_000_000 = $100,000). */
   balance: bigint;
-  /** Open positions for this account. */
+  /** [1] Open positions for this account. */
   positions: PositionInfo[];
-  /** Total equity (balance + unrealized PnL) in microUSDC (6 dp). */
+  /** [2] Total equity (balance + unrealized PnL) in microUSDC (6 dp).
+   * Scenario-aware: worst-case equity across all resolution outcomes. */
   equity: bigint;
-  /** Total maintenance margin requirement in microUSDC (6 dp). */
+  /** [3] Total maintenance margin requirement in microUSDC (6 dp).
+   * Scenario-aware: max MM across all resolution outcomes. */
   totalMm: bigint;
-  /** Total initial margin requirement in microUSDC (6 dp). */
+  /** [4] Total initial margin requirement in microUSDC (6 dp). */
   totalIm: bigint;
-  /** Margin ratio in basis points (equity / total notional * 10000). */
+  /** [5] Margin ratio in basis points (equity / total notional * 10000). */
   marginRatioBps: bigint;
+  /** [6] Resolution scenario that maximizes totalMm — the "binding" outcome.
+   * One entry per active impact market, ascending by impactMarketId.
+   * Empty for perp-only accounts. Undefined on responses from gateways
+   * older than 2026-04-24 (backward compat — the SDK decoder reads
+   * msgpack arrays by index). See Jesse's P1 #3 in docs/api-scope.md. */
+  bindingScenario?: BindingScenarioEntry[];
 }
 
-/** Configuration for a perpetual futures market. */
+/** Market kind discriminator. Wire shape mirrors the Rust `MarketKind`
+ *  enum exactly: `"Perp"` is a bare string, the parameterised variants
+ *  are `{ ConditionalPerp: [impactId, branch] }` /
+ *  `{ PredictionBinary: [impactId, branch] }`. */
+export type MarketKind =
+  | "Perp"
+  | { ConditionalPerp: [number, "Yes" | "No"] }
+  | { PredictionBinary: [number, "Yes" | "No"] };
+
+/** Configuration for a perpetual / conditional / binary market. The wire
+ *  form is a MessagePack positional array; indices below mirror the
+ *  Rust struct field order in services/exchange-core/src/types.rs.
+ *  Fields 7–10 were appended 2026-04-23..25 with `#[serde(default)]`
+ *  so older on-chain records decode unchanged. */
 export interface MarketConfig {
-  /** Market identifier (unique integer). */
+  /** [0] Market identifier (unique integer). */
   market: number;
-  /** Initial margin requirement in basis points (e.g., 1000 = 10% = 10x max leverage). */
+  /** [1] Initial margin requirement in basis points (e.g., 1000 = 10% = 10x max leverage). */
   imBps: number;
-  /** Maintenance margin requirement in basis points (e.g., 500 = 5%). */
+  /** [2] Maintenance margin requirement in basis points (e.g., 500 = 5%). */
   mmBps: number;
-  /** Taker fee rate in basis points (e.g., 5 = 0.05%). */
+  /** [3] Taker fee rate in basis points (e.g., 5 = 0.05%). */
   takerFeeBps: number;
-  /** Maker fee rate in basis points (e.g., 2 = 0.02%). */
+  /** [4] Maker fee rate in basis points (e.g., 2 = 0.02%). Negative = rebate. */
   makerFeeBps: number;
-  /** Funding interval in milliseconds (0 = funding disabled). */
+  /** [5] Funding interval in milliseconds (0 = funding disabled). */
   fundingIntervalMs: bigint;
-  /** Maximum absolute funding rate per interval in basis points. */
+  /** [6] Maximum absolute funding rate per interval in basis points. */
   maxFundingRateBps: number;
+  /** [7] Market kind. Defaults to `"Perp"` for legacy records lacking
+   *  this field. */
+  kind?: MarketKind;
+  /** [8] Per-account absolute position cap in contracts. 0 = no limit
+   *  (also the legacy default). Enforced at order-placement time —
+   *  fills that would push a taker's net (signed) position past
+   *  ±maxPositionSize are rejected with `PositionLimitExceeded`. */
+  maxPositionSize?: bigint;
+  /** [9] Default order TTL in ms. End-of-block `run_order_expiry`
+   *  cancels any resting order whose
+   *  `created_at_ms + defaultTtlMs < block_time_ms`. 0 disables TTL. */
+  defaultTtlMs?: bigint;
+  /** [10] Net-delta portfolio margin opt-in. true = firing legs that
+   *  share an underlying are aggregated into a single net position
+   *  for MM/IM. PredictionBinary legs ignore this flag. See
+   *  docs/margin-engine.md §6 for the derivation. */
+  netDeltaMargin?: boolean;
 }

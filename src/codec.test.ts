@@ -16,6 +16,7 @@ import {
   verify,
   hexToBytes,
   bytesToHex,
+  chainIdFromString,
 } from "./crypto.js";
 import { ActionType, Outcome, Side, type Action } from "./types.js";
 
@@ -69,7 +70,12 @@ describe("codec v1", () => {
   it("round-trips OracleUpdate", () => {
     const action: Action = {
       type: "OracleUpdate",
-      data: { market: 1, price: 5000n, signer: SIGNER },
+      data: {
+        market: 1,
+        price: 5000n,
+        signer: SIGNER,
+        publishTimeMs: 1_000_000n,
+      },
     };
     const bytes = encodeTx(action, 7n);
     const { action: decoded } = decodeTx(bytes);
@@ -77,6 +83,7 @@ describe("codec v1", () => {
     if (decoded.type === "OracleUpdate") {
       expect(decoded.data.market).toBe(1);
       expect(decoded.data.price).toBe(5000n);
+      expect(decoded.data.publishTimeMs).toBe(1_000_000n);
     }
   });
 
@@ -148,14 +155,19 @@ describe("codec v1 all action types", () => {
     { type: "CancelOrder", data: { orderId: 42n, owner: OWNER } },
     {
       type: "OracleUpdate",
-      data: { market: 1, price: 50000n, signer: SIGNER },
+      data: {
+        market: 1,
+        price: 50000n,
+        signer: SIGNER,
+        publishTimeMs: 100n,
+      },
     },
     {
       type: "MarketOrder",
       data: { market: 1, owner: OWNER, side: Side.Sell, quantity: 5n },
     },
-    { type: "Deposit", data: { owner: OWNER, amount: 1000000n } },
-    { type: "Withdraw", data: { owner: OWNER, amount: 500n } },
+    { type: "Deposit", data: { owner: OWNER, amount: 1000000n, signer: SIGNER } },
+    { type: "Withdraw", data: { owner: OWNER, amount: 500n, signer: SIGNER } },
     {
       type: "CreateMarket",
       data: {
@@ -282,6 +294,7 @@ describe("codec v1 all action types", () => {
         maxFundingRateBps: 250,
         fundingIntervalMs: 28_800_000n,
         maxPositionSize: 1000n,
+        defaultTtlMs: 60_000n,
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
@@ -293,6 +306,7 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.maxFundingRateBps).toBe(250);
     expect(decoded.data.fundingIntervalMs).toBe(28_800_000n);
     expect(decoded.data.maxPositionSize).toBe(1000n);
+    expect(decoded.data.defaultTtlMs).toBe(60_000n);
   });
 
   it("round-trips UpdateMarketFees with None fields preserved as null", () => {
@@ -306,6 +320,7 @@ describe("codec v1 all action types", () => {
         maxFundingRateBps: 100,
         fundingIntervalMs: null,
         maxPositionSize: null,
+        defaultTtlMs: null,
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
@@ -314,6 +329,26 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.makerFeeBps).toBeNull();
     expect(decoded.data.maxFundingRateBps).toBe(100);
     expect(decoded.data.fundingIntervalMs).toBeNull();
+    expect(decoded.data.maxPositionSize).toBeNull();
+    expect(decoded.data.defaultTtlMs).toBeNull();
+  });
+
+  it("round-trips UpdateMarketFees with only defaultTtlMs set (operator-only path)", () => {
+    // Operator flipping TTL on its own, leaving everything else alone.
+    // Verifies the defaultTtlMs field travels independently.
+    const action: Action = {
+      type: "UpdateMarketFees",
+      data: {
+        market: 7,
+        signer: SIGNER,
+        defaultTtlMs: 120_000n,
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 1n));
+    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
+    expect(decoded.data.market).toBe(7);
+    expect(decoded.data.defaultTtlMs).toBe(120_000n);
+    expect(decoded.data.takerFeeBps).toBeNull();
     expect(decoded.data.maxPositionSize).toBeNull();
   });
 });
@@ -358,7 +393,7 @@ describe("codec v2 signing", () => {
     const { privateKey, publicKey } = generateKeypair();
     const action: Action = {
       type: "Deposit",
-      data: { owner: OWNER, amount: 1000n },
+      data: { owner: OWNER, amount: 1000n, signer: SIGNER },
     };
 
     const bytes = signAndEncode(action, 5n, privateKey);
@@ -391,14 +426,19 @@ describe("codec v2 signing", () => {
       { type: "CancelOrder", data: { orderId: 42n, owner: OWNER } },
       {
         type: "OracleUpdate",
-        data: { market: 1, price: 50000n, signer: SIGNER },
+        data: {
+          market: 1,
+          price: 50000n,
+          signer: SIGNER,
+          publishTimeMs: 200n,
+        },
       },
       {
         type: "MarketOrder",
         data: { market: 1, owner: OWNER, side: Side.Sell, quantity: 5n },
       },
-      { type: "Deposit", data: { owner: OWNER, amount: 1000000n } },
-      { type: "Withdraw", data: { owner: OWNER, amount: 500n } },
+      { type: "Deposit", data: { owner: OWNER, amount: 1000000n, signer: SIGNER } },
+      { type: "Withdraw", data: { owner: OWNER, amount: 500n, signer: SIGNER } },
       {
         type: "CreateMarket",
         data: {
@@ -489,7 +529,7 @@ describe("codec v2 signing", () => {
     const { privateKey } = generateKeypair();
     const action: Action = {
       type: "Deposit",
-      data: { owner: OWNER, amount: 100n },
+      data: { owner: OWNER, amount: 100n, signer: SIGNER },
     };
     const a = signAndEncode(action, 1n, privateKey);
     const b = signAndEncode(action, 2n, privateKey);
@@ -555,42 +595,73 @@ describe("crypto", () => {
     expect(roundTripped).toEqual(original);
   });
 
-  it("signingMessage includes domain prefix", () => {
-    const msg = signingMessage(0x01, 1n, new Uint8Array([0xaa]));
-    const prefix = new TextEncoder().encode("ProofExchange-v2");
+  it("signingMessage includes v3 domain prefix", () => {
+    const chainId = new Uint8Array(32); // UNBOUND_CHAIN_ID
+    const msg = signingMessage(chainId, 0x01, 1n, new Uint8Array([0xaa]));
+    // Bumped to v3 on 2026-04-23 (audit B4) when the envelope
+    // gained a 32-byte chain_id binding.
+    const prefix = new TextEncoder().encode("ProofExchange-v3");
     for (let i = 0; i < prefix.length; i++) {
       expect(msg[i]).toBe(prefix[i]);
     }
   });
 
   it("signingMessage is deterministic", () => {
+    const chainId = new Uint8Array(32);
     const payload = new Uint8Array([1, 2, 3]);
-    const a = signingMessage(0x01, 42n, payload);
-    const b = signingMessage(0x01, 42n, payload);
+    const a = signingMessage(chainId, 0x01, 42n, payload);
+    const b = signingMessage(chainId, 0x01, 42n, payload);
     expect(a).toEqual(b);
   });
 
   it("sign and verify round-trip", () => {
+    const chainId = new Uint8Array(32);
     const { privateKey, publicKey } = generateKeypair();
-    const msg = signingMessage(0x01, 1n, new Uint8Array([0xff]));
+    const msg = signingMessage(chainId, 0x01, 1n, new Uint8Array([0xff]));
     const sig = sign(privateKey, msg);
     expect(sig.length).toBe(64);
     expect(verify(publicKey, sig, msg)).toBe(true);
   });
 
   it("wrong key fails verification", () => {
+    const chainId = new Uint8Array(32);
     const k1 = generateKeypair();
     const k2 = generateKeypair();
-    const msg = signingMessage(0x01, 1n, new Uint8Array([0xff]));
+    const msg = signingMessage(chainId, 0x01, 1n, new Uint8Array([0xff]));
     const sig = sign(k1.privateKey, msg);
     expect(verify(k2.publicKey, sig, msg)).toBe(false);
   });
 
   it("tampered message fails verification", () => {
+    const chainId = new Uint8Array(32);
     const { privateKey, publicKey } = generateKeypair();
-    const msg = signingMessage(0x01, 1n, new Uint8Array([0xff]));
+    const msg = signingMessage(chainId, 0x01, 1n, new Uint8Array([0xff]));
     const sig = sign(privateKey, msg);
-    const tampered = signingMessage(0x01, 2n, new Uint8Array([0xff]));
+    const tampered = signingMessage(chainId, 0x01, 2n, new Uint8Array([0xff]));
     expect(verify(publicKey, sig, tampered)).toBe(false);
+  });
+
+  it("chainIdFromString(A) differs from chainIdFromString(B) — B4 binding", () => {
+    const a = chainIdFromString("proof-dev-1");
+    const b = chainIdFromString("proof-prod-1");
+    expect(a).not.toEqual(b);
+    expect(a.length).toBe(32);
+    expect(b.length).toBe(32);
+  });
+
+  it("cross-chain replay rejected — B4 regression", () => {
+    // A signature generated for chain A must NOT verify against chain B.
+    // If this ever passes trivially again, the v3 binding has been
+    // silently downgraded.
+    const chainA = chainIdFromString("proof-dev-1");
+    const chainB = chainIdFromString("proof-prod-1");
+    const { privateKey, publicKey } = generateKeypair();
+    const payload = new Uint8Array([0xde, 0xad]);
+    const msgA = signingMessage(chainA, 0x01, 5n, payload);
+    const sigA = sign(privateKey, msgA);
+    expect(verify(publicKey, sigA, msgA)).toBe(true);
+
+    const msgB = signingMessage(chainB, 0x01, 5n, payload);
+    expect(verify(publicKey, sigA, msgB)).toBe(false);
   });
 });

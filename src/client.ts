@@ -1,12 +1,23 @@
-import { signAndEncode } from "./codec.js";
-import { getPublicKey, pubkeyToOwner, ownerToHex } from "./crypto.js";
+import { signAndEncodeWithChain } from "./codec.js";
+import {
+  getPublicKey,
+  pubkeyToOwner,
+  ownerToHex,
+  UNBOUND_CHAIN_ID,
+  chainIdFromString,
+} from "./crypto.js";
 import type {
   Action,
   TxResult,
   AccountInfo,
+  AdlQueueEntry,
+  BindingScenarioEntry,
+  HistoryCashFlow,
+  HistoryResolution,
   Orderbook,
   OrderbookLevel,
   PositionInfo,
+  Ticker,
 } from "./types.js";
 import { Decoder } from "@msgpack/msgpack";
 
@@ -19,12 +30,26 @@ export interface ExchangeClientOptions {
   apiUrl?: string;
   /** WebSocket URL. Derived from rpcUrl by default. */
   wsUrl?: string;
+  /**
+   * CometBFT `chain_id` string — e.g. "proof-testnet-1". Signatures
+   * are bound to this value via the v3 envelope
+   * (`crypto::signing_message`), closing the cross-chain replay
+   * vector audit B4 identified. If omitted, the client signs with
+   * `UNBOUND_CHAIN_ID` — OK for local dev against a fresh unbound
+   * chain, but **production deployments MUST set this** or every
+   * signed tx is replayable on any other unbound chain. The
+   * operator-safe default is to source this from the gateway
+   * `/v1/status` endpoint at client init time.
+   */
+  chainId?: string;
 }
 
 export class ExchangeClient {
   private rpcUrl: string;
   private apiUrl: string;
   private wsUrl: string;
+  /** 32-byte chain_id binding for v3 signatures (see audit B4). */
+  private chainId: Uint8Array;
   private privateKey: Uint8Array | null = null;
   private publicKey: Uint8Array | null = null;
   private address: Uint8Array | null = null;
@@ -51,6 +76,12 @@ export class ExchangeClient {
     this.apiUrl = opts.apiUrl ?? "http://localhost:8080";
     this.wsUrl =
       opts.wsUrl ?? this.rpcUrl.replace(/^http/, "ws") + "/websocket";
+    // Derive 32-byte chain binding: keccak256 of the chain_id string,
+    // or `UNBOUND_CHAIN_ID` when not provided. Production callers
+    // must supply `chainId` — see options docstring.
+    this.chainId = opts.chainId
+      ? chainIdFromString(opts.chainId)
+      : UNBOUND_CHAIN_ID;
   }
 
   // -----------------------------------------------------------------------
@@ -173,7 +204,12 @@ export class ExchangeClient {
     if (!this.privateKey) throw new Error("No private key set");
 
     const seq = this.nonce;
-    const txBytes = signAndEncode(action, seq, this.privateKey);
+    const txBytes = signAndEncodeWithChain(
+      this.chainId,
+      action,
+      seq,
+      this.privateKey,
+    );
     const b64 = toBase64(txBytes);
 
     const res = await fetch(this.rpcUrl, {
@@ -198,8 +234,13 @@ export class ExchangeClient {
       this.nonce++;
     } else if (r.code === 21) {
       // CheckTx rejected with InvalidNonce — local cache is stale, resync
-      // immediately so the next call starts from a clean slate.
-      this.syncNonce().catch(() => {});
+      // BEFORE returning so the next caller starts from a clean slate.
+      // Pre-2026-04-25 this was fire-and-forget (`.catch(() => {})`),
+      // which meant the next submit could fire while the resync was
+      // still in flight — visible in the impact-mm logs as cascades of
+      // `expected N, got N+1` / `expected N, got N+2` etc. Awaiting
+      // here serialises the recovery.
+      await this.syncNonce().catch(() => {});
     }
 
     return {
@@ -384,6 +425,33 @@ export class ExchangeClient {
     };
   }
 
+  /** Fetch the auto-deleveraging queue for a market. Returns
+   *  profitable positions ranked by `adlScore` desc — highest first
+   *  is most-likely to be ADL'd if a counterparty blows through the
+   *  earlier waterfall tiers. UIs use this to compute a per-position
+   *  percentile rank (search by owner+market, find your row index,
+   *  divide by total entries). Empty array if the market has no
+   *  profitable positions or if the gateway predates the endpoint. */
+  async queryAdlQueue(market: number): Promise<AdlQueueEntry[]> {
+    const res = await fetch(`${this.apiUrl}/v1/adl/queue/${market}`);
+    const json = await res.json();
+    if (json.error) return [];
+    const bytes = fromBase64(json.data);
+    const raw = msgpackDecoder.decode(bytes);
+    if (!Array.isArray(raw)) return [];
+    return raw.map((row) => {
+      const r = row as unknown[];
+      return {
+        owner: r[0] as Uint8Array,
+        market: Number(r[1]),
+        side: r[2] as "Buy" | "Sell",
+        size: BigInt(r[3] as number | bigint),
+        upnlNow: BigInt(r[4] as number | bigint),
+        adlScore: BigInt(r[5] as number | bigint),
+      };
+    });
+  }
+
   async queryAccount(addressHex?: string): Promise<AccountInfo | null> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return null;
@@ -394,25 +462,187 @@ export class ExchangeClient {
     const raw = msgpackDecoder.decode(bytes) as unknown[];
     const balance = BigInt(raw[0] as number | bigint);
     const positions: PositionInfo[] = ((raw[1] ?? []) as unknown[][]).map(
-      (p) => ({
-        owner: p[0] as Uint8Array,
-        market: Number(p[1]),
-        side: p[2] as "Buy" | "Sell",
-        entryPrice: BigInt(p[3] as number | bigint),
-        size: BigInt(p[4] as number | bigint),
-        lastFundingIndex: BigInt((p[5] as number | bigint) ?? 0),
-      }),
+      (p) => {
+        // Optional enrichments (indices 6-12) shipped incrementally:
+        //   6-11: scenario-aware brief fields, 2026-04-24 (P1 #2).
+        //   12  : adlScore, 2026-04-25 (item 7 — ADL rank surface).
+        // Older gateways return shorter tuples; missing fields are
+        // surfaced as `undefined` so the UI can show a "—" placeholder.
+        const optBig = (v: unknown): bigint | undefined =>
+          v === undefined || v === null
+            ? undefined
+            : BigInt(v as number | bigint);
+        return {
+          owner: p[0] as Uint8Array,
+          market: Number(p[1]),
+          side: p[2] as "Buy" | "Sell",
+          entryPrice: BigInt(p[3] as number | bigint),
+          size: BigInt(p[4] as number | bigint),
+          lastFundingIndex: BigInt((p[5] as number | bigint) ?? 0),
+          upnlNow: optBig(p[6]),
+          mmNow: optBig(p[7]),
+          imNow: optBig(p[8]),
+          pnlIfFires: optBig(p[9]),
+          pnlIfDies: optBig(p[10]),
+          fundingSince: optBig(p[11]),
+          adlScore: optBig(p[12]),
+        };
+      },
     );
     const equity = BigInt((raw[2] as number | bigint) ?? 0);
     const totalMm = BigInt((raw[3] as number | bigint) ?? 0);
     const totalIm = BigInt((raw[4] as number | bigint) ?? 0);
     const marginRatioBps = BigInt((raw[5] as number | bigint) ?? 0);
-    return { balance, positions, equity, totalMm, totalIm, marginRatioBps };
+    // Index [6] — shipped 2026-04-24 (Sprint 1 Day 2 / P1 #3). Older
+    // gateways omit this field; leave bindingScenario undefined rather
+    // than defaulting to [] so callers can tell "no data available"
+    // from "empty (perp-only account)".
+    let bindingScenario: BindingScenarioEntry[] | undefined;
+    if (raw[6] !== undefined) {
+      bindingScenario = ((raw[6] as unknown[]) ?? []).map((e) => {
+        const t = e as [number | bigint, string];
+        return {
+          impactMarketId: Number(t[0]),
+          branch: t[1] as "Yes" | "No",
+        };
+      });
+    }
+    return {
+      balance,
+      positions,
+      equity,
+      totalMm,
+      totalIm,
+      marginRatioBps,
+      bindingScenario,
+    };
   }
 
   async queryHealth(): Promise<{ status: string; height: number }> {
     const res = await fetch(`${this.apiUrl}/v1/health`);
     return res.json();
+  }
+
+  /** One-round-trip market summary. Bundles last / 24h volume / 24h
+   * change with pass-through msgpack blobs for funding + orderbook
+   * top-of-book. Meant for the Markets grid card rail — previously
+   * required N round-trips per card. Sprint 2 Day 5 (P2 #4).
+   *
+   * `openInterest` is null in every response today — the engine
+   * doesn't track OI yet. UI should render "—" or "coming soon". */
+  async queryTicker(market: number): Promise<Ticker | null> {
+    const res = await fetch(`${this.apiUrl}/v1/ticker/${market}`);
+    if (!res.ok) return null;
+    const row = (await res.json()) as Record<string, unknown>;
+    return {
+      market: String(row.market ?? market),
+      lastPrice: String(row.last_price ?? "0"),
+      volume24hContracts: String(row.volume_24h_contracts ?? "0"),
+      change24hBps: String(row.change_24h_bps ?? "0"),
+      fundingMsgpackB64: String(row.funding_msgpack_b64 ?? ""),
+      orderbookMsgpackB64: String(row.orderbook_msgpack_b64 ?? ""),
+      openInterest:
+        row.open_interest === null || row.open_interest === undefined
+          ? null
+          : String(row.open_interest),
+    };
+  }
+
+  /** Per-user deposit log — every `deposit_confirmed` event for this
+   * owner, newest first. Feeds Portfolio EquityChart equity-over-time
+   * reconstruction (P2 #6). */
+  async queryHistoryDeposits(
+    addressHex?: string,
+    opts?: { fromMs?: number; toMs?: number; limit?: number },
+  ): Promise<HistoryCashFlow[]> {
+    return this.queryHistoryCashFlow("deposits", addressHex, opts);
+  }
+
+  /** Per-user withdrawal lifecycle log — withdraw_requested /
+   * withdrawal_confirmed / withdrawal_failed, newest first. Filter by
+   * `kind` client-side if you want only pending requests. P2 #6. */
+  async queryHistoryWithdrawals(
+    addressHex?: string,
+    opts?: { fromMs?: number; toMs?: number; limit?: number },
+  ): Promise<HistoryCashFlow[]> {
+    return this.queryHistoryCashFlow("withdrawals", addressHex, opts);
+  }
+
+  /** Internal: shared decoder for the two cash-flow endpoints. They
+   * return identical row shapes (HistoryCashFlow); the difference is
+   * which kinds the server includes. */
+  private async queryHistoryCashFlow(
+    path: "deposits" | "withdrawals",
+    addressHex?: string,
+    opts?: { fromMs?: number; toMs?: number; limit?: number },
+  ): Promise<HistoryCashFlow[]> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return [];
+    const params = new URLSearchParams();
+    if (opts?.fromMs !== undefined) params.set("from", String(opts.fromMs));
+    if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
+    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    const url = `${this.apiUrl}/v1/history/${path}/${hex}${qs ? `?${qs}` : ""}`;
+    const res = await fetch(url);
+    const json = (await res.json()) as unknown;
+    if (!Array.isArray(json)) return [];
+    return (json as Array<Record<string, unknown>>).map((row) => ({
+      kind: row.kind as HistoryCashFlow["kind"],
+      owner: String(row.owner ?? ""),
+      amount: String(row.amount ?? ""),
+      signedDelta: String(row.signed_delta ?? "0"),
+      newBalance: String(row.new_balance ?? ""),
+      withdrawalId: String(row.withdrawal_id ?? ""),
+      solanaTxSig: String(row.solana_tx_sig ?? ""),
+      solanaDestination: String(row.solana_destination ?? ""),
+      reason: String(row.reason ?? ""),
+      blockHeight: Number(row.block_height ?? 0),
+      timestamp: Number(row.timestamp ?? 0),
+    }));
+  }
+
+  /** Per-user position-at-resolution log — each row is one settlement or
+   * voided-conditional snapshot. Feeds the Portfolio "Resolved" tab
+   * (P2 #7). Optional `impactMarketId` filter scopes to one event family.
+   *
+   * `fromMs` / `toMs` are unix-ms timestamps; omit for unbounded.
+   * `limit` caps at 1000 server-side. Results are newest-first. */
+  async queryHistoryResolutions(
+    addressHex?: string,
+    opts?: {
+      impactMarketId?: number;
+      fromMs?: number;
+      toMs?: number;
+      limit?: number;
+    },
+  ): Promise<HistoryResolution[]> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return [];
+    const params = new URLSearchParams();
+    if (opts?.impactMarketId !== undefined)
+      params.set("impact_market_id", String(opts.impactMarketId));
+    if (opts?.fromMs !== undefined) params.set("from", String(opts.fromMs));
+    if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
+    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    const url = `${this.apiUrl}/v1/history/resolutions/${hex}${qs ? `?${qs}` : ""}`;
+    const res = await fetch(url);
+    const json = (await res.json()) as unknown;
+    if (!Array.isArray(json)) return [];
+    return (json as Array<Record<string, unknown>>).map((row) => ({
+      kind: row.kind as HistoryResolution["kind"],
+      impactMarketId: String(row.impact_market_id ?? ""),
+      market: String(row.market ?? ""),
+      owner: String(row.owner ?? ""),
+      side: String(row.side ?? ""),
+      size: String(row.size ?? ""),
+      entryPrice: String(row.entry_price ?? ""),
+      settlementPrice: String(row.settlement_price ?? ""),
+      realizedPnl: String(row.realized_pnl ?? "0"),
+      blockHeight: Number(row.block_height ?? 0),
+      timestamp: Number(row.timestamp ?? 0),
+    }));
   }
 
   // -----------------------------------------------------------------------

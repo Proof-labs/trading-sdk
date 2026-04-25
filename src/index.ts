@@ -42,6 +42,7 @@ export {
   type AccountInfo,
   type PositionInfo,
   type MarketConfig,
+  type AdlQueueEntry,
 } from "./types.js";
 
 // Codec
@@ -49,6 +50,7 @@ export {
   encodeTx,
   encodeTxV2,
   signAndEncode,
+  signAndEncodeWithChain,
   decodeTx,
   peekActionType,
 } from "./codec.js";
@@ -64,6 +66,8 @@ export {
   signingMessage,
   sign,
   verify,
+  chainIdFromString,
+  UNBOUND_CHAIN_ID,
 } from "./crypto.js";
 
 // Client
