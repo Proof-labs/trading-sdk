@@ -279,8 +279,14 @@ pub fn encode_tx_v2(
     rmp_serde::to_vec(&envelope).map_err(|e| ExecError::InternalError(e.to_string()))
 }
 
-/// Sign an action and encode it as a v2 wire envelope.
-pub fn sign_and_encode(
+/// Sign an action and encode it as a v2 wire envelope, binding the
+/// signature to a specific `chain_id`. The wire envelope format is
+/// unchanged (chain_id is not carried on the wire — it's established
+/// by genesis / snapshot-load and every node verifies against its
+/// stored value), but the signing bytes gained a 32-byte chain_id
+/// prefix in v3 per audit B4.
+pub fn sign_and_encode_with_chain(
+    chain_id: &[u8; 32],
     action: &Action,
     seq: u64,
     signing_key: &ed25519_dalek::SigningKey,
@@ -288,7 +294,7 @@ pub fn sign_and_encode(
     use ed25519_dalek::Signer;
 
     let (action_type, payload) = encode_action(action)?;
-    let msg = crate::crypto::signing_message(action_type, seq, &payload);
+    let msg = crate::crypto::signing_message(chain_id, action_type, seq, &payload);
     let sig = signing_key.sign(&msg);
 
     let pubkey = signing_key.verifying_key().to_bytes();
@@ -303,6 +309,19 @@ pub fn sign_and_encode(
         signature,
     };
     rmp_serde::to_vec(&envelope).map_err(|e| ExecError::InternalError(e.to_string()))
+}
+
+/// Test-only convenience: sign with the `UNBOUND_CHAIN_ID`. Production
+/// code MUST use `sign_and_encode_with_chain` with a real chain_id,
+/// otherwise the signature is trivially replayable on any
+/// zero-chain_id deployment. Kept public because `exchange-core`
+/// integration tests are spread across multiple modules.
+pub fn sign_and_encode(
+    action: &Action,
+    seq: u64,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> Result<Vec<u8>, ExecError> {
+    sign_and_encode_with_chain(&crate::crypto::UNBOUND_CHAIN_ID, action, seq, signing_key)
 }
 
 /// Extract the action_type byte from a wire tx without full decoding.
@@ -453,6 +472,7 @@ mod tests {
             market: 1,
             price: 5000,
             signer: [0x03; 20],
+            publish_time_ms: 0,
         });
         let oracle_bytes = encode_tx(&oracle, 3).unwrap();
         println!("GOLDEN_ORACLE={}", hex::encode(&oracle_bytes));
@@ -503,6 +523,7 @@ mod tests {
             market: 1,
             price: 5000,
             signer: [0x03; 20],
+            publish_time_ms: 0,
         });
         let encoded = encode_tx(&action, 3).unwrap();
         assert_eq!(hex::encode(&encoded), expected_hex);
@@ -541,6 +562,7 @@ mod tests {
                 market: 2,
                 price: 60_000,
                 signer: [0xCC; 20],
+                publish_time_ms: 0,
             }),
             Action::MarketOrder(MarketOrder {
                 market: 3,
@@ -552,10 +574,12 @@ mod tests {
             Action::Deposit(Deposit {
                 owner: [0x11; 20],
                 amount: 1_000_000,
+                signer: [0xEE; 20],
             }),
             Action::Withdraw(Withdraw {
                 owner: [0x22; 20],
                 amount: 500_000,
+                signer: [0xEE; 20],
             }),
             Action::CreateMarket(CreateMarket {
                 market: 10,
@@ -635,6 +659,7 @@ mod tests {
                 market: u32::MAX,
                 price: u64::MAX,
                 signer: [0xFF; 20],
+                publish_time_ms: 0,
             }),
             Action::MarketOrder(MarketOrder {
                 market: u32::MAX,
@@ -646,10 +671,12 @@ mod tests {
             Action::Deposit(Deposit {
                 owner: [0xFF; 20],
                 amount: u64::MAX,
+                signer: [0xEE; 20],
             }),
             Action::Withdraw(Withdraw {
                 owner: [0xFF; 20],
                 amount: u64::MAX,
+                signer: [0xEE; 20],
             }),
             Action::CreateMarket(CreateMarket {
                 market: u32::MAX,
@@ -715,6 +742,7 @@ mod tests {
                 market: 0,
                 price: 0,
                 signer: [0u8; 20],
+                publish_time_ms: 0,
             }),
             Action::MarketOrder(MarketOrder {
                 market: 0,
@@ -726,10 +754,12 @@ mod tests {
             Action::Deposit(Deposit {
                 owner: [0u8; 20],
                 amount: 0,
+                signer: [0xEE; 20],
             }),
             Action::Withdraw(Withdraw {
                 owner: [0u8; 20],
                 amount: 0,
+                signer: [0xEE; 20],
             }),
             Action::CreateMarket(CreateMarket {
                 market: 0,
@@ -799,6 +829,7 @@ mod tests {
                     market,
                     price: i * 50,
                     signer: owner,
+                    publish_time_ms: 0,
                 }),
                 Action::MarketOrder(MarketOrder {
                     market,
@@ -810,10 +841,12 @@ mod tests {
                 Action::Deposit(Deposit {
                     owner,
                     amount: i * 1000,
+                    signer: [0xEE; 20],
                 }),
                 Action::Withdraw(Withdraw {
                     owner,
                     amount: i * 500,
+                    signer: [0xEE; 20],
                 }),
                 Action::CreateMarket(CreateMarket {
                     market,
@@ -888,6 +921,7 @@ mod tests {
                     market: 1,
                     price: 1,
                     signer: [0; 20],
+                    publish_time_ms: 0,
                 }),
                 ACTION_ORACLE_UPDATE,
             ),
@@ -905,6 +939,7 @@ mod tests {
                 Action::Deposit(Deposit {
                     owner: [0; 20],
                     amount: 1,
+                    signer: [0xEE; 20],
                 }),
                 ACTION_DEPOSIT,
             ),
@@ -912,6 +947,7 @@ mod tests {
                 Action::Withdraw(Withdraw {
                     owner: [0; 20],
                     amount: 1,
+                    signer: [0xEE; 20],
                 }),
                 ACTION_WITHDRAW,
             ),
@@ -1080,6 +1116,7 @@ mod tests {
                 market: 1,
                 price: 100,
                 signer: [0; 20],
+                publish_time_ms: 0,
             }),
             Action::MarketOrder(MarketOrder {
                 market: 1,
@@ -1091,10 +1128,12 @@ mod tests {
             Action::Deposit(Deposit {
                 owner: [0; 20],
                 amount: 1,
+                signer: [0xEE; 20],
             }),
             Action::Withdraw(Withdraw {
                 owner: [0; 20],
                 amount: 1,
+                signer: [0xEE; 20],
             }),
             Action::CreateMarket(CreateMarket {
                 market: 1,
@@ -1151,6 +1190,7 @@ mod tests {
         let action = Action::Deposit(Deposit {
             owner: [0xCC; 20],
             amount: 5000,
+            signer: [0xEE; 20],
         });
         let encoded = sign_and_encode(&action, 99, &key).unwrap();
         let decoded = decode_tx(&encoded).unwrap();
@@ -1158,6 +1198,7 @@ mod tests {
         let auth = decoded.auth.unwrap();
         // Signature should verify against the signing message
         let result = crate::crypto::verify_signature(
+            &crate::crypto::UNBOUND_CHAIN_ID,
             &auth.pubkey,
             &auth.signature,
             auth.action_type,
@@ -1174,6 +1215,7 @@ mod tests {
         let action = Action::Deposit(Deposit {
             owner: [0xCC; 20],
             amount: 5000,
+            signer: [0xEE; 20],
         });
         let encoded = sign_and_encode(&action, 99, &key).unwrap();
         let decoded = decode_tx(&encoded).unwrap();
@@ -1182,6 +1224,7 @@ mod tests {
         // Verify with the wrong key's pubkey should fail
         let wrong_pubkey = wrong_key.verifying_key().to_bytes();
         let result = crate::crypto::verify_signature(
+            &crate::crypto::UNBOUND_CHAIN_ID,
             &wrong_pubkey,
             &auth.signature,
             auth.action_type,
@@ -1356,6 +1399,7 @@ mod tests {
             // Verify signature through crypto module
             assert!(
                 crate::crypto::verify_signature(
+                    &crate::crypto::UNBOUND_CHAIN_ID,
                     &auth.pubkey,
                     &auth.signature,
                     auth.action_type,
@@ -1377,6 +1421,7 @@ mod tests {
             let action = Action::Deposit(Deposit {
                 owner,
                 amount: i + 1,
+                signer: [0xEE; 20],
             });
 
             if i % 2 == 0 {
@@ -1423,6 +1468,7 @@ mod tests {
                         market: 1,
                         price: seq + 1,
                         signer: owner,
+                        publish_time_ms: 0,
                     }),
                     3 => Action::MarketOrder(MarketOrder {
                         market: 1,
@@ -1434,10 +1480,12 @@ mod tests {
                     4 => Action::Deposit(Deposit {
                         owner,
                         amount: seq + 1,
+                        signer: [0xEE; 20],
                     }),
                     5 => Action::Withdraw(Withdraw {
                         owner,
                         amount: seq + 1,
+                        signer: [0xEE; 20],
                     }),
                     6 => Action::CreateMarket(CreateMarket {
                         market: seq as u32 + 1,
@@ -1491,6 +1539,7 @@ mod tests {
                 let auth = decoded.auth.as_ref().unwrap();
                 assert!(
                     crate::crypto::verify_signature(
+                        &crate::crypto::UNBOUND_CHAIN_ID,
                         &auth.pubkey,
                         &auth.signature,
                         auth.action_type,
@@ -1512,6 +1561,7 @@ mod tests {
             let action = Action::Deposit(Deposit {
                 owner: crate::crypto::pubkey_to_owner(&key.verifying_key().to_bytes()),
                 amount: i + 1,
+                signer: [0xEE; 20],
             });
 
             let encoded = sign_and_encode(&action, i, &key).unwrap();
@@ -1525,6 +1575,7 @@ mod tests {
                         if let Some(ref auth) = decoded.auth {
                             // Decoded but signature should fail
                             let verified = crate::crypto::verify_signature(
+                                &crate::crypto::UNBOUND_CHAIN_ID,
                                 &auth.pubkey,
                                 &auth.signature,
                                 auth.action_type,

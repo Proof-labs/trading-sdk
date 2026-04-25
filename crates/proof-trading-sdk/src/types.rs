@@ -205,6 +205,16 @@ pub struct Order {
     pub price: u64,
     /// Remaining quantity in base-asset units.
     pub quantity: u64,
+    /// Block timestamp (ms since epoch) when this order was placed.
+    /// Paired with `MarketConfig::default_ttl_ms` to power the
+    /// `run_order_expiry` end-of-block sweep. Zero means "no
+    /// timestamp recorded" — which is also how on-chain `Order`
+    /// records written before this field existed decode thanks to
+    /// `serde(default)`. An order with `created_at_ms = 0` is
+    /// treated as "never expires" for safety (we don't want to
+    /// accidentally cancel legacy orders that predate the TTL work).
+    #[serde(default)]
+    pub created_at_ms: u64,
 }
 
 /// Deterministic execution context passed to every transaction handler.
@@ -218,6 +228,18 @@ pub struct TxContext {
     pub tx_index: u32,
     /// Block timestamp in milliseconds since Unix epoch.
     pub block_time_ms: u64,
+    /// 32-byte chain_id binding used by the v3 signing envelope
+    /// (`crate::crypto::signing_message`). Every v2-enveloped tx at
+    /// verify time requires the chain_id that was used at sign time,
+    /// so the value MUST be consistent across all validators — the
+    /// FFI layer sources it from genesis / snapshot-bound state and
+    /// threads it through every `FinalizeBlock` call.
+    ///
+    /// Defaults to `crypto::UNBOUND_CHAIN_ID` ([0u8; 32]) in tests
+    /// and in unbound deployments; production chains must set a
+    /// non-zero value to close the cross-chain replay vector
+    /// (audit B4, 2026-04-23).
+    pub chain_id: [u8; 32],
 }
 
 // ---------------------------------------------------------------------------
@@ -271,6 +293,102 @@ pub struct MarketConfig {
     /// existing markets keep `0` until explicitly updated.
     #[serde(default)]
     pub max_position_size: u64,
+    /// Default order time-to-live in milliseconds. When > 0, the
+    /// end-of-block `run_order_expiry` sweep cancels any resting
+    /// order whose `created_at_ms + default_ttl_ms < block_time_ms`.
+    /// Zero means "no TTL" — backward-compatible default for
+    /// markets created before this field existed (serde(default)).
+    ///
+    /// Motivation: MMs and bots that crash or restart leave
+    /// orphaned orders resting forever at stale prices, silently
+    /// locking up their initial margin. On 2026-04-23 alice (core
+    /// MM owner) had 1432 such orders across 20+ markets pinning
+    /// $6M IM against $2.9M equity — every new ask bounced with
+    /// `InsufficientMargin` and the BTC book went permanently
+    /// one-sided. With TTL set, the same shape self-heals within
+    /// `default_ttl_ms` rather than requiring manual cleanup.
+    ///
+    /// Recommended value for perps: 60_000 (1 minute) to match
+    /// the MM refresh cadence. For impact markets: longer (minutes)
+    /// because their MMs don't re-quote as often.
+    #[serde(default)]
+    pub default_ttl_ms: u64,
+    /// When true, this market's firing legs participate in net-delta
+    /// margin aggregation: all firing legs within a scenario that share
+    /// the same underlying market are combined into a single net position
+    /// for MM/IM. Charges `|Σ signed_size| × settle × weighted_bps` rather
+    /// than summing bps-on-notional per leg.
+    ///
+    /// Scope: only Perp and ConditionalPerp. PredictionBinary legs are
+    /// always charged per-leg (they don't add linear delta to their
+    /// underlying). Flag on a binary's MarketConfig is ignored for
+    /// grouping.
+    ///
+    /// Grouping key: the underlying perp market id. For a perp, that's
+    /// the perp itself. For a conditional perp, it's the perp referenced
+    /// by the impact market's `underlying_market`. Two legs group iff
+    /// they share the same underlying AND both have `net_delta_margin=true`
+    /// AND both fire in the current scenario.
+    ///
+    /// Within a group: `mm = |Σ signed_size| × settle × weighted_mm_bps /
+    /// 10_000`, where `weighted_mm_bps = Σ(|size_i| × mm_bps_i) / Σ|size_i|`.
+    /// Same formula for IM with im_bps. A perfectly hedged group
+    /// (net_signed = 0) charges zero MM regardless of per-leg bps.
+    ///
+    /// Default: false — legacy per-leg scenario margin behavior.
+    /// `#[serde(default)]` keeps existing on-chain MarketConfig records
+    /// decoding correctly.
+    ///
+    /// See docs/margin-engine.md §6 for the derivation.
+    #[serde(default)]
+    pub net_delta_margin: bool,
+    /// Insurance-fund pool grouping. Markets with the same `pool_id`
+    /// share an insurance fund — a JELLY-style blowout in one pool can
+    /// drain its own IF to zero without touching the IF that backs
+    /// other pools. See `docs/adl-vs-socialized-loss.md` §3 for the
+    /// full waterfall design (HLP → per-pool IF → socialized loss →
+    /// ADL).
+    ///
+    /// Defaults to 0 so existing on-chain MarketConfigs (written before
+    /// per-pool IF existed) all map to the legacy single-IF behavior.
+    /// Pool 0 reads/writes route to the legacy `INSURANCE_FUND` key,
+    /// preserving balance continuity across the upgrade.
+    ///
+    /// At launch we run two pools:
+    ///   * Pool 0 — BTC/ETH/SOL perps + their conditional perps (the
+    ///     "majors" pool). Inherits all existing balance.
+    ///   * Pool 1 — high-vol prediction binaries / longtail markets.
+    ///     Per-event tighter caps, isolated from majors.
+    #[serde(default)]
+    pub pool_id: u8,
+}
+
+/// Configuration for the Hyperliquidity Provider (HLP) — the
+/// protocol-owned MM that absorbs bankruptcy losses at Tier 0 of the
+/// bad-debt waterfall. See `docs/adl-vs-socialized-loss.md` §3.2.
+///
+/// Stored under `keys::HLP_CONFIG` (single global record). The HLP's
+/// trading account lives at `address`; the engine treats it like any
+/// other account for matching purposes but consults `min_balance_floor`
+/// when settling deficits — once HLP equity drops below the floor it
+/// stops absorbing and further deficits route to the per-pool IF.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct HlpConfig {
+    /// 20-byte address of the HLP vault account (matches the address
+    /// derived from the HLP's signing key).
+    pub address: [u8; 20],
+    /// Bootstrap equity (microUSDC). Captured at HLP-onboarding time
+    /// and never updated; the floor is computed from this baseline so
+    /// drawdowns don't move the floor up.
+    pub bootstrap_balance: u64,
+    /// Minimum balance HLP must retain. Below this, Tier 0 stops
+    /// absorbing. Default: 60% of bootstrap (`0.6 × bootstrap_balance`).
+    /// Stored absolute so the value at config-write time is durable
+    /// across bootstrap_balance migrations.
+    pub min_balance_floor: u64,
+    /// True iff Tier 0 is enabled. When false (initial state — no HLP
+    /// configured) the waterfall starts at Tier 1 (per-pool IF).
+    pub enabled: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -331,29 +449,86 @@ pub struct CancelOrder {
     pub owner: [u8; 20],
 }
 
-/// Push a new oracle (mark) price. Requires an authorized oracle signer.
+/// Push a new oracle (mark) price. Requires an authorized oracle signer
+/// AND a strictly increasing `publish_time_ms` per market.
+///
+/// **Why the timestamp check** (added 2026-04-23, audit finding B3):
+/// before this field existed, `OracleUpdate` had no replay protection
+/// of any kind — it's relayer-signed so it skips nonce enforcement,
+/// and the handler read no previous state before overwriting the
+/// price. Any previously-signed update (captured from the mempool,
+/// a public API, or a node log) was replayable forever. An attacker
+/// could rewind the mark price to a historical value, triggering
+/// mass liquidations or arbitrage at stale prices.
+///
+/// The field is the Pyth-style publish time of the price signal
+/// (ms since Unix epoch). The handler rejects any update whose
+/// `publish_time_ms` is ≤ the most recent stored value for the
+/// same market. Genesis / first-update carries any timestamp; the
+/// check only kicks in from the second update onward.
+///
+/// `#[serde(default)]` on `publish_time_ms` so on-chain records
+/// written before this field existed decode with `publish_time_ms = 0`,
+/// which passes the monotonicity check exactly once (and fails
+/// all replays of that seed update thereafter).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OracleUpdate {
     pub market: MarketId,
     /// New mark price in micro-USDC.
     pub price: u64,
     pub signer: [u8; 20],
+    /// Oracle's own publish timestamp in ms since Unix epoch.
+    /// Must be strictly greater than the last accepted update's
+    /// `publish_time_ms` for the same market.
+    #[serde(default)]
+    pub publish_time_ms: u64,
 }
 
-/// Direct deposit (testing/internal). Production deposits use [`ConfirmDeposit`].
+/// Direct deposit — requires **relayer authorization**.
+///
+/// Previously described as "testing/internal" with no authorization check
+/// beyond `signer == owner`, which was an unauthenticated mint primitive:
+/// any signed user could credit themselves arbitrary balance. See audit
+/// finding B1 (2026-04-23). The handler now requires
+/// `is_relayer_authorized(signer)`.
+///
+/// In production the primary deposit path is [`ConfirmDeposit`] (which
+/// additionally dedupes on a Solana tx signature). This direct action
+/// remains available to the relayer for test bootstraps and the unusual
+/// cases where no Solana sig exists (e.g. migration/genesis-adjacent
+/// credits). External callers must use [`ConfirmDeposit`] instead.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Deposit {
     pub owner: [u8; 20],
     /// Amount in micro-USDC.
     pub amount: u64,
+    /// Relayer signer. Must be an authorized relayer; enforced by
+    /// `handle_deposit`. Added 2026-04-23 per audit B1.
+    #[serde(default)]
+    pub signer: [u8; 20],
 }
 
-/// Direct withdrawal (testing/internal). Production withdrawals use [`WithdrawRequest`].
+/// Direct withdrawal — requires **relayer authorization**.
+///
+/// Previously described as "testing/internal" with no authorization check
+/// beyond `signer == owner`, which let any user debit their balance with
+/// no off-chain counterparty (a silent burn). See audit finding B2
+/// (2026-04-23). The handler now requires
+/// `is_relayer_authorized(signer)`.
+///
+/// External users move funds out via the two-phase [`WithdrawRequest`] →
+/// relayer [`ConfirmWithdrawal`] path. This direct action remains
+/// available to the relayer for administrative adjustments (e.g.
+/// refunding a stuck position) and for integration tests.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Withdraw {
     pub owner: [u8; 20],
     /// Amount in micro-USDC.
     pub amount: u64,
+    /// Relayer signer. Must be an authorized relayer; enforced by
+    /// `handle_withdraw`. Added 2026-04-23 per audit B2.
+    #[serde(default)]
+    pub signer: [u8; 20],
 }
 
 /// Admin action to register a market with its risk parameters.
@@ -510,6 +685,28 @@ pub struct UpdateMarketFees {
     /// unchanged. Setting to 0 disables the cap.
     #[serde(default)]
     pub max_position_size: Option<u64>,
+    /// New default order TTL in milliseconds. `None` = leave
+    /// unchanged. Setting to 0 disables auto-cancel sweeps for this
+    /// market. Operators tune this per-market via the relayer-signed
+    /// admin action; recommended: 60_000 (1 minute) for perps, longer
+    /// for impact markets whose MMs re-quote less often. Motivated
+    /// by the 2026-04-23 incident where alice's orphaned-order
+    /// backlog locked $6M IM against $2.9M equity and made the BTC
+    /// book permanently one-sided — see `run_order_expiry` docstring.
+    #[serde(default)]
+    pub default_ttl_ms: Option<u64>,
+    /// Flip the net-delta portfolio margin flag on this market.
+    /// `None` = leave unchanged. `Some(true)` enables net-delta
+    /// grouping for firing legs on this market's underlying; `Some(false)`
+    /// falls back to per-leg scenario margin.
+    ///
+    /// See `MarketConfig::net_delta_margin` for the semantics. Flipping
+    /// this on a live market changes MM/IM for existing positions
+    /// on the next check — operators should model the impact before
+    /// flipping to `false` (could push accounts under MM) but
+    /// flipping to `true` is always safe (can only relieve MM).
+    #[serde(default)]
+    pub net_delta_margin: Option<bool>,
 }
 
 /// Status of a pending withdrawal.
@@ -649,6 +846,8 @@ pub enum Event {
         max_funding_rate_bps: u32,
         funding_interval_ms: u64,
         max_position_size: u64,
+        default_ttl_ms: u64,
+        net_delta_margin: bool,
     },
     /// Impact-market family was registered. Emitted once; the 5 underlying
     /// `MarketCreated` events follow (1 reused existing perp + 4 new children).
@@ -721,11 +920,99 @@ pub enum Event {
         realized_pnl: i64,
     },
     /// Insurance fund balance changed (e.g., from liquidation surplus/deficit).
+    /// Per-pool variant — the legacy event without `pool_id` continues to
+    /// be emitted for pool 0 to preserve consumer compatibility.
     InsuranceFundUpdated {
+        /// Pool the change applied to. 0 for legacy/majors pool (the
+        /// bare `InsuranceFund` state key); 1+ for newer pools keyed
+        /// under `InsuranceFundByPool`. Added 2026-04-25 with the
+        /// four-tier waterfall.
+        #[serde(default)]
+        pool_id: u8,
         /// New total balance in micro-USDC (can be negative if fund is depleted).
         balance: i64,
         /// Change amount in micro-USDC (positive = inflow, negative = outflow).
         delta: i64,
+    },
+    /// Tier 0 of the bad-debt waterfall. HLP absorbed `amount` of
+    /// liquidation deficit, leaving HLP balance at `hlp_balance_after`.
+    /// Emitted only when HLP is enabled AND its balance was above the
+    /// floor at draw time. Once HLP hits the floor, further deficits
+    /// route to Tier 1 (per-pool IF) and this event stops firing.
+    HlpAbsorbed {
+        /// Pool the liquidation came from (informational — HLP is
+        /// pool-agnostic at Tier 0).
+        pool_id: u8,
+        /// Microusdc absorbed by HLP this draw.
+        amount: u64,
+        /// HLP balance after the draw.
+        hlp_balance_after: i64,
+    },
+    /// Tier 2 of the bad-debt waterfall. The pool's IF was insufficient
+    /// to fully absorb a liquidation deficit, so the residual was
+    /// distributed pro-rata across all open positions in the pool,
+    /// capped at `socialized_cap_bps × pool_notional / 10_000` per
+    /// event. Each affected account is debited proportionally; the
+    /// list is included so off-chain consumers can reconstruct who
+    /// took what haircut.
+    SocializedLossApplied {
+        pool_id: u8,
+        /// Microusdc actually collected this event — sum of per-counterparty
+        /// debits. Floored by each counterparty's balance (current-balance
+        /// constraint, not the spec-pure "negative balance allowed" model).
+        total_amount: u64,
+        /// Microusdc the cap-respecting model says we *should* have
+        /// absorbed: `min(requested, socialized_cap_bps × pool_notional /
+        /// 10_000)`. When `total_amount < cap_target`, the gap reflects
+        /// counterparties that had zero balance at the moment of the
+        /// shock — under the spec-pure model these would have been pushed
+        /// to negative balance and re-liquidated next block. The engine
+        /// instead lets the gap roll through to Tier 3 (ADL), trading
+        /// spec fidelity for simpler accounting (no negative-balance
+        /// state migration). Off-chain consumers compare `total_amount`
+        /// vs `cap_target` to detect the deviation. Audit 2026-04-25 #4.
+        cap_target: u64,
+        /// Cap in bps applied to the pool's two-sided notional. Echoed
+        /// here for auditability; matches the
+        /// `InsuranceFundConfig.socialized_cap_bps` of the time.
+        cap_bps: u32,
+        /// Number of open positions that contributed.
+        affected_count: u32,
+    },
+    /// Tier 3 of the bad-debt waterfall. A profitable counterparty was
+    /// auto-deleveraged (force-closed at the bankruptcy price of the
+    /// counterparty being liquidated) because all prior tiers were
+    /// exhausted. The ADL queue ranks positions by
+    /// `unrealized_pnl × leverage_used` descending; this event is
+    /// emitted once per ADL'd position.
+    PositionAutoDeleveraged {
+        /// Owner whose position was force-closed.
+        owner: [u8; 20],
+        market: MarketId,
+        side: Side,
+        size: u64,
+        /// Price the position was actually closed at. Currently `mark` —
+        /// see `close_price_spec` for the spec-correct value. Audit
+        /// 2026-04-25 #2 tracks the migration to closing at the
+        /// liquidated trader's bankruptcy price.
+        close_price: u64,
+        /// Bankruptcy price the spec (`docs/adl-vs-socialized-loss.md`
+        /// §3.5) says the position SHOULD have been closed at. Set to
+        /// the liquidated counterparty's `bp = entry − σ × balance / size`
+        /// (one bp per liquidation event, threaded through). The engine
+        /// currently emits `close_price = mark` and claws back
+        /// `min(rpnl_at_mark, residual)` per position, which lets the
+        /// ADL'd counterparty keep `rpnl − residual` of profit when
+        /// `rpnl > residual` (vs. spec's "zero PnL on the leg").
+        /// `close_price_spec` exposes the gap so off-chain consumers can
+        /// reconstruct the spec-correct settlement and quantify the
+        /// over-distribution to deleveraged counterparties pending the
+        /// full fix.
+        close_price_spec: u64,
+        /// Realized PnL on the auto-deleveraged position (at
+        /// `close_price`, i.e. mark today; will switch to
+        /// `close_price_spec` post-fix).
+        realized_pnl: i64,
     },
     WithdrawRequested {
         withdrawal_id: u64,
@@ -878,6 +1165,34 @@ pub enum ExecError {
         limit: u64,
         would_be: u64,
     },
+    /// Rejected `OracleUpdate` whose `publish_time_ms` is not strictly
+    /// greater than the last accepted update for this market. Replay
+    /// protection per audit B3 (2026-04-23).
+    OracleTimestampNotMonotonic {
+        market: MarketId,
+        stored: u64,
+        submitted: u64,
+    },
+    /// Account would touch more impact markets than the scenario margin
+    /// engine can enumerate (`MAX_IMPACT_MARKETS_PER_ACCOUNT`). Returned
+    /// instead of `InsufficientMargin` so clients can distinguish
+    /// "basket exceeds enumeration cap" from "collateral shortfall."
+    /// Audit 2026-04-25 P3.
+    TooManyActiveImpactMarkets {
+        current: u32,
+        max: u32,
+    },
+    /// Net-delta margin grouping found legs of the same group with
+    /// disagreeing settle prices — upstream data corruption (different
+    /// markets in the same `underlying_market_id` group should resolve
+    /// to identical settles per scenario). Distinct from `Overflow`,
+    /// which the same path used to return as a placeholder. Audit
+    /// 2026-04-25 P2 #10.
+    SettlementPriceMismatch {
+        market: MarketId,
+        expected: u64,
+        got: u64,
+    },
 }
 
 impl ExecError {
@@ -912,6 +1227,9 @@ impl ExecError {
             ExecError::BinaryPriceOutOfRange => 27,
             ExecError::InvalidResolution(_) => 28,
             ExecError::PositionLimitExceeded { .. } => 29,
+            ExecError::OracleTimestampNotMonotonic { .. } => 30,
+            ExecError::TooManyActiveImpactMarkets { .. } => 31,
+            ExecError::SettlementPriceMismatch { .. } => 32,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -971,6 +1289,27 @@ impl fmt::Display for ExecError {
             } => write!(
                 f,
                 "position limit exceeded on market {market}: would be {would_be}, cap {limit}"
+            ),
+            ExecError::OracleTimestampNotMonotonic {
+                market,
+                stored,
+                submitted,
+            } => write!(
+                f,
+                "oracle publish_time_ms not strictly monotonic on market {market}: \
+                stored {stored}, submitted {submitted} (submitted must be > stored)"
+            ),
+            ExecError::TooManyActiveImpactMarkets { current, max } => write!(
+                f,
+                "too many active impact markets in basket: current {current}, cap {max}"
+            ),
+            ExecError::SettlementPriceMismatch {
+                market,
+                expected,
+                got,
+            } => write!(
+                f,
+                "settle price disagreement on market {market}: expected {expected} (group key), got {got}"
             ),
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
