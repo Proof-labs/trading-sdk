@@ -46,9 +46,9 @@ pub fn derive_abci_event(input: TokenStream) -> TokenStream {
                     let key = fname.to_string();
                     let ty = &f.ty;
 
-                    if is_byte_array(ty) {
-                        quote! { w.write_attr_hex(#key, #fname); }
-                    } else if is_vec_u8(ty) {
+                    if is_byte_array(ty) || is_vec_u8(ty) {
+                        // Both fixed-size and variable-length byte sequences
+                        // hex-encode for ABCI attribute output.
                         quote! { w.write_attr_hex(#key, #fname); }
                     } else if is_u64(ty) {
                         quote! { w.write_attr_u64(#key, *#fname); }

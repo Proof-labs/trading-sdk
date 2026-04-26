@@ -819,6 +819,44 @@ pub enum Event {
         market: MarketId,
         realized_pnl: i64,
     },
+    /// Per-trade MTM event for an impact-family ConditionalPerp close
+    /// (no-oracle MTM redesign, 2026-04-26). Issues `signed_delta` units of
+    /// the corresponding prediction binary (B+ for CPY closes, B- for CPN
+    /// closes) at entry $0 to the closing party, decomposing their
+    /// conditional PnL into a fungible binary token.
+    ///
+    /// `signed_delta` is in conditional dollars (the size of the issued
+    /// binary). Positive = long binary issued (closing party gained on the
+    /// CP close); negative = short binary issued (loss).
+    ///
+    /// `cash_pnl_realized` is the cash-settlement byproduct of the v1
+    /// limitation where MTM that creates an opposite-side delta against an
+    /// existing direct-traded binary position nets out, realizing PnL on
+    /// the absorbed portion at the MTM-issued $0 entry. Zero in the common
+    /// case (no existing opposite-side binary). Tracked separately for
+    /// observability so off-chain monitoring can quantify the cash
+    /// imbalance v2 multi-position support will eliminate.
+    ///
+    /// `final_size` and `final_entry` are the resulting state of the
+    /// owner's binary position after the MTM is applied (could be 0 if
+    /// the MTM netted out an equal-size opposite position).
+    BinaryIssuedFromMTM {
+        owner: [u8; 20],
+        /// CP market that triggered the MTM (closed via fill).
+        cp_market: MarketId,
+        /// Target binary market (B+ for CPY closes, B- for CPN closes).
+        binary_market: MarketId,
+        /// Signed quantity of binary issued. + = long, - = short.
+        signed_delta: i64,
+        /// Resulting binary position size after MTM applied.
+        final_size: u64,
+        /// Resulting binary position entry after MTM applied (weighted
+        /// average for same-side blends, 0 for fresh issuance).
+        final_entry: u64,
+        /// Cash debit/credit from netting against an existing opposite-side
+        /// binary position. Zero in the common case.
+        cash_pnl_realized: i64,
+    },
     MarketCreated {
         market: MarketId,
         im_bps: u32,
@@ -990,28 +1028,34 @@ pub enum Event {
         owner: [u8; 20],
         market: MarketId,
         side: Side,
+        /// Number of contracts force-closed in this leg. May be less
+        /// than the ADL'd account's full position when the deficit is
+        /// covered by a partial close (per audit 2026-04-25 P0 #2 fix);
+        /// the remainder of the position keeps its original entry.
         size: u64,
-        /// Price the position was actually closed at. Currently `mark` —
-        /// see `close_price_spec` for the spec-correct value. Audit
-        /// 2026-04-25 #2 tracks the migration to closing at the
-        /// liquidated trader's bankruptcy price.
+        /// Price the position was actually closed at — the **liquidated
+        /// trader's bankruptcy price** `bp = entry − σ × balance / size`
+        /// (one `bp` per liquidation event, threaded through to every
+        /// ADL leg in the same waterfall call). Equals `close_price_spec`
+        /// after the audit P0 #2 fix landed; the two fields are retained
+        /// separately for forward compatibility with future settlement-
+        /// price experimentation.
         close_price: u64,
         /// Bankruptcy price the spec (`docs/adl-vs-socialized-loss.md`
-        /// §3.5) says the position SHOULD have been closed at. Set to
-        /// the liquidated counterparty's `bp = entry − σ × balance / size`
-        /// (one bp per liquidation event, threaded through). The engine
-        /// currently emits `close_price = mark` and claws back
-        /// `min(rpnl_at_mark, residual)` per position, which lets the
-        /// ADL'd counterparty keep `rpnl − residual` of profit when
-        /// `rpnl > residual` (vs. spec's "zero PnL on the leg").
-        /// `close_price_spec` exposes the gap so off-chain consumers can
-        /// reconstruct the spec-correct settlement and quantify the
-        /// over-distribution to deleveraged counterparties pending the
-        /// full fix.
+        /// §3.5) says the position should be closed at. Currently equal
+        /// to `close_price`; tracked separately so any future deviation
+        /// (e.g., adding a "max haircut per ADL leg" cap that would
+        /// re-introduce a spec gap) can be audited via this field.
         close_price_spec: u64,
-        /// Realized PnL on the auto-deleveraged position (at
-        /// `close_price`, i.e. mark today; will switch to
-        /// `close_price_spec` post-fix).
+        /// Realized PnL credited to the ADL'd counterparty at
+        /// `close_price` for the closed `size`. Includes any rounding
+        /// surplus credited back when ceil-div over-extracted (so the
+        /// counterparty's net surrender equals exactly the residual
+        /// covered by this leg, not residual + rounding overshoot).
+        /// May be negative if `bp` would imply a realized loss for the
+        /// counterparty — note that for the alpha-deferred deviation,
+        /// we cap credit at 0 rather than driving the counterparty into
+        /// negative balance.
         realized_pnl: i64,
     },
     WithdrawRequested {
@@ -1193,6 +1237,20 @@ pub enum ExecError {
         expected: u64,
         got: u64,
     },
+    /// Rejected `OracleUpdate` for an impact-family market (CPY/CPN/EBY/EBN).
+    /// Per the no-oracle MTM redesign (2026-04-26), these markets mark
+    /// off the book directly and have no oracle layer. The only oracle
+    /// reading happens at resolution, against the underlying perp.
+    /// Returned defensively so a misbehaving feeder or replayed update
+    /// can't corrupt the impact market's state.
+    ///
+    /// Variant defined in Phase A but not yet wired in `handle_oracle_update`
+    /// (see comment there): the engine-side reject lands in Phase D
+    /// alongside the `get_mark_price` book-mid fallback and the rewrite
+    /// of impact-market test setup helpers, so the rollout is atomic.
+    OracleNotApplicable {
+        market: MarketId,
+    },
 }
 
 impl ExecError {
@@ -1230,6 +1288,7 @@ impl ExecError {
             ExecError::OracleTimestampNotMonotonic { .. } => 30,
             ExecError::TooManyActiveImpactMarkets { .. } => 31,
             ExecError::SettlementPriceMismatch { .. } => 32,
+            ExecError::OracleNotApplicable { .. } => 33,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -1310,6 +1369,10 @@ impl fmt::Display for ExecError {
             } => write!(
                 f,
                 "settle price disagreement on market {market}: expected {expected} (group key), got {got}"
+            ),
+            ExecError::OracleNotApplicable { market } => write!(
+                f,
+                "oracle update rejected for market {market}: impact-family markets mark off the book directly and have no oracle layer (post 2026-04-26 redesign)"
             ),
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
