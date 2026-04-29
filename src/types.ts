@@ -49,6 +49,14 @@ export const ActionType = {
    *  Fee tiering, funding-rate cap tightening, position-limit updates
    *  without a chain rebase. */
   UpdateMarketFees: 0x10,
+  /** Test/admin: force-run end-of-block liquidations now (relayer-signed).
+   *  Used by integration scenarios that need to deterministically engineer
+   *  cascade or bad-debt paths without waiting for end-of-block timing. */
+  RunLiquidationSweep: 0x11,
+  /** Test/admin: force-run a funding tick on one market now (relayer-signed),
+   *  bypassing the normal `funding_interval_ms` clock check. Used by S13/S14
+   *  to fire funding at a precise scenario point. */
+  RunFundingTick: 0x12,
 } as const;
 
 /** Union of all valid action type byte values. */
@@ -72,6 +80,14 @@ export interface PlaceOrder {
   quantity: bigint;
   /** Optional client-assigned order ID for tracking. */
   clientOrderId?: bigint | null;
+  /** When true, the engine rejects the order if it would cross the book on
+   *  placement (PostOnlyWouldCross, code 34). For makers who require
+   *  maker-side fills. Defaults to false. */
+  postOnly?: boolean;
+  /** When true, the order may only reduce an existing position. Same-side
+   *  orders are rejected (ReduceOnlyWouldIncrease, code 35); over-closing
+   *  is clamped to the position size. Defaults to false. */
+  reduceOnly?: boolean;
 }
 
 /** Cancel an existing resting order by its engine-assigned ID. */
@@ -340,6 +356,20 @@ export interface ImpactMarketInfo {
 // Action union type
 // ---------------------------------------------------------------------------
 
+/** Test/admin action: force-runs end-of-block liquidations now. */
+export interface RunLiquidationSweep {
+  /** Authorized relayer signer address (20 bytes). */
+  signer: Address;
+}
+
+/** Test/admin action: force-runs a funding tick on a single market now. */
+export interface RunFundingTick {
+  /** Market identifier to tick. */
+  market: number;
+  /** Authorized relayer signer address (20 bytes). */
+  signer: Address;
+}
+
 /** Discriminated union of all exchange actions. */
 export type Action =
   | { type: "PlaceOrder"; data: PlaceOrder }
@@ -357,7 +387,9 @@ export type Action =
   | { type: "RevokeAgent"; data: RevokeAgent }
   | { type: "CreateImpactMarket"; data: CreateImpactMarket }
   | { type: "ResolveEvent"; data: ResolveEvent }
-  | { type: "UpdateMarketFees"; data: UpdateMarketFees };
+  | { type: "UpdateMarketFees"; data: UpdateMarketFees }
+  | { type: "RunLiquidationSweep"; data: RunLiquidationSweep }
+  | { type: "RunFundingTick"; data: RunFundingTick };
 
 // ---------------------------------------------------------------------------
 // Event types (emitted by engine, delivered via ABCI/WebSocket)

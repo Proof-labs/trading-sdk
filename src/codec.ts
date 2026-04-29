@@ -317,6 +317,8 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           d.price,
           d.quantity,
           d.clientOrderId ?? null,
+          d.postOnly ?? false,
+          d.reduceOnly ?? false,
         ],
       ];
     }
@@ -479,6 +481,14 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
         ],
       ];
     }
+    case "RunLiquidationSweep": {
+      const d = action.data;
+      return [ActionType.RunLiquidationSweep, [toByteSeq(d.signer)]];
+    }
+    case "RunFundingTick": {
+      const d = action.data;
+      return [ActionType.RunFundingTick, [d.market, toByteSeq(d.signer)]];
+    }
   }
 }
 
@@ -529,6 +539,12 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           price: bi(f[3]),
           quantity: bi(f[4]),
           clientOrderId: biOrNull(f[5]),
+          // postOnly + reduceOnly added with the integration suite's
+          // S06/S09 surfaces. Old records (6-element arrays) decode
+          // with both flags = false; new records (8-element) carry
+          // the explicit values.
+          postOnly: f.length > 6 && f[6] === true,
+          reduceOnly: f.length > 7 && f[7] === true,
         },
       };
     case ActionType.CancelOrder:
@@ -706,6 +722,19 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
         },
       };
     }
+    case ActionType.RunLiquidationSweep:
+      return {
+        type: "RunLiquidationSweep",
+        data: { signer: bytesField(f[0]) },
+      };
+    case ActionType.RunFundingTick:
+      return {
+        type: "RunFundingTick",
+        data: {
+          market: f[0] as number,
+          signer: bytesField(f[1]),
+        },
+      };
     default:
       throw new Error(`unknown action_type: ${actionType}`);
   }
