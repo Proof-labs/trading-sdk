@@ -414,6 +414,31 @@ pub enum Action {
     CreateImpactMarket(CreateImpactMarket),
     ResolveEvent(ResolveEvent),
     UpdateMarketFees(UpdateMarketFees),
+    /// Test/admin: force-run end-of-block liquidations immediately. Used by
+    /// integration scenarios that need to deterministically engineer a
+    /// cascade or bad-debt path without waiting for the natural end-of-block
+    /// timing. Authorized by the relayer allowlist (same as OracleUpdate).
+    RunLiquidationSweep(RunLiquidationSweep),
+    /// Test/admin: force-run a funding tick on a single market immediately,
+    /// bypassing the `funding_interval_ms` clock check. Used by S13/S14 to
+    /// fire funding at a precise scenario point rather than waiting on
+    /// chain time. Authorized by the relayer allowlist.
+    RunFundingTick(RunFundingTick),
+}
+
+/// Test/admin action — force-runs `run_liquidations` immediately.
+/// See `Action::RunLiquidationSweep` for rationale.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RunLiquidationSweep {
+    pub signer: [u8; 20],
+}
+
+/// Test/admin action — force-runs a funding tick on one market.
+/// See `Action::RunFundingTick` for rationale.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RunFundingTick {
+    pub market: MarketId,
+    pub signer: [u8; 20],
 }
 
 /// Immediate-or-cancel order that crosses the book at the best available price.
@@ -440,6 +465,19 @@ pub struct PlaceOrder {
     pub quantity: u64,
     /// Optional client-assigned ID echoed in events for correlation.
     pub client_order_id: Option<u64>,
+    /// Post-only flag: if the order would cross the book on placement, the
+    /// engine rejects with `PostOnlyWouldCross` instead of taking. Used by
+    /// makers who want to guarantee maker-side fills. `serde(default)` so
+    /// pre-existing wire records decode with `false`.
+    #[serde(default)]
+    pub post_only: bool,
+    /// Reduce-only flag: order may only reduce an existing position;
+    /// rejected if same-side as the current position (would increase) or
+    /// no position exists. Clamped to position size if the order would
+    /// over-close (flip direction). `serde(default)` so old records
+    /// decode with `false`.
+    #[serde(default)]
+    pub reduce_only: bool,
 }
 
 /// Cancel a resting order. Only the owner (or an authorized agent) may cancel.
@@ -1251,6 +1289,20 @@ pub enum ExecError {
     OracleNotApplicable {
         market: MarketId,
     },
+    /// `PlaceOrder` with `post_only=true` would have crossed the book on
+    /// placement. Rejected without taking, so makers can guarantee
+    /// maker-side fills.
+    PostOnlyWouldCross,
+    /// `PlaceOrder` or `MarketOrder` with `reduce_only=true` was same-side
+    /// as the existing position (would increase exposure) or no position
+    /// existed at all. Reduce-only orders are required to actually reduce
+    /// or close a position.
+    ReduceOnlyWouldIncrease,
+    /// A test/admin action (`RunLiquidationSweep`, `RunFundingTick`,
+    /// `ForceLiquidate`) was rejected because the engine isn't configured
+    /// to accept them in this deployment, or the position the action
+    /// referenced doesn't exist.
+    TestActionRejected(String),
 }
 
 impl ExecError {
@@ -1289,6 +1341,9 @@ impl ExecError {
             ExecError::TooManyActiveImpactMarkets { .. } => 31,
             ExecError::SettlementPriceMismatch { .. } => 32,
             ExecError::OracleNotApplicable { .. } => 33,
+            ExecError::PostOnlyWouldCross => 34,
+            ExecError::ReduceOnlyWouldIncrease => 35,
+            ExecError::TestActionRejected(_) => 36,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -1374,6 +1429,15 @@ impl fmt::Display for ExecError {
                 f,
                 "oracle update rejected for market {market}: impact-family markets mark off the book directly and have no oracle layer (post 2026-04-26 redesign)"
             ),
+            ExecError::PostOnlyWouldCross => write!(
+                f,
+                "post-only order would cross the book on placement; rejected"
+            ),
+            ExecError::ReduceOnlyWouldIncrease => write!(
+                f,
+                "reduce-only order rejected: would increase exposure (same-side as position) or no position to reduce"
+            ),
+            ExecError::TestActionRejected(msg) => write!(f, "test action rejected: {msg}"),
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
     }

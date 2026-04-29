@@ -17,6 +17,8 @@ pub const ACTION_REVOKE_AGENT: u8 = 0x0D;
 pub const ACTION_CREATE_IMPACT_MARKET: u8 = 0x0E;
 pub const ACTION_RESOLVE_EVENT: u8 = 0x0F;
 pub const ACTION_UPDATE_MARKET_FEES: u8 = 0x10;
+pub const ACTION_RUN_LIQUIDATION_SWEEP: u8 = 0x11;
+pub const ACTION_RUN_FUNDING_TICK: u8 = 0x12;
 
 /// V1 wire envelope: [version=1, action_type, seq, payload_bytes]
 ///
@@ -115,6 +117,12 @@ fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_UPDATE_MARKET_FEES => Ok(Action::UpdateMarketFees(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_RUN_LIQUIDATION_SWEEP => Ok(Action::RunLiquidationSweep(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_RUN_FUNDING_TICK => Ok(Action::RunFundingTick(
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         other => Err(ExecError::DecodeError(format!(
@@ -241,6 +249,14 @@ fn encode_action(action: &Action) -> Result<(u8, Vec<u8>), ExecError> {
             ACTION_UPDATE_MARKET_FEES,
             rmp_serde::to_vec(cmd).map_err(enc)?,
         )),
+        Action::RunLiquidationSweep(cmd) => Ok((
+            ACTION_RUN_LIQUIDATION_SWEEP,
+            rmp_serde::to_vec(cmd).map_err(enc)?,
+        )),
+        Action::RunFundingTick(cmd) => Ok((
+            ACTION_RUN_FUNDING_TICK,
+            rmp_serde::to_vec(cmd).map_err(enc)?,
+        )),
     }
 }
 
@@ -363,6 +379,8 @@ mod tests {
             price: 10000,
             quantity: 50,
             client_order_id: Some(42),
+            post_only: false,
+            reduce_only: false,
         });
 
         let encoded = encode_tx(&action, 100).unwrap();
@@ -420,6 +438,8 @@ mod tests {
             price: 100,
             quantity: 10,
             client_order_id: None,
+            post_only: false,
+            reduce_only: false,
         });
 
         let encoded_a = encode_tx(&action, 1).unwrap();
@@ -440,6 +460,8 @@ mod tests {
                 price: 1,
                 quantity: 1,
                 client_order_id: None,
+                post_only: false,
+                reduce_only: false,
             })
             .unwrap(),
         };
@@ -457,6 +479,8 @@ mod tests {
             price: 100,
             quantity: 10,
             client_order_id: None,
+            post_only: false,
+            reduce_only: false,
         });
         let place_bytes = encode_tx(&place, 1).unwrap();
         println!("GOLDEN_PLACE={}", hex::encode(&place_bytes));
@@ -500,6 +524,8 @@ mod tests {
             price: 100,
             quantity: 10,
             client_order_id: None,
+            post_only: false,
+            reduce_only: false,
         });
         let encoded = encode_tx(&action, 1).unwrap();
         assert_eq!(hex::encode(&encoded), expected_hex);
@@ -553,6 +579,8 @@ mod tests {
                 price: 50_000,
                 quantity: 100,
                 client_order_id: Some(7),
+                post_only: false,
+                reduce_only: false,
             }),
             Action::CancelOrder(CancelOrder {
                 order_id: 42,
@@ -650,6 +678,8 @@ mod tests {
                 price: u64::MAX,
                 quantity: u64::MAX,
                 client_order_id: Some(u64::MAX),
+                post_only: false,
+                reduce_only: false,
             }),
             Action::CancelOrder(CancelOrder {
                 order_id: u64::MAX,
@@ -733,6 +763,8 @@ mod tests {
                 price: 0,
                 quantity: 0,
                 client_order_id: None,
+                post_only: false,
+                reduce_only: false,
             }),
             Action::CancelOrder(CancelOrder {
                 order_id: 0,
@@ -823,6 +855,8 @@ mod tests {
                     price: i * 100,
                     quantity: i + 1,
                     client_order_id: if i % 3 == 0 { Some(i) } else { None },
+                    post_only: false,
+                    reduce_only: false,
                 }),
                 Action::CancelOrder(CancelOrder { order_id: i, owner }),
                 Action::OracleUpdate(OracleUpdate {
@@ -906,6 +940,8 @@ mod tests {
                     price: 1,
                     quantity: 1,
                     client_order_id: None,
+                    post_only: false,
+                    reduce_only: false,
                 }),
                 ACTION_PLACE_ORDER,
             ),
@@ -1020,6 +1056,8 @@ mod tests {
             price: 50_000,
             quantity: 100,
             client_order_id: Some(42),
+            post_only: false,
+            reduce_only: false,
         });
         let encoded = encode_tx(&action, 99).unwrap();
 
@@ -1073,6 +1111,8 @@ mod tests {
             price: 50_000,
             quantity: 100,
             client_order_id: Some(7),
+            post_only: false,
+            reduce_only: false,
         });
 
         let encoded = sign_and_encode(&action, 42, &key).unwrap();
@@ -1107,6 +1147,8 @@ mod tests {
                 price: 1,
                 quantity: 1,
                 client_order_id: None,
+                post_only: false,
+                reduce_only: false,
             }),
             Action::CancelOrder(CancelOrder {
                 order_id: 1,
@@ -1258,6 +1300,8 @@ mod tests {
                 price: 1,
                 quantity: 1,
                 client_order_id: None,
+                post_only: false,
+                reduce_only: false,
             })
             .unwrap(),
             pubkey: vec![0u8; 16], // wrong: should be 32
@@ -1290,6 +1334,8 @@ mod tests {
                 price: 1,
                 quantity: 1,
                 client_order_id: None,
+                post_only: false,
+                reduce_only: false,
             })
             .unwrap(),
             pubkey: vec![0u8; 32],
@@ -1312,6 +1358,8 @@ mod tests {
             price: 100,
             quantity: 10,
             client_order_id: None,
+            post_only: false,
+            reduce_only: false,
         });
         let encoded = encode_tx(&action, 50).unwrap();
         let decoded = decode_tx(&encoded).unwrap();
@@ -1331,6 +1379,8 @@ mod tests {
                     price: 1,
                     quantity: 1,
                     client_order_id: None,
+                    post_only: false,
+                    reduce_only: false,
                 }),
                 ACTION_PLACE_ORDER,
             ),
@@ -1387,6 +1437,8 @@ mod tests {
                 price: (i as u64 + 1) * 100,
                 quantity: (i as u64 + 1) * 10,
                 client_order_id: Some(i as u64),
+                post_only: false,
+                reduce_only: false,
             });
 
             let encoded = sign_and_encode(&action, i as u64, &key).unwrap();
@@ -1459,6 +1511,8 @@ mod tests {
                         price: seq + 1,
                         quantity: seq + 1,
                         client_order_id: None,
+                        post_only: false,
+                        reduce_only: false,
                     }),
                     1 => Action::CancelOrder(CancelOrder {
                         order_id: seq,
