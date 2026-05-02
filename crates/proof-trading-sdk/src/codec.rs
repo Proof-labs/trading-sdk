@@ -618,6 +618,7 @@ mod tests {
                 signer: [0xEE; 20],
                 funding_interval_ms: 0,
                 max_funding_rate_bps: 0,
+                pool_id: 0,
             }),
             Action::WithdrawRequest(WithdrawRequest {
                 owner: [0x33; 20],
@@ -717,6 +718,7 @@ mod tests {
                 signer: [0xFF; 20],
                 funding_interval_ms: u64::MAX,
                 max_funding_rate_bps: u32::MAX,
+                pool_id: 0,
             }),
             Action::WithdrawRequest(WithdrawRequest {
                 owner: [0xFF; 20],
@@ -802,6 +804,7 @@ mod tests {
                 signer: [0u8; 20],
                 funding_interval_ms: 0,
                 max_funding_rate_bps: 0,
+                pool_id: 0,
             }),
             Action::WithdrawRequest(WithdrawRequest {
                 owner: [0u8; 20],
@@ -891,6 +894,7 @@ mod tests {
                     signer: owner,
                     funding_interval_ms: 0,
                     max_funding_rate_bps: 0,
+                    pool_id: 0,
                 }),
                 Action::WithdrawRequest(WithdrawRequest {
                     owner,
@@ -997,6 +1001,7 @@ mod tests {
                     signer: [0xEE; 20],
                     funding_interval_ms: 0,
                     max_funding_rate_bps: 0,
+                    pool_id: 0,
                 }),
                 ACTION_CREATE_MARKET,
             ),
@@ -1186,6 +1191,7 @@ mod tests {
                 signer: [0xEE; 20],
                 funding_interval_ms: 0,
                 max_funding_rate_bps: 0,
+                pool_id: 0,
             }),
             Action::WithdrawRequest(WithdrawRequest {
                 owner: [0; 20],
@@ -1550,6 +1556,7 @@ mod tests {
                         signer: owner,
                         funding_interval_ms: 0,
                         max_funding_rate_bps: 0,
+                        pool_id: 0,
                     }),
                     7 => Action::WithdrawRequest(WithdrawRequest {
                         owner,

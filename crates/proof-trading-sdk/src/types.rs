@@ -583,6 +583,14 @@ pub struct CreateMarket {
     pub funding_interval_ms: u64,
     /// Maximum absolute funding rate in basis points per interval.
     pub max_funding_rate_bps: u32,
+    /// Bad-debt pool the market belongs to. Markets in different pools
+    /// are insulated from each other's liquidation cascades — a residual
+    /// in pool 1 cannot ADL profitable counterparties holding only
+    /// positions in pool 2 (see `iter_positions(pool_id)` in
+    /// `absorb_via_adl`). Defaults to 0; existing markets continue to
+    /// share pool 0 unless explicitly placed elsewhere.
+    #[serde(default)]
+    pub pool_id: u8,
 }
 
 /// User requests a USDC withdrawal to a Solana address.
