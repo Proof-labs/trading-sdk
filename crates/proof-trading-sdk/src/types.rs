@@ -359,6 +359,13 @@ pub struct MarketConfig {
     ///     "majors" pool). Inherits all existing balance.
     ///   * Pool 1 — high-vol prediction binaries / longtail markets.
     ///     Per-event tighter caps, isolated from majors.
+    ///
+    /// **Pool IDs are operator-defined free-form labels (u8) — there is
+    /// no engine-level validation against a known set.** A typo (e.g.
+    /// passing `99` instead of `2`) silently creates the market in an
+    /// isolated pool with empty IF and empty ADL queue. Run
+    /// `scripts/admin-pool-audit.ts` after every CreateMarket batch to
+    /// surface markets in singleton pools.
     #[serde(default)]
     pub pool_id: u8,
 }
