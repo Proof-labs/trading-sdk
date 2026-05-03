@@ -1707,4 +1707,52 @@ mod tests {
             let _ = decode_tx(&garbage);
         }
     }
+
+    #[test]
+    fn decode_legacy_create_market_no_pool_id_uses_default() {
+        // Pre-pool_id wire shape: 8-field positional msgpack array.
+        // Confirms `serde(default)` on `CreateMarket.pool_id` picks up
+        // the missing field and resolves to 0 (shared pool 0), so older
+        // SDK builds that pre-date the pool_id rollout keep working.
+        //
+        // Field order matches the struct definition in `types.rs`:
+        //   market, im_bps, mm_bps, taker_fee_bps, maker_fee_bps,
+        //   signer, funding_interval_ms, max_funding_rate_bps,
+        //   [pool_id intentionally omitted]
+        let payload_bytes = rmp_serde::to_vec(&(
+            99u32,        // market
+            500u32,       // im_bps
+            250u32,       // mm_bps
+            5u32,         // taker_fee_bps
+            2u32,         // maker_fee_bps
+            [0xAAu8; 20], // signer
+            60_000u64,    // funding_interval_ms
+            3000u32,      // max_funding_rate_bps
+                          // intentionally NO pool_id (legacy SDK)
+        ))
+        .unwrap();
+
+        // V1 envelope built via the same struct existing tests use, so we
+        // pick up the `serde_bytes` payload encoding for free.
+        let envelope = WireTxEnvelope {
+            version: 1,
+            action_type: ACTION_CREATE_MARKET,
+            seq: 0,
+            payload: payload_bytes,
+        };
+        let encoded = rmp_serde::to_vec(&envelope).unwrap();
+
+        let DecodedTx { action, .. } =
+            decode_tx(&encoded).expect("legacy 8-field shape must decode");
+        match action {
+            Action::CreateMarket(c) => {
+                assert_eq!(c.market, 99);
+                assert_eq!(
+                    c.pool_id, 0,
+                    "missing pool_id must default to 0 for back-compat"
+                );
+            }
+            other => panic!("expected CreateMarket, got {other:?}"),
+        }
+    }
 }
