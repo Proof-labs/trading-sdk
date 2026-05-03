@@ -600,6 +600,27 @@ pub struct CreateMarket {
     pub pool_id: u8,
 }
 
+impl Default for CreateMarket {
+    /// Conservative defaults that match the production seed config
+    /// (`scripts/seed.ts`): 5% IM, 2.5% MM, 5/2 bps fees, 60 s funding
+    /// cadence with a 30% per-interval cap, pool 0. Tests that just
+    /// need *some* CreateMarket instance can `..Default::default()`
+    /// instead of repeating the full struct literal.
+    fn default() -> Self {
+        Self {
+            market: 0,
+            im_bps: 500,
+            mm_bps: 250,
+            taker_fee_bps: 5,
+            maker_fee_bps: 2,
+            signer: [0u8; 20],
+            funding_interval_ms: 60_000,
+            max_funding_rate_bps: 3000,
+            pool_id: 0,
+        }
+    }
+}
+
 /// User requests a USDC withdrawal to a Solana address.
 /// Debits balance immediately and creates a pending withdrawal record.
 #[derive(Clone, Debug, Serialize, Deserialize)]
