@@ -68,6 +68,91 @@ impl fmt::Display for Outcome {
     }
 }
 
+/// BE-54: how the YES/NO outcome of an impact-market event is determined
+/// at deadline. Stored on [`ImpactMarketInfo`] (and carried on
+/// [`CreateImpactMarket`]). `RelayerAttested` is the legacy default —
+/// the resolver supplies the outcome and the engine trusts it. The two
+/// auto-resolve modes derive YES/NO from an on-chain oracle reading,
+/// turning the relayer-supplied `outcome` field into a verifiable assertion
+/// (the engine recomputes and rejects on mismatch).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EventOracleSource {
+    /// Resolution determined by the underlying perp's oracle reading at
+    /// `ResolveEvent` time, compared against `strike_price`. The classic
+    /// "is BTC above $X at expiry?" pattern.
+    UnderlyingPriceVsStrike {
+        strike_price: u64,
+        comparison: PriceComparison,
+    },
+    /// Resolution determined by a different on-chain market's oracle
+    /// (e.g. ETH event whose outcome is gated on BTC's price). The
+    /// `market` MUST exist and have a current oracle price at resolution
+    /// time; otherwise the resolution is rejected.
+    MarketOracle {
+        market: MarketId,
+        strike_price: u64,
+        comparison: PriceComparison,
+    },
+    /// Resolution by relayer attestation only — the legacy/default path.
+    /// The relayer-supplied `outcome` is taken at face value (still subject
+    /// to the existing relayer-allowlist signature check). Use for events
+    /// where there is no on-chain price (e.g. "did Apple announce X?").
+    RelayerAttested,
+}
+
+impl fmt::Display for EventOracleSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EventOracleSource::UnderlyingPriceVsStrike {
+                strike_price,
+                comparison,
+            } => write!(f, "underlying_price_vs_strike:{strike_price}:{comparison}"),
+            EventOracleSource::MarketOracle {
+                market,
+                strike_price,
+                comparison,
+            } => write!(f, "market_oracle:{market}:{strike_price}:{comparison}"),
+            EventOracleSource::RelayerAttested => f.write_str("relayer_attested"),
+        }
+    }
+}
+
+/// BE-54: comparison operator used by the auto-resolve oracle modes.
+/// `YES` fires iff `oracle_price <comparison> strike_price` (e.g.
+/// `GreaterThan` means the event resolves YES when the oracle reading is
+/// strictly greater than the strike). Equality on the boundary is
+/// distinguished by the `OrEqual` variants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PriceComparison {
+    GreaterThan,
+    LessThan,
+    GreaterThanOrEqual,
+    LessThanOrEqual,
+}
+
+impl fmt::Display for PriceComparison {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            PriceComparison::GreaterThan => "gt",
+            PriceComparison::LessThan => "lt",
+            PriceComparison::GreaterThanOrEqual => "gte",
+            PriceComparison::LessThanOrEqual => "lte",
+        })
+    }
+}
+
+impl PriceComparison {
+    /// Apply the comparison: returns true iff the YES branch wins.
+    pub fn apply(self, oracle_price: u64, strike_price: u64) -> bool {
+        match self {
+            PriceComparison::GreaterThan => oracle_price > strike_price,
+            PriceComparison::LessThan => oracle_price < strike_price,
+            PriceComparison::GreaterThanOrEqual => oracle_price >= strike_price,
+            PriceComparison::LessThanOrEqual => oracle_price <= strike_price,
+        }
+    }
+}
+
 /// Kind of market stored on-chain. Stored on [`MarketConfig`].
 ///
 /// The existing engine paths (matching, funding, liquidation) only care that a
@@ -171,6 +256,13 @@ pub struct ImpactMarketInfo {
     pub created_ms: u64,
     /// Block timestamp when the impact market was resolved (ms since epoch), 0 if unresolved.
     pub resolved_ms: u64,
+    /// BE-54: how the YES/NO outcome is determined at deadline. Defaults
+    /// to `RelayerAttested` for back-compat with pre-BE-54 records (which
+    /// decode as `None` here, treated as `RelayerAttested` by the engine).
+    /// Stored in addition to `CreateImpactMarket.oracle_source` so the
+    /// resolver doesn't need to re-scan the original action bytes.
+    #[serde(default)]
+    pub oracle_source: Option<EventOracleSource>,
 }
 
 // ---------------------------------------------------------------------------
@@ -801,6 +893,16 @@ pub struct CreateImpactMarket {
     pub funding_interval_ms: u64,
     pub max_funding_rate_bps: u32,
     pub signer: [u8; 20],
+    /// BE-54: how this event's YES/NO outcome is determined at deadline.
+    /// Optional — `None` (or absent on the wire, via `serde(default)`) means
+    /// `RelayerAttested` (the legacy default — the resolver supplies the
+    /// outcome). Two auto-resolve modes derive YES/NO from an on-chain
+    /// oracle; in those modes `ResolveEvent.outcome` becomes a verifiable
+    /// assertion (engine recomputes and rejects on mismatch). Field at the
+    /// END of the struct so old SDK clients (12-element arrays) continue
+    /// to decode cleanly via the wire's `serde(default)` rule.
+    #[serde(default)]
+    pub oracle_source: Option<EventOracleSource>,
 }
 
 /// Admin action to resolve an impact-market event. Settles the winning
