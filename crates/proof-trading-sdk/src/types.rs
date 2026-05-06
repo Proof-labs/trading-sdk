@@ -460,6 +460,28 @@ pub struct MarketConfig {
     /// surface markets in singleton pools.
     #[serde(default)]
     pub pool_id: u8,
+    /// Maximum age (ms) of the oracle reading at the time of any
+    /// margin/order/liquidation read. `0 = no check (back-compat)`.
+    ///
+    /// Oracle staleness was previously enforced only at `ResolveEvent`
+    /// (60 s window) and replay-protection in `OracleUpdate`. Order
+    /// placement, margin checks, and liquidation read `get_mark_price`
+    /// without checking the oracle's age, so a node with a stuck
+    /// feeder silently mispriced everything. With this field set on a
+    /// market, the engine refuses to read an oracle whose
+    /// `publish_time_ms` is older than `block_time_ms -
+    /// mark_price_max_oracle_age_ms` and returns `ExecError::StaleOracle`
+    /// (BE-33, 2026-05-03).
+    ///
+    /// Skipped on impact-family markets (CPY/CPN/EBY/EBN) — those
+    /// mark off the book directly via the EWMA fallback and have no
+    /// continuous oracle layer post the 2026-04-26 redesign.
+    ///
+    /// Recommended value: 30_000 (30 s) for major perps. Existing
+    /// MarketConfig records decode with `mark_price_max_oracle_age_ms = 0`
+    /// thanks to `#[serde(default)]`, preserving back-compat.
+    #[serde(default)]
+    pub mark_price_max_oracle_age_ms: u64,
 }
 
 /// Configuration for the Hyperliquidity Provider (HLP) — the
@@ -1555,6 +1577,20 @@ pub enum ExecError {
     /// to accept them in this deployment, or the position the action
     /// referenced doesn't exist.
     TestActionRejected(String),
+    /// `get_mark_price` rejected because the oracle for `market` is
+    /// older than `MarketConfig::mark_price_max_oracle_age_ms`. Order
+    /// placement, margin checks, and liquidation refuse to use a
+    /// stale oracle so a node with a stuck feeder can't silently
+    /// misprice the book. BE-33, 2026-05-03.
+    StaleOracle {
+        market: MarketId,
+        /// Stored `publish_time_ms` of the most recent oracle update.
+        publish_time_ms: u64,
+        /// Block time at which the read was attempted.
+        block_time_ms: u64,
+        /// Configured staleness cap from `MarketConfig`.
+        max_staleness_ms: u64,
+    },
     /// `SetUserMarketLeverage` rejected because the user attempted to
     /// pick an IM ratio LOWER than the market's risk floor. The
     /// engine only allows users to deleverage (more margin, less
@@ -1605,6 +1641,7 @@ impl ExecError {
             ExecError::PostOnlyWouldCross => 34,
             ExecError::ReduceOnlyWouldIncrease => 35,
             ExecError::TestActionRejected(_) => 36,
+            ExecError::StaleOracle { .. } => 37,
             ExecError::UserLeverageBelowMarketIm { .. } => 38,
             ExecError::InternalError(_) => 255,
         }
@@ -1700,6 +1737,17 @@ impl fmt::Display for ExecError {
                 "reduce-only order rejected: would increase exposure (same-side as position) or no position to reduce"
             ),
             ExecError::TestActionRejected(msg) => write!(f, "test action rejected: {msg}"),
+            ExecError::StaleOracle {
+                market,
+                publish_time_ms,
+                block_time_ms,
+                max_staleness_ms,
+            } => write!(
+                f,
+                "oracle stale on market {market}: last publish_time {publish_time_ms}ms, \
+                block time {block_time_ms}ms (age {age}ms > cap {max_staleness_ms}ms)",
+                age = block_time_ms.saturating_sub(*publish_time_ms),
+            ),
             ExecError::UserLeverageBelowMarketIm {
                 market,
                 user_im_bps,
