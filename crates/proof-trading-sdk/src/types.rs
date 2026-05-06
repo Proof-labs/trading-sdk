@@ -482,6 +482,33 @@ pub struct MarketConfig {
     /// thanks to `#[serde(default)]`, preserving back-compat.
     #[serde(default)]
     pub mark_price_max_oracle_age_ms: u64,
+    /// Volume-based fee tier table. Empty (default for legacy
+    /// MarketConfig records) falls back to flat `taker_fee_bps` /
+    /// `maker_fee_bps`. Non-empty tables are evaluated at fill time
+    /// against each account's rolling 30-day taker volume and apply
+    /// tenth-bps fees. Negative maker values are rebates paid from
+    /// the FeePool.
+    ///
+    /// Added after `mark_price_max_oracle_age_ms` so already-merged
+    /// BE-33 records keep their positional wire/state layout.
+    #[serde(default)]
+    pub fee_tiers: Vec<FeeTier>,
+}
+
+/// Per-tier fee schedule for the volume-based maker-rebate program.
+///
+/// `*_tenth_bps` lets the engine express sub-bps fees (e.g. 1.5 bps =
+/// 15 tenth-bps) and signed maker rebates without losing precision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeeTier {
+    /// Minimum 30-day rolling taker volume (micro-USDC) required to
+    /// qualify for this tier. The lowest tier should be 0.
+    pub min_30d_volume_micro_usdc: u64,
+    /// Maker fee in tenth-basis-points. Negative means maker rebate.
+    pub maker_fee_tenth_bps: i16,
+    /// Taker fee in tenth-basis-points. The configured alpha tiers keep
+    /// this non-negative so the protocol never pays takers.
+    pub taker_fee_tenth_bps: i16,
 }
 
 /// Configuration for the Hyperliquidity Provider (HLP) — the
