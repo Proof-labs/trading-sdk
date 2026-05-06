@@ -24,6 +24,9 @@ pub const ACTION_RUN_FUNDING_TICK: u8 = 0x12;
 /// is NOT credited. Idempotent on retry; no-op if the signature is
 /// already in either the processed-deposits or failed-deposits set.
 pub const ACTION_FAIL_DEPOSIT: u8 = 0x15;
+/// Pick a per-user IM override on a single market. User-signed,
+/// not relayer-signed — each owner sets their own. BE-16.
+pub const ACTION_SET_USER_MARKET_LEVERAGE: u8 = 0x16;
 
 /// V1 wire envelope: [version=1, action_type, seq, payload_bytes]
 ///
@@ -131,6 +134,9 @@ fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_FAIL_DEPOSIT => Ok(Action::FailDeposit(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_SET_USER_MARKET_LEVERAGE => Ok(Action::SetUserMarketLeverage(
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         other => Err(ExecError::DecodeError(format!(
@@ -266,6 +272,10 @@ fn encode_action(action: &Action) -> Result<(u8, Vec<u8>), ExecError> {
             rmp_serde::to_vec(cmd).map_err(enc)?,
         )),
         Action::FailDeposit(cmd) => Ok((ACTION_FAIL_DEPOSIT, rmp_serde::to_vec(cmd).map_err(enc)?)),
+        Action::SetUserMarketLeverage(cmd) => Ok((
+            ACTION_SET_USER_MARKET_LEVERAGE,
+            rmp_serde::to_vec(cmd).map_err(enc)?,
+        )),
     }
 }
 

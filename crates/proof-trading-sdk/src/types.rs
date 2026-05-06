@@ -436,6 +436,12 @@ pub enum Action {
     /// fire funding at a precise scenario point rather than waiting on
     /// chain time. Authorized by the relayer allowlist.
     RunFundingTick(RunFundingTick),
+    /// User-side action: pick a more conservative initial-margin
+    /// requirement on a single market than the market's default. The
+    /// engine takes `max(market.im_bps, user_im_bps)` on every
+    /// IM-gated check, so users can deleverage but not exceed the
+    /// market's risk floor. BE-16, 2026-05-03.
+    SetUserMarketLeverage(SetUserMarketLeverage),
 }
 
 /// Test/admin action — force-runs `run_liquidations` immediately.
@@ -451,6 +457,32 @@ pub struct RunLiquidationSweep {
 pub struct RunFundingTick {
     pub market: MarketId,
     pub signer: [u8; 20],
+}
+
+/// Pick a per-account override on the initial-margin ratio for one
+/// market. The engine uses `max(market.im_bps, user_im_bps)` on
+/// every IM-gated check (place order, withdraw post-trade margin
+/// review, scenario IM enumeration), so users can choose a more
+/// conservative IM but never circumvent the market's risk floor.
+///
+/// `user_im_bps == 0` clears the override (equivalent to "use the
+/// market default"). The engine validates `user_im_bps == 0 ||
+/// user_im_bps >= market.im_bps` at admission; otherwise rejects
+/// with `ExecError::UserLeverageBelowMarketIm`.
+///
+/// This is a user-signed action (not relayer-signed). Each owner
+/// can only set their own override — the dispatcher enforces
+/// `signer == owner` before the handler runs.
+///
+/// BE-16, 2026-05-03.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SetUserMarketLeverage {
+    pub owner: [u8; 20],
+    pub market: MarketId,
+    /// Initial margin ratio in basis points the user wants to use
+    /// for this market. `0` clears the override; otherwise must be
+    /// `>= market.im_bps`.
+    pub user_im_bps: u32,
 }
 
 /// Immediate-or-cancel order that crosses the book at the best available price.
@@ -1296,6 +1328,14 @@ pub enum Event {
         requested_quantity: u64,
         filled_quantity: u64,
     },
+    /// User picked a per-market IM override (BE-16). `user_im_bps == 0`
+    /// means the override was cleared (engine reverts to market
+    /// default).
+    UserMarketLeverageSet {
+        owner: [u8; 20],
+        market: MarketId,
+        user_im_bps: u32,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1413,6 +1453,15 @@ pub enum ExecError {
     /// to accept them in this deployment, or the position the action
     /// referenced doesn't exist.
     TestActionRejected(String),
+    /// `SetUserMarketLeverage` rejected because the user attempted to
+    /// pick an IM ratio LOWER than the market's risk floor. The
+    /// engine only allows users to deleverage (more margin, less
+    /// leverage), never the other direction. BE-16, 2026-05-03.
+    UserLeverageBelowMarketIm {
+        market: MarketId,
+        user_im_bps: u32,
+        market_im_bps: u32,
+    },
 }
 
 impl ExecError {
@@ -1454,6 +1503,7 @@ impl ExecError {
             ExecError::PostOnlyWouldCross => 34,
             ExecError::ReduceOnlyWouldIncrease => 35,
             ExecError::TestActionRejected(_) => 36,
+            ExecError::UserLeverageBelowMarketIm { .. } => 38,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -1548,6 +1598,15 @@ impl fmt::Display for ExecError {
                 "reduce-only order rejected: would increase exposure (same-side as position) or no position to reduce"
             ),
             ExecError::TestActionRejected(msg) => write!(f, "test action rejected: {msg}"),
+            ExecError::UserLeverageBelowMarketIm {
+                market,
+                user_im_bps,
+                market_im_bps,
+            } => write!(
+                f,
+                "user_im_bps {user_im_bps} below market {market}'s im_bps {market_im_bps}; \
+                only deleveraging (user_im >= market_im) is allowed"
+            ),
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
     }
