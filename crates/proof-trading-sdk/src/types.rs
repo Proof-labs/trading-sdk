@@ -421,6 +421,11 @@ pub enum Action {
     CreateImpactMarket(CreateImpactMarket),
     ResolveEvent(ResolveEvent),
     UpdateMarketFees(UpdateMarketFees),
+    /// Relayer marks a Solana deposit signature as permanently failed
+    /// (malformed tx, unsupported token, dust). The user is NOT credited;
+    /// the signature is recorded so subsequent ConfirmDeposit/FailDeposit
+    /// for the same sig are no-ops. See [`FailDeposit`].
+    FailDeposit(FailDeposit),
     /// Test/admin: force-run end-of-block liquidations immediately. Used by
     /// integration scenarios that need to deterministically engineer a
     /// cascade or bad-debt path without waiting for the natural end-of-block
@@ -659,6 +664,66 @@ pub struct FailWithdrawal {
     pub withdrawal_id: u64,
     /// Human-readable reason for the failure (for event logging).
     pub reason: String,
+    pub signer: [u8; 20],
+}
+
+/// Why a Solana deposit was rejected by the relayer. Mirrors the small
+/// closed set of failure modes the bridge can detect off-chain — anything
+/// else falls under [`FailDepositReason::Other`] with a free-text reason
+/// in the action's `note` field.
+///
+/// Wire form: enum discriminant. Adding a variant is a wire-compatible
+/// change for old decoders ONLY when appended at the end (msgpack maps
+/// missing variants to a decode error). Treat the existing four as
+/// stable; bump a new constant if you need to extend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FailDepositReason {
+    /// Solana transaction couldn't be parsed (invalid instruction layout,
+    /// missing token-2022 metadata, etc.).
+    MalformedTx,
+    /// Deposit was for a token mint we don't accept.
+    UnsupportedToken,
+    /// Amount under the bridge's dust threshold; processing cost would
+    /// exceed the deposit value.
+    BelowMinimum,
+    /// Catch-all for relayer-side errors not covered above. Keep usage
+    /// rare so the breakdown stays meaningful in metrics.
+    Other,
+}
+
+impl fmt::Display for FailDepositReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FailDepositReason::MalformedTx => f.write_str("malformed_tx"),
+            FailDepositReason::UnsupportedToken => f.write_str("unsupported_token"),
+            FailDepositReason::BelowMinimum => f.write_str("below_minimum"),
+            FailDepositReason::Other => f.write_str("other"),
+        }
+    }
+}
+
+/// Relayer marks a Solana deposit signature as permanently failed.
+/// The user is NOT credited — they simply never see the deposit. The
+/// signature is recorded under a separate "failed" key so any future
+/// ConfirmDeposit OR FailDeposit referencing the same signature is a
+/// silent no-op (idempotent).
+///
+/// `solana_signature` uses `Vec<u8>` (not `[u8; 64]`) so the wire bytes
+/// are byte-for-byte identical to the matching `ConfirmDeposit.solana_tx_sig`
+/// — the deduplication relies on this identity. Solana sigs are typically
+/// 64 bytes; the engine does not currently length-validate but the
+/// gateway should reject anything else.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FailDeposit {
+    /// Solana transaction signature, same bytes that the original
+    /// `ConfirmDeposit.solana_tx_sig` would carry. Lookup against the
+    /// processed-deposits set is byte-equality.
+    pub solana_signature: Vec<u8>,
+    /// Structured reason for failure (for event-stream metrics + ops UX).
+    pub reason: FailDepositReason,
+    /// Authorized relayer signer (mirrors `ConfirmDeposit.signer`). The
+    /// envelope signer's derived address must equal this AND must be on
+    /// the relayer allowlist; otherwise `UnauthorizedRelayer`.
     pub signer: [u8; 20],
 }
 
@@ -1143,6 +1208,15 @@ pub enum Event {
         amount: u64,
         new_balance: u64,
         solana_tx_sig: Vec<u8>,
+    },
+    /// Relayer rejected a Solana deposit (BE-40). The user was NOT
+    /// credited; the signature is recorded so any subsequent
+    /// `ConfirmDeposit`/`FailDeposit` referencing the same sig is a
+    /// silent no-op. `solana_signature` is the raw on-chain sig bytes
+    /// (typically 64 bytes — same encoding as `DepositConfirmed.solana_tx_sig`).
+    DepositFailed {
+        solana_signature: Vec<u8>,
+        reason: FailDepositReason,
     },
     WithdrawalConfirmed {
         withdrawal_id: u64,

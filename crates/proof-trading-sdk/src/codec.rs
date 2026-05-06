@@ -19,6 +19,11 @@ pub const ACTION_RESOLVE_EVENT: u8 = 0x0F;
 pub const ACTION_UPDATE_MARKET_FEES: u8 = 0x10;
 pub const ACTION_RUN_LIQUIDATION_SWEEP: u8 = 0x11;
 pub const ACTION_RUN_FUNDING_TICK: u8 = 0x12;
+/// BE-40 — relayer-signed action that marks a Solana deposit signature
+/// as permanently failed (malformed tx, unsupported token, dust). User
+/// is NOT credited. Idempotent on retry; no-op if the signature is
+/// already in either the processed-deposits or failed-deposits set.
+pub const ACTION_FAIL_DEPOSIT: u8 = 0x15;
 
 /// V1 wire envelope: [version=1, action_type, seq, payload_bytes]
 ///
@@ -123,6 +128,9 @@ fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_RUN_FUNDING_TICK => Ok(Action::RunFundingTick(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_FAIL_DEPOSIT => Ok(Action::FailDeposit(
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         other => Err(ExecError::DecodeError(format!(
@@ -257,6 +265,7 @@ fn encode_action(action: &Action) -> Result<(u8, Vec<u8>), ExecError> {
             ACTION_RUN_FUNDING_TICK,
             rmp_serde::to_vec(cmd).map_err(enc)?,
         )),
+        Action::FailDeposit(cmd) => Ok((ACTION_FAIL_DEPOSIT, rmp_serde::to_vec(cmd).map_err(enc)?)),
     }
 }
 
@@ -639,6 +648,11 @@ mod tests {
             Action::FailWithdrawal(FailWithdrawal {
                 withdrawal_id: 100,
                 reason: "destination account closed".to_string(),
+                signer: [0x88; 20],
+            }),
+            Action::FailDeposit(crate::types::FailDeposit {
+                solana_signature: vec![0xEF; 64],
+                reason: crate::types::FailDepositReason::MalformedTx,
                 signer: [0x88; 20],
             }),
             Action::ApproveAgent(ApproveAgent {
