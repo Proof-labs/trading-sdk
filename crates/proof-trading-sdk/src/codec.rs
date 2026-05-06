@@ -693,6 +693,48 @@ mod tests {
         }
     }
 
+    #[derive(Serialize)]
+    struct LegacyCreateMarket {
+        market: u32,
+        im_bps: u32,
+        mm_bps: u32,
+        taker_fee_bps: u32,
+        maker_fee_bps: u32,
+        signer: [u8; 20],
+        funding_interval_ms: u64,
+        max_funding_rate_bps: u32,
+    }
+
+    #[test]
+    fn create_market_legacy_payload_defaults_pool_id() {
+        let legacy = LegacyCreateMarket {
+            market: 10,
+            im_bps: 1000,
+            mm_bps: 500,
+            taker_fee_bps: 0,
+            maker_fee_bps: 0,
+            signer: [0xEE; 20],
+            funding_interval_ms: 0,
+            max_funding_rate_bps: 0,
+        };
+        let envelope = WireTxEnvelope {
+            version: 1,
+            action_type: ACTION_CREATE_MARKET,
+            seq: 42,
+            payload: rmp_serde::to_vec(&legacy).unwrap(),
+        };
+        let encoded = rmp_serde::to_vec(&envelope).unwrap();
+        let decoded = decode_tx(&encoded).unwrap();
+
+        match decoded.action {
+            Action::CreateMarket(cmd) => {
+                assert_eq!(cmd.market, 10);
+                assert_eq!(cmd.pool_id, 0);
+            }
+            other => panic!("expected CreateMarket, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_codec_max_values() {
         let actions: Vec<Action> = vec![
