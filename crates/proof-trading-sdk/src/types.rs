@@ -1631,6 +1631,10 @@ pub enum ExecError {
 
 impl ExecError {
     pub fn code(&self) -> u32 {
+        // Reserved by the SDK gateway submit path for transport-level
+        // failures before the engine sees a transaction: 401, 413, 429, 500.
+        // Keep consensus ExecError codes out of that range so callers can
+        // distinguish engine rejects from gateway rejects.
         match self {
             ExecError::DecodeError(_) => 1,
             ExecError::OrderNotFound(_) => 2,
