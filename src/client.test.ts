@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { Encoder } from "@msgpack/msgpack";
 import { ExchangeClient } from "./client.js";
 import { bytesToHex, generateKeypair } from "./crypto.js";
 import { Side } from "./types.js";
@@ -278,6 +279,49 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
     await client.awaitPendingVerifies();
     // Nonce should remain at 51 — DeliverTx succeeded, no recovery needed.
     expect((client as unknown as { nonce: bigint }).nonce).toBe(51n);
+  });
+
+  it("queryWithdrawal decodes positional tuple by index", async () => {
+    const client = makeClient();
+
+    const owner = new Uint8Array(20);
+    owner.fill(0xab);
+    const dest = new Uint8Array(32);
+    dest.fill(0xcd);
+
+    // Positional msgpack tuple — field order MUST match WithdrawalRecord.
+    const tuple: unknown[] = [42n, owner, 1_000_000n, dest, "Pending", 100n];
+    const encoder = new Encoder({ useBigInt64: true });
+    const bytes = encoder.encode(tuple);
+    let b64 = "";
+    for (const b of bytes) b64 += String.fromCharCode(b);
+    const dataB64 = btoa(b64);
+
+    nextResponses.push(
+      () => new Response(JSON.stringify({ data: dataB64 })),
+    );
+
+    const rec = await client.queryWithdrawal(42n);
+    expect(rec).not.toBeNull();
+    expect(rec!.id).toBe(42n);
+    // Byte-exact owner/destination — guards against tuple-position swap
+    // (plan §Risk warned the two byte arrays are similar shape).
+    expect(rec!.owner).toEqual(owner);
+    expect(rec!.amount).toBe(1_000_000n);
+    expect(rec!.solanaDestination).toEqual(dest);
+    expect(rec!.status).toBe("Pending");
+    expect(rec!.requestHeight).toBe(100n);
+    expect(calls[0].url).toBe("http://test-api/v1/withdrawal/42");
+  });
+
+  it("queryWithdrawal returns null for msgpack-nil response", async () => {
+    const client = makeClient();
+    // msgpack nil = single byte 0xc0
+    nextResponses.push(
+      () => new Response(JSON.stringify({ data: btoa("\xc0") })),
+    );
+    const rec = await client.queryWithdrawal(999n);
+    expect(rec).toBeNull();
   });
 
   it("setUnsafeFastSubmit(true) skips background verifier", async () => {

@@ -20,6 +20,8 @@ import type {
   OrderbookLevel,
   PositionInfo,
   Ticker,
+  WithdrawalRecord,
+  WithdrawalStatus,
 } from "./types.js";
 import { Decoder } from "@msgpack/msgpack";
 import { sha256 } from "@noble/hashes/sha256";
@@ -644,6 +646,25 @@ export class ExchangeClient {
         adlScore: BigInt(r[5] as number | bigint),
       };
     });
+  }
+
+  /** Fetch a withdrawal record by id. Returns `null` for unknown ids
+   *  (the engine encodes "not found" as msgpack `nil`, not HTTP 404). */
+  async queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null> {
+    const res = await fetch(`${this.apiUrl}/v1/withdrawal/${id}`);
+    const json = await res.json();
+    if (json.error) return null;
+    const bytes = fromBase64(json.data);
+    const raw = msgpackDecoder.decode(bytes) as unknown[] | null;
+    if (raw === null) return null;
+    return {
+      id: BigInt(raw[0] as number | bigint),
+      owner: raw[1] as Uint8Array,
+      amount: BigInt(raw[2] as number | bigint),
+      solanaDestination: raw[3] as Uint8Array,
+      status: raw[4] as WithdrawalStatus,
+      requestHeight: BigInt(raw[5] as number | bigint),
+    };
   }
 
   async queryAccount(addressHex?: string): Promise<AccountInfo | null> {

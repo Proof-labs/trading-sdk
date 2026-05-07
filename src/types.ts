@@ -245,6 +245,27 @@ export interface ConfirmWithdrawal {
   signer: Address;
 }
 
+/** Lifecycle status of a withdrawal record. Title-case strings are
+ *  serde's default for unit variants — wire format is locked. */
+export type WithdrawalStatus = "Pending" | "Completed" | "Failed";
+
+/** On-chain withdrawal record returned by `queryWithdrawal`. Mirrors
+ *  `exchange-core::types::WithdrawalRecord` field-for-field. */
+export interface WithdrawalRecord {
+  /** Engine-assigned withdrawal id. */
+  id: bigint;
+  /** Account address that requested the withdrawal (20 bytes). */
+  owner: Address;
+  /** Withdrawal amount in microUSDC. */
+  amount: bigint;
+  /** Solana destination public key (Ed25519, 32 bytes). */
+  solanaDestination: Uint8Array;
+  /** Pending → Completed or Pending → Failed; never reverses. */
+  status: WithdrawalStatus;
+  /** Block height at which the request was admitted. */
+  requestHeight: bigint;
+}
+
 /** Relayer marks a withdrawal as permanently failed; refunds the debited balance. */
 export interface FailWithdrawal {
   /** Engine-assigned withdrawal ID. */
