@@ -613,6 +613,18 @@ pub struct MarketConfig {
     /// `Median`.
     #[serde(default)]
     pub cex_composite_staleness_ms: u64,
+    /// BE-26: enable partial liquidation for this market. When true,
+    /// the liquidation engine closes positions one at a time and
+    /// rechecks maintenance margin after each close. If MM holds after
+    /// closing a single market's position, the account is considered
+    /// healthy and the remaining positions are not closed.
+    ///
+    /// When false (default, backward-compatible with existing
+    /// `MarketConfig` records), the legacy all-or-nothing liquidation
+    /// runs: every position in the owner's portfolio closes when any
+    /// market is under MM.
+    #[serde(default)]
+    pub partial_liquidation_enabled: bool,
 }
 
 /// Per-tier fee schedule for the volume-based maker-rebate program.
@@ -1258,6 +1270,11 @@ pub struct UpdateMarketFees {
     /// one composite update.
     #[serde(default)]
     pub cex_composite_staleness_ms: Option<u64>,
+    /// BE-26: enable partial liquidation for this market. `None` =
+    /// leave unchanged. See `MarketConfig::partial_liquidation_enabled`
+    /// for semantics. Safe to flip on at any time.
+    #[serde(default)]
+    pub partial_liquidation_enabled: Option<bool>,
 }
 
 /// Per-account fee override (BE-46). Stored at
