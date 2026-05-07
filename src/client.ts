@@ -3,6 +3,7 @@ import {
   getPublicKey,
   pubkeyToOwner,
   ownerToHex,
+  bytesToHex,
   UNBOUND_CHAIN_ID,
   chainIdFromString,
 } from "./crypto.js";
@@ -13,6 +14,7 @@ import type {
   AdlQueueEntry,
   BindingScenarioEntry,
   HistoryCashFlow,
+  HistoryPositionSnapshot,
   HistoryResolution,
   Orderbook,
   OrderbookLevel,
@@ -20,6 +22,7 @@ import type {
   Ticker,
 } from "./types.js";
 import { Decoder } from "@msgpack/msgpack";
+import { sha256 } from "@noble/hashes/sha256";
 
 const msgpackDecoder = new Decoder({ useBigInt64: true });
 
@@ -42,11 +45,47 @@ export interface ExchangeClientOptions {
    * `/v1/status` endpoint at client init time.
    */
   chainId?: string;
+  /**
+   * Public-API gateway endpoint, used by `submitTx` when `useGateway`
+   * is true. Format: `http://<host>:9080` (the Rust API gateway, not
+   * the node REST API at `apiUrl`). When `useGateway` is true and
+   * this option is omitted, defaults to `http://localhost:9080`.
+   */
+  gatewayUrl?: string;
+  /**
+   * Submission path selector.
+   *
+   * - `true` (default): `submitTx` POSTs the signed wire bytes to
+   *   `gatewayUrl/exchange` — the same path external clients use.
+   *   The gateway verifies the signature, applies rate limiting, and
+   *   publishes to Redis. This is the production-facing path.
+   *
+   * - `false`: `submitTx` falls back to the legacy CometBFT
+   *   `broadcast_tx_sync` over `rpcUrl` — kept for internal tools
+   *   (MMs, HLP, oracle feeder, retail-flow taker) that want to skip
+   *   the gateway for performance and don't need rate limiting.
+   *
+   * The two paths are wire-compatible: both submit the same V3 signed
+   * envelope. Switching only changes which surface validates and
+   * forwards the bytes. CheckTx-level error semantics (code=21
+   * InvalidNonce auto-resync) are preserved on both paths.
+   */
+  useGateway?: boolean;
+  /**
+   * X-Api-Key header value sent with every gateway-path submission.
+   * Required when the gateway is started with `--api-key <key>`. Read
+   * endpoints (`POST /info`, `GET /health`) ignore this header.
+   * Ignored when `useGateway` is false.
+   */
+  apiKey?: string;
 }
 
 export class ExchangeClient {
   private rpcUrl: string;
   private apiUrl: string;
+  private gatewayUrl: string;
+  private useGateway: boolean;
+  private apiKey: string | null;
   private wsUrl: string;
   /** 32-byte chain_id binding for v3 signatures (see audit B4). */
   private chainId: Uint8Array;
@@ -74,6 +113,11 @@ export class ExchangeClient {
   constructor(opts: ExchangeClientOptions = {}) {
     this.rpcUrl = opts.rpcUrl ?? "http://localhost:26657";
     this.apiUrl = opts.apiUrl ?? "http://localhost:8080";
+    this.gatewayUrl = stripTrailingSlash(
+      opts.gatewayUrl ?? deriveGatewayUrl(this.rpcUrl),
+    );
+    this.useGateway = opts.useGateway ?? true;
+    this.apiKey = opts.apiKey ?? null;
     this.wsUrl =
       opts.wsUrl ?? this.rpcUrl.replace(/^http/, "ws") + "/websocket";
     // Derive 32-byte chain binding: keccak256 of the chain_id string,
@@ -195,10 +239,17 @@ export class ExchangeClient {
   }
 
   /**
-   * Internal: sign + broadcast_tx_sync, manage local nonce. Does NOT spawn
-   * a background verifier — the public submitTx adds that. submitTxCommit
-   * uses this directly so it can run its own synchronous verification
-   * without two pollers racing for the same tx hash.
+   * Internal: sign + submit, manage local nonce. Does NOT spawn a
+   * background verifier — the public `submitTx` adds that.
+   * `submitTxCommit` uses this directly so it can run its own
+   * synchronous verification without two pollers racing for the same
+   * tx hash.
+   *
+   * Routes via the gateway (`POST gatewayUrl/exchange`) when
+   * `useGateway` is true (default), or via CometBFT
+   * `broadcast_tx_sync` when false (internal-tools opt-out path).
+   * Both paths submit identical signed wire bytes; CheckTx-level
+   * error semantics (code=21 InvalidNonce auto-resync) are preserved.
    */
   private async broadcastSigned(action: Action): Promise<TxResult> {
     if (!this.privateKey) throw new Error("No private key set");
@@ -210,8 +261,134 @@ export class ExchangeClient {
       seq,
       this.privateKey,
     );
-    const b64 = toBase64(txBytes);
 
+    const r = this.useGateway
+      ? await this.submitViaGateway(txBytes)
+      : await this.submitViaCometBFT(txBytes);
+
+    if (r.code === 0) {
+      // Only increment nonce on successful CheckTx.
+      this.nonce++;
+    } else if (r.code === 21) {
+      // CheckTx rejected with InvalidNonce — local cache is stale, resync
+      // BEFORE returning so the next caller starts from a clean slate.
+      // Pre-2026-04-25 this was fire-and-forget (`.catch(() => {})`),
+      // which meant the next submit could fire while the resync was
+      // still in flight — visible in the impact-mm logs as cascades of
+      // `expected N, got N+1` / `expected N, got N+2` etc. Awaiting
+      // here serialises the recovery.
+      await this.syncNonce().catch(() => {});
+    }
+
+    return r;
+  }
+
+  /**
+   * Submit signed wire bytes via the public API gateway
+   * (`POST gatewayUrl/exchange`). Sends the **pre-signed** JSON shape
+   * the gateway accepts (`{"action": "<base64-wire-bytes>"}`) since
+   * the SDK already has the wire bytes — saves the gateway from
+   * re-encoding from structured JSON.
+   *
+   * The gateway re-verifies the signature, applies rate limiting and,
+   * when configured with `--api-key`, checks the `X-Api-Key` header.
+   * On success it publishes to Redis; the downstream consumer feeds
+   * CometBFT.
+   *
+   * The gateway response shape is `{status: "ok"|"error", error?}`.
+   * We map it to `TxResult` so callers can branch on `code` the same
+   * way they do for the CometBFT path. For engine-level rejections
+   * the error string is `"<code>: <message>"` (mirroring the
+   * ExecErrorCode table in `api-gateway/openapi.yaml`). For transport-
+   * level failures (rate limit, auth, etc.) we synthesize a code from
+   * the HTTP status.
+   */
+  private async submitViaGateway(txBytes: Uint8Array): Promise<TxResult> {
+    const txHash = computeCometTxHash(txBytes);
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (this.apiKey) headers["X-Api-Key"] = this.apiKey;
+
+    const body = JSON.stringify({ action: toBase64(txBytes) });
+    const res = await fetch(`${this.gatewayUrl}/exchange`, {
+      method: "POST",
+      headers,
+      body,
+    });
+    const gatewayBody = await readGatewayBody(res);
+
+    // Auth/rate-limit transport failures don't have a JSON body the
+    // engine produced — synthesize a code so callers can branch.
+    if (res.status === 401) {
+      return {
+        code: 401,
+        hash: "",
+        log: gatewayBody.error ?? "unauthorized: invalid or missing X-Api-Key",
+      };
+    }
+    if (res.status === 429) {
+      return {
+        code: 429,
+        hash: "",
+        log: gatewayBody.error ?? gatewayBody.raw ?? "rate limited by gateway",
+      };
+    }
+    if (res.status === 413) {
+      return {
+        code: 413,
+        hash: "",
+        log:
+          gatewayBody.error ??
+          gatewayBody.raw ??
+          "request body exceeds max size (default 8192 bytes)",
+      };
+    }
+    if (res.status >= 500) {
+      return {
+        code: 500,
+        hash: "",
+        log: gatewayBody.error
+          ? `gateway error: ${gatewayBody.error}`
+          : gatewayBody.raw
+            ? `gateway error: ${res.status} ${res.statusText}: ${gatewayBody.raw}`
+            : `gateway error: ${res.status} ${res.statusText}`,
+      };
+    }
+
+    if (!res.ok) {
+      const errMsg =
+        gatewayBody.error ??
+        gatewayBody.raw ??
+        `gateway returned HTTP ${res.status} ${res.statusText}`;
+      return { code: 1, hash: "", log: errMsg };
+    }
+
+    const json = gatewayBody.json as
+      | {
+          status?: string;
+          error?: string;
+        }
+      | undefined;
+    if (json?.status === "ok") {
+      return { code: 0, hash: txHash, log: "" };
+    }
+    // Gateway error shape: error string is "<engine_code>: <message>"
+    // (per ExecErrorCode table in api-gateway/openapi.yaml). Parse the
+    // leading code so callers branch on it; if missing, surface 1
+    // (DecodeError) as the conservative default.
+    const errMsg = json?.error ?? gatewayBody.raw ?? "unknown gateway error";
+    const code = parseLeadingErrorCode(errMsg) ?? 1;
+    return { code, hash: "", log: errMsg };
+  }
+
+  /**
+   * Submit signed wire bytes via CometBFT `broadcast_tx_sync`. Used
+   * when `useGateway` is false (internal-tools opt-out). Bypasses
+   * gateway auth/rate-limit/Redis, going directly to CometBFT.
+   */
+  private async submitViaCometBFT(txBytes: Uint8Array): Promise<TxResult> {
+    const b64 = toBase64(txBytes);
     const res = await fetch(this.rpcUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -229,20 +406,6 @@ export class ExchangeClient {
     }
 
     const r = json.result;
-    if (r.code === 0) {
-      // Only increment nonce on successful CheckTx.
-      this.nonce++;
-    } else if (r.code === 21) {
-      // CheckTx rejected with InvalidNonce — local cache is stale, resync
-      // BEFORE returning so the next caller starts from a clean slate.
-      // Pre-2026-04-25 this was fire-and-forget (`.catch(() => {})`),
-      // which meant the next submit could fire while the resync was
-      // still in flight — visible in the impact-mm logs as cascades of
-      // `expected N, got N+1` / `expected N, got N+2` etc. Awaiting
-      // here serialises the recovery.
-      await this.syncNonce().catch(() => {});
-    }
-
     return {
       code: r.code,
       hash: r.hash,
@@ -404,6 +567,37 @@ export class ExchangeClient {
     };
   }
 
+  /**
+   * BE-40 — convenience wrapper for the relayer-only `FailDeposit`
+   * action. Marks a Solana deposit signature as permanently failed;
+   * the engine records the sig in the failed-deposits set and emits
+   * `DepositFailed`. Idempotent on retry — a repeat (or a race with
+   * `ConfirmDeposit`) is a silent no-op (`code = 0`, no events).
+   *
+   * The caller's loaded private key MUST derive to a relayer-allowlisted
+   * address; otherwise the engine returns `UnauthorizedRelayer`.
+   *
+   * `solanaSignature` is the raw bytes of the Solana tx sig (typically
+   * 64 bytes). Same byte sequence the matching `ConfirmDeposit` would
+   * carry — that's how the dedup keyspace identifies "this same deposit".
+   */
+  async failDeposit(
+    solanaSignature: Uint8Array,
+    reason: import("./types.js").FailDepositReason,
+  ): Promise<TxResult> {
+    if (!this.address) {
+      throw new Error("failDeposit: client has no signer key loaded");
+    }
+    return this.submitTx({
+      type: "FailDeposit",
+      data: {
+        solanaSignature,
+        reason,
+        signer: this.address,
+      },
+    });
+  }
+
   // -----------------------------------------------------------------------
   // Query endpoints (via Go API server)
   // -----------------------------------------------------------------------
@@ -507,6 +701,14 @@ export class ExchangeClient {
         };
       });
     }
+    // Index [7] — added 2026-05-03 (BE-45). Cumulative trading fees
+    // paid (positive) or rebates received (negative). Older gateways
+    // omit this field; leave feesAccrued undefined so callers can
+    // distinguish "no data" from "0 fees".
+    let feesAccrued: bigint | undefined;
+    if (raw[7] !== undefined) {
+      feesAccrued = BigInt((raw[7] as number | bigint) ?? 0);
+    }
     return {
       balance,
       positions,
@@ -515,6 +717,7 @@ export class ExchangeClient {
       totalIm,
       marginRatioBps,
       bindingScenario,
+      feesAccrued,
     };
   }
 
@@ -645,6 +848,45 @@ export class ExchangeClient {
     }));
   }
 
+  /** Per-user position-history snapshot log. Each row is one
+   * point-in-time snapshot persisted after a fill that changes the
+   * position. A `size === "0"` row is a CLOSE event; the immediately
+   * preceding non-zero snapshot for the same `(owner, market, side)`
+   * carries the entry price. Feeds the trading-UI Position History tab
+   * (FE-23). Optional `market` filter scopes to one book; `fromMs` /
+   * `toMs` window the timestamps; `limit` caps server-side at 5000. */
+  async queryHistoryPositions(
+    addressHex?: string,
+    opts?: {
+      market?: number;
+      fromMs?: number;
+      toMs?: number;
+      limit?: number;
+    },
+  ): Promise<HistoryPositionSnapshot[]> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return [];
+    const params = new URLSearchParams();
+    if (opts?.market !== undefined) params.set("market", String(opts.market));
+    if (opts?.fromMs !== undefined) params.set("from", String(opts.fromMs));
+    if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
+    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    const url = `${this.apiUrl}/v1/history/positions/${hex}${qs ? `?${qs}` : ""}`;
+    const res = await fetch(url);
+    const json = (await res.json()) as unknown;
+    if (!Array.isArray(json)) return [];
+    return (json as Array<Record<string, unknown>>).map((row) => ({
+      owner: String(row.owner ?? ""),
+      market: String(row.market ?? ""),
+      side: String(row.side ?? ""),
+      entryPrice: String(row.entry_price ?? "0"),
+      size: String(row.size ?? "0"),
+      blockHeight: Number(row.block_height ?? 0),
+      timestamp: Number(row.timestamp ?? 0),
+    }));
+  }
+
   // -----------------------------------------------------------------------
   // CometBFT status & block queries
   // -----------------------------------------------------------------------
@@ -760,4 +1002,72 @@ function fromBase64(b64: string): Uint8Array {
   const arr = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
   return arr;
+}
+
+function stripTrailingSlash(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
+function deriveGatewayUrl(rpcUrl: string): string {
+  try {
+    const url = new URL(rpcUrl);
+    if (url.port === "26657") {
+      url.port = "9080";
+    }
+    url.pathname = "";
+    url.search = "";
+    url.hash = "";
+    return stripTrailingSlash(url.toString());
+  } catch {
+    return "http://localhost:9080";
+  }
+}
+
+function computeCometTxHash(txBytes: Uint8Array): string {
+  return bytesToHex(sha256(txBytes)).toUpperCase();
+}
+
+async function readGatewayBody(res: Response): Promise<{
+  json?: unknown;
+  error?: string;
+  raw?: string;
+}> {
+  const raw = await res.text();
+  if (!raw) return {};
+  try {
+    const json = JSON.parse(raw) as unknown;
+    const error =
+      typeof json === "object" &&
+      json !== null &&
+      "error" in json &&
+      typeof (json as { error?: unknown }).error === "string"
+        ? (json as { error: string }).error
+        : undefined;
+    return { json, error, raw };
+  } catch {
+    return { raw };
+  }
+}
+
+/**
+ * Parse the leading numeric code from a gateway error string.
+ *
+ * The gateway formats engine errors as `"<code>: <message>"` per the
+ * `ExecErrorCode` table in `api-gateway/openapi.yaml`. This helper lets
+ * the SDK branch on `code === 21` (InvalidNonce → resync) and similar
+ * patterns the same way it does for CometBFT-path responses.
+ *
+ * Returns `null` when the string doesn't match the expected shape so
+ * callers can fall back to a conservative default.
+ *
+ * Examples:
+ *   "21: invalid nonce: expected 5, got 4" → 21
+ *   "12: insufficient margin"               → 12
+ *   "signature verification failed"         → null
+ */
+function parseLeadingErrorCode(s: string): number | null {
+  const m = s.match(/^(\d+):\s/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
 }

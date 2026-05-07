@@ -75,6 +75,49 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "SettlementPriceMismatch",
     description: "net-delta margin grouping found legs of the same group with disagreeing settle prices (upstream data corruption)",
   },
+  33: {
+    name: "OracleNotApplicable",
+    description: "OracleUpdate targets a market kind that doesn't take oracle prices (impact-family children mark off the book)",
+  },
+  34: {
+    name: "PostOnlyWouldCross",
+    description: "post-only order would have crossed the book — rejected to preserve maker semantics",
+  },
+  35: {
+    name: "ReduceOnlyWouldIncrease",
+    description: "reduce-only order would have increased the position rather than reducing it",
+  },
+  36: { name: "TestActionRejected", description: "test/admin action rejected (e.g. unauthorized signer for RunLiquidationSweep)" },
+  37: {
+    name: "StaleOracle",
+    description:
+      "oracle for this market is older than MarketConfig.mark_price_max_oracle_age_ms; order placement, margin, and liquidation refuse to use a stale oracle (BE-33)",
+  },
+  38: {
+    name: "UserLeverageBelowMarketIm",
+    description:
+      "SetUserMarketLeverage rejected: user_im_bps below market.im_bps. The engine only allows users to deleverage (more margin), never the other direction (BE-16)",
+  },
+  39: {
+    name: "TickSizeViolation",
+    description: "PlaceOrder price is not a multiple of MarketConfig.tickSize (BE-48)",
+  },
+  40: {
+    name: "LotSizeViolation",
+    description: "PlaceOrder/MarketOrder quantity is not a multiple of MarketConfig.lotSize (BE-48)",
+  },
+  41: {
+    name: "OracleStaleNotElapsed",
+    description: "fallback oracle signer published before the primary's staleness window elapsed (BE-50)",
+  },
+  42: {
+    name: "FeeBpsOutOfRange",
+    description: "SetAccountFeeOverride rejected — taker_fee_bps or maker_fee_bps outside the [0, 10_000] basis-point range (BE-46)",
+  },
+  43: {
+    name: "FeeOverrideStaleSeq",
+    description: "SetAccountFeeOverride rejected — cmd.seq must be strictly greater than the highest accepted seq for this account (BE-46.2 replay guard)",
+  },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
 

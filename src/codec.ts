@@ -3,7 +3,11 @@ import {
   type Action,
   ActionType,
   type ActionTypeValue,
+  type Address,
+  type EventOracleSource,
+  type FailDepositReason,
   Outcome,
+  type PriceComparison,
   Side,
 } from "./types.js";
 import {
@@ -269,6 +273,112 @@ function outcomeStr(o: Outcome): string {
   }
 }
 
+/**
+ * BE-54: encode an `EventOracleSource` to its rmp-serde wire form.
+ *
+ * The Rust enum encoding (from `rmp_serde` defaults) is:
+ *   - `RelayerAttested` (unit variant) → bare msgpack string `"RelayerAttested"`.
+ *   - `UnderlyingPriceVsStrike { strike_price, comparison }` (struct variant)
+ *       → fixmap(1) `{"UnderlyingPriceVsStrike": [strikePrice, comparisonStr]}`.
+ *     Note: rmp-serde represents struct variants positionally by default,
+ *     so the inner value is an ARRAY of the field values in declaration
+ *     order, not a map of name->value.
+ *   - `MarketOracle { market, strike_price, comparison }`
+ *       → `{"MarketOracle": [market, strikePrice, comparisonStr]}`.
+ *
+ * `undefined` (the SDK's representation of "no oracle source set") is
+ * sent as msgpack `nil` so the engine's `serde(default)` treats it as
+ * `Option::None` — equivalent to RelayerAttested for the resolver.
+ */
+function encodeEventOracleSource(
+  src: EventOracleSource | undefined,
+): unknown {
+  if (src === undefined) return null;
+  switch (src.kind) {
+    case "RelayerAttested":
+      return "RelayerAttested";
+    case "UnderlyingPriceVsStrike":
+      return {
+        UnderlyingPriceVsStrike: [
+          src.strikePrice,
+          priceComparisonStr(src.comparison),
+        ],
+      };
+    case "MarketOracle":
+      return {
+        MarketOracle: [
+          src.market,
+          src.strikePrice,
+          priceComparisonStr(src.comparison),
+        ],
+      };
+  }
+}
+
+/** Inverse of `encodeEventOracleSource` — used by the decoder. */
+function decodeEventOracleSource(v: unknown): EventOracleSource | undefined {
+  if (v === null || v === undefined) return undefined;
+  if (typeof v === "string") {
+    if (v === "RelayerAttested") return { kind: "RelayerAttested" };
+    throw new Error(`unknown EventOracleSource string variant: ${v}`);
+  }
+  if (typeof v === "object" && v !== null) {
+    const obj = v as Record<string, unknown>;
+    const keys = Object.keys(obj);
+    if (keys.length !== 1) {
+      throw new Error(
+        `EventOracleSource must be a single-key map, got keys [${keys.join(",")}]`,
+      );
+    }
+    const variant = keys[0];
+    const fields = obj[variant];
+    if (!Array.isArray(fields)) {
+      throw new Error(
+        `EventOracleSource fields for ${variant} must be a positional array`,
+      );
+    }
+    if (variant === "UnderlyingPriceVsStrike") {
+      return {
+        kind: "UnderlyingPriceVsStrike",
+        strikePrice: toBigInt(fields[0]),
+        comparison: parsePriceComparison(fields[1]),
+      };
+    }
+    if (variant === "MarketOracle") {
+      return {
+        kind: "MarketOracle",
+        market: Number(toBigInt(fields[0])),
+        strikePrice: toBigInt(fields[1]),
+        comparison: parsePriceComparison(fields[2]),
+      };
+    }
+    throw new Error(`unknown EventOracleSource variant: ${variant}`);
+  }
+  throw new Error(`unexpected EventOracleSource shape: ${typeof v}`);
+}
+
+/** Map the SDK's `PriceComparison` string union to its wire representation. */
+function priceComparisonStr(c: PriceComparison): string {
+  // The SDK union and the Rust enum variants are name-identical.
+  return c;
+}
+
+/** Inverse of `priceComparisonStr`. */
+function parsePriceComparison(v: unknown): PriceComparison {
+  switch (v) {
+    case "GreaterThan":
+      return "GreaterThan";
+    case "LessThan":
+      return "LessThan";
+    case "GreaterThanOrEqual":
+      return "GreaterThanOrEqual";
+    case "LessThanOrEqual":
+      return "LessThanOrEqual";
+    default:
+      throw new Error(`invalid PriceComparison: ${String(v)}`);
+  }
+}
+
 /** Ensure an owner/signer field is a Uint8Array (not a hex string). */
 function toBytes(v: Uint8Array | string): Uint8Array {
   if (v instanceof Uint8Array) return v;
@@ -369,6 +479,11 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
     }
     case "CreateMarket": {
       const d = action.data;
+      // pool_id (final field) is `serde(default)` on the engine side, so
+      // omitting it from the wire-bytes lets old SDK clients keep working
+      // — but if the caller sets a non-zero poolId we MUST include it.
+      // Always include for forward-compatibility once any SDK build can
+      // address pools other than 0.
       return [
         ActionType.CreateMarket,
         [
@@ -380,6 +495,7 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           toByteSeq(d.signer),
           d.fundingIntervalMs,
           d.maxFundingRateBps,
+          d.poolId ?? 0,
         ],
       ];
     }
@@ -448,6 +564,12 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           d.fundingIntervalMs,
           d.maxFundingRateBps,
           toByteSeq(d.signer),
+          // BE-54: oracle_source at position 13. `null` (msgpack nil) is
+          // the wire shape rmp-serde emits for `Option::None`, which
+          // decodes back to `None` (= RelayerAttested behavior). Old SDK
+          // clients sending a 13-element array still decode cleanly via
+          // the engine's `serde(default)`.
+          encodeEventOracleSource(d.oracleSource),
         ],
       ];
     }
@@ -463,9 +585,12 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       // Field order MUST match the Rust struct: market, signer,
       // taker_fee_bps, maker_fee_bps, max_funding_rate_bps,
       // funding_interval_ms, max_position_size, default_ttl_ms,
-      // net_delta_margin. Each optional field encodes as its value or
-      // null (rmp-serde accepts null for `Option<T>` via
-      // serde(default) / Option deserialization).
+      // net_delta_margin, tick_size, lot_size, primary_oracle_signer,
+      // oracle_staleness_ms, mark_source_mode, max_mark_spread_bps,
+      // cex_composite_staleness_ms, partial_liquidation_enabled.
+      // Each optional field encodes as its value or null (rmp-serde
+      // accepts null for `Option<T>` via serde(default) / Option
+      // deserialization). New fields are appended at the end.
       return [
         ActionType.UpdateMarketFees,
         [
@@ -478,6 +603,30 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           d.maxPositionSize ?? null,
           d.defaultTtlMs ?? null,
           d.netDeltaMargin ?? null,
+          d.tickSize ?? null,
+          d.lotSize ?? null,
+          d.primaryOracleSigner ? toByteSeq(d.primaryOracleSigner) : null,
+          d.oracleStalenessMs ?? null,
+          d.markSourceMode ?? null,
+          d.maxMarkSpreadBps ?? null,
+          d.cexCompositeStalenessMs ?? null,
+          d.partialLiquidationEnabled ?? null,
+        ],
+      ];
+    }
+    case "SetAccountFeeOverride": {
+      const d = action.data;
+      // Field order MUST match the Rust struct: account, taker_fee_bps,
+      // maker_fee_bps, signer, seq. BE-46. The trailing `seq` is the
+      // BE-46.2 replay-guard sequence (Ramon's 2026-05-03 review).
+      return [
+        ActionType.SetAccountFeeOverride,
+        [
+          toByteSeq(d.account),
+          d.takerFeeBps,
+          d.makerFeeBps,
+          toByteSeq(d.signer),
+          d.seq,
         ],
       ];
     }
@@ -489,6 +638,61 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       const d = action.data;
       return [ActionType.RunFundingTick, [d.market, toByteSeq(d.signer)]];
     }
+    case "SetUserMarketLeverage": {
+      const d = action.data;
+      return [
+        ActionType.SetUserMarketLeverage,
+        [toByteSeq(d.owner), d.market, d.userImBps],
+      ];
+    }
+    case "FailDeposit": {
+      // BE-40: positional [solanaSignature, reason, signer]. The reason
+      // enum is encoded as the variant name (string) — that's what
+      // rmp-serde does by default for fieldless enums.
+      const d = action.data;
+      return [
+        ActionType.FailDeposit,
+        [
+          toByteSeq(d.solanaSignature),
+          failDepositReasonStr(d.reason),
+          toByteSeq(d.signer),
+        ],
+      ];
+    }
+  }
+}
+
+/**
+ * Map the SDK's `FailDepositReason` string union to the wire string the
+ * Rust enum (un-tagged variant name) expects. Stays a one-to-one map so
+ * the encoder/decoder cannot drift from the Rust definition silently.
+ */
+function failDepositReasonStr(r: FailDepositReason): string {
+  switch (r) {
+    case "MalformedTx":
+      return "MalformedTx";
+    case "UnsupportedToken":
+      return "UnsupportedToken";
+    case "BelowMinimum":
+      return "BelowMinimum";
+    case "Other":
+      return "Other";
+  }
+}
+
+/** Inverse of `failDepositReasonStr` — used by the decoder. */
+function parseFailDepositReason(v: unknown): FailDepositReason {
+  switch (v) {
+    case "MalformedTx":
+      return "MalformedTx";
+    case "UnsupportedToken":
+      return "UnsupportedToken";
+    case "BelowMinimum":
+      return "BelowMinimum";
+    case "Other":
+      return "Other";
+    default:
+      throw new Error(`invalid FailDepositReason: ${String(v)}`);
   }
 }
 
@@ -615,6 +819,10 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           signer: bytesField(f[5]),
           fundingIntervalMs: bi(f[6]),
           maxFundingRateBps: f[7] as number,
+          // poolId at index 8 — defensive on length so wire records
+          // emitted by older SDK builds (8 fields) still decode cleanly
+          // and land in pool 0, matching the engine's `serde(default)`.
+          poolId: f.length > 8 ? (f[8] as number) : 0,
         },
       };
     case ActionType.WithdrawRequest:
@@ -687,6 +895,11 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           fundingIntervalMs: bi(f[10]),
           maxFundingRateBps: Number(bi(f[11])),
           signer: bytesField(f[12]),
+          // BE-54: oracleSource at index 13. Length-tolerant so wire
+          // records emitted by pre-BE-54 SDKs (13-element arrays) still
+          // decode cleanly — the missing field defaults to undefined,
+          // mirroring the engine's `serde(default)` for `Option::None`.
+          oracleSource: f.length > 13 ? decodeEventOracleSource(f[13]) : undefined,
         },
       };
     case ActionType.ResolveEvent:
@@ -700,13 +913,24 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
       };
     case ActionType.UpdateMarketFees: {
       // Field order mirrors the Rust struct. Each optional u32/u64 is
-      // either null (unchanged) or a number/bigint from msgpack.
+      // either null (unchanged) or a number/bigint from msgpack. The
+      // length-guarded reads at indices 9 and 10 (BE-31 Phase A
+      // additions) let older 9-element wire records keep decoding
+      // cleanly — old SDK builds emit 9 fields, new SDK builds emit 11.
       const optNum = (v: unknown): number | null =>
         v === null || v === undefined ? null : Number(bi(v));
       const optBig = (v: unknown): bigint | null =>
         v === null || v === undefined ? null : bi(v);
       const optBool = (v: unknown): boolean | null =>
         v === null || v === undefined ? null : Boolean(v);
+      const optBytes = (v: unknown): Address | null =>
+        v === null || v === undefined ? null : bytesField(v);
+      const markSourceMode = f.length > 13 ? optNum(f[13]) : null;
+      // Cast back to the union shape exported on `UpdateMarketFees`.
+      const markSourceModeTyped =
+        markSourceMode === 0 || markSourceMode === 1
+          ? (markSourceMode as 0 | 1)
+          : null;
       return {
         type: "UpdateMarketFees",
         data: {
@@ -719,9 +943,34 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           maxPositionSize: optBig(f[6]),
           defaultTtlMs: optBig(f[7]),
           netDeltaMargin: optBool(f[8]),
+          tickSize: f.length > 9 ? optBig(f[9]) : null,
+          lotSize: f.length > 10 ? optBig(f[10]) : null,
+          primaryOracleSigner: f.length > 11 ? optBytes(f[11]) : null,
+          oracleStalenessMs: f.length > 12 ? optBig(f[12]) : null,
+          markSourceMode: markSourceModeTyped,
+          maxMarkSpreadBps: f.length > 14 ? optNum(f[14]) : null,
+          cexCompositeStalenessMs: f.length > 15 ? optBig(f[15]) : null,
+          partialLiquidationEnabled: f.length > 16 ? optBool(f[16]) : null,
         },
       };
     }
+    case ActionType.SetAccountFeeOverride:
+      // Field order mirrors the Rust struct: account, taker_fee_bps,
+      // maker_fee_bps, signer, seq. BE-46 / BE-46.2. The trailing
+      // `seq` is the replay-guard sequence; older payloads written
+      // before BE-46.2 are absent here and decode as 0n (which the
+      // engine rejects loudly via FeeOverrideStaleSeq, surfacing the
+      // missing-field bug rather than silently accepting).
+      return {
+        type: "SetAccountFeeOverride",
+        data: {
+          account: bytesField(f[0]),
+          takerFeeBps: Number(bi(f[1])),
+          makerFeeBps: Number(bi(f[2])),
+          signer: bytesField(f[3]),
+          seq: f[4] === undefined ? 0n : bi(f[4]),
+        },
+      };
     case ActionType.RunLiquidationSweep:
       return {
         type: "RunLiquidationSweep",
@@ -733,6 +982,24 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
         data: {
           market: f[0] as number,
           signer: bytesField(f[1]),
+        },
+      };
+    case ActionType.SetUserMarketLeverage:
+      return {
+        type: "SetUserMarketLeverage",
+        data: {
+          owner: bytesField(f[0]),
+          market: Number(bi(f[1])),
+          userImBps: Number(bi(f[2])),
+        },
+      };
+    case ActionType.FailDeposit:
+      return {
+        type: "FailDeposit",
+        data: {
+          solanaSignature: bytesField(f[0]),
+          reason: parseFailDepositReason(f[1]),
+          signer: bytesField(f[2]),
         },
       };
     default:

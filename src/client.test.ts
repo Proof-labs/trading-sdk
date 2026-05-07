@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { ExchangeClient } from "./client.js";
-import { generateKeypair } from "./crypto.js";
+import { bytesToHex, generateKeypair } from "./crypto.js";
 import { Side } from "./types.js";
+import { sha256 } from "@noble/hashes/sha256";
 
 /**
  * Tests for the submitTx auto-recovery from silent DeliverTx failures
@@ -36,6 +37,18 @@ function makeMsgpackBigInt(n: bigint): string {
   return btoa(s);
 }
 
+function bytesFromBase64(b64: string): Uint8Array {
+  const raw = atob(b64);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
+function expectedGatewayHash(call: FetchCall): string {
+  const body = JSON.parse(call.init?.body as string) as { action: string };
+  return bytesToHex(sha256(bytesFromBase64(body.action))).toUpperCase();
+}
+
 describe("ExchangeClient submitTx nonce-drift recovery", () => {
   const originalFetch = globalThis.fetch;
   let calls: FetchCall[] = [];
@@ -67,9 +80,14 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
   });
 
   function makeClient(): ExchangeClient {
+    // The nonce-drift tests below mock CometBFT JSON-RPC responses, so
+    // the client must take the legacy `useGateway: false` path. The
+    // production-default gateway path is exercised in the dedicated
+    // "submitViaGateway" test block further down.
     const c = new ExchangeClient({
       rpcUrl: "http://test-rpc",
       apiUrl: "http://test-api",
+      useGateway: false,
     });
     const kp = generateKeypair();
     c.setPrivateKey(kp.privateKey);
@@ -298,5 +316,557 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
     // Only one fetch was made (the broadcast_tx_sync), no /tx?hash poll.
     expect(calls.length).toBe(1);
     expect(calls[0].url).toBe("http://test-rpc");
+  });
+});
+
+/**
+ * Tests for the production-default gateway submission path.
+ *
+ * `useGateway: true` (the default) routes `submitTx` through the public
+ * Rust API gateway (`POST gatewayUrl/exchange`) instead of CometBFT
+ * `broadcast_tx_sync`. Same wire bytes; the gateway re-verifies the
+ * signature, applies rate limiting, and (when configured) checks
+ * `X-Api-Key`. CheckTx-level error semantics (code=21 InvalidNonce
+ * auto-resync) are preserved on this path.
+ */
+describe("ExchangeClient submitTx gateway path", () => {
+  const originalFetch = globalThis.fetch;
+  let calls: FetchCall[] = [];
+  let nextResponses: Array<(req: FetchCall) => Response> = [];
+
+  beforeEach(() => {
+    calls = [];
+    nextResponses = [];
+    globalThis.fetch = vi.fn(
+      async (url: RequestInfo | URL, init?: RequestInit) => {
+        const u = url.toString();
+        calls.push({ url: u, init });
+        if (nextResponses.length === 0) {
+          return new Response(
+            JSON.stringify({ error: "unexpected fetch in test" }),
+            {
+              status: 500,
+            },
+          );
+        }
+        const responder = nextResponses.shift()!;
+        return responder({ url: u, init });
+      },
+    ) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function makeGatewayClient(
+    opts: {
+      apiKey?: string;
+      gatewayUrl?: string;
+      rpcUrl?: string;
+    } = {},
+  ): ExchangeClient {
+    const c = new ExchangeClient({
+      rpcUrl: opts.rpcUrl ?? "http://test-rpc",
+      apiUrl: "http://test-api",
+      gatewayUrl: opts.gatewayUrl ?? "http://test-gateway",
+      // useGateway defaults to true — explicit here for documentation.
+      useGateway: true,
+      apiKey: opts.apiKey,
+    });
+    const kp = generateKeypair();
+    c.setPrivateKey(kp.privateKey);
+    return c;
+  }
+
+  it("default path posts to gatewayUrl/exchange (not rpcUrl)", async () => {
+    const client = makeGatewayClient();
+    client.setUnsafeFastSubmit(true);
+    (client as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(
+      () =>
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+
+    const r = await client.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+
+    expect(r.code).toBe(0);
+    expect(r.hash).toBe(expectedGatewayHash(calls[0]));
+    expect(calls.length).toBe(1);
+    expect(calls[0].url).toBe("http://test-gateway/exchange");
+    // Gateway path uses application/json + the pre-signed shape, not
+    // the JSON-RPC envelope CometBFT expects.
+    expect(
+      (calls[0].init?.headers as Record<string, string>)["Content-Type"],
+    ).toBe("application/json");
+    const body = JSON.parse(calls[0].init?.body as string) as {
+      action: string;
+    };
+    expect(typeof body.action).toBe("string");
+    // Nonce was incremented on success.
+    expect((client as unknown as { nonce: bigint }).nonce).toBe(6n);
+  });
+
+  it("trims trailing slash from gatewayUrl", async () => {
+    const client = makeGatewayClient({ gatewayUrl: "http://test-gateway/" });
+    client.setUnsafeFastSubmit(true);
+    (client as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(
+      () =>
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+
+    await client.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+
+    expect(calls[0].url).toBe("http://test-gateway/exchange");
+  });
+
+  it("derives default gatewayUrl from rpcUrl host when gatewayUrl is omitted", async () => {
+    const c = new ExchangeClient({
+      rpcUrl: "http://remote-node.example:26657",
+      apiUrl: "http://test-api",
+      useGateway: true,
+    });
+    const kp = generateKeypair();
+    c.setPrivateKey(kp.privateKey);
+    c.setUnsafeFastSubmit(true);
+    (c as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(
+      () =>
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+
+    await c.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: c.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+
+    expect(calls[0].url).toBe("http://remote-node.example:9080/exchange");
+  });
+
+  it("gateway success hash drives background delivery verification", async () => {
+    const client = makeGatewayClient();
+    (client as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(
+      () =>
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              tx_result: { code: 0, log: "", events: [] },
+              height: "101",
+            },
+          }),
+        ),
+    );
+
+    const r = await client.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+    const expectedHash = expectedGatewayHash(calls[0]);
+
+    expect(r.code).toBe(0);
+    expect(r.hash).toBe(expectedHash);
+    await client.awaitPendingVerifies();
+    expect(calls[1].url).toBe(`http://test-rpc/tx?hash=0x${expectedHash}`);
+    expect((client as unknown as { nonce: bigint }).nonce).toBe(6n);
+  });
+
+  it("submitTxCommit works on the gateway path by polling the computed hash", async () => {
+    const client = makeGatewayClient();
+    (client as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(
+      () =>
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              tx_result: { code: 0, log: "", events: [{ type: "proof.test" }] },
+              height: "202",
+            },
+          }),
+        ),
+    );
+
+    const r = await client.submitTxCommit({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+    const expectedHash = expectedGatewayHash(calls[0]);
+
+    expect(r).toMatchObject({
+      code: 0,
+      hash: expectedHash,
+      height: 202,
+      log: "",
+    });
+    expect(calls[1].url).toBe(`http://test-rpc/tx?hash=0x${expectedHash}`);
+    expect((client as unknown as { nonce: bigint }).nonce).toBe(6n);
+  });
+
+  it("includes X-Api-Key header when apiKey is set", async () => {
+    const client = makeGatewayClient({ apiKey: "secret-123" });
+    client.setUnsafeFastSubmit(true);
+    (client as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(
+      () =>
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+
+    await client.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+
+    expect(calls[0].init?.headers as Record<string, string>).toMatchObject({
+      "X-Api-Key": "secret-123",
+    });
+  });
+
+  it("does not send X-Api-Key when apiKey is unset", async () => {
+    const client = makeGatewayClient();
+    client.setUnsafeFastSubmit(true);
+    (client as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(
+      () =>
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+
+    await client.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+
+    const headers = calls[0].init?.headers as Record<string, string>;
+    expect(headers["X-Api-Key"]).toBeUndefined();
+  });
+
+  it("gateway error '21: invalid nonce' parses to code 21 and triggers nonce resync", async () => {
+    const client = makeGatewayClient();
+    client.setUnsafeFastSubmit(true);
+    (client as unknown as { nonce: bigint }).nonce = 50n;
+
+    // First response: gateway returns the engine's InvalidNonce error.
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "error",
+            error: "21: invalid nonce: expected 51, got 50",
+          }),
+          { status: 200 },
+        ),
+    );
+    // Second response: nonce resync via /v1/nonce/{addr} returns 51.
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            data: makeMsgpackBigInt(51n),
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const r = await client.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+
+    expect(r.code).toBe(21);
+    // After resync, local nonce matches chain.
+    expect((client as unknown as { nonce: bigint }).nonce).toBe(51n);
+  });
+
+  it("HTTP 401 from gateway maps to code 401 (auth failure)", async () => {
+    const client = makeGatewayClient({ apiKey: "wrong-key" });
+    client.setUnsafeFastSubmit(true);
+    (client as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "error",
+            error: "unauthorized",
+          }),
+          { status: 401 },
+        ),
+    );
+
+    const r = await client.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+
+    expect(r.code).toBe(401);
+    expect(r.log).toBe("unauthorized");
+    // 401 is a transport-level rejection, not a CheckTx success — local
+    // nonce should not have been incremented.
+    expect((client as unknown as { nonce: bigint }).nonce).toBe(5n);
+  });
+
+  it("HTTP 429 from gateway maps to code 429 (rate limited)", async () => {
+    const client = makeGatewayClient();
+    client.setUnsafeFastSubmit(true);
+    (client as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(() => new Response("rate limited", { status: 429 }));
+
+    const r = await client.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+
+    expect(r.code).toBe(429);
+    expect(r.log).toBe("rate limited");
+    expect((client as unknown as { nonce: bigint }).nonce).toBe(5n);
+  });
+
+  it("HTTP 413 from gateway maps to code 413 and preserves body detail", async () => {
+    const client = makeGatewayClient();
+    client.setUnsafeFastSubmit(true);
+    (client as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({ status: "error", error: "body too large" }),
+          { status: 413 },
+        ),
+    );
+
+    const r = await client.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+
+    expect(r.code).toBe(413);
+    expect(r.log).toBe("body too large");
+    expect((client as unknown as { nonce: bigint }).nonce).toBe(5n);
+  });
+
+  it("HTTP 5xx from gateway maps to code 500 and does not increment nonce", async () => {
+    const client = makeGatewayClient();
+    client.setUnsafeFastSubmit(true);
+    (client as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(
+      () =>
+        new Response("bad gateway", { status: 502, statusText: "Bad Gateway" }),
+    );
+
+    const r = await client.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+
+    expect(r.code).toBe(500);
+    expect(r.log).toContain("bad gateway");
+    expect((client as unknown as { nonce: bigint }).nonce).toBe(5n);
+  });
+
+  it("non-JSON gateway error body returns a TxResult instead of throwing", async () => {
+    const client = makeGatewayClient();
+    client.setUnsafeFastSubmit(true);
+    (client as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(
+      () => new Response("<html>bad request</html>", { status: 400 }),
+    );
+
+    const r = await client.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+
+    expect(r).toMatchObject({
+      code: 1,
+      hash: "",
+      log: "<html>bad request</html>",
+    });
+    expect((client as unknown as { nonce: bigint }).nonce).toBe(5n);
+  });
+
+  it("useGateway: false routes to legacy CometBFT path", async () => {
+    const c = new ExchangeClient({
+      rpcUrl: "http://test-rpc",
+      apiUrl: "http://test-api",
+      gatewayUrl: "http://test-gateway",
+      useGateway: false,
+    });
+    const kp = generateKeypair();
+    c.setPrivateKey(kp.privateKey);
+    c.setUnsafeFastSubmit(true);
+    (c as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            result: { code: 0, hash: "DEADBEEF", log: "" },
+          }),
+        ),
+    );
+
+    await c.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: c.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+
+    expect(calls[0].url).toBe("http://test-rpc");
+    const body = JSON.parse(calls[0].init?.body as string) as {
+      jsonrpc: string;
+      id: number;
+      method: string;
+      params: { tx: string };
+    };
+    expect(body).toMatchObject({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "broadcast_tx_sync",
+    });
+    expect(typeof body.params.tx).toBe("string");
   });
 });

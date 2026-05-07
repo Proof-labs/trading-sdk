@@ -1,6 +1,13 @@
 /** 20-byte account address (derived from Ed25519 public key). */
 export type Address = Uint8Array;
 
+/**
+ * All-zero address sentinel for `UpdateMarketFees.primaryOracleSigner`.
+ * Passing this value clears the primary oracle signer for a market. Omit
+ * or pass null to leave the field unchanged.
+ */
+export const PRIMARY_ORACLE_CLEAR_SENTINEL: Address = new Uint8Array(20);
+
 /** Order side. */
 export enum Side {
   /** Buy / long. */
@@ -57,6 +64,20 @@ export const ActionType = {
    *  bypassing the normal `funding_interval_ms` clock check. Used by S13/S14
    *  to fire funding at a precise scenario point. */
   RunFundingTick: 0x12,
+  /** Set (or overwrite) a per-account fee override (BE-46). Replaces the
+   *  market's base `taker_fee_bps` / `maker_fee_bps` for fills involving
+   *  this account on the corresponding side. Relayer-signed. */
+  SetAccountFeeOverride: 0x13,
+  /** BE-40 — relayer-signed action that marks a Solana deposit signature as
+   *  permanently failed (malformed tx, unsupported token, dust). User is
+   *  NOT credited. Idempotent on repeat; silent no-op if the signature is
+   *  already in either the processed-deposits or failed-deposits set. */
+  FailDeposit: 0x15,
+  /** User picks a per-market initial-margin override capped by the
+   *  market's risk floor. `user_im_bps == 0` clears the override.
+   *  Engine takes max(market.im_bps, user_im_bps) on every IM check.
+   *  BE-16. */
+  SetUserMarketLeverage: 0x16,
 } as const;
 
 /** Union of all valid action type byte values. */
@@ -183,6 +204,13 @@ export interface CreateMarket {
   fundingIntervalMs: bigint;
   /** Maximum absolute funding rate per interval in basis points. */
   maxFundingRateBps: number;
+  /**
+   * Bad-debt pool the market belongs to. Markets in different pools are
+   * insulated from each other's liquidation cascades. Optional — defaults
+   * to 0 on the wire (matches the engine's `serde(default)`), so omitting
+   * the field keeps a market in the shared pool 0.
+   */
+  poolId?: number;
 }
 
 /** User requests a USDC withdrawal to a Solana address. Debits balance immediately. */
@@ -228,6 +256,38 @@ export interface FailWithdrawal {
 }
 
 /**
+ * Why a Solana deposit was rejected by the relayer (BE-40). Mirrors the
+ * Rust `FailDepositReason` enum on the engine side. Wire encoding is the
+ * variant index (0 = MalformedTx, 1 = UnsupportedToken, 2 = BelowMinimum,
+ * 3 = Other), but the SDK exposes a string union for readability and lets
+ * the codec map both directions.
+ */
+export type FailDepositReason =
+  | "MalformedTx"
+  | "UnsupportedToken"
+  | "BelowMinimum"
+  | "Other";
+
+/**
+ * BE-40: relayer marks a Solana deposit signature as permanently failed.
+ * The user is NOT credited; the signature is recorded so any subsequent
+ * `ConfirmDeposit` OR `FailDeposit` for the same sig is a silent no-op.
+ *
+ * `solanaSignature` carries the raw on-chain signature bytes (typically
+ * 64 bytes — same encoding as `ConfirmDeposit.solanaTxSig`). The dedup
+ * keyspace shared with `ConfirmDeposit` relies on byte equality.
+ */
+export interface FailDeposit {
+  /** Solana transaction signature (raw bytes, typically 64 bytes). */
+  solanaSignature: Uint8Array;
+  /** Structured reason for the failure (for ops metrics). */
+  reason: FailDepositReason;
+  /** Authorized relayer signer address (20 bytes). Must match the envelope
+   *  signer's derived address AND be on the on-chain relayer allowlist. */
+  signer: Address;
+}
+
+/**
  * Approve a delegate keypair ("agent wallet") to trade on the owner's behalf.
  * The agent can place/cancel orders but CANNOT withdraw or move funds.
  */
@@ -259,6 +319,44 @@ export enum Outcome {
   Void = 3,
 }
 
+/**
+ * BE-54: comparison operator used by the auto-resolve oracle modes.
+ * `YES` fires iff `oracle_price <comparison> strike_price` (e.g.
+ * `GreaterThan` means the event resolves YES when the oracle reading is
+ * strictly greater than the strike). Equality on the boundary is
+ * distinguished by the `OrEqual` variants. Mirrors the engine's
+ * `PriceComparison` enum exactly.
+ */
+export type PriceComparison =
+  | "GreaterThan"
+  | "LessThan"
+  | "GreaterThanOrEqual"
+  | "LessThanOrEqual";
+
+/**
+ * BE-54: how an impact-market event's YES/NO outcome is determined at
+ * deadline. Carried optionally on `CreateImpactMarket`; `undefined`
+ * (the wire `nil`) means `RelayerAttested` — the legacy default where
+ * the resolver supplies the outcome and the engine trusts it. The two
+ * auto-resolve modes derive YES/NO from an on-chain oracle reading and
+ * make the relayer's outcome a verifiable assertion (engine recomputes
+ * and rejects on mismatch). Use `RelayerAttested` for events that have
+ * no on-chain price (e.g. "did Apple announce X?").
+ */
+export type EventOracleSource =
+  | {
+      kind: "UnderlyingPriceVsStrike";
+      strikePrice: bigint;
+      comparison: PriceComparison;
+    }
+  | {
+      kind: "MarketOracle";
+      market: number;
+      strikePrice: bigint;
+      comparison: PriceComparison;
+    }
+  | { kind: "RelayerAttested" };
+
 /** Create an impact-market family with 4 child books (CPY/CPN/EBY/EBN). */
 export interface CreateImpactMarket {
   impactMarketId: number;
@@ -274,6 +372,18 @@ export interface CreateImpactMarket {
   fundingIntervalMs: bigint;
   maxFundingRateBps: number;
   signer: Address;
+  /**
+   * BE-54: how this event's YES/NO outcome is determined at deadline.
+   * Optional — `undefined` (the wire `nil`) means `RelayerAttested`,
+   * which preserves the legacy behavior where the resolver supplies the
+   * outcome and the engine trusts it. Setting `UnderlyingPriceVsStrike`
+   * or `MarketOracle` makes the resolution self-verifying: the engine
+   * derives YES/NO from the named oracle's reading and rejects any
+   * `ResolveEvent` whose `outcome` doesn't match. `Outcome.Void`
+   * overrides the auto-derivation in either auto-resolve mode (operator
+   * escape hatch for unresolvable events).
+   */
+  oracleSource?: EventOracleSource;
 }
 
 /** Resolve an impact-market event. */
@@ -328,6 +438,55 @@ export interface UpdateMarketFees {
    * under MM.
    */
   netDeltaMargin?: boolean | null;
+  /**
+   * New tick size in micro-USDC. Omit (or null) to leave unchanged.
+   * 0 disables the tick gate (any price accepted). BE-48.
+   */
+  tickSize?: bigint | null;
+  /**
+   * New lot size in contracts. Omit (or null) to leave unchanged.
+   * 0 disables the lot gate (any quantity accepted). BE-48.
+   */
+  lotSize?: bigint | null;
+  /**
+   * Primary oracle signer for this market. Omit (or null) to leave
+   * unchanged. Pass `PRIMARY_ORACLE_CLEAR_SENTINEL` (all-zero address) to
+   * clear the primary signer; setting `oracleStalenessMs` to 0 only
+   * temporarily disables the fallback gate while preserving the configured
+   * primary. BE-50.
+   */
+  primaryOracleSigner?: Address | null;
+  /**
+   * Oracle staleness threshold in ms. Omit (or null) to leave
+   * unchanged. Only consulted when `primaryOracleSigner` is set on
+   * the market. 0 disables the gate. BE-50.
+   */
+  oracleStalenessMs?: bigint | null;
+  /**
+   * BE-31 Phase A: mark-price source mode. Omit to leave unchanged.
+   * 0 = OracleOnly (legacy); 1 = Median (oracle + book-mid).
+   * Has no effect on impact-family child markets - those always
+   * mark off the EWMA per the no-oracle-MTM redesign.
+   */
+  markSourceMode?: 0 | 1 | null;
+  /**
+   * BE-31 Phase A: thin-book spread cap in bps for the median guard.
+   * Omit to leave unchanged. 0 resets to the engine default
+   * (DEFAULT_MAX_MARK_SPREAD_BPS = 100). Ignored unless
+   * `markSourceMode === 1`.
+   */
+  maxMarkSpreadBps?: number | null;
+  /**
+   * BE-31 Phase B: max age in ms for the composite-CEX price source.
+   * Omit to leave unchanged. 0 resets to the engine default
+   * (DEFAULT_CEX_COMPOSITE_STALENESS_MS = 30s).
+   */
+  cexCompositeStalenessMs?: bigint | null;
+  /**
+   * BE-26: enable partial liquidation for this market. Omit to leave
+   * unchanged. true closes one position at a time and rechecks MM.
+   */
+  partialLiquidationEnabled?: boolean | null;
 }
 
 /** Lifecycle status of an impact-market family. */
@@ -356,6 +515,46 @@ export interface ImpactMarketInfo {
 // Action union type
 // ---------------------------------------------------------------------------
 
+/**
+ * Set (or overwrite) a per-account fee override (BE-46).
+ *
+ * Replaces the market's base `takerFeeBps` / `makerFeeBps` for any
+ * subsequent fills involving this account on the corresponding side
+ * (taker side uses the taker rate, maker side uses the maker rate).
+ * Override is global — applies on every market the account trades.
+ *
+ * Both fee values must be in `[0, 10_000]` (basis points; 10_000 bps
+ * = 100%) or `FEE_OVERRIDE_REVERT_SENTINEL`. Other out-of-range values
+ * are rejected with `FeeBpsOutOfRange` (code 40). Submitting an override
+ * identical to the existing one is a no-op (tx succeeds but emits no
+ * `AccountFeeOverrideSet` event).
+ *
+ * Set both fee values to `FEE_OVERRIDE_REVERT_SENTINEL` to clear the
+ * override; set only one side to the sentinel for a partial revert.
+ */
+export interface SetAccountFeeOverride {
+  /** Account to override fees for (20 bytes). */
+  account: Address;
+  /** New taker fee in basis points (0..10_000), or the revert sentinel. */
+  takerFeeBps: number;
+  /** New maker fee in basis points (0..10_000), or the revert sentinel. */
+  makerFeeBps: number;
+  /** Authorized relayer signer (20 bytes). Must equal the envelope
+   *  pubkey's derived owner and be on the relayer allowlist. */
+  signer: Address;
+  /** Replay-guard sequence (BE-46.2). The engine tracks the highest
+   *  accepted `seq` per `account`; the next call must satisfy
+   *  `seq > stored_seq` or it is rejected with `FeeOverrideStaleSeq`
+   *  (code 41). The first call against a fresh account (stored seq = 0)
+   *  accepts any `seq >= 1`. The seq advances on the no-op path too,
+   *  so identical-payload replays at a stale seq stay rejected.
+   *
+   *  Tier promoters should pass a strictly-monotonic value — typically
+   *  `Date.now()` cast to BigInt — and persist their last-emitted seq
+   *  so a restart doesn't accidentally re-issue. */
+  seq: bigint;
+}
+
 /** Test/admin action: force-runs end-of-block liquidations now. */
 export interface RunLiquidationSweep {
   /** Authorized relayer signer address (20 bytes). */
@@ -368,6 +567,22 @@ export interface RunFundingTick {
   market: number;
   /** Authorized relayer signer address (20 bytes). */
   signer: Address;
+}
+
+/** Pick a per-account override on the initial-margin ratio for one
+ *  market. Engine takes max(market.imBps, userImBps), so users can
+ *  deleverage but not exceed the market's risk floor. `userImBps == 0`
+ *  clears the override. User-signed (signer == owner). BE-16. */
+export interface SetUserMarketLeverage {
+  /** Account address picking the override (20 bytes). Must equal the
+   *  envelope signer's derived address. */
+  owner: Address;
+  /** Market identifier the override applies to. */
+  market: number;
+  /** Initial margin in basis points. `0` clears the override;
+   *  otherwise must be `>= market.imBps` (engine rejects with
+   *  `UserLeverageBelowMarketIm`, code 38). */
+  userImBps: number;
 }
 
 /** Discriminated union of all exchange actions. */
@@ -388,8 +603,11 @@ export type Action =
   | { type: "CreateImpactMarket"; data: CreateImpactMarket }
   | { type: "ResolveEvent"; data: ResolveEvent }
   | { type: "UpdateMarketFees"; data: UpdateMarketFees }
+  | { type: "SetAccountFeeOverride"; data: SetAccountFeeOverride }
   | { type: "RunLiquidationSweep"; data: RunLiquidationSweep }
-  | { type: "RunFundingTick"; data: RunFundingTick };
+  | { type: "RunFundingTick"; data: RunFundingTick }
+  | { type: "FailDeposit"; data: FailDeposit }
+  | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage };
 
 // ---------------------------------------------------------------------------
 // Event types (emitted by engine, delivered via ABCI/WebSocket)
@@ -905,6 +1123,33 @@ export interface HistoryResolution {
   timestamp: number;
 }
 
+/** One row of the per-user position-history snapshot log. Each entry is
+ * a point-in-time snapshot of a position written after each fill that
+ * changes its state (open → grow → reduce → close). When `size` is "0"
+ * the snapshot represents a CLOSE event; the immediately preceding
+ * non-zero snapshot for the same `(owner, market, side)` carries the
+ * weighted-average entry price.
+ *
+ * Returned by `GET /v1/history/positions/{address}` and the
+ * `historyPositions` InfoRequest. The HTTP endpoint accepts optional
+ * `?market=&from=&to=&limit=` filters; results are newest-first. */
+export interface HistoryPositionSnapshot {
+  /** 20-byte owner address as hex. */
+  owner: string;
+  /** Market ID as a decimal string. */
+  market: string;
+  /** Position side: "Buy" = long, "Sell" = short. */
+  side: string;
+  /** Weighted-average entry price in µUSDC at the time of the snapshot. */
+  entryPrice: string;
+  /** Absolute position size in contracts. "0" = closed. */
+  size: string;
+  /** Block height at which the snapshot landed. */
+  blockHeight: number;
+  /** Unix milliseconds. */
+  timestamp: number;
+}
+
 /** Full account information including balance, positions, and margin state. */
 export interface AccountInfo {
   /** [0] Available USDC balance in microUSDC (6 dp, e.g., 100_000_000_000 = $100,000). */
@@ -927,6 +1172,12 @@ export interface AccountInfo {
    * older than 2026-04-24 (backward compat — the SDK decoder reads
    * msgpack arrays by index). See Jesse's P1 #3 in docs/api-scope.md. */
   bindingScenario?: BindingScenarioEntry[];
+  /** [7] Cumulative trading fees paid (positive) or rebates received
+   * (negative) by this account, in microUSDC. Updated atomically with
+   * the fee debit at fill time. Powers the "lifetime trading cost"
+   * line on the UI. New accounts read 0. Undefined on responses from
+   * gateways predating 2026-05-03. BE-45. */
+  feesAccrued?: bigint;
 }
 
 /** Market kind discriminator. Wire shape mirrors the Rust `MarketKind`
@@ -975,4 +1226,43 @@ export interface MarketConfig {
    *  for MM/IM. PredictionBinary legs ignore this flag. See
    *  docs/margin-engine.md §6 for the derivation. */
   netDeltaMargin?: boolean;
+  /** [11] Maximum age (ms) of the oracle reading at the time of any
+   *  margin / order / liquidation read. `0` = no check (default for
+   *  legacy records). When set, order placement, margin checks, and
+   *  liquidation refuse to use a stale oracle (`StaleOracle` reject).
+   *  Skipped on impact-family child markets — those mark off the book
+   *  directly and have no continuous oracle layer. BE-33, 2026-05-03. */
+  markPriceMaxOracleAgeMs?: bigint;
+  /** [12] Volume-based fee tier table. Empty (default for legacy
+   *  records) falls back to flat takerFeeBps / makerFeeBps. When
+   *  non-empty, the engine looks up rolling 30d taker volume and
+   *  applies tenth-bps fees. Negative makerFeeTenthBps is a rebate. */
+  feeTiers?: FeeTier[];
+  /** [13] Tick size in micro-USDC. 0 = no tick gate (legacy default).
+   *  PlaceOrder rejects with `TickSizeViolation` when the price isn't
+   *  a multiple of `tickSize`. BE-48. */
+  tickSize?: bigint;
+  /** [14] Lot size in contracts. 0 = no lot gate (legacy default).
+   *  PlaceOrder/MarketOrder rejects with `LotSizeViolation` when the
+   *  quantity isn't a multiple of `lotSize`. BE-48. */
+  lotSize?: bigint;
+  /** [15] Primary oracle signer. When set together with a non-zero
+   *  `oracleStalenessMs`, only the primary may publish OracleUpdate
+   *  unless the previous publish is at least `oracleStalenessMs` old.
+   *  BE-50. */
+  primaryOracleSigner?: Address;
+  /** [16] Oracle staleness window in ms. Only meaningful when
+   *  `primaryOracleSigner` is set. 0 = gate disabled (any authorized
+   *  signer can publish). BE-50. */
+  oracleStalenessMs?: bigint;
+}
+
+/** Per-tier fee schedule for the BE-47 volume-based maker-rebate program. */
+export interface FeeTier {
+  /** [0] Minimum 30-day rolling taker volume in micro-USDC. */
+  min30dVolumeMicroUsdc: bigint;
+  /** [1] Maker fee in tenth-basis-points. Negative = maker rebate. */
+  makerFeeTenthBps: number;
+  /** [2] Taker fee in tenth-basis-points. */
+  takerFeeTenthBps: number;
 }
