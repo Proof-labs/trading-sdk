@@ -657,11 +657,15 @@ export class ExchangeClient {
     const bytes = fromBase64(json.data);
     const raw = msgpackDecoder.decode(bytes) as unknown[] | null;
     if (raw === null) return null;
+    // serde encodes `[u8; N]` as msgpack ARRAY (not BIN), so the
+    // decoder hands back `number[]` for owner/destination — coerce.
+    const toBytes = (v: unknown): Uint8Array =>
+      v instanceof Uint8Array ? v : Uint8Array.from(v as number[]);
     return {
       id: BigInt(raw[0] as number | bigint),
-      owner: raw[1] as Uint8Array,
+      owner: toBytes(raw[1]),
       amount: BigInt(raw[2] as number | bigint),
-      solanaDestination: raw[3] as Uint8Array,
+      solanaDestination: toBytes(raw[3]),
       status: raw[4] as WithdrawalStatus,
       requestHeight: BigInt(raw[5] as number | bigint),
     };
