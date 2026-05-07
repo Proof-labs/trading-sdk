@@ -1673,6 +1673,152 @@ impl ExecError {
             ExecError::InternalError(_) => 255,
         }
     }
+
+    /// Stable, one-line human-readable meaning per variant. Intended for
+    /// documentation and integration-guide tables (e.g. the openapi.yaml
+    /// `ExecErrorCode` table for Auros and other MMs). The string is the
+    /// **integration contract**: don't reword these without bumping a
+    /// minor doc version, since downstream tooling may key off them.
+    ///
+    /// Wording rules: present-tense, action-oriented, names the cause not
+    /// the symptom. "Order ID does not exist on the requested market"
+    /// beats "the order was not found" — clients want to know what to
+    /// fix, not just that something failed.
+    pub fn meaning(&self) -> &'static str {
+        match self {
+            ExecError::DecodeError(_) => {
+                "Tx envelope or payload could not be decoded as MessagePack at the expected version. \
+                 Indicates a malformed wire frame or a client/server version mismatch."
+            }
+            ExecError::OrderNotFound(_) => {
+                "Order ID does not exist on the requested market, or has already been filled or cancelled."
+            }
+            ExecError::NotOwner(_) => {
+                "Tx signer is not the owner of the referenced order; only the owner (or an approved agent) \
+                 may cancel or amend it."
+            }
+            ExecError::UnauthorizedOracle => {
+                "Oracle update was signed by a key that is not registered as an oracle signer for the market."
+            }
+            ExecError::Overflow => {
+                "An arithmetic operation (price * quantity, fee accrual, position size) overflowed a u64. \
+                 Almost always indicates a malformed input rather than legitimate volume."
+            }
+            ExecError::InvalidPrice => {
+                "Price is zero, exceeds the per-market max, or violates tick-size quantization."
+            }
+            ExecError::InvalidQuantity => {
+                "Quantity is zero, exceeds the per-market max, or violates lot-size quantization."
+            }
+            ExecError::InvalidSide => {
+                "Side byte is neither Buy (0) nor Sell (1)."
+            }
+            ExecError::UnknownMarket(_) => {
+                "Market ID is not registered. Either the market does not exist or it has been removed."
+            }
+            ExecError::InsufficientBalance => {
+                "Account's USDC balance cannot cover the requested debit (deposit, withdrawal, or fee)."
+            }
+            ExecError::InsufficientMargin => {
+                "Post-trade equity would fall below the initial-margin requirement for the resulting \
+                 portfolio. Reduce order size, add collateral, or close offsetting positions."
+            }
+            ExecError::StateCorruption(_) => {
+                "Engine read state in an unexpected shape (e.g. missing required key, malformed value). \
+                 Indicates a bug or data corruption — file an issue with the surrounding context."
+            }
+            ExecError::InternalError(_) => {
+                "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). \
+                 Treat as a server bug."
+            }
+            ExecError::UnauthorizedRelayer => {
+                "Tx is a relayer-only action (oracle update, funding tick, deposit confirmation, etc.) \
+                 but the signer is not registered as an authorized relayer."
+            }
+            ExecError::WithdrawalNotFound(_) => {
+                "Withdrawal ID does not exist or has already been claimed/refunded."
+            }
+            ExecError::WithdrawalAlreadyProcessed(_) => {
+                "Withdrawal was already settled (claim or refund); duplicate finalize call rejected."
+            }
+            ExecError::DuplicateDeposit => {
+                "On-chain deposit signature has already been credited; idempotency guard rejected the replay."
+            }
+            ExecError::InvalidSignature => {
+                "Ed25519 verification of the V2 envelope failed. Signature, pubkey, or signed bytes are wrong."
+            }
+            ExecError::SignatureRequired => {
+                "Action requires a V2 (signed) envelope, but a V1 (unsigned) envelope was submitted."
+            }
+            ExecError::AgentNotAuthorized => {
+                "Tx signer is neither the account owner nor on the owner's approved-agent list."
+            }
+            ExecError::AgentCannotWithdraw => {
+                "Agent wallets may place/cancel/market orders but are forbidden from initiating withdrawals."
+            }
+            ExecError::InvalidNonce { .. } => {
+                "Tx seq does not match the next expected nonce for the signer. SDK should auto-resync via \
+                 GET /v1/nonce/{address} and retry."
+            }
+            ExecError::MarketAlreadyExists(_) => {
+                "Attempted CreateMarket for a market ID already in the registry."
+            }
+            ExecError::InvalidMarketConfig(_) => {
+                "MarketConfig fields fail validation (e.g. fee bps out of range, lot/tick zero, IM/MM ratio \
+                 inverted)."
+            }
+            ExecError::ImpactMarketAlreadyExists(_) => {
+                "Attempted CreateImpactMarket for an impact market ID already in the registry."
+            }
+            ExecError::ImpactMarketNotFound(_) => {
+                "Impact market ID does not exist; cannot resolve, cash-out, or query."
+            }
+            ExecError::MarketClosedForTrading(_) => {
+                "Order placement attempted on a conditional/binary book whose parent impact market is \
+                 already resolved or voided."
+            }
+            ExecError::BinaryPriceOutOfRange => {
+                "Binary-book order price is outside the [0, BINARY_PRICE_MAX] range."
+            }
+            ExecError::InvalidResolution(_) => {
+                "ResolveEvent called with an outcome incompatible with the current state (already resolved, \
+                 outcome not in the configured set, etc.)."
+            }
+            ExecError::PositionLimitExceeded { .. } => {
+                "Fill would push absolute net position past MarketConfig.max_position_size. Engine cap \
+                 enforced at placement time independent of margin."
+            }
+            ExecError::OracleTimestampNotMonotonic { .. } => {
+                "OracleUpdate publish_time_ms is not strictly greater than the last accepted update for \
+                 this market — replay protection per audit B3 (2026-04-23)."
+            }
+            ExecError::TooManyActiveImpactMarkets { .. } => {
+                "Account would touch more impact markets than the scenario margin engine can enumerate \
+                 (MAX_IMPACT_MARKETS_PER_ACCOUNT). Close a leg before opening another."
+            }
+            ExecError::SettlementPriceMismatch { .. } => {
+                "Net-delta margin grouping found legs with disagreeing settle prices (data corruption \
+                 across same `underlying_market_id`)."
+            }
+            ExecError::OracleNotApplicable { .. } => {
+                "OracleUpdate targets an impact-family market (CPY/CPN/EBY/EBN), which marks off the book \
+                 and has no oracle layer."
+            }
+            ExecError::PostOnlyWouldCross => {
+                "PlaceOrder with post_only=true would have crossed the book. Rejected so makers retain \
+                 maker-side fills."
+            }
+            ExecError::ReduceOnlyWouldIncrease => {
+                "PlaceOrder/MarketOrder with reduce_only=true was same-side as the existing position (would \
+                 increase exposure) or no position existed."
+            }
+            ExecError::TestActionRejected(_) => {
+                "Test/admin action (RunLiquidationSweep, RunFundingTick, ForceLiquidate) rejected because \
+                 the engine isn't configured to accept them, or the position the action referenced does \
+                 not exist."
+            }
+        }
+    }
 }
 
 impl fmt::Display for ExecError {
@@ -1795,5 +1941,116 @@ impl From<StateError> for ExecError {
             StateError::ArithmeticInvariantViolation { .. } => ExecError::Overflow,
             other => ExecError::StateCorruption(other.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod exec_error_meaning_tests {
+    use super::*;
+
+    /// Sample one constructed value per variant. New variants added to
+    /// `ExecError` must be added here, otherwise the test below fails
+    /// (which is the point — it forces docs to keep up with the wire).
+    fn one_of_each() -> Vec<ExecError> {
+        vec![
+            ExecError::DecodeError("e".into()),
+            ExecError::OrderNotFound(0),
+            ExecError::NotOwner(0),
+            ExecError::UnauthorizedOracle,
+            ExecError::Overflow,
+            ExecError::InvalidPrice,
+            ExecError::InvalidQuantity,
+            ExecError::InvalidSide,
+            ExecError::UnknownMarket(0),
+            ExecError::InsufficientBalance,
+            ExecError::InsufficientMargin,
+            ExecError::StateCorruption("e".into()),
+            ExecError::InternalError("e".into()),
+            ExecError::UnauthorizedRelayer,
+            ExecError::WithdrawalNotFound(0),
+            ExecError::WithdrawalAlreadyProcessed(0),
+            ExecError::DuplicateDeposit,
+            ExecError::InvalidSignature,
+            ExecError::SignatureRequired,
+            ExecError::AgentNotAuthorized,
+            ExecError::AgentCannotWithdraw,
+            ExecError::InvalidNonce {
+                expected: 0,
+                got: 0,
+            },
+            ExecError::MarketAlreadyExists(0),
+            ExecError::InvalidMarketConfig("e".into()),
+            ExecError::ImpactMarketAlreadyExists(0),
+            ExecError::ImpactMarketNotFound(0),
+            ExecError::MarketClosedForTrading(0),
+            ExecError::BinaryPriceOutOfRange,
+            ExecError::InvalidResolution("e".into()),
+            ExecError::PositionLimitExceeded {
+                market: 0,
+                limit: 0,
+                would_be: 0,
+            },
+            ExecError::OracleTimestampNotMonotonic {
+                market: 0,
+                stored: 0,
+                submitted: 0,
+            },
+            ExecError::TooManyActiveImpactMarkets { current: 0, max: 0 },
+            ExecError::SettlementPriceMismatch {
+                market: 0,
+                expected: 0,
+                got: 0,
+            },
+            ExecError::OracleNotApplicable { market: 0 },
+            ExecError::PostOnlyWouldCross,
+            ExecError::ReduceOnlyWouldIncrease,
+            ExecError::TestActionRejected("e".into()),
+        ]
+    }
+
+    /// Every code returned by `code()` must have a non-empty `meaning()`.
+    /// This is the integration contract for the openapi-yaml `ExecErrorCode`
+    /// table — clients (Auros, etc.) read these to map raw codes to
+    /// actionable client-side errors.
+    #[test]
+    fn every_variant_has_non_empty_meaning() {
+        for e in one_of_each() {
+            let m = e.meaning();
+            assert!(
+                !m.is_empty(),
+                "ExecError code={} ({:?}) has empty meaning()",
+                e.code(),
+                e
+            );
+            // Heuristic: meanings should be at least one full sentence,
+            // not just the variant name. Catches future placeholder
+            // additions like `_ => "TODO"`.
+            assert!(
+                m.len() > 20,
+                "ExecError code={} ({:?}) meaning is too short to be useful: {:?}",
+                e.code(),
+                e,
+                m
+            );
+        }
+    }
+
+    /// Codes 1..=36 + 255 must all be covered by at least one variant.
+    /// Catches the case where a code is reserved in `code()` but no
+    /// variant maps to it (would surface as an unreachable arm in
+    /// `meaning()`).
+    #[test]
+    fn no_code_holes_in_documented_range() {
+        let mut codes: Vec<u32> = one_of_each().iter().map(|e| e.code()).collect();
+        codes.sort();
+        codes.dedup();
+        let expected: Vec<u32> = (1u32..=36).chain(std::iter::once(255)).collect();
+        assert_eq!(
+            codes, expected,
+            "ExecError codes covered by variants: {:?}; expected: {:?}. \
+             A new variant was added without bumping the codes table, \
+             OR a code was reserved without a corresponding variant.",
+            codes, expected
+        );
     }
 }
