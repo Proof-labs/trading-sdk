@@ -19,6 +19,10 @@ pub const ACTION_RESOLVE_EVENT: u8 = 0x0F;
 pub const ACTION_UPDATE_MARKET_FEES: u8 = 0x10;
 pub const ACTION_RUN_LIQUIDATION_SWEEP: u8 = 0x11;
 pub const ACTION_RUN_FUNDING_TICK: u8 = 0x12;
+/// BE-46: per-account fee override (relayer-signed admin action).
+pub const ACTION_SET_ACCOUNT_FEE_OVERRIDE: u8 = 0x13;
+/// BE-31 Phase B: composite-CEX price update.
+pub const ACTION_ORACLE_UPDATE_COMPOSITE: u8 = 0x14;
 /// BE-40 — relayer-signed action that marks a Solana deposit signature
 /// as permanently failed (malformed tx, unsupported token, dust). User
 /// is NOT credited. Idempotent on retry; no-op if the signature is
@@ -127,10 +131,16 @@ fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
         ACTION_UPDATE_MARKET_FEES => Ok(Action::UpdateMarketFees(
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
+        ACTION_SET_ACCOUNT_FEE_OVERRIDE => Ok(Action::SetAccountFeeOverride(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
         ACTION_RUN_LIQUIDATION_SWEEP => Ok(Action::RunLiquidationSweep(
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_RUN_FUNDING_TICK => Ok(Action::RunFundingTick(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_ORACLE_UPDATE_COMPOSITE => Ok(Action::OracleUpdateComposite(
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_FAIL_DEPOSIT => Ok(Action::FailDeposit(
@@ -263,12 +273,20 @@ fn encode_action(action: &Action) -> Result<(u8, Vec<u8>), ExecError> {
             ACTION_UPDATE_MARKET_FEES,
             rmp_serde::to_vec(cmd).map_err(enc)?,
         )),
+        Action::SetAccountFeeOverride(cmd) => Ok((
+            ACTION_SET_ACCOUNT_FEE_OVERRIDE,
+            rmp_serde::to_vec(cmd).map_err(enc)?,
+        )),
         Action::RunLiquidationSweep(cmd) => Ok((
             ACTION_RUN_LIQUIDATION_SWEEP,
             rmp_serde::to_vec(cmd).map_err(enc)?,
         )),
         Action::RunFundingTick(cmd) => Ok((
             ACTION_RUN_FUNDING_TICK,
+            rmp_serde::to_vec(cmd).map_err(enc)?,
+        )),
+        Action::OracleUpdateComposite(cmd) => Ok((
+            ACTION_ORACLE_UPDATE_COMPOSITE,
             rmp_serde::to_vec(cmd).map_err(enc)?,
         )),
         Action::FailDeposit(cmd) => Ok((ACTION_FAIL_DEPOSIT, rmp_serde::to_vec(cmd).map_err(enc)?)),

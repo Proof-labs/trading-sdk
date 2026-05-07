@@ -185,6 +185,51 @@ impl Default for MarketKind {
     }
 }
 
+/// Mark-price source for a perp market. Selects how `get_mark_price`
+/// derives the mark used for margin checks, liquidation triggers, and
+/// unrealized-PnL accounting.
+///
+/// Defaults to `OracleOnly` (the legacy single-source path) so existing
+/// on-chain `MarketConfig` records and freshly-created markets keep
+/// today's behavior byte-for-byte. Operators flip individual markets
+/// to `Median` via `UpdateMarketFees` once they want the multi-source
+/// guard. **No big-bang switch** — each market opts in independently.
+///
+/// Wire layout: encoded as a positional tag (msgpack) — `OracleOnly`
+/// = 0, `Median` = 1. New variants append.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MarkSourceMode {
+    /// Mark = oracle price. Single-source; same as the pre-BE-31
+    /// engine. Failure mode: a stale or attacked oracle moves mark
+    /// without a second opinion.
+    #[default]
+    OracleOnly,
+    /// Mark = median of available sources (oracle, book-mid, and —
+    /// once Phase B lands — composite CEX index). When fewer than 2
+    /// sources are available, falls through to the average of 2, then
+    /// to the single remaining source. When zero sources are
+    /// available, returns `UnknownMarket`.
+    ///
+    /// The thin-book guard rejects book-mid from the median when the
+    /// top-of-book spread exceeds `MarketConfig.max_mark_spread_bps`
+    /// (a single $50-spread quote pair on an otherwise empty book
+    /// can poison the median otherwise).
+    Median,
+}
+
+/// Built-in default for the thin-book spread guard, used when
+/// `MarketConfig.max_mark_spread_bps` is `0` (the serde default for
+/// existing on-chain records). 100 bps = 1% of mid; book-mid is
+/// excluded from the median when the top-of-book spread exceeds this.
+pub const DEFAULT_MAX_MARK_SPREAD_BPS: u32 = 100;
+
+/// Built-in default staleness threshold for the composite-CEX price,
+/// used when `MarketConfig.cex_composite_staleness_ms` is `0`. 30s
+/// = enough headroom for a 1s feeder cadence to miss a few cycles
+/// without dropping out of the median; tight enough that a stuck
+/// feeder shows up in the mark drift within minutes.
+pub const DEFAULT_CEX_COMPOSITE_STALENESS_MS: u64 = 30_000;
+
 impl MarketKind {
     /// Returns the impact market family ID this market belongs to, if any.
     pub fn impact_market_id(&self) -> Option<ImpactMarketId> {
@@ -493,6 +538,81 @@ pub struct MarketConfig {
     /// BE-33 records keep their positional wire/state layout.
     #[serde(default)]
     pub fee_tiers: Vec<FeeTier>,
+    /// Tick size in micro-USDC. Order prices must be exact multiples
+    /// of `tick_size`. Zero (default) disables the check, preserving
+    /// pre-BE-48 behavior. Recommended: $0.01 = 10_000 µUSDC for
+    /// crypto perps; $0.001 = 1_000 µUSDC for high-precision impact
+    /// market child books.
+    #[serde(default)]
+    pub tick_size: u64,
+    /// Lot size in contracts. Order quantities must be exact multiples
+    /// of `lot_size`. Zero (default) disables the check, preserving
+    /// pre-BE-48 behavior. Recommended: 1 for whole-contract markets
+    /// (BTC perps), 100 for high-volume markets where round lots
+    /// improve readability.
+    #[serde(default)]
+    pub lot_size: u64,
+    /// Primary oracle signer for this market (BE-50). When `Some`,
+    /// this signer's `OracleUpdate` is always accepted (subject to
+    /// the existing monotonic publish-time check).
+    ///
+    /// Other authorized signers (the "fallback" oracles) are accepted
+    /// only when the market's last oracle update — by *any* signer —
+    /// is older than `oracle_staleness_ms`. This means the gate works
+    /// recursively: once a fallback takes over, the next fallback is
+    /// gated against the active fallback's timestamp, not the primary's.
+    /// Net effect: fail-over chains through fallbacks rather than
+    /// requiring the primary itself to recover.
+    ///
+    /// `None` (default) preserves the pre-BE-50 behavior where any
+    /// authorized signer can update at any time.
+    #[serde(default)]
+    pub primary_oracle_signer: Option<[u8; 20]>,
+    /// Window (ms) the primary oracle has to publish before fallback
+    /// signers can take over. **Zero disables the gate entirely** —
+    /// any authorized relayer can post `OracleUpdate` regardless of
+    /// how recent the primary's update was. Use a non-zero value
+    /// when you want primary-preferred operation with fallback only
+    /// on silence; use zero when you want simple
+    /// "any-authorized-signer" semantics. Set per-market via
+    /// `UpdateMarketFees`.
+    #[serde(default)]
+    pub oracle_staleness_ms: u64,
+    /// Mark-price source mode. See `MarkSourceMode` docstring for
+    /// semantics. `serde(default)` -> `OracleOnly` so existing on-chain
+    /// `MarketConfig` records and the genesis path are byte-identical
+    /// to today. Operators flip individual perp markets to `Median`
+    /// via `UpdateMarketFees` once Phase A is live.
+    ///
+    /// Ignored on impact-family markets (`ConditionalPerp`,
+    /// `PredictionBinary`) - those keep marking off the book EWMA per
+    /// the no-oracle-MTM redesign (2026-04-26).
+    ///
+    /// Linear: BE-31 Phase A.
+    #[serde(default)]
+    pub mark_source_mode: MarkSourceMode,
+    /// Top-of-book spread cap (bps) for the thin-book guard on
+    /// `MarkSourceMode::Median`. When the top-of-book spread exceeds
+    /// this, book-mid is excluded from the median.
+    ///
+    /// Zero means "use the built-in default `DEFAULT_MAX_MARK_SPREAD_BPS`
+    /// (100 bps = 1%)" - which is also the value existing on-chain
+    /// `MarketConfig` records (written before this field existed)
+    /// decode to thanks to `serde(default)`. Operators tighten or
+    /// loosen per-market via `UpdateMarketFees`.
+    ///
+    /// Linear: BE-31 Phase A.
+    #[serde(default)]
+    pub max_mark_spread_bps: u32,
+    /// BE-31 Phase B: max age (ms) for a composite-CEX price update
+    /// before the engine excludes it from the median. Zero means
+    /// "use the built-in default `DEFAULT_CEX_COMPOSITE_STALENESS_MS`
+    /// (30s)" — also the value existing on-chain `MarketConfig`
+    /// records (written before this field existed) decode to thanks
+    /// to `serde(default)`. Ignored unless `mark_source_mode` is
+    /// `Median`.
+    #[serde(default)]
+    pub cex_composite_staleness_ms: u64,
 }
 
 /// Per-tier fee schedule for the volume-based maker-rebate program.
@@ -562,6 +682,10 @@ pub enum Action {
     CreateImpactMarket(CreateImpactMarket),
     ResolveEvent(ResolveEvent),
     UpdateMarketFees(UpdateMarketFees),
+    /// Set or update an account's fee override (BE-46). Replaces the
+    /// market's base `taker_fee_bps` / `maker_fee_bps` for fills where
+    /// this account is the taker / maker respectively. Relayer-signed.
+    SetAccountFeeOverride(SetAccountFeeOverride),
     /// Relayer marks a Solana deposit signature as permanently failed
     /// (malformed tx, unsupported token, dust). The user is NOT credited;
     /// the signature is recorded so subsequent ConfirmDeposit/FailDeposit
@@ -577,6 +701,11 @@ pub enum Action {
     /// fire funding at a precise scenario point rather than waiting on
     /// chain time. Authorized by the relayer allowlist.
     RunFundingTick(RunFundingTick),
+    /// BE-31 Phase B: composite-CEX price update for the multi-source
+    /// mark-price median. See `OracleUpdateComposite` docstring for
+    /// the trust model. Authorized by a feeder-specific allowlist
+    /// (separate from the Pyth oracle's relayer allowlist).
+    OracleUpdateComposite(OracleUpdateComposite),
     /// User-side action: pick a more conservative initial-margin
     /// requirement on a single market than the market's default. The
     /// engine takes `max(market.im_bps, user_im_bps)` on every
@@ -703,6 +832,49 @@ pub struct OracleUpdate {
     /// Oracle's own publish timestamp in ms since Unix epoch.
     /// Must be strictly greater than the last accepted update's
     /// `publish_time_ms` for the same market.
+    #[serde(default)]
+    pub publish_time_ms: u64,
+}
+
+/// Composite-CEX price update — BE-31 Phase B's third source for the
+/// multi-source mark-price median. Carries the median (or VWAP) of N
+/// off-chain CEX feeds (Binance / OKX / Bybit / Coinbase) computed by
+/// a separate off-chain feeder process.
+///
+/// **Why it's separate from `OracleUpdate`**:
+///   1. Different signer set — composite uses a feeder-specific
+///      allowlist, not the Pyth oracle relay's. Different trust model.
+///   2. Different staleness gate — composite is polled every ~1s vs.
+///      Pyth's per-block cadence; rejected from the median when older
+///      than `cex_composite_staleness_ms` (default 30s).
+///   3. Different aggregation — Pyth oracle is a single value; the
+///      composite is explicitly a median across multiple venues, with
+///      `n_sources` carried for observability.
+///
+/// Same monotonicity-of-publish-time replay guard as `OracleUpdate`
+/// (audit B3, 2026-04-23).
+///
+/// Stored under `keys::CexCompositePrice` keyspace, indexed by market.
+/// Read by `compute_median_mark_price` as the third source when the
+/// market is in `MarkSourceMode::Median`. Has no effect on
+/// `OracleOnly` markets.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OracleUpdateComposite {
+    pub market: MarketId,
+    /// Composite price in micro-USDC (median or VWAP of `n_sources`
+    /// off-chain CEX feeds, computed off-chain by the feeder).
+    pub price: u64,
+    /// Number of CEX feeds that went into the composite. Carried for
+    /// observability — a composite from 1 venue is much weaker
+    /// signal than one from 4. Field is informational; the engine
+    /// doesn't gate on it.
+    #[serde(default)]
+    pub n_sources: u8,
+    /// Authorized feeder signer (20 bytes).
+    pub signer: [u8; 20],
+    /// Feeder's own publish timestamp in ms since Unix epoch. Must
+    /// be strictly greater than the last accepted update's
+    /// `publish_time_ms` for the same market — replay guard.
     #[serde(default)]
     pub publish_time_ms: u64,
 }
@@ -1029,6 +1201,130 @@ pub struct UpdateMarketFees {
     /// flipping to `true` is always safe (can only relieve MM).
     #[serde(default)]
     pub net_delta_margin: Option<bool>,
+    /// Tick size in micro-USDC. `None` = leave unchanged. Setting to 0
+    /// disables the tick check (any price accepted). BE-48.
+    #[serde(default)]
+    pub tick_size: Option<u64>,
+    /// Lot size in contracts. `None` = leave unchanged. Setting to 0
+    /// disables the lot check (any quantity accepted). BE-48.
+    #[serde(default)]
+    pub lot_size: Option<u64>,
+    /// Primary oracle signer for this market. `None` = leave unchanged.
+    /// `Some(addr)` sets the primary to `addr`. BE-50.
+    ///
+    /// Wire-format note: msgpack via rmp-serde collapses `Option<Option<T>>`
+    /// in positional arrays — both `None` and `Some(None)` encode as `nil`,
+    /// so we can't distinguish "leave alone" from "clear" with bare option
+    /// nesting. To clear the primary without re-creating the market, send
+    /// `Some([0u8; 20])` — the engine treats the all-zero address as a
+    /// "clear primary" sentinel (mirrors the `FEE_OVERRIDE_REVERT_SENTINEL`
+    /// pattern from BE-46.1). Real signer addresses are derived from
+    /// keccak256 of an Ed25519 public key, which collides with the all-zero
+    /// address only with negligible probability — safe to use as a sentinel.
+    ///
+    /// Alternative: setting `oracle_staleness_ms = 0` disables the gate
+    /// entirely (any authorized relayer accepted) without disturbing the
+    /// primary slot — useful when you want to suspend the gate temporarily.
+    #[serde(default)]
+    pub primary_oracle_signer: Option<[u8; 20]>,
+    /// Oracle staleness threshold in ms. `None` = leave unchanged.
+    /// Only consulted when `primary_oracle_signer` is set; see
+    /// `MarketConfig::oracle_staleness_ms`. BE-50.
+    #[serde(default)]
+    pub oracle_staleness_ms: Option<u64>,
+    /// New mark-source mode (BE-31 Phase A). `None` = leave unchanged.
+    /// `Some(MarkSourceMode::Median)` opts the market into the
+    /// multi-source median path. Has no effect on impact-family
+    /// markets - those always read EWMA per the no-oracle-MTM redesign.
+    ///
+    /// Operational note: flipping `OracleOnly -> Median` on a live
+    /// market that has a thin or absent book returns oracle-only at
+    /// the floor - same value as the old path until the book is
+    /// liquid enough to pass the spread guard. Safe to roll out
+    /// per-market; no chain wipe.
+    #[serde(default)]
+    pub mark_source_mode: Option<MarkSourceMode>,
+    /// New thin-book spread cap in bps for the median guard
+    /// (BE-31 Phase A). `None` = leave unchanged. `Some(0)` resets
+    /// to the built-in default `DEFAULT_MAX_MARK_SPREAD_BPS` (100 bps).
+    /// Ignored unless `mark_source_mode` is `Median`.
+    #[serde(default)]
+    pub max_mark_spread_bps: Option<u32>,
+    /// BE-31 Phase B: max age (ms) for a composite-CEX price update
+    /// before it's excluded from the median. `None` = leave unchanged.
+    /// `Some(0)` resets to the built-in default
+    /// `DEFAULT_CEX_COMPOSITE_STALENESS_MS` (30s). Ignored unless
+    /// `mark_source_mode` is `Median` and the market has at least
+    /// one composite update.
+    #[serde(default)]
+    pub cex_composite_staleness_ms: Option<u64>,
+}
+
+/// Per-account fee override (BE-46). Stored at
+/// `keys::account_fee_override(addr)` whenever an account has been
+/// granted a non-default fee schedule. Replaces the market's base
+/// `taker_fee_bps` / `maker_fee_bps` on fills where this account is
+/// the taker / maker respectively.
+///
+/// Override semantics intentionally apply globally across all
+/// markets — a single VIP-tier flag per account is the MVP shape;
+/// per-market overrides can be added later as a follow-up if a
+/// real use-case shows up.
+///
+/// Wire-format note: this struct is stored on-chain (not sent over
+/// the wire as an Action), so field order is fixed by the storage
+/// layout. Do not reorder.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountFeeOverride {
+    /// Taker fee rate in basis points (0..10_000). Replaces the
+    /// market's `taker_fee_bps` on fills taken by this account.
+    pub taker_fee_bps: u32,
+    /// Maker fee rate in basis points (0..10_000). Replaces the
+    /// market's `maker_fee_bps` on fills made by this account.
+    pub maker_fee_bps: u32,
+}
+
+/// Set (or overwrite) an account's per-account fee override.
+/// Relayer-signed admin action — `signer` must be on the relayer
+/// allowlist or the engine returns `UnauthorizedRelayer`.
+///
+/// Both `taker_fee_bps` and `maker_fee_bps` must be in
+/// `[0, 10_000]`, except for `FEE_OVERRIDE_REVERT_SENTINEL`
+/// (`u32::MAX`), which reverts that side to the market's base fee at
+/// fill time. Other out-of-range values are rejected with
+/// `FeeBpsOutOfRange`.
+///
+/// To "clear" an existing override, set both fee fields to
+/// `FEE_OVERRIDE_REVERT_SENTINEL`; partial reverts set only the side
+/// that should fall back to the market base.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SetAccountFeeOverride {
+    /// Account to override fees for. 20-byte address.
+    pub account: [u8; 20],
+    /// New taker fee in basis points (0..10_000), or
+    /// `FEE_OVERRIDE_REVERT_SENTINEL` to revert taker fills to market base.
+    pub taker_fee_bps: u32,
+    /// New maker fee in basis points (0..10_000), or
+    /// `FEE_OVERRIDE_REVERT_SENTINEL` to revert maker fills to market base.
+    pub maker_fee_bps: u32,
+    /// Authorized relayer signer. Must equal the envelope's derived
+    /// owner and be on the relayer allowlist.
+    pub signer: [u8; 20],
+    /// Replay-guard sequence (BE-46.2). The engine tracks the highest
+    /// accepted `seq` per `account`; the next call must satisfy
+    /// `cmd.seq > stored_seq` or it is rejected with
+    /// `FeeOverrideStaleSeq`. The first call against a fresh account
+    /// (stored seq = 0) accepts any `seq >= 1`. The seq advances on
+    /// the no-op path too (identical override) so stale replays stay
+    /// rejected even when the value didn't change.
+    ///
+    /// Appended at the end of the struct so absent-on-the-wire decodes
+    /// as `0` (rmp-serde default for `u64`); the handler then rejects
+    /// `seq == 0` against any stored seq, surfacing legacy callers
+    /// loudly rather than silently accepting them. This breaks the
+    /// unreleased-branch wire format intentionally — landing the
+    /// guard before mainnet is the whole point.
+    pub seq: u64,
 }
 
 /// Status of a pending withdrawal.
@@ -1208,6 +1504,25 @@ pub enum Event {
         max_position_size: u64,
         default_ttl_ms: u64,
         net_delta_margin: bool,
+        // BE-48 + BE-50 fields included in the event payload so off-chain
+        // consumers can mirror the live config without re-reading state.
+        // `primary_oracle_signer` is flattened to `[u8; 20]` because the
+        // AbciEvent derive macro requires Display on every attribute and
+        // Option<T> doesn't satisfy that bound — all-zero bytes mean "no
+        // primary signer set" (semantically equivalent to None).
+        tick_size: u64,
+        lot_size: u64,
+        primary_oracle_signer: [u8; 20],
+        oracle_staleness_ms: u64,
+    },
+    /// An account's fee override was set (BE-46). Emitted on success
+    /// of `SetAccountFeeOverride`. Carries the post-update values so
+    /// off-chain consumers can mirror the override without re-reading
+    /// state.
+    AccountFeeOverrideSet {
+        account: [u8; 20],
+        taker_fee_bps: u32,
+        maker_fee_bps: u32,
     },
     /// Impact-market family was registered. Emitted once; the 5 underlying
     /// `MarketCreated` events follow (1 reused existing perp + 4 new children).
@@ -1604,6 +1919,46 @@ pub enum ExecError {
     /// to accept them in this deployment, or the position the action
     /// referenced doesn't exist.
     TestActionRejected(String),
+    /// `SetAccountFeeOverride` rejected because a fee value is outside
+    /// the legal `[0, 10_000]` basis-point range. BE-46.
+    FeeBpsOutOfRange {
+        bps: u32,
+    },
+    /// `SetAccountFeeOverride` rejected because `cmd.seq` is not
+    /// strictly greater than the seq stored on this account — i.e. it
+    /// is a replay or an out-of-order tx. BE-46.2 replay guard
+    /// (Ramon's 2026-05-03 review on #39). The seq advances on the
+    /// no-op path too, so even an identical-payload replay against a
+    /// stale seq is rejected here.
+    FeeOverrideStaleSeq {
+        cmd_seq: u64,
+        stored_seq: u64,
+    },
+    /// `PlaceOrder` price is not an exact multiple of the market's
+    /// `tick_size`. BE-48: makes the orderbook coarser at high precision
+    /// to keep MMs from quoting through fractional ticks.
+    TickSizeViolation {
+        market: MarketId,
+        tick_size: u64,
+        price: u64,
+    },
+    /// `PlaceOrder` quantity is not an exact multiple of the market's
+    /// `lot_size`. BE-48 sibling of `TickSizeViolation`.
+    LotSizeViolation {
+        market: MarketId,
+        lot_size: u64,
+        quantity: u64,
+    },
+    /// `OracleUpdate` from a fallback (non-primary) signer was rejected
+    /// because the market's last oracle update — by any signer — is still
+    /// within the staleness window. Caller must wait until
+    /// `block_time - last_publish_ms >= oracle_staleness_ms`. BE-50.
+    OracleStaleNotElapsed {
+        market: MarketId,
+        last_publish_ms: u64,
+        block_time_ms: u64,
+        staleness_ms: u64,
+    },
     /// `get_mark_price` rejected because the oracle for `market` is
     /// older than `MarketConfig::mark_price_max_oracle_age_ms`. Order
     /// placement, margin checks, and liquidation refuse to use a
@@ -1674,6 +2029,11 @@ impl ExecError {
             ExecError::TestActionRejected(_) => 36,
             ExecError::StaleOracle { .. } => 37,
             ExecError::UserLeverageBelowMarketIm { .. } => 38,
+            ExecError::TickSizeViolation { .. } => 39,
+            ExecError::LotSizeViolation { .. } => 40,
+            ExecError::OracleStaleNotElapsed { .. } => 41,
+            ExecError::FeeBpsOutOfRange { .. } => 42,
+            ExecError::FeeOverrideStaleSeq { .. } => 43,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -1821,6 +2181,27 @@ impl ExecError {
                  the engine isn't configured to accept them, or the position the action referenced does \
                  not exist."
             }
+            ExecError::StaleOracle { .. } => {
+                "Oracle price is stale for this market; refresh the oracle before placing orders, reading margin, or liquidating."
+            }
+            ExecError::UserLeverageBelowMarketIm { .. } => {
+                "User-selected initial margin is below the market risk floor; only deleveraging above the market floor is allowed."
+            }
+            ExecError::TickSizeViolation { .. } => {
+                "Order price is not an exact multiple of the market tick size."
+            }
+            ExecError::LotSizeViolation { .. } => {
+                "Order quantity is not an exact multiple of the market lot size."
+            }
+            ExecError::OracleStaleNotElapsed { .. } => {
+                "Fallback oracle signer published before the market staleness window elapsed."
+            }
+            ExecError::FeeBpsOutOfRange { .. } => {
+                "Per-account fee override has a fee outside the legal basis-point range."
+            }
+            ExecError::FeeOverrideStaleSeq { .. } => {
+                "Per-account fee override sequence is stale or out of order."
+            }
         }
     }
 }
@@ -1914,6 +2295,31 @@ impl fmt::Display for ExecError {
                 "reduce-only order rejected: would increase exposure (same-side as position) or no position to reduce"
             ),
             ExecError::TestActionRejected(msg) => write!(f, "test action rejected: {msg}"),
+            ExecError::FeeBpsOutOfRange { bps } => write!(
+                f,
+                "fee out of range: {bps} bps (must be in [0, 10_000])"
+            ),
+            ExecError::FeeOverrideStaleSeq {
+                cmd_seq,
+                stored_seq,
+            } => write!(
+                f,
+                "stale SetAccountFeeOverride seq: cmd seq {cmd_seq} <= stored seq {stored_seq} (replay or out-of-order tx)"
+            ),
+            ExecError::TickSizeViolation { market, tick_size, price } => write!(
+                f,
+                "tick size violation on market {market}: price {price} not a multiple of tick_size {tick_size}"
+            ),
+            ExecError::LotSizeViolation { market, lot_size, quantity } => write!(
+                f,
+                "lot size violation on market {market}: quantity {quantity} not a multiple of lot_size {lot_size}"
+            ),
+            ExecError::OracleStaleNotElapsed { market, last_publish_ms, block_time_ms, staleness_ms } => write!(
+                f,
+                "oracle update from fallback signer rejected on market {market}: \
+                primary's last_publish_ms {last_publish_ms} is too recent \
+                (block_time {block_time_ms} - last_publish < staleness_ms {staleness_ms})"
+            ),
             ExecError::StaleOracle {
                 market,
                 publish_time_ms,
