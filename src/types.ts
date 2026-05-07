@@ -683,9 +683,9 @@ export interface TradeExecutedEvent {
   makerSide: string;
   /** Hex-encoded taker address. */
   takerOwner: string;
-  /** Taker fee in microUSDC (signed; positive = paid, negative = rebate). */
+  /** Taker fee in microUSDC. Current engine emits non-negative charges. */
   takerFee: string;
-  /** Maker fee in microUSDC (signed; positive = paid, negative = rebate). */
+  /** Maker fee in microUSDC. Current engine emits non-negative charges. */
   makerFee: string;
 }
 
@@ -1224,7 +1224,7 @@ export interface MarketConfig {
   mmBps: number;
   /** [3] Taker fee rate in basis points (e.g., 5 = 0.05%). */
   takerFeeBps: number;
-  /** [4] Maker fee rate in basis points (e.g., 2 = 0.02%). Negative = rebate. */
+  /** [4] Maker fee rate in basis points (e.g., 2 = 0.02%). */
   makerFeeBps: number;
   /** [5] Funding interval in milliseconds (0 = funding disabled). */
   fundingIntervalMs: bigint;
