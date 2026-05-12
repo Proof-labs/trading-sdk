@@ -61,6 +61,19 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
     globalThis.fetch = vi.fn(
       async (url: RequestInfo | URL, init?: RequestInit) => {
         const u = url.toString();
+        // Auto-answer CometBFT /status chain_id discovery without
+        // consuming a test-queued response slot or polluting the
+        // calls[] log that tests assert on.
+        if (u.endsWith("/status")) {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              result: { node_info: { network: "test-chain" } },
+            }),
+            { status: 200 },
+          );
+        }
         calls.push({ url: u, init });
         if (nextResponses.length === 0) {
           return new Response(
@@ -384,6 +397,19 @@ describe("ExchangeClient submitTx gateway path", () => {
     globalThis.fetch = vi.fn(
       async (url: RequestInfo | URL, init?: RequestInit) => {
         const u = url.toString();
+        // Auto-answer CometBFT /status chain_id discovery without
+        // consuming a test-queued response slot or polluting the
+        // calls[] log that tests assert on.
+        if (u.endsWith("/status")) {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              result: { node_info: { network: "test-chain" } },
+            }),
+            { status: 200 },
+          );
+        }
         calls.push({ url: u, init });
         if (nextResponses.length === 0) {
           return new Response(
@@ -395,8 +421,7 @@ describe("ExchangeClient submitTx gateway path", () => {
         }
         const responder = nextResponses.shift()!;
         return responder({ url: u, init });
-      },
-    ) as unknown as typeof fetch;
+      }) as unknown as typeof fetch;
   });
 
   afterEach(() => {

@@ -91,6 +91,8 @@ export class ExchangeClient {
   private wsUrl: string;
   /** 32-byte chain_id binding for v3 signatures (see audit B4). */
   private chainId: Uint8Array;
+  /** Whether discoverChainId() has already resolved the live chain_id. */
+  private _chainIdDiscovered = false;
   private privateKey: Uint8Array | null = null;
   private publicKey: Uint8Array | null = null;
   private address: Uint8Array | null = null;
@@ -128,6 +130,37 @@ export class ExchangeClient {
     this.chainId = opts.chainId
       ? chainIdFromString(opts.chainId)
       : UNBOUND_CHAIN_ID;
+  }
+
+  // -----------------------------------------------------------------------
+  // Chain-id discovery
+  // -----------------------------------------------------------------------
+
+  /**
+   * Fetch the live chain_id from CometBFT `/status` and update the signing
+   * binding. Call once before the first `submitTx` so signatures match the
+   * real genesis chain_id instead of UNBOUND.
+   *
+   * No-op after the first successful resolution (`_chainIdDiscovered`).
+   * Fails silently to UNBOUND when CometBFT is unreachable (the dev-stack
+   * hasn't started the node yet).
+   */
+  async discoverChainId(): Promise<void> {
+    if (this._chainIdDiscovered) return;
+    try {
+      const res = await fetch(`${this.rpcUrl}/status`);
+      if (!res.ok) return;
+      const json = (await res.json()) as {
+        result?: { node_info?: { network?: string } };
+      };
+      const networkId = json?.result?.node_info?.network;
+      if (networkId) {
+        this.chainId = chainIdFromString(networkId);
+      }
+    } catch {
+      // CometBFT not reachable yet — stay on UNBOUND.
+    }
+    this._chainIdDiscovered = true;
   }
 
   // -----------------------------------------------------------------------
@@ -255,6 +288,12 @@ export class ExchangeClient {
    */
   private async broadcastSigned(action: Action): Promise<TxResult> {
     if (!this.privateKey) throw new Error("No private key set");
+
+    // Auto-discover the live chain_id on the first call so signatures
+    // match the real genesis chain_id instead of UNBOUND.
+    if (!this._chainIdDiscovered) {
+      await this.discoverChainId();
+    }
 
     const seq = this.nonce;
     const txBytes = signAndEncodeWithChain(
