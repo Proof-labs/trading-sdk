@@ -55,10 +55,10 @@ export {
   encodeTx,
   encodeTxV2,
   signAndEncode,
-  signAndEncodeWithChain,
   decodeTx,
   peekActionType,
 } from "./codec.js";
+export { fetchChainId } from "./client.js";
 
 /**
  * BE-46.1 sentinel value for `SetAccountFeeOverride.{takerFeeBps, makerFeeBps}`

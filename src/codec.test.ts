@@ -17,6 +17,7 @@ import {
   hexToBytes,
   bytesToHex,
   chainIdFromString,
+  UNBOUND_CHAIN_ID,
 } from "./crypto.js";
 import {
   ActionType,
@@ -696,7 +697,7 @@ describe("codec v2 signing", () => {
       },
     };
 
-    const bytes = signAndEncode(action, 1n, privateKey);
+    const bytes = signAndEncode(UNBOUND_CHAIN_ID, action, 1n, privateKey);
     const {
       version,
       pubkey,
@@ -721,7 +722,7 @@ describe("codec v2 signing", () => {
       data: { owner: OWNER, amount: 1000n, signer: SIGNER },
     };
 
-    const bytes = signAndEncode(action, 5n, privateKey);
+    const bytes = signAndEncode(UNBOUND_CHAIN_ID, action, 5n, privateKey);
     const { pubkey, signature } = decodeTx(bytes);
 
     // Reconstruct the signing message and verify
@@ -823,7 +824,7 @@ describe("codec v2 signing", () => {
     ];
 
     for (const action of allActions) {
-      const bytes = signAndEncode(action, 42n, privateKey);
+      const bytes = signAndEncode(UNBOUND_CHAIN_ID, action, 42n, privateKey);
       const {
         version,
         action: decoded,
@@ -851,8 +852,8 @@ describe("codec v2 signing", () => {
         quantity: 10n,
       },
     };
-    const a = signAndEncode(action, 1n, privateKey);
-    const b = signAndEncode(action, 1n, privateKey);
+    const a = signAndEncode(UNBOUND_CHAIN_ID, action, 1n, privateKey);
+    const b = signAndEncode(UNBOUND_CHAIN_ID, action, 1n, privateKey);
     expect(a).toEqual(b);
   });
 
@@ -862,8 +863,8 @@ describe("codec v2 signing", () => {
       type: "Deposit",
       data: { owner: OWNER, amount: 100n, signer: SIGNER },
     };
-    const a = signAndEncode(action, 1n, privateKey);
-    const b = signAndEncode(action, 2n, privateKey);
+    const a = signAndEncode(UNBOUND_CHAIN_ID, action, 1n, privateKey);
+    const b = signAndEncode(UNBOUND_CHAIN_ID, action, 2n, privateKey);
     const da = decodeTx(a);
     const db = decodeTx(b);
     expect(da.signature).not.toEqual(db.signature);

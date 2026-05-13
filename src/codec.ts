@@ -11,12 +11,7 @@ import {
   Side,
   TimeInForce,
 } from "./types.js";
-import {
-  signingMessage,
-  sign,
-  getPublicKey,
-  UNBOUND_CHAIN_ID,
-} from "./crypto.js";
+import { signingMessage, sign, getPublicKey } from "./crypto.js";
 
 // ---------------------------------------------------------------------------
 // MessagePack encoder/decoder configured for BigInt
@@ -150,12 +145,12 @@ export function encodeTxV2(
 
 /**
  * Sign an action and encode as V2 wire bytes, binding the signature
- * to a specific `chainId`. Per audit B4 (2026-04-23), production
- * signers MUST pass a real 32-byte chain_id — typically
- * `chainIdFromString(cometbftChainId)` — or signatures are replayable
- * across chains. Pass `UNBOUND_CHAIN_ID` only for unit tests.
+ * to `chainId` (audit B4, 2026-04-23). Production signers must pass
+ * `chainIdFromString(cometbftChainId)`; only unit tests should pass
+ * `UNBOUND_CHAIN_ID`. `ExchangeClient` resolves and caches this
+ * automatically — call this directly only when bypassing the client.
  */
-export function signAndEncodeWithChain(
+export function signAndEncode(
   chainId: Uint8Array,
   action: Action,
   seq: bigint,
@@ -174,21 +169,6 @@ export function signAndEncodeWithChain(
     pubkey,
     signature,
   ]) as Uint8Array;
-}
-
-/**
- * Legacy entry point — signs with `UNBOUND_CHAIN_ID`. Retained for
- * existing test callers and as a lower-friction migration path;
- * production paths should use `signAndEncodeWithChain`. Any operator
- * deploying a real chain MUST switch to the explicit variant or risk
- * cross-chain replay.
- */
-export function signAndEncode(
-  action: Action,
-  seq: bigint,
-  privateKey: Uint8Array,
-): Uint8Array {
-  return signAndEncodeWithChain(UNBOUND_CHAIN_ID, action, seq, privateKey);
 }
 
 // ---------------------------------------------------------------------------

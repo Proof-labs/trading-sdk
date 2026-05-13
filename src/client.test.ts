@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Encoder } from "@msgpack/msgpack";
-import { ExchangeClient } from "./client.js";
-import { bytesToHex, generateKeypair } from "./crypto.js";
+import { ExchangeClient, fetchChainId } from "./client.js";
+import {
+  UNBOUND_CHAIN_ID,
+  bytesToHex,
+  chainIdFromString,
+  generateKeypair,
+} from "./crypto.js";
 import { Side } from "./types.js";
 import { sha256 } from "@noble/hashes/sha256";
 
@@ -97,11 +102,14 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
     // The nonce-drift tests below mock CometBFT JSON-RPC responses, so
     // the client must take the legacy `useGateway: false` path. The
     // production-default gateway path is exercised in the dedicated
-    // "submitViaGateway" test block further down.
+    // "submitViaGateway" test block further down. `chainId` is pinned
+    // explicitly so submitTx doesn't try to resolve from the mocked /status
+    // (which only returns the scripted broadcast_tx_sync responses).
     const c = new ExchangeClient({
       rpcUrl: "http://test-rpc",
       apiUrl: "http://test-api",
       useGateway: false,
+      chainId: "test-chain",
     });
     const kp = generateKeypair();
     c.setPrivateKey(kp.privateKey);
@@ -442,6 +450,8 @@ describe("ExchangeClient submitTx gateway path", () => {
       // useGateway defaults to true — explicit here for documentation.
       useGateway: true,
       apiKey: opts.apiKey,
+      // Pinned so submitTx doesn't fan out to the mocked /status.
+      chainId: "test-chain",
     });
     const kp = generateKeypair();
     c.setPrivateKey(kp.privateKey);
@@ -523,6 +533,7 @@ describe("ExchangeClient submitTx gateway path", () => {
       rpcUrl: "http://remote-node.example:26657",
       apiUrl: "http://test-api",
       useGateway: true,
+      chainId: "test-chain",
     });
     const kp = generateKeypair();
     c.setPrivateKey(kp.privateKey);
@@ -895,6 +906,7 @@ describe("ExchangeClient submitTx gateway path", () => {
       apiUrl: "http://test-api",
       gatewayUrl: "http://test-gateway",
       useGateway: false,
+      chainId: "test-chain",
     });
     const kp = generateKeypair();
     c.setPrivateKey(kp.privateKey);
@@ -937,5 +949,165 @@ describe("ExchangeClient submitTx gateway path", () => {
       method: "broadcast_tx_sync",
     });
     expect(typeof body.params.tx).toBe("string");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// chain_id resolution (audit B4)
+//
+// Covers the four configurations of `opts.chainId` × `opts.allowUnbound`:
+//   - explicit chainId          → used immediately, no /status fetch
+//   - omitted, /status reachable → resolved + cached, identical to explicit
+//   - omitted, /status down, allowUnbound=false → throws on ready()
+//   - omitted, /status down, allowUnbound=true  → warns + falls back to UNBOUND
+//
+// The bug this guards against: pre-2026-05-12 the SDK silently signed with
+// UNBOUND when no chainId was provided, which "worked" against an unbound
+// engine and broke loudly the moment the engine bound chain_id at FFI
+// (exchange#90). Lazy resolve removes the silent path.
+// ---------------------------------------------------------------------------
+describe("ExchangeClient chain_id resolution", () => {
+  const originalFetch = globalThis.fetch;
+
+  function statusResponse(network: string): Response {
+    return new Response(
+      JSON.stringify({ result: { node_info: { network } } }),
+    );
+  }
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it("explicit opts.chainId binds eagerly and skips /status fetch", async () => {
+    const fetchSpy = vi.fn(async () => new Response("{}"));
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const client = new ExchangeClient({
+      rpcUrl: "http://test-rpc",
+      chainId: "proof-explicit",
+    });
+    await client.ready();
+    expect(client.getChainId()).toEqual(chainIdFromString("proof-explicit"));
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("auto-resolves from /status when opts.chainId omitted", async () => {
+    const fetchSpy = vi.fn(
+      async (url: RequestInfo | URL) => {
+        expect(url.toString()).toBe("http://test-rpc/status");
+        return statusResponse("proof-from-status");
+      },
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const client = new ExchangeClient({ rpcUrl: "http://test-rpc" });
+    await client.ready();
+    expect(client.getChainId()).toEqual(
+      chainIdFromString("proof-from-status"),
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    // Cached: a second ready() does not re-hit /status.
+    await client.ready();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws when /status is down and allowUnbound is not set", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+
+    const client = new ExchangeClient({ rpcUrl: "http://test-rpc" });
+    await expect(client.ready()).rejects.toThrow(
+      /could not resolve chain_id from http:\/\/test-rpc\/status/,
+    );
+    expect(client.getChainId()).toBeNull();
+  });
+
+  it("falls back to UNBOUND_CHAIN_ID when allowUnbound is true and /status is down", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const client = new ExchangeClient({
+      rpcUrl: "http://test-rpc",
+      allowUnbound: true,
+    });
+    await client.ready();
+    expect(client.getChainId()).toEqual(UNBOUND_CHAIN_ID);
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy.mock.calls[0]?.[0]).toMatch(/UNBOUND_CHAIN_ID/);
+  });
+
+  it("concurrent submits share a single /status fetch", async () => {
+    const fetchSpy = vi.fn(
+      async () => statusResponse("proof-shared"),
+    );
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    const client = new ExchangeClient({ rpcUrl: "http://test-rpc" });
+    await Promise.all([client.ready(), client.ready(), client.ready()]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries /status after a failure when allowUnbound is false", async () => {
+    let attempt = 0;
+    globalThis.fetch = vi.fn(async () => {
+      attempt++;
+      if (attempt === 1) throw new Error("transient");
+      return statusResponse("proof-after-retry");
+    }) as unknown as typeof fetch;
+
+    const client = new ExchangeClient({ rpcUrl: "http://test-rpc" });
+    await expect(client.ready()).rejects.toThrow();
+    // First failure cleared the in-flight cache; a second call retries
+    // instead of replaying the rejected promise forever.
+    await client.ready();
+    expect(client.getChainId()).toEqual(
+      chainIdFromString("proof-after-retry"),
+    );
+    expect(attempt).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchChainId standalone helper
+//
+// Exported for offline tooling that doesn't go through ExchangeClient
+// (gateway-side helpers, scripts that XADD to Redis directly, etc.).
+// ---------------------------------------------------------------------------
+describe("fetchChainId", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("returns chainIdFromString(network) on a valid /status response", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({ result: { node_info: { network: "proof-ok" } } }),
+      );
+    }) as unknown as typeof fetch;
+    const got = await fetchChainId("http://rpc");
+    expect(got).toEqual(chainIdFromString("proof-ok"));
+  });
+
+  it("throws on non-2xx /status response", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      return new Response("nope", { status: 503 });
+    }) as unknown as typeof fetch;
+    await expect(fetchChainId("http://rpc")).rejects.toThrow(/HTTP 503/);
+  });
+
+  it("throws when /status payload is missing result.node_info.network", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      return new Response(JSON.stringify({}));
+    }) as unknown as typeof fetch;
+    await expect(fetchChainId("http://rpc")).rejects.toThrow(
+      /missing result\.node_info\.network/,
+    );
   });
 });

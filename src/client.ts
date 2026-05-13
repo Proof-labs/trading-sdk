@@ -1,4 +1,4 @@
-import { signAndEncodeWithChain } from "./codec.js";
+import { signAndEncode } from "./codec.js";
 import {
   getPublicKey,
   pubkeyToOwner,
@@ -28,6 +28,28 @@ import { sha256 } from "@noble/hashes/sha256";
 
 const msgpackDecoder = new Decoder({ useBigInt64: true });
 
+/**
+ * Fetch the 32-byte chain_id binding from a CometBFT RPC's `/status`
+ * endpoint. Hashes `result.node_info.network` via `chainIdFromString`.
+ *
+ * `ExchangeClient` resolves this lazily on first submit and caches it
+ * — most callers don't need this directly. Use it from offline tooling
+ * (raw `signAndEncode` callers, gateway-side helpers) that build wire
+ * bytes without going through a client instance.
+ */
+export async function fetchChainId(rpcUrl: string): Promise<Uint8Array> {
+  const res = await fetch(`${rpcUrl}/status`);
+  if (!res.ok) throw new Error(`/status returned HTTP ${res.status}`);
+  const json = (await res.json()) as {
+    result?: { node_info?: { network?: string } };
+  };
+  const network = json.result?.node_info?.network;
+  if (!network) {
+    throw new Error("/status response missing result.node_info.network");
+  }
+  return chainIdFromString(network);
+}
+
 export interface ExchangeClientOptions {
   /** CometBFT RPC endpoint. Default: http://localhost:26657 */
   rpcUrl?: string;
@@ -39,14 +61,31 @@ export interface ExchangeClientOptions {
    * CometBFT `chain_id` string — e.g. "proof-testnet-1". Signatures
    * are bound to this value via the v3 envelope
    * (`crypto::signing_message`), closing the cross-chain replay
-   * vector audit B4 identified. If omitted, the client signs with
-   * `UNBOUND_CHAIN_ID` — OK for local dev against a fresh unbound
-   * chain, but **production deployments MUST set this** or every
-   * signed tx is replayable on any other unbound chain. The
-   * operator-safe default is to source this from the gateway
-   * `/v1/status` endpoint at client init time.
+   * vector audit B4 identified.
+   *
+   * If omitted, the client lazily fetches it from `${rpcUrl}/status`
+   * (`result.node_info.network`) on first submit and caches the
+   * result. Pre-warm with `await client.ready()` to surface
+   * resolution errors at init time instead of mid-flow.
+   *
+   * If `/status` is unreachable AND `allowUnbound: true` is set, the
+   * client falls back to `UNBOUND_CHAIN_ID`. Otherwise it throws.
+   * Production callers should pin `chainId` explicitly to keep
+   * signatures deterministic across SDK rebuilds.
    */
   chainId?: string;
+  /**
+   * When true, allow falling back to `UNBOUND_CHAIN_ID` if `chainId`
+   * is omitted AND `${rpcUrl}/status` is unreachable. Default false.
+   *
+   * The fallback exists for local fixtures where the chain isn't up
+   * yet (e.g. constructing a client that will never submit, just to
+   * sign offline). Any production or CI path that submits MUST leave
+   * this false: an UNBOUND signature against a real chain is
+   * replayable across deployments and will be rejected by any engine
+   * with a real chain_id binding.
+   */
+  allowUnbound?: boolean;
   /**
    * Public-API gateway endpoint, used by `submitTx` when `useGateway`
    * is true. Format: `http://<host>:9080` (the Rust API gateway, not
@@ -89,10 +128,15 @@ export class ExchangeClient {
   private useGateway: boolean;
   private apiKey: string | null;
   private wsUrl: string;
-  /** 32-byte chain_id binding for v3 signatures (see audit B4). */
-  private chainId: Uint8Array;
-  /** Whether discoverChainId() has already resolved the live chain_id. */
-  private _chainIdDiscovered = false;
+  /**
+   * 32-byte chain_id binding for v3 signatures (audit B4). `null` until
+   * either an explicit `opts.chainId` is hashed in the constructor or
+   * `resolveChainId()` fetches `${rpcUrl}/status` on first submit.
+   */
+  private chainId: Uint8Array | null;
+  private allowUnbound: boolean;
+  /** Single-flight guard so concurrent submits share one /status fetch. */
+  private chainIdPromise: Promise<Uint8Array> | null = null;
   private privateKey: Uint8Array | null = null;
   private publicKey: Uint8Array | null = null;
   private address: Uint8Array | null = null;
@@ -124,12 +168,73 @@ export class ExchangeClient {
     this.apiKey = opts.apiKey ?? null;
     this.wsUrl =
       opts.wsUrl ?? this.rpcUrl.replace(/^http/, "ws") + "/websocket";
-    // Derive 32-byte chain binding: keccak256 of the chain_id string,
-    // or `UNBOUND_CHAIN_ID` when not provided. Production callers
-    // must supply `chainId` — see options docstring.
-    this.chainId = opts.chainId
-      ? chainIdFromString(opts.chainId)
-      : UNBOUND_CHAIN_ID;
+    // Bind chainId eagerly when supplied, else leave null and let
+    // resolveChainId() fetch from /status on first submit.
+    this.chainId = opts.chainId ? chainIdFromString(opts.chainId) : null;
+    this.allowUnbound = opts.allowUnbound ?? false;
+  }
+
+  /**
+   * Resolve and cache the 32-byte chain_id binding. Idempotent and
+   * single-flight: concurrent callers share one in-flight promise.
+   *
+   * Resolution order:
+   *   1. Explicit `opts.chainId` from the constructor (already hashed) — return it.
+   *   2. Fetch `${rpcUrl}/status`, hash `result.node_info.network`, cache.
+   *   3. On fetch failure: if `allowUnbound`, warn and use `UNBOUND_CHAIN_ID`;
+   *      otherwise throw.
+   *
+   * Public via `ready()`. `broadcastSigned` calls this internally
+   * before every submit; the cache means only the first submit pays
+   * the round-trip.
+   */
+  private resolveChainId(): Promise<Uint8Array> {
+    if (this.chainId) return Promise.resolve(this.chainId);
+    if (this.chainIdPromise) return this.chainIdPromise;
+    this.chainIdPromise = (async () => {
+      try {
+        const bound = await fetchChainId(this.rpcUrl);
+        this.chainId = bound;
+        return bound;
+      } catch (err) {
+        // Reset so a future caller can retry (e.g. node was momentarily down).
+        this.chainIdPromise = null;
+        if (this.allowUnbound) {
+          console.warn(
+            `ExchangeClient: failed to resolve chain_id from ${this.rpcUrl}/status ` +
+              `(${(err as Error).message}); falling back to UNBOUND_CHAIN_ID. ` +
+              "Production callers must pin chainId or fix the rpcUrl.",
+          );
+          this.chainId = UNBOUND_CHAIN_ID;
+          return UNBOUND_CHAIN_ID;
+        }
+        throw new Error(
+          `ExchangeClient could not resolve chain_id from ${this.rpcUrl}/status: ` +
+            `${(err as Error).message}. Pass opts.chainId explicitly, or set ` +
+            "opts.allowUnbound = true if you intend to sign for an unbound chain.",
+        );
+      }
+    })();
+    return this.chainIdPromise;
+  }
+
+  /**
+   * Pre-resolve the chain_id binding before any `submitTx` call. Surfaces
+   * `/status`-fetch errors at init time rather than mid-flow. Optional —
+   * `submitTx` resolves lazily on its own.
+   */
+  async ready(): Promise<void> {
+    await this.resolveChainId();
+  }
+
+  /**
+   * Return the cached chain_id binding. `null` if `ready()` hasn't run
+   * and no explicit `opts.chainId` was passed. Callers that bypass
+   * `submitTx` (e.g. publishing wire bytes directly to Redis) should
+   * `await client.ready()` first, then use this to feed `signAndEncode`.
+   */
+  getChainId(): Uint8Array | null {
+    return this.chainId;
   }
 
   // -----------------------------------------------------------------------
@@ -289,19 +394,9 @@ export class ExchangeClient {
   private async broadcastSigned(action: Action): Promise<TxResult> {
     if (!this.privateKey) throw new Error("No private key set");
 
-    // Auto-discover the live chain_id on the first call so signatures
-    // match the real genesis chain_id instead of UNBOUND.
-    if (!this._chainIdDiscovered) {
-      await this.discoverChainId();
-    }
-
+    const chainId = await this.resolveChainId();
     const seq = this.nonce;
-    const txBytes = signAndEncodeWithChain(
-      this.chainId,
-      action,
-      seq,
-      this.privateKey,
-    );
+    const txBytes = signAndEncode(chainId, action, seq, this.privateKey);
 
     const r = this.useGateway
       ? await this.submitViaGateway(txBytes)

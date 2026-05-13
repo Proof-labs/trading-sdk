@@ -129,18 +129,26 @@ Transactions use MessagePack V2 signed envelopes:
 [2, action_type, seq, payload, pubkey(32B), signature(64B)]
 ```
 
-The signature covers `"ProofExchange-v2" || action_type(1) || seq(8,BE) || payload`.
+The signature covers `DOMAIN_PREFIX(16B) || chain_id(32B) || action_type(1B) || seq(8B,BE) || payload`.
+
+The 32-byte `chain_id` binding (audit B4) closes the cross-chain replay vector — the same wire bytes signed for chain X cannot be replayed on chain Y. `ExchangeClient` resolves it from CometBFT's `/status` endpoint on first submit and caches it; offline tooling that calls `signAndEncode` directly should pass `await fetchChainId(rpcUrl)` (or `chainIdFromString(name)` if pinning).
 
 ## Low-Level Codec
 
 ```typescript
-import { encodeTx, encodeTxV2, signAndEncode, decodeTx } from "@exchange/sdk";
+import {
+  encodeTx,
+  signAndEncode,
+  decodeTx,
+  fetchChainId,
+} from "@exchange/sdk";
 
 // V1 unsigned (testing only)
 const v1Bytes = encodeTx({ type: "PlaceOrder", data: { ... } }, seq);
 
-// V2 signed
-const v2Bytes = await signAndEncode({ type: "PlaceOrder", data: { ... } }, seq, privateKey);
+// V2 signed — chainId required (use UNBOUND_CHAIN_ID only in unit tests)
+const chainId = await fetchChainId("http://localhost:26657");
+const v2Bytes = signAndEncode(chainId, { type: "PlaceOrder", data: { ... } }, seq, privateKey);
 
 // Decode any version
 const { version, actionType, seq, action } = decodeTx(bytes);
