@@ -9,6 +9,7 @@ import {
   Outcome,
   type PriceComparison,
   Side,
+  TimeInForce,
 } from "./types.js";
 import {
   signingMessage,
@@ -429,6 +430,8 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           d.clientOrderId ?? null,
           d.postOnly ?? false,
           d.reduceOnly ?? false,
+          // timeInForce at index 8; serde encodes unit variants as strings
+          d.timeInForce === TimeInForce.Ioc ? "Ioc" : "Gtc",
         ],
       ];
     }
@@ -747,8 +750,14 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           // S06/S09 surfaces. Old records (6-element arrays) decode
           // with both flags = false; new records (8-element) carry
           // the explicit values.
+          // timeInForce added at index 8 (BE-XX). Old records decode
+          // as Gtc (0) via length-guarded fallback.
           postOnly: f.length > 6 && f[6] === true,
           reduceOnly: f.length > 7 && f[7] === true,
+          timeInForce:
+            f.length > 8
+              ? (f[8] as TimeInForce)
+              : TimeInForce.Gtc,
         },
       };
     case ActionType.CancelOrder:

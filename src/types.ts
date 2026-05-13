@@ -16,6 +16,19 @@ export enum Side {
   Sell = 2,
 }
 
+/**
+ * Time-in-force policy for a limit order. Controls how unmatched
+ * quantity is handled after crossing the book.
+ *
+ * Wire encoding: msgpack integer (0 = Gtc, 1 = Ioc).
+ */
+export enum TimeInForce {
+  /** Good-Till-Cancelled: unmatched quantity rests on the book. The default. */
+  Gtc = 0,
+  /** Immediate-Or-Cancel: unmatched quantity is dropped after crossing. */
+  Ioc = 1,
+}
+
 // ---------------------------------------------------------------------------
 // Action type constants (wire bytes 0x01–0x0D)
 // ---------------------------------------------------------------------------
@@ -109,6 +122,12 @@ export interface PlaceOrder {
    *  orders are rejected (ReduceOnlyWouldIncrease, code 35); over-closing
    *  is clamped to the position size. Defaults to false. */
   reduceOnly?: boolean;
+  /**
+   * Time-in-force policy. Defaults to `TimeInForce.Gtc` for backward
+   * compat. `TimeInForce.Ioc` drops any unfilled quantity after crossing
+   * the book (no resting order).
+   */
+  timeInForce?: TimeInForce;
 }
 
 /** Cancel an existing resting order by its engine-assigned ID. */
