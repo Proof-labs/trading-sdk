@@ -241,33 +241,6 @@ export class ExchangeClient {
   // Chain-id discovery
   // -----------------------------------------------------------------------
 
-  /**
-   * Fetch the live chain_id from CometBFT `/status` and update the signing
-   * binding. Call once before the first `submitTx` so signatures match the
-   * real genesis chain_id instead of UNBOUND.
-   *
-   * No-op after the first successful resolution (`_chainIdDiscovered`).
-   * Fails silently to UNBOUND when CometBFT is unreachable (the dev-stack
-   * hasn't started the node yet).
-   */
-  async discoverChainId(): Promise<void> {
-    if (this._chainIdDiscovered) return;
-    try {
-      const res = await fetch(`${this.rpcUrl}/status`);
-      if (!res.ok) return;
-      const json = (await res.json()) as {
-        result?: { node_info?: { network?: string } };
-      };
-      const networkId = json?.result?.node_info?.network;
-      if (networkId) {
-        this.chainId = chainIdFromString(networkId);
-      }
-    } catch {
-      // CometBFT not reachable yet — stay on UNBOUND.
-    }
-    this._chainIdDiscovered = true;
-  }
-
   // -----------------------------------------------------------------------
   // Wallet management
   // -----------------------------------------------------------------------
