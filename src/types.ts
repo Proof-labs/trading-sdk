@@ -91,6 +91,9 @@ export const ActionType = {
    *  Engine takes max(market.im_bps, user_im_bps) on every IM check.
    *  BE-16. */
   SetUserMarketLeverage: 0x16,
+  /** Close an entire position by placing an opposite-side IOC order at
+   *  oracle±spread. Idempotent on already-closed positions. User-signed. */
+  ClosePosition: 0x17,
 } as const;
 
 /** Union of all valid action type byte values. */
@@ -625,6 +628,17 @@ export interface SetUserMarketLeverage {
   userImBps: number;
 }
 
+/** Close an entire position on a market by placing an opposite-side IOC
+ *  order at oracle±spread. Idempotent: returns code=0 without events if
+ *  no position exists. User-signed (signer == owner). S49. */
+export interface ClosePosition {
+  /** Market identifier to close the position on. */
+  market: number;
+  /** Account address of the position owner (20 bytes). Must equal the
+   *  envelope signer's derived address. */
+  owner: Address;
+}
+
 /** Discriminated union of all exchange actions. */
 export type Action =
   | { type: "PlaceOrder"; data: PlaceOrder }
@@ -647,7 +661,8 @@ export type Action =
   | { type: "RunLiquidationSweep"; data: RunLiquidationSweep }
   | { type: "RunFundingTick"; data: RunFundingTick }
   | { type: "FailDeposit"; data: FailDeposit }
-  | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage };
+  | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage }
+  | { type: "ClosePosition"; data: ClosePosition };
 
 // ---------------------------------------------------------------------------
 // Event types (emitted by engine, delivered via ABCI/WebSocket)

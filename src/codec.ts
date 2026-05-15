@@ -642,6 +642,10 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
         ],
       ];
     }
+    case "ClosePosition": {
+      const d = action.data;
+      return [ActionType.ClosePosition, [d.market, toByteSeq(d.owner)]];
+    }
   }
 }
 
@@ -989,6 +993,14 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           solanaSignature: bytesField(f[0]),
           reason: parseFailDepositReason(f[1]),
           signer: bytesField(f[2]),
+        },
+      };
+    case ActionType.ClosePosition:
+      return {
+        type: "ClosePosition",
+        data: {
+          market: f[0] as number,
+          owner: bytesField(f[1]),
         },
       };
     default:
