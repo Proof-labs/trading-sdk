@@ -970,9 +970,7 @@ describe("ExchangeClient chain_id resolution", () => {
   const originalFetch = globalThis.fetch;
 
   function statusResponse(network: string): Response {
-    return new Response(
-      JSON.stringify({ result: { node_info: { network } } }),
-    );
+    return new Response(JSON.stringify({ result: { node_info: { network } } }));
   }
 
   afterEach(() => {
@@ -994,19 +992,15 @@ describe("ExchangeClient chain_id resolution", () => {
   });
 
   it("auto-resolves from /status when opts.chainId omitted", async () => {
-    const fetchSpy = vi.fn(
-      async (url: RequestInfo | URL) => {
-        expect(url.toString()).toBe("http://test-rpc/status");
-        return statusResponse("proof-from-status");
-      },
-    );
+    const fetchSpy = vi.fn(async (url: RequestInfo | URL) => {
+      expect(url.toString()).toBe("http://test-rpc/status");
+      return statusResponse("proof-from-status");
+    });
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
     const client = new ExchangeClient({ rpcUrl: "http://test-rpc" });
     await client.ready();
-    expect(client.getChainId()).toEqual(
-      chainIdFromString("proof-from-status"),
-    );
+    expect(client.getChainId()).toEqual(chainIdFromString("proof-from-status"));
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     // Cached: a second ready() does not re-hit /status.
@@ -1043,9 +1037,7 @@ describe("ExchangeClient chain_id resolution", () => {
   });
 
   it("concurrent submits share a single /status fetch", async () => {
-    const fetchSpy = vi.fn(
-      async () => statusResponse("proof-shared"),
-    );
+    const fetchSpy = vi.fn(async () => statusResponse("proof-shared"));
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
     const client = new ExchangeClient({ rpcUrl: "http://test-rpc" });
@@ -1066,9 +1058,7 @@ describe("ExchangeClient chain_id resolution", () => {
     // First failure cleared the in-flight cache; a second call retries
     // instead of replaying the rejected promise forever.
     await client.ready();
-    expect(client.getChainId()).toEqual(
-      chainIdFromString("proof-after-retry"),
-    );
+    expect(client.getChainId()).toEqual(chainIdFromString("proof-after-retry"));
     expect(attempt).toBe(2);
   });
 });
@@ -1077,7 +1067,7 @@ describe("ExchangeClient chain_id resolution", () => {
 // fetchChainId standalone helper
 //
 // Exported for offline tooling that doesn't go through ExchangeClient
-// (gateway-side helpers, scripts that XADD to Redis directly, etc.).
+// (gateway-side helpers, scripts that broadcast wire bytes directly, etc.).
 // ---------------------------------------------------------------------------
 describe("fetchChainId", () => {
   const originalFetch = globalThis.fetch;

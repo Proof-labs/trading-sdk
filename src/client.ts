@@ -99,7 +99,8 @@ export interface ExchangeClientOptions {
    * - `true` (default): `submitTx` POSTs the signed wire bytes to
    *   `gatewayUrl/exchange` — the same path external clients use.
    *   The gateway verifies the signature, applies rate limiting, and
-   *   publishes to Redis. This is the production-facing path.
+   *   forwards to CometBFT's `broadcast_tx_sync`. This is the
+   *   production-facing path.
    *
    * - `false`: `submitTx` falls back to the legacy CometBFT
    *   `broadcast_tx_sync` over `rpcUrl` — kept for internal tools
@@ -230,8 +231,9 @@ export class ExchangeClient {
   /**
    * Return the cached chain_id binding. `null` if `ready()` hasn't run
    * and no explicit `opts.chainId` was passed. Callers that bypass
-   * `submitTx` (e.g. publishing wire bytes directly to Redis) should
-   * `await client.ready()` first, then use this to feed `signAndEncode`.
+   * `submitTx` (e.g. signing wire bytes for an out-of-band submit
+   * path) should `await client.ready()` first, then use this to feed
+   * `signAndEncode`.
    */
   getChainId(): Uint8Array | null {
     return this.chainId;
@@ -267,9 +269,9 @@ export class ExchangeClient {
 
   /**
    * Return the private key the client is signing with. Exposed so
-   * adjacent ops tools (e.g. `scripts/lib/redis-submit.ts`) can build a
-   * signed envelope without re-loading the key from disk. Callers that
-   * don't need to bypass the normal `submitTx` path should not use this.
+   * adjacent ops tools can build a signed envelope without re-loading
+   * the key from disk. Callers that don't need to bypass the normal
+   * `submitTx` path should not use this.
    */
   getPrivateKey(): Uint8Array | null {
     return this.privateKey;
@@ -278,8 +280,7 @@ export class ExchangeClient {
   /**
    * Return the current local (next-to-use) nonce. Same caveat as
    * `getPrivateKey` — only for ops tools that submit via a side channel
-   * (Redis stream, gateway bypass) and need to tell the client which
-   * nonce to increment past on success.
+   * and need to tell the client which nonce to increment past on success.
    */
   getNonce(): bigint {
     return this.nonce;
@@ -401,8 +402,8 @@ export class ExchangeClient {
    *
    * The gateway re-verifies the signature, applies rate limiting and,
    * when configured with `--api-key`, checks the `X-Api-Key` header.
-   * On success it publishes to Redis; the downstream consumer feeds
-   * CometBFT.
+   * On success it forwards the wire bytes to CometBFT's
+   * `broadcast_tx_sync`.
    *
    * The gateway response shape is `{status: "ok"|"error", error?}`.
    * We map it to `TxResult` so callers can branch on `code` the same
@@ -494,7 +495,7 @@ export class ExchangeClient {
   /**
    * Submit signed wire bytes via CometBFT `broadcast_tx_sync`. Used
    * when `useGateway` is false (internal-tools opt-out). Bypasses
-   * gateway auth/rate-limit/Redis, going directly to CometBFT.
+   * gateway auth/rate-limit and goes directly to CometBFT.
    */
   private async submitViaCometBFT(txBytes: Uint8Array): Promise<TxResult> {
     const b64 = toBase64(txBytes);
