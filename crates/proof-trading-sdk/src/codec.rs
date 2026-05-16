@@ -31,6 +31,9 @@ pub const ACTION_FAIL_DEPOSIT: u8 = 0x15;
 /// Pick a per-user IM override on a single market. User-signed,
 /// not relayer-signed — each owner sets their own. BE-16.
 pub const ACTION_SET_USER_MARKET_LEVERAGE: u8 = 0x16;
+/// Close an existing position via opposite-side IOC order. User-signed.
+/// Idempotent on already-closed positions. S49.
+pub const ACTION_CLOSE_POSITION: u8 = 0x17;
 
 /// V1 wire envelope: [version=1, action_type, seq, payload_bytes]
 ///
@@ -147,6 +150,9 @@ fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_SET_USER_MARKET_LEVERAGE => Ok(Action::SetUserMarketLeverage(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_CLOSE_POSITION => Ok(Action::ClosePosition(
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         other => Err(ExecError::DecodeError(format!(
@@ -294,6 +300,9 @@ fn encode_action(action: &Action) -> Result<(u8, Vec<u8>), ExecError> {
             ACTION_SET_USER_MARKET_LEVERAGE,
             rmp_serde::to_vec(cmd).map_err(enc)?,
         )),
+        Action::ClosePosition(cmd) => {
+            Ok((ACTION_CLOSE_POSITION, rmp_serde::to_vec(cmd).map_err(enc)?))
+        }
     }
 }
 
@@ -403,8 +412,8 @@ mod tests {
     use super::*;
     use crate::types::{
         ApproveAgent, CancelOrder, ConfirmDeposit, ConfirmWithdrawal, CreateMarket, Deposit,
-        FailWithdrawal, MarketOrder, OracleUpdate, PlaceOrder, RevokeAgent, Side, Withdraw,
-        WithdrawRequest,
+        FailWithdrawal, MarketOrder, OracleUpdate, PlaceOrder, RevokeAgent, Side, TimeInForce,
+        Withdraw, WithdrawRequest,
     };
 
     #[test]
@@ -418,6 +427,7 @@ mod tests {
             client_order_id: Some(42),
             post_only: false,
             reduce_only: false,
+            time_in_force: TimeInForce::Gtc,
         });
 
         let encoded = encode_tx(&action, 100).unwrap();
@@ -477,6 +487,7 @@ mod tests {
             client_order_id: None,
             post_only: false,
             reduce_only: false,
+            time_in_force: TimeInForce::Gtc,
         });
 
         let encoded_a = encode_tx(&action, 1).unwrap();
@@ -499,6 +510,7 @@ mod tests {
                 client_order_id: None,
                 post_only: false,
                 reduce_only: false,
+                time_in_force: TimeInForce::Gtc,
             })
             .unwrap(),
         };
@@ -518,6 +530,7 @@ mod tests {
             client_order_id: None,
             post_only: false,
             reduce_only: false,
+            time_in_force: TimeInForce::Gtc,
         });
         let place_bytes = encode_tx(&place, 1).unwrap();
         println!("GOLDEN_PLACE={}", hex::encode(&place_bytes));
@@ -563,6 +576,7 @@ mod tests {
             client_order_id: None,
             post_only: false,
             reduce_only: false,
+            time_in_force: TimeInForce::Gtc,
         });
         let encoded = encode_tx(&action, 1).unwrap();
         assert_eq!(hex::encode(&encoded), expected_hex);
@@ -618,6 +632,7 @@ mod tests {
                 client_order_id: Some(7),
                 post_only: false,
                 reduce_only: false,
+                time_in_force: TimeInForce::Gtc,
             }),
             Action::CancelOrder(CancelOrder {
                 order_id: 42,
@@ -765,6 +780,7 @@ mod tests {
                 client_order_id: Some(u64::MAX),
                 post_only: false,
                 reduce_only: false,
+                time_in_force: TimeInForce::Gtc,
             }),
             Action::CancelOrder(CancelOrder {
                 order_id: u64::MAX,
@@ -851,6 +867,7 @@ mod tests {
                 client_order_id: None,
                 post_only: false,
                 reduce_only: false,
+                time_in_force: TimeInForce::Gtc,
             }),
             Action::CancelOrder(CancelOrder {
                 order_id: 0,
@@ -944,6 +961,7 @@ mod tests {
                     client_order_id: if i % 3 == 0 { Some(i) } else { None },
                     post_only: false,
                     reduce_only: false,
+                    time_in_force: TimeInForce::Gtc,
                 }),
                 Action::CancelOrder(CancelOrder { order_id: i, owner }),
                 Action::OracleUpdate(OracleUpdate {
@@ -1030,6 +1048,7 @@ mod tests {
                     client_order_id: None,
                     post_only: false,
                     reduce_only: false,
+                    time_in_force: TimeInForce::Gtc,
                 }),
                 ACTION_PLACE_ORDER,
             ),
@@ -1147,6 +1166,7 @@ mod tests {
             client_order_id: Some(42),
             post_only: false,
             reduce_only: false,
+            time_in_force: TimeInForce::Gtc,
         });
         let encoded = encode_tx(&action, 99).unwrap();
 
@@ -1202,6 +1222,7 @@ mod tests {
             client_order_id: Some(7),
             post_only: false,
             reduce_only: false,
+            time_in_force: TimeInForce::Gtc,
         });
 
         let encoded = sign_and_encode(&action, 42, &key).unwrap();
@@ -1238,6 +1259,7 @@ mod tests {
                 client_order_id: None,
                 post_only: false,
                 reduce_only: false,
+                time_in_force: TimeInForce::Gtc,
             }),
             Action::CancelOrder(CancelOrder {
                 order_id: 1,
@@ -1392,6 +1414,7 @@ mod tests {
                 client_order_id: None,
                 post_only: false,
                 reduce_only: false,
+                time_in_force: TimeInForce::Gtc,
             })
             .unwrap(),
             pubkey: vec![0u8; 16], // wrong: should be 32
@@ -1426,6 +1449,7 @@ mod tests {
                 client_order_id: None,
                 post_only: false,
                 reduce_only: false,
+                time_in_force: TimeInForce::Gtc,
             })
             .unwrap(),
             pubkey: vec![0u8; 32],
@@ -1450,6 +1474,7 @@ mod tests {
             client_order_id: None,
             post_only: false,
             reduce_only: false,
+            time_in_force: TimeInForce::Gtc,
         });
         let encoded = encode_tx(&action, 50).unwrap();
         let decoded = decode_tx(&encoded).unwrap();
@@ -1471,6 +1496,7 @@ mod tests {
                     client_order_id: None,
                     post_only: false,
                     reduce_only: false,
+                    time_in_force: TimeInForce::Gtc,
                 }),
                 ACTION_PLACE_ORDER,
             ),
@@ -1529,6 +1555,7 @@ mod tests {
                 client_order_id: Some(i as u64),
                 post_only: false,
                 reduce_only: false,
+                time_in_force: TimeInForce::Gtc,
             });
 
             let encoded = sign_and_encode(&action, i as u64, &key).unwrap();
@@ -1603,6 +1630,7 @@ mod tests {
                         client_order_id: None,
                         post_only: false,
                         reduce_only: false,
+                        time_in_force: TimeInForce::Gtc,
                     }),
                     1 => Action::CancelOrder(CancelOrder {
                         order_id: seq,

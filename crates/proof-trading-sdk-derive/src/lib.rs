@@ -87,10 +87,17 @@ pub fn derive_abci_event(input: TokenStream) -> TokenStream {
 }
 
 fn to_snake_case(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
     let mut result = String::with_capacity(s.len() + 4);
-    for (i, c) in s.chars().enumerate() {
+    for (i, &c) in chars.iter().enumerate() {
         if c.is_uppercase() {
-            if i > 0 {
+            let prev_is_lower_or_digit =
+                i > 0 && (chars[i - 1].is_ascii_lowercase() || chars[i - 1].is_ascii_digit());
+            let next_is_lower = chars
+                .get(i + 1)
+                .map(|next| next.is_ascii_lowercase())
+                .unwrap_or(false);
+            if i > 0 && (prev_is_lower_or_digit || next_is_lower) {
                 result.push('_');
             }
             result.push(c.to_ascii_lowercase());
@@ -130,4 +137,23 @@ fn matches_ident(ty: &Type, name: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::to_snake_case;
+
+    #[test]
+    fn snake_case_preserves_trailing_acronym() {
+        assert_eq!(
+            to_snake_case("BinaryIssuedFromMTM"),
+            "binary_issued_from_mtm"
+        );
+    }
+
+    #[test]
+    fn snake_case_handles_normal_event_names() {
+        assert_eq!(to_snake_case("OrderPlaced"), "order_placed");
+        assert_eq!(to_snake_case("HlpAbsorbed"), "hlp_absorbed");
+    }
 }

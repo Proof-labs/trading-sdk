@@ -330,6 +330,23 @@ impl fmt::Display for Side {
     }
 }
 
+/// Time-in-force policy for a `PlaceOrder`. Controls how unmatched
+/// quantity is handled after crossing the book. Serialized with serde
+/// default-to-0 so old wire records decode as `Gtc`.
+///
+/// Wire encoding: msgpack integer (0 = Gtc, 1 = Ioc).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TimeInForce {
+    /// Good-Till-Cancelled: unmatched quantity rests on the book until
+    /// explicitly cancelled or TTL-expired. The default.
+    #[default]
+    Gtc = 0,
+    /// Immediate-Or-Cancel: unmatched quantity after crossing is dropped
+    /// (never rests on the book). Same IOC semantics as a `MarketOrder`
+    /// but with a price limit — will not cross beyond it.
+    Ioc = 1,
+}
+
 /// A resting limit order on the order book.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Order {
@@ -724,6 +741,11 @@ pub enum Action {
     /// IM-gated check, so users can deleverage but not exceed the
     /// market's risk floor. BE-16, 2026-05-03.
     SetUserMarketLeverage(SetUserMarketLeverage),
+    /// Close an existing position by placing an opposite-side IOC order
+    /// at oracle±spread. Idempotent on already-closed positions. Replaces
+    /// the pattern of placing opposite-side market orders or cancelling
+    /// resting orders. S49, Auros doc plan (2026-05-09).
+    ClosePosition(ClosePosition),
 }
 
 /// Test/admin action — force-runs `run_liquidations` immediately.
@@ -767,6 +789,21 @@ pub struct SetUserMarketLeverage {
     pub user_im_bps: u32,
 }
 
+/// Close an entire position on a market by placing an opposite-side
+/// immediate-or-cancel order at oracle±spread. Idempotent on
+/// already-closed positions: calling on a zero position returns code=0
+/// without emitting events. Semantically equivalent to a high-priority
+/// market order but replaces the friction of opposite-side placement or
+/// order cancellation. User-signed (owner must match position owner).
+///
+/// S49, Auros documentation plan (2026-05-09) §1 line 11; matches
+/// the Hyperliquid pattern.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClosePosition {
+    pub market: MarketId,
+    pub owner: [u8; 20],
+}
+
 /// Immediate-or-cancel order that crosses the book at the best available price.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MarketOrder {
@@ -804,6 +841,10 @@ pub struct PlaceOrder {
     /// decode with `false`.
     #[serde(default)]
     pub reduce_only: bool,
+    /// Time-in-force policy. Defaults to `Gtc` for backward compat with
+    /// pre-TIF wire records. `Ioc` drops unfilled quantity after crossing.
+    #[serde(default)]
+    pub time_in_force: TimeInForce,
 }
 
 /// Cancel a resting order. Only the owner (or an authorized agent) may cancel.
@@ -2480,4 +2521,22 @@ mod exec_error_meaning_tests {
             codes, expected
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Prelude — commonly used types for internal imports
+// ---------------------------------------------------------------------------
+
+pub mod prelude {
+    pub use crate::types::{
+        AccountFeeOverride, Action, ApproveAgent, Branch, CancelOrder, CancelReason, ClosePosition,
+        ConfirmDeposit, ConfirmWithdrawal, CreateImpactMarket, CreateMarket, Deposit, Event,
+        EventOracleSource, ExecError, FailDeposit, FailWithdrawal, FillId, ImpactMarketId,
+        ImpactMarketInfo, ImpactMarketStatus, MarkSourceMode, MarketConfig, MarketId, MarketKind,
+        MarketOrder, OracleUpdate, OracleUpdateComposite, OrderId, Outcome, PlaceOrder, Position,
+        ResolveEvent, RevokeAgent, RunFundingTick, RunLiquidationSweep, SetAccountFeeOverride,
+        SetUserMarketLeverage, Side, TimeInForce, TxContext, UpdateMarketFees, Withdraw,
+        WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX, DEFAULT_CEX_COMPOSITE_STALENESS_MS,
+        DEFAULT_MAX_MARK_SPREAD_BPS,
+    };
 }
