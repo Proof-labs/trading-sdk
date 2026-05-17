@@ -34,6 +34,10 @@ pub const ACTION_SET_USER_MARKET_LEVERAGE: u8 = 0x16;
 /// Close an existing position via opposite-side IOC order. User-signed.
 /// Idempotent on already-closed positions. S49.
 pub const ACTION_CLOSE_POSITION: u8 = 0x17;
+/// Cancel an active resting order by owner-scoped client_order_id.
+pub const ACTION_CANCEL_CLIENT_ORDER: u8 = 0x18;
+/// Cancel all active resting orders for an owner, optionally market-scoped.
+pub const ACTION_CANCEL_ALL_ORDERS: u8 = 0x19;
 
 /// V1 wire envelope: [version=1, action_type, seq, payload_bytes]
 ///
@@ -92,6 +96,12 @@ fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_CANCEL_ORDER => Ok(Action::CancelOrder(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_CANCEL_CLIENT_ORDER => Ok(Action::CancelClientOrder(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_CANCEL_ALL_ORDERS => Ok(Action::CancelAllOrders(
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_ORACLE_UPDATE => Ok(Action::OracleUpdate(
@@ -241,6 +251,14 @@ fn encode_action(action: &Action) -> Result<(u8, Vec<u8>), ExecError> {
     match action {
         Action::PlaceOrder(cmd) => Ok((ACTION_PLACE_ORDER, rmp_serde::to_vec(cmd).map_err(enc)?)),
         Action::CancelOrder(cmd) => Ok((ACTION_CANCEL_ORDER, rmp_serde::to_vec(cmd).map_err(enc)?)),
+        Action::CancelClientOrder(cmd) => Ok((
+            ACTION_CANCEL_CLIENT_ORDER,
+            rmp_serde::to_vec(cmd).map_err(enc)?,
+        )),
+        Action::CancelAllOrders(cmd) => Ok((
+            ACTION_CANCEL_ALL_ORDERS,
+            rmp_serde::to_vec(cmd).map_err(enc)?,
+        )),
         Action::OracleUpdate(cmd) => {
             Ok((ACTION_ORACLE_UPDATE, rmp_serde::to_vec(cmd).map_err(enc)?))
         }

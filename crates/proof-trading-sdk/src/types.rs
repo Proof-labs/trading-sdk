@@ -359,6 +359,21 @@ pub struct Order {
     pub price: u64,
     /// Remaining quantity in base-asset units.
     pub quantity: u64,
+    /// Optional client-assigned order ID. Stored on resting orders so
+    /// fills/cancels can be reconciled without joining against the
+    /// original placement request. Zero is reserved as the event-level
+    /// "absent" sentinel; the optional storage field preserves the
+    /// engine semantics.
+    #[serde(default)]
+    pub client_order_id: Option<u64>,
+    /// Quantity originally accepted onto the book. Legacy orders decode
+    /// with `0`, in which case event helpers fall back to the current
+    /// remaining quantity.
+    #[serde(default)]
+    pub original_quantity: u64,
+    /// Cumulative quantity filled while this order rested as maker.
+    #[serde(default)]
+    pub filled_quantity: u64,
     /// Block timestamp (ms since epoch) when this order was placed.
     /// Paired with `MarketConfig::default_ttl_ms` to power the
     /// `run_order_expiry` end-of-block sweep. Zero means "no
@@ -746,6 +761,13 @@ pub enum Action {
     /// the pattern of placing opposite-side market orders or cancelling
     /// resting orders. S49, Auros doc plan (2026-05-09).
     ClosePosition(ClosePosition),
+    /// Cancel one resting order by the caller's client-assigned order id.
+    /// This is the MM-safe cancel path when an acknowledgement carrying the
+    /// exchange order id is delayed or lost.
+    CancelClientOrder(CancelClientOrder),
+    /// Cancel all resting orders for an owner, optionally scoped to a market.
+    /// Used by MM emergency disconnect handlers and quote-refresh loops.
+    CancelAllOrders(CancelAllOrders),
 }
 
 /// Test/admin action — force-runs `run_liquidations` immediately.
@@ -813,6 +835,8 @@ pub struct MarketOrder {
     /// Desired fill quantity in base-asset units.
     pub quantity: u64,
     /// Optional client-assigned ID echoed in events for correlation.
+    /// Active resting orders are unique per owner/client_order_id; reusing
+    /// an ID while an earlier order is still live is rejected.
     pub client_order_id: Option<u64>,
 }
 
@@ -852,6 +876,22 @@ pub struct PlaceOrder {
 pub struct CancelOrder {
     pub order_id: OrderId,
     pub owner: [u8; 20],
+}
+
+/// Cancel a resting order by client-assigned order id.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CancelClientOrder {
+    pub owner: [u8; 20],
+    pub client_order_id: u64,
+}
+
+/// Cancel all resting orders for an account. If `market` is set, only orders
+/// on that market are removed.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CancelAllOrders {
+    pub owner: [u8; 20],
+    #[serde(default)]
+    pub market: Option<MarketId>,
 }
 
 /// Push a new oracle (mark) price. Requires an authorized oracle signer
@@ -1316,6 +1356,12 @@ pub struct UpdateMarketFees {
     /// for semantics. Safe to flip on at any time.
     #[serde(default)]
     pub partial_liquidation_enabled: Option<bool>,
+    /// Replace the rolling-volume fee-tier table. `None` = leave
+    /// unchanged. `Some([])` clears the table and returns the market to
+    /// flat `taker_fee_bps` / `maker_fee_bps` pricing. Non-empty tables
+    /// must start at volume 0 and have strictly increasing thresholds.
+    #[serde(default)]
+    pub fee_tiers: Option<Vec<FeeTier>>,
 }
 
 /// Per-account fee override (BE-46). Stored at
@@ -1439,12 +1485,22 @@ pub enum Event {
         side: Side,
         price: u64,
         quantity: u64,
+        /// Client-assigned order id. `0` means absent.
+        client_order_id: u64,
     },
     OrderCancelled {
         order_id: OrderId,
         market: MarketId,
         owner: [u8; 20],
         reason: CancelReason,
+        /// Client-assigned order id. `0` means absent.
+        client_order_id: u64,
+        /// Quantity originally accepted onto the book.
+        original_quantity: u64,
+        /// Quantity still resting when the cancel occurred.
+        remaining_quantity: u64,
+        /// Cumulative maker quantity filled before cancellation.
+        filled_quantity: u64,
     },
     PriceUpdated {
         market: MarketId,
@@ -1458,9 +1514,13 @@ pub enum Event {
         /// Filled quantity in base-asset units.
         quantity: u64,
         maker_order_id: OrderId,
+        /// Maker's client-assigned order id. `0` means absent.
+        maker_client_order_id: u64,
         maker_owner: [u8; 20],
         maker_side: Side,
         taker_owner: [u8; 20],
+        /// Taker's client-assigned order id. `0` means absent.
+        taker_client_order_id: u64,
         /// Taker fee in micro-USDC (positive = charged, negative = rebate).
         taker_fee: i64,
         /// Maker fee in micro-USDC (positive = charged, negative = rebate).
@@ -1851,6 +1911,21 @@ pub enum Event {
         side: Side,
         requested_quantity: u64,
         filled_quantity: u64,
+        /// Client-assigned order id. `0` means absent.
+        client_order_id: u64,
+    },
+    /// Absolute post-mutation quantity at one orderbook price level.
+    ///
+    /// Emitted by the matching engine immediately after every deterministic
+    /// book mutation (resting add, maker fill/reduce, cancel, expiry). Market
+    /// data consumers can replay these events from a snapshot instead of
+    /// polling and diffing full books.
+    OrderbookLevelUpdated {
+        market: MarketId,
+        side: Side,
+        price: u64,
+        total_quantity: u64,
+        order_count: u32,
     },
     /// User picked a per-market IM override (BE-16). `user_im_bps == 0`
     /// means the override was cleared (engine reverts to market
@@ -2040,6 +2115,24 @@ pub enum ExecError {
         user_im_bps: u32,
         market_im_bps: u32,
     },
+    /// Cancel-by-client-order-id could not find an active resting order for
+    /// this owner/id pair. The order may never have rested, may have already
+    /// filled, or may already have been cancelled.
+    ClientOrderIdNotFound {
+        client_order_id: u64,
+    },
+    /// A new resting order attempted to reuse an active owner/client_order_id
+    /// pair. Client order IDs are how external MMs reconcile cancels, so the
+    /// engine keeps the active namespace one-to-one instead of letting a later
+    /// order shadow the earlier index entry.
+    DuplicateClientOrderId {
+        client_order_id: u64,
+    },
+    /// Client order ID zero is reserved as the "absent" sentinel in ABCI
+    /// events. External clients must use a positive 64-bit value.
+    InvalidClientOrderId {
+        client_order_id: u64,
+    },
 }
 
 impl ExecError {
@@ -2092,6 +2185,9 @@ impl ExecError {
             ExecError::OracleStaleNotElapsed { .. } => 41,
             ExecError::FeeBpsOutOfRange { .. } => 42,
             ExecError::FeeOverrideStaleSeq { .. } => 43,
+            ExecError::ClientOrderIdNotFound { .. } => 44,
+            ExecError::DuplicateClientOrderId { .. } => 45,
+            ExecError::InvalidClientOrderId { .. } => 46,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -2260,6 +2356,15 @@ impl ExecError {
             ExecError::FeeOverrideStaleSeq { .. } => {
                 "Per-account fee override sequence is stale or out of order."
             }
+            ExecError::ClientOrderIdNotFound { .. } => {
+                "No active resting order exists for the requested client order id."
+            }
+            ExecError::DuplicateClientOrderId { .. } => {
+                "An active resting order already uses the requested client order id."
+            }
+            ExecError::InvalidClientOrderId { .. } => {
+                "Client order id zero is reserved and cannot be submitted."
+            }
         }
     }
 }
@@ -2398,6 +2503,15 @@ impl fmt::Display for ExecError {
                 "user_im_bps {user_im_bps} below market {market}'s im_bps {market_im_bps}; \
                 only deleveraging (user_im >= market_im) is allowed"
             ),
+            ExecError::ClientOrderIdNotFound { client_order_id } => {
+                write!(f, "client order id not found: {client_order_id}")
+            }
+            ExecError::DuplicateClientOrderId { client_order_id } => {
+                write!(f, "duplicate active client order id: {client_order_id}")
+            }
+            ExecError::InvalidClientOrderId { client_order_id } => {
+                write!(f, "invalid client order id: {client_order_id}")
+            }
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
     }
@@ -2473,6 +2587,41 @@ mod exec_error_meaning_tests {
             ExecError::PostOnlyWouldCross,
             ExecError::ReduceOnlyWouldIncrease,
             ExecError::TestActionRejected("e".into()),
+            ExecError::FeeBpsOutOfRange { bps: 0 },
+            ExecError::FeeOverrideStaleSeq {
+                cmd_seq: 0,
+                stored_seq: 0,
+            },
+            ExecError::TickSizeViolation {
+                market: 0,
+                tick_size: 1,
+                price: 0,
+            },
+            ExecError::LotSizeViolation {
+                market: 0,
+                lot_size: 1,
+                quantity: 0,
+            },
+            ExecError::OracleStaleNotElapsed {
+                market: 0,
+                last_publish_ms: 0,
+                block_time_ms: 0,
+                staleness_ms: 1,
+            },
+            ExecError::StaleOracle {
+                market: 0,
+                publish_time_ms: 0,
+                block_time_ms: 0,
+                max_staleness_ms: 1,
+            },
+            ExecError::UserLeverageBelowMarketIm {
+                market: 0,
+                user_im_bps: 0,
+                market_im_bps: 1,
+            },
+            ExecError::ClientOrderIdNotFound { client_order_id: 0 },
+            ExecError::DuplicateClientOrderId { client_order_id: 0 },
+            ExecError::InvalidClientOrderId { client_order_id: 0 },
         ]
     }
 
@@ -2503,7 +2652,7 @@ mod exec_error_meaning_tests {
         }
     }
 
-    /// Codes 1..=36 + 255 must all be covered by at least one variant.
+    /// Codes 1..=46 + 255 must all be covered by at least one variant.
     /// Catches the case where a code is reserved in `code()` but no
     /// variant maps to it (would surface as an unreachable arm in
     /// `meaning()`).
@@ -2512,7 +2661,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = one_of_each().iter().map(|e| e.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=36).chain(std::iter::once(255)).collect();
+        let expected: Vec<u32> = (1u32..=46).chain(std::iter::once(255)).collect();
         assert_eq!(
             codes, expected,
             "ExecError codes covered by variants: {:?}; expected: {:?}. \
@@ -2529,14 +2678,14 @@ mod exec_error_meaning_tests {
 
 pub mod prelude {
     pub use crate::types::{
-        AccountFeeOverride, Action, ApproveAgent, Branch, CancelOrder, CancelReason, ClosePosition,
-        ConfirmDeposit, ConfirmWithdrawal, CreateImpactMarket, CreateMarket, Deposit, Event,
-        EventOracleSource, ExecError, FailDeposit, FailWithdrawal, FillId, ImpactMarketId,
-        ImpactMarketInfo, ImpactMarketStatus, MarkSourceMode, MarketConfig, MarketId, MarketKind,
-        MarketOrder, OracleUpdate, OracleUpdateComposite, OrderId, Outcome, PlaceOrder, Position,
-        ResolveEvent, RevokeAgent, RunFundingTick, RunLiquidationSweep, SetAccountFeeOverride,
-        SetUserMarketLeverage, Side, TimeInForce, TxContext, UpdateMarketFees, Withdraw,
-        WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX, DEFAULT_CEX_COMPOSITE_STALENESS_MS,
-        DEFAULT_MAX_MARK_SPREAD_BPS,
+        AccountFeeOverride, Action, ApproveAgent, Branch, CancelAllOrders, CancelClientOrder,
+        CancelOrder, CancelReason, ClosePosition, ConfirmDeposit, ConfirmWithdrawal,
+        CreateImpactMarket, CreateMarket, Deposit, Event, EventOracleSource, ExecError,
+        FailDeposit, FailWithdrawal, FillId, ImpactMarketId, ImpactMarketInfo, ImpactMarketStatus,
+        MarkSourceMode, MarketConfig, MarketId, MarketKind, MarketOrder, OracleUpdate,
+        OracleUpdateComposite, OrderId, Outcome, PlaceOrder, Position, ResolveEvent, RevokeAgent,
+        RunFundingTick, RunLiquidationSweep, SetAccountFeeOverride, SetUserMarketLeverage, Side,
+        TimeInForce, TxContext, UpdateMarketFees, Withdraw, WithdrawRequest, WithdrawalStatus,
+        BINARY_PRICE_MAX, DEFAULT_CEX_COMPOSITE_STALENESS_MS, DEFAULT_MAX_MARK_SPREAD_BPS,
     };
 }
