@@ -76,6 +76,36 @@ describe("codec v1", () => {
     }
   });
 
+  it("round-trips CancelClientOrder", () => {
+    const action: Action = {
+      type: "CancelClientOrder",
+      data: { owner: OWNER, clientOrderId: 123456789n },
+    };
+    const bytes = encodeTx(action, 2n);
+    expect(peekActionType(bytes)).toBe(ActionType.CancelClientOrder);
+    const { action: decoded } = decodeTx(bytes);
+    expect(decoded.type).toBe("CancelClientOrder");
+    if (decoded.type === "CancelClientOrder") {
+      expect(decoded.data.clientOrderId).toBe(123456789n);
+      expect(decoded.data.owner).toEqual(OWNER);
+    }
+  });
+
+  it("round-trips CancelAllOrders with optional market scope", () => {
+    const action: Action = {
+      type: "CancelAllOrders",
+      data: { owner: OWNER, market: 6 },
+    };
+    const bytes = encodeTx(action, 3n);
+    expect(peekActionType(bytes)).toBe(ActionType.CancelAllOrders);
+    const { action: decoded } = decodeTx(bytes);
+    expect(decoded.type).toBe("CancelAllOrders");
+    if (decoded.type === "CancelAllOrders") {
+      expect(decoded.data.market).toBe(6);
+      expect(decoded.data.owner).toEqual(OWNER);
+    }
+  });
+
   it("round-trips OracleUpdate", () => {
     const action: Action = {
       type: "OracleUpdate",
@@ -349,6 +379,18 @@ describe("codec v1 all action types", () => {
         maxMarkSpreadBps: 75,
         cexCompositeStalenessMs: 15_000n,
         partialLiquidationEnabled: true,
+        feeTiers: [
+          {
+            min30dVolumeMicroUsdc: 0n,
+            makerFeeTenthBps: 0,
+            takerFeeTenthBps: 5,
+          },
+          {
+            min30dVolumeMicroUsdc: 1_000_000_000n,
+            makerFeeTenthBps: -1,
+            takerFeeTenthBps: 3,
+          },
+        ],
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
@@ -370,6 +412,7 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.maxMarkSpreadBps).toBe(75);
     expect(decoded.data.cexCompositeStalenessMs).toBe(15_000n);
     expect(decoded.data.partialLiquidationEnabled).toBe(true);
+    expect(decoded.data.feeTiers).toEqual(action.data.feeTiers);
   });
 
   it("round-trips UpdateMarketFees with only BE-48/BE-50 fields set", () => {
@@ -444,6 +487,7 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.fundingIntervalMs).toBeNull();
     expect(decoded.data.maxPositionSize).toBeNull();
     expect(decoded.data.defaultTtlMs).toBeNull();
+    expect(decoded.data.feeTiers).toBeNull();
   });
 
   it("round-trips UpdateMarketFees with only defaultTtlMs set (operator-only path)", () => {

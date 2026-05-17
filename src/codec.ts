@@ -6,6 +6,7 @@ import {
   type Address,
   type EventOracleSource,
   type FailDepositReason,
+  type FeeTier,
   Outcome,
   type PriceComparison,
   Side,
@@ -104,6 +105,31 @@ function encode(value: unknown): Uint8Array {
 
 function decode(bytes: Uint8Array): unknown {
   return decoder.decode(bytes);
+}
+
+function encodeFeeTier(tier: FeeTier): unknown[] {
+  return [
+    tier.min30dVolumeMicroUsdc,
+    tier.makerFeeTenthBps,
+    tier.takerFeeTenthBps,
+  ];
+}
+
+function decodeFeeTiers(value: unknown): FeeTier[] | null {
+  if (value === null || value === undefined) return null;
+  if (!Array.isArray(value)) {
+    throw new Error("feeTiers must decode as an array");
+  }
+  return value.map((row) => {
+    if (!Array.isArray(row) || row.length < 3) {
+      throw new Error("feeTier row must decode as [minVolume, makerFee, takerFee]");
+    }
+    return {
+      min30dVolumeMicroUsdc: bi(row[0]),
+      makerFeeTenthBps: Number(bi(row[1])),
+      takerFeeTenthBps: Number(bi(row[2])),
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -419,6 +445,20 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       const d = action.data;
       return [ActionType.CancelOrder, [d.orderId, toByteSeq(d.owner)]];
     }
+    case "CancelClientOrder": {
+      const d = action.data;
+      return [
+        ActionType.CancelClientOrder,
+        [toByteSeq(d.owner), d.clientOrderId],
+      ];
+    }
+    case "CancelAllOrders": {
+      const d = action.data;
+      return [
+        ActionType.CancelAllOrders,
+        [toByteSeq(d.owner), d.market ?? null],
+      ];
+    }
     case "OracleUpdate": {
       const d = action.data;
       // Field order MUST match Rust: market, price, signer, publish_time_ms.
@@ -570,7 +610,8 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       // funding_interval_ms, max_position_size, default_ttl_ms,
       // net_delta_margin, tick_size, lot_size, primary_oracle_signer,
       // oracle_staleness_ms, mark_source_mode, max_mark_spread_bps,
-      // cex_composite_staleness_ms, partial_liquidation_enabled.
+      // cex_composite_staleness_ms, partial_liquidation_enabled,
+      // fee_tiers.
       // Each optional field encodes as its value or null (rmp-serde
       // accepts null for `Option<T>` via serde(default) / Option
       // deserialization). New fields are appended at the end.
@@ -594,6 +635,7 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           d.maxMarkSpreadBps ?? null,
           d.cexCompositeStalenessMs ?? null,
           d.partialLiquidationEnabled ?? null,
+          d.feeTiers ? d.feeTiers.map(encodeFeeTier) : null,
         ],
       ];
     }
@@ -750,6 +792,24 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
         data: {
           orderId: bi(f[0]),
           owner: bytesField(f[1]),
+        },
+      };
+    case ActionType.CancelClientOrder:
+      return {
+        type: "CancelClientOrder",
+        data: {
+          owner: bytesField(f[0]),
+          clientOrderId: bi(f[1]),
+        },
+      };
+    case ActionType.CancelAllOrders:
+      return {
+        type: "CancelAllOrders",
+        data: {
+          owner: bytesField(f[0]),
+          market: f.length > 1 && f[1] !== null && f[1] !== undefined
+            ? Number(bi(f[1]))
+            : null,
         },
       };
     case ActionType.OracleUpdate:
@@ -944,6 +1004,7 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           maxMarkSpreadBps: f.length > 14 ? optNum(f[14]) : null,
           cexCompositeStalenessMs: f.length > 15 ? optBig(f[15]) : null,
           partialLiquidationEnabled: f.length > 16 ? optBool(f[16]) : null,
+          feeTiers: f.length > 17 ? decodeFeeTiers(f[17]) : null,
         },
       };
     }

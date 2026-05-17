@@ -8,6 +8,8 @@ export {
   PRIMARY_ORACLE_CLEAR_SENTINEL,
   type PlaceOrder,
   type CancelOrder,
+  type CancelClientOrder,
+  type CancelAllOrders,
   type OracleUpdate,
   type MarketOrder,
   type Deposit,

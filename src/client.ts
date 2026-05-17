@@ -120,6 +120,13 @@ export interface ExchangeClientOptions {
    * Ignored when `useGateway` is false.
    */
   apiKey?: string;
+  /**
+   * Reserve a nonce before awaiting the network response, allowing many
+   * `submitTx` calls to run concurrently against engines using the relaxed
+   * nonce window. Default false preserves the old strictly sequential client
+   * behavior for wallets and tests.
+   */
+  concurrentNonces?: boolean;
 }
 
 export class ExchangeClient {
@@ -147,9 +154,9 @@ export class ExchangeClient {
   private eventListeners: Array<(event: Record<string, unknown>) => void> = [];
   /**
    * In-flight DeliverTx verification promises spawned by submitTx. When a
-   * verification detects a silent DeliverTx failure it calls syncNonce() to
-   * recover from the optimistic local-nonce drift. Awaiting this set lets
-   * callers serialize against background reconciliation when they need to.
+   * verification detects a silent DeliverTx failure it reconciles local nonce
+   * state. Awaiting this set lets callers serialize against background
+   * reconciliation when they need to.
    */
   private pendingVerifies = new Set<Promise<void>>();
   /**
@@ -158,6 +165,7 @@ export class ExchangeClient {
    * can flip this off via setUnsafeFastSubmit(true).
    */
   private autoVerifyDelivery = true;
+  private concurrentNonces: boolean;
 
   constructor(opts: ExchangeClientOptions = {}) {
     this.rpcUrl = opts.rpcUrl ?? "http://localhost:26657";
@@ -173,6 +181,7 @@ export class ExchangeClient {
     // resolveChainId() fetch from /status on first submit.
     this.chainId = opts.chainId ? chainIdFromString(opts.chainId) : null;
     this.allowUnbound = opts.allowUnbound ?? false;
+    this.concurrentNonces = opts.concurrentNonces ?? false;
   }
 
   /**
@@ -316,6 +325,23 @@ export class ExchangeClient {
     this.nonce = await this.fetchNonce();
   }
 
+  /**
+   * Enable the MM-oriented nonce allocator. When enabled, each submit reserves
+   * a unique nonce immediately, so concurrent calls do not sign the same seq.
+   */
+  setConcurrentNonces(enabled: boolean): void {
+    this.concurrentNonces = enabled;
+  }
+
+  private async reconcileNonceAfterFailure(): Promise<void> {
+    const chainNonce = await this.fetchNonce();
+    if (this.concurrentNonces) {
+      if (chainNonce > this.nonce) this.nonce = chainNonce;
+    } else {
+      this.nonce = chainNonce;
+    }
+  }
+
   // -----------------------------------------------------------------------
   // Transaction submission
   // -----------------------------------------------------------------------
@@ -326,7 +352,7 @@ export class ExchangeClient {
    * On `CheckTx code=0`, the local nonce is optimistically incremented and a
    * fire-and-forget background verifier is spawned. The verifier polls
    * `/tx?hash=...` for the actual `DeliverTx` result; if `DeliverTx` later
-   * silently fails, the verifier calls `syncNonce()` to recover from drift.
+   * silently fails, the verifier reconciles nonce state to recover from drift.
    *
    * This means the fast path stays fast (one HTTP round-trip) while still
    * being self-healing — sustained drift was the failure mode that caused
@@ -370,6 +396,9 @@ export class ExchangeClient {
 
     const chainId = await this.resolveChainId();
     const seq = this.nonce;
+    if (this.concurrentNonces) {
+      this.nonce++;
+    }
     const txBytes = signAndEncode(chainId, action, seq, this.privateKey);
 
     const r = this.useGateway
@@ -377,8 +406,11 @@ export class ExchangeClient {
       : await this.submitViaCometBFT(txBytes);
 
     if (r.code === 0) {
-      // Only increment nonce on successful CheckTx.
-      this.nonce++;
+      // Strict mode increments after CheckTx success; concurrent mode already
+      // reserved the seq before awaiting the network response.
+      if (!this.concurrentNonces) {
+        this.nonce++;
+      }
     } else if (r.code === 21) {
       // CheckTx rejected with InvalidNonce — local cache is stale, resync
       // BEFORE returning so the next caller starts from a clean slate.
@@ -387,7 +419,7 @@ export class ExchangeClient {
       // still in flight — visible in the impact-mm logs as cascades of
       // `expected N, got N+1` / `expected N, got N+2` etc. Awaiting
       // here serialises the recovery.
-      await this.syncNonce().catch(() => {});
+      await this.reconcileNonceAfterFailure().catch(() => {});
     }
 
     return r;
@@ -525,7 +557,7 @@ export class ExchangeClient {
 
   /**
    * Internal: spawn a fire-and-forget verifier that polls /tx?hash for the
-   * DeliverTx result and calls syncNonce() on failure to reconcile drift.
+   * DeliverTx result and reconciles nonce state on failure.
    * The promise is added to `pendingVerifies` so callers can await it via
    * `awaitPendingVerifies()` when they need synchronization.
    *
@@ -554,7 +586,7 @@ export class ExchangeClient {
                 // decrement directly because subsequent submits may have
                 // moved the nonce.
                 try {
-                  await this.syncNonce();
+                  await this.reconcileNonceAfterFailure();
                 } catch {
                   /* tolerate transient network errors — next call will retry */
                 }
@@ -568,7 +600,7 @@ export class ExchangeClient {
         }
         // Timed out without seeing the result. Resync defensively.
         try {
-          await this.syncNonce();
+          await this.reconcileNonceAfterFailure();
         } catch {
           /* swallow */
         }
@@ -648,9 +680,14 @@ export class ExchangeClient {
         if (txResult) {
           const code = txResult.code ?? 0;
           if (code !== 0) {
-            // DeliverTx failed — engine did not increment chain nonce, so
-            // roll back the optimistic local nonce increment from submitTx.
-            this.nonce--;
+            // DeliverTx failed. Strict mode can roll back the single in-flight
+            // optimistic increment; concurrent mode must not move backward and
+            // risk reusing a nonce that another caller has already reserved.
+            if (this.concurrentNonces) {
+              await this.reconcileNonceAfterFailure().catch(() => {});
+            } else {
+              this.nonce--;
+            }
           }
           return {
             code,
@@ -668,7 +705,7 @@ export class ExchangeClient {
     // Timed out waiting for inclusion. We don't know whether it landed.
     // Resync nonce from chain so the caller is in a sane state.
     try {
-      await this.syncNonce();
+      await this.reconcileNonceAfterFailure();
     } catch {}
     return {
       code: -1,
@@ -842,6 +879,13 @@ export class ExchangeClient {
     if (raw[7] !== undefined) {
       feesAccrued = BigInt((raw[7] as number | bigint) ?? 0);
     }
+    // Index [8] — added 2026-05-17. Rolling 30-day taker volume in
+    // micro-USDC at the account's last volume update. Used by the
+    // fee-tier program; older gateways omit it.
+    let volume30dMicroUsdc: bigint | undefined;
+    if (raw[8] !== undefined) {
+      volume30dMicroUsdc = BigInt((raw[8] as number | bigint) ?? 0);
+    }
     return {
       balance,
       positions,
@@ -851,6 +895,7 @@ export class ExchangeClient {
       marginRatioBps,
       bindingScenario,
       feesAccrued,
+      volume30dMicroUsdc,
     };
   }
 

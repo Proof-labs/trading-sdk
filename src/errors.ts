@@ -118,6 +118,18 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "FeeOverrideStaleSeq",
     description: "SetAccountFeeOverride rejected — cmd.seq must be strictly greater than the highest accepted seq for this account (BE-46.2 replay guard)",
   },
+  44: {
+    name: "ClientOrderIdNotFound",
+    description: "cancel-by-client-order-id rejected because no active resting order exists for that owner/clientOrderId pair",
+  },
+  45: {
+    name: "DuplicateClientOrderId",
+    description: "place order rejected because an active resting order already uses that owner/clientOrderId pair",
+  },
+  46: {
+    name: "InvalidClientOrderId",
+    description: "clientOrderId 0 is reserved for absent IDs in exchange events; submit a positive 64-bit value",
+  },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
 

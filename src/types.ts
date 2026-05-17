@@ -94,6 +94,10 @@ export const ActionType = {
   /** Close an entire position by placing an opposite-side IOC order at
    *  oracle±spread. Idempotent on already-closed positions. User-signed. */
   ClosePosition: 0x17,
+  /** Cancel a resting order by owner-scoped client order id. */
+  CancelClientOrder: 0x18,
+  /** Cancel all resting orders for an owner, optionally market-scoped. */
+  CancelAllOrders: 0x19,
 } as const;
 
 /** Union of all valid action type byte values. */
@@ -139,6 +143,22 @@ export interface CancelOrder {
   orderId: bigint;
   /** Account address of the order owner (20 bytes). Must match the order's owner. */
   owner: Address;
+}
+
+/** Cancel an existing resting order by the caller's client-assigned ID. */
+export interface CancelClientOrder {
+  /** Account address of the order owner (20 bytes). */
+  owner: Address;
+  /** Client-assigned order ID to cancel. */
+  clientOrderId: bigint;
+}
+
+/** Cancel all resting orders for an account, optionally scoped to one market. */
+export interface CancelAllOrders {
+  /** Account address whose resting orders should be cancelled. */
+  owner: Address;
+  /** Optional market scope; omit/null to cancel across all markets. */
+  market?: number | null;
 }
 
 /** Submit an oracle price update for a market (relayer only). */
@@ -530,6 +550,11 @@ export interface UpdateMarketFees {
    * unchanged. true closes one position at a time and rechecks MM.
    */
   partialLiquidationEnabled?: boolean | null;
+  /**
+   * Replace the rolling-volume fee-tier table. Omit to leave unchanged;
+   * [] clears volume tiers and falls back to flat taker/maker bps.
+   */
+  feeTiers?: FeeTier[] | null;
 }
 
 /** Lifecycle status of an impact-market family. */
@@ -643,6 +668,8 @@ export interface ClosePosition {
 export type Action =
   | { type: "PlaceOrder"; data: PlaceOrder }
   | { type: "CancelOrder"; data: CancelOrder }
+  | { type: "CancelClientOrder"; data: CancelClientOrder }
+  | { type: "CancelAllOrders"; data: CancelAllOrders }
   | { type: "OracleUpdate"; data: OracleUpdate }
   | { type: "MarketOrder"; data: MarketOrder }
   | { type: "Deposit"; data: Deposit }
@@ -683,6 +710,8 @@ export interface OrderPlacedEvent {
   price: string;
   /** Order quantity in contracts (integer lots). */
   quantity: string;
+  /** Client-assigned order ID, or "0" when absent. */
+  clientOrderId: string;
 }
 
 /** Emitted when an order is cancelled. */
@@ -696,6 +725,14 @@ export interface OrderCancelledEvent {
   owner: string;
   /** Cancellation reason (e.g., "user_requested", "liquidation"). */
   reason: string;
+  /** Client-assigned order ID, or "0" when absent. */
+  clientOrderId: string;
+  /** Quantity originally accepted onto the book. */
+  originalQuantity: string;
+  /** Quantity still resting when cancelled. */
+  remainingQuantity: string;
+  /** Cumulative maker quantity filled before cancellation. */
+  filledQuantity: string;
 }
 
 /** Emitted when a trade (fill) is executed between a maker and taker. */
@@ -711,12 +748,16 @@ export interface TradeExecutedEvent {
   quantity: string;
   /** Engine-assigned order ID of the resting (maker) order. */
   makerOrderId: string;
+  /** Maker client-assigned order ID, or "0" when absent. */
+  makerClientOrderId: string;
   /** Hex-encoded maker address. */
   makerOwner: string;
   /** Maker's side ("Buy" or "Sell"). */
   makerSide: string;
   /** Hex-encoded taker address. */
   takerOwner: string;
+  /** Taker client-assigned order ID, or "0" when absent. */
+  takerClientOrderId: string;
   /** Taker fee in microUSDC. Current engine emits non-negative charges. */
   takerFee: string;
   /** Maker fee in microUSDC. Current engine emits non-negative charges. */
@@ -902,6 +943,23 @@ export interface MarketOrderProcessedEvent {
   requestedQuantity: string;
   /** Quantity actually filled before IOC drop (integer lots). */
   filledQuantity: string;
+  /** Client-assigned order ID of the IOC/market/close request, when present. */
+  clientOrderId?: string;
+}
+
+/** Absolute post-mutation quantity at one orderbook price level. */
+export interface OrderbookLevelUpdatedEvent {
+  type: "OrderbookLevelUpdated";
+  /** Market identifier. */
+  market: string;
+  /** Book side ("Buy" or "Sell"). */
+  side: string;
+  /** Price level in micro-USDC. */
+  price: string;
+  /** Total resting quantity at this price after the mutation. */
+  totalQuantity: string;
+  /** Resting order count at this price after the mutation. */
+  orderCount: string;
 }
 
 /** Union of all exchange events. */
@@ -921,7 +979,8 @@ export type ExchangeEvent =
   | FundingSettledEvent
   | AgentApprovedEvent
   | AgentRevokedEvent
-  | MarketOrderProcessedEvent;
+  | MarketOrderProcessedEvent
+  | OrderbookLevelUpdatedEvent;
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -1233,6 +1292,10 @@ export interface AccountInfo {
    * line on the UI. New accounts read 0. Undefined on responses from
    * gateways predating 2026-05-03. BE-45. */
   feesAccrued?: bigint;
+  /** [8] Rolling 30-day taker volume in microUSDC at the account's last
+   * volume update. This is the value the engine uses to select market
+   * fee tiers before the next fill. Undefined on older gateways. */
+  volume30dMicroUsdc?: bigint;
 }
 
 /** Market kind discriminator. Wire shape mirrors the Rust `MarketKind`

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Encoder } from "@msgpack/msgpack";
 import { ExchangeClient, fetchChainId } from "./client.js";
+import { decodeTx } from "./codec.js";
 import {
   UNBOUND_CHAIN_ID,
   bytesToHex,
@@ -53,6 +54,11 @@ function bytesFromBase64(b64: string): Uint8Array {
 function expectedGatewayHash(call: FetchCall): string {
   const body = JSON.parse(call.init?.body as string) as { action: string };
   return bytesToHex(sha256(bytesFromBase64(body.action))).toUpperCase();
+}
+
+function gatewaySeq(call: FetchCall): bigint {
+  const body = JSON.parse(call.init?.body as string) as { action: string };
+  return decodeTx(bytesFromBase64(body.action)).seq;
 }
 
 describe("ExchangeClient submitTx nonce-drift recovery", () => {
@@ -498,6 +504,83 @@ describe("ExchangeClient submitTx gateway path", () => {
     expect(typeof body.action).toBe("string");
     // Nonce was incremented on success.
     expect((client as unknown as { nonce: bigint }).nonce).toBe(6n);
+  });
+
+  it("concurrent nonce mode reserves unique seqs before gateway responses", async () => {
+    const client = makeGatewayClient();
+    client.setUnsafeFastSubmit(true);
+    client.setConcurrentNonces(true);
+    (client as unknown as { nonce: bigint }).nonce = 5n;
+
+    nextResponses.push(
+      () =>
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      () =>
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+
+    const action = {
+      type: "PlaceOrder" as const,
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    };
+
+    const [a, b] = await Promise.all([
+      client.submitTx(action),
+      client.submitTx(action),
+    ]);
+
+    expect(a.code).toBe(0);
+    expect(b.code).toBe(0);
+    expect(gatewaySeq(calls[0])).toBe(5n);
+    expect(gatewaySeq(calls[1])).toBe(6n);
+    expect((client as unknown as { nonce: bigint }).nonce).toBe(7n);
+  });
+
+  it("concurrent nonce recovery never rewinds below already reserved seqs", async () => {
+    const client = makeGatewayClient();
+    client.setUnsafeFastSubmit(true);
+    client.setConcurrentNonces(true);
+    (client as unknown as { nonce: bigint }).nonce = 99n;
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({ status: "error", error: "21: invalid nonce" }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      () => new Response(JSON.stringify({ data: makeMsgpackBigInt(7n) })),
+    );
+
+    const r = await client.submitTx({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    });
+
+    expect(r.code).toBe(21);
+    expect((client as unknown as { nonce: bigint }).nonce).toBe(100n);
   });
 
   it("trims trailing slash from gatewayUrl", async () => {
