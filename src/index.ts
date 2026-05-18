@@ -56,8 +56,7 @@ export {
 
 // Codec
 export {
-  encodeTx,
-  encodeTxV2,
+  encodeSignedTx,
   signAndEncode,
   decodeTx,
   peekActionType,

@@ -7,9 +7,14 @@
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { ExchangeClient } from "./client.js";
-import { encodeTx } from "./codec.js";
+import { encodeSignedTx } from "./codec.js";
 import { Side, type Action } from "./types.js";
 import { randomBytes } from "crypto";
+
+const ZERO_PUBKEY = new Uint8Array(32);
+const ZERO_SIG = new Uint8Array(64);
+const encodeTx = (action: Action, seq: bigint) =>
+  encodeSignedTx(action, seq, ZERO_PUBKEY, ZERO_SIG);
 
 const RPC_URL = process.env.RPC_URL;
 const describeE2E = RPC_URL ? describe : describe.skip;
@@ -81,7 +86,7 @@ describeE2E("e2e: SDK → CometBFT", () => {
     };
     const bytes = encodeTx(action, 1n);
     expect(bytes.length).toBeGreaterThan(4);
-    expect(bytes[0]).toBe(0x94); // msgpack fixarray(4)
+    expect(bytes[0]).toBe(0x96); // msgpack fixarray(6)
   });
 
   it("base64 round-trip preserves tx bytes", () => {

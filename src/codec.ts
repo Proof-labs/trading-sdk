@@ -133,25 +133,16 @@ function decodeFeeTiers(value: unknown): FeeTier[] | null {
 }
 
 // ---------------------------------------------------------------------------
-// V1 encoding (legacy, unsigned — kept for backward compat)
-// ---------------------------------------------------------------------------
-
-/** Encode an action + sequence number into V1 wire bytes (unsigned). */
-export function encodeTx(action: Action, seq: bigint): Uint8Array {
-  const [actionType, payload] = encodePayload(action);
-  const payloadBytes = encode(payload);
-  return encode([1, actionType, seq, payloadBytes]) as Uint8Array;
-}
-
-// ---------------------------------------------------------------------------
-// V2 encoding (signed)
+// Signed wire envelope
 // ---------------------------------------------------------------------------
 
 /**
- * Encode a V2 signed envelope.
- * Wire: [version=2, actionType, seq, payload, pubkey(32), signature(64)]
+ * Encode a signed wire envelope from a pre-computed pubkey + signature.
+ * Wire: `[version=2, actionType, seq, payload, pubkey(32), signature(64)]`.
+ * Most callers should use `signAndEncode` instead; this exists for paths
+ * that already hold raw signature bytes.
  */
-export function encodeTxV2(
+export function encodeSignedTx(
   action: Action,
   seq: bigint,
   pubkey: Uint8Array,
@@ -224,18 +215,18 @@ function toBigInt(v: unknown): bigint {
   throw new Error(`expected number/bigint, got ${typeof v}: ${v}`);
 }
 
-/** Decode wire bytes into an action + sequence number. Works for both V1 and V2. */
+/** Decode wire bytes into an action + sequence number + auth fields. */
 export function decodeTx(bytes: Uint8Array): {
   action: Action;
   seq: bigint;
   version: number;
-  pubkey?: Uint8Array;
-  signature?: Uint8Array;
+  pubkey: Uint8Array;
+  signature: Uint8Array;
 } {
   const envelope = decode(bytes) as unknown[];
   const version = envelope[0] as number;
 
-  if (version !== 1 && version !== 2) {
+  if (version !== 2) {
     throw new Error(`unsupported version: ${version}`);
   }
 
@@ -248,17 +239,13 @@ export function decodeTx(bytes: Uint8Array): {
   const payload = decode(payloadBytes) as unknown[];
   const action = decodePayload(actionType, payload);
 
-  if (version === 2) {
-    return {
-      action,
-      seq,
-      version,
-      pubkey: envelope[4] as Uint8Array,
-      signature: envelope[5] as Uint8Array,
-    };
-  }
-
-  return { action, seq, version };
+  return {
+    action,
+    seq,
+    version,
+    pubkey: envelope[4] as Uint8Array,
+    signature: envelope[5] as Uint8Array,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -424,7 +411,7 @@ function toBytes(v: Uint8Array | string): Uint8Array {
  * encodes as a msgpack array — matching rmp-serde byte for byte.
  *
  * Envelope fields (pubkey, signature) are NOT affected because the
- * Rust `WireTxEnvelopeV2` uses `#[serde(with = "serde_bytes")]` for
+ * Rust `WireTxEnvelope` uses `#[serde(with = "serde_bytes")]` for
  * those, so they really are encoded as msgpack `bin` and the SDK
  * should keep using `Uint8Array` for them.
  */

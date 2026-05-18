@@ -1,10 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
-  encodeTx,
+  encodeSignedTx,
   decodeTx,
   peekActionType,
   signAndEncode,
-  encodeTxV2,
 } from "./codec.js";
 import {
   generateKeypair,
@@ -33,6 +32,18 @@ import { FEE_OVERRIDE_REVERT_SENTINEL } from "./index.js";
 const OWNER = new Uint8Array(20).fill(0xaa);
 const SIGNER = new Uint8Array(20).fill(0xff);
 
+// Test helpers: there's only one wire format (signed envelope), but the
+// codec round-trip tests below don't care about signature validity —
+// they just exercise encode/decode symmetry. `encodeTx` produces an
+// envelope with zero pubkey/sig; `encodeTxV2` is the same helper with
+// caller-supplied auth bytes, kept as an alias so the existing test
+// names still document intent.
+const ZERO_PUBKEY = new Uint8Array(32);
+const ZERO_SIG = new Uint8Array(64);
+const encodeTx = (action: Action, seq: bigint) =>
+  encodeSignedTx(action, seq, ZERO_PUBKEY, ZERO_SIG);
+const encodeTxV2 = encodeSignedTx;
+
 // ---------------------------------------------------------------------------
 // V1 round-trip tests (legacy)
 // ---------------------------------------------------------------------------
@@ -53,7 +64,7 @@ describe("codec v1", () => {
     const bytes = encodeTx(action, 42n);
     const { action: decoded, seq, version } = decodeTx(bytes);
 
-    expect(version).toBe(1);
+    expect(version).toBe(2);
     expect(seq).toBe(42n);
     expect(decoded.type).toBe("PlaceOrder");
     if (decoded.type === "PlaceOrder") {
@@ -401,7 +412,7 @@ describe("codec v1 all action types", () => {
     it(`round-trips ${action.type}`, () => {
       const bytes = encodeTx(action, 99n);
       const { action: decoded, seq, version } = decodeTx(bytes);
-      expect(version).toBe(1);
+      expect(version).toBe(2);
       expect(seq).toBe(99n);
       expect(decoded.type).toBe(action.type);
     });

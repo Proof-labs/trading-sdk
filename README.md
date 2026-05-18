@@ -120,7 +120,7 @@ const valid = await verify(publicKey, sig, msg);
 
 ## Wire Format
 
-Transactions use MessagePack V2 signed envelopes:
+Transactions use MessagePack signed envelopes:
 
 ```
 [2, action_type, seq, payload, pubkey(32B), signature(64B)]
@@ -134,25 +134,24 @@ The 32-byte `chain_id` binding (audit B4) closes the cross-chain replay vector �
 
 ```typescript
 import {
-  encodeTx,
+  encodeSignedTx,
   signAndEncode,
   decodeTx,
   fetchChainId,
 } from "@exchange/sdk";
 
-// V1 unsigned (testing only)
-const v1Bytes = encodeTx({ type: "PlaceOrder", data: { ... } }, seq);
-
-// V2 signed — chainId required (use UNBOUND_CHAIN_ID only in unit tests)
+// Sign + encode — chainId required (use UNBOUND_CHAIN_ID only in unit tests)
 const chainId = await fetchChainId("http://localhost:26657");
-const v2Bytes = signAndEncode(chainId, { type: "PlaceOrder", data: { ... } }, seq, privateKey);
+const bytes = signAndEncode(chainId, { type: "PlaceOrder", data: { ... } }, seq, privateKey);
 
-// Decode any version
-const { version, actionType, seq, action } = decodeTx(bytes);
+// Encode with a pre-computed pubkey + signature (e.g. when relaying)
+const bytes2 = encodeSignedTx({ type: "PlaceOrder", data: { ... } }, seq, pubkey, sig);
+
+const { version, actionType, seq, action, pubkey, signature } = decodeTx(bytes);
 ```
 
 ## Tests
 
 ```bash
-npm test        # 36 codec round-trip tests (all 13 actions, V1 + V2)
+npm test        # codec round-trip tests across all action types
 ```
