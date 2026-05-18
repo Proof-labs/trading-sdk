@@ -10,6 +10,7 @@ export {
   type CancelOrder,
   type CancelClientOrder,
   type CancelAllOrders,
+  type CancelReplaceOrder,
   type OracleUpdate,
   type MarketOrder,
   type Deposit,

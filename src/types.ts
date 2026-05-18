@@ -20,13 +20,15 @@ export enum Side {
  * Time-in-force policy for a limit order. Controls how unmatched
  * quantity is handled after crossing the book.
  *
- * Wire encoding: msgpack integer (0 = Gtc, 1 = Ioc).
+ * Wire encoding: msgpack enum variant (`Gtc`, `Ioc`, `Fok`).
  */
 export enum TimeInForce {
   /** Good-Till-Cancelled: unmatched quantity rests on the book. The default. */
   Gtc = 0,
   /** Immediate-Or-Cancel: unmatched quantity is dropped after crossing. */
   Ioc = 1,
+  /** Fill-Or-Kill: fully fill immediately or reject without mutation. */
+  Fok = 2,
 }
 
 // ---------------------------------------------------------------------------
@@ -98,6 +100,8 @@ export const ActionType = {
   CancelClientOrder: 0x18,
   /** Cancel all resting orders for an owner, optionally market-scoped. */
   CancelAllOrders: 0x19,
+  /** Atomically cancel one resting order and place its replacement. */
+  CancelReplaceOrder: 0x1a,
 } as const;
 
 /** Union of all valid action type byte values. */
@@ -132,7 +136,8 @@ export interface PlaceOrder {
   /**
    * Time-in-force policy. Defaults to `TimeInForce.Gtc` for backward
    * compat. `TimeInForce.Ioc` drops any unfilled quantity after crossing
-   * the book (no resting order).
+   * the book (no resting order). `TimeInForce.Fok` rejects unless the
+   * visible crossing book can fill the whole order immediately.
    */
   timeInForce?: TimeInForce;
 }
@@ -159,6 +164,32 @@ export interface CancelAllOrders {
   owner: Address;
   /** Optional market scope; omit/null to cancel across all markets. */
   market?: number | null;
+}
+
+/** Atomically cancel a resting order and place its replacement. */
+export interface CancelReplaceOrder {
+  /** Account address whose order should be cancelled/replaced. */
+  owner: Address;
+  /** Engine-assigned order ID to cancel. Mutually exclusive with `cancelClientOrderId`. */
+  cancelOrderId?: bigint | null;
+  /** Owner-scoped client order ID to cancel. Mutually exclusive with `cancelOrderId`. */
+  cancelClientOrderId?: bigint | null;
+  /** Replacement order market. */
+  market: number;
+  /** Replacement order side. */
+  side: Side;
+  /** Replacement limit price. */
+  price: bigint;
+  /** Replacement quantity. */
+  quantity: bigint;
+  /** Optional client-assigned ID for the replacement order. */
+  clientOrderId?: bigint | null;
+  /** Replacement post-only flag. Defaults to false. */
+  postOnly?: boolean;
+  /** Replacement reduce-only flag. Defaults to false. */
+  reduceOnly?: boolean;
+  /** Replacement time-in-force policy. Defaults to GTC. */
+  timeInForce?: TimeInForce;
 }
 
 /** Submit an oracle price update for a market (relayer only). */
@@ -670,6 +701,7 @@ export type Action =
   | { type: "CancelOrder"; data: CancelOrder }
   | { type: "CancelClientOrder"; data: CancelClientOrder }
   | { type: "CancelAllOrders"; data: CancelAllOrders }
+  | { type: "CancelReplaceOrder"; data: CancelReplaceOrder }
   | { type: "OracleUpdate"; data: OracleUpdate }
   | { type: "MarketOrder"; data: MarketOrder }
   | { type: "Deposit"; data: Deposit }

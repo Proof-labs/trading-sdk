@@ -24,6 +24,7 @@ import {
   Outcome,
   PRIMARY_ORACLE_CLEAR_SENTINEL,
   Side,
+  TimeInForce,
   type Action,
   type Address,
 } from "./types.js";
@@ -60,6 +61,27 @@ describe("codec v1", () => {
       expect(decoded.data.price).toBe(10000n);
       expect(decoded.data.quantity).toBe(50n);
       expect(decoded.data.side).toBe(Side.Buy);
+    }
+  });
+
+  it("round-trips FOK time-in-force on PlaceOrder", () => {
+    const action: Action = {
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: OWNER,
+        side: Side.Buy,
+        price: 10000n,
+        quantity: 50n,
+        timeInForce: TimeInForce.Fok,
+      },
+    };
+
+    const bytes = encodeTx(action, 43n);
+    const { action: decoded } = decodeTx(bytes);
+    expect(decoded.type).toBe("PlaceOrder");
+    if (decoded.type === "PlaceOrder") {
+      expect(decoded.data.timeInForce).toBe(TimeInForce.Fok);
     }
   });
 
@@ -103,6 +125,38 @@ describe("codec v1", () => {
     if (decoded.type === "CancelAllOrders") {
       expect(decoded.data.market).toBe(6);
       expect(decoded.data.owner).toEqual(OWNER);
+    }
+  });
+
+  it("round-trips CancelReplaceOrder with replacement controls", () => {
+    const action: Action = {
+      type: "CancelReplaceOrder",
+      data: {
+        owner: OWNER,
+        cancelClientOrderId: 101n,
+        market: 2,
+        side: Side.Sell,
+        price: 12345n,
+        quantity: 7n,
+        clientOrderId: 202n,
+        postOnly: true,
+        timeInForce: TimeInForce.Fok,
+      },
+    };
+    const bytes = encodeTx(action, 4n);
+    expect(peekActionType(bytes)).toBe(ActionType.CancelReplaceOrder);
+    const { action: decoded } = decodeTx(bytes);
+    expect(decoded.type).toBe("CancelReplaceOrder");
+    if (decoded.type === "CancelReplaceOrder") {
+      expect(decoded.data.cancelClientOrderId).toBe(101n);
+      expect(decoded.data.cancelOrderId).toBeNull();
+      expect(decoded.data.market).toBe(2);
+      expect(decoded.data.side).toBe(Side.Sell);
+      expect(decoded.data.price).toBe(12345n);
+      expect(decoded.data.quantity).toBe(7n);
+      expect(decoded.data.clientOrderId).toBe(202n);
+      expect(decoded.data.postOnly).toBe(true);
+      expect(decoded.data.timeInForce).toBe(TimeInForce.Fok);
     }
   });
 

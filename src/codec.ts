@@ -269,6 +269,17 @@ function sideStr(s: Side): string {
   return s === Side.Buy ? "Buy" : "Sell";
 }
 
+function timeInForceStr(tif?: TimeInForce): "Gtc" | "Ioc" | "Fok" {
+  switch (tif) {
+    case TimeInForce.Ioc:
+      return "Ioc";
+    case TimeInForce.Fok:
+      return "Fok";
+    default:
+      return "Gtc";
+  }
+}
+
 function outcomeStr(o: Outcome): string {
   switch (o) {
     case Outcome.Yes:
@@ -436,8 +447,8 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           d.clientOrderId ?? null,
           d.postOnly ?? false,
           d.reduceOnly ?? false,
-          // timeInForce at index 8; serde encodes unit variants as strings
-          d.timeInForce === TimeInForce.Ioc ? "Ioc" : "Gtc",
+          // timeInForce at index 8; serde encodes unit variants as strings.
+          timeInForceStr(d.timeInForce),
         ],
       ];
     }
@@ -457,6 +468,25 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       return [
         ActionType.CancelAllOrders,
         [toByteSeq(d.owner), d.market ?? null],
+      ];
+    }
+    case "CancelReplaceOrder": {
+      const d = action.data;
+      return [
+        ActionType.CancelReplaceOrder,
+        [
+          toByteSeq(d.owner),
+          d.cancelOrderId ?? null,
+          d.cancelClientOrderId ?? null,
+          d.market,
+          sideStr(d.side),
+          d.price,
+          d.quantity,
+          d.clientOrderId ?? null,
+          d.postOnly ?? false,
+          d.reduceOnly ?? false,
+          timeInForceStr(d.timeInForce),
+        ],
       ];
     }
     case "OracleUpdate": {
@@ -734,6 +764,12 @@ function parseSide(s: unknown): Side {
   return Side.Sell;
 }
 
+function parseTimeInForce(tif: unknown): TimeInForce {
+  if (tif === "Ioc" || tif === TimeInForce.Ioc) return TimeInForce.Ioc;
+  if (tif === "Fok" || tif === TimeInForce.Fok) return TimeInForce.Fok;
+  return TimeInForce.Gtc;
+}
+
 // Helper: u64 fields may decode as either Number (small fixint) or BigInt
 // (uint64), depending on what the encoder chose. Always normalize to bigint
 // so the SDK's external types stay stable. Nullable variant for optional
@@ -782,7 +818,7 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           reduceOnly: f.length > 7 && f[7] === true,
           timeInForce:
             f.length > 8
-              ? (f[8] as TimeInForce)
+              ? parseTimeInForce(f[8])
               : TimeInForce.Gtc,
         },
       };
@@ -810,6 +846,26 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           market: f.length > 1 && f[1] !== null && f[1] !== undefined
             ? Number(bi(f[1]))
             : null,
+        },
+      };
+    case ActionType.CancelReplaceOrder:
+      return {
+        type: "CancelReplaceOrder",
+        data: {
+          owner: bytesField(f[0]),
+          cancelOrderId: biOrNull(f[1]),
+          cancelClientOrderId: biOrNull(f[2]),
+          market: f[3] as number,
+          side: parseSide(f[4]),
+          price: bi(f[5]),
+          quantity: bi(f[6]),
+          clientOrderId: biOrNull(f[7]),
+          postOnly: f.length > 8 && f[8] === true,
+          reduceOnly: f.length > 9 && f[9] === true,
+          timeInForce:
+            f.length > 10
+              ? parseTimeInForce(f[10])
+              : TimeInForce.Gtc,
         },
       };
     case ActionType.OracleUpdate:

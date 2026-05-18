@@ -130,6 +130,14 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "InvalidClientOrderId",
     description: "clientOrderId 0 is reserved for absent IDs in exchange events; submit a positive 64-bit value",
   },
+  47: {
+    name: "FillOrKillWouldNotFill",
+    description: "FOK place order rejected because visible crossing liquidity could not fill the whole order immediately",
+  },
+  48: {
+    name: "InvalidCancelReplaceTarget",
+    description: "cancel-replace rejected because exactly one of cancelOrderId or cancelClientOrderId must be supplied",
+  },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
 
