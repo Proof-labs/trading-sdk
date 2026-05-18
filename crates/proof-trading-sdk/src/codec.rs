@@ -43,26 +43,19 @@ pub const ACTION_CANCEL_REPLACE_ORDER: u8 = 0x1A;
 /// Amend one resting order in place while preserving its order id.
 pub const ACTION_AMEND_ORDER: u8 = 0x1B;
 
-/// V1 wire envelope: [version=1, action_type, seq, payload_bytes]
+/// Wire envelope: `[version=2, action_type, seq, payload_bytes, pubkey, signature]`.
 ///
 /// `payload` uses `serde_bytes` so rmp-serde emits it as a msgpack `bin`
-/// (0xc4/c5/c6) rather than an array of u8 (0xdc). This matches what the
-/// SDK produces and what the Go validator's CheckTx parser expects. Before
-/// this attribute, Rust-built wire bytes had `payload` as an array, which
-/// the SDK can read (it accepts both) but the Go validator rejects with
-/// "invalid payload: expected bin format, got msgpack type 0xdc".
+/// (0xc4/c5/c6) rather than an array of u8 (0xdc). The Go CheckTx parser
+/// (exchange-node/check_tx.go) and the SDK both produce/consume the same
+/// shape — keep these in lockstep.
+///
+/// The `version` byte stays `2` and the signing-prefix string stays
+/// `"ProofExchange-v2"` because every existing signature in dev/devnet
+/// was produced under that prefix. The legacy unsigned (v1) envelope
+/// was removed pre-launch.
 #[derive(Serialize, Deserialize)]
 struct WireTxEnvelope {
-    version: u8,
-    action_type: u8,
-    seq: u64,
-    #[serde(with = "serde_bytes")]
-    payload: Vec<u8>,
-}
-
-/// V2 wire envelope: [version=2, action_type, seq, payload_bytes, pubkey, signature]
-#[derive(Serialize, Deserialize)]
-struct WireTxEnvelopeV2 {
     version: u8,
     action_type: u8,
     seq: u64,
@@ -74,7 +67,7 @@ struct WireTxEnvelopeV2 {
     signature: [u8; 64],
 }
 
-/// Authentication data extracted from a v2 envelope.
+/// Authentication data extracted from the wire envelope.
 #[derive(Debug)]
 pub struct TxAuth {
     pub pubkey: [u8; 32],
@@ -88,8 +81,7 @@ pub struct TxAuth {
 pub struct DecodedTx {
     pub action: Action,
     pub seq: u64,
-    /// None for v1 (unsigned) transactions, Some for v2 (signed).
-    pub auth: Option<TxAuth>,
+    pub auth: TxAuth,
 }
 
 /// Decode a payload into an Action given its action_type discriminant.
@@ -181,62 +173,19 @@ fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
     }
 }
 
-/// Decode raw tx bytes. Supports both v1 (unsigned) and v2 (signed) envelopes.
-///
-/// V1: fixarray(4) `[version=1, action_type, seq, payload]`
-/// V2: fixarray(6) `[version=2, action_type, seq, payload, pubkey, signature]`
+/// Decode raw tx bytes as a signed wire envelope:
+/// fixarray(6) `[version=2, action_type, seq, payload, pubkey, signature]`.
 pub fn decode_tx(bytes: &[u8]) -> Result<DecodedTx, ExecError> {
     if bytes.is_empty() {
         return Err(ExecError::DecodeError("empty tx".to_string()));
     }
 
-    // Peek at MessagePack fixarray marker to detect v1 vs v2.
-    let arr_len = match bytes[0] {
-        b if b & 0xF0 == 0x90 => (b & 0x0F) as usize,
-        _ => {
-            // Not a fixarray — try full decode as v1 for better error message
-            let envelope: WireTxEnvelope =
-                rmp_serde::from_slice(bytes).map_err(|e| ExecError::DecodeError(e.to_string()))?;
-            return decode_v1_envelope(envelope);
-        }
-    };
+    let envelope: WireTxEnvelope =
+        rmp_serde::from_slice(bytes).map_err(|e| ExecError::DecodeError(e.to_string()))?;
 
-    match arr_len {
-        4 => {
-            let envelope: WireTxEnvelope =
-                rmp_serde::from_slice(bytes).map_err(|e| ExecError::DecodeError(e.to_string()))?;
-            decode_v1_envelope(envelope)
-        }
-        6 => {
-            let envelope: WireTxEnvelopeV2 =
-                rmp_serde::from_slice(bytes).map_err(|e| ExecError::DecodeError(e.to_string()))?;
-            decode_v2_envelope(envelope)
-        }
-        _ => Err(ExecError::DecodeError(format!(
-            "unexpected envelope array length: {arr_len}"
-        ))),
-    }
-}
-
-fn decode_v1_envelope(envelope: WireTxEnvelope) -> Result<DecodedTx, ExecError> {
-    if envelope.version != 1 {
-        return Err(ExecError::DecodeError(format!(
-            "unsupported version: {}",
-            envelope.version
-        )));
-    }
-    let action = decode_action(envelope.action_type, &envelope.payload)?;
-    Ok(DecodedTx {
-        action,
-        seq: envelope.seq,
-        auth: None,
-    })
-}
-
-fn decode_v2_envelope(envelope: WireTxEnvelopeV2) -> Result<DecodedTx, ExecError> {
     if envelope.version != 2 {
         return Err(ExecError::DecodeError(format!(
-            "v2 envelope requires version 2, got {}",
+            "envelope requires version 2, got {}",
             envelope.version
         )));
     }
@@ -246,12 +195,12 @@ fn decode_v2_envelope(envelope: WireTxEnvelopeV2) -> Result<DecodedTx, ExecError
     Ok(DecodedTx {
         action,
         seq: envelope.seq,
-        auth: Some(TxAuth {
+        auth: TxAuth {
             pubkey: envelope.pubkey,
             signature: envelope.signature,
             action_type: envelope.action_type,
             payload: envelope.payload,
-        }),
+        },
     })
 }
 
@@ -339,31 +288,17 @@ fn encode_action(action: &Action) -> Result<(u8, Vec<u8>), ExecError> {
     }
 }
 
-/// Encode an Action as a v1 (unsigned) wire envelope.
-///
-/// **Deprecated**: v1 unsigned envelopes are rejected by CheckTx and by
-/// `execute_tx` in production builds. Use [`sign_and_encode`] instead.
-/// Kept for test convenience and golden-vector generation.
-pub fn encode_tx(action: &Action, seq: u64) -> Result<Vec<u8>, ExecError> {
-    let (action_type, payload) = encode_action(action)?;
-    let envelope = WireTxEnvelope {
-        version: 1,
-        action_type,
-        seq,
-        payload,
-    };
-    rmp_serde::to_vec(&envelope).map_err(|e| ExecError::InternalError(e.to_string()))
-}
-
-/// Encode an Action as a v2 (signed) wire envelope.
-pub fn encode_tx_v2(
+/// Encode an action with a pre-computed pubkey + signature into a wire envelope.
+/// Most callers should use [`sign_and_encode`] instead; this exists for paths
+/// (api-gateway forward, FFI relays) that already hold raw signature bytes.
+pub fn encode_signed_tx(
     action: &Action,
     seq: u64,
     pubkey: &[u8; 32],
     signature: &[u8; 64],
 ) -> Result<Vec<u8>, ExecError> {
     let (action_type, payload) = encode_action(action)?;
-    let envelope = WireTxEnvelopeV2 {
+    let envelope = WireTxEnvelope {
         version: 2,
         action_type,
         seq,
@@ -374,12 +309,10 @@ pub fn encode_tx_v2(
     rmp_serde::to_vec(&envelope).map_err(|e| ExecError::InternalError(e.to_string()))
 }
 
-/// Sign an action and encode it as a v2 wire envelope, binding the
-/// signature to a specific `chain_id`. The wire envelope format is
-/// unchanged (chain_id is not carried on the wire — it's established
-/// by genesis / snapshot-load and every node verifies against its
-/// stored value), but the signing bytes gained a 32-byte chain_id
-/// prefix in v3 per audit B4.
+/// Sign an action and encode it as a wire envelope, binding the
+/// signature to a specific `chain_id`. The signing bytes carry a 32-byte
+/// chain_id prefix per audit B4 — `chain_id` is established by
+/// genesis / snapshot-load, not carried on the wire.
 pub fn sign_and_encode_with_chain(
     chain_id: &[u8; 32],
     action: &Action,
@@ -395,7 +328,7 @@ pub fn sign_and_encode_with_chain(
     let pubkey = signing_key.verifying_key().to_bytes();
     let signature = sig.to_bytes();
 
-    let envelope = WireTxEnvelopeV2 {
+    let envelope = WireTxEnvelope {
         version: 2,
         action_type,
         seq,
@@ -420,16 +353,10 @@ pub fn sign_and_encode(
 }
 
 /// Extract the action_type byte from a wire tx without full decoding.
-/// Works for both v1 (fixarray 4) and v2 (fixarray 6) envelopes.
 pub fn peek_action_type(bytes: &[u8]) -> Option<u8> {
-    // Try v1 first (more common), then v2
-    if let Ok(env) = rmp_serde::from_slice::<WireTxEnvelope>(bytes) {
-        return Some(env.action_type);
-    }
-    if let Ok(env) = rmp_serde::from_slice::<WireTxEnvelopeV2>(bytes) {
-        return Some(env.action_type);
-    }
-    None
+    rmp_serde::from_slice::<WireTxEnvelope>(bytes)
+        .ok()
+        .map(|env| env.action_type)
 }
 
 /// Extract the seq number from a wire tx without deserializing the payload action.
@@ -449,6 +376,14 @@ mod tests {
         PlaceOrder, RevokeAgent, Side, TimeInForce, Withdraw, WithdrawRequest,
     };
 
+    fn test_key() -> ed25519_dalek::SigningKey {
+        ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
+    }
+
+    fn encode_tx(action: &Action, seq: u64) -> Result<Vec<u8>, ExecError> {
+        sign_and_encode(action, seq, &test_key())
+    }
+
     #[test]
     fn test_round_trip_place_order() {
         let action = Action::PlaceOrder(PlaceOrder {
@@ -467,9 +402,8 @@ mod tests {
         let DecodedTx {
             action: decoded,
             seq,
-            auth,
+            ..
         } = decode_tx(&encoded).unwrap();
-        assert!(auth.is_none()); // v1 is unsigned
 
         assert_eq!(seq, 100);
         match decoded {
@@ -504,9 +438,8 @@ mod tests {
         let DecodedTx {
             action: decoded,
             seq,
-            auth,
+            ..
         } = decode_tx(&encoded).unwrap();
-        assert!(auth.is_none());
         assert_eq!(seq, 101);
         match decoded {
             Action::PlaceOrder(cmd) => {
@@ -648,6 +581,8 @@ mod tests {
                 time_in_force: TimeInForce::Gtc,
             })
             .unwrap(),
+            pubkey: [0u8; 32],
+            signature: [0u8; 64],
         };
         let encoded = rmp_serde::to_vec(&bad_envelope).unwrap();
         let result = decode_tx(&encoded);
@@ -905,10 +840,12 @@ mod tests {
             max_funding_rate_bps: 0,
         };
         let envelope = WireTxEnvelope {
-            version: 1,
+            version: 2,
             action_type: ACTION_CREATE_MARKET,
             seq: 42,
             payload: rmp_serde::to_vec(&legacy).unwrap(),
+            pubkey: [0u8; 32],
+            signature: [0u8; 64],
         };
         let encoded = rmp_serde::to_vec(&envelope).unwrap();
         let decoded = decode_tx(&encoded).unwrap();
@@ -1383,9 +1320,7 @@ mod tests {
         let decoded = decode_tx(&encoded).unwrap();
 
         assert_eq!(decoded.seq, 42);
-        assert!(decoded.auth.is_some());
-
-        let auth = decoded.auth.unwrap();
+        let auth = decoded.auth;
         assert_eq!(auth.pubkey, key.verifying_key().to_bytes());
         assert_eq!(auth.action_type, ACTION_PLACE_ORDER);
 
@@ -1487,7 +1422,6 @@ mod tests {
         for action in actions {
             let encoded = sign_and_encode(&action, 1, &key).unwrap();
             let decoded = decode_tx(&encoded).unwrap();
-            assert!(decoded.auth.is_some(), "v2 decoded should have auth");
             assert_eq!(decoded.seq, 1);
         }
     }
@@ -1503,7 +1437,7 @@ mod tests {
         let encoded = sign_and_encode(&action, 99, &key).unwrap();
         let decoded = decode_tx(&encoded).unwrap();
 
-        let auth = decoded.auth.unwrap();
+        let auth = decoded.auth;
         // Signature should verify against the signing message
         let result = crate::crypto::verify_signature(
             &crate::crypto::UNBOUND_CHAIN_ID,
@@ -1528,7 +1462,7 @@ mod tests {
         let encoded = sign_and_encode(&action, 99, &key).unwrap();
         let decoded = decode_tx(&encoded).unwrap();
 
-        let auth = decoded.auth.unwrap();
+        let auth = decoded.auth;
         // Verify with the wrong key's pubkey should fail
         let wrong_pubkey = wrong_key.verifying_key().to_bytes();
         let result = crate::crypto::verify_signature(
@@ -1612,28 +1546,6 @@ mod tests {
         .unwrap();
         let result = decode_tx(&encoded);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_v1_still_decodes_at_codec_level() {
-        // v1 transactions still decode at the codec layer (auth=None).
-        // They are rejected at the engine level in production builds
-        // and at the Go CheckTx mempool gate.
-        let action = Action::PlaceOrder(PlaceOrder {
-            market: 1,
-            owner: [0xAA; 20],
-            side: Side::Buy,
-            price: 100,
-            quantity: 10,
-            client_order_id: None,
-            post_only: false,
-            reduce_only: false,
-            time_in_force: TimeInForce::Gtc,
-        });
-        let encoded = encode_tx(&action, 50).unwrap();
-        let decoded = decode_tx(&encoded).unwrap();
-        assert!(decoded.auth.is_none(), "v1 should have no auth");
-        assert_eq!(decoded.seq, 50);
     }
 
     #[test]
@@ -1732,7 +1644,7 @@ mod tests {
             let decoded = decode_tx(&encoded).unwrap();
 
             assert_eq!(decoded.seq, i as u64, "seq mismatch at i={i}");
-            let auth = decoded.auth.as_ref().expect("v2 should have auth");
+            let auth = &decoded.auth;
             assert_eq!(auth.pubkey, key.verifying_key().to_bytes());
 
             // Verify signature through crypto module
@@ -1748,34 +1660,6 @@ mod tests {
                 .is_ok(),
                 "signature verification failed at i={i}"
             );
-        }
-    }
-
-    #[test]
-    fn stress_mixed_v1_v2_interleaved() {
-        let key = test_signing_key();
-        let owner = crate::crypto::pubkey_to_owner(&key.verifying_key().to_bytes());
-
-        for i in 0u64..500 {
-            let action = Action::Deposit(Deposit {
-                owner,
-                amount: i + 1,
-                signer: [0xEE; 20],
-            });
-
-            if i % 2 == 0 {
-                // v1 unsigned
-                let encoded = encode_tx(&action, i).unwrap();
-                let decoded = decode_tx(&encoded).unwrap();
-                assert!(decoded.auth.is_none(), "v1 should be unsigned at i={i}");
-                assert_eq!(decoded.seq, i);
-            } else {
-                // v2 signed
-                let encoded = sign_and_encode(&action, i, &key).unwrap();
-                let decoded = decode_tx(&encoded).unwrap();
-                assert!(decoded.auth.is_some(), "v2 should be signed at i={i}");
-                assert_eq!(decoded.seq, i);
-            }
         }
     }
 
@@ -1874,12 +1758,8 @@ mod tests {
 
                 let encoded = sign_and_encode(&action, seq, &key).unwrap();
                 let decoded = decode_tx(&encoded).unwrap();
-                assert!(
-                    decoded.auth.is_some(),
-                    "missing auth for action_idx={action_idx} seq={seq}"
-                );
 
-                let auth = decoded.auth.as_ref().unwrap();
+                let auth = &decoded.auth;
                 assert!(
                     crate::crypto::verify_signature(
                         &crate::crypto::UNBOUND_CHAIN_ID,
@@ -1915,20 +1795,18 @@ mod tests {
                 tampered[byte_idx] ^= 0x01;
                 match decode_tx(&tampered) {
                     Ok(decoded) => {
-                        if let Some(ref auth) = decoded.auth {
-                            // Decoded but signature should fail
-                            let verified = crate::crypto::verify_signature(
-                                &crate::crypto::UNBOUND_CHAIN_ID,
-                                &auth.pubkey,
-                                &auth.signature,
-                                auth.action_type,
-                                decoded.seq,
-                                &auth.payload,
-                            );
-                            // It's fine if tampered action_type/seq matches by accident
-                            // but the signature should almost always fail
-                            let _ = verified;
-                        }
+                        let auth = &decoded.auth;
+                        // Decoded but signature should fail. It's fine if a
+                        // tampered action_type/seq matches by accident; the
+                        // signature should almost always fail anyway.
+                        let _ = crate::crypto::verify_signature(
+                            &crate::crypto::UNBOUND_CHAIN_ID,
+                            &auth.pubkey,
+                            &auth.signature,
+                            auth.action_type,
+                            decoded.seq,
+                            &auth.payload,
+                        );
                     }
                     Err(_) => {
                         // Decode failure is expected for structural tampering
@@ -1960,7 +1838,6 @@ mod tests {
             let encoded = sign_and_encode(&action, seq, &key).unwrap();
             let decoded = decode_tx(&encoded).unwrap();
             assert_eq!(decoded.seq, seq, "seq mismatch for {seq}");
-            assert!(decoded.auth.is_some());
         }
     }
 
@@ -2014,13 +1891,17 @@ mod tests {
         ))
         .unwrap();
 
-        // V1 envelope built via the same struct existing tests use, so we
-        // pick up the `serde_bytes` payload encoding for free.
+        // Envelope built via the same struct existing tests use, so we
+        // pick up the `serde_bytes` payload encoding for free. The
+        // pubkey/signature are zero because this test only exercises
+        // the codec's payload-decode path, not signature verification.
         let envelope = WireTxEnvelope {
-            version: 1,
+            version: 2,
             action_type: ACTION_CREATE_MARKET,
             seq: 0,
             payload: payload_bytes,
+            pubkey: [0u8; 32],
+            signature: [0u8; 64],
         };
         let encoded = rmp_serde::to_vec(&envelope).unwrap();
 
