@@ -40,6 +40,8 @@ pub const ACTION_CANCEL_CLIENT_ORDER: u8 = 0x18;
 pub const ACTION_CANCEL_ALL_ORDERS: u8 = 0x19;
 /// Atomically cancel one resting order and place its replacement.
 pub const ACTION_CANCEL_REPLACE_ORDER: u8 = 0x1A;
+/// Amend one resting order in place while preserving its order id.
+pub const ACTION_AMEND_ORDER: u8 = 0x1B;
 
 /// V1 wire envelope: [version=1, action_type, seq, payload_bytes]
 ///
@@ -107,6 +109,9 @@ fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_CANCEL_REPLACE_ORDER => Ok(Action::CancelReplaceOrder(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_AMEND_ORDER => Ok(Action::AmendOrder(
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_ORACLE_UPDATE => Ok(Action::OracleUpdate(
@@ -268,6 +273,7 @@ fn encode_action(action: &Action) -> Result<(u8, Vec<u8>), ExecError> {
             ACTION_CANCEL_REPLACE_ORDER,
             rmp_serde::to_vec(cmd).map_err(enc)?,
         )),
+        Action::AmendOrder(cmd) => Ok((ACTION_AMEND_ORDER, rmp_serde::to_vec(cmd).map_err(enc)?)),
         Action::OracleUpdate(cmd) => {
             Ok((ACTION_ORACLE_UPDATE, rmp_serde::to_vec(cmd).map_err(enc)?))
         }
@@ -438,9 +444,9 @@ pub fn peek_seq(bytes: &[u8]) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::types::{
-        ApproveAgent, CancelOrder, CancelReplaceOrder, ConfirmDeposit, ConfirmWithdrawal,
-        CreateMarket, Deposit, FailWithdrawal, MarketOrder, OracleUpdate, PlaceOrder, RevokeAgent,
-        Side, TimeInForce, Withdraw, WithdrawRequest,
+        AmendOrder, ApproveAgent, CancelOrder, CancelReplaceOrder, ConfirmDeposit,
+        ConfirmWithdrawal, CreateMarket, Deposit, FailWithdrawal, MarketOrder, OracleUpdate,
+        PlaceOrder, RevokeAgent, Side, TimeInForce, Withdraw, WithdrawRequest,
     };
 
     #[test]
@@ -573,6 +579,35 @@ mod tests {
                 assert_eq!(cmd.time_in_force, TimeInForce::Fok);
             }
             _ => panic!("expected CancelReplaceOrder"),
+        }
+    }
+
+    #[test]
+    fn test_round_trip_amend_order() {
+        let action = Action::AmendOrder(AmendOrder {
+            owner: [0xCD; 20],
+            order_id: 42,
+            new_price: Some(12346),
+            new_quantity: Some(8),
+        });
+
+        let encoded = encode_tx(&action, 202).unwrap();
+        assert_eq!(peek_action_type(&encoded), Some(ACTION_AMEND_ORDER));
+        let DecodedTx {
+            action: decoded,
+            seq,
+            ..
+        } = decode_tx(&encoded).unwrap();
+
+        assert_eq!(seq, 202);
+        match decoded {
+            Action::AmendOrder(cmd) => {
+                assert_eq!(cmd.owner, [0xCD; 20]);
+                assert_eq!(cmd.order_id, 42);
+                assert_eq!(cmd.new_price, Some(12346));
+                assert_eq!(cmd.new_quantity, Some(8));
+            }
+            _ => panic!("expected AmendOrder"),
         }
     }
 
@@ -750,6 +785,12 @@ mod tests {
                 post_only: true,
                 reduce_only: false,
                 time_in_force: TimeInForce::Ioc,
+            }),
+            Action::AmendOrder(AmendOrder {
+                owner: [0xBD; 20],
+                order_id: 42,
+                new_price: Some(50_200),
+                new_quantity: Some(75),
             }),
             Action::OracleUpdate(OracleUpdate {
                 market: 2,

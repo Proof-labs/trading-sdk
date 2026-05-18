@@ -388,6 +388,12 @@ pub struct Order {
     /// accidentally cancel legacy orders that predate the TTL work).
     #[serde(default)]
     pub created_at_ms: u64,
+    /// Monotonic FIFO priority within a price level. Defaults to `0` for
+    /// legacy orders, in which case readers fall back to `id`. Keeping this
+    /// separate lets amend preserve the public order id while still resetting
+    /// queue priority when a quote moves price or increases size.
+    #[serde(default)]
+    pub queue_priority: u64,
 }
 
 /// Deterministic execution context passed to every transaction handler.
@@ -775,6 +781,10 @@ pub enum Action {
     /// Atomically cancel one resting order and place a replacement order.
     /// Used by MMs to refresh quotes without exposing a cancel/place gap.
     CancelReplaceOrder(CancelReplaceOrder),
+    /// Amend a resting order in place while preserving the exchange order id.
+    /// Price changes and size increases reset queue priority; same-price size
+    /// reductions keep priority.
+    AmendOrder(AmendOrder),
 }
 
 /// Test/admin action — force-runs `run_liquidations` immediately.
@@ -924,6 +934,22 @@ pub struct CancelReplaceOrder {
     pub reduce_only: bool,
     #[serde(default)]
     pub time_in_force: TimeInForce,
+}
+
+/// Amend a resting order without changing its exchange order id.
+///
+/// `new_quantity` is the new total accepted quantity, not the remaining
+/// quantity. It must be greater than the order's cumulative maker fill. Same
+/// price size reductions preserve queue priority; price changes and size
+/// increases reset priority.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AmendOrder {
+    pub owner: [u8; 20],
+    pub order_id: OrderId,
+    #[serde(default)]
+    pub new_price: Option<u64>,
+    #[serde(default)]
+    pub new_quantity: Option<u64>,
 }
 
 /// Push a new oracle (mark) price. Requires an authorized oracle signer
@@ -1533,6 +1559,21 @@ pub enum Event {
         remaining_quantity: u64,
         /// Cumulative maker quantity filled before cancellation.
         filled_quantity: u64,
+    },
+    OrderAmended {
+        order_id: OrderId,
+        market: MarketId,
+        owner: [u8; 20],
+        side: Side,
+        old_price: u64,
+        new_price: u64,
+        old_quantity: u64,
+        new_quantity: u64,
+        remaining_quantity: u64,
+        filled_quantity: u64,
+        queue_priority_reset: bool,
+        /// Client-assigned order id. `0` means absent.
+        client_order_id: u64,
     },
     PriceUpdated {
         market: MarketId,
@@ -2174,6 +2215,14 @@ pub enum ExecError {
     /// `CancelReplaceOrder` must identify exactly one active order, either by
     /// engine order id or by owner-scoped client order id.
     InvalidCancelReplaceTarget,
+    /// `AmendOrder.new_quantity` is a total quantity below the order's already
+    /// filled maker quantity. The engine rejects instead of creating a
+    /// negative or zero resting remainder.
+    AmendBelowFilled {
+        order_id: OrderId,
+        filled_quantity: u64,
+        requested_quantity: u64,
+    },
 }
 
 impl ExecError {
@@ -2231,6 +2280,7 @@ impl ExecError {
             ExecError::InvalidClientOrderId { .. } => 46,
             ExecError::FillOrKillWouldNotFill { .. } => 47,
             ExecError::InvalidCancelReplaceTarget => 48,
+            ExecError::AmendBelowFilled { .. } => 49,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -2414,6 +2464,9 @@ impl ExecError {
             ExecError::InvalidCancelReplaceTarget => {
                 "Cancel-replace must specify exactly one active order target: either orderId or clientOrderId."
             }
+            ExecError::AmendBelowFilled { .. } => {
+                "AmendOrder new quantity is below the quantity already filled while the order rested."
+            }
         }
     }
 }
@@ -2571,6 +2624,14 @@ impl fmt::Display for ExecError {
             ExecError::InvalidCancelReplaceTarget => {
                 write!(f, "cancel-replace requires exactly one cancel target")
             }
+            ExecError::AmendBelowFilled {
+                order_id,
+                filled_quantity,
+                requested_quantity,
+            } => write!(
+                f,
+                "amend quantity below filled for order {order_id}: requested total {requested_quantity}, filled {filled_quantity}"
+            ),
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
     }
@@ -2686,6 +2747,11 @@ mod exec_error_meaning_tests {
                 available: 0,
             },
             ExecError::InvalidCancelReplaceTarget,
+            ExecError::AmendBelowFilled {
+                order_id: 0,
+                filled_quantity: 1,
+                requested_quantity: 0,
+            },
         ]
     }
 
@@ -2716,7 +2782,7 @@ mod exec_error_meaning_tests {
         }
     }
 
-    /// Codes 1..=48 + 255 must all be covered by at least one variant.
+    /// Codes 1..=49 + 255 must all be covered by at least one variant.
     /// Catches the case where a code is reserved in `code()` but no
     /// variant maps to it (would surface as an unreachable arm in
     /// `meaning()`).
@@ -2725,7 +2791,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = one_of_each().iter().map(|e| e.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=48).chain(std::iter::once(255)).collect();
+        let expected: Vec<u32> = (1u32..=49).chain(std::iter::once(255)).collect();
         assert_eq!(
             codes, expected,
             "ExecError codes covered by variants: {:?}; expected: {:?}. \
@@ -2742,15 +2808,15 @@ mod exec_error_meaning_tests {
 
 pub mod prelude {
     pub use crate::types::{
-        AccountFeeOverride, Action, ApproveAgent, Branch, CancelAllOrders, CancelClientOrder,
-        CancelOrder, CancelReason, CancelReplaceOrder, ClosePosition, ConfirmDeposit,
-        ConfirmWithdrawal, CreateImpactMarket, CreateMarket, Deposit, Event, EventOracleSource,
-        ExecError, FailDeposit, FailWithdrawal, FillId, ImpactMarketId, ImpactMarketInfo,
-        ImpactMarketStatus, MarkSourceMode, MarketConfig, MarketId, MarketKind, MarketOrder,
-        OracleUpdate, OracleUpdateComposite, OrderId, Outcome, PlaceOrder, Position, ResolveEvent,
-        RevokeAgent, RunFundingTick, RunLiquidationSweep, SetAccountFeeOverride,
-        SetUserMarketLeverage, Side, TimeInForce, TxContext, UpdateMarketFees, Withdraw,
-        WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX, DEFAULT_CEX_COMPOSITE_STALENESS_MS,
-        DEFAULT_MAX_MARK_SPREAD_BPS,
+        AccountFeeOverride, Action, AmendOrder, ApproveAgent, Branch, CancelAllOrders,
+        CancelClientOrder, CancelOrder, CancelReason, CancelReplaceOrder, ClosePosition,
+        ConfirmDeposit, ConfirmWithdrawal, CreateImpactMarket, CreateMarket, Deposit, Event,
+        EventOracleSource, ExecError, FailDeposit, FailWithdrawal, FillId, ImpactMarketId,
+        ImpactMarketInfo, ImpactMarketStatus, MarkSourceMode, MarketConfig, MarketId, MarketKind,
+        MarketOrder, OracleUpdate, OracleUpdateComposite, Order, OrderId, Outcome, PlaceOrder,
+        Position, ResolveEvent, RevokeAgent, RunFundingTick, RunLiquidationSweep,
+        SetAccountFeeOverride, SetUserMarketLeverage, Side, TimeInForce, TxContext,
+        UpdateMarketFees, Withdraw, WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX,
+        DEFAULT_CEX_COMPOSITE_STALENESS_MS, DEFAULT_MAX_MARK_SPREAD_BPS,
     };
 }
