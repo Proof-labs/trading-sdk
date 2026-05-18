@@ -38,6 +38,8 @@ pub const ACTION_CLOSE_POSITION: u8 = 0x17;
 pub const ACTION_CANCEL_CLIENT_ORDER: u8 = 0x18;
 /// Cancel all active resting orders for an owner, optionally market-scoped.
 pub const ACTION_CANCEL_ALL_ORDERS: u8 = 0x19;
+/// Atomically cancel one resting order and place its replacement.
+pub const ACTION_CANCEL_REPLACE_ORDER: u8 = 0x1A;
 
 /// V1 wire envelope: [version=1, action_type, seq, payload_bytes]
 ///
@@ -102,6 +104,9 @@ fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_CANCEL_ALL_ORDERS => Ok(Action::CancelAllOrders(
+            rmp_serde::from_slice(payload).map_err(de)?,
+        )),
+        ACTION_CANCEL_REPLACE_ORDER => Ok(Action::CancelReplaceOrder(
             rmp_serde::from_slice(payload).map_err(de)?,
         )),
         ACTION_ORACLE_UPDATE => Ok(Action::OracleUpdate(
@@ -257,6 +262,10 @@ fn encode_action(action: &Action) -> Result<(u8, Vec<u8>), ExecError> {
         )),
         Action::CancelAllOrders(cmd) => Ok((
             ACTION_CANCEL_ALL_ORDERS,
+            rmp_serde::to_vec(cmd).map_err(enc)?,
+        )),
+        Action::CancelReplaceOrder(cmd) => Ok((
+            ACTION_CANCEL_REPLACE_ORDER,
             rmp_serde::to_vec(cmd).map_err(enc)?,
         )),
         Action::OracleUpdate(cmd) => {
@@ -429,9 +438,9 @@ pub fn peek_seq(bytes: &[u8]) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::types::{
-        ApproveAgent, CancelOrder, ConfirmDeposit, ConfirmWithdrawal, CreateMarket, Deposit,
-        FailWithdrawal, MarketOrder, OracleUpdate, PlaceOrder, RevokeAgent, Side, TimeInForce,
-        Withdraw, WithdrawRequest,
+        ApproveAgent, CancelOrder, CancelReplaceOrder, ConfirmDeposit, ConfirmWithdrawal,
+        CreateMarket, Deposit, FailWithdrawal, MarketOrder, OracleUpdate, PlaceOrder, RevokeAgent,
+        Side, TimeInForce, Withdraw, WithdrawRequest,
     };
 
     #[test]
@@ -465,6 +474,38 @@ mod tests {
                 assert_eq!(cmd.side, Side::Buy);
                 assert_eq!(cmd.owner, [0xAA; 20]);
                 assert_eq!(cmd.client_order_id, Some(42));
+                assert_eq!(cmd.time_in_force, TimeInForce::Gtc);
+            }
+            _ => panic!("expected PlaceOrder"),
+        }
+    }
+
+    #[test]
+    fn test_round_trip_place_order_fok_time_in_force() {
+        let action = Action::PlaceOrder(PlaceOrder {
+            market: 1,
+            owner: [0xAA; 20],
+            side: Side::Buy,
+            price: 10000,
+            quantity: 50,
+            client_order_id: Some(43),
+            post_only: false,
+            reduce_only: false,
+            time_in_force: TimeInForce::Fok,
+        });
+
+        let encoded = encode_tx(&action, 101).unwrap();
+        let DecodedTx {
+            action: decoded,
+            seq,
+            auth,
+        } = decode_tx(&encoded).unwrap();
+        assert!(auth.is_none());
+        assert_eq!(seq, 101);
+        match decoded {
+            Action::PlaceOrder(cmd) => {
+                assert_eq!(cmd.client_order_id, Some(43));
+                assert_eq!(cmd.time_in_force, TimeInForce::Fok);
             }
             _ => panic!("expected PlaceOrder"),
         }
@@ -491,6 +532,47 @@ mod tests {
                 assert_eq!(cmd.owner, [0xBB; 20]);
             }
             _ => panic!("expected CancelOrder"),
+        }
+    }
+
+    #[test]
+    fn test_round_trip_cancel_replace_order() {
+        let action = Action::CancelReplaceOrder(CancelReplaceOrder {
+            owner: [0xCC; 20],
+            cancel_order_id: None,
+            cancel_client_order_id: Some(101),
+            market: 7,
+            side: Side::Sell,
+            price: 12345,
+            quantity: 9,
+            client_order_id: Some(202),
+            post_only: true,
+            reduce_only: false,
+            time_in_force: TimeInForce::Fok,
+        });
+
+        let encoded = encode_tx(&action, 201).unwrap();
+        let DecodedTx {
+            action: decoded,
+            seq,
+            ..
+        } = decode_tx(&encoded).unwrap();
+
+        assert_eq!(seq, 201);
+        match decoded {
+            Action::CancelReplaceOrder(cmd) => {
+                assert_eq!(cmd.owner, [0xCC; 20]);
+                assert_eq!(cmd.cancel_order_id, None);
+                assert_eq!(cmd.cancel_client_order_id, Some(101));
+                assert_eq!(cmd.market, 7);
+                assert_eq!(cmd.side, Side::Sell);
+                assert_eq!(cmd.price, 12345);
+                assert_eq!(cmd.quantity, 9);
+                assert_eq!(cmd.client_order_id, Some(202));
+                assert!(cmd.post_only);
+                assert_eq!(cmd.time_in_force, TimeInForce::Fok);
+            }
+            _ => panic!("expected CancelReplaceOrder"),
         }
     }
 
@@ -655,6 +737,19 @@ mod tests {
             Action::CancelOrder(CancelOrder {
                 order_id: 42,
                 owner: [0xBB; 20],
+            }),
+            Action::CancelReplaceOrder(CancelReplaceOrder {
+                owner: [0xBC; 20],
+                cancel_order_id: Some(42),
+                cancel_client_order_id: None,
+                market: 1,
+                side: Side::Sell,
+                price: 50_100,
+                quantity: 80,
+                client_order_id: Some(8),
+                post_only: true,
+                reduce_only: false,
+                time_in_force: TimeInForce::Ioc,
             }),
             Action::OracleUpdate(OracleUpdate {
                 market: 2,
@@ -1517,6 +1612,22 @@ mod tests {
                     time_in_force: TimeInForce::Gtc,
                 }),
                 ACTION_PLACE_ORDER,
+            ),
+            (
+                Action::CancelReplaceOrder(CancelReplaceOrder {
+                    owner: [0; 20],
+                    cancel_order_id: Some(1),
+                    cancel_client_order_id: None,
+                    market: 1,
+                    side: Side::Buy,
+                    price: 1,
+                    quantity: 1,
+                    client_order_id: None,
+                    post_only: false,
+                    reduce_only: false,
+                    time_in_force: TimeInForce::Gtc,
+                }),
+                ACTION_CANCEL_REPLACE_ORDER,
             ),
             (
                 Action::ApproveAgent(ApproveAgent {

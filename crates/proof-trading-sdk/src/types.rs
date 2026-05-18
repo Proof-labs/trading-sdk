@@ -334,7 +334,7 @@ impl fmt::Display for Side {
 /// quantity is handled after crossing the book. Serialized with serde
 /// default-to-0 so old wire records decode as `Gtc`.
 ///
-/// Wire encoding: msgpack integer (0 = Gtc, 1 = Ioc).
+/// Wire encoding: msgpack enum variant (`Gtc`, `Ioc`, `Fok`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TimeInForce {
     /// Good-Till-Cancelled: unmatched quantity rests on the book until
@@ -345,6 +345,10 @@ pub enum TimeInForce {
     /// (never rests on the book). Same IOC semantics as a `MarketOrder`
     /// but with a price limit — will not cross beyond it.
     Ioc = 1,
+    /// Fill-Or-Kill: the order must be fully filled immediately at or better
+    /// than the limit price. If the currently visible book cannot fill the
+    /// whole quantity, the engine rejects before mutating state.
+    Fok = 2,
 }
 
 /// A resting limit order on the order book.
@@ -768,6 +772,9 @@ pub enum Action {
     /// Cancel all resting orders for an owner, optionally scoped to a market.
     /// Used by MM emergency disconnect handlers and quote-refresh loops.
     CancelAllOrders(CancelAllOrders),
+    /// Atomically cancel one resting order and place a replacement order.
+    /// Used by MMs to refresh quotes without exposing a cancel/place gap.
+    CancelReplaceOrder(CancelReplaceOrder),
 }
 
 /// Test/admin action — force-runs `run_liquidations` immediately.
@@ -892,6 +899,31 @@ pub struct CancelAllOrders {
     pub owner: [u8; 20],
     #[serde(default)]
     pub market: Option<MarketId>,
+}
+
+/// Atomically cancel a resting order and place a replacement order.
+///
+/// Exactly one of `cancel_order_id` or `cancel_client_order_id` must be set.
+/// The replacement uses the same semantics as `PlaceOrder`: it may cross,
+/// be post-only/reduce-only, and can specify GTC/IOC/FOK.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CancelReplaceOrder {
+    pub owner: [u8; 20],
+    #[serde(default)]
+    pub cancel_order_id: Option<OrderId>,
+    #[serde(default)]
+    pub cancel_client_order_id: Option<u64>,
+    pub market: MarketId,
+    pub side: Side,
+    pub price: u64,
+    pub quantity: u64,
+    pub client_order_id: Option<u64>,
+    #[serde(default)]
+    pub post_only: bool,
+    #[serde(default)]
+    pub reduce_only: bool,
+    #[serde(default)]
+    pub time_in_force: TimeInForce,
 }
 
 /// Push a new oracle (mark) price. Requires an authorized oracle signer
@@ -2133,6 +2165,15 @@ pub enum ExecError {
     InvalidClientOrderId {
         client_order_id: u64,
     },
+    /// `PlaceOrder` with `time_in_force=Fok` could not fully fill against
+    /// currently visible crossing liquidity at the submitted limit price.
+    FillOrKillWouldNotFill {
+        requested: u64,
+        available: u64,
+    },
+    /// `CancelReplaceOrder` must identify exactly one active order, either by
+    /// engine order id or by owner-scoped client order id.
+    InvalidCancelReplaceTarget,
 }
 
 impl ExecError {
@@ -2188,6 +2229,8 @@ impl ExecError {
             ExecError::ClientOrderIdNotFound { .. } => 44,
             ExecError::DuplicateClientOrderId { .. } => 45,
             ExecError::InvalidClientOrderId { .. } => 46,
+            ExecError::FillOrKillWouldNotFill { .. } => 47,
+            ExecError::InvalidCancelReplaceTarget => 48,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -2365,6 +2408,12 @@ impl ExecError {
             ExecError::InvalidClientOrderId { .. } => {
                 "Client order id zero is reserved and cannot be submitted."
             }
+            ExecError::FillOrKillWouldNotFill { .. } => {
+                "Fill-or-kill order cannot be fully filled immediately at the submitted limit price."
+            }
+            ExecError::InvalidCancelReplaceTarget => {
+                "Cancel-replace must specify exactly one active order target: either orderId or clientOrderId."
+            }
         }
     }
 }
@@ -2512,6 +2561,16 @@ impl fmt::Display for ExecError {
             ExecError::InvalidClientOrderId { client_order_id } => {
                 write!(f, "invalid client order id: {client_order_id}")
             }
+            ExecError::FillOrKillWouldNotFill {
+                requested,
+                available,
+            } => write!(
+                f,
+                "fill-or-kill would not fully fill: requested {requested}, available {available}"
+            ),
+            ExecError::InvalidCancelReplaceTarget => {
+                write!(f, "cancel-replace requires exactly one cancel target")
+            }
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
     }
@@ -2622,6 +2681,11 @@ mod exec_error_meaning_tests {
             ExecError::ClientOrderIdNotFound { client_order_id: 0 },
             ExecError::DuplicateClientOrderId { client_order_id: 0 },
             ExecError::InvalidClientOrderId { client_order_id: 0 },
+            ExecError::FillOrKillWouldNotFill {
+                requested: 1,
+                available: 0,
+            },
+            ExecError::InvalidCancelReplaceTarget,
         ]
     }
 
@@ -2652,7 +2716,7 @@ mod exec_error_meaning_tests {
         }
     }
 
-    /// Codes 1..=46 + 255 must all be covered by at least one variant.
+    /// Codes 1..=48 + 255 must all be covered by at least one variant.
     /// Catches the case where a code is reserved in `code()` but no
     /// variant maps to it (would surface as an unreachable arm in
     /// `meaning()`).
@@ -2661,7 +2725,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = one_of_each().iter().map(|e| e.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=46).chain(std::iter::once(255)).collect();
+        let expected: Vec<u32> = (1u32..=48).chain(std::iter::once(255)).collect();
         assert_eq!(
             codes, expected,
             "ExecError codes covered by variants: {:?}; expected: {:?}. \
@@ -2679,13 +2743,14 @@ mod exec_error_meaning_tests {
 pub mod prelude {
     pub use crate::types::{
         AccountFeeOverride, Action, ApproveAgent, Branch, CancelAllOrders, CancelClientOrder,
-        CancelOrder, CancelReason, ClosePosition, ConfirmDeposit, ConfirmWithdrawal,
-        CreateImpactMarket, CreateMarket, Deposit, Event, EventOracleSource, ExecError,
-        FailDeposit, FailWithdrawal, FillId, ImpactMarketId, ImpactMarketInfo, ImpactMarketStatus,
-        MarkSourceMode, MarketConfig, MarketId, MarketKind, MarketOrder, OracleUpdate,
-        OracleUpdateComposite, OrderId, Outcome, PlaceOrder, Position, ResolveEvent, RevokeAgent,
-        RunFundingTick, RunLiquidationSweep, SetAccountFeeOverride, SetUserMarketLeverage, Side,
-        TimeInForce, TxContext, UpdateMarketFees, Withdraw, WithdrawRequest, WithdrawalStatus,
-        BINARY_PRICE_MAX, DEFAULT_CEX_COMPOSITE_STALENESS_MS, DEFAULT_MAX_MARK_SPREAD_BPS,
+        CancelOrder, CancelReason, CancelReplaceOrder, ClosePosition, ConfirmDeposit,
+        ConfirmWithdrawal, CreateImpactMarket, CreateMarket, Deposit, Event, EventOracleSource,
+        ExecError, FailDeposit, FailWithdrawal, FillId, ImpactMarketId, ImpactMarketInfo,
+        ImpactMarketStatus, MarkSourceMode, MarketConfig, MarketId, MarketKind, MarketOrder,
+        OracleUpdate, OracleUpdateComposite, OrderId, Outcome, PlaceOrder, Position, ResolveEvent,
+        RevokeAgent, RunFundingTick, RunLiquidationSweep, SetAccountFeeOverride,
+        SetUserMarketLeverage, Side, TimeInForce, TxContext, UpdateMarketFees, Withdraw,
+        WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX, DEFAULT_CEX_COMPOSITE_STALENESS_MS,
+        DEFAULT_MAX_MARK_SPREAD_BPS,
     };
 }
