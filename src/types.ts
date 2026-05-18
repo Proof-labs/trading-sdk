@@ -102,6 +102,8 @@ export const ActionType = {
   CancelAllOrders: 0x19,
   /** Atomically cancel one resting order and place its replacement. */
   CancelReplaceOrder: 0x1a,
+  /** Amend one resting order in place while preserving its exchange order ID. */
+  AmendOrder: 0x1b,
 } as const;
 
 /** Union of all valid action type byte values. */
@@ -190,6 +192,18 @@ export interface CancelReplaceOrder {
   reduceOnly?: boolean;
   /** Replacement time-in-force policy. Defaults to GTC. */
   timeInForce?: TimeInForce;
+}
+
+/** Amend a resting order without changing its exchange order ID. */
+export interface AmendOrder {
+  /** Account address whose order should be amended. */
+  owner: Address;
+  /** Engine-assigned order ID to amend. */
+  orderId: bigint;
+  /** Optional replacement price. Omit/null to keep the existing price. */
+  newPrice?: bigint | null;
+  /** Optional new total order quantity. Omit/null to keep the existing quantity. */
+  newQuantity?: bigint | null;
 }
 
 /** Submit an oracle price update for a market (relayer only). */
@@ -702,6 +716,7 @@ export type Action =
   | { type: "CancelClientOrder"; data: CancelClientOrder }
   | { type: "CancelAllOrders"; data: CancelAllOrders }
   | { type: "CancelReplaceOrder"; data: CancelReplaceOrder }
+  | { type: "AmendOrder"; data: AmendOrder }
   | { type: "OracleUpdate"; data: OracleUpdate }
   | { type: "MarketOrder"; data: MarketOrder }
   | { type: "Deposit"; data: Deposit }

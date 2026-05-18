@@ -160,6 +160,28 @@ describe("codec v1", () => {
     }
   });
 
+  it("round-trips AmendOrder with optional price and quantity", () => {
+    const action: Action = {
+      type: "AmendOrder",
+      data: {
+        owner: OWNER,
+        orderId: 42n,
+        newPrice: 12346n,
+        newQuantity: 8n,
+      },
+    };
+    const bytes = encodeTx(action, 5n);
+    expect(peekActionType(bytes)).toBe(ActionType.AmendOrder);
+    const { action: decoded } = decodeTx(bytes);
+    expect(decoded.type).toBe("AmendOrder");
+    if (decoded.type === "AmendOrder") {
+      expect(decoded.data.owner).toEqual(OWNER);
+      expect(decoded.data.orderId).toBe(42n);
+      expect(decoded.data.newPrice).toBe(12346n);
+      expect(decoded.data.newQuantity).toBe(8n);
+    }
+  });
+
   it("round-trips OracleUpdate", () => {
     const action: Action = {
       type: "OracleUpdate",

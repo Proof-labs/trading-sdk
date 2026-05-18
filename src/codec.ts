@@ -489,6 +489,13 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
         ],
       ];
     }
+    case "AmendOrder": {
+      const d = action.data;
+      return [
+        ActionType.AmendOrder,
+        [toByteSeq(d.owner), d.orderId, d.newPrice ?? null, d.newQuantity ?? null],
+      ];
+    }
     case "OracleUpdate": {
       const d = action.data;
       // Field order MUST match Rust: market, price, signer, publish_time_ms.
@@ -866,6 +873,16 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
             f.length > 10
               ? parseTimeInForce(f[10])
               : TimeInForce.Gtc,
+        },
+      };
+    case ActionType.AmendOrder:
+      return {
+        type: "AmendOrder",
+        data: {
+          owner: bytesField(f[0]),
+          orderId: bi(f[1]),
+          newPrice: biOrNull(f[2]),
+          newQuantity: biOrNull(f[3]),
         },
       };
     case ActionType.OracleUpdate:
