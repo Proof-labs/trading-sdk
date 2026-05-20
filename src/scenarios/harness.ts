@@ -156,7 +156,6 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
     if (!relayerAddress) {
       throw new Error("scenarios harness: failed to derive relayer address");
     }
-    await relayerClient.syncNonce();
   }
 
   // Oracle client — separate allowlist from the relayer (engine gates
@@ -171,7 +170,6 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
     if (!oracleAddress) {
       throw new Error("scenarios harness: failed to derive oracle address");
     }
-    await oracleClient.syncNonce();
   }
 
   const users: Record<string, User> = {};
@@ -289,9 +287,8 @@ async function createUser(
   const client = new ExchangeClient({ rpcUrl, apiUrl });
   client.setPrivateKey(privateKey);
   // Use submitTxCommit everywhere in the harness; skip the fire-and-verify
-  // background check to avoid the nonce-drift reconciler racing with us.
+  // background check so scenario assertions use submitTxCommit directly.
   client.setUnsafeFastSubmit(true);
-  await client.syncNonce();
 
   // Fund via relayer-signed Deposit. Engine's handle_deposit (audit
   // B1, 2026-04-23) rejects with code=13 (UnauthorizedRelayer)

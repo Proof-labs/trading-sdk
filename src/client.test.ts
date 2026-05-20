@@ -12,36 +12,15 @@ import { Side } from "./types.js";
 import { sha256 } from "@noble/hashes/sha256";
 
 /**
- * Tests for the submitTx auto-recovery from silent DeliverTx failures
- * (the nonce-drift bug that used to cascade into InvalidNonce errors).
- *
- * The strategy: stub global fetch to return scripted responses for the
- * RPC and API endpoints. We simulate:
- *   - broadcast_tx_sync returning code=0 (CheckTx pass)
- *   - /tx?hash=... returning a DeliverTx-failed result
- *   - /v1/nonce/... returning the chain's actual (lower) nonce
- *
- * The client should detect the silent DeliverTx failure via its background
- * verifier, call syncNonce(), and reset its local nonce to match the chain.
+ * Tests for timestamp-nonce submission. The strategy: stub global fetch to
+ * return scripted responses for RPC/API endpoints, then inspect the signed
+ * envelope to prove the SDK allocates unique millisecond nonces without a
+ * GET-before-submit or failure-time resync.
  */
 
 interface FetchCall {
   url: string;
   init?: RequestInit;
-}
-
-function makeMsgpackBigInt(n: bigint): string {
-  // msgpack uint64 fixed-format: 0xcf + 8 bytes BE
-  const bytes = new Uint8Array(9);
-  bytes[0] = 0xcf;
-  const v = BigInt.asUintN(64, n);
-  for (let i = 0; i < 8; i++) {
-    bytes[8 - i] = Number((v >> BigInt(i * 8)) & 0xffn);
-  }
-  // Base64 encode
-  let s = "";
-  for (const b of bytes) s += String.fromCharCode(b);
-  return btoa(s);
 }
 
 function bytesFromBase64(b64: string): Uint8Array {
@@ -61,7 +40,21 @@ function gatewaySeq(call: FetchCall): bigint {
   return decodeTx(bytesFromBase64(body.action)).seq;
 }
 
-describe("ExchangeClient submitTx nonce-drift recovery", () => {
+function cometSeq(call: FetchCall): bigint {
+  const body = JSON.parse(call.init?.body as string) as {
+    params: { tx: string };
+  };
+  return decodeTx(bytesFromBase64(body.params.tx)).seq;
+}
+
+function primeNextNonce(client: ExchangeClient, offsetMs = 1_000n): bigint {
+  const floor = BigInt(Date.now()) + offsetMs;
+  (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce =
+    floor;
+  return floor + 1n;
+}
+
+describe("ExchangeClient timestamp nonce submission", () => {
   const originalFetch = globalThis.fetch;
   let calls: FetchCall[] = [];
   let nextResponses: Array<(req: FetchCall) => Response> = [];
@@ -105,7 +98,7 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
   });
 
   function makeClient(): ExchangeClient {
-    // The nonce-drift tests below mock CometBFT JSON-RPC responses, so
+    // The timestamp-nonce tests below mock CometBFT JSON-RPC responses, so
     // the client must take the legacy `useGateway: false` path. The
     // production-default gateway path is exercised in the dedicated
     // "submitViaGateway" test block further down. `chainId` is pinned
@@ -122,13 +115,12 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
     return c;
   }
 
-  it("submitTx returns CheckTx code immediately and increments local nonce", async () => {
+  it("submitTx returns CheckTx code immediately and signs a timestamp nonce", async () => {
     const client = makeClient();
     // Use unsafe fast mode so no background verifier is spawned and we don't
     // need to queue follow-up /tx?hash responses for this test in isolation.
     client.setUnsafeFastSubmit(true);
-    // Pre-set nonce so we don't go through fetchNonce on first submit.
-    (client as unknown as { nonce: bigint }).nonce = 5n;
+    const expectedNonce = primeNextNonce(client);
 
     nextResponses.push(
       () =>
@@ -155,7 +147,10 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
 
     expect(result.code).toBe(0);
     expect(result.hash).toBe("DEADBEEF");
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(6n);
+    expect(cometSeq(calls[0])).toBe(expectedNonce);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
     // No verifier spawned in unsafe-fast mode, nothing to await.
     expect(
       (client as unknown as { pendingVerifies: Set<unknown> }).pendingVerifies
@@ -163,11 +158,11 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
     ).toBe(0);
   });
 
-  it("auto-resyncs nonce when CheckTx returns code 21 (InvalidNonce)", async () => {
+  it("does not resync on CheckTx timestamp nonce rejection; the next submit chooses a fresh timestamp", async () => {
     const client = makeClient();
-    (client as unknown as { nonce: bigint }).nonce = 99n;
+    const expectedNonce = primeNextNonce(client);
 
-    // First fetch: CheckTx returns InvalidNonce (code 21).
+    // First fetch: CheckTx returns timestamp nonce rejection (code 21).
     nextResponses.push(
       () =>
         new Response(
@@ -178,11 +173,6 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
           }),
         ),
     );
-    // Auto-resync triggered: fetch /v1/nonce/{addr} returns chain nonce 7.
-    nextResponses.push(
-      () => new Response(JSON.stringify({ data: makeMsgpackBigInt(7n) })),
-    );
-
     const result = await client.submitTx({
       type: "PlaceOrder",
       data: {
@@ -196,16 +186,16 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
     });
 
     expect(result.code).toBe(21);
-    // Local nonce should NOT have been incremented (CheckTx failed).
-    // After the auto-syncNonce kicks in, it should match the chain value (7).
-    // The auto-sync runs as a fire-and-forget Promise, so wait for next tick.
-    await new Promise((r) => setTimeout(r, 50));
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(7n);
+    expect(cometSeq(calls[0])).toBe(expectedNonce);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
+    expect(calls.length).toBe(1);
   });
 
-  it("background verifier resyncs nonce on silent DeliverTx failure", async () => {
+  it("background verifier does not rewind nonce on silent DeliverTx failure", async () => {
     const client = makeClient();
-    (client as unknown as { nonce: bigint }).nonce = 50n;
+    const expectedNonce = primeNextNonce(client);
 
     // 1. broadcast_tx_sync → CheckTx code 0
     nextResponses.push(
@@ -231,12 +221,6 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
           }),
         ),
     );
-    // 3. The verifier calls syncNonce → /v1/nonce returns the chain nonce
-    //    of 50 (NOT 51, because DeliverTx failed and chain didn't bump).
-    nextResponses.push(
-      () => new Response(JSON.stringify({ data: makeMsgpackBigInt(50n) })),
-    );
-
     const result = await client.submitTx({
       type: "MarketOrder",
       data: {
@@ -250,20 +234,22 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
 
     // submitTx itself returns the CheckTx result (code 0).
     expect(result.code).toBe(0);
-    // Local nonce was optimistically bumped to 51.
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(51n);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
 
-    // Wait for the background verifier to detect the failure and resync.
+    // Wait for the background verifier to observe the failed DeliverTx.
     await client.awaitPendingVerifies();
 
-    // After verification, the local nonce should match the chain (50),
-    // recovering from the silent DeliverTx failure.
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(50n);
+    // Included failed transactions burn their timestamp nonce, so no rewind.
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
   });
 
   it("background verifier leaves nonce alone on DeliverTx success", async () => {
     const client = makeClient();
-    (client as unknown as { nonce: bigint }).nonce = 50n;
+    const expectedNonce = primeNextNonce(client);
 
     // CheckTx pass
     nextResponses.push(
@@ -276,8 +262,7 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
           }),
         ),
     );
-    // Verifier polls — returns DeliverTx code 0 (success). No syncNonce call
-    // expected after this.
+    // Verifier polls — returns DeliverTx code 0 (success).
     nextResponses.push(
       () =>
         new Response(
@@ -301,11 +286,14 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
         clientOrderId: null,
       },
     });
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(51n);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
 
     await client.awaitPendingVerifies();
-    // Nonce should remain at 51 — DeliverTx succeeded, no recovery needed.
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(51n);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
   });
 
   it("queryWithdrawal decodes positional tuple by index", async () => {
@@ -324,9 +312,7 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
     for (const b of bytes) b64 += String.fromCharCode(b);
     const dataB64 = btoa(b64);
 
-    nextResponses.push(
-      () => new Response(JSON.stringify({ data: dataB64 })),
-    );
+    nextResponses.push(() => new Response(JSON.stringify({ data: dataB64 })));
 
     const rec = await client.queryWithdrawal(42n);
     expect(rec).not.toBeNull();
@@ -353,7 +339,7 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
 
   it("setUnsafeFastSubmit(true) skips background verifier", async () => {
     const client = makeClient();
-    (client as unknown as { nonce: bigint }).nonce = 10n;
+    const expectedNonce = primeNextNonce(client);
     client.setUnsafeFastSubmit(true);
 
     nextResponses.push(
@@ -387,6 +373,9 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
     // Only one fetch was made (the broadcast_tx_sync), no /tx?hash poll.
     expect(calls.length).toBe(1);
     expect(calls[0].url).toBe("http://test-rpc");
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
   });
 });
 
@@ -397,8 +386,7 @@ describe("ExchangeClient submitTx nonce-drift recovery", () => {
  * Rust API gateway (`POST gatewayUrl/exchange`) instead of CometBFT
  * `broadcast_tx_sync`. Same wire bytes; the gateway re-verifies the
  * signature, applies rate limiting, and (when configured) checks
- * `X-Api-Key`. CheckTx-level error semantics (code=21 InvalidNonce
- * auto-resync) are preserved on this path.
+ * `X-Api-Key`. Timestamp nonce semantics are identical on this path.
  */
 describe("ExchangeClient submitTx gateway path", () => {
   const originalFetch = globalThis.fetch;
@@ -435,7 +423,8 @@ describe("ExchangeClient submitTx gateway path", () => {
         }
         const responder = nextResponses.shift()!;
         return responder({ url: u, init });
-      }) as unknown as typeof fetch;
+      },
+    ) as unknown as typeof fetch;
   });
 
   afterEach(() => {
@@ -467,7 +456,7 @@ describe("ExchangeClient submitTx gateway path", () => {
   it("default path posts to gatewayUrl/exchange (not rpcUrl)", async () => {
     const client = makeGatewayClient();
     client.setUnsafeFastSubmit(true);
-    (client as unknown as { nonce: bigint }).nonce = 5n;
+    const expectedNonce = primeNextNonce(client);
 
     nextResponses.push(
       () =>
@@ -502,15 +491,16 @@ describe("ExchangeClient submitTx gateway path", () => {
       action: string;
     };
     expect(typeof body.action).toBe("string");
-    // Nonce was incremented on success.
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(6n);
+    expect(gatewaySeq(calls[0])).toBe(expectedNonce);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
   });
 
-  it("concurrent nonce mode reserves unique seqs before gateway responses", async () => {
+  it("concurrent submits reserve unique timestamp nonces before gateway responses", async () => {
     const client = makeGatewayClient();
     client.setUnsafeFastSubmit(true);
-    client.setConcurrentNonces(true);
-    (client as unknown as { nonce: bigint }).nonce = 5n;
+    const firstNonce = primeNextNonce(client);
 
     nextResponses.push(
       () =>
@@ -544,16 +534,71 @@ describe("ExchangeClient submitTx gateway path", () => {
 
     expect(a.code).toBe(0);
     expect(b.code).toBe(0);
-    expect(gatewaySeq(calls[0])).toBe(5n);
-    expect(gatewaySeq(calls[1])).toBe(6n);
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(7n);
+    expect(gatewaySeq(calls[0])).toBe(firstNonce);
+    expect(gatewaySeq(calls[1])).toBe(firstNonce + 1n);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(firstNonce + 1n);
   });
 
-  it("concurrent nonce recovery never rewinds below already reserved seqs", async () => {
+  it("100 same-ms concurrent submits each get a unique sequential timestamp nonce", async () => {
     const client = makeGatewayClient();
     client.setUnsafeFastSubmit(true);
-    client.setConcurrentNonces(true);
-    (client as unknown as { nonce: bigint }).nonce = 99n;
+    const firstNonce = primeNextNonce(client);
+
+    for (let i = 0; i < 100; i++) {
+      nextResponses.push(
+        () =>
+          new Response(JSON.stringify({ status: "ok" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+      );
+    }
+
+    const action = {
+      type: "PlaceOrder" as const,
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+        clientOrderId: null,
+      },
+    };
+
+    const results = await Promise.all(
+      Array.from({ length: 100 }, () => client.submitTx(action)),
+    );
+
+    expect(results.every((r) => r.code === 0)).toBe(true);
+    const seqs = calls
+      .slice(0, 100)
+      .map(gatewaySeq)
+      .sort((a, b) => Number(a - b));
+    for (let i = 0; i < 100; i++) {
+      expect(seqs[i]).toBe(firstNonce + BigInt(i));
+    }
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(firstNonce + 99n);
+  });
+
+  it("nextTimestampNonce caps at now + 60_000ms even under heavy bursts", () => {
+    const client = makeGatewayClient();
+    (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce =
+      BigInt(Date.now()) + 1_000_000n;
+    const next = (
+      client as unknown as { nextTimestampNonce(): bigint }
+    ).nextTimestampNonce();
+    expect(next).toBeLessThanOrEqual(BigInt(Date.now()) + 60_000n);
+  });
+
+  it("timestamp nonce rejection through gateway does not resync or rewind", async () => {
+    const client = makeGatewayClient();
+    client.setUnsafeFastSubmit(true);
+    const expectedNonce = primeNextNonce(client);
 
     nextResponses.push(
       () =>
@@ -564,7 +609,6 @@ describe("ExchangeClient submitTx gateway path", () => {
             headers: { "Content-Type": "application/json" },
           },
         ),
-      () => new Response(JSON.stringify({ data: makeMsgpackBigInt(7n) })),
     );
 
     const r = await client.submitTx({
@@ -580,13 +624,17 @@ describe("ExchangeClient submitTx gateway path", () => {
     });
 
     expect(r.code).toBe(21);
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(100n);
+    expect(gatewaySeq(calls[0])).toBe(expectedNonce);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
+    expect(calls.length).toBe(1);
   });
 
   it("trims trailing slash from gatewayUrl", async () => {
     const client = makeGatewayClient({ gatewayUrl: "http://test-gateway/" });
     client.setUnsafeFastSubmit(true);
-    (client as unknown as { nonce: bigint }).nonce = 5n;
+    primeNextNonce(client);
 
     nextResponses.push(
       () =>
@@ -621,7 +669,7 @@ describe("ExchangeClient submitTx gateway path", () => {
     const kp = generateKeypair();
     c.setPrivateKey(kp.privateKey);
     c.setUnsafeFastSubmit(true);
-    (c as unknown as { nonce: bigint }).nonce = 5n;
+    primeNextNonce(c);
 
     nextResponses.push(
       () =>
@@ -648,7 +696,7 @@ describe("ExchangeClient submitTx gateway path", () => {
 
   it("gateway success hash drives background delivery verification", async () => {
     const client = makeGatewayClient();
-    (client as unknown as { nonce: bigint }).nonce = 5n;
+    const expectedNonce = primeNextNonce(client);
 
     nextResponses.push(
       () =>
@@ -686,12 +734,14 @@ describe("ExchangeClient submitTx gateway path", () => {
     expect(r.hash).toBe(expectedHash);
     await client.awaitPendingVerifies();
     expect(calls[1].url).toBe(`http://test-rpc/tx?hash=0x${expectedHash}`);
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(6n);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
   });
 
   it("submitTxCommit works on the gateway path by polling the computed hash", async () => {
     const client = makeGatewayClient();
-    (client as unknown as { nonce: bigint }).nonce = 5n;
+    const expectedNonce = primeNextNonce(client);
 
     nextResponses.push(
       () =>
@@ -732,13 +782,15 @@ describe("ExchangeClient submitTx gateway path", () => {
       log: "",
     });
     expect(calls[1].url).toBe(`http://test-rpc/tx?hash=0x${expectedHash}`);
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(6n);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
   });
 
   it("includes X-Api-Key header when apiKey is set", async () => {
     const client = makeGatewayClient({ apiKey: "secret-123" });
     client.setUnsafeFastSubmit(true);
-    (client as unknown as { nonce: bigint }).nonce = 5n;
+    primeNextNonce(client);
 
     nextResponses.push(
       () =>
@@ -768,7 +820,7 @@ describe("ExchangeClient submitTx gateway path", () => {
   it("does not send X-Api-Key when apiKey is unset", async () => {
     const client = makeGatewayClient();
     client.setUnsafeFastSubmit(true);
-    (client as unknown as { nonce: bigint }).nonce = 5n;
+    primeNextNonce(client);
 
     nextResponses.push(
       () =>
@@ -794,28 +846,18 @@ describe("ExchangeClient submitTx gateway path", () => {
     expect(headers["X-Api-Key"]).toBeUndefined();
   });
 
-  it("gateway error '21: invalid nonce' parses to code 21 and triggers nonce resync", async () => {
+  it("gateway error '21: invalid nonce' parses to code 21 without nonce resync", async () => {
     const client = makeGatewayClient();
     client.setUnsafeFastSubmit(true);
-    (client as unknown as { nonce: bigint }).nonce = 50n;
+    const expectedNonce = primeNextNonce(client);
 
-    // First response: gateway returns the engine's InvalidNonce error.
+    // First response: gateway returns the engine's timestamp nonce rejection error.
     nextResponses.push(
       () =>
         new Response(
           JSON.stringify({
             status: "error",
-            error: "21: invalid nonce: expected 51, got 50",
-          }),
-          { status: 200 },
-        ),
-    );
-    // Second response: nonce resync via /v1/nonce/{addr} returns 51.
-    nextResponses.push(
-      () =>
-        new Response(
-          JSON.stringify({
-            data: makeMsgpackBigInt(51n),
+            error: "21: invalid timestamp nonce",
           }),
           { status: 200 },
         ),
@@ -834,14 +876,17 @@ describe("ExchangeClient submitTx gateway path", () => {
     });
 
     expect(r.code).toBe(21);
-    // After resync, local nonce matches chain.
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(51n);
+    expect(gatewaySeq(calls[0])).toBe(expectedNonce);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
+    expect(calls.length).toBe(1);
   });
 
   it("HTTP 401 from gateway maps to code 401 (auth failure)", async () => {
     const client = makeGatewayClient({ apiKey: "wrong-key" });
     client.setUnsafeFastSubmit(true);
-    (client as unknown as { nonce: bigint }).nonce = 5n;
+    const expectedNonce = primeNextNonce(client);
 
     nextResponses.push(
       () =>
@@ -868,15 +913,15 @@ describe("ExchangeClient submitTx gateway path", () => {
 
     expect(r.code).toBe(401);
     expect(r.log).toBe("unauthorized");
-    // 401 is a transport-level rejection, not a CheckTx success — local
-    // nonce should not have been incremented.
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(5n);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
   });
 
   it("HTTP 429 from gateway maps to code 429 (rate limited)", async () => {
     const client = makeGatewayClient();
     client.setUnsafeFastSubmit(true);
-    (client as unknown as { nonce: bigint }).nonce = 5n;
+    const expectedNonce = primeNextNonce(client);
 
     nextResponses.push(() => new Response("rate limited", { status: 429 }));
 
@@ -894,13 +939,15 @@ describe("ExchangeClient submitTx gateway path", () => {
 
     expect(r.code).toBe(429);
     expect(r.log).toBe("rate limited");
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(5n);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
   });
 
   it("HTTP 413 from gateway maps to code 413 and preserves body detail", async () => {
     const client = makeGatewayClient();
     client.setUnsafeFastSubmit(true);
-    (client as unknown as { nonce: bigint }).nonce = 5n;
+    const expectedNonce = primeNextNonce(client);
 
     nextResponses.push(
       () =>
@@ -924,13 +971,15 @@ describe("ExchangeClient submitTx gateway path", () => {
 
     expect(r.code).toBe(413);
     expect(r.log).toBe("body too large");
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(5n);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
   });
 
-  it("HTTP 5xx from gateway maps to code 500 and does not increment nonce", async () => {
+  it("HTTP 5xx from gateway maps to code 500 and keeps the allocated timestamp nonce", async () => {
     const client = makeGatewayClient();
     client.setUnsafeFastSubmit(true);
-    (client as unknown as { nonce: bigint }).nonce = 5n;
+    const expectedNonce = primeNextNonce(client);
 
     nextResponses.push(
       () =>
@@ -951,13 +1000,15 @@ describe("ExchangeClient submitTx gateway path", () => {
 
     expect(r.code).toBe(500);
     expect(r.log).toContain("bad gateway");
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(5n);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
   });
 
   it("non-JSON gateway error body returns a TxResult instead of throwing", async () => {
     const client = makeGatewayClient();
     client.setUnsafeFastSubmit(true);
-    (client as unknown as { nonce: bigint }).nonce = 5n;
+    const expectedNonce = primeNextNonce(client);
 
     nextResponses.push(
       () => new Response("<html>bad request</html>", { status: 400 }),
@@ -980,7 +1031,9 @@ describe("ExchangeClient submitTx gateway path", () => {
       hash: "",
       log: "<html>bad request</html>",
     });
-    expect((client as unknown as { nonce: bigint }).nonce).toBe(5n);
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(expectedNonce);
   });
 
   it("useGateway: false routes to legacy CometBFT path", async () => {
@@ -994,7 +1047,7 @@ describe("ExchangeClient submitTx gateway path", () => {
     const kp = generateKeypair();
     c.setPrivateKey(kp.privateKey);
     c.setUnsafeFastSubmit(true);
-    (c as unknown as { nonce: bigint }).nonce = 5n;
+    const expectedNonce = primeNextNonce(c);
 
     nextResponses.push(
       () =>
@@ -1020,6 +1073,7 @@ describe("ExchangeClient submitTx gateway path", () => {
     });
 
     expect(calls[0].url).toBe("http://test-rpc");
+    expect(cometSeq(calls[0])).toBe(expectedNonce);
     const body = JSON.parse(calls[0].init?.body as string) as {
       jsonrpc: string;
       id: number;

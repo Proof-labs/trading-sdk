@@ -109,8 +109,8 @@ export interface ExchangeClientOptions {
    *
    * The two paths are wire-compatible: both submit the same V3 signed
    * envelope. Switching only changes which surface validates and
-   * forwards the bytes. CheckTx-level error semantics (code=21
-   * InvalidNonce auto-resync) are preserved on both paths.
+   * forwards the bytes. The nonce in that envelope is a client-chosen
+   * millisecond Unix timestamp; code=21 means pick a fresh timestamp.
    */
   useGateway?: boolean;
   /**
@@ -121,10 +121,8 @@ export interface ExchangeClientOptions {
    */
   apiKey?: string;
   /**
-   * Reserve a nonce before awaiting the network response, allowing many
-   * `submitTx` calls to run concurrently against engines using the relaxed
-   * nonce window. Default false preserves the old strictly sequential client
-   * behavior for wallets and tests.
+   * Deprecated compatibility option. Timestamp nonces are inherently
+   * concurrency-safe, so the SDK ignores this flag.
    */
   concurrentNonces?: boolean;
 }
@@ -149,23 +147,21 @@ export class ExchangeClient {
   private publicKey: Uint8Array | null = null;
   private address: Uint8Array | null = null;
   private addressHex: string | null = null;
-  private nonce = 0n;
+  private lastTimestampNonce = 0n;
   private ws: WebSocket | null = null;
   private eventListeners: Array<(event: Record<string, unknown>) => void> = [];
   /**
-   * In-flight DeliverTx verification promises spawned by submitTx. When a
-   * verification detects a silent DeliverTx failure it reconciles local nonce
-   * state. Awaiting this set lets callers serialize against background
-   * reconciliation when they need to.
+   * In-flight DeliverTx verification promises spawned by submitTx. Awaiting
+   * this set lets callers serialize against block inclusion when they need to;
+   * timestamp nonces do not require drift reconciliation.
    */
   private pendingVerifies = new Set<Promise<void>>();
   /**
    * When true, submitTx is the safe-by-default fire-and-spawn-verifier mode.
-   * Callers that need maximum throughput and don't care about silent drift
-   * can flip this off via setUnsafeFastSubmit(true).
+   * Callers that need maximum throughput and don't need inclusion polling can
+   * flip this off via setUnsafeFastSubmit(true).
    */
   private autoVerifyDelivery = true;
-  private concurrentNonces: boolean;
 
   constructor(opts: ExchangeClientOptions = {}) {
     this.rpcUrl = opts.rpcUrl ?? "http://localhost:26657";
@@ -181,7 +177,7 @@ export class ExchangeClient {
     // resolveChainId() fetch from /status on first submit.
     this.chainId = opts.chainId ? chainIdFromString(opts.chainId) : null;
     this.allowUnbound = opts.allowUnbound ?? false;
-    this.concurrentNonces = opts.concurrentNonces ?? false;
+    void opts.concurrentNonces;
   }
 
   /**
@@ -286,60 +282,29 @@ export class ExchangeClient {
     return this.privateKey;
   }
 
-  /**
-   * Return the current local (next-to-use) nonce. Same caveat as
-   * `getPrivateKey` — only for ops tools that submit via a side channel
-   * and need to tell the client which nonce to increment past on success.
-   */
-  getNonce(): bigint {
-    return this.nonce;
-  }
-
-  /**
-   * Increment the local nonce. Only callers submitting outside of the
-   * built-in `submitTx` / `submitTxCommit` paths need this — normal
-   * submit methods bump the nonce internally on CheckTx success.
-   */
-  bumpNonce(): void {
-    this.nonce++;
-  }
-
   // -----------------------------------------------------------------------
-  // Nonce management
+  // Nonce diagnostics
   // -----------------------------------------------------------------------
 
-  /** Fetch current nonce from the node for a given address. */
-  async fetchNonce(addressHex?: string): Promise<bigint> {
+  /** Fetch the retained timestamp nonce set from the node, for diagnostics. */
+  async getRecentNonces(addressHex?: string): Promise<bigint[]> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) throw new Error("No address available");
-    const res = await fetch(`${this.apiUrl}/v1/nonce/${hex}`);
+    const res = await fetch(`${this.apiUrl}/v1/account/${hex}/recent-nonces`);
     const json = await res.json();
     if (json.error) throw new Error(json.error);
-    const bytes = fromBase64(json.data);
-    const nonce = msgpackDecoder.decode(bytes) as bigint | number;
-    return BigInt(nonce);
+    const recent = (json.recent ?? []) as Array<number | bigint | string>;
+    return recent.map((n) => BigInt(n));
   }
 
-  /** Sync nonce from the node. Call before first transaction. */
-  async syncNonce(): Promise<void> {
-    this.nonce = await this.fetchNonce();
-  }
-
-  /**
-   * Enable the MM-oriented nonce allocator. When enabled, each submit reserves
-   * a unique nonce immediately, so concurrent calls do not sign the same seq.
-   */
-  setConcurrentNonces(enabled: boolean): void {
-    this.concurrentNonces = enabled;
-  }
-
-  private async reconcileNonceAfterFailure(): Promise<void> {
-    const chainNonce = await this.fetchNonce();
-    if (this.concurrentNonces) {
-      if (chainNonce > this.nonce) this.nonce = chainNonce;
-    } else {
-      this.nonce = chainNonce;
-    }
+  private nextTimestampNonce(): bigint {
+    const now = BigInt(Date.now());
+    const max = now + 60_000n;
+    let next =
+      this.lastTimestampNonce >= now ? this.lastTimestampNonce + 1n : now;
+    if (next > max) next = max;
+    this.lastTimestampNonce = next;
+    return next;
   }
 
   // -----------------------------------------------------------------------
@@ -349,29 +314,26 @@ export class ExchangeClient {
   /**
    * Sign and submit a transaction via broadcast_tx_sync.
    *
-   * On `CheckTx code=0`, the local nonce is optimistically incremented and a
-   * fire-and-forget background verifier is spawned. The verifier polls
-   * `/tx?hash=...` for the actual `DeliverTx` result; if `DeliverTx` later
-   * silently fails, the verifier reconciles nonce state to recover from drift.
+   * The SDK signs each transaction with a fresh millisecond timestamp nonce
+   * before submitting. On `CheckTx code=0`, a fire-and-forget background
+   * verifier is spawned. The verifier polls `/tx?hash=...` for the actual
+   * `DeliverTx` result, but it never rewinds or resyncs nonce state: included
+   * failed transactions still burn their timestamp nonce by design.
    *
-   * This means the fast path stays fast (one HTTP round-trip) while still
-   * being self-healing — sustained drift was the failure mode that caused
-   * cascading `InvalidNonce` errors in the market maker. Callers that need
-   * to know definitively whether a tx landed should still use
+   * Callers that need to know definitively whether a tx landed should use
    * `submitTxCommit`, which awaits the same verification synchronously.
    *
    * Callers needing to serialize against in-flight verifications (e.g. before
    * issuing a tx that depends on the previous tx's effect) can call
    * `awaitPendingVerifies()` first.
    *
-   * Call `syncNonce()` once before the first transaction so the local
-   * counter is initialized.
+   * No nonce sync call is required before the first transaction.
    */
   async submitTx(action: Action): Promise<TxResult> {
     const r = await this.broadcastSigned(action);
-    // On CheckTx success, spawn the background DeliverTx verifier so silent
-    // DeliverTx failures self-heal via syncNonce(). Skipped when the caller
-    // has opted into unsafe fast mode.
+    // On CheckTx success, spawn the background DeliverTx verifier for
+    // inclusion visibility. Skipped when the caller has opted into unsafe
+    // fast mode.
     if (r.code === 0 && r.hash && this.autoVerifyDelivery) {
       this.spawnDeliveryVerifier(r.hash);
     }
@@ -379,7 +341,7 @@ export class ExchangeClient {
   }
 
   /**
-   * Internal: sign + submit, manage local nonce. Does NOT spawn a
+   * Internal: sign + submit with a fresh timestamp nonce. Does NOT spawn a
    * background verifier — the public `submitTx` adds that.
    * `submitTxCommit` uses this directly so it can run its own
    * synchronous verification without two pollers racing for the same
@@ -388,39 +350,18 @@ export class ExchangeClient {
    * Routes via the gateway (`POST gatewayUrl/exchange`) when
    * `useGateway` is true (default), or via CometBFT
    * `broadcast_tx_sync` when false (internal-tools opt-out path).
-   * Both paths submit identical signed wire bytes; CheckTx-level
-   * error semantics (code=21 InvalidNonce auto-resync) are preserved.
+   * Both paths submit identical signed wire bytes.
    */
   private async broadcastSigned(action: Action): Promise<TxResult> {
     if (!this.privateKey) throw new Error("No private key set");
 
     const chainId = await this.resolveChainId();
-    const seq = this.nonce;
-    if (this.concurrentNonces) {
-      this.nonce++;
-    }
+    const seq = this.nextTimestampNonce();
     const txBytes = signAndEncode(chainId, action, seq, this.privateKey);
 
     const r = this.useGateway
       ? await this.submitViaGateway(txBytes)
       : await this.submitViaCometBFT(txBytes);
-
-    if (r.code === 0) {
-      // Strict mode increments after CheckTx success; concurrent mode already
-      // reserved the seq before awaiting the network response.
-      if (!this.concurrentNonces) {
-        this.nonce++;
-      }
-    } else if (r.code === 21) {
-      // CheckTx rejected with InvalidNonce — local cache is stale, resync
-      // BEFORE returning so the next caller starts from a clean slate.
-      // Pre-2026-04-25 this was fire-and-forget (`.catch(() => {})`),
-      // which meant the next submit could fire while the resync was
-      // still in flight — visible in the impact-mm logs as cascades of
-      // `expected N, got N+1` / `expected N, got N+2` etc. Awaiting
-      // here serialises the recovery.
-      await this.reconcileNonceAfterFailure().catch(() => {});
-    }
 
     return r;
   }
@@ -557,7 +498,8 @@ export class ExchangeClient {
 
   /**
    * Internal: spawn a fire-and-forget verifier that polls /tx?hash for the
-   * DeliverTx result and reconciles nonce state on failure.
+   * DeliverTx result. Timestamp nonces are intentionally not reconciled on
+   * DeliverTx failure or timeout.
    * The promise is added to `pendingVerifies` so callers can await it via
    * `awaitPendingVerifies()` when they need synchronization.
    *
@@ -581,16 +523,6 @@ export class ExchangeClient {
             const txResult = json.result?.tx_result;
             if (txResult) {
               const code = txResult.code ?? 0;
-              if (code !== 0) {
-                // DeliverTx silently failed. Resync from chain. We don't
-                // decrement directly because subsequent submits may have
-                // moved the nonce.
-                try {
-                  await this.reconcileNonceAfterFailure();
-                } catch {
-                  /* tolerate transient network errors — next call will retry */
-                }
-              }
               return;
             }
             // Tx not yet indexed — keep polling.
@@ -598,12 +530,8 @@ export class ExchangeClient {
             // Network blip — retry.
           }
         }
-        // Timed out without seeing the result. Resync defensively.
-        try {
-          await this.reconcileNonceAfterFailure();
-        } catch {
-          /* swallow */
-        }
+        // Timed out without seeing the result. The timestamp nonce may have
+        // landed or may be reusable only if never included; do not rewind.
       } finally {
         this.pendingVerifies.delete(self);
       }
@@ -630,8 +558,7 @@ export class ExchangeClient {
 
   /**
    * Opt out of background DeliverTx verification. Only use this for
-   * high-throughput stress workloads that knowingly accept silent drift and
-   * reconcile via their own out-of-band syncNonce() schedule.
+   * high-throughput stress workloads that do not need inclusion polling.
    */
   setUnsafeFastSubmit(unsafe: boolean): void {
     this.autoVerifyDelivery = !unsafe;
@@ -657,11 +584,8 @@ export class ExchangeClient {
     const sync = await this.broadcastSigned(action);
     if (sync.code !== 0) {
       // CheckTx rejected (envelope-level failure). No DeliverTx will run.
-      // broadcastSigned already left this.nonce unchanged in this case.
       return sync;
     }
-    // broadcastSigned already incremented this.nonce optimistically. We'll
-    // undo the increment if DeliverTx turns out to have failed.
 
     // Step 2: poll /tx?hash=... until found or timeout (~9 seconds)
     const txHash = sync.hash;
@@ -679,16 +603,6 @@ export class ExchangeClient {
         const txResult = json.result?.tx_result;
         if (txResult) {
           const code = txResult.code ?? 0;
-          if (code !== 0) {
-            // DeliverTx failed. Strict mode can roll back the single in-flight
-            // optimistic increment; concurrent mode must not move backward and
-            // risk reusing a nonce that another caller has already reserved.
-            if (this.concurrentNonces) {
-              await this.reconcileNonceAfterFailure().catch(() => {});
-            } else {
-              this.nonce--;
-            }
-          }
           return {
             code,
             hash: txHash,
@@ -702,11 +616,8 @@ export class ExchangeClient {
         // network blip — retry
       }
     }
-    // Timed out waiting for inclusion. We don't know whether it landed.
-    // Resync nonce from chain so the caller is in a sane state.
-    try {
-      await this.reconcileNonceAfterFailure();
-    } catch {}
+    // Timed out waiting for inclusion. We don't know whether it landed, so
+    // do not reuse or rewind the timestamp nonce.
     return {
       code: -1,
       hash: txHash,
@@ -1232,7 +1143,7 @@ async function readGatewayBody(res: Response): Promise<{
  *
  * The gateway formats engine errors as `"<code>: <message>"` per the
  * `ExecErrorCode` table in `api-gateway/openapi.yaml`. This helper lets
- * the SDK branch on `code === 21` (InvalidNonce → resync) and similar
+ * the SDK branch on `code === 21` (fresh timestamp required) and similar
  * patterns the same way it does for CometBFT-path responses.
  *
  * Returns `null` when the string doesn't match the expected shape so

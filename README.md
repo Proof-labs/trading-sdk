@@ -30,9 +30,6 @@ const client = new ExchangeClient({
 });
 client.setPrivateKey(privateKey);
 
-// Sync nonce from chain (required before first tx)
-await client.syncNonce();
-
 // Place a limit order
 await client.submitTx({
   type: "PlaceOrder",
@@ -90,7 +87,7 @@ All 13 actions are supported via `client.submitTx({ type, data })`:
 const book = await client.queryOrderbook(marketId);  // Orderbook snapshot
 const acct = await client.queryAccount();             // Balance, equity, positions
 const order = await client.queryOrder(orderId);       // Single order
-const nonce = await client.fetchNonce(addressHex);    // Current nonce
+const recent = await client.getRecentNonces(addressHex); // Diagnostic retained timestamp nonces
 ```
 
 ## Crypto Utilities

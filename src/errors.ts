@@ -14,7 +14,7 @@
  */
 
 export interface ExecErrorInfo {
-  /** Variant name from the Rust enum, e.g. `"InvalidNonce"`. Stable. */
+  /** Rust variant name when the code is one-to-one, or a grouped wire-code name. Stable. */
   name: string;
   /** One-line human-readable message — what the engine prints in
    *  `Display`. Suitable for toast notifications. */
@@ -43,8 +43,8 @@ const TABLE: Record<number, ExecErrorInfo> = {
   19: { name: "AgentNotAuthorized", description: "signer is not the owner or an authorized agent" },
   20: { name: "AgentCannotWithdraw", description: "agent wallets cannot perform withdrawals" },
   21: {
-    name: "InvalidNonce",
-    description: "invalid nonce — local cache stale; SDK auto-resyncs on this code",
+    name: "TimestampNonceRejected",
+    description: "timestamp nonce failed replay-window validation — sign a fresh envelope",
   },
   22: { name: "MarketAlreadyExists", description: "market already exists" },
   23: { name: "InvalidMarketConfig", description: "invalid market configuration" },
