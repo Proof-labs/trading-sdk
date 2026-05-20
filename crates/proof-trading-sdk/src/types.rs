@@ -956,13 +956,12 @@ pub struct AmendOrder {
 /// AND a strictly increasing `publish_time_ms` per market.
 ///
 /// **Why the timestamp check** (added 2026-04-23, audit finding B3):
-/// before this field existed, `OracleUpdate` had no replay protection
-/// of any kind — it's relayer-signed so it skips nonce enforcement,
-/// and the handler read no previous state before overwriting the
-/// price. Any previously-signed update (captured from the mempool,
-/// a public API, or a node log) was replayable forever. An attacker
-/// could rewind the mark price to a historical value, triggering
-/// mass liquidations or arbitrage at stale prices.
+/// before this field existed, `OracleUpdate` relied only on the envelope
+/// nonce for transaction replay protection, while the handler read no
+/// previous oracle timestamp before overwriting the price. A different
+/// previously-signed update carrying stale price data could rewind the
+/// mark price to a historical value, triggering mass liquidations or
+/// arbitrage at stale prices.
 ///
 /// The field is the Pyth-style publish time of the price signal
 /// (ms since Unix epoch). The handler rejects any update whose
@@ -2045,8 +2044,19 @@ pub enum ExecError {
     AgentNotAuthorized,
     /// Agent wallets may trade but are forbidden from withdrawing funds.
     AgentCannotWithdraw,
-    InvalidNonce {
-        expected: u64,
+    NonceTooOld {
+        min_accepted: u64,
+        got: u64,
+    },
+    NonceTooFarFuture {
+        max_accepted: u64,
+        got: u64,
+    },
+    NonceReplay {
+        nonce: u64,
+    },
+    NonceBelowOldest {
+        oldest: u64,
         got: u64,
     },
     MarketAlreadyExists(MarketId),
@@ -2252,7 +2262,10 @@ impl ExecError {
             ExecError::SignatureRequired => 18,
             ExecError::AgentNotAuthorized => 19,
             ExecError::AgentCannotWithdraw => 20,
-            ExecError::InvalidNonce { .. } => 21,
+            ExecError::NonceTooOld { .. }
+            | ExecError::NonceTooFarFuture { .. }
+            | ExecError::NonceReplay { .. }
+            | ExecError::NonceBelowOldest { .. } => 21,
             ExecError::MarketAlreadyExists(_) => 22,
             ExecError::InvalidMarketConfig(_) => 23,
             ExecError::ImpactMarketAlreadyExists(_) => 24,
@@ -2367,9 +2380,12 @@ impl ExecError {
             ExecError::AgentCannotWithdraw => {
                 "Agent wallets may place/cancel/market orders but are forbidden from initiating withdrawals."
             }
-            ExecError::InvalidNonce { .. } => {
-                "Tx seq does not match the next expected nonce for the signer. SDK should auto-resync via \
-                 GET /v1/nonce/{address} and retry."
+            ExecError::NonceTooOld { .. }
+            | ExecError::NonceTooFarFuture { .. }
+            | ExecError::NonceReplay { .. }
+            | ExecError::NonceBelowOldest { .. } => {
+                "Timestamp nonce failed replay-window validation. Use a unique millisecond Unix timestamp within \
+                 [block_time-2d, block_time+1d]; included failures burn their nonce."
             }
             ExecError::MarketAlreadyExists(_) => {
                 "Attempted CreateMarket for a market ID already in the registry."
@@ -2500,8 +2516,18 @@ impl fmt::Display for ExecError {
             ExecError::AgentCannotWithdraw => {
                 write!(f, "agent wallets cannot perform withdrawals")
             }
-            ExecError::InvalidNonce { expected, got } => {
-                write!(f, "invalid nonce: expected {expected}, got {got}")
+            ExecError::NonceTooOld { min_accepted, got } => {
+                write!(f, "nonce too old: minimum accepted {min_accepted}, got {got}")
+            }
+            ExecError::NonceTooFarFuture { max_accepted, got } => {
+                write!(
+                    f,
+                    "nonce too far in future: maximum accepted {max_accepted}, got {got}"
+                )
+            }
+            ExecError::NonceReplay { nonce } => write!(f, "nonce replay: {nonce}"),
+            ExecError::NonceBelowOldest { oldest, got } => {
+                write!(f, "nonce below retained oldest: oldest {oldest}, got {got}")
             }
             ExecError::MarketAlreadyExists(id) => write!(f, "market already exists: {id}"),
             ExecError::InvalidMarketConfig(msg) => write!(f, "invalid market config: {msg}"),
@@ -2676,10 +2702,16 @@ mod exec_error_meaning_tests {
             ExecError::SignatureRequired,
             ExecError::AgentNotAuthorized,
             ExecError::AgentCannotWithdraw,
-            ExecError::InvalidNonce {
-                expected: 0,
+            ExecError::NonceTooOld {
+                min_accepted: 0,
                 got: 0,
             },
+            ExecError::NonceTooFarFuture {
+                max_accepted: 0,
+                got: 0,
+            },
+            ExecError::NonceReplay { nonce: 0 },
+            ExecError::NonceBelowOldest { oldest: 0, got: 0 },
             ExecError::MarketAlreadyExists(0),
             ExecError::InvalidMarketConfig("e".into()),
             ExecError::ImpactMarketAlreadyExists(0),
