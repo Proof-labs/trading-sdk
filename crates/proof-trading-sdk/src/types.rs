@@ -34,38 +34,24 @@ pub const BINARY_PRICE_MAX: u64 = 1_000_000;
 // ---------------------------------------------------------------------------
 
 /// Which branch of a binary event a conditional/prediction book represents.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, derive_more::Display)]
 pub enum Branch {
+    #[display("yes")]
     Yes = 1,
+    #[display("no")]
     No = 2,
-}
-
-impl fmt::Display for Branch {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Branch::Yes => f.write_str("yes"),
-            Branch::No => f.write_str("no"),
-        }
-    }
 }
 
 /// Outcome of an impact-market event resolution.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, derive_more::Display)]
 pub enum Outcome {
+    #[display("yes")]
     Yes = 1,
+    #[display("no")]
     No = 2,
     /// Auto-voided (neither branch won — e.g., resolver timeout under the auto-void policy).
+    #[display("void")]
     Void = 3,
-}
-
-impl fmt::Display for Outcome {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Outcome::Yes => f.write_str("yes"),
-            Outcome::No => f.write_str("no"),
-            Outcome::Void => f.write_str("void"),
-        }
-    }
 }
 
 /// BE-54: how the YES/NO outcome of an impact-market event is determined
@@ -75,11 +61,12 @@ impl fmt::Display for Outcome {
 /// auto-resolve modes derive YES/NO from an on-chain oracle reading,
 /// turning the relayer-supplied `outcome` field into a verifiable assertion
 /// (the engine recomputes and rejects on mismatch).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, derive_more::Display)]
 pub enum EventOracleSource {
     /// Resolution determined by the underlying perp's oracle reading at
     /// `ResolveEvent` time, compared against `strike_price`. The classic
     /// "is BTC above $X at expiry?" pattern.
+    #[display("underlying_price_vs_strike:{strike_price}:{comparison}")]
     UnderlyingPriceVsStrike {
         strike_price: u64,
         comparison: PriceComparison,
@@ -88,6 +75,7 @@ pub enum EventOracleSource {
     /// (e.g. ETH event whose outcome is gated on BTC's price). The
     /// `market` MUST exist and have a current oracle price at resolution
     /// time; otherwise the resolution is rejected.
+    #[display("market_oracle:{market}:{strike_price}:{comparison}")]
     MarketOracle {
         market: MarketId,
         strike_price: u64,
@@ -97,24 +85,8 @@ pub enum EventOracleSource {
     /// The relayer-supplied `outcome` is taken at face value (still subject
     /// to the existing relayer-allowlist signature check). Use for events
     /// where there is no on-chain price (e.g. "did Apple announce X?").
+    #[display("relayer_attested")]
     RelayerAttested,
-}
-
-impl fmt::Display for EventOracleSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            EventOracleSource::UnderlyingPriceVsStrike {
-                strike_price,
-                comparison,
-            } => write!(f, "underlying_price_vs_strike:{strike_price}:{comparison}"),
-            EventOracleSource::MarketOracle {
-                market,
-                strike_price,
-                comparison,
-            } => write!(f, "market_oracle:{market}:{strike_price}:{comparison}"),
-            EventOracleSource::RelayerAttested => f.write_str("relayer_attested"),
-        }
-    }
 }
 
 /// BE-54: comparison operator used by the auto-resolve oracle modes.
@@ -122,23 +94,16 @@ impl fmt::Display for EventOracleSource {
 /// `GreaterThan` means the event resolves YES when the oracle reading is
 /// strictly greater than the strike). Equality on the boundary is
 /// distinguished by the `OrEqual` variants.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, derive_more::Display)]
 pub enum PriceComparison {
+    #[display("gt")]
     GreaterThan,
+    #[display("lt")]
     LessThan,
+    #[display("gte")]
     GreaterThanOrEqual,
+    #[display("lte")]
     LessThanOrEqual,
-}
-
-impl fmt::Display for PriceComparison {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            PriceComparison::GreaterThan => "gt",
-            PriceComparison::LessThan => "lt",
-            PriceComparison::GreaterThanOrEqual => "gte",
-            PriceComparison::LessThanOrEqual => "lte",
-        })
-    }
 }
 
 impl PriceComparison {
@@ -161,9 +126,10 @@ impl PriceComparison {
 /// validation — binaries must trade inside `[0, BINARY_PRICE_MAX]`; (c)
 /// resolution — conditional books freeze at resolution, binaries settle to
 /// `$1` or `$0`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum MarketKind {
     /// Regular perpetual future (BTC-PERP, ETH-PERP, SOL-PERP, etc.).
+    #[default]
     Perp,
     /// Conditional perpetual — trades like a perp until the parent event
     /// resolves, then settles (if branch wins) or voids (if branch loses).
@@ -177,12 +143,6 @@ pub enum MarketKind {
         impact_market_id: ImpactMarketId,
         branch: Branch,
     },
-}
-
-impl Default for MarketKind {
-    fn default() -> Self {
-        MarketKind::Perp
-    }
 }
 
 /// Mark-price source for a perp market. Selects how `get_mark_price`
@@ -315,19 +275,12 @@ pub struct ImpactMarketInfo {
 // ---------------------------------------------------------------------------
 
 /// Order/position direction. Discriminant values (1, 2) are part of the wire format.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, derive_more::Display)]
 pub enum Side {
+    #[display("buy")]
     Buy = 1,
+    #[display("sell")]
     Sell = 2,
-}
-
-impl fmt::Display for Side {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Side::Buy => f.write_str("buy"),
-            Side::Sell => f.write_str("sell"),
-        }
-    }
 }
 
 /// Time-in-force policy for a `PlaceOrder`. Controls how unmatched
@@ -718,73 +671,48 @@ pub struct HlpConfig {
 // ---------------------------------------------------------------------------
 
 /// Top-level transaction action enum. MessagePack tag selects the variant.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Action {
-    PlaceOrder(PlaceOrder),
-    CancelOrder(CancelOrder),
-    OracleUpdate(OracleUpdate),
-    MarketOrder(MarketOrder),
-    Deposit(Deposit),
-    Withdraw(Withdraw),
-    CreateMarket(CreateMarket),
-    WithdrawRequest(WithdrawRequest),
-    ConfirmDeposit(ConfirmDeposit),
-    ConfirmWithdrawal(ConfirmWithdrawal),
-    FailWithdrawal(FailWithdrawal),
-    ApproveAgent(ApproveAgent),
-    RevokeAgent(RevokeAgent),
-    CreateImpactMarket(CreateImpactMarket),
-    ResolveEvent(ResolveEvent),
-    UpdateMarketFees(UpdateMarketFees),
-    /// Set or update an account's fee override (BE-46). Replaces the
-    /// market's base `taker_fee_bps` / `maker_fee_bps` for fills where
-    /// this account is the taker / maker respectively. Relayer-signed.
-    SetAccountFeeOverride(SetAccountFeeOverride),
-    /// Relayer marks a Solana deposit signature as permanently failed
-    /// (malformed tx, unsupported token, dust). The user is NOT credited;
-    /// the signature is recorded so subsequent ConfirmDeposit/FailDeposit
-    /// for the same sig are no-ops. See [`FailDeposit`].
-    FailDeposit(FailDeposit),
-    /// Test/admin: force-run end-of-block liquidations immediately. Used by
-    /// integration scenarios that need to deterministically engineer a
-    /// cascade or bad-debt path without waiting for the natural end-of-block
-    /// timing. Authorized by the relayer allowlist (same as OracleUpdate).
-    RunLiquidationSweep(RunLiquidationSweep),
-    /// Test/admin: force-run a funding tick on a single market immediately,
-    /// bypassing the `funding_interval_ms` clock check. Used by S13/S14 to
-    /// fire funding at a precise scenario point rather than waiting on
-    /// chain time. Authorized by the relayer allowlist.
-    RunFundingTick(RunFundingTick),
-    /// BE-31 Phase B: composite-CEX price update for the multi-source
-    /// mark-price median. See `OracleUpdateComposite` docstring for
-    /// the trust model. Authorized by a feeder-specific allowlist
-    /// (separate from the Pyth oracle's relayer allowlist).
-    OracleUpdateComposite(OracleUpdateComposite),
-    /// User-side action: pick a more conservative initial-margin
-    /// requirement on a single market than the market's default. The
-    /// engine takes `max(market.im_bps, user_im_bps)` on every
-    /// IM-gated check, so users can deleverage but not exceed the
-    /// market's risk floor. BE-16, 2026-05-03.
-    SetUserMarketLeverage(SetUserMarketLeverage),
-    /// Close an existing position by placing an opposite-side IOC order
-    /// at oracle±spread. Idempotent on already-closed positions. Replaces
-    /// the pattern of placing opposite-side market orders or cancelling
-    /// resting orders. S49, Auros doc plan (2026-05-09).
-    ClosePosition(ClosePosition),
-    /// Cancel one resting order by the caller's client-assigned order id.
-    /// This is the MM-safe cancel path when an acknowledgement carrying the
-    /// exchange order id is delayed or lost.
-    CancelClientOrder(CancelClientOrder),
-    /// Cancel all resting orders for an owner, optionally scoped to a market.
-    /// Used by MM emergency disconnect handlers and quote-refresh loops.
-    CancelAllOrders(CancelAllOrders),
-    /// Atomically cancel one resting order and place a replacement order.
-    /// Used by MMs to refresh quotes without exposing a cancel/place gap.
-    CancelReplaceOrder(CancelReplaceOrder),
-    /// Amend a resting order in place while preserving the exchange order id.
-    /// Price changes and size increases reset queue priority; same-price size
-    /// reductions keep priority.
-    AmendOrder(AmendOrder),
+/// Each variant wraps the corresponding payload struct — see that struct's
+/// documentation for field details, authorization requirements, and behavior.
+macro_rules! define_actions {
+    ($($variant:ident),+ $(,)?) => {
+        #[derive(Clone, Debug, Serialize, Deserialize, derive_more::From)]
+        pub enum Action {
+            $(
+                #[doc = concat!("See [`", stringify!($variant), "`].")]
+                $variant($variant),
+            )+
+        }
+    }
+}
+
+define_actions! {
+    PlaceOrder,
+    CancelOrder,
+    OracleUpdate,
+    MarketOrder,
+    Deposit,
+    Withdraw,
+    CreateMarket,
+    WithdrawRequest,
+    ConfirmDeposit,
+    ConfirmWithdrawal,
+    FailWithdrawal,
+    ApproveAgent,
+    RevokeAgent,
+    CreateImpactMarket,
+    ResolveEvent,
+    UpdateMarketFees,
+    SetAccountFeeOverride,
+    FailDeposit,
+    RunLiquidationSweep,
+    RunFundingTick,
+    OracleUpdateComposite,
+    SetUserMarketLeverage,
+    ClosePosition,
+    CancelClientOrder,
+    CancelAllOrders,
+    CancelReplaceOrder,
+    AmendOrder,
 }
 
 /// Test/admin action — force-runs `run_liquidations` immediately.
@@ -2372,7 +2300,7 @@ impl ExecError {
                 "Ed25519 verification of the V2 envelope failed. Signature, pubkey, or signed bytes are wrong."
             }
             ExecError::SignatureRequired => {
-                "Action requires a V2 (signed) envelope, but a V1 (unsigned) envelope was submitted."
+                "A signed (V2) transaction envelope is required. Unsigned (V1) envelopes are not accepted."
             }
             ExecError::AgentNotAuthorized => {
                 "Tx signer is neither the account owner nor on the owner's approved-agent list."

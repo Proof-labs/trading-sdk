@@ -1,54 +1,131 @@
-use crate::types::{Action, ExecError};
-use serde::{Deserialize, Serialize};
+use crate::types::*;
+use serde::{de::DeserializeOwned, Deserialize, Serialize, Deserializer, Serializer};
 
-pub const ACTION_PLACE_ORDER: u8 = 0x01;
-pub const ACTION_CANCEL_ORDER: u8 = 0x02;
-pub const ACTION_ORACLE_UPDATE: u8 = 0x03;
-pub const ACTION_MARKET_ORDER: u8 = 0x04;
-pub const ACTION_DEPOSIT: u8 = 0x05;
-pub const ACTION_WITHDRAW: u8 = 0x06;
-pub const ACTION_CREATE_MARKET: u8 = 0x07;
-pub const ACTION_WITHDRAW_REQUEST: u8 = 0x08;
-pub const ACTION_CONFIRM_DEPOSIT: u8 = 0x09;
-pub const ACTION_CONFIRM_WITHDRAWAL: u8 = 0x0A;
-pub const ACTION_FAIL_WITHDRAWAL: u8 = 0x0B;
-pub const ACTION_APPROVE_AGENT: u8 = 0x0C;
-pub const ACTION_REVOKE_AGENT: u8 = 0x0D;
-pub const ACTION_CREATE_IMPACT_MARKET: u8 = 0x0E;
-pub const ACTION_RESOLVE_EVENT: u8 = 0x0F;
-pub const ACTION_UPDATE_MARKET_FEES: u8 = 0x10;
-pub const ACTION_RUN_LIQUIDATION_SWEEP: u8 = 0x11;
-pub const ACTION_RUN_FUNDING_TICK: u8 = 0x12;
-/// BE-46: per-account fee override (relayer-signed admin action).
-pub const ACTION_SET_ACCOUNT_FEE_OVERRIDE: u8 = 0x13;
-/// BE-31 Phase B: composite-CEX price update.
-pub const ACTION_ORACLE_UPDATE_COMPOSITE: u8 = 0x14;
-/// BE-40 — relayer-signed action that marks a Solana deposit signature
-/// as permanently failed (malformed tx, unsupported token, dust). User
-/// is NOT credited. Idempotent on retry; no-op if the signature is
-/// already in either the processed-deposits or failed-deposits set.
-pub const ACTION_FAIL_DEPOSIT: u8 = 0x15;
-/// Pick a per-user IM override on a single market. User-signed,
-/// not relayer-signed — each owner sets their own. BE-16.
-pub const ACTION_SET_USER_MARKET_LEVERAGE: u8 = 0x16;
-/// Close an existing position via opposite-side IOC order. User-signed.
-/// Idempotent on already-closed positions. S49.
-pub const ACTION_CLOSE_POSITION: u8 = 0x17;
-/// Cancel an active resting order by owner-scoped client_order_id.
-pub const ACTION_CANCEL_CLIENT_ORDER: u8 = 0x18;
-/// Cancel all active resting orders for an owner, optionally market-scoped.
-pub const ACTION_CANCEL_ALL_ORDERS: u8 = 0x19;
-/// Atomically cancel one resting order and place its replacement.
-pub const ACTION_CANCEL_REPLACE_ORDER: u8 = 0x1A;
-/// Amend one resting order in place while preserving its order id.
-pub const ACTION_AMEND_ORDER: u8 = 0x1B;
+/// Structured output of encoding an action payload for the wire.
+struct EncodedAction {
+    action_type: u8,
+    payload: WireBlob,
+}
+
+/// Trait that pairs each action payload type with its wire discriminant
+/// and provides msgpack encode/decode.
+trait EncodePayload: Serialize + DeserializeOwned {
+    const ACTION_TYPE: u8;
+
+    fn encode_payload(&self) -> Result<WireBlob, ExecError> {
+        let bytes = rmp_serde::to_vec(self)
+            .map_err(|e| ExecError::InternalError(e.to_string()))?;
+        Ok(WireBlob(bytes))
+    }
+
+    fn encode_action(&self) -> Result<EncodedAction, ExecError> {
+        self.encode_payload().map(|payload| EncodedAction {
+            action_type: Self::ACTION_TYPE,
+            payload,
+        })
+    }
+}
+
+macro_rules! impl_action_encoding {
+    ($($ty:ident => $code:expr),+ $(,)?) => {
+        $(impl EncodePayload for $ty {
+            const ACTION_TYPE: u8 = $code;
+        })+
+
+        impl Action {
+            fn encode_action(&self) -> Result<EncodedAction, ExecError> {
+                match self {
+                    $(Self::$ty(cmd) => cmd.encode_action()),+,
+                }
+            }
+
+            fn encode_payload(&self) -> Result<WireBlob, ExecError> {
+                match self {
+                    $(Self::$ty(cmd) => cmd.encode_payload()),+,
+                }
+            }
+        }
+
+        fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
+            let de = |e: rmp_serde::decode::Error| ExecError::DecodeError(e.to_string());
+            match action_type {
+                $($code => rmp_serde::from_slice::<$ty>(payload).map_err(de).map(Action::from)),+,
+                other => Err(ExecError::DecodeError(format!(
+                    "unknown action_type: {other:#x}"
+                ))),
+            }
+        }
+    }
+}
+
+impl_action_encoding! {
+    PlaceOrder => 0x01,
+    CancelOrder => 0x02,
+    CancelClientOrder => 0x18,
+    CancelAllOrders => 0x19,
+    CancelReplaceOrder => 0x1A,
+    OracleUpdate => 0x03,
+    MarketOrder => 0x04,
+    Deposit => 0x05,
+    Withdraw => 0x06,
+    CreateMarket => 0x07,
+    WithdrawRequest => 0x08,
+    ConfirmDeposit => 0x09,
+    ConfirmWithdrawal => 0x0A,
+    FailWithdrawal => 0x0B,
+    ApproveAgent => 0x0C,
+    RevokeAgent => 0x0D,
+    CreateImpactMarket => 0x0E,
+    ResolveEvent => 0x0F,
+    UpdateMarketFees => 0x10,
+    SetAccountFeeOverride => 0x13,
+    RunLiquidationSweep => 0x11,
+    RunFundingTick => 0x12,
+    OracleUpdateComposite => 0x14,
+    FailDeposit => 0x15,
+    SetUserMarketLeverage => 0x16,
+    ClosePosition => 0x17,
+    AmendOrder => 0x1B,
+}
+
+/// Byte buffer that always serializes as msgpack `bin` (0xc4/c5/c6),
+/// never as msgpack `array` (0xdc/0xdd). Used in `WireTxEnvelope` fields
+/// that must match the Go CheckTx parser's wire format.
+#[derive(Clone, Debug)]
+struct WireBlob(Vec<u8>);
+
+impl Serialize for WireBlob {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        serde_bytes::Bytes::new(&self.0).serialize(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for WireBlob {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        serde_bytes::ByteBuf::deserialize(d).map(|b| WireBlob(b.into_vec()))
+    }
+}
+
+#[cfg(test)]
+impl WireBlob {
+    fn from_test_payload(bytes: Vec<u8>) -> Self {
+        WireBlob(bytes)
+    }
+}
+
+impl std::ops::Deref for WireBlob {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Vec<u8> {
+        &self.0
+    }
+}
 
 /// Wire envelope: `[version=2, action_type, seq, payload_bytes, pubkey, signature]`.
 ///
-/// `payload` uses `serde_bytes` so rmp-serde emits it as a msgpack `bin`
-/// (0xc4/c5/c6) rather than an array of u8 (0xdc). The Go CheckTx parser
-/// (exchange-node/check_tx.go) and the SDK both produce/consume the same
-/// shape — keep these in lockstep.
+/// Byte fields use [`WireBlob`] which enforces msgpack `bin` encoding at the
+/// type level (not just an annotation). The Go CheckTx parser
+/// (exchange-node/check_tx.go) and the SDK both expect this shape.
 ///
 /// The `version` byte stays `2` and the signing-prefix string stays
 /// `"ProofExchange-v2"` because every existing signature in dev/devnet
@@ -59,8 +136,7 @@ struct WireTxEnvelope {
     version: u8,
     action_type: u8,
     seq: u64,
-    #[serde(with = "serde_bytes")]
-    payload: Vec<u8>,
+    payload: WireBlob,
     #[serde(with = "serde_bytes")]
     pubkey: [u8; 32],
     #[serde(with = "serde_bytes")]
@@ -84,95 +160,6 @@ pub struct DecodedTx {
     pub auth: TxAuth,
 }
 
-/// Decode a payload into an Action given its action_type discriminant.
-fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
-    let de = |e: rmp_serde::decode::Error| ExecError::DecodeError(e.to_string());
-    match action_type {
-        ACTION_PLACE_ORDER => Ok(Action::PlaceOrder(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_CANCEL_ORDER => Ok(Action::CancelOrder(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_CANCEL_CLIENT_ORDER => Ok(Action::CancelClientOrder(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_CANCEL_ALL_ORDERS => Ok(Action::CancelAllOrders(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_CANCEL_REPLACE_ORDER => Ok(Action::CancelReplaceOrder(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_AMEND_ORDER => Ok(Action::AmendOrder(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_ORACLE_UPDATE => Ok(Action::OracleUpdate(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_MARKET_ORDER => Ok(Action::MarketOrder(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_DEPOSIT => Ok(Action::Deposit(rmp_serde::from_slice(payload).map_err(de)?)),
-        ACTION_WITHDRAW => Ok(Action::Withdraw(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_CREATE_MARKET => Ok(Action::CreateMarket(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_WITHDRAW_REQUEST => Ok(Action::WithdrawRequest(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_CONFIRM_DEPOSIT => Ok(Action::ConfirmDeposit(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_CONFIRM_WITHDRAWAL => Ok(Action::ConfirmWithdrawal(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_FAIL_WITHDRAWAL => Ok(Action::FailWithdrawal(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_APPROVE_AGENT => Ok(Action::ApproveAgent(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_REVOKE_AGENT => Ok(Action::RevokeAgent(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_CREATE_IMPACT_MARKET => Ok(Action::CreateImpactMarket(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_RESOLVE_EVENT => Ok(Action::ResolveEvent(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_UPDATE_MARKET_FEES => Ok(Action::UpdateMarketFees(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_SET_ACCOUNT_FEE_OVERRIDE => Ok(Action::SetAccountFeeOverride(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_RUN_LIQUIDATION_SWEEP => Ok(Action::RunLiquidationSweep(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_RUN_FUNDING_TICK => Ok(Action::RunFundingTick(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_ORACLE_UPDATE_COMPOSITE => Ok(Action::OracleUpdateComposite(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_FAIL_DEPOSIT => Ok(Action::FailDeposit(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_SET_USER_MARKET_LEVERAGE => Ok(Action::SetUserMarketLeverage(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        ACTION_CLOSE_POSITION => Ok(Action::ClosePosition(
-            rmp_serde::from_slice(payload).map_err(de)?,
-        )),
-        other => Err(ExecError::DecodeError(format!(
-            "unknown action_type: {other:#x}"
-        ))),
-    }
-}
-
 /// Decode raw tx bytes as a signed wire envelope:
 /// fixarray(6) `[version=2, action_type, seq, payload, pubkey, signature]`.
 pub fn decode_tx(bytes: &[u8]) -> Result<DecodedTx, ExecError> {
@@ -183,9 +170,9 @@ pub fn decode_tx(bytes: &[u8]) -> Result<DecodedTx, ExecError> {
     let envelope: WireTxEnvelope =
         rmp_serde::from_slice(bytes).map_err(|e| ExecError::DecodeError(e.to_string()))?;
 
-    if envelope.version != 2 {
+    if envelope.version < 2 {
         return Err(ExecError::DecodeError(format!(
-            "envelope requires version 2, got {}",
+            "envelope requires version >=2, got {}",
             envelope.version
         )));
     }
@@ -199,93 +186,9 @@ pub fn decode_tx(bytes: &[u8]) -> Result<DecodedTx, ExecError> {
             pubkey: envelope.pubkey,
             signature: envelope.signature,
             action_type: envelope.action_type,
-            payload: envelope.payload,
+            payload: envelope.payload.0,
         },
     })
-}
-
-/// Determine the action_type byte and serialize the payload for an Action.
-fn encode_action(action: &Action) -> Result<(u8, Vec<u8>), ExecError> {
-    let enc = |e: rmp_serde::encode::Error| ExecError::InternalError(e.to_string());
-    match action {
-        Action::PlaceOrder(cmd) => Ok((ACTION_PLACE_ORDER, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::CancelOrder(cmd) => Ok((ACTION_CANCEL_ORDER, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::CancelClientOrder(cmd) => Ok((
-            ACTION_CANCEL_CLIENT_ORDER,
-            rmp_serde::to_vec(cmd).map_err(enc)?,
-        )),
-        Action::CancelAllOrders(cmd) => Ok((
-            ACTION_CANCEL_ALL_ORDERS,
-            rmp_serde::to_vec(cmd).map_err(enc)?,
-        )),
-        Action::CancelReplaceOrder(cmd) => Ok((
-            ACTION_CANCEL_REPLACE_ORDER,
-            rmp_serde::to_vec(cmd).map_err(enc)?,
-        )),
-        Action::AmendOrder(cmd) => Ok((ACTION_AMEND_ORDER, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::OracleUpdate(cmd) => {
-            Ok((ACTION_ORACLE_UPDATE, rmp_serde::to_vec(cmd).map_err(enc)?))
-        }
-        Action::MarketOrder(cmd) => Ok((ACTION_MARKET_ORDER, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::Deposit(cmd) => Ok((ACTION_DEPOSIT, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::Withdraw(cmd) => Ok((ACTION_WITHDRAW, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::CreateMarket(cmd) => {
-            Ok((ACTION_CREATE_MARKET, rmp_serde::to_vec(cmd).map_err(enc)?))
-        }
-        Action::WithdrawRequest(cmd) => Ok((
-            ACTION_WITHDRAW_REQUEST,
-            rmp_serde::to_vec(cmd).map_err(enc)?,
-        )),
-        Action::ConfirmDeposit(cmd) => {
-            Ok((ACTION_CONFIRM_DEPOSIT, rmp_serde::to_vec(cmd).map_err(enc)?))
-        }
-        Action::ConfirmWithdrawal(cmd) => Ok((
-            ACTION_CONFIRM_WITHDRAWAL,
-            rmp_serde::to_vec(cmd).map_err(enc)?,
-        )),
-        Action::FailWithdrawal(cmd) => {
-            Ok((ACTION_FAIL_WITHDRAWAL, rmp_serde::to_vec(cmd).map_err(enc)?))
-        }
-        Action::ApproveAgent(cmd) => {
-            Ok((ACTION_APPROVE_AGENT, rmp_serde::to_vec(cmd).map_err(enc)?))
-        }
-        Action::RevokeAgent(cmd) => Ok((ACTION_REVOKE_AGENT, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::CreateImpactMarket(cmd) => Ok((
-            ACTION_CREATE_IMPACT_MARKET,
-            rmp_serde::to_vec(cmd).map_err(enc)?,
-        )),
-        Action::ResolveEvent(cmd) => {
-            Ok((ACTION_RESOLVE_EVENT, rmp_serde::to_vec(cmd).map_err(enc)?))
-        }
-        Action::UpdateMarketFees(cmd) => Ok((
-            ACTION_UPDATE_MARKET_FEES,
-            rmp_serde::to_vec(cmd).map_err(enc)?,
-        )),
-        Action::SetAccountFeeOverride(cmd) => Ok((
-            ACTION_SET_ACCOUNT_FEE_OVERRIDE,
-            rmp_serde::to_vec(cmd).map_err(enc)?,
-        )),
-        Action::RunLiquidationSweep(cmd) => Ok((
-            ACTION_RUN_LIQUIDATION_SWEEP,
-            rmp_serde::to_vec(cmd).map_err(enc)?,
-        )),
-        Action::RunFundingTick(cmd) => Ok((
-            ACTION_RUN_FUNDING_TICK,
-            rmp_serde::to_vec(cmd).map_err(enc)?,
-        )),
-        Action::OracleUpdateComposite(cmd) => Ok((
-            ACTION_ORACLE_UPDATE_COMPOSITE,
-            rmp_serde::to_vec(cmd).map_err(enc)?,
-        )),
-        Action::FailDeposit(cmd) => Ok((ACTION_FAIL_DEPOSIT, rmp_serde::to_vec(cmd).map_err(enc)?)),
-        Action::SetUserMarketLeverage(cmd) => Ok((
-            ACTION_SET_USER_MARKET_LEVERAGE,
-            rmp_serde::to_vec(cmd).map_err(enc)?,
-        )),
-        Action::ClosePosition(cmd) => {
-            Ok((ACTION_CLOSE_POSITION, rmp_serde::to_vec(cmd).map_err(enc)?))
-        }
-    }
 }
 
 /// Encode an action with a pre-computed pubkey + signature into a wire envelope.
@@ -297,7 +200,7 @@ pub fn encode_signed_tx(
     pubkey: &[u8; 32],
     signature: &[u8; 64],
 ) -> Result<Vec<u8>, ExecError> {
-    let (action_type, payload) = encode_action(action)?;
+    let EncodedAction { action_type, payload } = action.encode_action()?;
     let envelope = WireTxEnvelope {
         version: 2,
         action_type,
@@ -321,7 +224,7 @@ pub fn sign_and_encode_with_chain(
 ) -> Result<Vec<u8>, ExecError> {
     use ed25519_dalek::Signer;
 
-    let (action_type, payload) = encode_action(action)?;
+    let EncodedAction { action_type, payload } = action.encode_action()?;
     let msg = crate::crypto::signing_message(chain_id, action_type, seq, &payload);
     let sig = signing_key.sign(&msg);
 
@@ -384,134 +287,71 @@ mod tests {
         sign_and_encode(action, seq, &test_key())
     }
 
-    #[test]
-    fn test_round_trip_place_order() {
-        let action = Action::PlaceOrder(PlaceOrder {
-            market: 1,
-            owner: [0xAA; 20],
-            side: Side::Buy,
-            price: 10000,
-            quantity: 50,
-            client_order_id: Some(42),
-            post_only: false,
-            reduce_only: false,
-            time_in_force: TimeInForce::Gtc,
-        });
-
-        let encoded = encode_tx(&action, 100).unwrap();
-        let DecodedTx {
-            action: decoded,
-            seq,
-            ..
-        } = decode_tx(&encoded).unwrap();
-
-        assert_eq!(seq, 100);
-        match decoded {
-            Action::PlaceOrder(cmd) => {
-                assert_eq!(cmd.market, 1);
-                assert_eq!(cmd.price, 10000);
-                assert_eq!(cmd.quantity, 50);
-                assert_eq!(cmd.side, Side::Buy);
-                assert_eq!(cmd.owner, [0xAA; 20]);
-                assert_eq!(cmd.client_order_id, Some(42));
-                assert_eq!(cmd.time_in_force, TimeInForce::Gtc);
-            }
-            _ => panic!("expected PlaceOrder"),
-        }
+    fn assert_round_trip(action: &Action, seq: u64) {
+        let encoded = encode_tx(action, seq).unwrap();
+        let dt = decode_tx(&encoded).unwrap();
+        assert_eq!(dt.seq, seq);
+        assert_eq!(
+            format!("{:?}", action),
+            format!("{:?}", dt.action),
+        );
     }
 
     #[test]
-    fn test_round_trip_place_order_fok_time_in_force() {
-        let action = Action::PlaceOrder(PlaceOrder {
-            market: 1,
-            owner: [0xAA; 20],
-            side: Side::Buy,
-            price: 10000,
-            quantity: 50,
-            client_order_id: Some(43),
-            post_only: false,
-            reduce_only: false,
-            time_in_force: TimeInForce::Fok,
-        });
+    fn test_golden_vectors() {
+        const PLACE_HEX: &str = include_str!("../../spec/golden-vectors/place_order.hex");
+        const CANCEL_HEX: &str = include_str!("../../spec/golden-vectors/cancel_order.hex");
+        const ORACLE_HEX: &str = include_str!("../../spec/golden-vectors/oracle_update.hex");
 
-        let encoded = encode_tx(&action, 101).unwrap();
-        let DecodedTx {
-            action: decoded,
-            seq,
-            ..
-        } = decode_tx(&encoded).unwrap();
-        assert_eq!(seq, 101);
-        match decoded {
-            Action::PlaceOrder(cmd) => {
-                assert_eq!(cmd.client_order_id, Some(43));
-                assert_eq!(cmd.time_in_force, TimeInForce::Fok);
-            }
-            _ => panic!("expected PlaceOrder"),
-        }
-    }
+        let cases: Vec<(Action, u64, &str, u8)> = vec![
+            (
+                Action::PlaceOrder(PlaceOrder {
+                    market: 1,
+                    owner: [0x01; 20],
+                    side: Side::Buy,
+                    price: 100,
+                    quantity: 10,
+                    client_order_id: None,
+                    post_only: false,
+                    reduce_only: false,
+                    time_in_force: TimeInForce::Gtc,
+                }),
+                1,
+                PLACE_HEX.trim(),
+                PlaceOrder::ACTION_TYPE,
+            ),
+            (
+                Action::CancelOrder(CancelOrder {
+                    order_id: 42,
+                    owner: [0x02; 20],
+                }),
+                2,
+                CANCEL_HEX.trim(),
+                CancelOrder::ACTION_TYPE,
+            ),
+            (
+                Action::OracleUpdate(OracleUpdate {
+                    market: 1,
+                    price: 5000,
+                    signer: [0x03; 20],
+                    publish_time_ms: 0,
+                }),
+                3,
+                ORACLE_HEX.trim(),
+                OracleUpdate::ACTION_TYPE,
+            ),
+        ];
 
-    #[test]
-    fn test_round_trip_cancel_order() {
-        let action = Action::CancelOrder(CancelOrder {
-            order_id: 999,
-            owner: [0xBB; 20],
-        });
+        for (action, seq, expected_hex, action_type) in cases {
+            let encoded_a = encode_tx(&action, seq).unwrap();
+            let encoded_b = encode_tx(&action, seq).unwrap();
+            assert_eq!(encoded_a, encoded_b, "encoding must be deterministic");
+            assert_eq!(hex::encode(&encoded_a), expected_hex, "golden vector mismatch");
 
-        let encoded = encode_tx(&action, 200).unwrap();
-        let DecodedTx {
-            action: decoded,
-            seq,
-            ..
-        } = decode_tx(&encoded).unwrap();
+            let dt = decode_tx(&encoded_a).unwrap();
+            assert_eq!(dt.seq, seq);
 
-        assert_eq!(seq, 200);
-        match decoded {
-            Action::CancelOrder(cmd) => {
-                assert_eq!(cmd.order_id, 999);
-                assert_eq!(cmd.owner, [0xBB; 20]);
-            }
-            _ => panic!("expected CancelOrder"),
-        }
-    }
-
-    #[test]
-    fn test_round_trip_cancel_replace_order() {
-        let action = Action::CancelReplaceOrder(CancelReplaceOrder {
-            owner: [0xCC; 20],
-            cancel_order_id: None,
-            cancel_client_order_id: Some(101),
-            market: 7,
-            side: Side::Sell,
-            price: 12345,
-            quantity: 9,
-            client_order_id: Some(202),
-            post_only: true,
-            reduce_only: false,
-            time_in_force: TimeInForce::Fok,
-        });
-
-        let encoded = encode_tx(&action, 201).unwrap();
-        let DecodedTx {
-            action: decoded,
-            seq,
-            ..
-        } = decode_tx(&encoded).unwrap();
-
-        assert_eq!(seq, 201);
-        match decoded {
-            Action::CancelReplaceOrder(cmd) => {
-                assert_eq!(cmd.owner, [0xCC; 20]);
-                assert_eq!(cmd.cancel_order_id, None);
-                assert_eq!(cmd.cancel_client_order_id, Some(101));
-                assert_eq!(cmd.market, 7);
-                assert_eq!(cmd.side, Side::Sell);
-                assert_eq!(cmd.price, 12345);
-                assert_eq!(cmd.quantity, 9);
-                assert_eq!(cmd.client_order_id, Some(202));
-                assert!(cmd.post_only);
-                assert_eq!(cmd.time_in_force, TimeInForce::Fok);
-            }
-            _ => panic!("expected CancelReplaceOrder"),
+            assert_eq!(peek_action_type(&encoded_a), Some(action_type));
         }
     }
 
@@ -525,7 +365,7 @@ mod tests {
         });
 
         let encoded = encode_tx(&action, 202).unwrap();
-        assert_eq!(peek_action_type(&encoded), Some(ACTION_AMEND_ORDER));
+        assert_eq!(peek_action_type(&encoded), Some(AmendOrder::ACTION_TYPE));
         let DecodedTx {
             action: decoded,
             seq,
@@ -545,31 +385,12 @@ mod tests {
     }
 
     #[test]
-    fn test_golden_vector_determinism() {
-        let action = Action::PlaceOrder(PlaceOrder {
-            market: 1,
-            owner: [0x01; 20],
-            side: Side::Buy,
-            price: 100,
-            quantity: 10,
-            client_order_id: None,
-            post_only: false,
-            reduce_only: false,
-            time_in_force: TimeInForce::Gtc,
-        });
-
-        let encoded_a = encode_tx(&action, 1).unwrap();
-        let encoded_b = encode_tx(&action, 1).unwrap();
-        assert_eq!(encoded_a, encoded_b, "encoding must be deterministic");
-    }
-
-    #[test]
-    fn test_reject_unknown_version() {
+    fn test_reject_deprecated_version_1() {
         let bad_envelope = WireTxEnvelope {
-            version: 99,
-            action_type: ACTION_PLACE_ORDER,
+            version: 1,
+            action_type: PlaceOrder::ACTION_TYPE,
             seq: 0,
-            payload: rmp_serde::to_vec(&PlaceOrder {
+            payload: WireBlob::from_test_payload(rmp_serde::to_vec(&PlaceOrder {
                 market: 1,
                 owner: [0x00; 20],
                 side: Side::Buy,
@@ -580,110 +401,13 @@ mod tests {
                 reduce_only: false,
                 time_in_force: TimeInForce::Gtc,
             })
-            .unwrap(),
+            .unwrap()),
             pubkey: [0u8; 32],
             signature: [0u8; 64],
         };
         let encoded = rmp_serde::to_vec(&bad_envelope).unwrap();
         let result = decode_tx(&encoded);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_generate_golden_vectors() {
-        let place = Action::PlaceOrder(PlaceOrder {
-            market: 1,
-            owner: [0x01; 20],
-            side: Side::Buy,
-            price: 100,
-            quantity: 10,
-            client_order_id: None,
-            post_only: false,
-            reduce_only: false,
-            time_in_force: TimeInForce::Gtc,
-        });
-        let place_bytes = encode_tx(&place, 1).unwrap();
-        println!("GOLDEN_PLACE={}", hex::encode(&place_bytes));
-
-        let cancel = Action::CancelOrder(CancelOrder {
-            order_id: 42,
-            owner: [0x02; 20],
-        });
-        let cancel_bytes = encode_tx(&cancel, 2).unwrap();
-        println!("GOLDEN_CANCEL={}", hex::encode(&cancel_bytes));
-
-        let oracle = Action::OracleUpdate(OracleUpdate {
-            market: 1,
-            price: 5000,
-            signer: [0x03; 20],
-            publish_time_ms: 0,
-        });
-        let oracle_bytes = encode_tx(&oracle, 3).unwrap();
-        println!("GOLDEN_ORACLE={}", hex::encode(&oracle_bytes));
-
-        let dt = decode_tx(&place_bytes).unwrap();
-        assert_eq!(dt.seq, 1);
-        assert!(matches!(dt.action, Action::PlaceOrder(_)));
-
-        let dt = decode_tx(&cancel_bytes).unwrap();
-        assert_eq!(dt.seq, 2);
-        assert!(matches!(dt.action, Action::CancelOrder(_)));
-
-        let dt = decode_tx(&oracle_bytes).unwrap();
-        assert_eq!(dt.seq, 3);
-        assert!(matches!(dt.action, Action::OracleUpdate(_)));
-    }
-
-    #[test]
-    fn test_golden_vector_place_order_matches_file() {
-        let expected_hex = include_str!("../../spec/golden-vectors/place_order.hex").trim();
-        let action = Action::PlaceOrder(PlaceOrder {
-            market: 1,
-            owner: [0x01; 20],
-            side: Side::Buy,
-            price: 100,
-            quantity: 10,
-            client_order_id: None,
-            post_only: false,
-            reduce_only: false,
-            time_in_force: TimeInForce::Gtc,
-        });
-        let encoded = encode_tx(&action, 1).unwrap();
-        assert_eq!(hex::encode(&encoded), expected_hex);
-    }
-
-    #[test]
-    fn test_golden_vector_cancel_order_matches_file() {
-        let expected_hex = include_str!("../../spec/golden-vectors/cancel_order.hex").trim();
-        let action = Action::CancelOrder(CancelOrder {
-            order_id: 42,
-            owner: [0x02; 20],
-        });
-        let encoded = encode_tx(&action, 2).unwrap();
-        assert_eq!(hex::encode(&encoded), expected_hex);
-    }
-
-    #[test]
-    fn test_golden_vector_oracle_update_matches_file() {
-        let expected_hex = include_str!("../../spec/golden-vectors/oracle_update.hex").trim();
-        let action = Action::OracleUpdate(OracleUpdate {
-            market: 1,
-            price: 5000,
-            signer: [0x03; 20],
-            publish_time_ms: 0,
-        });
-        let encoded = encode_tx(&action, 3).unwrap();
-        assert_eq!(hex::encode(&encoded), expected_hex);
-    }
-
-    #[test]
-    fn test_peek_action_type() {
-        let action = Action::CancelOrder(CancelOrder {
-            order_id: 1,
-            owner: [0; 20],
-        });
-        let encoded = encode_tx(&action, 5).unwrap();
-        assert_eq!(peek_action_type(&encoded), Some(ACTION_CANCEL_ORDER));
     }
 
     // -----------------------------------------------------------------------
@@ -801,17 +525,7 @@ mod tests {
     #[test]
     fn test_all_action_types_round_trip() {
         for (i, action) in all_action_variants().into_iter().enumerate() {
-            let seq = (i as u64) + 1;
-            let encoded = encode_tx(&action, seq).unwrap();
-            let dt = decode_tx(&encoded).unwrap();
-            assert_eq!(dt.seq, seq);
-
-            // Verify fields via Debug representation (all types derive Debug)
-            assert_eq!(
-                format!("{:?}", action),
-                format!("{:?}", dt.action),
-                "round-trip mismatch for variant index {i}"
-            );
+            assert_round_trip(&action, (i as u64) + 1);
         }
     }
 
@@ -841,9 +555,9 @@ mod tests {
         };
         let envelope = WireTxEnvelope {
             version: 2,
-            action_type: ACTION_CREATE_MARKET,
+            action_type: CreateMarket::ACTION_TYPE,
             seq: 42,
-            payload: rmp_serde::to_vec(&legacy).unwrap(),
+            payload: WireBlob::from_test_payload(rmp_serde::to_vec(&legacy).unwrap()),
             pubkey: [0u8; 32],
             signature: [0u8; 64],
         };
@@ -859,9 +573,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_codec_max_values() {
-        let actions: Vec<Action> = vec![
+    fn max_value_actions() -> Vec<Action> {
+        vec![
             Action::PlaceOrder(PlaceOrder {
                 market: u32::MAX,
                 owner: [0xFF; 20],
@@ -932,23 +645,11 @@ mod tests {
                 reason: "x".repeat(1024),
                 signer: [0xFF; 20],
             }),
-        ];
-
-        for (i, action) in actions.into_iter().enumerate() {
-            let encoded = encode_tx(&action, u64::MAX).unwrap();
-            let dt = decode_tx(&encoded).unwrap();
-            assert_eq!(dt.seq, u64::MAX);
-            assert_eq!(
-                format!("{:?}", action),
-                format!("{:?}", dt.action),
-                "max-values round-trip failed for variant index {i}"
-            );
-        }
+        ]
     }
 
-    #[test]
-    fn test_codec_empty_and_minimal() {
-        let actions: Vec<Action> = vec![
+    fn min_value_actions() -> Vec<Action> {
+        vec![
             Action::PlaceOrder(PlaceOrder {
                 market: 0,
                 owner: [0u8; 20],
@@ -1019,17 +720,20 @@ mod tests {
                 reason: String::new(),
                 signer: [0u8; 20],
             }),
-        ];
+        ]
+    }
 
-        for (i, action) in actions.into_iter().enumerate() {
-            let encoded = encode_tx(&action, 0).unwrap();
-            let dt = decode_tx(&encoded).unwrap();
-            assert_eq!(dt.seq, 0);
-            assert_eq!(
-                format!("{:?}", action),
-                format!("{:?}", dt.action),
-                "minimal-values round-trip failed for variant index {i}"
-            );
+    #[test]
+    fn test_codec_max_values() {
+        for action in max_value_actions() {
+            assert_round_trip(&action, u64::MAX);
+        }
+    }
+
+    #[test]
+    fn test_codec_empty_and_minimal() {
+        for action in min_value_actions() {
+            assert_round_trip(&action, 0);
         }
     }
 
@@ -1127,122 +831,12 @@ mod tests {
     }
 
     #[test]
-    fn test_peek_action_type_all_variants() {
-        let expected: Vec<(Action, u8)> = vec![
-            (
-                Action::PlaceOrder(PlaceOrder {
-                    market: 1,
-                    owner: [0; 20],
-                    side: Side::Buy,
-                    price: 1,
-                    quantity: 1,
-                    client_order_id: None,
-                    post_only: false,
-                    reduce_only: false,
-                    time_in_force: TimeInForce::Gtc,
-                }),
-                ACTION_PLACE_ORDER,
-            ),
-            (
-                Action::CancelOrder(CancelOrder {
-                    order_id: 1,
-                    owner: [0; 20],
-                }),
-                ACTION_CANCEL_ORDER,
-            ),
-            (
-                Action::OracleUpdate(OracleUpdate {
-                    market: 1,
-                    price: 1,
-                    signer: [0; 20],
-                    publish_time_ms: 0,
-                }),
-                ACTION_ORACLE_UPDATE,
-            ),
-            (
-                Action::MarketOrder(MarketOrder {
-                    market: 1,
-                    owner: [0; 20],
-                    side: Side::Buy,
-                    quantity: 1,
-                    client_order_id: None,
-                }),
-                ACTION_MARKET_ORDER,
-            ),
-            (
-                Action::Deposit(Deposit {
-                    owner: [0; 20],
-                    amount: 1,
-                    signer: [0xEE; 20],
-                }),
-                ACTION_DEPOSIT,
-            ),
-            (
-                Action::Withdraw(Withdraw {
-                    owner: [0; 20],
-                    amount: 1,
-                    signer: [0xEE; 20],
-                }),
-                ACTION_WITHDRAW,
-            ),
-            (
-                Action::CreateMarket(CreateMarket {
-                    market: 1,
-                    im_bps: 1000,
-                    mm_bps: 500,
-                    taker_fee_bps: 0,
-                    maker_fee_bps: 0,
-                    signer: [0xEE; 20],
-                    funding_interval_ms: 0,
-                    max_funding_rate_bps: 0,
-                    pool_id: 0,
-                }),
-                ACTION_CREATE_MARKET,
-            ),
-            (
-                Action::WithdrawRequest(WithdrawRequest {
-                    owner: [0; 20],
-                    amount: 1,
-                    solana_destination: [0; 32],
-                }),
-                ACTION_WITHDRAW_REQUEST,
-            ),
-            (
-                Action::ConfirmDeposit(ConfirmDeposit {
-                    owner: [0; 20],
-                    amount: 1,
-                    solana_tx_sig: vec![0; 64],
-                    signer: [0; 20],
-                }),
-                ACTION_CONFIRM_DEPOSIT,
-            ),
-            (
-                Action::ConfirmWithdrawal(ConfirmWithdrawal {
-                    withdrawal_id: 1,
-                    solana_tx_sig: vec![0; 64],
-                    signer: [0; 20],
-                }),
-                ACTION_CONFIRM_WITHDRAWAL,
-            ),
-            (
-                Action::FailWithdrawal(FailWithdrawal {
-                    withdrawal_id: 1,
-                    reason: "test".to_string(),
-                    signer: [0; 20],
-                }),
-                ACTION_FAIL_WITHDRAWAL,
-            ),
-        ];
-
-        for (action, expected_type) in expected {
+    fn test_peek_action_type() {
+        for action in all_action_variants() {
             let encoded = encode_tx(&action, 1).unwrap();
             let peeked = peek_action_type(&encoded);
-            assert_eq!(
-                peeked,
-                Some(expected_type),
-                "peek mismatch for {:?}",
-                action
-            );
+            let expected = action.encode_action().unwrap().action_type;
+            assert_eq!(peeked, Some(expected), "peek mismatch for {action:?}");
         }
     }
 
@@ -1299,40 +893,6 @@ mod tests {
 
     fn test_signing_key() -> ed25519_dalek::SigningKey {
         ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
-    }
-
-    #[test]
-    fn test_v2_round_trip_place_order() {
-        let key = test_signing_key();
-        let action = Action::PlaceOrder(PlaceOrder {
-            market: 1,
-            owner: [0xAA; 20],
-            side: Side::Buy,
-            price: 50_000,
-            quantity: 100,
-            client_order_id: Some(7),
-            post_only: false,
-            reduce_only: false,
-            time_in_force: TimeInForce::Gtc,
-        });
-
-        let encoded = sign_and_encode(&action, 42, &key).unwrap();
-        let decoded = decode_tx(&encoded).unwrap();
-
-        assert_eq!(decoded.seq, 42);
-        let auth = decoded.auth;
-        assert_eq!(auth.pubkey, key.verifying_key().to_bytes());
-        assert_eq!(auth.action_type, ACTION_PLACE_ORDER);
-
-        match decoded.action {
-            Action::PlaceOrder(cmd) => {
-                assert_eq!(cmd.market, 1);
-                assert_eq!(cmd.price, 50_000);
-                assert_eq!(cmd.quantity, 100);
-                assert_eq!(cmd.client_order_id, Some(7));
-            }
-            _ => panic!("expected PlaceOrder"),
-        }
     }
 
     #[test]
@@ -1491,7 +1051,7 @@ mod tests {
         }
         let encoded = rmp_serde::to_vec(&BadEnvelope {
             version: 2,
-            action_type: ACTION_PLACE_ORDER,
+            action_type: PlaceOrder::ACTION_TYPE,
             seq: 1,
             payload: rmp_serde::to_vec(&PlaceOrder {
                 market: 1,
@@ -1526,7 +1086,7 @@ mod tests {
         }
         let encoded = rmp_serde::to_vec(&BadEnvelope {
             version: 2,
-            action_type: ACTION_PLACE_ORDER,
+            action_type: PlaceOrder::ACTION_TYPE,
             seq: 1,
             payload: rmp_serde::to_vec(&PlaceOrder {
                 market: 1,
@@ -1551,57 +1111,11 @@ mod tests {
     #[test]
     fn test_peek_action_type_v2() {
         let key = test_signing_key();
-        let actions_and_types = vec![
-            (
-                Action::PlaceOrder(PlaceOrder {
-                    market: 1,
-                    owner: [0; 20],
-                    side: Side::Buy,
-                    price: 1,
-                    quantity: 1,
-                    client_order_id: None,
-                    post_only: false,
-                    reduce_only: false,
-                    time_in_force: TimeInForce::Gtc,
-                }),
-                ACTION_PLACE_ORDER,
-            ),
-            (
-                Action::CancelReplaceOrder(CancelReplaceOrder {
-                    owner: [0; 20],
-                    cancel_order_id: Some(1),
-                    cancel_client_order_id: None,
-                    market: 1,
-                    side: Side::Buy,
-                    price: 1,
-                    quantity: 1,
-                    client_order_id: None,
-                    post_only: false,
-                    reduce_only: false,
-                    time_in_force: TimeInForce::Gtc,
-                }),
-                ACTION_CANCEL_REPLACE_ORDER,
-            ),
-            (
-                Action::ApproveAgent(ApproveAgent {
-                    owner: [0; 20],
-                    agent_pubkey: [0; 32],
-                }),
-                ACTION_APPROVE_AGENT,
-            ),
-            (
-                Action::RevokeAgent(RevokeAgent {
-                    owner: [0; 20],
-                    agent_pubkey: [0; 32],
-                }),
-                ACTION_REVOKE_AGENT,
-            ),
-        ];
-
-        for (action, expected_type) in actions_and_types {
+        for action in all_action_variants() {
             let encoded = sign_and_encode(&action, 1, &key).unwrap();
             let peeked = peek_action_type(&encoded);
-            assert_eq!(peeked, Some(expected_type));
+            let expected = action.encode_action().unwrap().action_type;
+            assert_eq!(peeked, Some(expected), "v2 peek mismatch for {action:?}");
         }
     }
 
@@ -1891,15 +1405,15 @@ mod tests {
         ))
         .unwrap();
 
-        // Envelope built via the same struct existing tests use, so we
-        // pick up the `serde_bytes` payload encoding for free. The
-        // pubkey/signature are zero because this test only exercises
-        // the codec's payload-decode path, not signature verification.
+        // Envelope uses WireBlob for payload, which enforces msgpack
+        // bin encoding at the type level. The pubkey/signature are zero
+        // because this test only exercises the codec's payload-decode
+        // path, not signature verification.
         let envelope = WireTxEnvelope {
             version: 2,
-            action_type: ACTION_CREATE_MARKET,
+            action_type: CreateMarket::ACTION_TYPE,
             seq: 0,
-            payload: payload_bytes,
+            payload: WireBlob::from_test_payload(payload_bytes),
             pubkey: [0u8; 32],
             signature: [0u8; 64],
         };
