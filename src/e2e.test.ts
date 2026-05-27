@@ -16,6 +16,12 @@ const ZERO_SIG = new Uint8Array(64);
 const encodeTx = (action: Action, seq: bigint) =>
   encodeSignedTx(action, seq, ZERO_PUBKEY, ZERO_SIG);
 
+const MARKET_ID = 1;
+const DEFAULT_PRICE = 100n;
+const DEFAULT_QTY = 10n;
+const SEQ_1 = 1n;
+const MSGPACK_FIXARRAY_6 = 0x96;
+
 const RPC_URL = process.env.RPC_URL;
 const describeE2E = RPC_URL ? describe : describe.skip;
 
@@ -82,19 +88,19 @@ describeE2E("e2e: SDK → CometBFT", () => {
   it("encodeTx produces non-empty bytes with correct msgpack header", () => {
     const action: Action = {
       type: "PlaceOrder",
-      data: { market: 1, owner, side: Side.Buy, price: 100n, quantity: 10n },
+      data: { market: MARKET_ID, owner, side: Side.Buy, price: DEFAULT_PRICE, quantity: DEFAULT_QTY },
     };
-    const bytes = encodeTx(action, 1n);
+    const bytes = encodeTx(action, SEQ_1);
     expect(bytes.length).toBeGreaterThan(4);
-    expect(bytes[0]).toBe(0x96); // msgpack fixarray(6)
+    expect(bytes[0]).toBe(MSGPACK_FIXARRAY_6);
   });
 
   it("base64 round-trip preserves tx bytes", () => {
     const action: Action = {
       type: "PlaceOrder",
-      data: { market: 1, owner, side: Side.Buy, price: 100n, quantity: 10n },
+      data: { market: MARKET_ID, owner, side: Side.Buy, price: DEFAULT_PRICE, quantity: DEFAULT_QTY },
     };
-    const bytes = encodeTx(action, 1n);
+    const bytes = encodeTx(action, SEQ_1);
     const b64 = Buffer.from(bytes).toString("base64");
     const decoded = Buffer.from(b64, "base64");
     expect(new Uint8Array(decoded)).toEqual(bytes);
@@ -103,7 +109,7 @@ describeE2E("e2e: SDK → CometBFT", () => {
   it("submitTx PlaceOrder passes CheckTx", async () => {
     const result = await client.submitTx({
       type: "PlaceOrder",
-      data: { market: 1, owner, side: Side.Buy, price: 100n, quantity: 10n },
+      data: { market: MARKET_ID, owner, side: Side.Buy, price: DEFAULT_PRICE, quantity: DEFAULT_QTY },
     });
     expect(result.code).toBe(0);
     expect(result.hash).toBeTruthy();
@@ -122,7 +128,7 @@ describeE2E("e2e: SDK → CometBFT", () => {
     const signer = randomOwner();
     const result = await client.submitTx({
       type: "OracleUpdate",
-      data: { market: 1, price: 5000n, signer },
+      data: { market: MARKET_ID, price: 5000n, signer },
     });
     expect(result.code).toBe(0);
     expect(result.hash).toBeTruthy();
@@ -131,7 +137,7 @@ describeE2E("e2e: SDK → CometBFT", () => {
   it("submitted tx is included in a block", async () => {
     const result = await client.submitTx({
       type: "PlaceOrder",
-      data: { market: 1, owner, side: Side.Sell, price: 200n, quantity: 5n },
+      data: { market: MARKET_ID, owner, side: Side.Sell, price: 200n, quantity: 5n },
     });
     expect(result.code).toBe(0);
 
@@ -142,7 +148,7 @@ describeE2E("e2e: SDK → CometBFT", () => {
   it("submitted tx appears in block data", async () => {
     const result = await client.submitTx({
       type: "PlaceOrder",
-      data: { market: 1, owner, side: Side.Buy, price: 300n, quantity: 1n },
+      data: { market: MARKET_ID, owner, side: Side.Buy, price: 300n, quantity: 1n },
     });
     expect(result.code).toBe(0);
 
@@ -162,7 +168,7 @@ describeE2E("e2e: SDK → CometBFT", () => {
       const result = await client.submitTx({
         type: "PlaceOrder",
         data: {
-          market: 1,
+          market: MARKET_ID,
           owner,
           side: Side.Buy,
           price: BigInt(1000 + i),

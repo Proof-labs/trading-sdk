@@ -39,10 +39,7 @@ const TABLE: Record<number, ExecErrorInfo> = {
   15: { name: "WithdrawalAlreadyProcessed", description: "withdrawal already processed" },
   16: { name: "DuplicateDeposit", description: "duplicate deposit signature (replay protection)" },
   17: { name: "InvalidSignature", description: "invalid Ed25519 signature" },
-  // Code 18 (SignatureRequired) was retired when the unsigned envelope was
-  // removed pre-launch — every tx is signed, so the engine never emits it.
-  // The slot stays vacant rather than being reshuffled, in case any
-  // downstream tooling still references it.
+  18: { name: "SignatureRequired", description: "signed (V2) envelope required" },
   19: { name: "AgentNotAuthorized", description: "signer is not the owner or an authorized agent" },
   20: { name: "AgentCannotWithdraw", description: "agent wallets cannot perform withdrawals" },
   21: {
