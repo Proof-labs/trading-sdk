@@ -38,12 +38,6 @@ macro_rules! impl_action_encoding {
                     $(Self::$ty(cmd) => cmd.encode_action()),+,
                 }
             }
-
-            fn encode_payload(&self) -> Result<WireBlob, ExecError> {
-                match self {
-                    $(Self::$ty(cmd) => cmd.encode_payload()),+,
-                }
-            }
         }
 
         fn decode_action(action_type: u8, payload: &[u8]) -> Result<Action, ExecError> {
@@ -121,6 +115,17 @@ impl std::ops::Deref for WireBlob {
     }
 }
 
+/// Envelope version emitted by this build.
+pub const ENVELOPE_VERSION: u8 = 2;
+
+/// Wire envelope versions this build accepts on decode. Single source of
+/// truth — mirrored by `supportedEnvelopeVersions` in
+/// `exchange-node/check_tx.go` and the SDK check in `sdk/src/codec.ts`.
+/// Add a new version here when introducing one; drop an old one when it
+/// is no longer permitted. Decoders MUST consult this slice instead of
+/// hardcoding numeric comparisons.
+pub const SUPPORTED_ENVELOPE_VERSIONS: &[u8] = &[ENVELOPE_VERSION];
+
 /// Wire envelope: `[version=2, action_type, seq, payload_bytes, pubkey, signature]`.
 ///
 /// Byte fields use [`WireBlob`] which enforces msgpack `bin` encoding at the
@@ -170,10 +175,10 @@ pub fn decode_tx(bytes: &[u8]) -> Result<DecodedTx, ExecError> {
     let envelope: WireTxEnvelope =
         rmp_serde::from_slice(bytes).map_err(|e| ExecError::DecodeError(e.to_string()))?;
 
-    if envelope.version < 2 {
+    if !SUPPORTED_ENVELOPE_VERSIONS.contains(&envelope.version) {
         return Err(ExecError::DecodeError(format!(
-            "envelope requires version >=2, got {}",
-            envelope.version
+            "unsupported envelope version: {} (supported: {:?})",
+            envelope.version, SUPPORTED_ENVELOPE_VERSIONS
         )));
     }
 
@@ -202,7 +207,7 @@ pub fn encode_signed_tx(
 ) -> Result<Vec<u8>, ExecError> {
     let EncodedAction { action_type, payload } = action.encode_action()?;
     let envelope = WireTxEnvelope {
-        version: 2,
+        version: ENVELOPE_VERSION,
         action_type,
         seq,
         payload,
@@ -232,7 +237,7 @@ pub fn sign_and_encode_with_chain(
     let signature = sig.to_bytes();
 
     let envelope = WireTxEnvelope {
-        version: 2,
+        version: ENVELOPE_VERSION,
         action_type,
         seq,
         payload,
@@ -385,29 +390,40 @@ mod tests {
     }
 
     #[test]
-    fn test_reject_deprecated_version_1() {
-        let bad_envelope = WireTxEnvelope {
-            version: 1,
-            action_type: PlaceOrder::ACTION_TYPE,
-            seq: 0,
-            payload: WireBlob::from_test_payload(rmp_serde::to_vec(&PlaceOrder {
-                market: 1,
-                owner: [0x00; 20],
-                side: Side::Buy,
-                price: 1,
-                quantity: 1,
-                client_order_id: None,
-                post_only: false,
-                reduce_only: false,
-                time_in_force: TimeInForce::Gtc,
-            })
-            .unwrap()),
-            pubkey: [0u8; 32],
-            signature: [0u8; 64],
-        };
-        let encoded = rmp_serde::to_vec(&bad_envelope).unwrap();
-        let result = decode_tx(&encoded);
-        assert!(result.is_err());
+    fn test_reject_unsupported_envelope_versions() {
+        // Strict mode: only versions listed in SUPPORTED_ENVELOPE_VERSIONS
+        // decode. v1 (legacy unsigned) and any future-but-not-yet-shipped
+        // v3 must both bounce out of decode_tx.
+        for bad_version in [0u8, 1, 3, 255] {
+            let bad_envelope = WireTxEnvelope {
+                version: bad_version,
+                action_type: PlaceOrder::ACTION_TYPE,
+                seq: 0,
+                payload: WireBlob::from_test_payload(
+                    rmp_serde::to_vec(&PlaceOrder {
+                        market: 1,
+                        owner: [0x00; 20],
+                        side: Side::Buy,
+                        price: 1,
+                        quantity: 1,
+                        client_order_id: None,
+                        post_only: false,
+                        reduce_only: false,
+                        time_in_force: TimeInForce::Gtc,
+                    })
+                    .unwrap(),
+                ),
+                pubkey: [0u8; 32],
+                signature: [0u8; 64],
+            };
+            let encoded = rmp_serde::to_vec(&bad_envelope).unwrap();
+            let result = decode_tx(&encoded);
+            assert!(
+                result.is_err(),
+                "version {} should be rejected",
+                bad_version
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
