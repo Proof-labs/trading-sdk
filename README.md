@@ -18,7 +18,7 @@ npm run build   # tsc -> dist/
 ## Quick Start
 
 ```typescript
-import { ExchangeClient, Side, generateKeypair, pubkeyToOwner } from "@exchange/sdk";
+import { ExchangeClient, Side, generateKeypair, pubkeyToOwner } from "@proof/trading-sdk";
 
 const { publicKey, privateKey } = generateKeypair();
 const address = pubkeyToOwner(publicKey);          // keccak256(pubkey)[12..32]
