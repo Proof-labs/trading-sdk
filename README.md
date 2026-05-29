@@ -1,54 +1,41 @@
-# @exchange/sdk
+# Proof Trading SDK
 
-TypeScript SDK for the Proof Exchange. Handles Ed25519 signing, MessagePack encoding, and CometBFT/API interaction for all 13 action types.
+TypeScript SDK for the Proof Exchange: Ed25519 signing, MessagePack codec, and
+CometBFT/gateway interaction for every exchange action.
+
+This package was extracted from the `exchange/` monorepo (the `sdk/` subtree,
+history preserved) so it can be versioned and published on its own. It is the
+reference client today; a shared Rust core with native bindings is planned —
+see `trading-sdks.md` in ProofOfBrain.
 
 ## Install
 
 ```bash
 npm install
-npm run build
+npm run build   # tsc -> dist/
 ```
 
 ## Quick Start
 
 ```typescript
-import {
-  ExchangeClient,
-  Side,
-  generateKeypair,
-  pubkeyToOwner,
-} from "@exchange/sdk";
+import { ExchangeClient, Side, generateKeypair, pubkeyToOwner } from "@exchange/sdk";
 
-// Generate a keypair
 const { publicKey, privateKey } = generateKeypair();
-const address = pubkeyToOwner(publicKey);
+const address = pubkeyToOwner(publicKey);          // keccak256(pubkey)[12..32]
 
-// Create client and set signing key
 const client = new ExchangeClient({
   rpcUrl: "http://localhost:26657",
   apiUrl: "http://localhost:8080",
 });
 client.setPrivateKey(privateKey);
 
-// Place a limit order
 await client.submitTx({
   type: "PlaceOrder",
-  data: {
-    market: 1,
-    owner: address,
-    side: Side.Buy,
-    price: 6675000n,     // $66,750.00 (prices in cents)
-    quantity: 100n,       // 100 contracts
-  },
+  data: { market: 1, owner: address, side: Side.Buy, price: 6675000n, quantity: 100n },
 });
 
-// Query orderbook
 const book = await client.queryOrderbook(1);
-console.log(`${book.bids.length} bids, ${book.asks.length} asks`);
-
-// Query account
 const account = await client.queryAccount();
-console.log(`Balance: ${Number(account.balance) / 1_000_000} USDC`);
 ```
 
 ## Unit Conventions
@@ -56,102 +43,50 @@ console.log(`Balance: ${Number(account.balance) / 1_000_000} USDC`);
 | Field | Unit | Example |
 |-------|------|---------|
 | Prices | Cents (2 dp) | `6675234` = $66,752.34 |
-| Balances, amounts | MicroUSDC (6 dp) | `100_000_000_000` = $100,000 |
-| Fees, margin rates | Basis points | `500` = 5% (20x leverage) |
-| Funding intervals | Milliseconds | `3_600_000` = 1 hour |
+| Balances / amounts | MicroUSDC (6 dp) | `100_000_000_000` = $100,000 |
+| Fees / margin rates | Basis points | `500` = 5% |
 | Addresses | 20-byte `Uint8Array` | `pubkeyToOwner(publicKey)` |
 
-## Action Types
-
-All 13 actions are supported via `client.submitTx({ type, data })`:
-
-| Type | Description |
-|------|-------------|
-| `PlaceOrder` | Limit order (price-time FIFO) |
-| `CancelOrder` | Cancel by order ID |
-| `MarketOrder` | IOC market order (walks the book) |
-| `OracleUpdate` | Set oracle price (oracle signer only) |
-| `Deposit` | Credit funds to account |
-| `Withdraw` | Debit funds from account |
-| `CreateMarket` | Register a new market (relayer only) |
-| `WithdrawRequest` | Request withdrawal to Solana address |
-| `ConfirmDeposit` | Confirm Solana deposit (relayer only) |
-| `ConfirmWithdrawal` | Mark withdrawal complete (relayer only) |
-| `FailWithdrawal` | Mark withdrawal failed, refund (relayer only) |
-| `ApproveAgent` | Delegate trading to an agent pubkey |
-| `RevokeAgent` | Revoke agent delegation |
-
-## Queries
-
-```typescript
-const book = await client.queryOrderbook(marketId);  // Orderbook snapshot
-const acct = await client.queryAccount();             // Balance, equity, positions
-const order = await client.queryOrder(orderId);       // Single order
-const recent = await client.getRecentNonces(addressHex); // Diagnostic retained timestamp nonces
-```
-
-## Crypto Utilities
-
-```typescript
-import {
-  generateKeypair,
-  getPublicKey,
-  pubkeyToOwner,
-  ownerToHex,
-  hexToBytes,
-  bytesToHex,
-  sign,
-  verify,
-  signingMessage,
-} from "@exchange/sdk";
-
-// Keypair generation
-const { publicKey, privateKey } = generateKeypair();
-
-// Address derivation: keccak256(pubkey)[12..32]
-const address = pubkeyToOwner(publicKey);
-const hex = ownerToHex(address);  // "a1b2c3..."
-
-// Low-level signing (normally handled by client.submitTx)
-const msg = signingMessage(actionType, seq, payload);
-const sig = await sign(privateKey, msg);
-const valid = await verify(publicKey, sig, msg);
-```
+All prices and quantities are `u64` — never floats.
 
 ## Wire Format
 
-Transactions use MessagePack signed envelopes:
+Transactions are MessagePack **positional arrays** (never maps):
 
 ```
 [2, action_type, seq, payload, pubkey(32B), signature(64B)]
 ```
 
-The signature covers `DOMAIN_PREFIX(16B) || chain_id(32B) || action_type(1B) || seq(8B,BE) || payload`.
+The signature covers
+`DOMAIN_PREFIX(16B) || chain_id(32B) || action_type(1B) || seq(8B BE) || payload`.
+The 32-byte `chain_id` binding closes the cross-chain replay vector;
+`ExchangeClient` resolves it from CometBFT's `/status` on first submit and
+caches it. Offline tooling calling `signAndEncode` directly must pass a
+`chainId` (`fetchChainId(rpcUrl)` or `chainIdFromString(name)`).
 
-The 32-byte `chain_id` binding (audit B4) closes the cross-chain replay vector — the same wire bytes signed for chain X cannot be replayed on chain Y. `ExchangeClient` resolves it from CometBFT's `/status` endpoint on first submit and caches it; offline tooling that calls `signAndEncode` directly should pass `await fetchChainId(rpcUrl)` (or `chainIdFromString(name)` if pinning).
+`seq` is a wall-clock-ms timestamp nonce; the engine validates it against a
+sliding window (see `nextTimestampNonce`).
 
-## Low-Level Codec
+The full action set, payload layouts, and codec are defined in
+`src/types.ts` and `src/codec.ts` — these are the contract.
 
-```typescript
-import {
-  encodeSignedTx,
-  signAndEncode,
-  decodeTx,
-  fetchChainId,
-} from "@exchange/sdk";
+## Layout
 
-// Sign + encode — chainId required (use UNBOUND_CHAIN_ID only in unit tests)
-const chainId = await fetchChainId("http://localhost:26657");
-const bytes = signAndEncode(chainId, { type: "PlaceOrder", data: { ... } }, seq, privateKey);
+| Path | Contents |
+|------|----------|
+| `src/codec.ts` | MessagePack encode/decode, signed-envelope assembly |
+| `src/crypto.ts` | Ed25519 sign/verify, keypair + owner derivation |
+| `src/client.ts` | `ExchangeClient` — submit, queries, nonce allocation |
+| `src/errors.ts` | Typed engine/gateway error surface |
+| `src/types.ts` | Action types and payload shapes (wire contract) |
+| `src/scenarios/` | End-to-end matching/liquidation scenario tests |
 
-// Encode with a pre-computed pubkey + signature (e.g. when relaying)
-const bytes2 = encodeSignedTx({ type: "PlaceOrder", data: { ... } }, seq, pubkey, sig);
-
-const { version, actionType, seq, action, pubkey, signature } = decodeTx(bytes);
-```
-
-## Tests
+## Test
 
 ```bash
-npm test        # codec round-trip tests across all action types
+npm test        # vitest: codec round-trips, signing, client, scenarios
 ```
+
+## License
+
+Apache-2.0.
