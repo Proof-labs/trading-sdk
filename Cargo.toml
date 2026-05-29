@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/proof-trading-sdk", "crates/proof-trading-sdk-derive"]
+resolver = "2"
