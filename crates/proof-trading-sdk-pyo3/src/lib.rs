@@ -11,14 +11,6 @@ use pyo3::types::{PyBytes, PyDict, PyList};
 #[cfg(feature = "pkcs11")]
 mod pkcs11;
 
-fn make_dict<'py>(py: Python<'py>, pairs: &[(&str, PyObject)]) -> Bound<'py, PyDict> {
-    let dict = PyDict::new_bound(py);
-    for (k, v) in pairs {
-        dict.set_item(*k, v.clone_ref(py)).ok();
-    }
-    dict
-}
-
 fn map_err(e: ExecError) -> PyErr {
     PyValueError::new_err(format!("{e:?}"))
 }
@@ -45,15 +37,15 @@ struct SigningHandle {
 impl SigningHandle {
     /// The 32-byte Ed25519 public key (safe to expose).
     #[getter]
-    fn public_key(&self, py: Python<'_>) -> PyObject {
-        PyBytes::new_bound(py, &self.signer.public_key()).into()
+    fn public_key<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.signer.public_key())
     }
 
     /// The 20-byte owner address derived from the public key.
     #[getter]
-    fn owner(&self, py: Python<'_>) -> PyObject {
+    fn owner<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         let owner = crypto::pubkey_to_owner(&self.signer.public_key());
-        PyBytes::new_bound(py, &owner).into()
+        PyBytes::new(py, &owner)
     }
 
     /// Sign an action payload and encode it as a wire-ready envelope.
@@ -61,14 +53,14 @@ impl SigningHandle {
     /// The signature is produced inside the signer (Rust for a local key, the
     /// device for an HSM); the key never reaches Python. Equivalent in output
     /// to the free `sign_and_encode`, but with no secret-key argument.
-    fn sign_and_encode(
+    fn sign_and_encode<'py>(
         &self,
-        py: Python<'_>,
+        py: Python<'py>,
         chain_id: &[u8],
         action_type: u8,
         action_payload: &[u8],
         seq: u64,
-    ) -> PyResult<PyObject> {
+    ) -> PyResult<Bound<'py, PyBytes>> {
         let chain_id_arr: [u8; 32] = chain_id
             .try_into()
             .map_err(|_| PyValueError::new_err("chain_id must be exactly 32 bytes"))?;
@@ -78,7 +70,7 @@ impl SigningHandle {
         let encoded =
             codec::encode_signed_tx_raw(action_type, action_payload, seq, &pubkey, &signature)
                 .map_err(map_err)?;
-        Ok(PyBytes::new_bound(py, &encoded).into())
+        Ok(PyBytes::new(py, &encoded))
     }
 
     /// Redacted repr — never leak key material via `str()`/logging.
@@ -93,14 +85,14 @@ impl SigningHandle {
 
 /// Sign an action and encode it as a wire-ready MessagePack envelope.
 #[pyfunction]
-fn sign_and_encode(
-    py: Python<'_>,
+fn sign_and_encode<'py>(
+    py: Python<'py>,
     chain_id: &[u8],
     action_type: u8,
     action_payload: &[u8],
     seq: u64,
     secret_key: &[u8],
-) -> PyResult<PyObject> {
+) -> PyResult<Bound<'py, PyBytes>> {
     let chain_id_arr: [u8; 32] = chain_id
         .try_into()
         .map_err(|_| PyValueError::new_err("chain_id must be exactly 32 bytes"))?;
@@ -109,22 +101,23 @@ fn sign_and_encode(
         .map_err(|_| PyValueError::new_err("secret_key must be exactly 32 bytes"))?;
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&sk_bytes);
 
-    let encoded = codec::sign_and_encode_payload(&chain_id_arr, action_type, action_payload, seq, &signing_key)
-        .map_err(map_err)?;
+    let encoded =
+        codec::sign_and_encode_payload(&chain_id_arr, action_type, action_payload, seq, &signing_key)
+            .map_err(map_err)?;
 
-    Ok(PyBytes::new_bound(py, &encoded).into())
+    Ok(PyBytes::new(py, &encoded))
 }
 
 /// Encode a pre-signed action into a wire envelope.
 #[pyfunction]
-fn encode_signed_tx(
-    py: Python<'_>,
+fn encode_signed_tx<'py>(
+    py: Python<'py>,
     action_type: u8,
     action_payload: &[u8],
     seq: u64,
     pubkey: &[u8],
     signature: &[u8],
-) -> PyResult<PyObject> {
+) -> PyResult<Bound<'py, PyBytes>> {
     let pk: [u8; 32] = pubkey
         .try_into()
         .map_err(|_| PyValueError::new_err("pubkey must be exactly 32 bytes"))?;
@@ -135,7 +128,7 @@ fn encode_signed_tx(
     let encoded = codec::encode_signed_tx_raw(action_type, action_payload, seq, &pk, &sig)
         .map_err(map_err)?;
 
-    Ok(PyBytes::new_bound(py, &encoded).into())
+    Ok(PyBytes::new(py, &encoded))
 }
 
 /// Encode a structured action payload into wire MessagePack bytes via the
@@ -152,14 +145,14 @@ fn encode_signed_tx(
 /// The returned bytes are the `action_payload` argument for
 /// [`sign_and_encode`].
 #[pyfunction]
-fn encode_action(
-    py: Python<'_>,
+fn encode_action<'py>(
+    py: Python<'py>,
     action_type: u8,
-    fields: &Bound<'_, PyAny>,
-) -> PyResult<PyObject> {
+    fields: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyBytes>> {
     let mut de = pythonize::Depythonizer::from_object(fields);
     let payload = codec::encode_payload_dyn(action_type, &mut de).map_err(map_err)?;
-    Ok(PyBytes::new_bound(py, &payload).into())
+    Ok(PyBytes::new(py, &payload))
 }
 
 /// Decode raw MessagePack action-payload bytes into a native Python object
@@ -167,42 +160,38 @@ fn encode_action(
 /// [`encode_action`]. The payload is parsed into the typed struct for
 /// `action_type` and re-serialized through `pythonize`.
 #[pyfunction]
-fn decode_action(py: Python<'_>, action_type: u8, payload: &[u8]) -> PyResult<PyObject> {
+fn decode_action<'py>(
+    py: Python<'py>,
+    action_type: u8,
+    payload: &[u8],
+) -> PyResult<Bound<'py, PyAny>> {
     let pythonizer = pythonize::Pythonizer::new(py);
-    let obj = codec::decode_payload_dyn(action_type, payload, pythonizer).map_err(map_err)?;
-    Ok(obj.into())
+    codec::decode_payload_dyn(action_type, payload, pythonizer).map_err(map_err)
 }
 
 /// Decode a wire envelope into its components.
 #[pyfunction]
-fn decode_tx(py: Python<'_>, tx_bytes: &[u8]) -> PyResult<PyObject> {
+fn decode_tx<'py>(py: Python<'py>, tx_bytes: &[u8]) -> PyResult<Bound<'py, PyDict>> {
     let decoded = codec::decode_tx_raw(tx_bytes).map_err(map_err)?;
-    let payload = PyBytes::new_bound(py, &decoded.payload);
-    let pk = PyBytes::new_bound(py, &decoded.pubkey);
-    let sig = PyBytes::new_bound(py, &decoded.signature);
 
-    let dict = make_dict(
-        py,
-        &[
-            ("version", decoded.version.into_py(py)),
-            ("action_type", decoded.action_type.into_py(py)),
-            ("seq", decoded.seq.into_py(py)),
-            ("payload", payload.into()),
-            ("pubkey", pk.into()),
-            ("signature", sig.into()),
-        ],
-    );
-    Ok(dict.into())
+    let dict = PyDict::new(py);
+    dict.set_item("version", decoded.version)?;
+    dict.set_item("action_type", decoded.action_type)?;
+    dict.set_item("seq", decoded.seq)?;
+    dict.set_item("payload", PyBytes::new(py, &decoded.payload))?;
+    dict.set_item("pubkey", PyBytes::new(py, &decoded.pubkey))?;
+    dict.set_item("signature", PyBytes::new(py, &decoded.signature))?;
+    Ok(dict)
 }
 
 /// Derive a 20-byte owner address from a 32-byte Ed25519 public key.
 #[pyfunction]
-fn pubkey_to_owner(py: Python<'_>, pubkey: &[u8]) -> PyResult<PyObject> {
+fn pubkey_to_owner<'py>(py: Python<'py>, pubkey: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
     let pk: [u8; 32] = pubkey
         .try_into()
         .map_err(|_| PyValueError::new_err("pubkey must be exactly 32 bytes"))?;
     let owner = crypto::pubkey_to_owner(&pk);
-    Ok(PyBytes::new_bound(py, &owner).into())
+    Ok(PyBytes::new(py, &owner))
 }
 
 /// Verify an Ed25519 signature over the canonical signing message.
@@ -233,15 +222,15 @@ fn verify_signature(
 
 /// Hash a CometBFT chain_id string into 32 bytes (Keccak-256).
 #[pyfunction]
-fn chain_id_from_string(py: Python<'_>, chain_id: &str) -> PyResult<PyObject> {
+fn chain_id_from_string<'py>(py: Python<'py>, chain_id: &str) -> PyResult<Bound<'py, PyBytes>> {
     let result = crypto::chain_id_from_string(chain_id);
-    Ok(PyBytes::new_bound(py, &result).into())
+    Ok(PyBytes::new(py, &result))
 }
 
 /// Generate a new Ed25519 keypair, optionally from a 32-byte seed.
 #[pyfunction]
 #[pyo3(signature = (seed=None))]
-fn generate_keypair(py: Python<'_>, seed: Option<&[u8]>) -> PyResult<PyObject> {
+fn generate_keypair<'py>(py: Python<'py>, seed: Option<&[u8]>) -> PyResult<Bound<'py, PyDict>> {
     let signing_key: ed25519_dalek::SigningKey = match seed {
         Some(s) => {
             let arr: [u8; 32] = s
@@ -255,14 +244,11 @@ fn generate_keypair(py: Python<'_>, seed: Option<&[u8]>) -> PyResult<PyObject> {
         }
     };
     let vk = signing_key.verifying_key();
-    let dict = make_dict(
-        py,
-        &[
-            ("secret_key", PyBytes::new_bound(py, signing_key.as_bytes()).into()),
-            ("public_key", PyBytes::new_bound(py, &vk.to_bytes()).into()),
-        ],
-    );
-    Ok(dict.into())
+
+    let dict = PyDict::new(py);
+    dict.set_item("secret_key", PyBytes::new(py, signing_key.as_bytes()))?;
+    dict.set_item("public_key", PyBytes::new(py, &vk.to_bytes()))?;
+    Ok(dict)
 }
 
 /// Load a signing key from a file descriptor into an opaque [`SigningHandle`].
@@ -320,35 +306,31 @@ fn load_key_from_pkcs11(
 /// Return all action-type name → code mappings from the Rust core.
 /// Generated from the codec so bindings never drift.
 #[pyfunction]
-fn get_action_types(py: Python<'_>) -> PyObject {
-    let entries = codec::get_action_types();
-    let list = PyList::empty_bound(py);
-    for (name, code) in entries {
-        let d = make_dict(py, &[("name", name.into_py(py)), ("code", code.into_py(py))]);
-        list.append(d).ok();
+fn get_action_types<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+    let list = PyList::empty(py);
+    for (name, code) in codec::get_action_types() {
+        let d = PyDict::new(py);
+        d.set_item("name", name)?;
+        d.set_item("code", code)?;
+        list.append(d)?;
     }
-    list.into()
+    Ok(list)
 }
 
 /// Return the error-code manifest — a list of {code, name, meaning} dicts.
 /// One entry per ErrorKind variant. Generated from the Rust core so bindings
 /// never drift.
 #[pyfunction]
-fn get_error_code_table(py: Python<'_>) -> PyObject {
-    let entries = core_sdk::types::error_code_manifest();
-    let list = PyList::empty_bound(py);
-    for kind in entries {
-        let d = make_dict(
-            py,
-            &[
-                ("code", kind.code().into_py(py)),
-                ("name", kind.name().into_py(py)),
-                ("meaning", kind.meaning().into_py(py)),
-            ],
-        );
-        list.append(d).ok();
+fn get_error_code_table<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+    let list = PyList::empty(py);
+    for kind in core_sdk::types::error_code_manifest() {
+        let d = PyDict::new(py);
+        d.set_item("code", kind.code())?;
+        d.set_item("name", kind.name())?;
+        d.set_item("meaning", kind.meaning())?;
+        list.append(d)?;
     }
-    list.into()
+    Ok(list)
 }
 
 /// Native Python extension module for proof-trading-sdk (internal name: _native).

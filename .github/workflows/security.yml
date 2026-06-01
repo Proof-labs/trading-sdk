@@ -35,11 +35,7 @@ jobs:
       - name: Generate lockfile
         run: cargo generate-lockfile
       - name: Audit dependencies
-        # RUSTSEC-2025-0020: pyo3 < 0.24.1 buffer overflow in
-        # PyString::from_object. Tracked for the pyo3 0.22 -> 0.24 upgrade
-        # (+ matching pythonize) as a W22-08 follow-up; the advisory still
-        # prints as a warning here. REMOVE this ignore with that upgrade.
-        run: cargo audit --ignore RUSTSEC-2025-0020
+        run: cargo audit
 
   fuzz:
     name: cargo fuzz (smoke)
