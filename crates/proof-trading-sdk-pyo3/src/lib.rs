@@ -185,6 +185,19 @@ fn load_key_from_fd(py: Python<'_>, fd: i32) -> PyResult<PyObject> {
     Ok(dict.into())
 }
 
+/// Return all action-type name → code mappings from the Rust core.
+/// Generated from the codec so bindings never drift.
+#[pyfunction]
+fn get_action_types(py: Python<'_>) -> PyObject {
+    let entries = codec::get_action_types();
+    let list = PyList::empty_bound(py);
+    for (name, code) in entries {
+        let d = make_dict(py, &[("name", name.into_py(py)), ("code", code.into_py(py))]);
+        list.append(d).ok();
+    }
+    list.into()
+}
+
 /// Return the error-code manifest — a list of {code, name, meaning} dicts.
 /// One entry per ErrorKind variant. Generated from the Rust core so bindings
 /// never drift.
@@ -217,6 +230,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(chain_id_from_string, m)?)?;
     m.add_function(wrap_pyfunction!(generate_keypair, m)?)?;
     m.add_function(wrap_pyfunction!(load_key_from_fd, m)?)?;
+    m.add_function(wrap_pyfunction!(get_action_types, m)?)?;
     m.add_function(wrap_pyfunction!(get_error_code_table, m)?)?;
     Ok(())
 }
