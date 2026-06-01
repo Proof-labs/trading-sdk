@@ -14,12 +14,14 @@ from proof_trading_sdk._native import (
 )
 
 from proof_trading_sdk.errors import (
-    ProofTradingSdkError,
+    AuthenticationError,
     CodecError,
+    EngineError,
+    GatewayError,
+    ProofTradingSdkError,
+    RateLimited,
     SigningError,
     TransportError,
-    EngineError,
-    RateLimited,
     get_error_name,
     get_error_code_table,
 )
@@ -43,12 +45,14 @@ __all__ = [
     "load_config",
     "AccountEventStream",
     "OrderbookDeltaStream",
-    "ProofTradingSdkError",
+    "AuthenticationError",
     "CodecError",
+    "EngineError",
+    "GatewayError",
+    "ProofTradingSdkError",
+    "RateLimited",
     "SigningError",
     "TransportError",
-    "EngineError",
-    "RateLimited",
     "get_error_name",
     "get_error_code_table",
 ]

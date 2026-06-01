@@ -53,7 +53,24 @@ class SigningError(ProofTradingSdkError):
 
 
 class TransportError(ProofTradingSdkError):
-    """HTTP or WebSocket transport failure."""
+    """HTTP or WebSocket transport failure — connection, DNS, or timeout."""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        self.status_code = status_code
+        super().__init__(message)
+
+
+class GatewayError(TransportError):
+    """Gateway returned a 5xx response — retry with backoff."""
+
+    def __init__(self, status_code: int, body: str) -> None:
+        self.status_code = status_code
+        self.body = body
+        super().__init__(f"gateway error: {status_code} {body[:200]}", status_code=status_code)
+
+
+class AuthenticationError(ProofTradingSdkError):
+    """HTTP 401 — API key missing, invalid, or expired."""
 
 
 class EngineError(ProofTradingSdkError):

@@ -12,8 +12,10 @@ import httpx
 from proof_trading_sdk._native import sign_and_encode
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.errors import (
+    AuthenticationError,
     CodecError,
     EngineError,
+    GatewayError,
     ProofTradingSdkError,
     RateLimited,
     TransportError,
@@ -170,24 +172,45 @@ class ExchangeClient:
         url = urljoin(self._gateway_url, path)
         try:
             resp = self._http.request(method, url, content=content, params=params)
+        except httpx.ConnectError as e:
+            raise TransportError(f"connection refused: {e}") from e
+        except httpx.ConnectTimeout as e:
+            raise TransportError(f"connection timed out: {e}") from e
+        except httpx.ReadTimeout as e:
+            raise TransportError(f"read timed out: {e}") from e
+        except httpx.ReadError as e:
+            raise TransportError(f"read failed (connection reset): {e}") from e
+        except httpx.RemoteProtocolError as e:
+            raise TransportError(f"protocol error: {e}") from e
         except httpx.RequestError as e:
             raise TransportError(f"request failed: {e}") from e
 
         self._parse_rate_limits(resp)
+        return self._check_response(resp)
 
+    def _check_response(self, resp: httpx.Response) -> httpx.Response:
         if resp.status_code == 429:
             retry_after = float(resp.headers.get("Retry-After", "5"))
             bucket = resp.headers.get("X-RateLimit-Bucket", "")
             raise RateLimited(retry_after_secs=retry_after, bucket=bucket)
 
         if resp.status_code == 401:
-            raise ProofTradingSdkError("unauthorized — check your API key")
+            raise AuthenticationError("unauthorized — check your API key")
+
+        if resp.status_code == 403:
+            raise AuthenticationError("forbidden — API key lacks permission")
+
+        if resp.status_code == 404:
+            raise TransportError(f"not found: {resp.url}", status_code=404)
 
         if resp.status_code == 413:
-            raise ProofTradingSdkError("payload too large")
+            raise TransportError("payload too large", status_code=413)
+
+        if resp.status_code == 422:
+            raise TransportError(f"unprocessable: {resp.text[:200]}", status_code=422)
 
         if resp.status_code >= 500:
-            raise TransportError(f"gateway error: {resp.status_code} {resp.text[:200]}")
+            raise GatewayError(resp.status_code, resp.text)
 
         return resp
 
