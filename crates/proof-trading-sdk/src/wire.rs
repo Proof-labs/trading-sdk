@@ -15,8 +15,9 @@
 //!        vectors), and
 //!      * the **bytes** form that `pythonize` produces from a Python
 //!        `bytes`/`bytearray` object in the PyO3 codec path.
-//!    This removes the ambiguity that made feeding Python byte fields
-//!    through `pythonize` fragile.
+//!
+//! This removes the ambiguity that made feeding Python byte fields through
+//! `pythonize` fragile.
 //!
 //! **Wire compatibility is preserved.** [`Serialize`] forwards to the inner
 //! array/vec, so the encoded bytes — and the checked-in conformance

@@ -432,7 +432,7 @@ pub fn peek_seq(bytes: &[u8]) -> Option<u64> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::wire::{Address, Pubkey};
@@ -723,7 +723,7 @@ mod tests {
             mm_bps: 500,
             taker_fee_bps: 0,
             maker_fee_bps: 0,
-            signer: [0xEE; 20].into(),
+            signer: [0xEE; 20],
             funding_interval_ms: 0,
             max_funding_rate_bps: 0,
         };
