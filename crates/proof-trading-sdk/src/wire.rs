@@ -175,6 +175,10 @@ fixed_byte_newtype! {
 /// Wraps `Vec<u8>` for the same dual-form decode (msgpack seq-of-u8 *or*
 /// Python `bytes`) and wire-identical encode guarantees as the fixed
 /// newtypes.
+/// Length of a Solana (Ed25519) signature in bytes. Used to bound the
+/// untrusted-decode pre-allocation; not a hard validity check.
+const SOLANA_SIG_LEN: usize = 64;
+
 #[derive(Clone, PartialEq, Eq, Hash, Default)]
 pub struct SolanaSignature(pub Vec<u8>);
 
@@ -245,7 +249,14 @@ impl<'de> Deserialize<'de> for SolanaSignature {
             }
 
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<SolanaSignature, A::Error> {
-                let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                // Never pre-allocate from the declared sequence length: a
+                // malformed msgpack array header can claim billions of
+                // elements, and `with_capacity(that)` is an OOM DoS on
+                // untrusted input (caught by fuzzing). A Solana signature is
+                // 64 bytes, so cap the hint; the Vec still grows to fit any
+                // real elements that follow.
+                let cap = seq.size_hint().unwrap_or(0).min(SOLANA_SIG_LEN);
+                let mut out = Vec::with_capacity(cap);
                 while let Some(b) = seq.next_element::<u8>()? {
                     out.push(b);
                 }
@@ -307,5 +318,21 @@ mod tests {
     fn debug_is_hex_not_array() {
         let a = Address([0x0a, 0x0b, 0x0c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
         assert!(format!("{a:?}").starts_with("Address(0x0a0b0c"));
+    }
+
+    #[test]
+    fn solana_sig_huge_length_header_errors_without_oom() {
+        // Regression (fuzz, decode_payload OOM): a msgpack `array32` marker
+        // (0xdd) declaring ~3.7B elements with no real payload must error on
+        // the truncated stream — NOT pre-allocate gigabytes and OOM.
+        let malicious = [0xddu8, 0xdd, 0xdd, 0xdd, 0xdd];
+        assert!(rmp_serde::from_slice::<SolanaSignature>(&malicious).is_err());
+    }
+
+    #[test]
+    fn solana_sig_round_trips_64_bytes() {
+        let sig = SolanaSignature(vec![0x7u8; 64]);
+        let bytes = rmp_serde::to_vec(&sig).unwrap();
+        assert_eq!(rmp_serde::from_slice::<SolanaSignature>(&bytes).unwrap(), sig);
     }
 }

@@ -1,0 +1,31 @@
+[package]
+name = "proof-trading-sdk-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+proof-trading-sdk = { path = "../crates/proof-trading-sdk" }
+
+[[bin]]
+name = "decode_tx"
+path = "fuzz_targets/decode_tx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_payload"
+path = "fuzz_targets/decode_payload.rs"
+test = false
+doc = false
+bench = false
+
+# Detach from the parent workspace: the fuzz harnesses are their own root so the
+# core crate's deny-lints and the abi3/pyo3 members don't get pulled in.
+[workspace]
