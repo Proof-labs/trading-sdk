@@ -3,5 +3,6 @@ members = [
     "crates/proof-trading-sdk",
     "crates/proof-trading-sdk-derive",
     "crates/proof-trading-sdk-pyo3",
+    "crates/spec",
 ]
 resolver = "2"

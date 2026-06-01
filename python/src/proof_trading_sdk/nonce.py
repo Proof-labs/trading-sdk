@@ -44,6 +44,16 @@ class NonceAllocator:
     def _now_ms() -> int:
         return int(time.time_ns() // 1_000_000)
 
+    @staticmethod
+    def step(last: int, now_ms: int) -> int:
+        """Pure nonce transition: ``max(now_ms, last + 1)``.
+
+        Clock-free and side-effect-free, so the cross-language nonce
+        conformance vectors (``conformance/nonce.ndjson``) can pin it
+        directly. :meth:`allocate` is this composed with the wall clock.
+        """
+        return max(now_ms, last + 1)
+
     def allocate(self) -> int:
         """Return the next nonce value.
 
@@ -52,7 +62,7 @@ class NonceAllocator:
         """
         now = self._now_ms()
         with self._lock:
-            candidate = max(now, self._last + 1)
+            candidate = self.step(self._last, now)
             self._last = candidate
             return candidate
 
