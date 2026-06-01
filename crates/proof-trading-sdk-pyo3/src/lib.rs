@@ -8,6 +8,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
+#[cfg(feature = "pkcs11")]
+mod pkcs11;
+
 fn make_dict<'py>(py: Python<'py>, pairs: &[(&str, PyObject)]) -> Bound<'py, PyDict> {
     let dict = PyDict::new_bound(py);
     for (k, v) in pairs {
@@ -18,6 +21,74 @@ fn make_dict<'py>(py: Python<'py>, pairs: &[(&str, PyObject)]) -> Bound<'py, PyD
 
 fn map_err(e: ExecError) -> PyErr {
     PyValueError::new_err(format!("{e:?}"))
+}
+
+/// Map a signing-backend failure to a Python exception, without leaking any
+/// key material into the message.
+fn map_signer_err(e: core_sdk::SignerError) -> PyErr {
+    PyValueError::new_err(e.to_string())
+}
+
+/// Opaque signing handle returned to Python. Exposes the public key, derived
+/// owner, and a sign-and-encode operation — but **never** the secret bytes.
+///
+/// Holds a boxed [`core_sdk::Signer`] so every custody backend shares one type:
+/// a [`core_sdk::LocalSigner`] (key in Rust memory, zeroized on drop) or an
+/// HSM-backed signer (key stays on the device). Either way the secret never
+/// crosses into Python's heap — the point of the FD/HSM design.
+#[pyclass(name = "SigningHandle", module = "proof_trading_sdk._native", frozen)]
+struct SigningHandle {
+    signer: Box<dyn core_sdk::Signer>,
+}
+
+#[pymethods]
+impl SigningHandle {
+    /// The 32-byte Ed25519 public key (safe to expose).
+    #[getter]
+    fn public_key(&self, py: Python<'_>) -> PyObject {
+        PyBytes::new_bound(py, &self.signer.public_key()).into()
+    }
+
+    /// The 20-byte owner address derived from the public key.
+    #[getter]
+    fn owner(&self, py: Python<'_>) -> PyObject {
+        let owner = crypto::pubkey_to_owner(&self.signer.public_key());
+        PyBytes::new_bound(py, &owner).into()
+    }
+
+    /// Sign an action payload and encode it as a wire-ready envelope.
+    ///
+    /// The signature is produced inside the signer (Rust for a local key, the
+    /// device for an HSM); the key never reaches Python. Equivalent in output
+    /// to the free `sign_and_encode`, but with no secret-key argument.
+    fn sign_and_encode(
+        &self,
+        py: Python<'_>,
+        chain_id: &[u8],
+        action_type: u8,
+        action_payload: &[u8],
+        seq: u64,
+    ) -> PyResult<PyObject> {
+        let chain_id_arr: [u8; 32] = chain_id
+            .try_into()
+            .map_err(|_| PyValueError::new_err("chain_id must be exactly 32 bytes"))?;
+        let msg = crypto::signing_message(&chain_id_arr, action_type, seq, action_payload);
+        let signature = self.signer.try_sign(&msg).map_err(map_signer_err)?;
+        let pubkey = self.signer.public_key();
+        let encoded =
+            codec::encode_signed_tx_raw(action_type, action_payload, seq, &pubkey, &signature)
+                .map_err(map_err)?;
+        Ok(PyBytes::new_bound(py, &encoded).into())
+    }
+
+    /// Redacted repr — never leak key material via `str()`/logging.
+    fn __repr__(&self) -> String {
+        let mut pk = String::with_capacity(64);
+        for b in self.signer.public_key() {
+            pk.push_str(&format!("{b:02x}"));
+        }
+        format!("SigningHandle(public_key=0x{pk}, secret=<redacted>)")
+    }
 }
 
 /// Sign an action and encode it as a wire-ready MessagePack envelope.
@@ -194,9 +265,16 @@ fn generate_keypair(py: Python<'_>, seed: Option<&[u8]>) -> PyResult<PyObject> {
     Ok(dict.into())
 }
 
-/// Load a signing keypair from a file descriptor.
+/// Load a signing key from a file descriptor into an opaque [`SigningHandle`].
+///
+/// Reads exactly 32 key bytes from `fd`, builds the in-process signing key, and
+/// **immediately zeroizes the read buffer**. The key is sealed inside the
+/// returned handle (a Rust-owned, zeroize-on-drop `SigningKey`) and is *never*
+/// copied onto Python's heap — callers sign through `handle.sign_and_encode(…)`
+/// and can read only the public key / owner. This is the FD-isolation design
+/// the spec requires; returning the raw `secret_key` to Python would defeat it.
 #[pyfunction]
-fn load_key_from_fd(py: Python<'_>, fd: i32) -> PyResult<PyObject> {
+fn load_key_from_fd(fd: i32) -> PyResult<SigningHandle> {
     use std::io::Read;
     use std::os::fd::{FromRawFd, OwnedFd};
 
@@ -206,18 +284,37 @@ fn load_key_from_fd(py: Python<'_>, fd: i32) -> PyResult<PyObject> {
     file.read_exact(&mut buf)
         .map_err(|e| PyValueError::new_err(format!("failed to read key from fd: {e}")))?;
 
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&buf);
+    let signer = core_sdk::LocalSigner::from_bytes(&buf);
     zeroize::Zeroize::zeroize(&mut buf);
 
-    let vk = signing_key.verifying_key();
-    let dict = make_dict(
-        py,
-        &[
-            ("secret_key", PyBytes::new_bound(py, signing_key.as_bytes()).into()),
-            ("public_key", PyBytes::new_bound(py, &vk.to_bytes()).into()),
-        ],
-    );
-    Ok(dict.into())
+    Ok(SigningHandle {
+        signer: Box::new(signer),
+    })
+}
+
+/// Bind to an Ed25519 signing key resident in a PKCS#11 token (HSM) and return
+/// an opaque [`SigningHandle`].
+///
+/// The key never leaves the device: signing is performed inside the HSM. This
+/// references a key that already exists in the token (by `key_label`); it does
+/// not import or generate keys. `pin` is used only to log in and is not
+/// retained by the handle.
+///
+/// Requires the crate's `pkcs11` feature (enabled by default). `module` is the
+/// path to the vendor's PKCS#11 `.so`, loaded at runtime.
+#[cfg(feature = "pkcs11")]
+#[pyfunction]
+fn load_key_from_pkcs11(
+    module: &str,
+    slot_id: u64,
+    pin: &str,
+    key_label: &str,
+) -> PyResult<SigningHandle> {
+    let signer = pkcs11::Pkcs11Signer::open(module, slot_id, pin, key_label)
+        .map_err(PyValueError::new_err)?;
+    Ok(SigningHandle {
+        signer: Box::new(signer),
+    })
 }
 
 /// Return all action-type name → code mappings from the Rust core.
@@ -257,6 +354,7 @@ fn get_error_code_table(py: Python<'_>) -> PyObject {
 /// Native Python extension module for proof-trading-sdk (internal name: _native).
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<SigningHandle>()?;
     m.add_function(wrap_pyfunction!(sign_and_encode, m)?)?;
     m.add_function(wrap_pyfunction!(encode_signed_tx, m)?)?;
     m.add_function(wrap_pyfunction!(encode_action, m)?)?;
@@ -267,6 +365,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(chain_id_from_string, m)?)?;
     m.add_function(wrap_pyfunction!(generate_keypair, m)?)?;
     m.add_function(wrap_pyfunction!(load_key_from_fd, m)?)?;
+    #[cfg(feature = "pkcs11")]
+    m.add_function(wrap_pyfunction!(load_key_from_pkcs11, m)?)?;
     m.add_function(wrap_pyfunction!(get_action_types, m)?)?;
     m.add_function(wrap_pyfunction!(get_error_code_table, m)?)?;
     Ok(())

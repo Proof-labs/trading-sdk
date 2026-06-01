@@ -9,10 +9,17 @@ description = "PyO3 bindings for the proof-trading-sdk core: MessagePack codec, 
 name = "proof_trading_sdk_native"
 crate-type = ["cdylib"]
 
+[features]
+default = ["pkcs11"]
+# HSM signing via a PKCS#11 module (dlopened at runtime — no HSM needed to
+# build). Disable for a smaller binary with no hardware-signing support.
+pkcs11 = ["dep:cryptoki"]
+
 [dependencies]
 proof-trading-sdk = { path = "../proof-trading-sdk" }
 pyo3 = { version = "0.22", features = ["extension-module", "abi3"] }
 pythonize = "0.22"
-ed25519-dalek = { version = "2", features = ["rand_core"] }
+ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 zeroize = "1"
+cryptoki = { version = "0.12", optional = true }

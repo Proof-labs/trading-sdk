@@ -7,6 +7,9 @@
 pub mod abci_event;
 pub mod codec;
 pub mod crypto;
+pub mod signer;
 pub mod state;
 pub mod types;
 pub mod wire;
+
+pub use signer::{LocalSigner, Signer, SignerError};

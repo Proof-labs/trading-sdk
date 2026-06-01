@@ -9,7 +9,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from proof_trading_sdk._native import sign_and_encode
+from proof_trading_sdk._native import SigningHandle, sign_and_encode
 from proof_trading_sdk.actions import Action, encode_action
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.errors import (
@@ -85,7 +85,13 @@ class ExchangeClient:
         gateway_url: Base URL of the gateway API.
         api_key: API key for gateway authentication.
         secret_key: 32-byte Ed25519 signing key (bytes). Passed to the
-            Rust core for signing — Python never inspects the key bytes.
+            Rust core for signing. NOTE: this places the key on Python's heap;
+            for hardware-isolated keys prefer ``key_handle`` (see
+            :func:`~proof_trading_sdk.load_key_from_fd`), which keeps the secret
+            in Rust/HSM memory and never exposes it to Python. Exactly one of
+            ``secret_key`` / ``key_handle`` should be set.
+        key_handle: Opaque :class:`SigningHandle` whose key never enters Python
+            memory. Takes precedence over ``secret_key`` when both are set.
         chain_id: 32-byte chain binding (bytes). If ``None``, uses the
             ``UNBOUND_CHAIN_ID`` (zeros). Prod must bind a real chain_id.
         config: Pre-built :class:`SdkConfig`. If ``None``, loads from
@@ -101,6 +107,7 @@ class ExchangeClient:
         chain_id: bytes | None = None,
         config: SdkConfig | None = None,
         timeout_secs: int = 0,
+        key_handle: SigningHandle | None = None,
     ) -> None:
         if config is not None:
             cfg = config.with_overrides(
@@ -120,6 +127,7 @@ class ExchangeClient:
         self._timeout_secs = cfg.timeout_secs
         self._chain_id = chain_id if chain_id is not None else UNBOUND_CHAIN_ID
         self._secret_key = secret_key
+        self._key_handle = key_handle
 
         self._nonce = NonceAllocator()
         self._rate_limits: dict[str, RateLimitState] = {}
@@ -250,20 +258,28 @@ class ExchangeClient:
             CodecError: If encoding fails.
             SigningError: If signing fails.
         """
-        if self._secret_key is None:
-            raise SigningError("no secret key set")
-
         seq = self._nonce.allocate()
         try:
-            return sign_and_encode(
-                self._chain_id,
-                action_type,
-                action_payload,
-                seq,
-                self._secret_key,
-            )
+            if self._key_handle is not None:
+                # Hardware-isolated path: the key never enters Python memory.
+                return self._key_handle.sign_and_encode(
+                    self._chain_id,
+                    action_type,
+                    action_payload,
+                    seq,
+                )
+            if self._secret_key is not None:
+                return sign_and_encode(
+                    self._chain_id,
+                    action_type,
+                    action_payload,
+                    seq,
+                    self._secret_key,
+                )
         except ValueError as e:
             raise CodecError(str(e)) from e
+
+        raise SigningError("no signing key set (pass secret_key or key_handle)")
 
     def sign_action(self, action: Action) -> bytes:
         """Encode a typed :class:`~proof_trading_sdk.actions.Action` through

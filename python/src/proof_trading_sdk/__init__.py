@@ -3,11 +3,13 @@ from __future__ import annotations
 import typing as t
 
 from proof_trading_sdk._native import (
+    SigningHandle,
     chain_id_from_string,
     decode_tx,
     encode_signed_tx,
     generate_keypair,
     load_key_from_fd,
+    load_key_from_pkcs11,
     pubkey_to_owner,
     sign_and_encode,
     verify_signature,
@@ -47,6 +49,8 @@ __all__ = [
     "encode_signed_tx",
     "generate_keypair",
     "load_key_from_fd",
+    "load_key_from_pkcs11",
+    "SigningHandle",
     "pubkey_to_owner",
     "sign_and_encode",
     "verify_signature",
