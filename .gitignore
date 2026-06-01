@@ -5,3 +5,8 @@ dist/
 # Rust
 /target/
 Cargo.lock
+
+# Python
+__pycache__/
+.pytest_cache/
+*.egg-info/

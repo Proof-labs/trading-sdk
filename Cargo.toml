@@ -1,3 +1,7 @@
 [workspace]
-members = ["crates/proof-trading-sdk", "crates/proof-trading-sdk-derive"]
+members = [
+    "crates/proof-trading-sdk",
+    "crates/proof-trading-sdk-derive",
+    "crates/proof-trading-sdk-pyo3",
+]
 resolver = "2"

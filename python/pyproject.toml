@@ -1,0 +1,26 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "proof-trading-sdk"
+version = "0.1.0"
+description = "Proof Exchange Trading SDK — Ed25519 signing, MessagePack codec, and gateway client."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "websockets>=12",
+    "msgpack>=1.0",
+]
+
+[tool.maturin]
+manifest-path = "../crates/proof-trading-sdk-pyo3/Cargo.toml"
+python-source = "src"
+module-name = "proof_trading_sdk._native"
+features = ["pyo3/extension-module", "pyo3/abi3"]
+
+[project.urls]
+homepage = "https://github.com/Proof-labs/trading-sdk"
+repository = "https://github.com/Proof-labs/trading-sdk"

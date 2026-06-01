@@ -260,6 +260,87 @@ pub fn sign_and_encode(
     sign_and_encode_with_chain(&crate::crypto::UNBOUND_CHAIN_ID, action, seq, signing_key)
 }
 
+/// Sign a raw payload (bytes + action_type) and encode it as a wire envelope.
+/// Used by PyO3 / WASM bindings that hold pre-encoded payload bytes.
+pub fn sign_and_encode_payload(
+    chain_id: &[u8; 32],
+    action_type: u8,
+    payload: &[u8],
+    seq: u64,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> Result<Vec<u8>, ExecError> {
+    use ed25519_dalek::Signer;
+
+    let msg = crate::crypto::signing_message(chain_id, action_type, seq, payload);
+    let sig = signing_key.sign(&msg);
+    let pubkey = signing_key.verifying_key().to_bytes();
+    let signature = sig.to_bytes();
+
+    let envelope = WireTxEnvelope {
+        version: ENVELOPE_VERSION,
+        action_type,
+        seq,
+        payload: WireBlob(payload.to_vec()),
+        pubkey,
+        signature,
+    };
+    rmp_serde::to_vec(&envelope).map_err(|e| ExecError::InternalError(e.to_string()))
+}
+
+/// Encode pre-signed components into a wire envelope (raw payload version).
+/// Used by PyO3 / WASM bindings.
+pub fn encode_signed_tx_raw(
+    action_type: u8,
+    payload: &[u8],
+    seq: u64,
+    pubkey: &[u8; 32],
+    signature: &[u8; 64],
+) -> Result<Vec<u8>, ExecError> {
+    let envelope = WireTxEnvelope {
+        version: ENVELOPE_VERSION,
+        action_type,
+        seq,
+        payload: WireBlob(payload.to_vec()),
+        pubkey: *pubkey,
+        signature: *signature,
+    };
+    rmp_serde::to_vec(&envelope).map_err(|e| ExecError::InternalError(e.to_string()))
+}
+
+/// Decoded wire envelope components (raw, no Action enum).
+pub struct DecodedTxRaw {
+    pub version: u8,
+    pub action_type: u8,
+    pub seq: u64,
+    pub payload: Vec<u8>,
+    pub pubkey: [u8; 32],
+    pub signature: [u8; 64],
+}
+
+/// Decode raw tx bytes into raw components without parsing the action payload.
+/// Used by PyO3 / WASM bindings where the payload is opaque.
+pub fn decode_tx_raw(bytes: &[u8]) -> Result<DecodedTxRaw, ExecError> {
+    if bytes.is_empty() {
+        return Err(ExecError::DecodeError("empty tx".to_string()));
+    }
+    let envelope: WireTxEnvelope =
+        rmp_serde::from_slice(bytes).map_err(|e| ExecError::DecodeError(e.to_string()))?;
+    if !SUPPORTED_ENVELOPE_VERSIONS.contains(&envelope.version) {
+        return Err(ExecError::DecodeError(format!(
+            "unsupported envelope version: {} (supported: {:?})",
+            envelope.version, SUPPORTED_ENVELOPE_VERSIONS
+        )));
+    }
+    Ok(DecodedTxRaw {
+        version: envelope.version,
+        action_type: envelope.action_type,
+        seq: envelope.seq,
+        payload: envelope.payload.0,
+        pubkey: envelope.pubkey,
+        signature: envelope.signature,
+    })
+}
+
 /// Extract the action_type byte from a wire tx without full decoding.
 pub fn peek_action_type(bytes: &[u8]) -> Option<u8> {
     rmp_serde::from_slice::<WireTxEnvelope>(bytes)
