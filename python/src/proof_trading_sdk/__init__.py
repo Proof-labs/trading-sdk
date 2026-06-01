@@ -13,6 +13,17 @@ from proof_trading_sdk._native import (
     verify_signature,
 )
 
+from proof_trading_sdk import actions
+from proof_trading_sdk.actions import (
+    Action,
+    ActionType,
+    RawAction,
+    Side,
+    TimeInForce,
+    decode_action,
+    encode_action,
+)
+
 from proof_trading_sdk.errors import (
     AuthenticationError,
     CodecError,
@@ -39,6 +50,14 @@ __all__ = [
     "pubkey_to_owner",
     "sign_and_encode",
     "verify_signature",
+    "actions",
+    "Action",
+    "ActionType",
+    "RawAction",
+    "Side",
+    "TimeInForce",
+    "encode_action",
+    "decode_action",
     "NonceAllocator",
     "ExchangeClient",
     "SdkConfig",

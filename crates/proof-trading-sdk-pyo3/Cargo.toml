@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 [dependencies]
 proof-trading-sdk = { path = "../proof-trading-sdk" }
 pyo3 = { version = "0.22", features = ["extension-module", "abi3"] }
+pythonize = "0.22"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 zeroize = "1"

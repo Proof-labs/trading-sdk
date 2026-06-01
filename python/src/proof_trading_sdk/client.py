@@ -10,6 +10,7 @@ from urllib.parse import urljoin
 import httpx
 
 from proof_trading_sdk._native import sign_and_encode
+from proof_trading_sdk.actions import Action, encode_action
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.errors import (
     AuthenticationError,
@@ -18,6 +19,7 @@ from proof_trading_sdk.errors import (
     GatewayError,
     ProofTradingSdkError,
     RateLimited,
+    SigningError,
     TransportError,
 )
 from proof_trading_sdk.nonce import NonceAllocator
@@ -262,6 +264,20 @@ class ExchangeClient:
             )
         except ValueError as e:
             raise CodecError(str(e)) from e
+
+    def sign_action(self, action: Action) -> bytes:
+        """Encode a typed :class:`~proof_trading_sdk.actions.Action` through
+        the shared Rust codec, then sign it into a wire envelope.
+
+        The payload bytes are produced by the core (not by Python), so the
+        wire layout is authoritative and identical across bindings.
+        """
+        action_type, payload = encode_action(action)
+        return self.sign_and_encode_action(action_type, payload)
+
+    def submit(self, action: Action) -> dict[str, t.Any]:
+        """Encode + sign + submit a typed action in one call."""
+        return self.submit_action(self.sign_action(action))
 
     # ── Write action ─────────────────────────────────────────────────────
 

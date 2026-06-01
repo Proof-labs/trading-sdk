@@ -7,6 +7,7 @@
 use core::fmt;
 
 use crate::state::StateError;
+use crate::wire::{Address, Pubkey, SolanaSignature};
 use exchange_derive::AbciEvent;
 use serde::{Deserialize, Serialize};
 
@@ -310,7 +311,7 @@ pub struct Order {
     pub id: OrderId,
     pub market: MarketId,
     /// Keccak-256-derived account address (first 20 bytes of pubkey hash).
-    pub owner: [u8; 20],
+    pub owner: Address,
     pub side: Side,
     /// Limit price in micro-USDC per unit of the base asset.
     pub price: u64,
@@ -381,7 +382,7 @@ pub struct TxContext {
 /// Persistent position state per owner per market.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Position {
-    pub owner: [u8; 20],
+    pub owner: Address,
     pub market: MarketId,
     pub side: Side,
     /// Weighted-average entry price (in quote units, same scale as order prices).
@@ -679,7 +680,7 @@ pub use crate::codec::Action;
 /// See `Action::RunLiquidationSweep` for rationale.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunLiquidationSweep {
-    pub signer: [u8; 20],
+    pub signer: Address,
 }
 
 /// Test/admin action — force-runs a funding tick on one market.
@@ -687,7 +688,7 @@ pub struct RunLiquidationSweep {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunFundingTick {
     pub market: MarketId,
-    pub signer: [u8; 20],
+    pub signer: Address,
 }
 
 /// Pick a per-account override on the initial-margin ratio for one
@@ -708,7 +709,7 @@ pub struct RunFundingTick {
 /// BE-16, 2026-05-03.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SetUserMarketLeverage {
-    pub owner: [u8; 20],
+    pub owner: Address,
     pub market: MarketId,
     /// Initial margin ratio in basis points the user wants to use
     /// for this market. `0` clears the override; otherwise must be
@@ -728,14 +729,14 @@ pub struct SetUserMarketLeverage {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClosePosition {
     pub market: MarketId,
-    pub owner: [u8; 20],
+    pub owner: Address,
 }
 
 /// Immediate-or-cancel order that crosses the book at the best available price.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MarketOrder {
     pub market: MarketId,
-    pub owner: [u8; 20],
+    pub owner: Address,
     pub side: Side,
     /// Desired fill quantity in base-asset units.
     pub quantity: u64,
@@ -749,7 +750,7 @@ pub struct MarketOrder {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlaceOrder {
     pub market: MarketId,
-    pub owner: [u8; 20],
+    pub owner: Address,
     pub side: Side,
     /// Limit price in micro-USDC per unit of the base asset.
     pub price: u64,
@@ -780,13 +781,13 @@ pub struct PlaceOrder {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CancelOrder {
     pub order_id: OrderId,
-    pub owner: [u8; 20],
+    pub owner: Address,
 }
 
 /// Cancel a resting order by client-assigned order id.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CancelClientOrder {
-    pub owner: [u8; 20],
+    pub owner: Address,
     pub client_order_id: u64,
 }
 
@@ -794,7 +795,7 @@ pub struct CancelClientOrder {
 /// on that market are removed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CancelAllOrders {
-    pub owner: [u8; 20],
+    pub owner: Address,
     #[serde(default)]
     pub market: Option<MarketId>,
 }
@@ -806,7 +807,7 @@ pub struct CancelAllOrders {
 /// be post-only/reduce-only, and can specify GTC/IOC/FOK.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CancelReplaceOrder {
-    pub owner: [u8; 20],
+    pub owner: Address,
     #[serde(default)]
     pub cancel_order_id: Option<OrderId>,
     #[serde(default)]
@@ -832,7 +833,7 @@ pub struct CancelReplaceOrder {
 /// increases reset priority.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AmendOrder {
-    pub owner: [u8; 20],
+    pub owner: Address,
     pub order_id: OrderId,
     #[serde(default)]
     pub new_price: Option<u64>,
@@ -866,7 +867,7 @@ pub struct OracleUpdate {
     pub market: MarketId,
     /// New mark price in micro-USDC.
     pub price: u64,
-    pub signer: [u8; 20],
+    pub signer: Address,
     /// Oracle's own publish timestamp in ms since Unix epoch.
     /// Must be strictly greater than the last accepted update's
     /// `publish_time_ms` for the same market.
@@ -909,7 +910,7 @@ pub struct OracleUpdateComposite {
     #[serde(default)]
     pub n_sources: u8,
     /// Authorized feeder signer (20 bytes).
-    pub signer: [u8; 20],
+    pub signer: Address,
     /// Feeder's own publish timestamp in ms since Unix epoch. Must
     /// be strictly greater than the last accepted update's
     /// `publish_time_ms` for the same market — replay guard.
@@ -932,13 +933,13 @@ pub struct OracleUpdateComposite {
 /// credits). External callers must use [`ConfirmDeposit`] instead.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Deposit {
-    pub owner: [u8; 20],
+    pub owner: Address,
     /// Amount in micro-USDC.
     pub amount: u64,
     /// Relayer signer. Must be an authorized relayer; enforced by
     /// `handle_deposit`. Added 2026-04-23 per audit B1.
     #[serde(default)]
-    pub signer: [u8; 20],
+    pub signer: Address,
 }
 
 /// Direct withdrawal — requires **relayer authorization**.
@@ -955,13 +956,13 @@ pub struct Deposit {
 /// refunding a stuck position) and for integration tests.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Withdraw {
-    pub owner: [u8; 20],
+    pub owner: Address,
     /// Amount in micro-USDC.
     pub amount: u64,
     /// Relayer signer. Must be an authorized relayer; enforced by
     /// `handle_withdraw`. Added 2026-04-23 per audit B2.
     #[serde(default)]
-    pub signer: [u8; 20],
+    pub signer: Address,
 }
 
 /// Admin action to register a market with its risk parameters.
@@ -973,7 +974,7 @@ pub struct CreateMarket {
     pub mm_bps: u32,
     pub taker_fee_bps: u32,
     pub maker_fee_bps: u32,
-    pub signer: [u8; 20],
+    pub signer: Address,
     /// Funding interval in milliseconds. 0 = funding disabled.
     pub funding_interval_ms: u64,
     /// Maximum absolute funding rate in basis points per interval.
@@ -1001,7 +1002,7 @@ impl Default for CreateMarket {
             mm_bps: 250,
             taker_fee_bps: 5,
             maker_fee_bps: 2,
-            signer: [0u8; 20],
+            signer: Address([0u8; 20]),
             funding_interval_ms: 60_000,
             max_funding_rate_bps: 3000,
             pool_id: 0,
@@ -1013,21 +1014,21 @@ impl Default for CreateMarket {
 /// Debits balance immediately and creates a pending withdrawal record.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WithdrawRequest {
-    pub owner: [u8; 20],
+    pub owner: Address,
     pub amount: u64,
     /// Solana destination public key (Ed25519, 32 bytes).
-    pub solana_destination: [u8; 32],
+    pub solana_destination: Pubkey,
 }
 
 /// Relayer confirms an on-chain USDC deposit from Solana.
 /// Credits the derived internal account.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfirmDeposit {
-    pub owner: [u8; 20],
+    pub owner: Address,
     pub amount: u64,
     /// Solana transaction signature (typically 64 bytes) for idempotency.
-    pub solana_tx_sig: Vec<u8>,
-    pub signer: [u8; 20],
+    pub solana_tx_sig: SolanaSignature,
+    pub signer: Address,
 }
 
 /// Relayer confirms a USDC withdrawal was sent on Solana.
@@ -1035,8 +1036,8 @@ pub struct ConfirmDeposit {
 pub struct ConfirmWithdrawal {
     pub withdrawal_id: u64,
     /// Solana transaction signature (typically 64 bytes).
-    pub solana_tx_sig: Vec<u8>,
-    pub signer: [u8; 20],
+    pub solana_tx_sig: SolanaSignature,
+    pub signer: Address,
 }
 
 /// Relayer marks a withdrawal as permanently failed (e.g. Solana transfer
@@ -1047,7 +1048,7 @@ pub struct FailWithdrawal {
     pub withdrawal_id: u64,
     /// Human-readable reason for the failure (for event logging).
     pub reason: String,
-    pub signer: [u8; 20],
+    pub signer: Address,
 }
 
 /// Why a Solana deposit was rejected by the relayer. Mirrors the small
@@ -1101,28 +1102,28 @@ pub struct FailDeposit {
     /// Solana transaction signature, same bytes that the original
     /// `ConfirmDeposit.solana_tx_sig` would carry. Lookup against the
     /// processed-deposits set is byte-equality.
-    pub solana_signature: Vec<u8>,
+    pub solana_signature: SolanaSignature,
     /// Structured reason for failure (for event-stream metrics + ops UX).
     pub reason: FailDepositReason,
     /// Authorized relayer signer (mirrors `ConfirmDeposit.signer`). The
     /// envelope signer's derived address must equal this AND must be on
     /// the relayer allowlist; otherwise `UnauthorizedRelayer`.
-    pub signer: [u8; 20],
+    pub signer: Address,
 }
 
 /// Approve a delegate keypair ("agent wallet") to trade on the owner's behalf.
 /// The agent can place/cancel orders but CANNOT withdraw or move funds.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApproveAgent {
-    pub owner: [u8; 20],
-    pub agent_pubkey: [u8; 32],
+    pub owner: Address,
+    pub agent_pubkey: Pubkey,
 }
 
 /// Revoke a previously approved agent wallet.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RevokeAgent {
-    pub owner: [u8; 20],
-    pub agent_pubkey: [u8; 32],
+    pub owner: Address,
+    pub agent_pubkey: Pubkey,
 }
 
 /// Admin action to create a new impact market family. Atomically registers
@@ -1151,7 +1152,7 @@ pub struct CreateImpactMarket {
     /// Funding interval for the conditional-perp child books (ms). 0 = disabled.
     pub funding_interval_ms: u64,
     pub max_funding_rate_bps: u32,
-    pub signer: [u8; 20],
+    pub signer: Address,
     /// BE-54: how this event's YES/NO outcome is determined at deadline.
     /// Optional — `None` (or absent on the wire, via `serde(default)`) means
     /// `RelayerAttested` (the legacy default — the resolver supplies the
@@ -1171,7 +1172,7 @@ pub struct CreateImpactMarket {
 pub struct ResolveEvent {
     pub impact_market_id: ImpactMarketId,
     pub outcome: Outcome,
-    pub signer: [u8; 20],
+    pub signer: Address,
 }
 
 /// Update a subset of `MarketConfig` fields on an existing market.
@@ -1199,7 +1200,7 @@ pub struct ResolveEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateMarketFees {
     pub market: MarketId,
-    pub signer: [u8; 20],
+    pub signer: Address,
     /// New taker fee in basis points. `None` = leave unchanged.
     #[serde(default)]
     pub taker_fee_bps: Option<u32>,
@@ -1264,7 +1265,7 @@ pub struct UpdateMarketFees {
     /// entirely (any authorized relayer accepted) without disturbing the
     /// primary slot — useful when you want to suspend the gate temporarily.
     #[serde(default)]
-    pub primary_oracle_signer: Option<[u8; 20]>,
+    pub primary_oracle_signer: Option<Address>,
     /// Oracle staleness threshold in ms. `None` = leave unchanged.
     /// Only consulted when `primary_oracle_signer` is set; see
     /// `MarketConfig::oracle_staleness_ms`. BE-50.
@@ -1349,7 +1350,7 @@ pub struct AccountFeeOverride {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SetAccountFeeOverride {
     /// Account to override fees for. 20-byte address.
-    pub account: [u8; 20],
+    pub account: Address,
     /// New taker fee in basis points (0..10_000), or
     /// `FEE_OVERRIDE_REVERT_SENTINEL` to revert taker fills to market base.
     pub taker_fee_bps: u32,
@@ -1358,7 +1359,7 @@ pub struct SetAccountFeeOverride {
     pub maker_fee_bps: u32,
     /// Authorized relayer signer. Must equal the envelope's derived
     /// owner and be on the relayer allowlist.
-    pub signer: [u8; 20],
+    pub signer: Address,
     /// Replay-guard sequence (BE-46.2). The engine tracks the highest
     /// accepted `seq` per `account`; the next call must satisfy
     /// `cmd.seq > stored_seq` or it is rejected with
@@ -1388,7 +1389,7 @@ pub enum WithdrawalStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WithdrawalRecord {
     pub id: u64,
-    pub owner: [u8; 20],
+    pub owner: Address,
     pub amount: u64,
     pub solana_destination: [u8; 32],
     pub status: WithdrawalStatus,

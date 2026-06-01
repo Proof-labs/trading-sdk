@@ -67,6 +67,41 @@ fn encode_signed_tx(
     Ok(PyBytes::new_bound(py, &encoded).into())
 }
 
+/// Encode a structured action payload into wire MessagePack bytes via the
+/// shared Rust codec.
+///
+/// `fields` is a native Python object (a dict keyed by the action's
+/// snake_case field names, or any object `pythonize` can deserialize). It is
+/// deserialized into the typed payload struct selected by `action_type`, then
+/// encoded by the *same* `rmp-serde` path the engine uses — so field order,
+/// enum-as-string, byte-array, and integer-width encoding are authoritative
+/// and identical across every binding. Byte fields accept Python `bytes`
+/// directly (the `wire` newtypes handle both `bytes` and seq-of-u8).
+///
+/// The returned bytes are the `action_payload` argument for
+/// [`sign_and_encode`].
+#[pyfunction]
+fn encode_action(
+    py: Python<'_>,
+    action_type: u8,
+    fields: &Bound<'_, PyAny>,
+) -> PyResult<PyObject> {
+    let mut de = pythonize::Depythonizer::from_object(fields);
+    let payload = codec::encode_payload_dyn(action_type, &mut de).map_err(map_err)?;
+    Ok(PyBytes::new_bound(py, &payload).into())
+}
+
+/// Decode raw MessagePack action-payload bytes into a native Python object
+/// (a dict keyed by the action's field names), the inverse of
+/// [`encode_action`]. The payload is parsed into the typed struct for
+/// `action_type` and re-serialized through `pythonize`.
+#[pyfunction]
+fn decode_action(py: Python<'_>, action_type: u8, payload: &[u8]) -> PyResult<PyObject> {
+    let pythonizer = pythonize::Pythonizer::new(py);
+    let obj = codec::decode_payload_dyn(action_type, payload, pythonizer).map_err(map_err)?;
+    Ok(obj.into())
+}
+
 /// Decode a wire envelope into its components.
 #[pyfunction]
 fn decode_tx(py: Python<'_>, tx_bytes: &[u8]) -> PyResult<PyObject> {
@@ -224,6 +259,8 @@ fn get_error_code_table(py: Python<'_>) -> PyObject {
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sign_and_encode, m)?)?;
     m.add_function(wrap_pyfunction!(encode_signed_tx, m)?)?;
+    m.add_function(wrap_pyfunction!(encode_action, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_tx, m)?)?;
     m.add_function(wrap_pyfunction!(pubkey_to_owner, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;
