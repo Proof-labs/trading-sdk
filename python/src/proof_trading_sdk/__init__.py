@@ -20,6 +20,8 @@ from proof_trading_sdk.errors import (
     TransportError,
     EngineError,
     RateLimited,
+    get_error_name,
+    get_error_code_table,
 )
 from proof_trading_sdk.nonce import NonceAllocator
 from proof_trading_sdk.config import SdkConfig, load_config
@@ -47,4 +49,6 @@ __all__ = [
     "TransportError",
     "EngineError",
     "RateLimited",
+    "get_error_name",
+    "get_error_code_table",
 ]

@@ -6,7 +6,7 @@ use core_sdk::types::ExecError;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::types::{PyBytes, PyDict, PyList};
 
 fn make_dict<'py>(py: Python<'py>, pairs: &[(&str, PyObject)]) -> Bound<'py, PyDict> {
     let dict = PyDict::new_bound(py);
@@ -185,6 +185,27 @@ fn load_key_from_fd(py: Python<'_>, fd: i32) -> PyResult<PyObject> {
     Ok(dict.into())
 }
 
+/// Return the error-code manifest — a list of {code, name, meaning} dicts.
+/// One entry per ErrorKind variant. Generated from the Rust core so bindings
+/// never drift.
+#[pyfunction]
+fn get_error_code_table(py: Python<'_>) -> PyObject {
+    let entries = core_sdk::types::error_code_manifest();
+    let list = PyList::empty_bound(py);
+    for kind in entries {
+        let d = make_dict(
+            py,
+            &[
+                ("code", kind.code().into_py(py)),
+                ("name", kind.name().into_py(py)),
+                ("meaning", kind.meaning().into_py(py)),
+            ],
+        );
+        list.append(d).ok();
+    }
+    list.into()
+}
+
 /// Native Python extension module for proof-trading-sdk (internal name: _native).
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -196,5 +217,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(chain_id_from_string, m)?)?;
     m.add_function(wrap_pyfunction!(generate_keypair, m)?)?;
     m.add_function(wrap_pyfunction!(load_key_from_fd, m)?)?;
+    m.add_function(wrap_pyfunction!(get_error_code_table, m)?)?;
     Ok(())
 }

@@ -42,3 +42,6 @@ def verify_signature(
 
 def chain_id_from_string(chain_id: str) -> bytes:
     ...
+
+def get_error_code_table() -> list[dict[str, object]]:
+    ...
