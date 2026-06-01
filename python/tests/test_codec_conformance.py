@@ -92,16 +92,19 @@ class TestEncodeDecodeRoundTrip:
         assert decoded["client_order_id"] == 99
         assert decoded["post_only"] is True
         assert decoded["time_in_force"] == "Ioc"
-        # Owner survives the bytes -> wire-seq -> bytes round trip.
-        assert bytes(decoded["owner"]) == bytes(range(20))
+        # Owner surfaces as `bytes` (not a list of ints) and round-trips.
+        assert isinstance(decoded["owner"], bytes)
+        assert decoded["owner"] == bytes(range(20))
 
     def test_byte_field_accepts_python_bytes(self):
         # The wire newtypes must accept a Python `bytes` owner directly
-        # (not only a list[int]) — the pythonize-ambiguity this fixes.
+        # (not only a list[int]) — the pythonize-ambiguity this fixes — and
+        # decode back to `bytes`.
         act = actions.ClosePosition(market=2, owner=bytes([0xAB] * 20))
         action_type, payload = actions.encode_action(act)
         decoded = actions.decode_action(action_type, payload)
-        assert bytes(decoded["owner"]) == bytes([0xAB] * 20)
+        assert isinstance(decoded["owner"], bytes)
+        assert decoded["owner"] == bytes([0xAB] * 20)
 
     def test_wrong_owner_length_rejected(self):
         # A 19-byte owner must be rejected by the core's length check,

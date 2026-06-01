@@ -19,9 +19,13 @@
 //! This removes the ambiguity that made feeding Python byte fields through
 //! `pythonize` fragile.
 //!
-//! **Wire compatibility is preserved.** [`Serialize`] forwards to the inner
-//! array/vec, so the encoded bytes — and the checked-in conformance
-//! vectors — are byte-for-byte identical to the pre-newtype encoding.
+//! **Wire compatibility is preserved.** For binary formats (rmp-serde — the
+//! wire) [`Serialize`] forwards to the inner array/vec, so the encoded bytes
+//! — and the checked-in conformance vectors — are byte-for-byte identical to
+//! the pre-newtype encoding. Human-readable serializers (`pythonize`) instead
+//! get a byte scalar, so a decoded address surfaces in Python as `bytes`
+//! rather than a list of ints. The split keys off `Serializer::is_human_readable()`
+//! (`false` for rmp-serde).
 
 use core::fmt;
 
@@ -85,9 +89,19 @@ macro_rules! fixed_byte_newtype {
 
         impl Serialize for $name {
             fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-                // Forward to the inner array so the wire form is identical
-                // to a bare `[u8; $len]` (a msgpack array of u8).
-                self.0.serialize(s)
+                if s.is_human_readable() {
+                    // Human-readable consumers — `pythonize` (→ a Python
+                    // `bytes`), serde_json, etc. — get a byte scalar so a
+                    // decoded address round-trips back to `bytes`, not a
+                    // list of ints.
+                    s.serialize_bytes(&self.0)
+                } else {
+                    // Binary formats (rmp-serde — the wire) get the inner
+                    // array verbatim: a msgpack seq-of-u8 identical to a
+                    // bare `[u8; $len]`. The conformance vectors depend on
+                    // this; `is_human_readable()` is `false` for rmp-serde.
+                    self.0.serialize(s)
+                }
             }
         }
 
@@ -201,9 +215,14 @@ impl AsRef<[u8]> for SolanaSignature {
 
 impl Serialize for SolanaSignature {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        // `Vec<u8>` serializes as a msgpack array of u8 — identical to the
-        // pre-newtype field encoding.
-        self.0.serialize(s)
+        if s.is_human_readable() {
+            // Human-readable consumers (pythonize → a Python `bytes`).
+            s.serialize_bytes(self.0.as_slice())
+        } else {
+            // Wire (rmp-serde): a msgpack array of u8, identical to the
+            // pre-newtype `Vec<u8>` field encoding.
+            self.0.serialize(s)
+        }
     }
 }
 
