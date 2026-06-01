@@ -1,19 +1,16 @@
 import {
-  etc,
   getPublicKey as ed_getPublicKey,
+  hashes,
   sign as ed_sign,
   verify as ed_verify,
   utils,
 } from "@noble/ed25519";
-import { keccak_256 } from "@noble/hashes/sha3";
-import { sha512 } from "@noble/hashes/sha512";
+import { keccak_256 } from "@noble/hashes/sha3.js";
+import { sha512 } from "@noble/hashes/sha2.js";
 
-// noble/ed25519 v2 requires setting the sha512 hash for sync operations
-etc.sha512Sync = (...msgs: Uint8Array[]) => {
-  const h = sha512.create();
-  for (const m of msgs) h.update(m);
-  return h.digest();
-};
+// noble/ed25519 v3 requires injecting sha512 for synchronous sign/verify
+// (v2 used `etc.sha512Sync`; v3 moved the hook to `hashes.sha512`).
+hashes.sha512 = sha512;
 
 /**
  * Domain separator matching Rust: `b"ProofExchange-v3"` (16 bytes).
@@ -46,7 +43,7 @@ export function generateKeypair(): {
   privateKey: Uint8Array;
   publicKey: Uint8Array;
 } {
-  const privateKey = utils.randomPrivateKey();
+  const privateKey = utils.randomSecretKey();
   const publicKey = ed_getPublicKey(privateKey);
   return { privateKey, publicKey };
 }

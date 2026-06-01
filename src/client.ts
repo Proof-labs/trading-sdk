@@ -24,7 +24,7 @@ import type {
   WithdrawalStatus,
 } from "./types.js";
 import { Decoder } from "@msgpack/msgpack";
-import { sha256 } from "@noble/hashes/sha256";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 const msgpackDecoder = new Decoder({ useBigInt64: true });
 
