@@ -297,6 +297,18 @@ export class ExchangeClient {
     return recent.map((n) => BigInt(n));
   }
 
+  /**
+   * Allocate the next timestamp nonce.
+   *
+   * Algorithm: `max(now_ms, last_nonce + 1)` capped at `now_ms + 60s` to
+   * bound the growth if the clock stops ticking.
+   *
+   * Engine window: `[block_time - 2 days, block_time + 1 day]`. All four
+   * rejection modes (too old, too far future, replay, below oldest) map to
+   * code 21 `InvalidNonce`. Nonces are burned on success — no rewinding.
+   *
+   * Thread-safe only through external serialization (caller's responsibility).
+   */
   private nextTimestampNonce(): bigint {
     const now = BigInt(Date.now());
     const max = now + 60_000n;
