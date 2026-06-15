@@ -1,6 +1,16 @@
 node_modules/
 dist/
 *.tsbuildinfo
+*.log
+
+# Benchmarks / coverage artifacts
+.benchmarks/
+coverage/
+
+# Editor / OS
+.DS_Store
+.idea/
+*.swp
 
 # Rust
 /target/

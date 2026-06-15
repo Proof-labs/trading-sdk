@@ -1,0 +1,16 @@
+# Build output / vendored
+dist/
+node_modules/
+target/
+fuzz/target/
+
+# Non-JS/TS configs prettier has no parser for
+*.toml
+Cargo.lock
+package-lock.json
+
+# Python + Rust sources (formatted by their own toolchains)
+python/
+crates/
+fuzz/
+conformance/

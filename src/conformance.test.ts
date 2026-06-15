@@ -83,7 +83,10 @@ function big(v: unknown): bigint {
  * Throwing on an unknown type is intentional — it surfaces coverage gaps and
  * the deliberately-missing `OracleUpdateComposite` (0x14).
  */
-function toAction(actionType: ActionTypeValue, input: Record<string, unknown>): Action {
+function toAction(
+  actionType: ActionTypeValue,
+  input: Record<string, unknown>,
+): Action {
   switch (actionType) {
     case ActionType.PlaceOrder:
       return {

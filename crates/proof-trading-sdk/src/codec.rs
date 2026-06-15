@@ -208,10 +208,10 @@ pub const SUPPORTED_ENVELOPE_VERSIONS: &[u8] = &[ENVELOPE_VERSION];
 /// type level (not just an annotation). The Go CheckTx parser
 /// (exchange-node/check_tx.go) and the SDK both expect this shape.
 ///
-/// The `version` byte stays `2` and the signing-prefix string stays
-/// `"ProofExchange-v2"` because every existing signature in dev/devnet
-/// was produced under that prefix. The legacy unsigned (v1) envelope
-/// was removed pre-launch.
+/// The envelope `version` byte stays `2` (exchange-core accepts only `[2]`).
+/// This is independent of the signing **domain prefix**, which is
+/// `"ProofExchange-v3"` (see `crypto.rs`) — bumped to v3 when chain_id
+/// binding landed. The legacy unsigned (v1) envelope was removed pre-launch.
 #[derive(Serialize, Deserialize)]
 struct WireTxEnvelope {
     version: u8,

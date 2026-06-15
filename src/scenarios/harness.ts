@@ -16,12 +16,7 @@ import {
   hexToBytes,
 } from "../crypto.js";
 import { Side } from "../types.js";
-import type {
-  Action,
-  AccountInfo,
-  Orderbook,
-  PositionInfo,
-} from "../types.js";
+import type { Action, AccountInfo, Orderbook, PositionInfo } from "../types.js";
 
 /** Canonical market IDs seeded by scripts/seed.ts. */
 export const BTC_PERP = 1;
@@ -71,11 +66,7 @@ export interface User {
   limitSell(market: number, qty: bigint, price: bigint): Promise<void>;
 
   /** Submit a market order (any side) and wait for inclusion. */
-  marketOrder(
-    market: number,
-    side: "Buy" | "Sell",
-    qty: bigint,
-  ): Promise<void>;
+  marketOrder(market: number, side: "Buy" | "Sell", qty: bigint): Promise<void>;
 
   /** Cancel every open order this user has, across all markets. */
   cancelAll(): Promise<number>;
@@ -102,10 +93,7 @@ export interface World {
   position(user: string, market: number): Promise<bigint>;
 
   /** Raw position info (if present) — gives callers the typed SDK shape. */
-  positionInfo(
-    user: string,
-    market: number,
-  ): Promise<PositionInfo | null>;
+  positionInfo(user: string, market: number): Promise<PositionInfo | null>;
 
   /** Push an oracle update via the relayer key. Throws if the harness
    *  was not initialised with `relayerPrivateKey`. Used by liquidation

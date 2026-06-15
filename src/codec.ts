@@ -122,7 +122,9 @@ function decodeFeeTiers(value: unknown): FeeTier[] | null {
   }
   return value.map((row) => {
     if (!Array.isArray(row) || row.length < 3) {
-      throw new Error("feeTier row must decode as [minVolume, makerFee, takerFee]");
+      throw new Error(
+        "feeTier row must decode as [minVolume, makerFee, takerFee]",
+      );
     }
     return {
       min30dVolumeMicroUsdc: bi(row[0]),
@@ -295,9 +297,7 @@ function outcomeStr(o: Outcome): string {
  * sent as msgpack `nil` so the engine's `serde(default)` treats it as
  * `Option::None` — equivalent to RelayerAttested for the resolver.
  */
-function encodeEventOracleSource(
-  src: EventOracleSource | undefined,
-): unknown {
+function encodeEventOracleSource(src: EventOracleSource | undefined): unknown {
   if (src === undefined) return null;
   switch (src.kind) {
     case "RelayerAttested":
@@ -480,7 +480,12 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       const d = action.data;
       return [
         ActionType.AmendOrder,
-        [toByteSeq(d.owner), d.orderId, d.newPrice ?? null, d.newQuantity ?? null],
+        [
+          toByteSeq(d.owner),
+          d.orderId,
+          d.newPrice ?? null,
+          d.newQuantity ?? null,
+        ],
       ];
     }
     case "OracleUpdate": {
@@ -810,10 +815,7 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           // as Gtc (0) via length-guarded fallback.
           postOnly: f.length > 6 && f[6] === true,
           reduceOnly: f.length > 7 && f[7] === true,
-          timeInForce:
-            f.length > 8
-              ? parseTimeInForce(f[8])
-              : TimeInForce.Gtc,
+          timeInForce: f.length > 8 ? parseTimeInForce(f[8]) : TimeInForce.Gtc,
         },
       };
     case ActionType.CancelOrder:
@@ -837,9 +839,10 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
         type: "CancelAllOrders",
         data: {
           owner: bytesField(f[0]),
-          market: f.length > 1 && f[1] !== null && f[1] !== undefined
-            ? Number(bi(f[1]))
-            : null,
+          market:
+            f.length > 1 && f[1] !== null && f[1] !== undefined
+              ? Number(bi(f[1]))
+              : null,
         },
       };
     case ActionType.CancelReplaceOrder:
@@ -857,9 +860,7 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           postOnly: f.length > 8 && f[8] === true,
           reduceOnly: f.length > 9 && f[9] === true,
           timeInForce:
-            f.length > 10
-              ? parseTimeInForce(f[10])
-              : TimeInForce.Gtc,
+            f.length > 10 ? parseTimeInForce(f[10]) : TimeInForce.Gtc,
         },
       };
     case ActionType.AmendOrder:
@@ -1012,7 +1013,8 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           // records emitted by pre-BE-54 SDKs (13-element arrays) still
           // decode cleanly — the missing field defaults to undefined,
           // mirroring the engine's `serde(default)` for `Option::None`.
-          oracleSource: f.length > 13 ? decodeEventOracleSource(f[13]) : undefined,
+          oracleSource:
+            f.length > 13 ? decodeEventOracleSource(f[13]) : undefined,
         },
       };
     case ActionType.ResolveEvent:
