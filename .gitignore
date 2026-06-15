@@ -5,3 +5,14 @@ dist/
 # Rust
 /target/
 Cargo.lock
+
+# Python
+__pycache__/
+.pytest_cache/
+*.egg-info/
+.venv/
+# maturin-built extension (installed in-place by `maturin develop`)
+*.so
+*.abi3.so
+.claude/settings.local.json
+.claude/.session-*

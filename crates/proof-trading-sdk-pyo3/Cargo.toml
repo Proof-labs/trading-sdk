@@ -1,0 +1,25 @@
+[package]
+name = "proof-trading-sdk-pyo3"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "PyO3 bindings for the proof-trading-sdk core: MessagePack codec, Ed25519 signing, and Keccak256 owner derivation."
+
+[lib]
+name = "proof_trading_sdk_native"
+crate-type = ["cdylib"]
+
+[features]
+default = ["pkcs11"]
+# HSM signing via a PKCS#11 module (dlopened at runtime — no HSM needed to
+# build). Disable for a smaller binary with no hardware-signing support.
+pkcs11 = ["dep:cryptoki"]
+
+[dependencies]
+proof-trading-sdk = { path = "../proof-trading-sdk" }
+pyo3 = { version = "0.28", features = ["extension-module", "abi3"] }
+pythonize = "0.28"
+ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+zeroize = "1"
+cryptoki = { version = "0.12", optional = true }

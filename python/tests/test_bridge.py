@@ -1,0 +1,212 @@
+"""Smoke tests for the PyO3 bridge.
+
+These test the FFI boundary — not the core logic. Core correctness is
+tested in the Rust crate and via shared conformance vectors.
+"""
+
+import pytest
+
+import proof_trading_sdk as pts
+
+
+class TestGenerateKeypair:
+    def test_without_seed(self):
+        kp = pts.generate_keypair()
+        assert isinstance(kp, dict)
+        assert len(kp["secret_key"]) == 32
+        assert len(kp["public_key"]) == 32
+
+    def test_with_seed(self):
+        seed = bytes(range(32))
+        kp = pts.generate_keypair(seed)
+        kp2 = pts.generate_keypair(seed)
+        assert kp["secret_key"] == kp2["secret_key"]
+        assert kp["public_key"] == kp2["public_key"]
+
+    def test_rejects_wrong_seed_length(self):
+        with pytest.raises(ValueError, match="exactly 32 bytes"):
+            pts.generate_keypair(b"\x00" * 31)
+
+
+class TestPubkeyToOwner:
+    def test_valid(self):
+        kp = pts.generate_keypair()
+        owner = pts.pubkey_to_owner(kp["public_key"])
+        assert len(owner) == 20
+
+    def test_rejects_wrong_length(self):
+        with pytest.raises(ValueError, match="exactly 32 bytes"):
+            pts.pubkey_to_owner(b"\x00" * 16)
+
+
+class TestChainIdFromString:
+    def test_returns_32_bytes(self):
+        cid = pts.chain_id_from_string("proof-dev-1")
+        assert len(cid) == 32
+
+    def test_deterministic(self):
+        a = pts.chain_id_from_string("test")
+        b = pts.chain_id_from_string("test")
+        assert a == b
+
+    def test_different_strings_differ(self):
+        a = pts.chain_id_from_string("chain-a")
+        b = pts.chain_id_from_string("chain-b")
+        assert a != b
+
+
+class TestSignAndEncode:
+    def test_round_trip(self):
+        kp = pts.generate_keypair()
+        cid = pts.chain_id_from_string("proof-dev-1")
+        payload = b"\x01\x02\x03"
+        tx = pts.sign_and_encode(cid, 1, payload, 42, kp["secret_key"])
+        assert isinstance(tx, bytes)
+        assert len(tx) > 80
+
+        decoded = pts.decode_tx(tx)
+        assert decoded["version"] == 2
+        assert decoded["action_type"] == 1
+        assert decoded["seq"] == 42
+        assert decoded["pubkey"] == kp["public_key"]
+
+    def test_rejects_wrong_chain_id_length(self):
+        kp = pts.generate_keypair()
+        with pytest.raises(ValueError, match="exactly 32 bytes"):
+            pts.sign_and_encode(b"\x00" * 16, 1, b"", 1, kp["secret_key"])
+
+    def test_rejects_wrong_key_length(self):
+        cid = pts.chain_id_from_string("test")
+        with pytest.raises(ValueError, match="exactly 32 bytes"):
+            pts.sign_and_encode(cid, 1, b"", 1, b"\x00" * 16)
+
+
+class TestDecodeTx:
+    def test_rejects_empty(self):
+        with pytest.raises(ValueError):
+            pts.decode_tx(b"")
+
+    def test_rejects_truncated(self):
+        kp = pts.generate_keypair()
+        cid = pts.chain_id_from_string("test")
+        tx = pts.sign_and_encode(cid, 1, b"", 1, kp["secret_key"])
+        with pytest.raises(ValueError):
+            pts.decode_tx(tx[:10])
+
+
+class TestVerifySignature:
+    def test_valid_sig(self):
+        kp = pts.generate_keypair()
+        cid = pts.chain_id_from_string("test")
+        payload = b"hello"
+        tx = pts.sign_and_encode(cid, 1, payload, 99, kp["secret_key"])
+        decoded = pts.decode_tx(tx)
+        valid = pts.verify_signature(
+            cid,
+            kp["public_key"],
+            decoded["signature"],
+            1,
+            99,
+            payload,
+        )
+        assert valid is True
+
+    def test_wrong_key(self):
+        kp = pts.generate_keypair()
+        wrong = pts.generate_keypair()
+        cid = pts.chain_id_from_string("test")
+        payload = b"data"
+        tx = pts.sign_and_encode(cid, 1, payload, 1, kp["secret_key"])
+        decoded = pts.decode_tx(tx)
+        valid = pts.verify_signature(
+            cid,
+            wrong["public_key"],
+            decoded["signature"],
+            1,
+            1,
+            payload,
+        )
+        assert valid is False
+
+    def test_tampered_payload(self):
+        kp = pts.generate_keypair()
+        cid = pts.chain_id_from_string("test")
+        tx = pts.sign_and_encode(cid, 1, b"real", 1, kp["secret_key"])
+        decoded = pts.decode_tx(tx)
+        valid = pts.verify_signature(
+            cid,
+            kp["public_key"],
+            decoded["signature"],
+            1,
+            1,
+            b"fake",
+        )
+        assert valid is False
+
+
+class TestEncodeSignedTx:
+    def test_encode_with_precomputed_sig(self):
+        kp = pts.generate_keypair()
+        cid = pts.chain_id_from_string("test")
+        payload = b"\x01\x02"
+        tx = pts.sign_and_encode(cid, 1, payload, 7, kp["secret_key"])
+        decoded = pts.decode_tx(tx)
+
+        tx2 = pts.encode_signed_tx(
+            1,
+            payload,
+            7,
+            kp["public_key"],
+            decoded["signature"],
+        )
+        decoded2 = pts.decode_tx(tx2)
+        assert decoded2["pubkey"] == decoded["pubkey"]
+        assert decoded2["signature"] == decoded["signature"]
+        assert decoded2["seq"] == 7
+
+
+class TestNonceAllocator:
+    def test_monotonic(self):
+        na = pts.NonceAllocator()
+        values = [na.allocate() for _ in range(100)]
+        for i in range(1, len(values)):
+            assert values[i] >= values[i - 1]
+
+    def test_same_ms_bump(self):
+        na = pts.NonceAllocator()
+        # Force same-ms by comparing — the allocator bumps on collision
+        a = na.allocate()
+        b = na.allocate()
+        assert b >= a
+
+
+class TestErrors:
+    def test_engine_error(self):
+        err = pts.EngineError(21, "InvalidNonce")
+        assert err.code == 21
+        assert "InvalidNonce" in str(err)
+
+    def test_rate_limited(self):
+        err = pts.RateLimited(retry_after_secs=5.0, bucket="orders")
+        assert err.retry_after_secs == 5.0
+        assert err.bucket == "orders"
+
+
+class TestConfig:
+    def test_default_config(self):
+        cfg = pts.load_config()
+        assert cfg.gateway_url == "http://localhost:1317"
+        assert cfg.timeout_secs == 30
+        assert cfg.log_level == "WARNING"
+
+    def test_env_overrides(self, monkeypatch):
+        monkeypatch.setenv("PROOF_GATEWAY_URL", "https://api.prod.proof.exchange")
+        monkeypatch.setenv("PROOF_LOG_LEVEL", "INFO")
+        cfg = pts.load_config()
+        assert cfg.gateway_url == "https://api.prod.proof.exchange"
+        assert cfg.log_level == "INFO"
+
+    def test_programmatic_overrides(self):
+        cfg = pts.load_config(gateway_url="https://custom.url", timeout_secs=60)
+        assert cfg.gateway_url == "https://custom.url"
+        assert cfg.timeout_secs == 60

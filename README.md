@@ -64,8 +64,12 @@ The 32-byte `chain_id` binding closes the cross-chain replay vector;
 caches it. Offline tooling calling `signAndEncode` directly must pass a
 `chainId` (`fetchChainId(rpcUrl)` or `chainIdFromString(name)`).
 
-`seq` is a wall-clock-ms timestamp nonce; the engine validates it against a
-sliding window (see `nextTimestampNonce`).
+`seq` is a **timestamp nonce** — a millisecond Unix timestamp chosen by the
+client. The SDK allocates via `max(now_ms, last_nonce + 1)`. The engine
+validates against a sliding window (`[block_time - 2 days, block_time + 1 day]`)
+and rejects replays with code 21 `InvalidNonce`. Nonces are burned on success;
+only invalid signatures skip the burn. See `nonce.py` / `nextTimestampNonce()`
+for the allocator.
 
 The full action set, payload layouts, and codec are defined in
 `src/types.ts` and `src/codec.ts` — these are the contract.
