@@ -1,5 +1,9 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Rust
+/target/
+Cargo.lock
 .claude/settings.local.json
 .claude/.session-*
