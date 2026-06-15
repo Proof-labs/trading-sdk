@@ -1,0 +1,38 @@
+# Proof-labs working agreement (Cursor)
+# Synced from Proof-labs/.github (templates/agent-config/.cursorrules).
+# Same policy lives in AGENTS.md and CLAUDE.md.
+
+<!-- ===== org-policy (synced — do not edit by hand) ===== -->
+
+## Branching policy
+
+Before any code edit, ask the user what this work is:
+
+  "A ProofOfBrain board card (W##-NN, e.g. W20-04), a Linear ticket (BE-##), or ad-hoc?"
+
+Then create a branch:
+
+  - ProofOfBrain card      : git checkout -b W##-NN/<short-kebab-slug>   (e.g. W20-04/known-limitations)
+  - Linear ticket / ad-hoc : git checkout -b <type>/<slug>              (type ∈ chore, feat, fix, docs, hotfix, infra, refactor)
+
+A Linear ticket rides a <type>/ branch and is attached at PR time, not in the branch name.
+Never edit on main, dev, develop, or master. Those branches are blocked org-wide.
+
+For a ProofOfBrain card, read the board card before editing:
+  Proof-labs/ProofOfBrain → delivery/boards/YYYY-Www.md → heading "### W##-NN — <title>"
+
+## Pull-request policy
+
+When you open a PR, set the optional "Task link" in the body — ask once if you don't already know it:
+  - W##-NN  (ProofOfBrain board card)
+  - BE-##   (Linear ticket)
+  - No — free-styling for now
+
+Free text is fine. The "Board item / validate" check is advisory and never blocks a merge.
+From the terminal, `bash .github/open-pr.sh` asks the same question, then runs `gh pr create`.
+
+<!-- ===== /org-policy ===== -->
+
+<!-- repo-specific -->
+# Add repo-specific Cursor rules below this line.
+

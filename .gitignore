@@ -5,3 +5,5 @@ dist/
 # Rust
 /target/
 Cargo.lock
+.claude/settings.local.json
+.claude/.session-*
