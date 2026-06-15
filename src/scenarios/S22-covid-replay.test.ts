@@ -88,10 +88,9 @@ describeScenario("S22: COVID-style 50% crash absorbed cleanly", () => {
 
     // Every long flat.
     for (const name of ALL) {
-      expect(
-        await w.position(name, BTC_PERP),
-        `${name} should be flat`,
-      ).toBe(0n);
+      expect(await w.position(name, BTC_PERP), `${name} should be flat`).toBe(
+        0n,
+      );
     }
 
     // No underwater accounts.

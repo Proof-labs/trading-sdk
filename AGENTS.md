@@ -22,7 +22,7 @@ Before any code edit:
 When you open a pull request, set the **Task link** in the PR body — optional, but ask by default:
 
 1. If the user already named a ticket for this work (a ProofOfBrain card `W##-NN` or a Linear ticket `BE-##`), use it — don't ask again.
-2. Otherwise ask once: *"Is this part of a ProofOfBrain board card (`W##-NN`), a Linear ticket (`BE-##`), or free-styling for now?"*
+2. Otherwise ask once: _"Is this part of a ProofOfBrain board card (`W##-NN`), a Linear ticket (`BE-##`), or free-styling for now?"_
 3. Fill the matching line in the template's **Task link** section (or mark "No — free-styling"). Free text is fine.
 
 From the terminal you can use the helper `bash .github/open-pr.sh`, which asks the same question and then runs `gh pr create`. The `Board item / validate` workflow is **advisory only — it never blocks a merge**.
@@ -37,4 +37,3 @@ From the terminal you can use the helper `bash .github/open-pr.sh`, which asks t
 
 <!-- repo-specific -->
 <!-- Add repo-specific agent instructions below this line. -->
-

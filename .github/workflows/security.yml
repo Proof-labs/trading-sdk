@@ -1,0 +1,65 @@
+name: security
+
+# Pre-audit security gate (W22-08): dependency advisories + fuzzing the
+# untrusted-input decoders. Runs on PRs and dev pushes; a weekly schedule does
+# a longer fuzz soak. Manual runs via workflow_dispatch.
+on:
+  push:
+    branches: [dev]
+  pull_request:
+  schedule:
+    - cron: "0 4 * * 1" # Mondays 04:00 UTC — longer fuzz soak
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Install the latest cargo-audit: the RustSec DB now carries CVSS 4.0
+      # advisories that older releases fail to parse.
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      # Cargo.lock is gitignored (this is a library workspace), so materialize
+      # it before auditing.
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+      - name: Audit dependencies
+        run: cargo audit
+
+  fuzz:
+    name: cargo fuzz (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      # 60s/target on PRs and pushes; 10min/target on the weekly soak.
+      - name: Set fuzz duration
+        run: echo "FUZZ_SECONDS=${{ github.event_name == 'schedule' && 600 || 60 }}" >> "$GITHUB_ENV"
+      - name: Fuzz decode_tx
+        run: cargo fuzz run decode_tx -- -max_total_time=$FUZZ_SECONDS
+      - name: Fuzz decode_payload
+        run: cargo fuzz run decode_payload -- -max_total_time=$FUZZ_SECONDS
+      # Preserve any crash/OOM reproducer so it can be replayed locally.
+      - name: Upload fuzz artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

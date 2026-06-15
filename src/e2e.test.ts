@@ -88,7 +88,13 @@ describeE2E("e2e: SDK → CometBFT", () => {
   it("encodeTx produces non-empty bytes with correct msgpack header", () => {
     const action: Action = {
       type: "PlaceOrder",
-      data: { market: MARKET_ID, owner, side: Side.Buy, price: DEFAULT_PRICE, quantity: DEFAULT_QTY },
+      data: {
+        market: MARKET_ID,
+        owner,
+        side: Side.Buy,
+        price: DEFAULT_PRICE,
+        quantity: DEFAULT_QTY,
+      },
     };
     const bytes = encodeTx(action, SEQ_1);
     expect(bytes.length).toBeGreaterThan(4);
@@ -98,7 +104,13 @@ describeE2E("e2e: SDK → CometBFT", () => {
   it("base64 round-trip preserves tx bytes", () => {
     const action: Action = {
       type: "PlaceOrder",
-      data: { market: MARKET_ID, owner, side: Side.Buy, price: DEFAULT_PRICE, quantity: DEFAULT_QTY },
+      data: {
+        market: MARKET_ID,
+        owner,
+        side: Side.Buy,
+        price: DEFAULT_PRICE,
+        quantity: DEFAULT_QTY,
+      },
     };
     const bytes = encodeTx(action, SEQ_1);
     const b64 = Buffer.from(bytes).toString("base64");
@@ -109,7 +121,13 @@ describeE2E("e2e: SDK → CometBFT", () => {
   it("submitTx PlaceOrder passes CheckTx", async () => {
     const result = await client.submitTx({
       type: "PlaceOrder",
-      data: { market: MARKET_ID, owner, side: Side.Buy, price: DEFAULT_PRICE, quantity: DEFAULT_QTY },
+      data: {
+        market: MARKET_ID,
+        owner,
+        side: Side.Buy,
+        price: DEFAULT_PRICE,
+        quantity: DEFAULT_QTY,
+      },
     });
     expect(result.code).toBe(0);
     expect(result.hash).toBeTruthy();
@@ -137,7 +155,13 @@ describeE2E("e2e: SDK → CometBFT", () => {
   it("submitted tx is included in a block", async () => {
     const result = await client.submitTx({
       type: "PlaceOrder",
-      data: { market: MARKET_ID, owner, side: Side.Sell, price: 200n, quantity: 5n },
+      data: {
+        market: MARKET_ID,
+        owner,
+        side: Side.Sell,
+        price: 200n,
+        quantity: 5n,
+      },
     });
     expect(result.code).toBe(0);
 
@@ -148,7 +172,13 @@ describeE2E("e2e: SDK → CometBFT", () => {
   it("submitted tx appears in block data", async () => {
     const result = await client.submitTx({
       type: "PlaceOrder",
-      data: { market: MARKET_ID, owner, side: Side.Buy, price: 300n, quantity: 1n },
+      data: {
+        market: MARKET_ID,
+        owner,
+        side: Side.Buy,
+        price: 300n,
+        quantity: 1n,
+      },
     });
     expect(result.code).toBe(0);
 

@@ -18,10 +18,15 @@ npm run build   # tsc -> dist/
 ## Quick Start
 
 ```typescript
-import { ExchangeClient, Side, generateKeypair, pubkeyToOwner } from "@proof/trading-sdk";
+import {
+  ExchangeClient,
+  Side,
+  generateKeypair,
+  pubkeyToOwner,
+} from "@proof/trading-sdk";
 
 const { publicKey, privateKey } = generateKeypair();
-const address = pubkeyToOwner(publicKey);          // keccak256(pubkey)[12..32]
+const address = pubkeyToOwner(publicKey); // keccak256(pubkey)[12..32]
 
 const client = new ExchangeClient({
   rpcUrl: "http://localhost:26657",
@@ -31,7 +36,13 @@ client.setPrivateKey(privateKey);
 
 await client.submitTx({
   type: "PlaceOrder",
-  data: { market: 1, owner: address, side: Side.Buy, price: 6675000n, quantity: 100n },
+  data: {
+    market: 1,
+    owner: address,
+    side: Side.Buy,
+    price: 6675000n,
+    quantity: 100n,
+  },
 });
 
 const book = await client.queryOrderbook(1);
@@ -40,12 +51,12 @@ const account = await client.queryAccount();
 
 ## Unit Conventions
 
-| Field | Unit | Example |
-|-------|------|---------|
-| Prices | Cents (2 dp) | `6675234` = $66,752.34 |
-| Balances / amounts | MicroUSDC (6 dp) | `100_000_000_000` = $100,000 |
-| Fees / margin rates | Basis points | `500` = 5% |
-| Addresses | 20-byte `Uint8Array` | `pubkeyToOwner(publicKey)` |
+| Field               | Unit                 | Example                      |
+| ------------------- | -------------------- | ---------------------------- |
+| Prices              | Cents (2 dp)         | `6675234` = $66,752.34       |
+| Balances / amounts  | MicroUSDC (6 dp)     | `100_000_000_000` = $100,000 |
+| Fees / margin rates | Basis points         | `500` = 5%                   |
+| Addresses           | 20-byte `Uint8Array` | `pubkeyToOwner(publicKey)`   |
 
 All prices and quantities are `u64` — never floats.
 
@@ -64,22 +75,26 @@ The 32-byte `chain_id` binding closes the cross-chain replay vector;
 caches it. Offline tooling calling `signAndEncode` directly must pass a
 `chainId` (`fetchChainId(rpcUrl)` or `chainIdFromString(name)`).
 
-`seq` is a wall-clock-ms timestamp nonce; the engine validates it against a
-sliding window (see `nextTimestampNonce`).
+`seq` is a **timestamp nonce** — a millisecond Unix timestamp chosen by the
+client. The SDK allocates via `max(now_ms, last_nonce + 1)`. The engine
+validates against a sliding window (`[block_time - 2 days, block_time + 1 day]`)
+and rejects replays with code 21 `InvalidNonce`. Nonces are burned on success;
+only invalid signatures skip the burn. See `nonce.py` / `nextTimestampNonce()`
+for the allocator.
 
 The full action set, payload layouts, and codec are defined in
 `src/types.ts` and `src/codec.ts` — these are the contract.
 
 ## Layout
 
-| Path | Contents |
-|------|----------|
-| `src/codec.ts` | MessagePack encode/decode, signed-envelope assembly |
-| `src/crypto.ts` | Ed25519 sign/verify, keypair + owner derivation |
-| `src/client.ts` | `ExchangeClient` — submit, queries, nonce allocation |
-| `src/errors.ts` | Typed engine/gateway error surface |
-| `src/types.ts` | Action types and payload shapes (wire contract) |
-| `src/scenarios/` | End-to-end matching/liquidation scenario tests |
+| Path             | Contents                                             |
+| ---------------- | ---------------------------------------------------- |
+| `src/codec.ts`   | MessagePack encode/decode, signed-envelope assembly  |
+| `src/crypto.ts`  | Ed25519 sign/verify, keypair + owner derivation      |
+| `src/client.ts`  | `ExchangeClient` — submit, queries, nonce allocation |
+| `src/errors.ts`  | Typed engine/gateway error surface                   |
+| `src/types.ts`   | Action types and payload shapes (wire contract)      |
+| `src/scenarios/` | End-to-end matching/liquidation scenario tests       |
 
 ## Test
 

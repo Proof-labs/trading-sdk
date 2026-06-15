@@ -9,7 +9,7 @@ import {
   generateKeypair,
 } from "./crypto.js";
 import { Side } from "./types.js";
-import { sha256 } from "@noble/hashes/sha256";
+import { sha256 } from "@noble/hashes/sha2.js";
 
 /**
  * Tests for timestamp-nonce submission. The strategy: stub global fetch to

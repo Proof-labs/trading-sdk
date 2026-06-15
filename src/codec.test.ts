@@ -613,7 +613,8 @@ describe("codec v1 all action types", () => {
     };
     const { action: decoded } = decodeTx(encodeTx(action, 7n));
     expect(decoded.type).toBe("SetAccountFeeOverride");
-    if (decoded.type !== "SetAccountFeeOverride") throw new Error("type narrowing");
+    if (decoded.type !== "SetAccountFeeOverride")
+      throw new Error("type narrowing");
     expect(decoded.data.account).toEqual(account);
     expect(decoded.data.takerFeeBps).toBe(3);
     expect(decoded.data.makerFeeBps).toBe(1);
@@ -638,7 +639,8 @@ describe("codec v1 all action types", () => {
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "SetAccountFeeOverride") throw new Error("type narrowing");
+    if (decoded.type !== "SetAccountFeeOverride")
+      throw new Error("type narrowing");
     expect(decoded.data.seq).toBe(ms);
   });
 
@@ -662,7 +664,8 @@ describe("codec v1 all action types", () => {
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "SetAccountFeeOverride") throw new Error("type narrowing");
+    if (decoded.type !== "SetAccountFeeOverride")
+      throw new Error("type narrowing");
     expect(decoded.data.takerFeeBps).toBe(FEE_OVERRIDE_REVERT_SENTINEL);
     expect(decoded.data.makerFeeBps).toBe(FEE_OVERRIDE_REVERT_SENTINEL);
   });
@@ -683,7 +686,8 @@ describe("codec v1 all action types", () => {
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "SetAccountFeeOverride") throw new Error("type narrowing");
+    if (decoded.type !== "SetAccountFeeOverride")
+      throw new Error("type narrowing");
     expect(decoded.data.takerFeeBps).toBe(1);
     expect(decoded.data.makerFeeBps).toBe(FEE_OVERRIDE_REVERT_SENTINEL);
   });
@@ -712,7 +716,8 @@ describe("codec v1 all action types", () => {
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "CreateImpactMarket") throw new Error("type narrowing");
+    if (decoded.type !== "CreateImpactMarket")
+      throw new Error("type narrowing");
     expect(decoded.data.oracleSource).toBeUndefined();
   });
 
@@ -741,7 +746,8 @@ describe("codec v1 all action types", () => {
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "CreateImpactMarket") throw new Error("type narrowing");
+    if (decoded.type !== "CreateImpactMarket")
+      throw new Error("type narrowing");
     expect(decoded.data.oracleSource).toEqual({
       kind: "UnderlyingPriceVsStrike",
       strikePrice: 10_000_000n,
@@ -775,7 +781,8 @@ describe("codec v1 all action types", () => {
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "CreateImpactMarket") throw new Error("type narrowing");
+    if (decoded.type !== "CreateImpactMarket")
+      throw new Error("type narrowing");
     expect(decoded.data.oracleSource).toEqual({
       kind: "MarketOracle",
       market: 7,
@@ -805,7 +812,8 @@ describe("codec v1 all action types", () => {
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "CreateImpactMarket") throw new Error("type narrowing");
+    if (decoded.type !== "CreateImpactMarket")
+      throw new Error("type narrowing");
     expect(decoded.data.oracleSource).toEqual({ kind: "RelayerAttested" });
   });
 });

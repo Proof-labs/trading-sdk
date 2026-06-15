@@ -25,7 +25,7 @@ The `PreToolUse` hook at `.claude/hooks/pre-tool-use.sh` rejects `Edit` / `Write
 When you open a pull request, set the **Task link** in the PR body — it's optional, but ask by default:
 
 1. If the user already named a ticket for this work (a ProofOfBrain card `W##-NN` or a Linear ticket `BE-##`), use it — don't ask again.
-2. Otherwise ask once, in chat: *"Is this part of a ProofOfBrain board card (`W##-NN`), a Linear ticket (`BE-##`), or free-styling for now?"*
+2. Otherwise ask once, in chat: _"Is this part of a ProofOfBrain board card (`W##-NN`), a Linear ticket (`BE-##`), or free-styling for now?"_
 3. Fill the matching line in the template's **Task link** section (or tick "No — free-styling"). Free text is fine.
 
 The `Board item / validate` check is **advisory only — it never blocks a merge**. Use `dev` as the integration branch; `develop` and `master` are blocked org-wide via ruleset.
@@ -58,14 +58,14 @@ npx prettier --check .
 
 ## Layout
 
-| Path | Role |
-|------|------|
-| `src/codec.ts` | MessagePack encode/decode; signed-envelope assembly |
-| `src/crypto.ts` | Ed25519 sign/verify; keypair + owner derivation |
-| `src/client.ts` | `ExchangeClient`: submit, queries, nonce allocation |
-| `src/errors.ts` | Typed engine/gateway error surface |
-| `src/types.ts` | Action types + payload shapes — the wire contract |
-| `src/scenarios/` | End-to-end matching/liquidation scenario tests |
+| Path             | Role                                                |
+| ---------------- | --------------------------------------------------- |
+| `src/codec.ts`   | MessagePack encode/decode; signed-envelope assembly |
+| `src/crypto.ts`  | Ed25519 sign/verify; keypair + owner derivation     |
+| `src/client.ts`  | `ExchangeClient`: submit, queries, nonce allocation |
+| `src/errors.ts`  | Typed engine/gateway error surface                  |
+| `src/types.ts`   | Action types + payload shapes — the wire contract   |
+| `src/scenarios/` | End-to-end matching/liquidation scenario tests      |
 
 ## Wire format rules
 
@@ -74,8 +74,16 @@ npx prettier --check .
 - Envelope: `[version=2, action_type, seq, payload, pubkey(32B), signature(64B)]`.
   Signature covers
   `DOMAIN_PREFIX(16B) || chain_id(32B) || action_type(1B) || seq(8B BE) || payload`.
-  The signing-prefix string stays `"ProofExchange-v2"` for compatibility with
-  already-issued signatures.
+- **Two distinct version numbers — do not conflate them:**
+  - The **envelope `version` byte** is `2` (first array element). Unchanged;
+    `exchange-core` accepts only `[2]` (`SUPPORTED_ENVELOPE_VERSIONS`).
+  - The **signing domain prefix** is `"ProofExchange-v3"` (16B) — the V3 signing
+    layout above, which binds `chain_id` (audit B4). Earlier docs said the prefix
+    "stays v2"; that is stale. It was bumped to v3 when chain_id binding landed,
+    and `exchange-core` (`exchange-core/src/crypto.rs`) signs/verifies under v3.
+  - Verified byte-identical against `exchange-core` golden vectors
+    (`docs/spec/golden-vectors/*.hex` ≡ `crates/spec/golden-vectors/*.hex`) at
+    exchange HEAD `e91d803`. Re-diff those files to re-confirm after any wire change.
 - The 32-byte `chain_id` binding closes cross-chain replay. Resolved from
   CometBFT `/status` and cached; offline callers of `signAndEncode` must pass it.
 - `seq` is a wall-clock-ms timestamp nonce; the engine validates it against a
@@ -87,12 +95,12 @@ npx prettier --check .
 
 ## Unit conventions
 
-| Field | Scale | Example |
-|-------|-------|---------|
-| Prices | Integer cents (2 dp) | `6675000` = $66,750 |
-| Balances | MicroUSDC (6 dp) | `100_000_000_000` = $100k |
-| Fees/Rates | Basis points | `500` = 5% |
-| Addresses | 20 bytes — keccak256(pubkey)[12..32] | `pubkeyToOwner()` |
+| Field      | Scale                                | Example                   |
+| ---------- | ------------------------------------ | ------------------------- |
+| Prices     | Integer cents (2 dp)                 | `6675000` = $66,750       |
+| Balances   | MicroUSDC (6 dp)                     | `100_000_000_000` = $100k |
+| Fees/Rates | Basis points                         | `500` = 5%                |
+| Addresses  | 20 bytes — keccak256(pubkey)[12..32] | `pubkeyToOwner()`         |
 
 ## Spec / contract sync
 
