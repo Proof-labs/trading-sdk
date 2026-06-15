@@ -14,3 +14,5 @@ __pycache__/
 # maturin-built extension (installed in-place by `maturin develop`)
 *.so
 *.abi3.so
+.claude/settings.local.json
+.claude/.session-*

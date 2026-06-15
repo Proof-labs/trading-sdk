@@ -1,28 +1,41 @@
 # Proof-labs working agreement (Claude Code)
 
-This file is project-level guidance for Claude Code. The org-policy section is
-synced from `Proof-labs/.github`; the repo-specific section below it covers this
-SDK.
+This file is project-level guidance for Claude Code, synced from `Proof-labs/.github` (`templates/agent-config/CLAUDE.md`). Repo-specific instructions live below the `<!-- repo-specific -->` marker — don't edit anything above it.
 
 <!-- ===== org-policy (synced — do not edit by hand) ===== -->
 
 ## Branching policy (hard-enforced)
 
-Before making any code edits:
+**Before making any code edits**, you must:
 
-1. Ask the user for a board ticket ID `W##-NN` (e.g. `W20-04`) **or**
-   `n/a — <reason>` for non-ticket work.
-2. Branch with the correct prefix:
-   - Ticket work: `git checkout -b W##-NN/<short-kebab-slug>`
-   - Non-ticket: `git checkout -b <type>/<slug>`, `<type>` ∈
-     `chore|feat|fix|docs|hotfix|infra|refactor`.
-3. For ticket work, read the board card first:
-   `Proof-labs/ProofOfBrain` → `delivery/boards/YYYY-Www.md` → `### W##-NN — <title>`.
-4. Confirm scope with the user before editing.
+1. Ask the user what this work is: a **ProofOfBrain board card** (`W##-NN`, e.g. `W20-04`), a **Linear ticket** (`BE-##`), or **ad-hoc**.
+2. Create a branch with the correct prefix:
+   - **ProofOfBrain card:** `git checkout -b W##-NN/<short-kebab-slug>` (e.g. `W20-04/known-limitations`)
+   - **Linear ticket or ad-hoc:** `git checkout -b <type>/<slug>` where `<type>` is one of `chore`, `feat`, `fix`, `docs`, `hotfix`, `infra`, `refactor`. A Linear ticket rides a `<type>/` branch and is attached at PR time (see pull-request policy), not in the branch name.
+3. **For a ProofOfBrain card**, read the board card before editing:
+   `Proof-labs/ProofOfBrain` → `delivery/boards/YYYY-Www.md` → heading `### W##-NN — <title>`
+4. Confirm scope with the user before editing files.
 
-`main`, `dev`, `develop`, `master` (any case) are blocked for direct edits. Use
-`dev` as the integration branch; every PR fills the `**Board item:**` field with
-`W##-NN` or `n/a — <reason>`.
+The `PreToolUse` hook at `.claude/hooks/pre-tool-use.sh` rejects `Edit` / `Write` / `NotebookEdit` calls until the current branch matches the convention. Don't try to bypass — fix the branch.
+
+`main`, `dev`, `develop`, `master` (any case) are blocked for direct edits.
+
+## Pull-request policy
+
+When you open a pull request, set the **Task link** in the PR body — it's optional, but ask by default:
+
+1. If the user already named a ticket for this work (a ProofOfBrain card `W##-NN` or a Linear ticket `BE-##`), use it — don't ask again.
+2. Otherwise ask once, in chat: *"Is this part of a ProofOfBrain board card (`W##-NN`), a Linear ticket (`BE-##`), or free-styling for now?"*
+3. Fill the matching line in the template's **Task link** section (or tick "No — free-styling"). Free text is fine.
+
+The `Board item / validate` check is **advisory only — it never blocks a merge**. Use `dev` as the integration branch; `develop` and `master` are blocked org-wide via ruleset.
+
+## Linked policy
+
+- Definition of Done axes: `Proof-labs/ProofOfBrain` → `delivery/definition-of-done.md`
+- Weekly boards: `Proof-labs/ProofOfBrain` → `delivery/boards/_index.md`
+- Branching policy: `Proof-labs/ProofOfBrain` → meeting notes referenced from the PR template
+- Org-level config (this file, hooks, rulesets, validator workflow): `Proof-labs/.github`
 
 <!-- ===== /org-policy ===== -->
 
