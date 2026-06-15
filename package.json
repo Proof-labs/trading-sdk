@@ -1,11 +1,35 @@
 {
   "name": "@proof/trading-sdk",
   "version": "0.1.0",
-  "description": "TypeScript SDK for Proof Exchange \u2014 signing, encoding, querying, and submitting actions.",
+  "description": "TypeScript SDK for Proof Exchange — signing, encoding, querying, and submitting actions.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Proof-labs/trading-sdk.git"
+  },
+  "homepage": "https://github.com/Proof-labs/trading-sdk#readme",
+  "bugs": {
+    "url": "https://github.com/Proof-labs/trading-sdk/issues"
+  },
+  "keywords": [
+    "proof",
+    "exchange",
+    "trading",
+    "sdk",
+    "ed25519",
+    "messagepack"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -19,11 +43,11 @@
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.0.0-beta.3",
-    "@noble/ed25519": "^2.2.0",
-    "@noble/hashes": "^1.7.0"
+    "@noble/ed25519": "^3.1.0",
+    "@noble/hashes": "^2.2.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "typescript": "^6.0.0",
+    "vitest": "^4.1.0"
   }
 }

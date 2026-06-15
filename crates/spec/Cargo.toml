@@ -1,0 +1,23 @@
+[package]
+name = "proof-trading-sdk-conformance"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Cross-language conformance vectors (NDJSON) + generator + Rust runner for the Proof trading SDK core."
+publish = false
+
+[lib]
+name = "proof_trading_sdk_conformance"
+path = "src/lib.rs"
+
+# Regenerate the checked-in vectors:  cargo run -p proof-trading-sdk-conformance --bin gen-vectors
+[[bin]]
+name = "gen-vectors"
+path = "src/bin/gen_vectors.rs"
+
+[dependencies]
+proof-trading-sdk = { path = "../proof-trading-sdk" }
+ed25519-dalek = { version = "2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"

@@ -1,0 +1,4 @@
+{"case":"clock_ticks","last":0,"now_ms":[1000,1001,1002],"expect":[1000,1001,1002]}
+{"case":"same_ms_collision","last":0,"now_ms":[1000,1000,1000],"expect":[1000,1001,1002]}
+{"case":"clock_backwards","last":5000,"now_ms":[4000,4001],"expect":[5001,5002]}
+{"case":"restart_from_zero","last":0,"now_ms":[1700000000000],"expect":[1700000000000]}

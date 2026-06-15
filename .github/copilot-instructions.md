@@ -32,4 +32,3 @@ Free text is fine. The `Board item / validate` workflow is **advisory only — i
 
 <!-- repo-specific -->
 <!-- Add repo-specific Copilot instructions below this line. -->
-
