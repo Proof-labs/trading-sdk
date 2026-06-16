@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
-# Open a pull request, asking once for an optional task link.
+# Open a pull request, asking once for an optional issue reference.
 #
-# Synced from Proof-labs/.github (templates/agent-config/.github/open-pr.sh).
-# This is the terminal counterpart to the Claude Code chat prompt: it asks the
-# same question (ProofOfBrain card / Linear ticket / free-style), then hands off
-# to `gh pr create` with your answer in the body. Free text, nothing validated,
-# nothing blocked.
+# Asks for an optional related issue/task, then hands off to `gh pr create`
+# with your answer in the body. Free text, nothing validated, nothing blocked.
 #
 # Usage:
 #   bash .github/open-pr.sh [--base <branch>]
@@ -27,7 +24,7 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
 fi
 
 # Args — only --base <branch> / --base=<branch> are supported.
-base="dev"
+base="main"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --base) base="${2:-}"; shift 2 ;;
@@ -61,19 +58,18 @@ default_title="$(git log -1 --pretty=%s 2>/dev/null || printf '%s' "$branch")"
 
 echo "Opening a pull request:  $branch → $base"
 echo
-echo "Is this part of a task list?  (optional)"
-echo "  • a ProofOfBrain card   e.g.  W25-07"
-echo "  • a Linear ticket       e.g.  BE-63"
-echo "  • or just press Enter to free-style this one"
-printf "Task › "
+echo "Does this close or relate to an issue?  (optional)"
+echo "  • an issue number      e.g.  #42  (or 'Closes #42')"
+echo "  • or just press Enter to skip"
+printf "Issue › "
 read -r task < /dev/tty || task=""
 task="$(trim "$task")"
 
 if [ -z "$task" ]; then
-  task_line="**Task link:** No — free-styling for now"
-  echo "✓ No task linked — free-styling. (you can add one later)"
+  task_line="**Related issue:** none"
+  echo "✓ No issue linked. (you can add one later)"
 else
-  task_line="**Task link:** $task"
+  task_line="**Related issue:** $task"
   echo "✓ Linking to $task"
 fi
 
@@ -82,7 +78,7 @@ read -r title < /dev/tty || title=""
 title="$(trim "$title")"
 [ -z "$title" ] && title="$default_title"
 
-body="$(printf '## Task link\n\n%s\n\n<!-- Opened via .github/open-pr.sh — edit to add a summary / test plan. -->\n' "$task_line")"
+body="$(printf '## Related issue\n\n%s\n\n<!-- Opened via .github/open-pr.sh — edit to add a summary / test plan. -->\n' "$task_line")"
 
 # Push first so `gh pr create` never falls into its own interactive push prompt.
 echo "Pushing $branch…"
