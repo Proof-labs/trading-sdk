@@ -1,0 +1,15 @@
+# Code owners for @proof/trading-sdk.
+# Owners are automatically requested for review on matching paths. If branch
+# protection requires Code Owner review, these paths cannot merge without it.
+# Later-matching patterns take precedence over earlier ones.
+
+# Default owner for everything in the repo.
+*                 @aleksandr-proof
+
+# Security-critical surfaces — signing, codec, and the wire contract.
+# Listed explicitly so they keep an owner if more default owners are added.
+/src/crypto.ts    @aleksandr-proof
+/src/codec.ts     @aleksandr-proof
+/src/types.ts     @aleksandr-proof
+/crates/          @aleksandr-proof
+/python/          @aleksandr-proof
