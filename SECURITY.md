@@ -22,14 +22,8 @@ reporting an issue you can only reproduce on an older release.
 **Do not open a public issue, pull request, or discussion for a security
 vulnerability.** Public disclosure before a fix is available puts users at risk.
 
-Report privately through GitHub's **Report a vulnerability** flow:
-
-1. Go to the repository's **[Security tab](https://github.com/Proof-labs/trading-sdk/security)**.
-2. Click **Report a vulnerability** (GitHub Private Vulnerability Reporting).
-3. Describe the issue with enough detail for us to reproduce it.
-
-This routes the report to the maintainers privately — no email address is
-required.
+Report privately by email to **[security@proof.trade](mailto:security@proof.trade)**
+with enough detail for us to reproduce the issue.
 
 Please include, where applicable:
 
