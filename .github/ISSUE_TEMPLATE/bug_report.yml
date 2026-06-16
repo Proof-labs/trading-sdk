@@ -1,0 +1,52 @@
+name: Bug report
+description: Report a defect in @proof/trading-sdk
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Do not use this form for security
+        vulnerabilities** — email them privately to security@proof.trade.
+        See [SECURITY.md](../../SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: SDK version
+      description: e.g. `@proof/trading-sdk@0.1.0`, or a git rev.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Which language surface does this affect?
+      options:
+        - TypeScript
+        - Rust core
+        - Python bindings
+        - Unsure
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime / environment
+      description: e.g. Node 20.11 on Linux, Python 3.12, rustc 1.78.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: A short code snippet that triggers the bug. No real key material.
+      render: typescript
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs. actual behaviour
+      description: What did you expect, and what happened instead? Include error text verbatim.
+    validations:
+      required: true
