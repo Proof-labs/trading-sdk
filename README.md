@@ -4,11 +4,22 @@ TypeScript SDK for the Proof Exchange: Ed25519 signing, MessagePack codec, and
 CometBFT/gateway interaction for every exchange action.
 
 This package was extracted from the `exchange/` monorepo (the `sdk/` subtree,
-history preserved) so it can be versioned and published on its own. It is the
-reference client today; a shared Rust core with native bindings is planned —
-see `trading-sdks.md` in ProofOfBrain.
+history preserved) so it can be versioned and published on its own. The same
+wire protocol is available from TypeScript and from Python
+(`proof-trading-sdk`), the latter built on PyO3 bindings over a shared Rust
+core.
 
 ## Install
+
+```bash
+# TypeScript / Node
+npm install @proof/trading-sdk
+
+# Python
+pip install proof-trading-sdk
+```
+
+Building from a checkout instead:
 
 ```bash
 npm install
@@ -16,6 +27,9 @@ npm run build   # tsc -> dist/
 ```
 
 ## Quick Start
+
+<details>
+<summary><strong>TypeScript</strong></summary>
 
 ```typescript
 import {
@@ -48,6 +62,56 @@ await client.submitTx({
 const book = await client.queryOrderbook(1);
 const account = await client.queryAccount();
 ```
+
+</details>
+
+<details>
+<summary><strong>Python</strong></summary>
+
+```python
+import proof_trading_sdk as pts
+from proof_trading_sdk.actions import PlaceOrder, Side, TimeInForce
+
+kp = pts.generate_keypair()
+owner = pts.pubkey_to_owner(kp["public_key"])  # 20-byte address
+
+client = pts.ExchangeClient(
+    gateway_url="http://localhost:8080",
+    api_key="...",
+    secret_key=kp["secret_key"],
+)
+
+result = client.submit(
+    PlaceOrder(
+        market=1,
+        owner=owner,
+        side=Side.Buy,
+        price=6_675_000,   # $66,750.00 — integer cents
+        quantity=100,
+        time_in_force=TimeInForce.Gtc,
+    )
+)
+
+account = client.account(owner)
+```
+
+Typed actions (`PlaceOrder`, `MarketOrder`, `CancelOrder`, …) live in
+`proof_trading_sdk.actions`; their MessagePack payloads are produced by the
+shared Rust core, not by Python. For offline signing without a gateway, build
+the envelope directly:
+
+```python
+chain_id = pts.chain_id_from_string("proof-dev")
+action_type, payload = pts.encode_action(
+    PlaceOrder(market=1, owner=owner, side=Side.Buy, price=6_675_000, quantity=100)
+)
+envelope = pts.sign_and_encode(
+    chain_id, action_type, payload, 1_700_000_000_000, kp["secret_key"]
+)
+decoded = pts.decode_tx(envelope)  # round-trips: version, action_type, seq, payload, pubkey, signature
+```
+
+</details>
 
 ## Unit Conventions
 
