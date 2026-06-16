@@ -1,0 +1,44 @@
+name: Feature request
+description: Suggest a capability or improvement for @proof/trading-sdk
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. For **security-sensitive** changes, report
+        privately via the
+        [Security tab](https://github.com/Proof-labs/trading-sdk/security)
+        rather than here.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to do that the SDK does not support today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would you like the SDK to do? API sketches welcome.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Which language surface is this for?
+      options:
+        - TypeScript
+        - Rust core
+        - Python bindings
+        - All / unsure
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you have tried or other approaches you weighed.
+    validations:
+      required: false

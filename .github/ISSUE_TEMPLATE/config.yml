@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Proof-labs/trading-sdk/security
+    about: Do not open a public issue. Report privately via the Security tab (Report a vulnerability). See SECURITY.md.
+  - name: Question or usage help
+    url: https://github.com/Proof-labs/trading-sdk/discussions
+    about: For how-to questions and integration help, open a Discussion rather than an issue.
