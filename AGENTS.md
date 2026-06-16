@@ -1,39 +1,21 @@
-# Proof-labs working agreement (any AI agent)
+# Proof Trading SDK — agent & contributor guide
 
-Tool-agnostic agent instructions, synced from `Proof-labs/.github` (`templates/agent-config/AGENTS.md`). Read by Aider, Codex CLI, Continue, Cursor (newer), and any agent that follows the AGENTS.md convention. Claude Code reads `CLAUDE.md` separately but the policy is identical.
+Tool-agnostic guidance for AI agents (Aider, Codex CLI, Continue, Cursor, and
+anything following the `AGENTS.md` convention) and human contributors alike.
+Claude Code reads `CLAUDE.md`; the policy is the same.
 
-<!-- ===== org-policy (synced — do not edit by hand) ===== -->
+## Branching & pull requests
 
-## Branching policy (hard-enforced where possible)
+1. Branch off `main` using `<type>/<slug>`, where `<type>` is one of `chore`,
+   `feat`, `fix`, `docs`, `hotfix`, `infra`, `refactor`. Never commit directly
+   to `main`.
+2. Keep each PR to a single logical change, and add a test with every behaviour
+   change.
+3. Title each PR with one Conventional Commits prefix.
 
-Before any code edit:
-
-1. Ask the user what this work is: a **ProofOfBrain board card** (`W##-NN`, e.g. `W20-04`), a **Linear ticket** (`BE-##`), or **ad-hoc**.
-2. Create a branch with the correct prefix:
-   - **ProofOfBrain card:** `W##-NN/<short-kebab-slug>` (e.g. `W20-04/known-limitations`)
-   - **Linear ticket or ad-hoc:** `<type>/<slug>` where `<type>` ∈ `chore`, `feat`, `fix`, `docs`, `hotfix`, `infra`, `refactor`. A Linear ticket rides a `<type>/` branch and is attached at PR time, not in the branch name.
-3. For a ProofOfBrain card, read the board card before editing: `Proof-labs/ProofOfBrain` → `delivery/boards/YYYY-Www.md` → `### W##-NN — <title>`.
-4. Confirm scope with the user before editing.
-
-`main`, `dev`, `develop`, `master` are blocked for direct edits (org-wide ruleset).
-
-## Pull-request policy
-
-When you open a pull request, set the **Task link** in the PR body — optional, but ask by default:
-
-1. If the user already named a ticket for this work (a ProofOfBrain card `W##-NN` or a Linear ticket `BE-##`), use it — don't ask again.
-2. Otherwise ask once: _"Is this part of a ProofOfBrain board card (`W##-NN`), a Linear ticket (`BE-##`), or free-styling for now?"_
-3. Fill the matching line in the template's **Task link** section (or mark "No — free-styling"). Free text is fine.
-
-From the terminal you can use the helper `bash .github/open-pr.sh`, which asks the same question and then runs `gh pr create`. The `Board item / validate` workflow is **advisory only — it never blocks a merge**.
-
-## Linked policy
-
-- Definition of Done axes: `Proof-labs/ProofOfBrain` → `delivery/definition-of-done.md`
-- Weekly boards: `Proof-labs/ProofOfBrain` → `delivery/boards/_index.md`
-- Org-level config (this file, validator workflow, rulesets): `Proof-labs/.github`
-
-<!-- ===== /org-policy ===== -->
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow. Report security
+vulnerabilities privately via the repository Security tab — never in a public
+issue or PR (see [SECURITY.md](SECURITY.md)).
 
 <!-- repo-specific -->
 <!-- Add repo-specific agent instructions below this line. -->
