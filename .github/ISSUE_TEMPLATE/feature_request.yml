@@ -5,10 +5,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the suggestion. For **security-sensitive** changes, report
-        privately via the
-        [Security tab](https://github.com/Proof-labs/trading-sdk/security)
-        rather than here.
+        Thanks for the suggestion. For **security-sensitive** changes, email
+        security@proof.trade privately rather than opening this form.
   - type: textarea
     id: problem
     attributes:

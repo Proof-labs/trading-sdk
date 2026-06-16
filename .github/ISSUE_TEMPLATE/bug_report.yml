@@ -6,9 +6,8 @@ body:
     attributes:
       value: |
         Thanks for the report. **Do not use this form for security
-        vulnerabilities** — report those privately via the
-        [Security tab](https://github.com/Proof-labs/trading-sdk/security)
-        (Report a vulnerability). See [SECURITY.md](../../SECURITY.md).
+        vulnerabilities** — email them privately to security@proof.trade.
+        See [SECURITY.md](../../SECURITY.md).
   - type: input
     id: version
     attributes:
