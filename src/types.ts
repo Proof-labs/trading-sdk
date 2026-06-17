@@ -104,6 +104,8 @@ export const ActionType = {
   CancelReplaceOrder: 0x1a,
   /** Amend one resting order in place while preserving its exchange order ID. */
   AmendOrder: 0x1b,
+  /** Native all-or-revert multi-leg basket order. */
+  AtomicBasketOrder: 0x1c,
 } as const;
 
 /** Union of all valid action type byte values. */
@@ -298,6 +300,22 @@ export interface CreateMarket {
    * the field keeps a market in the shared pool 0.
    */
   poolId?: number;
+  /**
+   * Published size scale: order/position `quantity` is in units of
+   * 10^-szDecimals of the base asset (display/metadata only — the engine
+   * never reads it). MANDATORY: the engine struct has no `serde(default)`
+   * for this field, so a payload that omits it is rejected at decode. The
+   * scale is fixed at creation and immutable thereafter. Use 0 for
+   * integer-unit sizing.
+   */
+  szDecimals: number;
+  /**
+   * Human-readable ticker / short symbol (e.g. `BTC`). Display/metadata only
+   * — the engine never reads it. MANDATORY on the wire (no serde(default)),
+   * though an empty string is accepted; capped at 24 bytes by the engine.
+   * Fixed at creation and immutable thereafter.
+   */
+  ticker: string;
 }
 
 /** User requests a USDC withdrawal to a Solana address. Debits balance immediately. */
@@ -492,6 +510,12 @@ export interface CreateImpactMarket {
    * escape hatch for unresolvable events).
    */
   oracleSource?: EventOracleSource;
+  /** Optional event body text for frontend detail pages. Encodes as "" when
+   *  absent (matches the engine's `serde(default)`). */
+  description?: string;
+  /** Optional resolution criteria text. Encodes as "" when absent (matches
+   *  the engine's `serde(default)`). */
+  rules?: string;
 }
 
 /** Resolve an impact-market event. */
@@ -709,6 +733,39 @@ export interface ClosePosition {
   owner: Address;
 }
 
+/** One leg of a native all-or-revert basket. The engine executes every leg as
+ *  a fill-or-kill limit order; if any leg cannot fully fill at `price` or
+ *  better, the whole transaction rolls back. */
+export interface AtomicBasketLeg {
+  /** Market identifier for this leg. */
+  market: number;
+  /** Leg side: Buy or Sell. */
+  side: Side;
+  /** Worst acceptable execution price in micro-USDC. Buy legs will not pay
+   *  above this; sell legs will not sell below it. */
+  price: bigint;
+  /** Leg quantity in contracts (integer lots). */
+  quantity: bigint;
+  /** Optional client-assigned order ID echoed in events for correlation. */
+  clientOrderId?: bigint | null;
+  /** When true, this leg may only reduce an existing position. */
+  reduceOnly?: boolean;
+}
+
+/** Native all-or-revert multi-leg basket order (action `0x1c`). Every leg fills
+ *  fully or the entire transaction reverts through the tx overlay. */
+export interface AtomicBasketOrder {
+  /** Account address of the basket owner (20 bytes). Must equal the envelope
+   *  signer's derived address. */
+  owner: Address;
+  /** Ordered legs; each executes as a fill-or-kill limit order. */
+  legs: AtomicBasketLeg[];
+  /** Basket-wide slippage budget in basis points. The engine enforces each
+   *  leg's explicit price limit; this value is emitted for auditability and
+   *  client/UI reconciliation. Encodes as 0 when absent (NOT nil). */
+  maxSlippageBps?: number;
+}
+
 /** Discriminated union of all exchange actions. */
 export type Action =
   | { type: "PlaceOrder"; data: PlaceOrder }
@@ -717,6 +774,7 @@ export type Action =
   | { type: "CancelAllOrders"; data: CancelAllOrders }
   | { type: "CancelReplaceOrder"; data: CancelReplaceOrder }
   | { type: "AmendOrder"; data: AmendOrder }
+  | { type: "AtomicBasketOrder"; data: AtomicBasketOrder }
   | { type: "OracleUpdate"; data: OracleUpdate }
   | { type: "MarketOrder"; data: MarketOrder }
   | { type: "Deposit"; data: Deposit }

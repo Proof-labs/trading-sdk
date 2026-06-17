@@ -2,6 +2,7 @@
 export {
   type Address,
   Side,
+  TimeInForce,
   ActionType,
   type ActionTypeValue,
   type Action,
@@ -12,6 +13,9 @@ export {
   type CancelAllOrders,
   type CancelReplaceOrder,
   type AmendOrder,
+  type AtomicBasketLeg,
+  type AtomicBasketOrder,
+  type ClosePosition,
   type OracleUpdate,
   type MarketOrder,
   type Deposit,

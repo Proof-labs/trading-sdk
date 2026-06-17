@@ -227,6 +227,119 @@ class ClosePosition(Action):
 
 
 @dataclass
+class CreateMarket(Action):
+    ACTION_NAME = "CreateMarket"
+    market: int
+    im_bps: int
+    mm_bps: int
+    taker_fee_bps: int
+    maker_fee_bps: int
+    signer: bytes
+    funding_interval_ms: int
+    max_funding_rate_bps: int
+    # sz_decimals + ticker are MANDATORY on the engine (no serde default) — a
+    # payload omitting them is rejected at decode. pool_id is serde(default).
+    sz_decimals: int
+    ticker: str
+    pool_id: int = 0
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "im_bps": self.im_bps,
+            "mm_bps": self.mm_bps,
+            "taker_fee_bps": self.taker_fee_bps,
+            "maker_fee_bps": self.maker_fee_bps,
+            "signer": self.signer,
+            "funding_interval_ms": self.funding_interval_ms,
+            "max_funding_rate_bps": self.max_funding_rate_bps,
+            "pool_id": self.pool_id,
+            "sz_decimals": self.sz_decimals,
+            "ticker": self.ticker,
+        }
+
+
+@dataclass
+class CreateImpactMarket(Action):
+    ACTION_NAME = "CreateImpactMarket"
+    impact_market_id: int
+    underlying_market: int
+    child_market_base: int
+    question: str
+    deadline_ms: int
+    resolution_window_ms: int
+    im_bps: int
+    mm_bps: int
+    taker_fee_bps: int
+    maker_fee_bps: int
+    funding_interval_ms: int
+    max_funding_rate_bps: int
+    signer: bytes
+    oracle_source: Optional[Any] = None
+    description: str = ""
+    rules: str = ""
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "impact_market_id": self.impact_market_id,
+            "underlying_market": self.underlying_market,
+            "child_market_base": self.child_market_base,
+            "question": self.question,
+            "deadline_ms": self.deadline_ms,
+            "resolution_window_ms": self.resolution_window_ms,
+            "im_bps": self.im_bps,
+            "mm_bps": self.mm_bps,
+            "taker_fee_bps": self.taker_fee_bps,
+            "maker_fee_bps": self.maker_fee_bps,
+            "funding_interval_ms": self.funding_interval_ms,
+            "max_funding_rate_bps": self.max_funding_rate_bps,
+            "signer": self.signer,
+            "oracle_source": self.oracle_source,
+            "description": self.description,
+            "rules": self.rules,
+        }
+
+
+@dataclass
+class AtomicBasketLeg:
+    """One leg of a native all-or-revert basket. Not an action on its own —
+    nested inside :class:`AtomicBasketOrder`."""
+
+    market: int
+    side: str
+    price: int
+    quantity: int
+    client_order_id: Optional[int] = None
+    reduce_only: bool = False
+
+    def as_wire(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "side": self.side,
+            "price": self.price,
+            "quantity": self.quantity,
+            "client_order_id": self.client_order_id,
+            "reduce_only": self.reduce_only,
+        }
+
+
+@dataclass
+class AtomicBasketOrder(Action):
+    ACTION_NAME = "AtomicBasketOrder"
+    owner: bytes
+    legs: list[AtomicBasketLeg]
+    # serde(default) u32 — encodes as 0 when absent, NOT nil.
+    max_slippage_bps: int = 0
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "owner": self.owner,
+            "legs": [leg.as_wire() for leg in self.legs],
+            "max_slippage_bps": self.max_slippage_bps,
+        }
+
+
+@dataclass
 class ApproveAgent(Action):
     ACTION_NAME = "ApproveAgent"
     owner: bytes

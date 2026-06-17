@@ -210,3 +210,74 @@ class TestConfig:
         cfg = pts.load_config(gateway_url="https://custom.url", timeout_secs=60)
         assert cfg.gateway_url == "https://custom.url"
         assert cfg.timeout_secs == 60
+
+
+class TestEngineParityActions:
+    """Actions that were missing from the Python binding (engine-parity port):
+    CreateMarket (mandatory sz_decimals/ticker) and AtomicBasketOrder (0x1c).
+    Encode/decode runs through the native core, so this asserts the binding's
+    field map matches the engine struct."""
+
+    def test_create_market_round_trips_with_sz_decimals_ticker(self):
+        action = pts.actions.CreateMarket(
+            market=42,
+            im_bps=1000,
+            mm_bps=500,
+            taker_fee_bps=5,
+            maker_fee_bps=2,
+            signer=b"\xee" * 20,
+            funding_interval_ms=60_000,
+            max_funding_rate_bps=100,
+            sz_decimals=4,
+            ticker="BTC",
+            pool_id=9,
+        )
+        action_type, payload = pts.encode_action(action)
+        assert action_type == pts.ActionType["CreateMarket"]
+        decoded = pts.decode_action(action_type, payload)
+        assert decoded["sz_decimals"] == 4
+        assert decoded["ticker"] == "BTC"
+        assert decoded["pool_id"] == 9
+
+    def test_atomic_basket_order_round_trips(self):
+        action = pts.actions.AtomicBasketOrder(
+            owner=b"\x11" * 20,
+            legs=[
+                pts.actions.AtomicBasketLeg(
+                    market=1,
+                    side=pts.Side.Buy,
+                    price=6_675_000,
+                    quantity=3,
+                    client_order_id=77,
+                ),
+                pts.actions.AtomicBasketLeg(
+                    market=2,
+                    side=pts.Side.Sell,
+                    price=250_000,
+                    quantity=5,
+                    reduce_only=True,
+                ),
+            ],
+            max_slippage_bps=50,
+        )
+        action_type, payload = pts.encode_action(action)
+        assert action_type == 0x1C
+        decoded = pts.decode_action(action_type, payload)
+        assert len(decoded["legs"]) == 2
+        assert decoded["legs"][0]["client_order_id"] == 77
+        assert decoded["legs"][1]["reduce_only"] is True
+        assert decoded["max_slippage_bps"] == 50
+
+    def test_atomic_basket_order_default_slippage_is_zero(self):
+        action = pts.actions.AtomicBasketOrder(
+            owner=b"\x11" * 20,
+            legs=[
+                pts.actions.AtomicBasketLeg(
+                    market=1, side=pts.Side.Buy, price=100, quantity=1
+                )
+            ],
+        )
+        action_type, payload = pts.encode_action(action)
+        decoded = pts.decode_action(action_type, payload)
+        assert decoded["max_slippage_bps"] == 0
+        assert decoded["legs"][0]["reduce_only"] is False
