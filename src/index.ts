@@ -71,6 +71,7 @@ export {
 export {
   encodeSignedTx,
   signAndEncode,
+  encodePayloadBytes,
   decodeTx,
   peekActionType,
 } from "./codec.js";
