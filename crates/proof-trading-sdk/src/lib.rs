@@ -4,11 +4,11 @@
 //! audited encoding/signing logic backs every binding. Engine-side modules
 //! (matching, margin, state store) were intentionally left behind.
 
-pub mod abci_event;
+mod abci_event;
 pub mod codec;
 pub mod crypto;
+mod state;
 pub mod signer;
-pub mod state;
 pub mod types;
 pub mod wire;
 
