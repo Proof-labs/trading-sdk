@@ -69,6 +69,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     const ORACLE_UPDATE: u8 = 0x03;
     const MARKET_ORDER: u8 = 0x04;
     const CLOSE_POSITION: u8 = 0x17;
+    const CREATE_MARKET: u8 = 0x07;
+    const ATOMIC_BASKET_ORDER: u8 = 0x1C;
 
     let owner = vec![0x01u8; 20];
     let signer = vec![0x03u8; 20];
@@ -122,6 +124,36 @@ fn main() -> Result<(), Box<dyn Error>> {
             "close_position/basic",
             CLOSE_POSITION,
             json!({ "market": 2, "owner": owner }),
+        ),
+        // CreateMarket with the MANDATORY sz_decimals + ticker fields. Pins
+        // that a market-creation payload carries them — the gap that left the
+        // SDK building engine-rejected CreateMarket txs.
+        codec_case(
+            "create_market/full",
+            CREATE_MARKET,
+            json!({
+                "market": 42, "im_bps": 1000, "mm_bps": 500,
+                "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": signer,
+                "funding_interval_ms": 60000u64, "max_funding_rate_bps": 100,
+                "pool_id": 9, "sz_decimals": 4, "ticker": "BTC"
+            }),
+        ),
+        // AtomicBasketOrder (0x1c) — multi-leg, mixed leg optionals; pins the
+        // action that was entirely absent from the SDK. max_slippage_bps is
+        // serde(default) and encodes as 0 when absent.
+        codec_case(
+            "atomic_basket_order/two_legs",
+            ATOMIC_BASKET_ORDER,
+            json!({
+                "owner": owner,
+                "legs": [
+                    { "market": 1, "side": "Buy", "price": 6675000u64,
+                      "quantity": 3, "client_order_id": 77u64, "reduce_only": false },
+                    { "market": 2, "side": "Sell", "price": 250000u64,
+                      "quantity": 5, "client_order_id": null, "reduce_only": true }
+                ],
+                "max_slippage_bps": 50
+            }),
         ),
     ];
     write_ndjson(&dir.join(cv::CODEC_FILE), &codec)?;

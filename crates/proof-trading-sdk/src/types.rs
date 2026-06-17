@@ -732,6 +732,36 @@ pub struct ClosePosition {
     pub owner: Address,
 }
 
+/// One leg of a native all-or-revert basket. The engine executes every leg as
+/// a fill-or-kill limit order; if any leg cannot fully fill at `price` or
+/// better, the whole transaction rolls back through the tx overlay.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AtomicBasketLeg {
+    pub market: MarketId,
+    pub side: Side,
+    /// Worst acceptable execution price in micro-USDC. Buy legs will not pay
+    /// above this price; sell legs will not sell below it.
+    pub price: u64,
+    pub quantity: u64,
+    pub client_order_id: Option<u64>,
+    #[serde(default)]
+    pub reduce_only: bool,
+}
+
+/// Native all-or-revert multi-leg order (action `0x1c`). Every leg fills fully
+/// or the entire transaction reverts.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AtomicBasketOrder {
+    pub owner: Address,
+    pub legs: Vec<AtomicBasketLeg>,
+    /// Basket-wide slippage budget in basis points. The engine enforces each
+    /// leg's explicit price limit; this value is emitted for auditability and
+    /// client/UI reconciliation. `serde(default)` (u32) — encodes as 0 when
+    /// absent, NOT nil.
+    #[serde(default)]
+    pub max_slippage_bps: u32,
+}
+
 /// Immediate-or-cancel order that crosses the book at the best available price.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MarketOrder {
@@ -987,6 +1017,15 @@ pub struct CreateMarket {
     /// share pool 0 unless explicitly placed elsewhere.
     #[serde(default)]
     pub pool_id: u8,
+    /// Published size scale: `quantity` is in units of `10^-sz_decimals` of
+    /// the base asset. MANDATORY — the engine struct has NO `serde(default)`
+    /// for this field, so a payload that omits it is rejected at decode.
+    /// Fixed at creation and immutable thereafter. Use 0 for integer sizing.
+    pub sz_decimals: u8,
+    /// Human-readable ticker / short symbol (e.g. `BTC`). Display/metadata
+    /// only. MANDATORY like `sz_decimals` (no `serde(default)`); an empty
+    /// string is accepted but the field must be present on the wire.
+    pub ticker: String,
 }
 
 impl Default for CreateMarket {
@@ -1006,6 +1045,8 @@ impl Default for CreateMarket {
             funding_interval_ms: 60_000,
             max_funding_rate_bps: 3000,
             pool_id: 0,
+            sz_decimals: 0,
+            ticker: String::new(),
         }
     }
 }
@@ -1163,6 +1204,14 @@ pub struct CreateImpactMarket {
     /// to decode cleanly via the wire's `serde(default)` rule.
     #[serde(default)]
     pub oracle_source: Option<EventOracleSource>,
+    /// Optional frontend-facing event body text. `serde(default)` so old SDK
+    /// clients (arrays without it) decode cleanly to "". Kept on the admin
+    /// action for off-chain indexers; not stored in consensus state.
+    #[serde(default)]
+    pub description: String,
+    /// Optional resolution criteria text. `serde(default)` like `description`.
+    #[serde(default)]
+    pub rules: String,
 }
 
 /// Admin action to resolve an impact-market event. Settles the winning

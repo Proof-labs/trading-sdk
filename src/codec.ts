@@ -548,6 +548,11 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           d.fundingIntervalMs,
           d.maxFundingRateBps,
           d.poolId ?? 0,
+          // sz_decimals and ticker are MANDATORY on the engine (no
+          // serde(default)) — a payload that omits them is rejected at
+          // decode. Both are required fields on CreateMarket.
+          d.szDecimals,
+          d.ticker,
         ],
       ];
     }
@@ -622,6 +627,10 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           // clients sending a 13-element array still decode cleanly via
           // the engine's `serde(default)`.
           encodeEventOracleSource(d.oracleSource),
+          // description (pos 14) and rules (pos 15) — optional event text,
+          // `serde(default)` on the engine, so "" when absent.
+          d.description ?? "",
+          d.rules ?? "",
         ],
       ];
     }
@@ -716,6 +725,28 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
     case "ClosePosition": {
       const d = action.data;
       return [ActionType.ClosePosition, [d.market, toByteSeq(d.owner)]];
+    }
+    case "AtomicBasketOrder": {
+      const d = action.data;
+      // Field order matches the engine struct: owner, legs, max_slippage_bps.
+      // Each leg: [market, side(str), price, quantity, client_order_id|nil,
+      // reduce_only]. max_slippage_bps is `serde(default)` (u32) — encodes as
+      // 0 when absent, NOT nil.
+      return [
+        ActionType.AtomicBasketOrder,
+        [
+          toByteSeq(d.owner),
+          d.legs.map((leg) => [
+            leg.market,
+            sideStr(leg.side),
+            leg.price,
+            leg.quantity,
+            leg.clientOrderId ?? null,
+            leg.reduceOnly ?? false,
+          ]),
+          d.maxSlippageBps ?? 0,
+        ],
+      ];
     }
   }
 }
@@ -937,6 +968,11 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           // emitted by older SDK builds (8 fields) still decode cleanly
           // and land in pool 0, matching the engine's `serde(default)`.
           poolId: f.length > 8 ? (f[8] as number) : 0,
+          // szDecimals (index 9) + ticker (index 10). Mandatory on the
+          // engine; length-guarded here so legacy short records still
+          // decode (0 / "" defaults).
+          szDecimals: f.length > 9 ? (f[9] as number) : 0,
+          ticker: f.length > 10 ? (f[10] as string) : "",
         },
       };
     case ActionType.WithdrawRequest:
@@ -1015,6 +1051,13 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           // mirroring the engine's `serde(default)` for `Option::None`.
           oracleSource:
             f.length > 13 ? decodeEventOracleSource(f[13]) : undefined,
+          // description (index 14) + rules (index 15) — optional event text,
+          // `serde(default)` on the engine. Length-tolerant; "" decodes to
+          // undefined so an absent and an explicitly-empty field round-trip
+          // to the same encoded "".
+          description:
+            f.length > 14 && f[14] !== "" ? String(f[14]) : undefined,
+          rules: f.length > 15 && f[15] !== "" ? String(f[15]) : undefined,
         },
       };
     case ActionType.ResolveEvent:
@@ -1124,6 +1167,26 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
         data: {
           market: f[0] as number,
           owner: bytesField(f[1]),
+        },
+      };
+    case ActionType.AtomicBasketOrder:
+      return {
+        type: "AtomicBasketOrder",
+        data: {
+          owner: bytesField(f[0]),
+          legs: (f[1] as unknown[]).map((raw) => {
+            const lg = raw as unknown[];
+            return {
+              market: lg[0] as number,
+              side: parseSide(lg[1]),
+              price: bi(lg[2]),
+              quantity: bi(lg[3]),
+              clientOrderId: biOrNull(lg[4]),
+              reduceOnly: lg[5] === true,
+            };
+          }),
+          // max_slippage_bps is `serde(default)` u32; absent → 0.
+          maxSlippageBps: f[2] === undefined ? 0 : Number(bi(f[2])),
         },
       };
     default:

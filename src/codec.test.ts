@@ -308,6 +308,8 @@ describe("codec v1 all action types", () => {
         signer: SIGNER,
         fundingIntervalMs: 3600000n,
         maxFundingRateBps: 100,
+        szDecimals: 4,
+        ticker: "ETH",
       },
     },
     {
@@ -431,11 +433,62 @@ describe("codec v1 all action types", () => {
         fundingIntervalMs: 60000n,
         maxFundingRateBps: 100,
         poolId: 9,
+        szDecimals: 4,
+        ticker: "BTC",
       },
     };
 
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
     expect(decoded).toEqual(action);
+  });
+
+  it("round-trips AtomicBasketOrder", () => {
+    const action: Action = {
+      type: "AtomicBasketOrder",
+      data: {
+        owner: SIGNER,
+        legs: [
+          {
+            market: 1,
+            side: Side.Buy,
+            price: 6675000n,
+            quantity: 3n,
+            clientOrderId: 77n,
+            reduceOnly: false,
+          },
+          {
+            market: 2,
+            side: Side.Sell,
+            price: 250000n,
+            quantity: 5n,
+            clientOrderId: null,
+            reduceOnly: true,
+          },
+        ],
+        maxSlippageBps: 50,
+      },
+    };
+
+    const { action: decoded } = decodeTx(encodeTx(action, 1n));
+    expect(decoded).toEqual(action);
+  });
+
+  it("AtomicBasketOrder maxSlippageBps absent encodes as 0, not nil", () => {
+    const action: Action = {
+      type: "AtomicBasketOrder",
+      data: {
+        owner: SIGNER,
+        legs: [
+          { market: 1, side: Side.Buy, price: 100n, quantity: 1n },
+        ],
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 1n));
+    if (decoded.type !== "AtomicBasketOrder") throw new Error("wrong type");
+    expect(decoded.data.maxSlippageBps).toBe(0);
+    // absent per-leg optionals normalize to null / false
+    expect(decoded.data.legs[0].clientOrderId).toBe(null);
+    expect(decoded.data.legs[0].reduceOnly).toBe(false);
   });
 
   // Deeper round-trip: field-by-field equality for UpdateMarketFees
@@ -921,6 +974,8 @@ describe("codec v2 signing", () => {
           signer: SIGNER,
           fundingIntervalMs: 3600000n,
           maxFundingRateBps: 100,
+          szDecimals: 4,
+          ticker: "ETH",
         },
       },
       {
