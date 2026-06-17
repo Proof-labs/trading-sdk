@@ -13,9 +13,14 @@ import type {
   AccountInfo,
   AdlQueueEntry,
   BindingScenarioEntry,
+  FeeTier,
   HistoryCashFlow,
   HistoryPositionSnapshot,
   HistoryResolution,
+  MarketConfig,
+  MarketKind,
+  MarkSourceMode,
+  OpenOrder,
   Orderbook,
   OrderbookLevel,
   PositionInfo,
@@ -51,9 +56,9 @@ export async function fetchChainId(rpcUrl: string): Promise<Uint8Array> {
 }
 
 export interface ExchangeClientOptions {
-  /** CometBFT RPC endpoint. Default: http://localhost:26657 */
+  /** CometBFT RPC endpoint. Default: https://api.dev.proof.trade */
   rpcUrl?: string;
-  /** Go API server endpoint. Default: http://localhost:8080 */
+  /** Go API server endpoint. Default: https://api.dev.proof.trade */
   apiUrl?: string;
   /** WebSocket URL. Derived from rpcUrl by default. */
   wsUrl?: string;
@@ -88,9 +93,8 @@ export interface ExchangeClientOptions {
   allowUnbound?: boolean;
   /**
    * Public-API gateway endpoint, used by `submitTx` when `useGateway`
-   * is true. Format: `http://<host>:9080` (the Rust API gateway, not
-   * the node REST API at `apiUrl`). When `useGateway` is true and
-   * this option is omitted, defaults to `http://localhost:9080`.
+   * is true. When omitted, defaults to the rpcUrl host with port 26657
+   * remapped to 9080 (or the same host if no port match).
    */
   gatewayUrl?: string;
   /**
@@ -157,6 +161,13 @@ export class ExchangeClient {
    */
   private pendingVerifies = new Set<Promise<void>>();
   /**
+   * Completed DeliverTx results collected by background verifiers. Cleared on
+   * each `awaitPendingVerifies()` call. Non-zero code entries indicate a tx
+   * passed CheckTx but failed at inclusion time — the caller should handle
+   * these (e.g. retry or log).
+   */
+  private deliveryResults: TxResult[] = [];
+  /**
    * When true, submitTx is the safe-by-default fire-and-spawn-verifier mode.
    * Callers that need maximum throughput and don't need inclusion polling can
    * flip this off via setUnsafeFastSubmit(true).
@@ -164,8 +175,8 @@ export class ExchangeClient {
   private autoVerifyDelivery = true;
 
   constructor(opts: ExchangeClientOptions = {}) {
-    this.rpcUrl = opts.rpcUrl ?? "http://localhost:26657";
-    this.apiUrl = opts.apiUrl ?? "http://localhost:8080";
+    this.rpcUrl = opts.rpcUrl ?? "https://api.dev.proof.trade";
+    this.apiUrl = opts.apiUrl ?? "https://api.dev.proof.trade";
     this.gatewayUrl = stripTrailingSlash(
       opts.gatewayUrl ?? deriveGatewayUrl(this.rpcUrl),
     );
@@ -535,6 +546,16 @@ export class ExchangeClient {
             const txResult = json.result?.tx_result;
             if (txResult) {
               const code = txResult.code ?? 0;
+              const height = json.result.height
+                ? Number(json.result.height)
+                : undefined;
+              this.deliveryResults.push({
+                code,
+                hash: txHash,
+                height,
+                log: txResult.log ?? "",
+                events: txResult.events,
+              });
               return;
             }
             // Tx not yet indexed — keep polling.
@@ -553,12 +574,17 @@ export class ExchangeClient {
   }
 
   /**
-   * Wait for every in-flight DeliverTx verifier spawned by submitTx to settle.
-   * Call this before a tx that depends on a previous tx's state having
-   * actually landed (e.g. a cancel that depends on a place that may have
-   * silently failed at DeliverTx time).
+   * Wait for every in-flight DeliverTx verifier spawned by submitTx to settle,
+   * then return the collected delivery results. Each entry is the DeliverTx
+   * result observed by the background poller — `code === 0` means the tx was
+   * included successfully, non-zero means it passed CheckTx but failed at
+   * inclusion. Call this before a tx that depends on a previous tx's state
+   * having actually landed.
+   *
+   * Results are drained from the internal buffer: subsequent calls return
+   * only verifications that completed *after* the previous drain.
    */
-  async awaitPendingVerifies(): Promise<void> {
+  async awaitPendingVerifies(): Promise<TxResult[]> {
     // Snapshot then await — verifiers self-remove from the set in their
     // finally blocks, but new ones could be spawned mid-wait. Loop until
     // the set is genuinely empty.
@@ -566,6 +592,9 @@ export class ExchangeClient {
       const snapshot = Array.from(this.pendingVerifies);
       await Promise.allSettled(snapshot);
     }
+    const results = [...this.deliveryResults];
+    this.deliveryResults = [];
+    return results;
   }
 
   /**
@@ -687,6 +716,45 @@ export class ExchangeClient {
       bids: (raw[0] as unknown[][]).map(parseLevel),
       asks: (raw[1] as unknown[][]).map(parseLevel),
     };
+  }
+
+  /** List all registered market configs. Returns an empty array on error. */
+  async queryMarkets(): Promise<MarketConfig[]> {
+    const res = await fetch(`${this.apiUrl}/v1/markets`);
+    const json = (await res.json()) as { data?: string; error?: string };
+    if (json.error) return [];
+    const bytes = fromBase64(json.data!);
+    const raw = msgpackDecoder.decode(bytes) as unknown[][];
+    return raw.map((m) => decodeMarketConfig(m));
+  }
+
+  /** Fetch open orders for an address. Returns an empty array if the
+   *  account has no open orders or the endpoint is unreachable.
+   *  Each order is a 6-tuple `[id, market, owner, side, price, quantity]`
+   *  decoded from MessagePack. */
+  async queryOpenOrders(addressHex?: string): Promise<OpenOrder[]> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return [];
+    const res = await fetch(`${this.apiUrl}/v1/orders/${hex}`);
+    if (!res.ok) return [];
+    const json = (await res.json()) as { data?: string; error?: string };
+    if (!json.data || json.error) return [];
+    const bytes = fromBase64(json.data);
+    let decoded: unknown;
+    try {
+      decoded = msgpackDecoder.decode(bytes);
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(decoded)) return [];
+    return (decoded as unknown[][]).map((order) => ({
+      id: BigInt(order[0] as number | bigint),
+      market: Number(order[1]),
+      owner: (order[2] as Uint8Array) ?? new Uint8Array(),
+      side: order[3] as "Buy" | "Sell",
+      price: BigInt(order[4] as number | bigint),
+      quantity: BigInt(order[5] as number | bigint),
+    }));
   }
 
   /** Fetch the auto-deleveraging queue for a market. Returns
@@ -820,6 +888,18 @@ export class ExchangeClient {
       feesAccrued,
       volume30dMicroUsdc,
     };
+  }
+
+  /** Convenience: fetch just the USDC balance (microUSDC) for an address. */
+  async queryBalance(addressHex?: string): Promise<bigint | null> {
+    const acct = await this.queryAccount(addressHex);
+    return acct ? acct.balance : null;
+  }
+
+  /** Convenience: fetch just the equity (microUSDC) for an address. */
+  async queryEquity(addressHex?: string): Promise<bigint | null> {
+    const acct = await this.queryAccount(addressHex);
+    return acct ? acct.equity : null;
   }
 
   async queryHealth(): Promise<{ status: string; height: number }> {
@@ -1035,12 +1115,16 @@ export class ExchangeClient {
     };
   }
 
+  private wsReconnectAttempts = 0;
+  private wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
   private ensureWebSocket() {
     if (this.ws) return;
 
     this.ws = new WebSocket(this.wsUrl);
 
     this.ws.onopen = () => {
+      this.wsReconnectAttempts = 0;
       // Subscribe to both new blocks and tx events
       this.ws!.send(
         JSON.stringify({
@@ -1075,14 +1159,25 @@ export class ExchangeClient {
 
     this.ws.onclose = () => {
       this.ws = null;
-      // Auto-reconnect after 2 seconds
-      if (this.eventListeners.length > 0) {
-        setTimeout(() => this.ensureWebSocket(), 2000);
-      }
+      if (this.eventListeners.length === 0) return;
+      // Exponential backoff: 2s, 4s, 8s, 16s, … capped at 60s, with
+      // ±25% jitter to avoid thundering-herd on server restart.
+      const attempts = this.wsReconnectAttempts++;
+      const baseDelay = Math.min(2000 * Math.pow(2, attempts), 60_000);
+      const jitter = baseDelay * (0.75 + Math.random() * 0.5);
+      this.wsReconnectTimer = setTimeout(
+        () => this.ensureWebSocket(),
+        jitter,
+      );
     };
   }
 
   disconnect() {
+    if (this.wsReconnectTimer) {
+      clearTimeout(this.wsReconnectTimer);
+      this.wsReconnectTimer = null;
+    }
+    this.wsReconnectAttempts = 0;
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -1171,4 +1266,81 @@ function parseLeadingErrorCode(s: string): number | null {
   if (!m) return null;
   const n = Number(m[1]);
   return Number.isFinite(n) ? n : null;
+}
+
+// ---------------------------------------------------------------------------
+// MarketConfig decoder
+// ---------------------------------------------------------------------------
+
+/** Decode a single MarketConfig from its MessagePack positional array.
+ *  Field order mirrors the Rust struct in exchange-core/src/types.rs.
+ *  Null-safe reads on every optional field. */
+function decodeMarketConfig(raw: unknown[]): MarketConfig {
+  const optBig = (v: unknown): bigint | undefined =>
+    v == null ? undefined : BigInt(v as number | bigint);
+  const addr = (v: unknown): Uint8Array | undefined =>
+    v == null
+      ? undefined
+      : v instanceof Uint8Array
+        ? v
+        : Uint8Array.from(v as number[]);
+
+  let kind: MarketKind | undefined;
+  if (raw[7] != null) {
+    if (typeof raw[7] === "string") {
+      kind = raw[7] as MarketKind;
+    } else if (typeof raw[7] === "object" && raw[7] !== null) {
+      const obj = raw[7] as Record<string, unknown>;
+      if (Array.isArray(obj.ConditionalPerp))
+        kind = {
+          ConditionalPerp: [
+            Number((obj.ConditionalPerp as unknown[])[0]),
+            (obj.ConditionalPerp as unknown[])[1] as "Yes" | "No",
+          ],
+        };
+      else if (Array.isArray(obj.PredictionBinary))
+        kind = {
+          PredictionBinary: [
+            Number((obj.PredictionBinary as unknown[])[0]),
+            (obj.PredictionBinary as unknown[])[1] as "Yes" | "No",
+          ],
+        };
+    }
+  }
+
+  let feeTiers: FeeTier[] | undefined;
+  if (Array.isArray(raw[13])) {
+    feeTiers = (raw[13] as unknown[][]).map((t) => ({
+      min30dVolumeMicroUsdc: BigInt(t[0] as number | bigint),
+      makerFeeTenthBps: Number(t[1]),
+      takerFeeTenthBps: Number(t[2]),
+    }));
+  }
+
+  return {
+    market: Number(raw[0]),
+    imBps: Number(raw[1]),
+    mmBps: Number(raw[2]),
+    takerFeeBps: Number(raw[3]),
+    makerFeeBps: Number(raw[4]),
+    fundingIntervalMs: BigInt(raw[5] as number | bigint),
+    maxFundingRateBps: Number(raw[6]),
+    kind,
+    maxPositionSize: optBig(raw[8]),
+    defaultTtlMs: optBig(raw[9]),
+    netDeltaMargin: raw[10] == null ? undefined : Boolean(raw[10]),
+    poolId: raw[11] == null ? undefined : Number(raw[11]),
+    markPriceMaxOracleAgeMs: optBig(raw[12]),
+    feeTiers,
+    tickSize: optBig(raw[14]),
+    lotSize: optBig(raw[15]),
+    primaryOracleSigner: addr(raw[16]),
+    oracleStalenessMs: optBig(raw[17]),
+    markSourceMode: raw[18] == null ? undefined : (raw[18] as MarkSourceMode),
+    maxMarkSpreadBps: raw[19] == null ? undefined : Number(raw[19]),
+    cexCompositeStalenessMs: optBig(raw[20]),
+    partialLiquidationEnabled: raw[21] == null ? undefined : Boolean(raw[21]),
+    szDecimals: raw[22] == null ? undefined : Number(raw[22]),
+    ticker: raw[23] == null ? undefined : String(raw[23]),
+  };
 }

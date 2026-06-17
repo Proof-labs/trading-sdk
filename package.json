@@ -39,7 +39,9 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "vitest run"
+    "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "example": "npx tsx examples/connect-and-trade.ts"
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.0.0-beta.3",

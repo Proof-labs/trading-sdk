@@ -1135,6 +1135,23 @@ export interface Orderbook {
   asks: OrderbookLevel[];
 }
 
+/** A resting order on the book. Returned by `GET /v1/orders/{addr}`.
+ *  Wire shape: 6-tuple `[id, market, owner, side, price, quantity]`. */
+export interface OpenOrder {
+  /** Engine-assigned order ID (monotonic within the market). */
+  id: bigint;
+  /** Market ID. */
+  market: number;
+  /** 20-byte owner address. */
+  owner: Uint8Array;
+  /** Order side. */
+  side: "Buy" | "Sell";
+  /** Limit price in cents. */
+  price: bigint;
+  /** Resting quantity in contracts. */
+  quantity: bigint;
+}
+
 /** One row of the auto-deleveraging queue for a market. Returned
  *  sorted by `adlScore` desc (front of the queue first). Used by the
  *  trading UI to compute a real per-position ADL percentile rather
@@ -1412,11 +1429,14 @@ export type MarketKind =
   | { ConditionalPerp: [number, "Yes" | "No"] }
   | { PredictionBinary: [number, "Yes" | "No"] };
 
+/** Mark-price source mode. Mirrors the engine's `MarkSourceMode` enum. */
+export type MarkSourceMode = "OracleOnly" | "Median";
+
 /** Configuration for a perpetual / conditional / binary market. The wire
- *  form is a MessagePack positional array; indices below mirror the
- *  Rust struct field order in exchange-core/src/types.rs.
- *  Fields 7–10 were appended 2026-04-23..25 with `#[serde(default)]`
- *  so older on-chain records decode unchanged. */
+ *  form is a MessagePack positional array; indices mirror the Rust struct
+ *  field order in exchange-core/src/types.rs.
+ *  Fields after index 7 use `#[serde(default)]` so older on-chain records
+ *  decode cleanly. */
 export interface MarketConfig {
   /** [0] Market identifier (unique integer). */
   market: number;
@@ -1432,52 +1452,41 @@ export interface MarketConfig {
   fundingIntervalMs: bigint;
   /** [6] Maximum absolute funding rate per interval in basis points. */
   maxFundingRateBps: number;
-  /** [7] Market kind. Defaults to `"Perp"` for legacy records lacking
-   *  this field. */
+  /** [7] Market kind. Defaults to `"Perp"` for legacy records lacking this field. */
   kind?: MarketKind;
-  /** [8] Per-account absolute position cap in contracts. 0 = no limit
-   *  (also the legacy default). Enforced at order-placement time —
-   *  fills that would push a taker's net (signed) position past
-   *  ±maxPositionSize are rejected with `PositionLimitExceeded`. */
+  /** [8] Per-account absolute position cap in contracts. 0 = no limit. */
   maxPositionSize?: bigint;
-  /** [9] Default order TTL in ms. End-of-block `run_order_expiry`
-   *  cancels any resting order whose
-   *  `created_at_ms + defaultTtlMs < block_time_ms`. 0 disables TTL. */
+  /** [9] Default order TTL in ms. 0 = no TTL. */
   defaultTtlMs?: bigint;
-  /** [10] Net-delta portfolio margin opt-in. true = firing legs that
-   *  share an underlying are aggregated into a single net position
-   *  for MM/IM. PredictionBinary legs ignore this flag. See
-   *  docs/margin-engine.md §6 for the derivation. */
+  /** [10] Net-delta portfolio margin opt-in. */
   netDeltaMargin?: boolean;
-  /** [11] Maximum age (ms) of the oracle reading at the time of any
-   *  margin / order / liquidation read. `0` = no check (default for
-   *  legacy records). When set, order placement, margin checks, and
-   *  liquidation refuse to use a stale oracle (`StaleOracle` reject).
-   *  Skipped on impact-family child markets — those mark off the book
-   *  directly and have no continuous oracle layer. BE-33, 2026-05-03. */
+  /** [11] Insurance-fund pool ID. Markets in different pools are insulated
+   *  from each other's liquidation cascades. 0 = shared default pool. */
+  poolId?: number;
+  /** [12] Max oracle age (ms) before the engine refuses to read it. 0 = no check. */
   markPriceMaxOracleAgeMs?: bigint;
-  /** [12] Volume-based fee tier table. Empty (default for legacy
-   *  records) falls back to flat takerFeeBps / makerFeeBps. When
-   *  non-empty, the engine looks up rolling 30d taker volume and
-   *  applies tenth-bps fees. Negative makerFeeTenthBps is a rebate. */
+  /** [13] Volume-based fee tier table. Empty = flat taker/maker fees. */
   feeTiers?: FeeTier[];
-  /** [13] Tick size in micro-USDC. 0 = no tick gate (legacy default).
-   *  PlaceOrder rejects with `TickSizeViolation` when the price isn't
-   *  a multiple of `tickSize`. BE-48. */
+  /** [14] Tick size in micro-USDC. 0 = no tick gate. */
   tickSize?: bigint;
-  /** [14] Lot size in contracts. 0 = no lot gate (legacy default).
-   *  PlaceOrder/MarketOrder rejects with `LotSizeViolation` when the
-   *  quantity isn't a multiple of `lotSize`. BE-48. */
+  /** [15] Lot size in contracts. 0 = no lot gate. */
   lotSize?: bigint;
-  /** [15] Primary oracle signer. When set together with a non-zero
-   *  `oracleStalenessMs`, only the primary may publish OracleUpdate
-   *  unless the previous publish is at least `oracleStalenessMs` old.
-   *  BE-50. */
+  /** [16] Primary oracle signer address (20 bytes). */
   primaryOracleSigner?: Address;
-  /** [16] Oracle staleness window in ms. Only meaningful when
-   *  `primaryOracleSigner` is set. 0 = gate disabled (any authorized
-   *  signer can publish). BE-50. */
+  /** [17] Oracle staleness window (ms) before fallback signers may publish. 0 = disabled. */
   oracleStalenessMs?: bigint;
+  /** [18] Mark-price source mode. */
+  markSourceMode?: MarkSourceMode;
+  /** [19] Top-of-book spread cap (bps) for thin-book guard on Median mode. */
+  maxMarkSpreadBps?: number;
+  /** [20] Max age (ms) for composite-CEX price in Median mode. */
+  cexCompositeStalenessMs?: bigint;
+  /** [21] Enable partial liquidation (close per-market rather than all-or-nothing). */
+  partialLiquidationEnabled?: boolean;
+  /** [22] Published size scale: quantity is in units of 10^-szDecimals. */
+  szDecimals?: number;
+  /** [23] Human-readable ticker / short symbol (e.g. "BTC"). */
+  ticker?: string;
 }
 
 /** Per-tier fee schedule for the BE-47 volume-based maker-rebate program. */
