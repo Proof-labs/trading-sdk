@@ -144,7 +144,7 @@ Ordered by value. Items 1–2 complete the cross-language guarantee; 3+ widen it
       `OracleUpdate.publish_time_ms`, serde-default tails (`CreateMarket.pool_id`).
 - [ ] Every flag combo that changes layout: `post_only`/`reduce_only`, each
       `TimeInForce` (Gtc/Ioc/Fok), each `Side`.
-- [ ] Every enum: `Outcome`, `FailDepositReason`, `PriceComparison`,
+- [ ] Every enum: `Outcome`, `PriceComparison`,
       `MarkSourceMode`.
 - [ ] Nested shapes: `EventOracleSource` (3 variants), `FeeTier` lists.
 - [ ] **`OracleUpdateComposite` (0x14).** This is an **internal feeder action**

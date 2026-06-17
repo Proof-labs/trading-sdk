@@ -21,13 +21,11 @@ import {
 import {
   ActionType,
   Outcome,
-  PRIMARY_ORACLE_CLEAR_SENTINEL,
   Side,
   TimeInForce,
   type Action,
   type Address,
 } from "./types.js";
-import { FEE_OVERRIDE_REVERT_SENTINEL } from "./index.js";
 
 const OWNER = new Uint8Array(20).fill(0xaa);
 const SIGNER = new Uint8Array(20).fill(0xff);
@@ -590,16 +588,13 @@ describe("codec v1 all action types", () => {
       data: {
         market: 7,
         signer: SIGNER,
-        primaryOracleSigner: PRIMARY_ORACLE_CLEAR_SENTINEL,
+        primaryOracleSigner: new Uint8Array(20),
       },
     };
 
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
 
     if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
-    expect(decoded.data.primaryOracleSigner).toEqual(
-      PRIMARY_ORACLE_CLEAR_SENTINEL,
-    );
     expect(decoded.data.primaryOracleSigner).toEqual(new Uint8Array(20));
   });
 
@@ -645,102 +640,6 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.defaultTtlMs).toBe(120_000n);
     expect(decoded.data.takerFeeBps).toBeNull();
     expect(decoded.data.maxPositionSize).toBeNull();
-  });
-
-  // BE-46 / BE-46.2: per-account fee override round-trip, including
-  // the replay-guard `seq` field appended by Ramon's 2026-05-03
-  // review on PR #39.
-  it("round-trips SetAccountFeeOverride", () => {
-    const account = new Uint8Array(20).fill(0xab);
-    const action: Action = {
-      type: "SetAccountFeeOverride",
-      data: {
-        account,
-        takerFeeBps: 3,
-        makerFeeBps: 1,
-        signer: SIGNER,
-        seq: 42n,
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 7n));
-    expect(decoded.type).toBe("SetAccountFeeOverride");
-    if (decoded.type !== "SetAccountFeeOverride")
-      throw new Error("type narrowing");
-    expect(decoded.data.account).toEqual(account);
-    expect(decoded.data.takerFeeBps).toBe(3);
-    expect(decoded.data.makerFeeBps).toBe(1);
-    expect(decoded.data.signer).toEqual(SIGNER);
-    expect(decoded.data.seq).toBe(42n);
-  });
-
-  // BE-46.2: seq round-trips at the realistic Date.now()-style ms
-  // boundary the tier promoter is expected to use. Sanity-check that
-  // we don't fall off a u32/Number cliff.
-  it("round-trips SetAccountFeeOverride with millisecond-scale seq", () => {
-    const account = new Uint8Array(20).fill(0xcd);
-    const ms: bigint = 1_730_000_000_000n; // ~2024-10-27 in ms — well past 2^32.
-    const action: Action = {
-      type: "SetAccountFeeOverride",
-      data: {
-        account,
-        takerFeeBps: 0,
-        makerFeeBps: 0,
-        signer: SIGNER,
-        seq: ms,
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "SetAccountFeeOverride")
-      throw new Error("type narrowing");
-    expect(decoded.data.seq).toBe(ms);
-  });
-
-  // BE-46.1: the FEE_OVERRIDE_REVERT_SENTINEL constant is what callers
-  // pass on either side of an override to mean "fall back to market
-  // base for this side." The encoder/decoder must round-trip it
-  // verbatim — the engine compares it as `u32::MAX` exactly, so a
-  // round-trip drift would silently produce nonsense fees.
-  it("round-trips FEE_OVERRIDE_REVERT_SENTINEL on both fee sides", () => {
-    expect(FEE_OVERRIDE_REVERT_SENTINEL).toBe(4_294_967_295);
-
-    const account = new Uint8Array(20).fill(0xef);
-    const action: Action = {
-      type: "SetAccountFeeOverride",
-      data: {
-        account,
-        takerFeeBps: FEE_OVERRIDE_REVERT_SENTINEL,
-        makerFeeBps: FEE_OVERRIDE_REVERT_SENTINEL,
-        signer: SIGNER,
-        seq: 1n,
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "SetAccountFeeOverride")
-      throw new Error("type narrowing");
-    expect(decoded.data.takerFeeBps).toBe(FEE_OVERRIDE_REVERT_SENTINEL);
-    expect(decoded.data.makerFeeBps).toBe(FEE_OVERRIDE_REVERT_SENTINEL);
-  });
-
-  // Mixed: sentinel on one side, real bps on the other — the engine
-  // resolves each side independently. Make sure the encoder doesn't
-  // accidentally truncate u32::MAX into something smaller.
-  it("round-trips FEE_OVERRIDE_REVERT_SENTINEL alongside a normal bps value", () => {
-    const account = new Uint8Array(20).fill(0x12);
-    const action: Action = {
-      type: "SetAccountFeeOverride",
-      data: {
-        account,
-        takerFeeBps: 1, // explicit override on taker side
-        makerFeeBps: FEE_OVERRIDE_REVERT_SENTINEL, // revert maker to market base
-        signer: SIGNER,
-        seq: 2n,
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "SetAccountFeeOverride")
-      throw new Error("type narrowing");
-    expect(decoded.data.takerFeeBps).toBe(1);
-    expect(decoded.data.makerFeeBps).toBe(FEE_OVERRIDE_REVERT_SENTINEL);
   });
 
   // BE-54: oracleSource round-trip — three flavors. Default (undefined)

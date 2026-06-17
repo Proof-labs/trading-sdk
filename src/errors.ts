@@ -130,7 +130,7 @@ const TABLE: Record<number, ExecErrorInfo> = {
   36: {
     name: "TestActionRejected",
     description:
-      "test/admin action rejected (e.g. unauthorized signer for RunLiquidationSweep)",
+      "test/admin action rejected (unauthorized signer or engine not configured to accept them)",
   },
   37: {
     name: "StaleOracle",
@@ -160,12 +160,12 @@ const TABLE: Record<number, ExecErrorInfo> = {
   42: {
     name: "FeeBpsOutOfRange",
     description:
-      "SetAccountFeeOverride rejected — taker_fee_bps or maker_fee_bps outside the [0, 10_000] basis-point range (BE-46)",
+      "fee bps value outside the [0, 10_000] basis-point range",
   },
   43: {
     name: "FeeOverrideStaleSeq",
     description:
-      "SetAccountFeeOverride rejected — cmd.seq must be strictly greater than the highest accepted seq for this account (BE-46.2 replay guard)",
+      "fee override rejected — seq not strictly greater than last accepted",
   },
   44: {
     name: "ClientOrderIdNotFound",

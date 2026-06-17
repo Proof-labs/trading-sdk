@@ -666,37 +666,6 @@ export class ExchangeClient {
     };
   }
 
-  /**
-   * BE-40 — convenience wrapper for the relayer-only `FailDeposit`
-   * action. Marks a Solana deposit signature as permanently failed;
-   * the engine records the sig in the failed-deposits set and emits
-   * `DepositFailed`. Idempotent on retry — a repeat (or a race with
-   * `ConfirmDeposit`) is a silent no-op (`code = 0`, no events).
-   *
-   * The caller's loaded private key MUST derive to a relayer-allowlisted
-   * address; otherwise the engine returns `UnauthorizedRelayer`.
-   *
-   * `solanaSignature` is the raw bytes of the Solana tx sig (typically
-   * 64 bytes). Same byte sequence the matching `ConfirmDeposit` would
-   * carry — that's how the dedup keyspace identifies "this same deposit".
-   */
-  async failDeposit(
-    solanaSignature: Uint8Array,
-    reason: import("./types.js").FailDepositReason,
-  ): Promise<TxResult> {
-    if (!this.address) {
-      throw new Error("failDeposit: client has no signer key loaded");
-    }
-    return this.submitTx({
-      type: "FailDeposit",
-      data: {
-        solanaSignature,
-        reason,
-        signer: this.address,
-      },
-    });
-  }
-
   // -----------------------------------------------------------------------
   // Query endpoints (via Go API server)
   // -----------------------------------------------------------------------
