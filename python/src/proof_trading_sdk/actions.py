@@ -246,6 +246,313 @@ class RevokeAgent(Action):
         return {"owner": self.owner, "agent_pubkey": self.agent_pubkey}
 
 
+# ── Relayer-signed actions ────────────────────────────────────────────────────
+
+
+@dataclass
+class OracleUpdate(Action):
+    ACTION_NAME = "OracleUpdate"
+    market: int
+    price: int
+    signer: bytes
+    publish_time_ms: int = 0
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "price": self.price,
+            "signer": self.signer,
+            "publish_time_ms": self.publish_time_ms,
+        }
+
+
+@dataclass
+class Deposit(Action):
+    ACTION_NAME = "Deposit"
+    owner: bytes
+    amount: int
+    signer: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {"owner": self.owner, "amount": self.amount, "signer": self.signer}
+
+
+@dataclass
+class Withdraw(Action):
+    ACTION_NAME = "Withdraw"
+    owner: bytes
+    amount: int
+    signer: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {"owner": self.owner, "amount": self.amount, "signer": self.signer}
+
+
+@dataclass
+class WithdrawRequest(Action):
+    ACTION_NAME = "WithdrawRequest"
+    owner: bytes
+    amount: int
+    solana_destination: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "owner": self.owner,
+            "amount": self.amount,
+            "solana_destination": self.solana_destination,
+        }
+
+
+@dataclass
+class ConfirmDeposit(Action):
+    ACTION_NAME = "ConfirmDeposit"
+    owner: bytes
+    amount: int
+    solana_tx_sig: bytes
+    signer: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "owner": self.owner,
+            "amount": self.amount,
+            "solana_tx_sig": self.solana_tx_sig,
+            "signer": self.signer,
+        }
+
+
+@dataclass
+class ConfirmWithdrawal(Action):
+    ACTION_NAME = "ConfirmWithdrawal"
+    withdrawal_id: int
+    solana_tx_sig: bytes
+    signer: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "withdrawal_id": self.withdrawal_id,
+            "solana_tx_sig": self.solana_tx_sig,
+            "signer": self.signer,
+        }
+
+
+@dataclass
+class FailWithdrawal(Action):
+    ACTION_NAME = "FailWithdrawal"
+    withdrawal_id: int
+    reason: str
+    signer: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "withdrawal_id": self.withdrawal_id,
+            "reason": self.reason,
+            "signer": self.signer,
+        }
+
+
+@dataclass
+class ResolveEvent(Action):
+    ACTION_NAME = "ResolveEvent"
+    impact_market_id: int
+    outcome: str  # "Yes" | "No" | "Void"
+    signer: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "impact_market_id": self.impact_market_id,
+            "outcome": self.outcome,
+            "signer": self.signer,
+        }
+
+
+@dataclass
+class FailDeposit(Action):
+    ACTION_NAME = "FailDeposit"
+    solana_signature: bytes
+    reason: str  # "MalformedTx" | "UnsupportedToken" | "BelowMinimum" | "Other"
+    signer: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "solana_signature": self.solana_signature,
+            "reason": self.reason,
+            "signer": self.signer,
+        }
+
+
+@dataclass
+class SetUserMarketLeverage(Action):
+    ACTION_NAME = "SetUserMarketLeverage"
+    owner: bytes
+    market: int
+    user_im_bps: int
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "owner": self.owner,
+            "market": self.market,
+            "user_im_bps": self.user_im_bps,
+        }
+
+
+# ── Admin / test actions ──────────────────────────────────────────────────────
+
+
+@dataclass
+class CreateMarket(Action):
+    ACTION_NAME = "CreateMarket"
+    market: int
+    im_bps: int
+    mm_bps: int
+    taker_fee_bps: int
+    maker_fee_bps: int
+    signer: bytes
+    funding_interval_ms: int
+    max_funding_rate_bps: int
+    pool_id: int = 0
+    sz_decimals: int = 0
+    ticker: str = ""
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "im_bps": self.im_bps,
+            "mm_bps": self.mm_bps,
+            "taker_fee_bps": self.taker_fee_bps,
+            "maker_fee_bps": self.maker_fee_bps,
+            "signer": self.signer,
+            "funding_interval_ms": self.funding_interval_ms,
+            "max_funding_rate_bps": self.max_funding_rate_bps,
+            "pool_id": self.pool_id,
+            "sz_decimals": self.sz_decimals,
+            "ticker": self.ticker,
+        }
+
+
+@dataclass
+class CreateImpactMarket(Action):
+    ACTION_NAME = "CreateImpactMarket"
+    impact_market_id: int
+    underlying_market: int
+    child_market_base: int
+    question: str
+    deadline_ms: int
+    resolution_window_ms: int
+    im_bps: int
+    mm_bps: int
+    taker_fee_bps: int
+    maker_fee_bps: int
+    funding_interval_ms: int
+    max_funding_rate_bps: int
+    signer: bytes
+    oracle_source: Any = None
+    description: str = ""
+    rules: str = ""
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "impact_market_id": self.impact_market_id,
+            "underlying_market": self.underlying_market,
+            "child_market_base": self.child_market_base,
+            "question": self.question,
+            "deadline_ms": self.deadline_ms,
+            "resolution_window_ms": self.resolution_window_ms,
+            "im_bps": self.im_bps,
+            "mm_bps": self.mm_bps,
+            "taker_fee_bps": self.taker_fee_bps,
+            "maker_fee_bps": self.maker_fee_bps,
+            "funding_interval_ms": self.funding_interval_ms,
+            "max_funding_rate_bps": self.max_funding_rate_bps,
+            "signer": self.signer,
+            "oracle_source": self.oracle_source,
+            "description": self.description,
+            "rules": self.rules,
+        }
+
+
+@dataclass
+class UpdateMarketFees(Action):
+    ACTION_NAME = "UpdateMarketFees"
+    market: int
+    signer: bytes
+    taker_fee_bps: Optional[int] = None
+    maker_fee_bps: Optional[int] = None
+    max_funding_rate_bps: Optional[int] = None
+    funding_interval_ms: Optional[int] = None
+    max_position_size: Optional[int] = None
+    default_ttl_ms: Optional[int] = None
+    net_delta_margin: Optional[bool] = None
+    tick_size: Optional[int] = None
+    lot_size: Optional[int] = None
+    primary_oracle_signer: Optional[bytes] = None
+    oracle_staleness_ms: Optional[int] = None
+    mark_source_mode: Optional[int] = None
+    max_mark_spread_bps: Optional[int] = None
+    cex_composite_staleness_ms: Optional[int] = None
+    partial_liquidation_enabled: Optional[bool] = None
+    fee_tiers: Optional[list[dict[str, Any]]] = None
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "signer": self.signer,
+            "taker_fee_bps": self.taker_fee_bps,
+            "maker_fee_bps": self.maker_fee_bps,
+            "max_funding_rate_bps": self.max_funding_rate_bps,
+            "funding_interval_ms": self.funding_interval_ms,
+            "max_position_size": self.max_position_size,
+            "default_ttl_ms": self.default_ttl_ms,
+            "net_delta_margin": self.net_delta_margin,
+            "tick_size": self.tick_size,
+            "lot_size": self.lot_size,
+            "primary_oracle_signer": self.primary_oracle_signer,
+            "oracle_staleness_ms": self.oracle_staleness_ms,
+            "mark_source_mode": self.mark_source_mode,
+            "max_mark_spread_bps": self.max_mark_spread_bps,
+            "cex_composite_staleness_ms": self.cex_composite_staleness_ms,
+            "partial_liquidation_enabled": self.partial_liquidation_enabled,
+            "fee_tiers": self.fee_tiers,
+        }
+
+
+@dataclass
+class SetAccountFeeOverride(Action):
+    ACTION_NAME = "SetAccountFeeOverride"
+    account: bytes
+    taker_fee_bps: int
+    maker_fee_bps: int
+    signer: bytes
+    seq: int = 0
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "account": self.account,
+            "taker_fee_bps": self.taker_fee_bps,
+            "maker_fee_bps": self.maker_fee_bps,
+            "signer": self.signer,
+            "seq": self.seq,
+        }
+
+
+@dataclass
+class RunLiquidationSweep(Action):
+    ACTION_NAME = "RunLiquidationSweep"
+    signer: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {"signer": self.signer}
+
+
+@dataclass
+class RunFundingTick(Action):
+    ACTION_NAME = "RunFundingTick"
+    market: int
+    signer: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {"market": self.market, "signer": self.signer}
+
+
 # ── Codec helpers (delegate to the shared Rust core) ─────────────────────────
 
 
@@ -281,6 +588,22 @@ __all__ = [
     "ClosePosition",
     "ApproveAgent",
     "RevokeAgent",
+    "OracleUpdate",
+    "Deposit",
+    "Withdraw",
+    "WithdrawRequest",
+    "ConfirmDeposit",
+    "ConfirmWithdrawal",
+    "FailWithdrawal",
+    "ResolveEvent",
+    "FailDeposit",
+    "SetUserMarketLeverage",
+    "CreateMarket",
+    "CreateImpactMarket",
+    "UpdateMarketFees",
+    "SetAccountFeeOverride",
+    "RunLiquidationSweep",
+    "RunFundingTick",
     "encode_action",
     "decode_action",
 ]
