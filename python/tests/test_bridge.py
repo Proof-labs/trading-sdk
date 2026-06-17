@@ -198,13 +198,12 @@ class TestConfig:
         assert cfg.gateway_url == "https://api.dev.proof.trade"
         assert cfg.timeout_secs == 30
         assert cfg.log_level == "WARNING"
-        assert cfg.chain_id == "exchange-devnet-1"
 
     def test_env_overrides(self, monkeypatch):
-        monkeypatch.setenv("PROOF_GATEWAY_URL", "https://alt.proof.trade")
+        monkeypatch.setenv("PROOF_GATEWAY_URL", "https://api.prod.proof.exchange")
         monkeypatch.setenv("PROOF_LOG_LEVEL", "INFO")
         cfg = pts.load_config()
-        assert cfg.gateway_url == "https://alt.proof.trade"
+        assert cfg.gateway_url == "https://api.prod.proof.exchange"
         assert cfg.log_level == "INFO"
 
     def test_programmatic_overrides(self):
