@@ -791,13 +791,15 @@ function parseFailDepositReason(v: unknown): FailDepositReason {
 
 function parseSide(s: unknown): Side {
   if (s === "Buy" || s === Side.Buy) return Side.Buy;
-  return Side.Sell;
+  if (s === "Sell" || s === Side.Sell) return Side.Sell;
+  throw new Error(`Invalid Side value: ${JSON.stringify(s)}`);
 }
 
 function parseTimeInForce(tif: unknown): TimeInForce {
   if (tif === "Ioc" || tif === TimeInForce.Ioc) return TimeInForce.Ioc;
   if (tif === "Fok" || tif === TimeInForce.Fok) return TimeInForce.Fok;
-  return TimeInForce.Gtc;
+  if (tif === "Gtc" || tif === TimeInForce.Gtc) return TimeInForce.Gtc;
+  throw new Error(`Invalid TimeInForce value: ${JSON.stringify(tif)}`);
 }
 
 // Helper: u64 fields may decode as either Number (small fixint) or BigInt

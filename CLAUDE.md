@@ -1,5 +1,27 @@
 # Proof Trading SDK — Claude Code guide
 
+## Trading with the SDK
+
+If a user asks you to connect to Proof Exchange and trade, here is the pattern:
+
+1. **Generate keys** — `generateKeypair()` handles Ed25519 key creation.
+   Derive the address with `pubkeyToOwner(publicKey)` (keccak256[12..32]).
+2. **Create a client** — `new ExchangeClient({ chainId: "exchange-devnet-1" })`
+   for the public devnet.
+3. **Fund** — The user must have tokens. Call the faucet via
+   `POST https://faucet.dev.proof.trade/drip` with an auth token.
+4. **Trade** — `submitTx({ type: "PlaceOrder", data: { ... } })`.
+   Prices are integer cents, quantities are integer contracts.
+5. **Check results** — `code === 0` means CheckTx passed. Non-zero codes
+   are error codes (12 = insufficient margin, 21 = nonce collision, etc.).
+
+Run the example:
+```bash
+npx tsx examples/connect-and-trade.ts
+```
+
+See [AGENTS.md](AGENTS.md) for the complete agent reference.
+
 ## Branching & pull requests
 
 **Before making any code edits:**
@@ -35,14 +57,15 @@ npx prettier --check .
 
 ## Layout
 
-| Path             | Role                                                |
-| ---------------- | --------------------------------------------------- |
-| `src/codec.ts`   | MessagePack encode/decode; signed-envelope assembly |
-| `src/crypto.ts`  | Ed25519 sign/verify; keypair + owner derivation     |
-| `src/client.ts`  | `ExchangeClient`: submit, queries, nonce allocation |
-| `src/errors.ts`  | Typed engine/gateway error surface                  |
-| `src/types.ts`   | Action types + payload shapes — the wire contract   |
-| `src/scenarios/` | End-to-end matching/liquidation scenario tests      |
+| Path | Role |
+| ---- | ---- |
+| `src/codec.ts` | MessagePack encode/decode; signed-envelope assembly |
+| `src/crypto.ts` | Ed25519 sign/verify; keypair + owner derivation |
+| `src/client.ts` | `ExchangeClient`: submit, queries, nonce allocation |
+| `src/errors.ts` | Typed engine/gateway error surface |
+| `src/types.ts` | Action types + payload shapes — the wire contract |
+| `src/scenarios/` | End-to-end matching/liquidation scenario tests |
+| `examples/connect-and-trade.ts` | End-to-end example for the devnet |
 
 ## Wire format rules
 
@@ -70,12 +93,12 @@ npx prettier --check .
 
 ## Unit conventions
 
-| Field      | Scale                                | Example                   |
-| ---------- | ------------------------------------ | ------------------------- |
-| Prices     | Integer cents (2 dp)                 | `6675000` = $66,750       |
-| Balances   | MicroUSDC (6 dp)                     | `100_000_000_000` = $100k |
-| Fees/Rates | Basis points                         | `500` = 5%                |
-| Addresses  | 20 bytes — keccak256(pubkey)[12..32] | `pubkeyToOwner()`         |
+| Field | Scale | Example |
+| ----- | ----- | ------- |
+| Prices | Integer cents (2 dp) | `6675000` = $66,750 |
+| Balances | MicroUSDC (6 dp) | `100_000_000_000` = $100k |
+| Fees/Rates | Basis points | `500` = 5% |
+| Addresses | 20 bytes — keccak256(pubkey)[12..32] | `pubkeyToOwner()` |
 
 ## Spec / contract sync
 
