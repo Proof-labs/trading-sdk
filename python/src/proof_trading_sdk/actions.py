@@ -20,19 +20,24 @@ still fully reachable through :class:`RawAction`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Optional
 
 import proof_trading_sdk._native as _native
 
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+FEE_OVERRIDE_REVERT_SENTINEL = 4_294_967_295
+
 # ── Wire-string enums (match the Rust serde unit-variant names) ──────────────
 
 
-class Side:
+class Side(StrEnum):
     Buy = "Buy"
     Sell = "Sell"
 
 
-class TimeInForce:
+class TimeInForce(StrEnum):
     Gtc = "Gtc"
     Ioc = "Ioc"
     Fok = "Fok"
@@ -687,6 +692,7 @@ def decode_action(action_type: int, payload: bytes) -> dict[str, Any]:
 
 __all__ = [
     "Action",
+    "FEE_OVERRIDE_REVERT_SENTINEL",
     "ActionType",
     "RawAction",
     "Side",

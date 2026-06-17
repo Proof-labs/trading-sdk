@@ -15,15 +15,54 @@ from proof_trading_sdk._native import (
     verify_signature,
 )
 
+# ── Convenience aliases (match the TS SDK naming) ────────────────────────────
+
+
+def owner_to_hex(owner: bytes) -> str:
+    """20-byte owner bytes → 40-char hex string (no ``0x``)."""
+    return owner.hex()
+
+
+def hex_to_owner(hex_str: str) -> bytes:
+    """Hex string (with or without ``0x``) → 20-byte owner bytes."""
+    return bytes.fromhex(hex_str.removeprefix("0x"))
+
 from proof_trading_sdk import actions
-from proof_trading_sdk.actions import (
+from proof_trading_sdk.actions import (  # noqa: F401
     Action,
     ActionType,
     RawAction,
+    FEE_OVERRIDE_REVERT_SENTINEL,
     Side,
     TimeInForce,
-    decode_action,
+    PlaceOrder,
+    MarketOrder,
+    CancelOrder,
+    CancelClientOrder,
+    CancelAllOrders,
+    CancelReplaceOrder,
+    AmendOrder,
+    ClosePosition,
+    ApproveAgent,
+    RevokeAgent,
+    OracleUpdate,
+    Deposit,
+    Withdraw,
+    WithdrawRequest,
+    ConfirmDeposit,
+    ConfirmWithdrawal,
+    FailWithdrawal,
+    ResolveEvent,
+    FailDeposit,
+    SetUserMarketLeverage,
+    CreateMarket,
+    CreateImpactMarket,
+    UpdateMarketFees,
+    SetAccountFeeOverride,
+    RunLiquidationSweep,
+    RunFundingTick,
     encode_action,
+    decode_action,
 )
 
 from proof_trading_sdk.errors import (
@@ -45,6 +84,8 @@ from proof_trading_sdk.streams import AccountEventStream, OrderbookDeltaStream
 
 __all__ = [
     "chain_id_from_string",
+    "owner_to_hex",
+    "hex_to_owner",
     "decode_tx",
     "encode_signed_tx",
     "generate_keypair",
@@ -58,8 +99,35 @@ __all__ = [
     "Action",
     "ActionType",
     "RawAction",
+    "FEE_OVERRIDE_REVERT_SENTINEL",
     "Side",
     "TimeInForce",
+    "PlaceOrder",
+    "MarketOrder",
+    "CancelOrder",
+    "CancelClientOrder",
+    "CancelAllOrders",
+    "CancelReplaceOrder",
+    "AmendOrder",
+    "ClosePosition",
+    "ApproveAgent",
+    "RevokeAgent",
+    "OracleUpdate",
+    "Deposit",
+    "Withdraw",
+    "WithdrawRequest",
+    "ConfirmDeposit",
+    "ConfirmWithdrawal",
+    "FailWithdrawal",
+    "ResolveEvent",
+    "FailDeposit",
+    "SetUserMarketLeverage",
+    "CreateMarket",
+    "CreateImpactMarket",
+    "UpdateMarketFees",
+    "SetAccountFeeOverride",
+    "RunLiquidationSweep",
+    "RunFundingTick",
     "encode_action",
     "decode_action",
     "NonceAllocator",

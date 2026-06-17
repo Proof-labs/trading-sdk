@@ -9,7 +9,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from proof_trading_sdk._native import SigningHandle, sign_and_encode
+from proof_trading_sdk._native import SigningHandle, chain_id_from_string, generate_keypair, pubkey_to_owner, sign_and_encode
 from proof_trading_sdk.actions import Action, encode_action
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.errors import (
@@ -25,6 +25,19 @@ from proof_trading_sdk.errors import (
 from proof_trading_sdk.nonce import NonceAllocator
 
 log = logging.getLogger("proof_trading_sdk")
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _to_hex(owner: bytes | str) -> str:
+    """Normalise *owner* to a hex string (with or without ``0x`` prefix).
+
+    Accepts either raw 20-byte ``bytes`` or any hex string. Strips ``0x``
+    prefix if present so the caller doesn't need to check.
+    """
+    if isinstance(owner, bytes):
+        return owner.hex()
+    return owner.removeprefix("0x")
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -125,7 +138,12 @@ class ExchangeClient:
         self._gateway_url = cfg.gateway_url.rstrip("/")
         self._api_key = cfg.api_key
         self._timeout_secs = cfg.timeout_secs
-        self._chain_id = chain_id if chain_id is not None else UNBOUND_CHAIN_ID
+        if chain_id is not None:
+            self._chain_id = chain_id
+        elif cfg.chain_id:
+            self._chain_id = chain_id_from_string(cfg.chain_id)
+        else:
+            self._chain_id = UNBOUND_CHAIN_ID
         self._secret_key = secret_key
         self._key_handle = key_handle
 
@@ -317,11 +335,24 @@ class ExchangeClient:
 
     # ── Info queries ─────────────────────────────────────────────────────
 
-    def account(self, owner: bytes | str) -> AccountState:
-        """Fetch account state: balances, positions, open orders, margin."""
-        if isinstance(owner, bytes):
-            owner = owner.hex()
-        resp = self._get(f"/v1/account/{owner}")
+    def _own_owner(self) -> bytes:
+        """Derive the 20-byte owner from whichever signing key is configured."""
+        if self._key_handle is not None:
+            return self._key_handle.owner
+        if self._secret_key is not None:
+            return pubkey_to_owner(generate_keypair(self._secret_key)["public_key"])
+        msg = "No signing key configured — pass an explicit `owner` or set `secret_key`/`key_handle`."
+        raise ValueError(msg)
+
+    def account(self, owner: bytes | str | None = None) -> AccountState:
+        """Fetch account state: balances, positions, open orders, margin.
+
+        If *owner* is ``None`` (default), uses the owner derived from the
+        configured signing key.
+        """
+        if owner is None:
+            owner = self._own_owner()
+        resp = self._get(f"/v1/account/{_to_hex(owner)}")
         data: dict[str, t.Any] = resp.json()
         return AccountState(
             balances=data.get("balances", {}),
@@ -332,9 +363,7 @@ class ExchangeClient:
         )
 
     def open_orders(self, owner: bytes | str) -> list[dict[str, t.Any]]:
-        if isinstance(owner, bytes):
-            owner = owner.hex()
-        resp = self._get(f"/v1/orders/{owner}")
+        resp = self._get(f"/v1/orders/{_to_hex(owner)}")
         return resp.json()
 
     def withdrawal_status(self, withdrawal_id: int) -> dict[str, t.Any]:
@@ -342,9 +371,7 @@ class ExchangeClient:
         return resp.json()
 
     def nonce_info(self, owner: bytes | str) -> dict[str, t.Any]:
-        if isinstance(owner, bytes):
-            owner = owner.hex()
-        resp = self._get(f"/v1/nonce/{owner}")
+        resp = self._get(f"/v1/nonce/{_to_hex(owner)}")
         return resp.json()
 
     def markets(self) -> list[dict[str, t.Any]]:
@@ -537,8 +564,7 @@ class ExchangeClient:
         to_ms: int | None = None,
         limit: int | None = None,
     ) -> list[dict[str, t.Any]]:
-        if isinstance(owner, bytes):
-            owner = owner.hex()
+        owner = _to_hex(owner)
         params: dict[str, t.Any] = {}
         if from_ms is not None:
             params["from"] = from_ms
@@ -557,8 +583,8 @@ class ExchangeClient:
         params: dict[str, t.Any],
     ) -> CursorPage:
         owner = params.pop("owner", None)
-        if isinstance(owner, bytes):
-            params["owner"] = owner.hex()
+        if owner is not None:
+            params["owner"] = _to_hex(owner)
 
         query = {k: v for k, v in params.items() if v is not None and k != "self"}
         resp = self._get(path, params=query)
