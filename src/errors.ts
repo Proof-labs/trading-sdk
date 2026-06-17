@@ -159,8 +159,7 @@ const TABLE: Record<number, ExecErrorInfo> = {
   },
   42: {
     name: "FeeBpsOutOfRange",
-    description:
-      "fee bps value outside the [0, 10_000] basis-point range",
+    description: "fee bps value outside the [0, 10_000] basis-point range",
   },
   43: {
     name: "FeeOverrideStaleSeq",

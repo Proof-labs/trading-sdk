@@ -5,7 +5,6 @@ import {
   type ActionTypeValue,
   type Address,
   type EventOracleSource,
-
   type FeeTier,
   Outcome,
   type PriceComparison,
