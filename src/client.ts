@@ -702,10 +702,10 @@ export class ExchangeClient {
   // -----------------------------------------------------------------------
 
   async queryOrderbook(market: number): Promise<Orderbook> {
-    const res = await fetch(`${this.apiUrl}/v1/orderbook/${market}`);
-    const json = await res.json();
-    if (json.error) return { bids: [], asks: [] };
-    const bytes = fromBase64(json.data);
+    const json = await fetchApiJson(
+      `${this.apiUrl}/v1/orderbook/${market}`,
+    );
+    const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as [unknown[], unknown[]];
     const parseLevel = (arr: unknown[]): OrderbookLevel => ({
       price: BigInt(arr[0] as number | bigint),
@@ -718,28 +718,24 @@ export class ExchangeClient {
     };
   }
 
-  /** List all registered market configs. Returns an empty array on error. */
+  /** List all registered market configs. */
   async queryMarkets(): Promise<MarketConfig[]> {
-    const res = await fetch(`${this.apiUrl}/v1/markets`);
-    const json = (await res.json()) as { data?: string; error?: string };
-    if (json.error) return [];
-    const bytes = fromBase64(json.data!);
+    const json = await fetchApiJson(`${this.apiUrl}/v1/markets`);
+    const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as unknown[][];
     return raw.map((m) => decodeMarketConfig(m));
   }
 
   /** Fetch open orders for an address. Returns an empty array if the
-   *  account has no open orders or the endpoint is unreachable.
+   *  account has no open orders.
    *  Each order is a 6-tuple `[id, market, owner, side, price, quantity]`
    *  decoded from MessagePack. */
   async queryOpenOrders(addressHex?: string): Promise<OpenOrder[]> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return [];
-    const res = await fetch(`${this.apiUrl}/v1/orders/${hex}`);
-    if (!res.ok) return [];
-    const json = (await res.json()) as { data?: string; error?: string };
-    if (!json.data || json.error) return [];
-    const bytes = fromBase64(json.data);
+    const json = await fetchApiJson(`${this.apiUrl}/v1/orders/${hex}`);
+    if (!json.data) return [];
+    const bytes = fromBase64(json.data as string);
     let decoded: unknown;
     try {
       decoded = msgpackDecoder.decode(bytes);
@@ -765,10 +761,10 @@ export class ExchangeClient {
    *  divide by total entries). Empty array if the market has no
    *  profitable positions or if the gateway predates the endpoint. */
   async queryAdlQueue(market: number): Promise<AdlQueueEntry[]> {
-    const res = await fetch(`${this.apiUrl}/v1/adl/queue/${market}`);
-    const json = await res.json();
-    if (json.error) return [];
-    const bytes = fromBase64(json.data);
+    const json = await fetchApiJson(
+      `${this.apiUrl}/v1/adl/queue/${market}`,
+    );
+    const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes);
     if (!Array.isArray(raw)) return [];
     return raw.map((row) => {
@@ -787,10 +783,10 @@ export class ExchangeClient {
   /** Fetch a withdrawal record by id. Returns `null` for unknown ids
    *  (the engine encodes "not found" as msgpack `nil`, not HTTP 404). */
   async queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null> {
-    const res = await fetch(`${this.apiUrl}/v1/withdrawal/${id}`);
-    const json = await res.json();
-    if (json.error) return null;
-    const bytes = fromBase64(json.data);
+    const json = await fetchApiJson(
+      `${this.apiUrl}/v1/withdrawal/${id}`,
+    );
+    const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as unknown[] | null;
     if (raw === null) return null;
     // serde encodes `[u8; N]` as msgpack ARRAY (not BIN), so the
@@ -810,10 +806,8 @@ export class ExchangeClient {
   async queryAccount(addressHex?: string): Promise<AccountInfo | null> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return null;
-    const res = await fetch(`${this.apiUrl}/v1/account/${hex}`);
-    const json = await res.json();
-    if (json.error) return null;
-    const bytes = fromBase64(json.data);
+    const json = await fetchApiJson(`${this.apiUrl}/v1/account/${hex}`);
+    const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as unknown[];
     const balance = BigInt(raw[0] as number | bigint);
     const positions: PositionInfo[] = ((raw[1] ?? []) as unknown[][]).map(
@@ -916,7 +910,10 @@ export class ExchangeClient {
    * doesn't track OI yet. UI should render "—" or "coming soon". */
   async queryTicker(market: number): Promise<Ticker | null> {
     const res = await fetch(`${this.apiUrl}/v1/ticker/${market}`);
-    if (!res.ok) return null;
+    if (!res.ok) {
+      if (res.status === 404) return null;
+      throw new Error(`API error: HTTP ${res.status}`);
+    }
     const row = (await res.json()) as Record<string, unknown>;
     return {
       market: String(row.market ?? market),
@@ -968,9 +965,7 @@ export class ExchangeClient {
     if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
     const qs = params.toString();
     const url = `${this.apiUrl}/v1/history/${path}/${hex}${qs ? `?${qs}` : ""}`;
-    const res = await fetch(url);
-    const json = (await res.json()) as unknown;
-    if (!Array.isArray(json)) return [];
+    const json = await fetchApiArray(url);
     return (json as Array<Record<string, unknown>>).map((row) => ({
       kind: row.kind as HistoryCashFlow["kind"],
       owner: String(row.owner ?? ""),
@@ -1011,9 +1006,7 @@ export class ExchangeClient {
     if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
     const qs = params.toString();
     const url = `${this.apiUrl}/v1/history/resolutions/${hex}${qs ? `?${qs}` : ""}`;
-    const res = await fetch(url);
-    const json = (await res.json()) as unknown;
-    if (!Array.isArray(json)) return [];
+    const json = await fetchApiArray(url);
     return (json as Array<Record<string, unknown>>).map((row) => ({
       kind: row.kind as HistoryResolution["kind"],
       impactMarketId: String(row.impact_market_id ?? ""),
@@ -1054,9 +1047,7 @@ export class ExchangeClient {
     if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
     const qs = params.toString();
     const url = `${this.apiUrl}/v1/history/positions/${hex}${qs ? `?${qs}` : ""}`;
-    const res = await fetch(url);
-    const json = (await res.json()) as unknown;
-    if (!Array.isArray(json)) return [];
+    const json = await fetchApiArray(url);
     return (json as Array<Record<string, unknown>>).map((row) => ({
       owner: String(row.owner ?? ""),
       market: String(row.market ?? ""),
@@ -1188,6 +1179,44 @@ export class ExchangeClient {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Fetch JSON from the API server and throw on non-2xx or `json.error`.
+ * Returns the parsed JSON body on success.
+ */
+async function fetchApiJson(url: string): Promise<Record<string, unknown>> {
+  const res = await fetch(url);
+  const json = (await res.json()) as Record<string, unknown>;
+  if (!res.ok || json.error) {
+    const msg = (json.error as string) ?? `HTTP ${res.status}`;
+    throw new Error(`API error: ${msg}`);
+  }
+  return json;
+}
+
+/**
+ * Fetch a JSON array from the API server and throw on non-2xx or
+ * `json.error`. Returns the parsed array on success.
+ */
+async function fetchApiArray(url: string): Promise<unknown[]> {
+  const res = await fetch(url);
+  const json = (await res.json()) as unknown;
+  if (
+    !res.ok ||
+    (json !== null &&
+      typeof json === "object" &&
+      "error" in (json as Record<string, unknown>))
+  ) {
+    const msg =
+      ((json as Record<string, unknown> | null)?.error as string) ??
+      `HTTP ${res.status}`;
+    throw new Error(`API error: ${msg}`);
+  }
+  if (!Array.isArray(json)) {
+    throw new Error(`API error: expected array, got ${typeof json}`);
+  }
+  return json;
+}
 
 function toBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
