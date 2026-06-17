@@ -146,6 +146,24 @@ await client.submitTx({
 
 ## Reading data
 
+The SDK talks to the API gateway at `PROOF_GATEWAY_URL`. The gateway routes
+read endpoints as follows:
+
+| Endpoint | Gateway | Notes |
+|---|---|---|
+| `/v1/markets`, `/v1/orderbook/*`, `/v1/candles/*`, `/v1/trades/*`, `/v1/funding/*`, `/v1/fee-tiers/*`, `/v1/impact_*`, `/v1/ticker/*`, `/v1/health`, `/v1/oracle/health` | ✅ Proxied to node | Public, no auth |
+| `POST /info` | ✅ Routed | Structured queries (clearinghouseState, etc.) |
+| `/v1/account/{hex}` | ❌ **Not routed** | 404s on gateway |
+| `/v1/account/{hex}/recent-nonces`, `/v1/nonce/{hex}` | ✅ Routed | Diagnostic |
+| `/v1/history/*` | ✅ Proxied | Historical data only (not live state) |
+| `POST /exchange` | ✅ Routed | Transaction submission (API key required) |
+
+**Key caveat**: `GET /v1/account/{hex}` (live balance + positions + margin)
+is **not** routed on the gateway. The SDK's `queryAccount()` handles this:
+it falls back to `POST /info` with `clearinghouseState`, which IS routed.
+History endpoints (`/v1/history/equity/{addr}`, `/v1/history/positions/{addr}`)
+serve **historical snapshots**, not current live state.
+
 ```typescript
 // Orderbook depth
 const book = await client.queryOrderbook(1);
@@ -155,7 +173,7 @@ const book = await client.queryOrderbook(1);
 const orders = await client.queryOpenOrders(hex); // or omit for own address
 // [{ id: bigint, market: number, owner: Uint8Array, side: "Buy"|"Sell", price: bigint, quantity: bigint }]
 
-// Account (balance, positions, margin)
+// Account (balance, positions, margin) — uses POST /info fallback internally
 const acct = await client.queryAccount(hex); // or omit for own address
 // { balance: bigint, equity: bigint, totalMm: bigint, totalIm: bigint, positions: [...] }
 
