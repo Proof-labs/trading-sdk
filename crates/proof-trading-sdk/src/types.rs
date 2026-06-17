@@ -353,7 +353,7 @@ pub struct Order {
 /// Deterministic execution context passed to every transaction handler.
 ///
 /// Constructed exclusively by the FFI boundary from CometBFT's `FinalizeBlock` fields.
-pub struct TxContext {
+pub(crate) struct TxContext {
     /// 1-based block height.
     pub height: u64,
     /// 0-based index within the block. `u32::MAX` / `u32::MAX - 1` are sentinels
@@ -639,34 +639,6 @@ pub struct FeeTier {
     pub taker_fee_tenth_bps: i16,
 }
 
-/// Configuration for the Hyperliquidity Provider (HLP) — the
-/// protocol-owned MM that absorbs bankruptcy losses at Tier 0 of the
-/// bad-debt waterfall. See `docs/adl-vs-socialized-loss.md` §3.2.
-///
-/// Stored under `keys::HLP_CONFIG` (single global record). The HLP's
-/// trading account lives at `address`; the engine treats it like any
-/// other account for matching purposes but consults `min_balance_floor`
-/// when settling deficits — once HLP equity drops below the floor it
-/// stops absorbing and further deficits route to the per-pool IF.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct HlpConfig {
-    /// 20-byte address of the HLP vault account (matches the address
-    /// derived from the HLP's signing key).
-    pub address: [u8; 20],
-    /// Bootstrap equity (microUSDC). Captured at HLP-onboarding time
-    /// and never updated; the floor is computed from this baseline so
-    /// drawdowns don't move the floor up.
-    pub bootstrap_balance: u64,
-    /// Minimum balance HLP must retain. Below this, Tier 0 stops
-    /// absorbing. Default: 60% of bootstrap (`0.6 × bootstrap_balance`).
-    /// Stored absolute so the value at config-write time is durable
-    /// across bootstrap_balance migrations.
-    pub min_balance_floor: u64,
-    /// True iff Tier 0 is enabled. When false (initial state — no HLP
-    /// configured) the waterfall starts at Tier 1 (per-pool IF).
-    pub enabled: bool,
-}
-
 // ---------------------------------------------------------------------------
 // Actions (wire types — field order is the MessagePack wire layout)
 // ---------------------------------------------------------------------------
@@ -676,20 +648,7 @@ pub struct HlpConfig {
 // `crate::types::Action` paths continue to work.
 pub use crate::codec::Action;
 
-/// Test/admin action — force-runs `run_liquidations` immediately.
-/// See `Action::RunLiquidationSweep` for rationale.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RunLiquidationSweep {
-    pub signer: Address,
-}
 
-/// Test/admin action — force-runs a funding tick on one market.
-/// See `Action::RunFundingTick` for rationale.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RunFundingTick {
-    pub market: MarketId,
-    pub signer: Address,
-}
 
 /// Pick a per-account override on the initial-margin ratio for one
 /// market. The engine uses `max(market.im_bps, user_im_bps)` on
@@ -905,49 +864,6 @@ pub struct OracleUpdate {
     pub publish_time_ms: u64,
 }
 
-/// Composite-CEX price update — BE-31 Phase B's third source for the
-/// multi-source mark-price median. Carries the median (or VWAP) of N
-/// off-chain CEX feeds (Binance / OKX / Bybit / Coinbase) computed by
-/// a separate off-chain feeder process.
-///
-/// **Why it's separate from `OracleUpdate`**:
-///   1. Different signer set — composite uses a feeder-specific
-///      allowlist, not the Pyth oracle relay's. Different trust model.
-///   2. Different staleness gate — composite is polled every ~1s vs.
-///      Pyth's per-block cadence; rejected from the median when older
-///      than `cex_composite_staleness_ms` (default 30s).
-///   3. Different aggregation — Pyth oracle is a single value; the
-///      composite is explicitly a median across multiple venues, with
-///      `n_sources` carried for observability.
-///
-/// Same monotonicity-of-publish-time replay guard as `OracleUpdate`
-/// (audit B3, 2026-04-23).
-///
-/// Stored under `keys::CexCompositePrice` keyspace, indexed by market.
-/// Read by `compute_median_mark_price` as the third source when the
-/// market is in `MarkSourceMode::Median`. Has no effect on
-/// `OracleOnly` markets.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OracleUpdateComposite {
-    pub market: MarketId,
-    /// Composite price in micro-USDC (median or VWAP of `n_sources`
-    /// off-chain CEX feeds, computed off-chain by the feeder).
-    pub price: u64,
-    /// Number of CEX feeds that went into the composite. Carried for
-    /// observability — a composite from 1 venue is much weaker
-    /// signal than one from 4. Field is informational; the engine
-    /// doesn't gate on it.
-    #[serde(default)]
-    pub n_sources: u8,
-    /// Authorized feeder signer (20 bytes).
-    pub signer: Address,
-    /// Feeder's own publish timestamp in ms since Unix epoch. Must
-    /// be strictly greater than the last accepted update's
-    /// `publish_time_ms` for the same market — replay guard.
-    #[serde(default)]
-    pub publish_time_ms: u64,
-}
-
 /// Direct deposit — requires **relayer authorization**.
 ///
 /// Previously described as "testing/internal" with no authorization check
@@ -1127,30 +1043,7 @@ impl fmt::Display for FailDepositReason {
     }
 }
 
-/// Relayer marks a Solana deposit signature as permanently failed.
-/// The user is NOT credited — they simply never see the deposit. The
-/// signature is recorded under a separate "failed" key so any future
-/// ConfirmDeposit OR FailDeposit referencing the same signature is a
-/// silent no-op (idempotent).
-///
-/// `solana_signature` uses `Vec<u8>` (not `[u8; 64]`) so the wire bytes
-/// are byte-for-byte identical to the matching `ConfirmDeposit.solana_tx_sig`
-/// — the deduplication relies on this identity. Solana sigs are typically
-/// 64 bytes; the engine does not currently length-validate but the
-/// gateway should reject anything else.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct FailDeposit {
-    /// Solana transaction signature, same bytes that the original
-    /// `ConfirmDeposit.solana_tx_sig` would carry. Lookup against the
-    /// processed-deposits set is byte-equality.
-    pub solana_signature: SolanaSignature,
-    /// Structured reason for failure (for event-stream metrics + ops UX).
-    pub reason: FailDepositReason,
-    /// Authorized relayer signer (mirrors `ConfirmDeposit.signer`). The
-    /// envelope signer's derived address must equal this AND must be on
-    /// the relayer allowlist; otherwise `UnauthorizedRelayer`.
-    pub signer: Address,
-}
+
 
 /// Approve a delegate keypair ("agent wallet") to trade on the owner's behalf.
 /// The agent can place/cancel orders but CANNOT withdraw or move funds.
@@ -1305,8 +1198,7 @@ pub struct UpdateMarketFees {
     /// so we can't distinguish "leave alone" from "clear" with bare option
     /// nesting. To clear the primary without re-creating the market, send
     /// `Some([0u8; 20])` — the engine treats the all-zero address as a
-    /// "clear primary" sentinel (mirrors the `FEE_OVERRIDE_REVERT_SENTINEL`
-    /// pattern from BE-46.1). Real signer addresses are derived from
+    /// "clear primary" sentinel (all-zero address). Real signer addresses are derived from
     /// keccak256 of an Ed25519 public key, which collides with the all-zero
     /// address only with negligible probability — safe to use as a sentinel.
     ///
@@ -1383,48 +1275,7 @@ pub struct AccountFeeOverride {
     pub maker_fee_bps: u32,
 }
 
-/// Set (or overwrite) an account's per-account fee override.
-/// Relayer-signed admin action — `signer` must be on the relayer
-/// allowlist or the engine returns `UnauthorizedRelayer`.
-///
-/// Both `taker_fee_bps` and `maker_fee_bps` must be in
-/// `[0, 10_000]`, except for `FEE_OVERRIDE_REVERT_SENTINEL`
-/// (`u32::MAX`), which reverts that side to the market's base fee at
-/// fill time. Other out-of-range values are rejected with
-/// `FeeBpsOutOfRange`.
-///
-/// To "clear" an existing override, set both fee fields to
-/// `FEE_OVERRIDE_REVERT_SENTINEL`; partial reverts set only the side
-/// that should fall back to the market base.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SetAccountFeeOverride {
-    /// Account to override fees for. 20-byte address.
-    pub account: Address,
-    /// New taker fee in basis points (0..10_000), or
-    /// `FEE_OVERRIDE_REVERT_SENTINEL` to revert taker fills to market base.
-    pub taker_fee_bps: u32,
-    /// New maker fee in basis points (0..10_000), or
-    /// `FEE_OVERRIDE_REVERT_SENTINEL` to revert maker fills to market base.
-    pub maker_fee_bps: u32,
-    /// Authorized relayer signer. Must equal the envelope's derived
-    /// owner and be on the relayer allowlist.
-    pub signer: Address,
-    /// Replay-guard sequence (BE-46.2). The engine tracks the highest
-    /// accepted `seq` per `account`; the next call must satisfy
-    /// `cmd.seq > stored_seq` or it is rejected with
-    /// `FeeOverrideStaleSeq`. The first call against a fresh account
-    /// (stored seq = 0) accepts any `seq >= 1`. The seq advances on
-    /// the no-op path too (identical override) so stale replays stay
-    /// rejected even when the value didn't change.
-    ///
-    /// Appended at the end of the struct so absent-on-the-wire decodes
-    /// as `0` (rmp-serde default for `u64`); the handler then rejects
-    /// `seq == 0` against any stored seq, surfacing legacy callers
-    /// loudly rather than silently accepting them. This breaks the
-    /// unreleased-branch wire format intentionally — landing the
-    /// guard before mainnet is the whole point.
-    pub seq: u64,
-}
+
 
 /// Status of a pending withdrawal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1643,8 +1494,7 @@ pub enum Event {
         primary_oracle_signer: [u8; 20],
         oracle_staleness_ms: u64,
     },
-    /// An account's fee override was set (BE-46). Emitted on success
-    /// of `SetAccountFeeOverride`. Carries the post-update values so
+    /// An account's fee override was set (BE-46). Carries the post-update values so
     /// off-chain consumers can mirror the override without re-reading
     /// state.
     AccountFeeOverrideSet {
@@ -1837,9 +1687,9 @@ pub enum Event {
     },
     /// Relayer rejected a Solana deposit (BE-40). The user was NOT
     /// credited; the signature is recorded so any subsequent
-    /// `ConfirmDeposit`/`FailDeposit` referencing the same sig is a
-    /// silent no-op. `solana_signature` is the raw on-chain sig bytes
-    /// (typically 64 bytes — same encoding as `DepositConfirmed.solana_tx_sig`).
+    /// `ConfirmDeposit` referencing the same sig is a silent no-op.
+    /// `solana_signature` is the raw on-chain sig bytes (typically 64
+    /// bytes — same encoding as `DepositConfirmed.solana_tx_sig`).
     DepositFailed {
         solana_signature: Vec<u8>,
         reason: FailDepositReason,
@@ -2068,22 +1918,17 @@ pub enum ExecError {
     /// existed at all. Reduce-only orders are required to actually reduce
     /// or close a position.
     ReduceOnlyWouldIncrease,
-    /// A test/admin action (`RunLiquidationSweep`, `RunFundingTick`,
-    /// `ForceLiquidate`) was rejected because the engine isn't configured
+    /// A test/admin action was rejected because the engine isn't configured
     /// to accept them in this deployment, or the position the action
     /// referenced doesn't exist.
     TestActionRejected(String),
-    /// `SetAccountFeeOverride` rejected because a fee value is outside
-    /// the legal `[0, 10_000]` basis-point range. BE-46.
+    /// Fee override rejected because a fee value is outside the legal
+    /// `[0, 10_000]` basis-point range.
     FeeBpsOutOfRange {
         bps: u32,
     },
-    /// `SetAccountFeeOverride` rejected because `cmd.seq` is not
-    /// strictly greater than the seq stored on this account — i.e. it
-    /// is a replay or an out-of-order tx. BE-46.2 replay guard
-    /// (Ramon's 2026-05-03 review on #39). The seq advances on the
-    /// no-op path too, so even an identical-payload replay against a
-    /// stale seq is rejected here.
+    /// Fee override rejected because `cmd.seq` is not strictly greater than
+    /// the seq stored on this account — a replay or out-of-order tx.
     FeeOverrideStaleSeq {
         cmd_seq: u64,
         stored_seq: u64,
@@ -2378,9 +2223,8 @@ impl ExecError {
                  increase exposure) or no position existed."
             }
             ExecError::TestActionRejected(_) => {
-                "Test/admin action (RunLiquidationSweep, RunFundingTick, ForceLiquidate) rejected because \
-                 the engine isn't configured to accept them, or the position the action referenced does \
-                 not exist."
+                "Test/admin action rejected because the engine isn't configured to accept them, or the \
+                 position the action referenced does not exist."
             }
             ExecError::StaleOracle { .. } => {
                 "Oracle price is stale for this market; refresh the oracle before placing orders, reading margin, or liquidating."
@@ -2533,7 +2377,7 @@ impl fmt::Display for ExecError {
                 stored_seq,
             } => write!(
                 f,
-                "stale SetAccountFeeOverride seq: cmd seq {cmd_seq} <= stored seq {stored_seq} (replay or out-of-order tx)"
+                "stale fee override seq: cmd seq {cmd_seq} <= stored seq {stored_seq} (replay or out-of-order tx)"
             ),
             ExecError::TickSizeViolation { market, tick_size, price } => write!(
                 f,
@@ -2674,7 +2518,7 @@ define_error_kinds! {
     33  => OracleNotApplicable          ~ "OracleUpdate targets an impact-family market (CPY/CPN/EBY/EBN), which marks off the book and has no oracle layer.",
     34  => PostOnlyWouldCross           ~ "PlaceOrder with post_only=true would have crossed the book. Rejected so makers retain maker-side fills.",
     35  => ReduceOnlyWouldIncrease      ~ "PlaceOrder/MarketOrder with reduce_only=true was same-side as the existing position (would increase exposure) or no position existed.",
-    36  => TestActionRejected           ~ "Test/admin action (RunLiquidationSweep, RunFundingTick, ForceLiquidate) rejected because the engine isn't configured to accept them, or the position the action referenced does not exist.",
+    36  => TestActionRejected           ~ "Test/admin action rejected because the engine isn't configured to accept them, or the position the action referenced does not exist.",
     37  => StaleOracle                  ~ "Oracle price is stale for this market; refresh the oracle before placing orders, reading margin, or liquidating.",
     38  => UserLeverageBelowMarketIm    ~ "User-selected initial margin is below the market risk floor; only deleveraging above the market floor is allowed.",
     39  => TickSizeViolation            ~ "Order price is not an exact multiple of the market tick size.",
@@ -2876,11 +2720,10 @@ pub mod prelude {
         AccountFeeOverride, Action, AmendOrder, ApproveAgent, Branch, CancelAllOrders,
         CancelClientOrder, CancelOrder, CancelReason, CancelReplaceOrder, ClosePosition,
         ConfirmDeposit, ConfirmWithdrawal, CreateImpactMarket, CreateMarket, Deposit, Event,
-        EventOracleSource, ExecError, FailDeposit, FailWithdrawal, FillId, ImpactMarketId,
+        EventOracleSource, ExecError, FailDepositReason, FailWithdrawal, FillId, ImpactMarketId,
         ImpactMarketInfo, ImpactMarketStatus, MarkSourceMode, MarketConfig, MarketId, MarketKind,
-        MarketOrder, OracleUpdate, OracleUpdateComposite, Order, OrderId, Outcome, PlaceOrder,
-        Position, ResolveEvent, RevokeAgent, RunFundingTick, RunLiquidationSweep,
-        SetAccountFeeOverride, SetUserMarketLeverage, Side, TimeInForce, TxContext,
+        MarketOrder, OracleUpdate, Order, OrderId, Outcome, PlaceOrder,
+        Position, ResolveEvent, RevokeAgent, SetUserMarketLeverage, Side, TimeInForce,
         UpdateMarketFees, Withdraw, WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX,
         DEFAULT_CEX_COMPOSITE_STALENESS_MS, DEFAULT_MAX_MARK_SPREAD_BPS,
     };

@@ -148,11 +148,6 @@ impl_action_encoding! {
     CreateImpactMarket => 0x0E,
     ResolveEvent => 0x0F,
     UpdateMarketFees => 0x10,
-    SetAccountFeeOverride => 0x13,
-    RunLiquidationSweep => 0x11,
-    RunFundingTick => 0x12,
-    OracleUpdateComposite => 0x14,
-    FailDeposit => 0x15,
     SetUserMarketLeverage => 0x16,
     ClosePosition => 0x17,
     AmendOrder => 0x1B,
@@ -681,11 +676,6 @@ mod tests {
             Action::FailWithdrawal(FailWithdrawal {
                 withdrawal_id: 100,
                 reason: "destination account closed".to_string(),
-                signer: [0x88; 20].into(),
-            }),
-            Action::FailDeposit(crate::types::FailDeposit {
-                solana_signature: vec![0xEF; 64].into(),
-                reason: crate::types::FailDepositReason::MalformedTx,
                 signer: [0x88; 20].into(),
             }),
             Action::ApproveAgent(ApproveAgent {
