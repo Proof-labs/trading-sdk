@@ -152,11 +152,11 @@ const book = await client.queryOrderbook(1);
 // { bids: [{ price: bigint, totalQty: bigint, orderCount: number }], asks: [...] }
 
 // Open orders for an address (empty array if none or endpoint unreachable)
-const orders = await client.queryOpenOrders("0x..."); // or omit for own address
+const orders = await client.queryOpenOrders(hex); // or omit for own address
 // [{ id: bigint, market: number, owner: Uint8Array, side: "Buy"|"Sell", price: bigint, quantity: bigint }]
 
 // Account (balance, positions, margin)
-const acct = await client.queryAccount("0x..."); // or omit for own address
+const acct = await client.queryAccount(hex); // or omit for own address
 // { balance: bigint, equity: bigint, totalMm: bigint, totalIm: bigint, positions: [...] }
 
 // Ticker (24h summary)
