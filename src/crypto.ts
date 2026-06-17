@@ -26,6 +26,9 @@ const DOMAIN_PREFIX = new TextEncoder().encode("ProofExchange-v3");
  * use a real chain_id (typically `keccak256(cometbft_chain_id_string)`)
  * or their signatures are trivially replayable on any other
  * zero-chain_id deployment.
+ *
+ * NOTE: This is exported as a mutable Uint8Array for backward
+ * compatibility. Do NOT mutate it — treat as readonly.
  */
 export const UNBOUND_CHAIN_ID = new Uint8Array(32);
 
@@ -64,9 +67,7 @@ export function pubkeyToOwner(pubkey: Uint8Array): Uint8Array {
 
 /** Convert a 20-byte address to hex string. */
 export function ownerToHex(owner: Uint8Array): string {
-  return Array.from(owner)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  return bytesToHex(owner);
 }
 
 /** Parse a hex string into bytes. */
@@ -74,7 +75,7 @@ export function hexToBytes(hex: string): Uint8Array {
   const h = hex.startsWith("0x") ? hex.slice(2) : hex;
   const bytes = new Uint8Array(h.length / 2);
   for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(h.substr(i * 2, 2), 16);
+    bytes[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
   }
   return bytes;
 }
