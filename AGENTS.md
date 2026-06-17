@@ -17,8 +17,13 @@ Agent → sign + encode → POST /exchange (gateway) → CometBFT → exchange e
 
 ```typescript
 import {
-  ExchangeClient, Side, Action, TxResult,
-  generateKeypair, pubkeyToOwner, ownerToHex,
+  ExchangeClient,
+  Side,
+  Action,
+  TxResult,
+  generateKeypair,
+  pubkeyToOwner,
+  ownerToHex,
 } from "@proof/trading-sdk";
 
 // 1. Key
@@ -36,7 +41,13 @@ const acct = await client.queryAccount();
 // 4. Trade
 const r: TxResult = await client.submitTx({
   type: "PlaceOrder",
-  data: { market: 1, owner: address, side: Side.Buy, price: 50000000n, quantity: 1n },
+  data: {
+    market: 1,
+    owner: address,
+    side: Side.Buy,
+    price: 50000000n,
+    quantity: 1n,
+  },
 });
 ```
 
@@ -44,11 +55,11 @@ const r: TxResult = await client.submitTx({
 
 ### Devnet (default)
 
-| Env var | Default |
-|---------|---------|
-| `PROOF_GATEWAY_URL` | `https://api.dev.proof.trade` |
-| `PROOF_CHAIN_ID` | `exchange-devnet-1` |
-| `PROOF_FAUCET_URL` | `https://faucet.dev.proof.trade` |
+| Env var             | Default                          |
+| ------------------- | -------------------------------- |
+| `PROOF_GATEWAY_URL` | `https://api.dev.proof.trade`    |
+| `PROOF_CHAIN_ID`    | `exchange-devnet-1`              |
+| `PROOF_FAUCET_URL`  | `https://faucet.dev.proof.trade` |
 
 ```typescript
 const client = new ExchangeClient({ chainId: "exchange-devnet-1" });
@@ -69,11 +80,11 @@ const client = new ExchangeClient({
 
 ```typescript
 // Generate
-const kp = generateKeypair();   // { publicKey: Uint8Array, privateKey: Uint8Array }
+const kp = generateKeypair(); // { publicKey: Uint8Array, privateKey: Uint8Array }
 
 // Derive address (keccak256(pubkey)[12..32])
-const addr = pubkeyToOwner(kp.publicKey);   // Uint8Array (20 bytes)
-const hex  = ownerToHex(addr);              // hex string
+const addr = pubkeyToOwner(kp.publicKey); // Uint8Array (20 bytes)
+const hex = ownerToHex(addr); // hex string
 
 // Load into client
 client.setPrivateKey(kp.privateKey);
@@ -83,16 +94,16 @@ client.setPrivateKey(kp.privateKey);
 
 Every action is `{ type: string, data: object }`:
 
-| Action | Type string | What it does |
-|--------|-------------|--------------|
-| Limit order | `"PlaceOrder"` | Place a resting limit order |
-| Market order | `"MarketOrder"` | Cross the book immediately |
-| Cancel | `"CancelOrder"` | Cancel by engine order ID |
-| Cancel all | `"CancelAllOrders"` | Cancel all orders (optionally per-market) |
-| Replace | `"CancelReplaceOrder"` | Atomically cancel + replace |
-| Amend | `"AmendOrder"` | Change price/quantity on a resting order |
-| Close position | `"ClosePosition"` | IOC order at oracle±spread |
-| Basket | `"AtomicBasketOrder"` | Multi-leg fill-or-kill |
+| Action         | Type string            | What it does                              |
+| -------------- | ---------------------- | ----------------------------------------- |
+| Limit order    | `"PlaceOrder"`         | Place a resting limit order               |
+| Market order   | `"MarketOrder"`        | Cross the book immediately                |
+| Cancel         | `"CancelOrder"`        | Cancel by engine order ID                 |
+| Cancel all     | `"CancelAllOrders"`    | Cancel all orders (optionally per-market) |
+| Replace        | `"CancelReplaceOrder"` | Atomically cancel + replace               |
+| Amend          | `"AmendOrder"`         | Change price/quantity on a resting order  |
+| Close position | `"ClosePosition"`      | IOC order at oracle±spread                |
+| Basket         | `"AtomicBasketOrder"`  | Multi-leg fill-or-kill                    |
 
 See `src/types.ts` for every action's payload shape.
 
@@ -102,12 +113,12 @@ await client.submitTx({
   type: "PlaceOrder",
   data: {
     market: 1,
-    owner: address,          // 20-byte Uint8Array
-    side: Side.Buy,          // or Side.Sell
-    price: 50000000n,        // $500,000.00 in cents
+    owner: address, // 20-byte Uint8Array
+    side: Side.Buy, // or Side.Sell
+    price: 50000000n, // $500,000.00 in cents
     quantity: 1n,
-    postOnly: true,          // optional: reject if would cross
-    reduceOnly: false,       // optional: only reduce position
+    postOnly: true, // optional: reject if would cross
+    reduceOnly: false, // optional: only reduce position
     timeInForce: TimeInForce.Gtc, // Gtc | Ioc | Fok
   },
 });
@@ -121,17 +132,17 @@ await client.submitTx({
 
 ### Order fields
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `market` | `number` | Market ID (1 = BTC, 2 = ETH, etc.) |
-| `owner` | `Uint8Array` (20B) | `pubkeyToOwner(pubkey)` |
-| `side` | `Side.Buy` / `Side.Sell` | |
-| `price` | `bigint` | Integer cents. $50,000 → `5000000n`. |
-| `quantity` | `bigint` | Integer contracts |
-| `clientOrderId` | `bigint?` | Client-scoped dedup ref |
-| `postOnly` | `boolean?` | `true` = reject if taker |
-| `reduceOnly` | `boolean?` | `true` = only reduce position |
-| `timeInForce` | `TimeInForce?` | `Gtc` (default), `Ioc`, `Fok` |
+| Field           | Type                     | Notes                                |
+| --------------- | ------------------------ | ------------------------------------ |
+| `market`        | `number`                 | Market ID (1 = BTC, 2 = ETH, etc.)   |
+| `owner`         | `Uint8Array` (20B)       | `pubkeyToOwner(pubkey)`              |
+| `side`          | `Side.Buy` / `Side.Sell` |                                      |
+| `price`         | `bigint`                 | Integer cents. $50,000 → `5000000n`. |
+| `quantity`      | `bigint`                 | Integer contracts                    |
+| `clientOrderId` | `bigint?`                | Client-scoped dedup ref              |
+| `postOnly`      | `boolean?`               | `true` = reject if taker             |
+| `reduceOnly`    | `boolean?`               | `true` = only reduce position        |
+| `timeInForce`   | `TimeInForce?`           | `Gtc` (default), `Ioc`, `Fok`        |
 
 ## Reading data
 
@@ -183,15 +194,15 @@ const results: TxResult[] = await client.awaitPendingVerifies();
 
 Common error codes:
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 12 | Insufficient margin |
-| 17 | Invalid signature |
-| 21 | Invalid / duplicate nonce (retry with a fresh call) |
-| 34 | Post-only would cross |
-| 401 | Missing/invalid API key |
-| 429 | Rate limited |
+| Code | Meaning                                             |
+| ---- | --------------------------------------------------- |
+| 0    | Success                                             |
+| 12   | Insufficient margin                                 |
+| 17   | Invalid signature                                   |
+| 21   | Invalid / duplicate nonce (retry with a fresh call) |
+| 34   | Post-only would cross                               |
+| 401  | Missing/invalid API key                             |
+| 429  | Rate limited                                        |
 
 ## Error handling pattern
 
@@ -220,20 +231,25 @@ curl -X POST https://faucet.dev.proof.trade/drip \
 
 ## Unit conventions
 
-| Field | Scale | Example |
-|-------|-------|---------|
-| Prices | Integer cents | `5000000n` = $50,000.00 |
-| Balances | MicroUSDC (6 dp) | `10_000_000_000n` = $10,000 |
-| Quantities | Integer contracts | `1n` = 1 lot |
-| Fees/Rates | Basis points | `500` = 5% |
-| Addresses | 20 bytes hex | `pubkeyToOwner()` |
+| Field      | Scale             | Example                     |
+| ---------- | ----------------- | --------------------------- |
+| Prices     | Integer cents     | `5000000n` = $50,000.00     |
+| Balances   | MicroUSDC (6 dp)  | `10_000_000_000n` = $10,000 |
+| Quantities | Integer contracts | `1n` = 1 lot                |
+| Fees/Rates | Basis points      | `500` = 5%                  |
+| Addresses  | 20 bytes hex      | `pubkeyToOwner()`           |
 
 ## Offline / raw signing
 
 For agents that want to build and inspect the wire envelope directly:
 
 ```typescript
-import { signAndEncode, decodeTx, fetchChainId, chainIdFromString } from "@proof/trading-sdk";
+import {
+  signAndEncode,
+  decodeTx,
+  fetchChainId,
+  chainIdFromString,
+} from "@proof/trading-sdk";
 
 const chainId = await fetchChainId("https://api.dev.proof.trade");
 const txBytes = signAndEncode(chainId, action, seq, privateKey);
@@ -255,7 +271,9 @@ npx tsx examples/connect-and-trade.ts
 
 ```typescript
 const unsub = client.subscribeBlocks((event) => {
-  if (event.type === "TradeExecuted") { /* ... */ }
+  if (event.type === "TradeExecuted") {
+    /* ... */
+  }
 });
 // later: unsub()
 ```

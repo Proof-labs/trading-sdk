@@ -217,7 +217,14 @@ export function signEnvelopeFromPayload(
   const msg = signingMessage(chainId, actionType, seq, payloadBytes);
   const signature = sign(privateKey, msg);
   const pubkey = getPublicKey(privateKey);
-  return encode([2, actionType, seq, payloadBytes, pubkey, signature]) as Uint8Array;
+  return encode([
+    2,
+    actionType,
+    seq,
+    payloadBytes,
+    pubkey,
+    signature,
+  ]) as Uint8Array;
 }
 
 // ---------------------------------------------------------------------------
