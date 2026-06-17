@@ -6,7 +6,6 @@ export {
   ActionType,
   type ActionTypeValue,
   type Action,
-
   type PlaceOrder,
   type CancelOrder,
   type CancelClientOrder,
@@ -25,7 +24,6 @@ export {
   type ConfirmDeposit,
   type ConfirmWithdrawal,
   type FailWithdrawal,
-
   type ApproveAgent,
   type RevokeAgent,
   type CreateImpactMarket,
@@ -33,7 +31,6 @@ export {
   type PriceComparison,
   type ResolveEvent,
   type UpdateMarketFees,
-
   type SetUserMarketLeverage,
   type ImpactMarketInfo,
   type ImpactMarketStatus,
@@ -84,7 +81,6 @@ export {
   peekActionType,
 } from "./codec.js";
 export { fetchChainId } from "./client.js";
-
 
 // Error decoder
 export {

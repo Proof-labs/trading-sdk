@@ -350,30 +350,7 @@ pub struct Order {
     pub queue_priority: u64,
 }
 
-/// Deterministic execution context passed to every transaction handler.
-///
-/// Constructed exclusively by the FFI boundary from CometBFT's `FinalizeBlock` fields.
-pub(crate) struct TxContext {
-    /// 1-based block height.
-    pub height: u64,
-    /// 0-based index within the block. `u32::MAX` / `u32::MAX - 1` are sentinels
-    /// for end-of-block liquidation and funding events respectively.
-    pub tx_index: u32,
-    /// Block timestamp in milliseconds since Unix epoch.
-    pub block_time_ms: u64,
-    /// 32-byte chain_id binding used by the v3 signing envelope
-    /// (`crate::crypto::signing_message`). Every v2-enveloped tx at
-    /// verify time requires the chain_id that was used at sign time,
-    /// so the value MUST be consistent across all validators — the
-    /// FFI layer sources it from genesis / snapshot-bound state and
-    /// threads it through every `FinalizeBlock` call.
-    ///
-    /// Defaults to `crypto::UNBOUND_CHAIN_ID` ([0u8; 32]) in tests
-    /// and in unbound deployments; production chains must set a
-    /// non-zero value to close the cross-chain replay vector
-    /// (audit B4, 2026-04-23).
-    pub chain_id: [u8; 32],
-}
+
 
 // ---------------------------------------------------------------------------
 // Position & margin types
