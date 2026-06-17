@@ -5,7 +5,7 @@ import {
   type ActionTypeValue,
   type Address,
   type EventOracleSource,
-  type FailDepositReason,
+
   type FeeTier,
   Outcome,
   type PriceComparison,
@@ -714,49 +714,11 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
         ],
       ];
     }
-    case "SetAccountFeeOverride": {
-      const d = action.data;
-      // Field order MUST match the Rust struct: account, taker_fee_bps,
-      // maker_fee_bps, signer, seq. BE-46. The trailing `seq` is the
-      // BE-46.2 replay-guard sequence (Ramon's 2026-05-03 review).
-      return [
-        ActionType.SetAccountFeeOverride,
-        [
-          toByteSeq(d.account),
-          d.takerFeeBps,
-          d.makerFeeBps,
-          toByteSeq(d.signer),
-          d.seq,
-        ],
-      ];
-    }
-    case "RunLiquidationSweep": {
-      const d = action.data;
-      return [ActionType.RunLiquidationSweep, [toByteSeq(d.signer)]];
-    }
-    case "RunFundingTick": {
-      const d = action.data;
-      return [ActionType.RunFundingTick, [d.market, toByteSeq(d.signer)]];
-    }
     case "SetUserMarketLeverage": {
       const d = action.data;
       return [
         ActionType.SetUserMarketLeverage,
         [toByteSeq(d.owner), d.market, d.userImBps],
-      ];
-    }
-    case "FailDeposit": {
-      // BE-40: positional [solanaSignature, reason, signer]. The reason
-      // enum is encoded as the variant name (string) — that's what
-      // rmp-serde does by default for fieldless enums.
-      const d = action.data;
-      return [
-        ActionType.FailDeposit,
-        [
-          toByteSeq(d.solanaSignature),
-          failDepositReasonStr(d.reason),
-          toByteSeq(d.signer),
-        ],
       ];
     }
     case "ClosePosition": {
@@ -785,40 +747,6 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
         ],
       ];
     }
-  }
-}
-
-/**
- * Map the SDK's `FailDepositReason` string union to the wire string the
- * Rust enum (un-tagged variant name) expects. Stays a one-to-one map so
- * the encoder/decoder cannot drift from the Rust definition silently.
- */
-function failDepositReasonStr(r: FailDepositReason): string {
-  switch (r) {
-    case "MalformedTx":
-      return "MalformedTx";
-    case "UnsupportedToken":
-      return "UnsupportedToken";
-    case "BelowMinimum":
-      return "BelowMinimum";
-    case "Other":
-      return "Other";
-  }
-}
-
-/** Inverse of `failDepositReasonStr` — used by the decoder. */
-function parseFailDepositReason(v: unknown): FailDepositReason {
-  switch (v) {
-    case "MalformedTx":
-      return "MalformedTx";
-    case "UnsupportedToken":
-      return "UnsupportedToken";
-    case "BelowMinimum":
-      return "BelowMinimum";
-    case "Other":
-      return "Other";
-    default:
-      throw new Error(`invalid FailDepositReason: ${String(v)}`);
   }
 }
 
@@ -1152,36 +1080,6 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
         },
       };
     }
-    case ActionType.SetAccountFeeOverride:
-      // Field order mirrors the Rust struct: account, taker_fee_bps,
-      // maker_fee_bps, signer, seq. BE-46 / BE-46.2. The trailing
-      // `seq` is the replay-guard sequence; older payloads written
-      // before BE-46.2 are absent here and decode as 0n (which the
-      // engine rejects loudly via FeeOverrideStaleSeq, surfacing the
-      // missing-field bug rather than silently accepting).
-      return {
-        type: "SetAccountFeeOverride",
-        data: {
-          account: bytesField(f[0]),
-          takerFeeBps: Number(bi(f[1])),
-          makerFeeBps: Number(bi(f[2])),
-          signer: bytesField(f[3]),
-          seq: f[4] === undefined ? 0n : bi(f[4]),
-        },
-      };
-    case ActionType.RunLiquidationSweep:
-      return {
-        type: "RunLiquidationSweep",
-        data: { signer: bytesField(f[0]) },
-      };
-    case ActionType.RunFundingTick:
-      return {
-        type: "RunFundingTick",
-        data: {
-          market: f[0] as number,
-          signer: bytesField(f[1]),
-        },
-      };
     case ActionType.SetUserMarketLeverage:
       return {
         type: "SetUserMarketLeverage",
@@ -1189,15 +1087,6 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           owner: bytesField(f[0]),
           market: Number(bi(f[1])),
           userImBps: Number(bi(f[2])),
-        },
-      };
-    case ActionType.FailDeposit:
-      return {
-        type: "FailDeposit",
-        data: {
-          solanaSignature: bytesField(f[0]),
-          reason: parseFailDepositReason(f[1]),
-          signer: bytesField(f[2]),
         },
       };
     case ActionType.ClosePosition:
