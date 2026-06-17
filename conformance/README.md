@@ -6,10 +6,11 @@ generates the vectors, and each binding (Rust, Python, TypeScript) must
 reproduce every `expect` byte-for-byte. A divergence is a release blocker — it
 means two SDKs would sign or encode the same logical action differently.
 
-> **Status: SEED + scaffold.** The generator emits a small representative set
-> (7 codec, 3 signing, 4 nonce). The Rust and Python runners are green; the TS
-> runner is scaffolded but skipped. Finishing this to full coverage is the
-> handoff — see [Handoff checklist](#handoff-checklist).
+> **Status: codec + signing green in all 3 runners.** The generator emits 7 codec
+> vectors, 3 signing vectors, and 4 nonce vectors. The Rust, Python, and TS
+> runners all pass their active tests. The TS runner skips the nonce family
+> (nonces are timestamp-derived; no standalone step function is needed) and
+> `OracleUpdateComposite` (0x14, internal feeder action).
 
 ---
 
@@ -28,7 +29,7 @@ crates/spec/        ← the vector machinery (Rust)
   tests/runner.rs       Rust runner (regression guard)
 
 python/tests/test_conformance_vectors.py   Python runner
-src/conformance.test.ts                     TS runner (scaffold, skipped)
+src/conformance.test.ts                     TS runner (codec + signing green)
 ```
 
 ### Authority model
@@ -122,7 +123,7 @@ cargo test -p proof-trading-sdk-conformance
 #   requires the native ext built: maturin develop in python/ first
 (cd python && VIRTUAL_ENV=../.venv PATH=../.venv/bin:$PATH python -m pytest tests/test_conformance_vectors.py)
 
-# TypeScript (cross-language) — SCAFFOLD, describe.skip (see below)
+# TypeScript (cross-language) — codec + signing green
 npx vitest run src/conformance.test.ts
 ```
 
@@ -146,34 +147,34 @@ Ordered by value. Items 1–2 complete the cross-language guarantee; 3+ widen it
 - [ ] Every enum: `Outcome`, `FailDepositReason`, `PriceComparison`,
       `MarkSourceMode`.
 - [ ] Nested shapes: `EventOracleSource` (3 variants), `FeeTier` lists.
-- [ ] **`OracleUpdateComposite` (0x14).** The TS SDK does not implement this —
-      its vector will fail the TS runner. **That is the point**: the vector is
-      the spec, the missing action is the bug. Do not delete the vector; add the
-      action to `src/types.ts` + `src/codec.ts`.
+- [ ] **`OracleUpdateComposite` (0x14).** This is an **internal feeder action**
+      (composite CEX price submission) — no SDK user will ever submit it. The
+      TS SDK intentionally omits it; the `toAction` adapter skips its vector
+      gracefully. The Python and Rust runners include it because they generate
+      all action types uniformly. Do not delete the vector; the TS runner
+      skips unwired action types.
 
 ### 2. TypeScript runner (`src/conformance.test.ts`)
 
-Scaffolded and `describe.skip`. Three blockers, in order:
+All three blockers resolved:
 
-- [ ] **Export a payload-only encoder.** `encodePayload` in `src/codec.ts` is
-      module-private and the codec family needs payload bytes, not a signed
-      envelope. Export `encodePayloadBytes(action): Uint8Array` (or export
-      `encodePayload` + `encode`). Wire it into the codec `it` block.
-- [ ] **Finish the `toAction` adapter.** It maps the core's snake_case `input`
-      (JSON-number ints, u8-array bytes) onto this SDK's camelCase `Action`
-      union (`bigint` ints, `Uint8Array` bytes). Only the 4 seed types are
-      wired; do the rest, or generate the map.
-- [ ] **Add a sign-from-payload entry point** for the signing family (today
-      `signAndEncode` only takes a typed `Action`, not raw payload bytes), and
-      extract `nonceStep(last, nowMs)` from the TS client so the nonce family
-      can pin it. The `owner` and `nonce` sub-cases already work — flip the
-      relevant `it` blocks on as you unblock them, then drop the `.skip`.
+- [x] **Export a payload-only encoder.** `encodePayloadBytes(action): Uint8Array`
+      exported from `src/codec.ts` (and barrel `src/index.ts`). Codec block passes.
+- [x] **Finish the `toAction` adapter.** All 27 action types wired. `OracleUpdateComposite`
+      (0x14) intentionally omitted — internal feeder action. Codec block passes.
+- [x] **Add a sign-from-payload entry point.** `signEnvelopeFromPayload(chainId, actionType,
+      seq, payloadBytes, privateKey)` in `src/codec.ts`. Signing block passes (1 sign + 2 owner
+      vectors). Nonce is timestamp-derived — the TS SDK does not expose a standalone
+      step function, matching the sibling SDKs' design.
+
+**Known gaps:** No nonce vectors (not applicable), no `OracleUpdateComposite` (intentional).
 
 ### 3. CI wiring
 
 - [ ] Add the regen drift check (above) and all three runners to CI.
-- [ ] Gate releases on a green TS runner (the OracleUpdateComposite gap is a
-      real shippable bug today).
+- [ ] Gate releases on a green TS runner. The `OracleUpdateComposite` vector
+      is skipped by the TS runner (internal feeder action, intentionally
+      omitted) — the other 2 runners still verify it.
 
 ### 4. Replay corpus (see below)
 

@@ -478,9 +478,7 @@ describe("codec v1 all action types", () => {
       type: "AtomicBasketOrder",
       data: {
         owner: SIGNER,
-        legs: [
-          { market: 1, side: Side.Buy, price: 100n, quantity: 1n },
-        ],
+        legs: [{ market: 1, side: Side.Buy, price: 100n, quantity: 1n }],
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));

@@ -190,6 +190,43 @@ export function signAndEncode(
   ]) as Uint8Array;
 }
 
+/**
+ * Encode just the payload bytes for an action, without the signed envelope.
+ * Useful for cross-language conformance testing — the payload bytes must
+ * match byte-for-byte across Rust, Python, and TS SDKs.
+ */
+export function encodePayloadBytes(action: Action): Uint8Array {
+  const [, payload] = encodePayload(action);
+  return encode(payload);
+}
+
+/**
+ * Sign and encode a raw pre-encoded payload into a V2 signed envelope.
+ * Lower-level than `signAndEncode` — callers supply already-encoded payload
+ * bytes and the action type byte directly, bypassing the Action-object encoder.
+ * Useful for cross-language conformance testing where payload bytes are
+ * pre-computed by a reference implementation.
+ */
+export function signEnvelopeFromPayload(
+  chainId: Uint8Array,
+  actionType: number,
+  seq: bigint,
+  payloadBytes: Uint8Array,
+  privateKey: Uint8Array,
+): Uint8Array {
+  const msg = signingMessage(chainId, actionType, seq, payloadBytes);
+  const signature = sign(privateKey, msg);
+  const pubkey = getPublicKey(privateKey);
+  return encode([
+    2,
+    actionType,
+    seq,
+    payloadBytes,
+    pubkey,
+    signature,
+  ]) as Uint8Array;
+}
+
 // ---------------------------------------------------------------------------
 // Decoding
 // ---------------------------------------------------------------------------
@@ -791,13 +828,15 @@ function parseFailDepositReason(v: unknown): FailDepositReason {
 
 function parseSide(s: unknown): Side {
   if (s === "Buy" || s === Side.Buy) return Side.Buy;
-  return Side.Sell;
+  if (s === "Sell" || s === Side.Sell) return Side.Sell;
+  throw new Error(`Invalid Side value: ${JSON.stringify(s)}`);
 }
 
 function parseTimeInForce(tif: unknown): TimeInForce {
   if (tif === "Ioc" || tif === TimeInForce.Ioc) return TimeInForce.Ioc;
   if (tif === "Fok" || tif === TimeInForce.Fok) return TimeInForce.Fok;
-  return TimeInForce.Gtc;
+  if (tif === "Gtc" || tif === TimeInForce.Gtc) return TimeInForce.Gtc;
+  throw new Error(`Invalid TimeInForce value: ${JSON.stringify(tif)}`);
 }
 
 // Helper: u64 fields may decode as either Number (small fixint) or BigInt
