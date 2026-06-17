@@ -51,6 +51,11 @@ curl -X POST https://faucet.dev.proof.trade/drip \
 
 Each address receives ~10,000 USDC (10,000,000,000 µUSDC) with a 24 h cooldown.
 
+> **Paper-trading competition participant?** Do not use the flow above — it
+> needs a privileged faucet token you will not have. You receive a
+> pre-funded private key by redeeming an access code. See
+> [PAPER-TRADING.md](PAPER-TRADING.md).
+
 ## Quick Start
 
 ```typescript
