@@ -200,6 +200,26 @@ export function encodePayloadBytes(action: Action): Uint8Array {
   return encode(payload);
 }
 
+/**
+ * Sign and encode a raw pre-encoded payload into a V2 signed envelope.
+ * Lower-level than `signAndEncode` — callers supply already-encoded payload
+ * bytes and the action type byte directly, bypassing the Action-object encoder.
+ * Useful for cross-language conformance testing where payload bytes are
+ * pre-computed by a reference implementation.
+ */
+export function signEnvelopeFromPayload(
+  chainId: Uint8Array,
+  actionType: number,
+  seq: bigint,
+  payloadBytes: Uint8Array,
+  privateKey: Uint8Array,
+): Uint8Array {
+  const msg = signingMessage(chainId, actionType, seq, payloadBytes);
+  const signature = sign(privateKey, msg);
+  const pubkey = getPublicKey(privateKey);
+  return encode([2, actionType, seq, payloadBytes, pubkey, signature]) as Uint8Array;
+}
+
 // ---------------------------------------------------------------------------
 // Decoding
 // ---------------------------------------------------------------------------

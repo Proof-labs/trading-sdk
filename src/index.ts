@@ -71,6 +71,7 @@ export {
 export {
   encodeSignedTx,
   signAndEncode,
+  signEnvelopeFromPayload,
   encodePayloadBytes,
   decodeTx,
   peekActionType,
