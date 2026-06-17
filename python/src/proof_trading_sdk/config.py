@@ -18,8 +18,9 @@ class SdkConfig:
     4. Programmatic overrides
     """
 
-    gateway_url: str = "http://localhost:1317"
+    gateway_url: str = "https://api.dev.proof.trade"
     api_key: str = ""
+    chain_id: str = ""
     timeout_secs: int = 30
     log_level: str = "WARNING"
     ws_url: str = ""
@@ -30,8 +31,9 @@ class SdkConfig:
     def from_env(cls) -> SdkConfig:
         """Load config from built-in defaults + env vars."""
         return cls(
-            gateway_url=os.environ.get("PROOF_GATEWAY_URL", "http://localhost:1317"),
+            gateway_url=os.environ.get("PROOF_GATEWAY_URL", "https://api.dev.proof.trade"),
             api_key=os.environ.get("PROOF_API_KEY", ""),
+            chain_id=os.environ.get("PROOF_CHAIN_ID", "exchange-devnet-1"),
             timeout_secs=int(os.environ.get("PROOF_TIMEOUT_SECS", "30")),
             log_level=os.environ.get("PROOF_LOG_LEVEL", "WARNING"),
             ws_url=os.environ.get("PROOF_WS_URL", ""),
@@ -49,6 +51,7 @@ class SdkConfig:
         section = data.get("sdk", data)
         cfg.gateway_url = str(section.get("gateway_url", cfg.gateway_url))
         cfg.api_key = str(section.get("api_key", cfg.api_key))
+        cfg.chain_id = str(section.get("chain_id", cfg.chain_id))
         cfg.timeout_secs = int(section.get("timeout_secs", cfg.timeout_secs))
         cfg.log_level = str(section.get("log_level", cfg.log_level))
         cfg.ws_url = str(section.get("ws_url", cfg.ws_url))
@@ -59,6 +62,7 @@ class SdkConfig:
         cfg = SdkConfig(
             gateway_url=kwargs.get("gateway_url", self.gateway_url),  # type: ignore[arg-type]
             api_key=kwargs.get("api_key", self.api_key),  # type: ignore[arg-type]
+            chain_id=str(kwargs.get("chain_id", self.chain_id)),  # type: ignore[arg-type]
             timeout_secs=int(kwargs.get("timeout_secs", self.timeout_secs)),  # type: ignore[arg-type]
             log_level=str(kwargs.get("log_level", self.log_level)),  # type: ignore[arg-type]
             ws_url=str(kwargs.get("ws_url", self.ws_url)),  # type: ignore[arg-type]
