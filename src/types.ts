@@ -1,13 +1,6 @@
 /** 20-byte account address (derived from Ed25519 public key). */
 export type Address = Uint8Array;
 
-/**
- * All-zero address sentinel for `UpdateMarketFees.primaryOracleSigner`.
- * Passing this value clears the primary oracle signer for a market. Omit
- * or pass null to leave the field unchanged.
- */
-export const PRIMARY_ORACLE_CLEAR_SENTINEL: Address = new Uint8Array(20);
-
 /** Order side. */
 export enum Side {
   /** Buy / long. */
@@ -71,23 +64,7 @@ export const ActionType = {
    *  Fee tiering, funding-rate cap tightening, position-limit updates
    *  without a chain rebase. */
   UpdateMarketFees: 0x10,
-  /** Test/admin: force-run end-of-block liquidations now (relayer-signed).
-   *  Used by integration scenarios that need to deterministically engineer
-   *  cascade or bad-debt paths without waiting for end-of-block timing. */
-  RunLiquidationSweep: 0x11,
-  /** Test/admin: force-run a funding tick on one market now (relayer-signed),
-   *  bypassing the normal `funding_interval_ms` clock check. Used by S13/S14
-   *  to fire funding at a precise scenario point. */
-  RunFundingTick: 0x12,
-  /** Set (or overwrite) a per-account fee override (BE-46). Replaces the
-   *  market's base `taker_fee_bps` / `maker_fee_bps` for fills involving
-   *  this account on the corresponding side. Relayer-signed. */
-  SetAccountFeeOverride: 0x13,
-  /** BE-40 — relayer-signed action that marks a Solana deposit signature as
-   *  permanently failed (malformed tx, unsupported token, dust). User is
-   *  NOT credited. Idempotent on repeat; silent no-op if the signature is
-   *  already in either the processed-deposits or failed-deposits set. */
-  FailDeposit: 0x15,
+
   /** User picks a per-market initial-margin override capped by the
    *  market's risk floor. `user_im_bps == 0` clears the override.
    *  Engine takes max(market.im_bps, user_im_bps) on every IM check.
@@ -382,38 +359,6 @@ export interface FailWithdrawal {
 }
 
 /**
- * Why a Solana deposit was rejected by the relayer (BE-40). Mirrors the
- * Rust `FailDepositReason` enum on the engine side. Wire encoding is the
- * variant index (0 = MalformedTx, 1 = UnsupportedToken, 2 = BelowMinimum,
- * 3 = Other), but the SDK exposes a string union for readability and lets
- * the codec map both directions.
- */
-export type FailDepositReason =
-  | "MalformedTx"
-  | "UnsupportedToken"
-  | "BelowMinimum"
-  | "Other";
-
-/**
- * BE-40: relayer marks a Solana deposit signature as permanently failed.
- * The user is NOT credited; the signature is recorded so any subsequent
- * `ConfirmDeposit` OR `FailDeposit` for the same sig is a silent no-op.
- *
- * `solanaSignature` carries the raw on-chain signature bytes (typically
- * 64 bytes — same encoding as `ConfirmDeposit.solanaTxSig`). The dedup
- * keyspace shared with `ConfirmDeposit` relies on byte equality.
- */
-export interface FailDeposit {
-  /** Solana transaction signature (raw bytes, typically 64 bytes). */
-  solanaSignature: Uint8Array;
-  /** Structured reason for the failure (for ops metrics). */
-  reason: FailDepositReason;
-  /** Authorized relayer signer address (20 bytes). Must match the envelope
-   *  signer's derived address AND be on the on-chain relayer allowlist. */
-  signer: Address;
-}
-
-/**
  * Approve a delegate keypair ("agent wallet") to trade on the owner's behalf.
  * The agent can place/cancel orders but CANNOT withdraw or move funds.
  */
@@ -582,7 +527,7 @@ export interface UpdateMarketFees {
   lotSize?: bigint | null;
   /**
    * Primary oracle signer for this market. Omit (or null) to leave
-   * unchanged. Pass `PRIMARY_ORACLE_CLEAR_SENTINEL` (all-zero address) to
+   * unchanged. Pass an all-zero address (20 zero bytes) to
    * clear the primary signer; setting `oracleStalenessMs` to 0 only
    * temporarily disables the fallback gate while preserving the configured
    * primary. BE-50.
@@ -651,60 +596,6 @@ export interface ImpactMarketInfo {
 // ---------------------------------------------------------------------------
 // Action union type
 // ---------------------------------------------------------------------------
-
-/**
- * Set (or overwrite) a per-account fee override (BE-46).
- *
- * Replaces the market's base `takerFeeBps` / `makerFeeBps` for any
- * subsequent fills involving this account on the corresponding side
- * (taker side uses the taker rate, maker side uses the maker rate).
- * Override is global — applies on every market the account trades.
- *
- * Both fee values must be in `[0, 10_000]` (basis points; 10_000 bps
- * = 100%) or `FEE_OVERRIDE_REVERT_SENTINEL`. Other out-of-range values
- * are rejected with `FeeBpsOutOfRange` (code 40). Submitting an override
- * identical to the existing one is a no-op (tx succeeds but emits no
- * `AccountFeeOverrideSet` event).
- *
- * Set both fee values to `FEE_OVERRIDE_REVERT_SENTINEL` to clear the
- * override; set only one side to the sentinel for a partial revert.
- */
-export interface SetAccountFeeOverride {
-  /** Account to override fees for (20 bytes). */
-  account: Address;
-  /** New taker fee in basis points (0..10_000), or the revert sentinel. */
-  takerFeeBps: number;
-  /** New maker fee in basis points (0..10_000), or the revert sentinel. */
-  makerFeeBps: number;
-  /** Authorized relayer signer (20 bytes). Must equal the envelope
-   *  pubkey's derived owner and be on the relayer allowlist. */
-  signer: Address;
-  /** Replay-guard sequence (BE-46.2). The engine tracks the highest
-   *  accepted `seq` per `account`; the next call must satisfy
-   *  `seq > stored_seq` or it is rejected with `FeeOverrideStaleSeq`
-   *  (code 41). The first call against a fresh account (stored seq = 0)
-   *  accepts any `seq >= 1`. The seq advances on the no-op path too,
-   *  so identical-payload replays at a stale seq stay rejected.
-   *
-   *  Tier promoters should pass a strictly-monotonic value — typically
-   *  `Date.now()` cast to BigInt — and persist their last-emitted seq
-   *  so a restart doesn't accidentally re-issue. */
-  seq: bigint;
-}
-
-/** Test/admin action: force-runs end-of-block liquidations now. */
-export interface RunLiquidationSweep {
-  /** Authorized relayer signer address (20 bytes). */
-  signer: Address;
-}
-
-/** Test/admin action: force-runs a funding tick on a single market now. */
-export interface RunFundingTick {
-  /** Market identifier to tick. */
-  market: number;
-  /** Authorized relayer signer address (20 bytes). */
-  signer: Address;
-}
 
 /** Pick a per-account override on the initial-margin ratio for one
  *  market. Engine takes max(market.imBps, userImBps), so users can
@@ -789,10 +680,6 @@ export type Action =
   | { type: "CreateImpactMarket"; data: CreateImpactMarket }
   | { type: "ResolveEvent"; data: ResolveEvent }
   | { type: "UpdateMarketFees"; data: UpdateMarketFees }
-  | { type: "SetAccountFeeOverride"; data: SetAccountFeeOverride }
-  | { type: "RunLiquidationSweep"; data: RunLiquidationSweep }
-  | { type: "RunFundingTick"; data: RunFundingTick }
-  | { type: "FailDeposit"; data: FailDeposit }
   | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage }
   | { type: "ClosePosition"; data: ClosePosition };
 

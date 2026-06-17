@@ -28,7 +28,7 @@ import {
   TimeInForce,
   type Action,
   type ActionTypeValue,
-  type FailDepositReason,
+
 } from "./types.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -348,30 +348,6 @@ function toAction(
         },
       };
     }
-    case ActionType.SetAccountFeeOverride:
-      return {
-        type: "SetAccountFeeOverride",
-        data: {
-          account: bytes(input.account),
-          takerFeeBps: input.taker_fee_bps as number,
-          makerFeeBps: input.maker_fee_bps as number,
-          signer: bytes(input.signer),
-          seq: big(input.seq ?? 0),
-        },
-      };
-    case ActionType.RunLiquidationSweep:
-      return {
-        type: "RunLiquidationSweep",
-        data: { signer: bytes(input.signer) },
-      };
-    case ActionType.RunFundingTick:
-      return {
-        type: "RunFundingTick",
-        data: {
-          market: input.market as number,
-          signer: bytes(input.signer),
-        },
-      };
     case ActionType.SetUserMarketLeverage:
       return {
         type: "SetUserMarketLeverage",
@@ -379,15 +355,6 @@ function toAction(
           owner: bytes(input.owner),
           market: input.market as number,
           userImBps: input.user_im_bps as number,
-        },
-      };
-    case ActionType.FailDeposit:
-      return {
-        type: "FailDeposit",
-        data: {
-          solanaSignature: bytes(input.solana_signature),
-          reason: input.reason as FailDepositReason,
-          signer: bytes(input.signer),
         },
       };
     case ActionType.ClosePosition:
