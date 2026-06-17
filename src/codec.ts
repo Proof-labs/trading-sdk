@@ -190,6 +190,16 @@ export function signAndEncode(
   ]) as Uint8Array;
 }
 
+/**
+ * Encode just the payload bytes for an action, without the signed envelope.
+ * Useful for cross-language conformance testing — the payload bytes must
+ * match byte-for-byte across Rust, Python, and TS SDKs.
+ */
+export function encodePayloadBytes(action: Action): Uint8Array {
+  const [, payload] = encodePayload(action);
+  return encode(payload);
+}
+
 // ---------------------------------------------------------------------------
 // Decoding
 // ---------------------------------------------------------------------------
