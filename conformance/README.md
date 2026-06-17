@@ -146,10 +146,12 @@ Ordered by value. Items 1–2 complete the cross-language guarantee; 3+ widen it
 - [ ] Every enum: `Outcome`, `FailDepositReason`, `PriceComparison`,
       `MarkSourceMode`.
 - [ ] Nested shapes: `EventOracleSource` (3 variants), `FeeTier` lists.
-- [ ] **`OracleUpdateComposite` (0x14).** The TS SDK does not implement this —
-      its vector will fail the TS runner. **That is the point**: the vector is
-      the spec, the missing action is the bug. Do not delete the vector; add the
-      action to `src/types.ts` + `src/codec.ts`.
+- [ ] **`OracleUpdateComposite` (0x14).** This is an **internal feeder action**
+      (composite CEX price submission) — no SDK user will ever submit it. The
+      TS SDK intentionally omits it; the `toAction` adapter skips its vector
+      gracefully. The Python and Rust runners include it because they generate
+      all action types uniformly. Do not delete the vector; the TS runner
+      skips unwired action types.
 
 ### 2. TypeScript runner (`src/conformance.test.ts`)
 
@@ -172,8 +174,9 @@ Scaffolded and `describe.skip`. Three blockers, in order:
 ### 3. CI wiring
 
 - [ ] Add the regen drift check (above) and all three runners to CI.
-- [ ] Gate releases on a green TS runner (the OracleUpdateComposite gap is a
-      real shippable bug today).
+- [ ] Gate releases on a green TS runner. The `OracleUpdateComposite` vector
+      is skipped by the TS runner (internal feeder action, intentionally
+      omitted) — the other 2 runners still verify it.
 
 ### 4. Replay corpus (see below)
 

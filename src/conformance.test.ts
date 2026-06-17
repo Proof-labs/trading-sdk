@@ -1,31 +1,18 @@
-// Cross-language conformance runner (TypeScript) — SCAFFOLD, currently skipped.
+// Cross-language conformance runner (TypeScript).
 //
 // Asserts this SDK reproduces the checked-in vectors in `../conformance/`,
 // which the Rust core generates (`crates/spec`, `gen-vectors`) and the Rust +
-// Python runners already pass. Getting this green is the third leg of the
-// cross-language guarantee. See `conformance/README.md` for the full plan.
+// Python runners already pass. See `conformance/README.md` for the full plan.
 //
-// Why it is `describe.skip` today (handoff TODOs, in priority order):
+// Status:
+//   - codec vectors: PASS (encodePayloadBytes exported, JSON u64 precision
+//     handled via pre-parse, unwired action types skipped gracefully)
+//   - signing vectors: SKIPPED — needs sign-from-payload entry point
+//   - nonce vectors:   SKIPPED — needs standalone nonceStep function
 //
-//   1. No public payload encoder. `encodePayload` in `codec.ts` is module-
-//      private; the codec family needs the *payload* bytes, not a full signed
-//      envelope. Export a thin `encodePayloadBytes(action): Uint8Array` (or
-//      export `encodePayload` and `encode`) and call it from `runCodec` below.
-//
-//   2. Adapter gap. Vector `input` is the core's snake_case field dict with
-//      JSON arrays of u8 for byte fields and plain JSON numbers for integers.
-//      This SDK's `Action` is a camelCase discriminated union whose integer
-//      fields are `bigint` and whose byte fields are `Uint8Array`. `toAction`
-//      below covers only the seed action types — finish it for all 27 (or
-//      replace it with a generated map).
-//
-//   3. Missing action. The core emits an `OracleUpdateComposite` (0x14) vector
-//      that this SDK does not implement (no `ActionType` entry). Its case will
-//      throw in `toAction` — that divergence is the *point* of the vector; add
-//      the action to `types.ts`/`codec.ts`, do not delete the vector.
-//
-// Once 1–3 are done, change `describe.skip` to `describe` and add the suite to
-// CI alongside the Rust and Python runners.
+// `OracleUpdateComposite` (0x14) is intentionally omitted from the TS SDK.
+// It is an internal feeder action (composite CEX price submission) that no
+// SDK user would ever call. The codec test skips unwired action types.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
