@@ -9,7 +9,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from proof_trading_sdk._native import SigningHandle, sign_and_encode
+from proof_trading_sdk._native import SigningHandle, chain_id_from_string, generate_keypair, pubkey_to_owner, sign_and_encode
 from proof_trading_sdk.actions import Action, encode_action
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.errors import (
@@ -25,6 +25,19 @@ from proof_trading_sdk.errors import (
 from proof_trading_sdk.nonce import NonceAllocator
 
 log = logging.getLogger("proof_trading_sdk")
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _to_hex(owner: bytes | str) -> str:
+    """Normalise *owner* to a hex string (with or without ``0x`` prefix).
+
+    Accepts either raw 20-byte ``bytes`` or any hex string. Strips ``0x``
+    prefix if present so the caller doesn't need to check.
+    """
+    if isinstance(owner, bytes):
+        return owner.hex()
+    return owner.removeprefix("0x")
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
@@ -125,7 +138,12 @@ class ExchangeClient:
         self._gateway_url = cfg.gateway_url.rstrip("/")
         self._api_key = cfg.api_key
         self._timeout_secs = cfg.timeout_secs
-        self._chain_id = chain_id if chain_id is not None else UNBOUND_CHAIN_ID
+        if chain_id is not None:
+            self._chain_id = chain_id
+        elif cfg.chain_id:
+            self._chain_id = chain_id_from_string(cfg.chain_id)
+        else:
+            self._chain_id = UNBOUND_CHAIN_ID
         self._secret_key = secret_key
         self._key_handle = key_handle
 
@@ -317,11 +335,24 @@ class ExchangeClient:
 
     # ── Info queries ─────────────────────────────────────────────────────
 
-    def account(self, owner: bytes | str) -> AccountState:
-        """Fetch account state: balances, positions, open orders, margin."""
-        if isinstance(owner, bytes):
-            owner = owner.hex()
-        resp = self._get(f"/v1/account/{owner}")
+    def _own_owner(self) -> bytes:
+        """Derive the 20-byte owner from whichever signing key is configured."""
+        if self._key_handle is not None:
+            return self._key_handle.owner
+        if self._secret_key is not None:
+            return pubkey_to_owner(generate_keypair(self._secret_key)["public_key"])
+        msg = "No signing key configured — pass an explicit `owner` or set `secret_key`/`key_handle`."
+        raise ValueError(msg)
+
+    def account(self, owner: bytes | str | None = None) -> AccountState:
+        """Fetch account state: balances, positions, open orders, margin.
+
+        If *owner* is ``None`` (default), uses the owner derived from the
+        configured signing key.
+        """
+        if owner is None:
+            owner = self._own_owner()
+        resp = self._get(f"/v1/account/{_to_hex(owner)}")
         data: dict[str, t.Any] = resp.json()
         return AccountState(
             balances=data.get("balances", {}),
@@ -332,9 +363,7 @@ class ExchangeClient:
         )
 
     def open_orders(self, owner: bytes | str) -> list[dict[str, t.Any]]:
-        if isinstance(owner, bytes):
-            owner = owner.hex()
-        resp = self._get(f"/v1/orders/{owner}")
+        resp = self._get(f"/v1/orders/{_to_hex(owner)}")
         return resp.json()
 
     def withdrawal_status(self, withdrawal_id: int) -> dict[str, t.Any]:
@@ -342,9 +371,7 @@ class ExchangeClient:
         return resp.json()
 
     def nonce_info(self, owner: bytes | str) -> dict[str, t.Any]:
-        if isinstance(owner, bytes):
-            owner = owner.hex()
-        resp = self._get(f"/v1/nonce/{owner}")
+        resp = self._get(f"/v1/nonce/{_to_hex(owner)}")
         return resp.json()
 
     def markets(self) -> list[dict[str, t.Any]]:
@@ -397,6 +424,105 @@ class ExchangeClient:
         resp = self._get("/v1/history/status")
         return resp.json()
 
+    # ── Health & status ──────────────────────────────────────────────────
+
+    def health(self) -> dict[str, t.Any]:
+        """Gateway health check: ``GET /v1/health``."""
+        resp = self._get("/v1/health")
+        return resp.json()
+
+    def status(self) -> dict[str, t.Any]:
+        """CometBFT node status: ``GET <rpc>/status``.
+
+        Uses ``gateway_url`` with ``/status`` appended. Returns the raw
+        CometBFT JSON-RPC response (``result.sync_info``, etc.).
+        """
+        resp = self._request("GET", "/status")
+        return resp.json()
+
+    def get_block(self, height: int | None = None) -> dict[str, t.Any]:
+        """CometBFT block at *height* (latest if omitted): ``GET <rpc>/block``."""
+        params = {"height": height} if height is not None else None
+        resp = self._request("GET", "/block", params=params)
+        return resp.json()
+
+    def get_block_results(self, height: int) -> dict[str, t.Any]:
+        """CometBFT block results at *height*: ``GET <rpc>/block_results``."""
+        resp = self._request("GET", "/block_results", params={"height": height})
+        return resp.json()
+
+    # ── Market data ──────────────────────────────────────────────────────
+
+    def ticker(self, market: int) -> dict[str, t.Any] | None:
+        """One-round-trip market summary: ``GET /v1/ticker/{market}``.
+
+        Returns ``None`` if the market is unknown or the endpoint 404s.
+        """
+        try:
+            resp = self._get(f"/v1/ticker/{market}")
+            return resp.json()
+        except TransportError as e:
+            if e.status_code == 404:
+                return None
+            raise
+
+    def orderbook(self, market: int) -> dict[str, t.Any]:
+        """L2 orderbook snapshot: ``GET /v1/orderbook/{market}``."""
+        resp = self._get(f"/v1/orderbook/{market}")
+        return resp.json()
+
+    def adl_queue(self, market: int) -> list[dict[str, t.Any]]:
+        """ADL (auto-deleveraging) queue for *market*: ``GET /v1/adl/queue/{market}``."""
+        resp = self._get(f"/v1/adl/queue/{market}")
+        data = resp.json()
+        return data if isinstance(data, list) else []
+
+    # ── History (per-owner, time-windowed) ──────────────────────────────
+
+    def history_deposits(
+        self,
+        owner: bytes | str,
+        from_ms: int | None = None,
+        to_ms: int | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, t.Any]]:
+        """Deposit log for *owner*: ``GET /v1/history/deposits/{hex}``."""
+        return self._history_cashflow("deposits", owner, from_ms, to_ms, limit)
+
+    def history_withdrawals(
+        self,
+        owner: bytes | str,
+        from_ms: int | None = None,
+        to_ms: int | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, t.Any]]:
+        """Withdrawal log for *owner*: ``GET /v1/history/withdrawals/{hex}``."""
+        return self._history_cashflow("withdrawals", owner, from_ms, to_ms, limit)
+
+    def history_resolutions(
+        self,
+        owner: bytes | str,
+        impact_market_id: int | None = None,
+        from_ms: int | None = None,
+        to_ms: int | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, t.Any]]:
+        """Position-at-resolution log for *owner*: ``GET /v1/history/resolutions/{hex}``."""
+        if isinstance(owner, bytes):
+            owner = owner.hex()
+        params: dict[str, t.Any] = {}
+        if impact_market_id is not None:
+            params["impact_market_id"] = impact_market_id
+        if from_ms is not None:
+            params["from"] = from_ms
+        if to_ms is not None:
+            params["to"] = to_ms
+        if limit is not None:
+            params["limit"] = limit
+        resp = self._get(f"/v1/history/resolutions/{owner}", params=params or None)
+        data = resp.json()
+        return data if isinstance(data, list) else []
+
     # ── System ───────────────────────────────────────────────────────────
 
     def system_status(self) -> dict[str, t.Any]:
@@ -430,6 +556,26 @@ class ExchangeClient:
 
     # ── Internal helpers ─────────────────────────────────────────────────
 
+    def _history_cashflow(
+        self,
+        kind: str,
+        owner: bytes | str,
+        from_ms: int | None = None,
+        to_ms: int | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, t.Any]]:
+        owner = _to_hex(owner)
+        params: dict[str, t.Any] = {}
+        if from_ms is not None:
+            params["from"] = from_ms
+        if to_ms is not None:
+            params["to"] = to_ms
+        if limit is not None:
+            params["limit"] = limit
+        resp = self._get(f"/v1/history/{kind}/{owner}", params=params or None)
+        data = resp.json()
+        return data if isinstance(data, list) else []
+
     def _cursor_page(
         self,
         method: str,
@@ -437,8 +583,8 @@ class ExchangeClient:
         params: dict[str, t.Any],
     ) -> CursorPage:
         owner = params.pop("owner", None)
-        if isinstance(owner, bytes):
-            params["owner"] = owner.hex()
+        if owner is not None:
+            params["owner"] = _to_hex(owner)
 
         query = {k: v for k, v in params.items() if v is not None and k != "self"}
         resp = self._get(path, params=query)
