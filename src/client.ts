@@ -702,9 +702,7 @@ export class ExchangeClient {
   // -----------------------------------------------------------------------
 
   async queryOrderbook(market: number): Promise<Orderbook> {
-    const json = await fetchApiJson(
-      `${this.apiUrl}/v1/orderbook/${market}`,
-    );
+    const json = await fetchApiJson(`${this.apiUrl}/v1/orderbook/${market}`);
     const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as [unknown[], unknown[]];
     const parseLevel = (arr: unknown[]): OrderbookLevel => ({
@@ -761,9 +759,7 @@ export class ExchangeClient {
    *  divide by total entries). Empty array if the market has no
    *  profitable positions or if the gateway predates the endpoint. */
   async queryAdlQueue(market: number): Promise<AdlQueueEntry[]> {
-    const json = await fetchApiJson(
-      `${this.apiUrl}/v1/adl/queue/${market}`,
-    );
+    const json = await fetchApiJson(`${this.apiUrl}/v1/adl/queue/${market}`);
     const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes);
     if (!Array.isArray(raw)) return [];
@@ -783,9 +779,7 @@ export class ExchangeClient {
   /** Fetch a withdrawal record by id. Returns `null` for unknown ids
    *  (the engine encodes "not found" as msgpack `nil`, not HTTP 404). */
   async queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null> {
-    const json = await fetchApiJson(
-      `${this.apiUrl}/v1/withdrawal/${id}`,
-    );
+    const json = await fetchApiJson(`${this.apiUrl}/v1/withdrawal/${id}`);
     const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as unknown[] | null;
     if (raw === null) return null;
@@ -1156,10 +1150,7 @@ export class ExchangeClient {
       const attempts = this.wsReconnectAttempts++;
       const baseDelay = Math.min(2000 * Math.pow(2, attempts), 60_000);
       const jitter = baseDelay * (0.75 + Math.random() * 0.5);
-      this.wsReconnectTimer = setTimeout(
-        () => this.ensureWebSocket(),
-        jitter,
-      );
+      this.wsReconnectTimer = setTimeout(() => this.ensureWebSocket(), jitter);
     };
   }
 

@@ -52,10 +52,7 @@ function cases(file: string): Case[] {
       // BigInt sees the exact value. Number.MAX_SAFE_INTEGER has 16
       // digits (9007199254740991); anything 16+ digits may be unsafe.
       // This catches the max-u64 18446744073709551615 (20 digits).
-      const fixed = l.replace(
-        /:\s*(\d{16,})(\s*[,}\]])/g,
-        ': "$1"$2',
-      );
+      const fixed = l.replace(/:\s*(\d{16,})(\s*[,}\]])/g, ': "$1"$2');
       return JSON.parse(fixed) as Case;
     });
 }
@@ -137,8 +134,7 @@ function toAction(
         type: "CancelAllOrders",
         data: {
           owner: bytes(input.owner),
-          market:
-            input.market == null ? null : (input.market as number),
+          market: input.market == null ? null : (input.market as number),
         },
       };
     case ActionType.CancelReplaceOrder:
@@ -280,9 +276,7 @@ function toAction(
     case ActionType.CreateImpactMarket: {
       const os = input.oracle_source;
       const parsedOs =
-        os === null || os === undefined
-          ? undefined
-          : parseOracleSource(os);
+        os === null || os === undefined ? undefined : parseOracleSource(os);
       return {
         type: "CreateImpactMarket",
         data: {
@@ -414,9 +408,10 @@ function toAction(
             clientOrderId: bigOrNull(leg.client_order_id),
             reduceOnly: leg.reduce_only === true,
           })),
-          maxSlippageBps: input.max_slippage_bps == null
-            ? 0
-            : Number(big(input.max_slippage_bps)),
+          maxSlippageBps:
+            input.max_slippage_bps == null
+              ? 0
+              : Number(big(input.max_slippage_bps)),
         },
       };
     default:
@@ -445,7 +440,8 @@ function parseOracleSource(v: unknown): any {
   if (typeof v === "object" && v !== null) {
     const obj = v as Record<string, unknown>;
     const keys = Object.keys(obj);
-    if (keys.length !== 1) throw new Error(`expected single-key EventOracleSource map`);
+    if (keys.length !== 1)
+      throw new Error(`expected single-key EventOracleSource map`);
     const variant = keys[0];
     const fields = obj[variant] as unknown[];
     if (variant === "UnderlyingPriceVsStrike") {
@@ -469,9 +465,9 @@ function parseOracleSource(v: unknown): any {
 }
 
 describe("conformance vectors (TypeScript)", () => {
-  // TODO(#2): wire toAction for all 27 action types + add signEnvelopeFromPayload
-  // Before that, skip the signing/nonce tests since they unconditionally throw.
-  // The codec test below handles unwired types gracefully by skipping those vectors.
+  // All 27 action types wired. OracleUpdateComposite (0x14) intentionally omitted
+  // — internal feeder action, not user-submittable. Nonce is timestamp-derived,
+  // no standalone step function needed.
 
   it("signing: (payload,key) → envelope; pubkey → owner", () => {
     for (const c of cases("signing.ndjson")) {
@@ -480,7 +476,9 @@ describe("conformance vectors (TypeScript)", () => {
         const actionType = c.action_type as number;
         const seq = BigInt(c.seq as number);
         const payloadBytes = new Uint8Array(
-          (c.payload_hex as string).match(/.{1,2}/g)!.map((b) => parseInt(b, 16)),
+          (c.payload_hex as string)
+            .match(/.{1,2}/g)!
+            .map((b) => parseInt(b, 16)),
         );
         const privateKey = new Uint8Array(c.secret_key as number[]);
         const envelope = signEnvelopeFromPayload(

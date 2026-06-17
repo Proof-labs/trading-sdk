@@ -24,11 +24,11 @@ npm install @proof/trading-sdk
 
 The SDK ships configured for the Proof devnet out of the box:
 
-| Parameter | Default |
-|-----------|---------|
-| Gateway URL | `https://api.dev.proof.trade` |
-| Chain ID | `exchange-devnet-1` |
-| Faucet URL | `https://faucet.dev.proof.trade` |
+| Parameter   | Default                          |
+| ----------- | -------------------------------- |
+| Gateway URL | `https://api.dev.proof.trade`    |
+| Chain ID    | `exchange-devnet-1`              |
+| Faucet URL  | `https://faucet.dev.proof.trade` |
 
 **Key generation (no server needed):**
 
@@ -55,7 +55,11 @@ Each address receives ~10,000 USDC (10,000,000,000 µUSDC) with a 24 h cooldown.
 
 ```typescript
 import {
-  ExchangeClient, Side, generateKeypair, pubkeyToOwner, ownerToHex,
+  ExchangeClient,
+  Side,
+  generateKeypair,
+  pubkeyToOwner,
+  ownerToHex,
 } from "@proof/trading-sdk";
 
 const { publicKey, privateKey } = generateKeypair();
@@ -78,7 +82,7 @@ const result = await client.submitTx({
     market: 1,
     owner: address,
     side: Side.Buy,
-    price: 50000000n,    // $500,000.00 in cents
+    price: 50000000n, // $500,000.00 in cents
     quantity: 1n,
   },
 });
@@ -88,12 +92,12 @@ console.log(result); // { code: 0, hash: "…" } on success
 
 ## Unit Conventions
 
-| Field | Unit | Example |
-|-------|------|---------|
-| Prices | Cents (2 dp) | `6675234` = $66,752.34 |
-| Balances / amounts | MicroUSDC (6 dp) | `100_000_000_000` = $100,000 |
-| Fees / margin rates | Basis points | `500` = 5% |
-| Addresses | 20-byte `Uint8Array` | `pubkeyToOwner(publicKey)` |
+| Field               | Unit                 | Example                      |
+| ------------------- | -------------------- | ---------------------------- |
+| Prices              | Cents (2 dp)         | `6675234` = $66,752.34       |
+| Balances / amounts  | MicroUSDC (6 dp)     | `100_000_000_000` = $100,000 |
+| Fees / margin rates | Basis points         | `500` = 5%                   |
+| Addresses           | 20-byte `Uint8Array` | `pubkeyToOwner(publicKey)`   |
 
 All prices and quantities are `u64` (BigInt) — never floats.
 
@@ -151,25 +155,25 @@ The `Action` type is a discriminated union. Every action is:
 
 ```typescript
 type Action =
-  | { type: "PlaceOrder";        data: PlaceOrder }
-  | { type: "CancelOrder";       data: CancelOrder }
-  | { type: "CancelAllOrders";   data: CancelAllOrders }
-  | { type: "CancelReplaceOrder";data: CancelReplaceOrder }
-  | { type: "MarketOrder";       data: MarketOrder }
-  | { type: "ClosePosition";     data: ClosePosition }
-  // … 20+ more — see src/types.ts
+  | { type: "PlaceOrder"; data: PlaceOrder }
+  | { type: "CancelOrder"; data: CancelOrder }
+  | { type: "CancelAllOrders"; data: CancelAllOrders }
+  | { type: "CancelReplaceOrder"; data: CancelReplaceOrder }
+  | { type: "MarketOrder"; data: MarketOrder }
+  | { type: "ClosePosition"; data: ClosePosition };
+// … 20+ more — see src/types.ts
 ```
 
 ### Options
 
 ```typescript
 interface ExchangeClientOptions {
-  rpcUrl?: string;        // default: https://api.dev.proof.trade
-  apiUrl?: string;        // default: https://api.dev.proof.trade
-  gatewayUrl?: string;    // default: https://api.dev.proof.trade
-  chainId?: string;       // default: "exchange-devnet-1"
-  useGateway?: boolean;   // default: true
-  apiKey?: string;        // gateway API key (optional)
+  rpcUrl?: string; // default: https://api.dev.proof.trade
+  apiUrl?: string; // default: https://api.dev.proof.trade
+  gatewayUrl?: string; // default: https://api.dev.proof.trade
+  chainId?: string; // default: "exchange-devnet-1"
+  useGateway?: boolean; // default: true
+  apiKey?: string; // gateway API key (optional)
 }
 ```
 
@@ -208,15 +212,15 @@ The full action set and payload layouts are defined in `src/types.ts` and
 
 ## Layout
 
-| Path | Contents |
-|------|----------|
-| `src/client.ts` | `ExchangeClient` — submit, queries, nonce allocation |
-| `src/codec.ts` | MessagePack encode/decode, signed-envelope assembly |
-| `src/crypto.ts` | Ed25519 sign/verify, keypair + owner derivation |
-| `src/types.ts` | Action types and payload shapes (wire contract) |
-| `src/errors.ts` | Typed engine/gateway error surface |
-| `examples/connect-and-trade.ts` | End-to-end example |
-| `src/scenarios/` | Matching/liquidation scenario tests |
+| Path                            | Contents                                             |
+| ------------------------------- | ---------------------------------------------------- |
+| `src/client.ts`                 | `ExchangeClient` — submit, queries, nonce allocation |
+| `src/codec.ts`                  | MessagePack encode/decode, signed-envelope assembly  |
+| `src/crypto.ts`                 | Ed25519 sign/verify, keypair + owner derivation      |
+| `src/types.ts`                  | Action types and payload shapes (wire contract)      |
+| `src/errors.ts`                 | Typed engine/gateway error surface                   |
+| `examples/connect-and-trade.ts` | End-to-end example                                   |
+| `src/scenarios/`                | Matching/liquidation scenario tests                  |
 
 ## Test
 

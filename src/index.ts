@@ -33,6 +33,11 @@ export {
   type EventOracleSource,
   type PriceComparison,
   type ResolveEvent,
+  type UpdateMarketFees,
+  type RunLiquidationSweep,
+  type RunFundingTick,
+  type SetAccountFeeOverride,
+  type SetUserMarketLeverage,
   type ImpactMarketInfo,
   type ImpactMarketStatus,
   Branch,
@@ -65,6 +70,11 @@ export {
   type HistoryPositionSnapshot,
   type WithdrawalStatus,
   type WithdrawalRecord,
+  type MarketKind,
+  type FeeTier,
+  type AgentApprovedEvent,
+  type AgentRevokedEvent,
+  type FeesCollectedEvent,
 } from "./types.js";
 
 // Codec

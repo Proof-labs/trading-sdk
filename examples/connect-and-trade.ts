@@ -22,15 +22,19 @@ import {
   bytesToHex,
 } from "../src/index.js";
 
-const GATEWAY_URL = process.env.PROOF_GATEWAY_URL ?? "https://api.dev.proof.trade";
+const GATEWAY_URL =
+  process.env.PROOF_GATEWAY_URL ?? "https://api.dev.proof.trade";
 const CHAIN_ID = process.env.PROOF_CHAIN_ID ?? "exchange-devnet-1";
-const FAUCET_URL = process.env.PROOF_FAUCET_URL ?? "https://faucet.dev.proof.trade";
+const FAUCET_URL =
+  process.env.PROOF_FAUCET_URL ?? "https://faucet.dev.proof.trade";
 const FAUCET_TOKEN = process.env.PROOF_FAUCET_TOKEN;
 
 info("=== Proof Trading SDK — Connect & Trade ===");
 info(`Gateway: ${GATEWAY_URL}`);
 info(`Chain:   ${CHAIN_ID}`);
-info(`Mode:    ${FAUCET_TOKEN ? "read-write" : "read-only (set PROOF_FAUCET_TOKEN to trade)"}`);
+info(
+  `Mode:    ${FAUCET_TOKEN ? "read-write" : "read-only (set PROOF_FAUCET_TOKEN to trade)"}`,
+);
 info("");
 
 // Step 1 — Check connectivity
@@ -51,7 +55,9 @@ const markets = await client.queryMarkets();
 const perpMarkets = markets.filter((m) => m.kind === "Perp" || !m.kind);
 info(`  Total markets: ${markets.length} (${perpMarkets.length} perp)`);
 for (const m of markets.slice(0, 5)) {
-  info(`    Market ${m.market}: IM=${m.imBps}bps  MM=${m.mmBps}bps  ticker=${m.ticker ?? "—"}`);
+  info(
+    `    Market ${m.market}: IM=${m.imBps}bps  MM=${m.mmBps}bps  ticker=${m.ticker ?? "—"}`,
+  );
 }
 if (markets.length > 5) info(`    … and ${markets.length - 5} more`);
 info("");
@@ -71,7 +77,10 @@ if (FAUCET_TOKEN) {
   const body = JSON.stringify({ address: `0x${addressHex}` });
   const res = await fetch(`${FAUCET_URL}/drip`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${FAUCET_TOKEN}` },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${FAUCET_TOKEN}`,
+    },
     body,
   });
   const drip = await res.json().catch(() => ({}));
@@ -100,7 +109,9 @@ client.setPrivateKey(privateKey);
 const account = await client.queryAccount(addressHex);
 if (account) {
   info(`  Balance: $${fmt(account.balance)}  Equity: $${fmt(account.equity)}`);
-  info(`  Positions: ${account.positions.length}  Margin ratio: ${account.marginRatioBps}bps`);
+  info(
+    `  Positions: ${account.positions.length}  Margin ratio: ${account.marginRatioBps}bps`,
+  );
 } else {
   info("  Account not found (no deposit recorded on chain yet)");
 }
@@ -110,7 +121,9 @@ info("");
 if (FAUCET_TOKEN && account && account.balance > 0n) {
   info("--- 6. Place a limit order ---");
   const orderPrice = 50_000_00n; // $50,000.00 in cents
-  info(`  Placing bid: market=1  side=Buy  price=$${fmt(orderPrice, 2)}  qty=1`);
+  info(
+    `  Placing bid: market=1  side=Buy  price=$${fmt(orderPrice, 2)}  qty=1`,
+  );
 
   const result = await client.submitTxCommit({
     type: "PlaceOrder",
@@ -122,7 +135,9 @@ if (FAUCET_TOKEN && account && account.balance > 0n) {
       quantity: 1n,
     },
   });
-  info(`  Result: code=${result.code}  height=${result.height ?? "?"}  hash=${result.hash}`);
+  info(
+    `  Result: code=${result.code}  height=${result.height ?? "?"}  hash=${result.hash}`,
+  );
   if (result.code === 0) {
     info("  Order landed on chain ✓");
   } else {
@@ -136,7 +151,9 @@ if (FAUCET_TOKEN && account && account.balance > 0n) {
   info(`  Bids: ${book.bids.length} levels  Asks: ${book.asks.length} levels`);
   if (book.bids.length > 0) {
     const top = book.bids[0];
-    info(`  Best bid: $${fmt(top.price)}  qty=${top.totalQty}  orders=${top.orderCount}`);
+    info(
+      `  Best bid: $${fmt(top.price)}  qty=${top.totalQty}  orders=${top.orderCount}`,
+    );
   }
   info("");
 

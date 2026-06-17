@@ -12,10 +12,10 @@ released against the latest published `0.x` minor line. Until a `1.0.0` release,
 only the most recent published version is supported — please upgrade before
 reporting an issue you can only reproduce on an older release.
 
-| Version | Supported |
-| ------- | --------- |
-| latest `0.x` | ✅ |
-| older `0.x` | ❌ (upgrade first) |
+| Version      | Supported          |
+| ------------ | ------------------ |
+| latest `0.x` | ✅                 |
+| older `0.x`  | ❌ (upgrade first) |
 
 ## Reporting a vulnerability
 
