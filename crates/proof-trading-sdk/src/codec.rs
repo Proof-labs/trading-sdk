@@ -156,6 +156,7 @@ impl_action_encoding! {
     SetUserMarketLeverage => 0x16,
     ClosePosition => 0x17,
     AmendOrder => 0x1B,
+    AtomicBasketOrder => 0x1C,
 }
 
 /// Byte buffer that always serializes as msgpack `bin` (0xc4/c5/c6),
@@ -658,6 +659,8 @@ mod tests {
                 funding_interval_ms: 0,
                 max_funding_rate_bps: 0,
                 pool_id: 0,
+                sz_decimals: 0,
+                ticker: String::new(),
             }),
             Action::WithdrawRequest(WithdrawRequest {
                 owner: [0x33; 20].into(),
@@ -716,7 +719,13 @@ mod tests {
     }
 
     #[test]
-    fn create_market_legacy_payload_defaults_pool_id() {
+    fn create_market_legacy_8field_payload_now_rejected() {
+        // `sz_decimals` and `ticker` are MANDATORY on the engine (no
+        // `serde(default)`), and positionally they sit after `pool_id`, so a
+        // legacy 8-field CreateMarket payload (pre-sz_decimals) can no longer
+        // decode — it is rejected at decode exactly as the engine rejects it.
+        // This documents the backward-incompatible tightening that brought the
+        // SDK back into parity with the engine struct.
         let legacy = LegacyCreateMarket {
             market: 10,
             im_bps: 1000,
@@ -736,15 +745,10 @@ mod tests {
             signature: [0u8; 64],
         };
         let encoded = rmp_serde::to_vec(&envelope).unwrap();
-        let decoded = decode_tx(&encoded).unwrap();
-
-        match decoded.action {
-            Action::CreateMarket(cmd) => {
-                assert_eq!(cmd.market, 10);
-                assert_eq!(cmd.pool_id, 0);
-            }
-            other => panic!("expected CreateMarket, got {other:?}"),
-        }
+        assert!(
+            decode_tx(&encoded).is_err(),
+            "legacy 8-field CreateMarket must be rejected now that sz_decimals/ticker are mandatory"
+        );
     }
 
     fn max_value_actions() -> Vec<Action> {
@@ -797,6 +801,8 @@ mod tests {
                 funding_interval_ms: u64::MAX,
                 max_funding_rate_bps: u32::MAX,
                 pool_id: 0,
+                sz_decimals: 0,
+                ticker: String::new(),
             }),
             Action::WithdrawRequest(WithdrawRequest {
                 owner: [0xFF; 20].into(),
@@ -872,6 +878,8 @@ mod tests {
                 funding_interval_ms: 0,
                 max_funding_rate_bps: 0,
                 pool_id: 0,
+                sz_decimals: 0,
+                ticker: String::new(),
             }),
             Action::WithdrawRequest(WithdrawRequest {
                 owner: [0u8; 20].into(),
@@ -968,6 +976,8 @@ mod tests {
                     funding_interval_ms: 0,
                     max_funding_rate_bps: 0,
                     pool_id: 0,
+                    sz_decimals: 0,
+                    ticker: String::new(),
                 }),
                 Action::WithdrawRequest(WithdrawRequest {
                     owner,
@@ -1123,6 +1133,8 @@ mod tests {
                 funding_interval_ms: 0,
                 max_funding_rate_bps: 0,
                 pool_id: 0,
+                sz_decimals: 0,
+                ticker: String::new(),
             }),
             Action::WithdrawRequest(WithdrawRequest {
                 owner: [0; 20].into(),
@@ -1413,6 +1425,8 @@ mod tests {
                         funding_interval_ms: 0,
                         max_funding_rate_bps: 0,
                         pool_id: 0,
+                        sz_decimals: 0,
+                        ticker: String::new(),
                     }),
                     7 => Action::WithdrawRequest(WithdrawRequest {
                         owner,
@@ -1558,11 +1572,13 @@ mod tests {
     }
 
     #[test]
-    fn decode_legacy_create_market_no_pool_id_uses_default() {
+    fn decode_legacy_create_market_8field_now_rejected() {
         // Pre-pool_id wire shape: 8-field positional msgpack array.
-        // Confirms `serde(default)` on `CreateMarket.pool_id` picks up
-        // the missing field and resolves to 0 (shared pool 0), so older
-        // SDK builds that pre-date the pool_id rollout keep working.
+        // Although `pool_id` is `serde(default)`, the trailing `sz_decimals`
+        // and `ticker` are MANDATORY (no default) and positionally follow
+        // `pool_id`, so an 8-field array cannot satisfy the struct and is
+        // rejected at decode — matching the engine. Old SDK builds that
+        // pre-date sz_decimals can no longer create markets, by design.
         //
         // Field order matches the struct definition in `types.rs`:
         //   market, im_bps, mm_bps, taker_fee_bps, maker_fee_bps,
@@ -1595,17 +1611,47 @@ mod tests {
         };
         let encoded = rmp_serde::to_vec(&envelope).unwrap();
 
-        let DecodedTx { action, .. } =
-            decode_tx(&encoded).expect("legacy 8-field shape must decode");
-        match action {
-            Action::CreateMarket(c) => {
-                assert_eq!(c.market, 99);
-                assert_eq!(
-                    c.pool_id, 0,
-                    "missing pool_id must default to 0 for back-compat"
-                );
+        assert!(
+            decode_tx(&encoded).is_err(),
+            "legacy 8-field CreateMarket must now be rejected: sz_decimals/ticker are mandatory"
+        );
+    }
+
+    #[test]
+    fn atomic_basket_order_round_trips() {
+        let action = Action::AtomicBasketOrder(AtomicBasketOrder {
+            owner: [0x11; 20].into(),
+            legs: vec![
+                AtomicBasketLeg {
+                    market: 1,
+                    side: Side::Buy,
+                    price: 6_675_000,
+                    quantity: 3,
+                    client_order_id: Some(77),
+                    reduce_only: false,
+                },
+                AtomicBasketLeg {
+                    market: 2,
+                    side: Side::Sell,
+                    price: 250_000,
+                    quantity: 5,
+                    client_order_id: None,
+                    reduce_only: true,
+                },
+            ],
+            max_slippage_bps: 50,
+        });
+        assert_round_trip(&action, 7);
+        let encoded = encode_tx(&action, 7).unwrap();
+        match decode_tx(&encoded).unwrap().action {
+            Action::AtomicBasketOrder(b) => {
+                assert_eq!(b.owner, [0x11; 20].into());
+                assert_eq!(b.legs.len(), 2);
+                assert_eq!(b.legs[0].client_order_id, Some(77));
+                assert!(b.legs[1].reduce_only);
+                assert_eq!(b.max_slippage_bps, 50);
             }
-            other => panic!("expected CreateMarket, got {other:?}"),
+            other => panic!("expected AtomicBasketOrder, got {other:?}"),
         }
     }
 }
