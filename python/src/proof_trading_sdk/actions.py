@@ -25,10 +25,6 @@ from typing import Any, Optional
 
 import proof_trading_sdk._native as _native
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-
-FEE_OVERRIDE_REVERT_SENTINEL = 4_294_967_295
-
 # ── Wire-string enums (match the Rust serde unit-variant names) ──────────────
 
 
@@ -232,39 +228,6 @@ class ClosePosition(Action):
 
 
 @dataclass
-class CreateMarket(Action):
-    ACTION_NAME = "CreateMarket"
-    market: int
-    im_bps: int
-    mm_bps: int
-    taker_fee_bps: int
-    maker_fee_bps: int
-    signer: bytes
-    funding_interval_ms: int
-    max_funding_rate_bps: int
-    # sz_decimals + ticker are MANDATORY on the engine (no serde default) — a
-    # payload omitting them is rejected at decode. pool_id is serde(default).
-    sz_decimals: int
-    ticker: str
-    pool_id: int = 0
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "im_bps": self.im_bps,
-            "mm_bps": self.mm_bps,
-            "taker_fee_bps": self.taker_fee_bps,
-            "maker_fee_bps": self.maker_fee_bps,
-            "signer": self.signer,
-            "funding_interval_ms": self.funding_interval_ms,
-            "max_funding_rate_bps": self.max_funding_rate_bps,
-            "pool_id": self.pool_id,
-            "sz_decimals": self.sz_decimals,
-            "ticker": self.ticker,
-        }
-
-
-@dataclass
 class CreateImpactMarket(Action):
     ACTION_NAME = "CreateImpactMarket"
     impact_market_id: int
@@ -368,23 +331,6 @@ class RevokeAgent(Action):
 
 
 @dataclass
-class OracleUpdate(Action):
-    ACTION_NAME = "OracleUpdate"
-    market: int
-    price: int
-    signer: bytes
-    publish_time_ms: int = 0
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "price": self.price,
-            "signer": self.signer,
-            "publish_time_ms": self.publish_time_ms,
-        }
-
-
-@dataclass
 class Deposit(Action):
     ACTION_NAME = "Deposit"
     owner: bytes
@@ -469,36 +415,6 @@ class FailWithdrawal(Action):
 
 
 @dataclass
-class ResolveEvent(Action):
-    ACTION_NAME = "ResolveEvent"
-    impact_market_id: int
-    outcome: str  # "Yes" | "No" | "Void"
-    signer: bytes
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "impact_market_id": self.impact_market_id,
-            "outcome": self.outcome,
-            "signer": self.signer,
-        }
-
-
-@dataclass
-class FailDeposit(Action):
-    ACTION_NAME = "FailDeposit"
-    solana_signature: bytes
-    reason: str  # "MalformedTx" | "UnsupportedToken" | "BelowMinimum" | "Other"
-    signer: bytes
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "solana_signature": self.solana_signature,
-            "reason": self.reason,
-            "signer": self.signer,
-        }
-
-
-@dataclass
 class SetUserMarketLeverage(Action):
     ACTION_NAME = "SetUserMarketLeverage"
     owner: bytes
@@ -512,39 +428,6 @@ class SetUserMarketLeverage(Action):
             "user_im_bps": self.user_im_bps,
         }
 
-
-# ── Admin / test actions ──────────────────────────────────────────────────────
-
-
-@dataclass
-class CreateMarket(Action):
-    ACTION_NAME = "CreateMarket"
-    market: int
-    im_bps: int
-    mm_bps: int
-    taker_fee_bps: int
-    maker_fee_bps: int
-    signer: bytes
-    funding_interval_ms: int
-    max_funding_rate_bps: int
-    pool_id: int = 0
-    sz_decimals: int = 0
-    ticker: str = ""
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "im_bps": self.im_bps,
-            "mm_bps": self.mm_bps,
-            "taker_fee_bps": self.taker_fee_bps,
-            "maker_fee_bps": self.maker_fee_bps,
-            "signer": self.signer,
-            "funding_interval_ms": self.funding_interval_ms,
-            "max_funding_rate_bps": self.max_funding_rate_bps,
-            "pool_id": self.pool_id,
-            "sz_decimals": self.sz_decimals,
-            "ticker": self.ticker,
-        }
 
 
 @dataclass
@@ -633,44 +516,6 @@ class UpdateMarketFees(Action):
         }
 
 
-@dataclass
-class SetAccountFeeOverride(Action):
-    ACTION_NAME = "SetAccountFeeOverride"
-    account: bytes
-    taker_fee_bps: int
-    maker_fee_bps: int
-    signer: bytes
-    seq: int = 0
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "account": self.account,
-            "taker_fee_bps": self.taker_fee_bps,
-            "maker_fee_bps": self.maker_fee_bps,
-            "signer": self.signer,
-            "seq": self.seq,
-        }
-
-
-@dataclass
-class RunLiquidationSweep(Action):
-    ACTION_NAME = "RunLiquidationSweep"
-    signer: bytes
-
-    def fields(self) -> dict[str, Any]:
-        return {"signer": self.signer}
-
-
-@dataclass
-class RunFundingTick(Action):
-    ACTION_NAME = "RunFundingTick"
-    market: int
-    signer: bytes
-
-    def fields(self) -> dict[str, Any]:
-        return {"market": self.market, "signer": self.signer}
-
-
 # ── Codec helpers (delegate to the shared Rust core) ─────────────────────────
 
 
@@ -692,7 +537,6 @@ def decode_action(action_type: int, payload: bytes) -> dict[str, Any]:
 
 __all__ = [
     "Action",
-    "FEE_OVERRIDE_REVERT_SENTINEL",
     "ActionType",
     "RawAction",
     "Side",
@@ -707,22 +551,15 @@ __all__ = [
     "ClosePosition",
     "ApproveAgent",
     "RevokeAgent",
-    "OracleUpdate",
     "Deposit",
     "Withdraw",
     "WithdrawRequest",
     "ConfirmDeposit",
     "ConfirmWithdrawal",
     "FailWithdrawal",
-    "ResolveEvent",
-    "FailDeposit",
     "SetUserMarketLeverage",
-    "CreateMarket",
     "CreateImpactMarket",
     "UpdateMarketFees",
-    "SetAccountFeeOverride",
-    "RunLiquidationSweep",
-    "RunFundingTick",
     "encode_action",
     "decode_action",
 ]

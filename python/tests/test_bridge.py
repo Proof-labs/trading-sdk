@@ -217,21 +217,28 @@ class TestEngineParityActions:
     """Actions that were missing from the Python binding (engine-parity port):
     CreateMarket (mandatory sz_decimals/ticker) and AtomicBasketOrder (0x1c).
     Encode/decode runs through the native core, so this asserts the binding's
-    field map matches the engine struct."""
+    field map matches the engine struct.
+
+    No dedicated builder for the admin-only CreateMarket — exercise the
+    generic RawAction escape hatch (still encoded by the core).
+    """
 
     def test_create_market_round_trips_with_sz_decimals_ticker(self):
-        action = pts.actions.CreateMarket(
-            market=42,
-            im_bps=1000,
-            mm_bps=500,
-            taker_fee_bps=5,
-            maker_fee_bps=2,
-            signer=b"\xee" * 20,
-            funding_interval_ms=60_000,
-            max_funding_rate_bps=100,
-            sz_decimals=4,
-            ticker="BTC",
-            pool_id=9,
+        action = pts.actions.RawAction(
+            pts.ActionType["CreateMarket"],
+            {
+                "market": 42,
+                "im_bps": 1000,
+                "mm_bps": 500,
+                "taker_fee_bps": 5,
+                "maker_fee_bps": 2,
+                "signer": b"\xee" * 20,
+                "funding_interval_ms": 60_000,
+                "max_funding_rate_bps": 100,
+                "sz_decimals": 4,
+                "ticker": "BTC",
+                "pool_id": 9,
+            },
         )
         action_type, payload = pts.encode_action(action)
         assert action_type == pts.ActionType["CreateMarket"]
