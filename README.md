@@ -173,24 +173,34 @@ type Action =
 
 ```typescript
 interface ExchangeClientOptions {
-  rpcUrl?: string; // default: https://api.dev.proof.trade
-  apiUrl?: string; // default: https://api.dev.proof.trade
-  gatewayUrl?: string; // default: https://api.dev.proof.trade
+  gatewayUrl?: string; // default: https://api.dev.proof.trade — the single endpoint
   chainId?: string; // default: "exchange-devnet-1"
-  useGateway?: boolean; // default: true
+  useGateway?: boolean; // default: true — route ALL traffic through the gateway
   apiKey?: string; // gateway API key (optional)
+
+  // Internal direct-node overrides — only consulted when useGateway: false
+  // (in-cluster tools, scenario harness). Derived from gatewayUrl when
+  // omitted (local gateway 9080 → 26657 / 8080).
+  rpcUrl?: string;
+  apiUrl?: string;
+  wsUrl?: string;
 }
 ```
 
-When `chainId` is omitted, the SDK auto-resolves it from the CometBFT `/status`
-endpoint. Pin it explicitly for deterministic cross-build signatures.
+`gatewayUrl` is the single source of truth: under the default
+`useGateway: true` every request — submission, reads, chain queries, and the
+WebSocket feed — goes through it. External clients should set only this.
 
-For a local development stack, point the client at your local services:
+When `chainId` is omitted, the SDK auto-resolves it from the gateway's
+`/status` endpoint. Pin it explicitly for deterministic cross-build
+signatures.
+
+For a local development stack, point the client at your local gateway; the
+node URLs are derived from it (override `rpcUrl` / `apiUrl` if your ports
+differ from the 26657 / 8080 convention):
 
 ```typescript
 const client = new ExchangeClient({
-  rpcUrl: "http://localhost:26657",
-  apiUrl: "http://localhost:8080",
   gatewayUrl: "http://localhost:9080",
   chainId: "proof-dev",
 });
