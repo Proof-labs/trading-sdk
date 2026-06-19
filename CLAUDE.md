@@ -125,10 +125,16 @@ callers.** This holds for every SDK (TypeScript, Python) — the gateway is the
 single public surface; treat direct node access as internal-only.
 
 "All traffic" means submission **and** every read: order submission, account /
-orderbook / market / history queries, chain status, blocks, and the live
+orderbook / market / history queries, transaction-status polling, and the live
 WebSocket feed. External clients must **not** assume the CometBFT RPC or the Go
 API server are reachable — those sit behind the gateway and may be firewalled
 off in a public deployment.
+
+Two things the gateway does **not** front today (so they are direct-node-only,
+`useGateway: false`): the chain-id `/status` bootstrap — gateway clients must
+pin `chainId` — and the raw CometBFT helpers `status()` / `getBlock()` /
+`getBlockResults()`. Adding a `/v1/status` (+`/v1/block`) gateway route would
+let these move onto the gateway too.
 
 - **One endpoint.** Public callers configure only the gateway URL. Prod default
   is `https://api.dev.proof.trade` (port 443). Local stack: the gateway is
@@ -138,12 +144,15 @@ off in a public deployment.
   internal `rpcUrl` / `apiUrl` are derived from it (local gateway `9080` →
   `26657` / `8080`) and consulted only on the `useGateway: false` path.
 - **`useGateway` is the master switch.** Under the default `useGateway: true`,
-  `ExchangeClient` routes **all** traffic — reads (`readBaseUrl`), chain status
-  / blocks / chain-id / tx-result polling / WebSocket (`rpcBaseUrl`), and
-  submission — through `gatewayUrl`. `useGateway: false` is the internal-only
-  direct-node path for in-cluster tools (MMs, HLP, oracle feeder) and the
-  scenario harness. Never document or default it for the public SDK, and never
-  add a fresh hard-coded `rpcUrl` / `apiUrl` call that bypasses the base getters.
+  `ExchangeClient` routes reads (`readBaseUrl`), tx-status polling
+  (`txStatusUrl` → the gateway's `/v1/tx/{hash}`), the WebSocket feed, and
+  submission through `gatewayUrl`. Chain-id resolution requires a pinned
+  `chainId`, and the CometBFT helpers (`status()` / `getBlock()` /
+  `getBlockResults()`) are gated to the direct path via `requireDirectNode()`.
+  `useGateway: false` is the internal-only direct-node path for in-cluster
+  tools (MMs, HLP, oracle feeder) and the scenario harness. Never document or
+  default it for the public SDK, and never add a fresh hard-coded `rpcUrl` /
+  `apiUrl` call that bypasses the base getters.
 
 ## Security notes
 

@@ -736,7 +736,7 @@ describe("ExchangeClient submitTx gateway path", () => {
     expect(r.code).toBe(0);
     expect(r.hash).toBe(expectedHash);
     await client.awaitPendingVerifies();
-    expect(calls[1].url).toBe(`http://test-gateway/tx?hash=0x${expectedHash}`);
+    expect(calls[1].url).toBe(`http://test-gateway/v1/tx/${expectedHash}`);
     expect(
       (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
     ).toBe(expectedNonce);
@@ -784,7 +784,7 @@ describe("ExchangeClient submitTx gateway path", () => {
       height: 202,
       log: "",
     });
-    expect(calls[1].url).toBe(`http://test-gateway/tx?hash=0x${expectedHash}`);
+    expect(calls[1].url).toBe(`http://test-gateway/v1/tx/${expectedHash}`);
     expect(
       (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
     ).toBe(expectedNonce);
@@ -1131,6 +1131,32 @@ describe("ExchangeClient chain_id resolution", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("gateway path without chainId throws asking to pin it (no /status fetch)", async () => {
+    const fetchSpy = vi.fn(async () => new Response("{}"));
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    // Default useGateway: true — the gateway exposes no /status to resolve from.
+    const client = new ExchangeClient({ gatewayUrl: "http://test-gateway" });
+    await expect(client.ready()).rejects.toThrow(/must pin opts\.chainId/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(client.getChainId()).toBeNull();
+  });
+
+  it("gateway path with allowUnbound falls back to UNBOUND_CHAIN_ID (no /status fetch)", async () => {
+    const fetchSpy = vi.fn(async () => new Response("{}"));
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const client = new ExchangeClient({
+      gatewayUrl: "http://test-gateway",
+      allowUnbound: true,
+    });
+    await client.ready();
+    expect(client.getChainId()).toEqual(UNBOUND_CHAIN_ID);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(warnSpy.mock.calls[0]?.[0]).toMatch(/UNBOUND_CHAIN_ID/);
+  });
+
   it("auto-resolves from /status when opts.chainId omitted", async () => {
     const fetchSpy = vi.fn(async (url: RequestInfo | URL) => {
       expect(url.toString()).toBe("http://test-rpc/status");
@@ -1138,7 +1164,7 @@ describe("ExchangeClient chain_id resolution", () => {
     });
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-    const client = new ExchangeClient({ gatewayUrl: "http://test-rpc" });
+    const client = new ExchangeClient({ useGateway: false, rpcUrl: "http://test-rpc" });
     await client.ready();
     expect(client.getChainId()).toEqual(chainIdFromString("proof-from-status"));
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -1153,7 +1179,7 @@ describe("ExchangeClient chain_id resolution", () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
 
-    const client = new ExchangeClient({ gatewayUrl: "http://test-rpc" });
+    const client = new ExchangeClient({ useGateway: false, rpcUrl: "http://test-rpc" });
     await expect(client.ready()).rejects.toThrow(
       /could not resolve chain_id from http:\/\/test-rpc\/status/,
     );
@@ -1167,7 +1193,8 @@ describe("ExchangeClient chain_id resolution", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const client = new ExchangeClient({
-      gatewayUrl: "http://test-rpc",
+      useGateway: false,
+      rpcUrl: "http://test-rpc",
       allowUnbound: true,
     });
     await client.ready();
@@ -1180,7 +1207,7 @@ describe("ExchangeClient chain_id resolution", () => {
     const fetchSpy = vi.fn(async () => statusResponse("proof-shared"));
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-    const client = new ExchangeClient({ gatewayUrl: "http://test-rpc" });
+    const client = new ExchangeClient({ useGateway: false, rpcUrl: "http://test-rpc" });
     await Promise.all([client.ready(), client.ready(), client.ready()]);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
@@ -1193,7 +1220,7 @@ describe("ExchangeClient chain_id resolution", () => {
       return statusResponse("proof-after-retry");
     }) as unknown as typeof fetch;
 
-    const client = new ExchangeClient({ gatewayUrl: "http://test-rpc" });
+    const client = new ExchangeClient({ useGateway: false, rpcUrl: "http://test-rpc" });
     await expect(client.ready()).rejects.toThrow();
     // First failure cleared the in-flight cache; a second call retries
     // instead of replaying the rejected promise forever.
@@ -1317,14 +1344,16 @@ describe("ExchangeClient chain-endpoint routing", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("default (useGateway) routes status through gatewayUrl, not rpcUrl", async () => {
+  it("default (useGateway) status() throws — the gateway has no /status route", async () => {
     const client = new ExchangeClient({
       rpcUrl: "http://test-rpc",
       gatewayUrl: "http://test-gateway",
       chainId: "test-chain",
     });
-    await client.status();
-    expect(calls).toEqual(["http://test-gateway/status"]);
+    await expect(client.status()).rejects.toThrow(
+      /not available over the API gateway/,
+    );
+    expect(calls).toEqual([]);
   });
 
   it("useGateway:false routes status to the direct rpcUrl", async () => {
