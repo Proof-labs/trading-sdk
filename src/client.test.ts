@@ -733,7 +733,7 @@ describe("ExchangeClient submitTx gateway path", () => {
     expect(r.code).toBe(0);
     expect(r.hash).toBe(expectedHash);
     await client.awaitPendingVerifies();
-    expect(calls[1].url).toBe(`http://test-rpc/tx?hash=0x${expectedHash}`);
+    expect(calls[1].url).toBe(`http://test-gateway/tx?hash=0x${expectedHash}`);
     expect(
       (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
     ).toBe(expectedNonce);
@@ -781,7 +781,7 @@ describe("ExchangeClient submitTx gateway path", () => {
       height: 202,
       log: "",
     });
-    expect(calls[1].url).toBe(`http://test-rpc/tx?hash=0x${expectedHash}`);
+    expect(calls[1].url).toBe(`http://test-gateway/tx?hash=0x${expectedHash}`);
     expect(
       (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
     ).toBe(expectedNonce);
@@ -1283,5 +1283,55 @@ describe("ExchangeClient read routing", () => {
     });
     await client.queryHealth();
     expect(calls).toEqual(["http://test-api/v1/health"]);
+  });
+});
+
+/**
+ * Chain endpoints (`/status`, `/block`, `/block_results`, `/tx`) must also
+ * honour the gateway-only policy under the default `useGateway: true`. The
+ * `useGateway: false` internal path keeps hitting the bare CometBFT RPC.
+ */
+describe("ExchangeClient chain-endpoint routing", () => {
+  const originalFetch = globalThis.fetch;
+  let calls: string[] = [];
+
+  beforeEach(() => {
+    calls = [];
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
+      calls.push(url.toString());
+      return new Response(
+        JSON.stringify({
+          result: {
+            sync_info: { latest_block_height: 7, latest_app_hash: "" },
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("default (useGateway) routes status through gatewayUrl, not rpcUrl", async () => {
+    const client = new ExchangeClient({
+      rpcUrl: "http://test-rpc",
+      gatewayUrl: "http://test-gateway",
+      chainId: "test-chain",
+    });
+    await client.status();
+    expect(calls).toEqual(["http://test-gateway/status"]);
+  });
+
+  it("useGateway:false routes status to the direct rpcUrl", async () => {
+    const client = new ExchangeClient({
+      rpcUrl: "http://test-rpc",
+      gatewayUrl: "http://test-gateway",
+      useGateway: false,
+      chainId: "test-chain",
+    });
+    await client.status();
+    expect(calls).toEqual(["http://test-rpc/status"]);
   });
 });
