@@ -150,14 +150,14 @@ await client.submitTx({
 The SDK talks to the API gateway at `PROOF_GATEWAY_URL`. The gateway routes
 read endpoints as follows:
 
-| Endpoint                                                                                                                                                                 | Gateway            | Notes                                         |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ | --------------------------------------------- |
-| `/v1/markets`, `/v1/orderbook/*`, `/v1/candles/*`, `/v1/trades/*`, `/v1/funding/*`, `/v1/fee-tiers/*`, `/v1/impact_*`, `/v1/ticker/*`, `/v1/health`, `/v1/oracle/health` | ✅ Proxied to node | Public, no auth                               |
-| `POST /info`                                                                                                                                                             | ✅ Routed          | Structured queries (clearinghouseState, etc.) |
-| `/v1/account/{hex}`                                                                                                                                                      | ❌ **Not routed**  | 404s on gateway                               |
-| `/v1/account/{hex}/recent-nonces`, `/v1/nonce/{hex}`                                                                                                                     | ✅ Routed          | Diagnostic                                    |
-| `/v1/history/*`                                                                                                                                                          | ✅ Proxied         | Historical data only (not live state)         |
-| `POST /exchange`                                                                                                                                                         | ✅ Routed          | Transaction submission (API key required)     |
+| Endpoint                                                                                                                                                 | Gateway            | Notes                                         |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | --------------------------------------------- |
+| `/v1/markets`, `/v1/orderbook/*`, `/v1/candles/*`, `/v1/trades/*`, `/v1/funding/*`, `/v1/fee-tiers/*`, `/v1/impact_*`, `/v1/health`, `/v1/oracle/health` | ✅ Proxied to node | Public, no auth                               |
+| `POST /info`                                                                                                                                             | ✅ Routed          | Structured queries (clearinghouseState, etc.) |
+| `/v1/account/{hex}`                                                                                                                                      | ❌ **Not routed**  | 404s on gateway                               |
+| `/v1/account/{hex}/recent-nonces`, `/v1/nonce/{hex}`                                                                                                     | ✅ Routed          | Diagnostic                                    |
+| `/v1/history/*`                                                                                                                                          | ✅ Proxied         | Historical data only (not live state)         |
+| `POST /exchange`                                                                                                                                         | ✅ Routed          | Transaction submission (API key required)     |
 
 **Key caveat**: `GET /v1/account/{hex}` (live balance + positions + margin)
 is **not** routed on the gateway. The SDK's `queryAccount()` handles this:
@@ -177,10 +177,6 @@ const orders = await client.queryOpenOrders(hex); // or omit for own address
 // Account (balance, positions, margin) — uses POST /info fallback internally
 const acct = await client.queryAccount(hex); // or omit for own address
 // { balance: bigint, equity: bigint, totalMm: bigint, totalIm: bigint, positions: [...] }
-
-// Ticker (24h summary)
-const ticker = await client.queryTicker(1);
-// { lastPrice, volume24hContracts, change24hBps, fundingMsgpackB64, orderbookMsgpackB64 }
 
 // Chain status
 const status = await client.status();

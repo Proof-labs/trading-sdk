@@ -11,7 +11,6 @@ import type {
   Action,
   TxResult,
   AccountInfo,
-  AdlQueueEntry,
   BindingScenarioEntry,
   FeeTier,
   HistoryCashFlow,
@@ -24,7 +23,6 @@ import type {
   Orderbook,
   OrderbookLevel,
   PositionInfo,
-  Ticker,
   WithdrawalRecord,
   WithdrawalStatus,
 } from "./types.js";
@@ -802,33 +800,6 @@ export class ExchangeClient {
     }));
   }
 
-  /** Fetch the auto-deleveraging queue for a market. Returns
-   *  profitable positions ranked by `adlScore` desc — highest first
-   *  is most-likely to be ADL'd if a counterparty blows through the
-   *  earlier waterfall tiers. UIs use this to compute a per-position
-   *  percentile rank (search by owner+market, find your row index,
-   *  divide by total entries). Empty array if the market has no
-   *  profitable positions or if the gateway predates the endpoint. */
-  async queryAdlQueue(market: number): Promise<AdlQueueEntry[]> {
-    const json = await fetchApiJson(
-      `${this.readBaseUrl}/v1/adl/queue/${market}`,
-    );
-    const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes);
-    if (!Array.isArray(raw)) return [];
-    return raw.map((row) => {
-      const r = row as unknown[];
-      return {
-        owner: r[0] as Uint8Array,
-        market: Number(r[1]),
-        side: r[2] as "Buy" | "Sell",
-        size: BigInt(r[3] as number | bigint),
-        upnlNow: BigInt(r[4] as number | bigint),
-        adlScore: BigInt(r[5] as number | bigint),
-      };
-    });
-  }
-
   /** Fetch a withdrawal record by id. Returns `null` for unknown ids
    *  (the engine encodes "not found" as msgpack `nil`, not HTTP 404). */
   async queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null> {
@@ -952,34 +923,6 @@ export class ExchangeClient {
   async queryHealth(): Promise<{ status: string; height: number }> {
     const res = await fetch(`${this.readBaseUrl}/v1/health`);
     return res.json();
-  }
-
-  /** One-round-trip market summary. Bundles last / 24h volume / 24h
-   * change with pass-through msgpack blobs for funding + orderbook
-   * top-of-book. Meant for the Markets grid card rail — previously
-   * required N round-trips per card. Sprint 2 Day 5 (P2 #4).
-   *
-   * `openInterest` is null in every response today — the engine
-   * doesn't track OI yet. UI should render "—" or "coming soon". */
-  async queryTicker(market: number): Promise<Ticker | null> {
-    const res = await fetch(`${this.readBaseUrl}/v1/ticker/${market}`);
-    if (!res.ok) {
-      if (res.status === 404) return null;
-      throw new Error(`API error: HTTP ${res.status}`);
-    }
-    const row = (await res.json()) as Record<string, unknown>;
-    return {
-      market: String(row.market ?? market),
-      lastPrice: String(row.last_price ?? "0"),
-      volume24hContracts: String(row.volume_24h_contracts ?? "0"),
-      change24hBps: String(row.change_24h_bps ?? "0"),
-      fundingMsgpackB64: String(row.funding_msgpack_b64 ?? ""),
-      orderbookMsgpackB64: String(row.orderbook_msgpack_b64 ?? ""),
-      openInterest:
-        row.open_interest === null || row.open_interest === undefined
-          ? null
-          : String(row.open_interest),
-    };
   }
 
   /** Per-user deposit log — every `deposit_confirmed` event for this

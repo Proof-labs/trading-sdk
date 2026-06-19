@@ -1039,32 +1039,6 @@ export interface OpenOrder {
   quantity: bigint;
 }
 
-/** One row of the auto-deleveraging queue for a market. Returned
- *  sorted by `adlScore` desc (front of the queue first). Used by the
- *  trading UI to compute a real per-position ADL percentile rather
- *  than relying on the per-account score alone.
- *
- *  Wire shape: 6-tuple `[owner, market, side, size, upnlNow, adlScore]`.
- *  Endpoint: `GET /v1/adl/queue/{market}`. Added 2026-04-25 with the
- *  Tier-3 ADL force-close path.
- */
-export interface AdlQueueEntry {
-  /** 20-byte owner address. */
-  owner: Uint8Array;
-  market: number;
-  /** Position side: "Buy" = long, "Sell" = short. */
-  side: "Buy" | "Sell";
-  /** Position size in contracts. */
-  size: bigint;
-  /** Unrealized PnL at the current mark, signed. Always positive
-   *  here (only profitable positions are queued). */
-  upnlNow: bigint;
-  /** `max(0, upnlNow) × leverage_bps`. Higher = closer to the front
-   *  of the ADL queue. Tied with `PositionInfo.adlScore` for the
-   *  same position. */
-  adlScore: bigint;
-}
-
 /** Information about a single open position.
  *
  * Fields 0-5 are the raw `Position` state; fields 6-11 (the "now"/
@@ -1141,33 +1115,6 @@ export interface PositionInfo {
 export interface BindingScenarioEntry {
   impactMarketId: number;
   branch: "Yes" | "No";
-}
-
-/** One-round-trip market summary for the Markets-page card rail and
- * Perp trade ticker bar. Bundles trade-derived summary stats (from
- * history.db, JSON) with pass-through base64 msgpack blobs for
- * funding + orderbook top-of-book.
- *
- * Returned by `GET /v1/ticker/{market}` and the `ticker` InfoRequest.
- * Sprint 2 Day 5 (Jesse's P2 #4). */
-export interface Ticker {
-  /** Market id as decimal string. */
-  market: string;
-  /** Last fill price in the 24h window (empty/"0" if no trades). */
-  lastPrice: string;
-  /** Σ quantity across the 24h window (integer contracts). */
-  volume24hContracts: string;
-  /** Signed 24h change in basis points. Empty/"0" if no trades. */
-  change24hBps: string;
-  /** Base64 msgpack FundingInfo (mark EWMA, oracle, funding rate,
-   * interval). Decode with @msgpack/msgpack. */
-  fundingMsgpackB64: string;
-  /** Base64 msgpack OrderbookSnapshot at depth=1. Empty for fresh
-   * markets with no orders. */
-  orderbookMsgpackB64: string;
-  /** Always null today — the engine doesn't track open interest yet.
-   * UIs should render "—" / "coming soon" for this column. */
-  openInterest: string | null;
 }
 
 /** One row of the per-user deposit/withdraw cash-flow log. Covers four
