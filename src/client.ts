@@ -201,7 +201,9 @@ export class ExchangeClient {
     this.useGateway = opts.useGateway ?? true;
     this.apiKey = opts.apiKey ?? null;
     this.wsUrl =
-      opts.wsUrl ?? this.rpcUrl.replace(/^http/, "ws") + "/websocket";
+      opts.wsUrl ??
+      (this.useGateway ? this.gatewayUrl : this.rpcUrl).replace(/^http/, "ws") +
+        "/websocket";
     // Bind chainId eagerly when supplied, else leave null and let
     // resolveChainId() fetch from /status on first submit.
     this.chainId = opts.chainId ? chainIdFromString(opts.chainId) : null;
@@ -216,6 +218,16 @@ export class ExchangeClient {
    */
   private get readBaseUrl(): string {
     return this.useGateway ? this.gatewayUrl : this.apiUrl;
+  }
+
+  /**
+   * Base URL for CometBFT-style chain endpoints (`/status`, `/block`,
+   * `/block_results`, `/tx`) and the WebSocket feed. Routes through the
+   * gateway under the default `useGateway: true`; only the internal
+   * direct-node path (`useGateway: false`) targets the bare `rpcUrl`.
+   */
+  private get rpcBaseUrl(): string {
+    return this.useGateway ? this.gatewayUrl : this.rpcUrl;
   }
 
   /**
@@ -237,7 +249,7 @@ export class ExchangeClient {
     if (this.chainIdPromise) return this.chainIdPromise;
     this.chainIdPromise = (async () => {
       try {
-        const bound = await fetchChainId(this.rpcUrl);
+        const bound = await fetchChainId(this.rpcBaseUrl);
         this.chainId = bound;
         return bound;
       } catch (err) {
@@ -245,7 +257,7 @@ export class ExchangeClient {
         this.chainIdPromise = null;
         if (this.allowUnbound) {
           console.warn(
-            `ExchangeClient: failed to resolve chain_id from ${this.rpcUrl}/status ` +
+            `ExchangeClient: failed to resolve chain_id from ${this.rpcBaseUrl}/status ` +
               `(${(err as Error).message}); falling back to UNBOUND_CHAIN_ID. ` +
               "Production callers must pin chainId or fix the rpcUrl.",
           );
@@ -253,7 +265,7 @@ export class ExchangeClient {
           return UNBOUND_CHAIN_ID;
         }
         throw new Error(
-          `ExchangeClient could not resolve chain_id from ${this.rpcUrl}/status: ` +
+          `ExchangeClient could not resolve chain_id from ${this.rpcBaseUrl}/status: ` +
             `${(err as Error).message}. Pass opts.chainId explicitly, or set ` +
             "opts.allowUnbound = true if you intend to sign for an unbound chain.",
         );
@@ -570,7 +582,7 @@ export class ExchangeClient {
           await new Promise((r) => setTimeout(r, pollDelay));
           pollDelay = Math.min(pollDelay + 100, 600);
           try {
-            const res = await fetch(`${this.rpcUrl}/tx?hash=0x${txHash}`);
+            const res = await fetch(`${this.rpcBaseUrl}/tx?hash=0x${txHash}`);
             const json = await res.json();
             const txResult = json.result?.tx_result;
             if (txResult) {
@@ -668,7 +680,7 @@ export class ExchangeClient {
       await new Promise((r) => setTimeout(r, pollDelay));
       pollDelay = Math.min(pollDelay + 100, 600);
       try {
-        const res = await fetch(`${this.rpcUrl}/tx?hash=0x${txHash}`);
+        const res = await fetch(`${this.rpcBaseUrl}/tx?hash=0x${txHash}`);
         const json = await res.json();
         const txResult = json.result?.tx_result;
         if (txResult) {
@@ -1060,7 +1072,7 @@ export class ExchangeClient {
   // -----------------------------------------------------------------------
 
   async status(): Promise<{ latestHeight: number; latestAppHash: string }> {
-    const res = await fetch(`${this.rpcUrl}/status`);
+    const res = await fetch(`${this.rpcBaseUrl}/status`);
     const json = await res.json();
     const info = json.result.sync_info;
     return {
@@ -1071,7 +1083,7 @@ export class ExchangeClient {
 
   async getBlock(height?: number): Promise<Record<string, unknown>> {
     const params = height != null ? `?height=${height}` : "";
-    const res = await fetch(`${this.rpcUrl}/block${params}`);
+    const res = await fetch(`${this.rpcBaseUrl}/block${params}`);
     const json = await res.json();
     if (json.error)
       throw new Error(json.error.message ?? JSON.stringify(json.error));
@@ -1079,7 +1091,9 @@ export class ExchangeClient {
   }
 
   async getBlockResults(height: number): Promise<Record<string, unknown>> {
-    const res = await fetch(`${this.rpcUrl}/block_results?height=${height}`);
+    const res = await fetch(
+      `${this.rpcBaseUrl}/block_results?height=${height}`,
+    );
     const json = await res.json();
     if (json.error)
       throw new Error(json.error.message ?? JSON.stringify(json.error));
