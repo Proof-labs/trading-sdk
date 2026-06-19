@@ -56,9 +56,21 @@ export async function fetchChainId(rpcUrl: string): Promise<Uint8Array> {
 }
 
 export interface ExchangeClientOptions {
-  /** CometBFT RPC endpoint. Default: https://api.dev.proof.trade */
+  /**
+   * CometBFT RPC endpoint for the **internal** direct-node path
+   * (`useGateway: false`). Default: https://api.dev.proof.trade. When
+   * `useGateway` is true (the default, and the only supported mode for
+   * external clients) all chain status / block / tx-result / chain-id
+   * traffic goes through `gatewayUrl` and this value is ignored.
+   */
   rpcUrl?: string;
-  /** Go API server endpoint. Default: https://api.dev.proof.trade */
+  /**
+   * Go API server endpoint for the **internal** direct-node read path
+   * (`useGateway: false`). Default: https://api.dev.proof.trade. When
+   * `useGateway` is true (the default) every read/query goes through
+   * `gatewayUrl` and this value is ignored. External clients must not
+   * rely on direct API-server reachability.
+   */
   apiUrl?: string;
   /** WebSocket URL. Derived from rpcUrl by default. */
   wsUrl?: string;
@@ -98,21 +110,27 @@ export interface ExchangeClientOptions {
    */
   gatewayUrl?: string;
   /**
-   * Submission path selector.
+   * Master traffic selector. Controls **all** network paths, not just
+   * submission, so the SDK honours the gateway-only network policy (see
+   * CLAUDE.md → "Network policy — gateway only").
    *
-   * - `true` (default): `submitTx` POSTs the signed wire bytes to
-   *   `gatewayUrl/exchange` — the same path external clients use.
-   *   The gateway verifies the signature, applies rate limiting, and
-   *   forwards to CometBFT's `broadcast_tx_sync`. This is the
+   * - `true` (default, the only supported mode for external clients):
+   *   every request — submission, reads/queries, chain status, blocks,
+   *   tx-result polling, chain-id resolution, and the WebSocket feed —
+   *   goes through `gatewayUrl`. Submission POSTs the signed wire bytes
+   *   to `gatewayUrl/exchange`; the gateway verifies the signature,
+   *   applies rate limiting, and forwards to CometBFT. This is the
    *   production-facing path.
    *
-   * - `false`: `submitTx` falls back to the legacy CometBFT
-   *   `broadcast_tx_sync` over `rpcUrl` — kept for internal tools
-   *   (MMs, HLP, oracle feeder, retail-flow taker) that want to skip
-   *   the gateway for performance and don't need rate limiting.
+   * - `false`: the legacy direct-node path — submission goes to CometBFT
+   *   `broadcast_tx_sync` over `rpcUrl`, reads to `apiUrl`, and chain
+   *   queries to `rpcUrl`. Kept only for in-cluster tools (MMs, HLP,
+   *   oracle feeder, retail-flow taker) and the scenario harness that
+   *   reach the node directly and don't need the gateway. Never expose
+   *   this to external callers.
    *
-   * The two paths are wire-compatible: both submit the same V3 signed
-   * envelope. Switching only changes which surface validates and
+   * The submission paths are wire-compatible: both submit the same V3
+   * signed envelope. Switching only changes which surface validates and
    * forwards the bytes. The nonce in that envelope is a client-chosen
    * millisecond Unix timestamp; code=21 means pick a fresh timestamp.
    */
@@ -189,6 +207,15 @@ export class ExchangeClient {
     this.chainId = opts.chainId ? chainIdFromString(opts.chainId) : null;
     this.allowUnbound = opts.allowUnbound ?? false;
     void opts.concurrentNonces;
+  }
+
+  /**
+   * Base URL for read/query endpoints (`/v1/*`). Routes through the
+   * gateway under the default `useGateway: true`; only the internal
+   * direct-node path (`useGateway: false`) targets the bare `apiUrl`.
+   */
+  private get readBaseUrl(): string {
+    return this.useGateway ? this.gatewayUrl : this.apiUrl;
   }
 
   /**
@@ -301,7 +328,9 @@ export class ExchangeClient {
   async getRecentNonces(addressHex?: string): Promise<bigint[]> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) throw new Error("No address available");
-    const res = await fetch(`${this.apiUrl}/v1/account/${hex}/recent-nonces`);
+    const res = await fetch(
+      `${this.readBaseUrl}/v1/account/${hex}/recent-nonces`,
+    );
     const json = await res.json();
     if (json.error) throw new Error(json.error);
     const recent = (json.recent ?? []) as Array<number | bigint | string>;
@@ -671,7 +700,9 @@ export class ExchangeClient {
   // -----------------------------------------------------------------------
 
   async queryOrderbook(market: number): Promise<Orderbook> {
-    const json = await fetchApiJson(`${this.apiUrl}/v1/orderbook/${market}`);
+    const json = await fetchApiJson(
+      `${this.readBaseUrl}/v1/orderbook/${market}`,
+    );
     const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as [unknown[], unknown[]];
     const parseLevel = (arr: unknown[]): OrderbookLevel => ({
@@ -687,7 +718,7 @@ export class ExchangeClient {
 
   /** List all registered market configs. */
   async queryMarkets(): Promise<MarketConfig[]> {
-    const json = await fetchApiJson(`${this.apiUrl}/v1/markets`);
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/markets`);
     const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as unknown[][];
     return raw.map((m) => decodeMarketConfig(m));
@@ -700,7 +731,7 @@ export class ExchangeClient {
   async queryOpenOrders(addressHex?: string): Promise<OpenOrder[]> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return [];
-    const json = await fetchApiJson(`${this.apiUrl}/v1/orders/${hex}`);
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/orders/${hex}`);
     if (!json.data) return [];
     const bytes = fromBase64(json.data as string);
     let decoded: unknown;
@@ -728,7 +759,9 @@ export class ExchangeClient {
    *  divide by total entries). Empty array if the market has no
    *  profitable positions or if the gateway predates the endpoint. */
   async queryAdlQueue(market: number): Promise<AdlQueueEntry[]> {
-    const json = await fetchApiJson(`${this.apiUrl}/v1/adl/queue/${market}`);
+    const json = await fetchApiJson(
+      `${this.readBaseUrl}/v1/adl/queue/${market}`,
+    );
     const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes);
     if (!Array.isArray(raw)) return [];
@@ -748,7 +781,7 @@ export class ExchangeClient {
   /** Fetch a withdrawal record by id. Returns `null` for unknown ids
    *  (the engine encodes "not found" as msgpack `nil`, not HTTP 404). */
   async queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null> {
-    const json = await fetchApiJson(`${this.apiUrl}/v1/withdrawal/${id}`);
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/withdrawal/${id}`);
     const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as unknown[] | null;
     if (raw === null) return null;
@@ -769,7 +802,7 @@ export class ExchangeClient {
   async queryAccount(addressHex?: string): Promise<AccountInfo | null> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return null;
-    const json = await fetchApiJson(`${this.apiUrl}/v1/account/${hex}`);
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/account/${hex}`);
     const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as unknown[];
     const balance = BigInt(raw[0] as number | bigint);
@@ -860,7 +893,7 @@ export class ExchangeClient {
   }
 
   async queryHealth(): Promise<{ status: string; height: number }> {
-    const res = await fetch(`${this.apiUrl}/v1/health`);
+    const res = await fetch(`${this.readBaseUrl}/v1/health`);
     return res.json();
   }
 
@@ -872,7 +905,7 @@ export class ExchangeClient {
    * `openInterest` is null in every response today — the engine
    * doesn't track OI yet. UI should render "—" or "coming soon". */
   async queryTicker(market: number): Promise<Ticker | null> {
-    const res = await fetch(`${this.apiUrl}/v1/ticker/${market}`);
+    const res = await fetch(`${this.readBaseUrl}/v1/ticker/${market}`);
     if (!res.ok) {
       if (res.status === 404) return null;
       throw new Error(`API error: HTTP ${res.status}`);
@@ -927,7 +960,7 @@ export class ExchangeClient {
     if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
     if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
     const qs = params.toString();
-    const url = `${this.apiUrl}/v1/history/${path}/${hex}${qs ? `?${qs}` : ""}`;
+    const url = `${this.readBaseUrl}/v1/history/${path}/${hex}${qs ? `?${qs}` : ""}`;
     const json = await fetchApiArray(url);
     return (json as Array<Record<string, unknown>>).map((row) => ({
       kind: row.kind as HistoryCashFlow["kind"],
@@ -968,7 +1001,7 @@ export class ExchangeClient {
     if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
     if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
     const qs = params.toString();
-    const url = `${this.apiUrl}/v1/history/resolutions/${hex}${qs ? `?${qs}` : ""}`;
+    const url = `${this.readBaseUrl}/v1/history/resolutions/${hex}${qs ? `?${qs}` : ""}`;
     const json = await fetchApiArray(url);
     return (json as Array<Record<string, unknown>>).map((row) => ({
       kind: row.kind as HistoryResolution["kind"],
@@ -1009,7 +1042,7 @@ export class ExchangeClient {
     if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
     if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
     const qs = params.toString();
-    const url = `${this.apiUrl}/v1/history/positions/${hex}${qs ? `?${qs}` : ""}`;
+    const url = `${this.readBaseUrl}/v1/history/positions/${hex}${qs ? `?${qs}` : ""}`;
     const json = await fetchApiArray(url);
     return (json as Array<Record<string, unknown>>).map((row) => ({
       owner: String(row.owner ?? ""),

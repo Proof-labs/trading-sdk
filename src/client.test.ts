@@ -1238,3 +1238,50 @@ describe("fetchChainId", () => {
     );
   });
 });
+
+/**
+ * Read/query endpoints must honour the gateway-only network policy: under
+ * the default `useGateway: true`, every `/v1/*` read goes through
+ * `gatewayUrl`, never the bare `apiUrl`. The `useGateway: false` internal
+ * path keeps hitting the Go API server directly (scenario harness, in-cluster
+ * tools).
+ */
+describe("ExchangeClient read routing", () => {
+  const originalFetch = globalThis.fetch;
+  let calls: string[] = [];
+
+  beforeEach(() => {
+    calls = [];
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
+      calls.push(url.toString());
+      return new Response(JSON.stringify({ status: "ok", height: 1 }), {
+        status: 200,
+      });
+    }) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("default (useGateway) routes reads through gatewayUrl, not apiUrl", async () => {
+    const client = new ExchangeClient({
+      apiUrl: "http://test-api",
+      gatewayUrl: "http://test-gateway",
+      chainId: "test-chain",
+    });
+    await client.queryHealth();
+    expect(calls).toEqual(["http://test-gateway/v1/health"]);
+  });
+
+  it("useGateway:false routes reads to the direct apiUrl", async () => {
+    const client = new ExchangeClient({
+      apiUrl: "http://test-api",
+      gatewayUrl: "http://test-gateway",
+      useGateway: false,
+      chainId: "test-chain",
+    });
+    await client.queryHealth();
+    expect(calls).toEqual(["http://test-api/v1/health"]);
+  });
+});
