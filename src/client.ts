@@ -725,8 +725,27 @@ export class ExchangeClient {
   }
 
   // -----------------------------------------------------------------------
-  // Query endpoints (via Go API server)
+  // Query endpoints
   // -----------------------------------------------------------------------
+
+  /**
+   * Owner-scoped reads (account, open orders, withdrawal) are deliberately
+   * NOT exposed as GETs on the gateway — it 404s them and requires
+   * `POST /info` instead (see `api-gateway/src/server.rs`
+   * `is_public_node_path`). On the gateway path we POST the matching
+   * `/info` request; on the internal `useGateway: false` path we hit the
+   * Go API GET directly. The gateway proxies the node body verbatim, so
+   * both return the same `{ data: <base64-msgpack> }` shape and callers
+   * decode identically.
+   */
+  private async queryOwnerScoped(
+    info: Record<string, unknown>,
+    nodePath: string,
+  ): Promise<Record<string, unknown>> {
+    return this.useGateway
+      ? postInfoJson(this.gatewayUrl, info)
+      : fetchApiJson(`${this.apiUrl}${nodePath}`);
+  }
 
   async queryOrderbook(market: number): Promise<Orderbook> {
     const json = await fetchApiJson(
@@ -760,7 +779,10 @@ export class ExchangeClient {
   async queryOpenOrders(addressHex?: string): Promise<OpenOrder[]> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return [];
-    const json = await fetchApiJson(`${this.readBaseUrl}/v1/orders/${hex}`);
+    const json = await this.queryOwnerScoped(
+      { type: "openOrders", user: hex },
+      `/v1/orders/${hex}`,
+    );
     if (!json.data) return [];
     const bytes = fromBase64(json.data as string);
     let decoded: unknown;
@@ -810,7 +832,10 @@ export class ExchangeClient {
   /** Fetch a withdrawal record by id. Returns `null` for unknown ids
    *  (the engine encodes "not found" as msgpack `nil`, not HTTP 404). */
   async queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null> {
-    const json = await fetchApiJson(`${this.readBaseUrl}/v1/withdrawal/${id}`);
+    const json = await this.queryOwnerScoped(
+      { type: "withdrawalStatus", withdrawalId: Number(id) },
+      `/v1/withdrawal/${id}`,
+    );
     const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as unknown[] | null;
     if (raw === null) return null;
@@ -831,7 +856,10 @@ export class ExchangeClient {
   async queryAccount(addressHex?: string): Promise<AccountInfo | null> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return null;
-    const json = await fetchApiJson(`${this.readBaseUrl}/v1/account/${hex}`);
+    const json = await this.queryOwnerScoped(
+      { type: "clearinghouseState", user: hex },
+      `/v1/account/${hex}`,
+    );
     const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as unknown[];
     const balance = BigInt(raw[0] as number | bigint);
@@ -1210,6 +1238,30 @@ export class ExchangeClient {
  */
 async function fetchApiJson(url: string): Promise<Record<string, unknown>> {
   const res = await fetch(url);
+  const json = (await res.json()) as Record<string, unknown>;
+  if (!res.ok || json.error) {
+    const msg = (json.error as string) ?? `HTTP ${res.status}`;
+    throw new Error(`API error: ${msg}`);
+  }
+  return json;
+}
+
+/**
+ * POST a structured `/info` request to the gateway and throw on non-2xx or
+ * `json.error`. The gateway proxies the node's response body verbatim, so
+ * the returned shape matches the equivalent direct-node GET (e.g.
+ * `{ data: <base64-msgpack> }`). Used for owner-scoped reads the gateway
+ * does not expose as GETs (account, open orders, withdrawal).
+ */
+async function postInfoJson(
+  gatewayUrl: string,
+  info: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`${gatewayUrl}/info`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(info),
+  });
   const json = (await res.json()) as Record<string, unknown>;
   if (!res.ok || json.error) {
     const msg = (json.error as string) ?? `HTTP ${res.status}`;
