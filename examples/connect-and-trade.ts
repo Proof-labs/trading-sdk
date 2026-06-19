@@ -37,20 +37,21 @@ info(
 );
 info("");
 
+// `gatewayUrl` is the only endpoint the SDK needs — everything (reads,
+// submission, chain queries, WebSocket) is routed through it.
+const client = new ExchangeClient({
+  gatewayUrl: GATEWAY_URL,
+  chainId: CHAIN_ID,
+});
+
 // Step 1 — Check connectivity
 info("--- 1. Health check ---");
-const health = await fetchJSON(`${GATEWAY_URL}/health`);
+const health = await client.queryHealth();
 info(`Status: ${health.status}  Height: ${health.height}`);
 info("");
 
 // Step 2 — List markets using the SDK
 info("--- 2. Available markets ---");
-const client = new ExchangeClient({
-  rpcUrl: GATEWAY_URL,
-  apiUrl: GATEWAY_URL,
-  gatewayUrl: GATEWAY_URL,
-  chainId: CHAIN_ID,
-});
 const markets = await client.queryMarkets();
 const perpMarkets = markets.filter((m) => m.kind === "Perp" || !m.kind);
 info(`  Total markets: ${markets.length} (${perpMarkets.length} perp)`);
@@ -199,11 +200,6 @@ client.disconnect();
 
 function info(msg: string) {
   console.log(msg);
-}
-
-async function fetchJSON(url: string): Promise<Record<string, unknown>> {
-  const res = await fetch(url);
-  return res.json();
 }
 
 /** Format micro-USDC or cents as a dollar string. */

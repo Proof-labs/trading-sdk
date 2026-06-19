@@ -118,6 +118,33 @@ wire-format change affects the SDK:
 `src/types.ts` and `src/codec.ts` are the source of truth for the action set —
 do not hardcode action counts elsewhere; they change as the engine grows.
 
+## Network policy — gateway only
+
+**All SDK traffic goes through the API gateway. No exceptions for external
+callers.** This holds for every SDK (TypeScript, Python) — the gateway is the
+single public surface; treat direct node access as internal-only.
+
+"All traffic" means submission **and** every read: order submission, account /
+orderbook / market / history queries, chain status, blocks, and the live
+WebSocket feed. External clients must **not** assume the CometBFT RPC or the Go
+API server are reachable — those sit behind the gateway and may be firewalled
+off in a public deployment.
+
+- **One endpoint.** Public callers configure only the gateway URL. Prod default
+  is `https://api.dev.proof.trade` (port 443). Local stack: the gateway is
+  **port 9080** — that is the port external clients use. `8080` (Go API) and
+  `26657` (CometBFT RPC) are upstreams the gateway fronts, not client targets.
+- **Single source of truth.** `ExchangeClient` takes one `gatewayUrl`; the
+  internal `rpcUrl` / `apiUrl` are derived from it (local gateway `9080` →
+  `26657` / `8080`) and consulted only on the `useGateway: false` path.
+- **`useGateway` is the master switch.** Under the default `useGateway: true`,
+  `ExchangeClient` routes **all** traffic — reads (`readBaseUrl`), chain status
+  / blocks / chain-id / tx-result polling / WebSocket (`rpcBaseUrl`), and
+  submission — through `gatewayUrl`. `useGateway: false` is the internal-only
+  direct-node path for in-cluster tools (MMs, HLP, oracle feeder) and the
+  scenario harness. Never document or default it for the public SDK, and never
+  add a fresh hard-coded `rpcUrl` / `apiUrl` call that bypasses the base getters.
+
 ## Security notes
 
 This SDK signs and encodes value-bearing transactions. Treat signing and codec
