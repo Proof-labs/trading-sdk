@@ -183,12 +183,12 @@ if (FAUCET_TOKEN && account && account.balance > 0n) {
   info("");
 }
 
-// Step 9 — WebSocket events (conceptual)
-info("--- 9. Real-time events ---");
-info("  Subscribe via the SDK:");
-info(`    client.subscribeBlocks((event) => { ... })`);
-info("  Or connect to the multiplexed WebSocket feed:");
-info(`    wss://${new URL(GATEWAY_URL).host}/ws`);
+// Step 9 — WebSocket streams (conceptual)
+info("--- 9. Real-time streams ---");
+info("  Subscribe to the gateway's native feed via the SDK:");
+info(`    client.subscribeAccountEvents(address, (event) => { ... })`);
+info(`    client.subscribeOrderbookDeltas(1, (msg) => { ... })`);
+info("  One-shot snapshot:  await client.orderbookSnapshot(1)");
 info("");
 
 info("=== Done ===");
