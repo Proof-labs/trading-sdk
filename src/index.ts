@@ -56,8 +56,6 @@ export {
   type PositionInfo,
   type MarketConfig,
   type MarkSourceMode,
-  type AdlQueueEntry,
-  type Ticker,
   type BindingScenarioEntry,
   type HistoryCashFlow,
   type HistoryResolution,
