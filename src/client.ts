@@ -4,6 +4,7 @@ import {
   pubkeyToOwner,
   ownerToHex,
   bytesToHex,
+  sign,
   UNBOUND_CHAIN_ID,
   chainIdFromString,
 } from "./crypto.js";
@@ -72,8 +73,14 @@ export interface ExchangeClientOptions {
    * must not rely on direct API-server reachability.
    */
   apiUrl?: string;
-  /** WebSocket URL. Derived from `gatewayUrl` (or `rpcUrl` on the
-   * direct-node path) by default. */
+  /**
+   * WebSocket base URL for the gateway streams (`/account-events`,
+   * `/orderbook-deltas`). Defaults to `gatewayUrl` (or `rpcUrl` on the
+   * direct-node path) with the scheme swapped to `ws`/`wss`. The gateway
+   * serves its feed on a dedicated listener; for a local stack whose WS
+   * port differs from the HTTP port, set this explicitly
+   * (e.g. `ws://localhost:9091`).
+   */
   wsUrl?: string;
   /**
    * CometBFT `chain_id` string — e.g. "proof-testnet-1". Signatures
@@ -173,8 +180,9 @@ export class ExchangeClient {
   private address: Uint8Array | null = null;
   private addressHex: string | null = null;
   private lastTimestampNonce = 0n;
-  private ws: WebSocket | null = null;
-  private eventListeners: Array<(event: Record<string, unknown>) => void> = [];
+  /** Unsubscribe handles for every open WebSocket stream, so `disconnect()`
+   *  can tear them all down at once. */
+  private activeStreams = new Set<() => void>();
   /**
    * In-flight DeliverTx verification promises spawned by submitTx. Awaiting
    * this set lets callers serialize against block inclusion when they need to;
@@ -215,10 +223,17 @@ export class ExchangeClient {
       opts.apiUrl ?? deriveNodeUrl(this.gatewayUrl, "8080"),
     );
     this.apiKey = opts.apiKey ?? null;
-    this.wsUrl =
+    // WebSocket base URL (no path). Per-stream methods append the channel
+    // path (`/account-events`, `/orderbook-deltas`). Mirrors the Python SDK,
+    // which derives the WS base by swapping the gateway URL's scheme. Local
+    // stacks whose WS listener is on a different port must pass `wsUrl`.
+    this.wsUrl = stripTrailingSlash(
       opts.wsUrl ??
-      (this.useGateway ? this.gatewayUrl : this.rpcUrl).replace(/^http/, "ws") +
-        "/websocket";
+        (this.useGateway ? this.gatewayUrl : this.rpcUrl).replace(
+          /^http/,
+          "ws",
+        ),
+    );
     // Bind chainId eagerly when supplied, else leave null and let
     // resolveChainId() fetch from /status on first submit.
     this.chainId = opts.chainId ? chainIdFromString(opts.chainId) : null;
@@ -1089,91 +1104,238 @@ export class ExchangeClient {
   }
 
   // -----------------------------------------------------------------------
-  // WebSocket subscriptions
+  // WebSocket streams (gateway-native; mirror the Python SDK)
   // -----------------------------------------------------------------------
 
-  /** Subscribe to CometBFT events via WebSocket. */
-  subscribeBlocks(
+  /**
+   * Subscribe to the account-events stream (`/account-events`). Mirrors the
+   * Python SDK's `AccountEventStream`: the gateway sends an initial snapshot
+   * frame followed by incremental event frames. The SDK tracks the highest
+   * `event_id` seen and replays from it via `after_id` on reconnect, so no
+   * events are dropped across a disconnect.
+   *
+   * Auth: account streams require auth only when the gateway runs with
+   * `--api-key`. A browser `WebSocket` cannot send the `X-Api-Key` header, so
+   * the SDK uses the gateway's signed-query auth instead — when a private key
+   * is loaded (`setPrivateKey`) it signs the `ProofExchange-account-events-v1`
+   * message and appends `public_key` / `signature` / `timestamp_ms`. Against
+   * an unauthenticated gateway (e.g. devnet) the owner alone is enough.
+   *
+   * Returns an unsubscribe function; `disconnect()` closes all streams.
+   */
+  subscribeAccountEvents(
+    owner: Uint8Array | string,
     onEvent: (event: Record<string, unknown>) => void,
+    opts: WsStreamOptions = {},
   ): () => void {
-    this.eventListeners.push(onEvent);
-    this.ensureWebSocket();
+    const ownerHex = (
+      owner instanceof Uint8Array ? bytesToHex(owner) : owner.replace(/^0x/, "")
+    ).toLowerCase();
+    // Tracked across reconnects for gap recovery. Signed into the auth
+    // message too, so the value we send and the value we sign always match.
+    let afterId = 0n;
 
-    return () => {
-      this.eventListeners = this.eventListeners.filter((l) => l !== onEvent);
-    };
-  }
-
-  private wsReconnectAttempts = 0;
-  private wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-  private ensureWebSocket() {
-    if (this.ws) return;
-
-    this.ws = new WebSocket(this.wsUrl);
-
-    this.ws.onopen = () => {
-      this.wsReconnectAttempts = 0;
-      // Subscribe to both new blocks and tx events
-      this.ws!.send(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          method: "subscribe",
-          id: 1,
-          params: { query: "tm.event='NewBlock'" },
-        }),
-      );
-      this.ws!.send(
-        JSON.stringify({
-          jsonrpc: "2.0",
-          method: "subscribe",
-          id: 2,
-          params: { query: "tm.event='Tx'" },
-        }),
-      );
-    };
-
-    this.ws.onmessage = (msg) => {
-      try {
-        const json = JSON.parse(msg.data);
-        if (json.result?.data) {
-          for (const listener of this.eventListeners) {
-            listener(json.result.data);
-          }
-        }
-      } catch {
-        // ignore parse errors
+    const buildUrl = async (): Promise<string> => {
+      const params = new URLSearchParams({ owner: ownerHex });
+      if (afterId > 0n) params.set("after_id", afterId.toString());
+      if (this.privateKey && this.publicKey) {
+        const chainId = await this.resolveChainId();
+        const timestampMs = BigInt(Date.now());
+        const msg = accountWsAuthMessage(
+          chainId,
+          ownerHex,
+          afterId,
+          timestampMs,
+        );
+        params.set("public_key", bytesToHex(this.publicKey));
+        params.set("signature", bytesToHex(sign(this.privateKey, msg)));
+        params.set("timestamp_ms", timestampMs.toString());
       }
+      return `${this.wsUrl}/account-events?${params.toString()}`;
     };
 
-    this.ws.onclose = () => {
-      this.ws = null;
-      if (this.eventListeners.length === 0) return;
-      // Exponential backoff: 2s, 4s, 8s, 16s, … capped at 60s, with
-      // ±25% jitter to avoid thundering-herd on server restart.
-      const attempts = this.wsReconnectAttempts++;
-      const baseDelay = Math.min(2000 * Math.pow(2, attempts), 60_000);
-      const jitter = baseDelay * (0.75 + Math.random() * 0.5);
-      this.wsReconnectTimer = setTimeout(() => this.ensureWebSocket(), jitter);
-    };
+    return this.openStream(
+      buildUrl,
+      (frame) => {
+        const id = frame.event_id;
+        if (typeof id === "number" || typeof id === "bigint") {
+          const big = BigInt(id);
+          if (big > afterId) afterId = big;
+        }
+        onEvent(frame);
+      },
+      opts,
+    );
   }
 
+  /**
+   * Subscribe to the L2 orderbook delta stream for a market
+   * (`/orderbook-deltas`). Mirrors the Python SDK's `OrderbookDeltaStream`:
+   * the first frame is a full `l2Book` snapshot, then incremental deltas.
+   * Returns an unsubscribe function.
+   */
+  subscribeOrderbookDeltas(
+    market: number,
+    onMessage: (msg: Record<string, unknown>) => void,
+    opts: WsStreamOptions = {},
+  ): () => void {
+    return this.openStream(
+      async () => `${this.wsUrl}/orderbook-deltas?market=${market}`,
+      onMessage,
+      opts,
+    );
+  }
+
+  /**
+   * One-shot L2 orderbook snapshot via a temporary delta-stream connection:
+   * opens the stream, resolves the first `l2Book` snapshot frame, and closes.
+   * Mirrors the Python SDK's `orderbook_snapshot`.
+   */
+  orderbookSnapshot(market: number): Promise<Record<string, unknown>> {
+    return new Promise((resolve, reject) => {
+      const unsub = this.subscribeOrderbookDeltas(
+        market,
+        (msg) => {
+          if (msg.type === "l2Book") {
+            unsub();
+            resolve(msg);
+          }
+        },
+        {
+          onError: (err) => {
+            unsub();
+            reject(err instanceof Error ? err : new Error(String(err)));
+          },
+        },
+      );
+    });
+  }
+
+  /**
+   * Internal: open one self-reconnecting WebSocket. `buildUrl` is re-invoked
+   * on every (re)connect so per-connect state (fresh auth timestamp, current
+   * `after_id`) is rebuilt each time. Reconnects with exponential backoff and
+   * jitter. Returns an unsubscribe that stops reconnecting and closes the
+   * socket.
+   */
+  private openStream(
+    buildUrl: () => Promise<string>,
+    onMessage: (msg: Record<string, unknown>) => void,
+    opts: WsStreamOptions,
+  ): () => void {
+    const backoffCapMs = opts.reconnectBackoffMaxMs ?? 30_000;
+    let closed = false;
+    let ws: WebSocket | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let backoff = 500;
+
+    const scheduleReconnect = () => {
+      if (closed) return;
+      const jitter = backoff * (0.75 + Math.random() * 0.5);
+      timer = setTimeout(() => void connect(), jitter);
+      backoff = Math.min(backoff * 2, backoffCapMs);
+    };
+
+    const connect = async (): Promise<void> => {
+      if (closed) return;
+      let url: string;
+      try {
+        url = await buildUrl();
+      } catch (err) {
+        opts.onError?.(err);
+        scheduleReconnect();
+        return;
+      }
+      if (closed) return;
+      ws = new WebSocket(url);
+      ws.onopen = () => {
+        backoff = 500;
+      };
+      ws.onmessage = (ev) => {
+        try {
+          onMessage(JSON.parse(ev.data as string) as Record<string, unknown>);
+        } catch (err) {
+          opts.onError?.(err);
+        }
+      };
+      ws.onerror = (err) => {
+        opts.onError?.(err);
+      };
+      ws.onclose = () => {
+        ws = null;
+        if (!closed) scheduleReconnect();
+      };
+    };
+
+    const unsubscribe = () => {
+      closed = true;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      this.activeStreams.delete(unsubscribe);
+    };
+    this.activeStreams.add(unsubscribe);
+    void connect();
+    return unsubscribe;
+  }
+
+  /** Close every open WebSocket stream and stop their reconnect loops. */
   disconnect() {
-    if (this.wsReconnectTimer) {
-      clearTimeout(this.wsReconnectTimer);
-      this.wsReconnectTimer = null;
-    }
-    this.wsReconnectAttempts = 0;
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+    for (const unsub of [...this.activeStreams]) unsub();
   }
+}
+
+/** Options common to the WebSocket stream subscriptions. */
+export interface WsStreamOptions {
+  /** Called on connect/parse errors. The stream keeps reconnecting; use
+   *  this for logging or to surface terminal failures. */
+  onError?: (err: unknown) => void;
+  /** Max reconnect backoff in milliseconds (default 30000). Backoff starts
+   *  at 500ms and doubles with ±25% jitter up to this cap. */
+  reconnectBackoffMaxMs?: number;
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Build the byte string the gateway expects for signed account-events stream
+ * auth (`api-gateway` `account_ws_auth_message`):
+ *
+ *   "ProofExchange-account-events-v1" || chain_id(32B) ||
+ *   owner(ascii hex) || after_id(i64 BE) || timestamp_ms(u64 BE)
+ *
+ * Signed with the account's Ed25519 key; the gateway re-derives the owner
+ * from the public key and verifies the signature.
+ */
+function accountWsAuthMessage(
+  chainId: Uint8Array,
+  ownerHex: string,
+  afterId: bigint,
+  timestampMs: bigint,
+): Uint8Array {
+  const prefix = new TextEncoder().encode("ProofExchange-account-events-v1");
+  const ownerBytes = new TextEncoder().encode(ownerHex);
+  const msg = new Uint8Array(prefix.length + 32 + ownerBytes.length + 16);
+  let o = 0;
+  msg.set(prefix, o);
+  o += prefix.length;
+  msg.set(chainId, o);
+  o += 32;
+  msg.set(ownerBytes, o);
+  o += ownerBytes.length;
+  const dv = new DataView(msg.buffer);
+  dv.setBigInt64(o, afterId, false);
+  o += 8;
+  dv.setBigUint64(o, timestampMs, false);
+  return msg;
+}
 
 /**
  * Fetch JSON from the API server and throw on non-2xx or `json.error`.

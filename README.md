@@ -133,9 +133,7 @@ class ExchangeClient {
   queryOpenOrders(addressHex?: string): Promise<OpenOrder[]>;
   queryMarkets(): Promise<MarketConfig[]>;
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
-  queryTicker(market: number): Promise<Ticker | null>;
   queryHealth(): Promise<{ status: string; height: number }>;
-  queryAdlQueue(market: number): Promise<AdlQueueEntry[]>;
   queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null>;
 
   // History
@@ -148,8 +146,10 @@ class ExchangeClient {
   getBlock(height?: number): Promise<Record<string, unknown>>;
   getBlockResults(height: number): Promise<Record<string, unknown>>;
 
-  // Events
-  subscribeBlocks(onEvent: (event: Record<string, unknown>) => void): () => void;
+  // Streams (gateway-native; mirror the Python SDK)
+  subscribeAccountEvents(owner: Uint8Array | string, onEvent: (e: Record<string, unknown>) => void, opts?: WsStreamOptions): () => void;
+  subscribeOrderbookDeltas(market: number, onMessage: (m: Record<string, unknown>) => void, opts?: WsStreamOptions): () => void;
+  orderbookSnapshot(market: number): Promise<Record<string, unknown>>;
   disconnect(): void;
 }
 ```
@@ -205,6 +205,48 @@ const client = new ExchangeClient({
   chainId: "proof-dev",
 });
 ```
+
+## WebSocket streams
+
+The SDK exposes the gateway's native multiplexed feed — the same two streams
+as the Python SDK. Each subscription opens its own connection, auto-reconnects
+with exponential backoff (500ms → 30s, ±25% jitter), and returns an
+unsubscribe function. `disconnect()` tears down every open stream.
+
+The WS base URL defaults to `gatewayUrl` with its scheme swapped to `ws`/`wss`.
+If your local stack serves WebSockets on a separate port, set `wsUrl`
+explicitly (e.g. `ws://localhost:9091`).
+
+```typescript
+// Account events: snapshot frame, then incremental events. The SDK tracks
+// the highest event_id and replays via after_id on reconnect (no gaps).
+const unsub = client.subscribeAccountEvents(address, (event) => {
+  console.log(event.event_type, event);
+});
+
+// L2 orderbook: first frame is a full `l2Book` snapshot, then deltas.
+const unsubBook = client.subscribeOrderbookDeltas(1, (msg) => {
+  console.log(msg);
+});
+
+// One-shot snapshot (opens, reads the first l2Book frame, closes):
+const book = await client.orderbookSnapshot(1);
+
+// later:
+unsub();
+unsubBook();
+client.disconnect(); // closes everything
+```
+
+`WsStreamOptions` (third arg) takes `onError?: (err) => void` and
+`reconnectBackoffMaxMs?: number`.
+
+**Auth.** Account streams require auth only when the gateway runs with
+`--api-key`. Because a browser `WebSocket` cannot send the `X-Api-Key` header,
+the SDK uses the gateway's signed-query auth: with a private key loaded
+(`setPrivateKey`) it signs the stream-auth message and appends `public_key` /
+`signature` / `timestamp_ms` to the URL automatically. Against an
+unauthenticated gateway (e.g. devnet) the owner alone suffices.
 
 ## Wire Format
 

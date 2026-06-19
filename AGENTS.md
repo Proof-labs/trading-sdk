@@ -282,19 +282,36 @@ Run the end-to-end example:
 npx tsx examples/connect-and-trade.ts
 ```
 
-## WebSocket events
+## WebSocket streams
+
+The gateway serves a native multiplexed feed (mirrored by both the TS and
+Python SDKs). Each subscription opens its own auto-reconnecting connection and
+returns an unsubscribe function; `disconnect()` closes them all.
 
 ```typescript
-const unsub = client.subscribeBlocks((event) => {
-  if (event.type === "TradeExecuted") {
+// Account events — snapshot then incremental frames, with after_id gap
+// recovery on reconnect. Signed-query auth is added automatically when a
+// private key is loaded (browsers can't set the X-Api-Key header).
+const unsub = client.subscribeAccountEvents(address, (event) => {
+  if (event.event_type === "fill") {
     /* ... */
   }
 });
-// later: unsub()
+
+// L2 orderbook — first frame is a full `l2Book` snapshot, then deltas.
+const unsubBook = client.subscribeOrderbookDeltas(1, (msg) => {
+  /* ... */
+});
+
+// One-shot snapshot:
+const book = await client.orderbookSnapshot(1);
+
+// later: unsub(); unsubBook(); or client.disconnect();
 ```
 
-Or connect directly to the gateway multiplexed feed:
-`wss://api.dev.proof.trade/ws`
+The WS base URL defaults to `gatewayUrl` with the scheme swapped to `ws`/`wss`
+(e.g. `wss://api.dev.proof.trade`). Set `wsUrl` for local stacks whose
+WebSocket listener is on a separate port.
 
 ## Branches & PRs
 
