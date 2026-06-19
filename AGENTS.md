@@ -178,11 +178,9 @@ const orders = await client.queryOpenOrders(hex); // or omit for own address
 const acct = await client.queryAccount(hex); // or omit for own address
 // { balance: bigint, equity: bigint, totalMm: bigint, totalIm: bigint, positions: [...] }
 
-// Chain status
-const status = await client.status();
-// { latestHeight: number, latestAppHash: string }
-
-// Health
+// Chain height — use queryHealth() on the gateway path. The raw CometBFT
+// helpers status() / getBlock() / getBlockResults() are direct-node-only
+// (useGateway: false; the gateway exposes no /status or /block).
 const health = await client.queryHealth();
 // { status: string, height: number }
 ```

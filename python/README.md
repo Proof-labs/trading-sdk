@@ -28,7 +28,7 @@ owner = pts.pubkey_to_owner(public_key)
 
 # Create a client
 client = pts.ExchangeClient(
-    gateway_url="https://api.dev.proof.exchange",
+    gateway_url="https://api.dev.proof.trade",
     api_key="...",
     secret_key=secret_key,
 )
