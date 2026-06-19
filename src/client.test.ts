@@ -659,10 +659,9 @@ describe("ExchangeClient submitTx gateway path", () => {
     expect(calls[0].url).toBe("http://test-gateway/exchange");
   });
 
-  it("derives default gatewayUrl from rpcUrl host when gatewayUrl is omitted", async () => {
+  it("submits to the configured gatewayUrl verbatim", async () => {
     const c = new ExchangeClient({
-      rpcUrl: "http://remote-node.example:26657",
-      apiUrl: "http://test-api",
+      gatewayUrl: "http://remote-node.example:9080",
       useGateway: true,
       chainId: "test-chain",
     });
@@ -1120,7 +1119,7 @@ describe("ExchangeClient chain_id resolution", () => {
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
     const client = new ExchangeClient({
-      rpcUrl: "http://test-rpc",
+      gatewayUrl: "http://test-rpc",
       chainId: "proof-explicit",
     });
     await client.ready();
@@ -1135,7 +1134,7 @@ describe("ExchangeClient chain_id resolution", () => {
     });
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-    const client = new ExchangeClient({ rpcUrl: "http://test-rpc" });
+    const client = new ExchangeClient({ gatewayUrl: "http://test-rpc" });
     await client.ready();
     expect(client.getChainId()).toEqual(chainIdFromString("proof-from-status"));
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -1150,7 +1149,7 @@ describe("ExchangeClient chain_id resolution", () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
 
-    const client = new ExchangeClient({ rpcUrl: "http://test-rpc" });
+    const client = new ExchangeClient({ gatewayUrl: "http://test-rpc" });
     await expect(client.ready()).rejects.toThrow(
       /could not resolve chain_id from http:\/\/test-rpc\/status/,
     );
@@ -1164,7 +1163,7 @@ describe("ExchangeClient chain_id resolution", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const client = new ExchangeClient({
-      rpcUrl: "http://test-rpc",
+      gatewayUrl: "http://test-rpc",
       allowUnbound: true,
     });
     await client.ready();
@@ -1177,7 +1176,7 @@ describe("ExchangeClient chain_id resolution", () => {
     const fetchSpy = vi.fn(async () => statusResponse("proof-shared"));
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-    const client = new ExchangeClient({ rpcUrl: "http://test-rpc" });
+    const client = new ExchangeClient({ gatewayUrl: "http://test-rpc" });
     await Promise.all([client.ready(), client.ready(), client.ready()]);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
@@ -1190,7 +1189,7 @@ describe("ExchangeClient chain_id resolution", () => {
       return statusResponse("proof-after-retry");
     }) as unknown as typeof fetch;
 
-    const client = new ExchangeClient({ rpcUrl: "http://test-rpc" });
+    const client = new ExchangeClient({ gatewayUrl: "http://test-rpc" });
     await expect(client.ready()).rejects.toThrow();
     // First failure cleared the in-flight cache; a second call retries
     // instead of replaying the rejected promise forever.
@@ -1333,5 +1332,65 @@ describe("ExchangeClient chain-endpoint routing", () => {
     });
     await client.status();
     expect(calls).toEqual(["http://test-rpc/status"]);
+  });
+});
+
+/**
+ * `gatewayUrl` is the single source of truth. The direct-node URLs are
+ * derived from it on the internal path: a local gateway on :9080 remaps to
+ * the conventional node ports (26657 / 8080); a hosted gateway with no port
+ * keeps the same host (the node sits behind it).
+ */
+describe("ExchangeClient endpoint derivation", () => {
+  const originalFetch = globalThis.fetch;
+  let calls: string[] = [];
+
+  beforeEach(() => {
+    calls = [];
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
+      calls.push(url.toString());
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          height: 1,
+          result: {
+            sync_info: { latest_block_height: 7, latest_app_hash: "" },
+          },
+        }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("derives node ports from a local :9080 gateway on the direct path", async () => {
+    const client = new ExchangeClient({
+      gatewayUrl: "http://localhost:9080",
+      useGateway: false,
+      chainId: "test-chain",
+    });
+    await client.queryHealth();
+    await client.status();
+    expect(calls).toEqual([
+      "http://localhost:8080/v1/health",
+      "http://localhost:26657/status",
+    ]);
+  });
+
+  it("keeps the same host for a hosted gateway with no port", async () => {
+    const client = new ExchangeClient({
+      gatewayUrl: "https://api.dev.proof.trade",
+      useGateway: false,
+      chainId: "test-chain",
+    });
+    await client.queryHealth();
+    await client.status();
+    expect(calls).toEqual([
+      "https://api.dev.proof.trade/v1/health",
+      "https://api.dev.proof.trade/status",
+    ]);
   });
 });
