@@ -57,22 +57,25 @@ export async function fetchChainId(rpcUrl: string): Promise<Uint8Array> {
 
 export interface ExchangeClientOptions {
   /**
-   * CometBFT RPC endpoint for the **internal** direct-node path
-   * (`useGateway: false`). Default: https://api.dev.proof.trade. When
-   * `useGateway` is true (the default, and the only supported mode for
-   * external clients) all chain status / block / tx-result / chain-id
+   * Override for the CometBFT RPC endpoint on the **internal**
+   * direct-node path (`useGateway: false`). Optional — when omitted it is
+   * derived from `gatewayUrl` (remapping local gateway port 9080 → 26657).
+   * When `useGateway` is true (the default, and the only supported mode
+   * for external clients) all chain status / block / tx-result / chain-id
    * traffic goes through `gatewayUrl` and this value is ignored.
    */
   rpcUrl?: string;
   /**
-   * Go API server endpoint for the **internal** direct-node read path
-   * (`useGateway: false`). Default: https://api.dev.proof.trade. When
-   * `useGateway` is true (the default) every read/query goes through
-   * `gatewayUrl` and this value is ignored. External clients must not
-   * rely on direct API-server reachability.
+   * Override for the Go API server endpoint on the **internal**
+   * direct-node read path (`useGateway: false`). Optional — when omitted
+   * it is derived from `gatewayUrl` (remapping local gateway port
+   * 9080 → 8080). When `useGateway` is true (the default) every read/query
+   * goes through `gatewayUrl` and this value is ignored. External clients
+   * must not rely on direct API-server reachability.
    */
   apiUrl?: string;
-  /** WebSocket URL. Derived from rpcUrl by default. */
+  /** WebSocket URL. Derived from `gatewayUrl` (or `rpcUrl` on the
+   * direct-node path) by default. */
   wsUrl?: string;
   /**
    * CometBFT `chain_id` string — e.g. "proof-testnet-1". Signatures
@@ -104,9 +107,11 @@ export interface ExchangeClientOptions {
    */
   allowUnbound?: boolean;
   /**
-   * Public-API gateway endpoint, used by `submitTx` when `useGateway`
-   * is true. When omitted, defaults to the rpcUrl host with port 26657
-   * remapped to 9080 (or the same host if no port match).
+   * Public API gateway endpoint — the single source of truth for where
+   * the SDK points. Under the default `useGateway: true` every request
+   * (submission, reads, chain queries, WebSocket) goes here, and the
+   * direct-node URLs (`rpcUrl` / `apiUrl`) are derived from it. Defaults
+   * to `https://api.dev.proof.trade`.
    */
   gatewayUrl?: string;
   /**
@@ -193,12 +198,24 @@ export class ExchangeClient {
   private autoVerifyDelivery = true;
 
   constructor(opts: ExchangeClientOptions = {}) {
-    this.rpcUrl = opts.rpcUrl ?? "https://api.dev.proof.trade";
-    this.apiUrl = opts.apiUrl ?? "https://api.dev.proof.trade";
+    // `gatewayUrl` is the single source of truth for where the SDK points.
+    // Everything else is derived from it. The direct-node URLs (`rpcUrl`,
+    // `apiUrl`) are only consulted on the internal `useGateway: false`
+    // path; when omitted they are derived from the gateway by remapping
+    // the conventional local gateway port (9080) to the node ports
+    // (26657 for CometBFT RPC, 8080 for the Go API). Those port remaps are
+    // best-effort fallbacks — deployments that differ should pass `rpcUrl`
+    // / `apiUrl` explicitly.
     this.gatewayUrl = stripTrailingSlash(
-      opts.gatewayUrl ?? deriveGatewayUrl(this.rpcUrl),
+      opts.gatewayUrl ?? "https://api.dev.proof.trade",
     );
     this.useGateway = opts.useGateway ?? true;
+    this.rpcUrl = stripTrailingSlash(
+      opts.rpcUrl ?? deriveNodeUrl(this.gatewayUrl, "26657"),
+    );
+    this.apiUrl = stripTrailingSlash(
+      opts.apiUrl ?? deriveNodeUrl(this.gatewayUrl, "8080"),
+    );
     this.apiKey = opts.apiKey ?? null;
     this.wsUrl =
       opts.wsUrl ??
@@ -1240,18 +1257,29 @@ function stripTrailingSlash(url: string): string {
   return url.replace(/\/+$/, "");
 }
 
-function deriveGatewayUrl(rpcUrl: string): string {
+/**
+ * Derive a direct-node URL from the gateway URL by remapping the
+ * conventional local gateway port (9080) to a node port. Used only as a
+ * fallback for the internal `useGateway: false` path when an explicit
+ * `rpcUrl` / `apiUrl` is not supplied.
+ *
+ * When the gateway has no port (a hosted gateway on 80/443) the node is
+ * assumed to sit behind the same host, so the URL is returned unchanged
+ * minus any path/query/hash. Callers whose node ports differ from the
+ * 26657/8080 convention must pass the URL explicitly.
+ */
+function deriveNodeUrl(gatewayUrl: string, fallbackPort: string): string {
   try {
-    const url = new URL(rpcUrl);
-    if (url.port === "26657") {
-      url.port = "9080";
+    const url = new URL(gatewayUrl);
+    if (url.port === "9080") {
+      url.port = fallbackPort;
     }
     url.pathname = "";
     url.search = "";
     url.hash = "";
     return stripTrailingSlash(url.toString());
   } catch {
-    return "http://localhost:9080";
+    return `http://localhost:${fallbackPort}`;
   }
 }
 
