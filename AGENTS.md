@@ -67,10 +67,11 @@ const client = new ExchangeClient({ chainId: "exchange-devnet-1" });
 
 ### Local stack
 
+Point the client at your local gateway — `rpcUrl` / `apiUrl` are derived
+from it (gateway port 9080 → 26657 / 8080), so you only set one URL:
+
 ```typescript
 const client = new ExchangeClient({
-  rpcUrl: "http://localhost:26657",
-  apiUrl: "http://localhost:8080",
   gatewayUrl: "http://localhost:9080",
   chainId: "proof-dev",
 });
@@ -149,14 +150,14 @@ await client.submitTx({
 The SDK talks to the API gateway at `PROOF_GATEWAY_URL`. The gateway routes
 read endpoints as follows:
 
-| Endpoint | Gateway | Notes |
-|---|---|---|
-| `/v1/markets`, `/v1/orderbook/*`, `/v1/candles/*`, `/v1/trades/*`, `/v1/funding/*`, `/v1/fee-tiers/*`, `/v1/impact_*`, `/v1/ticker/*`, `/v1/health`, `/v1/oracle/health` | ✅ Proxied to node | Public, no auth |
-| `POST /info` | ✅ Routed | Structured queries (clearinghouseState, etc.) |
-| `/v1/account/{hex}` | ❌ **Not routed** | 404s on gateway |
-| `/v1/account/{hex}/recent-nonces`, `/v1/nonce/{hex}` | ✅ Routed | Diagnostic |
-| `/v1/history/*` | ✅ Proxied | Historical data only (not live state) |
-| `POST /exchange` | ✅ Routed | Transaction submission (API key required) |
+| Endpoint                                                                                                                                                                 | Gateway            | Notes                                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ | --------------------------------------------- |
+| `/v1/markets`, `/v1/orderbook/*`, `/v1/candles/*`, `/v1/trades/*`, `/v1/funding/*`, `/v1/fee-tiers/*`, `/v1/impact_*`, `/v1/ticker/*`, `/v1/health`, `/v1/oracle/health` | ✅ Proxied to node | Public, no auth                               |
+| `POST /info`                                                                                                                                                             | ✅ Routed          | Structured queries (clearinghouseState, etc.) |
+| `/v1/account/{hex}`                                                                                                                                                      | ❌ **Not routed**  | 404s on gateway                               |
+| `/v1/account/{hex}/recent-nonces`, `/v1/nonce/{hex}`                                                                                                                     | ✅ Routed          | Diagnostic                                    |
+| `/v1/history/*`                                                                                                                                                          | ✅ Proxied         | Historical data only (not live state)         |
+| `POST /exchange`                                                                                                                                                         | ✅ Routed          | Transaction submission (API key required)     |
 
 **Key caveat**: `GET /v1/account/{hex}` (live balance + positions + margin)
 is **not** routed on the gateway. The SDK's `queryAccount()` handles this:
