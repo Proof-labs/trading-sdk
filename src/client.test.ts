@@ -1394,3 +1394,90 @@ describe("ExchangeClient endpoint derivation", () => {
     ]);
   });
 });
+
+/**
+ * Owner-scoped reads (account, open orders, withdrawal) are not exposed as
+ * GETs on the gateway — it 404s them and requires `POST /info`. The SDK must
+ * POST the structured `/info` request on the gateway path, and only fall back
+ * to a direct GET on the internal `useGateway: false` path.
+ */
+describe("ExchangeClient owner-scoped reads via /info", () => {
+  const originalFetch = globalThis.fetch;
+  let calls: FetchCall[] = [];
+  const accountEncoder = new Encoder({ useBigInt64: true });
+
+  function b64(bytes: Uint8Array): string {
+    let s = "";
+    for (const byte of bytes) s += String.fromCharCode(byte);
+    return btoa(s);
+  }
+
+  beforeEach(() => {
+    calls = [];
+    globalThis.fetch = vi.fn(
+      async (url: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: url.toString(), init });
+        // Shape the msgpack blob to the request: account is a positional
+        // tuple, open orders / withdrawal decode from a list.
+        const type = init?.body
+          ? (JSON.parse(init.body as string) as { type?: string }).type
+          : undefined;
+        const isAccount =
+          type === "clearinghouseState" ||
+          url.toString().includes("/v1/account/");
+        const payload = isAccount
+          ? // balance, positions[], equity, totalMm, totalIm, marginRatioBps
+            [1_000n, [], 0n, 0n, 0n, 0n]
+          : []; // empty open-orders list
+        const blob = b64(accountEncoder.encode(payload) as Uint8Array);
+        return new Response(JSON.stringify({ data: blob }), { status: 200 });
+      },
+    ) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("default (useGateway) POSTs /info clearinghouseState instead of GET /v1/account", async () => {
+    const client = new ExchangeClient({
+      gatewayUrl: "http://test-gateway",
+      apiUrl: "http://test-api",
+      chainId: "test-chain",
+    });
+    const acct = await client.queryAccount("a".repeat(40));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("http://test-gateway/info");
+    expect(calls[0].init?.method).toBe("POST");
+    expect(JSON.parse(calls[0].init?.body as string)).toEqual({
+      type: "clearinghouseState",
+      user: "a".repeat(40),
+    });
+    expect(acct?.balance).toBe(1_000n);
+  });
+
+  it("default (useGateway) POSTs /info openOrders", async () => {
+    const client = new ExchangeClient({
+      gatewayUrl: "http://test-gateway",
+      chainId: "test-chain",
+    });
+    await client.queryOpenOrders("b".repeat(40));
+    expect(calls[0].url).toBe("http://test-gateway/info");
+    expect(JSON.parse(calls[0].init?.body as string)).toEqual({
+      type: "openOrders",
+      user: "b".repeat(40),
+    });
+  });
+
+  it("useGateway:false reads owner-scoped data via the direct node GET", async () => {
+    const client = new ExchangeClient({
+      gatewayUrl: "http://test-gateway",
+      apiUrl: "http://test-api",
+      useGateway: false,
+      chainId: "test-chain",
+    });
+    await client.queryAccount("c".repeat(40));
+    expect(calls[0].url).toBe(`http://test-api/v1/account/${"c".repeat(40)}`);
+    expect(calls[0].init?.method ?? "GET").toBe("GET");
+  });
+});
