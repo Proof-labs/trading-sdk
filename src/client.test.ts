@@ -1670,11 +1670,11 @@ describe("ExchangeClient ticker + adl-queue routing", () => {
     expect(t?.openInterest).toBeNull();
   });
 
-  it("queryAdlQueue routes through the gateway /v1/adl/queue and decodes", async () => {
+  it("queryAdlQueue routes through /v1/adl/queue and coerces a serde-array owner", async () => {
     calls = [];
-    const tuple = [
-      [Uint8Array.from([1, 2, 3]), 1, "Buy", 100n, 5n, 50n],
-    ];
+    // serde encodes `[u8; 20]` as a msgpack ARRAY (number[]), not BIN.
+    const ownerArr = Array.from({ length: 20 }, (_, i) => i + 1);
+    const tuple = [[ownerArr, 1, "Buy", 100n, 5n, 50n]];
     const data = toB64(encoder.encode(tuple) as Uint8Array);
     globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
       calls.push(url.toString());
@@ -1691,5 +1691,56 @@ describe("ExchangeClient ticker + adl-queue routing", () => {
     expect(queue[0].market).toBe(1);
     expect(queue[0].size).toBe(100n);
     expect(queue[0].adlScore).toBe(50n);
+    expect(queue[0].owner).toBeInstanceOf(Uint8Array);
+    expect(Array.from(queue[0].owner)).toEqual(ownerArr);
+  });
+});
+
+/**
+ * Owner/destination bytes: serde encodes `[u8; N]` as a msgpack ARRAY, so the
+ * decoder hands back `number[]` — every decoded byte field must be coerced to
+ * `Uint8Array` (the public type), for open orders, account positions, and ADL.
+ */
+describe("ExchangeClient owner byte-coercion (serde array shape)", () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new Encoder({ useBigInt64: true });
+  const ownerArr = Array.from({ length: 20 }, (_, i) => i + 1);
+  const hex = "ab".repeat(20);
+
+  function toB64(bytes: Uint8Array): string {
+    let s = "";
+    for (const b of bytes) s += String.fromCharCode(b);
+    return btoa(s);
+  }
+  function infoResponse(payload: unknown): Response {
+    return new Response(
+      JSON.stringify({ data: toB64(encoder.encode(payload) as Uint8Array) }),
+      { status: 200 },
+    );
+  }
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("queryOpenOrders coerces a number[] owner to Uint8Array", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      infoResponse([[7n, 1, ownerArr, "Buy", 100n, 10n]]),
+    ) as unknown as typeof fetch;
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    const orders = await client.queryOpenOrders(hex);
+    expect(orders[0].owner).toBeInstanceOf(Uint8Array);
+    expect(Array.from(orders[0].owner)).toEqual(ownerArr);
+  });
+
+  it("queryAccount coerces a number[] position owner to Uint8Array", async () => {
+    const position = [ownerArr, 1, "Buy", 6_675_000n, 100n, 0n];
+    globalThis.fetch = vi.fn(async () =>
+      infoResponse([1_000n, [position], 0n, 0n, 0n, 0n]),
+    ) as unknown as typeof fetch;
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    const acct = await client.queryAccount(hex);
+    expect(acct?.positions[0].owner).toBeInstanceOf(Uint8Array);
+    expect(Array.from(acct!.positions[0].owner)).toEqual(ownerArr);
   });
 });
