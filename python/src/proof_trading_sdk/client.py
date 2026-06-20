@@ -349,28 +349,52 @@ class ExchangeClient:
         msg = "No signing key configured — pass an explicit `owner` or set `secret_key`/`key_handle`."
         raise ValueError(msg)
 
-    def _post_info(self, info: dict[str, t.Any]) -> t.Any:
-        """POST a structured ``/info`` query and return the decoded msgpack
-        ``data`` payload (or ``None``).
+    @staticmethod
+    def _decode_envelope(payload: t.Any, *, source: str, require_data: bool) -> t.Any:
+        """Decode a gateway ``{data: base64 msgpack}`` read envelope.
 
-        Owner-scoped reads (account, open orders, withdrawal) are deliberately
-        NOT exposed as plain GETs on the gateway — it 404s ``/v1/account``,
-        ``/v1/orders`` and ``/v1/withdrawal`` and requires ``POST /info``
-        instead. The gateway proxies the node body verbatim as
-        ``{"data": "<base64 msgpack>"}``; we base64-decode and unpack it.
-        Mirrors the TS client's ``queryOwnerScoped`` / ``postInfoJson``.
+        Raises ``ProofTradingSdkError`` on a JSON ``{"error": …}`` body. When
+        ``require_data`` is set (value-bearing owner-scoped reads), also raises
+        if the ``data`` key is absent, so a gateway/engine error or malformed
+        response never silently degrades to empty account/order state. A
+        present-but-nil ``data`` (e.g. an unknown withdrawal id, which the
+        engine encodes as msgpack nil) decodes to ``None`` and is returned.
         """
-        body = json.dumps(info).encode()
-        resp = self._request(
-            "POST", "/info", content=body, headers={"Content-Type": "application/json"}
-        )
-        payload = resp.json()
-        data_b64 = payload.get("data") if isinstance(payload, dict) else None
+        if isinstance(payload, dict) and payload.get("error"):
+            raise ProofTradingSdkError(
+                f"gateway error for {source}: {payload['error']}"
+            )
+        if not isinstance(payload, dict) or "data" not in payload:
+            if require_data:
+                raise ProofTradingSdkError(
+                    f"gateway {source}: response missing 'data' envelope: "
+                    f"{payload!r}"[:200]
+                )
+            return None
+        data_b64 = payload["data"]
         if not data_b64:
             return None
         return msgpack.unpackb(
             base64.b64decode(data_b64), raw=False, strict_map_key=False
         )
+
+    def _post_info(self, info: dict[str, t.Any]) -> t.Any:
+        """POST a structured ``/info`` query and return the decoded msgpack
+        ``data`` payload (``None`` only for an engine "not found" nil).
+
+        Owner-scoped reads (account, open orders, withdrawal) are deliberately
+        NOT exposed as plain GETs on the gateway — it 404s ``/v1/account``,
+        ``/v1/orders`` and ``/v1/withdrawal`` and requires ``POST /info``
+        instead. The gateway proxies the node body verbatim as
+        ``{"data": "<base64 msgpack>"}``. Mirrors the TS ``postInfoJson``: an
+        ``{"error": …}`` body or a missing envelope raises rather than silently
+        degrading a value-bearing read to empty state.
+        """
+        body = json.dumps(info).encode()
+        resp = self._request(
+            "POST", "/info", content=body, headers={"Content-Type": "application/json"}
+        )
+        return self._decode_envelope(resp.json(), source="/info", require_data=True)
 
     @staticmethod
     def _to_bytes(v: t.Any) -> bytes:
@@ -492,15 +516,11 @@ class ExchangeClient:
 
     def _get_data(self, path: str, params: dict[str, t.Any] | None = None) -> t.Any:
         """GET a ``/v1/*`` read endpoint and decode the ``{data: base64 msgpack}``
-        envelope the gateway returns (markets, orderbook, adl-queue, …)."""
+        envelope the gateway returns (markets, orderbook, adl-queue, …). Raises
+        on a JSON ``{"error": …}`` body; a missing envelope yields ``None`` (the
+        callers default to an empty list)."""
         resp = self._get(path, params=params)
-        payload = resp.json()
-        data_b64 = payload.get("data") if isinstance(payload, dict) else None
-        if not data_b64:
-            return None
-        return msgpack.unpackb(
-            base64.b64decode(data_b64), raw=False, strict_map_key=False
-        )
+        return self._decode_envelope(resp.json(), source=path, require_data=False)
 
     @staticmethod
     def _decode_market_config(raw: t.Sequence[t.Any]) -> dict[str, t.Any]:

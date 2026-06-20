@@ -13,8 +13,10 @@ import json
 
 import httpx
 import msgpack
+import pytest
 
 from proof_trading_sdk.client import ExchangeClient
+from proof_trading_sdk.errors import ProofTradingSdkError
 
 
 def _client(handler) -> ExchangeClient:
@@ -87,6 +89,23 @@ def test_withdrawal_status_none_when_nil():
         return _info_response(None)  # engine encodes "not found" as msgpack nil
 
     assert _client(handler).withdrawal_status(123) is None
+
+
+def test_account_raises_on_error_body():
+    # A JSON {error} body must NOT silently become an empty (balance-0) account.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"error": "internal node error"})
+
+    with pytest.raises(ProofTradingSdkError):
+        _client(handler).account("aa" * 20)
+
+
+def test_account_raises_on_missing_data_envelope():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"unexpected": "shape"})
+
+    with pytest.raises(ProofTradingSdkError):
+        _client(handler).account("aa" * 20)
 
 
 def test_status_routes_through_v1_status():
