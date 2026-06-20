@@ -188,16 +188,15 @@ interface ExchangeClientOptions {
 ```
 
 `gatewayUrl` is the single source of truth: under the default
-`useGateway: true` submission, reads, transaction-status polling, and the
-WebSocket feed all go through it. External clients should set only this.
+`useGateway: true` everything — submission, reads, transaction-status polling,
+chain status/blocks (`/v1/status`, `/v1/block`, `/v1/block_results`), chain-id
+resolution, and the WebSocket feed — goes through it. External clients should
+set only this.
 
-**Pin `chainId` for gateway clients.** The gateway does not expose CometBFT's
-`/status`, so the chain-id binding cannot be auto-resolved on the gateway path
-— omit it and the first submit throws. Pinning is the recommended production
-practice anyway (deterministic cross-build signatures). Only the internal
-direct-node path (`useGateway: false`) auto-resolves it from `/status`. The
-raw CometBFT helpers `status()` / `getBlock()` / `getBlockResults()` are
-likewise direct-node-only.
+When `chainId` is omitted, the SDK auto-resolves it on first submit from the
+gateway's `/v1/status` (or `${rpcUrl}/status` on the direct-node path). Pinning
+`chainId` explicitly is still recommended for production — it keeps signatures
+deterministic across SDK rebuilds.
 
 For a local development stack, point the client at your local gateway; the
 node URLs are derived from it (override `rpcUrl` / `apiUrl` if your ports
