@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import time
@@ -8,6 +9,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urljoin
 
 import httpx
+import msgpack
 
 from proof_trading_sdk._native import SigningHandle, chain_id_from_string, generate_keypair, pubkey_to_owner, sign_and_encode
 from proof_trading_sdk.actions import Action, encode_action
@@ -196,10 +198,13 @@ class ExchangeClient:
         *,
         content: bytes | None = None,
         params: dict[str, t.Any] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         url = urljoin(self._gateway_url, path)
         try:
-            resp = self._http.request(method, url, content=content, params=params)
+            resp = self._http.request(
+                method, url, content=content, params=params, headers=headers
+            )
         except httpx.ConnectError as e:
             raise TransportError(f"connection refused: {e}") from e
         except httpx.ConnectTimeout as e:
@@ -344,31 +349,142 @@ class ExchangeClient:
         msg = "No signing key configured — pass an explicit `owner` or set `secret_key`/`key_handle`."
         raise ValueError(msg)
 
-    def account(self, owner: bytes | str | None = None) -> AccountState:
-        """Fetch account state: balances, positions, open orders, margin.
+    def _post_info(self, info: dict[str, t.Any]) -> t.Any:
+        """POST a structured ``/info`` query and return the decoded msgpack
+        ``data`` payload (or ``None``).
 
-        If *owner* is ``None`` (default), uses the owner derived from the
-        configured signing key.
+        Owner-scoped reads (account, open orders, withdrawal) are deliberately
+        NOT exposed as plain GETs on the gateway — it 404s ``/v1/account``,
+        ``/v1/orders`` and ``/v1/withdrawal`` and requires ``POST /info``
+        instead. The gateway proxies the node body verbatim as
+        ``{"data": "<base64 msgpack>"}``; we base64-decode and unpack it.
+        Mirrors the TS client's ``queryOwnerScoped`` / ``postInfoJson``.
+        """
+        body = json.dumps(info).encode()
+        resp = self._request(
+            "POST", "/info", content=body, headers={"Content-Type": "application/json"}
+        )
+        payload = resp.json()
+        data_b64 = payload.get("data") if isinstance(payload, dict) else None
+        if not data_b64:
+            return None
+        return msgpack.unpackb(
+            base64.b64decode(data_b64), raw=False, strict_map_key=False
+        )
+
+    @staticmethod
+    def _to_bytes(v: t.Any) -> bytes:
+        """serde encodes ``[u8; N]`` as a msgpack ARRAY, so owner / destination
+        fields decode to ``list[int]`` — coerce to ``bytes``."""
+        if isinstance(v, (bytes, bytearray, list)):
+            return bytes(v)
+        return b""
+
+    @staticmethod
+    def _decode_position(p: t.Sequence[t.Any]) -> dict[str, t.Any]:
+        """Decode one position tuple (mirrors the TS ``PositionInfo`` layout).
+        Indices 6-12 are optional enrichments older gateways may omit."""
+
+        def opt(i: int) -> int | None:
+            return int(p[i]) if len(p) > i and p[i] is not None else None
+
+        return {
+            "owner": ExchangeClient._to_bytes(p[0]),
+            "market": int(p[1]),
+            "side": p[2],
+            "entry_price": int(p[3]),
+            "size": int(p[4]),
+            "last_funding_index": int(p[5]) if len(p) > 5 and p[5] is not None else 0,
+            "upnl_now": opt(6),
+            "mm_now": opt(7),
+            "im_now": opt(8),
+            "pnl_if_fires": opt(9),
+            "pnl_if_dies": opt(10),
+            "funding_since": opt(11),
+            "adl_score": opt(12),
+        }
+
+    def account(self, owner: bytes | str | None = None) -> AccountState:
+        """Fetch account state (balance, positions, margin) via ``POST /info``.
+
+        Owner-scoped reads are not exposed as GETs on the gateway, so this posts
+        a ``clearinghouseState`` query and decodes the returned msgpack tuple
+        (mirrors the TS ``queryAccount``). If *owner* is ``None`` (default),
+        uses the owner derived from the configured signing key.
         """
         if owner is None:
             owner = self._own_owner()
-        resp = self._get(f"/v1/account/{_to_hex(owner)}")
-        data: dict[str, t.Any] = resp.json()
+        raw = self._post_info({"type": "clearinghouseState", "user": _to_hex(owner)})
+        if not isinstance(raw, (list, tuple)) or not raw:
+            return AccountState()
+
+        def at(i: int) -> int:
+            return int(raw[i]) if len(raw) > i and raw[i] is not None else 0
+
+        positions = (
+            [
+                self._decode_position(p)
+                for p in raw[1]
+                if isinstance(p, (list, tuple))
+            ]
+            if len(raw) > 1 and raw[1]
+            else []
+        )
         return AccountState(
-            balances=data.get("balances", {}),
-            positions=data.get("positions", []),
-            open_orders=data.get("open_orders", []),
-            margin=data.get("margin", {}),
-            raw=data,
+            balances={"USDC": int(raw[0])},
+            positions=positions,
+            open_orders=[],  # not in clearinghouseState — use open_orders()
+            margin={
+                "equity": at(2),
+                "total_mm": at(3),
+                "total_im": at(4),
+                "margin_ratio_bps": at(5),
+            },
+            raw={"tuple": list(raw)},
         )
 
     def open_orders(self, owner: bytes | str) -> list[dict[str, t.Any]]:
-        resp = self._get(f"/v1/orders/{_to_hex(owner)}")
-        return resp.json()
+        """Open orders for *owner* via ``POST /info`` (``openOrders``).
 
-    def withdrawal_status(self, withdrawal_id: int) -> dict[str, t.Any]:
-        resp = self._get(f"/v1/withdrawal/{withdrawal_id}")
-        return resp.json()
+        Each order decodes from a msgpack 6-tuple
+        ``[id, market, owner, side, price, quantity]`` (mirrors TS
+        ``queryOpenOrders``).
+        """
+        raw = self._post_info({"type": "openOrders", "user": _to_hex(owner)})
+        if not isinstance(raw, (list, tuple)):
+            return []
+        return [
+            {
+                "id": int(o[0]),
+                "market": int(o[1]),
+                "owner": self._to_bytes(o[2]),
+                "side": o[3],
+                "price": int(o[4]),
+                "quantity": int(o[5]),
+            }
+            for o in raw
+            if isinstance(o, (list, tuple)) and len(o) >= 6
+        ]
+
+    def withdrawal_status(self, withdrawal_id: int) -> dict[str, t.Any] | None:
+        """Withdrawal record by id via ``POST /info`` (``withdrawalStatus``).
+
+        Returns ``None`` for unknown ids (the engine encodes "not found" as
+        msgpack ``nil``).
+        """
+        raw = self._post_info(
+            {"type": "withdrawalStatus", "withdrawalId": int(withdrawal_id)}
+        )
+        if not isinstance(raw, (list, tuple)) or len(raw) < 6:
+            return None
+        return {
+            "id": int(raw[0]),
+            "owner": self._to_bytes(raw[1]),
+            "amount": int(raw[2]),
+            "solana_destination": self._to_bytes(raw[3]),
+            "status": raw[4],
+            "request_height": int(raw[5]),
+        }
 
     def nonce_info(self, owner: bytes | str) -> dict[str, t.Any]:
         resp = self._get(f"/v1/nonce/{_to_hex(owner)}")
@@ -432,23 +548,23 @@ class ExchangeClient:
         return resp.json()
 
     def status(self) -> dict[str, t.Any]:
-        """CometBFT node status: ``GET <rpc>/status``.
+        """CometBFT node status via the gateway: ``GET /v1/status``.
 
-        Uses ``gateway_url`` with ``/status`` appended. Returns the raw
-        CometBFT JSON-RPC response (``result.sync_info``, etc.).
+        The gateway proxies CometBFT ``/status`` and returns it verbatim
+        (``result.sync_info``, ``result.node_info``, etc.).
         """
-        resp = self._request("GET", "/status")
+        resp = self._get("/v1/status")
         return resp.json()
 
     def get_block(self, height: int | None = None) -> dict[str, t.Any]:
-        """CometBFT block at *height* (latest if omitted): ``GET <rpc>/block``."""
+        """CometBFT block at *height* (latest if omitted) via ``GET /v1/block``."""
         params = {"height": height} if height is not None else None
-        resp = self._request("GET", "/block", params=params)
+        resp = self._get("/v1/block", params=params)
         return resp.json()
 
     def get_block_results(self, height: int) -> dict[str, t.Any]:
-        """CometBFT block results at *height*: ``GET <rpc>/block_results``."""
-        resp = self._request("GET", "/block_results", params={"height": height})
+        """CometBFT block results at *height* via ``GET /v1/block_results``."""
+        resp = self._get("/v1/block_results", params={"height": height})
         return resp.json()
 
     # ── Market data ──────────────────────────────────────────────────────
