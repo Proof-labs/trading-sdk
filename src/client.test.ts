@@ -1628,3 +1628,68 @@ describe("ExchangeClient WebSocket streams", () => {
     expect(FakeWebSocket.instances.every((w) => w.closed)).toBe(true);
   });
 });
+
+/**
+ * Restored ticker / ADL-queue reads route through the gateway's /v1/* paths
+ * (api-gateway exposes them as public node-REST reads). Ticker returns plain
+ * JSON; the ADL queue returns a base64-msgpack `{ data }` envelope.
+ */
+describe("ExchangeClient ticker + adl-queue routing", () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new Encoder({ useBigInt64: true });
+  let calls: string[] = [];
+
+  function toB64(bytes: Uint8Array): string {
+    let s = "";
+    for (const b of bytes) s += String.fromCharCode(b);
+    return btoa(s);
+  }
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("queryTicker routes through the gateway /v1/ticker and maps fields", async () => {
+    calls = [];
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
+      calls.push(url.toString());
+      return new Response(
+        JSON.stringify({ market: "1", last_price: "6675000", change_24h_bps: "12" }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    const client = new ExchangeClient({
+      gatewayUrl: "http://test-gateway",
+      chainId: "test-chain",
+    });
+    const t = await client.queryTicker(1);
+    expect(calls).toEqual(["http://test-gateway/v1/ticker/1"]);
+    expect(t?.lastPrice).toBe("6675000");
+    expect(t?.change24hBps).toBe("12");
+    expect(t?.openInterest).toBeNull();
+  });
+
+  it("queryAdlQueue routes through the gateway /v1/adl/queue and decodes", async () => {
+    calls = [];
+    const tuple = [
+      [Uint8Array.from([1, 2, 3]), 1, "Buy", 100n, 5n, 50n],
+    ];
+    const data = toB64(encoder.encode(tuple) as Uint8Array);
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
+      calls.push(url.toString());
+      return new Response(JSON.stringify({ data }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const client = new ExchangeClient({
+      gatewayUrl: "http://test-gateway",
+      chainId: "test-chain",
+    });
+    const queue = await client.queryAdlQueue(1);
+    expect(calls).toEqual(["http://test-gateway/v1/adl/queue/1"]);
+    expect(queue).toHaveLength(1);
+    expect(queue[0].market).toBe(1);
+    expect(queue[0].size).toBe(100n);
+    expect(queue[0].adlScore).toBe(50n);
+  });
+});

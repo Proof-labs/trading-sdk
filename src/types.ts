@@ -1039,6 +1039,44 @@ export interface OpenOrder {
   quantity: bigint;
 }
 
+/** One row of the auto-deleveraging queue for a market. Returned sorted by
+ *  `adlScore` desc (front of the queue first). Decoded from the msgpack
+ *  6-tuple `[owner, market, side, size, upnlNow, adlScore]`. Endpoint:
+ *  `GET /v1/adl/queue/{market}`. */
+export interface AdlQueueEntry {
+  /** 20-byte owner address. */
+  owner: Uint8Array;
+  market: number;
+  /** Position side: "Buy" = long, "Sell" = short. */
+  side: "Buy" | "Sell";
+  /** Position size in contracts. */
+  size: bigint;
+  /** Unrealized PnL at the current mark, signed. Always positive here
+   *  (only profitable positions are queued). */
+  upnlNow: bigint;
+  /** `max(0, upnlNow) × leverage_bps`. Higher = closer to the front of the
+   *  ADL queue. */
+  adlScore: bigint;
+}
+
+/** One-round-trip market summary. Returned by `GET /v1/ticker/{market}`. */
+export interface Ticker {
+  /** Market id as decimal string. */
+  market: string;
+  /** Last fill price in the 24h window (empty/"0" if no trades). */
+  lastPrice: string;
+  /** Σ quantity across the 24h window (integer contracts). */
+  volume24hContracts: string;
+  /** Signed 24h change in basis points. Empty/"0" if no trades. */
+  change24hBps: string;
+  /** Base64 msgpack FundingInfo (mark EWMA, oracle, funding rate, interval). */
+  fundingMsgpackB64: string;
+  /** Base64 msgpack OrderbookSnapshot at depth=1. Empty for fresh markets. */
+  orderbookMsgpackB64: string;
+  /** Null today — the engine doesn't track open interest yet. */
+  openInterest: string | null;
+}
+
 /** Information about a single open position.
  *
  * Fields 0-5 are the raw `Position` state; fields 6-11 (the "now"/

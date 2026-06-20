@@ -148,3 +148,29 @@ def test_orderbook_decodes_bids_asks():
     ob = _client(handler).orderbook(1)
     assert ob["bids"][0] == {"price": 6_675_000, "total_qty": 100, "order_count": 2}
     assert ob["asks"][0]["price"] == 6_680_000
+
+
+def test_adl_queue_decodes_tuples():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/adl/queue/1"
+        rows = [[list(b"\x03" * 20), 1, "Buy", 100, 5, 50]]
+        return _info_response(rows)
+
+    q = _client(handler).adl_queue(1)
+    assert len(q) == 1
+    assert q[0]["market"] == 1
+    assert q[0]["size"] == 100
+    assert q[0]["adl_score"] == 50
+    assert q[0]["owner"] == b"\x03" * 20
+
+
+def test_ticker_routes_through_v1_ticker():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"market": "1", "last_price": "6675000"})
+
+    t = _client(handler).ticker(1)
+    assert seen == ["/v1/ticker/1"]
+    assert t is not None and t["last_price"] == "6675000"
