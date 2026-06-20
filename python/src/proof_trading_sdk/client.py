@@ -490,9 +490,95 @@ class ExchangeClient:
         resp = self._get(f"/v1/nonce/{_to_hex(owner)}")
         return resp.json()
 
+    def _get_data(self, path: str, params: dict[str, t.Any] | None = None) -> t.Any:
+        """GET a ``/v1/*`` read endpoint and decode the ``{data: base64 msgpack}``
+        envelope the gateway returns (markets, orderbook, adl-queue, …)."""
+        resp = self._get(path, params=params)
+        payload = resp.json()
+        data_b64 = payload.get("data") if isinstance(payload, dict) else None
+        if not data_b64:
+            return None
+        return msgpack.unpackb(
+            base64.b64decode(data_b64), raw=False, strict_map_key=False
+        )
+
+    @staticmethod
+    def _decode_market_config(raw: t.Sequence[t.Any]) -> dict[str, t.Any]:
+        """Decode a market-config tuple (mirrors the TS ``decodeMarketConfig``)."""
+
+        def opt(i: int) -> int | None:
+            return int(raw[i]) if len(raw) > i and raw[i] is not None else None
+
+        def at(i: int) -> int:
+            return int(raw[i]) if len(raw) > i and raw[i] is not None else 0
+
+        def flag(i: int) -> bool | None:
+            return None if len(raw) <= i or raw[i] is None else bool(raw[i])
+
+        kind: t.Any = None
+        k = raw[7] if len(raw) > 7 else None
+        if isinstance(k, str):
+            kind = k
+        elif isinstance(k, dict):
+            for variant in ("ConditionalPerp", "PredictionBinary"):
+                v = k.get(variant)
+                if isinstance(v, (list, tuple)) and len(v) >= 2:
+                    kind = {variant: [int(v[0]), v[1]]}
+                    break
+
+        fee_tiers = None
+        if len(raw) > 13 and isinstance(raw[13], (list, tuple)):
+            fee_tiers = [
+                {
+                    "min_30d_volume_micro_usdc": int(ft[0]),
+                    "maker_fee_tenth_bps": int(ft[1]),
+                    "taker_fee_tenth_bps": int(ft[2]),
+                }
+                for ft in raw[13]
+                if isinstance(ft, (list, tuple)) and len(ft) >= 3
+            ]
+
+        return {
+            "market": at(0),
+            "im_bps": at(1),
+            "mm_bps": at(2),
+            "taker_fee_bps": at(3),
+            "maker_fee_bps": at(4),
+            "funding_interval_ms": at(5),
+            "max_funding_rate_bps": at(6),
+            "kind": kind,
+            "max_position_size": opt(8),
+            "default_ttl_ms": opt(9),
+            "net_delta_margin": flag(10),
+            "pool_id": opt(11),
+            "mark_price_max_oracle_age_ms": opt(12),
+            "fee_tiers": fee_tiers,
+            "tick_size": opt(14),
+            "lot_size": opt(15),
+            "primary_oracle_signer": (
+                ExchangeClient._to_bytes(raw[16])
+                if len(raw) > 16 and raw[16] is not None
+                else None
+            ),
+            "oracle_staleness_ms": opt(17),
+            "mark_source_mode": (
+                raw[18] if len(raw) > 18 and raw[18] is not None else None
+            ),
+            "max_mark_spread_bps": opt(19),
+            "cex_composite_staleness_ms": opt(20),
+            "partial_liquidation_enabled": flag(21),
+            "sz_decimals": opt(22),
+            "ticker": None if len(raw) <= 23 or raw[23] is None else str(raw[23]),
+        }
+
     def markets(self) -> list[dict[str, t.Any]]:
-        resp = self._get("/v1/markets")
-        return resp.json()
+        """All registered market configs, decoded from the msgpack envelope."""
+        raw = self._get_data("/v1/markets")
+        if not isinstance(raw, (list, tuple)):
+            return []
+        return [
+            self._decode_market_config(m) for m in raw if isinstance(m, (list, tuple))
+        ]
 
     def market_status(self, market: int) -> dict[str, t.Any]:
         resp = self._get(f"/v1/market-status/{market}")
@@ -583,9 +669,31 @@ class ExchangeClient:
             raise
 
     def orderbook(self, market: int) -> dict[str, t.Any]:
-        """L2 orderbook snapshot: ``GET /v1/orderbook/{market}``."""
-        resp = self._get(f"/v1/orderbook/{market}")
-        return resp.json()
+        """L2 orderbook snapshot via ``GET /v1/orderbook/{market}``.
+
+        Decodes the msgpack ``[bids, asks]`` envelope into
+        ``{"bids": [...], "asks": [...]}`` where each level is
+        ``{price, total_qty, order_count}`` (mirrors TS ``queryOrderbook``).
+        """
+        raw = self._get_data(f"/v1/orderbook/{market}")
+        if not isinstance(raw, (list, tuple)) or len(raw) < 2:
+            return {"bids": [], "asks": []}
+
+        def level(lv: t.Sequence[t.Any]) -> dict[str, int]:
+            return {
+                "price": int(lv[0]),
+                "total_qty": int(lv[1]),
+                "order_count": int(lv[2]),
+            }
+
+        return {
+            "bids": [
+                level(lv) for lv in (raw[0] or []) if isinstance(lv, (list, tuple))
+            ],
+            "asks": [
+                level(lv) for lv in (raw[1] or []) if isinstance(lv, (list, tuple))
+            ],
+        }
 
     def adl_queue(self, market: int) -> list[dict[str, t.Any]]:
         """ADL (auto-deleveraging) queue for *market*: ``GET /v1/adl/queue/{market}``."""

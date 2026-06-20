@@ -123,3 +123,28 @@ def test_get_block_results_routes_through_v1():
 
     _client(handler).get_block_results(7)
     assert seen == ["/v1/block_results"]
+
+
+def test_markets_decodes_msgpack_config():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/markets"
+        # market-config tuple (trailing optional fields omitted)
+        cfg = [1, 1_000, 500, 5, 2, 3_600_000, 100, "Perp"]
+        return _info_response([cfg])
+
+    mkts = _client(handler).markets()
+    assert len(mkts) == 1
+    assert mkts[0]["market"] == 1
+    assert mkts[0]["im_bps"] == 1_000
+    assert mkts[0]["kind"] == "Perp"
+    assert mkts[0]["sz_decimals"] is None  # omitted optional -> None
+
+
+def test_orderbook_decodes_bids_asks():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/orderbook/1"
+        return _info_response([[[6_675_000, 100, 2]], [[6_680_000, 50, 1]]])
+
+    ob = _client(handler).orderbook(1)
+    assert ob["bids"][0] == {"price": 6_675_000, "total_qty": 100, "order_count": 2}
+    assert ob["asks"][0]["price"] == 6_680_000
