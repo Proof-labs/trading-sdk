@@ -21,8 +21,10 @@ import type {
   MarketKind,
   MarkSourceMode,
   OpenOrder,
+  AdlQueueEntry,
   Orderbook,
   OrderbookLevel,
+  Ticker,
   PositionInfo,
   WithdrawalRecord,
   WithdrawalStatus,
@@ -960,6 +962,47 @@ export class ExchangeClient {
   async queryHealth(): Promise<{ status: string; height: number }> {
     const res = await fetch(`${this.readBaseUrl}/v1/health`);
     return res.json();
+  }
+
+  /** Fetch the auto-deleveraging queue for a market — profitable positions
+   *  ranked by `adlScore` desc (highest first). Empty array if the market has
+   *  no profitable positions. Routes through the gateway's `/v1/adl/queue`. */
+  async queryAdlQueue(market: number): Promise<AdlQueueEntry[]> {
+    const res = await fetch(`${this.readBaseUrl}/v1/adl/queue/${market}`);
+    const json = await res.json();
+    if (json.error) return [];
+    const bytes = fromBase64(json.data);
+    const raw = msgpackDecoder.decode(bytes);
+    if (!Array.isArray(raw)) return [];
+    return (raw as unknown[][]).map((row) => ({
+      owner: row[0] as Uint8Array,
+      market: Number(row[1]),
+      side: row[2] as "Buy" | "Sell",
+      size: BigInt(row[3] as number | bigint),
+      upnlNow: BigInt(row[4] as number | bigint),
+      adlScore: BigInt(row[5] as number | bigint),
+    }));
+  }
+
+  /** One-round-trip market summary (last / 24h volume / 24h change + funding
+   *  and top-of-book blobs). Returns `null` if the market is unknown. Routes
+   *  through the gateway's `/v1/ticker`. */
+  async queryTicker(market: number): Promise<Ticker | null> {
+    const res = await fetch(`${this.readBaseUrl}/v1/ticker/${market}`);
+    if (!res.ok) return null;
+    const row = (await res.json()) as Record<string, unknown>;
+    return {
+      market: String(row.market ?? market),
+      lastPrice: String(row.last_price ?? "0"),
+      volume24hContracts: String(row.volume_24h_contracts ?? "0"),
+      change24hBps: String(row.change_24h_bps ?? "0"),
+      fundingMsgpackB64: String(row.funding_msgpack_b64 ?? ""),
+      orderbookMsgpackB64: String(row.orderbook_msgpack_b64 ?? ""),
+      openInterest:
+        row.open_interest === null || row.open_interest === undefined
+          ? null
+          : String(row.open_interest),
+    };
   }
 
   /** Per-user deposit log — every `deposit_confirmed` event for this
