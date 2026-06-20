@@ -59,10 +59,9 @@ export interface ExchangeClientOptions {
    * Override for the CometBFT RPC endpoint on the **internal**
    * direct-node path (`useGateway: false`). Optional — when omitted it is
    * derived from `gatewayUrl` (remapping local gateway port 9080 → 26657).
-   * When `useGateway` is true (the default, and the only supported mode
-   * for external clients) tx-result polling goes through `gatewayUrl` and
-   * this value is ignored; the raw CometBFT helpers (`status()`,
-   * `getBlock()`, `getBlockResults()`) are disabled on that path.
+   * When `useGateway` is true (the default, and the only supported mode for
+   * external clients) chain reads, tx-result polling, and chain-id resolution
+   * go through `gatewayUrl` (`/v1/*`) and this value is ignored.
    */
   rpcUrl?: string;
   /**
@@ -89,24 +88,21 @@ export interface ExchangeClientOptions {
    * (`crypto::signing_message`), closing the cross-chain replay
    * vector audit B4 identified.
    *
-   * **Gateway clients must pin this.** The API gateway does not expose
-   * CometBFT's `/status`, so the binding cannot be auto-resolved on the
-   * default `useGateway: true` path — omitting it throws on first submit
-   * (unless `allowUnbound: true`). Pinning is the recommended production
-   * practice anyway: it keeps signatures deterministic across SDK rebuilds.
+   * If omitted, the client auto-resolves it on first submit from the
+   * gateway's `/v1/status` (`result.node_info.network`), or from
+   * `${rpcUrl}/status` on the direct-node path, and caches it. Pre-warm with
+   * `await client.ready()` to surface resolution errors at init time. Pinning
+   * `chainId` explicitly is still recommended for production — it keeps
+   * signatures deterministic across SDK rebuilds.
    *
-   * Only the internal direct-node path (`useGateway: false`) lazily fetches
-   * it from `${rpcUrl}/status` (`result.node_info.network`) on first submit
-   * and caches it; pre-warm with `await client.ready()` to surface errors at
-   * init time. When the binding can't be resolved (gateway path with no
-   * `chainId`, or `/status` unreachable on the direct path) AND
-   * `allowUnbound: true` is set, the client falls back to
-   * `UNBOUND_CHAIN_ID`; otherwise it throws.
+   * If `/status` is unreachable AND `allowUnbound: true` is set, the client
+   * falls back to `UNBOUND_CHAIN_ID`; otherwise it throws.
    */
   chainId?: string;
   /**
    * When true, allow falling back to `UNBOUND_CHAIN_ID` if `chainId`
-   * is omitted AND `${rpcUrl}/status` is unreachable. Default false.
+   * is omitted AND the chain's `/status` is unreachable (the gateway's
+   * `/v1/status`, or `${rpcUrl}/status` on the direct path). Default false.
    *
    * The fallback exists for local fixtures where the chain isn't up
    * yet (e.g. constructing a client that will never submit, just to
@@ -130,13 +126,12 @@ export interface ExchangeClientOptions {
    * CLAUDE.md → "Network policy — gateway only").
    *
    * - `true` (default, the only supported mode for external clients):
-   *   submission, reads/queries, tx-result polling, and the WebSocket feed
-   *   go through `gatewayUrl`. Submission POSTs the signed wire bytes to
-   *   `gatewayUrl/exchange`; the gateway verifies the signature, applies
-   *   rate limiting, and forwards to CometBFT. `chainId` must be pinned (the
-   *   gateway has no `/status` to auto-resolve from), and the raw CometBFT
-   *   helpers (`status()`, `getBlock()`, `getBlockResults()`) are not
-   *   available on this path. This is the production-facing path.
+   *   every request — submission, reads/queries, chain status/blocks
+   *   (`/v1/status`, `/v1/block`, …), tx-result polling, chain-id resolution,
+   *   and the WebSocket feed — goes through `gatewayUrl`. Submission POSTs the
+   *   signed wire bytes to `gatewayUrl/exchange`; the gateway verifies the
+   *   signature, applies rate limiting, and forwards to CometBFT. This is the
+   *   production-facing path.
    *
    * - `false`: the legacy direct-node path — submission goes to CometBFT
    *   `broadcast_tx_sync` over `rpcUrl`, reads to `apiUrl`, and chain
@@ -175,7 +170,8 @@ export class ExchangeClient {
   /**
    * 32-byte chain_id binding for v3 signatures (audit B4). `null` until
    * either an explicit `opts.chainId` is hashed in the constructor or
-   * `resolveChainId()` fetches `${rpcUrl}/status` on first submit.
+   * `resolveChainId()` fetches `${chainBase}/status` (the gateway's
+   * `/v1/status`, or `${rpcUrl}/status` on the direct path) on first submit.
    */
   private chainId: Uint8Array | null;
   private allowUnbound: boolean;
@@ -272,22 +268,16 @@ export class ExchangeClient {
   }
 
   /**
-   * Guard for CometBFT-RPC-shaped chain endpoints (`status()`, `getBlock()`,
-   * `getBlockResults()`). The API gateway does not expose CometBFT's
-   * `/status`, `/block`, or `/block_results`, so these are reachable only on
-   * the internal direct-node path. Throw a clear error on the gateway path
-   * rather than emit a request the gateway 404s. (When the gateway grows a
-   * `/v1/status` surface, these can move onto it.)
+   * Base URL for CometBFT-style chain reads (`/status`, `/block`,
+   * `/block_results`) and the chain-id bootstrap. On the gateway path
+   * (default) this is the gateway's `/v1` proxy prefix — the gateway fronts
+   * these as `/v1/status`, `/v1/block`, `/v1/block_results` (api-gateway #69)
+   * and returns the CometBFT body verbatim. On the internal direct-node path
+   * (`useGateway: false`) it is the bare `rpcUrl`. Append the endpoint
+   * (`/status`, …); both paths yield the same response shape.
    */
-  private requireDirectNode(method: string): void {
-    if (this.useGateway) {
-      throw new Error(
-        `ExchangeClient.${method}() is not available over the API gateway — ` +
-          "it does not expose CometBFT's /status, /block, or /block_results. " +
-          "Construct the client with useGateway: false for direct-node access, " +
-          "or read the latest height via queryHealth().",
-      );
-    }
+  private get chainBase(): string {
+    return this.useGateway ? `${this.gatewayUrl}/v1` : this.rpcUrl;
   }
 
   /**
@@ -296,46 +286,22 @@ export class ExchangeClient {
    *
    * Resolution order:
    *   1. Explicit `opts.chainId` from the constructor (already hashed) — return it.
-   *   2. Fetch `${rpcUrl}/status`, hash `result.node_info.network`, cache.
+   *   2. Fetch `${chainBase}/status` (the gateway's `/v1/status`, or
+   *      `${rpcUrl}/status` on the direct path), hash `result.node_info.network`.
    *   3. On fetch failure: if `allowUnbound`, warn and use `UNBOUND_CHAIN_ID`;
    *      otherwise throw.
    *
-   * Public via `ready()`. `broadcastSigned` calls this internally
-   * before every submit; the cache means only the first submit pays
-   * the round-trip.
+   * Public via `ready()`. `broadcastSigned` calls this internally before every
+   * submit; the cache means only the first submit pays the round-trip.
    */
   private resolveChainId(): Promise<Uint8Array> {
     if (this.chainId) return Promise.resolve(this.chainId);
-
-    // Gateway path: the gateway does not expose CometBFT's `/status`, so the
-    // chain_id binding cannot be auto-resolved — it must be pinned (the
-    // recommended production practice anyway). Resolved synchronously so a
-    // rejected single-flight promise is never cached.
-    if (this.useGateway) {
-      if (this.allowUnbound) {
-        console.warn(
-          "ExchangeClient: no chainId pinned and the gateway does not serve " +
-            "/status; falling back to UNBOUND_CHAIN_ID. Production callers " +
-            "MUST pass opts.chainId.",
-        );
-        this.chainId = UNBOUND_CHAIN_ID;
-        return Promise.resolve(UNBOUND_CHAIN_ID);
-      }
-      return Promise.reject(
-        new Error(
-          "ExchangeClient: gateway clients must pin opts.chainId — the API " +
-            "gateway does not expose CometBFT's /status for auto-resolution. " +
-            'Pass e.g. chainId: "proof-dev" (or set allowUnbound: true for ' +
-            "offline/unbound signing).",
-        ),
-      );
-    }
-
-    // Direct-node path (`useGateway: false`): fetch and hash `/status`.
     if (this.chainIdPromise) return this.chainIdPromise;
     this.chainIdPromise = (async () => {
       try {
-        const bound = await fetchChainId(this.rpcUrl);
+        // `fetchChainId` appends `/status`, so the gateway path resolves from
+        // `${gatewayUrl}/v1/status` and the direct path from `${rpcUrl}/status`.
+        const bound = await fetchChainId(this.chainBase);
         this.chainId = bound;
         return bound;
       } catch (err) {
@@ -343,15 +309,15 @@ export class ExchangeClient {
         this.chainIdPromise = null;
         if (this.allowUnbound) {
           console.warn(
-            `ExchangeClient: failed to resolve chain_id from ${this.rpcUrl}/status ` +
+            `ExchangeClient: failed to resolve chain_id from ${this.chainBase}/status ` +
               `(${(err as Error).message}); falling back to UNBOUND_CHAIN_ID. ` +
-              "Production callers must pin chainId or fix the rpcUrl.",
+              "Production callers should pin chainId or fix the gateway/rpc URL.",
           );
           this.chainId = UNBOUND_CHAIN_ID;
           return UNBOUND_CHAIN_ID;
         }
         throw new Error(
-          `ExchangeClient could not resolve chain_id from ${this.rpcUrl}/status: ` +
+          `ExchangeClient could not resolve chain_id from ${this.chainBase}/status: ` +
             `${(err as Error).message}. Pass opts.chainId explicitly, or set ` +
             "opts.allowUnbound = true if you intend to sign for an unbound chain.",
         );
@@ -1127,12 +1093,11 @@ export class ExchangeClient {
   }
 
   // -----------------------------------------------------------------------
-  // CometBFT status & block queries (direct-node path only — useGateway: false)
+  // Chain status & block queries (via the gateway's /v1/* by default)
   // -----------------------------------------------------------------------
 
   async status(): Promise<{ latestHeight: number; latestAppHash: string }> {
-    this.requireDirectNode("status");
-    const res = await fetch(`${this.rpcUrl}/status`);
+    const res = await fetch(`${this.chainBase}/status`);
     const json = await res.json();
     const info = json.result.sync_info;
     return {
@@ -1142,9 +1107,8 @@ export class ExchangeClient {
   }
 
   async getBlock(height?: number): Promise<Record<string, unknown>> {
-    this.requireDirectNode("getBlock");
     const params = height != null ? `?height=${height}` : "";
-    const res = await fetch(`${this.rpcUrl}/block${params}`);
+    const res = await fetch(`${this.chainBase}/block${params}`);
     const json = await res.json();
     if (json.error)
       throw new Error(json.error.message ?? JSON.stringify(json.error));
@@ -1152,9 +1116,8 @@ export class ExchangeClient {
   }
 
   async getBlockResults(height: number): Promise<Record<string, unknown>> {
-    this.requireDirectNode("getBlockResults");
     const res = await fetch(
-      `${this.rpcUrl}/block_results?height=${height}`,
+      `${this.chainBase}/block_results?height=${height}`,
     );
     const json = await res.json();
     if (json.error)

@@ -1131,30 +1131,18 @@ describe("ExchangeClient chain_id resolution", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("gateway path without chainId throws asking to pin it (no /status fetch)", async () => {
-    const fetchSpy = vi.fn(async () => new Response("{}"));
-    globalThis.fetch = fetchSpy as unknown as typeof fetch;
-
-    // Default useGateway: true — the gateway exposes no /status to resolve from.
-    const client = new ExchangeClient({ gatewayUrl: "http://test-gateway" });
-    await expect(client.ready()).rejects.toThrow(/must pin opts\.chainId/);
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(client.getChainId()).toBeNull();
-  });
-
-  it("gateway path with allowUnbound falls back to UNBOUND_CHAIN_ID (no /status fetch)", async () => {
-    const fetchSpy = vi.fn(async () => new Response("{}"));
-    globalThis.fetch = fetchSpy as unknown as typeof fetch;
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const client = new ExchangeClient({
-      gatewayUrl: "http://test-gateway",
-      allowUnbound: true,
+  it("gateway path auto-resolves chain-id from /v1/status", async () => {
+    const fetchSpy = vi.fn(async (url: RequestInfo | URL) => {
+      expect(url.toString()).toBe("http://test-gateway/v1/status");
+      return statusResponse("proof-via-gateway");
     });
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+    // Default useGateway: true — resolves from the gateway's /v1/status proxy.
+    const client = new ExchangeClient({ gatewayUrl: "http://test-gateway" });
     await client.ready();
-    expect(client.getChainId()).toEqual(UNBOUND_CHAIN_ID);
-    expect(fetchSpy).not.toHaveBeenCalled();
-    expect(warnSpy.mock.calls[0]?.[0]).toMatch(/UNBOUND_CHAIN_ID/);
+    expect(client.getChainId()).toEqual(chainIdFromString("proof-via-gateway"));
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("auto-resolves from /status when opts.chainId omitted", async () => {
@@ -1344,16 +1332,14 @@ describe("ExchangeClient chain-endpoint routing", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("default (useGateway) status() throws — the gateway has no /status route", async () => {
+  it("default (useGateway) routes status through the gateway's /v1/status", async () => {
     const client = new ExchangeClient({
       rpcUrl: "http://test-rpc",
       gatewayUrl: "http://test-gateway",
       chainId: "test-chain",
     });
-    await expect(client.status()).rejects.toThrow(
-      /not available over the API gateway/,
-    );
-    expect(calls).toEqual([]);
+    await client.status();
+    expect(calls).toEqual(["http://test-gateway/v1/status"]);
   });
 
   it("useGateway:false routes status to the direct rpcUrl", async () => {
