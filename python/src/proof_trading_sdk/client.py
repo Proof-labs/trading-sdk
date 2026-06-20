@@ -696,10 +696,26 @@ class ExchangeClient:
         }
 
     def adl_queue(self, market: int) -> list[dict[str, t.Any]]:
-        """ADL (auto-deleveraging) queue for *market*: ``GET /v1/adl/queue/{market}``."""
-        resp = self._get(f"/v1/adl/queue/{market}")
-        data = resp.json()
-        return data if isinstance(data, list) else []
+        """ADL (auto-deleveraging) queue for *market* via ``GET /v1/adl/queue/{market}``.
+
+        Decodes the msgpack 6-tuples ``[owner, market, side, size, upnl_now,
+        adl_score]`` (mirrors TS ``queryAdlQueue``).
+        """
+        raw = self._get_data(f"/v1/adl/queue/{market}")
+        if not isinstance(raw, (list, tuple)):
+            return []
+        return [
+            {
+                "owner": self._to_bytes(r[0]),
+                "market": int(r[1]),
+                "side": r[2],
+                "size": int(r[3]),
+                "upnl_now": int(r[4]),
+                "adl_score": int(r[5]),
+            }
+            for r in raw
+            if isinstance(r, (list, tuple)) and len(r) >= 6
+        ]
 
     # ── History (per-owner, time-windowed) ──────────────────────────────
 

@@ -49,6 +49,8 @@ export {
   type FundingSettledEvent,
   type AccountLiquidatedEvent,
   type MarketCreatedEvent,
+  type AdlQueueEntry,
+  type Ticker,
   type Orderbook,
   type OrderbookLevel,
   type OpenOrder,
