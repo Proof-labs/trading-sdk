@@ -832,7 +832,7 @@ export class ExchangeClient {
     return (decoded as unknown[][]).map((order) => ({
       id: BigInt(order[0] as number | bigint),
       market: Number(order[1]),
-      owner: (order[2] as Uint8Array) ?? new Uint8Array(),
+      owner: toBytes(order[2]),
       side: order[3] as "Buy" | "Sell",
       price: BigInt(order[4] as number | bigint),
       quantity: BigInt(order[5] as number | bigint),
@@ -849,10 +849,6 @@ export class ExchangeClient {
     const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as unknown[] | null;
     if (raw === null) return null;
-    // serde encodes `[u8; N]` as msgpack ARRAY (not BIN), so the
-    // decoder hands back `number[]` for owner/destination — coerce.
-    const toBytes = (v: unknown): Uint8Array =>
-      v instanceof Uint8Array ? v : Uint8Array.from(v as number[]);
     return {
       id: BigInt(raw[0] as number | bigint),
       owner: toBytes(raw[1]),
@@ -885,7 +881,7 @@ export class ExchangeClient {
             ? undefined
             : BigInt(v as number | bigint);
         return {
-          owner: p[0] as Uint8Array,
+          owner: toBytes(p[0]),
           market: Number(p[1]),
           side: p[2] as "Buy" | "Sell",
           entryPrice: BigInt(p[3] as number | bigint),
@@ -975,7 +971,7 @@ export class ExchangeClient {
     const raw = msgpackDecoder.decode(bytes);
     if (!Array.isArray(raw)) return [];
     return (raw as unknown[][]).map((row) => ({
-      owner: row[0] as Uint8Array,
+      owner: toBytes(row[0]),
       market: Number(row[1]),
       side: row[2] as "Buy" | "Sell",
       size: BigInt(row[3] as number | bigint),
@@ -1466,6 +1462,15 @@ async function fetchApiArray(url: string): Promise<unknown[]> {
 
 function toBase64(bytes: Uint8Array): string {
   return btoa(String.fromCharCode(...bytes));
+}
+
+/** Coerce a decoded owner/destination field to bytes. serde encodes `[u8; N]`
+ *  as a msgpack ARRAY (not BIN), so the decoder may hand back `number[]`; some
+ *  encoders use BIN (`Uint8Array`). Accept both; null/undefined → empty. */
+function toBytes(v: unknown): Uint8Array {
+  if (v instanceof Uint8Array) return v;
+  if (Array.isArray(v)) return Uint8Array.from(v as number[]);
+  return new Uint8Array();
 }
 
 function fromBase64(b64: string): Uint8Array {
