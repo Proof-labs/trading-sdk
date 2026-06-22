@@ -1,6 +1,6 @@
 [package]
 name = "proof-trading-sdk"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Rust core for the Proof trading SDK: MessagePack codec, Ed25519 signing, and wire types. Hub of the wheel-and-spokes SDK."
@@ -13,7 +13,7 @@ serde_bytes = "0.11"
 rmp-serde = "1"
 # The codec/types were extracted from exchange-core; the proc-macro keeps its
 # original `exchange_derive` import path via the `package` rename.
-exchange-derive = { package = "proof-trading-sdk-derive", path = "../proof-trading-sdk-derive", version = "0.1.0" }
+exchange-derive = { package = "proof-trading-sdk-derive", path = "../proof-trading-sdk-derive", version = "1" }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 

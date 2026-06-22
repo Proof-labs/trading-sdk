@@ -92,6 +92,26 @@ npx prettier --check .
   (backward compatible). Adding an action means: define its type/payload in
   `types.ts`, assign its `action_type` byte and encode/decode arms in `codec.ts`.
 
+## Versioning & wire-format compatibility
+
+Every package here (the npm `@proof/trading-sdk` and the `crates/*` Rust crates) ships **semver on the full `MAJOR.MINOR.PATCH` line and is kept at `>= 1.0.0`**. We are off `0.x` on purpose: under `0.x`, Cargo and npm caret ranges treat the *second* number as the breaking one, which is the wrong signal for a wire contract. At `>= 1.0.0` only a **MAJOR** difference is incompatible; MINOR and PATCH are drop-in for consumers. Do not reset to `0.x`.
+
+This SDK **reimplements** the exchange wire format (it does not pin `exchange-core` as a dependency), so it does not get the engine's version automatically — keep it in lockstep by hand. The wire format is the contract that drives the bump, and the rule matches the engine's exactly:
+
+- **PATCH** — no wire change. Internal fix, perf, refactor, docs. Identical bytes, identical decode for every existing message.
+- **MINOR** — a wire change that older versions can **still decode**. Purely additive: messages produced before the change still round-trip on the new code and the previous code still accepts what the new code emits. Examples: a new trailing optional field that encodes as `nil` when absent; a new `action_type`; **adding a new signable wire variant — MINOR if and only if transactions produced before the change still decode successfully.**
+- **MAJOR** — a wire change that makes an older version **fail to decode**, or makes the new code reject what an old version produced. Examples: **removing/deprecating an existing wire format**; reordering a positional array; changing a field type or scale; bumping the envelope `version` byte or the signing domain prefix (`DOMAIN_PREFIX`).
+
+Rule of thumb: **every wire-format change is at least a MINOR bump; if it breaks backward decode in either direction it is a MAJOR bump.** Prove decodability before calling something MINOR — re-diff the golden vectors in `crates/spec/golden-vectors/*.hex` and add a decode test for the previous version's bytes.
+
+Lockstep with the engine: this SDK's **MAJOR must equal the engine wire MAJOR it speaks.** When the engine cuts a MAJOR (breaking wire), the SDK cuts a MAJOR in the same change window; an additive engine MINOR that the SDK starts emitting/accepting is a SDK MINOR. Record the compatible engine version in `CHANGELOG.md` on every release. The npm package and the Rust crates move together — bump all of them, never just one.
+
+### Changelog discipline — update it per-PR, never at release time
+
+`CHANGELOG.md` is updated **in the same PR as the change**, not reconstructed at release. Every PR that changes observable behaviour — wire format, public API surface (TS/Rust/Python), routing, query methods, defaults, error semantics, or a security fix — adds at least one line under `## [Unreleased]` in the right [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) group (`Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`). A behaviour-changing PR with no CHANGELOG line is incomplete — call it out in review.
+
+This rule exists because we already lost history the other way: `0.1.0` sat as a single "Initial public release" line while gateway-only read/stream routing, the full Python/PyO3 SDK, dedicated builders for all core action types, conformance coverage of every action, engine-parity (CreateMarket fields, AtomicBasketOrder), the public-API pruning of internal abstractions, and multiple security/leak fixes all landed **unrecorded**. A release entry assembled from memory drops most of what shipped. When `[Unreleased]` is kept current per-PR, cutting a release is mechanical: rename `[Unreleased]` to the new `MAJOR.MINOR.PATCH`, add the dated compare link, open a fresh empty `[Unreleased]` — the substance is already written.
+
 ## Unit conventions
 
 | Field      | Scale                                | Example                   |

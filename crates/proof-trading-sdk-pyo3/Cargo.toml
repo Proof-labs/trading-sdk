@@ -1,6 +1,6 @@
 [package]
 name = "proof-trading-sdk-pyo3"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "PyO3 bindings for the proof-trading-sdk core: MessagePack codec, Ed25519 signing, and Keccak256 owner derivation."
@@ -16,7 +16,7 @@ default = ["pkcs11"]
 pkcs11 = ["dep:cryptoki"]
 
 [dependencies]
-proof-trading-sdk = { path = "../proof-trading-sdk", version = "0.1.0" }
+proof-trading-sdk = { path = "../proof-trading-sdk", version = "1" }
 pyo3 = { version = "0.29", features = ["extension-module", "abi3"] }
 pythonize = "0.29"
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
