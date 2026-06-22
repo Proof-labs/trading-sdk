@@ -1,6 +1,6 @@
 [package]
 name = "proof-trading-sdk-conformance"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Cross-language conformance vectors (NDJSON) + generator + Rust runner for the Proof trading SDK core."
