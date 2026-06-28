@@ -8,12 +8,12 @@
 //! CI should run this and fail if `git diff --exit-code conformance/` is dirty.
 //!
 //! TODO(handoff): this emits a SEED set only. Extend to full coverage:
-//!   * codec: all 27 action types (this seed has 6) + edges — zero/max u64,
+//!   * codec: all 27 action types (this seed has 8) + edges — zero/max u64,
 //!     CLOID None/Some(MAX), post_only/reduce_only/TIF, serde-default tails
 //!     (CreateMarket.pool_id, OracleUpdate.publish_time_ms…), every enum,
-//!     nested EventOracleSource (3 variants), FeeTier lists, and
-//!     OracleUpdateComposite (0x14 — which the TS SDK is missing, so its
-//!     vector will fail the TS runner: that is the point).
+//!     nested EventOracleSource (3 variants), FeeTier lists.
+//!     OracleUpdateComposite (0x14) is now wired across all three SDKs and
+//!     covered here.
 //!   * signing: more keys / seqs (0,1,MAX) / chain_ids (unbound + bound) /
 //!     payload sizes; more owner cases.
 //!   * nonce: already reasonably covered; add multi-process interleavings if
@@ -67,6 +67,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     const PLACE_ORDER: u8 = 0x01;
     const CANCEL_ORDER: u8 = 0x02;
     const ORACLE_UPDATE: u8 = 0x03;
+    const ORACLE_UPDATE_COMPOSITE: u8 = 0x14;
     const MARKET_ORDER: u8 = 0x04;
     const CLOSE_POSITION: u8 = 0x17;
     const CREATE_MARKET: u8 = 0x07;
@@ -113,6 +114,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             "oracle_update/no_publish_time",
             ORACLE_UPDATE,
             json!({ "market": 1, "price": 5000, "signer": signer, "publish_time_ms": 0 }),
+        ),
+        // OracleUpdateComposite (0x14) — BE-31 composite-CEX feeder action.
+        // Operator-only; pins the cross-language wire shape now that the TS
+        // and Python SDKs expose it. Field order: market, price, n_sources,
+        // signer, publish_time_ms (n_sources/publish_time are serde-default).
+        codec_case(
+            "oracle_update_composite/four_sources",
+            ORACLE_UPDATE_COMPOSITE,
+            json!({ "market": 1, "price": 6675000u64, "n_sources": 4,
+                    "signer": signer, "publish_time_ms": 1700000000123u64 }),
+        ),
+        codec_case(
+            "oracle_update_composite/no_publish_time",
+            ORACLE_UPDATE_COMPOSITE,
+            json!({ "market": 7, "price": 250000u64, "n_sources": 1,
+                    "signer": signer, "publish_time_ms": 0 }),
         ),
         codec_case(
             "market_order/basic",

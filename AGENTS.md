@@ -145,6 +145,60 @@ await client.submitTx({
 | `reduceOnly`    | `boolean?`               | `true` = only reduce position        |
 | `timeInForce`   | `TimeInForce?`           | `Gtc` (default), `Ioc`, `Fok`        |
 
+## Operator actions (privileged — not for trading integrations)
+
+**If you are building a trading integration, stop here — you never need this
+section.** The actions below are operator infrastructure (oracle relay,
+composite-CEX feeder, relayer/admin). Each is gated by a dedicated engine
+allowlist; a trader's signer is rejected, so they grant nothing without an
+operator-provisioned key. They live in the public SDK so operator tooling needs
+no second SDK.
+
+The action union reflects this split: `Action = TraderAction | OperatorAction`.
+A trading integration can type its calls as `TraderAction` to keep operator
+actions out of autocomplete entirely:
+
+```typescript
+import type { TraderAction } from "@proof/trading-sdk";
+const order: TraderAction = { type: "PlaceOrder", data: { /* … */ } };
+await client.submitTx(order); // submitTx still accepts the full Action union
+```
+
+`OracleUpdateComposite` (0x14) — submit a composite-CEX price for the
+multi-source mark-price median (BE-31 Phase B). Requires a signer on the
+engine's **CEX-composite feeder allowlist** (a separate trust domain from the
+oracle relay). A market only consults the composite once an operator flips it to
+`Median` via `UpdateMarketFees` (`markSourceMode: 1`).
+
+```typescript
+await client.submitTx({
+  type: "OracleUpdateComposite",
+  data: {
+    market: 1,
+    price: 6675000n, // composite price in cents
+    nSources: 4, // # of CEX feeds (observability only)
+    signer: feederAddress, // on the composite-feeder allowlist
+    publishTimeMs: BigInt(Date.now()), // strictly monotonic per market
+  },
+});
+```
+
+Python (typed builder):
+
+```python
+from proof_trading_sdk import OracleUpdateComposite
+client.submit_tx(OracleUpdateComposite(
+    market=1, price=6_675_000, signer=feeder_addr, n_sources=4,
+    publish_time_ms=now_ms,
+))
+```
+
+Other operator actions (`OracleUpdate`, `CreateMarket`, `UpdateMarketFees`,
+`ConfirmDeposit`/`ConfirmWithdrawal`/`FailWithdrawal`, `Deposit`/`Withdraw`,
+`CreateImpactMarket`, `ResolveEvent`) are in `OperatorAction`; the Python SDK
+exposes them via typed builders where present or `RawAction` otherwise. See
+`src/types.ts` for every payload shape.
+
 ## Reading data
 
 The SDK talks to the API gateway at `PROOF_GATEWAY_URL`. The gateway routes

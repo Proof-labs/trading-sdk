@@ -53,6 +53,7 @@ from proof_trading_sdk.actions import (  # noqa: F401
     SetUserMarketLeverage,
     CreateImpactMarket,
     UpdateMarketFees,
+    OracleUpdateComposite,
     encode_action,
     decode_action,
 )
@@ -112,6 +113,7 @@ __all__ = [
     "SetUserMarketLeverage",
     "CreateImpactMarket",
     "UpdateMarketFees",
+    "OracleUpdateComposite",
     "encode_action",
     "decode_action",
     "NonceAllocator",
