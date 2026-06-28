@@ -135,6 +135,7 @@ impl_action_encoding! {
     CancelAllOrders => 0x19,
     CancelReplaceOrder => 0x1A,
     OracleUpdate => 0x03,
+    OracleUpdateComposite => 0x14,
     MarketOrder => 0x04,
     Deposit => 0x05,
     Withdraw => 0x06,
@@ -435,7 +436,8 @@ mod tests {
     use crate::types::{
         AmendOrder, ApproveAgent, CancelOrder, CancelReplaceOrder, ConfirmDeposit,
         ConfirmWithdrawal, CreateMarket, Deposit, FailWithdrawal, MarketOrder, OracleUpdate,
-        PlaceOrder, RevokeAgent, Side, TimeInForce, Withdraw, WithdrawRequest,
+        OracleUpdateComposite, PlaceOrder, RevokeAgent, Side, TimeInForce, Withdraw,
+        WithdrawRequest,
     };
 
     fn test_key() -> ed25519_dalek::SigningKey {
@@ -1642,6 +1644,68 @@ mod tests {
                 assert_eq!(b.max_slippage_bps, 50);
             }
             other => panic!("expected AtomicBasketOrder, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn oracle_update_composite_round_trips() {
+        let action = Action::OracleUpdateComposite(OracleUpdateComposite {
+            market: 1,
+            price: 6_675_000,
+            n_sources: 4,
+            signer: [0x21; 20].into(),
+            publish_time_ms: 1_700_000_000_123,
+        });
+        assert_round_trip(&action, 14);
+        let encoded = encode_tx(&action, 14).unwrap();
+        assert_eq!(
+            peek_action_type(&encoded),
+            Some(OracleUpdateComposite::ACTION_TYPE)
+        );
+        assert_eq!(OracleUpdateComposite::ACTION_TYPE, 0x14);
+        match decode_tx(&encoded).unwrap().action {
+            Action::OracleUpdateComposite(c) => {
+                assert_eq!(c.market, 1);
+                assert_eq!(c.price, 6_675_000);
+                assert_eq!(c.n_sources, 4);
+                assert_eq!(c.signer, [0x21; 20].into());
+                assert_eq!(c.publish_time_ms, 1_700_000_000_123);
+            }
+            other => panic!("expected OracleUpdateComposite, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn oracle_update_composite_trailing_publish_time_defaults() {
+        // A 4-field payload (no trailing publish_time_ms) must still decode,
+        // with publish_time_ms = 0 via serde(default). Proves the new field is
+        // a backward-compatible (MINOR) addition: feeder records written before
+        // the replay guard existed round-trip on this code.
+        let payload = rmp_serde::to_vec(&(
+            7u32,         // market
+            250_000u64,   // price
+            1u8,          // n_sources
+            [0x21u8; 20], // signer
+                          // publish_time_ms intentionally omitted
+        ))
+        .unwrap();
+        let envelope = WireTxEnvelope {
+            version: 2,
+            action_type: OracleUpdateComposite::ACTION_TYPE,
+            seq: 0,
+            payload: WireBlob::from_test_payload(payload),
+            pubkey: [0u8; 32],
+            signature: [0u8; 64],
+        };
+        let encoded = rmp_serde::to_vec(&envelope).unwrap();
+        match decode_tx(&encoded).unwrap().action {
+            Action::OracleUpdateComposite(c) => {
+                assert_eq!(c.market, 7);
+                assert_eq!(c.price, 250_000);
+                assert_eq!(c.n_sources, 1);
+                assert_eq!(c.publish_time_ms, 0, "trailing field must default to 0");
+            }
+            other => panic!("expected OracleUpdateComposite, got {other:?}"),
         }
     }
 }

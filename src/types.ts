@@ -36,6 +36,9 @@ export const ActionType = {
   CancelOrder: 0x02,
   /** Submit an oracle price update (relayer only). */
   OracleUpdate: 0x03,
+  /** Operator-only: submit a composite-CEX price for the multi-source mark
+   *  median (BE-31 Phase B). Feeder infrastructure, not a trading action. */
+  OracleUpdateComposite: 0x14,
   /** Place a market order that crosses immediately. */
   MarketOrder: 0x04,
   /** Credit USDC to an account (legacy, prefer ConfirmDeposit). */
@@ -200,6 +203,37 @@ export interface OracleUpdate {
    * Added 2026-04-23 per audit B3 as replay protection for the
    * relayer-signed oracle feed.
    */
+  publishTimeMs: bigint;
+}
+
+/**
+ * **Operator action — not for trading integrations.** Submit a composite-CEX
+ * price for a market: BE-31 Phase B's third source for the multi-source
+ * mark-price median (oracle + book-mid + composite CEX index).
+ *
+ * A normal trading integration never submits this — it is feeder
+ * infrastructure run by the operator. The engine re-checks the signer against
+ * a **separate CEX-composite feeder allowlist** (a distinct trust domain from
+ * the {@link OracleUpdate} relay), so a non-feeder signer is rejected
+ * regardless. Markets ignore the composite entirely unless an operator has
+ * flipped them to `Median` via {@link UpdateMarketFees} (`markSourceMode = 1`).
+ *
+ * @remarks Operator-only. Requires a signer on the engine's CEX-composite
+ * feeder allowlist; not needed for trading integrations.
+ */
+export interface OracleUpdateComposite {
+  /** Market identifier to update. */
+  market: number;
+  /** Composite price in cents (median/VWAP of `nSources` CEX feeds). */
+  price: bigint;
+  /** Number of CEX feeds that went into the composite. Observability only —
+   *  the engine does not gate on it. Encodes as 0 when absent. */
+  nSources: number;
+  /** Authorized feeder signer (20 bytes), on the CEX-composite allowlist. */
+  signer: Address;
+  /** Feeder publish timestamp in ms since Unix epoch. Must be strictly
+   *  greater than the last accepted composite on this market (replay guard,
+   *  same semantics as {@link OracleUpdate.publishTimeMs}). */
   publishTimeMs: bigint;
 }
 
@@ -657,8 +691,12 @@ export interface AtomicBasketOrder {
   maxSlippageBps?: number;
 }
 
-/** Discriminated union of all exchange actions. */
-export type Action =
+/**
+ * Trading actions — the surface a normal integration (market maker, bot,
+ * trader) uses. User-signed: each is authorized by the account that owns the
+ * order/position/funds it touches. This is the union you want by default.
+ */
+export type TraderAction =
   | { type: "PlaceOrder"; data: PlaceOrder }
   | { type: "CancelOrder"; data: CancelOrder }
   | { type: "CancelClientOrder"; data: CancelClientOrder }
@@ -666,22 +704,42 @@ export type Action =
   | { type: "CancelReplaceOrder"; data: CancelReplaceOrder }
   | { type: "AmendOrder"; data: AmendOrder }
   | { type: "AtomicBasketOrder"; data: AtomicBasketOrder }
-  | { type: "OracleUpdate"; data: OracleUpdate }
   | { type: "MarketOrder"; data: MarketOrder }
+  | { type: "WithdrawRequest"; data: WithdrawRequest }
+  | { type: "ApproveAgent"; data: ApproveAgent }
+  | { type: "RevokeAgent"; data: RevokeAgent }
+  | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage }
+  | { type: "ClosePosition"; data: ClosePosition };
+
+/**
+ * Operator actions — privileged infrastructure submitted by the operator's
+ * relayer / oracle relay / CEX-composite feeder, **not** by a trading
+ * integration. Each is gated by a dedicated engine allowlist (relayer, oracle,
+ * or composite-feeder); a normal trader's signer is rejected. They are part of
+ * the public wire contract (so operator tooling has one SDK), but a trading
+ * consumer should never need them. See the "Operator actions" section in
+ * AGENTS.md / README.md.
+ */
+export type OperatorAction =
+  | { type: "OracleUpdate"; data: OracleUpdate }
+  | { type: "OracleUpdateComposite"; data: OracleUpdateComposite }
   | { type: "Deposit"; data: Deposit }
   | { type: "Withdraw"; data: Withdraw }
   | { type: "CreateMarket"; data: CreateMarket }
-  | { type: "WithdrawRequest"; data: WithdrawRequest }
   | { type: "ConfirmDeposit"; data: ConfirmDeposit }
   | { type: "ConfirmWithdrawal"; data: ConfirmWithdrawal }
   | { type: "FailWithdrawal"; data: FailWithdrawal }
-  | { type: "ApproveAgent"; data: ApproveAgent }
-  | { type: "RevokeAgent"; data: RevokeAgent }
   | { type: "CreateImpactMarket"; data: CreateImpactMarket }
   | { type: "ResolveEvent"; data: ResolveEvent }
-  | { type: "UpdateMarketFees"; data: UpdateMarketFees }
-  | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage }
-  | { type: "ClosePosition"; data: ClosePosition };
+  | { type: "UpdateMarketFees"; data: UpdateMarketFees };
+
+/**
+ * Discriminated union of every exchange action. Equals
+ * {@link TraderAction} ∪ {@link OperatorAction}. `submitTx` accepts this full
+ * union — trading integrations can narrow to `TraderAction` to keep operator
+ * actions out of autocomplete.
+ */
+export type Action = TraderAction | OperatorAction;
 
 // ---------------------------------------------------------------------------
 // Event types (emitted by engine, delivered via ABCI/WebSocket)

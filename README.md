@@ -159,15 +159,31 @@ class ExchangeClient {
 The `Action` type is a discriminated union. Every action is:
 
 ```typescript
-type Action =
+type Action = TraderAction | OperatorAction;
+
+type TraderAction =
   | { type: "PlaceOrder"; data: PlaceOrder }
   | { type: "CancelOrder"; data: CancelOrder }
   | { type: "CancelAllOrders"; data: CancelAllOrders }
   | { type: "CancelReplaceOrder"; data: CancelReplaceOrder }
   | { type: "MarketOrder"; data: MarketOrder }
   | { type: "ClosePosition"; data: ClosePosition };
-// … 20+ more — see src/types.ts
+// … more trader actions — see src/types.ts
 ```
+
+Trading integrations use `TraderAction` and can type their calls against it to
+keep operator actions out of autocomplete. `submitTx` still accepts the full
+`Action` union.
+
+#### Operator actions (privileged)
+
+`OperatorAction` covers oracle-relay / composite-CEX-feeder / relayer-admin
+actions — e.g. `OracleUpdate`, `OracleUpdateComposite`, `UpdateMarketFees`,
+`CreateMarket`. **A trading integration never needs these.** Each is gated by a
+dedicated engine allowlist, so codec availability grants nothing without an
+operator-provisioned key. See [AGENTS.md](AGENTS.md) → "Operator actions" for
+usage (e.g. driving the BE-31 multi-source mark via `OracleUpdateComposite` +
+`UpdateMarketFees` `markSourceMode`).
 
 ### Options
 

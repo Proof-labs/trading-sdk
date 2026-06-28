@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "proof-trading-sdk"
-version = "0.1.0"
+version = "1.1.0"
 description = "Proof Exchange Trading SDK — Ed25519 signing, MessagePack codec, and gateway client."
 readme = "README.md"
 license = { text = "Apache-2.0" }

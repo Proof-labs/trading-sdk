@@ -9,9 +9,9 @@
 //   - signing vectors: PASS (signEnvelopeFromPayload + pubkeyToOwner/ownerToHex)
 //   - nonce vectors:   SKIPPED — nonces are derived from timestamps, not a step function
 //
-// `OracleUpdateComposite` (0x14) is intentionally omitted from the TS SDK.
-// It is an internal feeder action (composite CEX price submission) that no
-// SDK user would ever call. The codec test skips unwired action types.
+// `OracleUpdateComposite` (0x14) is now wired (operator action — composite-CEX
+// feeder price submission). Its codec vectors are exercised here like any other
+// action; the toAction adapter below maps it.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -92,8 +92,8 @@ function bigOrNull(v: unknown): bigint | null {
 
 /**
  * Adapter: core snake_case `input` dict → this SDK's `Action` union.
- * Wired for all 27 action types (0x14 OracleUpdateComposite is intentionally
- * omitted from the TS SDK — internal feeder action, not user-submittable).
+ * Wired for all action types including 0x14 OracleUpdateComposite (operator
+ * action — composite-CEX feeder).
  */
 function toAction(
   actionType: ActionTypeValue,
@@ -161,6 +161,18 @@ function toAction(
           orderId: big(input.order_id),
           newPrice: bigOrNull(input.new_price),
           newQuantity: bigOrNull(input.new_quantity),
+        },
+      };
+    case ActionType.OracleUpdateComposite:
+      return {
+        type: "OracleUpdateComposite",
+        data: {
+          market: input.market as number,
+          price: big(input.price),
+          nSources: input.n_sources == null ? 0 : Number(big(input.n_sources)),
+          signer: bytes(input.signer),
+          publishTimeMs:
+            input.publish_time_ms == null ? 0n : big(input.publish_time_ms),
         },
       };
     case ActionType.OracleUpdate:
@@ -431,9 +443,9 @@ function parseOracleSource(v: unknown): any {
 }
 
 describe("conformance vectors (TypeScript)", () => {
-  // All 27 action types wired. OracleUpdateComposite (0x14) intentionally omitted
-  // — internal feeder action, not user-submittable. Nonce is timestamp-derived,
-  // no standalone step function needed.
+  // All action types wired, including OracleUpdateComposite (0x14) — the
+  // operator composite-CEX feeder action. Nonce is timestamp-derived, no
+  // standalone step function needed.
 
   it("signing: (payload,key) → envelope; pubkey → owner", () => {
     for (const c of cases("signing.ndjson")) {

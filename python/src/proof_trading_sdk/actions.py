@@ -516,6 +516,52 @@ class UpdateMarketFees(Action):
         }
 
 
+# ── Operator actions (privileged — feeder / relayer infrastructure) ──────────
+#
+# These are NOT trading actions. A normal trading integration never builds
+# them — they are submitted by the operator's oracle relay / CEX-composite
+# feeder / relayer, each gated by a dedicated engine allowlist. They live in
+# the public SDK so operator tooling needs no second SDK, but a trading
+# consumer should ignore this section. Most operator actions (OracleUpdate,
+# CreateMarket, Confirm*/Fail*, ResolveEvent, …) are reachable via
+# :class:`RawAction`; OracleUpdateComposite gets a typed builder because Auros'
+# Python feeder requested first-class support.
+
+
+@dataclass
+class OracleUpdateComposite(Action):
+    """**Operator-only.** Submit a composite-CEX price for a market — BE-31
+    Phase B's third source for the multi-source mark-price median.
+
+    Not a trading action: the engine re-checks ``signer`` against a *separate*
+    CEX-composite feeder allowlist (a distinct trust domain from the
+    ``OracleUpdate`` relay), so a non-feeder signer is rejected regardless.
+    Markets ignore the composite entirely unless an operator has flipped them
+    to ``Median`` via :class:`UpdateMarketFees` (``mark_source_mode=1``).
+
+    Field order matches the engine struct: ``market, price, n_sources,
+    signer, publish_time_ms``. ``n_sources`` is observability-only (the engine
+    does not gate on it); ``publish_time_ms`` is a strictly-monotonic replay
+    guard, same as :class:`OracleUpdate`.
+    """
+
+    ACTION_NAME = "OracleUpdateComposite"
+    market: int
+    price: int
+    signer: bytes
+    n_sources: int = 0
+    publish_time_ms: int = 0
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "price": self.price,
+            "n_sources": self.n_sources,
+            "signer": self.signer,
+            "publish_time_ms": self.publish_time_ms,
+        }
+
+
 # ── Codec helpers (delegate to the shared Rust core) ─────────────────────────
 
 
@@ -560,6 +606,7 @@ __all__ = [
     "SetUserMarketLeverage",
     "CreateImpactMarket",
     "UpdateMarketFees",
+    "OracleUpdateComposite",
     "encode_action",
     "decode_action",
 ]

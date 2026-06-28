@@ -841,6 +841,58 @@ pub struct OracleUpdate {
     pub publish_time_ms: u64,
 }
 
+/// **Operator action (composite-CEX feeder).** Push a composite-CEX
+/// price — BE-31 Phase B's third source for the multi-source mark-price
+/// median. Carries the median (or VWAP) of N off-chain CEX feeds
+/// (Binance / OKX / Bybit / Coinbase) computed by a separate off-chain
+/// feeder process.
+///
+/// **Not a trading action.** A normal trading integration never submits
+/// this — it is feeder infrastructure. The engine re-checks
+/// `is_cex_composite_authorized(signer)` against a *separate* feeder
+/// allowlist (distinct trust domain from the `OracleUpdate` relay), so a
+/// non-feeder signer is rejected regardless of this builder's
+/// availability. Markets ignore the composite entirely unless flipped to
+/// `MarkSourceMode::Median` via [`UpdateMarketFees`].
+///
+/// **Why it's separate from [`OracleUpdate`]**:
+///   1. Different signer set — composite uses a feeder-specific
+///      allowlist, not the Pyth oracle relay's. Different trust model.
+///   2. Different staleness gate — composite is polled every ~1s vs.
+///      Pyth's per-block cadence; rejected from the median when older
+///      than `cex_composite_staleness_ms` (default 30s).
+///   3. Different aggregation — Pyth oracle is a single value; the
+///      composite is explicitly a median across multiple venues, with
+///      `n_sources` carried for observability.
+///
+/// Same monotonicity-of-publish-time replay guard as [`OracleUpdate`]
+/// (audit B3, 2026-04-23).
+///
+/// Wire layout (must match the engine struct field order):
+/// `market, price, n_sources, signer, publish_time_ms`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OracleUpdateComposite {
+    pub market: MarketId,
+    /// Composite price in micro-USDC (median or VWAP of `n_sources`
+    /// off-chain CEX feeds, computed off-chain by the feeder).
+    pub price: u64,
+    /// Number of CEX feeds that went into the composite. Carried for
+    /// observability — a composite from 1 venue is much weaker signal
+    /// than one from 4. Informational; the engine doesn't gate on it.
+    /// `serde(default)` so absent encodes as `0`.
+    #[serde(default)]
+    pub n_sources: u8,
+    /// Authorized feeder signer (20 bytes). Must be on the engine's
+    /// CEX-composite feeder allowlist (separate from the oracle relay).
+    pub signer: Address,
+    /// Feeder's own publish timestamp in ms since Unix epoch. Must be
+    /// strictly greater than the last accepted update's `publish_time_ms`
+    /// for the same market — replay guard. `serde(default)` so records
+    /// written before this field existed decode with `0`.
+    #[serde(default)]
+    pub publish_time_ms: u64,
+}
+
 /// Direct deposit — requires **relayer authorization**.
 ///
 /// Previously described as "testing/internal" with no authorization check
