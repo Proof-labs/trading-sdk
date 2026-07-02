@@ -549,8 +549,15 @@ class OracleUpdateComposite(Action):
     market: int
     price: int
     signer: bytes
+    # Required — NOT defaulted. `publish_time_ms` is the strictly-monotonic
+    # replay guard the engine enforces; a silent `0` default lets a feeder mint
+    # a first update at ts 0 and then have every later omitted update rejected,
+    # silently dropping the composite from the median. Matches the TS builder
+    # (`publishTimeMs` required) and Rust construction. The `serde(default)` on
+    # the Rust struct is decode-only (legacy payloads), not a mint-time default.
+    publish_time_ms: int
+    # Observability-only (the engine doesn't gate on it); safe to default.
     n_sources: int = 0
-    publish_time_ms: int = 0
 
     def fields(self) -> dict[str, Any]:
         return {

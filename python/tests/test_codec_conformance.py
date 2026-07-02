@@ -125,6 +125,23 @@ class TestEncodeDecodeRoundTrip:
         assert decoded["signer"] == bytes([0x21] * 20)
         assert decoded["publish_time_ms"] == 1_700_000_000_123
 
+    def test_oracle_update_composite_requires_publish_time_ms(self):
+        # publish_time_ms is the engine's strictly-monotonic replay guard; the
+        # builder must NOT let a feeder omit it (a silent 0 would break
+        # monotonicity and drop the composite from the median). Required arg,
+        # matching the TS (`publishTimeMs`) and Rust builders.
+        try:
+            actions.OracleUpdateComposite(
+                market=1,
+                price=250_000,
+                signer=bytes([0x21] * 20),
+                n_sources=4,
+            )
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("publish_time_ms must be a required argument")
+
     def test_wrong_owner_length_rejected(self):
         # A 19-byte owner must be rejected by the core's length check,
         # not silently truncated.
