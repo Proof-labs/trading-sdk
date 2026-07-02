@@ -1,5 +1,5 @@
 /**
- * S10 — Liquidation at maintenance margin threshold
+ * SDK10 — Liquidation at maintenance margin threshold
  *
  * Alice opens a leveraged long, an adversarial price move pushes mark
  * below the maintenance margin threshold, and the end-of-block
@@ -12,7 +12,7 @@
  * the `RELAYER_PRIVATE_KEY` env var), so we can drive the oracle
  * downward without needing a market-order flow.
  *
- * Catalog: ../../../../docs/exchange-test-scenarios.md (S10).
+ * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK10).
  *
  * Runs only when both `RPC_URL` and `RELAYER_PRIVATE_KEY` are set.
  * CI keeps this skipped so `npm test` stays green without a live node.
@@ -29,7 +29,7 @@ const describeScenario =
     ? describe
     : describe.skip;
 
-describeScenario("S10: liquidation on adverse price move", () => {
+describeScenario("SDK10: liquidation on adverse price move", () => {
   let w: World;
 
   beforeAll(async () => {

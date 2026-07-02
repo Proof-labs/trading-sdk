@@ -1,5 +1,5 @@
 /**
- * S04 — Cancel-then-replace at the same price
+ * SDK04 — Cancel-then-replace at the same price
  *
  * Tests the MM requote pattern: cancel an existing bid, then place
  * a new bid at the SAME price but a different size. The matcher
@@ -18,7 +18,7 @@
  *   - no other unexpected state (invariants hold).
  *
  * This covers the MM-requote path that matching-engine code exercises
- * ~thousands of times per minute but none of S01/S02/S03/S05 tests.
+ * ~thousands of times per minute but none of SDK01/SDK02/SDK03/SDK05 tests.
  * Regressions here would show up as: (a) ghost-level where cancelled
  * orders still appear in the book, (b) duplicate orders at a level
  * because the cancel "landed" after the replace, or (c) phantom
@@ -31,7 +31,7 @@ import { invariants } from "./invariants.js";
 const RPC_URL = process.env.RPC_URL;
 const describeScenario = RPC_URL ? describe : describe.skip;
 
-describeScenario("S04: cancel-then-replace at same price", () => {
+describeScenario("SDK04: cancel-then-replace at same price", () => {
   let w: World;
 
   beforeAll(async () => {

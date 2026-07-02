@@ -1,5 +1,5 @@
 /**
- * S24 — HLP floor enforcement
+ * SDK24 — HLP floor enforcement
  *
  * `HlpConfig.min_balance_floor` is the explicit non-Hyperliquid
  * design choice: HLP stops absorbing once its balance drops below
@@ -22,7 +22,7 @@
  * setup step is `expect.fail`-ed loudly so no one assumes the path
  * is exercised.
  *
- * Catalog: ../../../../docs/exchange-test-scenarios.md (S24).
+ * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK24).
  */
 import { describe, it, beforeAll, expect } from "vitest";
 import { seedWorld, type World } from "./harness.js";
@@ -36,7 +36,7 @@ const describeScenario =
     ? describe
     : describe.skip;
 
-describeScenario("S24: HLP floor enforcement (e2e)", () => {
+describeScenario("SDK24: HLP floor enforcement (e2e)", () => {
   let w: World;
 
   beforeAll(async () => {
@@ -59,7 +59,7 @@ describeScenario("S24: HLP floor enforcement (e2e)", () => {
     //      (HLP at floor); InsuranceFundUpdated fires for the full
     //      $50M.
     expect.fail(
-      "S24 e2e not yet runnable — needs an admin SDK action to set HlpConfig. " +
+      "SDK24 e2e not yet runnable — needs an admin SDK action to set HlpConfig. " +
         "Engine-level coverage in `waterfall_tier0_*` tests handles the dispatch.",
     );
   });
