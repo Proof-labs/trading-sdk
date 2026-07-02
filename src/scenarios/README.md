@@ -1,6 +1,15 @@
 # Scenario Tests
 
-End-to-end behaviour tests for the exchange. Each file corresponds to a single scenario ID (`S01`, `S02`, …). The intent is "behaviour that a user actually cares about, written so it reads like English."
+End-to-end behaviour tests for the exchange. Each file corresponds to a single scenario ID (`SDK01`, `SDK02`, …). The intent is "behaviour that a user actually cares about, written so it reads like English."
+
+> **Why `SDK##` and not `S##`?** This suite used to share the bare `S##`
+> namespace with the proof-integration gateway suite, but the numberings
+> diverged (this repo's old S04 was cancel-then-replace; proof-integration's
+> S04 is a market sweep), so a bare S-id was ambiguous without naming the
+> repo. The suite was renamed to its own `SDK##` namespace to make every ID
+> globally unambiguous. Older notes and docs citing `S01`–`S24` for this
+> suite map 1:1 to `SDK01`–`SDK24`. The `S##` ids now always refer to the
+> proof-integration catalog.
 
 ## How they run
 
@@ -41,12 +50,16 @@ If you must run against an MM-active stack, comment out `positionSymmetry` in `i
 
 - `harness.ts` — `seedWorld()` boots the world, returns a fluent API (`w.alice.limitBuy(...)`).
 - `invariants.ts` — shared assertions run at the end of every scenario (orderbook not crossed, position symmetry, no negative equity).
-- `S##-<slug>.test.ts` — one scenario per file, named by catalog ID.
+- `SDK##-<slug>.test.ts` — one scenario per file, named by suite ID.
 
 ## Adding a scenario
 
-1. Reserve the next ID in `docs/exchange-test-scenarios.md`.
-2. Copy an existing `S##-*.test.ts` as a template.
+1. Take the next unused `SDK##` in this directory (ids are local to this
+   suite — no external reservation needed). Then add the scenario to the
+   "SDK-suite scenarios" section of the ProofOfBrain vault catalog
+   (`testing/exchange-test-scenarios.md`) so the shared catalog stays
+   complete.
+2. Copy an existing `SDK##-*.test.ts` as a template.
 3. Keep each test focused on one behaviour — split rather than branch.
 4. Always end with `await invariants(w)`.
 

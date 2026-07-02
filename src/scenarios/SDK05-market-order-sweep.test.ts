@@ -1,5 +1,5 @@
 /**
- * S05 — Market order sweeps multiple price levels
+ * SDK05 — Market order sweeps multiple price levels
  *
  * Alice posts three asks at ascending prices forming a tight ladder:
  *   1 @ $50,000
@@ -18,8 +18,8 @@
  *   - alice has exactly one resting ask: 1 @ $50,200
  *   - bob has no remainder (market order filled full 5)
  *
- * This covers the cross-level sweep path that S01 (single level) and
- * S02 (single maker/taker pair) don't reach. If the matcher has an
+ * This covers the cross-level sweep path that SDK01 (single level) and
+ * SDK02 (single maker/taker pair) don't reach. If the matcher has an
  * off-by-one on level iteration or applies the taker's size to the
  * wrong level, this scenario catches it.
  */
@@ -30,7 +30,7 @@ import { invariants } from "./invariants.js";
 const RPC_URL = process.env.RPC_URL;
 const describeScenario = RPC_URL ? describe : describe.skip;
 
-describeScenario("S05: market order sweeps three price levels", () => {
+describeScenario("SDK05: market order sweeps three price levels", () => {
   let w: World;
 
   beforeAll(async () => {

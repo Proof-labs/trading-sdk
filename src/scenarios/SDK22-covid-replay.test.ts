@@ -1,5 +1,5 @@
 /**
- * S22 — COVID-style fast crash replay
+ * SDK22 — COVID-style fast crash replay
  *
  * March 12, 2020 ("Black Thursday"): BTC dropped from ~$8k to
  * ~$3.8k in 24 hours, with a single 50%+ candle. BitMEX took the
@@ -24,7 +24,7 @@
  *   - Pool isolation respected — a tier-2 socialized loss event
  *     is emitted with the correct cap.
  *
- * Catalog: ../../../../docs/exchange-test-scenarios.md (S22).
+ * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK22).
  *
  * Runs only when `RPC_URL`, `RELAYER_PRIVATE_KEY`, and
  * `ORACLE_PRIVATE_KEY` are set AND the dev stack is running without
@@ -42,7 +42,7 @@ const describeScenario =
     ? describe
     : describe.skip;
 
-describeScenario("S22: COVID-style 50% crash absorbed cleanly", () => {
+describeScenario("SDK22: COVID-style 50% crash absorbed cleanly", () => {
   let w: World;
   // Three "buckets" of trader sizes — small / medium / whale.
   const SMALL = ["s1", "s2", "s3", "s4", "s5"];

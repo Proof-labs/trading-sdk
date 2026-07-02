@@ -1,5 +1,5 @@
 /**
- * S23 — Pool isolation: a blowout in one pool does NOT drain another
+ * SDK23 — Pool isolation: a blowout in one pool does NOT drain another
  *
  * The four-tier waterfall (docs/adl-vs-socialized-loss.md §3) groups
  * markets into pools by `MarketConfig.pool_id`. The whole point of
@@ -19,7 +19,7 @@
  * via the seed script; the engine-level tests in
  * `engine::tests::waterfall_*` cover the pool dispatch directly.
  *
- * Catalog: ../../../../docs/exchange-test-scenarios.md (S23).
+ * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK23).
  */
 import { describe, it, beforeAll, expect } from "vitest";
 import { seedWorld, BTC_PERP, type World } from "./harness.js";
@@ -33,7 +33,7 @@ const describeScenario =
     ? describe
     : describe.skip;
 
-describeScenario("S23: pool isolation across the IF dispatch", () => {
+describeScenario("SDK23: pool isolation across the IF dispatch", () => {
   let w: World;
 
   beforeAll(async () => {
