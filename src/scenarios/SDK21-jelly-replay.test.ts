@@ -1,5 +1,5 @@
 /**
- * S21 — JELLY-shape blowout replay
+ * SDK21 — JELLY-shape blowout replay
  *
  * The 2025 Hyperliquid JELLY incident: a single concentrated long
  * position on a low-liquidity perp blew up when the oracle dropped
@@ -21,7 +21,7 @@
  *      positions.
  *   3. No trader account left underwater post-event.
  *
- * Catalog: ../../../../docs/exchange-test-scenarios.md (S21).
+ * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK21).
  *
  * Runs only when `RPC_URL`, `RELAYER_PRIVATE_KEY`, and
  * `ORACLE_PRIVATE_KEY` are set.
@@ -38,7 +38,7 @@ const describeScenario =
     ? describe
     : describe.skip;
 
-describeScenario("S21: JELLY-shape blowout absorbed by waterfall", () => {
+describeScenario("SDK21: JELLY-shape blowout absorbed by waterfall", () => {
   let w: World;
 
   beforeAll(async () => {

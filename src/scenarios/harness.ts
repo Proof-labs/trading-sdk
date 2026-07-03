@@ -97,7 +97,7 @@ export interface World {
 
   /** Push an oracle update via the relayer key. Throws if the harness
    *  was not initialised with `relayerPrivateKey`. Used by liquidation
-   *  scenarios (S10+) to drive mark prices toward maintenance margin
+   *  scenarios (SDK10+) to drive mark prices toward maintenance margin
    *  without needing market-order flow on the underlying. The price
    *  must be expressed in microUSDC (6 dp), matching engine convention. */
   pushOracle(market: number, priceMicroUsdc: bigint): Promise<void>;

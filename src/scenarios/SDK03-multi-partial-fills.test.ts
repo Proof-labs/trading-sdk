@@ -1,5 +1,5 @@
 /**
- * S03 — Multiple partial fills converging to zero resting
+ * SDK03 — Multiple partial fills converging to zero resting
  *
  * Alice limit-buys 10 BTC @ $50k. Two other users pick at her order
  * from different sides of the stack:
@@ -15,7 +15,7 @@
  *   - no stray orders on the ask side (bob and carol both crossed)
  *
  * This covers the multi-maker-per-taker-sequence path that the
- * single-transaction-per-side scenarios (S01/S02) don't reach. If
+ * single-transaction-per-side scenarios (SDK01/SDK02) don't reach. If
  * the matching engine mishandles multiple passes against the same
  * resting order (e.g. off-by-one on remaining size, double-decrement
  * of open_order_count), this scenario catches it.
@@ -29,7 +29,7 @@ import { invariants } from "./invariants.js";
 const RPC_URL = process.env.RPC_URL;
 const describeScenario = RPC_URL ? describe : describe.skip;
 
-describeScenario("S03: multiple partial fills converge to remainder", () => {
+describeScenario("SDK03: multiple partial fills converge to remainder", () => {
   let w: World;
 
   beforeAll(async () => {

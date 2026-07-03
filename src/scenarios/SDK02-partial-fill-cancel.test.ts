@@ -1,5 +1,5 @@
 /**
- * S02 — Partial fill + cancel
+ * SDK02 — Partial fill + cancel
  *
  * Alice limit-buys 5 BTC @ $50k. Bob limit-sells 2 BTC @ $50k → Alice's
  * order partially fills (2 of 5). Alice then cancels the remainder.
@@ -8,9 +8,9 @@
  *   - Alice ends +2 BTC long, Bob ends -2 BTC short.
  *   - After cancelAll, no Alice bid remains at $50k.
  *
- * Units match S01 — integer lot quantities, microUSD prices.
+ * Units match SDK01 — integer lot quantities, microUSD prices.
  *
- * Catalog: ../../../../docs/exchange-test-scenarios.md (S02).
+ * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK02).
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { seedWorld, BTC_PERP, type World } from "./harness.js";
@@ -19,7 +19,7 @@ import { invariants } from "./invariants.js";
 const RPC_URL = process.env.RPC_URL;
 const describeScenario = RPC_URL ? describe : describe.skip;
 
-describeScenario("S02: partial fill then cancel", () => {
+describeScenario("SDK02: partial fill then cancel", () => {
   let w: World;
 
   beforeAll(async () => {

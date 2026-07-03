@@ -1,5 +1,5 @@
 /**
- * S20 — Cascade liquidation with 200+ accounts at escalating leverage
+ * SDK20 — Cascade liquidation with 200+ accounts at escalating leverage
  *
  * This is the headline stress test promised in
  * `docs/adl-vs-socialized-loss.md` §Integration tests. The setup:
@@ -18,9 +18,9 @@
  * no four-tier waterfall, so this scenario was just a placeholder.
  * Now (item 5 + item 13) it can run end-to-end. The scaffolding
  * here covers the smaller-N case (default 25); set
- * `S20_TRADER_COUNT=200` to reproduce the full design-doc replay.
+ * `SDK20_TRADER_COUNT=200` to reproduce the full design-doc replay.
  *
- * Catalog: ../../../../docs/exchange-test-scenarios.md (S20).
+ * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK20).
  *
  * Runs only when `RPC_URL`, `RELAYER_PRIVATE_KEY`, and
  * `ORACLE_PRIVATE_KEY` are set AND a quiet node (no concurrent MMs)
@@ -32,14 +32,14 @@ import { seedWorld, BTC_PERP, type World } from "./harness.js";
 const RPC_URL = process.env.RPC_URL;
 const RELAYER_PRIVATE_KEY = process.env.RELAYER_PRIVATE_KEY;
 const ORACLE_PRIVATE_KEY = process.env.ORACLE_PRIVATE_KEY;
-const TRADER_COUNT = Number(process.env.S20_TRADER_COUNT ?? 25);
+const TRADER_COUNT = Number(process.env.SDK20_TRADER_COUNT ?? 25);
 
 const describeScenario =
   RPC_URL && RELAYER_PRIVATE_KEY && ORACLE_PRIVATE_KEY
     ? describe
     : describe.skip;
 
-describeScenario("S20: cascade liquidation across many accounts", () => {
+describeScenario("SDK20: cascade liquidation across many accounts", () => {
   let w: World;
 
   beforeAll(async () => {

@@ -1,5 +1,5 @@
 /**
- * S01 — Simple full match
+ * SDK01 — Simple full match
  *
  * Alice limit-buys 1 BTC @ $50k, Bob limit-sells 1 BTC @ $50k.
  * Expected: both orders fully fill, Alice ends +1 BTC long, Bob ends
@@ -10,7 +10,7 @@
  *     whole-contract lot sizes, not sub-contract fractional units.
  *   - price: microUSD (6 dp). 50_000_000_000n = $50,000.
  *
- * Catalog: ../../../../docs/exchange-test-scenarios.md (S01).
+ * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK01).
  *
  * Runs only when `RPC_URL` is set. CI keeps this skipped so that
  * `npm test` stays green without a live node.
@@ -22,7 +22,7 @@ import { invariants } from "./invariants.js";
 const RPC_URL = process.env.RPC_URL;
 const describeScenario = RPC_URL ? describe : describe.skip;
 
-describeScenario("S01: simple full match", () => {
+describeScenario("SDK01: simple full match", () => {
   let w: World;
 
   beforeAll(async () => {
