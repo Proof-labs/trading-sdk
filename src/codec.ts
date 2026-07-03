@@ -534,6 +534,21 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
         [d.market, d.price, toByteSeq(d.signer), d.publishTimeMs],
       ];
     }
+    case "OracleUpdateComposite": {
+      const d = action.data;
+      // Field order MUST match the Rust/engine struct:
+      // market, price, n_sources, signer, publish_time_ms.
+      return [
+        ActionType.OracleUpdateComposite,
+        [
+          d.market,
+          d.price,
+          d.nSources ?? 0,
+          toByteSeq(d.signer),
+          d.publishTimeMs,
+        ],
+      ];
+    }
     case "MarketOrder": {
       const d = action.data;
       return [
@@ -883,6 +898,24 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           // msgpack side. Map both shapes (absent, null) to 0n.
           publishTimeMs:
             f.length > 3 && f[3] !== null && f[3] !== undefined ? bi(f[3]) : 0n,
+        },
+      };
+    case ActionType.OracleUpdateComposite:
+      // Field order: market, price, n_sources, signer, publish_time_ms.
+      // n_sources and publish_time_ms are serde(default); map absent/null
+      // tails to 0 (publish_time_ms predates the replay guard on old records).
+      return {
+        type: "OracleUpdateComposite",
+        data: {
+          market: f[0] as number,
+          price: bi(f[1]),
+          nSources:
+            f.length > 2 && f[2] !== null && f[2] !== undefined
+              ? Number(f[2])
+              : 0,
+          signer: bytesField(f[3]),
+          publishTimeMs:
+            f.length > 4 && f[4] !== null && f[4] !== undefined ? bi(f[4]) : 0n,
         },
       };
     case ActionType.MarketOrder:
