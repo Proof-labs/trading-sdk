@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `queryOracleHealth()` — typed read of the gateway's `/v1/oracle/health`:
+  overall feeder status plus per-market feed freshness (`lastUpdateUnixMs`,
+  `staleSeconds`, source, status), snake_case wire fields normalized to
+  camelCase, absent fields as `null`. First consumer: the Web Admin read-only
+  console (Admin Control Plane Phase 1).
+- `MarketConfig.maxOpenInterest` — decode tuple slot 24 (the market-wide
+  open-interest cap, W27-01), null-tolerant like the other optional slots.
+  Read-side only; the create/config-update write types are Phase 2 work.
+
 ## [1.1.0]
 
 Additive wire change — **MINOR**. Transactions produced before this release

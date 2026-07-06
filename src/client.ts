@@ -19,8 +19,10 @@ import type {
   HistoryResolution,
   MarketConfig,
   MarketKind,
+  MarketOracleHealth,
   MarkSourceMode,
   OpenOrder,
+  OracleHealthSnapshot,
   AdlQueueEntry,
   Orderbook,
   OrderbookLevel,
@@ -960,6 +962,48 @@ export class ExchangeClient {
     return res.json();
   }
 
+  /** Fetch per-market oracle feed freshness from the gateway's
+   *  `/v1/oracle/health` (the feeder's process-local health, proxied — a
+   *  display-grade signal, not consensus state). Field names are normalized
+   *  to camelCase; absent fields decode as `null`, never a throw. */
+  async queryOracleHealth(): Promise<OracleHealthSnapshot> {
+    const res = await fetch(`${this.readBaseUrl}/v1/oracle/health`);
+    if (!res.ok) throw new Error(`API error: HTTP ${res.status}`);
+    const json = (await res.json()) as Record<string, unknown>;
+    const optNum = (v: unknown): number | null =>
+      typeof v === "number" ? v : null;
+    const optStr = (v: unknown): string | null =>
+      typeof v === "string" ? v : null;
+    const markets: Record<string, MarketOracleHealth> = {};
+    const rawMarkets = (json.markets ?? {}) as Record<
+      string,
+      Record<string, unknown>
+    >;
+    for (const [id, m] of Object.entries(rawMarkets)) {
+      markets[id] = {
+        market: Number(m.market ?? id),
+        feed: String(m.feed ?? ""),
+        source: String(m.source ?? ""),
+        status: String(m.status ?? "unknown"),
+        lastUpdateUnixMs: optNum(m.last_update_unix_ms),
+        staleSeconds: optNum(m.stale_seconds),
+        sourcePublishTimeMs: optNum(m.source_publish_time_ms),
+        lastSubmitUnixMs: optNum(m.last_submit_unix_ms),
+        priceMicro: optNum(m.price_micro),
+        unchangedReads: Number(m.unchanged_reads ?? 0),
+        reason: optStr(m.reason),
+        txHash: optStr(m.tx_hash),
+      };
+    }
+    return {
+      status: String(json.status ?? "unknown"),
+      embeddedFeeder: Boolean(json.embedded_feeder),
+      source: String(json.source ?? ""),
+      updatedAtUnixMs: Number(json.updated_at_unix_ms ?? 0),
+      markets,
+    };
+  }
+
   /** Fetch the auto-deleveraging queue for a market — profitable positions
    *  ranked by `adlScore` desc (highest first). Empty array if the market has
    *  no profitable positions. Routes through the gateway's `/v1/adl/queue`. */
@@ -1633,5 +1677,6 @@ function decodeMarketConfig(raw: unknown[]): MarketConfig {
     partialLiquidationEnabled: raw[21] == null ? undefined : Boolean(raw[21]),
     szDecimals: raw[22] == null ? undefined : Number(raw[22]),
     ticker: raw[23] == null ? undefined : String(raw[23]),
+    maxOpenInterest: optBig(raw[24]),
   };
 }

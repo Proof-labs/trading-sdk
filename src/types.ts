@@ -1417,6 +1417,49 @@ export interface MarketConfig {
   szDecimals?: number;
   /** [23] Human-readable ticker / short symbol (e.g. "BTC"). */
   ticker?: string;
+  /** [24] Market-wide open-interest cap in contracts (W27-01). 0 = no cap. */
+  maxOpenInterest?: bigint;
+}
+
+/** Per-market feed freshness as reported by the oracle feeder's health
+ *  endpoint, proxied by the gateway at `/v1/oracle/health`. This is the
+ *  feeder's process-local view — display-grade freshness, not consensus
+ *  state. */
+export interface MarketOracleHealth {
+  /** Numeric market id. */
+  market: number;
+  /** Feed label (e.g. "BTC"). */
+  feed: string;
+  /** Source adapter name (e.g. "binance", "pyth"). */
+  source: string;
+  /** Feeder-reported status string (e.g. "ok", "stale", "starting"). */
+  status: string;
+  /** Unix ms of the last successful on-chain price submit. Null = never. */
+  lastUpdateUnixMs: number | null;
+  /** Seconds since the source last published. Null = unknown. */
+  staleSeconds: number | null;
+  /** Unix ms the source reported for its own publish. Null = unknown. */
+  sourcePublishTimeMs: number | null;
+  /** Unix ms of the last submit attempt. Null = never. */
+  lastSubmitUnixMs: number | null;
+  /** Last submitted price in micro-USDC. Null = none yet. */
+  priceMicro: number | null;
+  /** Consecutive reads that returned an unchanged source price. */
+  unchangedReads: number;
+  /** Human-readable reason accompanying a non-ok status. */
+  reason: string | null;
+  /** Transaction hash of the last accepted submit. */
+  txHash: string | null;
+}
+
+/** Snapshot returned by `queryOracleHealth()`: overall feeder status plus a
+ *  per-market map keyed by the market id rendered as a string. */
+export interface OracleHealthSnapshot {
+  status: string;
+  embeddedFeeder: boolean;
+  source: string;
+  updatedAtUnixMs: number;
+  markets: Record<string, MarketOracleHealth>;
 }
 
 /** Per-tier fee schedule for the BE-47 volume-based maker-rebate program. */

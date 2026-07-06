@@ -72,6 +72,8 @@ export {
   type AgentApprovedEvent,
   type AgentRevokedEvent,
   type FeesCollectedEvent,
+  type MarketOracleHealth,
+  type OracleHealthSnapshot,
 } from "./types.js";
 
 // Codec
