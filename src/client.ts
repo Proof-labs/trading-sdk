@@ -20,6 +20,8 @@ import type {
   MarketConfig,
   MarketKind,
   MarkSourceMode,
+  OracleHealth,
+  OracleMarketHealth,
   OpenOrder,
   AdlQueueEntry,
   Orderbook,
@@ -960,6 +962,48 @@ export class ExchangeClient {
     return res.json();
   }
 
+  /**
+   * Fetch the oracle-feeder health snapshot from the gateway's
+   * `/v1/oracle/health`. The gateway emits snake_case fields; this
+   * normalizes them to camelCase and tolerates absent fields (they decode
+   * as null rather than throwing).
+   *
+   * `price_micro` is a u64 that can exceed 2^53, so the body is parsed with
+   * a bigint-preserving pass (long integer literals are quoted before
+   * `JSON.parse`) and `priceMicro` is returned as a `bigint` — a plain
+   * `res.json()` would silently round it to the nearest double.
+   */
+  async queryOracleHealth(): Promise<OracleHealth> {
+    const res = await fetch(`${this.readBaseUrl}/v1/oracle/health`);
+    if (!res.ok) throw new Error(`API error: HTTP ${res.status}`);
+    const raw = parseJsonPreservingBigInts(await res.text()) as OracleHealthRaw;
+    const markets: Record<string, OracleMarketHealth> = {};
+    for (const [id, m] of Object.entries(raw.markets ?? {})) {
+      markets[id] = {
+        market: Number(m.market),
+        feed: m.feed ?? null,
+        source: m.source ?? null,
+        status: m.status ?? "unknown",
+        lastUpdateUnixMs: numOrNull(m.last_update_unix_ms),
+        staleSeconds: numOrNull(m.stale_seconds),
+        sourcePublishTimeMs: numOrNull(m.source_publish_time_ms),
+        lastSubmitUnixMs: numOrNull(m.last_submit_unix_ms),
+        priceMicro: m.price_micro == null ? null : BigInt(m.price_micro),
+        unchangedReads:
+          m.unchanged_reads == null ? 0 : Number(m.unchanged_reads),
+        reason: m.reason ?? null,
+        txHash: m.tx_hash ?? null,
+      };
+    }
+    return {
+      status: raw.status ?? "unknown",
+      embeddedFeeder: raw.embedded_feeder ?? false,
+      source: raw.source ?? null,
+      updatedAtUnixMs: numOrNull(raw.updated_at_unix_ms),
+      markets,
+    };
+  }
+
   /** Fetch the auto-deleveraging queue for a market — profitable positions
    *  ranked by `adlScore` desc (highest first). Empty array if the market has
    *  no profitable positions. Routes through the gateway's `/v1/adl/queue`. */
@@ -1633,5 +1677,46 @@ function decodeMarketConfig(raw: unknown[]): MarketConfig {
     partialLiquidationEnabled: raw[21] == null ? undefined : Boolean(raw[21]),
     szDecimals: raw[22] == null ? undefined : Number(raw[22]),
     ticker: raw[23] == null ? undefined : String(raw[23]),
+    maxOpenInterest: optBig(raw[24]),
   };
+}
+
+/** Raw snake_case shape of a `/v1/oracle/health` market entry. */
+interface OracleMarketRaw {
+  market: number;
+  feed?: string;
+  source?: string;
+  status?: string;
+  last_update_unix_ms?: number;
+  stale_seconds?: number;
+  source_publish_time_ms?: number;
+  last_submit_unix_ms?: number;
+  /** May arrive as a string once quoted by the bigint-preserving parser. */
+  price_micro?: number | string;
+  unchanged_reads?: number;
+  reason?: string | null;
+  tx_hash?: string;
+}
+
+/** Raw snake_case shape of the `/v1/oracle/health` response body. */
+interface OracleHealthRaw {
+  status?: string;
+  embedded_feeder?: boolean;
+  source?: string;
+  updated_at_unix_ms?: number;
+  markets?: Record<string, OracleMarketRaw>;
+}
+
+function numOrNull(v: unknown): number | null {
+  return v == null ? null : Number(v);
+}
+
+/**
+ * `JSON.parse` that preserves large integers. Integer literals with 16+ digits
+ * (2^53 has 16 digits, so anything that long risks precision loss as a double)
+ * are quoted before parsing so they survive as strings that `BigInt()` can
+ * consume exactly. Smaller integers are left as numbers.
+ */
+function parseJsonPreservingBigInts(text: string): unknown {
+  return JSON.parse(text.replace(/:\s*(-?\d{16,})(?=\s*[,}\]])/g, ':"$1"'));
 }

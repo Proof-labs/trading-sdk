@@ -1417,6 +1417,51 @@ export interface MarketConfig {
   szDecimals?: number;
   /** [23] Human-readable ticker / short symbol (e.g. "BTC"). */
   ticker?: string;
+  /** [24] Max open interest in contracts (W27-01). `undefined` on
+   *  pre-W27-01 markets whose config tuple is shorter than 25 slots. */
+  maxOpenInterest?: bigint;
+}
+
+/** Per-market oracle liveness, normalized from the gateway's snake_case shape. */
+export interface OracleMarketHealth {
+  /** Market identifier. */
+  market: number;
+  /** Feed symbol the oracle tracks (e.g. "BTC"), or null if unreported. */
+  feed: string | null;
+  /** Upstream price source (e.g. "binance"), or null if unreported. */
+  source: string | null;
+  /** Liveness status (e.g. "ok", "stale"); "unknown" when the field is absent. */
+  status: string;
+  /** Wall-clock ms of the last accepted update, or null. */
+  lastUpdateUnixMs: number | null;
+  /** Seconds since the last update, or null. */
+  staleSeconds: number | null;
+  /** Source publish timestamp (ms) of the last update, or null. */
+  sourcePublishTimeMs: number | null;
+  /** Wall-clock ms of the last submit attempt, or null. */
+  lastSubmitUnixMs: number | null;
+  /** Last price in micro-USDC. `bigint` to preserve full u64 precision; null if absent. */
+  priceMicro: bigint | null;
+  /** Count of consecutive reads that returned an unchanged price. Defaults to 0. */
+  unchangedReads: number;
+  /** Reason string when the oracle is unhealthy, else null. */
+  reason: string | null;
+  /** Tx hash of the last submitted update, or null. */
+  txHash: string | null;
+}
+
+/** Oracle-feeder health snapshot from `GET /v1/oracle/health`. */
+export interface OracleHealth {
+  /** Overall feeder status; "unknown" when the field is absent. */
+  status: string;
+  /** Whether the gateway runs an embedded oracle feeder. Defaults to false. */
+  embeddedFeeder: boolean;
+  /** Upstream price source in use, or null. */
+  source: string | null;
+  /** Wall-clock ms the snapshot was produced, or null. */
+  updatedAtUnixMs: number | null;
+  /** Per-market health keyed by stringified market id. */
+  markets: Record<string, OracleMarketHealth>;
 }
 
 /** Per-tier fee schedule for the BE-47 volume-based maker-rebate program. */

@@ -60,6 +60,8 @@ export {
   type AccountInfo,
   type PositionInfo,
   type MarketConfig,
+  type OracleHealth,
+  type OracleMarketHealth,
   type MarkSourceMode,
   type BindingScenarioEntry,
   type HistoryCashFlow,
