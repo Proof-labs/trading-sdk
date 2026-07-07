@@ -182,7 +182,10 @@ product decision that reverses the one on record (link a superseding ADR).
   is only _deferred_, not banned — are in
   [docs/adr/0002-oracle-health-out-of-scope.md](docs/adr/0002-oracle-health-out-of-scope.md).
   Oracle _operation_ (`OracleUpdate` / `OracleUpdateComposite`) stays in the
-  SDK; oracle _health monitoring_ does not.
+  SDK, but as `OperatorAction`s for operator-tooling completeness only —
+  **not** for the SDK's primary trader users (allowlist-gated; see AGENTS.md
+  "Operator actions — privileged, not for trading integrations"). Oracle
+  _health monitoring_ is not a wire action at all and does not belong here.
 
 ## Security notes
 

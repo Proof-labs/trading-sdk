@@ -48,9 +48,15 @@ liveness, and creates a maintenance burden (normalizing an ops-only JSON shape)
 for zero users.
 
 The SDK's job is signing/encoding trading actions and reading trading state
-(orderbook, account, markets, positions, history). Oracle _operation_ (e.g.
-submitting `OracleUpdate` / `OracleUpdateComposite`) stays in the SDK as an
-operator action; oracle _health monitoring_ does not.
+(orderbook, account, markets, positions, history). Oracle _operation_
+(`OracleUpdate` / `OracleUpdateComposite`) stays in the SDK — but **for
+operator-tooling completeness only, not for the SDK's primary (trader) users**.
+These are `OperatorAction`s (the `Action = TraderAction | OperatorAction` split),
+gated by dedicated engine allowlists, and are present so operator/feeder tooling
+needs no second SDK — not because a trading integration should call them (see
+AGENTS.md "Operator actions — privileged, not for trading integrations"). Oracle
+_health monitoring_ is different again: it is neither a trader nor an operator
+wire action, has no engine action at all, and does not belong in the SDK.
 
 ## Scope of this prohibition
 
