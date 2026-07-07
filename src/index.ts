@@ -76,6 +76,7 @@ export {
 
 // Codec
 export {
+  ENVELOPE_VERSION,
   encodeSignedTx,
   signAndEncode,
   signEnvelopeFromPayload,

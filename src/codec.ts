@@ -11,7 +11,18 @@ import {
   Side,
   TimeInForce,
 } from "./types.js";
-import { signingMessage, sign, getPublicKey } from "./crypto.js";
+import { signingMessage, sign, getPublicKey, hexToBytes } from "./crypto.js";
+
+/**
+ * Envelope version byte — the first element of the wire array
+ * `[version, actionType, seq, payload, pubkey, signature]`. The exchange
+ * engine accepts only version `2`.
+ *
+ * Distinct from the signing domain prefix `"ProofExchange-v3"` (see
+ * `crypto.ts` and CLAUDE.md "Two distinct version numbers"): the envelope
+ * version is `2`, the signing layout is v3.
+ */
+export const ENVELOPE_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // MessagePack encoder/decoder configured for BigInt
@@ -152,7 +163,7 @@ export function encodeSignedTx(
   const [actionType, payload] = encodePayload(action);
   const payloadBytes = encode(payload);
   return encode([
-    2,
+    ENVELOPE_VERSION,
     actionType,
     seq,
     payloadBytes,
@@ -180,7 +191,7 @@ export function signAndEncode(
   const signature = sign(privateKey, msg);
   const pubkey = getPublicKey(privateKey);
   return encode([
-    2,
+    ENVELOPE_VERSION,
     actionType,
     seq,
     payloadBytes,
@@ -217,7 +228,7 @@ export function signEnvelopeFromPayload(
   const signature = sign(privateKey, msg);
   const pubkey = getPublicKey(privateKey);
   return encode([
-    2,
+    ENVELOPE_VERSION,
     actionType,
     seq,
     payloadBytes,
@@ -264,7 +275,7 @@ export function decodeTx(bytes: Uint8Array): {
   const envelope = decode(bytes) as unknown[];
   const version = envelope[0] as number;
 
-  if (version !== 2) {
+  if (version !== ENVELOPE_VERSION) {
     throw new Error(`unsupported version: ${version}`);
   }
 
@@ -420,15 +431,13 @@ function parsePriceComparison(v: unknown): PriceComparison {
   }
 }
 
-/** Ensure an owner/signer field is a Uint8Array (not a hex string). */
+/**
+ * Ensure an owner/signer field is a `Uint8Array` (not a hex string).
+ * Delegates hex parsing to `hexToBytes` so the validation (odd length /
+ * non-hex chars throw instead of silently zero-filling) lives in one place.
+ */
 function toBytes(v: Uint8Array | string): Uint8Array {
-  if (v instanceof Uint8Array) return v;
-  const hex = v.startsWith("0x") ? v.slice(2) : v;
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return bytes;
+  return v instanceof Uint8Array ? v : hexToBytes(v);
 }
 
 /**

@@ -27,8 +27,13 @@ const DOMAIN_PREFIX = new TextEncoder().encode("ProofExchange-v3");
  * or their signatures are trivially replayable on any other
  * zero-chain_id deployment.
  *
- * NOTE: This is exported as a mutable Uint8Array for backward
- * compatibility. Do NOT mutate it — treat as readonly.
+ * NOTE: Treat this as read-only. It is a single shared instance and
+ * cannot be truly frozen — `Object.freeze` throws on a non-empty typed
+ * array, and freezing the backing `ArrayBuffer` does not stop element
+ * writes through the view. Do NOT mutate it; copy it (`.slice()`) first
+ * if you need a writable 32-byte buffer. `ExchangeClient` defensively
+ * copies before caching so an external mutation cannot corrupt its
+ * signing chain_id.
  */
 export const UNBOUND_CHAIN_ID = new Uint8Array(32);
 
@@ -70,9 +75,23 @@ export function ownerToHex(owner: Uint8Array): string {
   return bytesToHex(owner);
 }
 
-/** Parse a hex string into bytes. */
+/**
+ * Parse a hex string (with or without a `0x` prefix) into bytes.
+ *
+ * Throws on malformed input — an odd number of digits or any
+ * non-hexadecimal character — rather than silently substituting zero
+ * bytes (`parseInt` on bad input yields `NaN`, which coerces to `0` in a
+ * `Uint8Array`). Silent corruption on a key/address/signature field is a
+ * security hazard, so validate up front.
+ */
 export function hexToBytes(hex: string): Uint8Array {
   const h = hex.startsWith("0x") ? hex.slice(2) : hex;
+  if (h.length % 2 !== 0) {
+    throw new Error(`invalid hex: odd number of digits (${h.length})`);
+  }
+  if (h.length > 0 && !/^[0-9a-fA-F]+$/.test(h)) {
+    throw new Error("invalid hex: non-hexadecimal characters");
+  }
   const bytes = new Uint8Array(h.length / 2);
   for (let i = 0; i < bytes.length; i++) {
     bytes[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
