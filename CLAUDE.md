@@ -168,6 +168,22 @@ and may be firewalled off in a public deployment.
   default it for the public SDK, and never add a fresh hard-coded `rpcUrl` /
   `apiUrl` call that bypasses the base getters.
 
+## Out of scope — do not implement
+
+Some surfaces have been explicitly rejected. Do not add them back without a new
+product decision that reverses the one on record (link a superseding ADR).
+
+- **Oracle health (`queryOracleHealth()` / any read of `/v1/oracle/health`).**
+  **Prohibited.** Feed liveness/freshness is an operational-monitoring concern
+  owned by **Grafana (Markets Health)**, not the SDK; no trading or admin caller
+  needs it. Proposed in PR #26 and **closed unmerged** (2026-07-06 weekly
+  meeting; Web Admin is read-only and does not consume it). Full rationale and
+  the (narrow) scope of the ban — including that `MarketConfig.maxOpenInterest`
+  is only _deferred_, not banned — are in
+  [docs/adr/0002-oracle-health-out-of-scope.md](docs/adr/0002-oracle-health-out-of-scope.md).
+  Oracle _operation_ (`OracleUpdate` / `OracleUpdateComposite`) stays in the
+  SDK; oracle _health monitoring_ does not.
+
 ## Security notes
 
 This SDK signs and encodes value-bearing transactions. Treat signing and codec
