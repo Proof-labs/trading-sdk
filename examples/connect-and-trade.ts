@@ -139,10 +139,15 @@ if (FAUCET_TOKEN && account && account.balance > 0n) {
   info(
     `  Result: code=${result.code}  height=${result.height ?? "?"}  hash=${result.hash}`,
   );
-  if (result.code === 0) {
+  if (result.ok) {
     info("  Order landed on chain ✓");
   } else {
-    info(`  Rejected: ${result.log}`);
+    // `error` is the auto-decoded engine ExecError (null for transport/timeout);
+    // `outcome` tells engine rejections apart from transport failures.
+    const detail = result.error
+      ? `${result.error.name} — ${result.error.description}`
+      : (result.log ?? result.outcome);
+    info(`  Rejected (${result.outcome}): ${detail}`);
   }
   info("");
 
@@ -165,7 +170,7 @@ if (FAUCET_TOKEN && account && account.balance > 0n) {
     data: { owner: address, market: 1 },
   });
   info(`  Result: code=${cancel.code}  height=${cancel.height ?? "?"}`);
-  if (cancel.code === 0) info("  Orders cancelled ✓");
+  if (cancel.ok) info("  Orders cancelled ✓");
   info("");
 
   // Re-check account after cancel

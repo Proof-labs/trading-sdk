@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { decodeExecError, execErrorName } from "./errors.js";
+import { ExecErrorCode, decodeExecError, execErrorName } from "./errors.js";
 
 describe("decodeExecError", () => {
   it("returns null for code 0 (success)", () => {
@@ -44,5 +44,24 @@ describe("execErrorName", () => {
 
   it("returns 'UnknownError' for codes not in the table", () => {
     expect(execErrorName(999)).toBe("UnknownError");
+  });
+});
+
+describe("ExecErrorCode enum", () => {
+  const numericEntries = Object.entries(ExecErrorCode).filter(
+    ([, v]) => typeof v === "number",
+  ) as [string, number][];
+
+  it("every enum member resolves in the decode table with a matching name", () => {
+    for (const [name, code] of numericEntries) {
+      expect(execErrorName(code)).toBe(name);
+      expect(decodeExecError(code)?.name).toBe(name);
+    }
+  });
+
+  it("exposes the documented well-known codes", () => {
+    expect(ExecErrorCode.InsufficientMargin).toBe(12);
+    expect(ExecErrorCode.TimestampNonceRejected).toBe(21);
+    expect(ExecErrorCode.InternalError).toBe(255);
   });
 });
