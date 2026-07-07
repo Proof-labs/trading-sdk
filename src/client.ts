@@ -1,5 +1,12 @@
 import { signAndEncode } from "./codec.js";
 import {
+  txEngineError,
+  txFromEngineCode,
+  txOk,
+  txTimeout,
+  txTransportError,
+} from "./tx-result.js";
+import {
   getPublicKey,
   pubkeyToOwner,
   ownerToHex,
@@ -452,7 +459,7 @@ export class ExchangeClient {
     // On CheckTx success, spawn the background DeliverTx verifier for
     // inclusion visibility. Skipped when the caller has opted into unsafe
     // fast mode.
-    if (r.code === 0 && r.hash && this.autoVerifyDelivery) {
+    if (r.ok && r.hash && this.autoVerifyDelivery) {
       this.spawnDeliveryVerifier(r.hash);
     }
     return r;
@@ -520,41 +527,37 @@ export class ExchangeClient {
     const gatewayBody = await readGatewayBody(res);
 
     // Auth/rate-limit transport failures don't have a JSON body the
-    // engine produced — synthesize a code so callers can branch.
+    // engine produced — synthesize an HTTP-status code and tag the result
+    // `outcome: "transport"` so callers don't read it as an ExecError.
     if (res.status === 401) {
-      return {
-        code: 401,
-        hash: "",
-        log: gatewayBody.error ?? "unauthorized: invalid or missing X-Api-Key",
-      };
+      return txTransportError(
+        401,
+        gatewayBody.error ?? "unauthorized: invalid or missing X-Api-Key",
+      );
     }
     if (res.status === 429) {
-      return {
-        code: 429,
-        hash: "",
-        log: gatewayBody.error ?? gatewayBody.raw ?? "rate limited by gateway",
-      };
+      return txTransportError(
+        429,
+        gatewayBody.error ?? gatewayBody.raw ?? "rate limited by gateway",
+      );
     }
     if (res.status === 413) {
-      return {
-        code: 413,
-        hash: "",
-        log:
-          gatewayBody.error ??
+      return txTransportError(
+        413,
+        gatewayBody.error ??
           gatewayBody.raw ??
           "request body exceeds max size (default 8192 bytes)",
-      };
+      );
     }
     if (res.status >= 500) {
-      return {
-        code: 500,
-        hash: "",
-        log: gatewayBody.error
+      return txTransportError(
+        500,
+        gatewayBody.error
           ? `gateway error: ${gatewayBody.error}`
           : gatewayBody.raw
             ? `gateway error: ${res.status} ${res.statusText}: ${gatewayBody.raw}`
             : `gateway error: ${res.status} ${res.statusText}`,
-      };
+      );
     }
 
     if (!res.ok) {
@@ -562,7 +565,9 @@ export class ExchangeClient {
         gatewayBody.error ??
         gatewayBody.raw ??
         `gateway returned HTTP ${res.status} ${res.statusText}`;
-      return { code: 1, hash: "", log: errMsg };
+      // Non-JSON / unexpected HTTP error with no engine body — transport, not
+      // an ExecError. `code` stays 1 for back-compat; `outcome` disambiguates.
+      return txTransportError(1, errMsg);
     }
 
     const json = gatewayBody.json as
@@ -572,7 +577,7 @@ export class ExchangeClient {
         }
       | undefined;
     if (json?.status === "ok") {
-      return { code: 0, hash: txHash, log: "" };
+      return txOk({ hash: txHash });
     }
     // Gateway error shape: error string is "<engine_code>: <message>"
     // (per ExecErrorCode table in api-gateway/openapi.yaml). Parse the
@@ -580,7 +585,7 @@ export class ExchangeClient {
     // (DecodeError) as the conservative default.
     const errMsg = json?.error ?? gatewayBody.raw ?? "unknown gateway error";
     const code = parseLeadingErrorCode(errMsg) ?? 1;
-    return { code, hash: "", log: errMsg };
+    return txEngineError(code, { log: errMsg });
   }
 
   /**
@@ -607,11 +612,7 @@ export class ExchangeClient {
     }
 
     const r = json.result;
-    return {
-      code: r.code,
-      hash: r.hash,
-      log: r.log,
-    };
+    return txFromEngineCode(r.code, { hash: r.hash, log: r.log });
   }
 
   /**
@@ -644,13 +645,14 @@ export class ExchangeClient {
               const height = json.result.height
                 ? Number(json.result.height)
                 : undefined;
-              this.deliveryResults.push({
-                code,
-                hash: txHash,
-                height,
-                log: txResult.log ?? "",
-                events: txResult.events,
-              });
+              this.deliveryResults.push(
+                txFromEngineCode(code, {
+                  hash: txHash,
+                  height,
+                  log: txResult.log ?? "",
+                  events: txResult.events,
+                }),
+              );
               return;
             }
             // Tx not yet indexed — keep polling.
@@ -718,8 +720,9 @@ export class ExchangeClient {
     // path so we don't double-spawn a background verifier — we're going to
     // do our own synchronous verification below.
     const sync = await this.broadcastSigned(action);
-    if (sync.code !== 0) {
-      // CheckTx rejected (envelope-level failure). No DeliverTx will run.
+    if (!sync.ok) {
+      // CheckTx rejected (envelope-level failure) or a transport failure. No
+      // DeliverTx will run.
       return sync;
     }
 
@@ -739,13 +742,12 @@ export class ExchangeClient {
         const txResult = json.result?.tx_result;
         if (txResult) {
           const code = txResult.code ?? 0;
-          return {
-            code,
+          return txFromEngineCode(code, {
             hash: txHash,
             height: json.result.height ? Number(json.result.height) : undefined,
             log: txResult.log,
             events: txResult.events,
-          };
+          });
         }
         // tx not yet indexed → keep polling
       } catch {
@@ -754,11 +756,7 @@ export class ExchangeClient {
     }
     // Timed out waiting for inclusion. We don't know whether it landed, so
     // do not reuse or rewind the timestamp nonce.
-    return {
-      code: -1,
-      hash: txHash,
-      log: "submitTxCommit: timed out polling /tx after 9s",
-    };
+    return txTimeout(txHash, "submitTxCommit: timed out polling /tx after 9s");
   }
 
   // -----------------------------------------------------------------------
@@ -1155,9 +1153,7 @@ export class ExchangeClient {
   }
 
   async getBlockResults(height: number): Promise<Record<string, unknown>> {
-    const res = await fetch(
-      `${this.chainBase}/block_results?height=${height}`,
-    );
+    const res = await fetch(`${this.chainBase}/block_results?height=${height}`);
     const json = await res.json();
     if (json.error)
       throw new Error(json.error.message ?? JSON.stringify(json.error));

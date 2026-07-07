@@ -1,3 +1,5 @@
+import type { ExecErrorInfo } from "./errors.js";
+
 /** 20-byte account address (derived from Ed25519 public key). */
 export type Address = Uint8Array;
 
@@ -433,10 +435,7 @@ export enum Outcome {
  * `PriceComparison` enum exactly.
  */
 export type PriceComparison =
-  | "GreaterThan"
-  | "LessThan"
-  | "GreaterThanOrEqual"
-  | "LessThanOrEqual";
+  "GreaterThan" | "LessThan" | "GreaterThanOrEqual" | "LessThanOrEqual";
 
 /**
  * BE-54: how an impact-market event's YES/NO outcome is determined at
@@ -1036,11 +1035,48 @@ export type ExchangeEvent =
 // Result types
 // ---------------------------------------------------------------------------
 
+/**
+ * What produced a {@link TxResult}. Lets callers separate an engine rejection
+ * from a transport/timeout failure without reverse-engineering the numeric
+ * `code` (engine codes and synthesized HTTP statuses share that field):
+ *
+ * - `"ok"`        — CheckTx accepted the tx (`code === 0`).
+ * - `"engine"`    — the engine rejected it with an `ExecError` (`code` 1..48/255);
+ *                   see {@link TxResult.error} for the decoded name/description.
+ * - `"transport"` — a gateway/HTTP-level failure (auth, rate-limit, body too
+ *                   large, 5xx, non-JSON body). `code` is the synthesized HTTP
+ *                   status, not an engine code.
+ * - `"timeout"`   — inclusion polling gave up before seeing a DeliverTx result
+ *                   (`code === -1`); the tx may or may not have landed.
+ */
+export type TxOutcome = "ok" | "engine" | "transport" | "timeout";
+
 /** Result of submitting a transaction to the exchange. */
 export interface TxResult {
-  /** Status code (0 = success, non-zero = error code from ExecError). */
+  /**
+   * True iff the tx passed CheckTx (engine `code === 0`). Primary discriminant —
+   * prefer `if (!result.ok)` over `result.code !== 0`.
+   */
+  ok: boolean;
+  /**
+   * Category of the outcome — see {@link TxOutcome}. Distinguishes engine
+   * rejections from transport/timeout failures that also surface via `code`.
+   */
+  outcome: TxOutcome;
+  /**
+   * Status code. `0` on success; the engine `ExecError` code on
+   * `outcome === "engine"`; a synthesized HTTP status on `"transport"`; `-1` on
+   * `"timeout"`. Retained for back-compat with `result.code === 0` checks.
+   */
   code: number;
-  /** Transaction hash (hex-encoded). */
+  /**
+   * Decoded engine error, populated automatically (via `decodeExecError`) when
+   * `outcome === "engine"` and the code is known — so callers get a typed
+   * `{ name, description }` without decoding it themselves. `null` for success,
+   * transport/timeout failures, and unknown engine codes.
+   */
+  error: ExecErrorInfo | null;
+  /** Transaction hash (hex-encoded). Empty string when the tx never got a hash. */
   hash: string;
   /** Block height at which the transaction was included. */
   height?: number;

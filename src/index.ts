@@ -40,6 +40,7 @@ export {
   Branch,
   Outcome,
   type TxResult,
+  type TxOutcome,
   type TxEvent,
   type ExchangeEvent,
   type OrderPlacedEvent,
@@ -88,6 +89,7 @@ export { fetchChainId } from "./client.js";
 // Error decoder
 export {
   type ExecErrorInfo,
+  ExecErrorCode,
   decodeExecError,
   execErrorName,
 } from "./errors.js";
