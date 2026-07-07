@@ -152,6 +152,14 @@ wire-format change affects the SDK:
 `src/types.ts` and `src/codec.ts` are the source of truth for the action set —
 do not hardcode action counts elsewhere; they change as the engine grows.
 
+> **Note — the TS codec is migrating to a WASM build of the Rust core.** The
+> hand-written parallel codec in `src/codec.ts` is being replaced by a
+> `wasm-bindgen` binding over `encode_payload_dyn` / `decode_payload_dyn`, so
+> the Rust registry becomes the single source of truth. Read
+> [docs/adr/0001-wasm-core-vs-parallel-types.md](docs/adr/0001-wasm-core-vs-parallel-types.md)
+> before touching `codec.ts` — it records why WASM (not codegen or a hybrid) was
+> chosen, so the tradeoff does not get re-argued.
+
 ## Network policy — gateway only
 
 **All SDK traffic goes through the API gateway. No exceptions for external
