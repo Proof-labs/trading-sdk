@@ -4,6 +4,7 @@ import {
   decodeTx,
   peekActionType,
   signAndEncode,
+  ENVELOPE_VERSION,
 } from "./codec.js";
 import {
   generateKeypair,
@@ -1086,5 +1087,38 @@ describe("crypto", () => {
 
     const msgB = signingMessage(chainB, 0x01, 5n, payload);
     expect(verify(publicKey, sigA, msgB)).toBe(false);
+  });
+});
+
+describe("codec/crypto hygiene", () => {
+  it("ENVELOPE_VERSION is the version byte written and required on decode", () => {
+    expect(ENVELOPE_VERSION).toBe(2);
+    const { publicKey, privateKey } = generateKeypair();
+    const owner = pubkeyToOwner(publicKey);
+    const bytes = signAndEncode(
+      new Uint8Array(32),
+      { type: "CancelOrder", data: { orderId: 1n, owner } },
+      1n,
+      privateKey,
+    );
+    expect(decodeTx(bytes).version).toBe(ENVELOPE_VERSION);
+  });
+
+  it("hexToBytes round-trips with bytesToHex and accepts a 0x prefix", () => {
+    const bytes = Uint8Array.from([0x00, 0x0a, 0xff, 0x42]);
+    const hex = bytesToHex(bytes);
+    expect(hexToBytes(hex)).toEqual(bytes);
+    expect(hexToBytes("0x" + hex)).toEqual(bytes);
+    expect(hexToBytes("")).toEqual(new Uint8Array(0));
+  });
+
+  it("hexToBytes throws on odd length instead of silently zero-filling", () => {
+    expect(() => hexToBytes("abc")).toThrow(/odd number of digits/);
+  });
+
+  it("hexToBytes throws on non-hex characters instead of yielding NaN->0", () => {
+    // Pre-fix, parseInt("zz", 16) === NaN, which coerces to 0 in a Uint8Array.
+    expect(() => hexToBytes("zz")).toThrow(/non-hexadecimal/);
+    expect(() => hexToBytes("0xgg")).toThrow(/non-hexadecimal/);
   });
 });

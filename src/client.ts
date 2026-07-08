@@ -315,8 +315,11 @@ export class ExchangeClient {
               `(${(err as Error).message}); falling back to UNBOUND_CHAIN_ID. ` +
               "Production callers should pin chainId or fix the gateway/rpc URL.",
           );
-          this.chainId = UNBOUND_CHAIN_ID;
-          return UNBOUND_CHAIN_ID;
+          // Copy the shared singleton — it cannot be frozen, so caching it
+          // directly would let an external mutation corrupt our signing key.
+          const unbound = UNBOUND_CHAIN_ID.slice();
+          this.chainId = unbound;
+          return unbound;
         }
         throw new Error(
           `ExchangeClient could not resolve chain_id from ${this.chainBase}/status: ` +
