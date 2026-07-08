@@ -21,6 +21,65 @@ export interface ExecErrorInfo {
   description: string;
 }
 
+/**
+ * Named engine `ExecError` codes — the machine-readable half of the {@link TABLE}
+ * below, so callers can branch on `code === ExecErrorCode.InsufficientMargin`
+ * instead of a bare `12`. Values are the stable wire codes; names mirror the
+ * Rust `ExecError` variants. `errors.test.ts` asserts this enum and `TABLE`
+ * stay in agreement.
+ */
+export enum ExecErrorCode {
+  DecodeError = 1,
+  OrderNotFound = 2,
+  NotOwner = 3,
+  UnauthorizedOracle = 4,
+  Overflow = 5,
+  InvalidPrice = 6,
+  InvalidQuantity = 7,
+  InvalidSide = 8,
+  UnknownMarket = 9,
+  StateCorruption = 10,
+  InsufficientBalance = 11,
+  InsufficientMargin = 12,
+  UnauthorizedRelayer = 13,
+  WithdrawalNotFound = 14,
+  WithdrawalAlreadyProcessed = 15,
+  DuplicateDeposit = 16,
+  InvalidSignature = 17,
+  SignatureRequired = 18,
+  AgentNotAuthorized = 19,
+  AgentCannotWithdraw = 20,
+  TimestampNonceRejected = 21,
+  MarketAlreadyExists = 22,
+  InvalidMarketConfig = 23,
+  ImpactMarketAlreadyExists = 24,
+  ImpactMarketNotFound = 25,
+  MarketClosedForTrading = 26,
+  BinaryPriceOutOfRange = 27,
+  InvalidResolution = 28,
+  PositionLimitExceeded = 29,
+  OracleTimestampNotMonotonic = 30,
+  TooManyActiveImpactMarkets = 31,
+  SettlementPriceMismatch = 32,
+  OracleNotApplicable = 33,
+  PostOnlyWouldCross = 34,
+  ReduceOnlyWouldIncrease = 35,
+  TestActionRejected = 36,
+  StaleOracle = 37,
+  UserLeverageBelowMarketIm = 38,
+  TickSizeViolation = 39,
+  LotSizeViolation = 40,
+  OracleStaleNotElapsed = 41,
+  FeeBpsOutOfRange = 42,
+  FeeOverrideStaleSeq = 43,
+  ClientOrderIdNotFound = 44,
+  DuplicateClientOrderId = 45,
+  InvalidClientOrderId = 46,
+  FillOrKillWouldNotFill = 47,
+  InvalidCancelReplaceTarget = 48,
+  InternalError = 255,
+}
+
 const TABLE: Record<number, ExecErrorInfo> = {
   1: { name: "DecodeError", description: "transaction decode error" },
   2: { name: "OrderNotFound", description: "order not found" },
