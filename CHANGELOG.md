@@ -7,6 +7,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Convenience action builders on `ExchangeClient`** — `placeOrder`,
+  `marketOrder`, `cancelOrder`, `cancelClientOrder`, `cancelAllOrders`,
+  `closePosition` — that fill `owner` from the loaded signer key and wrap
+  `submitTx`, so callers stop hand-writing `{ type, data: { owner, … } }`
+  literals. Raw `submitTx` / `submitTxCommit` remain for power users.
+
 ## [1.1.0]
 
 Additive wire change — **MINOR**. Transactions produced before this release
