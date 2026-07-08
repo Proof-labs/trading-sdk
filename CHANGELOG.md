@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`UpdateMarketFees.markSourceMode` was encoded as a bare integer** instead of
+  its enum variant name (`"OracleOnly"` / `"Median"`), the form the engine's
+  `rmp-serde` (and the gateway's signature re-encoding) produce. A
+  `markSourceMode` update signed by the SDK therefore disagreed with the
+  gateway's canonical payload and was **rejected at signature verification**. No
+  conformance vector exercised it, so it went undetected (surfaced by the WASM
+  differential test). Encode now emits the variant name; decode still accepts
+  the legacy integer form for back-compat. A regression test pins both.
+
 ## [1.1.0]
 
 Additive wire change — **MINOR**. Transactions produced before this release
