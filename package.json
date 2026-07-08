@@ -39,6 +39,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "build:wasm": "cargo build -p proof-trading-sdk-wasm --target wasm32-unknown-unknown --release && wasm-bindgen --target web --out-dir src/wasm target/wasm32-unknown-unknown/release/proof_trading_sdk_wasm.wasm",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build",
     "test": "vitest run",

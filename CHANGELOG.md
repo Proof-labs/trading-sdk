@@ -7,6 +7,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **WASM core crate (`crates/proof-trading-sdk-wasm`)** — a `wasm-bindgen`
+  binding over the Rust core's `encode_payload_dyn` / `decode_payload_dyn` and
+  Ed25519 signing, the JS/WASM sibling of the PyO3 crate. Lets the TypeScript
+  codec move to bytes that are identical to the exchange engine _by
+  construction_ (see `docs/adr/0001-wasm-core-vs-parallel-types.md`). Built with
+  `npm run build:wasm` (Rust + `wasm-bindgen` toolchain); a differential test
+  (`src/wasm-codec.test.ts`) proves the WASM reproduces every
+  `conformance/codec.ndjson` vector byte-for-byte, including full-`u64`
+  precision via BigInt. No wire or TS-API change: this lands the crate alongside
+  the existing hand-written codec (both coexist); wiring the TS codec to call it
+  is the next step.
+
 ## [1.1.0]
 
 Additive wire change — **MINOR**. Transactions produced before this release
