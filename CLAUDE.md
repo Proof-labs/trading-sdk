@@ -11,7 +11,7 @@ If a user asks you to connect to Proof Exchange and trade, here is the pattern:
 3. **Fund** — The user must have tokens. Call the faucet via
    `POST https://faucet.dev.proof.trade/drip` with an auth token.
 4. **Trade** — `submitTx({ type: "PlaceOrder", data: { ... } })`.
-   Prices are integer cents, quantities are integer contracts.
+   Prices are integer **micro-USDC** (6 dp), quantities are integer contracts.
 5. **Check results** — `code === 0` means CheckTx passed. Non-zero codes
    are error codes (12 = insufficient margin, 21 = nonce collision, etc.).
 
@@ -87,7 +87,8 @@ npx prettier --check .
   CometBFT `/status` and cached; offline callers of `signAndEncode` must pass it.
 - `seq` is a wall-clock-ms timestamp nonce; the engine validates it against a
   sliding window (no strict sequential ordering).
-- All prices and quantities are `u64` (cents / microUSDC). **No floats.**
+- All monetary values (prices, balances, amounts, fees) are `u64` **micro-USDC**
+  (6 dp; `1_000_000` = $1). Quantities are integer contracts. **No floats.**
 - New fields go at the **end** as optional so absent fields encode as `nil`
   (backward compatible). Adding an action means: define its type/payload in
   `types.ts`, assign its `action_type` byte and encode/decode arms in `codec.ts`.
@@ -116,7 +117,7 @@ This rule exists because we already lost history the other way: `0.1.0` sat as a
 
 | Field      | Scale                                | Example                   |
 | ---------- | ------------------------------------ | ------------------------- |
-| Prices     | Integer cents (2 dp)                 | `6675000` = $66,750       |
+| Prices     | micro-USDC (6 dp)                    | `66_750_000_000` = $66,750 |
 | Balances   | MicroUSDC (6 dp)                     | `100_000_000_000` = $100k |
 | Fees/Rates | Basis points                         | `500` = 5%                |
 | Addresses  | 20 bytes — keccak256(pubkey)[12..32] | `pubkeyToOwner()`         |

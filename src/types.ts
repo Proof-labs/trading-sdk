@@ -105,7 +105,7 @@ export interface PlaceOrder {
   owner: Address;
   /** Order side: Buy (1) or Sell (2). */
   side: Side;
-  /** Limit price in cents (2 decimal places, e.g., 6675234 = $66,752.34). */
+  /** Limit price in micro-USDC (6 decimal places, e.g., 66752340000 = $66,752.34). */
   price: bigint;
   /** Order quantity in contracts (integer lots). */
   quantity: bigint;
@@ -194,7 +194,7 @@ export interface AmendOrder {
 export interface OracleUpdate {
   /** Market identifier to update. */
   market: number;
-  /** New oracle price in cents (2 decimal places, e.g., 6675234 = $66,752.34). */
+  /** New oracle price in micro-USDC (6 decimal places, e.g., 66752340000 = $66,752.34). */
   price: bigint;
   /** Authorized oracle signer address (20 bytes). */
   signer: Address;
@@ -226,7 +226,7 @@ export interface OracleUpdate {
 export interface OracleUpdateComposite {
   /** Market identifier to update. */
   market: number;
-  /** Composite price in cents (median/VWAP of `nSources` CEX feeds). */
+  /** Composite price in micro-USDC (median/VWAP of `nSources` CEX feeds). */
   price: bigint;
   /** Number of CEX feeds that went into the composite. Observability only —
    *  the engine does not gate on it. Encodes as 0 when absent. */
@@ -755,7 +755,7 @@ export interface OrderPlacedEvent {
   owner: string;
   /** Order side ("Buy" or "Sell"). */
   side: string;
-  /** Limit price in cents (2 dp, e.g., "6675234" = $66,752.34). */
+  /** Limit price in micro-USDC (6 dp, e.g., "66752340000" = $66,752.34). */
   price: string;
   /** Order quantity in contracts (integer lots). */
   quantity: string;
@@ -791,7 +791,7 @@ export interface TradeExecutedEvent {
   fillId: string;
   /** Market identifier. */
   market: string;
-  /** Execution price in cents (2 dp). */
+  /** Execution price in micro-USDC (6 dp). */
   price: string;
   /** Fill quantity in contracts (integer lots). */
   quantity: string;
@@ -859,7 +859,7 @@ export interface PositionUpdatedEvent {
   market: string;
   /** Position side ("Buy" = long, "Sell" = short). */
   side: string;
-  /** Weighted-average entry price in cents (2 dp). */
+  /** Weighted-average entry price in micro-USDC (6 dp). */
   entryPrice: string;
   /** Absolute position size in contracts (integer lots). */
   size: string;
@@ -881,7 +881,7 @@ export interface PriceUpdatedEvent {
   type: "PriceUpdated";
   /** Market identifier. */
   market: string;
-  /** New oracle price in cents (2 dp). */
+  /** New oracle price in micro-USDC (6 dp). */
   price: string;
 }
 
@@ -915,7 +915,7 @@ export interface AccountLiquidatedEvent {
   side: string;
   /** Liquidated position size in contracts (integer lots). */
   size: string;
-  /** Mark price at liquidation in cents (2 dp). */
+  /** Mark price at liquidation in micro-USDC (6 dp). */
   markPrice: string;
   /** Realized PnL from liquidation in microUSDC (signed). */
   realizedPnl: string;
@@ -1100,7 +1100,7 @@ export interface TxEvent {
 
 /** A single price level in the order book. */
 export interface OrderbookLevel {
-  /** Price in cents (2 dp, e.g., 6675234 = $66,752.34). */
+  /** Price in micro-USDC (6 dp, e.g., 66752340000 = $66,752.34). */
   price: bigint;
   /** Total resting quantity at this level in contracts (integer lots). */
   totalQty: bigint;
@@ -1127,7 +1127,7 @@ export interface OpenOrder {
   owner: Uint8Array;
   /** Order side. */
   side: "Buy" | "Sell";
-  /** Limit price in cents. */
+  /** Limit price in micro-USDC. */
   price: bigint;
   /** Resting quantity in contracts. */
   quantity: bigint;
@@ -1188,7 +1188,7 @@ export interface PositionInfo {
   market: number;
   /** [2] Position side: "Buy" (long) or "Sell" (short). */
   side: "Buy" | "Sell";
-  /** [3] Weighted-average entry price in cents (2 dp). */
+  /** [3] Weighted-average entry price in micro-USDC (6 dp). */
   entryPrice: bigint;
   /** [4] Absolute position size in contracts (integer lots). */
   size: bigint;

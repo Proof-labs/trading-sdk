@@ -116,7 +116,7 @@ await client.submitTx({
     market: 1,
     owner: address, // 20-byte Uint8Array
     side: Side.Buy, // or Side.Sell
-    price: 50000000n, // $500,000.00 in cents
+    price: 500_000_000_000n, // $500,000.00 in micro-USDC (6 dp)
     quantity: 1n,
     postOnly: true, // optional: reject if would cross
     reduceOnly: false, // optional: only reduce position
@@ -138,7 +138,7 @@ await client.submitTx({
 | `market`        | `number`                 | Market ID (1 = BTC, 2 = ETH, etc.)   |
 | `owner`         | `Uint8Array` (20B)       | `pubkeyToOwner(pubkey)`              |
 | `side`          | `Side.Buy` / `Side.Sell` |                                      |
-| `price`         | `bigint`                 | Integer cents. $50,000 → `5000000n`. |
+| `price`         | `bigint`                 | micro-USDC (6 dp). $50,000 → `50_000_000_000n`. |
 | `quantity`      | `bigint`                 | Integer contracts                    |
 | `clientOrderId` | `bigint?`                | Client-scoped dedup ref              |
 | `postOnly`      | `boolean?`               | `true` = reject if taker             |
@@ -175,7 +175,7 @@ await client.submitTx({
   type: "OracleUpdateComposite",
   data: {
     market: 1,
-    price: 6675000n, // composite price in cents
+    price: 66_750_000_000n, // composite price in micro-USDC ($66,750)
     nSources: 4, // # of CEX feeds (observability only)
     signer: feederAddress, // on the composite-feeder allowlist
     publishTimeMs: BigInt(Date.now()), // strictly monotonic per market
@@ -301,7 +301,7 @@ curl -X POST https://faucet.dev.proof.trade/drip \
 
 | Field      | Scale             | Example                     |
 | ---------- | ----------------- | --------------------------- |
-| Prices     | Integer cents     | `5000000n` = $50,000.00     |
+| Prices     | micro-USDC (6 dp) | `50_000_000_000n` = $50,000.00 |
 | Balances   | MicroUSDC (6 dp)  | `10_000_000_000n` = $10,000 |
 | Quantities | Integer contracts | `1n` = 1 lot                |
 | Fees/Rates | Basis points      | `500` = 5%                  |
