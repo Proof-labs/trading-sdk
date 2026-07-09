@@ -1,0 +1,21 @@
+[package]
+name = "proof-trading-sdk-wasm"
+version = "1.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "WebAssembly bindings for the proof-trading-sdk core: MessagePack codec + Ed25519 signing, byte-identical to the exchange engine (the JS/WASM spoke of the wheel-and-spokes SDK)."
+repository = "https://github.com/Proof-labs/trading-sdk"
+
+[lib]
+# cdylib for the wasm artifact; rlib so `cargo test` and downstream Rust can
+# still link it.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+proof-trading-sdk = { path = "../proof-trading-sdk", version = "1" }
+wasm-bindgen = "0.2"
+serde-wasm-bindgen = "0.6"
+# Deterministic Ed25519 signing only (SigningKey::from_bytes + sign) — no
+# `rand_core` feature, so nothing pulls `getrandom`, which would fail to build
+# on wasm32-unknown-unknown without the `js` backend.
+ed25519-dalek = { version = "2", default-features = false }
