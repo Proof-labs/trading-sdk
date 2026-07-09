@@ -7,6 +7,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+
 ### Fixed
 
 - **Documented price unit corrected: order prices are `u64` micro-USDC (6 dp),
@@ -19,6 +20,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   AGENTS.md, and `examples/connect-and-trade.ts`. The gateway `openapi.yaml` and
   some `exchange/docs` still say "cents" for order prices — tracked for the
   platform team to reconcile.
+
+### Added
+
+- **Convenience action builders on `ExchangeClient`** — `placeOrder`,
+  `marketOrder`, `cancelOrder`, `cancelClientOrder`, `cancelAllOrders`,
+  `closePosition` — that fill `owner` from the loaded signer key and wrap
+  `submitTx`, so callers stop hand-writing `{ type, data: { owner, … } }`
+  literals. Raw `submitTx` / `submitTxCommit` remain for power users.
+
 
 ## [1.1.0]
 
