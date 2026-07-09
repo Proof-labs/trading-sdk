@@ -13,6 +13,13 @@ blockchain node required.
 Agent → sign + encode → POST /exchange (gateway) → CometBFT → exchange engine
 ```
 
+The `sign + encode` core is migrating from a hand-written TypeScript codec to a
+WASM build of the authoritative Rust core (single source of truth, byte-identical
+to the engine by construction). See
+[docs/adr/0001-wasm-core-vs-parallel-types.md](docs/adr/0001-wasm-core-vs-parallel-types.md)
+for the decision and its consequences (notably: codec/signing entry points become
+`await`-initialized).
+
 ## Quick start for agents
 
 ```typescript
