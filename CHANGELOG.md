@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+
 - **`ExecErrorCode` enum** export (#29) — branch on
   `code === ExecErrorCode.InsufficientMargin` instead of a bare `12`; kept in
   agreement with the decode table by a test.
@@ -28,6 +29,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`hexToBytes` now throws on malformed input** (#32) — an odd number of digits
   or a non-hex character raises instead of silently zero-filling (`parseInt` →
   `NaN` → `0`), preventing silent corruption of a key/address/signature field.
+
+- **Convenience action builders on `ExchangeClient`** — `placeOrder`,
+  `marketOrder`, `cancelOrder`, `cancelClientOrder`, `cancelAllOrders`,
+  `closePosition` — that fill `owner` from the loaded signer key and wrap
+  `submitTx`, so callers stop hand-writing `{ type, data: { owner, … } }`
+  literals. Raw `submitTx` / `submitTxCommit` remain for power users.
+
 
 ## [1.1.0]
 
