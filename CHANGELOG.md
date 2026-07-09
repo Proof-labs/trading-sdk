@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+
 - **WASM core crate (`crates/proof-trading-sdk-wasm`)** — a `wasm-bindgen`
   binding over the Rust core's `encode_payload_dyn` / `decode_payload_dyn` and
   Ed25519 signing, the JS/WASM sibling of the PyO3 crate. Lets the TypeScript
@@ -38,6 +39,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   binding) encode it as the enum _name_ — so a legacy-signed `markSourceMode`
   update would fail the gateway's signature check. The WASM path is correct; the
   cutover fixes it. (Operator-only action; narrow blast radius.)
+
+- **Convenience action builders on `ExchangeClient`** — `placeOrder`,
+  `marketOrder`, `cancelOrder`, `cancelClientOrder`, `cancelAllOrders`,
+  `closePosition` — that fill `owner` from the loaded signer key and wrap
+  `submitTx`, so callers stop hand-writing `{ type, data: { owner, … } }`
+  literals. Raw `submitTx` / `submitTxCommit` remain for power users.
+
 
 ## [1.1.0]
 

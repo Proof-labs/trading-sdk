@@ -18,6 +18,8 @@ import {
 import type {
   Action,
   TxResult,
+  PlaceOrder,
+  MarketOrder,
   AccountInfo,
   BindingScenarioEntry,
   FeeTier,
@@ -760,6 +762,88 @@ export class ExchangeClient {
     // Timed out waiting for inclusion. We don't know whether it landed, so
     // do not reuse or rewind the timestamp nonce.
     return txTimeout(txHash, "submitTxCommit: timed out polling /tx after 9s");
+  }
+
+  // -----------------------------------------------------------------------
+  // Convenience action builders
+  //
+  // Thin wrappers over `submitTx` for the common trader actions. Each fills
+  // `owner` from the loaded signer key so callers don't repeat their own
+  // address on every action, and returns the same `TxResult` as `submitTx`
+  // (CheckTx result + background DeliverTx verification). For inclusion-
+  // waiting semantics, build the action yourself and call `submitTxCommit`.
+  // -----------------------------------------------------------------------
+
+  /**
+   * The loaded signer's 20-byte owner address, or throw if no key is set.
+   * Every convenience builder needs it, so the guard lives here.
+   */
+  private requireOwner(): Uint8Array {
+    if (!this.address) {
+      throw new Error(
+        "No signer key loaded — call setPrivateKey() before submitting actions",
+      );
+    }
+    return this.address;
+  }
+
+  /**
+   * Place a limit order for the loaded signer. `owner` is supplied
+   * automatically. Equivalent to
+   * `submitTx({ type: "PlaceOrder", data: { ...params, owner } })`.
+   */
+  async placeOrder(params: Omit<PlaceOrder, "owner">): Promise<TxResult> {
+    return this.submitTx({
+      type: "PlaceOrder",
+      data: { ...params, owner: this.requireOwner() },
+    });
+  }
+
+  /** Place a market order (crosses immediately) for the loaded signer. */
+  async marketOrder(params: Omit<MarketOrder, "owner">): Promise<TxResult> {
+    return this.submitTx({
+      type: "MarketOrder",
+      data: { ...params, owner: this.requireOwner() },
+    });
+  }
+
+  /** Cancel a resting order by its engine-assigned order ID. */
+  async cancelOrder(orderId: bigint): Promise<TxResult> {
+    return this.submitTx({
+      type: "CancelOrder",
+      data: { orderId, owner: this.requireOwner() },
+    });
+  }
+
+  /** Cancel a resting order by the owner-scoped client order ID. */
+  async cancelClientOrder(clientOrderId: bigint): Promise<TxResult> {
+    return this.submitTx({
+      type: "CancelClientOrder",
+      data: { clientOrderId, owner: this.requireOwner() },
+    });
+  }
+
+  /**
+   * Cancel all resting orders for the loaded signer. Pass a `market` to
+   * scope the cancel to one market; omit it to cancel across all markets.
+   */
+  async cancelAllOrders(market?: number | null): Promise<TxResult> {
+    return this.submitTx({
+      type: "CancelAllOrders",
+      data: { owner: this.requireOwner(), market: market ?? null },
+    });
+  }
+
+  /**
+   * Close the loaded signer's entire position on `market` via an
+   * opposite-side IOC order at oracle±spread. Idempotent on an already-flat
+   * position.
+   */
+  async closePosition(market: number): Promise<TxResult> {
+    return this.submitTx({
+      type: "ClosePosition",
+      data: { market, owner: this.requireOwner() },
+    });
   }
 
   // -----------------------------------------------------------------------
