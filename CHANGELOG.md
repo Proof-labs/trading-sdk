@@ -23,6 +23,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+
+- **WASM core crate (`crates/proof-trading-sdk-wasm`)** — a `wasm-bindgen`
+  binding over the Rust core's `encode_payload_dyn` / `decode_payload_dyn` and
+  Ed25519 signing, the JS/WASM sibling of the PyO3 crate. Lets the TypeScript
+  codec move to bytes that are identical to the exchange engine _by
+  construction_ (see `docs/adr/0001-wasm-core-vs-parallel-types.md`). Built with
+  `npm run build:wasm` (Rust + `wasm-bindgen` toolchain); a differential test
+  (`src/wasm-codec.test.ts`) proves the WASM reproduces every
+  `conformance/codec.ndjson` vector byte-for-byte, including full-`u64`
+  precision via BigInt. No wire or TS-API change: this lands the crate alongside
+  the existing hand-written codec (both coexist); wiring the TS codec to call it
+  is the next step.
+- **WASM-backed codec path landed alongside the legacy TS codec** (coexist +
+  differential; ADR 0001). A lazy loader (`src/wasm-loader.ts` — `ready()` /
+  `getWasm()`) and a TS↔WASM field adapter (`src/codec-adapter.ts`) route the TS
+  `Action` shape through the Rust core's `encode_payload`. A differential test
+  (`src/codec-adapter.test.ts`) proves the WASM path reproduces the legacy
+  encode bytes for representative and complex actions (nested `FeeTier`,
+  `EventOracleSource` variants, `legs` arrays, enum fields). Not yet wired into
+  the public API — the cutover (routing `codec.ts` through WASM, decode, and
+  deleting the hand-written arms) follows.
+
+### Notes
+
+- The differential test surfaced a **latent bug in the hand-written TS codec**
+  that no conformance vector covers: `UpdateMarketFees.markSourceMode` is encoded
+  as the integer variant index, but the authoritative core (and the Python
+  binding) encode it as the enum _name_ — so a legacy-signed `markSourceMode`
+  update would fail the gateway's signature check. The WASM path is correct; the
+  cutover fixes it. (Operator-only action; narrow blast radius.)
+
 - **Convenience action builders on `ExchangeClient`** — `placeOrder`,
   `marketOrder`, `cancelOrder`, `cancelClientOrder`, `cancelAllOrders`,
   `closePosition` — that fill `owner` from the loaded signer key and wrap
