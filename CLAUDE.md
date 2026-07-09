@@ -65,10 +65,16 @@ timestamp-nonce allocation, and gateway/CometBFT submission helpers.
 
 ```bash
 npm install
-npm run build     # tsc -> dist/
-npm test          # vitest run (codec, crypto, client, scenarios)
+npm run build:wasm # build the Rust core → src/wasm (needs Rust + wasm-bindgen)
+npm run build      # tsc -> dist/
+npm test           # vitest run — REQUIRES build:wasm first (codec routes through WASM)
 npx prettier --check .
 ```
+
+The codec and signing run through a WASM build of the Rust core, so
+`npm run build:wasm` must run before `npm test` / any codec call, and callers
+`await ready()` once before encoding/signing (`ExchangeClient` does this
+internally). See `docs/adr/0001-wasm-core-vs-parallel-types.md`.
 
 ## Layout
 
@@ -104,8 +110,12 @@ npx prettier --check .
 - All monetary values (prices, balances, amounts, fees) are `u64` **micro-USDC**
   (6 dp; `1_000_000` = $1). Quantities are integer contracts. **No floats.**
 - New fields go at the **end** as optional so absent fields encode as `nil`
-  (backward compatible). Adding an action means: define its type/payload in
-  `types.ts`, assign its `action_type` byte and encode/decode arms in `codec.ts`.
+  (backward compatible). The action codec now lives in the **Rust core**, so
+  adding an action means: add the struct + `impl_action_encoding!` entry in
+  `crates/proof-trading-sdk` and `npm run build:wasm`; on the TS side add the
+  `types.ts` interface/union + its `ActionType` byte, and (only if it introduces
+  a new enum or a field name whose camel↔snake conversion is irregular) a
+  mapping in `codec-adapter.ts`. `codec.ts` is no longer hand-edited per action.
 
 ## Versioning & wire-format compatibility
 
@@ -170,13 +180,15 @@ wire-format change affects the SDK:
 `src/types.ts` and `src/codec.ts` are the source of truth for the action set —
 do not hardcode action counts elsewhere; they change as the engine grows.
 
-> **Note — the TS codec is migrating to a WASM build of the Rust core.** The
-> hand-written parallel codec in `src/codec.ts` is being replaced by a
-> `wasm-bindgen` binding over `encode_payload_dyn` / `decode_payload_dyn`, so
-> the Rust registry becomes the single source of truth. Read
+> **Note — the action codec + signing run through a WASM build of the Rust
+> core.** `src/codec.ts` is now a thin adapter (`codec-adapter.ts`) over a
+> `wasm-bindgen` binding of `encode_payload_dyn` / `decode_payload_dyn` +
+> signing; the Rust registry is the single source of truth and the bytes are
+> engine-identical by construction. Consequences: `npm run build:wasm` must run
+> before tests/codec use, and callers `await ready()` once before
+> encoding/signing (`ExchangeClient` does this internally). See
 > [docs/adr/0001-wasm-core-vs-parallel-types.md](docs/adr/0001-wasm-core-vs-parallel-types.md)
-> before touching `codec.ts` — it records why WASM (not codegen or a hybrid) was
-> chosen, so the tradeoff does not get re-argued.
+> for why WASM (not codegen or a hybrid) was chosen.
 
 ## Network policy — gateway only
 

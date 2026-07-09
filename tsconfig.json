@@ -12,6 +12,13 @@
     "esModuleInterop": true,
     "skipLibCheck": true
   },
-  "include": ["src"],
-  "exclude": ["src/**/*.test.ts", "src/scenarios/**", "src/wasm/**"]
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/scenarios/**",
+    "src/wasm/**",
+    "src/test-setup.ts"
+  ]
 }

@@ -38,10 +38,12 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "npm run build:wasm && tsc && npm run copy:wasm",
     "build:wasm": "cargo build -p proof-trading-sdk-wasm --target wasm32-unknown-unknown --release && wasm-bindgen --target web --out-dir src/wasm target/wasm32-unknown-unknown/release/proof_trading_sdk_wasm.wasm",
+    "copy:wasm": "node -e \"require('node:fs').cpSync('src/wasm','dist/wasm',{recursive:true})\"",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build",
+    "pretest": "npm run build:wasm",
     "test": "vitest run",
     "example": "npx tsx examples/connect-and-trade.ts"
   },
