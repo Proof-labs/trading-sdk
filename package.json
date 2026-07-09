@@ -51,6 +51,7 @@
     "@noble/hashes": "^2.2.0"
   },
   "devDependencies": {
+    "prettier": "^3.9.4",
     "typescript": "^6.0.0",
     "vitest": "^4.1.0"
   }
