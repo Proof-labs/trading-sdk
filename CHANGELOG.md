@@ -7,7 +7,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-
 ### Fixed
 
 - **`UpdateMarketFees.markSourceMode` was encoded as a bare integer** instead of
@@ -20,8 +19,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the legacy integer form for back-compat. A regression test pins both.
 
 ### Added
-
-
 
 - **`ExecErrorCode` enum** export (#29) — branch on
   `code === ExecErrorCode.InsufficientMargin` instead of a bare `12`; kept in
@@ -73,13 +70,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   update would fail the gateway's signature check. The WASM path is correct; the
   cutover fixes it. (Operator-only action; narrow blast radius.)
 
-
 - **Convenience action builders on `ExchangeClient`** — `placeOrder`,
   `marketOrder`, `cancelOrder`, `cancelClientOrder`, `cancelAllOrders`,
   `closePosition` — that fill `owner` from the loaded signer key and wrap
   `submitTx`, so callers stop hand-writing `{ type, data: { owner, … } }`
   literals. Raw `submitTx` / `submitTxCommit` remain for power users.
-
 
 ## [1.1.0]
 

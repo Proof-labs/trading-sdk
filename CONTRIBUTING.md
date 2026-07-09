@@ -10,11 +10,11 @@ features.
 This is a multi-language SDK. Build and run the test suite for the surface you touch
 before opening a PR.
 
-| Surface | Path | Build / test |
-|---|---|---|
+| Surface                                            | Path                | Build / test                                                 |
+| -------------------------------------------------- | ------------------- | ------------------------------------------------------------ |
 | **TypeScript** (published as `@proof/trading-sdk`) | repo root → `dist/` | `npm install && npm run build`, then `npm run test` (vitest) |
-| **Rust core** | `crates/` | standard `cargo build` / `cargo test` workflow |
-| **Python bindings** | `python/` (PyO3) | see `python/pyproject.toml` |
+| **Rust core**                                      | `crates/`           | standard `cargo build` / `cargo test` workflow               |
+| **Python bindings**                                | `python/` (PyO3)    | see `python/pyproject.toml`                                  |
 
 ## Reporting bugs & requesting features
 
@@ -36,8 +36,8 @@ without using "and," split it into separate PRs. (Distilled from
 - **Never mix behaviour changes with structural ones** (refactors, renames, reformatting,
   lint fixes). Structural changes get their own PR.
 - **Keep PRs small and reviewable;** prefer a stack of small PRs over one large one.
-- **Apply the revert test:** *"If this broke production, could it be reverted cleanly
-  without removing unrelated work?"* If not, split it.
+- **Apply the revert test:** _"If this broke production, could it be reverted cleanly
+  without removing unrelated work?"_ If not, split it.
 - **Title every PR with one Conventional Commits prefix** — `feat`, `fix`, `refactor`,
   `style`, `chore`, `docs`, `test`, `perf`. Exactly one type per PR; if two apply, it's
   two PRs.
