@@ -22,6 +22,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 
+
+- **`ExecErrorCode` enum** export (#29) — branch on
+  `code === ExecErrorCode.InsufficientMargin` instead of a bare `12`; kept in
+  agreement with the decode table by a test.
+- **`ENVELOPE_VERSION` constant** export (#32) — the wire envelope version byte
+  (`2`), replacing the bare literal in the encoders/decoder. Documented as
+  distinct from the `"ProofExchange-v3"` signing domain prefix.
+
+### Changed
+
+- **`TxResult` gains `ok`, `outcome`, and `error`** (#29; additive — `code` /
+  `hash` / `height` / `log` / `events` and existing `result.code === 0` checks
+  are unchanged). `ok` is a boolean discriminant; `outcome` is
+  `"ok" | "engine" | "transport" | "timeout"`; `error` is the auto-decoded
+  `ExecErrorInfo` (null off the engine path). Transport/timeout failures are
+  tagged via `outcome` so their synthesized HTTP `code` is not mistaken for an
+  engine `ExecError`.
+- **`hexToBytes` now throws on malformed input** (#32) — an odd number of digits
+  or a non-hex character raises instead of silently zero-filling (`parseInt` →
+  `NaN` → `0`), preventing silent corruption of a key/address/signature field.
+
 - **WASM core crate (`crates/proof-trading-sdk-wasm`)** — a `wasm-bindgen`
   binding over the Rust core's `encode_payload_dyn` / `decode_payload_dyn` and
   Ed25519 signing, the JS/WASM sibling of the PyO3 crate. Lets the TypeScript
@@ -51,6 +72,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   binding) encode it as the enum _name_ — so a legacy-signed `markSourceMode`
   update would fail the gateway's signature check. The WASM path is correct; the
   cutover fixes it. (Operator-only action; narrow blast radius.)
+
 
 - **Convenience action builders on `ExchangeClient`** — `placeOrder`,
   `marketOrder`, `cancelOrder`, `cancelClientOrder`, `cancelAllOrders`,
