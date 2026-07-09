@@ -25,11 +25,16 @@ See [AGENTS.md](AGENTS.md) for the complete agent reference.
 
 ## Branching & pull requests
 
+`dev` is the **integration** branch; `main` is the **release** branch. **All
+feature work targets `dev` — never open a PR against `main` directly.** `main`
+only ever advances by merging `dev` into it (see the release rule below).
+
 **Before making any code edits:**
 
-1. Branch off `main` using `<type>/<slug>`, where `<type>` is one of `chore`,
-   `feat`, `fix`, `docs`, `hotfix`, `infra`, `refactor`. Never edit on `main`
-   directly.
+1. Branch off **`dev`** using `<type>/<slug>`, where `<type>` is one of `chore`,
+   `feat`, `fix`, `docs`, `hotfix`, `infra`, `refactor`, and open the PR **with
+   `dev` as the base**. Never edit on `dev` or `main` directly, and never point
+   a feature PR at `main`.
 2. Keep each PR to a single logical change, and add a test with every
    behaviour change.
 3. Title each PR with one Conventional Commits prefix.
@@ -37,6 +42,15 @@ See [AGENTS.md](AGENTS.md) for the complete agent reference.
 The `PreToolUse` hook at `.claude/hooks/pre-tool-use.sh` rejects `Edit` /
 `Write` / `NotebookEdit` calls until the branch matches `<type>/<slug>`. Fix
 the branch rather than bypassing it.
+
+**Releasing (`dev` → `main`): always use "Create a merge commit" — never
+"Rebase and merge" or "Squash and merge".** A rebase/squash of a sync PR
+replays `dev`'s commits onto `main` under *new hashes*, so the same change ends
+up as two different commits and the branches permanently diverge (and `dev` is
+protected, so you cannot force-push the duplicates away). A merge commit
+references the real commits, keeps a shared merge-base, and reconciles the
+branches with no force-push. This applies to any `dev`↔`main` sync PR in either
+direction.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and
 [SECURITY.md](SECURITY.md) for reporting vulnerabilities (privately, never in a
