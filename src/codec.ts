@@ -316,6 +316,25 @@ function timeInForceStr(tif?: TimeInForce): "Gtc" | "Ioc" | "Fok" {
   }
 }
 
+/**
+ * `MarkSourceMode` encodes as its Rust enum *variant name* — the same form
+ * `rmp-serde` (and therefore the engine + the gateway's signature re-encode)
+ * produces. Emitting the bare integer index instead makes the signed payload
+ * disagree with the gateway's canonical re-encoding, so the tx is rejected.
+ */
+function markSourceModeToWire(m: 0 | 1 | null | undefined): string | null {
+  if (m === 0) return "OracleOnly";
+  if (m === 1) return "Median";
+  return null;
+}
+
+/** Inverse of `markSourceModeToWire`; tolerates the legacy integer form too. */
+function parseMarkSourceMode(v: unknown): 0 | 1 | null {
+  if (v === "OracleOnly" || v === 0) return 0;
+  if (v === "Median" || v === 1) return 1;
+  return null;
+}
+
 function outcomeStr(o: Outcome): string {
   switch (o) {
     case Outcome.Yes:
@@ -729,7 +748,7 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           d.lotSize ?? null,
           d.primaryOracleSigner ? toByteSeq(d.primaryOracleSigner) : null,
           d.oracleStalenessMs ?? null,
-          d.markSourceMode ?? null,
+          markSourceModeToWire(d.markSourceMode),
           d.maxMarkSpreadBps ?? null,
           d.cexCompositeStalenessMs ?? null,
           d.partialLiquidationEnabled ?? null,
@@ -1091,12 +1110,10 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
         v === null || v === undefined ? null : Boolean(v);
       const optBytes = (v: unknown): Address | null =>
         v === null || v === undefined ? null : bytesField(v);
-      const markSourceMode = f.length > 13 ? optNum(f[13]) : null;
-      // Cast back to the union shape exported on `UpdateMarketFees`.
+      // Decode the enum variant name (tolerating the legacy integer form) back
+      // to the `0 | 1` union shape exported on `UpdateMarketFees`.
       const markSourceModeTyped =
-        markSourceMode === 0 || markSourceMode === 1
-          ? (markSourceMode as 0 | 1)
-          : null;
+        f.length > 13 ? parseMarkSourceMode(f[13]) : null;
       return {
         type: "UpdateMarketFees",
         data: {
