@@ -1,14 +1,16 @@
 name: security
 
-# Pre-audit security gate (W22-08): dependency advisories + fuzzing the
-# untrusted-input decoders. Runs on PRs and dev pushes; a weekly schedule does
-# a longer fuzz soak. Manual runs via workflow_dispatch.
+# Security gate (W22-08). `audit` (dependency advisories) runs on every PR and
+# dev push. `fuzz` is EXPENSIVE (it compiles cargo-fuzz + LibFuzzer and soaks
+# the decoders), so it is kept OUT of per-PR CI — it runs only on the weekly
+# schedule and on manual `workflow_dispatch`. Per-PR wire coverage comes from
+# the conformance suites in `ci.yml`.
 on:
   push:
     branches: [dev]
   pull_request:
   schedule:
-    - cron: "0 4 * * 1" # Mondays 04:00 UTC — longer fuzz soak
+    - cron: "0 4 * * 1" # Mondays 04:00 UTC — weekly fuzz soak
   workflow_dispatch:
 
 permissions:
@@ -39,6 +41,8 @@ jobs:
 
   fuzz:
     name: cargo fuzz (smoke)
+    # Expensive — keep it out of per-PR/push CI. Weekly soak + manual only.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,7 +52,7 @@ jobs:
           workspaces: fuzz
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
-      # 60s/target on PRs and pushes; 10min/target on the weekly soak.
+      # 60s/target on a manual dispatch; 10min/target on the weekly soak.
       - name: Set fuzz duration
         run: echo "FUZZ_SECONDS=${{ github.event_name == 'schedule' && 600 || 60 }}" >> "$GITHUB_ENV"
       - name: Fuzz decode_tx
