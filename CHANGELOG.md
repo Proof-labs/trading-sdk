@@ -7,6 +7,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Open-interest-cap versioning is package-specific. The Rust core, PyO3, WASM,
+and Python packages move to **2.0.0**: their frozen v1 `rmp-serde` decoder
+rejects populated 12-field `CreateMarket` and 21-field `UpdateMarketFees`
+payloads, and the Rust wire structs gain source-incompatible fields. The npm
+package moves to **1.2.0**: its new fields and log argument are optional, its
+v1 decoder already tolerates trailing fields, and all pre-cap calls retain
+their bytes. The unchanged derive crate stays at **1.1.0**; the unpublished
+conformance crate labels the v2 vectors as **2.0.0**. Compatible engine:
+`exchange-core >= 2.0.0, < 3.0.0`.
+
 ### Fixed
 
 - **Documented price unit corrected: order prices are `u64` micro-USDC (6 dp),
@@ -28,9 +38,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   conformance vector exercised it, so it went undetected (surfaced by the WASM
   differential test). Encode now emits the variant name; decode still accepts
   the legacy integer form for back-compat. A regression test pins both.
+- TypeScript now omits an explicit zero CreateMarket cap, matching Rust,
+  Python, and the frozen legacy bytes, and rejects negative/out-of-u64 cap
+  values before encoding.
+- Python market reads decode `MarketConfig.max_open_interest` from slot 24.
+- Rust `Event::MarketConfigUpdated` now matches the engine's complete event
+  shape, including `im_bps`, `mm_bps`, and `max_open_interest`.
 
 ### Added
 
+- Aggregate open-interest cap support across Rust, TypeScript, and Python:
+  `CreateMarket.maxOpenInterest` is an optional trailing field,
+  `UpdateMarketFees.maxOpenInterest` occupies the engine's trailing slot 20,
+  and `MarketConfig.maxOpenInterest` decodes from slot 24. Legacy
+  `CreateMarket` callers that omit the cap retain their exact 11-field wire
+  payload and create an uncapped market.
+- Log-aware error-code classification across Rust, TypeScript, and Python.
+  Shared code 50 resolves to `OpenInterestLimitExceeded` or
+  `SlippageExceeded` only from the canonical DeliverTx log; absent or unknown
+  logs resolve to `AmbiguousCode50` rather than guessing.
+- Rust exports a `Milliseconds` alias for every millisecond timestamp/duration
+  wire field and `UpdateMarketFees::new(market, signer)` for concise no-op
+  defaults; the alias remains source- and wire-identical to `u64`.
 - **`ExecErrorCode` enum** export (#29) — branch on
   `code === ExecErrorCode.InsufficientMargin` instead of a bare `12`; kept in
   agreement with the decode table by a test.
@@ -45,6 +74,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `submitTx` no longer starts a redundant background verifier. Hash-only error
   responses remain ambiguous and are still reconciled; pre-upgrade gateway
   acknowledgements retain the existing polling behavior.
+- `UpdateMarketFees` now includes the engine's existing `imBps` and `mmBps`
+  tail slots before `maxOpenInterest`, preventing the OI cap from being
+  misinterpreted as a margin-ratio update.
 - **`TxResult` gains `ok`, `outcome`, and `error`** (#29; additive — `code` /
   `hash` / `height` / `log` / `events` and existing `result.code === 0` checks
   are unchanged). `ok` is a boolean discriminant; `outcome` is
@@ -186,6 +218,7 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Proof-labs/trading-sdk/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Proof-labs/trading-sdk/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/Proof-labs/trading-sdk/releases/tag/v0.1.0

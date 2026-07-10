@@ -85,6 +85,16 @@ const decoder = new Decoder({ useBigInt64: true });
  * keeping it preserves correctness if a signed field is added later.
  */
 const U32_MAX_BIGINT = 0xffff_ffffn; // 2^32 - 1
+const U64_MAX_BIGINT = 0xffff_ffff_ffff_ffffn; // 2^64 - 1
+
+function assertU64(value: bigint, field: string): void {
+  if (typeof value !== "bigint") {
+    throw new TypeError(`${field} must be a bigint`);
+  }
+  if (value < 0n || value > U64_MAX_BIGINT) {
+    throw new RangeError(`${field} must be in the unsigned u64 range`);
+  }
+}
 
 function minimizeBigInts(value: unknown): unknown {
   if (typeof value === "bigint") {
@@ -615,25 +625,31 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       // — but if the caller sets a non-zero poolId we MUST include it.
       // Always include for forward-compatibility once any SDK build can
       // address pools other than 0.
-      return [
-        ActionType.CreateMarket,
-        [
-          d.market,
-          d.imBps,
-          d.mmBps,
-          d.takerFeeBps,
-          d.makerFeeBps,
-          toByteSeq(d.signer),
-          d.fundingIntervalMs,
-          d.maxFundingRateBps,
-          d.poolId ?? 0,
-          // sz_decimals and ticker are MANDATORY on the engine (no
-          // serde(default)) — a payload that omits them is rejected at
-          // decode. Both are required fields on CreateMarket.
-          d.szDecimals,
-          d.ticker,
-        ],
+      const fields: unknown[] = [
+        d.market,
+        d.imBps,
+        d.mmBps,
+        d.takerFeeBps,
+        d.makerFeeBps,
+        toByteSeq(d.signer),
+        d.fundingIntervalMs,
+        d.maxFundingRateBps,
+        d.poolId ?? 0,
+        // sz_decimals and ticker are MANDATORY on the engine (no
+        // serde(default)) — a payload that omits them is rejected at
+        // decode. Both are required fields on CreateMarket.
+        d.szDecimals,
+        d.ticker,
       ];
+      // Preserve byte-for-byte compatibility for callers that do not opt in:
+      // an absent tail decodes to the engine's serde-default cap of 0.
+      if (d.maxOpenInterest !== undefined) {
+        assertU64(d.maxOpenInterest, "CreateMarket.maxOpenInterest");
+        // Zero and absence both mean uncapped. Omitting the zero tail is
+        // required for exact Rust/Python/pre-cap byte parity.
+        if (d.maxOpenInterest !== 0n) fields.push(d.maxOpenInterest);
+      }
+      return [ActionType.CreateMarket, fields];
     }
     case "WithdrawRequest": {
       const d = action.data;
@@ -722,13 +738,16 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
     }
     case "UpdateMarketFees": {
       const d = action.data;
+      if (d.maxOpenInterest != null) {
+        assertU64(d.maxOpenInterest, "UpdateMarketFees.maxOpenInterest");
+      }
       // Field order MUST match the Rust struct: market, signer,
       // taker_fee_bps, maker_fee_bps, max_funding_rate_bps,
       // funding_interval_ms, max_position_size, default_ttl_ms,
       // net_delta_margin, tick_size, lot_size, primary_oracle_signer,
       // oracle_staleness_ms, mark_source_mode, max_mark_spread_bps,
       // cex_composite_staleness_ms, partial_liquidation_enabled,
-      // fee_tiers.
+      // fee_tiers, im_bps, mm_bps, max_open_interest.
       // Each optional field encodes as its value or null (rmp-serde
       // accepts null for `Option<T>` via serde(default) / Option
       // deserialization). New fields are appended at the end.
@@ -753,6 +772,9 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           d.cexCompositeStalenessMs ?? null,
           d.partialLiquidationEnabled ?? null,
           d.feeTiers ? d.feeTiers.map(encodeFeeTier) : null,
+          d.imBps ?? null,
+          d.mmBps ?? null,
+          d.maxOpenInterest ?? null,
         ],
       ];
     }
@@ -1000,6 +1022,7 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           // decode (0 / "" defaults).
           szDecimals: f.length > 9 ? (f[9] as number) : 0,
           ticker: f.length > 10 ? (f[10] as string) : "",
+          ...(f.length > 11 ? { maxOpenInterest: bi(f[11]) } : {}),
         },
       };
     case ActionType.WithdrawRequest:
@@ -1135,6 +1158,9 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           cexCompositeStalenessMs: f.length > 15 ? optBig(f[15]) : null,
           partialLiquidationEnabled: f.length > 16 ? optBool(f[16]) : null,
           feeTiers: f.length > 17 ? decodeFeeTiers(f[17]) : null,
+          imBps: f.length > 18 ? optNum(f[18]) : null,
+          mmBps: f.length > 19 ? optNum(f[19]) : null,
+          maxOpenInterest: f.length > 20 ? optBig(f[20]) : null,
         },
       };
     }

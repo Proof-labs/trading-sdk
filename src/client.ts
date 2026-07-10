@@ -1794,5 +1794,6 @@ function decodeMarketConfig(raw: unknown[]): MarketConfig {
     partialLiquidationEnabled: raw[21] == null ? undefined : Boolean(raw[21]),
     szDecimals: raw[22] == null ? undefined : Number(raw[22]),
     ticker: raw[23] == null ? undefined : String(raw[23]),
+    maxOpenInterest: optBig(raw[24]),
   };
 }

@@ -191,6 +191,18 @@ class TestErrors:
         assert err.retry_after_secs == 5.0
         assert err.bucket == "orders"
 
+    def test_shared_code_50_uses_delivertx_log(self):
+        oi = "open interest limit exceeded on market 7: would be 4, cap 3"
+        slip = "atomic basket aggregate slippage 51 bps exceeds budget 50 bps"
+        assert pts.get_error_name(50, oi) == "OpenInterestLimitExceeded"
+        assert pts.get_error_name(50, slip) == "SlippageExceeded"
+        assert pts.get_error_name(50) == "AmbiguousCode50"
+        assert pts.get_error_name(50, "") == "AmbiguousCode50"
+        assert pts.get_error_name(50, "unknown") == "AmbiguousCode50"
+        assert pts.EngineError(50, oi).name == "OpenInterestLimitExceeded"
+        assert pts.EngineError(50, slip).name == "SlippageExceeded"
+        assert pts.EngineError(50, "").name == "AmbiguousCode50"
+
 
 class TestConfig:
     def test_default_config(self):
@@ -238,6 +250,7 @@ class TestEngineParityActions:
                 "sz_decimals": 4,
                 "ticker": "BTC",
                 "pool_id": 9,
+                "max_open_interest": 1_000_000,
             },
         )
         action_type, payload = pts.encode_action(action)
@@ -246,6 +259,20 @@ class TestEngineParityActions:
         assert decoded["sz_decimals"] == 4
         assert decoded["ticker"] == "BTC"
         assert decoded["pool_id"] == 9
+        assert decoded["max_open_interest"] == 1_000_000
+
+    def test_update_market_fees_max_open_interest_uses_slot_after_margin_ratios(self):
+        action = pts.actions.UpdateMarketFees(
+            market=42,
+            signer=b"\xee" * 20,
+            max_open_interest=500_000,
+        )
+        action_type, payload = pts.encode_action(action)
+        assert action_type == pts.ActionType["UpdateMarketFees"]
+        decoded = pts.decode_action(action_type, payload)
+        assert decoded["im_bps"] is None
+        assert decoded["mm_bps"] is None
+        assert decoded["max_open_interest"] == 500_000
 
     def test_atomic_basket_order_round_trips(self):
         action = pts.actions.AtomicBasketOrder(

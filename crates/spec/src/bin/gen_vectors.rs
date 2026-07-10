@@ -8,7 +8,7 @@
 //! CI should run this and fail if `git diff --exit-code conformance/` is dirty.
 //!
 //! TODO(handoff): this emits a SEED set only. Extend to full coverage:
-//!   * codec: all 27 action types (this seed has 8) + edges — zero/max u64,
+//!   * codec: all 27 action types (this seed has 13) + edges — zero/max u64,
 //!     CLOID None/Some(MAX), post_only/reduce_only/TIF, serde-default tails
 //!     (CreateMarket.pool_id, OracleUpdate.publish_time_ms…), every enum,
 //!     nested EventOracleSource (3 variants), FeeTier lists.
@@ -71,6 +71,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     const MARKET_ORDER: u8 = 0x04;
     const CLOSE_POSITION: u8 = 0x17;
     const CREATE_MARKET: u8 = 0x07;
+    const UPDATE_MARKET_FEES: u8 = 0x10;
     const ATOMIC_BASKET_ORDER: u8 = 0x1C;
 
     let owner = vec![0x01u8; 20];
@@ -155,6 +156,55 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "pool_id": 9, "sz_decimals": 4, "ticker": "BTC"
             }),
         ),
+        // An explicit zero cap is semantically identical to omission and must
+        // retain the exact pre-cap 11-field payload in every binding.
+        codec_case(
+            "create_market/max_open_interest_zero_legacy_bytes",
+            CREATE_MARKET,
+            json!({
+                "market": 42, "im_bps": 1000, "mm_bps": 500,
+                "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": signer,
+                "funding_interval_ms": 60000u64, "max_funding_rate_bps": 100,
+                "pool_id": 9, "sz_decimals": 4, "ticker": "BTC",
+                "max_open_interest": 0u64
+            }),
+        ),
+        // S40: optional CreateMarket tail. The uncapped case above remains
+        // byte-identical (11 fields); this case pins slot 11 when supplied.
+        codec_case(
+            "create_market/max_open_interest",
+            CREATE_MARKET,
+            json!({
+                "market": 43, "im_bps": 1000, "mm_bps": 500,
+                "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": signer,
+                "funding_interval_ms": 60000u64, "max_funding_rate_bps": 100,
+                "pool_id": 9, "sz_decimals": 5, "ticker": "ETH",
+                "max_open_interest": 1_000_000u64
+            }),
+        ),
+        // UpdateMarketFees appends the existing live-risk ratio levers at
+        // slots 18/19 before the S40 OI cap at slot 20. Null placeholders are
+        // intentional and prevent the cap from being decoded as im_bps.
+        codec_case(
+            "update_market_fees/max_open_interest_only",
+            UPDATE_MARKET_FEES,
+            json!({
+                "market": 43, "signer": signer,
+                "im_bps": null, "mm_bps": null,
+                "max_open_interest": 500_000u64
+            }),
+        ),
+        // Pin the three adjacent risk tails together across Rust, TypeScript,
+        // and Python so a binding cannot shift max OI into an IM/MM slot.
+        codec_case(
+            "update_market_fees/margin_ratios_and_max_open_interest",
+            UPDATE_MARKET_FEES,
+            json!({
+                "market": 44, "signer": signer,
+                "im_bps": 3334, "mm_bps": 1667,
+                "max_open_interest": 750_000u64
+            }),
+        ),
         // AtomicBasketOrder (0x1c) — multi-leg, mixed leg optionals; pins the
         // action that was entirely absent from the SDK. max_slippage_bps is
         // serde(default) and encodes as 0 when absent.
@@ -188,8 +238,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let envelope = cv::sign_envelope(&unbound, PLACE_ORDER, 1, &po_payload, &sk)?;
 
-    let pk_42 = ed25519_dalek::SigningKey::from_bytes(&sk).verifying_key().to_bytes();
-    let pk_01 = ed25519_dalek::SigningKey::from_bytes(&[0x01u8; 32]).verifying_key().to_bytes();
+    let pk_42 = ed25519_dalek::SigningKey::from_bytes(&sk)
+        .verifying_key()
+        .to_bytes();
+    let pk_01 = ed25519_dalek::SigningKey::from_bytes(&[0x01u8; 32])
+        .verifying_key()
+        .to_bytes();
 
     let signing = vec![
         cv::SigningCase::Sign {

@@ -107,8 +107,12 @@ pub fn sign_envelope(
     payload: &[u8],
     secret_key: &[u8],
 ) -> Result<Vec<u8>, String> {
-    let cid: [u8; 32] = chain_id.try_into().map_err(|_| "chain_id must be 32 bytes")?;
-    let sk: [u8; 32] = secret_key.try_into().map_err(|_| "secret_key must be 32 bytes")?;
+    let cid: [u8; 32] = chain_id
+        .try_into()
+        .map_err(|_| "chain_id must be 32 bytes")?;
+    let sk: [u8; 32] = secret_key
+        .try_into()
+        .map_err(|_| "secret_key must be 32 bytes")?;
     let key = ed25519_dalek::SigningKey::from_bytes(&sk);
     proof_trading_sdk::codec::sign_and_encode_payload(&cid, action_type, payload, seq, &key)
         .map_err(|e| format!("{e:?}"))

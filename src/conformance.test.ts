@@ -229,6 +229,9 @@ function toAction(
           poolId: input.pool_id as number,
           szDecimals: input.sz_decimals as number,
           ticker: input.ticker as string,
+          ...(input.max_open_interest === undefined
+            ? {}
+            : { maxOpenInterest: big(input.max_open_interest) }),
         },
       };
     case ActionType.WithdrawRequest:
@@ -356,6 +359,9 @@ function toAction(
           cexCompositeStalenessMs: optBig(input.cex_composite_staleness_ms),
           partialLiquidationEnabled: optBool(input.partial_liquidation_enabled),
           feeTiers: input.fee_tiers == null ? null : (input.fee_tiers as any),
+          imBps: optNum(input.im_bps),
+          mmBps: optNum(input.mm_bps),
+          maxOpenInterest: optBig(input.max_open_interest),
         },
       };
     }

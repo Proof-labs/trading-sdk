@@ -316,7 +316,9 @@ mod tests {
 
     #[test]
     fn debug_is_hex_not_array() {
-        let a = Address([0x0a, 0x0b, 0x0c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let a = Address([
+            0x0a, 0x0b, 0x0c, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]);
         assert!(format!("{a:?}").starts_with("Address(0x0a0b0c"));
     }
 
@@ -333,6 +335,9 @@ mod tests {
     fn solana_sig_round_trips_64_bytes() {
         let sig = SolanaSignature(vec![0x7u8; 64]);
         let bytes = rmp_serde::to_vec(&sig).unwrap();
-        assert_eq!(rmp_serde::from_slice::<SolanaSignature>(&bytes).unwrap(), sig);
+        assert_eq!(
+            rmp_serde::from_slice::<SolanaSignature>(&bytes).unwrap(),
+            sig
+        );
     }
 }

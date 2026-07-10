@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { Encoder } from "@msgpack/msgpack";
 import {
   encodeSignedTx,
+  encodePayloadBytes,
   decodeTx,
   peekActionType,
   signAndEncode,
@@ -439,7 +441,83 @@ describe("codec v1 all action types", () => {
 
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
     expect(decoded).toEqual(action);
+    if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
+    expect(decoded.data.maxOpenInterest).toBeUndefined();
   });
+
+  it("round-trips CreateMarket maxOpenInterest tail", () => {
+    const action: Action = {
+      type: "CreateMarket",
+      data: {
+        market: 42,
+        imBps: 1000,
+        mmBps: 500,
+        takerFeeBps: 5,
+        makerFeeBps: 2,
+        signer: SIGNER,
+        fundingIntervalMs: 60_000n,
+        maxFundingRateBps: 100,
+        poolId: 9,
+        szDecimals: 5,
+        ticker: "BTC",
+        maxOpenInterest: 1_000_000n,
+      },
+    };
+
+    const { action: decoded } = decodeTx(encodeTx(action, 1n));
+    expect(decoded).toEqual(action);
+  });
+
+  it("omits an explicit zero CreateMarket cap for legacy byte parity", () => {
+    const base: Action = {
+      type: "CreateMarket",
+      data: {
+        market: 42,
+        imBps: 1000,
+        mmBps: 500,
+        takerFeeBps: 5,
+        makerFeeBps: 2,
+        signer: SIGNER,
+        fundingIntervalMs: 60_000n,
+        maxFundingRateBps: 100,
+        poolId: 9,
+        szDecimals: 5,
+        ticker: "BTC",
+      },
+    };
+    const zeroCap: Action = {
+      type: "CreateMarket",
+      data: { ...base.data, maxOpenInterest: 0n },
+    };
+    expect(encodePayloadBytes(zeroCap)).toEqual(encodePayloadBytes(base));
+    const decoded = decodeTx(encodeTx(zeroCap, 1n)).action;
+    if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
+    expect(decoded.data.maxOpenInterest).toBeUndefined();
+  });
+
+  it.each([-1n, 0x1_0000_0000_0000_0000n])(
+    "rejects CreateMarket maxOpenInterest outside u64: %s",
+    (maxOpenInterest) => {
+      const action: Action = {
+        type: "CreateMarket",
+        data: {
+          market: 42,
+          imBps: 1000,
+          mmBps: 500,
+          takerFeeBps: 5,
+          makerFeeBps: 2,
+          signer: SIGNER,
+          fundingIntervalMs: 60_000n,
+          maxFundingRateBps: 100,
+          poolId: 9,
+          szDecimals: 5,
+          ticker: "BTC",
+          maxOpenInterest,
+        },
+      };
+      expect(() => encodePayloadBytes(action)).toThrow(/unsigned u64 range/);
+    },
+  );
 
   it("round-trips AtomicBasketOrder", () => {
     const action: Action = {
@@ -528,6 +606,9 @@ describe("codec v1 all action types", () => {
             takerFeeTenthBps: 3,
           },
         ],
+        imBps: 3334,
+        mmBps: 1667,
+        maxOpenInterest: 2_000_000n,
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
@@ -550,6 +631,9 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.cexCompositeStalenessMs).toBe(15_000n);
     expect(decoded.data.partialLiquidationEnabled).toBe(true);
     expect(decoded.data.feeTiers).toEqual(action.data.feeTiers);
+    expect(decoded.data.imBps).toBe(3334);
+    expect(decoded.data.mmBps).toBe(1667);
+    expect(decoded.data.maxOpenInterest).toBe(2_000_000n);
   });
 
   it("round-trips UpdateMarketFees with only BE-48/BE-50 fields set", () => {
@@ -581,6 +665,9 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.takerFeeBps).toBeNull();
     expect(decoded.data.maxPositionSize).toBeNull();
     expect(decoded.data.netDeltaMargin).toBeNull();
+    expect(decoded.data.imBps).toBeNull();
+    expect(decoded.data.mmBps).toBeNull();
+    expect(decoded.data.maxOpenInterest).toBeNull();
   });
 
   it("round-trips UpdateMarketFees primary oracle clear sentinel", () => {
@@ -622,6 +709,61 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.maxPositionSize).toBeNull();
     expect(decoded.data.defaultTtlMs).toBeNull();
     expect(decoded.data.feeTiers).toBeNull();
+    expect(decoded.data.imBps).toBeNull();
+    expect(decoded.data.mmBps).toBeNull();
+    expect(decoded.data.maxOpenInterest).toBeNull();
+  });
+
+  it("round-trips UpdateMarketFees with only maxOpenInterest set", () => {
+    const action: Action = {
+      type: "UpdateMarketFees",
+      data: {
+        market: 7,
+        signer: SIGNER,
+        maxOpenInterest: 500_000n,
+      },
+    };
+
+    const { action: decoded } = decodeTx(encodeTx(action, 1n));
+    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
+    expect(decoded.data.maxOpenInterest).toBe(500_000n);
+    // Slots 18/19 are required placeholders; max OI is engine slot 20.
+    expect(decoded.data.imBps).toBeNull();
+    expect(decoded.data.mmBps).toBeNull();
+  });
+
+  it.each([-1n, 0x1_0000_0000_0000_0000n])(
+    "rejects UpdateMarketFees maxOpenInterest outside u64: %s",
+    (maxOpenInterest) => {
+      const action: Action = {
+        type: "UpdateMarketFees",
+        data: { market: 7, signer: SIGNER, maxOpenInterest },
+      };
+      expect(() => encodePayloadBytes(action)).toThrow(/unsigned u64 range/);
+    },
+  );
+
+  it("decodes the legacy 18-field UpdateMarketFees payload", () => {
+    const encoder = new Encoder({ useBigInt64: true });
+    const payload = encoder.encode([
+      7,
+      Array.from(SIGNER),
+      ...Array(16).fill(null),
+    ]);
+    const wire = encoder.encode([
+      ENVELOPE_VERSION,
+      ActionType.UpdateMarketFees,
+      1n,
+      payload,
+      ZERO_PUBKEY,
+      ZERO_SIG,
+    ]);
+
+    const { action: decoded } = decodeTx(wire);
+    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
+    expect(decoded.data.imBps).toBeNull();
+    expect(decoded.data.mmBps).toBeNull();
+    expect(decoded.data.maxOpenInterest).toBeNull();
   });
 
   it("round-trips UpdateMarketFees with only defaultTtlMs set (operator-only path)", () => {
