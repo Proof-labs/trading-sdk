@@ -16,6 +16,10 @@ coverage/
 /target/
 Cargo.lock
 
+# Generated WASM artifact (built by `npm run build:wasm`, not committed;
+# produced in CI / prepublish). See docs/adr/0001-wasm-core-vs-parallel-types.md.
+/src/wasm/
+
 # Python
 __pycache__/
 .pytest_cache/

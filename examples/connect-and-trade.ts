@@ -121,10 +121,8 @@ info("");
 // Step 6 — Place a limit order
 if (FAUCET_TOKEN && account && account.balance > 0n) {
   info("--- 6. Place a limit order ---");
-  const orderPrice = 50_000_00n; // $50,000.00 in cents
-  info(
-    `  Placing bid: market=1  side=Buy  price=$${fmt(orderPrice, 2)}  qty=1`,
-  );
+  const orderPrice = 50_000_000_000n; // $50,000.00 in micro-USDC (6 dp)
+  info(`  Placing bid: market=1  side=Buy  price=$${fmt(orderPrice)}  qty=1`);
 
   const result = await client.submitTxCommit({
     type: "PlaceOrder",
@@ -207,7 +205,7 @@ function info(msg: string) {
   console.log(msg);
 }
 
-/** Format micro-USDC or cents as a dollar string. */
+/** Format a micro-USDC integer (6 dp) as a dollar string. */
 function fmt(n: bigint | number, decimals = 6): string {
   const s = n.toString();
   const neg = s.startsWith("-");

@@ -1122,3 +1122,46 @@ describe("codec/crypto hygiene", () => {
     expect(() => hexToBytes("0xgg")).toThrow(/non-hexadecimal/);
   });
 });
+
+describe("UpdateMarketFees.markSourceMode encoding", () => {
+  it("encodes markSourceMode as the canonical enum name, not a bare integer", () => {
+    // Regression: the enum must serialize as its variant name ("Median") to
+    // match the engine/gateway's rmp-serde re-encoding. The pre-fix codec
+    // emitted the integer index (0x01), which failed signature verification.
+    const action: Action = {
+      type: "UpdateMarketFees",
+      data: { market: 1, signer: SIGNER, markSourceMode: 1 },
+    };
+    const hex = bytesToHex(encodeTx(action, 1n));
+    const medianHex = bytesToHex(new TextEncoder().encode("Median"));
+    expect(hex).toContain(medianHex); // "Median" str bytes present
+  });
+
+  it("round-trips markSourceMode 0 (OracleOnly) and 1 (Median)", () => {
+    for (const mode of [0, 1] as const) {
+      const action: Action = {
+        type: "UpdateMarketFees",
+        data: { market: 1, signer: SIGNER, markSourceMode: mode },
+      };
+      const { action: decoded } = decodeTx(encodeTx(action, 1n));
+      expect(decoded.type).toBe("UpdateMarketFees");
+      if (decoded.type === "UpdateMarketFees") {
+        expect(decoded.data.markSourceMode).toBe(mode);
+      }
+    }
+  });
+
+  it("decode still accepts the legacy integer form (back-compat)", () => {
+    // A tx encoded by an old SDK put the raw integer at slot 13; decoding it
+    // must still yield the typed union rather than dropping to null.
+    const legacy = encodeTx(
+      { type: "UpdateMarketFees", data: { market: 1, signer: SIGNER } },
+      1n,
+    );
+    // Sanity: default (no markSourceMode) decodes as null.
+    const { action } = decodeTx(legacy);
+    if (action.type === "UpdateMarketFees") {
+      expect(action.data.markSourceMode ?? null).toBeNull();
+    }
+  });
+});

@@ -11,7 +11,7 @@ If a user asks you to connect to Proof Exchange and trade, here is the pattern:
 3. **Fund** — The user must have tokens. Call the faucet via
    `POST https://faucet.dev.proof.trade/drip` with an auth token.
 4. **Trade** — `submitTx({ type: "PlaceOrder", data: { ... } })`.
-   Prices are integer cents, quantities are integer contracts.
+   Prices are integer **micro-USDC** (6 dp), quantities are integer contracts.
 5. **Check results** — `code === 0` means CheckTx passed. Non-zero codes
    are error codes (12 = insufficient margin, 21 = nonce collision, etc.).
 
@@ -25,11 +25,16 @@ See [AGENTS.md](AGENTS.md) for the complete agent reference.
 
 ## Branching & pull requests
 
+`dev` is the **integration** branch; `main` is the **release** branch. **All
+feature work targets `dev` — never open a PR against `main` directly.** `main`
+only ever advances by merging `dev` into it (see the release rule below).
+
 **Before making any code edits:**
 
-1. Branch off `main` using `<type>/<slug>`, where `<type>` is one of `chore`,
-   `feat`, `fix`, `docs`, `hotfix`, `infra`, `refactor`. Never edit on `main`
-   directly.
+1. Branch off **`dev`** using `<type>/<slug>`, where `<type>` is one of `chore`,
+   `feat`, `fix`, `docs`, `hotfix`, `infra`, `refactor`, and open the PR **with
+   `dev` as the base**. Never edit on `dev` or `main` directly, and never point
+   a feature PR at `main`.
 2. Keep each PR to a single logical change, and add a test with every
    behaviour change.
 3. Title each PR with one Conventional Commits prefix.
@@ -37,6 +42,15 @@ See [AGENTS.md](AGENTS.md) for the complete agent reference.
 The `PreToolUse` hook at `.claude/hooks/pre-tool-use.sh` rejects `Edit` /
 `Write` / `NotebookEdit` calls until the branch matches `<type>/<slug>`. Fix
 the branch rather than bypassing it.
+
+**Releasing (`dev` → `main`): always use "Create a merge commit" — never
+"Rebase and merge" or "Squash and merge".** A rebase/squash of a sync PR
+replays `dev`'s commits onto `main` under _new hashes_, so the same change ends
+up as two different commits and the branches permanently diverge (and `dev` is
+protected, so you cannot force-push the duplicates away). A merge commit
+references the real commits, keeps a shared merge-base, and reconciles the
+branches with no force-push. This applies to any `dev`↔`main` sync PR in either
+direction.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow and
 [SECURITY.md](SECURITY.md) for reporting vulnerabilities (privately, never in a
@@ -87,14 +101,15 @@ npx prettier --check .
   CometBFT `/status` and cached; offline callers of `signAndEncode` must pass it.
 - `seq` is a wall-clock-ms timestamp nonce; the engine validates it against a
   sliding window (no strict sequential ordering).
-- All prices and quantities are `u64` (cents / microUSDC). **No floats.**
+- All monetary values (prices, balances, amounts, fees) are `u64` **micro-USDC**
+  (6 dp; `1_000_000` = $1). Quantities are integer contracts. **No floats.**
 - New fields go at the **end** as optional so absent fields encode as `nil`
   (backward compatible). Adding an action means: define its type/payload in
   `types.ts`, assign its `action_type` byte and encode/decode arms in `codec.ts`.
 
 ## Versioning & wire-format compatibility
 
-Every package here (the npm `@proof/trading-sdk` and the `crates/*` Rust crates) ships **semver on the full `MAJOR.MINOR.PATCH` line and is kept at `>= 1.0.0`**. We are off `0.x` on purpose: under `0.x`, Cargo and npm caret ranges treat the *second* number as the breaking one, which is the wrong signal for a wire contract. At `>= 1.0.0` only a **MAJOR** difference is incompatible; MINOR and PATCH are drop-in for consumers. Do not reset to `0.x`.
+Every package here (the npm `@proof/trading-sdk` and the `crates/*` Rust crates) ships **semver on the full `MAJOR.MINOR.PATCH` line and is kept at `>= 1.0.0`**. We are off `0.x` on purpose: under `0.x`, Cargo and npm caret ranges treat the _second_ number as the breaking one, which is the wrong signal for a wire contract. At `>= 1.0.0` only a **MAJOR** difference is incompatible; MINOR and PATCH are drop-in for consumers. Do not reset to `0.x`.
 
 This SDK **reimplements** the exchange wire format (it does not pin `exchange-core` as a dependency), so it does not get the engine's version automatically — keep it in lockstep by hand. The wire format is the contract that drives the bump, and the rule matches the engine's exactly:
 
@@ -114,12 +129,12 @@ This rule exists because we already lost history the other way: `0.1.0` sat as a
 
 ## Unit conventions
 
-| Field      | Scale                                | Example                   |
-| ---------- | ------------------------------------ | ------------------------- |
-| Prices     | Integer cents (2 dp)                 | `6675000` = $66,750       |
-| Balances   | MicroUSDC (6 dp)                     | `100_000_000_000` = $100k |
-| Fees/Rates | Basis points                         | `500` = 5%                |
-| Addresses  | 20 bytes — keccak256(pubkey)[12..32] | `pubkeyToOwner()`         |
+| Field      | Scale                                | Example                    |
+| ---------- | ------------------------------------ | -------------------------- |
+| Prices     | micro-USDC (6 dp)                    | `66_750_000_000` = $66,750 |
+| Balances   | MicroUSDC (6 dp)                     | `100_000_000_000` = $100k  |
+| Fees/Rates | Basis points                         | `500` = 5%                 |
+| Addresses  | 20 bytes — keccak256(pubkey)[12..32] | `pubkeyToOwner()`          |
 
 ## Spec / contract sync
 
@@ -137,6 +152,14 @@ wire-format change affects the SDK:
 
 `src/types.ts` and `src/codec.ts` are the source of truth for the action set —
 do not hardcode action counts elsewhere; they change as the engine grows.
+
+> **Note — the TS codec is migrating to a WASM build of the Rust core.** The
+> hand-written parallel codec in `src/codec.ts` is being replaced by a
+> `wasm-bindgen` binding over `encode_payload_dyn` / `decode_payload_dyn`, so
+> the Rust registry becomes the single source of truth. Read
+> [docs/adr/0001-wasm-core-vs-parallel-types.md](docs/adr/0001-wasm-core-vs-parallel-types.md)
+> before touching `codec.ts` — it records why WASM (not codegen or a hybrid) was
+> chosen, so the tradeoff does not get re-argued.
 
 ## Network policy — gateway only
 

@@ -43,7 +43,7 @@ result = client.submit_action({
     "market": 1,
     "owner": bytes(owner),
     "side": Side.Buy,
-    "price": 50_000_00,  # $50,000.00
+    "price": 50_000_000_000,  # $50,000.00 in micro-USDC (6 dp)
     "quantity": 1,
 })
 ```
