@@ -167,7 +167,7 @@ actions out of autocomplete entirely:
 
 ```typescript
 import type { TraderAction } from "@proof/trading-sdk";
-const order: TraderAction = { type: "PlaceOrder", data: { /* … */ } };
+const order: TraderAction = { type: "PlaceOrder", data: {/* … */} };
 await client.submitTx(order); // submitTx still accepts the full Action union
 ```
 
