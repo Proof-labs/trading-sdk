@@ -72,7 +72,11 @@ export function txTransportError(
   return { ok: false, outcome: "transport", code, error: null, hash, log };
 }
 
-/** Inclusion polling gave up before a DeliverTx result appeared (`code === -1`). */
+/**
+ * No final chain verdict is available yet (`code === -1`). This covers both a
+ * hash-only ambiguous gateway response and inclusion polling that expired; the
+ * transaction may still commit and should be reconciled by `hash`.
+ */
 export function txTimeout(hash: string, log: string): TxResult {
   return { ok: false, outcome: "timeout", code: -1, error: null, hash, log };
 }

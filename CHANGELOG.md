@@ -40,6 +40,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Gateway submissions consume the synchronous on-chain result** (#50) when
+  available, so `submitTxCommit` no longer repeats a `/v1/tx/{hash}` poll and
+  `submitTx` no longer starts a redundant background verifier. Hash-only error
+  responses remain ambiguous and are still reconciled; pre-upgrade gateway
+  acknowledgements retain the existing polling behavior.
 - **`TxResult` gains `ok`, `outcome`, and `error`** (#29; additive — `code` /
   `hash` / `height` / `log` / `events` and existing `result.code === 0` checks
   are unchanged). `ok` is a boolean discriminant; `outcome` is

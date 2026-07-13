@@ -1046,8 +1046,9 @@ export type ExchangeEvent =
  * - `"transport"` — a gateway/HTTP-level failure (auth, rate-limit, body too
  *                   large, 5xx, non-JSON body). `code` is the synthesized HTTP
  *                   status, not an engine code.
- * - `"timeout"`   — inclusion polling gave up before seeing a DeliverTx result
- *                   (`code === -1`); the tx may or may not have landed.
+ * - `"timeout"`   — no final chain verdict is available yet (`code === -1`):
+ *                   either the gateway returned a hash-only ambiguous response
+ *                   or inclusion polling expired. The tx may still land.
  */
 export type TxOutcome = "ok" | "engine" | "transport" | "timeout";
 
