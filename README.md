@@ -251,10 +251,10 @@ That last row is why upgrading the SDK is safe against a gateway that has not be
 upgraded yet: absence of `code`/`height` still means "execution unknown", and the old
 polling paths run exactly as before.
 
-**Read `code` from the field, not from the message.** Pre-#90 the gateway embedded the
-engine code in the error string (`"21: invalid nonce"`). It now sends a structured
-`code` and puts the chain's raw log in `error`. A client still parsing the string will
-classify every engine rejection as code `1` (`DecodeError`).
+**Read `code` from the field, not from the message.** The gateway still sends the
+long-standing `"<code>: <message>"` format in `error` (so older clients that parse the
+code back out of it keep working), and `log` carries the chain's message verbatim. New
+code should read the structured `code` field: it is authoritative and needs no parsing.
 
 ## WebSocket streams
 

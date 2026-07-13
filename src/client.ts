@@ -638,10 +638,10 @@ export class ExchangeClient {
       );
     }
 
-    // Legacy gateway error shape: the code is embedded in the string as
-    // "<engine_code>: <message>" (the pre-#90 ExecErrorCode contract). Parse the
-    // leading code; if missing, surface 1 (DecodeError) as the conservative
-    // default.
+    // Fallback: the code embedded in the string as "<engine_code>: <message>".
+    // The gateway still emits this format for compatibility, so this path also
+    // covers a pre-#90 gateway that sends ONLY the string. Parse the leading code;
+    // if missing, surface 1 (DecodeError) as the conservative default.
     const errMsg = json?.error ?? gatewayBody.raw ?? "unknown gateway error";
     const code = parseLeadingErrorCode(errMsg) ?? 1;
     return txEngineError(code, { log: errMsg });
