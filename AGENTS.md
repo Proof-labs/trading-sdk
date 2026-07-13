@@ -195,7 +195,7 @@ Python (typed builder):
 ```python
 from proof_trading_sdk import OracleUpdateComposite
 client.submit_tx(OracleUpdateComposite(
-    market=1, price=6_675_000, signer=feeder_addr, n_sources=4,
+    market=1, price=66_750_000_000, signer=feeder_addr, n_sources=4,  # micro-USDC ($66,750)
     publish_time_ms=now_ms,
 ))
 ```
