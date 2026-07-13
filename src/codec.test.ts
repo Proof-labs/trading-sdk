@@ -486,9 +486,12 @@ describe("codec v1 all action types", () => {
         ticker: "BTC",
       },
     };
-    const withCap = (maxOpenInterest?: bigint): Action => ({
+    const withCap = (maxOpenInterest?: bigint | null): Action => ({
       type: "CreateMarket",
-      data: { ...base.data, ...(maxOpenInterest === undefined ? {} : { maxOpenInterest }) },
+      data: {
+        ...base.data,
+        ...(maxOpenInterest === undefined ? {} : { maxOpenInterest }),
+      },
     });
 
     // The engine always serializes max_open_interest, so the array length must
@@ -497,18 +500,21 @@ describe("codec v1 all action types", () => {
     // signature over those bytes — could produce a different length than the
     // client signed, and every such tx would fail verification. Pin the msgpack
     // fixarray header (0x90 | n): 0x9c is a 12-element array.
-    for (const cap of [undefined, 0n, 1_000_000n]) {
+    for (const cap of [undefined, null, 0n, 1_000_000n]) {
       const bytes = encodePayloadBytes(withCap(cap));
       expect(bytes[0]).toBe(0x9c);
     }
 
-    // An omitted cap and an explicit zero are the same market, and therefore
-    // must be the same bytes — the canonical uncapped payload.
-    expect(encodePayloadBytes(withCap(0n))).toEqual(encodePayloadBytes(withCap(undefined)));
-
-    const decoded = decodeTx(encodeTx(withCap(0n), 1n)).action;
-    if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
-    expect(decoded.data.maxOpenInterest).toBe(0n);
+    // Omission, JSON-style null, and explicit zero are the same market and
+    // therefore must be the exact same canonical bytes. All three decode to
+    // the public uncapped value 0n rather than restoring absence/null.
+    const canonicalUncapped = encodePayloadBytes(withCap(undefined));
+    for (const cap of [undefined, null, 0n]) {
+      expect(encodePayloadBytes(withCap(cap))).toEqual(canonicalUncapped);
+      const decoded = decodeTx(encodeTx(withCap(cap), 1n)).action;
+      if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
+      expect(decoded.data.maxOpenInterest).toBe(0n);
+    }
   });
 
   it.each([-1n, 0x1_0000_0000_0000_0000n])(

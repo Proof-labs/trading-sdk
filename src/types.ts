@@ -330,11 +330,11 @@ export interface CreateMarket {
    */
   ticker: string;
   /**
-   * Aggregate market open-interest cap in contracts. Optional so callers
-   * that omit it keep emitting the legacy 11-field payload; the engine
-   * defaults an absent tail to 0 (uncapped).
+   * Aggregate market open-interest cap in contracts. Omitted, null, and 0 all
+   * mean uncapped and encode identically as the canonical 12-field payload
+   * with an explicit 0 tail. Legacy 11-field payloads still decode as 0n.
    */
-  maxOpenInterest?: bigint;
+  maxOpenInterest?: bigint | null;
 }
 
 /** User requests a USDC withdrawal to a Solana address. Debits balance immediately. */

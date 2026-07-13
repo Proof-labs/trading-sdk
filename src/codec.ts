@@ -625,7 +625,7 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       // — but if the caller sets a non-zero poolId we MUST include it.
       // Always include for forward-compatibility once any SDK build can
       // address pools other than 0.
-      if (d.maxOpenInterest !== undefined) {
+      if (d.maxOpenInterest != null) {
         assertU64(d.maxOpenInterest, "CreateMarket.maxOpenInterest");
       }
       return [

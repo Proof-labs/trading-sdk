@@ -7,14 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Open-interest-cap versioning is package-specific. The Rust core, PyO3, WASM,
-and Python packages move to **2.0.0**: their frozen v1 `rmp-serde` decoder
-rejects populated 12-field `CreateMarket` and 21-field `UpdateMarketFees`
-payloads, and the Rust wire structs gain source-incompatible fields. The npm
-package moves to **1.2.0**: its new fields and log argument are optional, its
-v1 decoder already tolerates trailing fields, and all pre-cap calls retain
-their bytes. The unchanged derive crate stays at **1.1.0**; the unpublished
-conformance crate labels the v2 vectors as **2.0.0**. Compatible engine:
+The npm, Rust core, PyO3, WASM, and Python packages move to **2.0.0** for the
+open-interest-cap wire contract. Every v2 `CreateMarket` wire payload now has
+one canonical 12-field encoding, including an explicit final `0` for uncapped
+markets. The npm input treats omission, null, and explicit zero identically.
+That changes its existing uncapped output from 11 to 12 fields and normalizes a
+decoded legacy absent tail from `undefined` to `0n`; a v1 gateway/engine cannot
+be assumed to accept the new bytes. Frozen v1 `rmp-serde` decoders also reject
+populated 12-field `CreateMarket` and 21-field `UpdateMarketFees` payloads, and
+the Rust wire structs gain source-incompatible fields. The unchanged derive
+crate stays at **1.1.0**; the unpublished conformance crate labels the v2
+vectors as **2.0.0**. Compatible engine:
 `exchange-core >= 2.0.0, < 3.0.0`.
 
 ### Fixed
@@ -38,9 +41,9 @@ conformance crate labels the v2 vectors as **2.0.0**. Compatible engine:
   conformance vector exercised it, so it went undetected (surfaced by the WASM
   differential test). Encode now emits the variant name; decode still accepts
   the legacy integer form for back-compat. A regression test pins both.
-- TypeScript now omits an explicit zero CreateMarket cap, matching Rust,
-  Python, and the frozen legacy bytes, and rejects negative/out-of-u64 cap
-  values before encoding.
+- TypeScript now emits the canonical 12-field `CreateMarket` for omitted, null,
+  zero, and non-zero caps, matching the v2 Rust core and gateway re-encoder. It
+  also rejects negative/out-of-u64 non-null cap values before encoding.
 - Python market reads decode `MarketConfig.max_open_interest` from slot 24.
 - Rust `Event::MarketConfigUpdated` now matches the engine's complete event
   shape, including `im_bps`, `mm_bps`, and `max_open_interest`.
@@ -48,11 +51,12 @@ conformance crate labels the v2 vectors as **2.0.0**. Compatible engine:
 ### Added
 
 - Aggregate open-interest cap support across Rust, TypeScript, and Python:
-  `CreateMarket.maxOpenInterest` is an optional trailing field,
+  `CreateMarket.maxOpenInterest` is an optional/nullable input normalized to
+  an explicit zero tail when uncapped,
   `UpdateMarketFees.maxOpenInterest` occupies the engine's trailing slot 20,
-  and `MarketConfig.maxOpenInterest` decodes from slot 24. Legacy
-  `CreateMarket` callers that omit the cap retain their exact 11-field wire
-  payload and create an uncapped market.
+  and `MarketConfig.maxOpenInterest` decodes from slot 24. Legacy 11-field
+  `CreateMarket` payloads still decode as uncapped, but every new encoding is
+  the canonical 12-field form and decodes the cap as `0` / `0n`.
 - Log-aware error-code classification across Rust, TypeScript, and Python.
   Shared code 50 resolves to `OpenInterestLimitExceeded` or
   `SlippageExceeded` only from the canonical DeliverTx log; absent or unknown

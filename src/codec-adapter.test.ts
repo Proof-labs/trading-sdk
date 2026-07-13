@@ -306,6 +306,41 @@ describe.skipIf(!built)("TS→WASM encode adapter ↔ legacy codec", () => {
       expect(wasmHex).toBe(legacyHex);
     });
   }
+
+  it("normalizes omitted, null, and zero CreateMarket caps to the same v2 bytes", () => {
+    const base = CASES.find(
+      ({ action }) => action.type === "CreateMarket",
+    )?.action;
+    if (!base || base.type !== "CreateMarket") {
+      throw new Error("missing CreateMarket differential fixture");
+    }
+
+    const forms: Action[] = [
+      base,
+      {
+        type: "CreateMarket",
+        data: { ...base.data, maxOpenInterest: null },
+      },
+      {
+        type: "CreateMarket",
+        data: { ...base.data, maxOpenInterest: 0n },
+      },
+    ];
+    const canonical = encodePayloadBytes(base);
+    expect(canonical[0]).toBe(0x9c);
+
+    for (const action of forms) {
+      const { actionType, fields } = toWasmFields(action);
+      const wasmPayload = getWasm().encode_payload(actionType, fields);
+      expect(wasmPayload).toEqual(canonical);
+      expect(encodePayloadBytes(action)).toEqual(canonical);
+
+      const decoded = getWasm().decode_payload(actionType, wasmPayload) as {
+        max_open_interest: bigint;
+      };
+      expect(decoded.max_open_interest).toBe(0n);
+    }
+  });
 });
 
 /**
