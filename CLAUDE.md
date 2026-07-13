@@ -129,12 +129,12 @@ This rule exists because we already lost history the other way: `0.1.0` sat as a
 
 ## Unit conventions
 
-| Field      | Scale                                | Example                   |
-| ---------- | ------------------------------------ | ------------------------- |
+| Field      | Scale                                | Example                    |
+| ---------- | ------------------------------------ | -------------------------- |
 | Prices     | micro-USDC (6 dp)                    | `66_750_000_000` = $66,750 |
-| Balances   | MicroUSDC (6 dp)                     | `100_000_000_000` = $100k |
-| Fees/Rates | Basis points                         | `500` = 5%                |
-| Addresses  | 20 bytes — keccak256(pubkey)[12..32] | `pubkeyToOwner()`         |
+| Balances   | MicroUSDC (6 dp)                     | `100_000_000_000` = $100k  |
+| Fees/Rates | Basis points                         | `500` = 5%                 |
+| Addresses  | 20 bytes — keccak256(pubkey)[12..32] | `pubkeyToOwner()`          |
 
 ## Spec / contract sync
 

@@ -52,7 +52,7 @@ const r: TxResult = await client.submitTx({
     market: 1,
     owner: address,
     side: Side.Buy,
-    price: 50000000n,
+    price: 500_000_000_000n, // $500,000.00 in micro-USDC (6 dp)
     quantity: 1n,
   },
 });
@@ -140,17 +140,17 @@ await client.submitTx({
 
 ### Order fields
 
-| Field           | Type                     | Notes                                |
-| --------------- | ------------------------ | ------------------------------------ |
-| `market`        | `number`                 | Market ID (1 = BTC, 2 = ETH, etc.)   |
-| `owner`         | `Uint8Array` (20B)       | `pubkeyToOwner(pubkey)`              |
-| `side`          | `Side.Buy` / `Side.Sell` |                                      |
+| Field           | Type                     | Notes                                           |
+| --------------- | ------------------------ | ----------------------------------------------- |
+| `market`        | `number`                 | Market ID (1 = BTC, 2 = ETH, etc.)              |
+| `owner`         | `Uint8Array` (20B)       | `pubkeyToOwner(pubkey)`                         |
+| `side`          | `Side.Buy` / `Side.Sell` |                                                 |
 | `price`         | `bigint`                 | micro-USDC (6 dp). $50,000 → `50_000_000_000n`. |
-| `quantity`      | `bigint`                 | Integer contracts                    |
-| `clientOrderId` | `bigint?`                | Client-scoped dedup ref              |
-| `postOnly`      | `boolean?`               | `true` = reject if taker             |
-| `reduceOnly`    | `boolean?`               | `true` = only reduce position        |
-| `timeInForce`   | `TimeInForce?`           | `Gtc` (default), `Ioc`, `Fok`        |
+| `quantity`      | `bigint`                 | Integer contracts                               |
+| `clientOrderId` | `bigint?`                | Client-scoped dedup ref                         |
+| `postOnly`      | `boolean?`               | `true` = reject if taker                        |
+| `reduceOnly`    | `boolean?`               | `true` = only reduce position                   |
+| `timeInForce`   | `TimeInForce?`           | `Gtc` (default), `Ioc`, `Fok`                   |
 
 ## Operator actions (privileged — not for trading integrations)
 
@@ -306,13 +306,13 @@ curl -X POST https://faucet.dev.proof.trade/drip \
 
 ## Unit conventions
 
-| Field      | Scale             | Example                     |
-| ---------- | ----------------- | --------------------------- |
+| Field      | Scale             | Example                        |
+| ---------- | ----------------- | ------------------------------ |
 | Prices     | micro-USDC (6 dp) | `50_000_000_000n` = $50,000.00 |
-| Balances   | MicroUSDC (6 dp)  | `10_000_000_000n` = $10,000 |
-| Quantities | Integer contracts | `1n` = 1 lot                |
-| Fees/Rates | Basis points      | `500` = 5%                  |
-| Addresses  | 20 bytes hex      | `pubkeyToOwner()`           |
+| Balances   | MicroUSDC (6 dp)  | `10_000_000_000n` = $10,000    |
+| Quantities | Integer contracts | `1n` = 1 lot                   |
+| Fees/Rates | Basis points      | `500` = 5%                     |
+| Addresses  | 20 bytes hex      | `pubkeyToOwner()`              |
 
 ## Offline / raw signing
 

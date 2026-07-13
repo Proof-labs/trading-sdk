@@ -9,7 +9,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-
 - **Documented price unit corrected: order prices are `u64` micro-USDC (6 dp),
   not cents.** `PlaceOrder.price` and every other wire price field (oracle,
   composite, execution, mark, entry, orderbook, amend) are micro-USDC — the unit
@@ -29,7 +28,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   conformance vector exercised it, so it went undetected (surfaced by the WASM
   differential test). Encode now emits the variant name; decode still accepts
   the legacy integer form for back-compat. A regression test pins both.
-
 
 ### Added
 
