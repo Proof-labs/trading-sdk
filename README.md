@@ -87,7 +87,7 @@ const result = await client.submitTx({
     market: 1,
     owner: address,
     side: Side.Buy,
-    price: 50000000n, // $500,000.00 in cents
+    price: 500_000_000_000n, // $500,000.00 in micro-USDC (6 dp)
     quantity: 1n,
   },
 });
@@ -97,12 +97,12 @@ console.log(result); // { code: 0, hash: "…" } on success
 
 ## Unit Conventions
 
-| Field               | Unit                 | Example                      |
-| ------------------- | -------------------- | ---------------------------- |
-| Prices              | Cents (2 dp)         | `6675234` = $66,752.34       |
-| Balances / amounts  | MicroUSDC (6 dp)     | `100_000_000_000` = $100,000 |
-| Fees / margin rates | Basis points         | `500` = 5%                   |
-| Addresses           | 20-byte `Uint8Array` | `pubkeyToOwner(publicKey)`   |
+| Field               | Unit                 | Example                       |
+| ------------------- | -------------------- | ----------------------------- |
+| Prices              | micro-USDC (6 dp)    | `66_752_340_000` = $66,752.34 |
+| Balances / amounts  | MicroUSDC (6 dp)     | `100_000_000_000` = $100,000  |
+| Fees / margin rates | Basis points         | `500` = 5%                    |
+| Addresses           | 20-byte `Uint8Array` | `pubkeyToOwner(publicKey)`    |
 
 All prices and quantities are `u64` (BigInt) — never floats.
 

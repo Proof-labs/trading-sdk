@@ -52,7 +52,7 @@ const r: TxResult = await client.submitTx({
     market: 1,
     owner: address,
     side: Side.Buy,
-    price: 50000000n,
+    price: 500_000_000_000n, // $500,000.00 in micro-USDC (6 dp)
     quantity: 1n,
   },
 });
@@ -123,7 +123,7 @@ await client.submitTx({
     market: 1,
     owner: address, // 20-byte Uint8Array
     side: Side.Buy, // or Side.Sell
-    price: 50000000n, // $500,000.00 in cents
+    price: 500_000_000_000n, // $500,000.00 in micro-USDC (6 dp)
     quantity: 1n,
     postOnly: true, // optional: reject if would cross
     reduceOnly: false, // optional: only reduce position
@@ -140,17 +140,17 @@ await client.submitTx({
 
 ### Order fields
 
-| Field           | Type                     | Notes                                |
-| --------------- | ------------------------ | ------------------------------------ |
-| `market`        | `number`                 | Market ID (1 = BTC, 2 = ETH, etc.)   |
-| `owner`         | `Uint8Array` (20B)       | `pubkeyToOwner(pubkey)`              |
-| `side`          | `Side.Buy` / `Side.Sell` |                                      |
-| `price`         | `bigint`                 | Integer cents. $50,000 → `5000000n`. |
-| `quantity`      | `bigint`                 | Integer contracts                    |
-| `clientOrderId` | `bigint?`                | Client-scoped dedup ref              |
-| `postOnly`      | `boolean?`               | `true` = reject if taker             |
-| `reduceOnly`    | `boolean?`               | `true` = only reduce position        |
-| `timeInForce`   | `TimeInForce?`           | `Gtc` (default), `Ioc`, `Fok`        |
+| Field           | Type                     | Notes                                           |
+| --------------- | ------------------------ | ----------------------------------------------- |
+| `market`        | `number`                 | Market ID (1 = BTC, 2 = ETH, etc.)              |
+| `owner`         | `Uint8Array` (20B)       | `pubkeyToOwner(pubkey)`                         |
+| `side`          | `Side.Buy` / `Side.Sell` |                                                 |
+| `price`         | `bigint`                 | micro-USDC (6 dp). $50,000 → `50_000_000_000n`. |
+| `quantity`      | `bigint`                 | Integer contracts                               |
+| `clientOrderId` | `bigint?`                | Client-scoped dedup ref                         |
+| `postOnly`      | `boolean?`               | `true` = reject if taker                        |
+| `reduceOnly`    | `boolean?`               | `true` = only reduce position                   |
+| `timeInForce`   | `TimeInForce?`           | `Gtc` (default), `Ioc`, `Fok`                   |
 
 ## Operator actions (privileged — not for trading integrations)
 
@@ -182,7 +182,7 @@ await client.submitTx({
   type: "OracleUpdateComposite",
   data: {
     market: 1,
-    price: 6675000n, // composite price in cents
+    price: 66_750_000_000n, // composite price in micro-USDC ($66,750)
     nSources: 4, // # of CEX feeds (observability only)
     signer: feederAddress, // on the composite-feeder allowlist
     publishTimeMs: BigInt(Date.now()), // strictly monotonic per market
@@ -195,7 +195,7 @@ Python (typed builder):
 ```python
 from proof_trading_sdk import OracleUpdateComposite
 client.submit_tx(OracleUpdateComposite(
-    market=1, price=6_675_000, signer=feeder_addr, n_sources=4,
+    market=1, price=66_750_000_000, signer=feeder_addr, n_sources=4,  # micro-USDC ($66,750)
     publish_time_ms=now_ms,
 ))
 ```
@@ -306,13 +306,13 @@ curl -X POST https://faucet.dev.proof.trade/drip \
 
 ## Unit conventions
 
-| Field      | Scale             | Example                     |
-| ---------- | ----------------- | --------------------------- |
-| Prices     | Integer cents     | `5000000n` = $50,000.00     |
-| Balances   | MicroUSDC (6 dp)  | `10_000_000_000n` = $10,000 |
-| Quantities | Integer contracts | `1n` = 1 lot                |
-| Fees/Rates | Basis points      | `500` = 5%                  |
-| Addresses  | 20 bytes hex      | `pubkeyToOwner()`           |
+| Field      | Scale             | Example                        |
+| ---------- | ----------------- | ------------------------------ |
+| Prices     | micro-USDC (6 dp) | `50_000_000_000n` = $50,000.00 |
+| Balances   | MicroUSDC (6 dp)  | `10_000_000_000n` = $10,000    |
+| Quantities | Integer contracts | `1n` = 1 lot                   |
+| Fees/Rates | Basis points      | `500` = 5%                     |
+| Addresses  | 20 bytes hex      | `pubkeyToOwner()`              |
 
 ## Offline / raw signing
 

@@ -9,6 +9,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Documented price unit corrected: order prices are `u64` micro-USDC (6 dp),
+  not cents.** `PlaceOrder.price` and every other wire price field (oracle,
+  composite, execution, mark, entry, orderbook, amend) are micro-USDC — the unit
+  the engine's `notional_micro` margin math actually consumes — but the SDK docs
+  and examples described them as "cents (2 dp)", **off by 10,000×**. Anyone who
+  followed the docs mispriced orders by that factor. No wire or logic change (the
+  SDK passes the `u64` through unchanged); corrects `types.ts` JSDoc, CLAUDE.md,
+  AGENTS.md, and `examples/connect-and-trade.ts`. The gateway `openapi.yaml` and
+  some `exchange/docs` still say "cents" for order prices — tracked for the
+  platform team to reconcile.
+
 - **`UpdateMarketFees.markSourceMode` was encoded as a bare integer** instead of
   its enum variant name (`"OracleOnly"` / `"Median"`), the form the engine's
   `rmp-serde` (and the gateway's signature re-encoding) produce. A
