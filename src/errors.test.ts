@@ -12,6 +12,7 @@ describe("decodeExecError", () => {
     expect(decodeExecError(29)?.name).toBe("PositionLimitExceeded");
     expect(decodeExecError(47)?.name).toBe("FillOrKillWouldNotFill");
     expect(decodeExecError(48)?.name).toBe("InvalidCancelReplaceTarget");
+    expect(decodeExecError(49)?.name).toBe("AmendBelowFilled");
     expect(decodeExecError(255)?.name).toBe("InternalError");
   });
 
@@ -23,6 +24,22 @@ describe("decodeExecError", () => {
     const e32 = decodeExecError(32);
     expect(e32?.name).toBe("SettlementPriceMismatch");
     expect(e32?.description).toContain("net-delta margin grouping");
+  });
+
+  it("disambiguates shared code 50 only from canonical DeliverTx logs", () => {
+    const oiLog = "open interest limit exceeded on market 7: would be 4, cap 3";
+    const slippageLog =
+      "atomic basket aggregate slippage 51 bps exceeds budget 50 bps";
+
+    expect(decodeExecError(50, oiLog)?.name).toBe("OpenInterestLimitExceeded");
+    expect(execErrorName(50, oiLog)).toBe("OpenInterestLimitExceeded");
+    expect(decodeExecError(50, slippageLog)?.name).toBe("SlippageExceeded");
+    expect(execErrorName(50, slippageLog)).toBe("SlippageExceeded");
+
+    for (const log of [undefined, "", "unknown code 50 diagnostic"]) {
+      expect(decodeExecError(50, log)?.name).toBe("AmbiguousCode50");
+      expect(execErrorName(50, log)).toBe("AmbiguousCode50");
+    }
   });
 
   it("returns null for unknown codes", () => {
@@ -54,6 +71,7 @@ describe("ExecErrorCode enum", () => {
 
   it("every enum member resolves in the decode table with a matching name", () => {
     for (const [name, code] of numericEntries) {
+      if (code === 50) continue;
       expect(execErrorName(code)).toBe(name);
       expect(decodeExecError(code)?.name).toBe(name);
     }
@@ -62,6 +80,8 @@ describe("ExecErrorCode enum", () => {
   it("exposes the documented well-known codes", () => {
     expect(ExecErrorCode.InsufficientMargin).toBe(12);
     expect(ExecErrorCode.TimestampNonceRejected).toBe(21);
+    expect(ExecErrorCode.AmendBelowFilled).toBe(49);
+    expect(ExecErrorCode.OpenInterestLimitExceeded).toBe(50);
     expect(ExecErrorCode.InternalError).toBe(255);
   });
 });

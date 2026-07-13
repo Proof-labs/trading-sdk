@@ -329,6 +329,12 @@ export interface CreateMarket {
    * Fixed at creation and immutable thereafter.
    */
   ticker: string;
+  /**
+   * Aggregate market open-interest cap in contracts. Omitted, null, and 0 all
+   * mean uncapped and encode identically as the canonical 12-field payload
+   * with an explicit 0 tail. Legacy 11-field payloads still decode as 0n.
+   */
+  maxOpenInterest?: bigint | null;
 }
 
 /** User requests a USDC withdrawal to a Solana address. Debits balance immediately. */
@@ -513,9 +519,8 @@ export interface ResolveEvent {
  * chain we couldn't rebase. This is the engine-level lever to tighten
  * parameters on a running market.
  *
- * Fields deliberately absent from this update path: `im_bps`,
- * `mm_bps`, `kind`. Changing them on a live market would require
- * re-margining every open position, out of scope here.
+ * `kind` and `szDecimals` remain immutable. Margin ratios may only be
+ * tightened by the engine; lowering either live risk floor is rejected.
  */
 export interface UpdateMarketFees {
   market: number;
@@ -602,6 +607,22 @@ export interface UpdateMarketFees {
    * [] clears volume tiers and falls back to flat taker/maker bps.
    */
   feeTiers?: FeeTier[] | null;
+  /**
+   * New initial margin ratio in basis points. Omit to leave unchanged.
+   * Must be greater than or equal to the current market value.
+   */
+  imBps?: number | null;
+  /**
+   * New maintenance margin ratio in basis points. Omit to leave unchanged.
+   * Must be greater than or equal to the current value, positive, and no
+   * greater than the resulting `imBps`.
+   */
+  mmBps?: number | null;
+  /**
+   * New aggregate open-interest cap in contracts. Omit to leave unchanged;
+   * 0 disables the cap.
+   */
+  maxOpenInterest?: bigint | null;
 }
 
 /** Lifecycle status of an impact-market family. */
@@ -1041,7 +1062,7 @@ export type ExchangeEvent =
  * `code` (engine codes and synthesized HTTP statuses share that field):
  *
  * - `"ok"`        — CheckTx accepted the tx (`code === 0`).
- * - `"engine"`    — the engine rejected it with an `ExecError` (`code` 1..48/255);
+ * - `"engine"`    — the engine rejected it with an `ExecError` (`code` 1..50/255);
  *                   see {@link TxResult.error} for the decoded name/description.
  * - `"transport"` — a gateway/HTTP-level failure (auth, rate-limit, body too
  *                   large, 5xx, non-JSON body). `code` is the synthesized HTTP
@@ -1454,6 +1475,8 @@ export interface MarketConfig {
   szDecimals?: number;
   /** [23] Human-readable ticker / short symbol (e.g. "BTC"). */
   ticker?: string;
+  /** [24] Aggregate market open-interest cap in contracts. 0 = no cap. */
+  maxOpenInterest?: bigint;
 }
 
 /** Per-tier fee schedule for the BE-47 volume-based maker-rebate program. */

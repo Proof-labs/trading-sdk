@@ -50,7 +50,7 @@ export function txEngineError(code: number, body: TxResultBody = {}): TxResult {
     ok: false,
     outcome: "engine",
     code,
-    error: decodeExecError(code),
+    error: decodeExecError(code, body.log),
     hash: body.hash ?? "",
     height: body.height,
     log: body.log,

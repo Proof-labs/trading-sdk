@@ -23,6 +23,8 @@ pub type MarketId = u32;
 pub type FillId = u64;
 /// Impact market family identifier (1 family owns 4 child markets — CPY/CPN/EBY/EBN).
 pub type ImpactMarketId = u32;
+/// Millisecond timestamp or duration carried on the wire.
+pub type Milliseconds = u64;
 
 /// Well-known market ID for the BTC-USD perpetual.
 pub const MARKET_BTC_USD_PERP: MarketId = 1;
@@ -189,7 +191,7 @@ pub const DEFAULT_MAX_MARK_SPREAD_BPS: u32 = 100;
 /// = enough headroom for a 1s feeder cadence to miss a few cycles
 /// without dropping out of the median; tight enough that a stuck
 /// feeder shows up in the mark drift within minutes.
-pub const DEFAULT_CEX_COMPOSITE_STALENESS_MS: u64 = 30_000;
+pub const DEFAULT_CEX_COMPOSITE_STALENESS_MS: Milliseconds = 30_000;
 
 impl MarketKind {
     /// Returns the impact market family ID this market belongs to, if any.
@@ -253,15 +255,15 @@ pub struct ImpactMarketInfo {
     /// Human-readable question (hashed into the market metadata).
     pub question: String,
     /// Event deadline in milliseconds since Unix epoch.
-    pub deadline_ms: u64,
+    pub deadline_ms: Milliseconds,
     /// Grace period after `deadline_ms` before the auto-void path fires.
-    pub resolution_window_ms: u64,
+    pub resolution_window_ms: Milliseconds,
     /// Current lifecycle status.
     pub status: ImpactMarketStatus,
     /// Block timestamp when the impact market was created (ms since epoch).
-    pub created_ms: u64,
+    pub created_ms: Milliseconds,
     /// Block timestamp when the impact market was resolved (ms since epoch), 0 if unresolved.
-    pub resolved_ms: u64,
+    pub resolved_ms: Milliseconds,
     /// BE-54: how the YES/NO outcome is determined at deadline. Defaults
     /// to `RelayerAttested` for back-compat with pre-BE-54 records (which
     /// decode as `None` here, treated as `RelayerAttested` by the engine).
@@ -276,7 +278,19 @@ pub struct ImpactMarketInfo {
 // ---------------------------------------------------------------------------
 
 /// Order/position direction. Discriminant values (1, 2) are part of the wire format.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, derive_more::Display)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    derive_more::Display,
+)]
 pub enum Side {
     #[display("buy")]
     Buy = 1,
@@ -341,7 +355,7 @@ pub struct Order {
     /// treated as "never expires" for safety (we don't want to
     /// accidentally cancel legacy orders that predate the TTL work).
     #[serde(default)]
-    pub created_at_ms: u64,
+    pub created_at_ms: Milliseconds,
     /// Monotonic FIFO priority within a price level. Defaults to `0` for
     /// legacy orders, in which case readers fall back to `id`. Keeping this
     /// separate lets amend preserve the public order id while still resetting
@@ -349,8 +363,6 @@ pub struct Order {
     #[serde(default)]
     pub queue_priority: u64,
 }
-
-
 
 // ---------------------------------------------------------------------------
 // Position & margin types
@@ -383,7 +395,7 @@ pub struct MarketConfig {
     /// Maker fee in basis points (e.g. 2 = 0.02%).
     pub maker_fee_bps: u32,
     /// Funding interval in milliseconds. 0 = funding disabled.
-    pub funding_interval_ms: u64,
+    pub funding_interval_ms: Milliseconds,
     /// Maximum absolute funding rate in basis points per interval.
     pub max_funding_rate_bps: u32,
     /// Market kind (perp / conditional perp / prediction binary).
@@ -422,7 +434,7 @@ pub struct MarketConfig {
     /// the MM refresh cadence. For impact markets: longer (minutes)
     /// because their MMs don't re-quote as often.
     #[serde(default)]
-    pub default_ttl_ms: u64,
+    pub default_ttl_ms: Milliseconds,
     /// When true, this market's firing legs participate in net-delta
     /// margin aggregation: all firing legs within a scenario that share
     /// the same underlying market are combined into a single net position
@@ -499,7 +511,7 @@ pub struct MarketConfig {
     /// MarketConfig records decode with `mark_price_max_oracle_age_ms = 0`
     /// thanks to `#[serde(default)]`, preserving back-compat.
     #[serde(default)]
-    pub mark_price_max_oracle_age_ms: u64,
+    pub mark_price_max_oracle_age_ms: Milliseconds,
     /// Volume-based fee tier table. Empty (default for legacy
     /// MarketConfig records) falls back to flat `taker_fee_bps` /
     /// `maker_fee_bps`. Non-empty tables are evaluated at fill time
@@ -550,7 +562,7 @@ pub struct MarketConfig {
     /// "any-authorized-signer" semantics. Set per-market via
     /// `UpdateMarketFees`.
     #[serde(default)]
-    pub oracle_staleness_ms: u64,
+    pub oracle_staleness_ms: Milliseconds,
     /// Mark-price source mode. See `MarkSourceMode` docstring for
     /// semantics. `serde(default)` -> `OracleOnly` so existing on-chain
     /// `MarketConfig` records and the genesis path are byte-identical
@@ -585,7 +597,7 @@ pub struct MarketConfig {
     /// to `serde(default)`. Ignored unless `mark_source_mode` is
     /// `Median`.
     #[serde(default)]
-    pub cex_composite_staleness_ms: u64,
+    pub cex_composite_staleness_ms: Milliseconds,
     /// BE-26: enable partial liquidation for this market. When true,
     /// the liquidation engine closes positions one at a time and
     /// rechecks maintenance margin after each close. If MM holds after
@@ -598,6 +610,18 @@ pub struct MarketConfig {
     /// market is under MM.
     #[serde(default)]
     pub partial_liquidation_enabled: bool,
+    /// Published size scale: quantity is in units of `10^-sz_decimals`.
+    /// Appended by the engine at slot 22; zero preserves legacy sizing.
+    #[serde(default)]
+    pub sz_decimals: u8,
+    /// Human-readable ticker / short symbol. Slot 23; empty for legacy
+    /// records and not used by consensus execution.
+    #[serde(default)]
+    pub ticker: String,
+    /// Aggregate market open-interest cap in contracts. Slot 24; zero means
+    /// uncapped and is the backward-compatible default.
+    #[serde(default)]
+    pub max_open_interest: u64,
 }
 
 /// Per-tier fee schedule for the volume-based maker-rebate program.
@@ -624,8 +648,6 @@ pub struct FeeTier {
 // paired with each variant's wire byte code. Re-exported here so all existing
 // `crate::types::Action` paths continue to work.
 pub use crate::codec::Action;
-
-
 
 /// Pick a per-account override on the initial-margin ratio for one
 /// market. The engine uses `max(market.im_bps, user_im_bps)` on
@@ -838,7 +860,7 @@ pub struct OracleUpdate {
     /// Must be strictly greater than the last accepted update's
     /// `publish_time_ms` for the same market.
     #[serde(default)]
-    pub publish_time_ms: u64,
+    pub publish_time_ms: Milliseconds,
 }
 
 /// **Operator action (composite-CEX feeder).** Push a composite-CEX
@@ -890,7 +912,7 @@ pub struct OracleUpdateComposite {
     /// for the same market — replay guard. `serde(default)` so records
     /// written before this field existed decode with `0`.
     #[serde(default)]
-    pub publish_time_ms: u64,
+    pub publish_time_ms: Milliseconds,
 }
 
 /// Direct deposit — requires **relayer authorization**.
@@ -951,7 +973,7 @@ pub struct CreateMarket {
     pub maker_fee_bps: u32,
     pub signer: Address,
     /// Funding interval in milliseconds. 0 = funding disabled.
-    pub funding_interval_ms: u64,
+    pub funding_interval_ms: Milliseconds,
     /// Maximum absolute funding rate in basis points per interval.
     pub max_funding_rate_bps: u32,
     /// Bad-debt pool the market belongs to. Markets in different pools
@@ -971,6 +993,16 @@ pub struct CreateMarket {
     /// only. MANDATORY like `sz_decimals` (no `serde(default)`); an empty
     /// string is accepted but the field must be present on the wire.
     pub ticker: String,
+    /// Aggregate market open-interest cap in contracts. `0` disables the cap.
+    ///
+    /// Always serialized, exactly like `pool_id`: `CreateMarket` is a
+    /// 12-element array whatever the cap's value. `serde(default)` still
+    /// decodes released 11-element payloads as uncapped, so backward decode is
+    /// intact — but the array's *length* must never depend on the field's
+    /// *value*. Mirrors `exchange-core`; a divergence here would make the SDK
+    /// sign bytes the engine and gateway would not reproduce.
+    #[serde(default)]
+    pub max_open_interest: u64,
 }
 
 impl Default for CreateMarket {
@@ -992,6 +1024,7 @@ impl Default for CreateMarket {
             pool_id: 0,
             sz_decimals: 0,
             ticker: String::new(),
+            max_open_interest: 0,
         }
     }
 }
@@ -1072,8 +1105,6 @@ impl fmt::Display for FailDepositReason {
     }
 }
 
-
-
 /// Approve a delegate keypair ("agent wallet") to trade on the owner's behalf.
 /// The agent can place/cancel orders but CANNOT withdraw or move funds.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1103,8 +1134,8 @@ pub struct CreateImpactMarket {
     /// None of these market IDs may already exist.
     pub child_market_base: MarketId,
     pub question: String,
-    pub deadline_ms: u64,
-    pub resolution_window_ms: u64,
+    pub deadline_ms: Milliseconds,
+    pub resolution_window_ms: Milliseconds,
     /// Initial margin ratio for the 2 conditional-perp child books (basis points).
     /// Prediction-binary books don't use bps IM — their IM is computed from payoff.
     pub im_bps: u32,
@@ -1113,7 +1144,7 @@ pub struct CreateImpactMarket {
     pub taker_fee_bps: u32,
     pub maker_fee_bps: u32,
     /// Funding interval for the conditional-perp child books (ms). 0 = disabled.
-    pub funding_interval_ms: u64,
+    pub funding_interval_ms: Milliseconds,
     pub max_funding_rate_bps: u32,
     pub signer: Address,
     /// BE-54: how this event's YES/NO outcome is determined at deadline.
@@ -1165,9 +1196,10 @@ pub struct ResolveEvent {
 ///   * `market` — identity
 ///   * `kind` — changing a market's kind would break the
 ///     book's accounting model (perp vs conditional perp vs binary).
-///   * `im_bps` / `mm_bps` — tempting to tune but too risky without a
-///     migration path for existing positions. Add if/when we have a
-///     well-tested position-re-margin routine.
+///   * `sz_decimals` — changing it would redenominate every stored quantity.
+///
+/// Initial and maintenance ratios are exposed as tightening-only levers; the
+/// engine rejects either ratio below its current value.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UpdateMarketFees {
     pub market: MarketId,
@@ -1184,7 +1216,7 @@ pub struct UpdateMarketFees {
     pub max_funding_rate_bps: Option<u32>,
     /// New funding interval in ms. `None` = leave unchanged.
     #[serde(default)]
-    pub funding_interval_ms: Option<u64>,
+    pub funding_interval_ms: Option<Milliseconds>,
     /// New per-account position cap in contracts. `None` = leave
     /// unchanged. Setting to 0 disables the cap.
     #[serde(default)]
@@ -1198,7 +1230,7 @@ pub struct UpdateMarketFees {
     /// backlog locked $6M IM against $2.9M equity and made the BTC
     /// book permanently one-sided — see `run_order_expiry` docstring.
     #[serde(default)]
-    pub default_ttl_ms: Option<u64>,
+    pub default_ttl_ms: Option<Milliseconds>,
     /// Flip the net-delta portfolio margin flag on this market.
     /// `None` = leave unchanged. `Some(true)` enables net-delta
     /// grouping for firing legs on this market's underlying; `Some(false)`
@@ -1240,7 +1272,7 @@ pub struct UpdateMarketFees {
     /// Only consulted when `primary_oracle_signer` is set; see
     /// `MarketConfig::oracle_staleness_ms`. BE-50.
     #[serde(default)]
-    pub oracle_staleness_ms: Option<u64>,
+    pub oracle_staleness_ms: Option<Milliseconds>,
     /// New mark-source mode (BE-31 Phase A). `None` = leave unchanged.
     /// `Some(MarkSourceMode::Median)` opts the market into the
     /// multi-source median path. Has no effect on impact-family
@@ -1266,7 +1298,7 @@ pub struct UpdateMarketFees {
     /// `mark_source_mode` is `Median` and the market has at least
     /// one composite update.
     #[serde(default)]
-    pub cex_composite_staleness_ms: Option<u64>,
+    pub cex_composite_staleness_ms: Option<Milliseconds>,
     /// BE-26: enable partial liquidation for this market. `None` =
     /// leave unchanged. See `MarketConfig::partial_liquidation_enabled`
     /// for semantics. Safe to flip on at any time.
@@ -1278,6 +1310,48 @@ pub struct UpdateMarketFees {
     /// must start at volume 0 and have strictly increasing thresholds.
     #[serde(default)]
     pub fee_tiers: Option<Vec<FeeTier>>,
+    /// New initial margin ratio in basis points. Tightening only; the engine
+    /// rejects values below the current ratio.
+    #[serde(default)]
+    pub im_bps: Option<u32>,
+    /// New maintenance margin ratio in basis points. Tightening only and must
+    /// remain positive and no greater than the resulting initial ratio.
+    #[serde(default)]
+    pub mm_bps: Option<u32>,
+    /// New aggregate open-interest cap in contracts. `None` leaves it
+    /// unchanged; `Some(0)` disables it. Tail slot 20.
+    #[serde(default)]
+    pub max_open_interest: Option<u64>,
+}
+
+impl UpdateMarketFees {
+    /// Construct a no-op market update. Set only the tunables that should
+    /// change with struct-update syntax; every omitted field remains `None`.
+    pub fn new(market: MarketId, signer: Address) -> Self {
+        Self {
+            market,
+            signer,
+            taker_fee_bps: None,
+            maker_fee_bps: None,
+            max_funding_rate_bps: None,
+            funding_interval_ms: None,
+            max_position_size: None,
+            default_ttl_ms: None,
+            net_delta_margin: None,
+            tick_size: None,
+            lot_size: None,
+            primary_oracle_signer: None,
+            oracle_staleness_ms: None,
+            mark_source_mode: None,
+            max_mark_spread_bps: None,
+            cex_composite_staleness_ms: None,
+            partial_liquidation_enabled: None,
+            fee_tiers: None,
+            im_bps: None,
+            mm_bps: None,
+            max_open_interest: None,
+        }
+    }
 }
 
 /// Per-account fee override (BE-46). Stored at
@@ -1303,8 +1377,6 @@ pub struct AccountFeeOverride {
     /// market's `maker_fee_bps` on fills made by this account.
     pub maker_fee_bps: u32,
 }
-
-
 
 /// Status of a pending withdrawal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1489,15 +1561,14 @@ pub enum Event {
         mm_bps: u32,
         taker_fee_bps: u32,
         maker_fee_bps: u32,
-        funding_interval_ms: u64,
+        funding_interval_ms: Milliseconds,
         max_funding_rate_bps: u32,
     },
     /// Admin updated one or more tunable fields on an existing market.
     /// Event carries the FULL post-update set of mutable fields so
     /// consumers see the live config after the tx; no need to diff
-    /// against prior state. Immutable fields (im_bps, mm_bps, kind)
-    /// are not included because they're not what UpdateMarketFees
-    /// can change.
+    /// against prior state. `kind` remains immutable and is intentionally
+    /// omitted; IM/MM and max OI are mutable risk levers and are included.
     ///
     /// ABCI event derivation requires Display on every attribute, so
     /// Option<T> would break the codegen — we emit the whole config
@@ -1505,12 +1576,14 @@ pub enum Event {
     /// compare to the previous MarketConfigUpdated for the same market.
     MarketConfigUpdated {
         market: MarketId,
+        im_bps: u32,
+        mm_bps: u32,
         taker_fee_bps: u32,
         maker_fee_bps: u32,
         max_funding_rate_bps: u32,
-        funding_interval_ms: u64,
+        funding_interval_ms: Milliseconds,
         max_position_size: u64,
-        default_ttl_ms: u64,
+        default_ttl_ms: Milliseconds,
         net_delta_margin: bool,
         // BE-48 + BE-50 fields included in the event payload so off-chain
         // consumers can mirror the live config without re-reading state.
@@ -1521,7 +1594,8 @@ pub enum Event {
         tick_size: u64,
         lot_size: u64,
         primary_oracle_signer: [u8; 20],
-        oracle_staleness_ms: u64,
+        oracle_staleness_ms: Milliseconds,
+        max_open_interest: u64,
     },
     /// An account's fee override was set (BE-46). Carries the post-update values so
     /// off-chain consumers can mirror the override without re-reading
@@ -1541,8 +1615,8 @@ pub enum Event {
         eby_market: MarketId,
         ebn_market: MarketId,
         question: String,
-        deadline_ms: u64,
-        resolution_window_ms: u64,
+        deadline_ms: Milliseconds,
+        resolution_window_ms: Milliseconds,
     },
     /// Event was resolved with a definitive outcome. Emitted once per family.
     EventResolved {
@@ -1551,7 +1625,7 @@ pub enum Event {
         /// Oracle price of the underlying at resolution time (micro-USDC).
         /// Used as the settlement mark for the winning conditional perp.
         settlement_price: u64,
-        timestamp_ms: u64,
+        timestamp_ms: Milliseconds,
     },
     /// A conditional-perp position was cash-settled to an owner's balance
     /// because its branch won the resolution.
@@ -1751,7 +1825,7 @@ pub enum Event {
         funding_rate_bps: i64,
         /// New cumulative funding index after applying this rate.
         cumulative_funding: i64,
-        timestamp_ms: u64,
+        timestamp_ms: Milliseconds,
     },
     /// Funding payment settled for a single position.
     FundingSettled {
@@ -1824,6 +1898,87 @@ pub enum Event {
         market: MarketId,
         user_im_bps: u32,
     },
+}
+
+#[cfg(test)]
+#[allow(clippy::arithmetic_side_effects, clippy::unwrap_used)]
+mod event_contract_tests {
+    use super::*;
+    use crate::abci_event::AbciEventWriter;
+
+    fn read_u16(buf: &[u8], offset: &mut usize) -> u16 {
+        let value = u16::from_le_bytes(buf[*offset..*offset + 2].try_into().unwrap());
+        *offset += 2;
+        value
+    }
+
+    fn read_string(buf: &[u8], offset: &mut usize) -> String {
+        let len = read_u16(buf, offset) as usize;
+        let value = String::from_utf8(buf[*offset..*offset + len].to_vec()).unwrap();
+        *offset += len;
+        value
+    }
+
+    #[test]
+    fn market_config_updated_matches_engine_attribute_shape() {
+        let event = Event::MarketConfigUpdated {
+            market: 7,
+            im_bps: 1_000,
+            mm_bps: 500,
+            taker_fee_bps: 5,
+            maker_fee_bps: 2,
+            max_funding_rate_bps: 100,
+            funding_interval_ms: 60_000,
+            max_position_size: 10_000,
+            default_ttl_ms: 30_000,
+            net_delta_margin: true,
+            tick_size: 10,
+            lot_size: 2,
+            primary_oracle_signer: [0xAB; 20],
+            oracle_staleness_ms: 5_000,
+            max_open_interest: 1_000_000,
+        };
+        let mut writer = AbciEventWriter::new();
+        event.encode_abci(&mut writer);
+        let bytes = writer.into_vec();
+        let mut offset = 0;
+        assert_eq!(read_string(&bytes, &mut offset), "market_config_updated");
+        let count = read_u16(&bytes, &mut offset);
+        let mut attrs = Vec::new();
+        for _ in 0..count {
+            attrs.push((
+                read_string(&bytes, &mut offset),
+                read_string(&bytes, &mut offset),
+            ));
+        }
+        assert_eq!(offset, bytes.len());
+        assert_eq!(
+            attrs
+                .iter()
+                .map(|(key, _)| key.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "market",
+                "im_bps",
+                "mm_bps",
+                "taker_fee_bps",
+                "maker_fee_bps",
+                "max_funding_rate_bps",
+                "funding_interval_ms",
+                "max_position_size",
+                "default_ttl_ms",
+                "net_delta_margin",
+                "tick_size",
+                "lot_size",
+                "primary_oracle_signer",
+                "oracle_staleness_ms",
+                "max_open_interest",
+            ]
+        );
+        assert_eq!(attrs[1].1, "1000");
+        assert_eq!(attrs[2].1, "500");
+        assert_eq!(attrs[14].1, "1000000");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1983,9 +2138,9 @@ pub enum ExecError {
     /// `block_time - last_publish_ms >= oracle_staleness_ms`. BE-50.
     OracleStaleNotElapsed {
         market: MarketId,
-        last_publish_ms: u64,
-        block_time_ms: u64,
-        staleness_ms: u64,
+        last_publish_ms: Milliseconds,
+        block_time_ms: Milliseconds,
+        staleness_ms: Milliseconds,
     },
     /// `get_mark_price` rejected because the oracle for `market` is
     /// older than `MarketConfig::mark_price_max_oracle_age_ms`. Order
@@ -1995,11 +2150,11 @@ pub enum ExecError {
     StaleOracle {
         market: MarketId,
         /// Stored `publish_time_ms` of the most recent oracle update.
-        publish_time_ms: u64,
+        publish_time_ms: Milliseconds,
         /// Block time at which the read was attempted.
-        block_time_ms: u64,
+        block_time_ms: Milliseconds,
         /// Configured staleness cap from `MarketConfig`.
-        max_staleness_ms: u64,
+        max_staleness_ms: Milliseconds,
     },
     /// `SetUserMarketLeverage` rejected because the user attempted to
     /// pick an IM ratio LOWER than the market's risk floor. The
@@ -2044,6 +2199,14 @@ pub enum ExecError {
         order_id: OrderId,
         filled_quantity: u64,
         requested_quantity: u64,
+    },
+    /// A fill would push aggregate market open interest above the configured
+    /// cap. The current engine also emits code 50 for `SlippageExceeded`;
+    /// numeric-only callers must inspect the engine log for basket rejects.
+    OpenInterestLimitExceeded {
+        market: MarketId,
+        limit: u64,
+        would_be: u64,
     },
 }
 
@@ -2106,6 +2269,7 @@ impl ExecError {
             ExecError::FillOrKillWouldNotFill { .. } => 47,
             ExecError::InvalidCancelReplaceTarget => 48,
             ExecError::AmendBelowFilled { .. } => 49,
+            ExecError::OpenInterestLimitExceeded { .. } => 50,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -2294,6 +2458,9 @@ impl ExecError {
             ExecError::AmendBelowFilled { .. } => {
                 "AmendOrder new quantity is below the quantity already filled while the order rested."
             }
+            ExecError::OpenInterestLimitExceeded { .. } => {
+                "Fill would push aggregate market open interest past MarketConfig.max_open_interest. Code 50 is also used by AtomicBasketOrder SlippageExceeded; inspect the engine log for basket rejects."
+            }
         }
     }
 }
@@ -2469,6 +2636,14 @@ impl fmt::Display for ExecError {
                 f,
                 "amend quantity below filled for order {order_id}: requested total {requested_quantity}, filled {filled_quantity}"
             ),
+            ExecError::OpenInterestLimitExceeded {
+                market,
+                limit,
+                would_be,
+            } => write!(
+                f,
+                "open interest limit exceeded on market {market}: would be {would_be}, cap {limit}"
+            ),
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
     }
@@ -2561,7 +2736,70 @@ define_error_kinds! {
     47  => FillOrKillWouldNotFill       ~ "Fill-or-kill order cannot be fully filled immediately at the submitted limit price.",
     48  => InvalidCancelReplaceTarget   ~ "Cancel-replace must specify exactly one active order target: either orderId or clientOrderId.",
     49  => AmendBelowFilled             ~ "AmendOrder new quantity is below the quantity already filled while the order rested.",
+    50  => OpenInterestLimitExceeded    ~ "Fill would push aggregate market open interest past MarketConfig.max_open_interest. Code 50 is also used by AtomicBasketOrder SlippageExceeded; inspect the engine log for basket rejects.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
+}
+
+/// Safe classification of an engine result code plus its canonical
+/// DeliverTx log. Code 50 is deployed with two meanings, so callers must not
+/// infer one from the integer alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodedExecErrorKind {
+    Known(ErrorKind),
+    SlippageExceeded,
+    AmbiguousCode50,
+}
+
+impl DecodedExecErrorKind {
+    pub fn code(self) -> u32 {
+        match self {
+            Self::Known(kind) => kind.code(),
+            Self::SlippageExceeded | Self::AmbiguousCode50 => 50,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Known(kind) => kind.name(),
+            Self::SlippageExceeded => "SlippageExceeded",
+            Self::AmbiguousCode50 => "AmbiguousCode50",
+        }
+    }
+
+    pub fn meaning(self) -> &'static str {
+        match self {
+            Self::Known(kind) => kind.meaning(),
+            Self::SlippageExceeded => {
+                "Atomic basket aggregate slippage exceeded the submitted max_slippage_bps budget."
+            }
+            Self::AmbiguousCode50 => {
+                "Engine code 50 is shared by OpenInterestLimitExceeded and SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely."
+            }
+        }
+    }
+}
+
+/// Decode an engine error without guessing the meaning of shared code 50.
+pub fn decode_exec_error_kind(code: u32, log: Option<&str>) -> Option<DecodedExecErrorKind> {
+    if code == 0 {
+        return None;
+    }
+    if code == 50 {
+        return Some(match log {
+            Some(log) if log.starts_with("open interest limit exceeded on market ") => {
+                DecodedExecErrorKind::Known(ErrorKind::OpenInterestLimitExceeded)
+            }
+            Some(log) if log.starts_with("atomic basket aggregate slippage ") => {
+                DecodedExecErrorKind::SlippageExceeded
+            }
+            _ => DecodedExecErrorKind::AmbiguousCode50,
+        });
+    }
+    ERROR_KINDS
+        .iter()
+        .copied()
+        .find(|kind| kind.code() == code)
+        .map(DecodedExecErrorKind::Known)
 }
 
 // Backward-compat alias for any callers still using `error_code_manifest()`.
@@ -2581,6 +2819,37 @@ impl From<StateError> for ExecError {
 #[cfg(test)]
 mod exec_error_meaning_tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn shared_code_50_requires_the_canonical_log() {
+        let oi = decode_exec_error_kind(
+            50,
+            Some("open interest limit exceeded on market 7: would be 4, cap 3"),
+        )
+        .unwrap();
+        assert_eq!(oi.name(), "OpenInterestLimitExceeded");
+        assert_eq!(oi.code(), 50);
+
+        let slippage = decode_exec_error_kind(
+            50,
+            Some("atomic basket aggregate slippage 51 bps exceeds budget 50 bps"),
+        )
+        .unwrap();
+        assert_eq!(slippage.name(), "SlippageExceeded");
+
+        for log in [None, Some(""), Some("unknown code 50 diagnostic")] {
+            assert_eq!(
+                decode_exec_error_kind(50, log).unwrap().name(),
+                "AmbiguousCode50"
+            );
+        }
+        assert_eq!(decode_exec_error_kind(0, None), None);
+        assert_eq!(
+            decode_exec_error_kind(12, None).unwrap().name(),
+            "InsufficientMargin"
+        );
+    }
 
     /// Sample one constructed value per variant. New variants added to
     /// `ExecError` must be added here, otherwise the test below fails
@@ -2690,6 +2959,11 @@ mod exec_error_meaning_tests {
                 filled_quantity: 1,
                 requested_quantity: 0,
             },
+            ExecError::OpenInterestLimitExceeded {
+                market: 0,
+                limit: 1,
+                would_be: 2,
+            },
         ]
     }
 
@@ -2720,7 +2994,7 @@ mod exec_error_meaning_tests {
         }
     }
 
-    /// Codes 1..=49 + 255 must all be covered by at least one variant.
+    /// Codes 1..=50 + 255 must all be covered by at least one variant.
     /// Catches the case where a code is reserved in `code()` but no
     /// variant maps to it (would surface as an unreachable arm in
     /// `meaning()`).
@@ -2729,7 +3003,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = one_of_each().iter().map(|e| e.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=49).chain(std::iter::once(255)).collect();
+        let expected: Vec<u32> = (1u32..=50).chain(std::iter::once(255)).collect();
         assert_eq!(
             codes, expected,
             "ExecError codes covered by variants: {:?}; expected: {:?}. \
@@ -2751,9 +3025,9 @@ pub mod prelude {
         ConfirmDeposit, ConfirmWithdrawal, CreateImpactMarket, CreateMarket, Deposit, Event,
         EventOracleSource, ExecError, FailDepositReason, FailWithdrawal, FillId, ImpactMarketId,
         ImpactMarketInfo, ImpactMarketStatus, MarkSourceMode, MarketConfig, MarketId, MarketKind,
-        MarketOrder, OracleUpdate, Order, OrderId, Outcome, PlaceOrder,
-        Position, ResolveEvent, RevokeAgent, SetUserMarketLeverage, Side, TimeInForce,
-        UpdateMarketFees, Withdraw, WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX,
-        DEFAULT_CEX_COMPOSITE_STALENESS_MS, DEFAULT_MAX_MARK_SPREAD_BPS,
+        MarketOrder, OracleUpdate, Order, OrderId, Outcome, PlaceOrder, Position, ResolveEvent,
+        RevokeAgent, SetUserMarketLeverage, Side, TimeInForce, UpdateMarketFees, Withdraw,
+        WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX, DEFAULT_CEX_COMPOSITE_STALENESS_MS,
+        DEFAULT_MAX_MARK_SPREAD_BPS,
     };
 }

@@ -1,6 +1,6 @@
 [package]
 name = "proof-trading-sdk-wasm"
-version = "1.1.0"
+version = "2.0.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "WebAssembly bindings for the proof-trading-sdk core: MessagePack codec + Ed25519 signing, byte-identical to the exchange engine (the JS/WASM spoke of the wheel-and-spokes SDK)."
@@ -12,7 +12,7 @@ repository = "https://github.com/Proof-labs/trading-sdk"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-proof-trading-sdk = { path = "../proof-trading-sdk", version = "1" }
+proof-trading-sdk = { path = "../proof-trading-sdk", version = "2" }
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
 # Deterministic Ed25519 signing only (SigningKey::from_bytes + sign) — no
