@@ -127,6 +127,10 @@ class ExchangeClient {
   submitTx(action: Action): Promise<TxResult>;
   submitTxCommit(action: Action): Promise<TxResult>;
   awaitPendingVerifies(): Promise<TxResult[]>;
+  // ^ Against a gateway that answers synchronously (api-gateway#90), both
+  //   submit paths return the chain's own result — `code`, `height`, `events` —
+  //   in ONE round-trip. `submitTxCommit` no longer polls `/tx?hash=` for it,
+  //   and `submitTx` spawns no background verifier. See "Transaction results".
 
   // Reads
   queryOrderbook(market: number): Promise<Orderbook>;
@@ -224,6 +228,33 @@ const client = new ExchangeClient({
   chainId: "proof-dev",
 });
 ```
+
+## Transaction results
+
+`POST /exchange` on the gateway is **synchronous on the on-chain result**
+([api-gateway#90](https://github.com/Proof-labs/api-gateway/pull/90)): it parks the
+response on the CometBFT tx hash and answers with the chain's own `code`, `log`,
+`height` and per-tx `events`. So a submit costs **one round-trip**, not a submit plus
+a poll loop — the original complaint (`exchange-issues-2026-06-08` H14) measured that
+loop at 9 s+ under load.
+
+The SDK reads that shape and stops working for it:
+
+| Gateway answers      | `TxResult`                                | Does the SDK poll?                                                                                                                                                                                                         |
+| -------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `code` + `height`    | `ok` / `engine`, with `height` + `events` | **No** — the tx executed; there is nothing to wait for                                                                                                                                                                     |
+| `code`, no `height`  | `engine`                                  | **No** — a CheckTx reject never enters a block, so no DeliverTx will run                                                                                                                                                   |
+| `txHash`, no `code`  | `timeout`                                 | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection |
+| `{status:"ok"}` only | `ok`, no `height`                         | **Yes** — a pre-#90 gateway acks CheckTx only, so inclusion is still unknown                                                                                                                                               |
+
+That last row is why upgrading the SDK is safe against a gateway that has not been
+upgraded yet: absence of `code`/`height` still means "execution unknown", and the old
+polling paths run exactly as before.
+
+**Read `code` from the field, not from the message.** Pre-#90 the gateway embedded the
+engine code in the error string (`"21: invalid nonce"`). It now sends a structured
+`code` and puts the chain's raw log in `error`. A client still parsing the string will
+classify every engine rejection as code `1` (`DecodeError`).
 
 ## WebSocket streams
 

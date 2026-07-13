@@ -17,6 +17,7 @@ import {
 } from "./crypto.js";
 import type {
   Action,
+  TxEvent,
   TxResult,
   PlaceOrder,
   MarketOrder,
@@ -461,10 +462,15 @@ export class ExchangeClient {
    */
   async submitTx(action: Action): Promise<TxResult> {
     const r = await this.broadcastSigned(action);
-    // On CheckTx success, spawn the background DeliverTx verifier for
-    // inclusion visibility. Skipped when the caller has opted into unsafe
-    // fast mode.
-    if (r.ok && r.hash && this.autoVerifyDelivery) {
+    // Spawn the background DeliverTx verifier only if the outcome is still
+    // unknown. A synchronous gateway (api-gateway#90) already returns the
+    // executed result, so polling for it would be pure waste — and a CheckTx
+    // reject is terminal, so there is nothing to verify either.
+    //
+    // The `timeout` case is the one that still needs it: the gateway broadcast
+    // the tx but could not report the outcome in time, so the SDK reconciles by
+    // hash on the caller's behalf, exactly as before.
+    if (this.autoVerifyDelivery && r.hash && !this.isFinalResult(r)) {
       this.spawnDeliveryVerifier(r.hash);
     }
     return r;
@@ -579,18 +585,83 @@ export class ExchangeClient {
       | {
           status?: string;
           error?: string;
+          txHash?: string;
+          code?: number;
+          log?: string;
+          height?: number;
+          events?: TxEvent[];
         }
       | undefined;
+
+    // The gateway is synchronous on the on-chain result (api-gateway#90): it
+    // parks the response on the tx hash and answers with the chain's own
+    // `code` / `log` / `height` / `events`. A body carrying a `height` is a
+    // FINISHED verdict — the tx is in a block and there is nothing left to
+    // poll for, so `submitTx` skips its background verifier and
+    // `submitTxCommit` returns immediately instead of polling `/tx?hash=` for
+    // up to 9 seconds.
+    //
+    // Older gateways answer `{status: "ok"}` with no `code`/`height`, so the
+    // absence of those fields still means "CheckTx accepted, execution
+    // unknown" and the polling paths below stay exactly as they were. That
+    // fallback is what makes this safe against a gateway that has not been
+    // upgraded yet.
+    if (typeof json?.code === "number") {
+      const hash = json.txHash ?? txHash;
+      // `height` present  → committed: the code IS the ExecTxResult code.
+      // `height` absent   → CheckTx reject: never entered a block, and equally
+      //                     terminal — no DeliverTx will ever run for it.
+      return txFromEngineCode(json.code, {
+        hash,
+        height: json.height,
+        log: json.log ?? json.error,
+        events: json.events,
+      });
+    }
+
     if (json?.status === "ok") {
+      // Legacy gateway: CheckTx ack only, execution still unknown.
       return txOk({ hash: txHash });
     }
-    // Gateway error shape: error string is "<engine_code>: <message>"
-    // (per ExecErrorCode table in api-gateway/openapi.yaml). Parse the
-    // leading code so callers branch on it; if missing, surface 1
-    // (DecodeError) as the conservative default.
+
+    // `status: error` with a `txHash` but NO `code` is not a rejection — it is
+    // the gateway saying "I broadcast this and could not tell you the outcome
+    // in time" (park deadline exceeded, a byte-identical tx already in flight,
+    // or a result it could not parse). The tx may well still commit, so this is
+    // a `timeout` outcome to be reconciled by hash, NOT an engine error. Calling
+    // it an engine error here would report a phantom rejection for an order
+    // that is about to fill.
+    if (json?.txHash) {
+      return txTimeout(
+        json.txHash,
+        json.error ?? "gateway returned no on-chain result; reconcile by hash",
+      );
+    }
+
+    // Legacy gateway error shape: the code is embedded in the string as
+    // "<engine_code>: <message>" (the pre-#90 ExecErrorCode contract). Parse the
+    // leading code; if missing, surface 1 (DecodeError) as the conservative
+    // default.
     const errMsg = json?.error ?? gatewayBody.raw ?? "unknown gateway error";
     const code = parseLeadingErrorCode(errMsg) ?? 1;
     return txEngineError(code, { log: errMsg });
+  }
+
+  /**
+   * Whether a `TxResult` is already final — i.e. nothing is gained by polling
+   * for it.
+   *
+   * A `height` means the tx executed in a block (the synchronous gateway
+   * response carries it). An `engine` outcome without a height is a CheckTx
+   * reject: it never entered a block and never will, so DeliverTx will not run.
+   * A `transport` failure never reached the chain at all.
+   */
+  private isFinalResult(r: TxResult): boolean {
+    return (
+      r.height !== undefined ||
+      r.outcome === "engine" ||
+      r.outcome === "transport"
+    );
   }
 
   /**
@@ -725,13 +796,22 @@ export class ExchangeClient {
     // path so we don't double-spawn a background verifier — we're going to
     // do our own synchronous verification below.
     const sync = await this.broadcastSigned(action);
-    if (!sync.ok) {
-      // CheckTx rejected (envelope-level failure) or a transport failure. No
-      // DeliverTx will run.
+    if (this.isFinalResult(sync)) {
+      // Either the gateway already returned the on-chain result (the
+      // synchronous submit path — nothing to wait for), or the tx was rejected
+      // at CheckTx / never reached the chain, in which case no DeliverTx will
+      // ever run. This is the case H14 was filed about: a confirmed order used
+      // to cost a 9-second poll loop, and now costs one round-trip.
+      return sync;
+    }
+    if (!sync.ok && sync.outcome !== "timeout") {
       return sync;
     }
 
-    // Step 2: poll /tx?hash=... until found or timeout (~9 seconds)
+    // Step 2: the outcome is still unknown (a pre-#90 gateway that only acks
+    // CheckTx, the direct-to-CometBFT path, or a gateway that broadcast the tx
+    // but could not report the result in time). Poll /tx?hash=... until found
+    // or timeout (~9 seconds).
     const txHash = sync.hash;
     if (!txHash) {
       throw new Error("submitTx returned no tx hash");
