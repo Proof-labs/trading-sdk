@@ -45,7 +45,7 @@ the branch rather than bypassing it.
 
 **Releasing (`dev` → `main`): always use "Create a merge commit" — never
 "Rebase and merge" or "Squash and merge".** A rebase/squash of a sync PR
-replays `dev`'s commits onto `main` under *new hashes*, so the same change ends
+replays `dev`'s commits onto `main` under _new hashes_, so the same change ends
 up as two different commits and the branches permanently diverge (and `dev` is
 protected, so you cannot force-push the duplicates away). A merge commit
 references the real commits, keeps a shared merge-base, and reconciles the
@@ -109,7 +109,7 @@ npx prettier --check .
 
 ## Versioning & wire-format compatibility
 
-Every package here (the npm `@proof/trading-sdk` and the `crates/*` Rust crates) ships **semver on the full `MAJOR.MINOR.PATCH` line and is kept at `>= 1.0.0`**. We are off `0.x` on purpose: under `0.x`, Cargo and npm caret ranges treat the *second* number as the breaking one, which is the wrong signal for a wire contract. At `>= 1.0.0` only a **MAJOR** difference is incompatible; MINOR and PATCH are drop-in for consumers. Do not reset to `0.x`.
+Every package here (the npm `@proof/trading-sdk` and the `crates/*` Rust crates) ships **semver on the full `MAJOR.MINOR.PATCH` line and is kept at `>= 1.0.0`**. We are off `0.x` on purpose: under `0.x`, Cargo and npm caret ranges treat the _second_ number as the breaking one, which is the wrong signal for a wire contract. At `>= 1.0.0` only a **MAJOR** difference is incompatible; MINOR and PATCH are drop-in for consumers. Do not reset to `0.x`.
 
 This SDK **reimplements** the exchange wire format (it does not pin `exchange-core` as a dependency), so it does not get the engine's version automatically — keep it in lockstep by hand. The wire format is the contract that drives the bump, and the rule matches the engine's exactly:
 
@@ -152,6 +152,14 @@ wire-format change affects the SDK:
 
 `src/types.ts` and `src/codec.ts` are the source of truth for the action set —
 do not hardcode action counts elsewhere; they change as the engine grows.
+
+> **Note — the TS codec is migrating to a WASM build of the Rust core.** The
+> hand-written parallel codec in `src/codec.ts` is being replaced by a
+> `wasm-bindgen` binding over `encode_payload_dyn` / `decode_payload_dyn`, so
+> the Rust registry becomes the single source of truth. Read
+> [docs/adr/0001-wasm-core-vs-parallel-types.md](docs/adr/0001-wasm-core-vs-parallel-types.md)
+> before touching `codec.ts` — it records why WASM (not codegen or a hybrid) was
+> chosen, so the tradeoff does not get re-argued.
 
 ## Network policy — gateway only
 

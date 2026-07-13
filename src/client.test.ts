@@ -1152,7 +1152,10 @@ describe("ExchangeClient chain_id resolution", () => {
     });
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-    const client = new ExchangeClient({ useGateway: false, rpcUrl: "http://test-rpc" });
+    const client = new ExchangeClient({
+      useGateway: false,
+      rpcUrl: "http://test-rpc",
+    });
     await client.ready();
     expect(client.getChainId()).toEqual(chainIdFromString("proof-from-status"));
     expect(fetchSpy).toHaveBeenCalledTimes(1);
@@ -1167,7 +1170,10 @@ describe("ExchangeClient chain_id resolution", () => {
       throw new Error("ECONNREFUSED");
     }) as unknown as typeof fetch;
 
-    const client = new ExchangeClient({ useGateway: false, rpcUrl: "http://test-rpc" });
+    const client = new ExchangeClient({
+      useGateway: false,
+      rpcUrl: "http://test-rpc",
+    });
     await expect(client.ready()).rejects.toThrow(
       /could not resolve chain_id from http:\/\/test-rpc\/status/,
     );
@@ -1195,7 +1201,10 @@ describe("ExchangeClient chain_id resolution", () => {
     const fetchSpy = vi.fn(async () => statusResponse("proof-shared"));
     globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-    const client = new ExchangeClient({ useGateway: false, rpcUrl: "http://test-rpc" });
+    const client = new ExchangeClient({
+      useGateway: false,
+      rpcUrl: "http://test-rpc",
+    });
     await Promise.all([client.ready(), client.ready(), client.ready()]);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
@@ -1208,7 +1217,10 @@ describe("ExchangeClient chain_id resolution", () => {
       return statusResponse("proof-after-retry");
     }) as unknown as typeof fetch;
 
-    const client = new ExchangeClient({ useGateway: false, rpcUrl: "http://test-rpc" });
+    const client = new ExchangeClient({
+      useGateway: false,
+      rpcUrl: "http://test-rpc",
+    });
     await expect(client.ready()).rejects.toThrow();
     // First failure cleared the in-flight cache; a second call retries
     // instead of replaying the rejected promise forever.
@@ -1654,7 +1666,11 @@ describe("ExchangeClient ticker + adl-queue routing", () => {
     globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
       calls.push(url.toString());
       return new Response(
-        JSON.stringify({ market: "1", last_price: "6675000", change_24h_bps: "12" }),
+        JSON.stringify({
+          market: "1",
+          last_price: "6675000",
+          change_24h_bps: "12",
+        }),
         { status: 200 },
       );
     }) as unknown as typeof fetch;
