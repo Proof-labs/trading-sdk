@@ -156,10 +156,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "pool_id": 9, "sz_decimals": 4, "ticker": "BTC"
             }),
         ),
-        // An explicit zero cap is semantically identical to omission and must
-        // retain the exact pre-cap 11-field payload in every binding.
+        // An explicit zero cap is semantically identical to omission, so both
+        // must produce the SAME bytes — the canonical 12-element uncapped
+        // payload with an explicit `0` tail. The array length never depends on
+        // the cap's value; see `CreateMarket::max_open_interest`.
         codec_case(
-            "create_market/max_open_interest_zero_legacy_bytes",
+            "create_market/max_open_interest_zero_explicit",
             CREATE_MARKET,
             json!({
                 "market": 42, "im_bps": 1000, "mm_bps": 500,
@@ -169,8 +171,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "max_open_interest": 0u64
             }),
         ),
-        // S40: optional CreateMarket tail. The uncapped case above remains
-        // byte-identical (11 fields); this case pins slot 11 when supplied.
+        // S40: the CreateMarket cap tail. The uncapped case above encodes the
+        // same 12 elements with a zero in slot 11; this case pins a non-zero
+        // slot 11. Only the value differs between them, never the length.
         codec_case(
             "create_market/max_open_interest",
             CREATE_MARKET,

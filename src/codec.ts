@@ -625,31 +625,36 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       // — but if the caller sets a non-zero poolId we MUST include it.
       // Always include for forward-compatibility once any SDK build can
       // address pools other than 0.
-      const fields: unknown[] = [
-        d.market,
-        d.imBps,
-        d.mmBps,
-        d.takerFeeBps,
-        d.makerFeeBps,
-        toByteSeq(d.signer),
-        d.fundingIntervalMs,
-        d.maxFundingRateBps,
-        d.poolId ?? 0,
-        // sz_decimals and ticker are MANDATORY on the engine (no
-        // serde(default)) — a payload that omits them is rejected at
-        // decode. Both are required fields on CreateMarket.
-        d.szDecimals,
-        d.ticker,
-      ];
-      // Preserve byte-for-byte compatibility for callers that do not opt in:
-      // an absent tail decodes to the engine's serde-default cap of 0.
       if (d.maxOpenInterest !== undefined) {
         assertU64(d.maxOpenInterest, "CreateMarket.maxOpenInterest");
-        // Zero and absence both mean uncapped. Omitting the zero tail is
-        // required for exact Rust/Python/pre-cap byte parity.
-        if (d.maxOpenInterest !== 0n) fields.push(d.maxOpenInterest);
       }
-      return [ActionType.CreateMarket, fields];
+      return [
+        ActionType.CreateMarket,
+        [
+          d.market,
+          d.imBps,
+          d.mmBps,
+          d.takerFeeBps,
+          d.makerFeeBps,
+          toByteSeq(d.signer),
+          d.fundingIntervalMs,
+          d.maxFundingRateBps,
+          d.poolId ?? 0,
+          // sz_decimals and ticker are MANDATORY on the engine (no
+          // serde(default)) — a payload that omits them is rejected at
+          // decode. Both are required fields on CreateMarket.
+          d.szDecimals,
+          d.ticker,
+          // max_open_interest: 0 disables the cap. Always emitted, exactly
+          // like pool_id above. The engine serializes this field
+          // unconditionally, and the gateway's structured path re-encodes the
+          // payload before the signature is checked — so a client that omitted
+          // the zero tail would sign 11 elements against a gateway that
+          // encodes 12, and verification would fail. Never make the array's
+          // length depend on the value: one value, one encoding.
+          d.maxOpenInterest ?? 0n,
+        ],
+      ];
     }
     case "WithdrawRequest": {
       const d = action.data;
@@ -1022,7 +1027,12 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           // decode (0 / "" defaults).
           szDecimals: f.length > 9 ? (f[9] as number) : 0,
           ticker: f.length > 10 ? (f[10] as string) : "",
-          ...(f.length > 11 ? { maxOpenInterest: bi(f[11]) } : {}),
+          // maxOpenInterest at index 11. A released pre-cap record has only 11
+          // elements; it means "uncapped", which the engine spells `0` — so
+          // normalize to 0n rather than leaving it undefined. That keeps
+          // decode → encode stable: re-encoding a legacy record yields the
+          // canonical 12-element form with an explicit zero tail.
+          maxOpenInterest: f.length > 11 ? bi(f[11]) : 0n,
         },
       };
     case ActionType.WithdrawRequest:

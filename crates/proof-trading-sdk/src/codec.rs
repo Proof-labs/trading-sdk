@@ -865,27 +865,46 @@ mod tests {
             max_open_interest: 0,
         };
 
+        // Backward decode holds: a released 11-element payload still decodes,
+        // as an uncapped market.
         let legacy_bytes = rmp_serde::to_vec(&legacy).unwrap();
-        assert_eq!(rmp_serde::to_vec(&uncapped).unwrap(), legacy_bytes);
         let legacy_decoded: CreateMarket = rmp_serde::from_slice(&legacy_bytes).unwrap();
         assert_eq!(legacy_decoded.max_open_interest, 0);
 
+        // But the v2 encoding is LENGTH-STABLE: a zero cap serializes to 12
+        // elements, not 11. The SDK must not drop the zero tail — the engine
+        // and the gateway's re-encoding path both emit it, and a client that
+        // signed 11 elements would fail signature verification against them.
+        let uncapped_bytes = rmp_serde::to_vec(&uncapped).unwrap();
         let capped = CreateMarket {
             max_open_interest: 1_000_000,
             ..uncapped
         };
         let capped_bytes = rmp_serde::to_vec(&capped).unwrap();
-        let fields: Vec<serde_json::Value> = rmp_serde::from_slice(&capped_bytes).unwrap();
-        assert_eq!(fields.len(), 12);
-        assert_eq!(fields[11], serde_json::json!(1_000_000));
-        let capped_decoded: CreateMarket = rmp_serde::from_slice(&capped_bytes).unwrap();
-        assert_eq!(capped_decoded.max_open_interest, 1_000_000);
-        let error =
-            rmp_serde::from_slice::<PreOpenInterestCreateMarket>(&capped_bytes).unwrap_err();
-        assert!(
-            error.to_string().contains("length") || error.to_string().contains("LengthMismatch"),
-            "unexpected frozen v1 CreateMarket decoder error: {error}"
-        );
+
+        for (label, bytes, tail) in [
+            ("uncapped", &uncapped_bytes, serde_json::json!(0)),
+            ("capped", &capped_bytes, serde_json::json!(1_000_000)),
+        ] {
+            let fields: Vec<serde_json::Value> = rmp_serde::from_slice(bytes).unwrap();
+            assert_eq!(fields.len(), 12, "{label} CreateMarket must be 12 elements");
+            assert_eq!(fields[11], tail, "{label} CreateMarket tail");
+
+            let decoded: CreateMarket = rmp_serde::from_slice(bytes).unwrap();
+            assert_eq!(
+                decoded.max_open_interest,
+                if label == "capped" { 1_000_000 } else { 0 }
+            );
+
+            // No v2 CreateMarket is forward-decodable by the frozen v1 struct —
+            // uncapped included. That is what makes this release MAJOR.
+            let error = rmp_serde::from_slice::<PreOpenInterestCreateMarket>(bytes).unwrap_err();
+            assert!(
+                error.to_string().contains("length")
+                    || error.to_string().contains("LengthMismatch"),
+                "unexpected frozen v1 CreateMarket decoder error ({label}): {error}"
+            );
+        }
     }
 
     #[test]

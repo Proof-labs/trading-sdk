@@ -32,10 +32,6 @@ pub const MARKET_BTC_USD_PERP: MarketId = 1;
 /// Maximum price (in micro-USDC) for a prediction-binary share. $1.00 = 1_000_000 µUSDC.
 pub const BINARY_PRICE_MAX: u64 = 1_000_000;
 
-fn is_zero_u64(value: &u64) -> bool {
-    *value == 0
-}
-
 // ---------------------------------------------------------------------------
 // Impact market enums
 // ---------------------------------------------------------------------------
@@ -997,10 +993,15 @@ pub struct CreateMarket {
     /// only. MANDATORY like `sz_decimals` (no `serde(default)`); an empty
     /// string is accepted but the field must be present on the wire.
     pub ticker: String,
-    /// Aggregate market open-interest cap in contracts. A zero/omitted tail
-    /// disables the cap. Omitting zero on serialization preserves the exact
-    /// pre-cap 11-field payload while the engine's serde default restores it.
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    /// Aggregate market open-interest cap in contracts. `0` disables the cap.
+    ///
+    /// Always serialized, exactly like `pool_id`: `CreateMarket` is a
+    /// 12-element array whatever the cap's value. `serde(default)` still
+    /// decodes released 11-element payloads as uncapped, so backward decode is
+    /// intact — but the array's *length* must never depend on the field's
+    /// *value*. Mirrors `exchange-core`; a divergence here would make the SDK
+    /// sign bytes the engine and gateway would not reproduce.
+    #[serde(default)]
     pub max_open_interest: u64,
 }
 
