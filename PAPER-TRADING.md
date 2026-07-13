@@ -99,8 +99,8 @@ await client.submitTx({
   data: {
     market: 1,
     side: Side.Buy,
-    price: 66_750_000_000, // micro-USDC (6 dp) = $66,750.00
-    quantity: 1, // integer contracts
+    price: 66_750_000_000n, // micro-USDC (6 dp) = $66,750.00
+    quantity: 1n, // integer contracts
   },
 });
 ```
