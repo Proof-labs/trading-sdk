@@ -446,10 +446,10 @@ export class ExchangeClient {
    * Sign and submit a transaction via broadcast_tx_sync.
    *
    * The SDK signs each transaction with a fresh millisecond timestamp nonce
-   * before submitting. On `CheckTx code=0`, a fire-and-forget background
-   * verifier is spawned. The verifier polls `/tx?hash=...` for the actual
-   * `DeliverTx` result, but it never rewinds or resyncs nonce state: included
-   * failed transactions still burn their timestamp nonce by design.
+   * before submitting. Whenever the response has a tx hash but no final chain
+   * verdict, a fire-and-forget verifier polls `/tx?hash=...` for the actual
+   * `DeliverTx` result. It never rewinds or resyncs nonce state: included failed
+   * transactions still burn their timestamp nonce by design.
    *
    * Callers that need to know definitively whether a tx landed should use
    * `submitTxCommit`, which awaits the same verification synchronously.
@@ -514,13 +514,13 @@ export class ExchangeClient {
    * On success it forwards the wire bytes to CometBFT's
    * `broadcast_tx_sync`.
    *
-   * The gateway response shape is `{status: "ok"|"error", error?}`.
-   * We map it to `TxResult` so callers can branch on `code` the same
-   * way they do for the CometBFT path. For engine-level rejections
-   * the error string is `"<code>: <message>"` (mirroring the
-   * ExecErrorCode table in `api-gateway/openapi.yaml`). For transport-
-   * level failures (rate limit, auth, etc.) we synthesize a code from
-   * the HTTP status.
+   * The gateway response is an `ExchangeResponse`: a structured chain verdict
+   * carries `code` and optionally `height`/`events`; an admitted-but-ambiguous
+   * submission carries `txHash` without `code` and must be reconciled. We map
+   * every shape to `TxResult`. Engine rejections retain the compatibility error
+   * string `"<code>: <message>"`, while the structured `code` is authoritative.
+   * For transport-level failures (rate limit, auth, etc.) we synthesize a code
+   * from the HTTP status.
    */
   private async submitViaGateway(txBytes: Uint8Array): Promise<TxResult> {
     const txHash = computeCometTxHash(txBytes);
@@ -781,13 +781,11 @@ export class ExchangeClient {
   /**
    * Submit and wait for block inclusion (slower, but confirms execution).
    *
-   * Implementation note: CometBFT's `broadcast_tx_commit` JSON-RPC method
-   * has a known reliability issue where the internal event subscription
-   * occasionally fails to fire before the 10s timeout, even though the tx
-   * is correctly applied to state. To work around this, we use
-   * `broadcast_tx_sync` (CheckTx-only) and then poll `/tx?hash=...` to
-   * fetch the DeliverTx result. This is faster (avg ~1.2s) AND more
-   * reliable than the native commit endpoint.
+   * A synchronous gateway verdict returns immediately. If the gateway only
+   * acknowledges CheckTx (legacy) or returns a hash-only ambiguous response,
+   * this falls back to polling `/tx?hash=...`. The direct-node path likewise
+   * uses `broadcast_tx_sync` plus polling instead of CometBFT's less reliable
+   * `broadcast_tx_commit` subscription.
    */
   async submitTxCommit(action: Action): Promise<TxResult> {
     if (!this.privateKey) throw new Error("No private key set");

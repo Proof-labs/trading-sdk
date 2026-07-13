@@ -12,7 +12,7 @@ import {
   pubkeyToOwner,
   verify,
 } from "./crypto.js";
-import { Side } from "./types.js";
+import { Side, type Action } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 
 /**
@@ -540,11 +540,9 @@ describe("ExchangeClient submitTx gateway path", () => {
   });
 
   it("reads the structured code, not the leading integer of the error string", async () => {
-    // Pre-#90 the gateway encoded the code INSIDE the message ("21: invalid
-    // nonce") and the SDK parsed it back out. The synchronous gateway sends a
-    // structured `code` and puts the chain's raw log in `error` — so a client
-    // still parsing the string would classify every engine rejection as code 1
-    // (DecodeError). Prefer the field.
+    // The gateway keeps the legacy "<code>: <message>" error string for old
+    // clients, but the structured `code` is authoritative. Deliberately make
+    // the compatibility string disagree to prove this path does not parse it.
     const client = makeGatewayClient();
     primeNextNonce(client);
 
@@ -553,7 +551,7 @@ describe("ExchangeClient submitTx gateway path", () => {
         new Response(
           JSON.stringify({
             status: "error",
-            error: "nonce too old: minimum accepted 1783771798253, got 0",
+            error: "12: stale compatibility text",
             log: "nonce too old: minimum accepted 1783771798253, got 0",
             txHash: "ABCD",
             code: 21,
@@ -572,13 +570,8 @@ describe("ExchangeClient submitTx gateway path", () => {
     expect(calls.some((c) => c.url.includes("/tx"))).toBe(false);
   });
 
-  it("a txHash with no code is a timeout to reconcile, not a rejection", async () => {
-    // The gateway broadcast the tx but could not report the outcome in time
-    // (park deadline, duplicate in flight, or an unreadable result). The tx may
-    // still commit, so calling this an engine error would report a phantom
-    // rejection for an order that is about to fill.
+  it("submitTxCommit reconciles a hash-only error through the gateway tx route", async () => {
     const client = makeGatewayClient();
-    client.setUnsafeFastSubmit(true); // don't spawn the background verifier here
     primeNextNonce(client);
 
     nextResponses.push(
@@ -593,12 +586,95 @@ describe("ExchangeClient submitTx gateway path", () => {
           { status: 200, headers: { "Content-Type": "application/json" } },
         ),
     );
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              height: "4821904",
+              tx_result: {
+                code: 0,
+                log: "",
+                events: [{ type: "order_placed", attributes: [] }],
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
 
-    const r = await client.submitTx(placeOrder(client));
+    const r = await client.submitTxCommit(placeOrder(client));
 
-    expect(r.outcome).toBe("timeout");
-    expect(r.ok).toBe(false);
+    expect(r.outcome).toBe("ok");
+    expect(r.ok).toBe(true);
     expect(r.hash).toBe("ABCD");
+    expect(r.height).toBe(4821904);
+    expect(r.events).toHaveLength(1);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].url).toBe("http://test-gateway/v1/tx/ABCD");
+  });
+
+  it("submitTx starts a background verifier for a hash-only error", async () => {
+    // A hash with no code is ambiguous, not a rejection: the tx may already be
+    // in flight. Fire-and-forget submission must therefore keep its normal
+    // background reconciliation rather than silently disabling it.
+    const client = makeGatewayClient();
+    primeNextNonce(client);
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "error",
+            error: "duplicate in-flight tx; reconcile via txHash",
+            txHash: "ABCD",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              height: "4821905",
+              tx_result: {
+                code: 12,
+                log: "insufficient margin",
+                events: [],
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const initial = await client.submitTx(placeOrder(client));
+
+    expect(initial).toMatchObject({
+      ok: false,
+      outcome: "timeout",
+      code: -1,
+      hash: "ABCD",
+    });
+    expect(
+      (client as unknown as { pendingVerifies: Set<unknown> }).pendingVerifies
+        .size,
+    ).toBe(1);
+
+    const reconciled = await client.awaitPendingVerifies();
+
+    expect(reconciled).toHaveLength(1);
+    expect(reconciled[0]).toMatchObject({
+      ok: false,
+      outcome: "engine",
+      code: 12,
+      hash: "ABCD",
+      height: 4821905,
+      log: "insufficient margin",
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[1].url).toBe("http://test-gateway/v1/tx/ABCD");
   });
 
   it("still polls when the gateway only acks CheckTx (pre-#90 gateway)", async () => {
