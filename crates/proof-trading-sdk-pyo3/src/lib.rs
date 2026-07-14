@@ -101,9 +101,14 @@ fn sign_and_encode<'py>(
         .map_err(|_| PyValueError::new_err("secret_key must be exactly 32 bytes"))?;
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&sk_bytes);
 
-    let encoded =
-        codec::sign_and_encode_payload(&chain_id_arr, action_type, action_payload, seq, &signing_key)
-            .map_err(map_err)?;
+    let encoded = codec::sign_and_encode_payload(
+        &chain_id_arr,
+        action_type,
+        action_payload,
+        seq,
+        &signing_key,
+    )
+    .map_err(map_err)?;
 
     Ok(PyBytes::new(py, &encoded))
 }
@@ -333,6 +338,15 @@ fn get_error_code_table<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
     Ok(list)
 }
 
+/// Classify an engine result using its canonical DeliverTx log. This is
+/// intentionally separate from the numeric manifest because deployed code 50
+/// has two meanings.
+#[pyfunction]
+#[pyo3(signature = (code, log=None))]
+fn classify_error_name(code: u32, log: Option<&str>) -> Option<&'static str> {
+    core_sdk::types::decode_exec_error_kind(code, log).map(|kind| kind.name())
+}
+
 /// Native Python extension module for proof-trading-sdk (internal name: _native).
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -351,5 +365,6 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_key_from_pkcs11, m)?)?;
     m.add_function(wrap_pyfunction!(get_action_types, m)?)?;
     m.add_function(wrap_pyfunction!(get_error_code_table, m)?)?;
+    m.add_function(wrap_pyfunction!(classify_error_name, m)?)?;
     Ok(())
 }

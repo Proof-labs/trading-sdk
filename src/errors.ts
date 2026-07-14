@@ -6,7 +6,7 @@
  * end with the next free integer. **Keep this map in sync with that
  * `code()` impl** (CI flags drift in the audit `api-drift` lane).
  *
- * Use `decodeExecError(code)` to translate a `TxResult.code` into a
+ * Use `decodeExecError(code, log)` to translate a `TxResult.code` into a
  * structured `{ name, description }`. UI can render `name` directly
  * (machine-readable) or `description` (human-readable). Code `0` is
  * success and returns `null` from this decoder — call sites should
@@ -77,6 +77,15 @@ export enum ExecErrorCode {
   InvalidClientOrderId = 46,
   FillOrKillWouldNotFill = 47,
   InvalidCancelReplaceTarget = 48,
+  AmendBelowFilled = 49,
+  /**
+   * The engine currently also emits code 50 for AtomicBasketOrder
+   * `SlippageExceeded`. A numeric result cannot distinguish the variants.
+   * Pass the canonical DeliverTx log to {@link decodeExecError}; without a
+   * recognized log the decoder returns `AmbiguousCode50`, never a guessed
+   * OI-cap classification.
+   */
+  OpenInterestLimitExceeded = 50,
   InternalError = 255,
 }
 
@@ -250,6 +259,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "cancel-replace rejected because exactly one of cancelOrderId or cancelClientOrderId must be supplied",
   },
+  49: {
+    name: "AmendBelowFilled",
+    description:
+      "amended total quantity is below the quantity already filled while the order rested",
+  },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
 
@@ -261,12 +275,45 @@ const TABLE: Record<number, ExecErrorInfo> = {
  * Example:
  *   const r = await client.placeOrder(...);
  *   if (r.code !== 0) {
- *     const err = decodeExecError(r.code);
+ *     const err = decodeExecError(r.code, r.log);
  *     console.error(`${err?.name ?? "Unknown"} (code ${r.code}): ${err?.description ?? r.log}`);
  *   }
  */
-export function decodeExecError(code: number): ExecErrorInfo | null {
+const OPEN_INTEREST_LOG_PREFIX = "open interest limit exceeded on market ";
+const SLIPPAGE_LOG_PREFIX = "atomic basket aggregate slippage ";
+
+const OPEN_INTEREST_LIMIT_EXCEEDED: ExecErrorInfo = {
+  name: "OpenInterestLimitExceeded",
+  description:
+    "fill would push aggregate market open interest past MarketConfig.maxOpenInterest",
+};
+
+const SLIPPAGE_EXCEEDED: ExecErrorInfo = {
+  name: "SlippageExceeded",
+  description:
+    "atomic basket aggregate slippage exceeded the submitted maxSlippageBps budget",
+};
+
+const AMBIGUOUS_CODE_50: ExecErrorInfo = {
+  name: "AmbiguousCode50",
+  description:
+    "engine code 50 is shared by OpenInterestLimitExceeded and SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely",
+};
+
+export function decodeExecError(
+  code: number,
+  log?: string,
+): ExecErrorInfo | null {
   if (code === 0) return null;
+  if (code === 50) {
+    if (log?.startsWith(OPEN_INTEREST_LOG_PREFIX)) {
+      return OPEN_INTEREST_LIMIT_EXCEEDED;
+    }
+    if (log?.startsWith(SLIPPAGE_LOG_PREFIX)) {
+      return SLIPPAGE_EXCEEDED;
+    }
+    return AMBIGUOUS_CODE_50;
+  }
   return TABLE[code] ?? null;
 }
 
@@ -275,7 +322,7 @@ export function decodeExecError(code: number): ExecErrorInfo | null {
  * code isn't in the table. Useful when you want to log a stable error
  * tag without rendering the full description.
  */
-export function execErrorName(code: number): string {
+export function execErrorName(code: number, log?: string): string {
   if (code === 0) return "Ok";
-  return TABLE[code]?.name ?? "UnknownError";
+  return decodeExecError(code, log)?.name ?? "UnknownError";
 }

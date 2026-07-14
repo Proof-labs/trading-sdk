@@ -139,8 +139,21 @@ export function toWasmFields(action: Action): {
   fields: Record<string, unknown>;
 } {
   const actionType = ActionType[action.type];
+  const fields = convertObject(
+    action.data as unknown as Record<string, unknown>,
+  );
+
+  // `CreateMarket.max_open_interest` is a non-optional u64 in the Rust/WASM
+  // core. The public TS input intentionally accepts omission/null as the
+  // operator-facing spelling of "uncapped", so normalize both before crossing
+  // the serde_wasm_bindgen boundary. This also makes the WASM migration path
+  // emit the same canonical 12-field payload as the current TS codec.
+  if (action.type === "CreateMarket" && fields.max_open_interest == null) {
+    fields.max_open_interest = 0n;
+  }
+
   return {
     actionType,
-    fields: convertObject(action.data as unknown as Record<string, unknown>),
+    fields,
   };
 }

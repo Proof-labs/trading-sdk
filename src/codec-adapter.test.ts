@@ -306,18 +306,50 @@ describe.skipIf(!built)("TS→WASM encode adapter ↔ legacy codec", () => {
       expect(wasmHex).toBe(legacyHex);
     });
   }
+
+  it("normalizes omitted, null, and zero CreateMarket caps to the same v2 bytes", () => {
+    const base = CASES.find(
+      ({ action }) => action.type === "CreateMarket",
+    )?.action;
+    if (!base || base.type !== "CreateMarket") {
+      throw new Error("missing CreateMarket differential fixture");
+    }
+
+    const forms: Action[] = [
+      base,
+      {
+        type: "CreateMarket",
+        data: { ...base.data, maxOpenInterest: null },
+      },
+      {
+        type: "CreateMarket",
+        data: { ...base.data, maxOpenInterest: 0n },
+      },
+    ];
+    const canonical = encodePayloadBytes(base);
+    expect(canonical[0]).toBe(0x9c);
+
+    for (const action of forms) {
+      const { actionType, fields } = toWasmFields(action);
+      const wasmPayload = getWasm().encode_payload(actionType, fields);
+      expect(wasmPayload).toEqual(canonical);
+      expect(encodePayloadBytes(action)).toEqual(canonical);
+
+      const decoded = getWasm().decode_payload(actionType, wasmPayload) as {
+        max_open_interest: bigint;
+      };
+      expect(decoded.max_open_interest).toBe(0n);
+    }
+  });
 });
 
 /**
- * The differential test surfaced a real bug in the hand-written TS codec that
- * no conformance vector covers: `UpdateMarketFees.markSourceMode` is encoded as
- * the integer variant index, but the authoritative Rust core (rmp-serde — the
- * same path the engine and the Python binding use) encodes the enum as its
- * variant *name*. A tx signed by the legacy codec over the integer form would
- * fail the gateway's signature check (it re-encodes to the name form). The WASM
- * path is correct by construction; the cutover fixes the bug.
+ * The WASM differential originally surfaced a real bug in the hand-written TS
+ * codec: `UpdateMarketFees.markSourceMode` used the integer variant index while
+ * the authoritative Rust core uses the enum name. The legacy path has since
+ * been fixed, so keep both encoders pinned to the same canonical bytes.
  */
-describe.skipIf(!built)("WASM fixes a latent legacy-codec bug", () => {
+describe.skipIf(!built)("WASM and legacy enum encoding agree", () => {
   beforeAll(async () => {
     await ready();
   });
@@ -333,11 +365,10 @@ describe.skipIf(!built)("WASM fixes a latent legacy-codec bug", () => {
     ).toString("hex");
     const legacyHex = Buffer.from(encodePayloadBytes(action)).toString("hex");
 
-    // WASM writes the variant name "Median" (a6 = str6 tag + UTF-8 bytes).
+    // Both paths write the variant name "Median" (a6 = str6 tag + UTF-8 bytes).
     const medianHex = Buffer.from("Median", "utf8").toString("hex");
     expect(wasmHex).toContain(medianHex);
-    // The legacy codec disagrees — it emits the non-canonical integer form.
-    expect(legacyHex).not.toContain(medianHex);
-    expect(wasmHex).not.toBe(legacyHex);
+    expect(legacyHex).toContain(medianHex);
+    expect(wasmHex).toBe(legacyHex);
   });
 });

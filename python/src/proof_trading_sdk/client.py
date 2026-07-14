@@ -589,6 +589,7 @@ class ExchangeClient:
             "partial_liquidation_enabled": flag(21),
             "sz_decimals": opt(22),
             "ticker": None if len(raw) <= 23 or raw[23] is None else str(raw[23]),
+            "max_open_interest": opt(24),
         }
 
     def markets(self) -> list[dict[str, t.Any]]:

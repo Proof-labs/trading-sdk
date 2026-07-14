@@ -17,8 +17,7 @@ fn vectors_dir() -> PathBuf {
 
 fn lines(file: &str) -> Vec<String> {
     let path = vectors_dir().join(file);
-    let body = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let body = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     body.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
@@ -62,7 +61,11 @@ fn signing_vectors() {
                 let payload = hex::decode(&payload_hex).expect("payload hex");
                 let env = cv::sign_envelope(&chain_id, action_type, seq, &payload, &secret_key)
                     .unwrap_or_else(|e| panic!("[{case}] sign failed: {e}"));
-                assert_eq!(hex::encode(env), expect_envelope_hex, "sign mismatch for {case}");
+                assert_eq!(
+                    hex::encode(env),
+                    expect_envelope_hex,
+                    "sign mismatch for {case}"
+                );
             }
             cv::SigningCase::Owner {
                 case,
@@ -70,7 +73,11 @@ fn signing_vectors() {
                 expect_owner_hex,
             } => {
                 let owner = cv::owner_of(&pubkey).unwrap_or_else(|e| panic!("[{case}] {e}"));
-                assert_eq!(hex::encode(owner), expect_owner_hex, "owner mismatch for {case}");
+                assert_eq!(
+                    hex::encode(owner),
+                    expect_owner_hex,
+                    "owner mismatch for {case}"
+                );
             }
         }
     }
