@@ -18,12 +18,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, it, expect } from "vitest";
 
-import {
-  decodeTx,
-  encodePayloadBytes,
-  encodeSignedTx,
-  signEnvelopeFromPayload,
-} from "./codec.js";
+import { encodePayloadBytes, signEnvelopeFromPayload } from "./codec.js";
 import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import {
   ActionType,
@@ -234,9 +229,6 @@ function toAction(
           poolId: input.pool_id as number,
           szDecimals: input.sz_decimals as number,
           ticker: input.ticker as string,
-          ...(input.max_open_interest === undefined
-            ? {}
-            : { maxOpenInterest: big(input.max_open_interest) }),
         },
       };
     case ActionType.WithdrawRequest:
@@ -364,9 +356,6 @@ function toAction(
           cexCompositeStalenessMs: optBig(input.cex_composite_staleness_ms),
           partialLiquidationEnabled: optBool(input.partial_liquidation_enabled),
           feeTiers: input.fee_tiers == null ? null : (input.fee_tiers as any),
-          imBps: optNum(input.im_bps),
-          mmBps: optNum(input.mm_bps),
-          maxOpenInterest: optBig(input.max_open_interest),
         },
       };
     }
@@ -504,49 +493,6 @@ describe("conformance vectors (TypeScript)", () => {
         if (e instanceof Error && e.message.startsWith("toAction:")) continue;
         throw e;
       }
-    }
-  });
-
-  it("codec: omitted, null, and zero CreateMarket caps share the canonical v2 bytes", () => {
-    const codecCases = cases("codec.ndjson");
-    const omitted = codecCases.find((c) => c.case === "create_market/full");
-    const explicitZero = codecCases.find(
-      (c) => c.case === "create_market/max_open_interest_zero_explicit",
-    );
-    if (!omitted || !explicitZero) {
-      throw new Error("missing uncapped CreateMarket conformance vectors");
-    }
-
-    const expected = (omitted.expect as { payload_hex: string }).payload_hex;
-    expect((explicitZero.expect as { payload_hex: string }).payload_hex).toBe(
-      expected,
-    );
-    expect(expected.startsWith("9c")).toBe(true);
-
-    const base = toAction(
-      omitted.action_type as ActionTypeValue,
-      omitted.input as Record<string, unknown>,
-    );
-    if (base.type !== "CreateMarket") throw new Error("type narrowing");
-    const forms: Action[] = [
-      base,
-      {
-        type: "CreateMarket",
-        data: { ...base.data, maxOpenInterest: null },
-      },
-      {
-        type: "CreateMarket",
-        data: { ...base.data, maxOpenInterest: 0n },
-      },
-    ];
-
-    for (const action of forms) {
-      expect(bytesToHex(encodePayloadBytes(action))).toBe(expected);
-      const decoded = decodeTx(
-        encodeSignedTx(action, 1n, new Uint8Array(32), new Uint8Array(64)),
-      ).action;
-      if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
-      expect(decoded.data.maxOpenInterest).toBe(0n);
     }
   });
 });

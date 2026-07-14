@@ -7,8 +7,8 @@
 mod abci_event;
 pub mod codec;
 pub mod crypto;
-pub mod signer;
 mod state;
+pub mod signer;
 pub mod types;
 pub mod wire;
 
