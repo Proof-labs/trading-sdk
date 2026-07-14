@@ -397,7 +397,23 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
           `payload is not a MessagePack array (got ${typeof fields})`,
         );
       }
-      action = decodePayload(actionType as ActionTypeValue, fields);
+      const decodedAction = decodePayload(
+        actionType as ActionTypeValue,
+        fields,
+      );
+      const [canonicalActionType, canonicalFields] =
+        encodePayload(decodedAction);
+      const canonicalPayloadBytes = encode(canonicalFields);
+      const isCanonical =
+        canonicalActionType === actionType &&
+        canonicalPayloadBytes.length === payloadBytes.length &&
+        canonicalPayloadBytes.every((byte, i) => byte === payloadBytes[i]);
+      if (!isCanonical) {
+        throw new Error(
+          "payload is not the canonical representation this SDK can safely display",
+        );
+      }
+      action = decodedAction;
     } catch (e) {
       decodeError = e instanceof Error ? e.message : String(e);
     }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { Encoder } from "@msgpack/msgpack";
+import { Decoder, Encoder } from "@msgpack/msgpack";
 import {
   encodeSignedTx,
   encodePayloadBytes,
@@ -1425,6 +1425,31 @@ describe("decodeSigningMessage", () => {
     expect(d.actionName).toBe("CreateMarket");
     expect(d.action).toBeNull();
     expect(d.decodeError).not.toBeNull();
+  });
+
+  it("refuses a known action payload with undisplayed trailing fields", () => {
+    const payload = encodePayloadBytes(createMarket);
+    const fields = new Decoder({ useBigInt64: true }).decode(payload);
+    if (!Array.isArray(fields)) {
+      expect.unreachable("expected a positional payload array");
+    }
+    const extendedPayload = new Encoder({ useBigInt64: true }).encode([
+      ...fields,
+      "field-this-sdk-does-not-display",
+    ]);
+    const msg = signingMessage(
+      chainId,
+      ActionType.CreateMarket,
+      5n,
+      extendedPayload,
+    );
+
+    const d = decodeSigningMessage(msg);
+
+    expect(d.actionName).toBe("CreateMarket");
+    expect(d.action).toBeNull();
+    expect(d.decodeError).toMatch(/not the canonical representation/);
+    expect(Array.from(d.payloadBytes)).toEqual(Array.from(extendedPayload));
   });
 
   it("throws on a wrong domain prefix", () => {
