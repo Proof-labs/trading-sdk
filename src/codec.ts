@@ -403,7 +403,15 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
     }
   }
 
-  return { chainId, actionType, actionName, seq, payloadBytes, action, decodeError };
+  return {
+    chainId,
+    actionType,
+    actionName,
+    seq,
+    payloadBytes,
+    action,
+    decodeError,
+  };
 }
 
 // ---------------------------------------------------------------------------
