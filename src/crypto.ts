@@ -19,7 +19,15 @@ hashes.sha512 = sha512;
  * v3 engine verifies against different message bytes and fails —
  * protects against cross-chain and post-wipe replay.
  */
-const DOMAIN_PREFIX = new TextEncoder().encode("ProofExchange-v3");
+/**
+ * The 16-byte signing domain prefix every v3 signing message starts with.
+ * Exported so signer-side tools can recognize (and decode) a Proof signing
+ * preimage before putting it in front of a human — see
+ * `decodeSigningMessage()` in codec.ts. Changing this value is a MAJOR wire
+ * break (see CLAUDE.md "Versioning"); it is distinct from the envelope
+ * version byte (`ENVELOPE_VERSION` = 2).
+ */
+export const DOMAIN_PREFIX = new TextEncoder().encode("ProofExchange-v3");
 
 /**
  * 32-byte zero chain_id — unbound chain. Production signers MUST
