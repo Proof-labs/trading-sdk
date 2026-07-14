@@ -77,6 +77,18 @@ vectors as **2.0.0**. Compatible engine:
   Shared code 50 resolves to `OpenInterestLimitExceeded` or
   `SlippageExceeded` only from the canonical DeliverTx log; absent or unknown
   logs resolve to `AmbiguousCode50` rather than guessing.
+- **`decodeSigningMessage()` + `DecodedSigningMessage`** — decode a v3
+  signing preimage (the exact `signingMessage()` output an external signer
+  signs) back into chain id, action type + name, seq, and the decoded
+  action, so signer-side tools can show a human WHAT they are about to sign
+  on a trust base independent of whoever built the bytes (the Web Admin
+  signer CLI is the first consumer; any future hardware-signer tool needs
+  the same). Structurally-invalid input (short, wrong domain prefix) throws;
+  an unknown action-type byte or undecodable payload degrades honestly to
+  `action: null` + `decodeError` with the envelope fields still parsed —
+  newer wire actions than the SDK build must never look like structural
+  rejections. `DOMAIN_PREFIX` is now exported alongside `ENVELOPE_VERSION`.
+  Decode-only; no wire change.
 - Rust exports a `Milliseconds` alias for every millisecond timestamp/duration
   wire field and `UpdateMarketFees::new(market, signer)` for concise no-op
   defaults; the alias remains source- and wire-identical to `u64`.
