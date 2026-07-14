@@ -1,5 +1,5 @@
 use crate::types::*;
-use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{de::DeserializeOwned, Deserialize, Serialize, Deserializer, Serializer};
 
 /// Structured output of encoding an action payload for the wire.
 struct EncodedAction {
@@ -13,7 +13,8 @@ trait EncodePayload: Serialize + DeserializeOwned {
     const ACTION_TYPE: u8;
 
     fn encode_payload(&self) -> Result<WireBlob, ExecError> {
-        let bytes = rmp_serde::to_vec(self).map_err(|e| ExecError::InternalError(e.to_string()))?;
+        let bytes = rmp_serde::to_vec(self)
+            .map_err(|e| ExecError::InternalError(e.to_string()))?;
         Ok(WireBlob(bytes))
     }
 
@@ -277,10 +278,7 @@ pub fn encode_signed_tx(
     pubkey: &[u8; 32],
     signature: &[u8; 64],
 ) -> Result<Vec<u8>, ExecError> {
-    let EncodedAction {
-        action_type,
-        payload,
-    } = action.encode_action()?;
+    let EncodedAction { action_type, payload } = action.encode_action()?;
     let envelope = WireTxEnvelope {
         version: ENVELOPE_VERSION,
         action_type,
@@ -304,10 +302,7 @@ pub fn sign_and_encode_with_chain(
 ) -> Result<Vec<u8>, ExecError> {
     use ed25519_dalek::Signer;
 
-    let EncodedAction {
-        action_type,
-        payload,
-    } = action.encode_action()?;
+    let EncodedAction { action_type, payload } = action.encode_action()?;
     let msg = crate::crypto::signing_message(chain_id, action_type, seq, &payload);
     let sig = signing_key.sign(&msg);
 
@@ -437,13 +432,13 @@ pub fn peek_seq(bytes: &[u8]) -> Option<u64> {
 #[allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::wire::{Address, Pubkey};
     use crate::types::{
         AmendOrder, ApproveAgent, CancelOrder, CancelReplaceOrder, ConfirmDeposit,
-        ConfirmWithdrawal, CreateMarket, Deposit, FailWithdrawal, MarketOrder, Milliseconds,
-        OracleUpdate, OracleUpdateComposite, PlaceOrder, RevokeAgent, Side, TimeInForce,
-        UpdateMarketFees, Withdraw, WithdrawRequest,
+        ConfirmWithdrawal, CreateMarket, Deposit, FailWithdrawal, MarketOrder, OracleUpdate,
+        OracleUpdateComposite, PlaceOrder, RevokeAgent, Side, TimeInForce, Withdraw,
+        WithdrawRequest,
     };
-    use crate::wire::{Address, Pubkey};
 
     fn test_key() -> ed25519_dalek::SigningKey {
         ed25519_dalek::SigningKey::from_bytes(&[0x42; 32])
@@ -457,7 +452,10 @@ mod tests {
         let encoded = encode_tx(action, seq).unwrap();
         let dt = decode_tx(&encoded).unwrap();
         assert_eq!(dt.seq, seq);
-        assert_eq!(format!("{:?}", action), format!("{:?}", dt.action),);
+        assert_eq!(
+            format!("{:?}", action),
+            format!("{:?}", dt.action),
+        );
     }
 
     #[test]
@@ -509,11 +507,7 @@ mod tests {
             let encoded_a = encode_tx(&action, seq).unwrap();
             let encoded_b = encode_tx(&action, seq).unwrap();
             assert_eq!(encoded_a, encoded_b, "encoding must be deterministic");
-            assert_eq!(
-                hex::encode(&encoded_a),
-                expected_hex,
-                "golden vector mismatch"
-            );
+            assert_eq!(hex::encode(&encoded_a), expected_hex, "golden vector mismatch");
 
             let dt = decode_tx(&encoded_a).unwrap();
             assert_eq!(dt.seq, seq);
@@ -664,7 +658,6 @@ mod tests {
                 pool_id: 0,
                 sz_decimals: 0,
                 ticker: String::new(),
-                max_open_interest: 0,
             }),
             Action::WithdrawRequest(WithdrawRequest {
                 owner: [0x33; 20].into(),
@@ -713,7 +706,7 @@ mod tests {
         taker_fee_bps: u32,
         maker_fee_bps: u32,
         signer: [u8; 20],
-        funding_interval_ms: Milliseconds,
+        funding_interval_ms: u64,
         max_funding_rate_bps: u32,
     }
 
@@ -747,217 +740,6 @@ mod tests {
         assert!(
             decode_tx(&encoded).is_err(),
             "legacy 8-field CreateMarket must be rejected now that sz_decimals/ticker are mandatory"
-        );
-    }
-
-    #[derive(Debug, Serialize, Deserialize)]
-    struct PreOpenInterestCreateMarket {
-        market: u32,
-        im_bps: u32,
-        mm_bps: u32,
-        taker_fee_bps: u32,
-        maker_fee_bps: u32,
-        signer: Address,
-        funding_interval_ms: Milliseconds,
-        max_funding_rate_bps: u32,
-        pool_id: u8,
-        sz_decimals: u8,
-        ticker: String,
-    }
-
-    #[derive(Debug, Default, Serialize, Deserialize)]
-    struct PreRiskTailUpdateMarketFees {
-        market: u32,
-        signer: Address,
-        taker_fee_bps: Option<u32>,
-        maker_fee_bps: Option<u32>,
-        max_funding_rate_bps: Option<u32>,
-        funding_interval_ms: Option<Milliseconds>,
-        max_position_size: Option<u64>,
-        default_ttl_ms: Option<Milliseconds>,
-        net_delta_margin: Option<bool>,
-        tick_size: Option<u64>,
-        lot_size: Option<u64>,
-        primary_oracle_signer: Option<Address>,
-        oracle_staleness_ms: Option<Milliseconds>,
-        mark_source_mode: Option<crate::types::MarkSourceMode>,
-        max_mark_spread_bps: Option<u32>,
-        cex_composite_staleness_ms: Option<Milliseconds>,
-        partial_liquidation_enabled: Option<bool>,
-        fee_tiers: Option<Vec<crate::types::FeeTier>>,
-    }
-
-    impl PreRiskTailUpdateMarketFees {
-        fn new(market: u32, signer: Address) -> Self {
-            Self {
-                market,
-                signer,
-                ..Self::default()
-            }
-        }
-    }
-
-    /// Released engine-v1 UpdateMarketFees shape. The SDK had lagged the
-    /// engine's IM/MM tails, so this separate 20-field stand-in is required to
-    /// prove compatibility against the real prior wire contract rather than
-    /// only against the SDK's stale 18-field shape above.
-    #[derive(Debug, Default, Serialize, Deserialize)]
-    struct FrozenV1UpdateMarketFees {
-        market: u32,
-        signer: Address,
-        taker_fee_bps: Option<u32>,
-        maker_fee_bps: Option<u32>,
-        max_funding_rate_bps: Option<u32>,
-        funding_interval_ms: Option<Milliseconds>,
-        max_position_size: Option<u64>,
-        default_ttl_ms: Option<Milliseconds>,
-        net_delta_margin: Option<bool>,
-        tick_size: Option<u64>,
-        lot_size: Option<u64>,
-        primary_oracle_signer: Option<Address>,
-        oracle_staleness_ms: Option<Milliseconds>,
-        mark_source_mode: Option<crate::types::MarkSourceMode>,
-        max_mark_spread_bps: Option<u32>,
-        cex_composite_staleness_ms: Option<Milliseconds>,
-        partial_liquidation_enabled: Option<bool>,
-        fee_tiers: Option<Vec<crate::types::FeeTier>>,
-        im_bps: Option<u32>,
-        mm_bps: Option<u32>,
-    }
-
-    impl FrozenV1UpdateMarketFees {
-        fn new(market: u32, signer: Address) -> Self {
-            Self {
-                market,
-                signer,
-                ..Self::default()
-            }
-        }
-    }
-
-    #[test]
-    fn create_market_open_interest_tail_is_optional_and_round_trips() {
-        let legacy = PreOpenInterestCreateMarket {
-            market: 42,
-            im_bps: 1000,
-            mm_bps: 500,
-            taker_fee_bps: 5,
-            maker_fee_bps: 2,
-            signer: [0xEE; 20].into(),
-            funding_interval_ms: 60_000,
-            max_funding_rate_bps: 100,
-            pool_id: 9,
-            sz_decimals: 5,
-            ticker: "BTC".to_string(),
-        };
-        let uncapped = CreateMarket {
-            market: 42,
-            im_bps: 1000,
-            mm_bps: 500,
-            taker_fee_bps: 5,
-            maker_fee_bps: 2,
-            signer: [0xEE; 20].into(),
-            funding_interval_ms: 60_000,
-            max_funding_rate_bps: 100,
-            pool_id: 9,
-            sz_decimals: 5,
-            ticker: "BTC".to_string(),
-            max_open_interest: 0,
-        };
-
-        // Backward decode holds: a released 11-element payload still decodes,
-        // as an uncapped market.
-        let legacy_bytes = rmp_serde::to_vec(&legacy).unwrap();
-        let legacy_decoded: CreateMarket = rmp_serde::from_slice(&legacy_bytes).unwrap();
-        assert_eq!(legacy_decoded.max_open_interest, 0);
-
-        // But the v2 encoding is LENGTH-STABLE: a zero cap serializes to 12
-        // elements, not 11. The SDK must not drop the zero tail — the engine
-        // and the gateway's re-encoding path both emit it, and a client that
-        // signed 11 elements would fail signature verification against them.
-        let uncapped_bytes = rmp_serde::to_vec(&uncapped).unwrap();
-        let capped = CreateMarket {
-            max_open_interest: 1_000_000,
-            ..uncapped
-        };
-        let capped_bytes = rmp_serde::to_vec(&capped).unwrap();
-
-        for (label, bytes, tail) in [
-            ("uncapped", &uncapped_bytes, serde_json::json!(0)),
-            ("capped", &capped_bytes, serde_json::json!(1_000_000)),
-        ] {
-            let fields: Vec<serde_json::Value> = rmp_serde::from_slice(bytes).unwrap();
-            assert_eq!(fields.len(), 12, "{label} CreateMarket must be 12 elements");
-            assert_eq!(fields[11], tail, "{label} CreateMarket tail");
-
-            let decoded: CreateMarket = rmp_serde::from_slice(bytes).unwrap();
-            assert_eq!(
-                decoded.max_open_interest,
-                if label == "capped" { 1_000_000 } else { 0 }
-            );
-
-            // No v2 CreateMarket is forward-decodable by the frozen v1 struct —
-            // uncapped included. That is what makes this release MAJOR.
-            let error = rmp_serde::from_slice::<PreOpenInterestCreateMarket>(bytes).unwrap_err();
-            assert!(
-                error.to_string().contains("length")
-                    || error.to_string().contains("LengthMismatch"),
-                "unexpected frozen v1 CreateMarket decoder error ({label}): {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn update_market_fees_uses_margin_slots_before_open_interest_cap() {
-        let update = UpdateMarketFees {
-            im_bps: Some(3334),
-            mm_bps: Some(1667),
-            max_open_interest: Some(500_000),
-            ..UpdateMarketFees::new(42, [0xEE; 20].into())
-        };
-
-        let payload = rmp_serde::to_vec(&update).unwrap();
-        let fields: Vec<serde_json::Value> = rmp_serde::from_slice(&payload).unwrap();
-        assert_eq!(fields.len(), 21);
-        assert_eq!(fields[18], serde_json::json!(3334));
-        assert_eq!(fields[19], serde_json::json!(1667));
-        assert_eq!(fields[20], serde_json::json!(500_000));
-
-        let decoded: UpdateMarketFees = rmp_serde::from_slice(&payload).unwrap();
-        assert_eq!(decoded.im_bps, Some(3334));
-        assert_eq!(decoded.mm_bps, Some(1667));
-        assert_eq!(decoded.max_open_interest, Some(500_000));
-
-        // The SDK's stale pre-risk-tail 18-field form remains accepted.
-        let stale_sdk = PreRiskTailUpdateMarketFees::new(42, [0xEE; 20].into());
-        let stale_sdk_payload = rmp_serde::to_vec(&stale_sdk).unwrap();
-        let stale_sdk_decoded: UpdateMarketFees =
-            rmp_serde::from_slice(&stale_sdk_payload).unwrap();
-        assert_eq!(stale_sdk_decoded.im_bps, None);
-        assert_eq!(stale_sdk_decoded.mm_bps, None);
-        assert_eq!(stale_sdk_decoded.max_open_interest, None);
-
-        // More importantly, model the actual released engine-v1 decoder and
-        // payload: it already had IM/MM at slots 18/19 and only lacks max OI.
-        let frozen_v1 = FrozenV1UpdateMarketFees {
-            im_bps: Some(3334),
-            mm_bps: Some(1667),
-            ..FrozenV1UpdateMarketFees::new(42, [0xEE; 20].into())
-        };
-        let frozen_v1_payload = rmp_serde::to_vec(&frozen_v1).unwrap();
-        let frozen_v1_fields: Vec<serde_json::Value> =
-            rmp_serde::from_slice(&frozen_v1_payload).unwrap();
-        assert_eq!(frozen_v1_fields.len(), 20);
-        let frozen_v1_decoded: UpdateMarketFees =
-            rmp_serde::from_slice(&frozen_v1_payload).unwrap();
-        assert_eq!(frozen_v1_decoded.im_bps, Some(3334));
-        assert_eq!(frozen_v1_decoded.mm_bps, Some(1667));
-        assert_eq!(frozen_v1_decoded.max_open_interest, None);
-
-        let error = rmp_serde::from_slice::<FrozenV1UpdateMarketFees>(&payload).unwrap_err();
-        assert!(
-            error.to_string().contains("length") || error.to_string().contains("LengthMismatch"),
-            "unexpected frozen v1 UpdateMarketFees decoder error: {error}"
         );
     }
 
@@ -1013,7 +795,6 @@ mod tests {
                 pool_id: 0,
                 sz_decimals: 0,
                 ticker: String::new(),
-                max_open_interest: u64::MAX,
             }),
             Action::WithdrawRequest(WithdrawRequest {
                 owner: [0xFF; 20].into(),
@@ -1091,7 +872,6 @@ mod tests {
                 pool_id: 0,
                 sz_decimals: 0,
                 ticker: String::new(),
-                max_open_interest: 0,
             }),
             Action::WithdrawRequest(WithdrawRequest {
                 owner: [0u8; 20].into(),
@@ -1190,7 +970,6 @@ mod tests {
                     pool_id: 0,
                     sz_decimals: 0,
                     ticker: String::new(),
-                    max_open_interest: i + 1,
                 }),
                 Action::WithdrawRequest(WithdrawRequest {
                     owner,
@@ -1348,7 +1127,6 @@ mod tests {
                 pool_id: 0,
                 sz_decimals: 0,
                 ticker: String::new(),
-                max_open_interest: 0,
             }),
             Action::WithdrawRequest(WithdrawRequest {
                 owner: [0; 20].into(),
@@ -1587,8 +1365,7 @@ mod tests {
             seed[0] = action_idx;
             seed[1] = 0xAB;
             let key = ed25519_dalek::SigningKey::from_bytes(&seed);
-            let owner: Address =
-                crate::crypto::pubkey_to_owner(&key.verifying_key().to_bytes()).into();
+            let owner: Address = crate::crypto::pubkey_to_owner(&key.verifying_key().to_bytes()).into();
 
             for seq in 0u64..100 {
                 let action = match action_idx {
@@ -1642,7 +1419,6 @@ mod tests {
                         pool_id: 0,
                         sz_decimals: 0,
                         ticker: String::new(),
-                        max_open_interest: seq + 1,
                     }),
                     7 => Action::WithdrawRequest(WithdrawRequest {
                         owner,
@@ -1906,11 +1682,11 @@ mod tests {
         // a backward-compatible (MINOR) addition: feeder records written before
         // the replay guard existed round-trip on this code.
         let payload = rmp_serde::to_vec(&(
-            7u32,       // market
-            250_000u64, // price
-            1u8,        // n_sources
+            7u32,         // market
+            250_000u64,   // price
+            1u8,          // n_sources
             [0x21u8; 20], // signer
-                        // publish_time_ms intentionally omitted
+                          // publish_time_ms intentionally omitted
         ))
         .unwrap();
         let envelope = WireTxEnvelope {

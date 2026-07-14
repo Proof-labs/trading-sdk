@@ -50,7 +50,7 @@ export function txEngineError(code: number, body: TxResultBody = {}): TxResult {
     ok: false,
     outcome: "engine",
     code,
-    error: decodeExecError(code, body.log),
+    error: decodeExecError(code),
     hash: body.hash ?? "",
     height: body.height,
     log: body.log,
@@ -72,11 +72,7 @@ export function txTransportError(
   return { ok: false, outcome: "transport", code, error: null, hash, log };
 }
 
-/**
- * No final chain verdict is available yet (`code === -1`). This covers both a
- * hash-only ambiguous gateway response and inclusion polling that expired; the
- * transaction may still commit and should be reconciled by `hash`.
- */
+/** Inclusion polling gave up before a DeliverTx result appeared (`code === -1`). */
 export function txTimeout(hash: string, log: string): TxResult {
   return { ok: false, outcome: "timeout", code: -1, error: null, hash, log };
 }

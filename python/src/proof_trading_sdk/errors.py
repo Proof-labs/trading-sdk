@@ -4,36 +4,28 @@ from typing import Optional
 
 # Delay imports to avoid circular access during proof_trading_sdk init
 _ERROR_CODES: list[dict[str, object]] = []
+_ERROR_CODE_MAP: dict[int, str] = {}
 _ERROR_CODES_LOADED = False
 
 
 def _ensure_loaded() -> None:
-    global _ERROR_CODES, _ERROR_CODES_LOADED
+    global _ERROR_CODES, _ERROR_CODE_MAP, _ERROR_CODES_LOADED
     if _ERROR_CODES_LOADED:
         return
     import proof_trading_sdk._native as _native
 
     _ERROR_CODES = _native.get_error_code_table()
+    _ERROR_CODE_MAP = {entry["code"]: entry["name"] for entry in _ERROR_CODES}  # type: ignore[arg-type]
     _ERROR_CODES_LOADED = True
 
 
-def get_error_name(code: int, message: str | None = None) -> Optional[str]:
-    """Return the safe error classification for a code and DeliverTx log.
+def get_error_name(code: int) -> Optional[str]:
+    """Return the canonical error name for a code, or ``None`` if unknown.
 
     E.g. ``get_error_name(21)`` returns ``"InvalidNonce"``.
-
-    Deployed code 50 is shared by ``OpenInterestLimitExceeded`` and
-    ``SlippageExceeded``. Its canonical non-empty DeliverTx log is required;
-    missing or unknown text returns ``AmbiguousCode50`` rather than guessing.
     """
     _ensure_loaded()
-    return _native_error_name(code, message)
-
-
-def _native_error_name(code: int, message: str | None) -> Optional[str]:
-    import proof_trading_sdk._native as _native
-
-    return _native.classify_error_name(code, message)  # type: ignore[no-any-return]
+    return _ERROR_CODE_MAP.get(code)
 
 
 def get_error_code_table() -> list[dict[str, object]]:
@@ -74,9 +66,7 @@ class GatewayError(TransportError):
     def __init__(self, status_code: int, body: str) -> None:
         self.status_code = status_code
         self.body = body
-        super().__init__(
-            f"gateway error: {status_code} {body[:200]}", status_code=status_code
-        )
+        super().__init__(f"gateway error: {status_code} {body[:200]}", status_code=status_code)
 
 
 class AuthenticationError(ProofTradingSdkError):
@@ -94,7 +84,7 @@ class EngineError(ProofTradingSdkError):
 
     def __init__(self, code: int, message: str) -> None:
         self.code = code
-        self.name = get_error_name(code, message) or "Unknown"
+        self.name = get_error_name(code) or "Unknown"
         self.message = message
         super().__init__(f"[{code}] {self.name}: {message}")
 
@@ -116,6 +106,4 @@ class RateLimited(ProofTradingSdkError):
     def __init__(self, retry_after_secs: float, bucket: str = "") -> None:
         self.retry_after_secs = retry_after_secs
         self.bucket = bucket
-        super().__init__(
-            f"rate_limited bucket={bucket!r} retry_after={retry_after_secs}s"
-        )
+        super().__init__(f"rate_limited bucket={bucket!r} retry_after={retry_after_secs}s")

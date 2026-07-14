@@ -157,20 +157,6 @@ def test_markets_decodes_msgpack_config():
     assert mkts[0]["im_bps"] == 1_000
     assert mkts[0]["kind"] == "Perp"
     assert mkts[0]["sz_decimals"] is None  # omitted optional -> None
-    assert mkts[0]["max_open_interest"] is None
-
-
-def test_markets_decodes_max_open_interest_slot_24():
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v1/markets"
-        cfg = [1, 1_000, 500, 5, 2, 3_600_000, 100, "Perp"]
-        cfg.extend([None] * (23 - len(cfg)))
-        cfg.extend(["BTC", 1_000_000])
-        return _info_response([cfg])
-
-    market = _client(handler).markets()[0]
-    assert market["ticker"] == "BTC"
-    assert market["max_open_interest"] == 1_000_000
 
 
 def test_orderbook_decodes_bids_asks():
