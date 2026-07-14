@@ -477,6 +477,37 @@ export class ExchangeClient {
   }
 
   /**
+   * Submit **externally signed** wire bytes — the public counterpart of
+   * `submitTx` for callers that never load a private key into the client
+   * (hardware or CLI signers, multisig proposers/approvers). Build the bytes
+   * with `signingMessage()` → sign anywhere → `encodeSignedTx()`; this method
+   * is pure transport for the result.
+   *
+   * The caller owns everything the loaded-key path normally does: the
+   * chain id, a fresh millisecond-timestamp `seq` (one per signature), and
+   * the signature itself. The bytes are deliberately treated as opaque —
+   * never decoded or validated here — so wire-valid action types this SDK
+   * build does not know yet still submit; the gateway and engine are the
+   * authorities that reject malformed bytes.
+   *
+   * Routes exactly like `submitTx` (gateway by default, CometBFT
+   * `broadcast_tx_sync` on the internal `useGateway: false` opt-out) with the
+   * same delivery-verification semantics: a synchronous gateway verdict is
+   * final and returns as-is; a hash-only ambiguous response spawns the same
+   * fire-and-forget `/tx?hash=` reconciliation, awaitable via
+   * `awaitPendingVerifies()`.
+   */
+  async submitSignedTx(txBytes: Uint8Array): Promise<TxResult> {
+    const r = this.useGateway
+      ? await this.submitViaGateway(txBytes)
+      : await this.submitViaCometBFT(txBytes);
+    if (this.autoVerifyDelivery && r.hash && !this.isFinalResult(r)) {
+      this.spawnDeliveryVerifier(r.hash);
+    }
+    return r;
+  }
+
+  /**
    * Internal: sign + submit with a fresh timestamp nonce. Does NOT spawn a
    * background verifier — the public `submitTx` adds that.
    * `submitTxCommit` uses this directly so it can run its own

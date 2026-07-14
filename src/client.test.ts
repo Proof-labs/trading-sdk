@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Encoder } from "@msgpack/msgpack";
 import { ExchangeClient, fetchChainId } from "./client.js";
-import { decodeTx } from "./codec.js";
+import { decodeTx, signAndEncode } from "./codec.js";
 import {
   UNBOUND_CHAIN_ID,
   bytesToHex,
@@ -674,6 +674,132 @@ describe("ExchangeClient submitTx gateway path", () => {
       log: "insufficient margin",
     });
     expect(calls).toHaveLength(2);
+    expect(calls[1].url).toBe("http://test-gateway/v1/tx/ABCD");
+  });
+
+  // ---------------------------------------------------------------------
+  // submitSignedTx — the external-signer path. The client holds NO private
+  // key; the caller built and signed the wire bytes elsewhere (signer CLI,
+  // hardware key) and the SDK's job is byte-exact transport: what was signed
+  // is exactly what the gateway receives, or the co-signature story breaks.
+  // ---------------------------------------------------------------------
+
+  /** A keyless client — external signers never call setPrivateKey. */
+  function makeKeylessGatewayClient(): ExchangeClient {
+    return new ExchangeClient({
+      rpcUrl: "http://test-rpc",
+      apiUrl: "http://test-api",
+      gatewayUrl: "http://test-gateway",
+      useGateway: true,
+      chainId: "test-chain",
+    });
+  }
+
+  /** Wire bytes signed OUTSIDE the client, as an external signer would. */
+  function externallySignedBytes(): Uint8Array {
+    const kp = generateKeypair();
+    const action: Action = {
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: pubkeyToOwner(kp.publicKey),
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+      },
+    };
+    return signAndEncode(
+      chainIdFromString("test-chain"),
+      action,
+      BigInt(Date.now()),
+      kp.privateKey,
+    );
+  }
+
+  it("submitSignedTx submits pre-signed bytes byte-exactly, with no key loaded", async () => {
+    const client = makeKeylessGatewayClient();
+    const txBytes = externallySignedBytes();
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "ok",
+            txHash: "ABCD",
+            code: 0,
+            height: 4821903,
+            events: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const r = await client.submitSignedTx(txBytes);
+
+    expect(r.ok).toBe(true);
+    expect(r.code).toBe(0);
+    expect(r.height).toBe(4821903);
+    expect(r.hash).toBe("ABCD");
+
+    // Exactly one round-trip to POST /exchange, and the forwarded bytes are
+    // the caller's bytes, bit for bit — the property co-signing relies on.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("http://test-gateway/exchange");
+    const body = JSON.parse(calls[0].init?.body as string) as {
+      action: string;
+    };
+    expect(bytesFromBase64(body.action)).toEqual(txBytes);
+
+    // Final synchronous verdict → no background verifier spawned.
+    expect(
+      (client as unknown as { pendingVerifies: Set<unknown> }).pendingVerifies
+        .size,
+    ).toBe(0);
+  });
+
+  it("submitSignedTx keeps the hash-only background reconciliation (parity with submitTx)", async () => {
+    const client = makeKeylessGatewayClient();
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "error",
+            error: "duplicate in-flight tx; reconcile via txHash",
+            txHash: "ABCD",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              height: "4821905",
+              tx_result: { code: 0, log: "", events: [] },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const initial = await client.submitSignedTx(externallySignedBytes());
+
+    expect(initial).toMatchObject({
+      ok: false,
+      outcome: "timeout",
+      hash: "ABCD",
+    });
+
+    const reconciled = await client.awaitPendingVerifies();
+    expect(reconciled).toHaveLength(1);
+    expect(reconciled[0]).toMatchObject({
+      ok: true,
+      code: 0,
+      hash: "ABCD",
+      height: 4821905,
+    });
     expect(calls[1].url).toBe("http://test-gateway/v1/tx/ABCD");
   });
 

@@ -50,6 +50,17 @@ vectors as **2.0.0**. Compatible engine:
 
 ### Added
 
+- **`ExchangeClient.submitSignedTx(txBytes)`** — public submission of
+  **externally signed** wire bytes (built via `signingMessage()` → external
+  signature → `encodeSignedTx()`), for callers that never load a private key
+  into the client: hardware/CLI signers and the Web Admin's multisig
+  propose/approve flows. Pure byte-exact transport — the bytes are never
+  decoded or re-encoded, so what was signed is exactly what the gateway
+  receives (and action types newer than this SDK build still submit). Routes
+  and reconciles identically to `submitTx` (gateway by default, same
+  hash-only background verification). Previously the only submission paths
+  required `setPrivateKey`, forcing external-signer apps toward hand-rolled
+  `POST /exchange` calls. No wire change.
 - Aggregate open-interest cap support across Rust, TypeScript, and Python:
   `CreateMarket.maxOpenInterest` is an optional/nullable input normalized to
   an explicit zero tail when uncapped,
