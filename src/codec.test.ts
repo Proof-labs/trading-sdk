@@ -4,6 +4,7 @@ import {
   encodeSignedTx,
   encodePayloadBytes,
   decodeTx,
+  decodeSigningMessage,
   peekActionType,
   signAndEncode,
   ENVELOPE_VERSION,
@@ -1327,5 +1328,130 @@ describe("UpdateMarketFees.markSourceMode encoding", () => {
     if (action.type === "UpdateMarketFees") {
       expect(action.data.markSourceMode ?? null).toBeNull();
     }
+  });
+});
+
+describe("decodeSigningMessage", () => {
+  const chainId = chainIdFromString("test-chain");
+  const owner = pubkeyToOwner(getPublicKey(generateKeypair().privateKey));
+
+  const createMarket: Action = {
+    type: "CreateMarket",
+    data: {
+      market: 42,
+      imBps: 500,
+      mmBps: 250,
+      takerFeeBps: 5,
+      makerFeeBps: 2,
+      signer: owner,
+      fundingIntervalMs: 3_600_000n,
+      maxFundingRateBps: 100,
+      szDecimals: 2,
+      ticker: "XYZ-PERP",
+    },
+  };
+
+  it("round-trips the exact signingMessage() bytes for a CreateMarket", () => {
+    const payload = encodePayloadBytes(createMarket);
+    const seq = 1_752_000_000_000n;
+    const msg = signingMessage(chainId, ActionType.CreateMarket, seq, payload);
+
+    const d = decodeSigningMessage(msg);
+
+    expect(Array.from(d.chainId)).toEqual(Array.from(chainId));
+    expect(d.actionType).toBe(ActionType.CreateMarket);
+    expect(d.actionName).toBe("CreateMarket");
+    expect(d.seq).toBe(seq);
+    expect(Array.from(d.payloadBytes)).toEqual(Array.from(payload));
+    expect(d.decodeError).toBeNull();
+    expect(d.action?.type).toBe("CreateMarket");
+    if (d.action?.type === "CreateMarket") {
+      expect(d.action.data.ticker).toBe("XYZ-PERP");
+      expect(d.action.data.market).toBe(42);
+      expect(d.action.data.imBps).toBe(500);
+    }
+  });
+
+  it("round-trips a PlaceOrder preimage", () => {
+    const placeOrder: Action = {
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 3n,
+      },
+    };
+    const payload = encodePayloadBytes(placeOrder);
+    const msg = signingMessage(chainId, ActionType.PlaceOrder, 7n, payload);
+
+    const d = decodeSigningMessage(msg);
+
+    expect(d.actionName).toBe("PlaceOrder");
+    expect(d.seq).toBe(7n);
+    if (d.action?.type === "PlaceOrder") {
+      expect(d.action.data.price).toBe(100_000_000n);
+      expect(d.action.data.side).toBe(Side.Buy);
+    } else {
+      expect.unreachable("expected a decoded PlaceOrder");
+    }
+  });
+
+  it("degrades to action:null (not a throw) for an unknown action-type byte", () => {
+    // A wire action newer than this SDK build: the envelope fields must
+    // still parse so a signer tool can show them, with an honest "cannot
+    // decode" instead of a false structural rejection.
+    const payload = encodePayloadBytes(createMarket);
+    const msg = signingMessage(chainId, 0xee, 5n, payload);
+
+    const d = decodeSigningMessage(msg);
+
+    expect(d.actionType).toBe(0xee);
+    expect(d.actionName).toBeNull();
+    expect(d.action).toBeNull();
+    expect(d.decodeError).toContain("unknown action type 0xee");
+    expect(d.seq).toBe(5n);
+    expect(Array.from(d.chainId)).toEqual(Array.from(chainId));
+    expect(Array.from(d.payloadBytes)).toEqual(Array.from(payload));
+  });
+
+  it("degrades to action:null when a known type's payload doesn't decode", () => {
+    const garbage = new Uint8Array([0xff, 0x00, 0x13, 0x37]);
+    const msg = signingMessage(chainId, ActionType.CreateMarket, 5n, garbage);
+
+    const d = decodeSigningMessage(msg);
+
+    expect(d.actionName).toBe("CreateMarket");
+    expect(d.action).toBeNull();
+    expect(d.decodeError).not.toBeNull();
+  });
+
+  it("throws on a wrong domain prefix", () => {
+    const payload = encodePayloadBytes(createMarket);
+    const msg = signingMessage(chainId, ActionType.CreateMarket, 1n, payload);
+    msg[0] ^= 0xff;
+    expect(() => decodeSigningMessage(msg)).toThrow(/domain prefix/);
+  });
+
+  it("throws on input shorter than the fixed header", () => {
+    expect(() => decodeSigningMessage(new Uint8Array(56))).toThrow(
+      /shorter than/,
+    );
+  });
+
+  it("parses a preimage whose bytes sit at a nonzero offset in a larger buffer", () => {
+    // The seq DataView reads through msg.buffer + byteOffset — a subarray
+    // view over a bigger allocation must decode identically.
+    const payload = encodePayloadBytes(createMarket);
+    const msg = signingMessage(chainId, ActionType.CreateMarket, 9n, payload);
+    const padded = new Uint8Array(msg.length + 8);
+    padded.set(msg, 8);
+    const view = padded.subarray(8);
+
+    const d = decodeSigningMessage(view);
+
+    expect(d.seq).toBe(9n);
+    expect(d.action?.type).toBe("CreateMarket");
   });
 });

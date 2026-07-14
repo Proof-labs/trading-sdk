@@ -83,6 +83,8 @@ export {
   signEnvelopeFromPayload,
   encodePayloadBytes,
   decodeTx,
+  decodeSigningMessage,
+  type DecodedSigningMessage,
   peekActionType,
 } from "./codec.js";
 export { fetchChainId } from "./client.js";
@@ -108,6 +110,7 @@ export {
   verify,
   chainIdFromString,
   UNBOUND_CHAIN_ID,
+  DOMAIN_PREFIX,
 } from "./crypto.js";
 
 // Client
