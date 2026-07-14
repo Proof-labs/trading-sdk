@@ -132,6 +132,16 @@ class ExchangeClient {
   //   in ONE round-trip. `submitTxCommit` no longer polls `/tx?hash=` for it,
   //   and `submitTx` spawns no background verifier. See "Transaction results".
 
+  // External signers — no key loaded in the client. Build the envelope with
+  // signingMessage() → sign anywhere (hardware key, CLI signer) →
+  // encodeSignedTx(), then submit the bytes byte-exact (never re-encoded).
+  // Semantics mirror the pair above: submitSignedTx is fire-and-forget with
+  // background reconciliation; submitSignedTxCommit waits for the final
+  // chain verdict (scoped to the call — use it when the caller must know
+  // definitively whether the tx landed, e.g. operator/multisig actions).
+  submitSignedTx(txBytes: Uint8Array): Promise<TxResult>;
+  submitSignedTxCommit(txBytes: Uint8Array): Promise<TxResult>;
+
   // Reads
   queryOrderbook(market: number): Promise<Orderbook>;
   queryOpenOrders(addressHex?: string): Promise<OpenOrder[]>;

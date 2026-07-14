@@ -803,6 +803,113 @@ describe("ExchangeClient submitTx gateway path", () => {
     expect(calls[1].url).toBe("http://test-gateway/v1/tx/ABCD");
   });
 
+  it("submitSignedTxCommit returns a synchronous verdict without polling", async () => {
+    const client = makeKeylessGatewayClient();
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "ok",
+            txHash: "ABCD",
+            code: 0,
+            height: 4821903,
+            events: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const r = await client.submitSignedTxCommit(externallySignedBytes());
+
+    expect(r.ok).toBe(true);
+    expect(r.height).toBe(4821903);
+    expect(calls).toHaveLength(1);
+    expect(calls.some((c) => c.url.includes("/tx"))).toBe(false);
+  });
+
+  it("submitSignedTxCommit resolves a hash-only ambiguous response synchronously, scoped to the call", async () => {
+    // The commit path must return THIS tx's final verdict directly — no
+    // background verifier, no draining the client-global
+    // awaitPendingVerifies() buffer.
+    const client = makeKeylessGatewayClient();
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "error",
+            error: "duplicate in-flight tx; reconcile via txHash",
+            txHash: "ABCD",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              height: "4821905",
+              tx_result: { code: 12, log: "insufficient margin", events: [] },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const r = await client.submitSignedTxCommit(externallySignedBytes());
+
+    expect(r).toMatchObject({
+      ok: false,
+      outcome: "engine",
+      code: 12,
+      hash: "ABCD",
+      height: 4821905,
+      log: "insufficient margin",
+    });
+    expect(calls[1].url).toBe("http://test-gateway/v1/tx/ABCD");
+    // Scoped: nothing left for the global reconciliation buffer.
+    expect(
+      (client as unknown as { pendingVerifies: Set<unknown> }).pendingVerifies
+        .size,
+    ).toBe(0);
+    expect(await client.awaitPendingVerifies()).toHaveLength(0);
+  });
+
+  it("submitSignedTxCommit polls when a legacy gateway only acks CheckTx", async () => {
+    const client = makeKeylessGatewayClient();
+
+    nextResponses.push(
+      () =>
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              height: "4821907",
+              tx_result: { code: 0, log: "", events: [] },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const r = await client.submitSignedTxCommit(externallySignedBytes());
+
+    expect(r.ok).toBe(true);
+    expect(r.height).toBe(4821907);
+    // The poll targets the hash of the exact bytes the caller signed.
+    expect(calls[1].url).toBe(
+      `http://test-gateway/v1/tx/${expectedGatewayHash(calls[0])}`,
+    );
+  });
+
   it("still polls when the gateway only acks CheckTx (pre-#90 gateway)", async () => {
     // Back-compat: an older gateway answers {status:"ok"} with no code/height.
     // The outcome is unknown, so the poll loop must still run — otherwise the
