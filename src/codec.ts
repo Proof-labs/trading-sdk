@@ -257,11 +257,34 @@ export function signEnvelopeFromPayload(
 // Decoding
 // ---------------------------------------------------------------------------
 
-/** Peek at the action_type byte without full decode. */
+/** Every wire action-type byte this SDK build knows — the validation set
+ *  behind `peekActionType`'s return type. */
+const KNOWN_ACTION_TYPES: ReadonlySet<number> = new Set<number>(
+  Object.values(ActionType),
+);
+
+/** Peek at the action_type byte without full decode.
+ *
+ *  Returns `null` both for structurally unreadable bytes AND for an
+ *  action-type slot this SDK build does not know (an unassigned byte, a
+ *  newer engine's wire type under an older SDK, or a non-numeric msgpack
+ *  value). Previously the raw slot value leaked out typed as
+ *  `ActionTypeValue`, so downstream code trusting the type to imply
+ *  membership (e.g. indexing a `Record<ActionTypeValue, …>`) hit
+ *  `undefined` at runtime with no type error — found live while building
+ *  WebAdmin's submit-route allowlist (#56). Callers that need the raw
+ *  byte of an unknown envelope should decode the envelope themselves. */
 export function peekActionType(bytes: Uint8Array): ActionTypeValue | null {
   try {
     const envelope = decode(bytes) as unknown[];
-    return envelope[1] as ActionTypeValue;
+    const raw = envelope[1];
+    const value =
+      typeof raw === "number"
+        ? raw
+        : typeof raw === "bigint"
+          ? Number(raw)
+          : NaN;
+    return KNOWN_ACTION_TYPES.has(value) ? (value as ActionTypeValue) : null;
   } catch {
     return null;
   }

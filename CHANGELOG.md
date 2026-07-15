@@ -22,6 +22,14 @@ vectors as **2.0.0**. Compatible engine:
 
 ### Fixed
 
+- **`peekActionType()` no longer leaks unknown action-type bytes as
+  `ActionTypeValue`** (#56). It now returns `null` for an action-type slot
+  this SDK build does not know — an unassigned byte, a newer engine's wire
+  type under an older SDK, or a non-numeric msgpack value — matching its
+  declared return type. Previously the raw slot value was cast through
+  unvalidated, so code trusting the type to imply membership (e.g. indexing
+  a `Record<ActionTypeValue, …>`) hit `undefined` at runtime. Callers that
+  need the raw byte of an unknown envelope should decode it themselves.
 - **Documented price unit corrected: order prices are `u64` micro-USDC (6 dp),
   not cents.** `PlaceOrder.price` and every other wire price field (oracle,
   composite, execution, mark, entry, orderbook, amend) are micro-USDC — the unit
