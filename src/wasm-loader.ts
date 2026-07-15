@@ -14,8 +14,12 @@
 
 /** The subset of the generated WASM bindings the SDK uses. */
 export interface WasmCore {
-  /** wasm-bindgen init — accepts the `.wasm` bytes (Node) or fetches by URL (browser). */
-  default: (input?: BufferSource | URL) => Promise<unknown>;
+  /** wasm-bindgen init — accepts the `.wasm` bytes (Node) or fetches by URL
+   *  (browser), passed as `{ module_or_path }` (the single-object form current
+   *  wasm-bindgen requires; the bare positional argument is deprecated). */
+  default: (options?: {
+    module_or_path?: BufferSource | URL;
+  }) => Promise<unknown>;
   encode_payload(actionType: number, fields: unknown): Uint8Array;
   decode_payload(actionType: number, payload: Uint8Array): unknown;
   signing_message(
@@ -77,9 +81,9 @@ export async function ready(): Promise<void> {
           fileURLToPath: (u: URL) => string;
         };
         const path = url.fileURLToPath(new URL(WASM_BG, import.meta.url));
-        await mod.default(fs.readFileSync(path));
+        await mod.default({ module_or_path: fs.readFileSync(path) });
       } else {
-        await mod.default(new URL(WASM_BG, import.meta.url));
+        await mod.default({ module_or_path: new URL(WASM_BG, import.meta.url) });
       }
       cached = mod;
       return mod;
