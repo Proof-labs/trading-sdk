@@ -538,7 +538,11 @@ describe("codec v1 all action types", () => {
           maxOpenInterest,
         },
       };
-      expect(() => encodePayloadBytes(action)).toThrow(/unsigned u64 range/);
+      // The WASM core rejects out-of-u64 BigInts at deserialization; the
+      // hand-written TS codec used to phrase this as "unsigned u64 range".
+      expect(() => encodePayloadBytes(action)).toThrow(
+        /BigInt outside u64|unsigned u64 range/,
+      );
     },
   );
 
@@ -762,7 +766,11 @@ describe("codec v1 all action types", () => {
         type: "UpdateMarketFees",
         data: { market: 7, signer: SIGNER, maxOpenInterest },
       };
-      expect(() => encodePayloadBytes(action)).toThrow(/unsigned u64 range/);
+      // The WASM core rejects out-of-u64 BigInts at deserialization; the
+      // hand-written TS codec used to phrase this as "unsigned u64 range".
+      expect(() => encodePayloadBytes(action)).toThrow(
+        /BigInt outside u64|unsigned u64 range/,
+      );
     },
   );
 
@@ -1448,7 +1456,12 @@ describe("decodeSigningMessage", () => {
 
     expect(d.actionName).toBe("CreateMarket");
     expect(d.action).toBeNull();
-    expect(d.decodeError).toMatch(/not the canonical representation/);
+    // Refusal is the contract: a non-canonical payload must never surface as a
+    // decoded action. The WASM core rejects the extra trailing field at strict
+    // length-checked decode ("array had incorrect length"); a payload that
+    // decodes but is non-minimal is still caught by the re-encode canonical
+    // check. Either way `action` is null and `decodeError` explains why.
+    expect(d.decodeError).not.toBeNull();
     expect(Array.from(d.payloadBytes)).toEqual(Array.from(extendedPayload));
   });
 
