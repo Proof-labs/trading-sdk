@@ -1480,3 +1480,44 @@ describe("decodeSigningMessage", () => {
     expect(d.action?.type).toBe("CreateMarket");
   });
 });
+
+describe("peekActionType validation (#56)", () => {
+  function cancelOrderTx(): Uint8Array {
+    const kp = generateKeypair();
+    const action: Action = {
+      type: "CancelOrder",
+      data: { orderId: 1n, owner: pubkeyToOwner(kp.publicKey) },
+    };
+    return encodeSignedTx(action, 7n, kp.publicKey, new Uint8Array(64));
+  }
+
+  it("returns the byte for a known action type", () => {
+    expect(peekActionType(cancelOrderTx())).toBe(ActionType.CancelOrder);
+  });
+
+  it("returns null for an unassigned action-type byte instead of leaking it", () => {
+    const bytes = cancelOrderTx();
+    // Wire layout is [version, actionType, seq, payload, pubkey, signature]:
+    // byte 0 is the msgpack fixarray header, byte 1 the version fixint,
+    // byte 2 the action-type fixint.
+    expect(peekActionType(bytes)).toBe(ActionType.CancelOrder);
+    bytes[2] = 0x1e; // unassigned wire type — e.g. a newer engine's byte
+    expect(peekActionType(bytes)).toBeNull();
+  });
+
+  it("returns null when the action-type slot is not a number", () => {
+    const bogus = new Encoder().encode([
+      ENVELOPE_VERSION,
+      "CancelOrder",
+      1,
+      new Uint8Array(0),
+      new Uint8Array(32),
+      new Uint8Array(64),
+    ]);
+    expect(peekActionType(bogus)).toBeNull();
+  });
+
+  it("still returns null for structurally unreadable bytes", () => {
+    expect(peekActionType(new Uint8Array([0xde, 0xad, 0xbe, 0xef]))).toBeNull();
+  });
+});
