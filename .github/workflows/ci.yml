@@ -88,8 +88,11 @@ jobs:
       # Provision that toolchain here — Rust, the wasm target, and a wasm-bindgen
       # CLI whose version MATCHES the crate (a mismatch fails the generated
       # bindings' schema check), resolved from the crate graph so it can never
-      # drift. Until the cutover lands, `npm run build` is tsc-only and these
-      # steps are simply unused (the WASM tests self-skip without src/wasm).
+      # drift. Until the cutover lands the WASM crate is absent from the graph,
+      # so the resolve step reports `present=false` and the wasm-bindgen install
+      # is SKIPPED — `npm run build` is tsc-only then and needs no wasm-bindgen.
+      # This keeps the job correct whether it runs before or after the cutover
+      # (#44) merges. The wasm target + rust-cache are harmless either way.
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -101,12 +104,25 @@ jobs:
           shared-key: rust-ci
           cache-all-crates: "true"
           cache-on-failure: "true"
+      # Resolve the wasm-bindgen version from the crate graph, and report whether
+      # it is present at all. `cargo metadata` yields `null` for the version when
+      # the WASM crate is not in the workspace (pre-cutover); guard on that so we
+      # never hand `wasm-bindgen-cli@` (empty version) to the installer below.
       - name: Resolve wasm-bindgen version from the crate graph
         id: wb
         run: |
           cargo generate-lockfile # Cargo.lock is gitignored (library workspace)
-          echo "version=$(cargo metadata --format-version 1 | jq -r 'first(.packages[] | select(.name=="wasm-bindgen")).version')" >> "$GITHUB_OUTPUT"
+          version="$(cargo metadata --format-version 1 | jq -r 'first(.packages[] | select(.name=="wasm-bindgen")).version')"
+          if [ -n "$version" ] && [ "$version" != "null" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "wasm-bindgen $version found in the crate graph — will build the WASM core."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "wasm-bindgen absent from the crate graph (pre-cutover) — skipping wasm-bindgen install; npm run build is tsc-only."
+          fi
       - uses: taiki-e/install-action@v2
+        if: steps.wb.outputs.present == 'true'
         with:
           tool: wasm-bindgen-cli@${{ steps.wb.outputs.version }}
       # `--ignore-scripts` skips the `prepare` build so an install failure is
