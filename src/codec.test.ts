@@ -1465,6 +1465,41 @@ describe("decodeSigningMessage", () => {
     expect(Array.from(d.payloadBytes)).toEqual(Array.from(extendedPayload));
   });
 
+  it("refuses a known action payload with a non-minimal integer encoding", () => {
+    // rmp accepts any integer width on decode, so a bloated encoding decodes
+    // to the same values — but those are not the bytes this SDK would produce,
+    // so the canonical re-encode check must refuse to display it. (The
+    // trailing-fields test above dies earlier, at strict length-checked
+    // decode; this one exercises the re-encode comparison itself.)
+    const payload = encodePayloadBytes({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: OWNER,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+      },
+    });
+    expect(payload[1]).toBe(0x01); // market=1 as a minimal positive fixint
+    const bloated = new Uint8Array([
+      payload[0],
+      0xce, // …re-encoded as a msgpack uint32: same value, non-minimal bytes
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      ...payload.slice(2),
+    ]);
+    const msg = signingMessage(chainId, ActionType.PlaceOrder, 5n, bloated);
+
+    const d = decodeSigningMessage(msg);
+
+    expect(d.actionName).toBe("PlaceOrder");
+    expect(d.action).toBeNull();
+    expect(d.decodeError).toMatch(/not the canonical representation/);
+  });
+
   it("throws on a wrong domain prefix", () => {
     const payload = encodePayloadBytes(createMarket);
     const msg = signingMessage(chainId, ActionType.CreateMarket, 1n, payload);
@@ -1532,5 +1567,57 @@ describe("peekActionType validation (#56)", () => {
 
   it("still returns null for structurally unreadable bytes", () => {
     expect(peekActionType(new Uint8Array([0xde, 0xad, 0xbe, 0xef]))).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Explicit undefined/null on optional action fields
+// ---------------------------------------------------------------------------
+
+describe("explicit undefined/null on optional action fields", () => {
+  // The legacy hand-written codec normalized optional defaulted fields with
+  // nullish coalescing (`d.postOnly ?? false`), so `{ postOnly: undefined }`
+  // (a common JS spread shape) and even an untyped caller's explicit null
+  // encoded as the documented default. The WASM adapter must keep that
+  // contract: nullish fields are dropped before the serde boundary, because a
+  // *present* JS null fails to deserialize into Rust's non-Option
+  // `#[serde(default)]` fields (post_only, reduce_only, time_in_force, …).
+  const base = {
+    market: 1,
+    owner: OWNER,
+    side: Side.Buy,
+    price: 66_750_000_000n,
+    quantity: 5n,
+  };
+  const omitted = () =>
+    encodePayloadBytes({ type: "PlaceOrder", data: { ...base } });
+
+  it("encodes explicit-undefined optional fields byte-identically to omission", () => {
+    const explicit = encodePayloadBytes({
+      type: "PlaceOrder",
+      data: {
+        ...base,
+        clientOrderId: undefined,
+        postOnly: undefined,
+        reduceOnly: undefined,
+        timeInForce: undefined,
+      },
+    });
+    expect(bytesToHex(explicit)).toBe(bytesToHex(omitted()));
+  });
+
+  it("encodes explicit-null optional fields byte-identically to omission (untyped JS callers)", () => {
+    const data = {
+      ...base,
+      clientOrderId: null,
+      postOnly: null,
+      reduceOnly: null,
+      timeInForce: null,
+    };
+    const explicit = encodePayloadBytes({
+      type: "PlaceOrder",
+      data,
+    } as unknown as Action);
+    expect(bytesToHex(explicit)).toBe(bytesToHex(omitted()));
   });
 });

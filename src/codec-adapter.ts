@@ -95,8 +95,6 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
 };
 
 function convertValue(camelKey: string, value: unknown): unknown {
-  if (value === undefined) return null;
-  if (value === null) return null;
   if (camelKey === "oracleSource") {
     return eventOracleSourceToWasm(value as EventOracleSource);
   }
@@ -126,6 +124,14 @@ function convertValue(camelKey: string, value: unknown): unknown {
 function convertObject(data: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(data)) {
+    // Nullish fields are dropped, never passed across as a JS null/undefined:
+    // serde applies `#[serde(default)]` / `Option::None` to a *missing* key,
+    // while a present null fails deserialization into non-Option defaulted
+    // fields ("invalid type: unit value" for `post_only`, `time_in_force`, …).
+    // Dropping reproduces the legacy codec's `?? default` nullish coalescing;
+    // for `Option` fields a missing key and an explicit null both encode as
+    // nil, so the bytes are identical either way.
+    if (v === null || v === undefined) continue;
     const snake = FIELD_OVERRIDES[k] ?? camelToSnake(k);
     out[snake] = convertValue(k, v);
   }
