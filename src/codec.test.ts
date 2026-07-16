@@ -1621,3 +1621,94 @@ describe("explicit undefined/null on optional action fields", () => {
     expect(bytesToHex(explicit)).toBe(bytesToHex(omitted()));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Legacy short-payload decode compatibility
+// ---------------------------------------------------------------------------
+
+describe("legacy short-payload decode compatibility", () => {
+  // The deleted TS codec decoded length-tolerantly (`postOnly: f.length > 6 &&
+  // f[6] === true`), so a wire record produced before post_only / reduce_only /
+  // time_in_force existed still decoded, with those trailing fields defaulted.
+  // The WASM path must preserve that: the Rust structs carry `#[serde(default)]`
+  // on the appended fields, so rmp-serde fills the defaults for a short
+  // positional array. Pin it here at the `decodeTx` boundary rather than
+  // leaving it implied by the Rust attributes.
+  const envelope = (
+    actionType: number,
+    payloadFields: unknown[],
+  ): Uint8Array => {
+    const enc = new Encoder({ useBigInt64: true });
+    const payload = enc.encode(payloadFields);
+    return enc.encode([
+      ENVELOPE_VERSION,
+      actionType,
+      1n,
+      payload,
+      ZERO_PUBKEY,
+      ZERO_SIG,
+    ]);
+  };
+
+  it("decodes a pre-TIF 6-field PlaceOrder, defaulting the appended flags", () => {
+    // [market, owner, side, price, quantity, client_order_id] — no post_only /
+    // reduce_only / time_in_force (the shape older SDKs emitted).
+    const bytes = envelope(ActionType.PlaceOrder, [
+      1,
+      OWNER,
+      "Buy",
+      66_750_000_000n,
+      5n,
+      null,
+    ]);
+    const { action } = decodeTx(bytes);
+    expect(action.type).toBe("PlaceOrder");
+    if (action.type === "PlaceOrder") {
+      expect(action.data.price).toBe(66_750_000_000n);
+      expect(action.data.postOnly).toBe(false);
+      expect(action.data.reduceOnly).toBe(false);
+      expect(action.data.timeInForce).toBe(TimeInForce.Gtc);
+    }
+  });
+
+  it("decodes an 8-field PlaceOrder missing only time_in_force", () => {
+    const bytes = envelope(ActionType.PlaceOrder, [
+      1,
+      OWNER,
+      "Sell",
+      100n,
+      2n,
+      7n,
+      true,
+      false,
+    ]);
+    const { action } = decodeTx(bytes);
+    expect(action.type).toBe("PlaceOrder");
+    if (action.type === "PlaceOrder") {
+      expect(action.data.postOnly).toBe(true);
+      expect(action.data.timeInForce).toBe(TimeInForce.Gtc);
+    }
+  });
+
+  it("decodes a pre-TIF CancelReplaceOrder, defaulting the appended flags", () => {
+    // CancelReplaceOrder up to `client_order_id`, no post_only/reduce_only/tif.
+    const bytes = envelope(ActionType.CancelReplaceOrder, [
+      OWNER,
+      101n, // cancel_order_id
+      null, // cancel_client_order_id
+      2, // market
+      "Buy",
+      12345n,
+      7n,
+      202n, // client_order_id
+    ]);
+    const { action } = decodeTx(bytes);
+    expect(action.type).toBe("CancelReplaceOrder");
+    if (action.type === "CancelReplaceOrder") {
+      expect(action.data.market).toBe(2);
+      expect(action.data.postOnly).toBe(false);
+      expect(action.data.reduceOnly).toBe(false);
+      expect(action.data.timeInForce).toBe(TimeInForce.Gtc);
+    }
+  });
+});
