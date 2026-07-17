@@ -54,6 +54,7 @@ jobs:
             # same downstream-binding rule the `python` filter applies for PyO3.
             ts:
               - 'src/**'
+              - 'scripts/**'
               - 'conformance/**'
               - 'package.json'
               - 'package-lock.json'
@@ -80,6 +81,7 @@ jobs:
               - '*.md'
               - 'docs/**/*.md'
               - 'src/**/*.ts'
+              - 'scripts/**'
               - 'examples/**/*.ts'
               - '.github/**/*.yml'
               - '.github/**/*.yaml'
