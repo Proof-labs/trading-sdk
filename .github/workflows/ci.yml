@@ -42,6 +42,11 @@ jobs:
               - 'crates/**'
               - 'conformance/**'
               - 'Cargo.toml'
+              # A workflow or gate-contract change exercises every suite. This
+              # proves the wiring itself instead of letting CI changes take a
+              # path that skips the jobs they govern.
+              - '.github/workflows/**'
+              - '.github/scripts/**'
             # The `ts` filter includes the Rust crates the WASM codec is built
             # from (`proof-trading-sdk`, `-derive`, `-wasm`): post-cutover the
             # TypeScript codec/signing runs through a WASM build of that core
@@ -55,12 +60,16 @@ jobs:
               - 'crates/proof-trading-sdk/**'
               - 'crates/proof-trading-sdk-derive/**'
               - 'crates/proof-trading-sdk-wasm/**'
+              - '.github/workflows/**'
+              - '.github/scripts/**'
             python:
               - 'python/**'
               - 'crates/proof-trading-sdk/**'
               - 'crates/proof-trading-sdk-derive/**'
               - 'crates/proof-trading-sdk-pyo3/**'
               - 'conformance/**'
+              - '.github/workflows/**'
+              - '.github/scripts/**'
             # Only the prettier-managed paths (mirrors .prettierignore: Rust,
             # Python, generated, and *.toml are formatted by their own tools).
             format:
@@ -69,8 +78,26 @@ jobs:
               - 'src/**/*.ts'
               - 'examples/**/*.ts'
               - '.github/**/*.yml'
+              - '.github/**/*.yaml'
+              - '.github/scripts/**'
               - 'package.json'
               - 'tsconfig.json'
+
+  # This job has no path condition: the gate's truth table and workflow syntax
+  # are checked on every run, and the final gate requires its exact success.
+  gate-contract:
+    name: CI gate contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise the fail-closed truth table
+        run: .github/scripts/test-ci-gate.sh
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+      - name: Lint GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
 
   ts:
     name: TypeScript tests
@@ -216,19 +243,27 @@ jobs:
       # .prettierignore. Run `npx prettier --write .` to fix locally.
       - run: npx prettier --check .
 
-  # Single status for branch protection: green unless a selected job failed
-  # (skipped jobs are fine — they just mean that area was untouched).
+  # Single status for branch protection. This is deliberately fail-closed:
+  # the detector and contract job must succeed, every detector output must be a
+  # literal boolean, selected suites must succeed, and unselected suites must
+  # skip. A missing output or any unexpected job result is a wiring failure.
   ci-ok:
     name: ci
-    needs: [ts, rust, python, format]
+    needs: [changes, gate-contract, ts, rust, python, format]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Fail if any selected suite failed
-        run: |
-          for r in "${{ needs.ts.result }}" "${{ needs.rust.result }}" "${{ needs.python.result }}" "${{ needs.format.result }}"; do
-            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
-              echo "A required suite did not pass (result: $r)"; exit 1
-            fi
-          done
-          echo "All selected suites passed (or were skipped)."
+      - uses: actions/checkout@v4
+      - name: Enforce exact detector/job agreement
+        env:
+          DETECTOR_RESULT: ${{ needs.changes.result }}
+          CONTRACT_RESULT: ${{ needs.gate-contract.result }}
+          TS_SELECTED: ${{ needs.changes.outputs.ts }}
+          TS_RESULT: ${{ needs.ts.result }}
+          RUST_SELECTED: ${{ needs.changes.outputs.rust }}
+          RUST_RESULT: ${{ needs.rust.result }}
+          PYTHON_SELECTED: ${{ needs.changes.outputs.python }}
+          PYTHON_RESULT: ${{ needs.python.result }}
+          FORMAT_SELECTED: ${{ needs.changes.outputs.format }}
+          FORMAT_RESULT: ${{ needs.format.result }}
+        run: .github/scripts/verify-ci-gate.sh
