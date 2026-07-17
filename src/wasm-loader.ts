@@ -7,9 +7,10 @@
  * once before any codec/signing call that routes through WASM; after it
  * resolves, `getWasm()` returns the initialized exports synchronously.
  *
- * The module is imported dynamically (via a runtime-computed specifier) so that
- * importing the SDK does not hard-fail when `src/wasm/` has not been built —
- * only code that actually calls `ready()` needs the artifact.
+ * The generated module and binary use literal relative references on purpose:
+ * package consumers such as Vite must be able to discover, copy, and rewrite
+ * both assets into their own build. `npm run build:wasm` runs before TypeScript,
+ * so those generated files exist whenever this source is compiled.
  */
 
 /** The subset of the generated WASM bindings the SDK uses. */
@@ -46,11 +47,6 @@ export interface WasmCore {
   chain_id_from_string(chainId: string): Uint8Array;
 }
 
-// Runtime-computed specifier: keeps `tsc` / bundlers from statically resolving
-// (and failing on) the generated module when the artifact is absent.
-const WASM_JS = "./wasm/proof_trading_sdk_wasm.js";
-const WASM_BG = "./wasm/proof_trading_sdk_wasm_bg.wasm";
-
 let cached: WasmCore | null = null;
 let initPromise: Promise<WasmCore> | null = null;
 
@@ -69,9 +65,16 @@ export async function ready(): Promise<void> {
   if (cached) return;
   if (!initPromise) {
     initPromise = (async () => {
-      const mod = (await import(
-        /* @vite-ignore */ new URL(WASM_JS, import.meta.url).href
-      )) as unknown as WasmCore;
+      // Keep this import literal: Vite/Rollup must see the generated module in
+      // a consuming application's dependency graph.
+      const mod =
+        (await import("./wasm/proof_trading_sdk_wasm.js")) as unknown as WasmCore;
+      // Likewise, a literal URL lets the consumer's bundler emit the binary as
+      // a hashed asset rather than leaving a broken node_modules-relative URL.
+      const wasmUrl = new URL(
+        "./wasm/proof_trading_sdk_wasm_bg.wasm",
+        import.meta.url,
+      );
       if (isNode()) {
         // Computed specifiers + loose casts keep `tsc` from needing Node types.
         const fs = (await import(/* @vite-ignore */ "node:fs" as string)) as {
@@ -80,12 +83,10 @@ export async function ready(): Promise<void> {
         const url = (await import(/* @vite-ignore */ "node:url" as string)) as {
           fileURLToPath: (u: URL) => string;
         };
-        const path = url.fileURLToPath(new URL(WASM_BG, import.meta.url));
+        const path = url.fileURLToPath(wasmUrl);
         await mod.default({ module_or_path: fs.readFileSync(path) });
       } else {
-        await mod.default({
-          module_or_path: new URL(WASM_BG, import.meta.url),
-        });
+        await mod.default({ module_or_path: wasmUrl });
       }
       cached = mod;
       return mod;

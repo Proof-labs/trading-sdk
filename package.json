@@ -45,6 +45,8 @@
     "prepublishOnly": "npm run build",
     "pretest": "npm run build:wasm",
     "test": "vitest run",
+    "smoke:browser:prepare": "node scripts/prepare-browser-smoke.mjs .browser-smoke",
+    "smoke:browser": "node scripts/browser-smoke.mjs .browser-smoke",
     "example": "npx tsx examples/connect-and-trade.ts"
   },
   "dependencies": {
@@ -53,8 +55,10 @@
     "@noble/hashes": "^2.2.0"
   },
   "devDependencies": {
+    "playwright": "1.61.1",
     "prettier": "^3.9.4",
     "typescript": "^6.0.0",
+    "vite": "8.1.5",
     "vitest": "^4.1.0"
   }
 }
