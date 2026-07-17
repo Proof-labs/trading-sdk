@@ -83,7 +83,9 @@ export async function ready(): Promise<void> {
         const path = url.fileURLToPath(new URL(WASM_BG, import.meta.url));
         await mod.default({ module_or_path: fs.readFileSync(path) });
       } else {
-        await mod.default({ module_or_path: new URL(WASM_BG, import.meta.url) });
+        await mod.default({
+          module_or_path: new URL(WASM_BG, import.meta.url),
+        });
       }
       cached = mod;
       return mod;
