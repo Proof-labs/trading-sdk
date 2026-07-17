@@ -56,7 +56,10 @@ jobs:
               - 'src/**'
               - 'conformance/**'
               - 'package.json'
+              - 'package-lock.json'
               - 'tsconfig.json'
+              - 'vitest.config.ts'
+              - 'Cargo.toml'
               - 'crates/proof-trading-sdk/**'
               - 'crates/proof-trading-sdk-derive/**'
               - 'crates/proof-trading-sdk-wasm/**'
@@ -68,6 +71,7 @@ jobs:
               - 'crates/proof-trading-sdk-derive/**'
               - 'crates/proof-trading-sdk-pyo3/**'
               - 'conformance/**'
+              - 'Cargo.toml'
               - '.github/workflows/**'
               - '.github/scripts/**'
             # Only the prettier-managed paths (mirrors .prettierignore: Rust,
@@ -80,8 +84,12 @@ jobs:
               - '.github/**/*.yml'
               - '.github/**/*.yaml'
               - '.github/scripts/**'
+              - '.prettierignore'
+              - '.prettierrc*'
               - 'package.json'
+              - 'package-lock.json'
               - 'tsconfig.json'
+              - 'vitest.config.ts'
 
   # This job has no path condition: the gate's truth table and workflow syntax
   # are checked on every run, and the final gate requires its exact success.
