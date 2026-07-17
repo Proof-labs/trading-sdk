@@ -56,9 +56,9 @@ jobs:
       - name: Set fuzz duration
         run: echo "FUZZ_SECONDS=${{ github.event_name == 'schedule' && 600 || 60 }}" >> "$GITHUB_ENV"
       - name: Fuzz decode_tx
-        run: cargo fuzz run decode_tx -- -max_total_time=$FUZZ_SECONDS
+        run: cargo fuzz run decode_tx -- "-max_total_time=$FUZZ_SECONDS"
       - name: Fuzz decode_payload
-        run: cargo fuzz run decode_payload -- -max_total_time=$FUZZ_SECONDS
+        run: cargo fuzz run decode_payload -- "-max_total_time=$FUZZ_SECONDS"
       # Preserve any crash/OOM reproducer so it can be replayed locally.
       - name: Upload fuzz artifacts
         if: failure()
