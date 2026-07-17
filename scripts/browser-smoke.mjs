@@ -50,12 +50,15 @@ async function waitForServer(url, preview, logs) {
 const port = await unusedPort();
 const url = `http://127.0.0.1:${port}/`;
 const output = [];
+// Spawn Vite directly. Going through `npm run preview` leaves Vite as a
+// grandchild; killing the npm wrapper can orphan the server with its pipe file
+// descriptors still open, which makes an otherwise-passing CI job hang.
+const viteBin = resolve(consumerDir, "node_modules", "vite", "bin", "vite.js");
 const preview = spawn(
-  "npm",
+  process.execPath,
   [
-    "run",
+    viteBin,
     "preview",
-    "--",
     "--host",
     "127.0.0.1",
     "--port",
@@ -70,6 +73,34 @@ const preview = spawn(
 );
 preview.stdout.on("data", (chunk) => output.push(chunk.toString()));
 preview.stderr.on("data", (chunk) => output.push(chunk.toString()));
+
+async function stopPreview() {
+  async function waitForExit(timeoutMs) {
+    if (preview.exitCode !== null) return;
+    await new Promise((resolveExit) => {
+      const timer = setTimeout(resolveExit, timeoutMs);
+      preview.once("exit", () => {
+        clearTimeout(timer);
+        resolveExit();
+      });
+    });
+  }
+
+  if (preview.exitCode === null) {
+    preview.kill("SIGTERM");
+    await waitForExit(2_000);
+  }
+  if (preview.exitCode === null) {
+    preview.kill("SIGKILL");
+    await waitForExit(2_000);
+  }
+  preview.stdout.destroy();
+  preview.stderr.destroy();
+  if (preview.exitCode === null) {
+    preview.unref();
+    throw new Error("Vite preview did not terminate after SIGKILL");
+  }
+}
 
 let browser;
 try {
@@ -118,10 +149,5 @@ try {
   );
 } finally {
   if (browser) await browser.close();
-  preview.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolveExit) => preview.once("exit", resolveExit)),
-    new Promise((resolveWait) => setTimeout(resolveWait, 2_000)),
-  ]);
-  if (preview.exitCode === null) preview.kill("SIGKILL");
+  await stopPreview();
 }
