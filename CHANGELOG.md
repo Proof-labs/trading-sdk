@@ -22,6 +22,14 @@ vectors as **2.0.0**. Compatible engine:
 
 ### Fixed
 
+- **`peekActionType()` no longer leaks unknown action-type bytes as
+  `ActionTypeValue`** (#56). It now returns `null` for an action-type slot
+  this SDK build does not know — an unassigned byte, a newer engine's wire
+  type under an older SDK, or a non-numeric msgpack value — matching its
+  declared return type. Previously the raw slot value was cast through
+  unvalidated, so code trusting the type to imply membership (e.g. indexing
+  a `Record<ActionTypeValue, …>`) hit `undefined` at runtime. Callers that
+  need the raw byte of an unknown envelope should decode it themselves.
 - **Documented price unit corrected: order prices are `u64` micro-USDC (6 dp),
   not cents.** `PlaceOrder.price` and every other wire price field (oracle,
   composite, execution, mark, entry, orderbook, amend) are micro-USDC — the unit
@@ -50,6 +58,22 @@ vectors as **2.0.0**. Compatible engine:
 
 ### Added
 
+- **`ExchangeClient.submitSignedTx(txBytes)` / `submitSignedTxCommit(txBytes)`**
+  — public submission of **externally signed** wire bytes (built via
+  `signingMessage()` → external signature → `encodeSignedTx()`), for callers
+  that never load a private key into the client: hardware/CLI signers and the
+  Web Admin's multisig propose/approve flows. Pure byte-exact transport — the
+  bytes are never decoded or re-encoded, so what was signed is exactly what
+  the gateway receives (and action types newer than this SDK build still
+  submit). `submitSignedTx` routes and reconciles identically to `submitTx`
+  (gateway by default, same hash-only background verification);
+  `submitSignedTxCommit` shares `submitTxCommit`'s finality logic and returns
+  the final chain verdict scoped to the call — added after adversarial review
+  flagged that without it, external signers had no deterministic commit path
+  under degraded-gateway responses (hash-only ambiguous, legacy CheckTx-only
+  ack). Previously the only submission paths required `setPrivateKey`,
+  forcing external-signer apps toward hand-rolled `POST /exchange` calls. No
+  wire change.
 - Aggregate open-interest cap support across Rust, TypeScript, and Python:
   `CreateMarket.maxOpenInterest` is an optional/nullable input normalized to
   an explicit zero tail when uncapped,
@@ -61,6 +85,18 @@ vectors as **2.0.0**. Compatible engine:
   Shared code 50 resolves to `OpenInterestLimitExceeded` or
   `SlippageExceeded` only from the canonical DeliverTx log; absent or unknown
   logs resolve to `AmbiguousCode50` rather than guessing.
+- **`decodeSigningMessage()` + `DecodedSigningMessage`** — decode a v3
+  signing preimage (the exact `signingMessage()` output an external signer
+  signs) back into chain id, action type + name, seq, and the decoded
+  action, so signer-side tools can show a human WHAT they are about to sign
+  on a trust base independent of whoever built the bytes (the Web Admin
+  signer CLI is the first consumer; any future hardware-signer tool needs
+  the same). Structurally-invalid input (short, wrong domain prefix) throws;
+  an unknown action-type byte or undecodable payload degrades honestly to
+  `action: null` + `decodeError` with the envelope fields still parsed —
+  newer wire actions than the SDK build must never look like structural
+  rejections. `DOMAIN_PREFIX` is now exported alongside `ENVELOPE_VERSION`.
+  Decode-only; no wire change.
 - Rust exports a `Milliseconds` alias for every millisecond timestamp/duration
   wire field and `UpdateMarketFees::new(market, signer)` for concise no-op
   defaults; the alias remains source- and wire-identical to `u64`.
