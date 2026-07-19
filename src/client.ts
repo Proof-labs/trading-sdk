@@ -17,6 +17,7 @@ import {
 } from "./crypto.js";
 import type {
   Action,
+  TxEvent,
   TxResult,
   PlaceOrder,
   MarketOrder,
@@ -445,10 +446,10 @@ export class ExchangeClient {
    * Sign and submit a transaction via broadcast_tx_sync.
    *
    * The SDK signs each transaction with a fresh millisecond timestamp nonce
-   * before submitting. On `CheckTx code=0`, a fire-and-forget background
-   * verifier is spawned. The verifier polls `/tx?hash=...` for the actual
-   * `DeliverTx` result, but it never rewinds or resyncs nonce state: included
-   * failed transactions still burn their timestamp nonce by design.
+   * before submitting. Whenever the response has a tx hash but no final chain
+   * verdict, a fire-and-forget verifier polls `/tx?hash=...` for the actual
+   * `DeliverTx` result. It never rewinds or resyncs nonce state: included failed
+   * transactions still burn their timestamp nonce by design.
    *
    * Callers that need to know definitively whether a tx landed should use
    * `submitTxCommit`, which awaits the same verification synchronously.
@@ -461,13 +462,59 @@ export class ExchangeClient {
    */
   async submitTx(action: Action): Promise<TxResult> {
     const r = await this.broadcastSigned(action);
-    // On CheckTx success, spawn the background DeliverTx verifier for
-    // inclusion visibility. Skipped when the caller has opted into unsafe
-    // fast mode.
-    if (r.ok && r.hash && this.autoVerifyDelivery) {
+    // Spawn the background DeliverTx verifier only if the outcome is still
+    // unknown. A synchronous gateway (api-gateway#90) already returns the
+    // executed result, so polling for it would be pure waste — and a CheckTx
+    // reject is terminal, so there is nothing to verify either.
+    //
+    // The `timeout` case is the one that still needs it: the gateway broadcast
+    // the tx but could not report the outcome in time, so the SDK reconciles by
+    // hash on the caller's behalf, exactly as before.
+    if (this.autoVerifyDelivery && r.hash && !this.isFinalResult(r)) {
       this.spawnDeliveryVerifier(r.hash);
     }
     return r;
+  }
+
+  /**
+   * Submit **externally signed** wire bytes — the public counterpart of
+   * `submitTx` for callers that never load a private key into the client
+   * (hardware or CLI signers, multisig proposers/approvers). Build the bytes
+   * with `signingMessage()` → sign anywhere → `encodeSignedTx()`; this method
+   * is pure transport for the result.
+   *
+   * The caller owns everything the loaded-key path normally does: the
+   * chain id, a fresh millisecond-timestamp `seq` (one per signature), and
+   * the signature itself. The bytes are deliberately treated as opaque —
+   * never decoded or validated here — so wire-valid action types this SDK
+   * build does not know yet still submit; the gateway and engine are the
+   * authorities that reject malformed bytes.
+   *
+   * Routes exactly like `submitTx` (gateway by default, CometBFT
+   * `broadcast_tx_sync` on the internal `useGateway: false` opt-out) with the
+   * same delivery-verification semantics: a synchronous gateway verdict is
+   * final and returns as-is; a hash-only ambiguous response spawns the same
+   * fire-and-forget `/tx?hash=` reconciliation, awaitable via
+   * `awaitPendingVerifies()`.
+   */
+  async submitSignedTx(txBytes: Uint8Array): Promise<TxResult> {
+    const r = await this.broadcastSignedBytes(txBytes);
+    if (this.autoVerifyDelivery && r.hash && !this.isFinalResult(r)) {
+      this.spawnDeliveryVerifier(r.hash);
+    }
+    return r;
+  }
+
+  /**
+   * Internal: route pre-signed wire bytes to the configured transport —
+   * gateway (`POST /exchange`, default) or CometBFT `broadcast_tx_sync` on
+   * the internal `useGateway: false` opt-out. Both submit identical bytes.
+   * Shared by `submitSignedTx` and `submitSignedTxCommit`.
+   */
+  private async broadcastSignedBytes(txBytes: Uint8Array): Promise<TxResult> {
+    return this.useGateway
+      ? this.submitViaGateway(txBytes)
+      : this.submitViaCometBFT(txBytes);
   }
 
   /**
@@ -508,13 +555,13 @@ export class ExchangeClient {
    * On success it forwards the wire bytes to CometBFT's
    * `broadcast_tx_sync`.
    *
-   * The gateway response shape is `{status: "ok"|"error", error?}`.
-   * We map it to `TxResult` so callers can branch on `code` the same
-   * way they do for the CometBFT path. For engine-level rejections
-   * the error string is `"<code>: <message>"` (mirroring the
-   * ExecErrorCode table in `api-gateway/openapi.yaml`). For transport-
-   * level failures (rate limit, auth, etc.) we synthesize a code from
-   * the HTTP status.
+   * The gateway response is an `ExchangeResponse`: a structured chain verdict
+   * carries `code` and optionally `height`/`events`; an admitted-but-ambiguous
+   * submission carries `txHash` without `code` and must be reconciled. We map
+   * every shape to `TxResult`. Engine rejections retain the compatibility error
+   * string `"<code>: <message>"`, while the structured `code` is authoritative.
+   * For transport-level failures (rate limit, auth, etc.) we synthesize a code
+   * from the HTTP status.
    */
   private async submitViaGateway(txBytes: Uint8Array): Promise<TxResult> {
     const txHash = computeCometTxHash(txBytes);
@@ -579,18 +626,83 @@ export class ExchangeClient {
       | {
           status?: string;
           error?: string;
+          txHash?: string;
+          code?: number;
+          log?: string;
+          height?: number;
+          events?: TxEvent[];
         }
       | undefined;
+
+    // The gateway is synchronous on the on-chain result (api-gateway#90): it
+    // parks the response on the tx hash and answers with the chain's own
+    // `code` / `log` / `height` / `events`. A body carrying a `height` is a
+    // FINISHED verdict — the tx is in a block and there is nothing left to
+    // poll for, so `submitTx` skips its background verifier and
+    // `submitTxCommit` returns immediately instead of polling `/tx?hash=` for
+    // up to 9 seconds.
+    //
+    // Older gateways answer `{status: "ok"}` with no `code`/`height`, so the
+    // absence of those fields still means "CheckTx accepted, execution
+    // unknown" and the polling paths below stay exactly as they were. That
+    // fallback is what makes this safe against a gateway that has not been
+    // upgraded yet.
+    if (typeof json?.code === "number") {
+      const hash = json.txHash ?? txHash;
+      // `height` present  → committed: the code IS the ExecTxResult code.
+      // `height` absent   → CheckTx reject: never entered a block, and equally
+      //                     terminal — no DeliverTx will ever run for it.
+      return txFromEngineCode(json.code, {
+        hash,
+        height: json.height,
+        log: json.log ?? json.error,
+        events: json.events,
+      });
+    }
+
     if (json?.status === "ok") {
+      // Legacy gateway: CheckTx ack only, execution still unknown.
       return txOk({ hash: txHash });
     }
-    // Gateway error shape: error string is "<engine_code>: <message>"
-    // (per ExecErrorCode table in api-gateway/openapi.yaml). Parse the
-    // leading code so callers branch on it; if missing, surface 1
-    // (DecodeError) as the conservative default.
+
+    // `status: error` with a `txHash` but NO `code` is not a rejection — it is
+    // the gateway saying "I broadcast this and could not tell you the outcome
+    // in time" (park deadline exceeded, a byte-identical tx already in flight,
+    // or a result it could not parse). The tx may well still commit, so this is
+    // a `timeout` outcome to be reconciled by hash, NOT an engine error. Calling
+    // it an engine error here would report a phantom rejection for an order
+    // that is about to fill.
+    if (json?.txHash) {
+      return txTimeout(
+        json.txHash,
+        json.error ?? "gateway returned no on-chain result; reconcile by hash",
+      );
+    }
+
+    // Fallback: the code embedded in the string as "<engine_code>: <message>".
+    // The gateway still emits this format for compatibility, so this path also
+    // covers a pre-#90 gateway that sends ONLY the string. Parse the leading code;
+    // if missing, surface 1 (DecodeError) as the conservative default.
     const errMsg = json?.error ?? gatewayBody.raw ?? "unknown gateway error";
     const code = parseLeadingErrorCode(errMsg) ?? 1;
     return txEngineError(code, { log: errMsg });
+  }
+
+  /**
+   * Whether a `TxResult` is already final — i.e. nothing is gained by polling
+   * for it.
+   *
+   * A `height` means the tx executed in a block (the synchronous gateway
+   * response carries it). An `engine` outcome without a height is a CheckTx
+   * reject: it never entered a block and never will, so DeliverTx will not run.
+   * A `transport` failure never reached the chain at all.
+   */
+  private isFinalResult(r: TxResult): boolean {
+    return (
+      r.height !== undefined ||
+      r.outcome === "engine" ||
+      r.outcome === "transport"
+    );
   }
 
   /**
@@ -710,13 +822,11 @@ export class ExchangeClient {
   /**
    * Submit and wait for block inclusion (slower, but confirms execution).
    *
-   * Implementation note: CometBFT's `broadcast_tx_commit` JSON-RPC method
-   * has a known reliability issue where the internal event subscription
-   * occasionally fails to fire before the 10s timeout, even though the tx
-   * is correctly applied to state. To work around this, we use
-   * `broadcast_tx_sync` (CheckTx-only) and then poll `/tx?hash=...` to
-   * fetch the DeliverTx result. This is faster (avg ~1.2s) AND more
-   * reliable than the native commit endpoint.
+   * A synchronous gateway verdict returns immediately. If the gateway only
+   * acknowledges CheckTx (legacy) or returns a hash-only ambiguous response,
+   * this falls back to polling `/tx?hash=...`. The direct-node path likewise
+   * uses `broadcast_tx_sync` plus polling instead of CometBFT's less reliable
+   * `broadcast_tx_commit` subscription.
    */
   async submitTxCommit(action: Action): Promise<TxResult> {
     if (!this.privateKey) throw new Error("No private key set");
@@ -725,13 +835,49 @@ export class ExchangeClient {
     // path so we don't double-spawn a background verifier — we're going to
     // do our own synchronous verification below.
     const sync = await this.broadcastSigned(action);
-    if (!sync.ok) {
-      // CheckTx rejected (envelope-level failure) or a transport failure. No
-      // DeliverTx will run.
+    return this.awaitCommit(sync);
+  }
+
+  /**
+   * Submit **externally signed** wire bytes and wait for block inclusion —
+   * the commit counterpart of `submitSignedTx`, for the same callers
+   * (hardware/CLI signers, multisig propose/approve) that never load a
+   * private key into the client. Shares `submitTxCommit`'s exact finality
+   * logic: a synchronous gateway verdict returns immediately; a hash-only
+   * ambiguous response or a legacy CheckTx-only ack falls back to polling
+   * `/tx?hash=...` (~9 s), scoped to THIS call — no background verifier, no
+   * draining the client-global `awaitPendingVerifies()` buffer. Use this
+   * when the caller must know definitively whether the tx landed (an
+   * operator action, a multisig proposal) rather than fire-and-forget.
+   */
+  async submitSignedTxCommit(txBytes: Uint8Array): Promise<TxResult> {
+    const sync = await this.broadcastSignedBytes(txBytes);
+    return this.awaitCommit(sync);
+  }
+
+  /**
+   * Internal: shared commit-semantics tail of `submitTxCommit` and
+   * `submitSignedTxCommit` — take a broadcast's sync result and return the
+   * final chain verdict, polling `/tx?hash=` only when the outcome is still
+   * unknown.
+   */
+  private async awaitCommit(sync: TxResult): Promise<TxResult> {
+    if (this.isFinalResult(sync)) {
+      // Either the gateway already returned the on-chain result (the
+      // synchronous submit path — nothing to wait for), or the tx was rejected
+      // at CheckTx / never reached the chain, in which case no DeliverTx will
+      // ever run. This is the case H14 was filed about: a confirmed order used
+      // to cost a 9-second poll loop, and now costs one round-trip.
+      return sync;
+    }
+    if (!sync.ok && sync.outcome !== "timeout") {
       return sync;
     }
 
-    // Step 2: poll /tx?hash=... until found or timeout (~9 seconds)
+    // Step 2: the outcome is still unknown (a pre-#90 gateway that only acks
+    // CheckTx, the direct-to-CometBFT path, or a gateway that broadcast the tx
+    // but could not report the result in time). Poll /tx?hash=... until found
+    // or timeout (~9 seconds).
     const txHash = sync.hash;
     if (!txHash) {
       throw new Error("submitTx returned no tx hash");
@@ -1716,5 +1862,6 @@ function decodeMarketConfig(raw: unknown[]): MarketConfig {
     partialLiquidationEnabled: raw[21] == null ? undefined : Boolean(raw[21]),
     szDecimals: raw[22] == null ? undefined : Number(raw[22]),
     ticker: raw[23] == null ? undefined : String(raw[23]),
+    maxOpenInterest: optBig(raw[24]),
   };
 }

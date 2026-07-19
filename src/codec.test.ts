@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
+import { Decoder, Encoder } from "@msgpack/msgpack";
 import {
   encodeSignedTx,
+  encodePayloadBytes,
   decodeTx,
+  decodeSigningMessage,
   peekActionType,
   signAndEncode,
   ENVELOPE_VERSION,
@@ -438,8 +441,106 @@ describe("codec v1 all action types", () => {
     };
 
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
+    if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
+    // An omitted cap encodes as an explicit zero tail and decodes back as 0n —
+    // "uncapped" is a value, not an absence.
+    expect(decoded.data).toEqual({ ...action.data, maxOpenInterest: 0n });
+  });
+
+  it("round-trips CreateMarket maxOpenInterest tail", () => {
+    const action: Action = {
+      type: "CreateMarket",
+      data: {
+        market: 42,
+        imBps: 1000,
+        mmBps: 500,
+        takerFeeBps: 5,
+        makerFeeBps: 2,
+        signer: SIGNER,
+        fundingIntervalMs: 60_000n,
+        maxFundingRateBps: 100,
+        poolId: 9,
+        szDecimals: 5,
+        ticker: "BTC",
+        maxOpenInterest: 1_000_000n,
+      },
+    };
+
+    const { action: decoded } = decodeTx(encodeTx(action, 1n));
     expect(decoded).toEqual(action);
   });
+
+  it("encodes CreateMarket to a 12-element array whatever the cap's value", () => {
+    const base: Action = {
+      type: "CreateMarket",
+      data: {
+        market: 42,
+        imBps: 1000,
+        mmBps: 500,
+        takerFeeBps: 5,
+        makerFeeBps: 2,
+        signer: SIGNER,
+        fundingIntervalMs: 60_000n,
+        maxFundingRateBps: 100,
+        poolId: 9,
+        szDecimals: 5,
+        ticker: "BTC",
+      },
+    };
+    const withCap = (maxOpenInterest?: bigint | null): Action => ({
+      type: "CreateMarket",
+      data: {
+        ...base.data,
+        ...(maxOpenInterest === undefined ? {} : { maxOpenInterest }),
+      },
+    });
+
+    // The engine always serializes max_open_interest, so the array length must
+    // never depend on its value. If it did, the api-gateway's structured path —
+    // which re-encodes the payload from JSON before the engine verifies the
+    // signature over those bytes — could produce a different length than the
+    // client signed, and every such tx would fail verification. Pin the msgpack
+    // fixarray header (0x90 | n): 0x9c is a 12-element array.
+    for (const cap of [undefined, null, 0n, 1_000_000n]) {
+      const bytes = encodePayloadBytes(withCap(cap));
+      expect(bytes[0]).toBe(0x9c);
+    }
+
+    // Omission, JSON-style null, and explicit zero are the same market and
+    // therefore must be the exact same canonical bytes. All three decode to
+    // the public uncapped value 0n rather than restoring absence/null.
+    const canonicalUncapped = encodePayloadBytes(withCap(undefined));
+    for (const cap of [undefined, null, 0n]) {
+      expect(encodePayloadBytes(withCap(cap))).toEqual(canonicalUncapped);
+      const decoded = decodeTx(encodeTx(withCap(cap), 1n)).action;
+      if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
+      expect(decoded.data.maxOpenInterest).toBe(0n);
+    }
+  });
+
+  it.each([-1n, 0x1_0000_0000_0000_0000n])(
+    "rejects CreateMarket maxOpenInterest outside u64: %s",
+    (maxOpenInterest) => {
+      const action: Action = {
+        type: "CreateMarket",
+        data: {
+          market: 42,
+          imBps: 1000,
+          mmBps: 500,
+          takerFeeBps: 5,
+          makerFeeBps: 2,
+          signer: SIGNER,
+          fundingIntervalMs: 60_000n,
+          maxFundingRateBps: 100,
+          poolId: 9,
+          szDecimals: 5,
+          ticker: "BTC",
+          maxOpenInterest,
+        },
+      };
+      expect(() => encodePayloadBytes(action)).toThrow(/unsigned u64 range/);
+    },
+  );
 
   it("round-trips AtomicBasketOrder", () => {
     const action: Action = {
@@ -528,6 +629,9 @@ describe("codec v1 all action types", () => {
             takerFeeTenthBps: 3,
           },
         ],
+        imBps: 3334,
+        mmBps: 1667,
+        maxOpenInterest: 2_000_000n,
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
@@ -550,6 +654,9 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.cexCompositeStalenessMs).toBe(15_000n);
     expect(decoded.data.partialLiquidationEnabled).toBe(true);
     expect(decoded.data.feeTiers).toEqual(action.data.feeTiers);
+    expect(decoded.data.imBps).toBe(3334);
+    expect(decoded.data.mmBps).toBe(1667);
+    expect(decoded.data.maxOpenInterest).toBe(2_000_000n);
   });
 
   it("round-trips UpdateMarketFees with only BE-48/BE-50 fields set", () => {
@@ -581,6 +688,9 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.takerFeeBps).toBeNull();
     expect(decoded.data.maxPositionSize).toBeNull();
     expect(decoded.data.netDeltaMargin).toBeNull();
+    expect(decoded.data.imBps).toBeNull();
+    expect(decoded.data.mmBps).toBeNull();
+    expect(decoded.data.maxOpenInterest).toBeNull();
   });
 
   it("round-trips UpdateMarketFees primary oracle clear sentinel", () => {
@@ -622,6 +732,61 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.maxPositionSize).toBeNull();
     expect(decoded.data.defaultTtlMs).toBeNull();
     expect(decoded.data.feeTiers).toBeNull();
+    expect(decoded.data.imBps).toBeNull();
+    expect(decoded.data.mmBps).toBeNull();
+    expect(decoded.data.maxOpenInterest).toBeNull();
+  });
+
+  it("round-trips UpdateMarketFees with only maxOpenInterest set", () => {
+    const action: Action = {
+      type: "UpdateMarketFees",
+      data: {
+        market: 7,
+        signer: SIGNER,
+        maxOpenInterest: 500_000n,
+      },
+    };
+
+    const { action: decoded } = decodeTx(encodeTx(action, 1n));
+    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
+    expect(decoded.data.maxOpenInterest).toBe(500_000n);
+    // Slots 18/19 are required placeholders; max OI is engine slot 20.
+    expect(decoded.data.imBps).toBeNull();
+    expect(decoded.data.mmBps).toBeNull();
+  });
+
+  it.each([-1n, 0x1_0000_0000_0000_0000n])(
+    "rejects UpdateMarketFees maxOpenInterest outside u64: %s",
+    (maxOpenInterest) => {
+      const action: Action = {
+        type: "UpdateMarketFees",
+        data: { market: 7, signer: SIGNER, maxOpenInterest },
+      };
+      expect(() => encodePayloadBytes(action)).toThrow(/unsigned u64 range/);
+    },
+  );
+
+  it("decodes the legacy 18-field UpdateMarketFees payload", () => {
+    const encoder = new Encoder({ useBigInt64: true });
+    const payload = encoder.encode([
+      7,
+      Array.from(SIGNER),
+      ...Array(16).fill(null),
+    ]);
+    const wire = encoder.encode([
+      ENVELOPE_VERSION,
+      ActionType.UpdateMarketFees,
+      1n,
+      payload,
+      ZERO_PUBKEY,
+      ZERO_SIG,
+    ]);
+
+    const { action: decoded } = decodeTx(wire);
+    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
+    expect(decoded.data.imBps).toBeNull();
+    expect(decoded.data.mmBps).toBeNull();
+    expect(decoded.data.maxOpenInterest).toBeNull();
   });
 
   it("round-trips UpdateMarketFees with only defaultTtlMs set (operator-only path)", () => {
@@ -1163,5 +1328,196 @@ describe("UpdateMarketFees.markSourceMode encoding", () => {
     if (action.type === "UpdateMarketFees") {
       expect(action.data.markSourceMode ?? null).toBeNull();
     }
+  });
+});
+
+describe("decodeSigningMessage", () => {
+  const chainId = chainIdFromString("test-chain");
+  const owner = pubkeyToOwner(getPublicKey(generateKeypair().privateKey));
+
+  const createMarket: Action = {
+    type: "CreateMarket",
+    data: {
+      market: 42,
+      imBps: 500,
+      mmBps: 250,
+      takerFeeBps: 5,
+      makerFeeBps: 2,
+      signer: owner,
+      fundingIntervalMs: 3_600_000n,
+      maxFundingRateBps: 100,
+      szDecimals: 2,
+      ticker: "XYZ-PERP",
+    },
+  };
+
+  it("round-trips the exact signingMessage() bytes for a CreateMarket", () => {
+    const payload = encodePayloadBytes(createMarket);
+    const seq = 1_752_000_000_000n;
+    const msg = signingMessage(chainId, ActionType.CreateMarket, seq, payload);
+
+    const d = decodeSigningMessage(msg);
+
+    expect(Array.from(d.chainId)).toEqual(Array.from(chainId));
+    expect(d.actionType).toBe(ActionType.CreateMarket);
+    expect(d.actionName).toBe("CreateMarket");
+    expect(d.seq).toBe(seq);
+    expect(Array.from(d.payloadBytes)).toEqual(Array.from(payload));
+    expect(d.decodeError).toBeNull();
+    expect(d.action?.type).toBe("CreateMarket");
+    if (d.action?.type === "CreateMarket") {
+      expect(d.action.data.ticker).toBe("XYZ-PERP");
+      expect(d.action.data.market).toBe(42);
+      expect(d.action.data.imBps).toBe(500);
+    }
+  });
+
+  it("round-trips a PlaceOrder preimage", () => {
+    const placeOrder: Action = {
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 3n,
+      },
+    };
+    const payload = encodePayloadBytes(placeOrder);
+    const msg = signingMessage(chainId, ActionType.PlaceOrder, 7n, payload);
+
+    const d = decodeSigningMessage(msg);
+
+    expect(d.actionName).toBe("PlaceOrder");
+    expect(d.seq).toBe(7n);
+    if (d.action?.type === "PlaceOrder") {
+      expect(d.action.data.price).toBe(100_000_000n);
+      expect(d.action.data.side).toBe(Side.Buy);
+    } else {
+      expect.unreachable("expected a decoded PlaceOrder");
+    }
+  });
+
+  it("degrades to action:null (not a throw) for an unknown action-type byte", () => {
+    // A wire action newer than this SDK build: the envelope fields must
+    // still parse so a signer tool can show them, with an honest "cannot
+    // decode" instead of a false structural rejection.
+    const payload = encodePayloadBytes(createMarket);
+    const msg = signingMessage(chainId, 0xee, 5n, payload);
+
+    const d = decodeSigningMessage(msg);
+
+    expect(d.actionType).toBe(0xee);
+    expect(d.actionName).toBeNull();
+    expect(d.action).toBeNull();
+    expect(d.decodeError).toContain("unknown action type 0xee");
+    expect(d.seq).toBe(5n);
+    expect(Array.from(d.chainId)).toEqual(Array.from(chainId));
+    expect(Array.from(d.payloadBytes)).toEqual(Array.from(payload));
+  });
+
+  it("degrades to action:null when a known type's payload doesn't decode", () => {
+    const garbage = new Uint8Array([0xff, 0x00, 0x13, 0x37]);
+    const msg = signingMessage(chainId, ActionType.CreateMarket, 5n, garbage);
+
+    const d = decodeSigningMessage(msg);
+
+    expect(d.actionName).toBe("CreateMarket");
+    expect(d.action).toBeNull();
+    expect(d.decodeError).not.toBeNull();
+  });
+
+  it("refuses a known action payload with undisplayed trailing fields", () => {
+    const payload = encodePayloadBytes(createMarket);
+    const fields = new Decoder({ useBigInt64: true }).decode(payload);
+    if (!Array.isArray(fields)) {
+      expect.unreachable("expected a positional payload array");
+    }
+    const extendedPayload = new Encoder({ useBigInt64: true }).encode([
+      ...fields,
+      "field-this-sdk-does-not-display",
+    ]);
+    const msg = signingMessage(
+      chainId,
+      ActionType.CreateMarket,
+      5n,
+      extendedPayload,
+    );
+
+    const d = decodeSigningMessage(msg);
+
+    expect(d.actionName).toBe("CreateMarket");
+    expect(d.action).toBeNull();
+    expect(d.decodeError).toMatch(/not the canonical representation/);
+    expect(Array.from(d.payloadBytes)).toEqual(Array.from(extendedPayload));
+  });
+
+  it("throws on a wrong domain prefix", () => {
+    const payload = encodePayloadBytes(createMarket);
+    const msg = signingMessage(chainId, ActionType.CreateMarket, 1n, payload);
+    msg[0] ^= 0xff;
+    expect(() => decodeSigningMessage(msg)).toThrow(/domain prefix/);
+  });
+
+  it("throws on input shorter than the fixed header", () => {
+    expect(() => decodeSigningMessage(new Uint8Array(56))).toThrow(
+      /shorter than/,
+    );
+  });
+
+  it("parses a preimage whose bytes sit at a nonzero offset in a larger buffer", () => {
+    // The seq DataView reads through msg.buffer + byteOffset — a subarray
+    // view over a bigger allocation must decode identically.
+    const payload = encodePayloadBytes(createMarket);
+    const msg = signingMessage(chainId, ActionType.CreateMarket, 9n, payload);
+    const padded = new Uint8Array(msg.length + 8);
+    padded.set(msg, 8);
+    const view = padded.subarray(8);
+
+    const d = decodeSigningMessage(view);
+
+    expect(d.seq).toBe(9n);
+    expect(d.action?.type).toBe("CreateMarket");
+  });
+});
+
+describe("peekActionType validation (#56)", () => {
+  function cancelOrderTx(): Uint8Array {
+    const kp = generateKeypair();
+    const action: Action = {
+      type: "CancelOrder",
+      data: { orderId: 1n, owner: pubkeyToOwner(kp.publicKey) },
+    };
+    return encodeSignedTx(action, 7n, kp.publicKey, new Uint8Array(64));
+  }
+
+  it("returns the byte for a known action type", () => {
+    expect(peekActionType(cancelOrderTx())).toBe(ActionType.CancelOrder);
+  });
+
+  it("returns null for an unassigned action-type byte instead of leaking it", () => {
+    const bytes = cancelOrderTx();
+    // Wire layout is [version, actionType, seq, payload, pubkey, signature]:
+    // byte 0 is the msgpack fixarray header, byte 1 the version fixint,
+    // byte 2 the action-type fixint.
+    expect(peekActionType(bytes)).toBe(ActionType.CancelOrder);
+    bytes[2] = 0x1e; // unassigned wire type — e.g. a newer engine's byte
+    expect(peekActionType(bytes)).toBeNull();
+  });
+
+  it("returns null when the action-type slot is not a number", () => {
+    const bogus = new Encoder().encode([
+      ENVELOPE_VERSION,
+      "CancelOrder",
+      1,
+      new Uint8Array(0),
+      new Uint8Array(32),
+      new Uint8Array(64),
+    ]);
+    expect(peekActionType(bogus)).toBeNull();
+  });
+
+  it("still returns null for structurally unreadable bytes", () => {
+    expect(peekActionType(new Uint8Array([0xde, 0xad, 0xbe, 0xef]))).toBeNull();
   });
 });

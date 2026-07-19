@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Encoder } from "@msgpack/msgpack";
 import { ExchangeClient, fetchChainId } from "./client.js";
-import { decodeTx } from "./codec.js";
+import { decodeTx, signAndEncode } from "./codec.js";
 import {
   UNBOUND_CHAIN_ID,
   bytesToHex,
@@ -12,7 +12,7 @@ import {
   pubkeyToOwner,
   verify,
 } from "./crypto.js";
-import { Side } from "./types.js";
+import { Side, type Action } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 
 /**
@@ -456,6 +456,494 @@ describe("ExchangeClient submitTx gateway path", () => {
     c.setPrivateKey(kp.privateKey);
     return c;
   }
+
+  /** A minimal valid order, so the tests read as being about the response. */
+  function placeOrder(client: ExchangeClient): Action {
+    return {
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: client.getAddress()!,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------------
+  // Synchronous on-chain result (api-gateway#90).
+  //
+  // The gateway now parks the response on the tx hash and answers with the
+  // chain's own code/log/height/events. The SDK's job is to stop polling for
+  // something it already has — and to keep polling when it doesn't.
+  // ---------------------------------------------------------------------
+
+  it("submitTxCommit returns the gateway's on-chain result without polling /tx", async () => {
+    const client = makeGatewayClient();
+    primeNextNonce(client);
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "ok",
+            txHash: "ABCD",
+            code: 0,
+            height: 4821903,
+            events: [{ type: "order_placed", attributes: [] }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const r = await client.submitTxCommit(placeOrder(client));
+
+    expect(r.ok).toBe(true);
+    expect(r.code).toBe(0);
+    expect(r.height).toBe(4821903);
+    expect(r.hash).toBe("ABCD");
+    expect(r.events?.length).toBe(1);
+    // The point of the change: exactly one round-trip. Previously this cost a
+    // /tx?hash= poll loop of up to 9 seconds (the H14 complaint).
+    expect(calls.length).toBe(1);
+    expect(calls[0].url).toContain("/exchange");
+    expect(calls.some((c) => c.url.includes("/tx"))).toBe(false);
+  });
+
+  it("a committed engine rejection is returned as an engine error, with its height", async () => {
+    const client = makeGatewayClient();
+    primeNextNonce(client);
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "error",
+            error: "insufficient margin",
+            txHash: "ABCD",
+            code: 12,
+            log: "insufficient margin",
+            height: 4821903,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const r = await client.submitTxCommit(placeOrder(client));
+
+    expect(r.ok).toBe(false);
+    expect(r.outcome).toBe("engine");
+    expect(r.code).toBe(12);
+    expect(r.height).toBe(4821903);
+    expect(calls.length).toBe(1);
+  });
+
+  it("reads the structured code, not the leading integer of the error string", async () => {
+    // The gateway keeps the legacy "<code>: <message>" error string for old
+    // clients, but the structured `code` is authoritative. Deliberately make
+    // the compatibility string disagree to prove this path does not parse it.
+    const client = makeGatewayClient();
+    primeNextNonce(client);
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "error",
+            error: "12: stale compatibility text",
+            log: "nonce too old: minimum accepted 1783771798253, got 0",
+            txHash: "ABCD",
+            code: 21,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const r = await client.submitTx(placeOrder(client));
+
+    expect(r.outcome).toBe("engine");
+    expect(r.code).toBe(21);
+    expect(r.error?.name).toBeDefined();
+    // A CheckTx reject never entered a block: no height, and nothing to verify.
+    expect(r.height).toBeUndefined();
+    expect(calls.some((c) => c.url.includes("/tx"))).toBe(false);
+  });
+
+  it("submitTxCommit reconciles a hash-only error through the gateway tx route", async () => {
+    const client = makeGatewayClient();
+    primeNextNonce(client);
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "error",
+            error:
+              "timed out waiting for on-chain result; reconcile via txHash",
+            txHash: "ABCD",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              height: "4821904",
+              tx_result: {
+                code: 0,
+                log: "",
+                events: [{ type: "order_placed", attributes: [] }],
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const r = await client.submitTxCommit(placeOrder(client));
+
+    expect(r.outcome).toBe("ok");
+    expect(r.ok).toBe(true);
+    expect(r.hash).toBe("ABCD");
+    expect(r.height).toBe(4821904);
+    expect(r.events).toHaveLength(1);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].url).toBe("http://test-gateway/v1/tx/ABCD");
+  });
+
+  it("submitTx starts a background verifier for a hash-only error", async () => {
+    // A hash with no code is ambiguous, not a rejection: the tx may already be
+    // in flight. Fire-and-forget submission must therefore keep its normal
+    // background reconciliation rather than silently disabling it.
+    const client = makeGatewayClient();
+    primeNextNonce(client);
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "error",
+            error: "duplicate in-flight tx; reconcile via txHash",
+            txHash: "ABCD",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              height: "4821905",
+              tx_result: {
+                code: 12,
+                log: "insufficient margin",
+                events: [],
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const initial = await client.submitTx(placeOrder(client));
+
+    expect(initial).toMatchObject({
+      ok: false,
+      outcome: "timeout",
+      code: -1,
+      hash: "ABCD",
+    });
+    expect(
+      (client as unknown as { pendingVerifies: Set<unknown> }).pendingVerifies
+        .size,
+    ).toBe(1);
+
+    const reconciled = await client.awaitPendingVerifies();
+
+    expect(reconciled).toHaveLength(1);
+    expect(reconciled[0]).toMatchObject({
+      ok: false,
+      outcome: "engine",
+      code: 12,
+      hash: "ABCD",
+      height: 4821905,
+      log: "insufficient margin",
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[1].url).toBe("http://test-gateway/v1/tx/ABCD");
+  });
+
+  // ---------------------------------------------------------------------
+  // submitSignedTx — the external-signer path. The client holds NO private
+  // key; the caller built and signed the wire bytes elsewhere (signer CLI,
+  // hardware key) and the SDK's job is byte-exact transport: what was signed
+  // is exactly what the gateway receives, or the co-signature story breaks.
+  // ---------------------------------------------------------------------
+
+  /** A keyless client — external signers never call setPrivateKey. */
+  function makeKeylessGatewayClient(): ExchangeClient {
+    return new ExchangeClient({
+      rpcUrl: "http://test-rpc",
+      apiUrl: "http://test-api",
+      gatewayUrl: "http://test-gateway",
+      useGateway: true,
+      chainId: "test-chain",
+    });
+  }
+
+  /** Wire bytes signed OUTSIDE the client, as an external signer would. */
+  function externallySignedBytes(): Uint8Array {
+    const kp = generateKeypair();
+    const action: Action = {
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: pubkeyToOwner(kp.publicKey),
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+      },
+    };
+    return signAndEncode(
+      chainIdFromString("test-chain"),
+      action,
+      BigInt(Date.now()),
+      kp.privateKey,
+    );
+  }
+
+  it("submitSignedTx submits pre-signed bytes byte-exactly, with no key loaded", async () => {
+    const client = makeKeylessGatewayClient();
+    const txBytes = externallySignedBytes();
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "ok",
+            txHash: "ABCD",
+            code: 0,
+            height: 4821903,
+            events: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const r = await client.submitSignedTx(txBytes);
+
+    expect(r.ok).toBe(true);
+    expect(r.code).toBe(0);
+    expect(r.height).toBe(4821903);
+    expect(r.hash).toBe("ABCD");
+
+    // Exactly one round-trip to POST /exchange, and the forwarded bytes are
+    // the caller's bytes, bit for bit — the property co-signing relies on.
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe("http://test-gateway/exchange");
+    const body = JSON.parse(calls[0].init?.body as string) as {
+      action: string;
+    };
+    expect(bytesFromBase64(body.action)).toEqual(txBytes);
+
+    // Final synchronous verdict → no background verifier spawned.
+    expect(
+      (client as unknown as { pendingVerifies: Set<unknown> }).pendingVerifies
+        .size,
+    ).toBe(0);
+  });
+
+  it("submitSignedTx keeps the hash-only background reconciliation (parity with submitTx)", async () => {
+    const client = makeKeylessGatewayClient();
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "error",
+            error: "duplicate in-flight tx; reconcile via txHash",
+            txHash: "ABCD",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              height: "4821905",
+              tx_result: { code: 0, log: "", events: [] },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const initial = await client.submitSignedTx(externallySignedBytes());
+
+    expect(initial).toMatchObject({
+      ok: false,
+      outcome: "timeout",
+      hash: "ABCD",
+    });
+
+    const reconciled = await client.awaitPendingVerifies();
+    expect(reconciled).toHaveLength(1);
+    expect(reconciled[0]).toMatchObject({
+      ok: true,
+      code: 0,
+      hash: "ABCD",
+      height: 4821905,
+    });
+    expect(calls[1].url).toBe("http://test-gateway/v1/tx/ABCD");
+  });
+
+  it("submitSignedTxCommit returns a synchronous verdict without polling", async () => {
+    const client = makeKeylessGatewayClient();
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "ok",
+            txHash: "ABCD",
+            code: 0,
+            height: 4821903,
+            events: [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const r = await client.submitSignedTxCommit(externallySignedBytes());
+
+    expect(r.ok).toBe(true);
+    expect(r.height).toBe(4821903);
+    expect(calls).toHaveLength(1);
+    expect(calls.some((c) => c.url.includes("/tx"))).toBe(false);
+  });
+
+  it("submitSignedTxCommit resolves a hash-only ambiguous response synchronously, scoped to the call", async () => {
+    // The commit path must return THIS tx's final verdict directly — no
+    // background verifier, no draining the client-global
+    // awaitPendingVerifies() buffer.
+    const client = makeKeylessGatewayClient();
+
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            status: "error",
+            error: "duplicate in-flight tx; reconcile via txHash",
+            txHash: "ABCD",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              height: "4821905",
+              tx_result: { code: 12, log: "insufficient margin", events: [] },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const r = await client.submitSignedTxCommit(externallySignedBytes());
+
+    expect(r).toMatchObject({
+      ok: false,
+      outcome: "engine",
+      code: 12,
+      hash: "ABCD",
+      height: 4821905,
+      log: "insufficient margin",
+    });
+    expect(calls[1].url).toBe("http://test-gateway/v1/tx/ABCD");
+    // Scoped: nothing left for the global reconciliation buffer.
+    expect(
+      (client as unknown as { pendingVerifies: Set<unknown> }).pendingVerifies
+        .size,
+    ).toBe(0);
+    expect(await client.awaitPendingVerifies()).toHaveLength(0);
+  });
+
+  it("submitSignedTxCommit polls when a legacy gateway only acks CheckTx", async () => {
+    const client = makeKeylessGatewayClient();
+
+    nextResponses.push(
+      () =>
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              height: "4821907",
+              tx_result: { code: 0, log: "", events: [] },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const r = await client.submitSignedTxCommit(externallySignedBytes());
+
+    expect(r.ok).toBe(true);
+    expect(r.height).toBe(4821907);
+    // The poll targets the hash of the exact bytes the caller signed.
+    expect(calls[1].url).toBe(
+      `http://test-gateway/v1/tx/${expectedGatewayHash(calls[0])}`,
+    );
+  });
+
+  it("still polls when the gateway only acks CheckTx (pre-#90 gateway)", async () => {
+    // Back-compat: an older gateway answers {status:"ok"} with no code/height.
+    // The outcome is unknown, so the poll loop must still run — otherwise the
+    // SDK would silently stop confirming inclusion against a deployment that
+    // hasn't been upgraded.
+    const client = makeGatewayClient();
+    primeNextNonce(client);
+
+    nextResponses.push(
+      () =>
+        new Response(JSON.stringify({ status: "ok" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({
+            result: {
+              height: "77",
+              tx_result: { code: 0, log: "", events: [] },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+
+    const r = await client.submitTxCommit(placeOrder(client));
+
+    expect(r.ok).toBe(true);
+    expect(r.height).toBe(77);
+    expect(calls.some((c) => c.url.includes("/tx"))).toBe(true);
+  });
 
   it("default path posts to gatewayUrl/exchange (not rpcUrl)", async () => {
     const client = makeGatewayClient();

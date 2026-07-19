@@ -7,8 +7,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+The npm, Rust core, PyO3, WASM, and Python packages move to **2.0.0** for the
+open-interest-cap wire contract. Every v2 `CreateMarket` wire payload now has
+one canonical 12-field encoding, including an explicit final `0` for uncapped
+markets. The npm input treats omission, null, and explicit zero identically.
+That changes its existing uncapped output from 11 to 12 fields and normalizes a
+decoded legacy absent tail from `undefined` to `0n`; a v1 gateway/engine cannot
+be assumed to accept the new bytes. Frozen v1 `rmp-serde` decoders also reject
+populated 12-field `CreateMarket` and 21-field `UpdateMarketFees` payloads, and
+the Rust wire structs gain source-incompatible fields. The unchanged derive
+crate stays at **1.1.0**; the unpublished conformance crate labels the v2
+vectors as **2.0.0**. Compatible engine:
+`exchange-core >= 2.0.0, < 3.0.0`.
+
 ### Fixed
 
+- **`peekActionType()` no longer leaks unknown action-type bytes as
+  `ActionTypeValue`** (#56). It now returns `null` for an action-type slot
+  this SDK build does not know — an unassigned byte, a newer engine's wire
+  type under an older SDK, or a non-numeric msgpack value — matching its
+  declared return type. Previously the raw slot value was cast through
+  unvalidated, so code trusting the type to imply membership (e.g. indexing
+  a `Record<ActionTypeValue, …>`) hit `undefined` at runtime. Callers that
+  need the raw byte of an unknown envelope should decode it themselves.
 - **Documented price unit corrected: order prices are `u64` micro-USDC (6 dp),
   not cents.** `PlaceOrder.price` and every other wire price field (oracle,
   composite, execution, mark, entry, orderbook, amend) are micro-USDC — the unit
@@ -28,9 +49,57 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   conformance vector exercised it, so it went undetected (surfaced by the WASM
   differential test). Encode now emits the variant name; decode still accepts
   the legacy integer form for back-compat. A regression test pins both.
+- TypeScript now emits the canonical 12-field `CreateMarket` for omitted, null,
+  zero, and non-zero caps, matching the v2 Rust core and gateway re-encoder. It
+  also rejects negative/out-of-u64 non-null cap values before encoding.
+- Python market reads decode `MarketConfig.max_open_interest` from slot 24.
+- Rust `Event::MarketConfigUpdated` now matches the engine's complete event
+  shape, including `im_bps`, `mm_bps`, and `max_open_interest`.
 
 ### Added
 
+- **`ExchangeClient.submitSignedTx(txBytes)` / `submitSignedTxCommit(txBytes)`**
+  — public submission of **externally signed** wire bytes (built via
+  `signingMessage()` → external signature → `encodeSignedTx()`), for callers
+  that never load a private key into the client: hardware/CLI signers and the
+  Web Admin's multisig propose/approve flows. Pure byte-exact transport — the
+  bytes are never decoded or re-encoded, so what was signed is exactly what
+  the gateway receives (and action types newer than this SDK build still
+  submit). `submitSignedTx` routes and reconciles identically to `submitTx`
+  (gateway by default, same hash-only background verification);
+  `submitSignedTxCommit` shares `submitTxCommit`'s finality logic and returns
+  the final chain verdict scoped to the call — added after adversarial review
+  flagged that without it, external signers had no deterministic commit path
+  under degraded-gateway responses (hash-only ambiguous, legacy CheckTx-only
+  ack). Previously the only submission paths required `setPrivateKey`,
+  forcing external-signer apps toward hand-rolled `POST /exchange` calls. No
+  wire change.
+- Aggregate open-interest cap support across Rust, TypeScript, and Python:
+  `CreateMarket.maxOpenInterest` is an optional/nullable input normalized to
+  an explicit zero tail when uncapped,
+  `UpdateMarketFees.maxOpenInterest` occupies the engine's trailing slot 20,
+  and `MarketConfig.maxOpenInterest` decodes from slot 24. Legacy 11-field
+  `CreateMarket` payloads still decode as uncapped, but every new encoding is
+  the canonical 12-field form and decodes the cap as `0` / `0n`.
+- Log-aware error-code classification across Rust, TypeScript, and Python.
+  Shared code 50 resolves to `OpenInterestLimitExceeded` or
+  `SlippageExceeded` only from the canonical DeliverTx log; absent or unknown
+  logs resolve to `AmbiguousCode50` rather than guessing.
+- **`decodeSigningMessage()` + `DecodedSigningMessage`** — decode a v3
+  signing preimage (the exact `signingMessage()` output an external signer
+  signs) back into chain id, action type + name, seq, and the decoded
+  action, so signer-side tools can show a human WHAT they are about to sign
+  on a trust base independent of whoever built the bytes (the Web Admin
+  signer CLI is the first consumer; any future hardware-signer tool needs
+  the same). Structurally-invalid input (short, wrong domain prefix) throws;
+  an unknown action-type byte or undecodable payload degrades honestly to
+  `action: null` + `decodeError` with the envelope fields still parsed —
+  newer wire actions than the SDK build must never look like structural
+  rejections. `DOMAIN_PREFIX` is now exported alongside `ENVELOPE_VERSION`.
+  Decode-only; no wire change.
+- Rust exports a `Milliseconds` alias for every millisecond timestamp/duration
+  wire field and `UpdateMarketFees::new(market, signer)` for concise no-op
+  defaults; the alias remains source- and wire-identical to `u64`.
 - **`ExecErrorCode` enum** export (#29) — branch on
   `code === ExecErrorCode.InsufficientMargin` instead of a bare `12`; kept in
   agreement with the decode table by a test.
@@ -40,6 +109,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Gateway submissions consume the synchronous on-chain result** (#50) when
+  available, so `submitTxCommit` no longer repeats a `/v1/tx/{hash}` poll and
+  `submitTx` no longer starts a redundant background verifier. Hash-only error
+  responses remain ambiguous and are still reconciled; pre-upgrade gateway
+  acknowledgements retain the existing polling behavior.
+- `UpdateMarketFees` now includes the engine's existing `imBps` and `mmBps`
+  tail slots before `maxOpenInterest`, preventing the OI cap from being
+  misinterpreted as a margin-ratio update.
 - **`TxResult` gains `ok`, `outcome`, and `error`** (#29; additive — `code` /
   `hash` / `height` / `log` / `events` and existing `result.code === 0` checks
   are unchanged). `ok` is a boolean discriminant; `outcome` is
@@ -181,6 +258,7 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Proof-labs/trading-sdk/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Proof-labs/trading-sdk/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/Proof-labs/trading-sdk/releases/tag/v0.1.0

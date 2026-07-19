@@ -37,6 +37,23 @@ describe("tx-result builders", () => {
     expect(r.error).toBeNull();
   });
 
+  it("txEngineError uses the DeliverTx log to classify shared code 50", () => {
+    expect(
+      txEngineError(50, {
+        log: "open interest limit exceeded on market 7: would be 4, cap 3",
+      }).error?.name,
+    ).toBe("OpenInterestLimitExceeded");
+    expect(
+      txEngineError(50, {
+        log: "atomic basket aggregate slippage 51 bps exceeds budget 50 bps",
+      }).error?.name,
+    ).toBe("SlippageExceeded");
+    expect(txEngineError(50).error?.name).toBe("AmbiguousCode50");
+    expect(txEngineError(50, { log: "unrecognized" }).error?.name).toBe(
+      "AmbiguousCode50",
+    );
+  });
+
   it("txTransportError tags 'transport' with null error and preserves code", () => {
     const r = txTransportError(429, "rate limited");
     expect(r.ok).toBe(false);

@@ -429,7 +429,6 @@ class SetUserMarketLeverage(Action):
         }
 
 
-
 @dataclass
 class CreateImpactMarket(Action):
     ACTION_NAME = "CreateImpactMarket"
@@ -492,6 +491,9 @@ class UpdateMarketFees(Action):
     cex_composite_staleness_ms: Optional[int] = None
     partial_liquidation_enabled: Optional[bool] = None
     fee_tiers: Optional[list[dict[str, Any]]] = None
+    im_bps: Optional[int] = None
+    mm_bps: Optional[int] = None
+    max_open_interest: Optional[int] = None
 
     def fields(self) -> dict[str, Any]:
         return {
@@ -513,6 +515,9 @@ class UpdateMarketFees(Action):
             "cex_composite_staleness_ms": self.cex_composite_staleness_ms,
             "partial_liquidation_enabled": self.partial_liquidation_enabled,
             "fee_tiers": self.fee_tiers,
+            "im_bps": self.im_bps,
+            "mm_bps": self.mm_bps,
+            "max_open_interest": self.max_open_interest,
         }
 
 

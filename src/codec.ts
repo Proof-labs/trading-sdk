@@ -11,7 +11,13 @@ import {
   Side,
   TimeInForce,
 } from "./types.js";
-import { signingMessage, sign, getPublicKey, hexToBytes } from "./crypto.js";
+import {
+  signingMessage,
+  sign,
+  getPublicKey,
+  hexToBytes,
+  DOMAIN_PREFIX,
+} from "./crypto.js";
 
 /**
  * Envelope version byte — the first element of the wire array
@@ -85,6 +91,16 @@ const decoder = new Decoder({ useBigInt64: true });
  * keeping it preserves correctness if a signed field is added later.
  */
 const U32_MAX_BIGINT = 0xffff_ffffn; // 2^32 - 1
+const U64_MAX_BIGINT = 0xffff_ffff_ffff_ffffn; // 2^64 - 1
+
+function assertU64(value: bigint, field: string): void {
+  if (typeof value !== "bigint") {
+    throw new TypeError(`${field} must be a bigint`);
+  }
+  if (value < 0n || value > U64_MAX_BIGINT) {
+    throw new RangeError(`${field} must be in the unsigned u64 range`);
+  }
+}
 
 function minimizeBigInts(value: unknown): unknown {
   if (typeof value === "bigint") {
@@ -241,11 +257,34 @@ export function signEnvelopeFromPayload(
 // Decoding
 // ---------------------------------------------------------------------------
 
-/** Peek at the action_type byte without full decode. */
+/** Every wire action-type byte this SDK build knows — the validation set
+ *  behind `peekActionType`'s return type. */
+const KNOWN_ACTION_TYPES: ReadonlySet<number> = new Set<number>(
+  Object.values(ActionType),
+);
+
+/** Peek at the action_type byte without full decode.
+ *
+ *  Returns `null` both for structurally unreadable bytes AND for an
+ *  action-type slot this SDK build does not know (an unassigned byte, a
+ *  newer engine's wire type under an older SDK, or a non-numeric msgpack
+ *  value). Previously the raw slot value leaked out typed as
+ *  `ActionTypeValue`, so downstream code trusting the type to imply
+ *  membership (e.g. indexing a `Record<ActionTypeValue, …>`) hit
+ *  `undefined` at runtime with no type error — found live while building
+ *  WebAdmin's submit-route allowlist (#56). Callers that need the raw
+ *  byte of an unknown envelope should decode the envelope themselves. */
 export function peekActionType(bytes: Uint8Array): ActionTypeValue | null {
   try {
     const envelope = decode(bytes) as unknown[];
-    return envelope[1] as ActionTypeValue;
+    const raw = envelope[1];
+    const value =
+      typeof raw === "number"
+        ? raw
+        : typeof raw === "bigint"
+          ? Number(raw)
+          : NaN;
+    return KNOWN_ACTION_TYPES.has(value) ? (value as ActionTypeValue) : null;
   } catch {
     return null;
   }
@@ -294,6 +333,123 @@ export function decodeTx(bytes: Uint8Array): {
     version,
     pubkey: envelope[4] as Uint8Array,
     signature: envelope[5] as Uint8Array,
+  };
+}
+
+/** Reverse lookup: wire action-type byte → SDK action name. */
+const ACTION_TYPE_NAMES: ReadonlyMap<number, string> = new Map(
+  Object.entries(ActionType).map(([name, byte]) => [byte, name]),
+);
+
+/**
+ * Decoded form of a v3 **signing preimage** — the exact bytes
+ * `signingMessage()` produces and an external signer signs. Not to be
+ * confused with the wire envelope `decodeTx()` decodes (which additionally
+ * carries the pubkey and signature).
+ */
+export interface DecodedSigningMessage {
+  /** The 32-byte chain id the signature will bind to (cross-chain replay guard). */
+  chainId: Uint8Array;
+  /** Wire action-type byte. */
+  actionType: number;
+  /** SDK name for `actionType`, or null when this SDK build doesn't know the byte. */
+  actionName: string | null;
+  /** Per-signer sequence field (u64; big-endian on the wire). */
+  seq: bigint;
+  /** Raw payload bytes (a MessagePack positional array). */
+  payloadBytes: Uint8Array;
+  /** The decoded action, or null when the payload could not be decoded. */
+  action: Action | null;
+  /** Present exactly when `action` is null — why the payload didn't decode. */
+  decodeError: string | null;
+}
+
+/**
+ * Decode a v3 signing preimage (`DOMAIN_PREFIX(16) || chain_id(32) ||
+ * action_type(1) || seq_be(8) || payload`) back into its parts, so a
+ * signer-side tool can show a human WHAT they are about to sign on a trust
+ * base independent of whoever built the bytes — the external-signer
+ * counterpart of `decodeTx()`.
+ *
+ * Throws when the input is structurally not a Proof v3 signing preimage
+ * (too short, or wrong domain prefix) — a signer tool should treat that as
+ * "refuse loudly", not display garbage. An unknown action-type byte or an
+ * undecodable payload is NOT structural: the envelope fields still parse
+ * and are returned, with `action: null` and `decodeError` explaining why —
+ * newer wire actions than this SDK build must degrade to "cannot decode,
+ * here are the raw bytes", never to a false structural rejection.
+ */
+export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
+  const headerLen = DOMAIN_PREFIX.length + 32 + 1 + 8;
+  if (msg.length < headerLen) {
+    throw new Error(
+      `not a Proof v3 signing message: ${msg.length} bytes is shorter than ` +
+        `the ${headerLen}-byte fixed header`,
+    );
+  }
+  for (let i = 0; i < DOMAIN_PREFIX.length; i++) {
+    if (msg[i] !== DOMAIN_PREFIX[i]) {
+      throw new Error(
+        'not a Proof v3 signing message: missing the "ProofExchange-v3" ' +
+          "domain prefix",
+      );
+    }
+  }
+
+  let offset = DOMAIN_PREFIX.length;
+  const chainId = msg.slice(offset, offset + 32);
+  offset += 32;
+  const actionType = msg[offset++];
+  const seq = new DataView(msg.buffer, msg.byteOffset + offset, 8).getBigUint64(
+    0,
+    false, // big-endian, mirroring signingMessage()
+  );
+  offset += 8;
+  const payloadBytes = msg.slice(offset);
+
+  const actionName = ACTION_TYPE_NAMES.get(actionType) ?? null;
+  let action: Action | null = null;
+  let decodeError: string | null = null;
+  if (actionName === null) {
+    decodeError = `unknown action type 0x${actionType.toString(16).padStart(2, "0")} — not in this SDK build`;
+  } else {
+    try {
+      const fields = decode(payloadBytes);
+      if (!Array.isArray(fields)) {
+        throw new Error(
+          `payload is not a MessagePack array (got ${typeof fields})`,
+        );
+      }
+      const decodedAction = decodePayload(
+        actionType as ActionTypeValue,
+        fields,
+      );
+      const [canonicalActionType, canonicalFields] =
+        encodePayload(decodedAction);
+      const canonicalPayloadBytes = encode(canonicalFields);
+      const isCanonical =
+        canonicalActionType === actionType &&
+        canonicalPayloadBytes.length === payloadBytes.length &&
+        canonicalPayloadBytes.every((byte, i) => byte === payloadBytes[i]);
+      if (!isCanonical) {
+        throw new Error(
+          "payload is not the canonical representation this SDK can safely display",
+        );
+      }
+      action = decodedAction;
+    } catch (e) {
+      decodeError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  return {
+    chainId,
+    actionType,
+    actionName,
+    seq,
+    payloadBytes,
+    action,
+    decodeError,
   };
 }
 
@@ -615,6 +771,9 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
       // — but if the caller sets a non-zero poolId we MUST include it.
       // Always include for forward-compatibility once any SDK build can
       // address pools other than 0.
+      if (d.maxOpenInterest != null) {
+        assertU64(d.maxOpenInterest, "CreateMarket.maxOpenInterest");
+      }
       return [
         ActionType.CreateMarket,
         [
@@ -632,6 +791,14 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           // decode. Both are required fields on CreateMarket.
           d.szDecimals,
           d.ticker,
+          // max_open_interest: 0 disables the cap. Always emitted, exactly
+          // like pool_id above. The engine serializes this field
+          // unconditionally, and the gateway's structured path re-encodes the
+          // payload before the signature is checked — so a client that omitted
+          // the zero tail would sign 11 elements against a gateway that
+          // encodes 12, and verification would fail. Never make the array's
+          // length depend on the value: one value, one encoding.
+          d.maxOpenInterest ?? 0n,
         ],
       ];
     }
@@ -722,13 +889,16 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
     }
     case "UpdateMarketFees": {
       const d = action.data;
+      if (d.maxOpenInterest != null) {
+        assertU64(d.maxOpenInterest, "UpdateMarketFees.maxOpenInterest");
+      }
       // Field order MUST match the Rust struct: market, signer,
       // taker_fee_bps, maker_fee_bps, max_funding_rate_bps,
       // funding_interval_ms, max_position_size, default_ttl_ms,
       // net_delta_margin, tick_size, lot_size, primary_oracle_signer,
       // oracle_staleness_ms, mark_source_mode, max_mark_spread_bps,
       // cex_composite_staleness_ms, partial_liquidation_enabled,
-      // fee_tiers.
+      // fee_tiers, im_bps, mm_bps, max_open_interest.
       // Each optional field encodes as its value or null (rmp-serde
       // accepts null for `Option<T>` via serde(default) / Option
       // deserialization). New fields are appended at the end.
@@ -753,6 +923,9 @@ function encodePayload(action: Action): [ActionTypeValue, unknown[]] {
           d.cexCompositeStalenessMs ?? null,
           d.partialLiquidationEnabled ?? null,
           d.feeTiers ? d.feeTiers.map(encodeFeeTier) : null,
+          d.imBps ?? null,
+          d.mmBps ?? null,
+          d.maxOpenInterest ?? null,
         ],
       ];
     }
@@ -1000,6 +1173,12 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           // decode (0 / "" defaults).
           szDecimals: f.length > 9 ? (f[9] as number) : 0,
           ticker: f.length > 10 ? (f[10] as string) : "",
+          // maxOpenInterest at index 11. A released pre-cap record has only 11
+          // elements; it means "uncapped", which the engine spells `0` — so
+          // normalize to 0n rather than leaving it undefined. That keeps
+          // decode → encode stable: re-encoding a legacy record yields the
+          // canonical 12-element form with an explicit zero tail.
+          maxOpenInterest: f.length > 11 ? bi(f[11]) : 0n,
         },
       };
     case ActionType.WithdrawRequest:
@@ -1135,6 +1314,9 @@ function decodePayload(actionType: ActionTypeValue, f: unknown[]): Action {
           cexCompositeStalenessMs: f.length > 15 ? optBig(f[15]) : null,
           partialLiquidationEnabled: f.length > 16 ? optBool(f[16]) : null,
           feeTiers: f.length > 17 ? decodeFeeTiers(f[17]) : null,
+          imBps: f.length > 18 ? optNum(f[18]) : null,
+          mmBps: f.length > 19 ? optNum(f[19]) : null,
+          maxOpenInterest: f.length > 20 ? optBig(f[20]) : null,
         },
       };
     }
