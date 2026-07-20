@@ -64,35 +64,47 @@ function isNode(): boolean {
 export async function ready(): Promise<void> {
   if (cached) return;
   if (!initPromise) {
-    initPromise = (async () => {
-      // Keep this import literal: Vite/Rollup must see the generated module in
-      // a consuming application's dependency graph.
-      const mod =
-        (await import("./wasm/proof_trading_sdk_wasm.js")) as unknown as WasmCore;
-      // Likewise, a literal URL lets the consumer's bundler emit the binary as
-      // a hashed asset rather than leaving a broken node_modules-relative URL.
-      const wasmUrl = new URL(
-        "./wasm/proof_trading_sdk_wasm_bg.wasm",
-        import.meta.url,
-      );
-      if (isNode()) {
-        // Computed specifiers + loose casts keep `tsc` from needing Node types.
-        const fs = (await import(/* @vite-ignore */ "node:fs" as string)) as {
-          readFileSync: (p: string) => BufferSource;
-        };
-        const url = (await import(/* @vite-ignore */ "node:url" as string)) as {
-          fileURLToPath: (u: URL) => string;
-        };
-        const path = url.fileURLToPath(wasmUrl);
-        await mod.default({ module_or_path: fs.readFileSync(path) });
-      } else {
-        await mod.default({ module_or_path: wasmUrl });
-      }
-      cached = mod;
-      return mod;
-    })();
+    initPromise = instantiate();
   }
-  await initPromise;
+  const attempt = initPromise;
+  try {
+    await attempt;
+  } catch (e) {
+    // A failed init (e.g. a transient fetch error for the .wasm binary in a
+    // browser) must not stay cached, or every later call replays the same
+    // rejection until page reload. Clear it so the next `ready()` retries —
+    // unless a newer attempt is already in flight.
+    if (initPromise === attempt) initPromise = null;
+    throw e;
+  }
+}
+
+async function instantiate(): Promise<WasmCore> {
+  // Keep this import literal: Vite/Rollup must see the generated module in
+  // a consuming application's dependency graph.
+  const mod =
+    (await import("./wasm/proof_trading_sdk_wasm.js")) as unknown as WasmCore;
+  // Likewise, a literal URL lets the consumer's bundler emit the binary as
+  // a hashed asset rather than leaving a broken node_modules-relative URL.
+  const wasmUrl = new URL(
+    "./wasm/proof_trading_sdk_wasm_bg.wasm",
+    import.meta.url,
+  );
+  if (isNode()) {
+    // Computed specifiers + loose casts keep `tsc` from needing Node types.
+    const fs = (await import(/* @vite-ignore */ "node:fs" as string)) as {
+      readFileSync: (p: string) => BufferSource;
+    };
+    const url = (await import(/* @vite-ignore */ "node:url" as string)) as {
+      fileURLToPath: (u: URL) => string;
+    };
+    const path = url.fileURLToPath(wasmUrl);
+    await mod.default({ module_or_path: fs.readFileSync(path) });
+  } else {
+    await mod.default({ module_or_path: wasmUrl });
+  }
+  cached = mod;
+  return mod;
 }
 
 /**

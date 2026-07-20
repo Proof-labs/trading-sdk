@@ -45,6 +45,11 @@ at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
 
 ### Fixed
 
+- **A failed WASM init no longer stays cached.** `ready()` used to memoize the
+  first instantiation attempt permanently, so a transient failure (e.g. one
+  dropped `.wasm` fetch in a browser) made every later `ready()` — and every
+  `ExchangeClient` submit — replay the same rejection until page reload. A
+  failed attempt is now cleared and the next call retries instantiation.
 - **The codec adapter rejects unknown enum values loudly, by field name.** An
   out-of-range numeric enum on encode (`side: 99`) or an unknown variant name
   on decode used to cross the WASM boundary as `undefined` and surface as
