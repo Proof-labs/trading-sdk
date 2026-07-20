@@ -98,12 +98,23 @@ function convertValue(camelKey: string, value: unknown): unknown {
   if (camelKey === "oracleSource") {
     return eventOracleSourceToWasm(value as EventOracleSource);
   }
+  // Unknown enum values throw HERE, by field name — letting `undefined` cross
+  // into serde_wasm_bindgen surfaces as an unrelated-looking
+  // "invalid type: unit value" from inside the WASM core.
   if (camelKey === "markSourceMode" && typeof value === "number") {
-    return MARK_SOURCE_MODE_NAMES[value];
+    const name = MARK_SOURCE_MODE_NAMES[value];
+    if (name === undefined) {
+      throw new Error(`unknown markSourceMode value: ${value}`);
+    }
+    return name;
   }
   const enumMap = NUMERIC_ENUM_FIELDS[camelKey];
   if (enumMap && typeof value === "number") {
-    return enumMap[value];
+    const name = enumMap[value];
+    if (name === undefined) {
+      throw new Error(`unknown ${camelKey} enum value: ${value}`);
+    }
+    return name;
   }
   if (value instanceof Uint8Array) return value;
   if (Array.isArray(value)) {
@@ -192,6 +203,23 @@ const MARK_SOURCE_MODE_VALUES: Record<string, number> = {
   Median: 1,
 };
 
+/**
+ * Fields that are byte strings (`Uint8Array`) in the TS `Action` shape. The
+ * WASM core may hand them back as plain number arrays (fixed-size `[u8; N]`
+ * serializes as a sequence), so the decode direction converts these — and only
+ * these — by name. Any future numeric-*list* field (e.g. a `Vec<u32>` of
+ * market ids) must NOT be added here; keying by name is what keeps such a
+ * field from being silently truncated into bytes.
+ */
+const BYTE_FIELDS = new Set([
+  "agentPubkey",
+  "owner",
+  "primaryOracleSigner",
+  "signer",
+  "solanaDestination",
+  "solanaTxSig",
+]);
+
 /** Decode an `EventOracleSource` from serde's `{ Variant: {...} }` / string form. */
 function eventOracleSourceFromWasm(v: unknown): EventOracleSource | null {
   if (v === null || v === undefined) return null;
@@ -238,15 +266,34 @@ function fromWasmValue(camelKey: string, value: unknown): unknown {
   // through before the generic object branch would iterate its indices.
   if (value instanceof Uint8Array) return value;
   if (camelKey === "oracleSource") return eventOracleSourceFromWasm(value);
+  // Same loudness as the encode direction: an unknown variant name (e.g. a
+  // newer engine's wire) throws by field name instead of decoding to a silent
+  // `undefined`. `decodeSigningMessage` degrades this to `decodeError`.
   if (camelKey === "markSourceMode" && typeof value === "string") {
-    return MARK_SOURCE_MODE_VALUES[value];
+    const num = MARK_SOURCE_MODE_VALUES[value];
+    if (num === undefined) {
+      throw new Error(`unknown markSourceMode variant: ${value}`);
+    }
+    return num;
   }
   const enumMap = NUMERIC_ENUM_FIELDS[camelKey];
-  if (enumMap && typeof value === "string") return enumMap[value];
+  if (enumMap && typeof value === "string") {
+    const num = enumMap[value];
+    if (num === undefined) {
+      throw new Error(`unknown ${camelKey} enum variant: ${value}`);
+    }
+    return num;
+  }
   if (Array.isArray(value)) {
-    // A non-empty all-numbers array is a byte field (owner/signer/…) → bytes;
-    // an array of objects (e.g. legs) recurses; an empty array stays `[]`.
-    if (value.length > 0 && value.every((x) => typeof x === "number")) {
+    // Byte fields are identified by name (`BYTE_FIELDS`), never by shape —
+    // a shape guess would silently byte-convert the first future numeric-list
+    // field. Arrays of objects (e.g. legs) recurse; everything else passes.
+    if (BYTE_FIELDS.has(camelKey)) {
+      if (!value.every((x) => typeof x === "number" && x >= 0 && x <= 255)) {
+        throw new Error(
+          `byte field ${camelKey}: expected an array of u8, got ${JSON.stringify(value)}`,
+        );
+      }
       return Uint8Array.from(value as number[]);
     }
     return value.map((v) =>

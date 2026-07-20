@@ -45,6 +45,18 @@ at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
 
 ### Fixed
 
+- **The codec adapter rejects unknown enum values loudly, by field name.** An
+  out-of-range numeric enum on encode (`side: 99`) or an unknown variant name
+  on decode used to cross the WASM boundary as `undefined` and surface as
+  serde's unrelated-looking `invalid type: unit value`; both directions now
+  throw e.g. `unknown side enum value: 99` at the adapter.
+- **Byte fields decode by name, not by array-shape guess.** The adapter's
+  decode direction converted any non-empty all-numbers array to `Uint8Array`,
+  which would silently truncate the first future numeric-list wire field; byte
+  fields are now an explicit name set (`owner`, `signer`, `agentPubkey`,
+  `primaryOracleSigner`, `solanaDestination`, `solanaTxSig`), an empty byte
+  field decodes as an empty `Uint8Array` (previously `[]`), and non-u8 content
+  in a byte field throws.
 - **`peekActionType()` no longer leaks unknown action-type bytes as
   `ActionTypeValue`** (#56). It now returns `null` for an action-type slot
   this SDK build does not know — an unassigned byte, a newer engine's wire
