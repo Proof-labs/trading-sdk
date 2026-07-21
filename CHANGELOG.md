@@ -7,10 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-The npm, Rust core, PyO3, WASM, and Python packages move to **2.0.0**. This
-major bundles two independent breaks that ship together: the open-interest-cap
-wire contract, and the cutover of the action codec + signing onto a WASM build
-of the Rust core (ADR 0001).
+The npm, Rust core, PyO3, and Python packages move to **2.1.0**. The MINOR bump
+adds the public code-51 `OpenInterestLimitExceeded` classification while
+preserving safe decoding across a rolling engine upgrade. The unchanged WASM
+crate stays at **2.0.0**, the derive crate stays at **1.1.0**, and the
+unpublished conformance crate continues to label the v2 vectors as **2.0.0**.
+
+This release also includes the two breaking changes first staged at 2.0.0: the
+open-interest-cap wire contract and the cutover of the action codec + signing
+onto a WASM build of the Rust core (ADR 0001).
 
 Open-interest cap — every v2 `CreateMarket` wire payload now has one canonical
 12-field encoding, including an explicit final `0` for uncapped markets. The npm
@@ -95,6 +100,12 @@ at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
 - Python market reads decode `MarketConfig.max_open_interest` from slot 24.
 - Rust `Event::MarketConfigUpdated` now matches the engine's complete event
   shape, including `im_bps`, `mm_bps`, and `max_open_interest`.
+- Rolling-upgrade error-code classification across Rust, TypeScript, and
+  Python. Upgraded engines use code 50 for `SlippageExceeded` and the new code
+  51 for `OpenInterestLimitExceeded`; code 51 decodes directly without a log.
+  Legacy code-50 open-interest rejects remain recognizable from their
+  canonical DeliverTx prefix, while absent or unknown code-50 logs resolve to
+  `AmbiguousCode50` rather than guessing.
 
 ### Added
 
@@ -121,10 +132,6 @@ at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
   and `MarketConfig.maxOpenInterest` decodes from slot 24. Legacy 11-field
   `CreateMarket` payloads still decode as uncapped, but every new encoding is
   the canonical 12-field form and decodes the cap as `0` / `0n`.
-- Log-aware error-code classification across Rust, TypeScript, and Python.
-  Shared code 50 resolves to `OpenInterestLimitExceeded` or
-  `SlippageExceeded` only from the canonical DeliverTx log; absent or unknown
-  logs resolve to `AmbiguousCode50` rather than guessing.
 - **`decodeSigningMessage()` + `DecodedSigningMessage`** — decode a v3
   signing preimage (the exact `signingMessage()` output an external signer
   signs) back into chain id, action type + name, seq, and the decoded

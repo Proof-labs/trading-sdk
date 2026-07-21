@@ -338,9 +338,10 @@ fn get_error_code_table<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
     Ok(list)
 }
 
-/// Classify an engine result using its canonical DeliverTx log. This is
-/// intentionally separate from the numeric manifest because deployed code 50
-/// has two meanings.
+/// Classify an engine result using its canonical DeliverTx log. This remains
+/// separate from the numeric manifest because legacy engines may emit code 50
+/// for open interest while upgraded engines use 50 for slippage and 51 for
+/// open interest during a rolling upgrade.
 #[pyfunction]
 #[pyo3(signature = (code, log=None))]
 fn classify_error_name(code: u32, log: Option<&str>) -> Option<&'static str> {

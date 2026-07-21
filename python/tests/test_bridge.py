@@ -191,7 +191,12 @@ class TestErrors:
         assert err.retry_after_secs == 5.0
         assert err.bucket == "orders"
 
-    def test_shared_code_50_uses_delivertx_log(self):
+    def test_current_code_51_does_not_require_delivertx_log(self):
+        assert pts.get_error_name(51) == "OpenInterestLimitExceeded"
+        assert pts.get_error_name(51, "unknown") == "OpenInterestLimitExceeded"
+        assert pts.EngineError(51, "").name == "OpenInterestLimitExceeded"
+
+    def test_transitional_code_50_uses_delivertx_log(self):
         oi = "open interest limit exceeded on market 7: would be 4, cap 3"
         slip = "atomic basket aggregate slippage 51 bps exceeds budget 50 bps"
         assert pts.get_error_name(50, oi) == "OpenInterestLimitExceeded"
@@ -202,6 +207,13 @@ class TestErrors:
         assert pts.EngineError(50, oi).name == "OpenInterestLimitExceeded"
         assert pts.EngineError(50, slip).name == "SlippageExceeded"
         assert pts.EngineError(50, "").name == "AmbiguousCode50"
+
+    def test_error_manifest_has_distinct_current_codes(self):
+        by_code = {
+            entry["code"]: entry["name"] for entry in pts.get_error_code_table()
+        }
+        assert by_code[50] == "SlippageExceeded"
+        assert by_code[51] == "OpenInterestLimitExceeded"
 
 
 class TestConfig:
