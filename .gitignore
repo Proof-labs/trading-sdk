@@ -6,6 +6,7 @@ dist/
 # Benchmarks / coverage artifacts
 .benchmarks/
 coverage/
+.browser-smoke/
 
 # Editor / OS
 .DS_Store

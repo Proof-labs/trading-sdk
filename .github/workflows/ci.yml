@@ -173,6 +173,15 @@ jobs:
       # src/wasm (post-cutover) and self-skips until then; RPC_URL-gated
       # scenario/e2e suites self-skip.
       - run: npm test
+      # Prove the registry artifact, not the source checkout: pack the SDK,
+      # install it into a clean Vite consumer, require one emitted WASM asset,
+      # then exercise the canonical codec path in a real browser.
+      - name: Install Chromium for the packaged-browser smoke
+        run: npx playwright install --with-deps chromium
+      - name: Build a clean consumer from the packed SDK
+        run: npm run smoke:browser:prepare
+      - name: Exercise the packaged WASM codec in Chromium
+        run: npm run smoke:browser
 
   rust:
     name: Rust tests + conformance

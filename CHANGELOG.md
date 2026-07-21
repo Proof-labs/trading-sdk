@@ -7,21 +7,61 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-The npm, Rust core, PyO3, WASM, and Python packages move to **2.0.0** for the
-open-interest-cap wire contract. Every v2 `CreateMarket` wire payload now has
-one canonical 12-field encoding, including an explicit final `0` for uncapped
-markets. The npm input treats omission, null, and explicit zero identically.
-That changes its existing uncapped output from 11 to 12 fields and normalizes a
-decoded legacy absent tail from `undefined` to `0n`; a v1 gateway/engine cannot
-be assumed to accept the new bytes. Frozen v1 `rmp-serde` decoders also reject
-populated 12-field `CreateMarket` and 21-field `UpdateMarketFees` payloads, and
-the Rust wire structs gain source-incompatible fields. The unchanged derive
-crate stays at **1.1.0**; the unpublished conformance crate labels the v2
-vectors as **2.0.0**. Compatible engine:
-`exchange-core >= 2.0.0, < 3.0.0`.
+The npm, Rust core, PyO3, WASM, and Python packages move to **2.0.0**. This
+major bundles two independent breaks that ship together: the open-interest-cap
+wire contract, and the cutover of the action codec + signing onto a WASM build
+of the Rust core (ADR 0001).
+
+Open-interest cap — every v2 `CreateMarket` wire payload now has one canonical
+12-field encoding, including an explicit final `0` for uncapped markets. The npm
+input treats omission, null, and explicit zero identically. That changes its
+existing uncapped output from 11 to 12 fields and normalizes a decoded legacy
+absent tail from `undefined` to `0n`; a v1 gateway/engine cannot be assumed to
+accept the new bytes. Frozen v1 `rmp-serde` decoders also reject populated
+12-field `CreateMarket` and 21-field `UpdateMarketFees` payloads, and the Rust
+wire structs gain source-incompatible fields. The unchanged derive crate stays
+at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
+**2.0.0**. Compatible engine: `exchange-core >= 2.0.0, < 3.0.0`.
+
+### Changed
+
+- **BREAKING — the action codec and signing now run through a WASM build of the
+  Rust core** (ADR 0001). `encodeSignedTx` / `signAndEncode` /
+  `signEnvelopeFromPayload` / `encodePayloadBytes` / `decodeTx` are byte-identical
+  to the exchange engine _by construction_; the ~770-line hand-written TS codec
+  is deleted (`codec.ts` is now a thin adapter over the WASM core). Because WASM
+  initializes asynchronously, **call `await ready()` once** (exported from the
+  package) before any codec/signing call — `ExchangeClient` does this internally
+  (`submitTx` / `ready()`); only raw `signAndEncode` / `decodeTx` callers need
+  it. Building and testing now require the Rust + `wasm-bindgen` toolchain
+  (`npm run build:wasm`). **The wire format is unchanged** — this is an API/build
+  break, not a wire break, but the async-init requirement warrants a MAJOR bump.
+
+### Removed
+
+- The hand-written positional MessagePack codec in `src/codec.ts` (~770 lines of
+  encode/decode arms + enum/byte helpers) — superseded by the WASM core and
+  `src/codec-adapter.ts` (a name/enum translation layer).
 
 ### Fixed
 
+- **A failed WASM init no longer stays cached.** `ready()` used to memoize the
+  first instantiation attempt permanently, so a transient failure (e.g. one
+  dropped `.wasm` fetch in a browser) made every later `ready()` — and every
+  `ExchangeClient` submit — replay the same rejection until page reload. A
+  failed attempt is now cleared and the next call retries instantiation.
+- **The codec adapter rejects unknown enum values loudly, by field name.** An
+  out-of-range numeric enum on encode (`side: 99`) or an unknown variant name
+  on decode used to cross the WASM boundary as `undefined` and surface as
+  serde's unrelated-looking `invalid type: unit value`; both directions now
+  throw e.g. `unknown side enum value: 99` at the adapter.
+- **Byte fields decode by name, not by array-shape guess.** The adapter's
+  decode direction converted any non-empty all-numbers array to `Uint8Array`,
+  which would silently truncate the first future numeric-list wire field; byte
+  fields are now an explicit name set (`owner`, `signer`, `agentPubkey`,
+  `primaryOracleSigner`, `solanaDestination`, `solanaTxSig`), an empty byte
+  field decodes as an empty `Uint8Array` (previously `[]`), and non-u8 content
+  in a byte field throws.
 - **`peekActionType()` no longer leaks unknown action-type bytes as
   `ActionTypeValue`** (#56). It now returns `null` for an action-type slot
   this SDK build does not know — an unassigned byte, a newer engine's wire

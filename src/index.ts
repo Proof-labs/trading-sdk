@@ -87,6 +87,9 @@ export {
   type DecodedSigningMessage,
   peekActionType,
 } from "./codec.js";
+// WASM codec/signing core init. `await ready()` once before any codec/signing
+// call (the `ExchangeClient` does this for you). See ADR 0001.
+export { ready } from "./wasm-loader.js";
 export { fetchChainId } from "./client.js";
 
 // Error decoder

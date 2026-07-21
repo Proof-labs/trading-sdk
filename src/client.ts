@@ -1,4 +1,5 @@
 import { signAndEncode } from "./codec.js";
+import { ready as initWasm } from "./wasm-loader.js";
 import {
   txEngineError,
   txFromEngineCode,
@@ -347,7 +348,8 @@ export class ExchangeClient {
    * `submitTx` resolves lazily on its own.
    */
   async ready(): Promise<void> {
-    await this.resolveChainId();
+    // Initialize the WASM codec/signing core and pre-resolve the chain_id.
+    await Promise.all([initWasm(), this.resolveChainId()]);
   }
 
   /**
@@ -532,7 +534,9 @@ export class ExchangeClient {
   private async broadcastSigned(action: Action): Promise<TxResult> {
     if (!this.privateKey) throw new Error("No private key set");
 
-    const chainId = await this.resolveChainId();
+    // Initialize the WASM codec/signing core and resolve the chain_id
+    // concurrently; both are cached, so only the first submit pays for either.
+    const [chainId] = await Promise.all([this.resolveChainId(), initWasm()]);
     const seq = this.nextTimestampNonce();
     const txBytes = signAndEncode(chainId, action, seq, this.privateKey);
 

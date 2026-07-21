@@ -538,7 +538,11 @@ describe("codec v1 all action types", () => {
           maxOpenInterest,
         },
       };
-      expect(() => encodePayloadBytes(action)).toThrow(/unsigned u64 range/);
+      // The WASM core rejects out-of-u64 BigInts at deserialization; the
+      // hand-written TS codec used to phrase this as "unsigned u64 range".
+      expect(() => encodePayloadBytes(action)).toThrow(
+        /BigInt outside u64|unsigned u64 range/,
+      );
     },
   );
 
@@ -762,7 +766,11 @@ describe("codec v1 all action types", () => {
         type: "UpdateMarketFees",
         data: { market: 7, signer: SIGNER, maxOpenInterest },
       };
-      expect(() => encodePayloadBytes(action)).toThrow(/unsigned u64 range/);
+      // The WASM core rejects out-of-u64 BigInts at deserialization; the
+      // hand-written TS codec used to phrase this as "unsigned u64 range".
+      expect(() => encodePayloadBytes(action)).toThrow(
+        /BigInt outside u64|unsigned u64 range/,
+      );
     },
   );
 
@@ -1448,8 +1456,48 @@ describe("decodeSigningMessage", () => {
 
     expect(d.actionName).toBe("CreateMarket");
     expect(d.action).toBeNull();
-    expect(d.decodeError).toMatch(/not the canonical representation/);
+    // Refusal is the contract: a non-canonical payload must never surface as a
+    // decoded action. The WASM core rejects the extra trailing field at strict
+    // length-checked decode ("array had incorrect length"); a payload that
+    // decodes but is non-minimal is still caught by the re-encode canonical
+    // check. Either way `action` is null and `decodeError` explains why.
+    expect(d.decodeError).not.toBeNull();
     expect(Array.from(d.payloadBytes)).toEqual(Array.from(extendedPayload));
+  });
+
+  it("refuses a known action payload with a non-minimal integer encoding", () => {
+    // rmp accepts any integer width on decode, so a bloated encoding decodes
+    // to the same values — but those are not the bytes this SDK would produce,
+    // so the canonical re-encode check must refuse to display it. (The
+    // trailing-fields test above dies earlier, at strict length-checked
+    // decode; this one exercises the re-encode comparison itself.)
+    const payload = encodePayloadBytes({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner: OWNER,
+        side: Side.Buy,
+        price: 100_000_000n,
+        quantity: 1n,
+      },
+    });
+    expect(payload[1]).toBe(0x01); // market=1 as a minimal positive fixint
+    const bloated = new Uint8Array([
+      payload[0],
+      0xce, // …re-encoded as a msgpack uint32: same value, non-minimal bytes
+      0x00,
+      0x00,
+      0x00,
+      0x01,
+      ...payload.slice(2),
+    ]);
+    const msg = signingMessage(chainId, ActionType.PlaceOrder, 5n, bloated);
+
+    const d = decodeSigningMessage(msg);
+
+    expect(d.actionName).toBe("PlaceOrder");
+    expect(d.action).toBeNull();
+    expect(d.decodeError).toMatch(/not the canonical representation/);
   });
 
   it("throws on a wrong domain prefix", () => {
@@ -1519,5 +1567,148 @@ describe("peekActionType validation (#56)", () => {
 
   it("still returns null for structurally unreadable bytes", () => {
     expect(peekActionType(new Uint8Array([0xde, 0xad, 0xbe, 0xef]))).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Explicit undefined/null on optional action fields
+// ---------------------------------------------------------------------------
+
+describe("explicit undefined/null on optional action fields", () => {
+  // The legacy hand-written codec normalized optional defaulted fields with
+  // nullish coalescing (`d.postOnly ?? false`), so `{ postOnly: undefined }`
+  // (a common JS spread shape) and even an untyped caller's explicit null
+  // encoded as the documented default. The WASM adapter must keep that
+  // contract: nullish fields are dropped before the serde boundary, because a
+  // *present* JS null fails to deserialize into Rust's non-Option
+  // `#[serde(default)]` fields (post_only, reduce_only, time_in_force, …).
+  const base = {
+    market: 1,
+    owner: OWNER,
+    side: Side.Buy,
+    price: 66_750_000_000n,
+    quantity: 5n,
+  };
+  const omitted = () =>
+    encodePayloadBytes({ type: "PlaceOrder", data: { ...base } });
+
+  it("encodes explicit-undefined optional fields byte-identically to omission", () => {
+    const explicit = encodePayloadBytes({
+      type: "PlaceOrder",
+      data: {
+        ...base,
+        clientOrderId: undefined,
+        postOnly: undefined,
+        reduceOnly: undefined,
+        timeInForce: undefined,
+      },
+    });
+    expect(bytesToHex(explicit)).toBe(bytesToHex(omitted()));
+  });
+
+  it("encodes explicit-null optional fields byte-identically to omission (untyped JS callers)", () => {
+    const data = {
+      ...base,
+      clientOrderId: null,
+      postOnly: null,
+      reduceOnly: null,
+      timeInForce: null,
+    };
+    const explicit = encodePayloadBytes({
+      type: "PlaceOrder",
+      data,
+    } as unknown as Action);
+    expect(bytesToHex(explicit)).toBe(bytesToHex(omitted()));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Legacy short-payload decode compatibility
+// ---------------------------------------------------------------------------
+
+describe("legacy short-payload decode compatibility", () => {
+  // The deleted TS codec decoded length-tolerantly (`postOnly: f.length > 6 &&
+  // f[6] === true`), so a wire record produced before post_only / reduce_only /
+  // time_in_force existed still decoded, with those trailing fields defaulted.
+  // The WASM path must preserve that: the Rust structs carry `#[serde(default)]`
+  // on the appended fields, so rmp-serde fills the defaults for a short
+  // positional array. Pin it here at the `decodeTx` boundary rather than
+  // leaving it implied by the Rust attributes.
+  const envelope = (
+    actionType: number,
+    payloadFields: unknown[],
+  ): Uint8Array => {
+    const enc = new Encoder({ useBigInt64: true });
+    const payload = enc.encode(payloadFields);
+    return enc.encode([
+      ENVELOPE_VERSION,
+      actionType,
+      1n,
+      payload,
+      ZERO_PUBKEY,
+      ZERO_SIG,
+    ]);
+  };
+
+  it("decodes a pre-TIF 6-field PlaceOrder, defaulting the appended flags", () => {
+    // [market, owner, side, price, quantity, client_order_id] — no post_only /
+    // reduce_only / time_in_force (the shape older SDKs emitted).
+    const bytes = envelope(ActionType.PlaceOrder, [
+      1,
+      OWNER,
+      "Buy",
+      66_750_000_000n,
+      5n,
+      null,
+    ]);
+    const { action } = decodeTx(bytes);
+    expect(action.type).toBe("PlaceOrder");
+    if (action.type === "PlaceOrder") {
+      expect(action.data.price).toBe(66_750_000_000n);
+      expect(action.data.postOnly).toBe(false);
+      expect(action.data.reduceOnly).toBe(false);
+      expect(action.data.timeInForce).toBe(TimeInForce.Gtc);
+    }
+  });
+
+  it("decodes an 8-field PlaceOrder missing only time_in_force", () => {
+    const bytes = envelope(ActionType.PlaceOrder, [
+      1,
+      OWNER,
+      "Sell",
+      100n,
+      2n,
+      7n,
+      true,
+      false,
+    ]);
+    const { action } = decodeTx(bytes);
+    expect(action.type).toBe("PlaceOrder");
+    if (action.type === "PlaceOrder") {
+      expect(action.data.postOnly).toBe(true);
+      expect(action.data.timeInForce).toBe(TimeInForce.Gtc);
+    }
+  });
+
+  it("decodes a pre-TIF CancelReplaceOrder, defaulting the appended flags", () => {
+    // CancelReplaceOrder up to `client_order_id`, no post_only/reduce_only/tif.
+    const bytes = envelope(ActionType.CancelReplaceOrder, [
+      OWNER,
+      101n, // cancel_order_id
+      null, // cancel_client_order_id
+      2, // market
+      "Buy",
+      12345n,
+      7n,
+      202n, // client_order_id
+    ]);
+    const { action } = decodeTx(bytes);
+    expect(action.type).toBe("CancelReplaceOrder");
+    if (action.type === "CancelReplaceOrder") {
+      expect(action.data.market).toBe(2);
+      expect(action.data.postOnly).toBe(false);
+      expect(action.data.reduceOnly).toBe(false);
+      expect(action.data.timeInForce).toBe(TimeInForce.Gtc);
+    }
   });
 });
