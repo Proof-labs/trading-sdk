@@ -278,7 +278,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "amended total quantity is below the quantity already filled while the order rested",
   },
-  50: SLIPPAGE_EXCEEDED,
   51: OPEN_INTEREST_LIMIT_EXCEEDED,
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
