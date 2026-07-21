@@ -79,15 +79,29 @@ export enum ExecErrorCode {
   InvalidCancelReplaceTarget = 48,
   AmendBelowFilled = 49,
   /**
-   * The engine currently also emits code 50 for AtomicBasketOrder
-   * `SlippageExceeded`. A numeric result cannot distinguish the variants.
-   * Pass the canonical DeliverTx log to {@link decodeExecError}; without a
-   * recognized log the decoder returns `AmbiguousCode50`, never a guessed
-   * OI-cap classification.
+   * New engines use code 50 for AtomicBasketOrder `SlippageExceeded`. During
+   * the rolling upgrade, legacy engines may still emit code 50 for
+   * `OpenInterestLimitExceeded`, so pass the canonical DeliverTx log to
+   * {@link decodeExecError}. Without a recognized log the decoder returns
+   * `AmbiguousCode50`, never a guessed classification.
    */
-  OpenInterestLimitExceeded = 50,
+  SlippageExceeded = 50,
+  /** Distinct open-interest-cap rejection emitted by upgraded engines. */
+  OpenInterestLimitExceeded = 51,
   InternalError = 255,
 }
+
+const OPEN_INTEREST_LIMIT_EXCEEDED: ExecErrorInfo = {
+  name: "OpenInterestLimitExceeded",
+  description:
+    "fill would push aggregate market open interest past MarketConfig.maxOpenInterest",
+};
+
+const SLIPPAGE_EXCEEDED: ExecErrorInfo = {
+  name: "SlippageExceeded",
+  description:
+    "atomic basket aggregate slippage exceeded the submitted maxSlippageBps budget",
+};
 
 const TABLE: Record<number, ExecErrorInfo> = {
   1: { name: "DecodeError", description: "transaction decode error" },
@@ -264,6 +278,8 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "amended total quantity is below the quantity already filled while the order rested",
   },
+  50: SLIPPAGE_EXCEEDED,
+  51: OPEN_INTEREST_LIMIT_EXCEEDED,
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
 
@@ -282,22 +298,10 @@ const TABLE: Record<number, ExecErrorInfo> = {
 const OPEN_INTEREST_LOG_PREFIX = "open interest limit exceeded on market ";
 const SLIPPAGE_LOG_PREFIX = "atomic basket aggregate slippage ";
 
-const OPEN_INTEREST_LIMIT_EXCEEDED: ExecErrorInfo = {
-  name: "OpenInterestLimitExceeded",
-  description:
-    "fill would push aggregate market open interest past MarketConfig.maxOpenInterest",
-};
-
-const SLIPPAGE_EXCEEDED: ExecErrorInfo = {
-  name: "SlippageExceeded",
-  description:
-    "atomic basket aggregate slippage exceeded the submitted maxSlippageBps budget",
-};
-
 const AMBIGUOUS_CODE_50: ExecErrorInfo = {
   name: "AmbiguousCode50",
   description:
-    "engine code 50 is shared by OpenInterestLimitExceeded and SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely",
+    "during the rolling upgrade, engine code 50 may mean legacy OpenInterestLimitExceeded or current SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely",
 };
 
 export function decodeExecError(

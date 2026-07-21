@@ -26,7 +26,15 @@ describe("decodeExecError", () => {
     expect(e32?.description).toContain("net-delta margin grouping");
   });
 
-  it("disambiguates shared code 50 only from canonical DeliverTx logs", () => {
+  it("decodes code 51 as open-interest-cap rejection without a log", () => {
+    expect(decodeExecError(51)?.name).toBe("OpenInterestLimitExceeded");
+    expect(decodeExecError(51, "unrecognized")?.name).toBe(
+      "OpenInterestLimitExceeded",
+    );
+    expect(execErrorName(51)).toBe("OpenInterestLimitExceeded");
+  });
+
+  it("classifies transitional code 50 only from canonical DeliverTx logs", () => {
     const oiLog = "open interest limit exceeded on market 7: would be 4, cap 3";
     const slippageLog =
       "atomic basket aggregate slippage 51 bps exceeds budget 50 bps";
@@ -81,7 +89,8 @@ describe("ExecErrorCode enum", () => {
     expect(ExecErrorCode.InsufficientMargin).toBe(12);
     expect(ExecErrorCode.TimestampNonceRejected).toBe(21);
     expect(ExecErrorCode.AmendBelowFilled).toBe(49);
-    expect(ExecErrorCode.OpenInterestLimitExceeded).toBe(50);
+    expect(ExecErrorCode.SlippageExceeded).toBe(50);
+    expect(ExecErrorCode.OpenInterestLimitExceeded).toBe(51);
     expect(ExecErrorCode.InternalError).toBe(255);
   });
 });

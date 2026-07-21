@@ -37,7 +37,14 @@ describe("tx-result builders", () => {
     expect(r.error).toBeNull();
   });
 
-  it("txEngineError uses the DeliverTx log to classify shared code 50", () => {
+  it("txEngineError decodes current code 51 without a log", () => {
+    expect(txEngineError(51).error?.name).toBe("OpenInterestLimitExceeded");
+    expect(txEngineError(51, { log: "unrecognized" }).error?.name).toBe(
+      "OpenInterestLimitExceeded",
+    );
+  });
+
+  it("txEngineError uses the DeliverTx log to classify transitional code 50", () => {
     expect(
       txEngineError(50, {
         log: "open interest limit exceeded on market 7: would be 4, cap 3",
