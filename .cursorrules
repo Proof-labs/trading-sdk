@@ -58,3 +58,10 @@ All client traffic — SDKs, frontends, bots, scripts — goes through the API g
 
 <!-- repo-specific -->
 # Add repo-specific Cursor rules below this line.
+
+## Trading SDK specifics
+
+See CONTRIBUTING.md for the full workflow. Report security vulnerabilities
+privately via the repository Security tab (see SECURITY.md) — never in a public
+issue or PR. Keep each PR to one logical change, add a test with every
+behaviour change, and title it with a single Conventional Commits prefix.

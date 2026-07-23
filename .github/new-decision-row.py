@@ -160,6 +160,24 @@ def main():
         }
     )
     gh("api", "-X", "PUT", f"repos/{REPO}/contents/{PATH}", "--input", "-", stdin=payload)
+
+    # The stub PR itself obeys the queue discipline: its body declares its
+    # lane, and it may only open ready-for-review when the author is under
+    # the org-wide 5-ready cap (an uncountable cap fails closed to draft).
+    draft_args = []
+    try:
+        count = int(gh("search", "prs", "--owner", "Proof-labs", "--author", "@me",
+                       "--state", "open", "--draft=false", "--limit", "100",
+                       "--json", "id", "--jq", "length").strip())
+        if count >= 5:
+            draft_args = ["--draft"]
+            print(f"note: work-in-progress cap reached ({count} ready) — "
+                  f"opening the stub PR as DRAFT; mark it ready when a slot frees.")
+    except (RuntimeError, ValueError):
+        draft_args = ["--draft"]
+        print("note: could not count open ready PRs — opening the stub PR as "
+              "DRAFT (fail closed).")
+
     url = gh(
         "pr", "create", "-R", REPO, "--base", "dev", "--head", branch,
         "--title", f"docs(delivery): DEC-{n} stub — {desc[:50]}",
@@ -169,8 +187,12 @@ def main():
             f"> {desc}\n>\n> Type: {dtype} · Priority: {prio_cell}\n\n"
             "Refine the decider and dependencies at the weekly decision moment; "
             "the originating pull request stays **draft** until this row is Decided.\n\n"
-            "Task link: No — decision-register stub."
+            "**Task link:** No — decision-register stub\n\n"
+            "## Decisions\n\n"
+            "- [x] **No decision required** — this pull request registers a "
+            "decision; it does not decide it."
         ),
+        *draft_args,
     ).strip().splitlines()[-1]
     print(f"DEC-{n}\t{url}")
 

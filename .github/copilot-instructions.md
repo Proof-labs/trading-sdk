@@ -56,3 +56,8 @@ All client traffic — SDKs, frontends, bots, scripts — goes through the **API
 
 <!-- repo-specific -->
 <!-- Add repo-specific Copilot instructions below this line. -->
+
+## Trading SDK specifics
+
+- See `CONTRIBUTING.md` for the full workflow and `SECURITY.md` for reporting vulnerabilities privately (never in a public issue or PR).
+- Keep each PR to one logical change; add a test with every behaviour change; title it with a single Conventional Commits prefix.
