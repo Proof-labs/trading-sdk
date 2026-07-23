@@ -250,3 +250,7 @@ paths as security-critical:
   every action — the scenario and codec tests are the regression guard.
 - Prefer typed errors (`src/errors.ts`) over string matching for engine/gateway
   rejection handling.
+
+## Decision Routing & Review-Queue Discipline
+
+A pull request whose merge requires a product, economic, or organisational decision stays **draft**, with its `DEC-N` rows from the Brain's `delivery/decision-register.md` (Proof-labs/ProofOfBrain) linked in the body, until those rows are Decided. Each author keeps at most **5 pull requests in ready-for-review** across the Proof repositories; further output is opened as draft or filed as an issue. Decisions are batched into the weekly decision moment, not litigated in review threads.
