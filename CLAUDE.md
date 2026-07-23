@@ -1,3 +1,70 @@
+# Proof-labs working agreement (Claude Code)
+
+This file is project-level guidance for Claude Code, synced from `Proof-labs/.github` (`templates/agent-config/CLAUDE.md`). Repo-specific instructions live below the `<!-- repo-specific -->` marker — don't edit anything above it.
+
+<!-- ===== org-policy (synced — do not edit by hand) ===== -->
+
+## Branching policy (hard-enforced)
+
+**Before making any code edits**, you must:
+
+1. Ask the user what this work is: a **ProofOfBrain board card** (`W##-NN`, e.g. `W20-04`), a **Linear ticket** (`BE-##`), or **ad-hoc**.
+2. Create a branch with the correct prefix:
+   - **ProofOfBrain card:** `git checkout -b W##-NN/<short-kebab-slug>` (e.g. `W20-04/known-limitations`)
+   - **Linear ticket or ad-hoc:** `git checkout -b <type>/<slug>` where `<type>` is one of `chore`, `feat`, `fix`, `docs`, `hotfix`, `infra`, `refactor`. A Linear ticket rides a `<type>/` branch and is attached at PR time (see pull-request policy), not in the branch name.
+3. **For a ProofOfBrain card**, read the board card before editing:
+   `Proof-labs/ProofOfBrain` → `delivery/boards/YYYY-Www.md` → heading `### W##-NN — <title>`
+4. Confirm scope with the user before editing files.
+
+The `PreToolUse` hook at `.claude/hooks/pre-tool-use.sh` rejects `Edit` / `Write` / `NotebookEdit` calls until the current branch matches the convention. Don't try to bypass — fix the branch.
+
+`main`, `dev`, `develop`, `master` (any case) are blocked for direct edits.
+
+## Pull-request policy
+
+When you open a pull request, set the **Task link** in the PR body — it's optional, but ask by default:
+
+1. If the user already named a ticket for this work (a ProofOfBrain card `W##-NN` or a Linear ticket `BE-##`), use it — don't ask again.
+2. Otherwise ask once, in chat: *"Is this part of a ProofOfBrain board card (`W##-NN`), a Linear ticket (`BE-##`), or free-styling for now?"*
+3. Fill the matching line in the template's **Task link** section (or tick "No — free-styling"). Free text is fine.
+
+The `Board item / validate` check is **advisory only — it never blocks a merge**. Use `dev` as the integration branch; `develop` and `master` are blocked org-wide via ruleset.
+
+## Pull-request queue discipline
+
+- **Decision-bearing pull requests stay draft.** If merging the PR requires a product, economic, or organisational decision (a new policy, a parameter set, an ownership assignment, release authority), reference its `DEC-N` rows from `Proof-labs/ProofOfBrain` → `delivery/decision-register.md` in the PR body and keep the PR **draft** until every linked row is Decided. **Re-scan at PR time** — decisions usually only become visible at the end of the work: before `gh pr create`, re-read the full branch diff and fill the template's **Decisions** section as an inventory: decisions **made** during the work (routine engineering calls — list them, they are reviewed in this PR) and decisions **needing authority** (→ register rows + draft). A `PreToolUse` hook enforces this structurally on every ready-for-review `gh pr create`: the body's Decisions section needs a **checked** lane (`- [x]`) — "No decision required", a made-list with at least one real bullet, or "Needs authority" with rows the hook verifies are **Decided** in the live register (still-Open rows require `--draft`) — and the org-wide 5-ready work-in-progress cap is counted at creation. Verification failures fail closed. `--draft` always passes. **If no row exists yet, create the stub first**: answer `open-pr.sh`'s decision prompt with a one-line description (it allocates the next `DEC-N` and opens the register pull request for you, via `.github/new-decision-row.py`), or append the row yourself via a small ProofOfBrain pull request into `dev` on branch `add/dec-N-<slug>` — then link both pull requests. Decisions are made in the weekly decision moment, not argued in review threads.
+- **Work-in-progress cap.** Each author keeps at most **5 pull requests in ready-for-review across the whole organisation**. Further output opens as **draft** (or as an issue) until a slot frees.
+
+## Scope: one logical change per PR
+
+Each PR does exactly one logical change — one concern, one Conventional Commits type
+(`feat` / `fix` / `refactor` / `style` / `chore` / `docs` / `test` / `perf`). Never bundle a
+feature with a fix, or a behaviour change with a structural one (refactor, rename,
+reformat, lint). If a request mixes concerns, make the change but split it into separate
+PRs by type, and tell the user which split you made and why. Full rule: `Proof-labs/.github`
+→ `CONTRIBUTING.md`.
+
+## Linked policy
+
+- Definition of Done axes: `Proof-labs/ProofOfBrain` → `delivery/definition-of-done.md`
+- Weekly boards: `Proof-labs/ProofOfBrain` → `delivery/boards/_index.md`
+- Branching policy: `Proof-labs/ProofOfBrain` → meeting notes referenced from the PR template
+- Org-level config (this file, hooks, rulesets, validator workflow): `Proof-labs/.github`
+
+## Network policy — gateway only (client-facing code)
+
+All client traffic — SDKs, frontends, bots, scripts — goes through the **API gateway**. The CometBFT RPC (`:26657`) and the node REST API (`:8080` / `:1317`) are internal upstreams the gateway fronts; they are **never** client targets and may be firewalled off in production.
+
+- **Through the SDK, never hand-rolled HTTP.** The gateway is the *network* boundary; the Proof SDK (`@proof/trading-sdk`, source of truth `exchange/sdk`) is the *client* boundary. Application code — frontends, bots, scripts, services — calls the SDK for every gateway interaction; it never hand-rolls `POST /exchange` bodies, signing, nonces / sequence numbers, or wire codecs against the gateway. If the SDK lacks a method for a gateway route, add the SDK method first, then consume it — same pattern as the gateway rule below. Exceptions: the SDK's own transport internals, and contract tests that deliberately pin the raw route / request shape (e.g. proof-integration scenarios).
+- **Default to the gateway.** A direct-to-node path may exist only as an explicit, non-default opt-out (e.g. `useGateway: false`) for in-cluster tools (market-makers, HLP, oracle feeder, test harness) — never the public default, never documented for external callers.
+- **Never hardcode or default to** node ports (`:26657`, `:8080`, `:1317`), raw CometBFT methods (`/status`, `/block`, `/tx?hash=`, `broadcast_tx_*`), or a node mode (`apiMode: 'node'`). Use the gateway surface: `POST /exchange`, `POST /info`, `GET /v1/*`, `/v1/tx/{hash}`, `/v1/status`, `/ws`.
+- **If the gateway doesn't serve a read you need, add the gateway route first**, then consume it — do not reach past the gateway to the node.
+- Scope: client-facing code only. Does **not** apply to the gateway itself or to node / infra repos, which legitimately talk to the node.
+
+<!-- ===== /org-policy ===== -->
+
+<!-- repo-specific -->
+
 # Proof Trading SDK — Claude Code guide
 
 ## Trading with the SDK
