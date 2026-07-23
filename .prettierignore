@@ -14,3 +14,9 @@ python/
 crates/
 fuzz/
 conformance/
+
+# Agent-config files synced from Proof-labs/.github (org canon owns their
+# formatting; local prettier churn would re-break every sync)
+CLAUDE.md
+AGENTS.md
+.github/copilot-instructions.md
