@@ -2200,14 +2200,26 @@ pub enum ExecError {
         filled_quantity: u64,
         requested_quantity: u64,
     },
+    /// An atomic basket's notional-weighted aggregate slippage exceeded its
+    /// submitted `max_slippage_bps` budget.
+    SlippageExceeded {
+        aggregate_bps: u32,
+        max_slippage_bps: u32,
+    },
     /// A fill would push aggregate market open interest above the configured
-    /// cap. The current engine also emits code 50 for `SlippageExceeded`;
-    /// numeric-only callers must inspect the engine log for basket rejects.
+    /// cap. Upgraded engines emit the distinct code 51 for this rejection.
     OpenInterestLimitExceeded {
         market: MarketId,
         limit: u64,
         would_be: u64,
     },
+    /// An admin governance action was submitted while no admin signer
+    /// registry exists on this chain; multisig administration is inactive
+    /// and every governance path fails closed.
+    AdminGovernanceInactive,
+    /// The tx signer does not match the action's declared admin actor, or is
+    /// not a member of the current admin signer registry.
+    NotAdminSigner,
 }
 
 impl ExecError {
@@ -2269,7 +2281,10 @@ impl ExecError {
             ExecError::FillOrKillWouldNotFill { .. } => 47,
             ExecError::InvalidCancelReplaceTarget => 48,
             ExecError::AmendBelowFilled { .. } => 49,
-            ExecError::OpenInterestLimitExceeded { .. } => 50,
+            ExecError::SlippageExceeded { .. } => 50,
+            ExecError::OpenInterestLimitExceeded { .. } => 51,
+            ExecError::AdminGovernanceInactive => 52,
+            ExecError::NotAdminSigner => 53,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -2458,8 +2473,17 @@ impl ExecError {
             ExecError::AmendBelowFilled { .. } => {
                 "AmendOrder new quantity is below the quantity already filled while the order rested."
             }
+            ExecError::SlippageExceeded { .. } => {
+                "Atomic basket aggregate slippage exceeded the submitted max_slippage_bps budget."
+            }
             ExecError::OpenInterestLimitExceeded { .. } => {
-                "Fill would push aggregate market open interest past MarketConfig.max_open_interest. Code 50 is also used by AtomicBasketOrder SlippageExceeded; inspect the engine log for basket rejects."
+                "Fill would push aggregate market open interest past MarketConfig.max_open_interest."
+            }
+            ExecError::AdminGovernanceInactive => {
+                "Admin governance action (propose/approve/reject/emergency) was submitted while no admin signer registry exists on this chain; multisig administration is inactive and every governance path fails closed."
+            }
+            ExecError::NotAdminSigner => {
+                "Tx signer does not match the action's declared proposer/approver/rejecter/signer field, or is not a member of the current admin signer registry."
             }
         }
     }
@@ -2636,6 +2660,13 @@ impl fmt::Display for ExecError {
                 f,
                 "amend quantity below filled for order {order_id}: requested total {requested_quantity}, filled {filled_quantity}"
             ),
+            ExecError::SlippageExceeded {
+                aggregate_bps,
+                max_slippage_bps,
+            } => write!(
+                f,
+                "atomic basket aggregate slippage {aggregate_bps} bps exceeds budget {max_slippage_bps} bps"
+            ),
             ExecError::OpenInterestLimitExceeded {
                 market,
                 limit,
@@ -2644,6 +2675,10 @@ impl fmt::Display for ExecError {
                 f,
                 "open interest limit exceeded on market {market}: would be {would_be}, cap {limit}"
             ),
+            ExecError::AdminGovernanceInactive => {
+                write!(f, "admin governance inactive: no signer registry exists")
+            }
+            ExecError::NotAdminSigner => write!(f, "not an authorized admin signer"),
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
     }
@@ -2736,17 +2771,24 @@ define_error_kinds! {
     47  => FillOrKillWouldNotFill       ~ "Fill-or-kill order cannot be fully filled immediately at the submitted limit price.",
     48  => InvalidCancelReplaceTarget   ~ "Cancel-replace must specify exactly one active order target: either orderId or clientOrderId.",
     49  => AmendBelowFilled             ~ "AmendOrder new quantity is below the quantity already filled while the order rested.",
-    50  => OpenInterestLimitExceeded    ~ "Fill would push aggregate market open interest past MarketConfig.max_open_interest. Code 50 is also used by AtomicBasketOrder SlippageExceeded; inspect the engine log for basket rejects.",
+    50  => SlippageExceeded             ~ "Atomic basket aggregate slippage exceeded the submitted max_slippage_bps budget.",
+    51  => OpenInterestLimitExceeded    ~ "Fill would push aggregate market open interest past MarketConfig.max_open_interest.",
+    52  => AdminGovernanceInactive      ~ "Admin governance action was submitted while no admin signer registry exists on this chain; multisig administration is inactive and every governance path fails closed.",
+    53  => NotAdminSigner               ~ "Tx signer does not match the action's declared proposer/approver/rejecter/signer field, or is not a member of the current admin signer registry.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
-/// Safe classification of an engine result code plus its canonical
-/// DeliverTx log. Code 50 is deployed with two meanings, so callers must not
-/// infer one from the integer alone.
+/// Safe classification of an engine result code plus its canonical DeliverTx
+/// log. Upgraded engines use code 50 for slippage and 51 for open interest, but
+/// legacy engines may emit code 50 for open interest during a rolling upgrade.
+/// Callers must not infer the meaning of code 50 from the integer alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodedExecErrorKind {
     Known(ErrorKind),
+    /// Preserved for source compatibility with the original log-aware
+    /// code-50 decoder.
     SlippageExceeded,
+    LegacyOpenInterestLimitExceeded,
     AmbiguousCode50,
 }
 
@@ -2754,7 +2796,9 @@ impl DecodedExecErrorKind {
     pub fn code(self) -> u32 {
         match self {
             Self::Known(kind) => kind.code(),
-            Self::SlippageExceeded | Self::AmbiguousCode50 => 50,
+            Self::SlippageExceeded
+            | Self::LegacyOpenInterestLimitExceeded
+            | Self::AmbiguousCode50 => 50,
         }
     }
 
@@ -2762,6 +2806,7 @@ impl DecodedExecErrorKind {
         match self {
             Self::Known(kind) => kind.name(),
             Self::SlippageExceeded => "SlippageExceeded",
+            Self::LegacyOpenInterestLimitExceeded => "OpenInterestLimitExceeded",
             Self::AmbiguousCode50 => "AmbiguousCode50",
         }
     }
@@ -2772,14 +2817,17 @@ impl DecodedExecErrorKind {
             Self::SlippageExceeded => {
                 "Atomic basket aggregate slippage exceeded the submitted max_slippage_bps budget."
             }
+            Self::LegacyOpenInterestLimitExceeded => {
+                "A legacy engine reported that a fill would push aggregate market open interest past MarketConfig.max_open_interest."
+            }
             Self::AmbiguousCode50 => {
-                "Engine code 50 is shared by OpenInterestLimitExceeded and SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely."
+                "During the rolling upgrade, engine code 50 may mean legacy OpenInterestLimitExceeded or current SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely."
             }
         }
     }
 }
 
-/// Decode an engine error without guessing the meaning of shared code 50.
+/// Decode an engine error without guessing the transitional meaning of code 50.
 pub fn decode_exec_error_kind(code: u32, log: Option<&str>) -> Option<DecodedExecErrorKind> {
     if code == 0 {
         return None;
@@ -2787,7 +2835,7 @@ pub fn decode_exec_error_kind(code: u32, log: Option<&str>) -> Option<DecodedExe
     if code == 50 {
         return Some(match log {
             Some(log) if log.starts_with("open interest limit exceeded on market ") => {
-                DecodedExecErrorKind::Known(ErrorKind::OpenInterestLimitExceeded)
+                DecodedExecErrorKind::LegacyOpenInterestLimitExceeded
             }
             Some(log) if log.starts_with("atomic basket aggregate slippage ") => {
                 DecodedExecErrorKind::SlippageExceeded
@@ -2822,7 +2870,34 @@ mod exec_error_meaning_tests {
 
     #[test]
     #[allow(clippy::unwrap_used)]
-    fn shared_code_50_requires_the_canonical_log() {
+    fn current_code_51_decodes_without_a_log() {
+        let oi = decode_exec_error_kind(51, None).unwrap();
+        assert_eq!(oi.name(), "OpenInterestLimitExceeded");
+        assert_eq!(oi.code(), 51);
+        assert_eq!(
+            decode_exec_error_kind(51, Some("unrecognized")),
+            Some(DecodedExecErrorKind::Known(
+                ErrorKind::OpenInterestLimitExceeded
+            ))
+        );
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn governance_codes_52_53_decode_without_a_log() {
+        let inactive = decode_exec_error_kind(52, None).unwrap();
+        assert_eq!(inactive.name(), "AdminGovernanceInactive");
+        assert_eq!(inactive.code(), 52);
+        let not_signer = decode_exec_error_kind(53, None).unwrap();
+        assert_eq!(not_signer.name(), "NotAdminSigner");
+        assert_eq!(not_signer.code(), 53);
+        assert_eq!(ExecError::AdminGovernanceInactive.code(), 52);
+        assert_eq!(ExecError::NotAdminSigner.code(), 53);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn transitional_code_50_requires_the_canonical_log() {
         let oi = decode_exec_error_kind(
             50,
             Some("open interest limit exceeded on market 7: would be 4, cap 3"),
@@ -2836,6 +2911,7 @@ mod exec_error_meaning_tests {
             Some("atomic basket aggregate slippage 51 bps exceeds budget 50 bps"),
         )
         .unwrap();
+        assert_eq!(slippage, DecodedExecErrorKind::SlippageExceeded);
         assert_eq!(slippage.name(), "SlippageExceeded");
 
         for log in [None, Some(""), Some("unknown code 50 diagnostic")] {
@@ -2959,6 +3035,10 @@ mod exec_error_meaning_tests {
                 filled_quantity: 1,
                 requested_quantity: 0,
             },
+            ExecError::SlippageExceeded {
+                aggregate_bps: 51,
+                max_slippage_bps: 50,
+            },
             ExecError::OpenInterestLimitExceeded {
                 market: 0,
                 limit: 1,
@@ -2994,16 +3074,15 @@ mod exec_error_meaning_tests {
         }
     }
 
-    /// Codes 1..=50 + 255 must all be covered by at least one variant.
-    /// Catches the case where a code is reserved in `code()` but no
-    /// variant maps to it (would surface as an unreachable arm in
-    /// `meaning()`).
+    /// Codes 1..=51 + 255 must all be covered by the public error manifest.
+    /// Catches the case where a code is reserved by the mirrored engine error
+    /// enum but no SDK classification maps to it.
     #[test]
     fn no_code_holes_in_documented_range() {
-        let mut codes: Vec<u32> = one_of_each().iter().map(|e| e.code()).collect();
+        let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=50).chain(std::iter::once(255)).collect();
+        let expected: Vec<u32> = (1u32..=53).chain(std::iter::once(255)).collect();
         assert_eq!(
             codes, expected,
             "ExecError codes covered by variants: {:?}; expected: {:?}. \

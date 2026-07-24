@@ -1,14 +1,15 @@
 //! Cross-language conformance vectors for the Proof trading SDK.
 //!
 //! The vectors live as **NDJSON** (one self-describing case per line) under
-//! the repo-root `conformance/` directory, split into three families that
-//! mirror the spec (`trading-sdks.md` → "Conformance Vectors"):
+//! the repo-root `conformance/` directory, split into families that mirror
+//! the spec (`trading-sdks.md` → "Conformance Vectors"):
 //!
 //! | File              | Family   | Asserts                                   |
 //! |-------------------|----------|-------------------------------------------|
 //! | `codec.ndjson`    | codec    | action fields → exact MessagePack payload |
 //! | `signing.ndjson`  | signing  | (payload,key)→envelope; pubkey→owner      |
 //! | `nonce.ndjson`    | nonce    | (last, now_ms…) → allocated nonce sequence|
+//! | `errors.ndjson`   | errors   | (code, log) → ExecError classification name|
 //!
 //! NDJSON (not a single JSON array) is deliberate: it is the indexer's
 //! archive format (`indexer/pkg/envelope` — `<height>.ndjson`), so the same
@@ -34,6 +35,7 @@ use serde::{Deserialize, Serialize};
 pub const CODEC_FILE: &str = "codec.ndjson";
 pub const SIGNING_FILE: &str = "signing.ndjson";
 pub const NONCE_FILE: &str = "nonce.ndjson";
+pub const ERRORS_FILE: &str = "errors.ndjson";
 
 // ---------------------------------------------------------------------------
 // Vector schemas (the NDJSON line shapes)
@@ -87,6 +89,23 @@ pub struct NonceCase {
     pub last: u64,
     pub now_ms: Vec<u64>,
     pub expect: Vec<u64>,
+}
+
+/// One error-classification case: an engine result `code` plus the optional
+/// canonical DeliverTx `log` → the classified variant name. A `log: null` case
+/// pins the numeric manifest (code → canonical name); a case carrying a `log`
+/// pins the log-aware decoder (the transitional code-50 disambiguation).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorCase {
+    pub case: String,
+    pub code: u32,
+    pub log: Option<String>,
+    pub expect: ErrorExpect,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorExpect {
+    pub name: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -143,6 +162,32 @@ pub fn nonce_sequence(last: u64, now_ms: &[u64]) -> Vec<u64> {
             last
         })
         .collect()
+}
+
+/// Canonical manifest name for a numeric code (the `ERROR_KINDS` table).
+pub fn error_manifest_name(code: u32) -> Option<&'static str> {
+    proof_trading_sdk::types::ERROR_KINDS
+        .iter()
+        .find(|kind| kind.code() == code)
+        .map(|kind| kind.name())
+}
+
+/// Safe log-aware classification name — the decoder the SDKs expose. Code 50
+/// resolves to slippage/open-interest only via its canonical log; a bare or
+/// unrecognized code 50 stays `AmbiguousCode50`.
+pub fn error_classify_name(code: u32, log: Option<&str>) -> Option<&'static str> {
+    proof_trading_sdk::types::decode_exec_error_kind(code, log).map(|kind| kind.name())
+}
+
+/// The reference every runner asserts. A bare code (`log: None`) pins the
+/// numeric manifest name; a code carrying a `log` pins the log-aware decoder.
+/// Bare code 50 is `SlippageExceeded` (manifest); code 50 + log resolves the
+/// transitional slippage/open-interest ambiguity.
+pub fn error_reference_name(code: u32, log: Option<&str>) -> Option<&'static str> {
+    match log {
+        None => error_manifest_name(code),
+        Some(log) => error_classify_name(code, Some(log)),
+    }
 }
 
 // ---------------------------------------------------------------------------

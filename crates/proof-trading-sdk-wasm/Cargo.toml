@@ -12,7 +12,7 @@ repository = "https://github.com/Proof-labs/trading-sdk"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-proof-trading-sdk = { path = "../proof-trading-sdk", version = "2" }
+proof-trading-sdk = { path = "../proof-trading-sdk", version = "3" }
 # Exact pin: the globally installed wasm-bindgen CLI hard-errors unless its
 # version matches the crate version cargo resolves, and Cargo.lock is
 # gitignored — a caret range here would let every machine float to the newest

@@ -1062,7 +1062,7 @@ export type ExchangeEvent =
  * `code` (engine codes and synthesized HTTP statuses share that field):
  *
  * - `"ok"`        — CheckTx accepted the tx (`code === 0`).
- * - `"engine"`    — the engine rejected it with an `ExecError` (`code` 1..50/255);
+ * - `"engine"`    — the engine rejected it with an `ExecError` (`code` 1..53/255);
  *                   see {@link TxResult.error} for the decoded name/description.
  * - `"transport"` — a gateway/HTTP-level failure (auth, rate-limit, body too
  *                   large, 5xx, non-JSON body). `code` is the synthesized HTTP

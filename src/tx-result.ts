@@ -7,11 +7,11 @@ import type { TxEvent, TxResult } from "./types.js";
  * CometBFT, inclusion polling) and makes the classification unit-testable
  * without a live node — see `tx-result.test.ts`.
  *
- * The numeric `code` values are deliberately unchanged from the pre-tag SDK
- * (0 success; engine `ExecError` 1..48/255; synthesized HTTP 401/429/413/500/1;
- * `-1` timeout). The new `outcome` tag is what lets callers tell an engine
- * rejection apart from a transport failure that happens to reuse a small
- * integer `code`.
+ * The numeric `code` field continues to carry 0 for success, engine
+ * `ExecError` values 1..53/255 (codes 51-53 added in SDK 3.0.0),
+ * synthesized HTTP 401/429/413/500/1, or `-1` for timeout. The `outcome` tag
+ * lets callers tell an engine rejection apart from a transport failure that
+ * happens to reuse a small integer `code`.
  */
 
 /** Optional fields shared by success and post-execution error results. */
