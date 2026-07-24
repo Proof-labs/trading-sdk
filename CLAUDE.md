@@ -65,7 +65,10 @@ timestamp-nonce allocation, and gateway/CometBFT submission helpers.
 
 ```bash
 npm install
-npm run build:wasm # build the Rust core → src/wasm (needs Rust + wasm-bindgen)
+npm run build:wasm # build the Rust core → src/wasm (needs Rust + wasm-bindgen CLI)
+#   the CLI version must match the exact-pinned wasm-bindgen crate version in
+#   crates/proof-trading-sdk-wasm/Cargo.toml:
+#   cargo install wasm-bindgen-cli --version 0.2.126
 npm run build      # tsc -> dist/
 npm test           # vitest run — REQUIRES build:wasm first (codec routes through WASM)
 npx prettier --check .
