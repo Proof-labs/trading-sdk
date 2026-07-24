@@ -12,7 +12,7 @@ repository = "https://github.com/Proof-labs/trading-sdk"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-proof-trading-sdk = { path = "../proof-trading-sdk", version = "2" }
+proof-trading-sdk = { path = "../proof-trading-sdk", version = "3" }
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
 # Deterministic Ed25519 signing only (SigningKey::from_bytes + sign) — no
