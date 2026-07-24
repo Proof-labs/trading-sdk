@@ -7,6 +7,7 @@
 // Status:
 //   - codec vectors: PASS
 //   - signing vectors: PASS (signEnvelopeFromPayload + pubkeyToOwner/ownerToHex)
+//   - errors vectors:  PASS (ExecErrorCode manifest + execErrorName log decoder)
 //   - nonce vectors:   SKIPPED — nonces are derived from timestamps, not a step function
 //
 // `OracleUpdateComposite` (0x14) is now wired (operator action — composite-CEX
@@ -25,6 +26,7 @@ import {
   signEnvelopeFromPayload,
 } from "./codec.js";
 import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
+import { ExecErrorCode, execErrorName } from "./errors.js";
 import {
   ActionType,
   Outcome,
@@ -589,6 +591,20 @@ describe("conformance vectors (TypeScript)", () => {
   });
 
   it.skip("nonce: timestamp-derived, step function not needed", () => {});
+
+  it("errors: code→name manifest + log-aware classification", () => {
+    for (const c of cases("errors.ndjson")) {
+      const code = Number(c.code);
+      const expected = (c.expect as { name: string }).name;
+      // A bare code (log null) pins the numeric manifest name (enum
+      // reverse-map); a code carrying a log pins the log-aware decoder.
+      const got =
+        c.log == null
+          ? ExecErrorCode[code]
+          : execErrorName(code, c.log as string);
+      expect(got).toBe(expected);
+    }
+  });
   it("codec: action fields → payload bytes", () => {
     for (const c of cases("codec.ndjson")) {
       try {
