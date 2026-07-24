@@ -1,3 +1,6 @@
+use crate::governance::{
+    ApproveAdminAction, EmergencyAdminAction, ProposeAdminAction, RejectAdminAction,
+};
 use crate::types::*;
 use serde::{de::DeserializeOwned, Deserialize, Deserializer, Serialize, Serializer};
 
@@ -152,6 +155,10 @@ impl_action_encoding! {
     ClosePosition => 0x17,
     AmendOrder => 0x1B,
     AtomicBasketOrder => 0x1C,
+    ProposeAdminAction => 0x1E,
+    ApproveAdminAction => 0x1F,
+    RejectAdminAction => 0x20,
+    EmergencyAdminAction => 0x21,
 }
 
 /// Byte buffer that always serializes as msgpack `bin` (0xc4/c5/c6),
