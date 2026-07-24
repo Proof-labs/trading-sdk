@@ -7,9 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-The npm, Rust core, PyO3, and Python packages move to **2.1.0**. The MINOR bump
-adds the public code-51 `OpenInterestLimitExceeded` classification while
-preserving safe decoding across a rolling engine upgrade. The unchanged WASM
+The npm, Rust core, PyO3, and Python packages move to **3.0.0**. The MAJOR bump
+renumbers `OpenInterestLimitExceeded` from result code 50 to 51 (and repurposes
+code 50 to `SlippageExceeded`), which changes the result for any consumer that
+switches on the integer code, and adds the public code-51
+`OpenInterestLimitExceeded` classification while preserving safe decoding across
+a rolling engine upgrade. The unchanged WASM
 crate stays at **2.0.0**, the derive crate stays at **1.1.0**, and the
 unpublished conformance crate continues to label the v2 vectors as **2.0.0**.
 
