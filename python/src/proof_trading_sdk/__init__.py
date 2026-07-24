@@ -4,6 +4,7 @@ import typing as t
 
 from proof_trading_sdk._native import (
     SigningHandle,
+    admin_proposal_content_hash,
     chain_id_from_string,
     decode_tx,
     encode_signed_tx,
@@ -76,6 +77,7 @@ from proof_trading_sdk.client import ExchangeClient
 from proof_trading_sdk.streams import AccountEventStream, OrderbookDeltaStream
 
 __all__ = [
+    "admin_proposal_content_hash",
     "chain_id_from_string",
     "owner_to_hex",
     "hex_to_owner",

@@ -94,6 +94,8 @@ export {
   decodeSigningMessage,
   type DecodedSigningMessage,
   peekActionType,
+  adminProposalContentHash,
+  type AdminProposalContext,
 } from "./codec.js";
 // WASM codec/signing core init. `await ready()` once before any codec/signing
 // call (the `ExchangeClient` does this for you). See ADR 0001.

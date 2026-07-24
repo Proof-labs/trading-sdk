@@ -2,6 +2,7 @@ extern crate proof_trading_sdk as core_sdk;
 
 use core_sdk::codec;
 use core_sdk::crypto;
+use core_sdk::governance;
 use core_sdk::types::ExecError;
 
 use pyo3::exceptions::PyValueError;
@@ -308,6 +309,49 @@ fn load_key_from_pkcs11(
     })
 }
 
+/// Recompute the engine's §2.4 domain-separated admin-proposal content hash
+/// in the authoritative core, so an approving client can verify a proposal's
+/// `content_hash` locally instead of trusting a server-supplied value.
+/// `action` is the serde map form (`{ "Variant": { snake_case_fields } }`),
+/// the same shape [`encode_action`] takes for the governance actions'
+/// `action` field.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)] // mirrors the core hash preimage, field for field
+fn admin_proposal_content_hash<'py>(
+    py: Python<'py>,
+    chain_id: &[u8],
+    proposal_id: u64,
+    registry_version: u64,
+    threshold: u32,
+    proposer: &[u8],
+    created_height: u64,
+    created_ms: u64,
+    expiry_ms: u64,
+    action: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let chain_id_arr: [u8; 32] = chain_id
+        .try_into()
+        .map_err(|_| PyValueError::new_err("chain_id must be exactly 32 bytes"))?;
+    let proposer_arr: [u8; 20] = proposer
+        .try_into()
+        .map_err(|_| PyValueError::new_err("proposer must be exactly 20 bytes"))?;
+    let action: governance::AdminAction = pythonize::depythonize(action)
+        .map_err(|e| PyValueError::new_err(format!("invalid AdminAction: {e}")))?;
+    let hash = governance::admin_proposal_content_hash(
+        &chain_id_arr,
+        governance::ProposalId(proposal_id),
+        governance::RegistryVersion(registry_version),
+        governance::SignatureThreshold(threshold),
+        &governance::SignerAddress(proposer_arr),
+        created_height,
+        created_ms,
+        expiry_ms,
+        &action,
+    )
+    .map_err(map_err)?;
+    Ok(PyBytes::new(py, &hash))
+}
+
 /// Return all action-type name → code mappings from the Rust core.
 /// Generated from the codec so bindings never drift.
 #[pyfunction]
@@ -364,6 +408,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_key_from_fd, m)?)?;
     #[cfg(feature = "pkcs11")]
     m.add_function(wrap_pyfunction!(load_key_from_pkcs11, m)?)?;
+    m.add_function(wrap_pyfunction!(admin_proposal_content_hash, m)?)?;
     m.add_function(wrap_pyfunction!(get_action_types, m)?)?;
     m.add_function(wrap_pyfunction!(get_error_code_table, m)?)?;
     m.add_function(wrap_pyfunction!(classify_error_name, m)?)?;

@@ -1,7 +1,16 @@
 import { Decoder } from "@msgpack/msgpack";
-import { type Action, ActionType, type ActionTypeValue } from "./types.js";
+import {
+  type Action,
+  ActionType,
+  type ActionTypeValue,
+  type AdminAction,
+} from "./types.js";
 import { getWasm } from "./wasm-loader.js";
-import { toWasmFields, fromWasmFields } from "./codec-adapter.js";
+import {
+  adminActionToWasm,
+  toWasmFields,
+  fromWasmFields,
+} from "./codec-adapter.js";
 import { DOMAIN_PREFIX } from "./crypto.js";
 
 /**
@@ -102,6 +111,49 @@ export function signEnvelopeFromPayload(
     payloadBytes,
     seq,
     privateKey,
+  );
+}
+
+/** Immutable proposal context committed by the §2.4 content hash. Field for
+ *  field the hash preimage — see `ApproveAdminAction`, which carries the same
+ *  context plus the hash itself. */
+export interface AdminProposalContext {
+  /** 32-byte chain-id binding (`chainIdFromString(cometbftChainId)`). */
+  chainId: Uint8Array;
+  proposalId: bigint;
+  registryVersion: bigint;
+  threshold: number;
+  /** Address that created the proposal (20 bytes). */
+  proposer: Uint8Array;
+  createdHeight: bigint;
+  createdMs: bigint;
+  expiryMs: bigint;
+  action: AdminAction;
+}
+
+/**
+ * Recompute the engine's domain-separated admin-proposal content hash
+ * (32 bytes) in the authoritative Rust core (§2.4,
+ * `PROOF_ADMIN_PROPOSAL_V1` preimage).
+ *
+ * An approving signer should recompute this from the full proposal context
+ * and compare it to the `content_hash` a server hands them — **never sign a
+ * hash they did not recompute**. Byte-equality with the engine is pinned by
+ * the core's golden-vector test.
+ */
+export function adminProposalContentHash(
+  ctx: AdminProposalContext,
+): Uint8Array {
+  return getWasm().admin_proposal_content_hash(
+    ctx.chainId,
+    ctx.proposalId,
+    ctx.registryVersion,
+    ctx.threshold,
+    ctx.proposer,
+    ctx.createdHeight,
+    ctx.createdMs,
+    ctx.expiryMs,
+    adminActionToWasm(ctx.action),
   );
 }
 

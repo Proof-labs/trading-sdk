@@ -45,6 +45,17 @@ export interface WasmCore {
   ): Uint8Array;
   pubkey_to_owner(pubkey: Uint8Array): Uint8Array;
   chain_id_from_string(chainId: string): Uint8Array;
+  admin_proposal_content_hash(
+    chainId: Uint8Array,
+    proposalId: bigint,
+    registryVersion: bigint,
+    threshold: number,
+    proposer: Uint8Array,
+    createdHeight: bigint,
+    createdMs: bigint,
+    expiryMs: bigint,
+    action: unknown,
+  ): Uint8Array;
 }
 
 let cached: WasmCore | null = null;

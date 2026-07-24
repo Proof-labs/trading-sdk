@@ -12,9 +12,10 @@ renumbers `OpenInterestLimitExceeded` from result code 50 to 51 (and repurposes
 code 50 to `SlippageExceeded`), which changes the result for any consumer that
 switches on the integer code, and adds the public code-51
 `OpenInterestLimitExceeded` classification while preserving safe decoding across
-a rolling engine upgrade. The unchanged WASM
-crate stays at **2.0.0**, the derive crate stays at **1.1.0**, and the
-unpublished conformance crate continues to label the v2 vectors as **2.0.0**.
+a rolling engine upgrade. The WASM crate takes a MINOR bump to **2.1.0** (a new
+`admin_proposal_content_hash` export; existing API and wire behaviour
+unchanged), the derive crate stays at **1.1.0**, and the unpublished
+conformance crate continues to label the v2 vectors as **2.0.0**.
 
 This release also includes the two breaking changes first staged at 2.0.0: the
 open-interest-cap wire contract and the cutover of the action codec + signing
@@ -124,8 +125,11 @@ at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
   PyO3 (Python) bridges by construction; the TypeScript surface adds the typed
   interfaces, the `GovernanceAction` union arm, and the externally-tagged enum
   mapping in the codec adapter. The engine's §2.4 domain-separated proposal
-  content hash (`admin_proposal_content_hash`) is reproduced in Rust and pinned
-  byte-for-byte against the engine's golden vectors; four governance codec
+  content hash (`admin_proposal_content_hash`) is reproduced in Rust, pinned
+  byte-for-byte against the engine's golden vectors, and exported through the
+  WASM and PyO3 bridges (`adminProposalContentHash` on npm,
+  `admin_proposal_content_hash` in Python) so an approving client verifies a
+  server-supplied hash locally instead of trusting it; the governance codec
   vectors are asserted cross-language. Purely **additive** wire change — every
   pre-existing payload encodes and decodes unchanged (MINOR-class; it ships
   inside this release's already-MAJOR bump). The new action types require an

@@ -18,6 +18,8 @@ import {
   TimeInForce,
   type Action,
   type ActionTypeValue,
+  type AdminAction,
+  type EmergencyAction,
   type EventOracleSource,
   type PriceComparison,
 } from "./types.js";
@@ -105,6 +107,17 @@ function governanceActionToWasm(value: unknown): unknown {
   if (value === null || value === undefined) return value;
   const v = value as { kind: string; value?: Record<string, unknown> };
   return { [v.kind]: v.value ? convertObject(v.value) : {} };
+}
+
+/**
+ * Public form of the governance-enum encoder, for WASM entry points that take
+ * a bare `AdminAction` / `EmergencyAction` outside an action payload (the
+ * content-hash binding in `codec.ts`).
+ */
+export function adminActionToWasm(
+  action: AdminAction | EmergencyAction,
+): unknown {
+  return governanceActionToWasm(action);
 }
 
 function convertValue(camelKey: string, value: unknown): unknown {
