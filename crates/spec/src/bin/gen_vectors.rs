@@ -86,6 +86,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     const CREATE_MARKET: u8 = 0x07;
     const UPDATE_MARKET_FEES: u8 = 0x10;
     const ATOMIC_BASKET_ORDER: u8 = 0x1C;
+    const PROPOSE_ADMIN_ACTION: u8 = 0x1E;
+    const APPROVE_ADMIN_ACTION: u8 = 0x1F;
+    const REJECT_ADMIN_ACTION: u8 = 0x20;
+    const EMERGENCY_ADMIN_ACTION: u8 = 0x21;
 
     let owner = vec![0x01u8; 20];
     let signer = vec![0x03u8; 20];
@@ -236,6 +240,81 @@ fn main() -> Result<(), Box<dyn Error>> {
                       "quantity": 5, "client_order_id": null, "reduce_only": true }
                 ],
                 "max_slippage_bps": 50
+            }),
+        ),
+        // Admin-multisig governance (tags 0x1E–0x21). The nested
+        // `action` is an externally-tagged `AdminAction`/`EmergencyAction`
+        // enum — serde_json's map form `{ "Variant": { snake_case } }`, which
+        // is exactly what the TS adapter must reproduce. The embedded
+        // CreateMarket signer is zero (governance supplies authorization).
+        codec_case(
+            "propose_admin_action/create_market",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "CreateMarket": {
+                    "market": 0, "im_bps": 3334, "mm_bps": 1667,
+                    "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": vec![0u8; 20],
+                    "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
+                    "pool_id": 0, "sz_decimals": 0, "ticker": "", "max_open_interest": 0u64
+                }}
+            }),
+        ),
+        codec_case(
+            "approve_admin_action/rotate_registry",
+            APPROVE_ADMIN_ACTION,
+            json!({
+                "approver": vec![0x22u8; 20],
+                "proposal_id": 42u64,
+                "registry_version": 3u64,
+                "threshold": 2u32,
+                "proposer": vec![0x22u8; 20],
+                "created_height": 7u64,
+                "created_ms": 1000u64,
+                "expiry_ms": 259201000u64,
+                "action": { "UpdateAdminSignerRegistry": {
+                    "new_threshold": 2u32,
+                    "new_members": [vec![0xA1u8; 20], vec![0xA2u8; 20]]
+                }},
+                "content_hash": vec![0xABu8; 32]
+            }),
+        ),
+        codec_case(
+            "reject_admin_action/basic",
+            REJECT_ADMIN_ACTION,
+            json!({
+                "rejecter": vec![0x33u8; 20],
+                "proposal_id": 42u64,
+                "content_hash": vec![0xABu8; 32]
+            }),
+        ),
+        codec_case(
+            "emergency_admin_action/pause_market",
+            EMERGENCY_ADMIN_ACTION,
+            json!({
+                "signer": vec![0x44u8; 20],
+                "action": { "PauseMarket": { "market_id": 7 } }
+            }),
+        ),
+        // HaltTrading is the trickiest arm to mirror: a fieldless STRUCT
+        // variant (`HaltTrading {}`), so it stays in serde's map form
+        // `{ "HaltTrading": {} }` — not the bare-string form a unit variant
+        // would take.
+        codec_case(
+            "emergency_admin_action/halt_trading",
+            EMERGENCY_ADMIN_ACTION,
+            json!({
+                "signer": vec![0x44u8; 20],
+                "action": { "HaltTrading": {} }
+            }),
+        ),
+        codec_case(
+            "emergency_admin_action/set_reduce_only",
+            EMERGENCY_ADMIN_ACTION,
+            json!({
+                "signer": vec![0x44u8; 20],
+                "action": { "SetReduceOnly": { "market_id": 7 } }
             }),
         ),
     ];

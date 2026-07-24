@@ -405,12 +405,113 @@ function toAction(
               : Number(big(input.max_slippage_bps)),
         },
       };
+    case ActionType.ProposeAdminAction:
+      return {
+        type: "ProposeAdminAction",
+        data: {
+          proposer: bytes(input.proposer),
+          registryVersion: big(input.registry_version),
+          action: toAdminAction(input.action as Record<string, unknown>),
+        },
+      };
+    case ActionType.ApproveAdminAction:
+      return {
+        type: "ApproveAdminAction",
+        data: {
+          approver: bytes(input.approver),
+          proposalId: big(input.proposal_id),
+          registryVersion: big(input.registry_version),
+          threshold: Number(big(input.threshold)),
+          proposer: bytes(input.proposer),
+          createdHeight: big(input.created_height),
+          createdMs: big(input.created_ms),
+          expiryMs: big(input.expiry_ms),
+          action: toAdminAction(input.action as Record<string, unknown>),
+          contentHash: bytes(input.content_hash),
+        },
+      };
+    case ActionType.RejectAdminAction:
+      return {
+        type: "RejectAdminAction",
+        data: {
+          rejecter: bytes(input.rejecter),
+          proposalId: big(input.proposal_id),
+          contentHash: bytes(input.content_hash),
+        },
+      };
+    case ActionType.EmergencyAdminAction:
+      return {
+        type: "EmergencyAdminAction",
+        data: {
+          signer: bytes(input.signer),
+          action: toEmergencyAction(input.action as Record<string, unknown>),
+        },
+      };
     default:
       throw new Error(
         `toAction: action_type 0x${actionType.toString(16)} not wired ` +
           `(intentionally omitted types should be documented in conformance/README.md)`,
       );
   }
+}
+
+/** Reconstruct a TS `AdminAction` from the vector's serde map form. */
+function toAdminAction(
+  v: Record<string, unknown>,
+): import("./types.js").AdminAction {
+  if (v.CreateMarket) {
+    const m = v.CreateMarket as Record<string, unknown>;
+    return {
+      kind: "CreateMarket",
+      value: {
+        market: m.market as number,
+        imBps: m.im_bps as number,
+        mmBps: m.mm_bps as number,
+        takerFeeBps: m.taker_fee_bps as number,
+        makerFeeBps: m.maker_fee_bps as number,
+        signer: bytes(m.signer),
+        fundingIntervalMs: big(m.funding_interval_ms),
+        maxFundingRateBps: m.max_funding_rate_bps as number,
+        poolId: m.pool_id as number,
+        szDecimals: m.sz_decimals as number,
+        ticker: m.ticker as string,
+        maxOpenInterest: big(m.max_open_interest),
+      },
+    };
+  }
+  const r = v.UpdateAdminSignerRegistry as Record<string, unknown>;
+  return {
+    kind: "UpdateAdminSignerRegistry",
+    value: {
+      newThreshold: Number(big(r.new_threshold)),
+      newMembers: (r.new_members as unknown[]).map((a) => bytes(a)),
+    },
+  };
+}
+
+/** Reconstruct a TS `EmergencyAction` from the vector's serde map form. */
+function toEmergencyAction(
+  v: Record<string, unknown>,
+): import("./types.js").EmergencyAction {
+  if (v.PauseMarket) {
+    return {
+      kind: "PauseMarket",
+      value: {
+        marketId: (v.PauseMarket as Record<string, unknown>)
+          .market_id as number,
+      },
+    };
+  }
+  if (v.SetReduceOnly) {
+    return {
+      kind: "SetReduceOnly",
+      value: {
+        marketId: (v.SetReduceOnly as Record<string, unknown>)
+          .market_id as number,
+      },
+    };
+  }
+  return { kind: "HaltTrading" };
 }
 
 /**
@@ -505,21 +606,83 @@ describe("conformance vectors (TypeScript)", () => {
     }
   });
   it("codec: action fields → payload bytes", () => {
+    // No try/catch: every vector must build through toAction and encode
+    // byte-exact. A vector whose action type is not wired here fails loudly —
+    // the old `continue`-on-unwired skip let new vector families pass green
+    // while asserting nothing (that hid the governance vectors until #65).
     for (const c of cases("codec.ndjson")) {
-      try {
-        const action = toAction(
-          c.action_type as ActionTypeValue,
-          c.input as Record<string, unknown>,
-        );
-        const payload = encodePayloadBytes(action);
-        expect(bytesToHex(payload)).toBe(
-          (c.expect as { payload_hex: string }).payload_hex,
-        );
-      } catch (e) {
-        // Skip vectors for action types not yet wired in toAction.
-        if (e instanceof Error && e.message.startsWith("toAction:")) continue;
-        throw e;
-      }
+      const action = toAction(
+        c.action_type as ActionTypeValue,
+        c.input as Record<string, unknown>,
+      );
+      const payload = encodePayloadBytes(action);
+      expect(bytesToHex(payload)).toBe(
+        (c.expect as { payload_hex: string }).payload_hex,
+      );
+    }
+  });
+
+  it("codec: vector coverage of the ActionType registry is pinned", () => {
+    const vectorTypes = new Set(
+      cases("codec.ndjson").map((c) => c.action_type as number),
+    );
+    // Every vector's action type must exist in the registry — an orphan means
+    // the vectors and `types.ts` have drifted.
+    const registryBytes = new Set<number>(Object.values(ActionType));
+    for (const t of vectorTypes) {
+      expect(
+        registryBytes.has(t),
+        `orphan vector action_type 0x${t.toString(16)}`,
+      ).toBe(true);
+    }
+    // Known coverage debt: action types with no codec vector yet. This is a
+    // ratchet — adding a new ActionType without a vector fails here. Prefer
+    // adding a vector in crates/spec/src/bin/gen_vectors.rs; extending this
+    // list instead is a conscious, reviewed decision. Remove names as vectors
+    // land; never re-add one.
+    const uncovered = Object.entries(ActionType)
+      .filter(([, byte]) => !vectorTypes.has(byte))
+      .map(([name]) => name)
+      .sort();
+    expect(uncovered).toEqual(
+      [
+        "AmendOrder",
+        "ApproveAgent",
+        "CancelAllOrders",
+        "CancelClientOrder",
+        "CancelReplaceOrder",
+        "ConfirmDeposit",
+        "ConfirmWithdrawal",
+        "CreateImpactMarket",
+        "Deposit",
+        "FailWithdrawal",
+        "ResolveEvent",
+        "RevokeAgent",
+        "SetUserMarketLeverage",
+        "Withdraw",
+        "WithdrawRequest",
+      ].sort(),
+    );
+  });
+
+  it("codec: all governance actions encode byte-exact (no silent skip)", () => {
+    const govTypes = new Set<number>([0x1e, 0x1f, 0x20, 0x21]);
+    const govCases = cases("codec.ndjson").filter((c) =>
+      govTypes.has(c.action_type as number),
+    );
+    // Guard against the vector file drifting out from under this assertion:
+    // propose, approve, reject, and all three emergency arms (PauseMarket,
+    // HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(6);
+    for (const c of govCases) {
+      // No try/catch: a missing toAction case or a byte mismatch fails loudly.
+      const action = toAction(
+        c.action_type as ActionTypeValue,
+        c.input as Record<string, unknown>,
+      );
+      expect(bytesToHex(encodePayloadBytes(action))).toBe(
+        (c.expect as { payload_hex: string }).payload_hex,
+      );
     }
   });
 

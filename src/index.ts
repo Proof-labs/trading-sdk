@@ -35,6 +35,14 @@ export {
   type ResolveEvent,
   type UpdateMarketFees,
   type SetUserMarketLeverage,
+  type GovernanceAction,
+  type AdminAction,
+  type EmergencyAction,
+  type UpdateAdminSignerRegistry,
+  type ProposeAdminAction,
+  type ApproveAdminAction,
+  type RejectAdminAction,
+  type EmergencyAdminAction,
   type ImpactMarketInfo,
   type ImpactMarketStatus,
   Branch,
@@ -86,6 +94,8 @@ export {
   decodeSigningMessage,
   type DecodedSigningMessage,
   peekActionType,
+  adminProposalContentHash,
+  type AdminProposalContext,
 } from "./codec.js";
 // WASM codec/signing core init. `await ready()` once before any codec/signing
 // call (the `ExchangeClient` does this for you). See ADR 0001.

@@ -168,8 +168,11 @@ jobs:
       # Post-cutover this builds the WASM core then tsc; pre-cutover it is tsc
       # only. Either way the toolchain above satisfies it.
       - run: npm run build
-      # vitest — src/conformance.test.ts (TS ↔ authoritative vectors). The WASM
-      # differential (src/wasm-codec.test.ts) runs once the build produces
+      # vitest — src/conformance.test.ts (TS ↔ authoritative vectors), which
+      # also enforces the vector-coverage ratchet: every codec vector must
+      # encode byte-exact (no silent skip), and an ActionType without a codec
+      # vector fails unless it is on the pinned coverage-debt list there. The
+      # WASM differential (src/wasm-codec.test.ts) runs once the build produces
       # src/wasm (post-cutover) and self-skips until then; RPC_URL-gated
       # scenario/e2e suites self-skip.
       - run: npm test

@@ -1044,6 +1044,66 @@ export class ExchangeClient {
     return raw.map((m) => decodeMarketConfig(m));
   }
 
+  /**
+   * Read the current on-chain admin signer registry via the gateway proxy
+   * (`GET /v1/admin/signer-registry`). The engine wraps the
+   * registry in an `Option`, so the proxy returns MessagePack `[registry|nil]`.
+   *
+   * Returns `null` when no registry is seeded — which means admin multisig is
+   * **inactive** (fail-closed), NOT an empty roster; callers must treat the two
+   * differently. When present, the decoded value is the engine's MessagePack
+   * registry record (version, threshold, members) as returned by the node; a
+   * typed decoder lands with the release-B seed, when a populated registry
+   * first exists to pin it against.
+   */
+  async queryAdminSignerRegistry(): Promise<unknown | null> {
+    const json = await fetchApiJson(
+      `${this.readBaseUrl}/v1/admin/signer-registry`,
+    );
+    if (!json.data) return null;
+    const bytes = fromBase64(json.data as string);
+    const decoded = msgpackDecoder.decode(bytes) as unknown[];
+    return decoded[0] ?? null;
+  }
+
+  /**
+   * List admin governance proposals via the gateway proxy
+   * (`GET /v1/proposals`). Optional `status` / `cursor` /
+   * `limit` are forwarded as query params (the node clamps oversized limits).
+   * The proxy returns MessagePack `[proposals, nextCursor|nil]`.
+   *
+   * `proposals` is the engine's MessagePack proposal list as returned by the
+   * node; a typed per-proposal decoder lands alongside the propose/approve UI,
+   * when a live proposal first exists to pin it against.
+   */
+  async queryProposals(opts?: {
+    status?: string;
+    cursor?: bigint;
+    limit?: number;
+  }): Promise<{ proposals: unknown[]; nextCursor: bigint | null }> {
+    const params = new URLSearchParams();
+    if (opts?.status) params.set("status", opts.status);
+    if (opts?.cursor != null) params.set("cursor", String(opts.cursor));
+    if (opts?.limit != null) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    const json = await fetchApiJson(
+      `${this.readBaseUrl}/v1/proposals${qs ? `?${qs}` : ""}`,
+    );
+    if (!json.data) return { proposals: [], nextCursor: null };
+    const bytes = fromBase64(json.data as string);
+    const decoded = msgpackDecoder.decode(bytes) as [unknown[], unknown];
+    // `useBigInt64` only yields bigint for 64-bit msgpack ints — a small
+    // cursor arrives as `number`, so normalize to honor the declared type.
+    const rawCursor = decoded[1];
+    return {
+      proposals: (decoded[0] ?? []) as unknown[],
+      nextCursor:
+        typeof rawCursor === "number"
+          ? BigInt(rawCursor)
+          : ((rawCursor ?? null) as bigint | null),
+    };
+  }
+
   /** Fetch open orders for an address. Returns an empty array if the
    *  account has no open orders.
    *  Each order is a 6-tuple `[id, market, owner, side, price, quantity]`

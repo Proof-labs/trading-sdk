@@ -15,6 +15,7 @@ extern crate proof_trading_sdk as core_sdk;
 
 use core_sdk::codec;
 use core_sdk::crypto;
+use core_sdk::governance;
 use core_sdk::types::ExecError;
 use wasm_bindgen::prelude::*;
 
@@ -99,6 +100,46 @@ pub fn sign_and_encode(
     let sk = arr32(secret_key, "secret_key")?;
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&sk);
     codec::sign_and_encode_payload(&cid, action_type, payload, seq, &signing_key).map_err(to_js)
+}
+
+/// Recompute the engine's §2.4 domain-separated admin-proposal content hash
+/// (`PROOF_ADMIN_PROPOSAL_V1` preimage) in the authoritative core, so an
+/// approving client can verify a proposal's `content_hash` locally instead of
+/// trusting a server-supplied value. `action` is the serde map form
+/// (`{ Variant: { snake_case_fields } }`), the same shape [`encode_payload`]
+/// takes for the governance actions' `action` field.
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)] // mirrors the core hash preimage, field for field
+pub fn admin_proposal_content_hash(
+    chain_id: &[u8],
+    proposal_id: u64,
+    registry_version: u64,
+    threshold: u32,
+    proposer: &[u8],
+    created_height: u64,
+    created_ms: u64,
+    expiry_ms: u64,
+    action: JsValue,
+) -> Result<Vec<u8>, JsError> {
+    let cid = arr32(chain_id, "chain_id")?;
+    let proposer_arr: [u8; 20] = proposer
+        .try_into()
+        .map_err(|_| JsError::new("proposer must be exactly 20 bytes"))?;
+    let action: governance::AdminAction = serde_wasm_bindgen::from_value(action)
+        .map_err(|e| JsError::new(&format!("invalid AdminAction: {e}")))?;
+    governance::admin_proposal_content_hash(
+        &cid,
+        governance::ProposalId(proposal_id),
+        governance::RegistryVersion(registry_version),
+        governance::SignatureThreshold(threshold),
+        &governance::SignerAddress(proposer_arr),
+        created_height,
+        created_ms,
+        expiry_ms,
+        &action,
+    )
+    .map(|h| h.to_vec())
+    .map_err(to_js)
 }
 
 /// Derive the 20-byte owner address from a 32-byte Ed25519 public key.

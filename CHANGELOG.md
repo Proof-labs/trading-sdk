@@ -12,9 +12,10 @@ renumbers `OpenInterestLimitExceeded` from result code 50 to 51 (and repurposes
 code 50 to `SlippageExceeded`), which changes the result for any consumer that
 switches on the integer code, and adds the public code-51
 `OpenInterestLimitExceeded` classification while preserving safe decoding across
-a rolling engine upgrade. The unchanged WASM
-crate stays at **2.0.0**, the derive crate stays at **1.1.0**, and the
-unpublished conformance crate continues to label the v2 vectors as **2.0.0**.
+a rolling engine upgrade. The WASM crate takes a MINOR bump to **2.1.0** (a new
+`admin_proposal_content_hash` export; existing API and wire behaviour
+unchanged), the derive crate stays at **1.1.0**, and the unpublished
+conformance crate continues to label the v2 vectors as **2.0.0**.
 
 This release also includes the two breaking changes first staged at 2.0.0: the
 open-interest-cap wire contract and the cutover of the action codec + signing
@@ -122,6 +123,29 @@ at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
 
 ### Added
 
+- **Admin-multisig governance action mirrors (W30-11)** — the engine's four
+  governance wire actions land in every SDK surface: `ProposeAdminAction`
+  (0x1E), `ApproveAdminAction` (0x1F), `RejectAdminAction` (0x20), and the
+  single-signer `EmergencyAdminAction` (0x21), with the `AdminAction` /
+  `EmergencyAction` inner enums. Implemented once in the Rust core
+  (`governance.rs` + `impl_action_encoding!`), inherited by the WASM (TS) and
+  PyO3 (Python) bridges by construction; the TypeScript surface adds the typed
+  interfaces, the `GovernanceAction` union arm, and the externally-tagged enum
+  mapping in the codec adapter. The engine's §2.4 domain-separated proposal
+  content hash (`admin_proposal_content_hash`) is reproduced in Rust, pinned
+  byte-for-byte against the engine's golden vectors, and exported through the
+  WASM and PyO3 bridges (`adminProposalContentHash` on npm,
+  `admin_proposal_content_hash` in Python) so an approving client verifies a
+  server-supplied hash locally instead of trusting it; the governance codec
+  vectors are asserted cross-language. Purely **additive** wire change — every
+  pre-existing payload encodes and decodes unchanged (MINOR-class; it ships
+  inside this release's already-MAJOR bump). The new action types require an
+  engine that knows them: `exchange-core >= 2.1.0`.
+- `ExchangeClient.queryProposals()` and
+  `ExchangeClient.queryAdminSignerRegistry()` — governance reads via the
+  gateway proxies (`/v1/proposals`, `/v1/admin/signer-registry`). An absent
+  registry decodes as `null`, meaning admin multisig is **inactive**
+  (fail-closed) — deliberately distinct from an empty roster.
 - **Governance error codes 52 (`AdminGovernanceInactive`) and 53
   (`NotAdminSigner`)** are mirrored from the consensus contract (exchange #282
   / `ddad45b`) into all three error tables (Rust, TypeScript, Python) and
