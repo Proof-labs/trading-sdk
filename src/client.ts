@@ -1092,9 +1092,15 @@ export class ExchangeClient {
     if (!json.data) return { proposals: [], nextCursor: null };
     const bytes = fromBase64(json.data as string);
     const decoded = msgpackDecoder.decode(bytes) as [unknown[], unknown];
+    // `useBigInt64` only yields bigint for 64-bit msgpack ints — a small
+    // cursor arrives as `number`, so normalize to honor the declared type.
+    const rawCursor = decoded[1];
     return {
       proposals: (decoded[0] ?? []) as unknown[],
-      nextCursor: (decoded[1] ?? null) as bigint | null,
+      nextCursor:
+        typeof rawCursor === "number"
+          ? BigInt(rawCursor)
+          : ((rawCursor ?? null) as bigint | null),
     };
   }
 
