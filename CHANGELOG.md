@@ -115,6 +115,26 @@ at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
 
 ### Added
 
+- **Admin-multisig governance action mirrors (W30-11)** — the engine's four
+  governance wire actions land in every SDK surface: `ProposeAdminAction`
+  (0x1E), `ApproveAdminAction` (0x1F), `RejectAdminAction` (0x20), and the
+  single-signer `EmergencyAdminAction` (0x21), with the `AdminAction` /
+  `EmergencyAction` inner enums. Implemented once in the Rust core
+  (`governance.rs` + `impl_action_encoding!`), inherited by the WASM (TS) and
+  PyO3 (Python) bridges by construction; the TypeScript surface adds the typed
+  interfaces, the `GovernanceAction` union arm, and the externally-tagged enum
+  mapping in the codec adapter. The engine's §2.4 domain-separated proposal
+  content hash (`admin_proposal_content_hash`) is reproduced in Rust and pinned
+  byte-for-byte against the engine's golden vectors; four governance codec
+  vectors are asserted cross-language. Purely **additive** wire change — every
+  pre-existing payload encodes and decodes unchanged (MINOR-class; it ships
+  inside this release's already-MAJOR bump). The new action types require an
+  engine that knows them: `exchange-core >= 2.1.0`.
+- `ExchangeClient.queryProposals()` and
+  `ExchangeClient.queryAdminSignerRegistry()` — governance reads via the
+  gateway proxies (`/v1/proposals`, `/v1/admin/signer-registry`). An absent
+  registry decodes as `null`, meaning admin multisig is **inactive**
+  (fail-closed) — deliberately distinct from an empty roster.
 - `errors` conformance-vector family (`conformance/errors.ndjson`) pinning the
   ExecError code→name classification across the Rust, TypeScript, and Python
   SDKs. A bare code pins the numeric `ERROR_KINDS` manifest name (including
