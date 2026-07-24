@@ -109,6 +109,16 @@ at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
 
 ### Added
 
+- `errors` conformance-vector family (`conformance/errors.ndjson`) pinning the
+  ExecError code→name classification across the Rust, TypeScript, and Python
+  SDKs. A bare code pins the numeric `ERROR_KINDS` manifest name (including
+  `50 → SlippageExceeded` and `51 → OpenInterestLimitExceeded`, the split that
+  the pre-#55 SDK would have failed); a code plus canonical DeliverTx log pins
+  the log-aware decoder (transitional code-50 slippage/open-interest cases →
+  `AmbiguousCode50` without a recognized log). Generated from the Rust core and
+  asserted by all three runners. Code 21 is excluded — the TS SDK deliberately
+  names it `TimestampNonceRejected` vs the core's `InvalidNonce`, an intentional
+  name divergence rather than the code↔code drift this family guards.
 - **`ExchangeClient.submitSignedTx(txBytes)` / `submitSignedTxCommit(txBytes)`**
   — public submission of **externally signed** wire bytes (built via
   `signingMessage()` → external signature → `encodeSignedTx()`), for callers

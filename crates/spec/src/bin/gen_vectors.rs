@@ -58,6 +58,19 @@ fn codec_case(case: &str, action_type: u8, input: serde_json::Value) -> cv::Code
     }
 }
 
+fn error_case(case: &str, code: u32, log: Option<&str>) -> cv::ErrorCase {
+    let name = cv::error_reference_name(code, log)
+        .unwrap_or_else(|| panic!("no error name for {case} (code {code})"));
+    cv::ErrorCase {
+        case: case.to_string(),
+        code,
+        log: log.map(str::to_string),
+        expect: cv::ErrorExpect {
+            name: name.to_string(),
+        },
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let dir = conformance_dir();
     fs::create_dir_all(&dir)?;
@@ -289,11 +302,50 @@ fn main() -> Result<(), Box<dyn Error>> {
         .collect();
     write_ndjson(&dir.join(cv::NONCE_FILE), &nonce)?;
 
+    // ── errors family ────────────────────────────────────────────────────
+    // Manifest: pin every numeric code → canonical name. This is the family
+    // that would have failed the pre-#55 SDK (which mapped open interest to 50
+    // and had no 51 entry) — `manifest/51` → OpenInterestLimitExceeded and
+    // `manifest/50` → SlippageExceeded together pin the split.
+    //
+    // Code 21 is skipped: the TS SDK deliberately exposes it as
+    // "TimestampNonceRejected" (pinned in src/errors.test.ts) while the core
+    // names it "InvalidNonce". That is an intentional name divergence, not the
+    // code↔code drift this family guards; pinning it would either fail TS or
+    // force an out-of-scope public rename.
+    const MANIFEST_NAME_DIVERGES: &[u32] = &[21];
+    let mut errors: Vec<cv::ErrorCase> = proof_trading_sdk::types::ERROR_KINDS
+        .iter()
+        .map(|kind| kind.code())
+        .filter(|code| !MANIFEST_NAME_DIVERGES.contains(code))
+        .map(|code| error_case(&format!("manifest/{code}"), code, None))
+        .collect();
+
+    // Transitional code-50 rolling-upgrade family: the canonical DeliverTx log
+    // disambiguates legacy open-interest from current slippage; anything else
+    // stays AmbiguousCode50 (never a guess). Plus a code-51 case proving the
+    // log is ignored once the engine emits the distinct code.
+    errors.push(error_case(
+        "code50/oi_log",
+        50,
+        Some("open interest limit exceeded on market 7: would be 4, cap 3"),
+    ));
+    errors.push(error_case(
+        "code50/slippage_log",
+        50,
+        Some("atomic basket aggregate slippage 51 bps exceeds budget 50 bps"),
+    ));
+    errors.push(error_case("code50/empty", 50, Some("")));
+    errors.push(error_case("code50/unknown_log", 50, Some("unknown code 50 diagnostic")));
+    errors.push(error_case("code51/ignored_log", 51, Some("unrecognized")));
+    write_ndjson(&dir.join(cv::ERRORS_FILE), &errors)?;
+
     eprintln!(
-        "wrote {} codec, {} signing, {} nonce cases to {}",
+        "wrote {} codec, {} signing, {} nonce, {} errors cases to {}",
         codec.len(),
         signing.len(),
         nonce.len(),
+        errors.len(),
         dir.display()
     );
     Ok(())
