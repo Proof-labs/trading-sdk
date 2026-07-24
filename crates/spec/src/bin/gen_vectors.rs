@@ -297,6 +297,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": { "PauseMarket": { "market_id": 7 } }
             }),
         ),
+        // HaltTrading is the trickiest arm to mirror: a fieldless STRUCT
+        // variant (`HaltTrading {}`), so it stays in serde's map form
+        // `{ "HaltTrading": {} }` — not the bare-string form a unit variant
+        // would take.
+        codec_case(
+            "emergency_admin_action/halt_trading",
+            EMERGENCY_ADMIN_ACTION,
+            json!({
+                "signer": vec![0x44u8; 20],
+                "action": { "HaltTrading": {} }
+            }),
+        ),
+        codec_case(
+            "emergency_admin_action/set_reduce_only",
+            EMERGENCY_ADMIN_ACTION,
+            json!({
+                "signer": vec![0x44u8; 20],
+                "action": { "SetReduceOnly": { "market_id": 7 } }
+            }),
+        ),
     ];
     write_ndjson(&dir.join(cv::CODEC_FILE), &codec)?;
 

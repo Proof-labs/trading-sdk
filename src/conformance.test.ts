@@ -665,13 +665,15 @@ describe("conformance vectors (TypeScript)", () => {
     );
   });
 
-  it("codec: all four governance actions encode byte-exact (no silent skip)", () => {
+  it("codec: all governance actions encode byte-exact (no silent skip)", () => {
     const govTypes = new Set<number>([0x1e, 0x1f, 0x20, 0x21]);
     const govCases = cases("codec.ndjson").filter((c) =>
       govTypes.has(c.action_type as number),
     );
-    // Guard against the vector file drifting out from under this assertion.
-    expect(govCases.length).toBe(4);
+    // Guard against the vector file drifting out from under this assertion:
+    // propose, approve, reject, and all three emergency arms (PauseMarket,
+    // HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(6);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
