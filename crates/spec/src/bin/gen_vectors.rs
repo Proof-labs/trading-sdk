@@ -336,7 +336,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         Some("atomic basket aggregate slippage 51 bps exceeds budget 50 bps"),
     ));
     errors.push(error_case("code50/empty", 50, Some("")));
-    errors.push(error_case("code50/unknown_log", 50, Some("unknown code 50 diagnostic")));
+    errors.push(error_case(
+        "code50/unknown_log",
+        50,
+        Some("unknown code 50 diagnostic"),
+    ));
     errors.push(error_case("code51/ignored_log", 51, Some("unrecognized")));
     write_ndjson(&dir.join(cv::ERRORS_FILE), &errors)?;
 

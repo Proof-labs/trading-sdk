@@ -109,6 +109,9 @@ at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
   Legacy code-50 open-interest rejects remain recognizable from their
   canonical DeliverTx prefix, while absent or unknown code-50 logs resolve to
   `AmbiguousCode50` rather than guessing.
+- The public Rust `ExecError` mirror now includes `SlippageExceeded` with code
+  50, so constructed Rust errors, the error-kind manifest, and the live engine
+  agree on both sides of the 50/51 split.
 
 ### Added
 
