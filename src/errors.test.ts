@@ -34,6 +34,15 @@ describe("decodeExecError", () => {
     expect(execErrorName(51)).toBe("OpenInterestLimitExceeded");
   });
 
+  it("decodes the governance codes 52/53", () => {
+    expect(decodeExecError(52)?.name).toBe("AdminGovernanceInactive");
+    expect(decodeExecError(53)?.name).toBe("NotAdminSigner");
+    expect(execErrorName(52)).toBe("AdminGovernanceInactive");
+    expect(execErrorName(53)).toBe("NotAdminSigner");
+    expect(ExecErrorCode.AdminGovernanceInactive).toBe(52);
+    expect(ExecErrorCode.NotAdminSigner).toBe(53);
+  });
+
   it("classifies transitional code 50 only from canonical DeliverTx logs", () => {
     const oiLog = "open interest limit exceeded on market 7: would be 4, cap 3";
     const slippageLog =

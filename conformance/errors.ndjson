@@ -48,6 +48,8 @@
 {"case":"manifest/49","code":49,"log":null,"expect":{"name":"AmendBelowFilled"}}
 {"case":"manifest/50","code":50,"log":null,"expect":{"name":"SlippageExceeded"}}
 {"case":"manifest/51","code":51,"log":null,"expect":{"name":"OpenInterestLimitExceeded"}}
+{"case":"manifest/52","code":52,"log":null,"expect":{"name":"AdminGovernanceInactive"}}
+{"case":"manifest/53","code":53,"log":null,"expect":{"name":"NotAdminSigner"}}
 {"case":"manifest/255","code":255,"log":null,"expect":{"name":"InternalError"}}
 {"case":"code50/oi_log","code":50,"log":"open interest limit exceeded on market 7: would be 4, cap 3","expect":{"name":"OpenInterestLimitExceeded"}}
 {"case":"code50/slippage_log","code":50,"log":"atomic basket aggregate slippage 51 bps exceeds budget 50 bps","expect":{"name":"SlippageExceeded"}}

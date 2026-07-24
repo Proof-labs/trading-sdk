@@ -196,6 +196,12 @@ class TestErrors:
         assert pts.get_error_name(51, "unknown") == "OpenInterestLimitExceeded"
         assert pts.EngineError(51, "").name == "OpenInterestLimitExceeded"
 
+    def test_governance_codes_52_53(self):
+        assert pts.get_error_name(52) == "AdminGovernanceInactive"
+        assert pts.get_error_name(53) == "NotAdminSigner"
+        assert pts.EngineError(52, "").name == "AdminGovernanceInactive"
+        assert pts.EngineError(53, "").name == "NotAdminSigner"
+
     def test_transitional_code_50_uses_delivertx_log(self):
         oi = "open interest limit exceeded on market 7: would be 4, cap 3"
         slip = "atomic basket aggregate slippage 51 bps exceeds budget 50 bps"

@@ -115,6 +115,13 @@ at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
 
 ### Added
 
+- **Governance error codes 52 (`AdminGovernanceInactive`) and 53
+  (`NotAdminSigner`)** are mirrored from the consensus contract (exchange #282
+  / `ddad45b`) into all three error tables (Rust, TypeScript, Python) and
+  pinned by the errors conformance manifest. Previously
+  `decodeExecError(52/53)` returned `null`, so a live admin-multisig rejection
+  decoded as unknown (#60). Purely additive — no existing code changes
+  meaning.
 - `errors` conformance-vector family (`conformance/errors.ndjson`) pinning the
   ExecError code→name classification across the Rust, TypeScript, and Python
   SDKs. A bare code pins the numeric `ERROR_KINDS` manifest name (including
