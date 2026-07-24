@@ -242,7 +242,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "max_slippage_bps": 50
             }),
         ),
-        // Admin-multisig governance (W29-04, tags 0x1E–0x21). The nested
+        // Admin-multisig governance (tags 0x1E–0x21). The nested
         // `action` is an externally-tagged `AdminAction`/`EmergencyAction`
         // enum — serde_json's map form `{ "Variant": { snake_case } }`, which
         // is exactly what the TS adapter must reproduce. The embedded

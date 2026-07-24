@@ -1046,7 +1046,7 @@ export class ExchangeClient {
 
   /**
    * Read the current on-chain admin signer registry via the gateway proxy
-   * (`GET /v1/admin/signer-registry`, api-gateway#97). The engine wraps the
+   * (`GET /v1/admin/signer-registry`). The engine wraps the
    * registry in an `Option`, so the proxy returns MessagePack `[registry|nil]`.
    *
    * Returns `null` when no registry is seeded — which means admin multisig is
@@ -1068,7 +1068,7 @@ export class ExchangeClient {
 
   /**
    * List admin governance proposals via the gateway proxy
-   * (`GET /v1/proposals`, api-gateway#97). Optional `status` / `cursor` /
+   * (`GET /v1/proposals`). Optional `status` / `cursor` /
    * `limit` are forwarded as query params (the node clamps oversized limits).
    * The proxy returns MessagePack `[proposals, nextCursor|nil]`.
    *

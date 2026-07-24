@@ -88,7 +88,7 @@ export const ActionType = {
   AmendOrder: 0x1b,
   /** Native all-or-revert multi-leg basket order. */
   AtomicBasketOrder: 0x1c,
-  /** Signed admin-multisig governance proposal (W29-04). */
+  /** Signed admin-multisig governance proposal. */
   ProposeAdminAction: 0x1e,
   /** Signed admin-multisig governance approval (carries full proposal context). */
   ApproveAdminAction: 0x1f,
@@ -768,7 +768,7 @@ export type OperatorAction =
  * actions out of autocomplete.
  */
 // ---------------------------------------------------------------------------
-// Admin-multisig governance actions (W29-04)
+// Admin-multisig governance actions
 // ---------------------------------------------------------------------------
 
 /**

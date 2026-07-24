@@ -5,7 +5,7 @@
 // file. The runtime `expect`s pin the `ActionType` byte values, which are a
 // value export.
 //
-// Regression guard for the W30-11 review finding: the governance TS surface was
+// Regression guard for a review finding: the governance TS surface was
 // declared in types.ts but not reachable from the package entrypoint.
 
 import { describe, it, expect } from "vitest";
