@@ -2213,6 +2213,13 @@ pub enum ExecError {
         limit: u64,
         would_be: u64,
     },
+    /// An admin governance action was submitted while no admin signer
+    /// registry exists on this chain; multisig administration is inactive
+    /// and every governance path fails closed.
+    AdminGovernanceInactive,
+    /// The tx signer does not match the action's declared admin actor, or is
+    /// not a member of the current admin signer registry.
+    NotAdminSigner,
 }
 
 impl ExecError {
@@ -2276,6 +2283,8 @@ impl ExecError {
             ExecError::AmendBelowFilled { .. } => 49,
             ExecError::SlippageExceeded { .. } => 50,
             ExecError::OpenInterestLimitExceeded { .. } => 51,
+            ExecError::AdminGovernanceInactive => 52,
+            ExecError::NotAdminSigner => 53,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -2470,6 +2479,12 @@ impl ExecError {
             ExecError::OpenInterestLimitExceeded { .. } => {
                 "Fill would push aggregate market open interest past MarketConfig.max_open_interest."
             }
+            ExecError::AdminGovernanceInactive => {
+                "Admin governance action (propose/approve/reject/emergency) was submitted while no admin signer registry exists on this chain; multisig administration is inactive and every governance path fails closed."
+            }
+            ExecError::NotAdminSigner => {
+                "Tx signer does not match the action's declared proposer/approver/rejecter/signer field, or is not a member of the current admin signer registry."
+            }
         }
     }
 }
@@ -2660,6 +2675,10 @@ impl fmt::Display for ExecError {
                 f,
                 "open interest limit exceeded on market {market}: would be {would_be}, cap {limit}"
             ),
+            ExecError::AdminGovernanceInactive => {
+                write!(f, "admin governance inactive: no signer registry exists")
+            }
+            ExecError::NotAdminSigner => write!(f, "not an authorized admin signer"),
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
     }
@@ -2754,6 +2773,8 @@ define_error_kinds! {
     49  => AmendBelowFilled             ~ "AmendOrder new quantity is below the quantity already filled while the order rested.",
     50  => SlippageExceeded             ~ "Atomic basket aggregate slippage exceeded the submitted max_slippage_bps budget.",
     51  => OpenInterestLimitExceeded    ~ "Fill would push aggregate market open interest past MarketConfig.max_open_interest.",
+    52  => AdminGovernanceInactive      ~ "Admin governance action was submitted while no admin signer registry exists on this chain; multisig administration is inactive and every governance path fails closed.",
+    53  => NotAdminSigner               ~ "Tx signer does not match the action's declared proposer/approver/rejecter/signer field, or is not a member of the current admin signer registry.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -2859,6 +2880,19 @@ mod exec_error_meaning_tests {
                 ErrorKind::OpenInterestLimitExceeded
             ))
         );
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn governance_codes_52_53_decode_without_a_log() {
+        let inactive = decode_exec_error_kind(52, None).unwrap();
+        assert_eq!(inactive.name(), "AdminGovernanceInactive");
+        assert_eq!(inactive.code(), 52);
+        let not_signer = decode_exec_error_kind(53, None).unwrap();
+        assert_eq!(not_signer.name(), "NotAdminSigner");
+        assert_eq!(not_signer.code(), 53);
+        assert_eq!(ExecError::AdminGovernanceInactive.code(), 52);
+        assert_eq!(ExecError::NotAdminSigner.code(), 53);
     }
 
     #[test]
@@ -3048,7 +3082,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=51).chain(std::iter::once(255)).collect();
+        let expected: Vec<u32> = (1u32..=53).chain(std::iter::once(255)).collect();
         assert_eq!(
             codes, expected,
             "ExecError codes covered by variants: {:?}; expected: {:?}. \

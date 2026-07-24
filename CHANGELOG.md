@@ -54,6 +54,13 @@ at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
 
 ### Fixed
 
+- **`wasm-bindgen` is exact-pinned (`=0.2.126`)** so `npm run build:wasm` (and
+  the `pretest` / `build` / `prepare` scripts that depend on it) cannot break
+  when a new `0.2.x` release ships: the wasm-bindgen CLI hard-errors on any
+  version mismatch with the crate, and with `Cargo.lock` gitignored a caret
+  range let every machine float independently of the installed CLI (#58).
+  Install the matching CLI with `cargo install wasm-bindgen-cli --version
+0.2.126`; CI already resolves the CLI version from the crate graph.
 - **A failed WASM init no longer stays cached.** `ready()` used to memoize the
   first instantiation attempt permanently, so a transient failure (e.g. one
   dropped `.wasm` fetch in a browser) made every later `ready()` — and every
@@ -139,6 +146,13 @@ at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
   gateway proxies (`/v1/proposals`, `/v1/admin/signer-registry`). An absent
   registry decodes as `null`, meaning admin multisig is **inactive**
   (fail-closed) — deliberately distinct from an empty roster.
+- **Governance error codes 52 (`AdminGovernanceInactive`) and 53
+  (`NotAdminSigner`)** are mirrored from the consensus contract (exchange #282
+  / `ddad45b`) into all three error tables (Rust, TypeScript, Python) and
+  pinned by the errors conformance manifest. Previously
+  `decodeExecError(52/53)` returned `null`, so a live admin-multisig rejection
+  decoded as unknown (#60). Purely additive — no existing code changes
+  meaning.
 - `errors` conformance-vector family (`conformance/errors.ndjson`) pinning the
   ExecError code→name classification across the Rust, TypeScript, and Python
   SDKs. A bare code pins the numeric `ERROR_KINDS` manifest name (including

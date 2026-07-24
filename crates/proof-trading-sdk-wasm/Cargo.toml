@@ -13,7 +13,14 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 proof-trading-sdk = { path = "../proof-trading-sdk", version = "3" }
-wasm-bindgen = "0.2"
+# Exact pin: the globally installed wasm-bindgen CLI hard-errors unless its
+# version matches the crate version cargo resolves, and Cargo.lock is
+# gitignored — a caret range here would let every machine float to the newest
+# 0.2.x and break `npm run build:wasm` (and with it `npm test` / `npm run
+# build` / `prepare`) the day a new release ships. Bump this and the CLI
+# (`cargo install wasm-bindgen-cli --version <same>`) together; CI resolves
+# the CLI version from the crate graph automatically (#58).
+wasm-bindgen = "=0.2.126"
 serde-wasm-bindgen = "0.6"
 # Deterministic Ed25519 signing only (SigningKey::from_bytes + sign) — no
 # `rand_core` feature, so nothing pulls `getrandom`, which would fail to build

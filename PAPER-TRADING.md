@@ -93,15 +93,12 @@ client.setPrivateKey(hexToBytes("abc123…")); // privateKeyHex from Step 2
 const book = await client.queryOrderbook(1);
 const account = await client.queryAccount("0x…"); // address from Step 2
 
-// Place an order
-await client.submitTx({
-  type: "PlaceOrder",
-  data: {
-    market: 1,
-    side: Side.Buy,
-    price: 66_750_000_000n, // micro-USDC (6 dp) = $66,750.00
-    quantity: 1n, // integer contracts
-  },
+// Place an order — the wrapper fills `owner` from the loaded key
+await client.placeOrder({
+  market: 1,
+  side: Side.Buy,
+  price: 66_750_000_000n, // micro-USDC (6 dp) = $66,750.00
+  quantity: 1n, // integer contracts
 });
 ```
 

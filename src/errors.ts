@@ -88,6 +88,10 @@ export enum ExecErrorCode {
   SlippageExceeded = 50,
   /** Distinct open-interest-cap rejection emitted by upgraded engines. */
   OpenInterestLimitExceeded = 51,
+  /** Admin governance action submitted while no signer registry exists. */
+  AdminGovernanceInactive = 52,
+  /** Signer is not the declared admin actor / not in the signer registry. */
+  NotAdminSigner = 53,
   InternalError = 255,
 }
 
@@ -279,6 +283,16 @@ const TABLE: Record<number, ExecErrorInfo> = {
       "amended total quantity is below the quantity already filled while the order rested",
   },
   51: OPEN_INTEREST_LIMIT_EXCEEDED,
+  52: {
+    name: "AdminGovernanceInactive",
+    description:
+      "admin governance action submitted while no admin signer registry exists on this chain; multisig administration is inactive and every governance path fails closed",
+  },
+  53: {
+    name: "NotAdminSigner",
+    description:
+      "tx signer does not match the action's declared proposer/approver/rejecter/signer field, or is not a member of the current admin signer registry",
+  },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
 
