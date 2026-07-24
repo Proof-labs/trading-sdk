@@ -606,22 +606,63 @@ describe("conformance vectors (TypeScript)", () => {
     }
   });
   it("codec: action fields → payload bytes", () => {
+    // No try/catch: every vector must build through toAction and encode
+    // byte-exact. A vector whose action type is not wired here fails loudly —
+    // the old `continue`-on-unwired skip let new vector families pass green
+    // while asserting nothing (that hid the governance vectors until #65).
     for (const c of cases("codec.ndjson")) {
-      try {
-        const action = toAction(
-          c.action_type as ActionTypeValue,
-          c.input as Record<string, unknown>,
-        );
-        const payload = encodePayloadBytes(action);
-        expect(bytesToHex(payload)).toBe(
-          (c.expect as { payload_hex: string }).payload_hex,
-        );
-      } catch (e) {
-        // Skip vectors for action types not yet wired in toAction.
-        if (e instanceof Error && e.message.startsWith("toAction:")) continue;
-        throw e;
-      }
+      const action = toAction(
+        c.action_type as ActionTypeValue,
+        c.input as Record<string, unknown>,
+      );
+      const payload = encodePayloadBytes(action);
+      expect(bytesToHex(payload)).toBe(
+        (c.expect as { payload_hex: string }).payload_hex,
+      );
     }
+  });
+
+  it("codec: vector coverage of the ActionType registry is pinned", () => {
+    const vectorTypes = new Set(
+      cases("codec.ndjson").map((c) => c.action_type as number),
+    );
+    // Every vector's action type must exist in the registry — an orphan means
+    // the vectors and `types.ts` have drifted.
+    const registryBytes = new Set<number>(Object.values(ActionType));
+    for (const t of vectorTypes) {
+      expect(
+        registryBytes.has(t),
+        `orphan vector action_type 0x${t.toString(16)}`,
+      ).toBe(true);
+    }
+    // Known coverage debt: action types with no codec vector yet. This is a
+    // ratchet — adding a new ActionType without a vector fails here. Prefer
+    // adding a vector in crates/spec/src/bin/gen_vectors.rs; extending this
+    // list instead is a conscious, reviewed decision. Remove names as vectors
+    // land; never re-add one.
+    const uncovered = Object.entries(ActionType)
+      .filter(([, byte]) => !vectorTypes.has(byte))
+      .map(([name]) => name)
+      .sort();
+    expect(uncovered).toEqual(
+      [
+        "AmendOrder",
+        "ApproveAgent",
+        "CancelAllOrders",
+        "CancelClientOrder",
+        "CancelReplaceOrder",
+        "ConfirmDeposit",
+        "ConfirmWithdrawal",
+        "CreateImpactMarket",
+        "Deposit",
+        "FailWithdrawal",
+        "ResolveEvent",
+        "RevokeAgent",
+        "SetUserMarketLeverage",
+        "Withdraw",
+        "WithdrawRequest",
+      ].sort(),
+    );
   });
 
   it("codec: all four governance actions encode byte-exact (no silent skip)", () => {
