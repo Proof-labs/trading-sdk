@@ -88,6 +88,14 @@ export const ActionType = {
   AmendOrder: 0x1b,
   /** Native all-or-revert multi-leg basket order. */
   AtomicBasketOrder: 0x1c,
+  /** Signed admin-multisig governance proposal (W29-04). */
+  ProposeAdminAction: 0x1e,
+  /** Signed admin-multisig governance approval (carries full proposal context). */
+  ApproveAdminAction: 0x1f,
+  /** Signed admin-multisig governance rejection. */
+  RejectAdminAction: 0x20,
+  /** Signed single-signer emergency action (pause/halt/reduce-only). */
+  EmergencyAdminAction: 0x21,
 } as const;
 
 /** Union of all valid action type byte values. */
@@ -759,7 +767,108 @@ export type OperatorAction =
  * union — trading integrations can narrow to `TraderAction` to keep operator
  * actions out of autocomplete.
  */
-export type Action = TraderAction | OperatorAction;
+// ---------------------------------------------------------------------------
+// Admin-multisig governance actions (W29-04)
+// ---------------------------------------------------------------------------
+
+/**
+ * Replacement admin signer roster. The engine assigns the next registry
+ * version; members are validated (sorted, duplicate-free) on-chain.
+ */
+export interface UpdateAdminSignerRegistry {
+  /** Approvals the replacement roster will require. */
+  newThreshold: number;
+  /** Members of the replacement roster (each a 20-byte address). */
+  newMembers: Address[];
+}
+
+/**
+ * Closed, typed set of operations executable through the multisig. The
+ * embedded `CreateMarket.signer` must be zero — governance supplies the
+ * authorization, not the embedded address.
+ */
+export type AdminAction =
+  | { kind: "CreateMarket"; value: CreateMarket }
+  | { kind: "UpdateAdminSignerRegistry"; value: UpdateAdminSignerRegistry };
+
+/**
+ * Closed set of immediate, loss-reducing single-signer actions. Reverse
+ * transitions (unpause/resume) are intentionally absent — they require a
+ * multisig `AdminAction`.
+ */
+export type EmergencyAction =
+  | { kind: "PauseMarket"; value: { marketId: number } }
+  | { kind: "HaltTrading"; value?: Record<string, never> }
+  | { kind: "SetReduceOnly"; value: { marketId: number } };
+
+/** Signed governance proposal (action 0x1e). */
+export interface ProposeAdminAction {
+  /** Address authorizing the proposal (20 bytes). */
+  proposer: Address;
+  /** Registry version under which the proposal is submitted. */
+  registryVersion: bigint;
+  /** Admin operation proposed for multisig execution. */
+  action: AdminAction;
+}
+
+/**
+ * Signed governance approval (action 0x1f). Carries the complete immutable
+ * proposal context so a signer commits to — and can independently render —
+ * exactly what they approve, never an id+hash alone.
+ */
+export interface ApproveAdminAction {
+  /** Address authorizing the approval (20 bytes). */
+  approver: Address;
+  /** Identifier of the proposal being approved. */
+  proposalId: bigint;
+  /** Registry version captured when the proposal was created. */
+  registryVersion: bigint;
+  /** Required approval count captured when the proposal was created. */
+  threshold: number;
+  /** Address that created the proposal (20 bytes). */
+  proposer: Address;
+  /** Block height at which the proposal was created. */
+  createdHeight: bigint;
+  /** Block timestamp at which the proposal was created, in milliseconds. */
+  createdMs: bigint;
+  /** Block timestamp after which the proposal expires, in milliseconds. */
+  expiryMs: bigint;
+  /** Typed admin operation being approved. */
+  action: AdminAction;
+  /** Domain-separated commitment to the immutable proposal context (32 bytes). */
+  contentHash: Uint8Array;
+}
+
+/** Signed governance rejection (action 0x20). */
+export interface RejectAdminAction {
+  /** Address authorizing the rejection (20 bytes). */
+  rejecter: Address;
+  /** Identifier of the proposal being rejected. */
+  proposalId: bigint;
+  /** Domain-separated commitment of the proposal being rejected (32 bytes). */
+  contentHash: Uint8Array;
+}
+
+/** Signed single-signer emergency action (action 0x21). */
+export interface EmergencyAdminAction {
+  /** Registry member authorizing the action (20 bytes). */
+  signer: Address;
+  /** Immediate loss-reducing operation to execute. */
+  action: EmergencyAction;
+}
+
+/**
+ * Governance actions — admin-multisig propose/approve/reject and the
+ * single-signer emergency action. Authorized on-chain against the versioned
+ * signer registry; a normal trader's signer is rejected.
+ */
+export type GovernanceAction =
+  | { type: "ProposeAdminAction"; data: ProposeAdminAction }
+  | { type: "ApproveAdminAction"; data: ApproveAdminAction }
+  | { type: "RejectAdminAction"; data: RejectAdminAction }
+  | { type: "EmergencyAdminAction"; data: EmergencyAdminAction };
+
+export type Action = TraderAction | OperatorAction | GovernanceAction;
 
 // ---------------------------------------------------------------------------
 // Event types (emitted by engine, delivered via ABCI/WebSocket)

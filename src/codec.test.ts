@@ -1549,7 +1549,7 @@ describe("peekActionType validation (#56)", () => {
     // byte 0 is the msgpack fixarray header, byte 1 the version fixint,
     // byte 2 the action-type fixint.
     expect(peekActionType(bytes)).toBe(ActionType.CancelOrder);
-    bytes[2] = 0x1e; // unassigned wire type — e.g. a newer engine's byte
+    bytes[2] = 0x7f; // unassigned wire type — e.g. a newer engine's byte
     expect(peekActionType(bytes)).toBeNull();
   });
 

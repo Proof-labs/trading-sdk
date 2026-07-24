@@ -94,9 +94,27 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
   1: "Median",
 };
 
+/**
+ * Encode a governance `AdminAction` / `EmergencyAction` for
+ * `serde_wasm_bindgen`: an externally-tagged enum whose struct variants are
+ * `{ Variant: { snake_case_fields } }` (a MAP). The TS shape is
+ * `{ kind, value }`; the variant name is preserved verbatim (NOT snake-cased)
+ * and the inner struct is converted recursively.
+ */
+function governanceActionToWasm(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  const v = value as { kind: string; value?: Record<string, unknown> };
+  return { [v.kind]: v.value ? convertObject(v.value) : {} };
+}
+
 function convertValue(camelKey: string, value: unknown): unknown {
   if (camelKey === "oracleSource") {
     return eventOracleSourceToWasm(value as EventOracleSource);
+  }
+  // The governance `action` field is a nested externally-tagged enum
+  // (`AdminAction` on propose/approve, `EmergencyAction` on emergency).
+  if (camelKey === "action") {
+    return governanceActionToWasm(value);
   }
   // Unknown enum values throw HERE, by field name — letting `undefined` cross
   // into serde_wasm_bindgen surfaces as an unrelated-looking
@@ -218,7 +236,21 @@ const BYTE_FIELDS = new Set([
   "signer",
   "solanaDestination",
   "solanaTxSig",
+  // Governance signer/commitment fields (20- or 32-byte).
+  "proposer",
+  "approver",
+  "rejecter",
+  "contentHash",
 ]);
+
+/** Decode a governance `{ Variant: {...} }` enum back into `{ kind, value }`. */
+function governanceActionFromWasm(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  const obj = value as Record<string, unknown>;
+  const kind = Object.keys(obj)[0];
+  const inner = obj[kind] as Record<string, unknown> | undefined;
+  return { kind, value: inner ? fromWasmObject(inner) : {} };
+}
 
 /** Decode an `EventOracleSource` from serde's `{ Variant: {...} }` / string form. */
 function eventOracleSourceFromWasm(v: unknown): EventOracleSource | null {
@@ -266,6 +298,16 @@ function fromWasmValue(camelKey: string, value: unknown): unknown {
   // through before the generic object branch would iterate its indices.
   if (value instanceof Uint8Array) return value;
   if (camelKey === "oracleSource") return eventOracleSourceFromWasm(value);
+  if (camelKey === "action" && typeof value === "object") {
+    return governanceActionFromWasm(value);
+  }
+  // `newMembers` is a list of 20-byte addresses (Vec<[u8;20]>); convert each
+  // element to a Uint8Array, unlike the single-address BYTE_FIELDS above.
+  if (camelKey === "newMembers" && Array.isArray(value)) {
+    return value.map((m) =>
+      m instanceof Uint8Array ? m : Uint8Array.from(m as number[]),
+    );
+  }
   // Same loudness as the encode direction: an unknown variant name (e.g. a
   // newer engine's wire) throws by field name instead of decoding to a silent
   // `undefined`. `decodeSigningMessage` degrades this to `decodeError`.
