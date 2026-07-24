@@ -8,7 +8,7 @@ import type { TxEvent, TxResult } from "./types.js";
  * without a live node — see `tx-result.test.ts`.
  *
  * The numeric `code` field continues to carry 0 for success, engine
- * `ExecError` values 1..51/255 (including code 51 added in SDK 2.1.0),
+ * `ExecError` values 1..51/255 (including code 51 added in SDK 3.0.0),
  * synthesized HTTP 401/429/413/500/1, or `-1` for timeout. The `outcome` tag
  * lets callers tell an engine rejection apart from a transport failure that
  * happens to reuse a small integer `code`.

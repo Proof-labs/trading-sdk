@@ -2200,6 +2200,12 @@ pub enum ExecError {
         filled_quantity: u64,
         requested_quantity: u64,
     },
+    /// An atomic basket's notional-weighted aggregate slippage exceeded its
+    /// submitted `max_slippage_bps` budget.
+    SlippageExceeded {
+        aggregate_bps: u32,
+        max_slippage_bps: u32,
+    },
     /// A fill would push aggregate market open interest above the configured
     /// cap. Upgraded engines emit the distinct code 51 for this rejection.
     OpenInterestLimitExceeded {
@@ -2268,6 +2274,7 @@ impl ExecError {
             ExecError::FillOrKillWouldNotFill { .. } => 47,
             ExecError::InvalidCancelReplaceTarget => 48,
             ExecError::AmendBelowFilled { .. } => 49,
+            ExecError::SlippageExceeded { .. } => 50,
             ExecError::OpenInterestLimitExceeded { .. } => 51,
             ExecError::InternalError(_) => 255,
         }
@@ -2457,6 +2464,9 @@ impl ExecError {
             ExecError::AmendBelowFilled { .. } => {
                 "AmendOrder new quantity is below the quantity already filled while the order rested."
             }
+            ExecError::SlippageExceeded { .. } => {
+                "Atomic basket aggregate slippage exceeded the submitted max_slippage_bps budget."
+            }
             ExecError::OpenInterestLimitExceeded { .. } => {
                 "Fill would push aggregate market open interest past MarketConfig.max_open_interest."
             }
@@ -2634,6 +2644,13 @@ impl fmt::Display for ExecError {
             } => write!(
                 f,
                 "amend quantity below filled for order {order_id}: requested total {requested_quantity}, filled {filled_quantity}"
+            ),
+            ExecError::SlippageExceeded {
+                aggregate_bps,
+                max_slippage_bps,
+            } => write!(
+                f,
+                "atomic basket aggregate slippage {aggregate_bps} bps exceeds budget {max_slippage_bps} bps"
             ),
             ExecError::OpenInterestLimitExceeded {
                 market,
@@ -2984,6 +3001,10 @@ mod exec_error_meaning_tests {
                 filled_quantity: 1,
                 requested_quantity: 0,
             },
+            ExecError::SlippageExceeded {
+                aggregate_bps: 51,
+                max_slippage_bps: 50,
+            },
             ExecError::OpenInterestLimitExceeded {
                 market: 0,
                 limit: 1,
@@ -3020,8 +3041,8 @@ mod exec_error_meaning_tests {
     }
 
     /// Codes 1..=51 + 255 must all be covered by the public error manifest.
-    /// Catches the case where a code is reserved by the engine but no SDK
-    /// classification maps to it.
+    /// Catches the case where a code is reserved by the mirrored engine error
+    /// enum but no SDK classification maps to it.
     #[test]
     fn no_code_holes_in_documented_range() {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
