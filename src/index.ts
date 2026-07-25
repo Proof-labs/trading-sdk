@@ -43,6 +43,11 @@ export {
   type ApproveAdminAction,
   type RejectAdminAction,
   type EmergencyAdminAction,
+  type AdminSignerRegistry,
+  type ExpiryReason,
+  type ProposalStatus,
+  type ProposalDisplayInfo,
+  type ProposalPage,
   type ImpactMarketInfo,
   type ImpactMarketStatus,
   Branch,
@@ -100,6 +105,17 @@ export {
 // WASM codec/signing core init. `await ready()` once before any codec/signing
 // call (the `ExchangeClient` does this for you). See ADR 0001.
 export { ready } from "./wasm-loader.js";
+
+// Governance read-model decoders. Exported so a caller holding raw proxy
+// bytes (an offline signer tool reconstructing an approval, say) can decode
+// them with the same pinned implementation the client uses, rather than
+// re-deriving the engine's positional layout by hand.
+export {
+  decodeAdminAction,
+  decodeAdminSignerRegistry,
+  decodeProposalDisplayInfo,
+  decodeProposalStatus,
+} from "./governance-query.js";
 export { fetchChainId } from "./client.js";
 
 // Error decoder

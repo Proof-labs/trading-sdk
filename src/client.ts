@@ -39,7 +39,13 @@ import type {
   PositionInfo,
   WithdrawalRecord,
   WithdrawalStatus,
+  AdminSignerRegistry,
+  ProposalPage,
 } from "./types.js";
+import {
+  decodeAdminSignerRegistry,
+  decodeProposalDisplayInfo,
+} from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
 import { sha256 } from "@noble/hashes/sha2.js";
 
@@ -1051,19 +1057,16 @@ export class ExchangeClient {
    *
    * Returns `null` when no registry is seeded — which means admin multisig is
    * **inactive** (fail-closed), NOT an empty roster; callers must treat the two
-   * differently. When present, the decoded value is the engine's MessagePack
-   * registry record (version, threshold, members) as returned by the node; a
-   * typed decoder lands with the release-B seed, when a populated registry
-   * first exists to pin it against.
+   * differently.
    */
-  async queryAdminSignerRegistry(): Promise<unknown | null> {
+  async queryAdminSignerRegistry(): Promise<AdminSignerRegistry | null> {
     const json = await fetchApiJson(
       `${this.readBaseUrl}/v1/admin/signer-registry`,
     );
     if (!json.data) return null;
     const bytes = fromBase64(json.data as string);
     const decoded = msgpackDecoder.decode(bytes) as unknown[];
-    return decoded[0] ?? null;
+    return decodeAdminSignerRegistry(decoded[0] ?? null);
   }
 
   /**
@@ -1072,15 +1075,17 @@ export class ExchangeClient {
    * `limit` are forwarded as query params (the node clamps oversized limits).
    * The proxy returns MessagePack `[proposals, nextCursor|nil]`.
    *
-   * `proposals` is the engine's MessagePack proposal list as returned by the
-   * node; a typed per-proposal decoder lands alongside the propose/approve UI,
-   * when a live proposal first exists to pin it against.
+   * Each proposal is decoded into a `ProposalDisplayInfo` — including the
+   * canonical action bytes and content hash an approving signer needs to
+   * rebuild their approval locally. Decoding fails closed: a proposal
+   * carrying an operation or status this SDK build does not know throws
+   * rather than being returned partially rendered.
    */
   async queryProposals(opts?: {
     status?: string;
     cursor?: bigint;
     limit?: number;
-  }): Promise<{ proposals: unknown[]; nextCursor: bigint | null }> {
+  }): Promise<ProposalPage> {
     const params = new URLSearchParams();
     if (opts?.status) params.set("status", opts.status);
     if (opts?.cursor != null) params.set("cursor", String(opts.cursor));
@@ -1096,7 +1101,9 @@ export class ExchangeClient {
     // cursor arrives as `number`, so normalize to honor the declared type.
     const rawCursor = decoded[1];
     return {
-      proposals: (decoded[0] ?? []) as unknown[],
+      proposals: ((decoded[0] ?? []) as unknown[]).map((p, i) =>
+        decodeProposalDisplayInfo(p as unknown[], i),
+      ),
       nextCursor:
         typeof rawCursor === "number"
           ? BigInt(rawCursor)
