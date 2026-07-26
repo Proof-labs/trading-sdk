@@ -277,3 +277,151 @@ describe("page envelope", () => {
     expect(Number(cursor)).toBe(43);
   });
 });
+
+describe("byte-field validation", () => {
+  // The byte fields on this path ARE the identities and the commitments a
+  // signer approves against, so they are validated rather than coerced.
+  // `Uint8Array.from` is lossy in exactly the wrong way: it truncates
+  // out-of-range values modulo 256 and maps non-numbers to 0, so a corrupted
+  // address would decode into a DIFFERENT but entirely plausible-looking
+  // address. Every case below would have silently produced one before.
+
+  /** The decoded-JS form of a valid proposal — what msgpack hands the
+   *  decoder. Tests copy it and corrupt exactly one field. */
+  function validProposalRaw(): unknown[] {
+    const addr = (fill: number) => new Array(20).fill(fill);
+    return [
+      42n,
+      "Pending",
+      "Pending",
+      7n,
+      2,
+      addr(0xaa),
+      [addr(0xbb)],
+      [],
+      1n,
+      2n,
+      3n,
+      1,
+      {
+        CreateMarket: [
+          1,
+          1000,
+          500,
+          7,
+          3,
+          new Array(20).fill(0),
+          0n,
+          800,
+          0,
+          4,
+          "T",
+          0n,
+        ],
+      },
+      [0xde, 0xad],
+      new Array(32).fill(0x5a),
+    ];
+  }
+
+  /** Corrupt one positional field and decode. */
+  function withField(index: number, value: unknown) {
+    const raw = validProposalRaw();
+    raw[index] = value;
+    return () => decodeProposalDisplayInfo(raw);
+  }
+
+  it("accepts the uncorrupted baseline", () => {
+    // Guards the negative cases below: if the baseline itself threw, every
+    // assertion here would pass for the wrong reason.
+    expect(() => decodeProposalDisplayInfo(validProposalRaw())).not.toThrow();
+  });
+
+  it.each([
+    ["a short proposer", 5, new Array(19).fill(1)],
+    ["a long proposer", 5, new Array(21).fill(1)],
+    ["a short content hash", 14, new Array(31).fill(1)],
+    ["a long content hash", 14, new Array(33).fill(1)],
+  ])("rejects %s by length", (_label, index, value) => {
+    expect(withField(index, value)).toThrow(/bytes, expected/);
+  });
+
+  it.each([
+    ["above 255", 300],
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["not a number", "ff"],
+    ["null", null],
+  ])("rejects a byte value that is %s", (_label, bad) => {
+    const corrupted = new Array(20).fill(1);
+    corrupted[7] = bad;
+    // Without validation, 300 would wrap to 44 and "ff"/null would become 0 —
+    // a different address that still looks like a valid one.
+    expect(withField(5, corrupted)).toThrow(/is not a byte/);
+  });
+
+  it("names the offending element, not just the field", () => {
+    const corrupted = new Array(20).fill(1);
+    corrupted[13] = 999;
+    expect(withField(5, corrupted)).toThrow(/proposer\[13\]/);
+  });
+
+  it("validates every address in the approvals and rejections lists", () => {
+    expect(withField(6, [new Array(19).fill(1)])).toThrow(
+      /approvals\[0\] is 19 bytes/,
+    );
+    expect(
+      withField(7, [new Array(20).fill(1), new Array(33).fill(1)]),
+    ).toThrow(/rejections\[1\] is 33 bytes/);
+  });
+
+  it("validates the signer inside a wrapped CreateMarket", () => {
+    const action = {
+      CreateMarket: [
+        1,
+        1000,
+        500,
+        7,
+        3,
+        new Array(19).fill(0),
+        0n,
+        800,
+        0,
+        4,
+        "T",
+        0n,
+      ],
+    };
+    expect(withField(12, action)).toThrow(
+      /createMarket\.signer is 19 bytes, expected 20/,
+    );
+  });
+
+  it("accepts actionCanonicalBytes at any length but still checks its elements", () => {
+    // Variable by nature: it is the stored action payload, whose size
+    // depends on the operation.
+    expect(withField(13, [])).not.toThrow();
+    expect(withField(13, new Array(500).fill(7))).not.toThrow();
+    expect(withField(13, [0, 256])).toThrow(
+      /actionCanonicalBytes\[1\] is not a byte/,
+    );
+  });
+
+  it("validates registry members", () => {
+    expect(() =>
+      decodeAdminSignerRegistry([1n, 2, [new Array(20).fill(1)]]),
+    ).not.toThrow();
+    expect(() =>
+      decodeAdminSignerRegistry([1n, 2, [new Array(19).fill(1)]]),
+    ).toThrow(/registry\.members\[0\] is 19 bytes, expected 20/);
+    expect(() =>
+      decodeAdminSignerRegistry([1n, 2, [new Array(20).fill(-5)]]),
+    ).toThrow(/is not a byte/);
+  });
+
+  it("validates the deciding member on a Rejected status", () => {
+    expect(() =>
+      decodeProposalStatus({ Rejected: [new Array(21).fill(1)] }),
+    ).toThrow(/Rejected\.by is 21 bytes, expected 20/);
+  });
+});

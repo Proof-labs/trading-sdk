@@ -54,13 +54,54 @@ function toNumber(value: unknown, field: string): number {
   throw new Error(`governance decode: ${field} is not an integer`);
 }
 
-/** Rebuild a byte field. See encoding fact 1: these arrive as `number[]`,
- *  but tolerate a `Uint8Array` so a future encoder switch to msgpack `bin`
- *  does not break every caller. */
-function toBytes(value: unknown, field: string): Uint8Array {
-  if (value instanceof Uint8Array) return value;
-  if (Array.isArray(value)) return Uint8Array.from(value as number[]);
-  throw new Error(`governance decode: ${field} is not a byte sequence`);
+/** A 20-byte governance address. */
+const ADDRESS_LEN = 20;
+/** A 32-byte domain-separated commitment. */
+const HASH_LEN = 32;
+
+/**
+ * Rebuild a byte field. See encoding fact 1: these arrive as `number[]`, but
+ * a `Uint8Array` is tolerated so a future encoder switch to msgpack `bin`
+ * does not break every caller.
+ *
+ * Validated rather than coerced, and `expectedLen` is mandatory for the
+ * fixed-width fields. `Uint8Array.from` is lossy in exactly the way that
+ * matters here: it truncates out-of-range values modulo 256 and turns
+ * non-numbers into 0, so `[300, -1, "x"]` would silently become a
+ * well-formed-looking `[44, 255, 0]`. On this path the byte fields ARE the
+ * identities and the commitments a signer approves against — a corrupted
+ * address that still renders as a plausible address is worse than a refusal,
+ * so a malformed field fails closed here instead of reaching a caller.
+ * The engine's own newtypes are fixed-width (`SignerAddress([u8; 20])`);
+ * this keeps the mirror as strict as the thing it mirrors.
+ */
+function toBytes(
+  value: unknown,
+  field: string,
+  expectedLen?: number,
+): Uint8Array {
+  let bytes: Uint8Array;
+  if (value instanceof Uint8Array) {
+    bytes = value;
+  } else if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) {
+      const b: unknown = value[i];
+      if (typeof b !== "number" || !Number.isInteger(b) || b < 0 || b > 255) {
+        throw new Error(
+          `governance decode: ${field}[${i}] is not a byte (0-255 integer)`,
+        );
+      }
+    }
+    bytes = Uint8Array.from(value as number[]);
+  } else {
+    throw new Error(`governance decode: ${field} is not a byte sequence`);
+  }
+  if (expectedLen != null && bytes.length !== expectedLen) {
+    throw new Error(
+      `governance decode: ${field} is ${bytes.length} bytes, expected ${expectedLen}`,
+    );
+  }
+  return bytes;
 }
 
 function toArray(value: unknown, field: string): unknown[] {
@@ -96,7 +137,7 @@ function decodeCreateMarket(raw: unknown[]): CreateMarket {
     mmBps: toNumber(raw[2], "createMarket.mmBps"),
     takerFeeBps: toNumber(raw[3], "createMarket.takerFeeBps"),
     makerFeeBps: toNumber(raw[4], "createMarket.makerFeeBps"),
-    signer: toBytes(raw[5], "createMarket.signer"),
+    signer: toBytes(raw[5], "createMarket.signer", ADDRESS_LEN),
     fundingIntervalMs: toBigInt(raw[6], "createMarket.fundingIntervalMs"),
     maxFundingRateBps: toNumber(raw[7], "createMarket.maxFundingRateBps"),
     poolId: toNumber(raw[8], "createMarket.poolId"),
@@ -110,7 +151,7 @@ function decodeUpdateRegistry(raw: unknown[]): UpdateAdminSignerRegistry {
   return {
     newThreshold: toNumber(raw[0], "updateRegistry.newThreshold"),
     newMembers: toArray(raw[1], "updateRegistry.newMembers").map((m, i) =>
-      toBytes(m, `updateRegistry.newMembers[${i}]`),
+      toBytes(m, `updateRegistry.newMembers[${i}]`, ADDRESS_LEN),
     ),
   };
 }
@@ -167,7 +208,7 @@ export function decodeProposalStatus(
     case "Rejected":
       return {
         kind: "Rejected",
-        by: toBytes(fields[0], `${field}.Rejected.by`),
+        by: toBytes(fields[0], `${field}.Rejected.by`, ADDRESS_LEN),
       };
     case "Expired": {
       const reason = fields[0];
@@ -208,20 +249,22 @@ export function decodeProposalDisplayInfo(
     statusEffective: decodeProposalStatus(raw[2], `${at}.statusEffective`),
     registryVersion: toBigInt(raw[3], `${at}.registryVersion`),
     threshold: toNumber(raw[4], `${at}.threshold`),
-    proposer: toBytes(raw[5], `${at}.proposer`),
+    proposer: toBytes(raw[5], `${at}.proposer`, ADDRESS_LEN),
     approvals: toArray(raw[6], `${at}.approvals`).map((a, i) =>
-      toBytes(a, `${at}.approvals[${i}]`),
+      toBytes(a, `${at}.approvals[${i}]`, ADDRESS_LEN),
     ),
     rejections: toArray(raw[7], `${at}.rejections`).map((r, i) =>
-      toBytes(r, `${at}.rejections[${i}]`),
+      toBytes(r, `${at}.rejections[${i}]`, ADDRESS_LEN),
     ),
     createdHeight: toBigInt(raw[8], `${at}.createdHeight`),
     createdMs: toBigInt(raw[9], `${at}.createdMs`),
     expiryMs: toBigInt(raw[10], `${at}.expiryMs`),
     actionTag: toNumber(raw[11], `${at}.actionTag`),
     action: decodeAdminAction(raw[12], `${at}.action`),
+    // Variable length by nature — it is the stored action payload, whose
+    // size depends on the operation. Still element-validated.
     actionCanonicalBytes: toBytes(raw[13], `${at}.actionCanonicalBytes`),
-    contentHash: toBytes(raw[14], `${at}.contentHash`),
+    contentHash: toBytes(raw[14], `${at}.contentHash`, HASH_LEN),
   };
 }
 
@@ -241,7 +284,7 @@ export function decodeAdminSignerRegistry(
     version: toBigInt(fields[0], "registry.version"),
     threshold: toNumber(fields[1], "registry.threshold"),
     members: toArray(fields[2], "registry.members").map((m, i) =>
-      toBytes(m, `registry.members[${i}]`),
+      toBytes(m, `registry.members[${i}]`, ADDRESS_LEN),
     ),
   };
 }
