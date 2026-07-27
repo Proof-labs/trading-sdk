@@ -65,6 +65,13 @@ describe("ExchangeClient governance reads (W30-11)", () => {
     expect(await makeClient().queryAdminSignerRegistry()).toBeNull();
   });
 
+  it("queryAdminSignerRegistry rejects a successful response without encoded data", async () => {
+    stubFetch(undefined);
+    await expect(makeClient().queryAdminSignerRegistry()).rejects.toThrow(
+      /response is missing encoded data/,
+    );
+  });
+
   it("queryProposals forwards status/cursor/limit and decodes the page", async () => {
     // A realistic `ProposalDisplayInfo` — 15 positional fields, byte fields
     // as integer arrays, the action as an externally-tagged map. The exact
@@ -159,9 +166,10 @@ describe("ExchangeClient governance reads (W30-11)", () => {
     expect(page).toEqual({ proposals: [], nextCursor: null });
   });
 
-  it("queryProposals treats a missing data field as an empty page", async () => {
+  it("queryProposals rejects a successful response without encoded data", async () => {
     stubFetch(undefined);
-    const page = await makeClient().queryProposals();
-    expect(page).toEqual({ proposals: [], nextCursor: null });
+    await expect(makeClient().queryProposals()).rejects.toThrow(
+      /response is missing encoded data/,
+    );
   });
 });

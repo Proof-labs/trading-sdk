@@ -33,6 +33,8 @@ import { Decoder } from "@msgpack/msgpack";
 import {
   decodeAdminAction,
   decodeAdminSignerRegistry,
+  decodeAdminSignerRegistryInfo,
+  decodeProposalPage,
   decodeProposalDisplayInfo,
   decodeProposalStatus,
 } from "./governance-query.js";
@@ -263,18 +265,39 @@ describe("decodeAdminAction", () => {
 
 describe("page envelope", () => {
   it("decodes an empty page", () => {
-    const [items, cursor] = decodeVector(PAGE_EMPTY) as [unknown[], unknown];
-    expect(items).toEqual([]);
-    expect(cursor).toBeNull();
+    expect(decodeProposalPage(decodeVector(PAGE_EMPTY))).toEqual({
+      proposals: [],
+      nextCursor: null,
+    });
   });
 
   it("carries the next cursor when one is present", () => {
-    const [, cursor] = decodeVector(PAGE_EXECUTED_REGISTRY_UPDATE) as [
-      unknown[],
-      unknown,
-    ];
     // 43 is a fixint, so it arrives as `number` — the client normalizes it.
-    expect(Number(cursor)).toBe(43);
+    expect(
+      decodeProposalPage(decodeVector(PAGE_EXECUTED_REGISTRY_UPDATE))
+        .nextCursor,
+    ).toBe(43n);
+  });
+
+  it("decodes the registry envelope without conflating malformed data with inactivity", () => {
+    expect(decodeAdminSignerRegistryInfo(decodeVector(REGISTRY_ABSENT))).toBe(
+      null,
+    );
+    expect(() => decodeAdminSignerRegistryInfo([])).toThrow(
+      /registryInfo has 0 fields, expected exactly 1/,
+    );
+    expect(() => decodeAdminSignerRegistryInfo([null, null])).toThrow(
+      /registryInfo has 2 fields, expected exactly 1/,
+    );
+  });
+
+  it("rejects malformed proposal-page envelopes", () => {
+    expect(() => decodeProposalPage([])).toThrow(
+      /proposalPage has 0 fields, expected exactly 2/,
+    );
+    expect(() => decodeProposalPage([[], null, "trailing"])).toThrow(
+      /proposalPage has 3 fields, expected exactly 2/,
+    );
   });
 });
 
@@ -335,6 +358,64 @@ describe("byte-field validation", () => {
     // Guards the negative cases below: if the baseline itself threw, every
     // assertion here would pass for the wrong reason.
     expect(() => decodeProposalDisplayInfo(validProposalRaw())).not.toThrow();
+  });
+
+  it("rejects missing or trailing positional fields", () => {
+    const short = validProposalRaw();
+    short.pop();
+    expect(() => decodeProposalDisplayInfo(short)).toThrow(
+      /proposal has 14 fields, expected exactly 15/,
+    );
+
+    const long = validProposalRaw();
+    long.push("newer-field");
+    expect(() => decodeProposalDisplayInfo(long)).toThrow(
+      /proposal has 16 fields, expected exactly 15/,
+    );
+
+    expect(() => decodeAdminSignerRegistry([1n, 2, [], "trailing"])).toThrow(
+      /registry has 4 fields, expected exactly 3/,
+    );
+    expect(() => decodeProposalStatus({ Failed: [1, "trailing"] })).toThrow(
+      /Failed has 2 fields, expected exactly 1/,
+    );
+  });
+
+  it("rejects an action tag that does not match the decoded action", () => {
+    expect(withField(11, 2)).toThrow(
+      /actionTag 2 does not match CreateMarket tag 1/,
+    );
+  });
+
+  it("rejects malformed CreateMarket tuples and coerced tickers", () => {
+    const raw = validProposalRaw();
+    const action = raw[12] as { CreateMarket: unknown[] };
+    action.CreateMarket.push("trailing");
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(
+      /createMarket has 13 fields, expected exactly 12/,
+    );
+
+    const nonString = validProposalRaw();
+    const nonStringAction = nonString[12] as { CreateMarket: unknown[] };
+    nonStringAction.CreateMarket[10] = null;
+    expect(() => decodeProposalDisplayInfo(nonString)).toThrow(
+      /createMarket\.ticker is not a string/,
+    );
+  });
+
+  it("rejects unsafe, negative, fractional, and out-of-range integers", () => {
+    expect(withField(0, -1n)).toThrow(/outside the unsigned integer range/);
+    expect(withField(0, 1n << 64n)).toThrow(
+      /outside the unsigned integer range/,
+    );
+    expect(withField(4, 0x1_0000_0000n)).toThrow(
+      /outside the unsigned integer range/,
+    );
+    expect(withField(11, 256)).toThrow(/outside the unsigned integer range/);
+    expect(withField(8, 1.5)).toThrow(/not a safe unsigned integer/);
+    expect(withField(8, Number.MAX_SAFE_INTEGER + 1)).toThrow(
+      /not a safe unsigned integer/,
+    );
   });
 
   it.each([

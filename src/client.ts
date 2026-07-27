@@ -43,8 +43,8 @@ import type {
   ProposalPage,
 } from "./types.js";
 import {
-  decodeAdminSignerRegistry,
-  decodeProposalDisplayInfo,
+  decodeAdminSignerRegistryInfo,
+  decodeProposalPage,
 } from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -1063,10 +1063,10 @@ export class ExchangeClient {
     const json = await fetchApiJson(
       `${this.readBaseUrl}/v1/admin/signer-registry`,
     );
-    if (!json.data) return null;
-    const bytes = fromBase64(json.data as string);
-    const decoded = msgpackDecoder.decode(bytes) as unknown[];
-    return decodeAdminSignerRegistry(decoded[0] ?? null);
+    const bytes = fromBase64(
+      requireEncodedData(json, "/v1/admin/signer-registry"),
+    );
+    return decodeAdminSignerRegistryInfo(msgpackDecoder.decode(bytes));
   }
 
   /**
@@ -1094,21 +1094,8 @@ export class ExchangeClient {
     const json = await fetchApiJson(
       `${this.readBaseUrl}/v1/proposals${qs ? `?${qs}` : ""}`,
     );
-    if (!json.data) return { proposals: [], nextCursor: null };
-    const bytes = fromBase64(json.data as string);
-    const decoded = msgpackDecoder.decode(bytes) as [unknown[], unknown];
-    // `useBigInt64` only yields bigint for 64-bit msgpack ints — a small
-    // cursor arrives as `number`, so normalize to honor the declared type.
-    const rawCursor = decoded[1];
-    return {
-      proposals: ((decoded[0] ?? []) as unknown[]).map((p, i) =>
-        decodeProposalDisplayInfo(p as unknown[], i),
-      ),
-      nextCursor:
-        typeof rawCursor === "number"
-          ? BigInt(rawCursor)
-          : ((rawCursor ?? null) as bigint | null),
-    };
+    const bytes = fromBase64(requireEncodedData(json, "/v1/proposals"));
+    return decodeProposalPage(msgpackDecoder.decode(bytes));
   }
 
   /** Fetch open orders for an address. Returns an empty array if the
@@ -1710,6 +1697,21 @@ async function fetchApiJson(url: string): Promise<Record<string, unknown>> {
     throw new Error(`API error: ${msg}`);
   }
   return json;
+}
+
+/**
+ * Governance reads carry a MessagePack envelope in `data`. A successful HTTP
+ * response without that envelope is malformed, not an inactive registry or
+ * an empty proposal page.
+ */
+function requireEncodedData(
+  json: Record<string, unknown>,
+  endpoint: string,
+): string {
+  if (typeof json.data !== "string" || json.data.length === 0) {
+    throw new Error(`API error: ${endpoint} response is missing encoded data`);
+  }
+  return json.data;
 }
 
 /**

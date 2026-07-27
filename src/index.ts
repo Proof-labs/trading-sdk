@@ -113,6 +113,8 @@ export { ready } from "./wasm-loader.js";
 export {
   decodeAdminAction,
   decodeAdminSignerRegistry,
+  decodeAdminSignerRegistryInfo,
+  decodeProposalPage,
   decodeProposalDisplayInfo,
   decodeProposalStatus,
 } from "./governance-query.js";

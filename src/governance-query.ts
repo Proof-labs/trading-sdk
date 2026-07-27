@@ -4,6 +4,7 @@ import type {
   AdminSignerRegistry,
   CreateMarket,
   ExpiryReason,
+  ProposalPage,
   ProposalDisplayInfo,
   ProposalStatus,
   UpdateAdminSignerRegistry,
@@ -42,17 +43,42 @@ import type {
  * already applies to `nextCursor`.
  */
 
-function toBigInt(value: unknown, field: string): bigint {
-  if (typeof value === "bigint") return value;
-  if (typeof value === "number") return BigInt(value);
-  throw new Error(`governance decode: ${field} is not an integer`);
+const U8_MAX = 0xff;
+const U32_MAX = 0xffff_ffff;
+const U64_MAX = (1n << 64n) - 1n;
+
+function toUnsignedBigInt(
+  value: unknown,
+  field: string,
+  max = U64_MAX,
+): bigint {
+  let decoded: bigint;
+  if (typeof value === "bigint") {
+    decoded = value;
+  } else if (typeof value === "number" && Number.isSafeInteger(value)) {
+    decoded = BigInt(value);
+  } else {
+    throw new Error(
+      `governance decode: ${field} is not a safe unsigned integer`,
+    );
+  }
+  if (decoded < 0n || decoded > max) {
+    throw new Error(
+      `governance decode: ${field} is outside the unsigned integer range 0-${max}`,
+    );
+  }
+  return decoded;
 }
 
-function toNumber(value: unknown, field: string): number {
-  if (typeof value === "number") return value;
-  if (typeof value === "bigint") return Number(value);
-  throw new Error(`governance decode: ${field} is not an integer`);
+function toUnsignedNumber(value: unknown, field: string, max: number): number {
+  return Number(toUnsignedBigInt(value, field, BigInt(max)));
 }
+
+const toU8 = (value: unknown, field: string) =>
+  toUnsignedNumber(value, field, U8_MAX);
+const toU32 = (value: unknown, field: string) =>
+  toUnsignedNumber(value, field, U32_MAX);
+const toU64 = (value: unknown, field: string) => toUnsignedBigInt(value, field);
 
 /** A 20-byte governance address. */
 const ADDRESS_LEN = 20;
@@ -109,6 +135,25 @@ function toArray(value: unknown, field: string): unknown[] {
   throw new Error(`governance decode: ${field} is not an array`);
 }
 
+function toTuple(
+  value: unknown,
+  field: string,
+  expectedLength: number,
+): unknown[] {
+  const fields = toArray(value, field);
+  if (fields.length !== expectedLength) {
+    throw new Error(
+      `governance decode: ${field} has ${fields.length} fields, expected exactly ${expectedLength}`,
+    );
+  }
+  return fields;
+}
+
+function toString(value: unknown, field: string): string {
+  if (typeof value === "string") return value;
+  throw new Error(`governance decode: ${field} is not a string`);
+}
+
 /** The single entry of an externally-tagged enum map (encoding fact 3). */
 function variantOf(
   value: unknown,
@@ -130,26 +175,28 @@ function variantOf(
 /** `CreateMarket` as the engine's 12-field positional payload. Distinct from
  *  `decodeMarketConfig` in client.ts: that decodes the STORED market config,
  *  this decodes the proposed action. */
-function decodeCreateMarket(raw: unknown[]): CreateMarket {
+function decodeCreateMarket(value: unknown): CreateMarket {
+  const raw = toTuple(value, "createMarket", 12);
   return {
-    market: toNumber(raw[0], "createMarket.market"),
-    imBps: toNumber(raw[1], "createMarket.imBps"),
-    mmBps: toNumber(raw[2], "createMarket.mmBps"),
-    takerFeeBps: toNumber(raw[3], "createMarket.takerFeeBps"),
-    makerFeeBps: toNumber(raw[4], "createMarket.makerFeeBps"),
+    market: toU32(raw[0], "createMarket.market"),
+    imBps: toU32(raw[1], "createMarket.imBps"),
+    mmBps: toU32(raw[2], "createMarket.mmBps"),
+    takerFeeBps: toU32(raw[3], "createMarket.takerFeeBps"),
+    makerFeeBps: toU32(raw[4], "createMarket.makerFeeBps"),
     signer: toBytes(raw[5], "createMarket.signer", ADDRESS_LEN),
-    fundingIntervalMs: toBigInt(raw[6], "createMarket.fundingIntervalMs"),
-    maxFundingRateBps: toNumber(raw[7], "createMarket.maxFundingRateBps"),
-    poolId: toNumber(raw[8], "createMarket.poolId"),
-    szDecimals: toNumber(raw[9], "createMarket.szDecimals"),
-    ticker: String(raw[10] ?? ""),
-    maxOpenInterest: toBigInt(raw[11], "createMarket.maxOpenInterest"),
+    fundingIntervalMs: toU64(raw[6], "createMarket.fundingIntervalMs"),
+    maxFundingRateBps: toU32(raw[7], "createMarket.maxFundingRateBps"),
+    poolId: toU8(raw[8], "createMarket.poolId"),
+    szDecimals: toU8(raw[9], "createMarket.szDecimals"),
+    ticker: toString(raw[10], "createMarket.ticker"),
+    maxOpenInterest: toU64(raw[11], "createMarket.maxOpenInterest"),
   };
 }
 
-function decodeUpdateRegistry(raw: unknown[]): UpdateAdminSignerRegistry {
+function decodeUpdateRegistry(value: unknown): UpdateAdminSignerRegistry {
+  const raw = toTuple(value, "updateRegistry", 2);
   return {
-    newThreshold: toNumber(raw[0], "updateRegistry.newThreshold"),
+    newThreshold: toU32(raw[0], "updateRegistry.newThreshold"),
     newMembers: toArray(raw[1], "updateRegistry.newMembers").map((m, i) =>
       toBytes(m, `updateRegistry.newMembers[${i}]`, ADDRESS_LEN),
     ),
@@ -168,14 +215,12 @@ export function decodeAdminAction(
     case "CreateMarket":
       return {
         kind: "CreateMarket",
-        value: decodeCreateMarket(toArray(payload, `${field}.CreateMarket`)),
+        value: decodeCreateMarket(payload),
       };
     case "UpdateAdminSignerRegistry":
       return {
         kind: "UpdateAdminSignerRegistry",
-        value: decodeUpdateRegistry(
-          toArray(payload, `${field}.UpdateAdminSignerRegistry`),
-        ),
+        value: decodeUpdateRegistry(payload),
       };
     default:
       throw new Error(
@@ -198,19 +243,23 @@ export function decodeProposalStatus(
     );
   }
   const { name, payload } = variantOf(value, field);
-  const fields = toArray(payload, `${field}.${name}`);
   switch (name) {
-    case "Failed":
+    case "Failed": {
+      const fields = toTuple(payload, `${field}.${name}`, 1);
       return {
         kind: "Failed",
-        code: toNumber(fields[0], `${field}.Failed.code`),
+        code: toU32(fields[0], `${field}.Failed.code`),
       };
-    case "Rejected":
+    }
+    case "Rejected": {
+      const fields = toTuple(payload, `${field}.${name}`, 1);
       return {
         kind: "Rejected",
         by: toBytes(fields[0], `${field}.Rejected.by`, ADDRESS_LEN),
       };
+    }
     case "Expired": {
+      const fields = toTuple(payload, `${field}.${name}`, 1);
       const reason = fields[0];
       if (reason !== "Ttl" && reason !== "RegistryChanged") {
         throw new Error(
@@ -243,28 +292,37 @@ export function decodeProposalDisplayInfo(
   if (!Array.isArray(raw)) {
     throw new Error(`governance decode: ${at} is not an array`);
   }
+  const fields = toTuple(raw, at, 15);
+  const actionTag = toU8(fields[11], `${at}.actionTag`);
+  const action = decodeAdminAction(fields[12], `${at}.action`);
+  const expectedActionTag = action.kind === "CreateMarket" ? 1 : 2;
+  if (actionTag !== expectedActionTag) {
+    throw new Error(
+      `governance decode: ${at}.actionTag ${actionTag} does not match ${action.kind} tag ${expectedActionTag}`,
+    );
+  }
   return {
-    proposalId: toBigInt(raw[0], `${at}.proposalId`),
-    statusStored: decodeProposalStatus(raw[1], `${at}.statusStored`),
-    statusEffective: decodeProposalStatus(raw[2], `${at}.statusEffective`),
-    registryVersion: toBigInt(raw[3], `${at}.registryVersion`),
-    threshold: toNumber(raw[4], `${at}.threshold`),
-    proposer: toBytes(raw[5], `${at}.proposer`, ADDRESS_LEN),
-    approvals: toArray(raw[6], `${at}.approvals`).map((a, i) =>
+    proposalId: toU64(fields[0], `${at}.proposalId`),
+    statusStored: decodeProposalStatus(fields[1], `${at}.statusStored`),
+    statusEffective: decodeProposalStatus(fields[2], `${at}.statusEffective`),
+    registryVersion: toU64(fields[3], `${at}.registryVersion`),
+    threshold: toU32(fields[4], `${at}.threshold`),
+    proposer: toBytes(fields[5], `${at}.proposer`, ADDRESS_LEN),
+    approvals: toArray(fields[6], `${at}.approvals`).map((a, i) =>
       toBytes(a, `${at}.approvals[${i}]`, ADDRESS_LEN),
     ),
-    rejections: toArray(raw[7], `${at}.rejections`).map((r, i) =>
+    rejections: toArray(fields[7], `${at}.rejections`).map((r, i) =>
       toBytes(r, `${at}.rejections[${i}]`, ADDRESS_LEN),
     ),
-    createdHeight: toBigInt(raw[8], `${at}.createdHeight`),
-    createdMs: toBigInt(raw[9], `${at}.createdMs`),
-    expiryMs: toBigInt(raw[10], `${at}.expiryMs`),
-    actionTag: toNumber(raw[11], `${at}.actionTag`),
-    action: decodeAdminAction(raw[12], `${at}.action`),
+    createdHeight: toU64(fields[8], `${at}.createdHeight`),
+    createdMs: toU64(fields[9], `${at}.createdMs`),
+    expiryMs: toU64(fields[10], `${at}.expiryMs`),
+    actionTag,
+    action,
     // Variable length by nature — it is the stored action payload, whose
     // size depends on the operation. Still element-validated.
-    actionCanonicalBytes: toBytes(raw[13], `${at}.actionCanonicalBytes`),
-    contentHash: toBytes(raw[14], `${at}.contentHash`, HASH_LEN),
+    actionCanonicalBytes: toBytes(fields[13], `${at}.actionCanonicalBytes`),
+    contentHash: toBytes(fields[14], `${at}.contentHash`, HASH_LEN),
   };
 }
 
@@ -279,12 +337,37 @@ export function decodeAdminSignerRegistry(
   raw: unknown,
 ): AdminSignerRegistry | null {
   if (raw == null) return null;
-  const fields = toArray(raw, "registry");
+  const fields = toTuple(raw, "registry", 3);
   return {
-    version: toBigInt(fields[0], "registry.version"),
-    threshold: toNumber(fields[1], "registry.threshold"),
+    version: toU64(fields[0], "registry.version"),
+    threshold: toU32(fields[1], "registry.threshold"),
     members: toArray(fields[2], "registry.members").map((m, i) =>
       toBytes(m, `registry.members[${i}]`, ADDRESS_LEN),
     ),
+  };
+}
+
+/** Decode the engine's one-field `AdminSignerRegistryInfo` envelope. */
+export function decodeAdminSignerRegistryInfo(
+  raw: unknown,
+): AdminSignerRegistry | null {
+  const fields = toTuple(raw, "registryInfo", 1);
+  return decodeAdminSignerRegistry(fields[0]);
+}
+
+/** Decode and validate the engine's two-field proposal-page envelope. */
+export function decodeProposalPage(raw: unknown): ProposalPage {
+  const fields = toTuple(raw, "proposalPage", 2);
+  const proposals = toArray(fields[0], "proposalPage.items").map(
+    (proposal, i) =>
+      decodeProposalDisplayInfo(
+        toArray(proposal, `proposalPage.items[${i}]`),
+        i,
+      ),
+  );
+  return {
+    proposals,
+    nextCursor:
+      fields[1] == null ? null : toU64(fields[1], "proposalPage.nextCursor"),
   };
 }
