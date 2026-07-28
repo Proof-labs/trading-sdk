@@ -871,6 +871,91 @@ export type GovernanceAction =
 export type Action = TraderAction | OperatorAction | GovernanceAction;
 
 // ---------------------------------------------------------------------------
+// Governance read model (GET /v1/admin/signer-registry, GET /v1/proposals)
+//
+// Mirrors of the engine's read-model structs, not of its wire actions above.
+// Decoded by governance-query.ts, which is pinned to golden bytes from the
+// engine's own serializer — see that module for the encoding facts these
+// shapes depend on.
+// ---------------------------------------------------------------------------
+
+/** The installed admin signer roster. Absent (a `null` read) means multisig
+ *  administration is INACTIVE — never an empty roster. */
+export interface AdminSignerRegistry {
+  /** Monotone, starts at 1, never reused; a rotation assigns +1. */
+  version: bigint;
+  /** Approvals required to execute a proposal (`2 <= threshold <= members`). */
+  threshold: number;
+  /** Canonically sorted, duplicate-free roster (each a 20-byte address). */
+  members: Address[];
+}
+
+/** Why a pending proposal expired. */
+export type ExpiryReason = "Ttl" | "RegistryChanged";
+
+/**
+ * Status of an admin proposal. Terminal states carry the payload the engine
+ * committed with them, so a caller never has to re-derive WHY a proposal
+ * ended: `Failed` carries the unnarrowed `ExecError` code, `Rejected` the
+ * member whose rejection was decisive, `Expired` the reason.
+ */
+export type ProposalStatus =
+  | { kind: "Pending" }
+  | { kind: "Executed" }
+  | { kind: "Failed"; code: number }
+  | { kind: "Rejected"; by: Address }
+  | { kind: "Expired"; reason: ExpiryReason };
+
+/**
+ * One proposal, shaped by the engine for display AND offline verification.
+ *
+ * The context fields plus `actionCanonicalBytes` are exactly what an
+ * approving signer needs to rebuild an `ApproveAdminAction` locally, without
+ * trusting anything a user interface rendered — which is the point: an
+ * approval is a commitment to specific bytes, so the bytes must be
+ * reconstructible from chain state alone.
+ */
+export interface ProposalDisplayInfo {
+  proposalId: bigint;
+  /** Status as written by the handlers. */
+  statusStored: ProposalStatus;
+  /**
+   * Status with the engine's own lazy-expiry rule already applied: a stored
+   * `Pending` past its `expiryMs` reads as `Expired { Ttl }`. The `status`
+   * query filter matches THIS field, so no two readers can disagree by
+   * applying different client-side staleness rules — prefer it for display.
+   */
+  statusEffective: ProposalStatus;
+  /** Registry version the proposal was created under. */
+  registryVersion: bigint;
+  /** Approvals required, captured at creation. */
+  threshold: number;
+  proposer: Address;
+  /** Distinct approving members. The proposer counts as approval #1. */
+  approvals: Address[];
+  rejections: Address[];
+  createdHeight: bigint;
+  createdMs: bigint;
+  /** Block time after which the proposal expires. */
+  expiryMs: bigint;
+  /** Engine-owned discriminant of `action`, committed by the content hash. */
+  actionTag: number;
+  /** Typed decode of the proposed operation. */
+  action: AdminAction;
+  /** The EXACT stored engine-canonical bytes the content hash covers. */
+  actionCanonicalBytes: Uint8Array;
+  /** Domain-separated commitment to the immutable proposal context. */
+  contentHash: Uint8Array;
+}
+
+/** A page of proposals, ascending by id. */
+export interface ProposalPage {
+  proposals: ProposalDisplayInfo[];
+  /** Last-seen id; pass as `cursor` for the next page. `null` = last page. */
+  nextCursor: bigint | null;
+}
+
+// ---------------------------------------------------------------------------
 // Event types (emitted by engine, delivered via ABCI/WebSocket)
 // ---------------------------------------------------------------------------
 

@@ -145,7 +145,10 @@ at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
   `ExchangeClient.queryAdminSignerRegistry()` — governance reads via the
   gateway proxies (`/v1/proposals`, `/v1/admin/signer-registry`). An absent
   registry decodes as `null`, meaning admin multisig is **inactive**
-  (fail-closed) — deliberately distinct from an empty roster.
+  (fail-closed) — deliberately distinct from an empty roster. Their typed
+  decoders reject missing envelopes, trailing tuple fields, out-of-range
+  integers, and action-tag mismatches instead of partially rendering
+  malformed or newer governance state.
 - **Governance error codes 52 (`AdminGovernanceInactive`) and 53
   (`NotAdminSigner`)** are mirrored from the consensus contract (exchange #282
   / `ddad45b`) into all three error tables (Rust, TypeScript, Python) and

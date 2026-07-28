@@ -39,7 +39,13 @@ import type {
   PositionInfo,
   WithdrawalRecord,
   WithdrawalStatus,
+  AdminSignerRegistry,
+  ProposalPage,
 } from "./types.js";
+import {
+  decodeAdminSignerRegistryInfo,
+  decodeProposalPage,
+} from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
 import { sha256 } from "@noble/hashes/sha2.js";
 
@@ -1051,19 +1057,16 @@ export class ExchangeClient {
    *
    * Returns `null` when no registry is seeded — which means admin multisig is
    * **inactive** (fail-closed), NOT an empty roster; callers must treat the two
-   * differently. When present, the decoded value is the engine's MessagePack
-   * registry record (version, threshold, members) as returned by the node; a
-   * typed decoder lands with the release-B seed, when a populated registry
-   * first exists to pin it against.
+   * differently.
    */
-  async queryAdminSignerRegistry(): Promise<unknown | null> {
+  async queryAdminSignerRegistry(): Promise<AdminSignerRegistry | null> {
     const json = await fetchApiJson(
       `${this.readBaseUrl}/v1/admin/signer-registry`,
     );
-    if (!json.data) return null;
-    const bytes = fromBase64(json.data as string);
-    const decoded = msgpackDecoder.decode(bytes) as unknown[];
-    return decoded[0] ?? null;
+    const bytes = fromBase64(
+      requireEncodedData(json, "/v1/admin/signer-registry"),
+    );
+    return decodeAdminSignerRegistryInfo(msgpackDecoder.decode(bytes));
   }
 
   /**
@@ -1072,15 +1075,17 @@ export class ExchangeClient {
    * `limit` are forwarded as query params (the node clamps oversized limits).
    * The proxy returns MessagePack `[proposals, nextCursor|nil]`.
    *
-   * `proposals` is the engine's MessagePack proposal list as returned by the
-   * node; a typed per-proposal decoder lands alongside the propose/approve UI,
-   * when a live proposal first exists to pin it against.
+   * Each proposal is decoded into a `ProposalDisplayInfo` — including the
+   * canonical action bytes and content hash an approving signer needs to
+   * rebuild their approval locally. Decoding fails closed: a proposal
+   * carrying an operation or status this SDK build does not know throws
+   * rather than being returned partially rendered.
    */
   async queryProposals(opts?: {
     status?: string;
     cursor?: bigint;
     limit?: number;
-  }): Promise<{ proposals: unknown[]; nextCursor: bigint | null }> {
+  }): Promise<ProposalPage> {
     const params = new URLSearchParams();
     if (opts?.status) params.set("status", opts.status);
     if (opts?.cursor != null) params.set("cursor", String(opts.cursor));
@@ -1089,19 +1094,8 @@ export class ExchangeClient {
     const json = await fetchApiJson(
       `${this.readBaseUrl}/v1/proposals${qs ? `?${qs}` : ""}`,
     );
-    if (!json.data) return { proposals: [], nextCursor: null };
-    const bytes = fromBase64(json.data as string);
-    const decoded = msgpackDecoder.decode(bytes) as [unknown[], unknown];
-    // `useBigInt64` only yields bigint for 64-bit msgpack ints — a small
-    // cursor arrives as `number`, so normalize to honor the declared type.
-    const rawCursor = decoded[1];
-    return {
-      proposals: (decoded[0] ?? []) as unknown[],
-      nextCursor:
-        typeof rawCursor === "number"
-          ? BigInt(rawCursor)
-          : ((rawCursor ?? null) as bigint | null),
-    };
+    const bytes = fromBase64(requireEncodedData(json, "/v1/proposals"));
+    return decodeProposalPage(msgpackDecoder.decode(bytes));
   }
 
   /** Fetch open orders for an address. Returns an empty array if the
@@ -1703,6 +1697,21 @@ async function fetchApiJson(url: string): Promise<Record<string, unknown>> {
     throw new Error(`API error: ${msg}`);
   }
   return json;
+}
+
+/**
+ * Governance reads carry a MessagePack envelope in `data`. A successful HTTP
+ * response without that envelope is malformed, not an inactive registry or
+ * an empty proposal page.
+ */
+function requireEncodedData(
+  json: Record<string, unknown>,
+  endpoint: string,
+): string {
+  if (typeof json.data !== "string" || json.data.length === 0) {
+    throw new Error(`API error: ${endpoint} response is missing encoded data`);
+  }
+  return json.data;
 }
 
 /**
