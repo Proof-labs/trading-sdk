@@ -30,7 +30,32 @@ accept the new bytes. Frozen v1 `rmp-serde` decoders also reject populated
 12-field `CreateMarket` and 21-field `UpdateMarketFees` payloads, and the Rust
 wire structs gain source-incompatible fields. The unchanged derive crate stays
 at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
-**2.0.0**. Compatible engine: `exchange-core >= 2.0.0, < 3.0.0`.
+**2.0.0**. Compatible engine: `exchange-core >= 2.0.0, < 3.0.0` for the wire as
+a whole; the receipt-carrying terminal actions added below (`0x22` / `0x23`)
+require `exchange-core >= 2.2.0` (the engine version that declared them, PR
+#316) — an earlier engine rejects those two action types.
+
+### Added
+
+- **Receipt-carrying terminal withdrawal actions `ConfirmWithdrawalReceipt`
+  (`0x22`) and `FailWithdrawalReceipt` (`0x23`)** — the operator-multisig
+  withdrawal-settlement phase (W28-20). Each carries a
+  `BridgeWithdrawalReceipt` (wire mirror of the frozen 327-byte
+  `bridge_core::BridgeReceiptV1`, a fixed 16-field record) plus an
+  `OperatorReceiptProof` (a signer bitmap and one 64-byte ed25519 signature per
+  set bit — `bridge_core::ReceiptProofV1::OperatorEd25519`). The engine verifies
+  the operator quorum signed exactly the receipt bytes in consensus, replacing
+  the trusted-relayer assertion of the legacy `ConfirmWithdrawal` (`0x0a`) /
+  `FailWithdrawal` (`0x0b`). This is **additive and MINOR in nature** — the two
+  legacy actions keep their discriminants and still decode byte-for-byte, and
+  transactions produced before this change are unaffected. The encoded payloads
+  are **byte-identical to the engine's committed golden vectors**
+  (`docs/spec/golden-vectors/{confirm,fail}_withdrawal_receipt.hex` on the
+  engine branch), proven by the Rust core test
+  `codec::tests::w28_20_receipt_action_golden_vectors`, the conformance vectors
+  `confirm_withdrawal_receipt/paid` and `fail_withdrawal_receipt/cancelled`, and
+  the TypeScript codec round-trip. Mirrors engine PR #316 (+ gateway #100). The
+  change folds into this uncut `3.0.0` release; no separate version bump.
 
 ### Changed
 

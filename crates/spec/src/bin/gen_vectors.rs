@@ -58,6 +58,45 @@ fn codec_case(case: &str, action_type: u8, input: serde_json::Value) -> cv::Code
     }
 }
 
+/// The engine golden `BridgeWithdrawalReceipt` fixture (mirrors exchange-core
+/// `codec::tests::golden_receipt`). `terminal_state` is `1 = Paid` for a
+/// confirm, `2 = Cancelled` for a fail; every other field is fixed.
+fn receipt_json(terminal_state: u8) -> serde_json::Value {
+    json!({
+        "deployment_id": vec![0x11u8; 32],
+        "authorization_digest": vec![0x22u8; 32],
+        "withdrawal_id": 777u64,
+        "terminal_state": terminal_state,
+        "vault_tier": 1,
+        "proof_owner": vec![0x05u8; 20],
+        "destination_owner": vec![0x06u8; 32],
+        "destination_token_acct": vec![0x07u8; 32],
+        "amount_micro_usdc": 1_000_000u64,
+        "fee_micro_usdc": 1_000_000u64,
+        "authorization_signer_epoch": 3u64,
+        "solana_tx_signature": vec![0x10u8; 64],
+        "finalized_slot": 900u64,
+        "finalized_blockhash": vec![0x33u8; 32],
+        "receipt_quorum_kind": 1,
+        "receipt_authority_epoch": 3u64,
+    })
+}
+
+/// The engine golden `OperatorReceiptProof` fixture (mirrors exchange-core
+/// `codec::tests::golden_proof`): a 4-of-n bitmap and four 64-byte ed25519
+/// signatures.
+fn operator_proof_json() -> serde_json::Value {
+    json!({
+        "signer_bitmap": vec![0x0Fu8],
+        "signatures": vec![
+            vec![0xABu8; 64],
+            vec![0xCDu8; 64],
+            vec![0xEFu8; 64],
+            vec![0x12u8; 64],
+        ],
+    })
+}
+
 fn error_case(case: &str, code: u32, log: Option<&str>) -> cv::ErrorCase {
     let name = cv::error_reference_name(code, log)
         .unwrap_or_else(|| panic!("no error name for {case} (code {code})"));
@@ -90,6 +129,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     const APPROVE_ADMIN_ACTION: u8 = 0x1F;
     const REJECT_ADMIN_ACTION: u8 = 0x20;
     const EMERGENCY_ADMIN_ACTION: u8 = 0x21;
+    const CONFIRM_WITHDRAWAL_RECEIPT: u8 = 0x22;
+    const FAIL_WITHDRAWAL_RECEIPT: u8 = 0x23;
 
     let owner = vec![0x01u8; 20];
     let signer = vec![0x03u8; 20];
@@ -315,6 +356,27 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({
                 "signer": vec![0x44u8; 20],
                 "action": { "SetReduceOnly": { "market_id": 7 } }
+            }),
+        ),
+        // W28-20 receipt-gated terminal withdrawals (0x22 / 0x23). The receipt
+        // + operator-ed25519 proof fixtures mirror the engine golden vectors
+        // (exchange-core `codec::tests::golden_receipt` / `golden_proof`); the
+        // generated payload_hex must equal the engine's committed
+        // docs/spec/golden-vectors/{confirm,fail}_withdrawal_receipt.hex.
+        codec_case(
+            "confirm_withdrawal_receipt/paid",
+            CONFIRM_WITHDRAWAL_RECEIPT,
+            json!({
+                "receipt": receipt_json(1),
+                "proof": operator_proof_json(),
+            }),
+        ),
+        codec_case(
+            "fail_withdrawal_receipt/cancelled",
+            FAIL_WITHDRAWAL_RECEIPT,
+            json!({
+                "receipt": receipt_json(2),
+                "proof": operator_proof_json(),
             }),
         ),
     ];
