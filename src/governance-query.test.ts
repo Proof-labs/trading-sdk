@@ -249,6 +249,14 @@ describe("decodeProposalStatus — every variant shape", () => {
   });
 });
 
+// Engine-frozen admin-actions-v2 wire bytes (exchange-core codec.rs,
+// `admin_action_v2_wire_vectors_frozen`) — the exact canonical bytes the
+// engine serializes for the two new arms, byte for byte.
+const ACTION_IMPACT =
+  "81b2437265617465496d706163744d61726b6574dc00105b0fcd238cad646f6573206974206c616e643fce000f4240cd03e8cd0d06cd0683050200cd0bb8dc00140000000000000000000000000000000000000000c0a0a0";
+const ACTION_BATCH =
+  "81a542617463689281ac4372656174654d61726b65749c0fcd0d06cd06830502dc00140000000000000000000000000000000000000000cdea60cd0bb80000a00081b2437265617465496d706163744d61726b6574dc00105b0fcd238cad646f6573206974206c616e643fce000f4240cd03e8cd0d06cd0683050200cd0bb8dc00140000000000000000000000000000000000000000c0a0a0";
+
 describe("decodeAdminAction", () => {
   it("fails closed on an operation this build does not know", () => {
     // The closed inner allowlist depends on this: an unknown operation must
@@ -259,6 +267,90 @@ describe("decodeAdminAction", () => {
   it("rejects a non-enum value", () => {
     expect(() => decodeAdminAction("CreateMarket")).toThrow(
       /not an enum variant/,
+    );
+  });
+
+  it("decodes the engine's frozen v2 impact bytes", () => {
+    expect(decodeAdminAction(decodeVector(ACTION_IMPACT))).toEqual({
+      kind: "CreateImpactMarket",
+      value: {
+        impactMarketId: 91,
+        underlyingMarket: 15,
+        childMarketBase: 9_100,
+        question: "does it land?",
+        deadlineMs: 1_000_000n,
+        resolutionWindowMs: 1_000n,
+        imBps: 3334,
+        mmBps: 1667,
+        takerFeeBps: 5,
+        makerFeeBps: 2,
+        fundingIntervalMs: 0n,
+        maxFundingRateBps: 3000,
+        signer: new Uint8Array(20),
+        // The nil oracle source stays ABSENT (not `undefined`-assigned);
+        // the empty text trailers decode as "".
+        description: "",
+        rules: "",
+      },
+    });
+  });
+
+  it("decodes the engine's frozen v2 batch bytes — both item variants", () => {
+    const action = decodeAdminAction(decodeVector(ACTION_BATCH));
+    if (action.kind !== "Batch") throw new Error("expected Batch");
+    expect(action.value).toHaveLength(2);
+    const [perp, impact] = action.value;
+    if (perp!.kind !== "CreateMarket") throw new Error("expected CreateMarket");
+    expect(perp!.value.market).toBe(15);
+    expect(perp!.value.imBps).toBe(3334);
+    expect(perp!.value.fundingIntervalMs).toBe(60_000n);
+    if (impact!.kind !== "CreateImpactMarket") {
+      throw new Error("expected CreateImpactMarket");
+    }
+    expect(impact!.value.impactMarketId).toBe(91);
+    expect(impact!.value.underlyingMarket).toBe(15);
+    expect(impact!.value.childMarketBase).toBe(9_100);
+  });
+
+  it("tolerates the serde(default) trailers' absence, like the engine", () => {
+    // 13 slots — a payload written before the oracle-source/description/
+    // rules trailers existed. The engine's decoder defaults them; the
+    // mirror must too, not refuse the whole proposal list.
+    const bare = {
+      CreateImpactMarket: [
+        91,
+        15,
+        9_100,
+        "does it land?",
+        1_000_000,
+        1_000,
+        3334,
+        1667,
+        5,
+        2,
+        0,
+        3000,
+        new Array(20).fill(0),
+      ],
+    };
+    const action = decodeAdminAction(bare);
+    if (action.kind !== "CreateImpactMarket") {
+      throw new Error("expected CreateImpactMarket");
+    }
+    expect(action.value.oracleSource).toBeUndefined();
+    expect(action.value.description).toBe("");
+    expect(action.value.rules).toBe("");
+  });
+
+  it("fails closed on a batch item outside the closed market-creation set", () => {
+    // The engine's `AdminBatchItem` cannot carry a registry change or a
+    // nested batch; a decoder that silently accepted one would render a
+    // proposal the chain would never execute.
+    expect(() =>
+      decodeAdminAction({ Batch: [{ UpdateAdminSignerRegistry: [2, []] }] }),
+    ).toThrow(/AdminBatchItem/);
+    expect(() => decodeAdminAction({ Batch: [{ Batch: [] }] })).toThrow(
+      /AdminBatchItem/,
     );
   });
 });

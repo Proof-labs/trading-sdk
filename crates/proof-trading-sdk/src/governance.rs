@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::types::{CreateMarket, ExecError, MarketId};
+use crate::types::{CreateImpactMarket, CreateMarket, ExecError, MarketId};
 
 /// Domain separator folded into every admin-proposal content hash.
 /// Byte-identical to `exchange-core`'s `ADMIN_PROPOSAL_HASH_DOMAIN`.
@@ -58,6 +58,30 @@ pub enum AdminAction {
     CreateMarket(CreateMarket),
     /// Replace the admin signer roster and threshold.
     UpdateAdminSignerRegistry(UpdateAdminSignerRegistry),
+    /// Create an impact-market family (4 child books) under multisig
+    /// authorization. Same rule as `CreateMarket`: the embedded signer must
+    /// be all-zero. Admitted by the engine from its admin-actions-v2
+    /// activation height.
+    CreateImpactMarket(CreateImpactMarket),
+    /// 2–4 market-creation actions executed sequentially in one child
+    /// overlay: the whole batch lands atomically and a later item may
+    /// reference state an earlier item created (canonically: a family whose
+    /// underlying perp is born in the same proposal). The item type is
+    /// deliberately closed and non-recursive — a nested batch or a registry
+    /// change inside a batch is undecodable, mirroring the engine.
+    Batch(Vec<AdminBatchItem>),
+}
+
+/// The closed set of actions a `Batch` may carry: market creations only.
+/// Mirrors the engine's `AdminBatchItem` byte for byte (externally tagged
+/// variant names identical to the corresponding `AdminAction` arms, so
+/// valid batch wire bytes are the same under either shape).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum AdminBatchItem {
+    /// Same rules as the singleton arm: all-zero inner signer.
+    CreateMarket(CreateMarket),
+    /// Same rules as the singleton arm: all-zero inner signer.
+    CreateImpactMarket(CreateImpactMarket),
 }
 
 /// Stable discriminant for [`AdminAction`], committed by the content hash.
@@ -67,6 +91,8 @@ pub enum AdminAction {
 pub enum AdminActionType {
     CreateMarket = 1,
     UpdateAdminSignerRegistry = 2,
+    CreateImpactMarket = 3,
+    Batch = 4,
 }
 
 impl AdminAction {
@@ -75,6 +101,8 @@ impl AdminAction {
         match self {
             AdminAction::CreateMarket(_) => AdminActionType::CreateMarket,
             AdminAction::UpdateAdminSignerRegistry(_) => AdminActionType::UpdateAdminSignerRegistry,
+            AdminAction::CreateImpactMarket(_) => AdminActionType::CreateImpactMarket,
+            AdminAction::Batch(_) => AdminActionType::Batch,
         }
     }
 
@@ -294,6 +322,85 @@ mod tests {
             "5fe2dd718a4aea63492a5ab95eee27588cc861c504643bf68ce3fdd2c45dab99"
         );
         assert_ne!(h1, h2);
+    }
+
+    /// The v2 impact fixture from `exchange-core`'s
+    /// `admin_action_v2_wire_vectors_frozen` / `…_v2_golden_vectors` — same
+    /// instance, field for field, or the pins below cannot match.
+    fn engine_v2_impact() -> CreateImpactMarket {
+        CreateImpactMarket {
+            impact_market_id: 91,
+            underlying_market: 15,
+            child_market_base: 9_100,
+            question: "does it land?".into(),
+            deadline_ms: 1_000_000,
+            resolution_window_ms: 1_000,
+            im_bps: 3334,
+            mm_bps: 1667,
+            taker_fee_bps: 5,
+            maker_fee_bps: 2,
+            funding_interval_ms: 0,
+            max_funding_rate_bps: 3000,
+            signer: crate::wire::Address([0u8; 20]),
+            oracle_source: None,
+            description: String::new(),
+            rules: String::new(),
+        }
+    }
+
+    fn engine_v2_batch() -> AdminAction {
+        AdminAction::Batch(vec![
+            AdminBatchItem::CreateMarket(CreateMarket {
+                market: 15,
+                ..engine_default_create_market()
+            }),
+            AdminBatchItem::CreateImpactMarket(engine_v2_impact()),
+        ])
+    }
+
+    /// Byte-for-byte pins against the engine's admin-actions-v2 vectors:
+    /// the canonical wire bytes AND the content hashes for the two new
+    /// arms (tags 3 and 4), same proposal context as the vectors above.
+    #[test]
+    fn v2_arms_match_engine_golden_vectors() {
+        let impact = AdminAction::CreateImpactMarket(engine_v2_impact());
+        assert_eq!(impact.action_tag(), 3);
+        assert_eq!(
+            hex_string(&canonical_admin_action_bytes(&impact).unwrap()),
+            "81b2437265617465496d706163744d61726b6574dc00105b0fcd238cad646f6573206974206c616e643fce000f4240cd03e8cd0d06cd0683050200cd0bb8dc00140000000000000000000000000000000000000000c0a0a0"
+        );
+
+        let batch = engine_v2_batch();
+        assert_eq!(batch.action_tag(), 4);
+        assert_eq!(
+            hex_string(&canonical_admin_action_bytes(&batch).unwrap()),
+            "81a542617463689281ac4372656174654d61726b65749c0fcd0d06cd06830502dc00140000000000000000000000000000000000000000cdea60cd0bb80000a00081b2437265617465496d706163744d61726b6574dc00105b0fcd238cad646f6573206974206c616e643fce000f4240cd03e8cd0d06cd0683050200cd0bb8dc00140000000000000000000000000000000000000000c0a0a0"
+        );
+
+        for (action, expected) in [
+            (
+                &impact,
+                "d57a7faa3a17aac647a0256c38f125f6bd0913d70013e185aeb322efaab9629e",
+            ),
+            (
+                &batch,
+                "f9a9b17a53b52ad72c1703b583a0ed4ac70295244cbf31f74518d5177dd86e36",
+            ),
+        ] {
+            let h = admin_proposal_content_hash(
+                &[0x11; 32],
+                ProposalId(42),
+                RegistryVersion(3),
+                SignatureThreshold(2),
+                &SignerAddress([0x22; 20]),
+                7,
+                1_000,
+                259_201_000,
+                action,
+            )
+            .unwrap();
+            assert_eq!(hex_string(&h), expected);
+        }
     }
 
     /// Every governance action round-trips through the same wire codec the
