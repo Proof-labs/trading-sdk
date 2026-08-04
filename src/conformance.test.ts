@@ -463,6 +463,14 @@ function toAction(
           proof: toOperatorProof(input.proof as Record<string, unknown>),
         },
       };
+    case ActionType.AuthorizeWithdrawal:
+      return {
+        type: "AuthorizeWithdrawal",
+        data: {
+          authorization: bytes(input.authorization),
+          proof: toOperatorProof(input.proof as Record<string, unknown>),
+        },
+      };
     default:
       throw new Error(
         `toAction: action_type 0x${actionType.toString(16)} not wired ` +

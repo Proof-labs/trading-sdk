@@ -65,6 +65,9 @@ export const ActionType = {
    *  ed25519 quorum proof. Replaces the free-text `FailWithdrawal` (0x0b, still
    *  accepted); refunds only against a positive on-chain cancellation. W28-20. */
   FailWithdrawalReceipt: 0x23,
+  /** Records the operator-quorum-signed `WithdrawalAuthorizationV1` a terminal
+   *  receipt (0x22/0x23) must settle against. Permissionless to submit. W28-20. */
+  AuthorizeWithdrawal: 0x24,
   /** Approve a delegate agent wallet to trade on the owner's behalf. */
   ApproveAgent: 0x0c,
   /** Revoke a previously approved agent wallet. */
@@ -502,6 +505,21 @@ export interface FailWithdrawalReceipt {
 }
 
 /**
+ * Records the operator-quorum-signed `WithdrawalAuthorizationV1` for a pending
+ * withdrawal (action `0x24`), binding its digest to the record so a terminal
+ * receipt (`0x22`/`0x23`) can only settle an authorization the quorum actually
+ * issued. Permissionless to submit — the operator quorum in `proof` is the
+ * authority, not the envelope signer.
+ */
+export interface AuthorizeWithdrawal {
+  /** The canonical `WithdrawalAuthorizationV1` bytes the quorum signed
+   *  (`bridge_core::WithdrawalAuthorizationV1::encode`, fixed 221 bytes). */
+  authorization: Uint8Array;
+  /** Operator ed25519 quorum proof over the authorization bytes. */
+  proof: OperatorReceiptProof;
+}
+
+/**
  * Approve a delegate keypair ("agent wallet") to trade on the owner's behalf.
  * The agent can place/cancel orders but CANNOT withdraw or move funds.
  */
@@ -852,6 +870,7 @@ export type OperatorAction =
   | { type: "FailWithdrawal"; data: FailWithdrawal }
   | { type: "ConfirmWithdrawalReceipt"; data: ConfirmWithdrawalReceipt }
   | { type: "FailWithdrawalReceipt"; data: FailWithdrawalReceipt }
+  | { type: "AuthorizeWithdrawal"; data: AuthorizeWithdrawal }
   | { type: "CreateImpactMarket"; data: CreateImpactMarket }
   | { type: "ResolveEvent"; data: ResolveEvent }
   | { type: "UpdateMarketFees"; data: UpdateMarketFees };

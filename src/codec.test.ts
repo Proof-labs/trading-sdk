@@ -456,6 +456,13 @@ describe("codec v1 all action types", () => {
         proof: OPERATOR_PROOF(),
       },
     },
+    {
+      type: "AuthorizeWithdrawal",
+      data: {
+        authorization: new Uint8Array(221).fill(0x44),
+        proof: OPERATOR_PROOF(),
+      },
+    },
   ];
 
   for (const action of allActions) {
@@ -484,6 +491,20 @@ describe("codec v1 all action types", () => {
       expect(decoded).toEqual(action);
     },
   );
+
+  it("round-trips AuthorizeWithdrawal authorization bytes + operator proof", () => {
+    const action: Action = {
+      type: "AuthorizeWithdrawal",
+      data: {
+        authorization: new Uint8Array(221).fill(0x44),
+        proof: OPERATOR_PROOF(),
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 8n));
+    // The 221-byte authorization (a bare Vec<u8> on the wire) and the proof
+    // must survive encode→decode structurally identical.
+    expect(decoded).toEqual(action);
+  });
 
   it("rejects a receipt whose fixed-width deploymentId is not 32 bytes", () => {
     const action: Action = {

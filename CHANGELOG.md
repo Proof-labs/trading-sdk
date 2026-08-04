@@ -31,9 +31,10 @@ accept the new bytes. Frozen v1 `rmp-serde` decoders also reject populated
 wire structs gain source-incompatible fields. The unchanged derive crate stays
 at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
 **2.0.0**. Compatible engine: `exchange-core >= 2.0.0, < 3.0.0` for the wire as
-a whole; the receipt-carrying terminal actions added below (`0x22` / `0x23`)
-require `exchange-core >= 2.2.0` (the engine version that declared them, PR
-#316) — an earlier engine rejects those two action types.
+a whole; the bridge-custody actions added below (`0x22` / `0x23` / `0x24`)
+require `exchange-core >= 2.3.0` (the engine version that declares them, PR
+#316 — `2.2.0` was tagged before this wire surface existed) — an earlier
+engine rejects those action types.
 
 ### Added
 
@@ -56,6 +57,14 @@ require `exchange-core >= 2.2.0` (the engine version that declared them, PR
   `confirm_withdrawal_receipt/paid` and `fail_withdrawal_receipt/cancelled`, and
   the TypeScript codec round-trip. Mirrors engine PR #316 (+ gateway #100). The
   change folds into this uncut `3.0.0` release; no separate version bump.
+- **`AuthorizeWithdrawal` (`0x24`)** — the authorization leg the terminal
+  receipts settle against: the operator-quorum-signed 221-byte
+  `WithdrawalAuthorizationV1` bytes (`bridge_core` fixed encoding) plus the
+  same `OperatorReceiptProof`. The engine requires it recorded before a
+  `0x22`/`0x23` receipt can settle. The engine commits no golden `.hex` for
+  this action; the cross-language byte pin is the
+  `authorize_withdrawal/operator` conformance vector, asserted by the Rust,
+  Python, and TypeScript runners.
 
 ### Changed
 

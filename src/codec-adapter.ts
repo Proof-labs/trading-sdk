@@ -260,6 +260,9 @@ const BYTE_FIELDS = new Set([
   // the bare-Vec bitmap needs naming here; `signatures` (a Vec of byte arrays)
   // has its own special case below.
   "signerBitmap",
+  // AuthorizeWithdrawal's 221-byte `WithdrawalAuthorizationV1` bytes — the
+  // same bare-Vec class as the bitmap.
+  "authorization",
 ]);
 
 /** Decode a governance `{ Variant: {...} }` enum back into `{ kind, value }`. */

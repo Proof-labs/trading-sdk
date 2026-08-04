@@ -164,6 +164,9 @@ impl_action_encoding! {
     // (0x0B) remain decodable. Engine mirror: exchange-core PR #316.
     ConfirmWithdrawalReceipt => 0x22,
     FailWithdrawalReceipt => 0x23,
+    // The authorization leg the terminal receipts settle against — the engine
+    // requires it recorded before 0x22/0x23 can settle.
+    AuthorizeWithdrawal => 0x24,
 }
 
 /// Byte buffer that always serializes as msgpack `bin` (0xc4/c5/c6),
@@ -450,11 +453,11 @@ pub fn peek_seq(bytes: &[u8]) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::types::{
-        AmendOrder, ApproveAgent, BridgeWithdrawalReceipt, CancelOrder, CancelReplaceOrder,
-        ConfirmDeposit, ConfirmWithdrawal, ConfirmWithdrawalReceipt, CreateMarket, Deposit,
-        FailWithdrawal, FailWithdrawalReceipt, MarketOrder, Milliseconds, OperatorReceiptProof,
-        OracleUpdate, OracleUpdateComposite, PlaceOrder, RevokeAgent, Side, TimeInForce,
-        UpdateMarketFees, Withdraw, WithdrawRequest,
+        AmendOrder, ApproveAgent, AuthorizeWithdrawal, BridgeWithdrawalReceipt, CancelOrder,
+        CancelReplaceOrder, ConfirmDeposit, ConfirmWithdrawal, ConfirmWithdrawalReceipt,
+        CreateMarket, Deposit, FailWithdrawal, FailWithdrawalReceipt, MarketOrder, Milliseconds,
+        OperatorReceiptProof, OracleUpdate, OracleUpdateComposite, PlaceOrder, RevokeAgent, Side,
+        TimeInForce, UpdateMarketFees, Withdraw, WithdrawRequest,
     };
     use crate::wire::{Address, Pubkey};
 
@@ -655,6 +658,32 @@ mod tests {
         for bad in [bad_bitmap, bad_outer, bad_inner] {
             assert!(rmp_serde::from_slice::<OperatorReceiptProof>(&bad).is_err());
         }
+    }
+
+    /// The authorization leg (0x24): the fixed 221-byte
+    /// `WithdrawalAuthorizationV1` bytes plus the operator proof. No engine
+    /// golden vector is committed for this action (unlike 0x22/0x23) — the
+    /// cross-language byte pin lives in `conformance/codec.ndjson`
+    /// (`authorize_withdrawal/operator`), asserted by all three runners.
+    #[test]
+    fn w28_20_authorize_withdrawal_round_trip() {
+        assert_eq!(AuthorizeWithdrawal::ACTION_TYPE, 0x24);
+        let action = Action::AuthorizeWithdrawal(AuthorizeWithdrawal {
+            authorization: vec![0x44; 221],
+            proof: golden_proof(),
+        });
+        assert_round_trip(&action, 9);
+    }
+
+    /// The `authorization` field is the same untrusted variable-length
+    /// sequence class as the proof fields: a huge declared length on a
+    /// truncated stream errors without pre-allocating.
+    #[test]
+    fn authorization_huge_seq_header_errors_without_prealloc() {
+        const HUGE: [u8; 5] = [0xdd, 0xff, 0xff, 0xff, 0xff];
+        // action = fixarray-2 [authorization, proof]
+        let bad: Vec<u8> = [&[0x92][..], &HUGE].concat();
+        assert!(rmp_serde::from_slice::<AuthorizeWithdrawal>(&bad).is_err());
     }
 
     #[test]

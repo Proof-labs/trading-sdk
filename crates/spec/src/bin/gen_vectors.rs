@@ -131,6 +131,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     const EMERGENCY_ADMIN_ACTION: u8 = 0x21;
     const CONFIRM_WITHDRAWAL_RECEIPT: u8 = 0x22;
     const FAIL_WITHDRAWAL_RECEIPT: u8 = 0x23;
+    const AUTHORIZE_WITHDRAWAL: u8 = 0x24;
 
     let owner = vec![0x01u8; 20];
     let signer = vec![0x03u8; 20];
@@ -376,6 +377,18 @@ fn main() -> Result<(), Box<dyn Error>> {
             FAIL_WITHDRAWAL_RECEIPT,
             json!({
                 "receipt": receipt_json(2),
+                "proof": operator_proof_json(),
+            }),
+        ),
+        // The authorization leg (0x24): the fixed 221-byte
+        // `WithdrawalAuthorizationV1` bytes + the operator proof. The engine
+        // commits no golden .hex for this action, so this conformance case is
+        // the cross-language byte pin (Rust / Python / TypeScript runners).
+        codec_case(
+            "authorize_withdrawal/operator",
+            AUTHORIZE_WITHDRAWAL,
+            json!({
+                "authorization": vec![0x44u8; 221],
                 "proof": operator_proof_json(),
             }),
         ),

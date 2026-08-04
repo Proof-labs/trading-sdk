@@ -1148,6 +1148,23 @@ pub struct FailWithdrawalReceipt {
     pub proof: OperatorReceiptProof,
 }
 
+/// Records the operator-quorum-signed `WithdrawalAuthorizationV1` for a
+/// pending withdrawal, binding its digest to the record so a terminal receipt
+/// can only settle an authorization the quorum actually issued. Permissionless
+/// to submit — the operator quorum in `proof` is the authority, not the
+/// envelope signer. Engine mirror: exchange-core `AuthorizeWithdrawal` (0x24).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthorizeWithdrawal {
+    /// The canonical `WithdrawalAuthorizationV1` bytes the quorum signed
+    /// (`bridge_core::WithdrawalAuthorizationV1::encode`, fixed 221 bytes).
+    /// Raw `Vec<u8>` mirrors the engine wire; length is verified by the
+    /// engine, not reshaped here.
+    #[serde(deserialize_with = "crate::wire::hint_capped_bytes")]
+    pub authorization: Vec<u8>,
+    /// Operator ed25519 quorum proof over the authorization bytes.
+    pub proof: OperatorReceiptProof,
+}
+
 /// Why a Solana deposit was rejected by the relayer. Mirrors the small
 /// closed set of failure modes the bridge can detect off-chain — anything
 /// else falls under [`FailDepositReason::Other`] with a free-text reason

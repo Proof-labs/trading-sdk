@@ -29,6 +29,7 @@ export {
   type FailWithdrawal,
   type ConfirmWithdrawalReceipt,
   type FailWithdrawalReceipt,
+  type AuthorizeWithdrawal,
   type BridgeWithdrawalReceipt,
   type OperatorReceiptProof,
   type ApproveAgent,
