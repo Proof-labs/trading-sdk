@@ -42,12 +42,10 @@ import type {
   AdminSignerRegistry,
   ProposalPage,
   ImpactMarketInfo,
-  ImpactMarketStatus,
 } from "./types.js";
-import { Outcome } from "./types.js";
 import {
   decodeAdminSignerRegistryInfo,
-  decodeOracleSource,
+  decodeImpactMarketInfo,
   decodeProposalPage,
 } from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
@@ -1055,12 +1053,22 @@ export class ExchangeClient {
   }
 
   /** List all impact-market families (the 5-book event structures: an
-   *  underlying perp plus CPY/CPN/EBY/EBN children). */
+   *  underlying perp plus CPY/CPN/EBY/EBN children). Fail-closed like the
+   *  governance reads: a missing envelope or a malformed row is a refusal,
+   *  never a partially-rendered list (decoder pinned to engine golden bytes
+   *  in governance-query.test.ts). */
   async queryImpactMarkets(): Promise<ImpactMarketInfo[]> {
     const json = await fetchApiJson(`${this.readBaseUrl}/v1/impact_markets`);
-    const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes) as unknown[][];
-    return raw.map((r) => decodeImpactMarketInfo(r));
+    if (typeof json.data !== "string") {
+      throw new Error(
+        "governance decode: impact-markets response has no encoded-data envelope",
+      );
+    }
+    const raw = msgpackDecoder.decode(fromBase64(json.data));
+    if (!Array.isArray(raw)) {
+      throw new Error("governance decode: impactMarkets is not an array");
+    }
+    return raw.map((r, i) => decodeImpactMarketInfo(r, i));
   }
 
   /**
@@ -1877,55 +1885,6 @@ function parseLeadingErrorCode(s: string): number | null {
 // ---------------------------------------------------------------------------
 // MarketConfig decoder
 // ---------------------------------------------------------------------------
-
-/** Lifecycle status: unit variants are bare strings, `Resolved(Outcome)` is
- *  a single-entry map whose payload is the outcome's variant name. Fails
- *  closed — a status this build cannot name must never render as one it can
- *  (these drive settle/void displays). */
-function decodeImpactStatus(v: unknown): ImpactMarketStatus {
-  if (v === "Trading") return { kind: "Trading" };
-  if (v === "PreResolution") return { kind: "PreResolution" };
-  if (typeof v === "object" && v !== null && "Resolved" in v) {
-    const OUTCOMES: Record<string, Outcome> = {
-      Yes: Outcome.Yes,
-      No: Outcome.No,
-      Void: Outcome.Void,
-    };
-    const outcome = OUTCOMES[(v as Record<string, unknown>).Resolved as string];
-    if (outcome !== undefined) return { kind: "Resolved", outcome };
-  }
-  throw new Error(`impact-market decode: unknown status ${JSON.stringify(v)}`);
-}
-
-/** Decode one `ImpactMarketDisplayInfo` from its MessagePack positional
- *  array (exchange-core/src/query.rs). 12 required slots; trailers shipped
- *  incrementally — [12] oracleSource (BE-54), [13] description and
- *  [14] rules (admin-actions v2). Older gateways return shorter tuples;
- *  missing trailers stay `undefined` so callers can tell "not served"
- *  from "empty". */
-function decodeImpactMarketInfo(raw: unknown[]): ImpactMarketInfo {
-  const num = (v: unknown): number => Number(v as number | bigint);
-  const big = (v: unknown): bigint => BigInt((v as number | bigint) ?? 0);
-  const info: ImpactMarketInfo = {
-    impactMarketId: num(raw[0]),
-    underlyingMarket: num(raw[1]),
-    cpyMarket: num(raw[2]),
-    cpnMarket: num(raw[3]),
-    ebyMarket: num(raw[4]),
-    ebnMarket: num(raw[5]),
-    question: raw[6] as string,
-    deadlineMs: big(raw[7]),
-    resolutionWindowMs: big(raw[8]),
-    status: decodeImpactStatus(raw[9]),
-    createdMs: big(raw[10]),
-    resolvedMs: big(raw[11]),
-  };
-  const oracleSource = decodeOracleSource(raw[12], "impactMarket.oracleSource");
-  if (oracleSource) info.oracleSource = oracleSource;
-  if (raw[13] !== undefined) info.description = raw[13] as string;
-  if (raw[14] !== undefined) info.rules = raw[14] as string;
-  return info;
-}
 
 /** Decode a single MarketConfig from its MessagePack positional array.
  *  Field order mirrors the Rust struct in exchange-core/src/types.rs.

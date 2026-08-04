@@ -7,16 +7,20 @@ import type {
   CreateMarket,
   EventOracleSource,
   ExpiryReason,
+  ImpactMarketInfo,
+  ImpactMarketStatus,
   PriceComparison,
   ProposalPage,
   ProposalDisplayInfo,
   ProposalStatus,
   UpdateAdminSignerRegistry,
 } from "./types.js";
+import { Outcome } from "./types.js";
 
 /**
  * Typed decoders for the engine's governance READ model — the responses
- * behind `GET /v1/admin/signer-registry` and `GET /v1/proposals`.
+ * behind `GET /v1/admin/signer-registry`, `GET /v1/proposals`, and
+ * `GET /v1/impact_markets`.
  *
  * These mirror engine structs (`exchange-core/src/query.rs`), they do not
  * define them. The engine serializes with `rmp_serde::to_vec` — the COMPACT
@@ -266,6 +270,80 @@ export function decodeOracleSource(
         `governance decode: ${field} has unknown EventOracleSource variant "${name}"`,
       );
   }
+}
+
+const OUTCOMES: Record<string, Outcome> = {
+  Yes: Outcome.Yes,
+  No: Outcome.No,
+  Void: Outcome.Void,
+};
+
+/** Impact-market lifecycle status: unit variants are bare strings (fact 2);
+ *  `Resolved(Outcome)` is a single-entry map whose newtype payload is the
+ *  outcome's variant name — a bare string, no array wrapper (confirmed from
+ *  engine bytes, not inferred). Fails closed: a status or outcome this build
+ *  cannot name must never render as one it can — these drive settle/void
+ *  displays. */
+function decodeImpactStatus(value: unknown, field: string): ImpactMarketStatus {
+  if (value === "Trading") return { kind: "Trading" };
+  if (value === "PreResolution") return { kind: "PreResolution" };
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const { name, payload } = variantOf(value, field);
+    if (name !== "Resolved") {
+      throw new Error(
+        `governance decode: ${field} has unknown ImpactMarketStatus variant "${name}"`,
+      );
+    }
+    const outcome = typeof payload === "string" ? OUTCOMES[payload] : undefined;
+    if (outcome === undefined) {
+      throw new Error(
+        `governance decode: ${field} has unknown Outcome ${JSON.stringify(payload)}`,
+      );
+    }
+    return { kind: "Resolved", outcome };
+  }
+  throw new Error(
+    `governance decode: ${field} is not a known ImpactMarketStatus`,
+  );
+}
+
+/**
+ * One `ImpactMarketDisplayInfo` row from `GET /v1/impact_markets` /
+ * `/v1/impact_market/{id}` (exchange-core/src/query.rs), as the engine's
+ * positional array: 12 required slots, plus trailers shipped incrementally —
+ * [12] `oracleSource` (BE-54), [13] `description` and [14] `rules`
+ * (admin-actions v2). Older gateways serve shorter tuples; missing trailers
+ * stay `undefined` so callers can tell "not served" from "empty". Anything
+ * outside the supported 12–15 shapes — including trailing fields — is a
+ * refusal, same fail-closed posture as every decoder in this file.
+ */
+export function decodeImpactMarketInfo(
+  value: unknown,
+  index?: number,
+): ImpactMarketInfo {
+  const f = index == null ? "impactMarket" : `impactMarket[${index}]`;
+  const raw = toTupleBetween(value, f, 12, 15);
+  const info: ImpactMarketInfo = {
+    impactMarketId: toU32(raw[0], `${f}.impactMarketId`),
+    underlyingMarket: toU32(raw[1], `${f}.underlyingMarket`),
+    cpyMarket: toU32(raw[2], `${f}.cpyMarket`),
+    cpnMarket: toU32(raw[3], `${f}.cpnMarket`),
+    ebyMarket: toU32(raw[4], `${f}.ebyMarket`),
+    ebnMarket: toU32(raw[5], `${f}.ebnMarket`),
+    question: toString(raw[6], `${f}.question`),
+    deadlineMs: toU64(raw[7], `${f}.deadlineMs`),
+    resolutionWindowMs: toU64(raw[8], `${f}.resolutionWindowMs`),
+    status: decodeImpactStatus(raw[9], `${f}.status`),
+    createdMs: toU64(raw[10], `${f}.createdMs`),
+    resolvedMs: toU64(raw[11], `${f}.resolvedMs`),
+  };
+  if (raw.length > 12) {
+    const oracleSource = decodeOracleSource(raw[12], `${f}.oracleSource`);
+    if (oracleSource) info.oracleSource = oracleSource;
+  }
+  if (raw.length > 13) info.description = toString(raw[13], `${f}.description`);
+  if (raw.length > 14) info.rules = toString(raw[14], `${f}.rules`);
+  return info;
 }
 
 /** `CreateImpactMarket` as the engine's positional payload: 13 required
