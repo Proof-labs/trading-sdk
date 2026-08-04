@@ -1123,8 +1123,10 @@ pub struct BridgeWithdrawalReceipt {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OperatorReceiptProof {
     /// `ceil(registry_len / 8)` bytes; unused high bits zero.
+    #[serde(deserialize_with = "crate::wire::hint_capped_bytes")]
     pub signer_bitmap: Vec<u8>,
     /// One 64-byte ed25519 signature per set bit, ascending set-bit order.
+    #[serde(deserialize_with = "crate::wire::hint_capped_byte_seqs")]
     pub signatures: Vec<Vec<u8>>,
 }
 

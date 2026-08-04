@@ -640,6 +640,23 @@ mod tests {
         );
     }
 
+    /// Same regression class as `wire::tests::solana_sig_huge_length_header_errors_without_oom`:
+    /// a msgpack `array32` header (0xdd) declaring ~4.3B elements with a
+    /// truncated stream must error — never pre-allocate from the declared
+    /// length. Covers all three untrusted sequences in the operator proof:
+    /// the bitmap, the outer signature list, and an inner signature.
+    #[test]
+    fn proof_huge_seq_headers_error_without_prealloc() {
+        const HUGE: [u8; 5] = [0xdd, 0xff, 0xff, 0xff, 0xff];
+        // proof = fixarray-2 [signer_bitmap, signatures]
+        let bad_bitmap: Vec<u8> = [&[0x92][..], &HUGE].concat();
+        let bad_outer: Vec<u8> = [&[0x92, 0x91, 0x0f][..], &HUGE].concat();
+        let bad_inner: Vec<u8> = [&[0x92, 0x91, 0x0f, 0x91][..], &HUGE].concat();
+        for bad in [bad_bitmap, bad_outer, bad_inner] {
+            assert!(rmp_serde::from_slice::<OperatorReceiptProof>(&bad).is_err());
+        }
+    }
+
     #[test]
     fn test_round_trip_amend_order() {
         let action = Action::AmendOrder(AmendOrder {
