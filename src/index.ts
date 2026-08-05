@@ -42,6 +42,7 @@ export {
   type SetUserMarketLeverage,
   type GovernanceAction,
   type AdminAction,
+  type AdminBatchItem,
   type EmergencyAction,
   type UpdateAdminSignerRegistry,
   type ProposeAdminAction,

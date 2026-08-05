@@ -159,6 +159,53 @@ engine rejects those action types.
 
 ### Added
 
+- **Admin-actions v2 mirrors: `CreateImpactMarket` + `Batch` proposals**
+  (engine Proof-labs/exchange#334) — the engine's two new `AdminAction` arms
+  land in every SDK surface: tag 3 `CreateImpactMarket` and tag 4 `Batch`, a
+  **closed, non-recursive** list of 2–4 market-creation items
+  (`AdminBatchItem` ∈ {`CreateMarket`, `CreateImpactMarket`}) executed
+  atomically on chain. Implemented once in the Rust core and inherited by the
+  WASM (TS) and PyO3 (Python) bridges; the TypeScript surface adds the union
+  arms, the read-model decoders (impact payload with its three
+  `serde(default)` trailers, oracle source, batch items — each failing closed
+  on unknown variants), a kind→tag **table** replacing the previous two-arm
+  ternary, and `Batch` recursion in the codec adapter. The engine's v2 golden
+  content hashes and frozen canonical wire bytes are pinned byte-for-byte in
+  all three languages, and a `propose_admin_action/batch_perp_plus_impact`
+  conformance vector asserts the batch bytes cross-language.
+  - **Source compatibility:** widening the `AdminAction` union is a
+    source-level break for TypeScript consumers that switch exhaustively over
+    `action.kind` (an exhaustiveness check stops compiling until the new arms
+    are handled — which is the point: an approving client must decide what it
+    renders). The **wire** is backward compatible: every pre-existing payload
+    encodes byte-identically, and the new tags never appear unless a client
+    builds them.
+  - **Versioning:** rides this release's already-staged bumps — npm / Rust
+    core / PyO3 / Python at **3.0.0**, WASM crate at **2.1.0** (new enum arms
+    accepted by existing exports; no new API), derive crate unchanged at
+    **1.1.0**, conformance vectors still labeled **2.0.0** (one additive
+    case). No further bump beyond what this release already declares.
+  - **Compatible engine / activation ordering:** building or hashing the new
+    arms requires an engine with admin-actions v2 (exchange#334;
+    `exchange-core >= 2.2`). Order of operations matters: this SDK (and the
+    clients consuming it — Web Admin, signer-cli) must be **deployed before**
+    the engine's `UPGRADE_HEIGHT_ADMIN_ACTIONS_V2` is pinned at release-tag
+    time. The proposals read fails closed on unknown action variants, so a v2
+    proposal reaching a pre-v2 strict client blanks its proposals page — the
+    rollout-ordering precondition in WebAdmin Specs §11.4. Against older
+    engines the new surface is inert: decoders tolerate the shorter legacy
+    impact-market tuples (12/13 slots), and the v2 tags simply never occur.
+- `ExchangeClient.queryImpactMarkets()` — impact-market families via the
+  gateway's public read (`GET /v1/impact_markets`). Strict, fail-closed
+  decoding in the same posture as the governance reads: missing encoded-data
+  envelope, non-list payloads, out-of-range integers, malformed text fields,
+  unknown status/outcome/oracle variants, and tuple lengths outside the
+  supported 12–15 range are refusals, never partial renders. The three
+  incrementally-shipped trailers ([12] `oracleSource` BE-54, [13]
+  `description` / [14] `rules` admin-actions v2) decode when present and stay
+  `undefined` on older gateways so callers can tell "not served" from
+  "empty"; decoders are pinned against engine-serialized golden bytes for the
+  current 15-slot and both legacy shapes.
 - **Admin-multisig governance action mirrors (W30-11)** — the engine's four
   governance wire actions land in every SDK surface: `ProposeAdminAction`
   (0x1E), `ApproveAdminAction` (0x1F), `RejectAdminAction` (0x20), and the

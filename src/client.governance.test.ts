@@ -172,4 +172,78 @@ describe("ExchangeClient governance reads (W30-11)", () => {
       /response is missing encoded data/,
     );
   });
+
+  it("queryImpactMarkets routes through the gateway and decodes an engine row", async () => {
+    // The engine-golden 15-slot row (see governance-query.test.ts for the
+    // full vector provenance), re-encoded here through the same msgpack
+    // encoder the stub uses elsewhere in this file.
+    const row = [
+      91,
+      15,
+      9_100,
+      9_101,
+      9_102,
+      9_103,
+      "does it land?",
+      1_000_000n,
+      1_000n,
+      { Resolved: "Yes" },
+      555n,
+      777n,
+      { MarketOracle: [3, 65_000_000_000n, "GreaterThanOrEqual"] },
+      "body",
+      "criteria",
+    ];
+    stubFetch(toB64(encoder.encode([row]) as Uint8Array));
+    const got = await makeClient().queryImpactMarkets();
+    expect(calls).toEqual(["http://test-gateway/v1/impact_markets"]);
+    expect(got).toHaveLength(1);
+    expect(got[0]!.impactMarketId).toBe(91);
+    expect(got[0]!.status).toEqual({ kind: "Resolved", outcome: 1 });
+    expect(got[0]!.oracleSource).toEqual({
+      kind: "MarketOracle",
+      market: 3,
+      strikePrice: 65_000_000_000n,
+      comparison: "GreaterThanOrEqual",
+    });
+    expect(got[0]!.rules).toBe("criteria");
+  });
+
+  it("queryImpactMarkets rejects a response without the encoded-data envelope", async () => {
+    stubFetch(undefined);
+    await expect(makeClient().queryImpactMarkets()).rejects.toThrow(
+      /no encoded-data envelope/,
+    );
+  });
+
+  it("queryImpactMarkets rejects a payload that is not a list", async () => {
+    stubFetch(toB64(encoder.encode({ rows: [] }) as Uint8Array));
+    await expect(makeClient().queryImpactMarkets()).rejects.toThrow(
+      /impactMarkets is not an array/,
+    );
+  });
+
+  it("queryImpactMarkets refuses the whole list when one row is malformed", async () => {
+    // Fail-closed, not filter: a partially-rendered market list would hide
+    // exactly the row an operator needed to see.
+    const good = [
+      91,
+      15,
+      9_100,
+      9_101,
+      9_102,
+      9_103,
+      "q",
+      1n,
+      1n,
+      "Trading",
+      0n,
+      0n,
+    ];
+    const bad = [...good.slice(0, 11)];
+    stubFetch(toB64(encoder.encode([good, bad]) as Uint8Array));
+    await expect(makeClient().queryImpactMarkets()).rejects.toThrow(
+      /impactMarket\[1\] has 11 fields, expected 12-15/,
+    );
+  });
 });

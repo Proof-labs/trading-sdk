@@ -764,6 +764,14 @@ export interface ImpactMarketInfo {
   status: ImpactMarketStatus;
   createdMs: bigint;
   resolvedMs: bigint;
+  /** BE-54: how the YES/NO outcome is determined at deadline. `undefined`
+   *  (older gateways / pre-BE-54 records) means `RelayerAttested`. */
+  oracleSource?: EventOracleSource;
+  /** Event body text; `""` when the record has none. `undefined` only on
+   *  gateways older than admin-actions v2 (field not served). */
+  description?: string;
+  /** Resolution criteria text; same shipping note as `description`. */
+  rules?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -897,13 +905,32 @@ export interface UpdateAdminSignerRegistry {
 }
 
 /**
+ * One item of a governance `Batch` — a CLOSED, non-recursive subset of
+ * `AdminAction` (market-creation shapes only, mirroring the engine's
+ * `AdminBatchItem`). A batch can never contain another batch or a
+ * registry change; the type makes that unrepresentable, exactly as the
+ * engine's enum does. Variant names are wire-identical to the
+ * `AdminAction` arms of the same name.
+ */
+export type AdminBatchItem =
+  | { kind: "CreateMarket"; value: CreateMarket }
+  | { kind: "CreateImpactMarket"; value: CreateImpactMarket };
+
+/**
  * Closed, typed set of operations executable through the multisig. The
- * embedded `CreateMarket.signer` must be zero — governance supplies the
- * authorization, not the embedded address.
+ * embedded `CreateMarket.signer` / `CreateImpactMarket.signer` must be
+ * zero — governance supplies the authorization, not the embedded address.
+ *
+ * `Batch` executes its items atomically in order against one overlay:
+ * all succeed or the proposal fails with no partial state. Admitted on
+ * chain only once admin-actions v2 activates (`CreateImpactMarket`
+ * likewise); the engine refuses the tags below the activation height.
  */
 export type AdminAction =
   | { kind: "CreateMarket"; value: CreateMarket }
-  | { kind: "UpdateAdminSignerRegistry"; value: UpdateAdminSignerRegistry };
+  | { kind: "UpdateAdminSignerRegistry"; value: UpdateAdminSignerRegistry }
+  | { kind: "CreateImpactMarket"; value: CreateImpactMarket }
+  | { kind: "Batch"; value: AdminBatchItem[] };
 
 /**
  * Closed set of immediate, loss-reducing single-signer actions. Reverse

@@ -41,9 +41,11 @@ import type {
   WithdrawalStatus,
   AdminSignerRegistry,
   ProposalPage,
+  ImpactMarketInfo,
 } from "./types.js";
 import {
   decodeAdminSignerRegistryInfo,
+  decodeImpactMarketInfo,
   decodeProposalPage,
 } from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
@@ -1048,6 +1050,25 @@ export class ExchangeClient {
     const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as unknown[][];
     return raw.map((m) => decodeMarketConfig(m));
+  }
+
+  /** List all impact-market families (the 5-book event structures: an
+   *  underlying perp plus CPY/CPN/EBY/EBN children). Fail-closed like the
+   *  governance reads: a missing envelope or a malformed row is a refusal,
+   *  never a partially-rendered list (decoder pinned to engine golden bytes
+   *  in governance-query.test.ts). */
+  async queryImpactMarkets(): Promise<ImpactMarketInfo[]> {
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/impact_markets`);
+    if (typeof json.data !== "string") {
+      throw new Error(
+        "governance decode: impact-markets response has no encoded-data envelope",
+      );
+    }
+    const raw = msgpackDecoder.decode(fromBase64(json.data));
+    if (!Array.isArray(raw)) {
+      throw new Error("governance decode: impactMarkets is not an array");
+    }
+    return raw.map((r, i) => decodeImpactMarketInfo(r, i));
   }
 
   /**

@@ -303,6 +303,37 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }}
             }),
         ),
+        // Admin-actions v2: a Batch proposal carrying both item variants —
+        // the engine's own golden fixture (perp on market 15 + impact
+        // family 91), so the nested-enum path (list payload, both items,
+        // the impact serde(default) trailers) is pinned across all three
+        // language bindings.
+        codec_case(
+            "propose_admin_action/batch_perp_plus_impact",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "Batch": [
+                    { "CreateMarket": {
+                        "market": 15, "im_bps": 3334, "mm_bps": 1667,
+                        "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": vec![0u8; 20],
+                        "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
+                        "pool_id": 0, "sz_decimals": 0, "ticker": "", "max_open_interest": 0u64
+                    }},
+                    { "CreateImpactMarket": {
+                        "impact_market_id": 91, "underlying_market": 15,
+                        "child_market_base": 9100, "question": "does it land?",
+                        "deadline_ms": 1000000u64, "resolution_window_ms": 1000u64,
+                        "im_bps": 3334, "mm_bps": 1667,
+                        "taker_fee_bps": 5, "maker_fee_bps": 2,
+                        "funding_interval_ms": 0u64, "max_funding_rate_bps": 3000,
+                        "signer": vec![0u8; 20], "oracle_source": null,
+                        "description": "", "rules": ""
+                    }}
+                ]}
+            }),
+        ),
         codec_case(
             "approve_admin_action/rotate_registry",
             APPROVE_ADMIN_ACTION,

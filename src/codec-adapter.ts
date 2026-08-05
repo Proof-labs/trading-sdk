@@ -105,8 +105,16 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
  */
 function governanceActionToWasm(value: unknown): unknown {
   if (value === null || value === undefined) return value;
-  const v = value as { kind: string; value?: Record<string, unknown> };
-  return { [v.kind]: v.value ? convertObject(v.value) : {} };
+  const v = value as { kind: string; value?: unknown };
+  // `Batch` is the one variant whose payload is a LIST of nested enum items
+  // (`AdminBatchItem[]`) rather than a struct — each item is itself
+  // `{ kind, value }` and converts through this same function.
+  if (Array.isArray(v.value)) {
+    return { [v.kind]: v.value.map(governanceActionToWasm) };
+  }
+  return {
+    [v.kind]: v.value ? convertObject(v.value as Record<string, unknown>) : {},
+  };
 }
 
 /**
@@ -270,8 +278,15 @@ function governanceActionFromWasm(value: unknown): unknown {
   if (value === null || value === undefined) return value;
   const obj = value as Record<string, unknown>;
   const kind = Object.keys(obj)[0];
-  const inner = obj[kind] as Record<string, unknown> | undefined;
-  return { kind, value: inner ? fromWasmObject(inner) : {} };
+  const inner = obj[kind];
+  // `Batch` carries a list of nested enum items; mirror the encoder's branch.
+  if (Array.isArray(inner)) {
+    return { kind, value: inner.map(governanceActionFromWasm) };
+  }
+  return {
+    kind,
+    value: inner ? fromWasmObject(inner as Record<string, unknown>) : {},
+  };
 }
 
 /** Decode an `EventOracleSource` from serde's `{ Variant: {...} }` / string form. */

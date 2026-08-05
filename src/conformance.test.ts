@@ -294,38 +294,11 @@ function toAction(
           agentPubkey: bytes(input.agent_pubkey),
         },
       };
-    case ActionType.CreateImpactMarket: {
-      const os = input.oracle_source;
-      const parsedOs =
-        os === null || os === undefined ? undefined : parseOracleSource(os);
+    case ActionType.CreateImpactMarket:
       return {
         type: "CreateImpactMarket",
-        data: {
-          impactMarketId: input.impact_market_id as number,
-          underlyingMarket: input.underlying_market as number,
-          childMarketBase: input.child_market_base as number,
-          question: input.question as string,
-          deadlineMs: big(input.deadline_ms),
-          resolutionWindowMs: big(input.resolution_window_ms),
-          imBps: input.im_bps as number,
-          mmBps: input.mm_bps as number,
-          takerFeeBps: input.taker_fee_bps as number,
-          makerFeeBps: input.maker_fee_bps as number,
-          fundingIntervalMs: big(input.funding_interval_ms),
-          maxFundingRateBps: input.max_funding_rate_bps as number,
-          signer: bytes(input.signer),
-          oracleSource: parsedOs,
-          description:
-            input.description === "" || input.description == null
-              ? undefined
-              : (input.description as string),
-          rules:
-            input.rules === "" || input.rules == null
-              ? undefined
-              : (input.rules as string),
-        },
+        data: toCreateImpactMarketValue(input),
       };
-    }
     case ActionType.ResolveEvent:
       return {
         type: "ResolveEvent",
@@ -513,38 +486,122 @@ function toOperatorProof(
   };
 }
 
-/** Reconstruct a TS `AdminAction` from the vector's serde map form. */
+/** Reconstruct a TS `CreateMarket` value from the vector's serde map form —
+ *  shared by the `AdminAction` arm and `Batch` items. */
+function toCreateMarketValue(
+  m: Record<string, unknown>,
+): import("./types.js").CreateMarket {
+  return {
+    market: m.market as number,
+    imBps: m.im_bps as number,
+    mmBps: m.mm_bps as number,
+    takerFeeBps: m.taker_fee_bps as number,
+    makerFeeBps: m.maker_fee_bps as number,
+    signer: bytes(m.signer),
+    fundingIntervalMs: big(m.funding_interval_ms),
+    maxFundingRateBps: m.max_funding_rate_bps as number,
+    poolId: m.pool_id as number,
+    szDecimals: m.sz_decimals as number,
+    ticker: m.ticker as string,
+    maxOpenInterest: big(m.max_open_interest),
+  };
+}
+
+/** Reconstruct a TS `CreateImpactMarket` value from the vector's serde map
+ *  form — shared by the relayer action (0x0e), the `AdminAction` arm, and
+ *  `Batch` items. */
+function toCreateImpactMarketValue(
+  input: Record<string, unknown>,
+): import("./types.js").CreateImpactMarket {
+  const os = input.oracle_source;
+  const parsedOs =
+    os === null || os === undefined ? undefined : parseOracleSource(os);
+  return {
+    impactMarketId: input.impact_market_id as number,
+    underlyingMarket: input.underlying_market as number,
+    childMarketBase: input.child_market_base as number,
+    question: input.question as string,
+    deadlineMs: big(input.deadline_ms),
+    resolutionWindowMs: big(input.resolution_window_ms),
+    imBps: input.im_bps as number,
+    mmBps: input.mm_bps as number,
+    takerFeeBps: input.taker_fee_bps as number,
+    makerFeeBps: input.maker_fee_bps as number,
+    fundingIntervalMs: big(input.funding_interval_ms),
+    maxFundingRateBps: input.max_funding_rate_bps as number,
+    signer: bytes(input.signer),
+    oracleSource: parsedOs,
+    description:
+      input.description === "" || input.description == null
+        ? undefined
+        : (input.description as string),
+    rules:
+      input.rules === "" || input.rules == null
+        ? undefined
+        : (input.rules as string),
+  };
+}
+
+/** One governance `Batch` item — the closed market-creation subset. */
+function toAdminBatchItem(
+  v: Record<string, unknown>,
+): import("./types.js").AdminBatchItem {
+  if (v.CreateMarket) {
+    return {
+      kind: "CreateMarket",
+      value: toCreateMarketValue(v.CreateMarket as Record<string, unknown>),
+    };
+  }
+  if (v.CreateImpactMarket) {
+    return {
+      kind: "CreateImpactMarket",
+      value: toCreateImpactMarketValue(
+        v.CreateImpactMarket as Record<string, unknown>,
+      ),
+    };
+  }
+  throw new Error(
+    `toAdminBatchItem: unknown variant ${Object.keys(v).join(",")}`,
+  );
+}
+
+/** Reconstruct a TS `AdminAction` from the vector's serde map form. Throws
+ *  on an unknown variant rather than falling through — a vector this suite
+ *  cannot name must fail the run, not mis-parse as a registry update. */
 function toAdminAction(
   v: Record<string, unknown>,
 ): import("./types.js").AdminAction {
   if (v.CreateMarket) {
-    const m = v.CreateMarket as Record<string, unknown>;
     return {
       kind: "CreateMarket",
+      value: toCreateMarketValue(v.CreateMarket as Record<string, unknown>),
+    };
+  }
+  if (v.CreateImpactMarket) {
+    return {
+      kind: "CreateImpactMarket",
+      value: toCreateImpactMarketValue(
+        v.CreateImpactMarket as Record<string, unknown>,
+      ),
+    };
+  }
+  if (v.Batch) {
+    return {
+      kind: "Batch",
+      value: (v.Batch as Record<string, unknown>[]).map(toAdminBatchItem),
+    };
+  }
+  if (v.UpdateAdminSignerRegistry) {
+    const r = v.UpdateAdminSignerRegistry as Record<string, unknown>;
+    return {
+      kind: "UpdateAdminSignerRegistry",
       value: {
-        market: m.market as number,
-        imBps: m.im_bps as number,
-        mmBps: m.mm_bps as number,
-        takerFeeBps: m.taker_fee_bps as number,
-        makerFeeBps: m.maker_fee_bps as number,
-        signer: bytes(m.signer),
-        fundingIntervalMs: big(m.funding_interval_ms),
-        maxFundingRateBps: m.max_funding_rate_bps as number,
-        poolId: m.pool_id as number,
-        szDecimals: m.sz_decimals as number,
-        ticker: m.ticker as string,
-        maxOpenInterest: big(m.max_open_interest),
+        newThreshold: Number(big(r.new_threshold)),
+        newMembers: (r.new_members as unknown[]).map((a) => bytes(a)),
       },
     };
   }
-  const r = v.UpdateAdminSignerRegistry as Record<string, unknown>;
-  return {
-    kind: "UpdateAdminSignerRegistry",
-    value: {
-      newThreshold: Number(big(r.new_threshold)),
-      newMembers: (r.new_members as unknown[]).map((a) => bytes(a)),
-    },
-  };
+  throw new Error(`toAdminAction: unknown variant ${Object.keys(v).join(",")}`);
 }
 
 /** Reconstruct a TS `EmergencyAction` from the vector's serde map form. */
@@ -729,9 +786,9 @@ describe("conformance vectors (TypeScript)", () => {
       govTypes.has(c.action_type as number),
     );
     // Guard against the vector file drifting out from under this assertion:
-    // propose, approve, reject, and all three emergency arms (PauseMarket,
-    // HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(6);
+    // propose (create-market and v2 batch), approve, reject, and all three
+    // emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(7);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
