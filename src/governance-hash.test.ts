@@ -39,6 +39,48 @@ function engineDefaultCreateMarket(): AdminAction {
   };
 }
 
+/** Mirrors the engine's admin-actions-v2 golden fixture
+ *  (`admin_proposal_content_hash_v2_golden_vectors` in `codec.rs`) — the
+ *  omitted trailers (oracleSource, description, rules) encode as
+ *  nil / "" / "", exactly what the engine's instance carries. */
+function engineV2Impact(): AdminAction {
+  return {
+    kind: "CreateImpactMarket",
+    value: {
+      impactMarketId: 91,
+      underlyingMarket: 15,
+      childMarketBase: 9_100,
+      question: "does it land?",
+      deadlineMs: 1_000_000n,
+      resolutionWindowMs: 1_000n,
+      imBps: 3334,
+      mmBps: 1667,
+      takerFeeBps: 5,
+      makerFeeBps: 2,
+      fundingIntervalMs: 0n,
+      maxFundingRateBps: 3000,
+      signer: new Uint8Array(20),
+    },
+  };
+}
+
+/** The engine's golden batch: the default perp re-pointed at market 15,
+ *  then the impact family above — one proposal, two creations. */
+function engineV2Batch(): AdminAction {
+  const perp = engineDefaultCreateMarket();
+  const impact = engineV2Impact();
+  if (perp.kind !== "CreateMarket" || impact.kind !== "CreateImpactMarket") {
+    throw new Error("unreachable: fixture kinds are fixed");
+  }
+  return {
+    kind: "Batch",
+    value: [
+      { kind: "CreateMarket", value: { ...perp.value, market: 15 } },
+      { kind: "CreateImpactMarket", value: impact.value },
+    ],
+  };
+}
+
 function goldenContext(): AdminProposalContext {
   return {
     chainId: new Uint8Array(32).fill(0x11),
@@ -73,6 +115,28 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     });
     expect(bytesToHex(hash)).toBe(
       "5fe2dd718a4aea63492a5ab95eee27588cc861c504643bf68ce3fdd2c45dab99",
+    );
+  });
+
+  it("reproduces the engine's v2 impact hash bit-for-bit", () => {
+    const hash = adminProposalContentHash({
+      ...goldenContext(),
+      action: engineV2Impact(),
+    });
+    expect(bytesToHex(hash)).toBe(
+      "d57a7faa3a17aac647a0256c38f125f6bd0913d70013e185aeb322efaab9629e",
+    );
+  });
+
+  it("reproduces the engine's v2 batch hash bit-for-bit", () => {
+    // Exercises the whole nested-enum path: the Batch arm's list payload,
+    // both item variants, and the impact trailers' default encoding.
+    const hash = adminProposalContentHash({
+      ...goldenContext(),
+      action: engineV2Batch(),
+    });
+    expect(bytesToHex(hash)).toBe(
+      "f9a9b17a53b52ad72c1703b583a0ed4ac70295244cbf31f74518d5177dd86e36",
     );
   });
 
