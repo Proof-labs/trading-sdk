@@ -262,6 +262,15 @@ const BYTE_FIELDS = new Set([
   "approver",
   "rejecter",
   "contentHash",
+  // Receipt-proof bitmap (raw `Vec<u8>` on the wire → number[] on decode).
+  // The receipt's own byte fields decode as `Uint8Array` (newtype
+  // serialize_bytes) and hit the early `instanceof Uint8Array` return, so only
+  // the bare-Vec bitmap needs naming here; `signatures` (a Vec of byte arrays)
+  // has its own special case below.
+  "signerBitmap",
+  // AuthorizeWithdrawal's 221-byte `WithdrawalAuthorizationV1` bytes — the
+  // same bare-Vec class as the bitmap.
+  "authorization",
 ]);
 
 /** Decode a governance `{ Variant: {...} }` enum back into `{ kind, value }`. */
@@ -334,6 +343,15 @@ function fromWasmValue(camelKey: string, value: unknown): unknown {
   if (camelKey === "newMembers" && Array.isArray(value)) {
     return value.map((m) =>
       m instanceof Uint8Array ? m : Uint8Array.from(m as number[]),
+    );
+  }
+  // Operator receipt proof `signatures` is a list of 64-byte ed25519 signatures
+  // (Vec<Vec<u8>>); each element is a byte array, so convert like `newMembers`.
+  // Without this the generic array branch would treat each inner number[] as a
+  // nested object.
+  if (camelKey === "signatures" && Array.isArray(value)) {
+    return value.map((s) =>
+      s instanceof Uint8Array ? s : Uint8Array.from(s as number[]),
     );
   }
   // Same loudness as the encode direction: an unknown variant name (e.g. a

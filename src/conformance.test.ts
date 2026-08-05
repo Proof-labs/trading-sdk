@@ -420,12 +420,70 @@ function toAction(
           action: toEmergencyAction(input.action as Record<string, unknown>),
         },
       };
+    case ActionType.ConfirmWithdrawalReceipt:
+      return {
+        type: "ConfirmWithdrawalReceipt",
+        data: {
+          receipt: toBridgeReceipt(input.receipt as Record<string, unknown>),
+          proof: toOperatorProof(input.proof as Record<string, unknown>),
+        },
+      };
+    case ActionType.FailWithdrawalReceipt:
+      return {
+        type: "FailWithdrawalReceipt",
+        data: {
+          receipt: toBridgeReceipt(input.receipt as Record<string, unknown>),
+          proof: toOperatorProof(input.proof as Record<string, unknown>),
+        },
+      };
+    case ActionType.AuthorizeWithdrawal:
+      return {
+        type: "AuthorizeWithdrawal",
+        data: {
+          authorization: bytes(input.authorization),
+          proof: toOperatorProof(input.proof as Record<string, unknown>),
+        },
+      };
     default:
       throw new Error(
         `toAction: action_type 0x${actionType.toString(16)} not wired ` +
           `(intentionally omitted types should be documented in conformance/README.md)`,
       );
   }
+}
+
+/** Reconstruct a TS `BridgeWithdrawalReceipt` from the vector's snake_case map. */
+function toBridgeReceipt(
+  r: Record<string, unknown>,
+): import("./types.js").BridgeWithdrawalReceipt {
+  return {
+    deploymentId: bytes(r.deployment_id),
+    authorizationDigest: bytes(r.authorization_digest),
+    withdrawalId: big(r.withdrawal_id),
+    terminalState: r.terminal_state as number,
+    vaultTier: r.vault_tier as number,
+    proofOwner: bytes(r.proof_owner),
+    destinationOwner: bytes(r.destination_owner),
+    destinationTokenAcct: bytes(r.destination_token_acct),
+    amountMicroUsdc: big(r.amount_micro_usdc),
+    feeMicroUsdc: big(r.fee_micro_usdc),
+    authorizationSignerEpoch: big(r.authorization_signer_epoch),
+    solanaTxSignature: bytes(r.solana_tx_signature),
+    finalizedSlot: big(r.finalized_slot),
+    finalizedBlockhash: bytes(r.finalized_blockhash),
+    receiptQuorumKind: r.receipt_quorum_kind as number,
+    receiptAuthorityEpoch: big(r.receipt_authority_epoch),
+  };
+}
+
+/** Reconstruct a TS `OperatorReceiptProof` from the vector's snake_case map. */
+function toOperatorProof(
+  p: Record<string, unknown>,
+): import("./types.js").OperatorReceiptProof {
+  return {
+    signerBitmap: bytes(p.signer_bitmap),
+    signatures: (p.signatures as unknown[]).map((s) => bytes(s)),
+  };
 }
 
 /** Reconstruct a TS `CreateMarket` value from the vector's serde map form —

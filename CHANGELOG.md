@@ -30,7 +30,43 @@ accept the new bytes. Frozen v1 `rmp-serde` decoders also reject populated
 12-field `CreateMarket` and 21-field `UpdateMarketFees` payloads, and the Rust
 wire structs gain source-incompatible fields. The unchanged derive crate stays
 at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
-**2.0.0**. Compatible engine: `exchange-core >= 2.0.0, < 3.0.0`.
+**2.0.0**. Compatible engine: `exchange-core >= 2.0.0, < 3.0.0` for the wire as
+a whole; the bridge-custody actions added below (`0x22` / `0x23` / `0x24`)
+require `exchange-core >= 2.3.0` (the engine version that declares them, PR
+#316 — `2.2.0` was tagged before this wire surface existed) — an earlier
+engine rejects those action types.
+
+### Added
+
+- **Receipt-carrying terminal withdrawal actions `ConfirmWithdrawalReceipt`
+  (`0x22`) and `FailWithdrawalReceipt` (`0x23`)** — the operator-multisig
+  withdrawal-settlement phase (W28-20). Each carries a
+  `BridgeWithdrawalReceipt` (wire mirror of the frozen 327-byte
+  `bridge_core::BridgeReceiptV1`, a fixed 16-field record) plus an
+  `OperatorReceiptProof` (a signer bitmap and one 64-byte ed25519 signature per
+  set bit — `bridge_core::ReceiptProofV1::OperatorEd25519`). The engine verifies
+  the operator quorum signed exactly the receipt bytes in consensus, replacing
+  the trusted-relayer assertion of the legacy `ConfirmWithdrawal` (`0x0a`) /
+  `FailWithdrawal` (`0x0b`). This is **additive and MINOR in nature** — the two
+  legacy actions keep their discriminants and still decode byte-for-byte, and
+  transactions produced before this change are unaffected. The encoded payloads
+  are **byte-identical to the engine's committed golden vectors**
+  (`docs/spec/golden-vectors/{confirm,fail}_withdrawal_receipt.hex` on the
+  engine branch), proven by the Rust core test
+  `codec::tests::w28_20_receipt_action_golden_vectors`, the conformance vectors
+  `confirm_withdrawal_receipt/paid` and `fail_withdrawal_receipt/cancelled`, and
+  the TypeScript codec round-trip. Mirrors engine PR #316 (+ gateway #100). The
+  change folds into this uncut `3.0.0` release; no separate version bump.
+- **`AuthorizeWithdrawal` (`0x24`)** — the authorization leg the terminal
+  receipts settle against: the operator-quorum-signed 221-byte
+  `WithdrawalAuthorizationV1` bytes (`bridge_core` fixed encoding) plus the
+  same `OperatorReceiptProof`. The engine requires it recorded before a
+  `0x22`/`0x23` receipt can settle. The engine commits no golden `.hex` for
+  this action; the byte pin is `crates/spec/golden-vectors/authorize_withdrawal.hex`,
+  derived by encoding the fixture with `exchange-core` itself (engine branch
+  commit `c32f7d1`, method control-checked against the committed `0x22`
+  vector), asserted by the Rust golden test plus the
+  `authorize_withdrawal/operator` conformance vector in all three runners.
 
 ### Changed
 

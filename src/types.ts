@@ -57,6 +57,17 @@ export const ActionType = {
   ConfirmWithdrawal: 0x0a,
   /** Relayer marks a withdrawal as permanently failed; refunds balance. */
   FailWithdrawal: 0x0b,
+  /** Receipt-gated confirmation: a finalized `Paid` bridge receipt + operator
+   *  ed25519 quorum proof. Replaces the trusted relayer assertion in
+   *  `ConfirmWithdrawal` (0x0a, still accepted). W28-20. */
+  ConfirmWithdrawalReceipt: 0x22,
+  /** Receipt-gated failure: a finalized `Cancelled` bridge receipt + operator
+   *  ed25519 quorum proof. Replaces the free-text `FailWithdrawal` (0x0b, still
+   *  accepted); refunds only against a positive on-chain cancellation. W28-20. */
+  FailWithdrawalReceipt: 0x23,
+  /** Records the operator-quorum-signed `WithdrawalAuthorizationV1` a terminal
+   *  receipt (0x22/0x23) must settle against. Permissionless to submit. W28-20. */
+  AuthorizeWithdrawal: 0x24,
   /** Approve a delegate agent wallet to trade on the owner's behalf. */
   ApproveAgent: 0x0c,
   /** Revoke a previously approved agent wallet. */
@@ -406,6 +417,106 @@ export interface FailWithdrawal {
   reason: string;
   /** Authorized relayer signer address (20 bytes). */
   signer: Address;
+}
+
+/**
+ * Wire mirror of the frozen `bridge_core::BridgeReceiptV1` (fixed 327-byte
+ * form) carried by the receipt-gated terminal withdrawal actions. The engine
+ * rebuilds the receipt, re-encodes, and verifies the operator quorum signed
+ * exactly those bytes — every field is signed, so tampering fails closed.
+ *
+ * Field order matches the Rust struct → MessagePack wire layout; never reorder.
+ */
+export interface BridgeWithdrawalReceipt {
+  /** `bridge_core::DeploymentId` — pins Proof/Solana genesis, program, mint (32 bytes). */
+  deploymentId: Uint8Array;
+  /** `SHA256(Borsh(WithdrawalAuthorizationV1))` (32 bytes). */
+  authorizationDigest: Uint8Array;
+  /** Engine-assigned withdrawal ID. */
+  withdrawalId: bigint;
+  /** Terminal state wire byte: `1 = Paid`, `2 = Cancelled`. */
+  terminalState: number;
+  /** `bridge_core::VaultTier` wire byte. */
+  vaultTier: number;
+  /** Internal account that owns the withdrawal (20 bytes). */
+  proofOwner: Address;
+  /** Solana destination owner pubkey (32 bytes). */
+  destinationOwner: Uint8Array;
+  /** Solana destination token account (32 bytes). */
+  destinationTokenAcct: Uint8Array;
+  /** Withdrawal amount in microUSDC (6 dp). */
+  amountMicroUsdc: bigint;
+  /** Bridge fee in microUSDC (6 dp). */
+  feeMicroUsdc: bigint;
+  /** Registry epoch the authorization signer set was pinned to. */
+  authorizationSignerEpoch: bigint;
+  /** Solana transaction signature (64 bytes). */
+  solanaTxSignature: Uint8Array;
+  /** Solana finalized slot the receipt was observed at. */
+  finalizedSlot: bigint;
+  /** Solana finalized blockhash (32 bytes). */
+  finalizedBlockhash: Uint8Array;
+  /** Receipt quorum kind wire byte: `1 = operator m-of-n`, `2 = validator stake`. */
+  receiptQuorumKind: number;
+  /** Registry epoch the receipt authority set was pinned to. */
+  receiptAuthorityEpoch: bigint;
+}
+
+/**
+ * Operator ed25519 proof — mirror of
+ * `bridge_core::ReceiptProofV1::OperatorEd25519`. A signer bitmap plus one
+ * 64-byte signature per set bit, in ascending registry-index order.
+ *
+ * Never log the signatures.
+ */
+export interface OperatorReceiptProof {
+  /** `ceil(registry_len / 8)` bytes; unused high bits zero. */
+  signerBitmap: Uint8Array;
+  /** One 64-byte ed25519 signature per set bit, ascending set-bit order. */
+  signatures: Uint8Array[];
+}
+
+/**
+ * Receipt-gated confirmation of a paid withdrawal (action `0x22`). Carries a
+ * finalized `Paid` {@link BridgeWithdrawalReceipt} and its
+ * {@link OperatorReceiptProof}. Permissionless to submit — the operator quorum
+ * in the receipt is the authority, not the envelope signer. Replaces the
+ * trusted relayer assertion in {@link ConfirmWithdrawal}.
+ */
+export interface ConfirmWithdrawalReceipt {
+  /** The finalized `Paid` bridge receipt. */
+  receipt: BridgeWithdrawalReceipt;
+  /** Operator ed25519 quorum proof over the receipt bytes. */
+  proof: OperatorReceiptProof;
+}
+
+/**
+ * Receipt-gated failure of a cancelled withdrawal (action `0x23`). Carries a
+ * finalized `Cancelled` {@link BridgeWithdrawalReceipt} and its
+ * {@link OperatorReceiptProof}; refunds the debited balance only against a
+ * positive on-chain cancellation proof, never a timeout. Replaces the free-text
+ * {@link FailWithdrawal}.
+ */
+export interface FailWithdrawalReceipt {
+  /** The finalized `Cancelled` bridge receipt. */
+  receipt: BridgeWithdrawalReceipt;
+  /** Operator ed25519 quorum proof over the receipt bytes. */
+  proof: OperatorReceiptProof;
+}
+
+/**
+ * Records the operator-quorum-signed `WithdrawalAuthorizationV1` for a pending
+ * withdrawal (action `0x24`), binding its digest to the record so a terminal
+ * receipt (`0x22`/`0x23`) can only settle an authorization the quorum actually
+ * issued. Permissionless to submit — the operator quorum in `proof` is the
+ * authority, not the envelope signer.
+ */
+export interface AuthorizeWithdrawal {
+  /** The canonical `WithdrawalAuthorizationV1` bytes the quorum signed
+   *  (`bridge_core::WithdrawalAuthorizationV1::encode`, fixed 221 bytes). */
+  authorization: Uint8Array;
+  /** Operator ed25519 quorum proof over the authorization bytes. */
+  proof: OperatorReceiptProof;
 }
 
 /**
@@ -765,6 +876,9 @@ export type OperatorAction =
   | { type: "ConfirmDeposit"; data: ConfirmDeposit }
   | { type: "ConfirmWithdrawal"; data: ConfirmWithdrawal }
   | { type: "FailWithdrawal"; data: FailWithdrawal }
+  | { type: "ConfirmWithdrawalReceipt"; data: ConfirmWithdrawalReceipt }
+  | { type: "FailWithdrawalReceipt"; data: FailWithdrawalReceipt }
+  | { type: "AuthorizeWithdrawal"; data: AuthorizeWithdrawal }
   | { type: "CreateImpactMarket"; data: CreateImpactMarket }
   | { type: "ResolveEvent"; data: ResolveEvent }
   | { type: "UpdateMarketFees"; data: UpdateMarketFees };

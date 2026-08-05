@@ -1070,6 +1070,101 @@ pub struct FailWithdrawal {
     pub signer: Address,
 }
 
+// ---------------------------------------------------------------------------
+// W28-20 bridge custody: receipt-gated terminal withdrawal actions
+// ---------------------------------------------------------------------------
+//
+// Operator-multisig phase. The legacy relayer `ConfirmWithdrawal` (0x0A) /
+// `FailWithdrawal` (0x0B) trust an authorized-relayer assertion; these new
+// action_types carry a `bridge_core::BridgeReceiptV1` and its operator ed25519
+// proof, and the engine verifies the quorum in consensus before crediting /
+// refunding — no trusted courier assertion. Additive: the legacy actions stay
+// decodable, so this is a MINOR wire change. Engine mirror: exchange-core
+// `BridgeWithdrawalReceipt` / `OperatorReceiptProof` (PR #316).
+
+/// Wire mirror of the frozen `bridge_core::BridgeReceiptV1` (fixed 327-byte
+/// form). Carried by the receipt-gated actions; the engine rebuilds the
+/// `BridgeReceiptV1`, re-encodes, and verifies the operator quorum signed
+/// exactly those bytes. Every field is signed, so tampering fails closed.
+///
+/// Field order and widths are the engine wire — never reorder. Byte fields use
+/// the SDK newtypes, which serialize byte-for-byte identically to the engine's
+/// bare `[u8; N]` / `Vec<u8>` (see `wire.rs`), so the encoded payload matches
+/// the engine golden vectors exactly.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BridgeWithdrawalReceipt {
+    /// `bridge_core::DeploymentId` — pins Proof/Solana genesis, program, mint.
+    pub deployment_id: Pubkey,
+    /// `SHA256(Borsh(WithdrawalAuthorizationV1))`.
+    pub authorization_digest: Pubkey,
+    pub withdrawal_id: u64,
+    /// `1 = Paid`, `2 = Cancelled`.
+    pub terminal_state: u8,
+    /// `bridge_core::VaultTier` wire byte.
+    pub vault_tier: u8,
+    pub proof_owner: Address,
+    pub destination_owner: Pubkey,
+    pub destination_token_acct: Pubkey,
+    pub amount_micro_usdc: u64,
+    pub fee_micro_usdc: u64,
+    pub authorization_signer_epoch: u64,
+    /// Solana tx signature (64 bytes on the wire; length validated downstream).
+    pub solana_tx_signature: SolanaSignature,
+    pub finalized_slot: u64,
+    pub finalized_blockhash: Pubkey,
+    /// `1 = operator m-of-n`, `2 = validator stake`.
+    pub receipt_quorum_kind: u8,
+    pub receipt_authority_epoch: u64,
+}
+
+/// Operator ed25519 proof — mirrors `bridge_core::ReceiptProofV1::OperatorEd25519`.
+/// Bitmap plus one signature per set bit in ascending registry order. Raw
+/// `Vec<u8>` / `Vec<Vec<u8>>` mirror the engine wire exactly.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorReceiptProof {
+    /// `ceil(registry_len / 8)` bytes; unused high bits zero.
+    #[serde(deserialize_with = "crate::wire::hint_capped_bytes")]
+    pub signer_bitmap: Vec<u8>,
+    /// One 64-byte ed25519 signature per set bit, ascending set-bit order.
+    #[serde(deserialize_with = "crate::wire::hint_capped_byte_seqs")]
+    pub signatures: Vec<Vec<u8>>,
+}
+
+/// Receipt-gated confirmation: a finalized `Paid` `BridgeReceiptV1`. Replaces
+/// the relayer assertion in `ConfirmWithdrawal`. Permissionless to submit — the
+/// operator quorum in the receipt is the authority, not the envelope signer.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConfirmWithdrawalReceipt {
+    pub receipt: BridgeWithdrawalReceipt,
+    pub proof: OperatorReceiptProof,
+}
+
+/// Receipt-gated failure: a finalized `Cancelled` `BridgeReceiptV1`. Replaces
+/// the free-text `FailWithdrawal`; refunds `amount` only against a positive
+/// on-chain cancellation proof, never a timeout.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FailWithdrawalReceipt {
+    pub receipt: BridgeWithdrawalReceipt,
+    pub proof: OperatorReceiptProof,
+}
+
+/// Records the operator-quorum-signed `WithdrawalAuthorizationV1` for a
+/// pending withdrawal, binding its digest to the record so a terminal receipt
+/// can only settle an authorization the quorum actually issued. Permissionless
+/// to submit — the operator quorum in `proof` is the authority, not the
+/// envelope signer. Engine mirror: exchange-core `AuthorizeWithdrawal` (0x24).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthorizeWithdrawal {
+    /// The canonical `WithdrawalAuthorizationV1` bytes the quorum signed
+    /// (`bridge_core::WithdrawalAuthorizationV1::encode`, fixed 221 bytes).
+    /// Raw `Vec<u8>` mirrors the engine wire; length is verified by the
+    /// engine, not reshaped here.
+    #[serde(deserialize_with = "crate::wire::hint_capped_bytes")]
+    pub authorization: Vec<u8>,
+    /// Operator ed25519 quorum proof over the authorization bytes.
+    pub proof: OperatorReceiptProof,
+}
+
 /// Why a Solana deposit was rejected by the relayer. Mirrors the small
 /// closed set of failure modes the bridge can detect off-chain — anything
 /// else falls under [`FailDepositReason::Other`] with a free-text reason

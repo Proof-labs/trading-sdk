@@ -34,6 +34,38 @@ import {
 const OWNER = new Uint8Array(20).fill(0xaa);
 const SIGNER = new Uint8Array(20).fill(0xff);
 
+// W28-20 receipt-gated withdrawal fixtures — the engine golden values
+// (exchange-core `codec::tests::golden_receipt` / `golden_proof`).
+const RECEIPT = (
+  terminalState: number,
+): import("./types.js").BridgeWithdrawalReceipt => ({
+  deploymentId: new Uint8Array(32).fill(0x11),
+  authorizationDigest: new Uint8Array(32).fill(0x22),
+  withdrawalId: 777n,
+  terminalState,
+  vaultTier: 1,
+  proofOwner: new Uint8Array(20).fill(0x05),
+  destinationOwner: new Uint8Array(32).fill(0x06),
+  destinationTokenAcct: new Uint8Array(32).fill(0x07),
+  amountMicroUsdc: 1_000_000n,
+  feeMicroUsdc: 1_000_000n,
+  authorizationSignerEpoch: 3n,
+  solanaTxSignature: new Uint8Array(64).fill(0x10),
+  finalizedSlot: 900n,
+  finalizedBlockhash: new Uint8Array(32).fill(0x33),
+  receiptQuorumKind: 1,
+  receiptAuthorityEpoch: 3n,
+});
+const OPERATOR_PROOF = (): import("./types.js").OperatorReceiptProof => ({
+  signerBitmap: new Uint8Array([0x0f]),
+  signatures: [
+    new Uint8Array(64).fill(0xab),
+    new Uint8Array(64).fill(0xcd),
+    new Uint8Array(64).fill(0xef),
+    new Uint8Array(64).fill(0x12),
+  ],
+});
+
 // Test helpers: there's only one wire format (signed envelope), but the
 // codec round-trip tests below don't care about signature validity —
 // they just exercise encode/decode symmetry. `encodeTx` produces an
@@ -410,6 +442,27 @@ describe("codec v1 all action types", () => {
         userImBps: 2000,
       },
     },
+    {
+      type: "ConfirmWithdrawalReceipt",
+      data: {
+        receipt: RECEIPT(1),
+        proof: OPERATOR_PROOF(),
+      },
+    },
+    {
+      type: "FailWithdrawalReceipt",
+      data: {
+        receipt: RECEIPT(2),
+        proof: OPERATOR_PROOF(),
+      },
+    },
+    {
+      type: "AuthorizeWithdrawal",
+      data: {
+        authorization: new Uint8Array(221).fill(0x44),
+        proof: OPERATOR_PROOF(),
+      },
+    },
   ];
 
   for (const action of allActions) {
@@ -421,6 +474,50 @@ describe("codec v1 all action types", () => {
       expect(decoded.type).toBe(action.type);
     });
   }
+
+  it.each([
+    ["ConfirmWithdrawalReceipt", 1] as const,
+    ["FailWithdrawalReceipt", 2] as const,
+  ])(
+    "round-trips %s receipt + operator proof with full field fidelity",
+    (type, terminalState) => {
+      const action = {
+        type,
+        data: { receipt: RECEIPT(terminalState), proof: OPERATOR_PROOF() },
+      } as Action;
+      const { action: decoded } = decodeTx(encodeTx(action, 7n));
+      // The nested receipt (16 fields) and the proof (bitmap + Vec<Vec<u8>>)
+      // must survive encode→decode structurally identical.
+      expect(decoded).toEqual(action);
+    },
+  );
+
+  it("round-trips AuthorizeWithdrawal authorization bytes + operator proof", () => {
+    const action: Action = {
+      type: "AuthorizeWithdrawal",
+      data: {
+        authorization: new Uint8Array(221).fill(0x44),
+        proof: OPERATOR_PROOF(),
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 8n));
+    // The 221-byte authorization (a bare Vec<u8> on the wire) and the proof
+    // must survive encode→decode structurally identical.
+    expect(decoded).toEqual(action);
+  });
+
+  it("rejects a receipt whose fixed-width deploymentId is not 32 bytes", () => {
+    const action: Action = {
+      type: "ConfirmWithdrawalReceipt",
+      data: {
+        receipt: { ...RECEIPT(1), deploymentId: new Uint8Array(31).fill(0x11) },
+        proof: OPERATOR_PROOF(),
+      },
+    };
+    // The 32-byte Pubkey newtype in the Rust core rejects a 31-byte array, so
+    // encoding a malformed receipt fails loudly rather than emitting bad bytes.
+    expect(() => encodeTx(action, 1n)).toThrow();
+  });
 
   it("round-trips CreateMarket poolId", () => {
     const action: Action = {

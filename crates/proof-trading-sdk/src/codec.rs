@@ -159,6 +159,14 @@ impl_action_encoding! {
     ApproveAdminAction => 0x1F,
     RejectAdminAction => 0x20,
     EmergencyAdminAction => 0x21,
+    // W28-20 bridge custody: receipt-gated terminal withdrawal actions.
+    // Additive — the legacy relayer ConfirmWithdrawal (0x0A) / FailWithdrawal
+    // (0x0B) remain decodable. Engine mirror: exchange-core PR #316.
+    ConfirmWithdrawalReceipt => 0x22,
+    FailWithdrawalReceipt => 0x23,
+    // The authorization leg the terminal receipts settle against — the engine
+    // requires it recorded before 0x22/0x23 can settle.
+    AuthorizeWithdrawal => 0x24,
 }
 
 /// Byte buffer that always serializes as msgpack `bin` (0xc4/c5/c6),
@@ -445,10 +453,11 @@ pub fn peek_seq(bytes: &[u8]) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::types::{
-        AmendOrder, ApproveAgent, CancelOrder, CancelReplaceOrder, ConfirmDeposit,
-        ConfirmWithdrawal, CreateMarket, Deposit, FailWithdrawal, MarketOrder, Milliseconds,
-        OracleUpdate, OracleUpdateComposite, PlaceOrder, RevokeAgent, Side, TimeInForce,
-        UpdateMarketFees, Withdraw, WithdrawRequest,
+        AmendOrder, ApproveAgent, AuthorizeWithdrawal, BridgeWithdrawalReceipt, CancelOrder,
+        CancelReplaceOrder, ConfirmDeposit, ConfirmWithdrawal, ConfirmWithdrawalReceipt,
+        CreateMarket, Deposit, FailWithdrawal, FailWithdrawalReceipt, MarketOrder, Milliseconds,
+        OperatorReceiptProof, OracleUpdate, OracleUpdateComposite, PlaceOrder, RevokeAgent, Side,
+        TimeInForce, UpdateMarketFees, Withdraw, WithdrawRequest,
     };
     use crate::wire::{Address, Pubkey};
 
@@ -527,6 +536,167 @@ mod tests {
 
             assert_eq!(peek_action_type(&encoded_a), Some(action_type));
         }
+    }
+
+    // -- W28-20 receipt-gated terminal withdrawal actions -------------------
+
+    /// The deterministic wire receipt fixture from the engine golden test
+    /// (`exchange-core` `codec::tests::golden_receipt`).
+    fn golden_receipt(terminal_state: u8) -> BridgeWithdrawalReceipt {
+        BridgeWithdrawalReceipt {
+            deployment_id: [0x11; 32].into(),
+            authorization_digest: [0x22; 32].into(),
+            withdrawal_id: 777,
+            terminal_state,
+            vault_tier: 1,
+            proof_owner: [0x05; 20].into(),
+            destination_owner: [0x06; 32].into(),
+            destination_token_acct: [0x07; 32].into(),
+            amount_micro_usdc: 1_000_000,
+            fee_micro_usdc: 1_000_000,
+            authorization_signer_epoch: 3,
+            solana_tx_signature: vec![0x10; 64].into(),
+            finalized_slot: 900,
+            finalized_blockhash: [0x33; 32].into(),
+            receipt_quorum_kind: 1,
+            receipt_authority_epoch: 3,
+        }
+    }
+
+    fn golden_proof() -> OperatorReceiptProof {
+        OperatorReceiptProof {
+            signer_bitmap: vec![0x0F],
+            signatures: vec![
+                vec![0xAB; 64],
+                vec![0xCD; 64],
+                vec![0xEF; 64],
+                vec![0x12; 64],
+            ],
+        }
+    }
+
+    /// Byte-identity against the engine's committed golden vectors
+    /// (`docs/spec/golden-vectors/{confirm,fail}_withdrawal_receipt.hex` on
+    /// `origin/W28-20/engine-receipt-verification`). These are the payload-only
+    /// hex (envelope signature excluded so the vector does not depend on a
+    /// signing key). If a serializer change moves these bytes, the SDK↔engine
+    /// wire contract broke — fix the encoding, not the vector.
+    #[test]
+    fn w28_20_receipt_action_golden_vectors() {
+        const CONFIRM_RECEIPT_PAYLOAD_HEX: &str =
+            include_str!("../../spec/golden-vectors/confirm_withdrawal_receipt.hex");
+        const FAIL_RECEIPT_PAYLOAD_HEX: &str =
+            include_str!("../../spec/golden-vectors/fail_withdrawal_receipt.hex");
+
+        let confirm = Action::ConfirmWithdrawalReceipt(ConfirmWithdrawalReceipt {
+            receipt: golden_receipt(1),
+            proof: golden_proof(),
+        });
+        let fail = Action::FailWithdrawalReceipt(FailWithdrawalReceipt {
+            receipt: golden_receipt(2),
+            proof: golden_proof(),
+        });
+
+        let confirm_payload = hex::encode(&confirm.encode_action().unwrap().payload.0);
+        let fail_payload = hex::encode(&fail.encode_action().unwrap().payload.0);
+        assert_eq!(
+            confirm_payload,
+            CONFIRM_RECEIPT_PAYLOAD_HEX.trim(),
+            "ConfirmWithdrawalReceipt payload must be engine-identical"
+        );
+        assert_eq!(
+            fail_payload,
+            FAIL_RECEIPT_PAYLOAD_HEX.trim(),
+            "FailWithdrawalReceipt payload must be engine-identical"
+        );
+
+        // New action_type bytes, distinct from the legacy 0x0A / 0x0B.
+        assert_eq!(ConfirmWithdrawalReceipt::ACTION_TYPE, 0x22);
+        assert_eq!(FailWithdrawalReceipt::ACTION_TYPE, 0x23);
+
+        // Full-envelope round-trip: decode reconstructs the same action.
+        for (i, action) in [confirm, fail].into_iter().enumerate() {
+            assert_round_trip(&action, i as u64);
+        }
+    }
+
+    /// Malformed: a 31-byte `deployment_id` must fail to decode — the fixed
+    /// 32-byte `Pubkey` newtype rejects a short msgpack array.
+    #[test]
+    fn short_deployment_id_fails_to_decode() {
+        let good = Action::ConfirmWithdrawalReceipt(ConfirmWithdrawalReceipt {
+            receipt: golden_receipt(1),
+            proof: golden_proof(),
+        });
+        let payload = good.encode_action().unwrap().payload.0;
+        // First `dc0020` (array-of-32 header) is deployment_id; corrupt it to
+        // `dc001f` (array-of-31) so the frame is one element short.
+        let idx = payload
+            .windows(3)
+            .position(|w| w == [0xdc, 0x00, 0x20])
+            .expect("deployment_id array header present");
+        let mut bad = payload.clone();
+        bad[idx + 2] = 0x1f;
+        assert!(
+            decode_action(ConfirmWithdrawalReceipt::ACTION_TYPE, &bad).is_err(),
+            "a 31-byte deployment_id must be rejected"
+        );
+    }
+
+    /// Same regression class as `wire::tests::solana_sig_huge_length_header_errors_without_oom`:
+    /// a msgpack `array32` header (0xdd) declaring ~4.3B elements with a
+    /// truncated stream must error — never pre-allocate from the declared
+    /// length. Covers all three untrusted sequences in the operator proof:
+    /// the bitmap, the outer signature list, and an inner signature.
+    #[test]
+    fn proof_huge_seq_headers_error_without_prealloc() {
+        const HUGE: [u8; 5] = [0xdd, 0xff, 0xff, 0xff, 0xff];
+        // proof = fixarray-2 [signer_bitmap, signatures]
+        let bad_bitmap: Vec<u8> = [&[0x92][..], &HUGE].concat();
+        let bad_outer: Vec<u8> = [&[0x92, 0x91, 0x0f][..], &HUGE].concat();
+        let bad_inner: Vec<u8> = [&[0x92, 0x91, 0x0f, 0x91][..], &HUGE].concat();
+        for bad in [bad_bitmap, bad_outer, bad_inner] {
+            assert!(rmp_serde::from_slice::<OperatorReceiptProof>(&bad).is_err());
+        }
+    }
+
+    /// The authorization leg (0x24): the fixed 221-byte
+    /// `WithdrawalAuthorizationV1` bytes plus the operator proof. The engine
+    /// commits no golden `.hex` for this action (unlike 0x22/0x23), so
+    /// `authorize_withdrawal.hex` here was derived by encoding this exact
+    /// fixture with `exchange-core` itself (branch
+    /// `W28-20/engine-receipt-verification`, commit `c32f7d1`), method
+    /// control-checked by reproducing the engine's committed 0x22 vector
+    /// byte-for-byte. Replace it with the engine-committed vector once #316
+    /// adds one.
+    #[test]
+    fn w28_20_authorize_withdrawal_golden_vector() {
+        const AUTHORIZE_PAYLOAD_HEX: &str =
+            include_str!("../../spec/golden-vectors/authorize_withdrawal.hex");
+
+        assert_eq!(AuthorizeWithdrawal::ACTION_TYPE, 0x24);
+        let action = Action::AuthorizeWithdrawal(AuthorizeWithdrawal {
+            authorization: vec![0x44; 221],
+            proof: golden_proof(),
+        });
+        let payload = hex::encode(&action.encode_action().unwrap().payload.0);
+        assert_eq!(
+            payload,
+            AUTHORIZE_PAYLOAD_HEX.trim(),
+            "AuthorizeWithdrawal payload must be engine-identical"
+        );
+        assert_round_trip(&action, 9);
+    }
+
+    /// The `authorization` field is the same untrusted variable-length
+    /// sequence class as the proof fields: a huge declared length on a
+    /// truncated stream errors without pre-allocating.
+    #[test]
+    fn authorization_huge_seq_header_errors_without_prealloc() {
+        const HUGE: [u8; 5] = [0xdd, 0xff, 0xff, 0xff, 0xff];
+        // action = fixarray-2 [authorization, proof]
+        let bad: Vec<u8> = [&[0x92][..], &HUGE].concat();
+        assert!(rmp_serde::from_slice::<AuthorizeWithdrawal>(&bad).is_err());
     }
 
     #[test]
