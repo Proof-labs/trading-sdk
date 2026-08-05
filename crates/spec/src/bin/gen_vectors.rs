@@ -382,8 +382,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         ),
         // The authorization leg (0x24): the fixed 221-byte
         // `WithdrawalAuthorizationV1` bytes + the operator proof. The engine
-        // commits no golden .hex for this action, so this conformance case is
-        // the cross-language byte pin (Rust / Python / TypeScript runners).
+        // commits no golden .hex for this action; the engine-derived pin is
+        // crates/spec/golden-vectors/authorize_withdrawal.hex (see the core
+        // golden test), and this case carries it to all three runners.
         codec_case(
             "authorize_withdrawal/operator",
             AUTHORIZE_WITHDRAWAL,

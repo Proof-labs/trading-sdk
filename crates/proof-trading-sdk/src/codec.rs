@@ -661,17 +661,30 @@ mod tests {
     }
 
     /// The authorization leg (0x24): the fixed 221-byte
-    /// `WithdrawalAuthorizationV1` bytes plus the operator proof. No engine
-    /// golden vector is committed for this action (unlike 0x22/0x23) — the
-    /// cross-language byte pin lives in `conformance/codec.ndjson`
-    /// (`authorize_withdrawal/operator`), asserted by all three runners.
+    /// `WithdrawalAuthorizationV1` bytes plus the operator proof. The engine
+    /// commits no golden `.hex` for this action (unlike 0x22/0x23), so
+    /// `authorize_withdrawal.hex` here was derived by encoding this exact
+    /// fixture with `exchange-core` itself (branch
+    /// `W28-20/engine-receipt-verification`, commit `c32f7d1`), method
+    /// control-checked by reproducing the engine's committed 0x22 vector
+    /// byte-for-byte. Replace it with the engine-committed vector once #316
+    /// adds one.
     #[test]
-    fn w28_20_authorize_withdrawal_round_trip() {
+    fn w28_20_authorize_withdrawal_golden_vector() {
+        const AUTHORIZE_PAYLOAD_HEX: &str =
+            include_str!("../../spec/golden-vectors/authorize_withdrawal.hex");
+
         assert_eq!(AuthorizeWithdrawal::ACTION_TYPE, 0x24);
         let action = Action::AuthorizeWithdrawal(AuthorizeWithdrawal {
             authorization: vec![0x44; 221],
             proof: golden_proof(),
         });
+        let payload = hex::encode(&action.encode_action().unwrap().payload.0);
+        assert_eq!(
+            payload,
+            AUTHORIZE_PAYLOAD_HEX.trim(),
+            "AuthorizeWithdrawal payload must be engine-identical"
+        );
         assert_round_trip(&action, 9);
     }
 

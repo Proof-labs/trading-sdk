@@ -62,9 +62,11 @@ engine rejects those action types.
   `WithdrawalAuthorizationV1` bytes (`bridge_core` fixed encoding) plus the
   same `OperatorReceiptProof`. The engine requires it recorded before a
   `0x22`/`0x23` receipt can settle. The engine commits no golden `.hex` for
-  this action; the cross-language byte pin is the
-  `authorize_withdrawal/operator` conformance vector, asserted by the Rust,
-  Python, and TypeScript runners.
+  this action; the byte pin is `crates/spec/golden-vectors/authorize_withdrawal.hex`,
+  derived by encoding the fixture with `exchange-core` itself (engine branch
+  commit `c32f7d1`, method control-checked against the committed `0x22`
+  vector), asserted by the Rust golden test plus the
+  `authorize_withdrawal/operator` conformance vector in all three runners.
 
 ### Changed
 
