@@ -68,6 +68,10 @@ export const ActionType = {
   /** Records the operator-quorum-signed `WithdrawalAuthorizationV1` a terminal
    *  receipt (0x22/0x23) must settle against. Permissionless to submit. W28-20. */
   AuthorizeWithdrawal: 0x24,
+  /** Atomically replace a whole-position stop-loss/take-profit bracket. */
+  SetPositionTriggers: 0x25,
+  /** Cancel the bracket attached to an exact position generation. */
+  CancelPositionTriggers: 0x26,
   /** Approve a delegate agent wallet to trade on the owner's behalf. */
   ApproveAgent: 0x0c,
   /** Revoke a previously approved agent wallet. */
@@ -519,6 +523,46 @@ export interface AuthorizeWithdrawal {
   proof: OperatorReceiptProof;
 }
 
+/** One optional limb of a whole-position protection bracket. */
+export interface TriggerLimb {
+  /** Trigger threshold in micro-USDC; must be non-zero. */
+  triggerPrice: bigint;
+  /** IOC execution collar in basis points; must be in `1..=9999`. */
+  maxSlippageBps: number;
+  /** Optional non-zero client correlation id for this limb. */
+  clientTriggerId?: bigint | null;
+}
+
+/** Atomically replace the owner's complete stop-loss/take-profit bracket. */
+export interface SetPositionTriggers {
+  market: number;
+  owner: Address;
+  /** Current position generation read from `/v1/triggers/{owner}`. */
+  expectedPositionEpoch: bigint;
+  stopLoss?: TriggerLimb | null;
+  takeProfit?: TriggerLimb | null;
+  /** Optional non-zero idempotency/correlation id for the whole bracket. */
+  clientGroupId?: bigint | null;
+}
+
+/** Cancel the active bracket for one exact position generation. */
+export interface CancelPositionTriggers {
+  market: number;
+  owner: Address;
+  expectedPositionEpoch: bigint;
+}
+
+/** Complete multisig-controlled trigger policy for one market (admin tag 5). */
+export interface SetTriggerMarketConfig {
+  market: number;
+  expectedCurrentVersion?: bigint | null;
+  enabled: boolean;
+  maxTriggerSlippageBps: number;
+  maxMarkAgeMs: bigint;
+  maxFuturePublishSkewMs: bigint;
+  maxActiveBrackets: bigint;
+}
+
 /**
  * Approve a delegate keypair ("agent wallet") to trade on the owner's behalf.
  * The agent can place/cancel orders but CANNOT withdraw or move funds.
@@ -856,7 +900,9 @@ export type TraderAction =
   | { type: "ApproveAgent"; data: ApproveAgent }
   | { type: "RevokeAgent"; data: RevokeAgent }
   | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage }
-  | { type: "ClosePosition"; data: ClosePosition };
+  | { type: "ClosePosition"; data: ClosePosition }
+  | { type: "SetPositionTriggers"; data: SetPositionTriggers }
+  | { type: "CancelPositionTriggers"; data: CancelPositionTriggers };
 
 /**
  * Operator actions — privileged infrastructure submitted by the operator's
@@ -930,7 +976,8 @@ export type AdminAction =
   | { kind: "CreateMarket"; value: CreateMarket }
   | { kind: "UpdateAdminSignerRegistry"; value: UpdateAdminSignerRegistry }
   | { kind: "CreateImpactMarket"; value: CreateImpactMarket }
-  | { kind: "Batch"; value: AdminBatchItem[] };
+  | { kind: "Batch"; value: AdminBatchItem[] }
+  | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig };
 
 /**
  * Closed set of immediate, loss-reducing single-signer actions. Reverse
@@ -1490,6 +1537,301 @@ export interface OpenOrder {
   quantity: bigint;
 }
 
+export type TriggerKind = "StopLoss" | "TakeProfit";
+export type TriggerLimbState =
+  | "Armed"
+  | "Filled"
+  | "Partial"
+  | "NoFill"
+  | "Rejected"
+  | "Cancelled"
+  | "Invalidated";
+export type TriggerOutcomeReason =
+  | "PositionClosed"
+  | "PositionEpochChanged"
+  | "PositionSideChanged"
+  | "BelowMaintenance"
+  | "IndeterminateAccount"
+  | "MarketDisabled"
+  | "MarkUnavailable"
+  | "MarkStale"
+  | "MarkFutureDated"
+  | "NoEligibleLiquidity"
+  | "SelfTradePrevention"
+  | "WorkLimitReached"
+  | "ExecutionRejected";
+
+/** Last deterministic evaluation of one stored trigger limb. */
+export interface TriggerEvaluation {
+  height: bigint;
+  frozenMark: bigint;
+  limitPrice: bigint | null;
+  requestedQuantity: bigint;
+  filledQuantity: bigint;
+  residualQuantity: bigint;
+  reason: TriggerOutcomeReason | null;
+}
+
+/** Engine-owned state for one stop-loss/take-profit limb. */
+export interface StoredTriggerLimb {
+  limbId: bigint;
+  kind: TriggerKind;
+  triggerPrice: bigint;
+  maxSlippageBps: number;
+  clientTriggerId: bigint | null;
+  state: TriggerLimbState;
+  lastEvaluation: TriggerEvaluation | null;
+}
+
+/** Effective trigger policy returned alongside each bracket. */
+export interface TriggerMarketConfig {
+  version: bigint;
+  enabled: boolean;
+  maxTriggerSlippageBps: number;
+  maxMarkAgeMs: bigint;
+  maxFuturePublishSkewMs: bigint;
+  maxActiveBrackets: bigint;
+}
+
+/** A governed trigger policy accepted in one block and effective next block. */
+export interface PendingTriggerMarketConfig {
+  config: TriggerMarketConfig;
+  acceptedHeight: bigint;
+  effectiveHeight: bigint;
+}
+
+/** Current and scheduled policy for one trigger-enabled market. */
+export interface TriggerMarketConfigState {
+  current: TriggerMarketConfig | null;
+  pending: PendingTriggerMarketConfig | null;
+}
+
+/** One row returned by `GET /v1/triggers/markets`. */
+export interface TriggerMarketConfigInfo {
+  market: number;
+  state: TriggerMarketConfigState;
+}
+
+/** Why a stored bracket is or is not eligible at the finalized height. */
+export type TriggerEffectiveAvailability =
+  | { kind: "Available" }
+  | { kind: "TriggerActionsInactive" }
+  | { kind: "PendingActivation" }
+  | { kind: "MigrationIncomplete" }
+  | { kind: "ConfigurationMissing" }
+  | { kind: "MarketDisabled" }
+  | { kind: "Deferred"; reason: TriggerOutcomeReason };
+
+/** Current protected position generation and both optional limbs. */
+export interface PositionTriggerBracket {
+  groupId: bigint;
+  owner: Address;
+  market: number;
+  positionEpoch: bigint;
+  positionSide: "Buy" | "Sell";
+  acceptedHeight: bigint;
+  activeFromHeight: bigint;
+  clientGroupId: bigint | null;
+  stopLoss: StoredTriggerLimb | null;
+  takeProfit: StoredTriggerLimb | null;
+}
+
+/** One owner/market row returned by `GET /v1/triggers/{owner}`. */
+export interface PositionTriggerInfo {
+  bracket: PositionTriggerBracket;
+  marketConfig: TriggerMarketConfig | null;
+  availability: TriggerEffectiveAvailability;
+}
+
+/** Next-height admission predicate returned by `GET /v1/triggers/status`. */
+export interface TriggerStatus {
+  finalizedHeight: bigint;
+  admissionHeight: bigint;
+  actionsActive: boolean;
+}
+
+/** Time-window spelling accepted by the trigger-history indexer. */
+export type TriggerHistoryTime = string | number | bigint;
+
+/** Filters bound into an owner-history cursor. */
+export interface PositionTriggerHistoryFilters {
+  market?: number;
+  from?: TriggerHistoryTime;
+  to?: TriggerHistoryTime;
+  limit?: number;
+  /** Opaque, non-empty token returned by the same filter set. */
+  cursor?: string;
+}
+
+/** Filters bound into a shared market-history cursor. */
+export interface TriggerMarketHistoryFilters {
+  from?: TriggerHistoryTime;
+  to?: TriggerHistoryTime;
+  limit?: number;
+  /** Opaque, non-empty token returned by the same filter set. */
+  cursor?: string;
+}
+
+export type PositionTriggerHistoryEventType =
+  | "position_triggers_set"
+  | "position_triggers_cancelled"
+  | "position_triggers_invalidated"
+  | "position_trigger_activated"
+  | "position_trigger_executed"
+  | "position_trigger_deferred";
+
+export type TriggerMarketHistoryEventType =
+  "trigger_market_deferred" | "trigger_market_resumed";
+
+export type TriggerHistoryEventType =
+  PositionTriggerHistoryEventType | TriggerMarketHistoryEventType;
+
+/** Raw canonical engine attributes retained losslessly by the indexer. */
+export interface TriggerHistoryPayloadBase {
+  readonly [key: string]: string;
+  event_key: string;
+  block_height: string;
+  execution_ordinal: string;
+  event_ordinal: string;
+  market: string;
+}
+
+export interface OwnerTriggerHistoryPayloadBase extends TriggerHistoryPayloadBase {
+  owner: string;
+  position_epoch: string;
+  group_id: string;
+}
+
+export interface PositionTriggersSetHistoryPayload extends OwnerTriggerHistoryPayloadBase {
+  client_group_id: string;
+  stop_limb_id: string;
+  stop_client_trigger_id: string;
+  take_profit_limb_id: string;
+  take_profit_client_trigger_id: string;
+  accepted_height: string;
+  active_from_height: string;
+  replaced_group_id: string;
+}
+
+export type PositionTriggersCancelledHistoryPayload =
+  OwnerTriggerHistoryPayloadBase;
+export type PositionTriggersInvalidatedHistoryPayload =
+  OwnerTriggerHistoryPayloadBase;
+
+export interface PositionTriggerActivatedHistoryPayload extends OwnerTriggerHistoryPayloadBase {
+  limb_id: string;
+  client_group_id: string;
+  client_trigger_id: string;
+  limb_kind: "stop_loss" | "take_profit";
+  trigger_price: string;
+  frozen_mark: string;
+  limit_price: string;
+  requested_quantity: string;
+  execution_order_id: string;
+}
+
+export interface PositionTriggerExecutedHistoryPayload extends PositionTriggerActivatedHistoryPayload {
+  filled_quantity: string;
+  residual_quantity: string;
+  /** Signed aggregate fee; kept as a decimal string. */
+  total_fee: string;
+  result: "filled" | "partial" | "no_fill" | "rejected" | "invalidated";
+  /** Empty when the terminal outcome has no additional reason. */
+  reason: string;
+}
+
+export interface PositionTriggerDeferredHistoryPayload extends OwnerTriggerHistoryPayloadBase {
+  limb_id: string;
+  client_group_id: string;
+  client_trigger_id: string;
+  limb_kind: "stop_loss" | "take_profit";
+  trigger_price: string;
+  frozen_mark: string;
+  requested_quantity: string;
+  reason: string;
+}
+
+export interface TriggerMarketDeferredHistoryPayload extends TriggerHistoryPayloadBase {
+  reason: string;
+}
+
+export interface TriggerMarketResumedHistoryPayload extends TriggerHistoryPayloadBase {
+  previous_reason: string;
+}
+
+/** One immutable chain-coordinate-keyed trigger history event. */
+export interface TriggerHistoryEvent<
+  TType extends TriggerHistoryEventType,
+  TOwner extends string | null,
+  TPayload extends TriggerHistoryPayloadBase,
+> {
+  eventKey: string;
+  blockHeight: string;
+  executionOrdinal: string;
+  eventOrdinal: string;
+  blockTime: string;
+  eventType: TType;
+  owner: TOwner;
+  market: string;
+  payload: TPayload;
+}
+
+export type PositionTriggerHistoryEvent =
+  | TriggerHistoryEvent<
+      "position_triggers_set",
+      string,
+      PositionTriggersSetHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "position_triggers_cancelled",
+      string,
+      PositionTriggersCancelledHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "position_triggers_invalidated",
+      string,
+      PositionTriggersInvalidatedHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "position_trigger_activated",
+      string,
+      PositionTriggerActivatedHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "position_trigger_executed",
+      string,
+      PositionTriggerExecutedHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "position_trigger_deferred",
+      string,
+      PositionTriggerDeferredHistoryPayload
+    >;
+
+export type TriggerMarketHistoryEvent =
+  | TriggerHistoryEvent<
+      "trigger_market_deferred",
+      null,
+      TriggerMarketDeferredHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "trigger_market_resumed",
+      null,
+      TriggerMarketResumedHistoryPayload
+    >;
+
+export interface PositionTriggerHistoryPage {
+  triggerEvents: PositionTriggerHistoryEvent[];
+  /** Empty when exhausted; otherwise pass back unchanged. */
+  nextCursor: string;
+}
+
+export interface TriggerMarketHistoryPage {
+  triggerMarketEvents: TriggerMarketHistoryEvent[];
+  /** Empty when exhausted; otherwise pass back unchanged. */
+  nextCursor: string;
+}
+
 /** One row of the auto-deleveraging queue for a market. Returned sorted by
  *  `adlScore` desc (front of the queue first). Decoded from the msgpack
  *  6-tuple `[owner, market, side, size, upnlNow, adlScore]`. Endpoint:
@@ -1594,6 +1936,11 @@ export interface PositionInfo {
    *  per-market percentile and warn at >90th percentile (the v3
    *  design-doc threshold). Added 2026-04-25. */
   adlScore?: bigint;
+  /** [13] Persistent generation of this live position. This is the only
+   * canonical first-attach input for `SetPositionTriggers`; absent means the
+   * bounded legacy backfill has not reached this row and callers must refuse
+   * trigger placement rather than guess `1`. */
+  positionEpoch?: bigint;
 }
 
 /** One entry per active impact market the account touches. Tuple of

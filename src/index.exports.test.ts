@@ -20,6 +20,17 @@ import {
   type ApproveAdminAction,
   type RejectAdminAction,
   type EmergencyAdminAction,
+  type SetPositionTriggers,
+  type CancelPositionTriggers,
+  type TriggerStatus,
+  type PositionTriggerHistoryEvent,
+  type TriggerMarketHistoryEvent,
+  type PositionTriggerHistoryPage,
+  type TriggerMarketHistoryPage,
+  type TriggerMarketConfigInfo,
+  decodeTriggerMarketConfigInfos,
+  decodePositionTriggerHistoryPage,
+  decodeTriggerMarketHistoryPage,
 } from "./index.js";
 
 describe("public barrel: governance surface", () => {
@@ -28,6 +39,8 @@ describe("public barrel: governance surface", () => {
     expect(ActionType.ApproveAdminAction).toBe(0x1f);
     expect(ActionType.RejectAdminAction).toBe(0x20);
     expect(ActionType.EmergencyAdminAction).toBe(0x21);
+    expect(ActionType.SetPositionTriggers).toBe(0x25);
+    expect(ActionType.CancelPositionTriggers).toBe(0x26);
   });
 
   it("re-exports the governance types (compile-time reachability)", () => {
@@ -80,5 +93,40 @@ describe("public barrel: governance surface", () => {
       { type: "EmergencyAdminAction", data: emergencyAction },
     ];
     expect(governance).toHaveLength(4);
+
+    const set: SetPositionTriggers = {
+      market: 1,
+      owner: new Uint8Array(20),
+      expectedPositionEpoch: 1n,
+      stopLoss: { triggerPrice: 1n, maxSlippageBps: 1 },
+    };
+    const cancel: CancelPositionTriggers = {
+      market: 1,
+      owner: new Uint8Array(20),
+      expectedPositionEpoch: 1n,
+    };
+    const status: TriggerStatus = {
+      finalizedHeight: 1n,
+      admissionHeight: 2n,
+      actionsActive: false,
+    };
+    const ownerEvent = null as PositionTriggerHistoryEvent | null;
+    const marketEvent = null as TriggerMarketHistoryEvent | null;
+    const ownerPage = null as PositionTriggerHistoryPage | null;
+    const marketPage = null as TriggerMarketHistoryPage | null;
+    const configInfo = null as TriggerMarketConfigInfo | null;
+    expect([
+      set,
+      cancel,
+      status,
+      ownerEvent,
+      marketEvent,
+      ownerPage,
+      marketPage,
+      configInfo,
+    ]).toHaveLength(8);
+    expect(decodePositionTriggerHistoryPage).toBeTypeOf("function");
+    expect(decodeTriggerMarketHistoryPage).toBeTypeOf("function");
+    expect(decodeTriggerMarketConfigInfos).toBeTypeOf("function");
   });
 });

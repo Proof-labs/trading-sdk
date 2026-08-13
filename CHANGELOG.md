@@ -38,6 +38,17 @@ engine rejects those action types.
 
 ### Added
 
+- **Position-linked stop-loss/take-profit support (W32-10)** — canonical
+  `SetPositionTriggers` (`0x25`) and `CancelPositionTriggers` (`0x26`) wire
+  actions, governed trigger-market configuration tag `0x05`, delegated-owner
+  signing, persistent position-epoch discovery, current trigger/config/status
+  reads, and lossless owner/market lifecycle-history reads now ship across the
+  Rust, WASM/TypeScript, and Python bindings. Engine-produced golden vectors
+  pin both action payloads/envelopes and the administration content hash; all
+  JSON-facing `u64` identifiers remain decimal strings or native lossless
+  integer types. This additive surface folds into the still-uncut `3.0.0`
+  release and requires the coordinated W32-10 engine/gateway contract
+  (`exchange-core >= 2.5.0`) before it is advertised as active.
 - **Receipt-carrying terminal withdrawal actions `ConfirmWithdrawalReceipt`
   (`0x22`) and `FailWithdrawalReceipt` (`0x23`)** — the operator-multisig
   withdrawal-settlement phase (W28-20). Each carries a

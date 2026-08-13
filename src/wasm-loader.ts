@@ -68,6 +68,41 @@ function isNode(): boolean {
   return typeof g.process?.versions?.node === "string";
 }
 
+interface NodeProcess {
+  versions?: { node?: string };
+  getBuiltinModule?: (name: string) => unknown;
+}
+
+interface NodeFs {
+  readFileSync(path: string): BufferSource;
+}
+
+interface NodeUrl {
+  fileURLToPath(url: URL): string;
+}
+
+/**
+ * Resolve Node built-ins without placing a statically discoverable `node:*`
+ * import in the browser dependency graph. Next/Webpack follows ordinary
+ * dynamic-import specifiers even when their branch is runtime-only. Node 22+
+ * uses `process.getBuiltinModule`; Node 20 uses a deliberately hidden native
+ * dynamic import so existing integration runners remain supported.
+ */
+async function nodeBuiltin<T>(name: string): Promise<T> {
+  const process = (globalThis as { process?: NodeProcess }).process;
+  if (process?.getBuiltinModule) {
+    return process.getBuiltinModule(name) as T;
+  }
+  // `Function` keeps the `node:` specifier out of Webpack's module graph. It
+  // runs only in the Node branch; browsers never evaluate it. Do not replace
+  // this with `import("node:fs")` without rerunning the Next/Webpack consumer
+  // smoke test.
+  const nativeImport = Function("specifier", "return import(specifier)") as (
+    specifier: string,
+  ) => Promise<unknown>;
+  return (await nativeImport(`node:${name}`)) as T;
+}
+
 /**
  * Initialize the WASM core (idempotent). Resolves once the module is ready;
  * concurrent callers share a single instantiation.
@@ -102,13 +137,8 @@ async function instantiate(): Promise<WasmCore> {
     import.meta.url,
   );
   if (isNode()) {
-    // Computed specifiers + loose casts keep `tsc` from needing Node types.
-    const fs = (await import(/* @vite-ignore */ "node:fs" as string)) as {
-      readFileSync: (p: string) => BufferSource;
-    };
-    const url = (await import(/* @vite-ignore */ "node:url" as string)) as {
-      fileURLToPath: (u: URL) => string;
-    };
+    const fs = await nodeBuiltin<NodeFs>("fs");
+    const url = await nodeBuiltin<NodeUrl>("url");
     const path = url.fileURLToPath(wasmUrl);
     await mod.default({ module_or_path: fs.readFileSync(path) });
   } else {

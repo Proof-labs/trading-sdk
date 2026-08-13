@@ -96,12 +96,16 @@ try {
   Side,
   TimeInForce,
   bytesToHex,
+  decodeTriggerMarketConfigInfos,
+  decodeTriggerMarketHistoryPage,
   encodePayloadBytes,
   ready,
 } from "@proof/trading-sdk";
 
 const expected =
   "9901dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463";
+const expectedTrigger =
+  "9607dc0014cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca50393ce000173184b0b93ce0001adb0320c09";
 const result = document.querySelector("#result");
 
 try {
@@ -124,8 +128,35 @@ try {
   if (payloadHex !== expected) {
     throw new Error(\`payload mismatch: got \${payloadHex}, expected \${expected}\`);
   }
-  globalThis.__proofSdkSmoke = { status: "passed", payloadHex };
-  result.textContent = \`proof-sdk-wasm-ok:\${payloadHex}\`;
+  const triggerPayloadHex = bytesToHex(encodePayloadBytes({
+    type: "SetPositionTriggers",
+    data: {
+      market: 7,
+      owner: new Uint8Array(20).fill(0xa5),
+      expectedPositionEpoch: 3n,
+      stopLoss: { triggerPrice: 95000n, maxSlippageBps: 75, clientTriggerId: 11n },
+      takeProfit: { triggerPrice: 110000n, maxSlippageBps: 50, clientTriggerId: 12n },
+      clientGroupId: 9n,
+    },
+  }));
+  if (triggerPayloadHex !== expectedTrigger) {
+    throw new Error(\`trigger payload mismatch: got \${triggerPayloadHex}, expected \${expectedTrigger}\`);
+  }
+  const history = decodeTriggerMarketHistoryPage(
+    { trigger_market_events: [], next_cursor: "" },
+    7,
+  );
+  if (history.nextCursor !== "" || history.triggerMarketEvents.length !== 0) {
+    throw new Error("trigger history package export returned malformed empty page");
+  }
+  const configs = decodeTriggerMarketConfigInfos([
+    [7, [[1n, true, 250, 5000n, 1000n, 32n], null]],
+  ]);
+  if (configs.length !== 1 || configs[0].state.current?.maxTriggerSlippageBps !== 250) {
+    throw new Error("trigger market config package export returned malformed policy");
+  }
+  globalThis.__proofSdkSmoke = { status: "passed", payloadHex, triggerPayloadHex };
+  result.textContent = \`proof-sdk-wasm-ok:\${triggerPayloadHex}\`;
 } catch (error) {
   const message = error instanceof Error ? error.stack || error.message : String(error);
   globalThis.__proofSdkSmoke = { status: "failed", error: message };

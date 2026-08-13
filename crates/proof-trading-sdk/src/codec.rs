@@ -167,6 +167,9 @@ impl_action_encoding! {
     // The authorization leg the terminal receipts settle against — the engine
     // requires it recorded before 0x22/0x23 can settle.
     AuthorizeWithdrawal => 0x24,
+    // W32-10 whole-position stop-loss/take-profit bracket management.
+    SetPositionTriggers => 0x25,
+    CancelPositionTriggers => 0x26,
 }
 
 /// Byte buffer that always serializes as msgpack `bin` (0xc4/c5/c6),
@@ -454,10 +457,12 @@ mod tests {
     use super::*;
     use crate::types::{
         AmendOrder, ApproveAgent, AuthorizeWithdrawal, BridgeWithdrawalReceipt, CancelOrder,
-        CancelReplaceOrder, ConfirmDeposit, ConfirmWithdrawal, ConfirmWithdrawalReceipt,
-        CreateMarket, Deposit, FailWithdrawal, FailWithdrawalReceipt, MarketOrder, Milliseconds,
-        OperatorReceiptProof, OracleUpdate, OracleUpdateComposite, PlaceOrder, RevokeAgent, Side,
-        TimeInForce, UpdateMarketFees, Withdraw, WithdrawRequest,
+        CancelPositionTriggers, CancelReplaceOrder, ClientTriggerGroupId, ClientTriggerId,
+        ConfirmDeposit, ConfirmWithdrawal, ConfirmWithdrawalReceipt, CreateMarket, Deposit,
+        FailWithdrawal, FailWithdrawalReceipt, MarketOrder, Milliseconds, OperatorReceiptProof,
+        OracleUpdate, OracleUpdateComposite, PlaceOrder, PositionEpoch, RevokeAgent,
+        SetPositionTriggers, Side, TimeInForce, TriggerLimb, TriggerSlippageBps, UpdateMarketFees,
+        Withdraw, WithdrawRequest,
     };
     use crate::wire::{Address, Pubkey};
 
@@ -686,6 +691,95 @@ mod tests {
             "AuthorizeWithdrawal payload must be engine-identical"
         );
         assert_round_trip(&action, 9);
+    }
+
+    /// Literal engine vectors from exchange-core's
+    /// `position_trigger_wire_vectors_are_typed_and_stable` test. These pin
+    /// both the positional payload and V2 signed-envelope framing.
+    #[test]
+    fn w32_10_position_trigger_engine_golden_vectors() {
+        let set = Action::SetPositionTriggers(SetPositionTriggers {
+            market: 7,
+            owner: [0xA5; 20].into(),
+            expected_position_epoch: PositionEpoch(3),
+            stop_loss: Some(TriggerLimb {
+                trigger_price: 95_000,
+                max_slippage_bps: TriggerSlippageBps(75),
+                client_trigger_id: Some(ClientTriggerId(11)),
+            }),
+            take_profit: Some(TriggerLimb {
+                trigger_price: 110_000,
+                max_slippage_bps: TriggerSlippageBps(50),
+                client_trigger_id: Some(ClientTriggerId(12)),
+            }),
+            client_group_id: Some(ClientTriggerGroupId(9)),
+        });
+        let cancel = Action::CancelPositionTriggers(CancelPositionTriggers {
+            market: 7,
+            owner: [0xA5; 20].into(),
+            expected_position_epoch: PositionEpoch(3),
+        });
+
+        for (action, action_type, payload_hex, envelope_hex) in [
+            (
+                set,
+                0x25,
+                "9607dc0014cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca50393ce000173184b0b93ce0001adb0320c09",
+                "9602252ac43f9607dc0014cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca50393ce000173184b0b93ce0001adb0320c09c4201111111111111111111111111111111111111111111111111111111111111111c44022222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222",
+            ),
+            (
+                cancel,
+                0x26,
+                "9307dc0014cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca503",
+                "9602262ac42e9307dc0014cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca503c4201111111111111111111111111111111111111111111111111111111111111111c44022222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222",
+            ),
+        ] {
+            let encoded = action.encode_action().expect("trigger payload encodes");
+            assert_eq!(encoded.action_type, action_type);
+            assert_eq!(hex::encode(&encoded.payload.0), payload_hex);
+            assert_eq!(
+                hex::encode(encode_signed_tx(&action, 42, &[0x11; 32], &[0x22; 64]).unwrap()),
+                envelope_hex
+            );
+            assert_round_trip(&action, 42);
+        }
+    }
+
+    #[test]
+    fn w32_10_position_trigger_static_validation() {
+        let limb = TriggerLimb {
+            trigger_price: 1,
+            max_slippage_bps: TriggerSlippageBps(1),
+            client_trigger_id: Some(ClientTriggerId(7)),
+        };
+        let valid = SetPositionTriggers {
+            market: 1,
+            owner: [0x01; 20].into(),
+            expected_position_epoch: PositionEpoch(1),
+            stop_loss: Some(limb.clone()),
+            take_profit: None,
+            client_group_id: Some(ClientTriggerGroupId(1)),
+        };
+        assert_eq!(valid.validate_fields(), Ok(()));
+
+        let mut invalid = valid.clone();
+        invalid.expected_position_epoch = PositionEpoch(0);
+        assert_eq!(
+            invalid.validate_fields(),
+            Err(crate::types::TriggerValidationError::ZeroPositionEpoch)
+        );
+        invalid = valid.clone();
+        invalid.stop_loss = None;
+        assert_eq!(
+            invalid.validate_fields(),
+            Err(crate::types::TriggerValidationError::EmptyBracket)
+        );
+        invalid = valid;
+        invalid.take_profit = Some(limb);
+        assert_eq!(
+            invalid.validate_fields(),
+            Err(crate::types::TriggerValidationError::DuplicateClientTriggerId)
+        );
     }
 
     /// The `authorization` field is the same untrusted variable-length

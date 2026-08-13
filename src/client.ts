@@ -42,6 +42,14 @@ import type {
   AdminSignerRegistry,
   ProposalPage,
   ImpactMarketInfo,
+  SetPositionTriggers,
+  PositionTriggerInfo,
+  TriggerStatus,
+  PositionTriggerHistoryFilters,
+  PositionTriggerHistoryPage,
+  TriggerMarketHistoryFilters,
+  TriggerMarketHistoryPage,
+  TriggerMarketConfigInfo,
 } from "./types.js";
 import {
   decodeAdminSignerRegistryInfo,
@@ -50,6 +58,20 @@ import {
 } from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
 import { sha256 } from "@noble/hashes/sha2.js";
+import {
+  decodePositionTriggerInfos,
+  decodeTriggerMarketConfigInfos,
+  decodeTriggerStatusJson,
+  validateCancelPositionTriggers,
+  validateSetPositionTriggers,
+} from "./triggers.js";
+import {
+  decodePositionTriggerHistoryPage,
+  decodeTriggerMarketHistoryPage,
+  positionTriggerHistorySearchParams,
+  triggerMarketHistorySearchParams,
+  validateTriggerHistoryMarket,
+} from "./trigger-history.js";
 
 const msgpackDecoder = new Decoder({ useBigInt64: true });
 
@@ -1004,6 +1026,35 @@ export class ExchangeClient {
     });
   }
 
+  /** Atomically replace a complete SL/TP bracket. When `owner` is omitted,
+   * use the loaded signer; a version-active trading agent may pass the
+   * delegated owner explicitly. The engine remains the authorization source. */
+  async setPositionTriggers(
+    params: Omit<SetPositionTriggers, "owner"> & { owner?: Uint8Array },
+  ): Promise<TxResult> {
+    const data: SetPositionTriggers = {
+      ...params,
+      owner: params.owner ?? this.requireOwner(),
+    };
+    validateSetPositionTriggers(data);
+    return this.submitTx({ type: "SetPositionTriggers", data });
+  }
+
+  /** Cancel the loaded signer's bracket for one exact position generation. */
+  async cancelPositionTriggers(
+    market: number,
+    expectedPositionEpoch: bigint,
+    owner?: Uint8Array,
+  ): Promise<TxResult> {
+    const data = {
+      market,
+      owner: owner ?? this.requireOwner(),
+      expectedPositionEpoch,
+    };
+    validateCancelPositionTriggers(data);
+    return this.submitTx({ type: "CancelPositionTriggers", data });
+  }
+
   // -----------------------------------------------------------------------
   // Query endpoints
   // -----------------------------------------------------------------------
@@ -1069,6 +1120,92 @@ export class ExchangeClient {
       throw new Error("governance decode: impactMarkets is not an array");
     }
     return raw.map((r, i) => decodeImpactMarketInfo(r, i));
+  }
+
+  /** Current whole-position trigger brackets for one owner. Immutable
+   * lifecycle history is a separate gateway/indexer query below. */
+  async queryPositionTriggers(
+    addressHex?: string,
+  ): Promise<PositionTriggerInfo[]> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) throw new Error("No address available");
+    if (!/^[0-9a-fA-F]{40}$/.test(hex)) {
+      throw new Error("trigger owner must be a 40-character hex address");
+    }
+    const path = `/v1/triggers/${hex.toLowerCase()}`;
+    const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return decodePositionTriggerInfos(msgpackDecoder.decode(bytes));
+  }
+
+  /** Read the complete governed trigger-market policy registry. Missing
+   * markets are disabled; callers must never synthesize a default policy. */
+  async queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]> {
+    const path = "/v1/triggers/markets";
+    const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return decodeTriggerMarketConfigInfos(msgpackDecoder.decode(bytes));
+  }
+
+  /** Read the fail-closed next-height trigger admission predicate. Heights
+   * are parsed from raw JSON into bigint without a lossy Number round-trip. */
+  async queryTriggerStatus(): Promise<TriggerStatus> {
+    const path = "/v1/triggers/status";
+    const res = await fetch(`${this.readBaseUrl}${path}`);
+    const text = await res.text();
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      try {
+        const body = JSON.parse(text) as { error?: unknown };
+        if (typeof body.error === "string") message = body.error;
+      } catch {
+        // Keep the HTTP fallback for a non-JSON upstream response.
+      }
+      throw new Error(`API error: ${message}`);
+    }
+    return decodeTriggerStatusJson(text);
+  }
+
+  /** Immutable owner-bearing trigger lifecycle history. This always uses the
+   * public gateway, including when the client is configured for direct-node
+   * current-state reads; the node does not own indexer history. */
+  async queryPositionTriggerHistory(
+    addressHex?: string,
+    filters: PositionTriggerHistoryFilters = {},
+  ): Promise<PositionTriggerHistoryPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) throw new Error("No address available");
+    if (!/^[0-9a-fA-F]{40}$/.test(hex)) {
+      throw new Error(
+        "trigger history owner must be a 40-character hex address",
+      );
+    }
+    const canonicalOwner = hex.toLowerCase();
+    const params = positionTriggerHistorySearchParams(filters);
+    const qs = params.toString();
+    const json = await fetchApiJson(
+      `${this.gatewayUrl}/v1/history/triggers/${canonicalOwner}${qs ? `?${qs}` : ""}`,
+    );
+    return decodePositionTriggerHistoryPage(
+      json,
+      canonicalOwner,
+      filters.market,
+    );
+  }
+
+  /** Shared market-level deferred/resumed trigger transitions. These are not
+   * duplicated into every owner's history and always route through gateway. */
+  async queryTriggerMarketHistory(
+    market: number,
+    filters: TriggerMarketHistoryFilters = {},
+  ): Promise<TriggerMarketHistoryPage> {
+    validateTriggerHistoryMarket(market);
+    const params = triggerMarketHistorySearchParams(filters);
+    const qs = params.toString();
+    const json = await fetchApiJson(
+      `${this.gatewayUrl}/v1/history/trigger-markets/${market}${qs ? `?${qs}` : ""}`,
+    );
+    return decodeTriggerMarketHistoryPage(json, market);
   }
 
   /**
@@ -1181,9 +1318,10 @@ export class ExchangeClient {
     const balance = BigInt(raw[0] as number | bigint);
     const positions: PositionInfo[] = ((raw[1] ?? []) as unknown[][]).map(
       (p) => {
-        // Optional enrichments (indices 6-12) shipped incrementally:
+        // Optional enrichments (indices 6-13) shipped incrementally:
         //   6-11: scenario-aware brief fields, 2026-04-24 (P1 #2).
         //   12  : adlScore, 2026-04-25 (item 7 — ADL rank surface).
+        //   13  : persistent position epoch (first-attach trigger input).
         // Older gateways return shorter tuples; missing fields are
         // surfaced as `undefined` so the UI can show a "—" placeholder.
         const optBig = (v: unknown): bigint | undefined =>
@@ -1204,6 +1342,7 @@ export class ExchangeClient {
           pnlIfDies: optBig(p[10]),
           fundingSince: optBig(p[11]),
           adlScore: optBig(p[12]),
+          positionEpoch: optBig(p[13]),
         };
       },
     );
