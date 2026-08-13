@@ -165,11 +165,16 @@ class ExchangeClient:
                 timeout_secs=timeout_secs or config.timeout_secs,
             )
         else:
-            cfg = load_config(
-                gateway_url=gateway_url,
-                api_key=api_key,
-                timeout_secs=timeout_secs,
-            )
+            # Only pass truthy overrides so absent-and-falsy constructor
+            # defaults ("" / 0) fall back to env/TOML inside load_config.
+            overrides: dict[str, t.Any] = {}
+            if gateway_url:
+                overrides["gateway_url"] = gateway_url
+            if api_key:
+                overrides["api_key"] = api_key
+            if timeout_secs:
+                overrides["timeout_secs"] = timeout_secs
+            cfg = load_config(**overrides)
 
         self._gateway_url = cfg.gateway_url.rstrip("/")
         self._api_key = cfg.api_key
@@ -277,6 +282,10 @@ class ExchangeClient:
             raise TransportError(f"unprocessable: {resp.text[:200]}", status_code=422)
 
         if resp.status_code >= 500:
+            raise GatewayError(resp.status_code, resp.text)
+
+        # Anything else non-2xx (400, 402, 405-428, 431, 3xx, …) is NOT success.
+        if resp.status_code >= 300:
             raise GatewayError(resp.status_code, resp.text)
 
         return resp
@@ -409,8 +418,20 @@ class ExchangeClient:
             ``tx_hash``, etc.
         """
         resp = self._post("/exchange", content=envelope)
-        data: dict[str, t.Any] = resp.json()
-        code = data.get("code", 0)
+        try:
+            data: dict[str, t.Any] = resp.json()
+        except json.JSONDecodeError as e:
+            raise TransportError(f"non-JSON response from /exchange: {resp.text[:200]}") from e
+        if "code" not in data:
+            # No engine code at all: an explicit error status is a rejection,
+            # not a code=0 success. Never default a missing code to 0. There is
+            # no valid engine code to build an EngineError from, so this surfaces
+            # as a TransportError.
+            if data.get("status") == "error":
+                msg = data.get("message", data.get("error", "engine error"))
+                raise TransportError(f"engine rejected action: {msg}")
+            raise TransportError(f"malformed /exchange response (no 'code'): {data!r}"[:200])
+        code = data["code"]
         if code != 0:
             raise EngineError(code, data.get("message", ""))
         return data
