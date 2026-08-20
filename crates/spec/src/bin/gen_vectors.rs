@@ -132,6 +132,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     const CONFIRM_WITHDRAWAL_RECEIPT: u8 = 0x22;
     const FAIL_WITHDRAWAL_RECEIPT: u8 = 0x23;
     const AUTHORIZE_WITHDRAWAL: u8 = 0x24;
+    // Coverage burn-down (issue #69): the 15 previously-unpinned action types.
+    const DEPOSIT: u8 = 0x05;
+    const WITHDRAW: u8 = 0x06;
+    const WITHDRAW_REQUEST: u8 = 0x08;
+    const CONFIRM_DEPOSIT: u8 = 0x09;
+    const CONFIRM_WITHDRAWAL: u8 = 0x0a;
+    const FAIL_WITHDRAWAL: u8 = 0x0b;
+    const APPROVE_AGENT: u8 = 0x0c;
+    const REVOKE_AGENT: u8 = 0x0d;
+    const CREATE_IMPACT_MARKET: u8 = 0x0e;
+    const RESOLVE_EVENT: u8 = 0x0f;
+    const SET_USER_MARKET_LEVERAGE: u8 = 0x16;
+    const CANCEL_CLIENT_ORDER: u8 = 0x18;
+    const CANCEL_ALL_ORDERS: u8 = 0x19;
+    const CANCEL_REPLACE_ORDER: u8 = 0x1a;
+    const AMEND_ORDER: u8 = 0x1b;
 
     let owner = vec![0x01u8; 20];
     let signer = vec![0x03u8; 20];
@@ -423,6 +439,135 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "authorization": vec![0x44u8; 221],
                 "proof": operator_proof_json(),
             }),
+        ),
+        // ── coverage burn-down (issue #69) ───────────────────────────────
+        // The 15 action types the coverage ratchet carried as debt. Each is
+        // already exercised by round-trip tests but had no cross-language byte
+        // pin; these vectors close the gap. Optional-bearing actions carry both
+        // a populated and a null-optional case so the `nil` tail is pinned too.
+        //
+        // Balance movement (legacy deposit/withdraw + Solana bridge lifecycle).
+        codec_case(
+            "deposit/basic",
+            DEPOSIT,
+            json!({ "owner": owner, "amount": 100_000_000u64, "signer": signer }),
+        ),
+        codec_case(
+            "withdraw/basic",
+            WITHDRAW,
+            json!({ "owner": owner, "amount": 50_000_000u64, "signer": signer }),
+        ),
+        codec_case(
+            "withdraw_request/basic",
+            WITHDRAW_REQUEST,
+            json!({ "owner": owner, "amount": 50_000_000u64,
+                    "solana_destination": vec![0x44u8; 32] }),
+        ),
+        codec_case(
+            "confirm_deposit/basic",
+            CONFIRM_DEPOSIT,
+            json!({ "owner": owner, "amount": 100_000_000u64,
+                    "solana_tx_sig": vec![0xABu8; 64], "signer": signer }),
+        ),
+        codec_case(
+            "confirm_withdrawal/basic",
+            CONFIRM_WITHDRAWAL,
+            json!({ "withdrawal_id": 7u64,
+                    "solana_tx_sig": vec![0xABu8; 64], "signer": signer }),
+        ),
+        codec_case(
+            "fail_withdrawal/basic",
+            FAIL_WITHDRAWAL,
+            json!({ "withdrawal_id": 7u64,
+                    "reason": "insufficient bridge liquidity", "signer": signer }),
+        ),
+        // Agent authorization.
+        codec_case(
+            "approve_agent/basic",
+            APPROVE_AGENT,
+            json!({ "owner": owner, "agent_pubkey": vec![0xAAu8; 32] }),
+        ),
+        codec_case(
+            "revoke_agent/basic",
+            REVOKE_AGENT,
+            json!({ "owner": owner, "agent_pubkey": vec![0xAAu8; 32] }),
+        ),
+        // Impact-market create (standalone 0x0e) + resolution. oracle_source,
+        // description, and rules are serde(default); the happy case leaves them
+        // absent (RelayerAttested / empty), matching the common relayer path.
+        codec_case(
+            "create_impact_market/relayer_attested",
+            CREATE_IMPACT_MARKET,
+            json!({
+                "impact_market_id": 91, "underlying_market": 15,
+                "child_market_base": 9100, "question": "does it land?",
+                "deadline_ms": 1_000_000u64, "resolution_window_ms": 1000u64,
+                "im_bps": 3334, "mm_bps": 1667,
+                "taker_fee_bps": 5, "maker_fee_bps": 2,
+                "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
+                "signer": signer, "oracle_source": null,
+                "description": "", "rules": ""
+            }),
+        ),
+        codec_case(
+            "resolve_event/yes",
+            RESOLVE_EVENT,
+            json!({ "impact_market_id": 91, "outcome": "Yes", "signer": signer }),
+        ),
+        // Per-user leverage override.
+        codec_case(
+            "set_user_market_leverage/basic",
+            SET_USER_MARKET_LEVERAGE,
+            json!({ "owner": owner, "market": 7, "user_im_bps": 2000 }),
+        ),
+        // Order management: cancel-by-cloid, cancel-all (scoped + global),
+        // cancel-replace (by order id + by client id), amend (populated + null).
+        codec_case(
+            "cancel_client_order/basic",
+            CANCEL_CLIENT_ORDER,
+            json!({ "owner": owner, "client_order_id": 99u64 }),
+        ),
+        codec_case(
+            "cancel_all_orders/market_scoped",
+            CANCEL_ALL_ORDERS,
+            json!({ "owner": owner, "market": 7 }),
+        ),
+        codec_case(
+            "cancel_all_orders/all_markets",
+            CANCEL_ALL_ORDERS,
+            json!({ "owner": owner, "market": null }),
+        ),
+        codec_case(
+            "cancel_replace_order/by_order_id",
+            CANCEL_REPLACE_ORDER,
+            json!({
+                "owner": owner, "cancel_order_id": 42u64,
+                "cancel_client_order_id": null, "market": 1, "side": "Buy",
+                "price": 6675000u64, "quantity": 3, "client_order_id": 77u64,
+                "post_only": false, "reduce_only": false, "time_in_force": "Gtc"
+            }),
+        ),
+        codec_case(
+            "cancel_replace_order/by_client_id",
+            CANCEL_REPLACE_ORDER,
+            json!({
+                "owner": owner, "cancel_order_id": null,
+                "cancel_client_order_id": 88u64, "market": 2, "side": "Sell",
+                "price": 250000u64, "quantity": 5, "client_order_id": null,
+                "post_only": true, "reduce_only": true, "time_in_force": "Ioc"
+            }),
+        ),
+        codec_case(
+            "amend_order/price_and_quantity",
+            AMEND_ORDER,
+            json!({ "owner": owner, "order_id": 42u64,
+                    "new_price": 6675000u64, "new_quantity": 5u64 }),
+        ),
+        codec_case(
+            "amend_order/both_null",
+            AMEND_ORDER,
+            json!({ "owner": owner, "order_id": 42u64,
+                    "new_price": null, "new_quantity": null }),
         ),
     ];
     write_ndjson(&dir.join(cv::CODEC_FILE), &codec)?;

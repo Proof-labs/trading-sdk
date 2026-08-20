@@ -754,30 +754,13 @@ describe("conformance vectors (TypeScript)", () => {
     // ratchet — adding a new ActionType without a vector fails here. Prefer
     // adding a vector in crates/spec/src/bin/gen_vectors.rs; extending this
     // list instead is a conscious, reviewed decision. Remove names as vectors
-    // land; never re-add one.
+    // land; never re-add one. The list is empty (issue #69 burn-down): every
+    // ActionType now carries at least one cross-language codec vector.
     const uncovered = Object.entries(ActionType)
       .filter(([, byte]) => !vectorTypes.has(byte))
       .map(([name]) => name)
       .sort();
-    expect(uncovered).toEqual(
-      [
-        "AmendOrder",
-        "ApproveAgent",
-        "CancelAllOrders",
-        "CancelClientOrder",
-        "CancelReplaceOrder",
-        "ConfirmDeposit",
-        "ConfirmWithdrawal",
-        "CreateImpactMarket",
-        "Deposit",
-        "FailWithdrawal",
-        "ResolveEvent",
-        "RevokeAgent",
-        "SetUserMarketLeverage",
-        "Withdraw",
-        "WithdrawRequest",
-      ].sort(),
-    );
+    expect(uncovered).toEqual([]);
   });
 
   it("codec: all governance actions encode byte-exact (no silent skip)", () => {
