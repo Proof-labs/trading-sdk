@@ -32,9 +32,10 @@ wire structs gain source-incompatible fields. The unchanged derive crate stays
 at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
 **2.0.0**. Compatible engine: `exchange-core >= 2.0.0, < 3.0.0` for the wire as
 a whole; the bridge-custody actions added below (`0x22` / `0x23` / `0x24`)
-require `exchange-core >= 2.3.0` (the engine version that declares them, PR
-#316 — `2.2.0` was tagged before this wire surface existed) — an earlier
-engine rejects those action types.
+require `exchange-core >= 2.4.0` (the next engine release to declare them,
+PR #316 — release C was tagged `v2.3.0` from a cut that predates that wire
+surface, and `2.2.0` earlier still) — an earlier engine rejects those
+action types.
 
 ### Added
 
@@ -198,7 +199,9 @@ engine rejects those action types.
     case). No further bump beyond what this release already declares.
   - **Compatible engine / activation ordering:** building or hashing the new
     arms requires an engine with admin-actions v2 (exchange#334;
-    `exchange-core >= 2.2`). Order of operations matters: this SDK (and the
+    `exchange-core >= 2.3.0` — release C, tag `v2.3.0`; the earlier "2.2"
+    claim here was wrong, that release predates #334). Order of operations
+    matters: this SDK (and the
     clients consuming it — Web Admin, signer-cli) must be **deployed before**
     the engine's `UPGRADE_HEIGHT_ADMIN_ACTIONS_V2` is pinned at release-tag
     time. The proposals read fails closed on unknown action variants, so a v2
