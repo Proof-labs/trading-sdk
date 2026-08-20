@@ -132,6 +132,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     const CONFIRM_WITHDRAWAL_RECEIPT: u8 = 0x22;
     const FAIL_WITHDRAWAL_RECEIPT: u8 = 0x23;
     const AUTHORIZE_WITHDRAWAL: u8 = 0x24;
+    const SET_POSITION_TRIGGERS: u8 = 0x25;
+    const CANCEL_POSITION_TRIGGERS: u8 = 0x26;
 
     let owner = vec![0x01u8; 20];
     let signer = vec![0x03u8; 20];
@@ -335,6 +337,23 @@ fn main() -> Result<(), Box<dyn Error>> {
             }),
         ),
         codec_case(
+            "propose_admin_action/set_trigger_market_config",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "SetTriggerMarketConfig": {
+                    "market": 7,
+                    "expected_current_version": 3u64,
+                    "enabled": true,
+                    "max_trigger_slippage_bps": 250u32,
+                    "max_mark_age_ms": 5_000u64,
+                    "max_future_publish_skew_ms": 1_000u64,
+                    "max_active_brackets": 32u64
+                }}
+            }),
+        ),
+        codec_case(
             "approve_admin_action/rotate_registry",
             APPROVE_ADMIN_ACTION,
             json!({
@@ -422,6 +441,37 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({
                 "authorization": vec![0x44u8; 221],
                 "proof": operator_proof_json(),
+            }),
+        ),
+        // W32-10 whole-position bracket actions. This is the literal fixture
+        // from exchange-core's position-trigger golden-vector test.
+        codec_case(
+            "set_position_triggers/engine_golden",
+            SET_POSITION_TRIGGERS,
+            json!({
+                "market": 7,
+                "owner": vec![0xA5u8; 20],
+                "expected_position_epoch": 3u64,
+                "stop_loss": {
+                    "trigger_price": 95_000u64,
+                    "max_slippage_bps": 75u32,
+                    "client_trigger_id": 11u64
+                },
+                "take_profit": {
+                    "trigger_price": 110_000u64,
+                    "max_slippage_bps": 50u32,
+                    "client_trigger_id": 12u64
+                },
+                "client_group_id": 9u64
+            }),
+        ),
+        codec_case(
+            "cancel_position_triggers/engine_golden",
+            CANCEL_POSITION_TRIGGERS,
+            json!({
+                "market": 7,
+                "owner": vec![0xA5u8; 20],
+                "expected_position_epoch": 3u64
             }),
         ),
     ];

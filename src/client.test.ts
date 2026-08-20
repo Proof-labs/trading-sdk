@@ -2247,4 +2247,29 @@ describe("ExchangeClient owner byte-coercion (serde array shape)", () => {
     expect(acct?.positions[0].owner).toBeInstanceOf(Uint8Array);
     expect(Array.from(acct!.positions[0].owner)).toEqual(ownerArr);
   });
+
+  it("queryAccount exposes the trailing position epoch losslessly", async () => {
+    const position = [
+      ownerArr,
+      1,
+      "Buy",
+      6_675_000n,
+      100n,
+      0n,
+      0n,
+      0n,
+      0n,
+      0n,
+      0n,
+      0n,
+      0n,
+      9_007_199_254_740_993n,
+    ];
+    globalThis.fetch = vi.fn(async () =>
+      infoResponse([1_000n, [position], 0n, 0n, 0n, 0n]),
+    ) as unknown as typeof fetch;
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    const acct = await client.queryAccount(hex);
+    expect(acct?.positions[0].positionEpoch).toBe(9_007_199_254_740_993n);
+  });
 });

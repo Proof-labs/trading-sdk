@@ -16,7 +16,7 @@ import msgpack
 import pytest
 
 from proof_trading_sdk.client import ExchangeClient
-from proof_trading_sdk.errors import ProofTradingSdkError
+from proof_trading_sdk.errors import GatewayError, ProofTradingSdkError
 
 
 def _client(handler) -> ExchangeClient:
@@ -62,6 +62,19 @@ def test_account_decodes_positions():
     assert acct.positions[0]["market"] == 1
     assert acct.positions[0]["entry_price"] == 6_675_000
     assert acct.positions[0]["owner"] == b"\x02" * 20
+
+
+def test_account_decodes_trailing_position_epoch_losslessly():
+    epoch = 9_007_199_254_740_993
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        pos = [list(b"\x02" * 20), 1, "Buy", 6_675_000, 100, 0]
+        pos.extend([0] * 7)
+        pos.append(epoch)
+        return _info_response([5_000, [pos], 5_000, 0, 0, 0])
+
+    position = _client(handler).account("aa" * 20).positions[0]
+    assert position["position_epoch"] == epoch
 
 
 def test_open_orders_posts_info():
@@ -144,6 +157,32 @@ def test_get_block_results_routes_through_v1():
     assert seen == ["/v1/block_results"]
 
 
+def test_history_fills_uses_opaque_cursor_and_preserves_u64_ids():
+    seen: list[dict[str, str]] = []
+    maximum = str((1 << 64) - 1)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        if len(seen) == 1:
+            return httpx.Response(
+                200,
+                json={"fills": [{"fill_id": maximum}], "next_cursor": "opaque+/=1"},
+            )
+        return httpx.Response(200, json={"fills": [], "next_cursor": None})
+
+    client = _client(handler)
+    first = client.history_fills("ab" * 20, limit=1)
+    second = client.history_fills("ab" * 20, cursor=first.next_cursor, limit=1)
+
+    assert first.data == [{"fill_id": maximum}]
+    assert first.next_cursor == "opaque+/=1"
+    assert second.data == []
+    assert seen == [
+        {"owner": "ab" * 20, "limit": "1"},
+        {"owner": "ab" * 20, "cursor": "opaque+/=1", "limit": "1"},
+    ]
+
+
 def test_markets_decodes_msgpack_config():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/markets"
@@ -207,3 +246,77 @@ def test_ticker_routes_through_v1_ticker():
     t = _client(handler).ticker(1)
     assert seen == ["/v1/ticker/1"]
     assert t is not None and t["last_price"] == "6675000"
+
+
+def test_position_triggers_use_public_gateway_route_and_preserve_ids():
+    owner = "ab" * 20
+    group_id = 9_007_199_254_740_993
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == f"/v1/triggers/{owner}"
+        row = [
+            [
+                group_id,
+                list(b"\xA5" * 20),
+                7,
+                3,
+                "Buy",
+                100,
+                101,
+                9,
+                [11, "StopLoss", 95_000, 75, 11, "Armed", None],
+                None,
+            ],
+            [4, True, 250, 5_000, 1_000, 32],
+            {"Deferred": "MarkStale"},
+        ]
+        return _info_response([row])
+
+    rows = _client(handler).position_triggers(owner)
+    assert rows[0]["bracket"]["group_id"] == group_id
+    assert rows[0]["bracket"]["owner"] == b"\xA5" * 20
+    assert rows[0]["bracket"]["stop_loss"]["client_trigger_id"] == 11
+    assert rows[0]["availability"] == {"kind": "Deferred", "reason": "MarkStale"}
+
+
+def test_trigger_status_preserves_large_json_heights_and_503_fails_closed():
+    large = 9_007_199_254_740_993
+
+    def ok(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/triggers/status"
+        return httpx.Response(
+            200,
+            content=(
+                '{"finalized_height":9007199254740993,'
+                '"admission_height":9007199254740994,"actions_active":true}'
+            ),
+            headers={"content-type": "application/json"},
+        )
+
+    assert _client(ok).trigger_status() == {
+        "finalized_height": large,
+        "admission_height": large + 1,
+        "actions_active": True,
+    }
+
+    def non_next_height(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "finalized_height": 10,
+                "admission_height": 12,
+                "actions_active": False,
+            },
+        )
+
+    with pytest.raises(ProofTradingSdkError, match="next height"):
+        _client(non_next_height).trigger_status()
+
+    def unavailable(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503, json={"error": "trigger activation status unavailable"}
+        )
+
+    with pytest.raises(GatewayError, match="trigger activation status unavailable"):
+        _client(unavailable).trigger_status()

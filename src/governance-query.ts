@@ -13,6 +13,7 @@ import type {
   ProposalPage,
   ProposalDisplayInfo,
   ProposalStatus,
+  SetTriggerMarketConfig,
   UpdateAdminSignerRegistry,
 } from "./types.js";
 import { Outcome } from "./types.js";
@@ -408,6 +409,36 @@ function decodeUpdateRegistry(value: unknown): UpdateAdminSignerRegistry {
   };
 }
 
+function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
+  const raw = toTuple(value, "setTriggerMarketConfig", 7);
+  if (typeof raw[2] !== "boolean") {
+    throw new Error(
+      "governance decode: setTriggerMarketConfig.enabled is not boolean",
+    );
+  }
+  return {
+    market: toU32(raw[0], "setTriggerMarketConfig.market"),
+    expectedCurrentVersion:
+      raw[1] == null
+        ? null
+        : toU64(raw[1], "setTriggerMarketConfig.expectedCurrentVersion"),
+    enabled: raw[2],
+    maxTriggerSlippageBps: toU32(
+      raw[3],
+      "setTriggerMarketConfig.maxTriggerSlippageBps",
+    ),
+    maxMarkAgeMs: toU64(raw[4], "setTriggerMarketConfig.maxMarkAgeMs"),
+    maxFuturePublishSkewMs: toU64(
+      raw[5],
+      "setTriggerMarketConfig.maxFuturePublishSkewMs",
+    ),
+    maxActiveBrackets: toU64(
+      raw[6],
+      "setTriggerMarketConfig.maxActiveBrackets",
+    ),
+  };
+}
+
 /** `kind` → the engine's `AdminActionType` tag, as a TABLE rather than
  *  arithmetic: a new arm added to `decodeAdminAction` without a row here is
  *  a compile error (`Record` over the closed union), never a silently
@@ -418,6 +449,7 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   UpdateAdminSignerRegistry: 2,
   CreateImpactMarket: 3,
   Batch: 4,
+  SetTriggerMarketConfig: 5,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
@@ -450,6 +482,11 @@ export function decodeAdminAction(
         value: toArray(payload, `${field}.batch`).map((item, i) =>
           decodeBatchItem(item, `${field}.batch[${i}]`),
         ),
+      };
+    case "SetTriggerMarketConfig":
+      return {
+        kind: "SetTriggerMarketConfig",
+        value: decodeSetTriggerMarketConfig(payload),
       };
     default:
       throw new Error(

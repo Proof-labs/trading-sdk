@@ -50,6 +50,46 @@ result = client.submit_action({
 
 See the full API at `help(proof_trading_sdk)`.
 
+## Position stop-loss / take-profit
+
+```python
+from proof_trading_sdk import TriggerLimb
+
+position = next(p for p in client.account(owner).positions if p["market"] == 7)
+epoch = position["position_epoch"]
+if epoch is None:
+    raise RuntimeError("position epoch is not backfilled; trigger placement is unavailable")
+policy = next(p for p in client.trigger_market_configs() if p.market == 7)
+if policy.state.current is None or not policy.state.current.enabled:
+    raise RuntimeError("position triggers are disabled for this market")
+client.set_position_triggers(
+    market=7,
+    owner=owner,
+    expected_position_epoch=epoch,
+    stop_loss=TriggerLimb(trigger_price=95_000, max_slippage_bps=75),
+)
+status = client.trigger_status()
+
+page = client.history_triggers(owner, market=7, limit=100)
+while page.next_cursor:
+    page = client.history_triggers(
+        owner, market=7, limit=100, cursor=page.next_cursor
+    )
+```
+
+`position_triggers()` is the current-state `/v1/triggers/{owner}` read;
+`trigger_status()` is the fail-closed next-height admission predicate. For a
+first attach, take the epoch from the canonical account position read; never
+guess `1`. `owner` defaults to the signer, but a version-active trading agent
+may pass its delegated owner and let the engine verify authorization.
+`trigger_market_configs()` is the strict source for the current and scheduled
+market policy; absence means disabled and no client default is substituted.
+
+`history_triggers()` and `history_trigger_markets()` use only the public gateway
+history routes. Their dataclass pages preserve chain coordinates, market ids,
+and every numeric payload value as strings. `next_cursor` is opaque and bound
+to the owner/market/time filters that issued it.
+
 ## Timestamp Nonces
 
 Every signed transaction carries a **timestamp nonce** (`seq`) — a millisecond

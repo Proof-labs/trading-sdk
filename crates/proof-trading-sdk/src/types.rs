@@ -26,6 +26,104 @@ pub type ImpactMarketId = u32;
 /// Millisecond timestamp or duration carried on the wire.
 pub type Milliseconds = u64;
 
+/// Maximum per-attempt stop-loss/take-profit collar accepted by the engine.
+pub const MAX_TRIGGER_SLIPPAGE_BPS: u32 = 9_999;
+
+/// Generation of one owner's position on one market.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PositionEpoch(pub u64);
+
+/// Optional client identifier for a whole position-trigger bracket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ClientTriggerGroupId(pub u64);
+
+/// Optional client identifier for one trigger limb.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ClientTriggerId(pub u64);
+
+/// Explicit execution collar for one trigger attempt, in basis points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TriggerSlippageBps(pub u32);
+
+/// Monotone version of one market's trigger policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TriggerConfigVersion(pub u64);
+
+/// Maximum accepted mark age for automatic trigger evaluation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TriggerMarkMaxAgeMs(pub u64);
+
+/// Maximum accepted future publish-time skew for a trigger mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TriggerFutureSkewMs(pub u64);
+
+/// Maximum active whole-position brackets for one market.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TriggerBracketLimit(pub u64);
+
+/// Static, state-independent trigger-action validation failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TriggerValidationError {
+    ZeroPositionEpoch,
+    EmptyBracket,
+    ZeroTriggerPrice,
+    InvalidSlippage,
+    ZeroClientGroupId,
+    ZeroClientTriggerId,
+    DuplicateClientTriggerId,
+    EnabledConfigMissingBound,
+}
+
+impl fmt::Display for TriggerValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::ZeroPositionEpoch => "expected position epoch must be non-zero",
+            Self::EmptyBracket => "at least one of stop_loss or take_profit is required",
+            Self::ZeroTriggerPrice => "trigger price must be non-zero",
+            Self::InvalidSlippage => "trigger slippage must be in 1..=9999 bps",
+            Self::ZeroClientGroupId => "client trigger group id must be non-zero",
+            Self::ZeroClientTriggerId => "client trigger id must be non-zero",
+            Self::DuplicateClientTriggerId => {
+                "stop-loss and take-profit client trigger ids must be distinct"
+            }
+            Self::EnabledConfigMissingBound => {
+                "enabled trigger config requires non-zero slippage, mark-age, future-skew and bracket bounds"
+            }
+        })
+    }
+}
+
+impl std::error::Error for TriggerValidationError {}
+
+/// Multisig-controlled complete replacement for one market's trigger policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetTriggerMarketConfig {
+    pub market: MarketId,
+    pub expected_current_version: Option<TriggerConfigVersion>,
+    pub enabled: bool,
+    pub max_trigger_slippage_bps: TriggerSlippageBps,
+    pub max_mark_age_ms: TriggerMarkMaxAgeMs,
+    pub max_future_publish_skew_ms: TriggerFutureSkewMs,
+    pub max_active_brackets: TriggerBracketLimit,
+}
+
+impl SetTriggerMarketConfig {
+    pub fn validate_fields(&self) -> Result<(), TriggerValidationError> {
+        if self.max_trigger_slippage_bps.0 > MAX_TRIGGER_SLIPPAGE_BPS {
+            return Err(TriggerValidationError::InvalidSlippage);
+        }
+        if self.enabled
+            && (self.max_trigger_slippage_bps.0 == 0
+                || self.max_mark_age_ms.0 == 0
+                || self.max_future_publish_skew_ms.0 == 0
+                || self.max_active_brackets.0 == 0)
+        {
+            return Err(TriggerValidationError::EnabledConfigMissingBound);
+        }
+        Ok(())
+    }
+}
+
 /// Well-known market ID for the BTC-USD perpetual.
 pub const MARKET_BTC_USD_PERP: MarketId = 1;
 
@@ -648,6 +746,88 @@ pub struct FeeTier {
 // paired with each variant's wire byte code. Re-exported here so all existing
 // `crate::types::Action` paths continue to work.
 pub use crate::codec::Action;
+
+/// One optional stop-loss or take-profit limb. Direction is derived by the
+/// engine from the live position side; it is intentionally absent on wire.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerLimb {
+    pub trigger_price: u64,
+    pub max_slippage_bps: TriggerSlippageBps,
+    pub client_trigger_id: Option<ClientTriggerId>,
+}
+
+impl TriggerLimb {
+    pub fn validate_fields(&self) -> Result<(), TriggerValidationError> {
+        if self.trigger_price == 0 {
+            return Err(TriggerValidationError::ZeroTriggerPrice);
+        }
+        if !(1..=MAX_TRIGGER_SLIPPAGE_BPS).contains(&self.max_slippage_bps.0) {
+            return Err(TriggerValidationError::InvalidSlippage);
+        }
+        if self.client_trigger_id == Some(ClientTriggerId(0)) {
+            return Err(TriggerValidationError::ZeroClientTriggerId);
+        }
+        Ok(())
+    }
+}
+
+/// Atomically replace the complete stop-loss/take-profit bracket for the
+/// owner's current standalone-perpetual position generation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetPositionTriggers {
+    pub market: MarketId,
+    pub owner: Address,
+    pub expected_position_epoch: PositionEpoch,
+    pub stop_loss: Option<TriggerLimb>,
+    pub take_profit: Option<TriggerLimb>,
+    pub client_group_id: Option<ClientTriggerGroupId>,
+}
+
+impl SetPositionTriggers {
+    /// Validate only invariants that do not require chain state. The engine
+    /// additionally checks the live epoch/side/mark, market policy and ticks.
+    pub fn validate_fields(&self) -> Result<(), TriggerValidationError> {
+        if self.expected_position_epoch.0 == 0 {
+            return Err(TriggerValidationError::ZeroPositionEpoch);
+        }
+        if self.stop_loss.is_none() && self.take_profit.is_none() {
+            return Err(TriggerValidationError::EmptyBracket);
+        }
+        if self.client_group_id == Some(ClientTriggerGroupId(0)) {
+            return Err(TriggerValidationError::ZeroClientGroupId);
+        }
+        if let Some(limb) = &self.stop_loss {
+            limb.validate_fields()?;
+        }
+        if let Some(limb) = &self.take_profit {
+            limb.validate_fields()?;
+        }
+        if let (Some(stop), Some(take)) = (&self.stop_loss, &self.take_profit) {
+            if stop.client_trigger_id.is_some() && stop.client_trigger_id == take.client_trigger_id
+            {
+                return Err(TriggerValidationError::DuplicateClientTriggerId);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Remove the active bracket for one exact position generation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CancelPositionTriggers {
+    pub market: MarketId,
+    pub owner: Address,
+    pub expected_position_epoch: PositionEpoch,
+}
+
+impl CancelPositionTriggers {
+    pub fn validate_fields(&self) -> Result<(), TriggerValidationError> {
+        if self.expected_position_epoch.0 == 0 {
+            return Err(TriggerValidationError::ZeroPositionEpoch);
+        }
+        Ok(())
+    }
+}
 
 /// Pick a per-account override on the initial-margin ratio for one
 /// market. The engine uses `max(market.im_bps, user_im_bps)` on

@@ -149,6 +149,15 @@ class ExchangeClient {
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
   queryHealth(): Promise<{ status: string; height: number }>;
   queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null>;
+  queryPositionTriggers(addressHex?: string): Promise<PositionTriggerInfo[]>;
+  queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]>;
+  queryTriggerStatus(): Promise<TriggerStatus>;
+  queryPositionTriggerHistory(addressHex?: string, filters?: PositionTriggerHistoryFilters): Promise<PositionTriggerHistoryPage>;
+  queryTriggerMarketHistory(market: number, filters?: TriggerMarketHistoryFilters): Promise<TriggerMarketHistoryPage>;
+
+  // Owner defaults to signer; version-active agents pass delegated owner.
+  setPositionTriggers(params: Omit<SetPositionTriggers, "owner"> & { owner?: Uint8Array }): Promise<TxResult>;
+  cancelPositionTriggers(market: number, expectedPositionEpoch: bigint, owner?: Uint8Array): Promise<TxResult>;
 
   // History
   queryHistoryDeposits(...): Promise<HistoryCashFlow[]>;
@@ -167,6 +176,28 @@ class ExchangeClient {
   disconnect(): void;
 }
 ```
+
+Position triggers are exact-position-generation brackets. For an existing
+bracket, `queryPositionTriggers()` returns its epoch; first attach must use the
+epoch on the canonical account position read and must never guess `1`. Submit
+action `0x25` (`SetPositionTriggers`) or `0x26`
+(`CancelPositionTriggers`). A set replaces the whole bracket atomically,
+requires at least one limb, and each limb carries an explicit `1..=9999` bps
+IOC collar. Owner defaults to the loaded signer; a version-active trading agent
+passes the delegated owner explicitly and the engine verifies the grant.
+
+Before setting a bracket, read `queryTriggerMarketConfigs()`. The current
+policy is the only valid source for `enabled` and the maximum IOC slippage;
+absence means disabled. The optional pending policy is shown with its accepted
+and next-block effective heights. The SDK rejects malformed, empty, unsorted,
+or version-skipping policy state rather than inventing a default.
+
+`queryTriggerStatus()` reports the fail-closed next-height activation
+predicate. `queryPositionTriggerHistory()` returns immutable owner-bearing
+lifecycle events; `queryTriggerMarketHistory()` returns the shared market
+deferred/resumed stream. Both history methods always use the gateway, return an
+opaque filter-bound cursor, and preserve every coordinate/id as a decimal
+string—pass those strings and the cursor through unchanged.
 
 ### Actions
 

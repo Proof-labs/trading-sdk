@@ -282,6 +282,8 @@ const ACTION_IMPACT =
   "81b2437265617465496d706163744d61726b6574dc00105b0fcd238cad646f6573206974206c616e643fce000f4240cd03e8cd0d06cd0683050200cd0bb8dc00140000000000000000000000000000000000000000c0a0a0";
 const ACTION_BATCH =
   "81a542617463689281ac4372656174654d61726b65749c0fcd0d06cd06830502dc00140000000000000000000000000000000000000000cdea60cd0bb80000a00081b2437265617465496d706163744d61726b6574dc00105b0fcd238cad646f6573206974206c616e643fce000f4240cd03e8cd0d06cd0683050200cd0bb8dc00140000000000000000000000000000000000000000c0a0a0";
+const ACTION_TRIGGER_CONFIG =
+  "81b6536574547269676765724d61726b6574436f6e666967970703c3ccfacd1388cd03e820";
 
 describe("decodeAdminAction", () => {
   it("fails closed on an operation this build does not know", () => {
@@ -336,6 +338,21 @@ describe("decodeAdminAction", () => {
     expect(impact!.value.impactMarketId).toBe(91);
     expect(impact!.value.underlyingMarket).toBe(15);
     expect(impact!.value.childMarketBase).toBe(9_100);
+  });
+
+  it("decodes the engine's frozen trigger-config bytes (admin tag 5)", () => {
+    expect(decodeAdminAction(decodeVector(ACTION_TRIGGER_CONFIG))).toEqual({
+      kind: "SetTriggerMarketConfig",
+      value: {
+        market: 7,
+        expectedCurrentVersion: 3n,
+        enabled: true,
+        maxTriggerSlippageBps: 250,
+        maxMarkAgeMs: 5_000n,
+        maxFuturePublishSkewMs: 1_000n,
+        maxActiveBrackets: 32n,
+      },
+    });
   });
 
   it("tolerates the serde(default) trailers' absence, like the engine", () => {

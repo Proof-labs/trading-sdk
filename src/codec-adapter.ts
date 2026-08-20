@@ -22,7 +22,13 @@ import {
   type EmergencyAction,
   type EventOracleSource,
   type PriceComparison,
+  type SetTriggerMarketConfig,
 } from "./types.js";
+import {
+  validateCancelPositionTriggers,
+  validateSetPositionTriggers,
+  validateSetTriggerMarketConfig,
+} from "./triggers.js";
 
 /** camelCase → snake_case for field names (matches Rust serde field idents). */
 function camelToSnake(key: string): string {
@@ -106,6 +112,9 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
 function governanceActionToWasm(value: unknown): unknown {
   if (value === null || value === undefined) return value;
   const v = value as { kind: string; value?: unknown };
+  if (v.kind === "SetTriggerMarketConfig") {
+    validateSetTriggerMarketConfig(v.value as SetTriggerMarketConfig);
+  }
   // `Batch` is the one variant whose payload is a LIST of nested enum items
   // (`AdminBatchItem[]`) rather than a struct — each item is itself
   // `{ kind, value }` and converts through this same function.
@@ -195,6 +204,11 @@ export function toWasmFields(action: Action): {
   actionType: ActionTypeValue;
   fields: Record<string, unknown>;
 } {
+  if (action.type === "SetPositionTriggers") {
+    validateSetPositionTriggers(action.data);
+  } else if (action.type === "CancelPositionTriggers") {
+    validateCancelPositionTriggers(action.data);
+  }
   const actionType = ActionType[action.type];
   const fields = convertObject(
     action.data as unknown as Record<string, unknown>,

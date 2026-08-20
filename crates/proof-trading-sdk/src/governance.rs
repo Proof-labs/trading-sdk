@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::types::{CreateImpactMarket, CreateMarket, ExecError, MarketId};
+use crate::types::{CreateImpactMarket, CreateMarket, ExecError, MarketId, SetTriggerMarketConfig};
 
 /// Domain separator folded into every admin-proposal content hash.
 /// Byte-identical to `exchange-core`'s `ADMIN_PROPOSAL_HASH_DOMAIN`.
@@ -70,6 +70,9 @@ pub enum AdminAction {
     /// deliberately closed and non-recursive — a nested batch or a registry
     /// change inside a batch is undecodable, mirroring the engine.
     Batch(Vec<AdminBatchItem>),
+    /// Replace one standalone-perpetual market's trigger policy. The engine
+    /// admits this arm only after the trigger-index activation gate.
+    SetTriggerMarketConfig(SetTriggerMarketConfig),
 }
 
 /// The closed set of actions a `Batch` may carry: market creations only.
@@ -93,6 +96,7 @@ pub enum AdminActionType {
     UpdateAdminSignerRegistry = 2,
     CreateImpactMarket = 3,
     Batch = 4,
+    SetTriggerMarketConfig = 5,
 }
 
 impl AdminAction {
@@ -103,6 +107,7 @@ impl AdminAction {
             AdminAction::UpdateAdminSignerRegistry(_) => AdminActionType::UpdateAdminSignerRegistry,
             AdminAction::CreateImpactMarket(_) => AdminActionType::CreateImpactMarket,
             AdminAction::Batch(_) => AdminActionType::Batch,
+            AdminAction::SetTriggerMarketConfig(_) => AdminActionType::SetTriggerMarketConfig,
         }
     }
 
@@ -254,6 +259,10 @@ pub fn admin_proposal_content_hash(
 #[allow(clippy::unwrap_used, clippy::panic, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::types::{
+        TriggerBracketLimit, TriggerConfigVersion, TriggerFutureSkewMs, TriggerMarkMaxAgeMs,
+        TriggerSlippageBps,
+    };
 
     /// Mirrors `exchange-core`'s `impl Default for CreateMarket` exactly — the
     /// same instance the engine's golden-vector test hashes. The non-zero fee /
@@ -401,6 +410,41 @@ mod tests {
             .unwrap();
             assert_eq!(hex_string(&h), expected);
         }
+    }
+
+    /// Literal engine vector for admin-action tag 0x05.
+    #[test]
+    fn trigger_market_config_matches_engine_golden_vector() {
+        let action = AdminAction::SetTriggerMarketConfig(SetTriggerMarketConfig {
+            market: 7,
+            expected_current_version: Some(TriggerConfigVersion(3)),
+            enabled: true,
+            max_trigger_slippage_bps: TriggerSlippageBps(250),
+            max_mark_age_ms: TriggerMarkMaxAgeMs(5_000),
+            max_future_publish_skew_ms: TriggerFutureSkewMs(1_000),
+            max_active_brackets: TriggerBracketLimit(32),
+        });
+        assert_eq!(action.action_tag(), 0x05);
+        assert_eq!(
+            hex_string(&canonical_admin_action_bytes(&action).unwrap()),
+            "81b6536574547269676765724d61726b6574436f6e666967970703c3ccfacd1388cd03e820"
+        );
+        let hash = admin_proposal_content_hash(
+            &[0x11; 32],
+            ProposalId(42),
+            RegistryVersion(3),
+            SignatureThreshold(2),
+            &SignerAddress([0x22; 20]),
+            7,
+            1_000,
+            259_201_000,
+            &action,
+        )
+        .unwrap();
+        assert_eq!(
+            hex_string(&hash),
+            "c707537e8d050389a705df1ce0aa2ad1cf873e67d1c45d10a955dde9b50e933c"
+        );
     }
 
     /// Every governance action round-trips through the same wire codec the
