@@ -82,6 +82,14 @@ action types.
 
 ### Changed
 
+- **BREAKING — the TypeScript `ExecErrorCode.TimestampNonceRejected` (code 21)
+  is renamed `InvalidNonce`** (#63), aligning the TS SDK with the engine
+  `ExecError` variant and the Rust/Python bindings, which already used that
+  name. `decodeExecError(21).name` / `execErrorName(21)` now return
+  `"InvalidNonce"`; any TS consumer keying on the old string must update. Code
+  21 is now pinned in the `errors` conformance manifest across all three
+  bindings (the `MANIFEST_NAME_DIVERGES` carve-out is removed). Folds into this
+  uncut `3.0.0` release; no separate version bump.
 - **BREAKING — the action codec and signing now run through a WASM build of the
   Rust core** (ADR 0001). `encodeSignedTx` / `signAndEncode` /
   `signEnvelopeFromPayload` / `encodePayloadBytes` / `decodeTx` are byte-identical
@@ -260,9 +268,9 @@ action types.
   the pre-#55 SDK would have failed); a code plus canonical DeliverTx log pins
   the log-aware decoder (transitional code-50 slippage/open-interest cases →
   `AmbiguousCode50` without a recognized log). Generated from the Rust core and
-  asserted by all three runners. Code 21 is excluded — the TS SDK deliberately
-  names it `TimestampNonceRejected` vs the core's `InvalidNonce`, an intentional
-  name divergence rather than the code↔code drift this family guards.
+  asserted by all three runners. Every code is pinned, including 21 — the TS
+  SDK was aligned to the engine name `InvalidNonce` (see Changed), removing the
+  earlier carve-out.
 - **`ExchangeClient.submitSignedTx(txBytes)` / `submitSignedTxCommit(txBytes)`**
   — public submission of **externally signed** wire bytes (built via
   `signingMessage()` → external signature → `encodeSignedTx()`), for callers
