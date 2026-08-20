@@ -93,6 +93,15 @@ action types.
   commit `c32f7d1`, method control-checked against the committed `0x22`
   vector), asserted by the Rust golden test plus the
   `authorize_withdrawal/operator` conformance vector in all three runners.
+- **Proposal-lifecycle error codes 54–71** — the multisig-governance error
+  family (`ProposalNotFound` … `InvalidAdminRegistry`) is now mirrored across all
+  three bindings from the engine's `ExecError` and the frozen `exchange/sdk`
+  reference table. `decodeExecError` / `get_error_name` previously returned
+  `null`/unknown for any propose/approve/reject or emergency-admin rejection in
+  this range. Additive and MINOR in nature (new decode entries only, no wire
+  change); the `no_code_holes_in_documented_range` gate now covers `1..=71` and
+  the `errors.ndjson` conformance manifest pins every new code→name. Mirrors
+  engine codes from `exchange-core/src/types.rs`.
 
 ### Changed
 

@@ -202,6 +202,13 @@ class TestErrors:
         assert pts.EngineError(52, "").name == "AdminGovernanceInactive"
         assert pts.EngineError(53, "").name == "NotAdminSigner"
 
+    def test_proposal_lifecycle_codes_54_71(self):
+        # Endpoints of the mirrored proposal-lifecycle family; the full range is
+        # pinned by the errors.ndjson conformance manifest.
+        assert pts.get_error_name(54) == "ProposalNotFound"
+        assert pts.get_error_name(71) == "InvalidAdminRegistry"
+        assert pts.EngineError(67, "").name == "EmergencyRateLimited"
+
     def test_transitional_code_50_uses_delivertx_log(self):
         oi = "open interest limit exceeded on market 7: would be 4, cap 3"
         slip = "atomic basket aggregate slippage 51 bps exceeds budget 50 bps"

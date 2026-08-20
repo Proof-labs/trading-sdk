@@ -51,6 +51,24 @@
 {"case":"manifest/51","code":51,"log":null,"expect":{"name":"OpenInterestLimitExceeded"}}
 {"case":"manifest/52","code":52,"log":null,"expect":{"name":"AdminGovernanceInactive"}}
 {"case":"manifest/53","code":53,"log":null,"expect":{"name":"NotAdminSigner"}}
+{"case":"manifest/54","code":54,"log":null,"expect":{"name":"ProposalNotFound"}}
+{"case":"manifest/55","code":55,"log":null,"expect":{"name":"ProposalNotPending"}}
+{"case":"manifest/56","code":56,"log":null,"expect":{"name":"ProposalExpired"}}
+{"case":"manifest/57","code":57,"log":null,"expect":{"name":"DuplicateApproval"}}
+{"case":"manifest/58","code":58,"log":null,"expect":{"name":"DuplicateRejection"}}
+{"case":"manifest/59","code":59,"log":null,"expect":{"name":"ProposalRegistryVersionMismatch"}}
+{"case":"manifest/60","code":60,"log":null,"expect":{"name":"ProposalContentMismatch"}}
+{"case":"manifest/61","code":61,"log":null,"expect":{"name":"InvalidAdminAction"}}
+{"case":"manifest/62","code":62,"log":null,"expect":{"name":"AdminActionTooLarge"}}
+{"case":"manifest/63","code":63,"log":null,"expect":{"name":"TooManyPendingProposals"}}
+{"case":"manifest/64","code":64,"log":null,"expect":{"name":"ProposalIdExhausted"}}
+{"case":"manifest/65","code":65,"log":null,"expect":{"name":"ConflictingVote"}}
+{"case":"manifest/66","code":66,"log":null,"expect":{"name":"MarketIdOutOfRange"}}
+{"case":"manifest/67","code":67,"log":null,"expect":{"name":"EmergencyRateLimited"}}
+{"case":"manifest/68","code":68,"log":null,"expect":{"name":"EmergencyGlobalRateLimited"}}
+{"case":"manifest/69","code":69,"log":null,"expect":{"name":"EmergencyActionRetired"}}
+{"case":"manifest/70","code":70,"log":null,"expect":{"name":"AdminActionRequiresProposal"}}
+{"case":"manifest/71","code":71,"log":null,"expect":{"name":"InvalidAdminRegistry"}}
 {"case":"manifest/255","code":255,"log":null,"expect":{"name":"InternalError"}}
 {"case":"code50/oi_log","code":50,"log":"open interest limit exceeded on market 7: would be 4, cap 3","expect":{"name":"OpenInterestLimitExceeded"}}
 {"case":"code50/slippage_log","code":50,"log":"atomic basket aggregate slippage 51 bps exceeds budget 50 bps","expect":{"name":"SlippageExceeded"}}
