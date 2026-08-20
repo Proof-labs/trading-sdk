@@ -7,13 +7,13 @@
 //! Run:  `cargo run -p proof-trading-sdk-conformance --bin gen-vectors`
 //! CI should run this and fail if `git diff --exit-code conformance/` is dirty.
 //!
-//! TODO(handoff): this emits a SEED set only. Extend to full coverage:
-//!   * codec: all 27 action types (this seed has 13) + edges — zero/max u64,
-//!     CLOID None/Some(MAX), post_only/reduce_only/TIF, serde-default tails
-//!     (CreateMarket.pool_id, OracleUpdate.publish_time_ms…), every enum,
-//!     nested EventOracleSource (3 variants), FeeTier lists.
-//!     OracleUpdateComposite (0x14) is now wired across all three SDKs and
-//!     covered here.
+//! Coverage status:
+//!   * codec: every `ActionType` in the registry now has at least one vector
+//!     (the coverage ratchet in `src/conformance.test.ts` enforces this — the
+//!     debt list is empty, #69). Remaining nice-to-haves are deeper edges, not
+//!     new types: more zero/max-u64 and serde-default-tail permutations, and
+//!     the nested `EventOracleSource` non-default variants (only
+//!     RelayerAttested is exercised today).
 //!   * signing: more keys / seqs (0,1,MAX) / chain_ids (unbound + bound) /
 //!     payload sizes; more owner cases.
 //!   * nonce: already reasonably covered; add multi-process interleavings if
