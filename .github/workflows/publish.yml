@@ -1,0 +1,170 @@
+name: publish
+
+# Release path for the SDK's published artifacts (resolves #80). Each package
+# is published INDEPENDENTLY by pushing its own tag — the repository keeps every
+# package on its own semver line (see CLAUDE.md "Versioning"), so there is no
+# single umbrella version. Push the tag for the artifact you are cutting:
+#
+#   npm-v3.0.0      -> npm  @proof/trading-sdk        + the GitHub Release
+#   core-v3.0.0     -> crates.io proof-trading-sdk
+#   derive-v1.1.0   -> crates.io proof-trading-sdk-derive
+#   wasm-v2.1.0     -> crates.io proof-trading-sdk-wasm
+#   pyo3-v3.0.0     -> crates.io proof-trading-sdk-pyo3
+#   py-v3.0.0       -> PyPI proof-trading-sdk (the maturin wheel + sdist)
+#
+# crates.io dependency order (publish must respect it): derive -> core ->
+# { wasm, pyo3 }. Push the tags in that order; crates.io needs a dependency
+# published before the crates that depend on it.
+#
+# Every job fails closed if the pushed tag's version does not match the version
+# in the package manifest, so a mistagged release cannot publish wrong bytes.
+#
+# Required repository secrets (none of these exist yet — see #80):
+#   NPM_TOKEN             npm automation token, publish scope
+#   CARGO_REGISTRY_TOKEN  crates.io API token
+#   MATURIN_PYPI_TOKEN    PyPI API token
+#
+# ponytail: single workflow, per-tag jobs. Add a signing/attestation step or a
+# multi-OS wheel matrix only when a consumer actually needs it.
+
+on:
+  push:
+    tags:
+      - "npm-v*"
+      - "core-v*"
+      - "derive-v*"
+      - "wasm-v*"
+      - "pyo3-v*"
+      - "py-v*"
+
+# Serialize publishes so two tag pushes cannot race the same registry.
+concurrency:
+  group: publish-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  npm:
+    name: npm publish
+    if: startsWith(github.ref_name, 'npm-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # cut the GitHub Release
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+      # The build compiles the WASM core with a wasm-bindgen CLI whose version
+      # is resolved from the crate graph — the same reproducibility rule ci.yml
+      # uses, so the published .wasm matches what CI tested (resolves #80's WASM
+      # reproducibility point).
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Resolve wasm-bindgen version from the crate graph
+        id: wb
+        run: |
+          cargo generate-lockfile
+          version="$(cargo metadata --format-version 1 | jq -r 'first(.packages[] | select(.name=="wasm-bindgen")).version')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@${{ steps.wb.outputs.version }}
+      - run: npm ci --ignore-scripts
+      - name: Verify the tag matches package.json
+        run: |
+          tag_version="${GITHUB_REF_NAME#npm-v}"
+          pkg_version="$(node -p "require('./package.json').version")"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME implies $tag_version but package.json is $pkg_version"
+            exit 1
+          fi
+      - run: npm run build
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Cut the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "See CHANGELOG.md for this release."
+
+  crate:
+    name: crates.io publish
+    # One job for every crate tag; the crate is derived from the tag prefix.
+    if: >-
+      startsWith(github.ref_name, 'core-v') ||
+      startsWith(github.ref_name, 'derive-v') ||
+      startsWith(github.ref_name, 'wasm-v') ||
+      startsWith(github.ref_name, 'pyo3-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Resolve the crate from the tag
+        id: crate
+        run: |
+          case "$GITHUB_REF_NAME" in
+            core-v*)   name=proof-trading-sdk;        dir=proof-trading-sdk;        verify=--no-verify ;;
+            derive-v*) name=proof-trading-sdk-derive; dir=proof-trading-sdk-derive; verify= ;;
+            wasm-v*)   name=proof-trading-sdk-wasm;   dir=proof-trading-sdk-wasm;   verify=--no-verify ;;
+            pyo3-v*)   name=proof-trading-sdk-pyo3;   dir=proof-trading-sdk-pyo3;   verify=--no-verify ;;
+            *) echo "::error::unhandled crate tag $GITHUB_REF_NAME"; exit 1 ;;
+          esac
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "verify=$verify" >> "$GITHUB_OUTPUT"
+      # --no-verify for the crates whose verify build cannot run on the host:
+      # the wasm crate is a wasm32 cdylib, pyo3 links libpython behind the
+      # extension-module feature, and the core is pulled in transitively. derive
+      # is a proc-macro and verifies natively.
+      - name: Verify the tag matches Cargo.toml
+        run: |
+          tag_version="${GITHUB_REF_NAME#*-v}"
+          crate_version="$(grep -m1 '^version = ' "crates/${{ steps.crate.outputs.dir }}/Cargo.toml" | cut -d'"' -f2)"
+          if [ "$tag_version" != "$crate_version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME implies $tag_version but crate is $crate_version"
+            exit 1
+          fi
+      - name: Publish to crates.io
+        run: cargo publish -p "${{ steps.crate.outputs.name }}" ${{ steps.crate.outputs.verify }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  python:
+    name: PyPI publish
+    if: startsWith(github.ref_name, 'py-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify the tag matches pyproject.toml
+        run: |
+          tag_version="${GITHUB_REF_NAME#py-v}"
+          py_version="$(grep -m1 '^version = ' python/pyproject.toml | cut -d'"' -f2)"
+          if [ "$tag_version" != "$py_version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME implies $tag_version but pyproject is $py_version"
+            exit 1
+          fi
+      # abi3 wheel (one wheel spans the 3.11+ ABI) + sdist. Linux only for now.
+      # ponytail: single-platform wheels. Add a macOS/Windows matrix via
+      # maturin-action's target inputs when a consumer needs a native wheel
+      # there; the sdist already lets them build from source meanwhile.
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: python
+          command: publish
+          args: --sdist --non-interactive
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.MATURIN_PYPI_TOKEN }}
