@@ -167,18 +167,37 @@ def test_submit_action_json_string_body_does_not_crash():
     assert exc.value.code == 12
 
 
-def test_submit_action_html_page_is_transport_error_not_engine_error():
-    # No recoverable code: do not fabricate an engine rejection.
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text="<html><body>502 Bad Gateway</body></html>")
+def test_submit_action_bare_error_string_without_code_is_engine_error():
+    """No leading "<code>: " still means a rejection, not a transport failure.
 
-    with pytest.raises(TransportError):
+    Classifying a terminal engine rejection as transport would invite the caller
+    to retry a submit that will never succeed. Falls back to code 1, matching
+    the TypeScript binding.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="signature verification failed")
+
+    with pytest.raises(EngineError) as exc:
         _client(handler).submit_action(b"\x00")
+    assert exc.value.code == 1
+    assert "signature verification failed" in str(exc.value)
+
+
+def test_submit_action_json_string_without_code_is_engine_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json="signature verification failed")
+
+    with pytest.raises(EngineError) as exc:
+        _client(handler).submit_action(b"\x00")
+    assert exc.value.code == 1
 
 
 def test_submit_action_json_list_body_does_not_crash():
+    # Not an object: must not reach .get(). Classified like any other non-object
+    # 2xx body rather than raising AttributeError.
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[1, 2, 3])
 
-    with pytest.raises(TransportError):
+    with pytest.raises(EngineError):
         _client(handler).submit_action(b"\x00")

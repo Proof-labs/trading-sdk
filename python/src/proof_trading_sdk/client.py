@@ -454,15 +454,15 @@ class ExchangeClient:
             parsed = None
 
         if not isinstance(parsed, dict):
-            text = (parsed if isinstance(parsed, str) else raw) or ""
-            recovered = _leading_error_code(text)
-            if recovered is not None:
-                raise EngineError(recovered, text.strip())
-            # No code to recover: an HTML error page or empty body is a
-            # transport failure, not a fabricated engine rejection.
-            raise TransportError(
-                f"unparseable /exchange response: {raw[:200]}",
-                status_code=resp.status_code,
+            # `_check_response` already raised for every status >= 300, so this
+            # is a 2xx whose body is not an object: the gateway's compatibility
+            # error string. Classify it as an ENGINE error, like the TS binding
+            # does — calling a terminal rejection a transport failure invites a
+            # pointless resubmit. The code comes from the leading "<code>: " and
+            # falls back to 1 (DecodeError) when there is none.
+            text = (parsed if isinstance(parsed, str) else raw or "").strip()
+            raise EngineError(
+                _leading_error_code(text) or 1, text[:200] or "unknown gateway error"
             )
         data: dict[str, t.Any] = parsed
 

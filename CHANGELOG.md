@@ -123,8 +123,13 @@ action types.
   `SubmissionPending` (reconcile by hash — **not** a rejection, since calling
   it one would make a trader re-place an order that is about to fill); and a
   bare error string recovers its leading `"<code>: "` engine code, falling back
-  to 1. A non-JSON body raises `TransportError` instead of propagating a raw
-  `JSONDecodeError`.
+  to 1. Because `_check_response` has already raised for every status >= 300,
+  any non-object body reaching this point is a 2xx compatibility error string
+  and is classified as an `EngineError`, not a transport failure — a terminal
+  rejection reported as transport would invite a pointless resubmit. A body
+  that is valid JSON but not an object (a bare string, a list) no longer
+  escapes as a raw `AttributeError`, and a non-JSON body no longer propagates a
+  raw `JSONDecodeError`.
 - **A default-constructed `ExchangeClient()` no longer clobbers env/TOML
   config** (#8). The `config=None` branch passed the falsy constructor defaults
   (`gateway_url=""`, `api_key=""`, `timeout_secs=0`) straight into
