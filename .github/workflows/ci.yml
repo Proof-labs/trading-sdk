@@ -7,7 +7,11 @@ name: ci
 # (it is expensive); it lives in `security.yml`, gated to the schedule/manual.
 on:
   push:
-    branches: [dev]
+    # `main` is here for the release gate, not for its own sake: publish.yml
+    # refuses to publish a tag whose commit has no successful run of this
+    # workflow, and the dev -> main promotion creates a merge commit that no
+    # pull-request run covers. Without main, every release tag would be blocked.
+    branches: [dev, main]
   pull_request:
 
 permissions:
