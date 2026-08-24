@@ -37,7 +37,14 @@ describe("tx-result builders", () => {
     expect(r.error).toBeNull();
   });
 
-  it("txEngineError uses the DeliverTx log to classify shared code 50", () => {
+  it("txEngineError decodes current code 51 without a log", () => {
+    expect(txEngineError(51).error?.name).toBe("OpenInterestLimitExceeded");
+    expect(txEngineError(51, { log: "unrecognized" }).error?.name).toBe(
+      "OpenInterestLimitExceeded",
+    );
+  });
+
+  it("txEngineError uses the DeliverTx log to classify transitional code 50", () => {
     expect(
       txEngineError(50, {
         log: "open interest limit exceeded on market 7: would be 4, cap 3",
@@ -86,7 +93,7 @@ describe("tx-result builders", () => {
     expect(txFromEngineCode(0, { hash: "X" }).outcome).toBe("ok");
     const err = txFromEngineCode(21, { hash: "Y" });
     expect(err.outcome).toBe("engine");
-    expect(err.error?.name).toBe("TimestampNonceRejected");
+    expect(err.error?.name).toBe("InvalidNonce");
     expect(err.hash).toBe("Y");
   });
 });

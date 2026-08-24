@@ -1,4 +1,5 @@
 import { signAndEncode } from "./codec.js";
+import { ready as initWasm } from "./wasm-loader.js";
 import {
   txEngineError,
   txFromEngineCode,
@@ -38,9 +39,39 @@ import type {
   PositionInfo,
   WithdrawalRecord,
   WithdrawalStatus,
+  AdminSignerRegistry,
+  ProposalPage,
+  ImpactMarketInfo,
+  SetPositionTriggers,
+  PositionTriggerInfo,
+  TriggerStatus,
+  PositionTriggerHistoryFilters,
+  PositionTriggerHistoryPage,
+  TriggerMarketHistoryFilters,
+  TriggerMarketHistoryPage,
+  TriggerMarketConfigInfo,
 } from "./types.js";
+import {
+  decodeAdminSignerRegistryInfo,
+  decodeImpactMarketInfo,
+  decodeProposalPage,
+} from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
 import { sha256 } from "@noble/hashes/sha2.js";
+import {
+  decodePositionTriggerInfos,
+  decodeTriggerMarketConfigInfos,
+  decodeTriggerStatusJson,
+  validateCancelPositionTriggers,
+  validateSetPositionTriggers,
+} from "./triggers.js";
+import {
+  decodePositionTriggerHistoryPage,
+  decodeTriggerMarketHistoryPage,
+  positionTriggerHistorySearchParams,
+  triggerMarketHistorySearchParams,
+  validateTriggerHistoryMarket,
+} from "./trigger-history.js";
 
 const msgpackDecoder = new Decoder({ useBigInt64: true });
 
@@ -347,7 +378,8 @@ export class ExchangeClient {
    * `submitTx` resolves lazily on its own.
    */
   async ready(): Promise<void> {
-    await this.resolveChainId();
+    // Initialize the WASM codec/signing core and pre-resolve the chain_id.
+    await Promise.all([initWasm(), this.resolveChainId()]);
   }
 
   /**
@@ -532,7 +564,9 @@ export class ExchangeClient {
   private async broadcastSigned(action: Action): Promise<TxResult> {
     if (!this.privateKey) throw new Error("No private key set");
 
-    const chainId = await this.resolveChainId();
+    // Initialize the WASM codec/signing core and resolve the chain_id
+    // concurrently; both are cached, so only the first submit pays for either.
+    const [chainId] = await Promise.all([this.resolveChainId(), initWasm()]);
     const seq = this.nextTimestampNonce();
     const txBytes = signAndEncode(chainId, action, seq, this.privateKey);
 
@@ -992,6 +1026,35 @@ export class ExchangeClient {
     });
   }
 
+  /** Atomically replace a complete SL/TP bracket. When `owner` is omitted,
+   * use the loaded signer; a version-active trading agent may pass the
+   * delegated owner explicitly. The engine remains the authorization source. */
+  async setPositionTriggers(
+    params: Omit<SetPositionTriggers, "owner"> & { owner?: Uint8Array },
+  ): Promise<TxResult> {
+    const data: SetPositionTriggers = {
+      ...params,
+      owner: params.owner ?? this.requireOwner(),
+    };
+    validateSetPositionTriggers(data);
+    return this.submitTx({ type: "SetPositionTriggers", data });
+  }
+
+  /** Cancel the loaded signer's bracket for one exact position generation. */
+  async cancelPositionTriggers(
+    market: number,
+    expectedPositionEpoch: bigint,
+    owner?: Uint8Array,
+  ): Promise<TxResult> {
+    const data = {
+      market,
+      owner: owner ?? this.requireOwner(),
+      expectedPositionEpoch,
+    };
+    validateCancelPositionTriggers(data);
+    return this.submitTx({ type: "CancelPositionTriggers", data });
+  }
+
   // -----------------------------------------------------------------------
   // Query endpoints
   // -----------------------------------------------------------------------
@@ -1038,6 +1101,159 @@ export class ExchangeClient {
     const bytes = fromBase64(json.data as string);
     const raw = msgpackDecoder.decode(bytes) as unknown[][];
     return raw.map((m) => decodeMarketConfig(m));
+  }
+
+  /** List all impact-market families (the 5-book event structures: an
+   *  underlying perp plus CPY/CPN/EBY/EBN children). Fail-closed like the
+   *  governance reads: a missing envelope or a malformed row is a refusal,
+   *  never a partially-rendered list (decoder pinned to engine golden bytes
+   *  in governance-query.test.ts). */
+  async queryImpactMarkets(): Promise<ImpactMarketInfo[]> {
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/impact_markets`);
+    if (typeof json.data !== "string") {
+      throw new Error(
+        "governance decode: impact-markets response has no encoded-data envelope",
+      );
+    }
+    const raw = msgpackDecoder.decode(fromBase64(json.data));
+    if (!Array.isArray(raw)) {
+      throw new Error("governance decode: impactMarkets is not an array");
+    }
+    return raw.map((r, i) => decodeImpactMarketInfo(r, i));
+  }
+
+  /** Current whole-position trigger brackets for one owner. Immutable
+   * lifecycle history is a separate gateway/indexer query below. */
+  async queryPositionTriggers(
+    addressHex?: string,
+  ): Promise<PositionTriggerInfo[]> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) throw new Error("No address available");
+    if (!/^[0-9a-fA-F]{40}$/.test(hex)) {
+      throw new Error("trigger owner must be a 40-character hex address");
+    }
+    const path = `/v1/triggers/${hex.toLowerCase()}`;
+    const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return decodePositionTriggerInfos(msgpackDecoder.decode(bytes));
+  }
+
+  /** Read the complete governed trigger-market policy registry. Missing
+   * markets are disabled; callers must never synthesize a default policy. */
+  async queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]> {
+    const path = "/v1/triggers/markets";
+    const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return decodeTriggerMarketConfigInfos(msgpackDecoder.decode(bytes));
+  }
+
+  /** Read the fail-closed next-height trigger admission predicate. Heights
+   * are parsed from raw JSON into bigint without a lossy Number round-trip. */
+  async queryTriggerStatus(): Promise<TriggerStatus> {
+    const path = "/v1/triggers/status";
+    const res = await fetch(`${this.readBaseUrl}${path}`);
+    const text = await res.text();
+    if (!res.ok) {
+      let message = `HTTP ${res.status}`;
+      try {
+        const body = JSON.parse(text) as { error?: unknown };
+        if (typeof body.error === "string") message = body.error;
+      } catch {
+        // Keep the HTTP fallback for a non-JSON upstream response.
+      }
+      throw new Error(`API error: ${message}`);
+    }
+    return decodeTriggerStatusJson(text);
+  }
+
+  /** Immutable owner-bearing trigger lifecycle history. This always uses the
+   * public gateway, including when the client is configured for direct-node
+   * current-state reads; the node does not own indexer history. */
+  async queryPositionTriggerHistory(
+    addressHex?: string,
+    filters: PositionTriggerHistoryFilters = {},
+  ): Promise<PositionTriggerHistoryPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) throw new Error("No address available");
+    if (!/^[0-9a-fA-F]{40}$/.test(hex)) {
+      throw new Error(
+        "trigger history owner must be a 40-character hex address",
+      );
+    }
+    const canonicalOwner = hex.toLowerCase();
+    const params = positionTriggerHistorySearchParams(filters);
+    const qs = params.toString();
+    const json = await fetchApiJson(
+      `${this.gatewayUrl}/v1/history/triggers/${canonicalOwner}${qs ? `?${qs}` : ""}`,
+    );
+    return decodePositionTriggerHistoryPage(
+      json,
+      canonicalOwner,
+      filters.market,
+    );
+  }
+
+  /** Shared market-level deferred/resumed trigger transitions. These are not
+   * duplicated into every owner's history and always route through gateway. */
+  async queryTriggerMarketHistory(
+    market: number,
+    filters: TriggerMarketHistoryFilters = {},
+  ): Promise<TriggerMarketHistoryPage> {
+    validateTriggerHistoryMarket(market);
+    const params = triggerMarketHistorySearchParams(filters);
+    const qs = params.toString();
+    const json = await fetchApiJson(
+      `${this.gatewayUrl}/v1/history/trigger-markets/${market}${qs ? `?${qs}` : ""}`,
+    );
+    return decodeTriggerMarketHistoryPage(json, market);
+  }
+
+  /**
+   * Read the current on-chain admin signer registry via the gateway proxy
+   * (`GET /v1/admin/signer-registry`). The engine wraps the
+   * registry in an `Option`, so the proxy returns MessagePack `[registry|nil]`.
+   *
+   * Returns `null` when no registry is seeded — which means admin multisig is
+   * **inactive** (fail-closed), NOT an empty roster; callers must treat the two
+   * differently.
+   */
+  async queryAdminSignerRegistry(): Promise<AdminSignerRegistry | null> {
+    const json = await fetchApiJson(
+      `${this.readBaseUrl}/v1/admin/signer-registry`,
+    );
+    const bytes = fromBase64(
+      requireEncodedData(json, "/v1/admin/signer-registry"),
+    );
+    return decodeAdminSignerRegistryInfo(msgpackDecoder.decode(bytes));
+  }
+
+  /**
+   * List admin governance proposals via the gateway proxy
+   * (`GET /v1/proposals`). Optional `status` / `cursor` /
+   * `limit` are forwarded as query params (the node clamps oversized limits).
+   * The proxy returns MessagePack `[proposals, nextCursor|nil]`.
+   *
+   * Each proposal is decoded into a `ProposalDisplayInfo` — including the
+   * canonical action bytes and content hash an approving signer needs to
+   * rebuild their approval locally. Decoding fails closed: a proposal
+   * carrying an operation or status this SDK build does not know throws
+   * rather than being returned partially rendered.
+   */
+  async queryProposals(opts?: {
+    status?: string;
+    cursor?: bigint;
+    limit?: number;
+  }): Promise<ProposalPage> {
+    const params = new URLSearchParams();
+    if (opts?.status) params.set("status", opts.status);
+    if (opts?.cursor != null) params.set("cursor", String(opts.cursor));
+    if (opts?.limit != null) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    const json = await fetchApiJson(
+      `${this.readBaseUrl}/v1/proposals${qs ? `?${qs}` : ""}`,
+    );
+    const bytes = fromBase64(requireEncodedData(json, "/v1/proposals"));
+    return decodeProposalPage(msgpackDecoder.decode(bytes));
   }
 
   /** Fetch open orders for an address. Returns an empty array if the
@@ -1102,9 +1318,10 @@ export class ExchangeClient {
     const balance = BigInt(raw[0] as number | bigint);
     const positions: PositionInfo[] = ((raw[1] ?? []) as unknown[][]).map(
       (p) => {
-        // Optional enrichments (indices 6-12) shipped incrementally:
+        // Optional enrichments (indices 6-13) shipped incrementally:
         //   6-11: scenario-aware brief fields, 2026-04-24 (P1 #2).
         //   12  : adlScore, 2026-04-25 (item 7 — ADL rank surface).
+        //   13  : persistent position epoch (first-attach trigger input).
         // Older gateways return shorter tuples; missing fields are
         // surfaced as `undefined` so the UI can show a "—" placeholder.
         const optBig = (v: unknown): bigint | undefined =>
@@ -1125,6 +1342,7 @@ export class ExchangeClient {
           pnlIfDies: optBig(p[10]),
           fundingSince: optBig(p[11]),
           adlScore: optBig(p[12]),
+          positionEpoch: optBig(p[13]),
         };
       },
     );
@@ -1639,6 +1857,21 @@ async function fetchApiJson(url: string): Promise<Record<string, unknown>> {
     throw new Error(`API error: ${msg}`);
   }
   return json;
+}
+
+/**
+ * Governance reads carry a MessagePack envelope in `data`. A successful HTTP
+ * response without that envelope is malformed, not an inactive registry or
+ * an empty proposal page.
+ */
+function requireEncodedData(
+  json: Record<string, unknown>,
+  endpoint: string,
+): string {
+  if (typeof json.data !== "string" || json.data.length === 0) {
+    throw new Error(`API error: ${endpoint} response is missing encoded data`);
+  }
+  return json.data;
 }
 
 /**

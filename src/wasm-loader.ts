@@ -7,15 +7,20 @@
  * once before any codec/signing call that routes through WASM; after it
  * resolves, `getWasm()` returns the initialized exports synchronously.
  *
- * The module is imported dynamically (via a runtime-computed specifier) so that
- * importing the SDK does not hard-fail when `src/wasm/` has not been built —
- * only code that actually calls `ready()` needs the artifact.
+ * The generated module and binary use literal relative references on purpose:
+ * package consumers such as Vite must be able to discover, copy, and rewrite
+ * both assets into their own build. `npm run build:wasm` runs before TypeScript,
+ * so those generated files exist whenever this source is compiled.
  */
 
 /** The subset of the generated WASM bindings the SDK uses. */
 export interface WasmCore {
-  /** wasm-bindgen init — accepts the `.wasm` bytes (Node) or fetches by URL (browser). */
-  default: (input?: BufferSource | URL) => Promise<unknown>;
+  /** wasm-bindgen init — accepts the `.wasm` bytes (Node) or fetches by URL
+   *  (browser), passed as `{ module_or_path }` (the single-object form current
+   *  wasm-bindgen requires; the bare positional argument is deprecated). */
+  default: (options?: {
+    module_or_path?: BufferSource | URL;
+  }) => Promise<unknown>;
   encode_payload(actionType: number, fields: unknown): Uint8Array;
   decode_payload(actionType: number, payload: Uint8Array): unknown;
   signing_message(
@@ -40,12 +45,18 @@ export interface WasmCore {
   ): Uint8Array;
   pubkey_to_owner(pubkey: Uint8Array): Uint8Array;
   chain_id_from_string(chainId: string): Uint8Array;
+  admin_proposal_content_hash(
+    chainId: Uint8Array,
+    proposalId: bigint,
+    registryVersion: bigint,
+    threshold: number,
+    proposer: Uint8Array,
+    createdHeight: bigint,
+    createdMs: bigint,
+    expiryMs: bigint,
+    action: unknown,
+  ): Uint8Array;
 }
-
-// Runtime-computed specifier: keeps `tsc` / bundlers from statically resolving
-// (and failing on) the generated module when the artifact is absent.
-const WASM_JS = "./wasm/proof_trading_sdk_wasm.js";
-const WASM_BG = "./wasm/proof_trading_sdk_wasm_bg.wasm";
 
 let cached: WasmCore | null = null;
 let initPromise: Promise<WasmCore> | null = null;
@@ -57,6 +68,41 @@ function isNode(): boolean {
   return typeof g.process?.versions?.node === "string";
 }
 
+interface NodeProcess {
+  versions?: { node?: string };
+  getBuiltinModule?: (name: string) => unknown;
+}
+
+interface NodeFs {
+  readFileSync(path: string): BufferSource;
+}
+
+interface NodeUrl {
+  fileURLToPath(url: URL): string;
+}
+
+/**
+ * Resolve Node built-ins without placing a statically discoverable `node:*`
+ * import in the browser dependency graph. Next/Webpack follows ordinary
+ * dynamic-import specifiers even when their branch is runtime-only. Node 22+
+ * uses `process.getBuiltinModule`; Node 20 uses a deliberately hidden native
+ * dynamic import so existing integration runners remain supported.
+ */
+async function nodeBuiltin<T>(name: string): Promise<T> {
+  const process = (globalThis as { process?: NodeProcess }).process;
+  if (process?.getBuiltinModule) {
+    return process.getBuiltinModule(name) as T;
+  }
+  // `Function` keeps the `node:` specifier out of Webpack's module graph. It
+  // runs only in the Node branch; browsers never evaluate it. Do not replace
+  // this with `import("node:fs")` without rerunning the Next/Webpack consumer
+  // smoke test.
+  const nativeImport = Function("specifier", "return import(specifier)") as (
+    specifier: string,
+  ) => Promise<unknown>;
+  return (await nativeImport(`node:${name}`)) as T;
+}
+
 /**
  * Initialize the WASM core (idempotent). Resolves once the module is ready;
  * concurrent callers share a single instantiation.
@@ -64,28 +110,42 @@ function isNode(): boolean {
 export async function ready(): Promise<void> {
   if (cached) return;
   if (!initPromise) {
-    initPromise = (async () => {
-      const mod = (await import(
-        /* @vite-ignore */ new URL(WASM_JS, import.meta.url).href
-      )) as unknown as WasmCore;
-      if (isNode()) {
-        // Computed specifiers + loose casts keep `tsc` from needing Node types.
-        const fs = (await import(/* @vite-ignore */ "node:fs" as string)) as {
-          readFileSync: (p: string) => BufferSource;
-        };
-        const url = (await import(/* @vite-ignore */ "node:url" as string)) as {
-          fileURLToPath: (u: URL) => string;
-        };
-        const path = url.fileURLToPath(new URL(WASM_BG, import.meta.url));
-        await mod.default(fs.readFileSync(path));
-      } else {
-        await mod.default(new URL(WASM_BG, import.meta.url));
-      }
-      cached = mod;
-      return mod;
-    })();
+    initPromise = instantiate();
   }
-  await initPromise;
+  const attempt = initPromise;
+  try {
+    await attempt;
+  } catch (e) {
+    // A failed init (e.g. a transient fetch error for the .wasm binary in a
+    // browser) must not stay cached, or every later call replays the same
+    // rejection until page reload. Clear it so the next `ready()` retries —
+    // unless a newer attempt is already in flight.
+    if (initPromise === attempt) initPromise = null;
+    throw e;
+  }
+}
+
+async function instantiate(): Promise<WasmCore> {
+  // Keep this import literal: Vite/Rollup must see the generated module in
+  // a consuming application's dependency graph.
+  const mod =
+    (await import("./wasm/proof_trading_sdk_wasm.js")) as unknown as WasmCore;
+  // Likewise, a literal URL lets the consumer's bundler emit the binary as
+  // a hashed asset rather than leaving a broken node_modules-relative URL.
+  const wasmUrl = new URL(
+    "./wasm/proof_trading_sdk_wasm_bg.wasm",
+    import.meta.url,
+  );
+  if (isNode()) {
+    const fs = await nodeBuiltin<NodeFs>("fs");
+    const url = await nodeBuiltin<NodeUrl>("url");
+    const path = url.fileURLToPath(wasmUrl);
+    await mod.default({ module_or_path: fs.readFileSync(path) });
+  } else {
+    await mod.default({ module_or_path: wasmUrl });
+  }
+  cached = mod;
+  return mod;
 }
 
 /**

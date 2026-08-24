@@ -84,6 +84,18 @@ fn signing_vectors() {
 }
 
 #[test]
+fn errors_vectors() {
+    let cases = lines(cv::ERRORS_FILE);
+    assert!(!cases.is_empty(), "no errors vectors");
+    for line in cases {
+        let c: cv::ErrorCase = serde_json::from_str(&line).expect("parse errors case");
+        let got = cv::error_reference_name(c.code, c.log.as_deref())
+            .unwrap_or_else(|| panic!("[{}] code {} not classified", c.case, c.code));
+        assert_eq!(got, c.expect.name, "errors mismatch for case {}", c.case);
+    }
+}
+
+#[test]
 fn nonce_vectors() {
     let cases = lines(cv::NONCE_FILE);
     assert!(!cases.is_empty(), "no nonce vectors");

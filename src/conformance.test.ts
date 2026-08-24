@@ -7,6 +7,7 @@
 // Status:
 //   - codec vectors: PASS
 //   - signing vectors: PASS (signEnvelopeFromPayload + pubkeyToOwner/ownerToHex)
+//   - errors vectors:  PASS (ExecErrorCode manifest + execErrorName log decoder)
 //   - nonce vectors:   SKIPPED — nonces are derived from timestamps, not a step function
 //
 // `OracleUpdateComposite` (0x14) is now wired (operator action — composite-CEX
@@ -25,6 +26,7 @@ import {
   signEnvelopeFromPayload,
 } from "./codec.js";
 import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
+import { ExecErrorCode, execErrorName } from "./errors.js";
 import {
   ActionType,
   Outcome,
@@ -292,38 +294,11 @@ function toAction(
           agentPubkey: bytes(input.agent_pubkey),
         },
       };
-    case ActionType.CreateImpactMarket: {
-      const os = input.oracle_source;
-      const parsedOs =
-        os === null || os === undefined ? undefined : parseOracleSource(os);
+    case ActionType.CreateImpactMarket:
       return {
         type: "CreateImpactMarket",
-        data: {
-          impactMarketId: input.impact_market_id as number,
-          underlyingMarket: input.underlying_market as number,
-          childMarketBase: input.child_market_base as number,
-          question: input.question as string,
-          deadlineMs: big(input.deadline_ms),
-          resolutionWindowMs: big(input.resolution_window_ms),
-          imBps: input.im_bps as number,
-          mmBps: input.mm_bps as number,
-          takerFeeBps: input.taker_fee_bps as number,
-          makerFeeBps: input.maker_fee_bps as number,
-          fundingIntervalMs: big(input.funding_interval_ms),
-          maxFundingRateBps: input.max_funding_rate_bps as number,
-          signer: bytes(input.signer),
-          oracleSource: parsedOs,
-          description:
-            input.description === "" || input.description == null
-              ? undefined
-              : (input.description as string),
-          rules:
-            input.rules === "" || input.rules == null
-              ? undefined
-              : (input.rules as string),
-        },
+        data: toCreateImpactMarketValue(input),
       };
-    }
     case ActionType.ResolveEvent:
       return {
         type: "ResolveEvent",
@@ -403,12 +378,301 @@ function toAction(
               : Number(big(input.max_slippage_bps)),
         },
       };
+    case ActionType.ProposeAdminAction:
+      return {
+        type: "ProposeAdminAction",
+        data: {
+          proposer: bytes(input.proposer),
+          registryVersion: big(input.registry_version),
+          action: toAdminAction(input.action as Record<string, unknown>),
+        },
+      };
+    case ActionType.ApproveAdminAction:
+      return {
+        type: "ApproveAdminAction",
+        data: {
+          approver: bytes(input.approver),
+          proposalId: big(input.proposal_id),
+          registryVersion: big(input.registry_version),
+          threshold: Number(big(input.threshold)),
+          proposer: bytes(input.proposer),
+          createdHeight: big(input.created_height),
+          createdMs: big(input.created_ms),
+          expiryMs: big(input.expiry_ms),
+          action: toAdminAction(input.action as Record<string, unknown>),
+          contentHash: bytes(input.content_hash),
+        },
+      };
+    case ActionType.RejectAdminAction:
+      return {
+        type: "RejectAdminAction",
+        data: {
+          rejecter: bytes(input.rejecter),
+          proposalId: big(input.proposal_id),
+          contentHash: bytes(input.content_hash),
+        },
+      };
+    case ActionType.EmergencyAdminAction:
+      return {
+        type: "EmergencyAdminAction",
+        data: {
+          signer: bytes(input.signer),
+          action: toEmergencyAction(input.action as Record<string, unknown>),
+        },
+      };
+    case ActionType.ConfirmWithdrawalReceipt:
+      return {
+        type: "ConfirmWithdrawalReceipt",
+        data: {
+          receipt: toBridgeReceipt(input.receipt as Record<string, unknown>),
+          proof: toOperatorProof(input.proof as Record<string, unknown>),
+        },
+      };
+    case ActionType.FailWithdrawalReceipt:
+      return {
+        type: "FailWithdrawalReceipt",
+        data: {
+          receipt: toBridgeReceipt(input.receipt as Record<string, unknown>),
+          proof: toOperatorProof(input.proof as Record<string, unknown>),
+        },
+      };
+    case ActionType.AuthorizeWithdrawal:
+      return {
+        type: "AuthorizeWithdrawal",
+        data: {
+          authorization: bytes(input.authorization),
+          proof: toOperatorProof(input.proof as Record<string, unknown>),
+        },
+      };
+    case ActionType.SetPositionTriggers: {
+      const limb = (value: unknown) => {
+        if (value == null) return null;
+        const item = value as Record<string, unknown>;
+        return {
+          triggerPrice: big(item.trigger_price),
+          maxSlippageBps: item.max_slippage_bps as number,
+          clientTriggerId: bigOrNull(item.client_trigger_id),
+        };
+      };
+      return {
+        type: "SetPositionTriggers",
+        data: {
+          market: input.market as number,
+          owner: bytes(input.owner),
+          expectedPositionEpoch: big(input.expected_position_epoch),
+          stopLoss: limb(input.stop_loss),
+          takeProfit: limb(input.take_profit),
+          clientGroupId: bigOrNull(input.client_group_id),
+        },
+      };
+    }
+    case ActionType.CancelPositionTriggers:
+      return {
+        type: "CancelPositionTriggers",
+        data: {
+          market: input.market as number,
+          owner: bytes(input.owner),
+          expectedPositionEpoch: big(input.expected_position_epoch),
+        },
+      };
     default:
       throw new Error(
         `toAction: action_type 0x${actionType.toString(16)} not wired ` +
           `(intentionally omitted types should be documented in conformance/README.md)`,
       );
   }
+}
+
+/** Reconstruct a TS `BridgeWithdrawalReceipt` from the vector's snake_case map. */
+function toBridgeReceipt(
+  r: Record<string, unknown>,
+): import("./types.js").BridgeWithdrawalReceipt {
+  return {
+    deploymentId: bytes(r.deployment_id),
+    authorizationDigest: bytes(r.authorization_digest),
+    withdrawalId: big(r.withdrawal_id),
+    terminalState: r.terminal_state as number,
+    vaultTier: r.vault_tier as number,
+    proofOwner: bytes(r.proof_owner),
+    destinationOwner: bytes(r.destination_owner),
+    destinationTokenAcct: bytes(r.destination_token_acct),
+    amountMicroUsdc: big(r.amount_micro_usdc),
+    feeMicroUsdc: big(r.fee_micro_usdc),
+    authorizationSignerEpoch: big(r.authorization_signer_epoch),
+    solanaTxSignature: bytes(r.solana_tx_signature),
+    finalizedSlot: big(r.finalized_slot),
+    finalizedBlockhash: bytes(r.finalized_blockhash),
+    receiptQuorumKind: r.receipt_quorum_kind as number,
+    receiptAuthorityEpoch: big(r.receipt_authority_epoch),
+  };
+}
+
+/** Reconstruct a TS `OperatorReceiptProof` from the vector's snake_case map. */
+function toOperatorProof(
+  p: Record<string, unknown>,
+): import("./types.js").OperatorReceiptProof {
+  return {
+    signerBitmap: bytes(p.signer_bitmap),
+    signatures: (p.signatures as unknown[]).map((s) => bytes(s)),
+  };
+}
+
+/** Reconstruct a TS `CreateMarket` value from the vector's serde map form —
+ *  shared by the `AdminAction` arm and `Batch` items. */
+function toCreateMarketValue(
+  m: Record<string, unknown>,
+): import("./types.js").CreateMarket {
+  return {
+    market: m.market as number,
+    imBps: m.im_bps as number,
+    mmBps: m.mm_bps as number,
+    takerFeeBps: m.taker_fee_bps as number,
+    makerFeeBps: m.maker_fee_bps as number,
+    signer: bytes(m.signer),
+    fundingIntervalMs: big(m.funding_interval_ms),
+    maxFundingRateBps: m.max_funding_rate_bps as number,
+    poolId: m.pool_id as number,
+    szDecimals: m.sz_decimals as number,
+    ticker: m.ticker as string,
+    maxOpenInterest: big(m.max_open_interest),
+  };
+}
+
+/** Reconstruct a TS `CreateImpactMarket` value from the vector's serde map
+ *  form — shared by the relayer action (0x0e), the `AdminAction` arm, and
+ *  `Batch` items. */
+function toCreateImpactMarketValue(
+  input: Record<string, unknown>,
+): import("./types.js").CreateImpactMarket {
+  const os = input.oracle_source;
+  const parsedOs =
+    os === null || os === undefined ? undefined : parseOracleSource(os);
+  return {
+    impactMarketId: input.impact_market_id as number,
+    underlyingMarket: input.underlying_market as number,
+    childMarketBase: input.child_market_base as number,
+    question: input.question as string,
+    deadlineMs: big(input.deadline_ms),
+    resolutionWindowMs: big(input.resolution_window_ms),
+    imBps: input.im_bps as number,
+    mmBps: input.mm_bps as number,
+    takerFeeBps: input.taker_fee_bps as number,
+    makerFeeBps: input.maker_fee_bps as number,
+    fundingIntervalMs: big(input.funding_interval_ms),
+    maxFundingRateBps: input.max_funding_rate_bps as number,
+    signer: bytes(input.signer),
+    oracleSource: parsedOs,
+    description:
+      input.description === "" || input.description == null
+        ? undefined
+        : (input.description as string),
+    rules:
+      input.rules === "" || input.rules == null
+        ? undefined
+        : (input.rules as string),
+  };
+}
+
+/** One governance `Batch` item — the closed market-creation subset. */
+function toAdminBatchItem(
+  v: Record<string, unknown>,
+): import("./types.js").AdminBatchItem {
+  if (v.CreateMarket) {
+    return {
+      kind: "CreateMarket",
+      value: toCreateMarketValue(v.CreateMarket as Record<string, unknown>),
+    };
+  }
+  if (v.CreateImpactMarket) {
+    return {
+      kind: "CreateImpactMarket",
+      value: toCreateImpactMarketValue(
+        v.CreateImpactMarket as Record<string, unknown>,
+      ),
+    };
+  }
+  throw new Error(
+    `toAdminBatchItem: unknown variant ${Object.keys(v).join(",")}`,
+  );
+}
+
+/** Reconstruct a TS `AdminAction` from the vector's serde map form. Throws
+ *  on an unknown variant rather than falling through — a vector this suite
+ *  cannot name must fail the run, not mis-parse as a registry update. */
+function toAdminAction(
+  v: Record<string, unknown>,
+): import("./types.js").AdminAction {
+  if (v.CreateMarket) {
+    return {
+      kind: "CreateMarket",
+      value: toCreateMarketValue(v.CreateMarket as Record<string, unknown>),
+    };
+  }
+  if (v.CreateImpactMarket) {
+    return {
+      kind: "CreateImpactMarket",
+      value: toCreateImpactMarketValue(
+        v.CreateImpactMarket as Record<string, unknown>,
+      ),
+    };
+  }
+  if (v.Batch) {
+    return {
+      kind: "Batch",
+      value: (v.Batch as Record<string, unknown>[]).map(toAdminBatchItem),
+    };
+  }
+  if (v.UpdateAdminSignerRegistry) {
+    const r = v.UpdateAdminSignerRegistry as Record<string, unknown>;
+    return {
+      kind: "UpdateAdminSignerRegistry",
+      value: {
+        newThreshold: Number(big(r.new_threshold)),
+        newMembers: (r.new_members as unknown[]).map((a) => bytes(a)),
+      },
+    };
+  }
+  if (v.SetTriggerMarketConfig) {
+    const c = v.SetTriggerMarketConfig as Record<string, unknown>;
+    return {
+      kind: "SetTriggerMarketConfig",
+      value: {
+        market: c.market as number,
+        expectedCurrentVersion: bigOrNull(c.expected_current_version),
+        enabled: c.enabled as boolean,
+        maxTriggerSlippageBps: c.max_trigger_slippage_bps as number,
+        maxMarkAgeMs: big(c.max_mark_age_ms),
+        maxFuturePublishSkewMs: big(c.max_future_publish_skew_ms),
+        maxActiveBrackets: big(c.max_active_brackets),
+      },
+    };
+  }
+  throw new Error(`toAdminAction: unknown variant ${Object.keys(v).join(",")}`);
+}
+
+/** Reconstruct a TS `EmergencyAction` from the vector's serde map form. */
+function toEmergencyAction(
+  v: Record<string, unknown>,
+): import("./types.js").EmergencyAction {
+  if (v.PauseMarket) {
+    return {
+      kind: "PauseMarket",
+      value: {
+        marketId: (v.PauseMarket as Record<string, unknown>)
+          .market_id as number,
+      },
+    };
+  }
+  if (v.SetReduceOnly) {
+    return {
+      kind: "SetReduceOnly",
+      value: {
+        marketId: (v.SetReduceOnly as Record<string, unknown>)
+          .market_id as number,
+      },
+    };
+  }
+  return { kind: "HaltTrading" };
 }
 
 /**
@@ -488,22 +752,98 @@ describe("conformance vectors (TypeScript)", () => {
   });
 
   it.skip("nonce: timestamp-derived, step function not needed", () => {});
+
+  it("errors: code→name manifest + log-aware classification", () => {
+    for (const c of cases("errors.ndjson")) {
+      const code = Number(c.code);
+      const expected = (c.expect as { name: string }).name;
+      // A bare code (log null) pins the numeric manifest name (enum
+      // reverse-map); a code carrying a log pins the log-aware decoder.
+      const got =
+        c.log == null
+          ? ExecErrorCode[code]
+          : execErrorName(code, c.log as string);
+      expect(got).toBe(expected);
+    }
+  });
   it("codec: action fields → payload bytes", () => {
+    // No try/catch: every vector must build through toAction and encode
+    // byte-exact. A vector whose action type is not wired here fails loudly —
+    // the old `continue`-on-unwired skip let new vector families pass green
+    // while asserting nothing (that hid the governance vectors until #65).
     for (const c of cases("codec.ndjson")) {
-      try {
-        const action = toAction(
-          c.action_type as ActionTypeValue,
-          c.input as Record<string, unknown>,
-        );
-        const payload = encodePayloadBytes(action);
-        expect(bytesToHex(payload)).toBe(
-          (c.expect as { payload_hex: string }).payload_hex,
-        );
-      } catch (e) {
-        // Skip vectors for action types not yet wired in toAction.
-        if (e instanceof Error && e.message.startsWith("toAction:")) continue;
-        throw e;
-      }
+      const action = toAction(
+        c.action_type as ActionTypeValue,
+        c.input as Record<string, unknown>,
+      );
+      const payload = encodePayloadBytes(action);
+      expect(bytesToHex(payload)).toBe(
+        (c.expect as { payload_hex: string }).payload_hex,
+      );
+    }
+  });
+
+  it("codec: vector coverage of the ActionType registry is pinned", () => {
+    const vectorTypes = new Set(
+      cases("codec.ndjson").map((c) => c.action_type as number),
+    );
+    // Every vector's action type must exist in the registry — an orphan means
+    // the vectors and `types.ts` have drifted.
+    const registryBytes = new Set<number>(Object.values(ActionType));
+    for (const t of vectorTypes) {
+      expect(
+        registryBytes.has(t),
+        `orphan vector action_type 0x${t.toString(16)}`,
+      ).toBe(true);
+    }
+    // Known coverage debt: action types with no codec vector yet. This is a
+    // ratchet — adding a new ActionType without a vector fails here. Prefer
+    // adding a vector in crates/spec/src/bin/gen_vectors.rs; extending this
+    // list instead is a conscious, reviewed decision. Remove names as vectors
+    // land; never re-add one.
+    const uncovered = Object.entries(ActionType)
+      .filter(([, byte]) => !vectorTypes.has(byte))
+      .map(([name]) => name)
+      .sort();
+    expect(uncovered).toEqual(
+      [
+        "AmendOrder",
+        "ApproveAgent",
+        "CancelAllOrders",
+        "CancelClientOrder",
+        "CancelReplaceOrder",
+        "ConfirmDeposit",
+        "ConfirmWithdrawal",
+        "CreateImpactMarket",
+        "Deposit",
+        "FailWithdrawal",
+        "ResolveEvent",
+        "RevokeAgent",
+        "SetUserMarketLeverage",
+        "Withdraw",
+        "WithdrawRequest",
+      ].sort(),
+    );
+  });
+
+  it("codec: all governance actions encode byte-exact (no silent skip)", () => {
+    const govTypes = new Set<number>([0x1e, 0x1f, 0x20, 0x21]);
+    const govCases = cases("codec.ndjson").filter((c) =>
+      govTypes.has(c.action_type as number),
+    );
+    // Guard against the vector file drifting out from under this assertion:
+    // propose (create-market, v2 batch and trigger config), approve, reject,
+    // and all three emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(8);
+    for (const c of govCases) {
+      // No try/catch: a missing toAction case or a byte mismatch fails loudly.
+      const action = toAction(
+        c.action_type as ActionTypeValue,
+        c.input as Record<string, unknown>,
+      );
+      expect(bytesToHex(encodePayloadBytes(action))).toBe(
+        (c.expect as { payload_hex: string }).payload_hex,
+      );
     }
   });
 

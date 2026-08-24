@@ -7,21 +7,175 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-The npm, Rust core, PyO3, WASM, and Python packages move to **2.0.0** for the
-open-interest-cap wire contract. Every v2 `CreateMarket` wire payload now has
-one canonical 12-field encoding, including an explicit final `0` for uncapped
-markets. The npm input treats omission, null, and explicit zero identically.
-That changes its existing uncapped output from 11 to 12 fields and normalizes a
-decoded legacy absent tail from `undefined` to `0n`; a v1 gateway/engine cannot
-be assumed to accept the new bytes. Frozen v1 `rmp-serde` decoders also reject
-populated 12-field `CreateMarket` and 21-field `UpdateMarketFees` payloads, and
-the Rust wire structs gain source-incompatible fields. The unchanged derive
-crate stays at **1.1.0**; the unpublished conformance crate labels the v2
-vectors as **2.0.0**. Compatible engine:
-`exchange-core >= 2.0.0, < 3.0.0`.
+Nothing yet.
+
+## [3.0.0] — 2026-08-24
+
+First published release: this is the first version of any of these packages
+to reach npm, crates.io, or PyPI. Earlier entries below describe versions
+that were tagged in this changelog only and never published.
+
+The npm, Rust core, PyO3, and Python packages move to **3.0.0**. The MAJOR bump
+renumbers `OpenInterestLimitExceeded` from result code 50 to 51 (and repurposes
+code 50 to `SlippageExceeded`), which changes the result for any consumer that
+switches on the integer code, and adds the public code-51
+`OpenInterestLimitExceeded` classification while preserving safe decoding across
+a rolling engine upgrade. The WASM crate takes a MINOR bump to **2.1.0** (a new
+`admin_proposal_content_hash` export; existing API and wire behaviour
+unchanged), the derive crate stays at **1.1.0**, and the unpublished
+conformance crate continues to label the v2 vectors as **2.0.0**.
+
+This release also includes the two breaking changes first staged at 2.0.0: the
+open-interest-cap wire contract and the cutover of the action codec + signing
+onto a WASM build of the Rust core (ADR 0001).
+
+Open-interest cap — every v2 `CreateMarket` wire payload now has one canonical
+12-field encoding, including an explicit final `0` for uncapped markets. The npm
+input treats omission, null, and explicit zero identically. That changes its
+existing uncapped output from 11 to 12 fields and normalizes a decoded legacy
+absent tail from `undefined` to `0n`; a v1 gateway/engine cannot be assumed to
+accept the new bytes. Frozen v1 `rmp-serde` decoders also reject populated
+12-field `CreateMarket` and 21-field `UpdateMarketFees` payloads, and the Rust
+wire structs gain source-incompatible fields. The unchanged derive crate stays
+at **1.1.0**; the unpublished conformance crate labels the v2 vectors as
+**2.0.0**. Compatible engine: `exchange-core >= 2.0.0, < 3.0.0` for the wire as
+a whole; the bridge-custody actions added below (`0x22` / `0x23` / `0x24`)
+require `exchange-core >= 2.4.0` (the next engine release to declare them,
+PR #316 — release C was tagged `v2.3.0` from a cut that predates that wire
+surface, and `2.2.0` earlier still) — an earlier engine rejects those
+action types.
+
+### Added
+
+- **`SubmissionPending` (Python)** — a new public exception for the gateway
+  shape that carries a `txHash` but no engine `code`. The gateway broadcast the
+  transaction and could not report its on-chain outcome in time; the tx may
+  still commit, so the caller reconciles by `tx_hash` instead of re-submitting.
+  Exported from `proof_trading_sdk`.
+
+- **Position-linked stop-loss/take-profit support (W32-10)** — canonical
+  `SetPositionTriggers` (`0x25`) and `CancelPositionTriggers` (`0x26`) wire
+  actions, governed trigger-market configuration tag `0x05`, delegated-owner
+  signing, persistent position-epoch discovery, current trigger/config/status
+  reads, and lossless owner/market lifecycle-history reads now ship across the
+  Rust, WASM/TypeScript, and Python bindings. Engine-produced golden vectors
+  pin both action payloads/envelopes and the administration content hash; all
+  JSON-facing `u64` identifiers remain decimal strings or native lossless
+  integer types. This additive surface folds into the still-uncut `3.0.0`
+  release and requires the coordinated W32-10 engine/gateway contract
+  (`exchange-core >= 2.5.0`) before it is advertised as active.
+- **Receipt-carrying terminal withdrawal actions `ConfirmWithdrawalReceipt`
+  (`0x22`) and `FailWithdrawalReceipt` (`0x23`)** — the operator-multisig
+  withdrawal-settlement phase (W28-20). Each carries a
+  `BridgeWithdrawalReceipt` (wire mirror of the frozen 327-byte
+  `bridge_core::BridgeReceiptV1`, a fixed 16-field record) plus an
+  `OperatorReceiptProof` (a signer bitmap and one 64-byte ed25519 signature per
+  set bit — `bridge_core::ReceiptProofV1::OperatorEd25519`). The engine verifies
+  the operator quorum signed exactly the receipt bytes in consensus, replacing
+  the trusted-relayer assertion of the legacy `ConfirmWithdrawal` (`0x0a`) /
+  `FailWithdrawal` (`0x0b`). This is **additive and MINOR in nature** — the two
+  legacy actions keep their discriminants and still decode byte-for-byte, and
+  transactions produced before this change are unaffected. The encoded payloads
+  are **byte-identical to the engine's committed golden vectors**
+  (`docs/spec/golden-vectors/{confirm,fail}_withdrawal_receipt.hex` on the
+  engine branch), proven by the Rust core test
+  `codec::tests::w28_20_receipt_action_golden_vectors`, the conformance vectors
+  `confirm_withdrawal_receipt/paid` and `fail_withdrawal_receipt/cancelled`, and
+  the TypeScript codec round-trip. Mirrors engine PR #316 (+ gateway #100). The
+  change folds into this uncut `3.0.0` release; no separate version bump.
+- **`AuthorizeWithdrawal` (`0x24`)** — the authorization leg the terminal
+  receipts settle against: the operator-quorum-signed 221-byte
+  `WithdrawalAuthorizationV1` bytes (`bridge_core` fixed encoding) plus the
+  same `OperatorReceiptProof`. The engine requires it recorded before a
+  `0x22`/`0x23` receipt can settle. The engine commits no golden `.hex` for
+  this action; the byte pin is `crates/spec/golden-vectors/authorize_withdrawal.hex`,
+  derived by encoding the fixture with `exchange-core` itself (engine branch
+  commit `c32f7d1`, method control-checked against the committed `0x22`
+  vector), asserted by the Rust golden test plus the
+  `authorize_withdrawal/operator` conformance vector in all three runners.
+
+### Changed
+
+- **BREAKING — the TypeScript `ExecErrorCode.TimestampNonceRejected` (code 21)
+  is renamed `InvalidNonce`** (#63), aligning the TS SDK with the engine
+  `ExecError` variant and the Rust/Python bindings, which already used that
+  name. `decodeExecError(21).name` / `execErrorName(21)` now return
+  `"InvalidNonce"`; any TS consumer keying on the old string must update. Code
+  21 is now pinned in the `errors` conformance manifest across all three
+  bindings (the `MANIFEST_NAME_DIVERGES` carve-out is removed). Folds into this
+  uncut `3.0.0` release; no separate version bump.
+- **BREAKING — the action codec and signing now run through a WASM build of the
+  Rust core** (ADR 0001). `encodeSignedTx` / `signAndEncode` /
+  `signEnvelopeFromPayload` / `encodePayloadBytes` / `decodeTx` are byte-identical
+  to the exchange engine _by construction_; the ~770-line hand-written TS codec
+  is deleted (`codec.ts` is now a thin adapter over the WASM core). Because WASM
+  initializes asynchronously, **call `await ready()` once** (exported from the
+  package) before any codec/signing call — `ExchangeClient` does this internally
+  (`submitTx` / `ready()`); only raw `signAndEncode` / `decodeTx` callers need
+  it. Building and testing now require the Rust + `wasm-bindgen` toolchain
+  (`npm run build:wasm`). **The wire format is unchanged** — this is an API/build
+  break, not a wire break, but the async-init requirement warrants a MAJOR bump.
+
+### Removed
+
+- The hand-written positional MessagePack codec in `src/codec.ts` (~770 lines of
+  encode/decode arms + enum/byte helpers) — superseded by the WASM core and
+  `src/codec-adapter.ts` (a name/enum translation layer).
 
 ### Fixed
 
+- **The Python client no longer reports a rejected submit as a success** (#7).
+  `_check_response` handled a fixed set of statuses and then returned the
+  response, so any other non-2xx (400, 402, 405–428, 431, 3xx) was treated as a
+  successful submit. Every non-2xx now raises: 5xx stays `GatewayError`
+  ("retry with backoff"), and a 3xx/4xx raises `TransportError` carrying
+  `status_code` — it must not be blind-retried.
+- **`submit_action` no longer defaults a missing engine `code` to 0**, and no
+  longer mistakes an unresolved broadcast for a rejection (#7). The four
+  documented `/exchange` shapes are now dispatched by body, matching the
+  contract the TypeScript binding pins in `submitViaGateway`: a structured
+  `code` is authoritative; a code-less `{"status": "ok"}` is a legacy CheckTx
+  ack and **succeeds**; a code-less body carrying a hash raises
+  `SubmissionPending` (reconcile by hash — **not** a rejection, since calling
+  it one would make a trader re-place an order that is about to fill); and a
+  bare error string recovers its leading `"<code>: "` engine code, falling back
+  to 1. Because `_check_response` has already raised for every status >= 300,
+  any non-object body reaching this point is a 2xx compatibility error string
+  and is classified as an `EngineError`, not a transport failure — a terminal
+  rejection reported as transport would invite a pointless resubmit. A body
+  that is valid JSON but not an object (a bare string, a list) no longer
+  escapes as a raw `AttributeError`, and a non-JSON body no longer propagates a
+  raw `JSONDecodeError`.
+- **A default-constructed `ExchangeClient()` no longer clobbers env/TOML
+  config** (#8). The `config=None` branch passed the falsy constructor defaults
+  (`gateway_url=""`, `api_key=""`, `timeout_secs=0`) straight into
+  `load_config`, so configured values were ignored and every request ran with
+  `httpx.Timeout(0)` and failed instantly. Only truthy overrides are forwarded
+  now, restoring the documented precedence (defaults < env < TOML < explicit).
+- **`wasm-bindgen` is exact-pinned (`=0.2.126`)** so `npm run build:wasm` (and
+  the `pretest` / `build` / `prepare` scripts that depend on it) cannot break
+  when a new `0.2.x` release ships: the wasm-bindgen CLI hard-errors on any
+  version mismatch with the crate, and with `Cargo.lock` gitignored a caret
+  range let every machine float independently of the installed CLI (#58).
+  Install the matching CLI with `cargo install wasm-bindgen-cli --version
+0.2.126`; CI already resolves the CLI version from the crate graph.
+- **A failed WASM init no longer stays cached.** `ready()` used to memoize the
+  first instantiation attempt permanently, so a transient failure (e.g. one
+  dropped `.wasm` fetch in a browser) made every later `ready()` — and every
+  `ExchangeClient` submit — replay the same rejection until page reload. A
+  failed attempt is now cleared and the next call retries instantiation.
+- **The codec adapter rejects unknown enum values loudly, by field name.** An
+  out-of-range numeric enum on encode (`side: 99`) or an unknown variant name
+  on decode used to cross the WASM boundary as `undefined` and surface as
+  serde's unrelated-looking `invalid type: unit value`; both directions now
+  throw e.g. `unknown side enum value: 99` at the adapter.
+- **Byte fields decode by name, not by array-shape guess.** The adapter's
+  decode direction converted any non-empty all-numbers array to `Uint8Array`,
+  which would silently truncate the first future numeric-list wire field; byte
+  fields are now an explicit name set (`owner`, `signer`, `agentPubkey`,
+  `primaryOracleSigner`, `solanaDestination`, `solanaTxSig`), an empty byte
+  field decodes as an empty `Uint8Array` (previously `[]`), and non-u8 content
+  in a byte field throws.
 - **`peekActionType()` no longer leaks unknown action-type bytes as
   `ActionTypeValue`** (#56). It now returns `null` for an action-type slot
   this SDK build does not know — an unassigned byte, a newer engine's wire
@@ -55,9 +209,110 @@ vectors as **2.0.0**. Compatible engine:
 - Python market reads decode `MarketConfig.max_open_interest` from slot 24.
 - Rust `Event::MarketConfigUpdated` now matches the engine's complete event
   shape, including `im_bps`, `mm_bps`, and `max_open_interest`.
+- Rolling-upgrade error-code classification across Rust, TypeScript, and
+  Python. Upgraded engines use code 50 for `SlippageExceeded` and the new code
+  51 for `OpenInterestLimitExceeded`; code 51 decodes directly without a log.
+  Legacy code-50 open-interest rejects remain recognizable from their
+  canonical DeliverTx prefix, while absent or unknown code-50 logs resolve to
+  `AmbiguousCode50` rather than guessing.
+- The public Rust `ExecError` mirror now includes `SlippageExceeded` with code
+  50, so constructed Rust errors, the error-kind manifest, and the live engine
+  agree on both sides of the 50/51 split.
 
 ### Added
 
+- **Admin-actions v2 mirrors: `CreateImpactMarket` + `Batch` proposals**
+  (engine Proof-labs/exchange#334) — the engine's two new `AdminAction` arms
+  land in every SDK surface: tag 3 `CreateImpactMarket` and tag 4 `Batch`, a
+  **closed, non-recursive** list of 2–4 market-creation items
+  (`AdminBatchItem` ∈ {`CreateMarket`, `CreateImpactMarket`}) executed
+  atomically on chain. Implemented once in the Rust core and inherited by the
+  WASM (TS) and PyO3 (Python) bridges; the TypeScript surface adds the union
+  arms, the read-model decoders (impact payload with its three
+  `serde(default)` trailers, oracle source, batch items — each failing closed
+  on unknown variants), a kind→tag **table** replacing the previous two-arm
+  ternary, and `Batch` recursion in the codec adapter. The engine's v2 golden
+  content hashes and frozen canonical wire bytes are pinned byte-for-byte in
+  all three languages, and a `propose_admin_action/batch_perp_plus_impact`
+  conformance vector asserts the batch bytes cross-language.
+  - **Source compatibility:** widening the `AdminAction` union is a
+    source-level break for TypeScript consumers that switch exhaustively over
+    `action.kind` (an exhaustiveness check stops compiling until the new arms
+    are handled — which is the point: an approving client must decide what it
+    renders). The **wire** is backward compatible: every pre-existing payload
+    encodes byte-identically, and the new tags never appear unless a client
+    builds them.
+  - **Versioning:** rides this release's already-staged bumps — npm / Rust
+    core / PyO3 / Python at **3.0.0**, WASM crate at **2.1.0** (new enum arms
+    accepted by existing exports; no new API), derive crate unchanged at
+    **1.1.0**, conformance vectors still labeled **2.0.0** (one additive
+    case). No further bump beyond what this release already declares.
+  - **Compatible engine / activation ordering:** building or hashing the new
+    arms requires an engine with admin-actions v2 (exchange#334;
+    `exchange-core >= 2.3.0` — release C, tag `v2.3.0`; the earlier "2.2"
+    claim here was wrong, that release predates #334). Order of operations
+    matters: this SDK (and the
+    clients consuming it — Web Admin, signer-cli) must be **deployed before**
+    the engine's `UPGRADE_HEIGHT_ADMIN_ACTIONS_V2` is pinned at release-tag
+    time. The proposals read fails closed on unknown action variants, so a v2
+    proposal reaching a pre-v2 strict client blanks its proposals page — the
+    rollout-ordering precondition in WebAdmin Specs §11.4. Against older
+    engines the new surface is inert: decoders tolerate the shorter legacy
+    impact-market tuples (12/13 slots), and the v2 tags simply never occur.
+- `ExchangeClient.queryImpactMarkets()` — impact-market families via the
+  gateway's public read (`GET /v1/impact_markets`). Strict, fail-closed
+  decoding in the same posture as the governance reads: missing encoded-data
+  envelope, non-list payloads, out-of-range integers, malformed text fields,
+  unknown status/outcome/oracle variants, and tuple lengths outside the
+  supported 12–15 range are refusals, never partial renders. The three
+  incrementally-shipped trailers ([12] `oracleSource` BE-54, [13]
+  `description` / [14] `rules` admin-actions v2) decode when present and stay
+  `undefined` on older gateways so callers can tell "not served" from
+  "empty"; decoders are pinned against engine-serialized golden bytes for the
+  current 15-slot and both legacy shapes.
+- **Admin-multisig governance action mirrors (W30-11)** — the engine's four
+  governance wire actions land in every SDK surface: `ProposeAdminAction`
+  (0x1E), `ApproveAdminAction` (0x1F), `RejectAdminAction` (0x20), and the
+  single-signer `EmergencyAdminAction` (0x21), with the `AdminAction` /
+  `EmergencyAction` inner enums. Implemented once in the Rust core
+  (`governance.rs` + `impl_action_encoding!`), inherited by the WASM (TS) and
+  PyO3 (Python) bridges by construction; the TypeScript surface adds the typed
+  interfaces, the `GovernanceAction` union arm, and the externally-tagged enum
+  mapping in the codec adapter. The engine's §2.4 domain-separated proposal
+  content hash (`admin_proposal_content_hash`) is reproduced in Rust, pinned
+  byte-for-byte against the engine's golden vectors, and exported through the
+  WASM and PyO3 bridges (`adminProposalContentHash` on npm,
+  `admin_proposal_content_hash` in Python) so an approving client verifies a
+  server-supplied hash locally instead of trusting it; the governance codec
+  vectors are asserted cross-language. Purely **additive** wire change — every
+  pre-existing payload encodes and decodes unchanged (MINOR-class; it ships
+  inside this release's already-MAJOR bump). The new action types require an
+  engine that knows them: `exchange-core >= 2.1.0`.
+- `ExchangeClient.queryProposals()` and
+  `ExchangeClient.queryAdminSignerRegistry()` — governance reads via the
+  gateway proxies (`/v1/proposals`, `/v1/admin/signer-registry`). An absent
+  registry decodes as `null`, meaning admin multisig is **inactive**
+  (fail-closed) — deliberately distinct from an empty roster. Their typed
+  decoders reject missing envelopes, trailing tuple fields, out-of-range
+  integers, and action-tag mismatches instead of partially rendering
+  malformed or newer governance state.
+- **Governance error codes 52 (`AdminGovernanceInactive`) and 53
+  (`NotAdminSigner`)** are mirrored from the consensus contract (exchange #282
+  / `ddad45b`) into all three error tables (Rust, TypeScript, Python) and
+  pinned by the errors conformance manifest. Previously
+  `decodeExecError(52/53)` returned `null`, so a live admin-multisig rejection
+  decoded as unknown (#60). Purely additive — no existing code changes
+  meaning.
+- `errors` conformance-vector family (`conformance/errors.ndjson`) pinning the
+  ExecError code→name classification across the Rust, TypeScript, and Python
+  SDKs. A bare code pins the numeric `ERROR_KINDS` manifest name (including
+  `50 → SlippageExceeded` and `51 → OpenInterestLimitExceeded`, the split that
+  the pre-#55 SDK would have failed); a code plus canonical DeliverTx log pins
+  the log-aware decoder (transitional code-50 slippage/open-interest cases →
+  `AmbiguousCode50` without a recognized log). Generated from the Rust core and
+  asserted by all three runners. Every code is pinned, including 21 — the TS
+  SDK was aligned to the engine name `InvalidNonce` (see Changed), removing the
+  earlier carve-out.
 - **`ExchangeClient.submitSignedTx(txBytes)` / `submitSignedTxCommit(txBytes)`**
   — public submission of **externally signed** wire bytes (built via
   `signingMessage()` → external signature → `encodeSignedTx()`), for callers
@@ -81,10 +336,6 @@ vectors as **2.0.0**. Compatible engine:
   and `MarketConfig.maxOpenInterest` decodes from slot 24. Legacy 11-field
   `CreateMarket` payloads still decode as uncapped, but every new encoding is
   the canonical 12-field form and decodes the cap as `0` / `0n`.
-- Log-aware error-code classification across Rust, TypeScript, and Python.
-  Shared code 50 resolves to `OpenInterestLimitExceeded` or
-  `SlippageExceeded` only from the canonical DeliverTx log; absent or unknown
-  logs resolve to `AmbiguousCode50` rather than guessing.
 - **`decodeSigningMessage()` + `DecodedSigningMessage`** — decode a v3
   signing preimage (the exact `signingMessage()` output an external signer
   signs) back into chain id, action type + name, seq, and the decoded
@@ -258,7 +509,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...HEAD
+[3.0.0]: https://github.com/Proof-labs/trading-sdk/releases/tag/npm-v3.0.0
 [1.1.0]: https://github.com/Proof-labs/trading-sdk/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Proof-labs/trading-sdk/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/Proof-labs/trading-sdk/releases/tag/v0.1.0

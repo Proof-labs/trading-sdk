@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import time
 import typing as t
 from dataclasses import dataclass, field
@@ -12,7 +13,13 @@ import httpx
 import msgpack
 
 from proof_trading_sdk._native import SigningHandle, chain_id_from_string, generate_keypair, pubkey_to_owner, sign_and_encode
-from proof_trading_sdk.actions import Action, encode_action
+from proof_trading_sdk.actions import (
+    Action,
+    CancelPositionTriggers,
+    SetPositionTriggers,
+    TriggerLimb,
+    encode_action,
+)
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.errors import (
     AuthenticationError,
@@ -22,13 +29,41 @@ from proof_trading_sdk.errors import (
     ProofTradingSdkError,
     RateLimited,
     SigningError,
+    SubmissionPending,
     TransportError,
 )
 from proof_trading_sdk.nonce import NonceAllocator
+from proof_trading_sdk.trigger_history import (
+    PositionTriggerHistoryPage,
+    TriggerHistoryTime,
+    TriggerMarketHistoryPage,
+    canonical_owner,
+    decode_position_trigger_history_page,
+    decode_trigger_market_history_page,
+    history_params,
+    validate_market,
+)
+from proof_trading_sdk.trigger_config import (
+    TriggerMarketConfigInfo,
+    decode_trigger_market_config_infos,
+)
 
 log = logging.getLogger("proof_trading_sdk")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+_LEADING_ERROR_CODE = re.compile(r"^(\d+):\s")
+
+
+def _leading_error_code(text: str) -> int | None:
+    """Recover an engine code from the gateway's ``"<code>: <message>"`` string.
+
+    Returns ``None`` when the text carries no leading code, so the caller can
+    apply its own fallback.
+    """
+    m = _LEADING_ERROR_CODE.match(text or "")
+    return int(m.group(1)) if m else None
 
 
 def _to_hex(owner: bytes | str) -> str:
@@ -46,6 +81,20 @@ def _to_hex(owner: bytes | str) -> str:
 ENVELOPE_VERSION = 2
 DOMAIN_PREFIX = b"ProofExchange-v3"
 UNBOUND_CHAIN_ID = b"\x00" * 32
+_TRIGGER_KINDS = {"StopLoss", "TakeProfit"}
+_TRIGGER_LIMB_STATES = {
+    "Armed", "Filled", "Partial", "NoFill", "Rejected", "Cancelled", "Invalidated"
+}
+_TRIGGER_REASONS = {
+    "PositionClosed", "PositionEpochChanged", "PositionSideChanged", "BelowMaintenance",
+    "IndeterminateAccount", "MarketDisabled", "MarkUnavailable", "MarkStale",
+    "MarkFutureDated", "NoEligibleLiquidity", "SelfTradePrevention",
+    "WorkLimitReached", "ExecutionRejected",
+}
+_TRIGGER_SIMPLE_AVAILABILITY = {
+    "Available", "TriggerActionsInactive", "PendingActivation", "MigrationIncomplete",
+    "ConfigurationMissing", "MarketDisabled",
+}
 
 # ── Enums ────────────────────────────────────────────────────────────────────
 
@@ -131,11 +180,16 @@ class ExchangeClient:
                 timeout_secs=timeout_secs or config.timeout_secs,
             )
         else:
-            cfg = load_config(
-                gateway_url=gateway_url,
-                api_key=api_key,
-                timeout_secs=timeout_secs,
-            )
+            # Only pass truthy overrides so absent-and-falsy constructor
+            # defaults ("" / 0) fall back to env/TOML inside load_config.
+            overrides: dict[str, t.Any] = {}
+            if gateway_url:
+                overrides["gateway_url"] = gateway_url
+            if api_key:
+                overrides["api_key"] = api_key
+            if timeout_secs:
+                overrides["timeout_secs"] = timeout_secs
+            cfg = load_config(**overrides)
 
         self._gateway_url = cfg.gateway_url.rstrip("/")
         self._api_key = cfg.api_key
@@ -245,6 +299,16 @@ class ExchangeClient:
         if resp.status_code >= 500:
             raise GatewayError(resp.status_code, resp.text)
 
+        # Anything else non-2xx (400, 402, 405-428, 431, 3xx, …) is NOT success.
+        # `GatewayError` specifically means "5xx — retry with backoff"; a 3xx/4xx
+        # is a client-side error that must NOT be blind-retried, so it surfaces
+        # as a plain TransportError carrying the status.
+        if resp.status_code >= 300:
+            raise TransportError(
+                f"unexpected HTTP {resp.status_code}: {resp.text[:200]}",
+                status_code=resp.status_code,
+            )
+
         return resp
 
     def _get(
@@ -318,6 +382,49 @@ class ExchangeClient:
         """Encode + sign + submit a typed action in one call."""
         return self.submit_action(self.sign_action(action))
 
+    def set_position_triggers(
+        self,
+        market: int,
+        expected_position_epoch: int,
+        *,
+        stop_loss: TriggerLimb | None = None,
+        take_profit: TriggerLimb | None = None,
+        client_group_id: int | None = None,
+        owner: bytes | None = None,
+    ) -> dict[str, t.Any]:
+        """Replace one exact position generation's complete SL/TP bracket.
+
+        ``owner`` defaults to the signer. A version-active trading agent may
+        pass the delegated owner explicitly; authorization remains an engine
+        decision and is not guessed from stale client state.
+        """
+        return self.submit(
+            SetPositionTriggers(
+                market=market,
+                owner=self._own_owner() if owner is None else owner,
+                expected_position_epoch=expected_position_epoch,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                client_group_id=client_group_id,
+            )
+        )
+
+    def cancel_position_triggers(
+        self,
+        market: int,
+        expected_position_epoch: int,
+        *,
+        owner: bytes | None = None,
+    ) -> dict[str, t.Any]:
+        """Cancel one bracket, defaulting owner to the loaded signer."""
+        return self.submit(
+            CancelPositionTriggers(
+                market=market,
+                owner=self._own_owner() if owner is None else owner,
+                expected_position_epoch=expected_position_epoch,
+            )
+        )
+
     # ── Write action ─────────────────────────────────────────────────────
 
     def submit_action(self, envelope: bytes) -> dict[str, t.Any]:
@@ -332,11 +439,70 @@ class ExchangeClient:
             ``tx_hash``, etc.
         """
         resp = self._post("/exchange", content=envelope)
-        data: dict[str, t.Any] = resp.json()
-        code = data.get("code", 0)
-        if code != 0:
-            raise EngineError(code, data.get("message", ""))
-        return data
+        # Keep the raw text. The gateway still emits engine rejections as a bare
+        # "<code>: <message>" string — a pre-#90 gateway sends ONLY that — and
+        # the TS binding recovers the code from it (`readGatewayBody` keeps the
+        # raw body precisely so the fallback can parse it). A body that IS valid
+        # JSON but is not an object (a bare string, a list, null) is the same
+        # case: `resp.json()` hands back a `str`, which must never reach `.get()`
+        # — in TS `json?.code` on a string is merely `undefined`, but in Python
+        # it is an `AttributeError` escaping the SDK.
+        raw = resp.text
+        try:
+            parsed: t.Any = resp.json()
+        except json.JSONDecodeError:
+            parsed = None
+
+        if not isinstance(parsed, dict):
+            # `_check_response` already raised for every status >= 300, so this
+            # is a 2xx whose body is not an object: the gateway's compatibility
+            # error string. Classify it as an ENGINE error, like the TS binding
+            # does — calling a terminal rejection a transport failure invites a
+            # pointless resubmit. The code comes from the leading "<code>: " and
+            # falls back to 1 (DecodeError) when there is none.
+            text = (parsed if isinstance(parsed, str) else raw or "").strip()
+            raise EngineError(
+                _leading_error_code(text) or 1, text[:200] or "unknown gateway error"
+            )
+        data: dict[str, t.Any] = parsed
+
+        # The gateway's `/exchange` response has four distinct shapes. Which one
+        # arrived is decided by the body, never by defaulting a missing `code`
+        # to 0 — and, just as importantly, never by treating "no code" as a
+        # rejection. This mirrors the contract pinned by the TypeScript binding
+        # (`submitViaGateway` in src/client.ts); the two must agree.
+        code = data.get("code")
+        if isinstance(code, int) and not isinstance(code, bool):
+            # 1. Structured chain verdict — the engine code is authoritative.
+            if code != 0:
+                msg = data.get("message") or data.get("log") or data.get("error") or ""
+                raise EngineError(code, msg)
+            return data
+
+        if data.get("status") == "ok":
+            # 2. Legacy gateway: CheckTx accepted, execution still unknown.
+            #    A code-less `status: ok` is a SUCCESS, not a malformed body.
+            return data
+
+        tx_hash = data.get("txHash") or data.get("tx_hash")
+        if tx_hash:
+            # 3. Broadcast but unresolved — NOT a rejection. The gateway pushed
+            #    the tx and could not report the outcome in time (park deadline
+            #    exceeded, a byte-identical tx already in flight, or a result it
+            #    could not parse). It may still commit, so the caller reconciles
+            #    by hash. Reporting this as an engine rejection would announce a
+            #    phantom reject for an order that is about to fill, and the
+            #    trader would re-place it into a double fill.
+            raise SubmissionPending(str(tx_hash), str(data.get("error") or ""))
+
+        # 4. No code and no hash: an error string is all the gateway gave us. It
+        #    still emits the "<code>: <message>" compatibility format, so recover
+        #    the engine code from the text and fall back to 1 (DecodeError), the
+        #    same conservative default the TS binding uses.
+        err = str(data.get("error") or data.get("message") or "")
+        if err or data.get("status") == "error":
+            raise EngineError(_leading_error_code(err) or 1, err or "engine error")
+        raise TransportError(f"malformed /exchange response (no 'code'): {data!r}"[:200])
 
     # ── Info queries ─────────────────────────────────────────────────────
 
@@ -407,7 +573,7 @@ class ExchangeClient:
     @staticmethod
     def _decode_position(p: t.Sequence[t.Any]) -> dict[str, t.Any]:
         """Decode one position tuple (mirrors the TS ``PositionInfo`` layout).
-        Indices 6-12 are optional enrichments older gateways may omit."""
+        Indices 6-13 are optional enrichments older gateways may omit."""
 
         def opt(i: int) -> int | None:
             return int(p[i]) if len(p) > i and p[i] is not None else None
@@ -426,6 +592,9 @@ class ExchangeClient:
             "pnl_if_dies": opt(10),
             "funding_since": opt(11),
             "adl_score": opt(12),
+            # Canonical first-attach input. None means migration/backfill has
+            # not reached this live position; callers must never guess 1.
+            "position_epoch": opt(13),
         }
 
     def account(self, owner: bytes | str | None = None) -> AccountState:
@@ -523,6 +692,293 @@ class ExchangeClient:
         return self._decode_envelope(resp.json(), source=path, require_data=False)
 
     @staticmethod
+    def _trigger_tuple(value: t.Any, name: str, size: int) -> t.Sequence[t.Any]:
+        if not isinstance(value, (list, tuple)) or len(value) != size:
+            raise ProofTradingSdkError(
+                f"trigger decode: {name} must be exactly a {size}-field tuple"
+            )
+        return value
+
+    @staticmethod
+    def _trigger_uint(
+        value: t.Any, name: str, maximum: int = (1 << 64) - 1
+    ) -> int:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 0
+            or value > maximum
+        ):
+            raise ProofTradingSdkError(
+                f"trigger decode: {name} is not an exact unsigned integer"
+            )
+        return value
+
+    @classmethod
+    def _decode_trigger_evaluation(cls, value: t.Any) -> dict[str, t.Any] | None:
+        if value is None:
+            return None
+        row = cls._trigger_tuple(value, "TriggerEvaluation", 7)
+        reason = row[6]
+        if reason is not None and reason not in _TRIGGER_REASONS:
+            raise ProofTradingSdkError(
+                f"trigger decode: unknown TriggerOutcomeReason {reason!r}"
+            )
+        requested = cls._trigger_uint(row[3], "evaluation.requested_quantity")
+        filled = cls._trigger_uint(row[4], "evaluation.filled_quantity")
+        residual = cls._trigger_uint(row[5], "evaluation.residual_quantity")
+        if filled + residual != requested:
+            raise ProofTradingSdkError("trigger decode: evaluation quantities do not conserve")
+        return {
+            "height": cls._trigger_uint(row[0], "evaluation.height"),
+            "frozen_mark": cls._trigger_uint(row[1], "evaluation.frozen_mark"),
+            "limit_price": (
+                None
+                if row[2] is None
+                else cls._trigger_uint(row[2], "evaluation.limit_price")
+            ),
+            "requested_quantity": requested,
+            "filled_quantity": filled,
+            "residual_quantity": residual,
+            "reason": reason,
+        }
+
+    @classmethod
+    def _decode_trigger_limb(cls, value: t.Any) -> dict[str, t.Any] | None:
+        if value is None:
+            return None
+        row = cls._trigger_tuple(value, "StoredTriggerLimb", 7)
+        if row[1] not in _TRIGGER_KINDS:
+            raise ProofTradingSdkError(
+                f"trigger decode: unknown TriggerKind {row[1]!r}"
+            )
+        if row[5] not in _TRIGGER_LIMB_STATES:
+            raise ProofTradingSdkError(
+                f"trigger decode: unknown TriggerLimbState {row[5]!r}"
+            )
+        limb_id = cls._trigger_uint(row[0], "limb_id")
+        trigger_price = cls._trigger_uint(row[2], "trigger_price")
+        max_slippage_bps = cls._trigger_uint(
+            row[3], "max_slippage_bps", (1 << 32) - 1
+        )
+        client_trigger_id = (
+            None
+            if row[4] is None
+            else cls._trigger_uint(row[4], "client_trigger_id")
+        )
+        if limb_id == 0 or trigger_price == 0:
+            raise ProofTradingSdkError(
+                "trigger decode: limb id and trigger price must be non-zero"
+            )
+        if not 1 <= max_slippage_bps <= 9_999:
+            raise ProofTradingSdkError(
+                "trigger decode: limb slippage is outside 1..=9999"
+            )
+        if client_trigger_id == 0:
+            raise ProofTradingSdkError(
+                "trigger decode: client trigger id must be non-zero"
+            )
+        return {
+            "limb_id": limb_id,
+            "kind": row[1],
+            "trigger_price": trigger_price,
+            "max_slippage_bps": max_slippage_bps,
+            "client_trigger_id": client_trigger_id,
+            "state": row[5],
+            "last_evaluation": cls._decode_trigger_evaluation(row[6]),
+        }
+
+    @classmethod
+    def _decode_trigger_info(cls, value: t.Any) -> dict[str, t.Any]:
+        row = cls._trigger_tuple(value, "PositionTriggerInfo", 3)
+        bracket = cls._trigger_tuple(row[0], "PositionTriggerBracket", 10)
+        config = None
+        if row[1] is not None:
+            cfg = cls._trigger_tuple(row[1], "TriggerMarketConfig", 6)
+            if not isinstance(cfg[1], bool):
+                raise ProofTradingSdkError(
+                    "trigger decode: config.enabled is not boolean"
+                )
+            config = {
+                "version": cls._trigger_uint(cfg[0], "config.version"),
+                "enabled": cfg[1],
+                "max_trigger_slippage_bps": cls._trigger_uint(
+                    cfg[2], "config.max_trigger_slippage_bps", (1 << 32) - 1
+                ),
+                "max_mark_age_ms": cls._trigger_uint(
+                    cfg[3], "config.max_mark_age_ms"
+                ),
+                "max_future_publish_skew_ms": cls._trigger_uint(
+                    cfg[4], "config.max_future_publish_skew_ms"
+                ),
+                "max_active_brackets": cls._trigger_uint(
+                    cfg[5], "config.max_active_brackets"
+                ),
+            }
+            if config["version"] == 0:
+                raise ProofTradingSdkError("trigger decode: config version is zero")
+            if config["max_trigger_slippage_bps"] > 9_999:
+                raise ProofTradingSdkError(
+                    "trigger decode: config slippage exceeds 9999"
+                )
+            if config["enabled"] and (
+                config["max_trigger_slippage_bps"] == 0
+                or config["max_mark_age_ms"] == 0
+                or config["max_future_publish_skew_ms"] == 0
+                or config["max_active_brackets"] == 0
+            ):
+                raise ProofTradingSdkError(
+                    "trigger decode: enabled config has a zero bound"
+                )
+        availability: dict[str, t.Any]
+        if isinstance(row[2], str) and row[2] in _TRIGGER_SIMPLE_AVAILABILITY:
+            availability = {"kind": row[2]}
+        elif isinstance(row[2], dict) and set(row[2]) == {"Deferred"}:
+            if row[2]["Deferred"] not in _TRIGGER_REASONS:
+                raise ProofTradingSdkError(
+                    "trigger decode: unknown deferred TriggerOutcomeReason"
+                )
+            availability = {"kind": "Deferred", "reason": row[2]["Deferred"]}
+        else:
+            raise ProofTradingSdkError(
+                "trigger decode: unknown TriggerEffectiveAvailability"
+            )
+        if bracket[4] not in ("Buy", "Sell"):
+            raise ProofTradingSdkError(
+                f"trigger decode: unknown position side {bracket[4]!r}"
+            )
+        stop_loss = cls._decode_trigger_limb(bracket[8])
+        take_profit = cls._decode_trigger_limb(bracket[9])
+        if stop_loss is None and take_profit is None:
+            raise ProofTradingSdkError("trigger decode: bracket has no limbs")
+        if stop_loss is not None and stop_loss["kind"] != "StopLoss":
+            raise ProofTradingSdkError("trigger decode: stop_loss has wrong kind")
+        if take_profit is not None and take_profit["kind"] != "TakeProfit":
+            raise ProofTradingSdkError("trigger decode: take_profit has wrong kind")
+        if stop_loss is not None and take_profit is not None and (
+            stop_loss["limb_id"] == take_profit["limb_id"]
+            or (
+                stop_loss["client_trigger_id"] is not None
+                and stop_loss["client_trigger_id"]
+                == take_profit["client_trigger_id"]
+            )
+        ):
+            raise ProofTradingSdkError(
+                "trigger decode: bracket has duplicate limb identity"
+            )
+        group_id = cls._trigger_uint(bracket[0], "group_id")
+        position_epoch = cls._trigger_uint(bracket[3], "position_epoch")
+        accepted_height = cls._trigger_uint(bracket[5], "accepted_height")
+        active_from_height = cls._trigger_uint(bracket[6], "active_from_height")
+        client_group_id = (
+            None
+            if bracket[7] is None
+            else cls._trigger_uint(bracket[7], "client_group_id")
+        )
+        if group_id == 0 or position_epoch == 0 or accepted_height == 0:
+            raise ProofTradingSdkError(
+                "trigger decode: bracket ids/heights must be non-zero"
+            )
+        if client_group_id == 0:
+            raise ProofTradingSdkError(
+                "trigger decode: client group id must be non-zero"
+            )
+        if active_from_height != accepted_height + 1:
+            raise ProofTradingSdkError("trigger decode: invalid active_from_height")
+        owner = cls._to_bytes(bracket[1])
+        if len(owner) != 20:
+            raise ProofTradingSdkError(
+                "trigger decode: owner must be exactly 20 bytes"
+            )
+        return {
+            "bracket": {
+                "group_id": group_id,
+                "owner": owner,
+                "market": cls._trigger_uint(
+                    bracket[2], "market", (1 << 32) - 1
+                ),
+                "position_epoch": position_epoch,
+                "position_side": bracket[4],
+                "accepted_height": accepted_height,
+                "active_from_height": active_from_height,
+                "client_group_id": client_group_id,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+            },
+            "market_config": config,
+            "availability": availability,
+        }
+
+    def position_triggers(
+        self, owner: bytes | str | None = None
+    ) -> list[dict[str, t.Any]]:
+        """Current stop-loss/take-profit brackets for one owner.
+
+        Uses the public node/gateway ``GET /v1/triggers/{owner}`` route. This
+        is current state only; no trigger-history endpoint is implied.
+        """
+        if owner is None:
+            owner = self._own_owner()
+        owner_hex = _to_hex(owner)
+        if len(owner_hex) != 40 or any(c not in "0123456789abcdefABCDEF" for c in owner_hex):
+            raise ValueError("trigger owner must be a 40-character hex address")
+        path = f"/v1/triggers/{owner_hex.lower()}"
+        resp = self._get(path)
+        raw = self._decode_envelope(resp.json(), source=path, require_data=True)
+        if not isinstance(raw, (list, tuple)):
+            raise ProofTradingSdkError("trigger decode: response is not an array")
+        return [self._decode_trigger_info(item) for item in raw]
+
+    def trigger_status(self) -> dict[str, t.Any]:
+        """Fail-closed next-height trigger admission status.
+
+        Python's JSON decoder preserves arbitrary-size integers, so both
+        heights remain exact ``int`` values.
+        """
+        data = self._get("/v1/triggers/status").json()
+        if not isinstance(data, dict):
+            raise ProofTradingSdkError("trigger status decode: expected an object")
+        try:
+            finalized = data["finalized_height"]
+            admission = data["admission_height"]
+            active = data["actions_active"]
+        except KeyError as exc:
+            raise ProofTradingSdkError(
+                f"trigger status decode: missing {exc.args[0]}"
+            ) from exc
+        if (
+            isinstance(finalized, bool)
+            or not isinstance(finalized, int)
+            or not 0 <= finalized <= (1 << 64) - 1
+            or isinstance(admission, bool)
+            or not isinstance(admission, int)
+            or not 0 <= admission <= (1 << 64) - 1
+            or not isinstance(active, bool)
+        ):
+            raise ProofTradingSdkError("trigger status decode: malformed fields")
+        if admission != finalized + 1:
+            raise ProofTradingSdkError(
+                "trigger status decode: admission height is not next height"
+            )
+        return {
+            "finalized_height": finalized,
+            "admission_height": admission,
+            "actions_active": active,
+        }
+
+    def trigger_market_configs(self) -> list[TriggerMarketConfigInfo]:
+        """Complete governed trigger policy, sorted by market id.
+
+        Missing markets are disabled. A malformed/missing envelope is an error;
+        this method never substitutes a permissive client-side default.
+        """
+        path = "/v1/triggers/markets"
+        raw = self._decode_envelope(
+            self._get(path).json(), source=path, require_data=True
+        )
+        return decode_trigger_market_config_infos(raw)
+
+    @staticmethod
     def _decode_market_config(raw: t.Sequence[t.Any]) -> dict[str, t.Any]:
         """Decode a market-config tuple (mirrors the TS ``decodeMarketConfig``)."""
 
@@ -614,10 +1070,12 @@ class ExchangeClient:
     def history_fills(
         self,
         owner: bytes | str,
-        after_id: int | None = None,
+        cursor: str | None = None,
         limit: int = 100,
     ) -> CursorPage:
-        return self._cursor_page("GET", f"/v1/history/fills", locals())
+        return self._cursor_page(
+            "GET", "/v1/history/fills", locals(), data_key="fills"
+        )
 
     def history_funding(
         self,
@@ -642,6 +1100,57 @@ class ExchangeClient:
         limit: int = 100,
     ) -> CursorPage:
         return self._cursor_page("GET", f"/v1/history/account-events", locals())
+
+    def history_triggers(
+        self,
+        owner: bytes | str | None = None,
+        *,
+        market: int | None = None,
+        from_: TriggerHistoryTime | None = None,
+        to: TriggerHistoryTime | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> PositionTriggerHistoryPage:
+        """Immutable owner-bearing trigger lifecycle history, newest first.
+
+        The route is gateway/indexer-owned. Coordinates, market ids, and every
+        numeric protocol value in ``payload`` remain decimal strings; callers
+        must pass ``next_cursor`` back unchanged with the same filters.
+        """
+        route_owner = canonical_owner(self._own_owner() if owner is None else owner)
+        params = history_params(
+            market=market,
+            from_=from_,
+            to=to,
+            limit=limit,
+            cursor=cursor,
+        )
+        data = self._get(
+            f"/v1/history/triggers/{route_owner}", params=params or None
+        ).json()
+        return decode_position_trigger_history_page(data, route_owner, market)
+
+    def history_trigger_markets(
+        self,
+        market: int,
+        *,
+        from_: TriggerHistoryTime | None = None,
+        to: TriggerHistoryTime | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> TriggerMarketHistoryPage:
+        """Shared market deferred/resumed transitions, never owner-duplicated."""
+        route_market = validate_market(market)
+        params = history_params(
+            from_=from_,
+            to=to,
+            limit=limit,
+            cursor=cursor,
+        )
+        data = self._get(
+            f"/v1/history/trigger-markets/{route_market}", params=params or None
+        ).json()
+        return decode_trigger_market_history_page(data, route_market)
 
     def history_status(self) -> dict[str, t.Any]:
         resp = self._get("/v1/history/status")
@@ -842,6 +1351,8 @@ class ExchangeClient:
         method: str,
         path: str,
         params: dict[str, t.Any],
+        *,
+        data_key: str = "data",
     ) -> CursorPage:
         owner = params.pop("owner", None)
         if owner is not None:
@@ -851,7 +1362,7 @@ class ExchangeClient:
         resp = self._get(path, params=query)
         data: dict[str, t.Any] = resp.json()
         return CursorPage(
-            data=data.get("data", []),
+            data=data.get(data_key, []),
             next_cursor=data.get("next_cursor"),
             raw=data,
         )

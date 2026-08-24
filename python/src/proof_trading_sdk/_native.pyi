@@ -83,6 +83,24 @@ def verify_signature(
 def chain_id_from_string(chain_id: str) -> bytes:
     ...
 
+def admin_proposal_content_hash(
+    chain_id: bytes,
+    proposal_id: int,
+    registry_version: int,
+    threshold: int,
+    proposer: bytes,
+    created_height: int,
+    created_ms: int,
+    expiry_ms: int,
+    action: dict[str, object],
+) -> bytes:
+    """Recompute the engine's §2.4 domain-separated admin-proposal content
+    hash in the authoritative Rust core, so an approving client can verify a
+    server-supplied ``content_hash`` locally. ``action`` is the serde map form
+    (``{"Variant": {snake_case_fields}}``), as used by :func:`encode_action`
+    for the governance actions' ``action`` field."""
+    ...
+
 def get_action_types() -> list[dict[str, object]]:
     ...
 

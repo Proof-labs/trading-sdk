@@ -1,6 +1,6 @@
 [package]
 name = "proof-trading-sdk"
-version = "2.0.0"
+version = "3.0.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Rust core for the Proof trading SDK: MessagePack codec, Ed25519 signing, and wire types. Hub of the wheel-and-spokes SDK."
@@ -16,9 +16,10 @@ rmp-serde = "1"
 exchange-derive = { package = "proof-trading-sdk-derive", path = "../proof-trading-sdk-derive", version = "1" }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
+# SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.
+sha2 = "0.11"
 
 [dev-dependencies]
-sha2 = "0.11"
 hex = "0.4"
 serde_json = "1"
 

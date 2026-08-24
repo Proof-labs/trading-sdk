@@ -1,0 +1,295 @@
+name: ci
+
+# Test gate: runs the per-language suites (including the cross-language
+# conformance vectors) on PRs and dev pushes. Jobs are selected by which paths
+# changed — and, crucially, a change to the Rust core that Python imports via
+# PyO3 runs BOTH the Rust job and the downstream Python job. Fuzzing is NOT here
+# (it is expensive); it lives in `security.yml`, gated to the schedule/manual.
+on:
+  push:
+    # `main` is here for the release gate, not for its own sake: publish.yml
+    # refuses to publish a tag whose commit has no successful run of this
+    # workflow, and the dev -> main promotion creates a merge commit that no
+    # pull-request run covers. Without main, every release tag would be blocked.
+    branches: [dev, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Detect what changed so each suite runs only when relevant.
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      ts: ${{ steps.filter.outputs.ts }}
+      rust: ${{ steps.filter.outputs.rust }}
+      python: ${{ steps.filter.outputs.python }}
+      format: ${{ steps.filter.outputs.format }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # The `python` filter deliberately includes the Rust crates that the
+          # PyO3 extension is built from (`proof-trading-sdk`, `-derive`,
+          # `-pyo3`): a change to that shared Rust core must exercise the
+          # downstream Python bindings, not just the Rust tests. The wire
+          # vectors (`conformance/**`) feed all three languages.
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'conformance/**'
+              - 'Cargo.toml'
+              # A workflow or gate-contract change exercises every suite. This
+              # proves the wiring itself instead of letting CI changes take a
+              # path that skips the jobs they govern.
+              - '.github/workflows/**'
+              - '.github/scripts/**'
+            # The `ts` filter includes the Rust crates the WASM codec is built
+            # from (`proof-trading-sdk`, `-derive`, `-wasm`): post-cutover the
+            # TypeScript codec/signing runs through a WASM build of that core
+            # (ADR 0001), so a change to it must exercise the TS suite too — the
+            # same downstream-binding rule the `python` filter applies for PyO3.
+            ts:
+              - 'src/**'
+              - 'scripts/**'
+              - 'conformance/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig.json'
+              - 'vitest.config.ts'
+              - 'Cargo.toml'
+              - 'crates/proof-trading-sdk/**'
+              - 'crates/proof-trading-sdk-derive/**'
+              - 'crates/proof-trading-sdk-wasm/**'
+              - '.github/workflows/**'
+              - '.github/scripts/**'
+            python:
+              - 'python/**'
+              - 'crates/proof-trading-sdk/**'
+              - 'crates/proof-trading-sdk-derive/**'
+              - 'crates/proof-trading-sdk-pyo3/**'
+              - 'conformance/**'
+              - 'Cargo.toml'
+              - '.github/workflows/**'
+              - '.github/scripts/**'
+            # Only the prettier-managed paths (mirrors .prettierignore: Rust,
+            # Python, generated, and *.toml are formatted by their own tools).
+            format:
+              - '*.md'
+              - 'docs/**/*.md'
+              - 'src/**/*.ts'
+              - 'scripts/**'
+              - 'examples/**/*.ts'
+              - '.github/**/*.yml'
+              - '.github/**/*.yaml'
+              - '.github/scripts/**'
+              - '.prettierignore'
+              - '.prettierrc*'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'tsconfig.json'
+              - 'vitest.config.ts'
+
+  # This job has no path condition: the gate's truth table and workflow syntax
+  # are checked on every run, and the final gate requires its exact success.
+  gate-contract:
+    name: CI gate contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise the fail-closed truth table
+        run: .github/scripts/test-ci-gate.sh
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+      - name: Lint GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+  ts:
+    name: TypeScript tests
+    needs: changes
+    if: needs.changes.outputs.ts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm # cache ~/.npm keyed on package-lock.json
+      # Post-cutover (ADR 0001) the TS codec/signing runs through a wasm-bindgen
+      # build of the Rust core, so `npm run build` / `npm test` compile the WASM.
+      # Provision that toolchain here — Rust, the wasm target, and a wasm-bindgen
+      # CLI whose version MATCHES the crate (a mismatch fails the generated
+      # bindings' schema check), resolved from the crate graph so it can never
+      # drift. Until the cutover lands the WASM crate is absent from the graph,
+      # so the resolve step reports `present=false` and the wasm-bindgen install
+      # is SKIPPED — `npm run build` is tsc-only then and needs no wasm-bindgen.
+      # This keeps the job correct whether it runs before or after the cutover
+      # (#44) merges. The wasm target + rust-cache are harmless either way.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      # Shares the `rust-ci` cache namespace with the rust/python jobs — the
+      # wasm build compiles the same core + serde/rmp deps, so it restores them
+      # instead of recompiling.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ci
+          cache-all-crates: "true"
+          cache-on-failure: "true"
+      # Resolve the wasm-bindgen version from the crate graph, and report whether
+      # it is present at all. `cargo metadata` yields `null` for the version when
+      # the WASM crate is not in the workspace (pre-cutover); guard on that so we
+      # never hand `wasm-bindgen-cli@` (empty version) to the installer below.
+      - name: Resolve wasm-bindgen version from the crate graph
+        id: wb
+        run: |
+          cargo generate-lockfile # Cargo.lock is gitignored (library workspace)
+          version="$(cargo metadata --format-version 1 | jq -r 'first(.packages[] | select(.name=="wasm-bindgen")).version')"
+          if [ -n "$version" ] && [ "$version" != "null" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "wasm-bindgen $version found in the crate graph — will build the WASM core."
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "wasm-bindgen absent from the crate graph (pre-cutover) — skipping wasm-bindgen install; npm run build is tsc-only."
+          fi
+      - uses: taiki-e/install-action@v2
+        if: steps.wb.outputs.present == 'true'
+        with:
+          tool: wasm-bindgen-cli@${{ steps.wb.outputs.version }}
+      # `--ignore-scripts` skips the `prepare` build so an install failure is
+      # not confused with a compile failure; we build explicitly next.
+      - run: npm ci --ignore-scripts
+      # Post-cutover this builds the WASM core then tsc; pre-cutover it is tsc
+      # only. Either way the toolchain above satisfies it.
+      - run: npm run build
+      # vitest — src/conformance.test.ts (TS ↔ authoritative vectors), which
+      # also enforces the vector-coverage ratchet: every codec vector must
+      # encode byte-exact (no silent skip), and an ActionType without a codec
+      # vector fails unless it is on the pinned coverage-debt list there. The
+      # WASM differential (src/wasm-codec.test.ts) runs once the build produces
+      # src/wasm (post-cutover) and self-skips until then; RPC_URL-gated
+      # scenario/e2e suites self-skip.
+      - run: npm test
+      # Prove the registry artifact, not the source checkout: pack the SDK,
+      # install it into a clean Vite consumer, require one emitted WASM asset,
+      # then exercise the canonical codec path in a real browser.
+      - name: Install Chromium for the packaged-browser smoke
+        run: npx playwright install --with-deps chromium
+      - name: Build a clean consumer from the packed SDK
+        run: npm run smoke:browser:prepare
+      - name: Exercise the packaged WASM codec in Chromium
+        run: npm run smoke:browser
+
+  rust:
+    name: Rust tests + conformance
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # One shared Rust cache namespace across the `rust` and `python` jobs:
+      # maturin builds the PyO3 crate into the same `./target`, so Python reuses
+      # this job's compiled deps (serde, rmp-serde, the core) instead of
+      # recompiling them. `cache-all-crates` keeps transitive/build-tool crates;
+      # `cache-on-failure` still saves the cache when a test fails.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ci
+          cache-all-crates: "true"
+          cache-on-failure: "true"
+      - name: Generate lockfile
+        run: cargo generate-lockfile # Cargo.lock is gitignored (library workspace)
+      # Core + derive + the conformance runner (crates/spec). Exclude the PyO3
+      # crate — it links libpython and is covered by the `python` job.
+      - name: Test workspace (excl. PyO3)
+        run: cargo test --workspace --exclude proof-trading-sdk-pyo3 --locked
+      # Guard against stale checked-in vectors: regenerating must be a no-op.
+      - name: Conformance vectors are fresh
+        run: |
+          cargo run -p proof-trading-sdk-conformance --bin gen-vectors --locked
+          git diff --exit-code conformance/ \
+            || (echo "::error::conformance/*.ndjson is stale — re-run gen-vectors and commit" && exit 1)
+
+  python:
+    name: Python tests + conformance
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Same shared-key as the `rust` job so the maturin build restores its
+      # compiled dependency graph (the expensive part) instead of rebuilding it.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ci
+          cache-all-crates: "true"
+          cache-on-failure: "true"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip # cache the pip wheel dir (maturin, pytest, httpx, …)
+          cache-dependency-path: python/pyproject.toml
+      # Pre-install the pinned build backend + test runner (served from the pip
+      # cache), so the wheel build below skips isolated-env setup and re-fetch.
+      - run: pip install "maturin>=1.7,<2" pytest
+      # Build the PyO3 extension from the Rust core and install the package.
+      # `--no-build-isolation` reuses the maturin above; the Rust compile is
+      # restored from the shared rust-cache.
+      - name: Build + install the PyO3 SDK
+        run: pip install ./python --no-build-isolation
+      # pytest — includes python/tests/test_conformance_vectors.py (Python ↔
+      # authoritative vectors) and the bridge/codec conformance tests.
+      - run: pytest python/tests -q
+
+  format:
+    name: prettier
+    needs: changes
+    if: needs.changes.outputs.format == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts
+      # Uses the pinned prettier devDependency (reproducible); respects
+      # .prettierignore. Run `npx prettier --write .` to fix locally.
+      - run: npx prettier --check .
+
+  # Single status for branch protection. This is deliberately fail-closed:
+  # the detector and contract job must succeed, every detector output must be a
+  # literal boolean, selected suites must succeed, and unselected suites must
+  # skip. A missing output or any unexpected job result is a wiring failure.
+  ci-ok:
+    name: ci
+    needs: [changes, gate-contract, ts, rust, python, format]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce exact detector/job agreement
+        env:
+          DETECTOR_RESULT: ${{ needs.changes.result }}
+          CONTRACT_RESULT: ${{ needs.gate-contract.result }}
+          TS_SELECTED: ${{ needs.changes.outputs.ts }}
+          TS_RESULT: ${{ needs.ts.result }}
+          RUST_SELECTED: ${{ needs.changes.outputs.rust }}
+          RUST_RESULT: ${{ needs.rust.result }}
+          PYTHON_SELECTED: ${{ needs.changes.outputs.python }}
+          PYTHON_RESULT: ${{ needs.python.result }}
+          FORMAT_SELECTED: ${{ needs.changes.outputs.format }}
+          FORMAT_RESULT: ${{ needs.format.result }}
+        run: .github/scripts/verify-ci-gate.sh

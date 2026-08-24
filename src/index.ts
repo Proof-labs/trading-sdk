@@ -27,6 +27,15 @@ export {
   type ConfirmDeposit,
   type ConfirmWithdrawal,
   type FailWithdrawal,
+  type ConfirmWithdrawalReceipt,
+  type FailWithdrawalReceipt,
+  type AuthorizeWithdrawal,
+  type TriggerLimb,
+  type SetPositionTriggers,
+  type CancelPositionTriggers,
+  type SetTriggerMarketConfig,
+  type BridgeWithdrawalReceipt,
+  type OperatorReceiptProof,
   type ApproveAgent,
   type RevokeAgent,
   type CreateImpactMarket,
@@ -35,6 +44,20 @@ export {
   type ResolveEvent,
   type UpdateMarketFees,
   type SetUserMarketLeverage,
+  type GovernanceAction,
+  type AdminAction,
+  type AdminBatchItem,
+  type EmergencyAction,
+  type UpdateAdminSignerRegistry,
+  type ProposeAdminAction,
+  type ApproveAdminAction,
+  type RejectAdminAction,
+  type EmergencyAdminAction,
+  type AdminSignerRegistry,
+  type ExpiryReason,
+  type ProposalStatus,
+  type ProposalDisplayInfo,
+  type ProposalPage,
   type ImpactMarketInfo,
   type ImpactMarketStatus,
   Branch,
@@ -58,6 +81,40 @@ export {
   type Orderbook,
   type OrderbookLevel,
   type OpenOrder,
+  type TriggerKind,
+  type TriggerLimbState,
+  type TriggerOutcomeReason,
+  type TriggerEvaluation,
+  type StoredTriggerLimb,
+  type TriggerMarketConfig,
+  type PendingTriggerMarketConfig,
+  type TriggerMarketConfigState,
+  type TriggerMarketConfigInfo,
+  type TriggerEffectiveAvailability,
+  type PositionTriggerBracket,
+  type PositionTriggerInfo,
+  type TriggerStatus,
+  type TriggerHistoryTime,
+  type PositionTriggerHistoryFilters,
+  type TriggerMarketHistoryFilters,
+  type PositionTriggerHistoryEventType,
+  type TriggerMarketHistoryEventType,
+  type TriggerHistoryEventType,
+  type TriggerHistoryPayloadBase,
+  type OwnerTriggerHistoryPayloadBase,
+  type PositionTriggersSetHistoryPayload,
+  type PositionTriggersCancelledHistoryPayload,
+  type PositionTriggersInvalidatedHistoryPayload,
+  type PositionTriggerActivatedHistoryPayload,
+  type PositionTriggerExecutedHistoryPayload,
+  type PositionTriggerDeferredHistoryPayload,
+  type TriggerMarketDeferredHistoryPayload,
+  type TriggerMarketResumedHistoryPayload,
+  type TriggerHistoryEvent,
+  type PositionTriggerHistoryEvent,
+  type TriggerMarketHistoryEvent,
+  type PositionTriggerHistoryPage,
+  type TriggerMarketHistoryPage,
   type AccountInfo,
   type PositionInfo,
   type MarketConfig,
@@ -75,6 +132,23 @@ export {
   type FeesCollectedEvent,
 } from "./types.js";
 
+export {
+  MAX_TRIGGER_SLIPPAGE_BPS,
+  validateSetPositionTriggers,
+  validateCancelPositionTriggers,
+  validateSetTriggerMarketConfig,
+  decodePositionTriggerInfos,
+  decodeTriggerMarketConfigInfos,
+  decodeTriggerStatusJson,
+} from "./triggers.js";
+
+export {
+  decodePositionTriggerHistoryPage,
+  decodeTriggerMarketHistoryPage,
+  positionTriggerHistorySearchParams,
+  triggerMarketHistorySearchParams,
+} from "./trigger-history.js";
+
 // Codec
 export {
   ENVELOPE_VERSION,
@@ -86,7 +160,25 @@ export {
   decodeSigningMessage,
   type DecodedSigningMessage,
   peekActionType,
+  adminProposalContentHash,
+  type AdminProposalContext,
 } from "./codec.js";
+// WASM codec/signing core init. `await ready()` once before any codec/signing
+// call (the `ExchangeClient` does this for you). See ADR 0001.
+export { ready } from "./wasm-loader.js";
+
+// Governance read-model decoders. Exported so a caller holding raw proxy
+// bytes (an offline signer tool reconstructing an approval, say) can decode
+// them with the same pinned implementation the client uses, rather than
+// re-deriving the engine's positional layout by hand.
+export {
+  decodeAdminAction,
+  decodeAdminSignerRegistry,
+  decodeAdminSignerRegistryInfo,
+  decodeProposalPage,
+  decodeProposalDisplayInfo,
+  decodeProposalStatus,
+} from "./governance-query.js";
 export { fetchChainId } from "./client.js";
 
 // Error decoder

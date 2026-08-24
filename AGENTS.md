@@ -318,13 +318,20 @@ curl -X POST https://faucet.dev.proof.trade/drip \
 
 For agents that want to build and inspect the wire envelope directly:
 
+The codec + signing run through a WASM build of the Rust core, so **`await
+ready()` once** before any `signAndEncode` / `encodeSignedTx` / `decodeTx`
+call (the `ExchangeClient` does this for you; only raw callers need it):
+
 ```typescript
 import {
+  ready,
   signAndEncode,
   decodeTx,
   fetchChainId,
   chainIdFromString,
 } from "@proof/trading-sdk";
+
+await ready(); // initialize the WASM codec/signing core once
 
 const chainId = await fetchChainId("https://api.dev.proof.trade");
 const txBytes = signAndEncode(chainId, action, seq, privateKey);

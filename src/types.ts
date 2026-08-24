@@ -57,6 +57,21 @@ export const ActionType = {
   ConfirmWithdrawal: 0x0a,
   /** Relayer marks a withdrawal as permanently failed; refunds balance. */
   FailWithdrawal: 0x0b,
+  /** Receipt-gated confirmation: a finalized `Paid` bridge receipt + operator
+   *  ed25519 quorum proof. Replaces the trusted relayer assertion in
+   *  `ConfirmWithdrawal` (0x0a, still accepted). W28-20. */
+  ConfirmWithdrawalReceipt: 0x22,
+  /** Receipt-gated failure: a finalized `Cancelled` bridge receipt + operator
+   *  ed25519 quorum proof. Replaces the free-text `FailWithdrawal` (0x0b, still
+   *  accepted); refunds only against a positive on-chain cancellation. W28-20. */
+  FailWithdrawalReceipt: 0x23,
+  /** Records the operator-quorum-signed `WithdrawalAuthorizationV1` a terminal
+   *  receipt (0x22/0x23) must settle against. Permissionless to submit. W28-20. */
+  AuthorizeWithdrawal: 0x24,
+  /** Atomically replace a whole-position stop-loss/take-profit bracket. */
+  SetPositionTriggers: 0x25,
+  /** Cancel the bracket attached to an exact position generation. */
+  CancelPositionTriggers: 0x26,
   /** Approve a delegate agent wallet to trade on the owner's behalf. */
   ApproveAgent: 0x0c,
   /** Revoke a previously approved agent wallet. */
@@ -88,6 +103,14 @@ export const ActionType = {
   AmendOrder: 0x1b,
   /** Native all-or-revert multi-leg basket order. */
   AtomicBasketOrder: 0x1c,
+  /** Signed admin-multisig governance proposal. */
+  ProposeAdminAction: 0x1e,
+  /** Signed admin-multisig governance approval (carries full proposal context). */
+  ApproveAdminAction: 0x1f,
+  /** Signed admin-multisig governance rejection. */
+  RejectAdminAction: 0x20,
+  /** Signed single-signer emergency action (pause/halt/reduce-only). */
+  EmergencyAdminAction: 0x21,
 } as const;
 
 /** Union of all valid action type byte values. */
@@ -401,6 +424,146 @@ export interface FailWithdrawal {
 }
 
 /**
+ * Wire mirror of the frozen `bridge_core::BridgeReceiptV1` (fixed 327-byte
+ * form) carried by the receipt-gated terminal withdrawal actions. The engine
+ * rebuilds the receipt, re-encodes, and verifies the operator quorum signed
+ * exactly those bytes — every field is signed, so tampering fails closed.
+ *
+ * Field order matches the Rust struct → MessagePack wire layout; never reorder.
+ */
+export interface BridgeWithdrawalReceipt {
+  /** `bridge_core::DeploymentId` — pins Proof/Solana genesis, program, mint (32 bytes). */
+  deploymentId: Uint8Array;
+  /** `SHA256(Borsh(WithdrawalAuthorizationV1))` (32 bytes). */
+  authorizationDigest: Uint8Array;
+  /** Engine-assigned withdrawal ID. */
+  withdrawalId: bigint;
+  /** Terminal state wire byte: `1 = Paid`, `2 = Cancelled`. */
+  terminalState: number;
+  /** `bridge_core::VaultTier` wire byte. */
+  vaultTier: number;
+  /** Internal account that owns the withdrawal (20 bytes). */
+  proofOwner: Address;
+  /** Solana destination owner pubkey (32 bytes). */
+  destinationOwner: Uint8Array;
+  /** Solana destination token account (32 bytes). */
+  destinationTokenAcct: Uint8Array;
+  /** Withdrawal amount in microUSDC (6 dp). */
+  amountMicroUsdc: bigint;
+  /** Bridge fee in microUSDC (6 dp). */
+  feeMicroUsdc: bigint;
+  /** Registry epoch the authorization signer set was pinned to. */
+  authorizationSignerEpoch: bigint;
+  /** Solana transaction signature (64 bytes). */
+  solanaTxSignature: Uint8Array;
+  /** Solana finalized slot the receipt was observed at. */
+  finalizedSlot: bigint;
+  /** Solana finalized blockhash (32 bytes). */
+  finalizedBlockhash: Uint8Array;
+  /** Receipt quorum kind wire byte: `1 = operator m-of-n`, `2 = validator stake`. */
+  receiptQuorumKind: number;
+  /** Registry epoch the receipt authority set was pinned to. */
+  receiptAuthorityEpoch: bigint;
+}
+
+/**
+ * Operator ed25519 proof — mirror of
+ * `bridge_core::ReceiptProofV1::OperatorEd25519`. A signer bitmap plus one
+ * 64-byte signature per set bit, in ascending registry-index order.
+ *
+ * Never log the signatures.
+ */
+export interface OperatorReceiptProof {
+  /** `ceil(registry_len / 8)` bytes; unused high bits zero. */
+  signerBitmap: Uint8Array;
+  /** One 64-byte ed25519 signature per set bit, ascending set-bit order. */
+  signatures: Uint8Array[];
+}
+
+/**
+ * Receipt-gated confirmation of a paid withdrawal (action `0x22`). Carries a
+ * finalized `Paid` {@link BridgeWithdrawalReceipt} and its
+ * {@link OperatorReceiptProof}. Permissionless to submit — the operator quorum
+ * in the receipt is the authority, not the envelope signer. Replaces the
+ * trusted relayer assertion in {@link ConfirmWithdrawal}.
+ */
+export interface ConfirmWithdrawalReceipt {
+  /** The finalized `Paid` bridge receipt. */
+  receipt: BridgeWithdrawalReceipt;
+  /** Operator ed25519 quorum proof over the receipt bytes. */
+  proof: OperatorReceiptProof;
+}
+
+/**
+ * Receipt-gated failure of a cancelled withdrawal (action `0x23`). Carries a
+ * finalized `Cancelled` {@link BridgeWithdrawalReceipt} and its
+ * {@link OperatorReceiptProof}; refunds the debited balance only against a
+ * positive on-chain cancellation proof, never a timeout. Replaces the free-text
+ * {@link FailWithdrawal}.
+ */
+export interface FailWithdrawalReceipt {
+  /** The finalized `Cancelled` bridge receipt. */
+  receipt: BridgeWithdrawalReceipt;
+  /** Operator ed25519 quorum proof over the receipt bytes. */
+  proof: OperatorReceiptProof;
+}
+
+/**
+ * Records the operator-quorum-signed `WithdrawalAuthorizationV1` for a pending
+ * withdrawal (action `0x24`), binding its digest to the record so a terminal
+ * receipt (`0x22`/`0x23`) can only settle an authorization the quorum actually
+ * issued. Permissionless to submit — the operator quorum in `proof` is the
+ * authority, not the envelope signer.
+ */
+export interface AuthorizeWithdrawal {
+  /** The canonical `WithdrawalAuthorizationV1` bytes the quorum signed
+   *  (`bridge_core::WithdrawalAuthorizationV1::encode`, fixed 221 bytes). */
+  authorization: Uint8Array;
+  /** Operator ed25519 quorum proof over the authorization bytes. */
+  proof: OperatorReceiptProof;
+}
+
+/** One optional limb of a whole-position protection bracket. */
+export interface TriggerLimb {
+  /** Trigger threshold in micro-USDC; must be non-zero. */
+  triggerPrice: bigint;
+  /** IOC execution collar in basis points; must be in `1..=9999`. */
+  maxSlippageBps: number;
+  /** Optional non-zero client correlation id for this limb. */
+  clientTriggerId?: bigint | null;
+}
+
+/** Atomically replace the owner's complete stop-loss/take-profit bracket. */
+export interface SetPositionTriggers {
+  market: number;
+  owner: Address;
+  /** Current position generation read from `/v1/triggers/{owner}`. */
+  expectedPositionEpoch: bigint;
+  stopLoss?: TriggerLimb | null;
+  takeProfit?: TriggerLimb | null;
+  /** Optional non-zero idempotency/correlation id for the whole bracket. */
+  clientGroupId?: bigint | null;
+}
+
+/** Cancel the active bracket for one exact position generation. */
+export interface CancelPositionTriggers {
+  market: number;
+  owner: Address;
+  expectedPositionEpoch: bigint;
+}
+
+/** Complete multisig-controlled trigger policy for one market (admin tag 5). */
+export interface SetTriggerMarketConfig {
+  market: number;
+  expectedCurrentVersion?: bigint | null;
+  enabled: boolean;
+  maxTriggerSlippageBps: number;
+  maxMarkAgeMs: bigint;
+  maxFuturePublishSkewMs: bigint;
+  maxActiveBrackets: bigint;
+}
+
+/**
  * Approve a delegate keypair ("agent wallet") to trade on the owner's behalf.
  * The agent can place/cancel orders but CANNOT withdraw or move funds.
  */
@@ -645,6 +808,14 @@ export interface ImpactMarketInfo {
   status: ImpactMarketStatus;
   createdMs: bigint;
   resolvedMs: bigint;
+  /** BE-54: how the YES/NO outcome is determined at deadline. `undefined`
+   *  (older gateways / pre-BE-54 records) means `RelayerAttested`. */
+  oracleSource?: EventOracleSource;
+  /** Event body text; `""` when the record has none. `undefined` only on
+   *  gateways older than admin-actions v2 (field not served). */
+  description?: string;
+  /** Resolution criteria text; same shipping note as `description`. */
+  rules?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -729,7 +900,9 @@ export type TraderAction =
   | { type: "ApproveAgent"; data: ApproveAgent }
   | { type: "RevokeAgent"; data: RevokeAgent }
   | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage }
-  | { type: "ClosePosition"; data: ClosePosition };
+  | { type: "ClosePosition"; data: ClosePosition }
+  | { type: "SetPositionTriggers"; data: SetPositionTriggers }
+  | { type: "CancelPositionTriggers"; data: CancelPositionTriggers };
 
 /**
  * Operator actions — privileged infrastructure submitted by the operator's
@@ -749,6 +922,9 @@ export type OperatorAction =
   | { type: "ConfirmDeposit"; data: ConfirmDeposit }
   | { type: "ConfirmWithdrawal"; data: ConfirmWithdrawal }
   | { type: "FailWithdrawal"; data: FailWithdrawal }
+  | { type: "ConfirmWithdrawalReceipt"; data: ConfirmWithdrawalReceipt }
+  | { type: "FailWithdrawalReceipt"; data: FailWithdrawalReceipt }
+  | { type: "AuthorizeWithdrawal"; data: AuthorizeWithdrawal }
   | { type: "CreateImpactMarket"; data: CreateImpactMarket }
   | { type: "ResolveEvent"; data: ResolveEvent }
   | { type: "UpdateMarketFees"; data: UpdateMarketFees };
@@ -759,7 +935,213 @@ export type OperatorAction =
  * union — trading integrations can narrow to `TraderAction` to keep operator
  * actions out of autocomplete.
  */
-export type Action = TraderAction | OperatorAction;
+// ---------------------------------------------------------------------------
+// Admin-multisig governance actions
+// ---------------------------------------------------------------------------
+
+/**
+ * Replacement admin signer roster. The engine assigns the next registry
+ * version; members are validated (sorted, duplicate-free) on-chain.
+ */
+export interface UpdateAdminSignerRegistry {
+  /** Approvals the replacement roster will require. */
+  newThreshold: number;
+  /** Members of the replacement roster (each a 20-byte address). */
+  newMembers: Address[];
+}
+
+/**
+ * One item of a governance `Batch` — a CLOSED, non-recursive subset of
+ * `AdminAction` (market-creation shapes only, mirroring the engine's
+ * `AdminBatchItem`). A batch can never contain another batch or a
+ * registry change; the type makes that unrepresentable, exactly as the
+ * engine's enum does. Variant names are wire-identical to the
+ * `AdminAction` arms of the same name.
+ */
+export type AdminBatchItem =
+  | { kind: "CreateMarket"; value: CreateMarket }
+  | { kind: "CreateImpactMarket"; value: CreateImpactMarket };
+
+/**
+ * Closed, typed set of operations executable through the multisig. The
+ * embedded `CreateMarket.signer` / `CreateImpactMarket.signer` must be
+ * zero — governance supplies the authorization, not the embedded address.
+ *
+ * `Batch` executes its items atomically in order against one overlay:
+ * all succeed or the proposal fails with no partial state. Admitted on
+ * chain only once admin-actions v2 activates (`CreateImpactMarket`
+ * likewise); the engine refuses the tags below the activation height.
+ */
+export type AdminAction =
+  | { kind: "CreateMarket"; value: CreateMarket }
+  | { kind: "UpdateAdminSignerRegistry"; value: UpdateAdminSignerRegistry }
+  | { kind: "CreateImpactMarket"; value: CreateImpactMarket }
+  | { kind: "Batch"; value: AdminBatchItem[] }
+  | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig };
+
+/**
+ * Closed set of immediate, loss-reducing single-signer actions. Reverse
+ * transitions (unpause/resume) are intentionally absent — they require a
+ * multisig `AdminAction`.
+ */
+export type EmergencyAction =
+  | { kind: "PauseMarket"; value: { marketId: number } }
+  | { kind: "HaltTrading"; value?: Record<string, never> }
+  | { kind: "SetReduceOnly"; value: { marketId: number } };
+
+/** Signed governance proposal (action 0x1e). */
+export interface ProposeAdminAction {
+  /** Address authorizing the proposal (20 bytes). */
+  proposer: Address;
+  /** Registry version under which the proposal is submitted. */
+  registryVersion: bigint;
+  /** Admin operation proposed for multisig execution. */
+  action: AdminAction;
+}
+
+/**
+ * Signed governance approval (action 0x1f). Carries the complete immutable
+ * proposal context so a signer commits to — and can independently render —
+ * exactly what they approve, never an id+hash alone.
+ */
+export interface ApproveAdminAction {
+  /** Address authorizing the approval (20 bytes). */
+  approver: Address;
+  /** Identifier of the proposal being approved. */
+  proposalId: bigint;
+  /** Registry version captured when the proposal was created. */
+  registryVersion: bigint;
+  /** Required approval count captured when the proposal was created. */
+  threshold: number;
+  /** Address that created the proposal (20 bytes). */
+  proposer: Address;
+  /** Block height at which the proposal was created. */
+  createdHeight: bigint;
+  /** Block timestamp at which the proposal was created, in milliseconds. */
+  createdMs: bigint;
+  /** Block timestamp after which the proposal expires, in milliseconds. */
+  expiryMs: bigint;
+  /** Typed admin operation being approved. */
+  action: AdminAction;
+  /** Domain-separated commitment to the immutable proposal context (32 bytes). */
+  contentHash: Uint8Array;
+}
+
+/** Signed governance rejection (action 0x20). */
+export interface RejectAdminAction {
+  /** Address authorizing the rejection (20 bytes). */
+  rejecter: Address;
+  /** Identifier of the proposal being rejected. */
+  proposalId: bigint;
+  /** Domain-separated commitment of the proposal being rejected (32 bytes). */
+  contentHash: Uint8Array;
+}
+
+/** Signed single-signer emergency action (action 0x21). */
+export interface EmergencyAdminAction {
+  /** Registry member authorizing the action (20 bytes). */
+  signer: Address;
+  /** Immediate loss-reducing operation to execute. */
+  action: EmergencyAction;
+}
+
+/**
+ * Governance actions — admin-multisig propose/approve/reject and the
+ * single-signer emergency action. Authorized on-chain against the versioned
+ * signer registry; a normal trader's signer is rejected.
+ */
+export type GovernanceAction =
+  | { type: "ProposeAdminAction"; data: ProposeAdminAction }
+  | { type: "ApproveAdminAction"; data: ApproveAdminAction }
+  | { type: "RejectAdminAction"; data: RejectAdminAction }
+  | { type: "EmergencyAdminAction"; data: EmergencyAdminAction };
+
+export type Action = TraderAction | OperatorAction | GovernanceAction;
+
+// ---------------------------------------------------------------------------
+// Governance read model (GET /v1/admin/signer-registry, GET /v1/proposals)
+//
+// Mirrors of the engine's read-model structs, not of its wire actions above.
+// Decoded by governance-query.ts, which is pinned to golden bytes from the
+// engine's own serializer — see that module for the encoding facts these
+// shapes depend on.
+// ---------------------------------------------------------------------------
+
+/** The installed admin signer roster. Absent (a `null` read) means multisig
+ *  administration is INACTIVE — never an empty roster. */
+export interface AdminSignerRegistry {
+  /** Monotone, starts at 1, never reused; a rotation assigns +1. */
+  version: bigint;
+  /** Approvals required to execute a proposal (`2 <= threshold <= members`). */
+  threshold: number;
+  /** Canonically sorted, duplicate-free roster (each a 20-byte address). */
+  members: Address[];
+}
+
+/** Why a pending proposal expired. */
+export type ExpiryReason = "Ttl" | "RegistryChanged";
+
+/**
+ * Status of an admin proposal. Terminal states carry the payload the engine
+ * committed with them, so a caller never has to re-derive WHY a proposal
+ * ended: `Failed` carries the unnarrowed `ExecError` code, `Rejected` the
+ * member whose rejection was decisive, `Expired` the reason.
+ */
+export type ProposalStatus =
+  | { kind: "Pending" }
+  | { kind: "Executed" }
+  | { kind: "Failed"; code: number }
+  | { kind: "Rejected"; by: Address }
+  | { kind: "Expired"; reason: ExpiryReason };
+
+/**
+ * One proposal, shaped by the engine for display AND offline verification.
+ *
+ * The context fields plus `actionCanonicalBytes` are exactly what an
+ * approving signer needs to rebuild an `ApproveAdminAction` locally, without
+ * trusting anything a user interface rendered — which is the point: an
+ * approval is a commitment to specific bytes, so the bytes must be
+ * reconstructible from chain state alone.
+ */
+export interface ProposalDisplayInfo {
+  proposalId: bigint;
+  /** Status as written by the handlers. */
+  statusStored: ProposalStatus;
+  /**
+   * Status with the engine's own lazy-expiry rule already applied: a stored
+   * `Pending` past its `expiryMs` reads as `Expired { Ttl }`. The `status`
+   * query filter matches THIS field, so no two readers can disagree by
+   * applying different client-side staleness rules — prefer it for display.
+   */
+  statusEffective: ProposalStatus;
+  /** Registry version the proposal was created under. */
+  registryVersion: bigint;
+  /** Approvals required, captured at creation. */
+  threshold: number;
+  proposer: Address;
+  /** Distinct approving members. The proposer counts as approval #1. */
+  approvals: Address[];
+  rejections: Address[];
+  createdHeight: bigint;
+  createdMs: bigint;
+  /** Block time after which the proposal expires. */
+  expiryMs: bigint;
+  /** Engine-owned discriminant of `action`, committed by the content hash. */
+  actionTag: number;
+  /** Typed decode of the proposed operation. */
+  action: AdminAction;
+  /** The EXACT stored engine-canonical bytes the content hash covers. */
+  actionCanonicalBytes: Uint8Array;
+  /** Domain-separated commitment to the immutable proposal context. */
+  contentHash: Uint8Array;
+}
+
+/** A page of proposals, ascending by id. */
+export interface ProposalPage {
+  proposals: ProposalDisplayInfo[];
+  /** Last-seen id; pass as `cursor` for the next page. `null` = last page. */
+  nextCursor: bigint | null;
+}
 
 // ---------------------------------------------------------------------------
 // Event types (emitted by engine, delivered via ABCI/WebSocket)
@@ -1062,7 +1444,7 @@ export type ExchangeEvent =
  * `code` (engine codes and synthesized HTTP statuses share that field):
  *
  * - `"ok"`        — CheckTx accepted the tx (`code === 0`).
- * - `"engine"`    — the engine rejected it with an `ExecError` (`code` 1..50/255);
+ * - `"engine"`    — the engine rejected it with an `ExecError` (`code` 1..53/255);
  *                   see {@link TxResult.error} for the decoded name/description.
  * - `"transport"` — a gateway/HTTP-level failure (auth, rate-limit, body too
  *                   large, 5xx, non-JSON body). `code` is the synthesized HTTP
@@ -1153,6 +1535,301 @@ export interface OpenOrder {
   price: bigint;
   /** Resting quantity in contracts. */
   quantity: bigint;
+}
+
+export type TriggerKind = "StopLoss" | "TakeProfit";
+export type TriggerLimbState =
+  | "Armed"
+  | "Filled"
+  | "Partial"
+  | "NoFill"
+  | "Rejected"
+  | "Cancelled"
+  | "Invalidated";
+export type TriggerOutcomeReason =
+  | "PositionClosed"
+  | "PositionEpochChanged"
+  | "PositionSideChanged"
+  | "BelowMaintenance"
+  | "IndeterminateAccount"
+  | "MarketDisabled"
+  | "MarkUnavailable"
+  | "MarkStale"
+  | "MarkFutureDated"
+  | "NoEligibleLiquidity"
+  | "SelfTradePrevention"
+  | "WorkLimitReached"
+  | "ExecutionRejected";
+
+/** Last deterministic evaluation of one stored trigger limb. */
+export interface TriggerEvaluation {
+  height: bigint;
+  frozenMark: bigint;
+  limitPrice: bigint | null;
+  requestedQuantity: bigint;
+  filledQuantity: bigint;
+  residualQuantity: bigint;
+  reason: TriggerOutcomeReason | null;
+}
+
+/** Engine-owned state for one stop-loss/take-profit limb. */
+export interface StoredTriggerLimb {
+  limbId: bigint;
+  kind: TriggerKind;
+  triggerPrice: bigint;
+  maxSlippageBps: number;
+  clientTriggerId: bigint | null;
+  state: TriggerLimbState;
+  lastEvaluation: TriggerEvaluation | null;
+}
+
+/** Effective trigger policy returned alongside each bracket. */
+export interface TriggerMarketConfig {
+  version: bigint;
+  enabled: boolean;
+  maxTriggerSlippageBps: number;
+  maxMarkAgeMs: bigint;
+  maxFuturePublishSkewMs: bigint;
+  maxActiveBrackets: bigint;
+}
+
+/** A governed trigger policy accepted in one block and effective next block. */
+export interface PendingTriggerMarketConfig {
+  config: TriggerMarketConfig;
+  acceptedHeight: bigint;
+  effectiveHeight: bigint;
+}
+
+/** Current and scheduled policy for one trigger-enabled market. */
+export interface TriggerMarketConfigState {
+  current: TriggerMarketConfig | null;
+  pending: PendingTriggerMarketConfig | null;
+}
+
+/** One row returned by `GET /v1/triggers/markets`. */
+export interface TriggerMarketConfigInfo {
+  market: number;
+  state: TriggerMarketConfigState;
+}
+
+/** Why a stored bracket is or is not eligible at the finalized height. */
+export type TriggerEffectiveAvailability =
+  | { kind: "Available" }
+  | { kind: "TriggerActionsInactive" }
+  | { kind: "PendingActivation" }
+  | { kind: "MigrationIncomplete" }
+  | { kind: "ConfigurationMissing" }
+  | { kind: "MarketDisabled" }
+  | { kind: "Deferred"; reason: TriggerOutcomeReason };
+
+/** Current protected position generation and both optional limbs. */
+export interface PositionTriggerBracket {
+  groupId: bigint;
+  owner: Address;
+  market: number;
+  positionEpoch: bigint;
+  positionSide: "Buy" | "Sell";
+  acceptedHeight: bigint;
+  activeFromHeight: bigint;
+  clientGroupId: bigint | null;
+  stopLoss: StoredTriggerLimb | null;
+  takeProfit: StoredTriggerLimb | null;
+}
+
+/** One owner/market row returned by `GET /v1/triggers/{owner}`. */
+export interface PositionTriggerInfo {
+  bracket: PositionTriggerBracket;
+  marketConfig: TriggerMarketConfig | null;
+  availability: TriggerEffectiveAvailability;
+}
+
+/** Next-height admission predicate returned by `GET /v1/triggers/status`. */
+export interface TriggerStatus {
+  finalizedHeight: bigint;
+  admissionHeight: bigint;
+  actionsActive: boolean;
+}
+
+/** Time-window spelling accepted by the trigger-history indexer. */
+export type TriggerHistoryTime = string | number | bigint;
+
+/** Filters bound into an owner-history cursor. */
+export interface PositionTriggerHistoryFilters {
+  market?: number;
+  from?: TriggerHistoryTime;
+  to?: TriggerHistoryTime;
+  limit?: number;
+  /** Opaque, non-empty token returned by the same filter set. */
+  cursor?: string;
+}
+
+/** Filters bound into a shared market-history cursor. */
+export interface TriggerMarketHistoryFilters {
+  from?: TriggerHistoryTime;
+  to?: TriggerHistoryTime;
+  limit?: number;
+  /** Opaque, non-empty token returned by the same filter set. */
+  cursor?: string;
+}
+
+export type PositionTriggerHistoryEventType =
+  | "position_triggers_set"
+  | "position_triggers_cancelled"
+  | "position_triggers_invalidated"
+  | "position_trigger_activated"
+  | "position_trigger_executed"
+  | "position_trigger_deferred";
+
+export type TriggerMarketHistoryEventType =
+  "trigger_market_deferred" | "trigger_market_resumed";
+
+export type TriggerHistoryEventType =
+  PositionTriggerHistoryEventType | TriggerMarketHistoryEventType;
+
+/** Raw canonical engine attributes retained losslessly by the indexer. */
+export interface TriggerHistoryPayloadBase {
+  readonly [key: string]: string;
+  event_key: string;
+  block_height: string;
+  execution_ordinal: string;
+  event_ordinal: string;
+  market: string;
+}
+
+export interface OwnerTriggerHistoryPayloadBase extends TriggerHistoryPayloadBase {
+  owner: string;
+  position_epoch: string;
+  group_id: string;
+}
+
+export interface PositionTriggersSetHistoryPayload extends OwnerTriggerHistoryPayloadBase {
+  client_group_id: string;
+  stop_limb_id: string;
+  stop_client_trigger_id: string;
+  take_profit_limb_id: string;
+  take_profit_client_trigger_id: string;
+  accepted_height: string;
+  active_from_height: string;
+  replaced_group_id: string;
+}
+
+export type PositionTriggersCancelledHistoryPayload =
+  OwnerTriggerHistoryPayloadBase;
+export type PositionTriggersInvalidatedHistoryPayload =
+  OwnerTriggerHistoryPayloadBase;
+
+export interface PositionTriggerActivatedHistoryPayload extends OwnerTriggerHistoryPayloadBase {
+  limb_id: string;
+  client_group_id: string;
+  client_trigger_id: string;
+  limb_kind: "stop_loss" | "take_profit";
+  trigger_price: string;
+  frozen_mark: string;
+  limit_price: string;
+  requested_quantity: string;
+  execution_order_id: string;
+}
+
+export interface PositionTriggerExecutedHistoryPayload extends PositionTriggerActivatedHistoryPayload {
+  filled_quantity: string;
+  residual_quantity: string;
+  /** Signed aggregate fee; kept as a decimal string. */
+  total_fee: string;
+  result: "filled" | "partial" | "no_fill" | "rejected" | "invalidated";
+  /** Empty when the terminal outcome has no additional reason. */
+  reason: string;
+}
+
+export interface PositionTriggerDeferredHistoryPayload extends OwnerTriggerHistoryPayloadBase {
+  limb_id: string;
+  client_group_id: string;
+  client_trigger_id: string;
+  limb_kind: "stop_loss" | "take_profit";
+  trigger_price: string;
+  frozen_mark: string;
+  requested_quantity: string;
+  reason: string;
+}
+
+export interface TriggerMarketDeferredHistoryPayload extends TriggerHistoryPayloadBase {
+  reason: string;
+}
+
+export interface TriggerMarketResumedHistoryPayload extends TriggerHistoryPayloadBase {
+  previous_reason: string;
+}
+
+/** One immutable chain-coordinate-keyed trigger history event. */
+export interface TriggerHistoryEvent<
+  TType extends TriggerHistoryEventType,
+  TOwner extends string | null,
+  TPayload extends TriggerHistoryPayloadBase,
+> {
+  eventKey: string;
+  blockHeight: string;
+  executionOrdinal: string;
+  eventOrdinal: string;
+  blockTime: string;
+  eventType: TType;
+  owner: TOwner;
+  market: string;
+  payload: TPayload;
+}
+
+export type PositionTriggerHistoryEvent =
+  | TriggerHistoryEvent<
+      "position_triggers_set",
+      string,
+      PositionTriggersSetHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "position_triggers_cancelled",
+      string,
+      PositionTriggersCancelledHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "position_triggers_invalidated",
+      string,
+      PositionTriggersInvalidatedHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "position_trigger_activated",
+      string,
+      PositionTriggerActivatedHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "position_trigger_executed",
+      string,
+      PositionTriggerExecutedHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "position_trigger_deferred",
+      string,
+      PositionTriggerDeferredHistoryPayload
+    >;
+
+export type TriggerMarketHistoryEvent =
+  | TriggerHistoryEvent<
+      "trigger_market_deferred",
+      null,
+      TriggerMarketDeferredHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "trigger_market_resumed",
+      null,
+      TriggerMarketResumedHistoryPayload
+    >;
+
+export interface PositionTriggerHistoryPage {
+  triggerEvents: PositionTriggerHistoryEvent[];
+  /** Empty when exhausted; otherwise pass back unchanged. */
+  nextCursor: string;
+}
+
+export interface TriggerMarketHistoryPage {
+  triggerMarketEvents: TriggerMarketHistoryEvent[];
+  /** Empty when exhausted; otherwise pass back unchanged. */
+  nextCursor: string;
 }
 
 /** One row of the auto-deleveraging queue for a market. Returned sorted by
@@ -1259,6 +1936,11 @@ export interface PositionInfo {
    *  per-market percentile and warn at >90th percentile (the v3
    *  design-doc threshold). Added 2026-04-25. */
   adlScore?: bigint;
+  /** [13] Persistent generation of this live position. This is the only
+   * canonical first-attach input for `SetPositionTriggers`; absent means the
+   * bounded legacy backfill has not reached this row and callers must refuse
+   * trigger placement rather than guess `1`. */
+  positionEpoch?: bigint;
 }
 
 /** One entry per active impact market the account touches. Tuple of

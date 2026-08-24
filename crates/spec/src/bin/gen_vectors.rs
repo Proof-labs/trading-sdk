@@ -58,6 +58,58 @@ fn codec_case(case: &str, action_type: u8, input: serde_json::Value) -> cv::Code
     }
 }
 
+/// The engine golden `BridgeWithdrawalReceipt` fixture (mirrors exchange-core
+/// `codec::tests::golden_receipt`). `terminal_state` is `1 = Paid` for a
+/// confirm, `2 = Cancelled` for a fail; every other field is fixed.
+fn receipt_json(terminal_state: u8) -> serde_json::Value {
+    json!({
+        "deployment_id": vec![0x11u8; 32],
+        "authorization_digest": vec![0x22u8; 32],
+        "withdrawal_id": 777u64,
+        "terminal_state": terminal_state,
+        "vault_tier": 1,
+        "proof_owner": vec![0x05u8; 20],
+        "destination_owner": vec![0x06u8; 32],
+        "destination_token_acct": vec![0x07u8; 32],
+        "amount_micro_usdc": 1_000_000u64,
+        "fee_micro_usdc": 1_000_000u64,
+        "authorization_signer_epoch": 3u64,
+        "solana_tx_signature": vec![0x10u8; 64],
+        "finalized_slot": 900u64,
+        "finalized_blockhash": vec![0x33u8; 32],
+        "receipt_quorum_kind": 1,
+        "receipt_authority_epoch": 3u64,
+    })
+}
+
+/// The engine golden `OperatorReceiptProof` fixture (mirrors exchange-core
+/// `codec::tests::golden_proof`): a 4-of-n bitmap and four 64-byte ed25519
+/// signatures.
+fn operator_proof_json() -> serde_json::Value {
+    json!({
+        "signer_bitmap": vec![0x0Fu8],
+        "signatures": vec![
+            vec![0xABu8; 64],
+            vec![0xCDu8; 64],
+            vec![0xEFu8; 64],
+            vec![0x12u8; 64],
+        ],
+    })
+}
+
+fn error_case(case: &str, code: u32, log: Option<&str>) -> cv::ErrorCase {
+    let name = cv::error_reference_name(code, log)
+        .unwrap_or_else(|| panic!("no error name for {case} (code {code})"));
+    cv::ErrorCase {
+        case: case.to_string(),
+        code,
+        log: log.map(str::to_string),
+        expect: cv::ErrorExpect {
+            name: name.to_string(),
+        },
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let dir = conformance_dir();
     fs::create_dir_all(&dir)?;
@@ -73,6 +125,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     const CREATE_MARKET: u8 = 0x07;
     const UPDATE_MARKET_FEES: u8 = 0x10;
     const ATOMIC_BASKET_ORDER: u8 = 0x1C;
+    const PROPOSE_ADMIN_ACTION: u8 = 0x1E;
+    const APPROVE_ADMIN_ACTION: u8 = 0x1F;
+    const REJECT_ADMIN_ACTION: u8 = 0x20;
+    const EMERGENCY_ADMIN_ACTION: u8 = 0x21;
+    const CONFIRM_WITHDRAWAL_RECEIPT: u8 = 0x22;
+    const FAIL_WITHDRAWAL_RECEIPT: u8 = 0x23;
+    const AUTHORIZE_WITHDRAWAL: u8 = 0x24;
+    const SET_POSITION_TRIGGERS: u8 = 0x25;
+    const CANCEL_POSITION_TRIGGERS: u8 = 0x26;
 
     let owner = vec![0x01u8; 20];
     let signer = vec![0x03u8; 20];
@@ -225,6 +286,194 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "max_slippage_bps": 50
             }),
         ),
+        // Admin-multisig governance (tags 0x1E–0x21). The nested
+        // `action` is an externally-tagged `AdminAction`/`EmergencyAction`
+        // enum — serde_json's map form `{ "Variant": { snake_case } }`, which
+        // is exactly what the TS adapter must reproduce. The embedded
+        // CreateMarket signer is zero (governance supplies authorization).
+        codec_case(
+            "propose_admin_action/create_market",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "CreateMarket": {
+                    "market": 0, "im_bps": 3334, "mm_bps": 1667,
+                    "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": vec![0u8; 20],
+                    "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
+                    "pool_id": 0, "sz_decimals": 0, "ticker": "", "max_open_interest": 0u64
+                }}
+            }),
+        ),
+        // Admin-actions v2: a Batch proposal carrying both item variants —
+        // the engine's own golden fixture (perp on market 15 + impact
+        // family 91), so the nested-enum path (list payload, both items,
+        // the impact serde(default) trailers) is pinned across all three
+        // language bindings.
+        codec_case(
+            "propose_admin_action/batch_perp_plus_impact",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "Batch": [
+                    { "CreateMarket": {
+                        "market": 15, "im_bps": 3334, "mm_bps": 1667,
+                        "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": vec![0u8; 20],
+                        "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
+                        "pool_id": 0, "sz_decimals": 0, "ticker": "", "max_open_interest": 0u64
+                    }},
+                    { "CreateImpactMarket": {
+                        "impact_market_id": 91, "underlying_market": 15,
+                        "child_market_base": 9100, "question": "does it land?",
+                        "deadline_ms": 1000000u64, "resolution_window_ms": 1000u64,
+                        "im_bps": 3334, "mm_bps": 1667,
+                        "taker_fee_bps": 5, "maker_fee_bps": 2,
+                        "funding_interval_ms": 0u64, "max_funding_rate_bps": 3000,
+                        "signer": vec![0u8; 20], "oracle_source": null,
+                        "description": "", "rules": ""
+                    }}
+                ]}
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/set_trigger_market_config",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "SetTriggerMarketConfig": {
+                    "market": 7,
+                    "expected_current_version": 3u64,
+                    "enabled": true,
+                    "max_trigger_slippage_bps": 250u32,
+                    "max_mark_age_ms": 5_000u64,
+                    "max_future_publish_skew_ms": 1_000u64,
+                    "max_active_brackets": 32u64
+                }}
+            }),
+        ),
+        codec_case(
+            "approve_admin_action/rotate_registry",
+            APPROVE_ADMIN_ACTION,
+            json!({
+                "approver": vec![0x22u8; 20],
+                "proposal_id": 42u64,
+                "registry_version": 3u64,
+                "threshold": 2u32,
+                "proposer": vec![0x22u8; 20],
+                "created_height": 7u64,
+                "created_ms": 1000u64,
+                "expiry_ms": 259201000u64,
+                "action": { "UpdateAdminSignerRegistry": {
+                    "new_threshold": 2u32,
+                    "new_members": [vec![0xA1u8; 20], vec![0xA2u8; 20]]
+                }},
+                "content_hash": vec![0xABu8; 32]
+            }),
+        ),
+        codec_case(
+            "reject_admin_action/basic",
+            REJECT_ADMIN_ACTION,
+            json!({
+                "rejecter": vec![0x33u8; 20],
+                "proposal_id": 42u64,
+                "content_hash": vec![0xABu8; 32]
+            }),
+        ),
+        codec_case(
+            "emergency_admin_action/pause_market",
+            EMERGENCY_ADMIN_ACTION,
+            json!({
+                "signer": vec![0x44u8; 20],
+                "action": { "PauseMarket": { "market_id": 7 } }
+            }),
+        ),
+        // HaltTrading is the trickiest arm to mirror: a fieldless STRUCT
+        // variant (`HaltTrading {}`), so it stays in serde's map form
+        // `{ "HaltTrading": {} }` — not the bare-string form a unit variant
+        // would take.
+        codec_case(
+            "emergency_admin_action/halt_trading",
+            EMERGENCY_ADMIN_ACTION,
+            json!({
+                "signer": vec![0x44u8; 20],
+                "action": { "HaltTrading": {} }
+            }),
+        ),
+        codec_case(
+            "emergency_admin_action/set_reduce_only",
+            EMERGENCY_ADMIN_ACTION,
+            json!({
+                "signer": vec![0x44u8; 20],
+                "action": { "SetReduceOnly": { "market_id": 7 } }
+            }),
+        ),
+        // W28-20 receipt-gated terminal withdrawals (0x22 / 0x23). The receipt
+        // + operator-ed25519 proof fixtures mirror the engine golden vectors
+        // (exchange-core `codec::tests::golden_receipt` / `golden_proof`); the
+        // generated payload_hex must equal the engine's committed
+        // docs/spec/golden-vectors/{confirm,fail}_withdrawal_receipt.hex.
+        codec_case(
+            "confirm_withdrawal_receipt/paid",
+            CONFIRM_WITHDRAWAL_RECEIPT,
+            json!({
+                "receipt": receipt_json(1),
+                "proof": operator_proof_json(),
+            }),
+        ),
+        codec_case(
+            "fail_withdrawal_receipt/cancelled",
+            FAIL_WITHDRAWAL_RECEIPT,
+            json!({
+                "receipt": receipt_json(2),
+                "proof": operator_proof_json(),
+            }),
+        ),
+        // The authorization leg (0x24): the fixed 221-byte
+        // `WithdrawalAuthorizationV1` bytes + the operator proof. The engine
+        // commits no golden .hex for this action; the engine-derived pin is
+        // crates/spec/golden-vectors/authorize_withdrawal.hex (see the core
+        // golden test), and this case carries it to all three runners.
+        codec_case(
+            "authorize_withdrawal/operator",
+            AUTHORIZE_WITHDRAWAL,
+            json!({
+                "authorization": vec![0x44u8; 221],
+                "proof": operator_proof_json(),
+            }),
+        ),
+        // W32-10 whole-position bracket actions. This is the literal fixture
+        // from exchange-core's position-trigger golden-vector test.
+        codec_case(
+            "set_position_triggers/engine_golden",
+            SET_POSITION_TRIGGERS,
+            json!({
+                "market": 7,
+                "owner": vec![0xA5u8; 20],
+                "expected_position_epoch": 3u64,
+                "stop_loss": {
+                    "trigger_price": 95_000u64,
+                    "max_slippage_bps": 75u32,
+                    "client_trigger_id": 11u64
+                },
+                "take_profit": {
+                    "trigger_price": 110_000u64,
+                    "max_slippage_bps": 50u32,
+                    "client_trigger_id": 12u64
+                },
+                "client_group_id": 9u64
+            }),
+        ),
+        codec_case(
+            "cancel_position_triggers/engine_golden",
+            CANCEL_POSITION_TRIGGERS,
+            json!({
+                "market": 7,
+                "owner": vec![0xA5u8; 20],
+                "expected_position_epoch": 3u64
+            }),
+        ),
     ];
     write_ndjson(&dir.join(cv::CODEC_FILE), &codec)?;
 
@@ -289,11 +538,50 @@ fn main() -> Result<(), Box<dyn Error>> {
         .collect();
     write_ndjson(&dir.join(cv::NONCE_FILE), &nonce)?;
 
+    // ── errors family ────────────────────────────────────────────────────
+    // Manifest: pin every numeric code → canonical name. This is the family
+    // that would have failed the pre-#55 SDK (which mapped open interest to 50
+    // and had no 51 entry) — `manifest/51` → OpenInterestLimitExceeded and
+    // `manifest/50` → SlippageExceeded together pin the split.
+    //
+    // Code 21 is now pinned like every other code: the TS SDK was aligned to
+    // the engine/Rust/Python name `InvalidNonce` (#63), removing the
+    // `TimestampNonceRejected` divergence that previously forced a carve-out.
+    let mut errors: Vec<cv::ErrorCase> = proof_trading_sdk::types::ERROR_KINDS
+        .iter()
+        .map(|kind| kind.code())
+        .map(|code| error_case(&format!("manifest/{code}"), code, None))
+        .collect();
+
+    // Transitional code-50 rolling-upgrade family: the canonical DeliverTx log
+    // disambiguates legacy open-interest from current slippage; anything else
+    // stays AmbiguousCode50 (never a guess). Plus a code-51 case proving the
+    // log is ignored once the engine emits the distinct code.
+    errors.push(error_case(
+        "code50/oi_log",
+        50,
+        Some("open interest limit exceeded on market 7: would be 4, cap 3"),
+    ));
+    errors.push(error_case(
+        "code50/slippage_log",
+        50,
+        Some("atomic basket aggregate slippage 51 bps exceeds budget 50 bps"),
+    ));
+    errors.push(error_case("code50/empty", 50, Some("")));
+    errors.push(error_case(
+        "code50/unknown_log",
+        50,
+        Some("unknown code 50 diagnostic"),
+    ));
+    errors.push(error_case("code51/ignored_log", 51, Some("unrecognized")));
+    write_ndjson(&dir.join(cv::ERRORS_FILE), &errors)?;
+
     eprintln!(
-        "wrote {} codec, {} signing, {} nonce cases to {}",
+        "wrote {} codec, {} signing, {} nonce, {} errors cases to {}",
         codec.len(),
         signing.len(),
         nonce.len(),
+        errors.len(),
         dir.display()
     );
     Ok(())

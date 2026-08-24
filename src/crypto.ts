@@ -1,16 +1,35 @@
-import {
-  getPublicKey as ed_getPublicKey,
-  hashes,
-  sign as ed_sign,
-  verify as ed_verify,
-  utils,
-} from "@noble/ed25519";
+import * as ed25519 from "@noble/ed25519";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { sha512 } from "@noble/hashes/sha2.js";
 
 // noble/ed25519 v3 requires injecting sha512 for synchronous sign/verify
 // (v2 used `etc.sha512Sync`; v3 moved the hook to `hashes.sha512`).
-hashes.sha512 = sha512;
+//
+// Use namespace reflection rather than a named `hashes` import. Some browser
+// bundlers coalesce another dependency's noble v2 copy while traversing a
+// packaged SDK, and v2 does not export `hashes`; a named import then fails the
+// production build before pnpm's issuer-scoped v3 resolution can run. Both
+// supported APIs are wired explicitly and fail closed if neither is present.
+type Sha512Hook = (message: Uint8Array) => Uint8Array;
+type NobleHashes = { sha512?: Sha512Hook };
+type NobleEtcV2 = typeof ed25519.etc & {
+  sha512Sync?: (...messages: Uint8Array[]) => Uint8Array;
+};
+type NobleUtilsCompat = typeof ed25519.utils & {
+  randomPrivateKey?: () => Uint8Array;
+};
+
+const nobleHashes = Reflect.get(ed25519, "hashes") as NobleHashes | undefined;
+if (nobleHashes) {
+  nobleHashes.sha512 = sha512;
+} else {
+  const nobleEtc = ed25519.etc as NobleEtcV2;
+  if (!("sha512Sync" in nobleEtc)) {
+    throw new Error("unsupported @noble/ed25519 hash API");
+  }
+  nobleEtc.sha512Sync = (...messages) =>
+    sha512(nobleEtc.concatBytes(...messages));
+}
 
 /**
  * Domain separator matching Rust: `b"ProofExchange-v3"` (16 bytes).
@@ -59,14 +78,20 @@ export function generateKeypair(): {
   privateKey: Uint8Array;
   publicKey: Uint8Array;
 } {
-  const privateKey = utils.randomSecretKey();
-  const publicKey = ed_getPublicKey(privateKey);
+  const nobleUtils = ed25519.utils as NobleUtilsCompat;
+  const randomSecretKey =
+    Reflect.get(nobleUtils, "randomSecretKey") ?? nobleUtils.randomPrivateKey;
+  if (typeof randomSecretKey !== "function") {
+    throw new Error("unsupported @noble/ed25519 random-key API");
+  }
+  const privateKey = randomSecretKey.call(nobleUtils) as Uint8Array;
+  const publicKey = ed25519.getPublicKey(privateKey);
   return { privateKey, publicKey };
 }
 
 /** Get public key from private key. */
 export function getPublicKey(privateKey: Uint8Array): Uint8Array {
-  return ed_getPublicKey(privateKey);
+  return ed25519.getPublicKey(privateKey);
 }
 
 /**
@@ -151,7 +176,7 @@ export function signingMessage(
 
 /** Sign a message with Ed25519. Returns 64-byte signature. */
 export function sign(privateKey: Uint8Array, message: Uint8Array): Uint8Array {
-  return ed_sign(message, privateKey);
+  return ed25519.sign(message, privateKey);
 }
 
 /** Verify an Ed25519 signature. */
@@ -160,5 +185,5 @@ export function verify(
   signature: Uint8Array,
   message: Uint8Array,
 ): boolean {
-  return ed_verify(signature, message, publicKey);
+  return ed25519.verify(signature, message, publicKey);
 }

@@ -26,6 +26,104 @@ pub type ImpactMarketId = u32;
 /// Millisecond timestamp or duration carried on the wire.
 pub type Milliseconds = u64;
 
+/// Maximum per-attempt stop-loss/take-profit collar accepted by the engine.
+pub const MAX_TRIGGER_SLIPPAGE_BPS: u32 = 9_999;
+
+/// Generation of one owner's position on one market.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct PositionEpoch(pub u64);
+
+/// Optional client identifier for a whole position-trigger bracket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ClientTriggerGroupId(pub u64);
+
+/// Optional client identifier for one trigger limb.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ClientTriggerId(pub u64);
+
+/// Explicit execution collar for one trigger attempt, in basis points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TriggerSlippageBps(pub u32);
+
+/// Monotone version of one market's trigger policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TriggerConfigVersion(pub u64);
+
+/// Maximum accepted mark age for automatic trigger evaluation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TriggerMarkMaxAgeMs(pub u64);
+
+/// Maximum accepted future publish-time skew for a trigger mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TriggerFutureSkewMs(pub u64);
+
+/// Maximum active whole-position brackets for one market.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TriggerBracketLimit(pub u64);
+
+/// Static, state-independent trigger-action validation failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TriggerValidationError {
+    ZeroPositionEpoch,
+    EmptyBracket,
+    ZeroTriggerPrice,
+    InvalidSlippage,
+    ZeroClientGroupId,
+    ZeroClientTriggerId,
+    DuplicateClientTriggerId,
+    EnabledConfigMissingBound,
+}
+
+impl fmt::Display for TriggerValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::ZeroPositionEpoch => "expected position epoch must be non-zero",
+            Self::EmptyBracket => "at least one of stop_loss or take_profit is required",
+            Self::ZeroTriggerPrice => "trigger price must be non-zero",
+            Self::InvalidSlippage => "trigger slippage must be in 1..=9999 bps",
+            Self::ZeroClientGroupId => "client trigger group id must be non-zero",
+            Self::ZeroClientTriggerId => "client trigger id must be non-zero",
+            Self::DuplicateClientTriggerId => {
+                "stop-loss and take-profit client trigger ids must be distinct"
+            }
+            Self::EnabledConfigMissingBound => {
+                "enabled trigger config requires non-zero slippage, mark-age, future-skew and bracket bounds"
+            }
+        })
+    }
+}
+
+impl std::error::Error for TriggerValidationError {}
+
+/// Multisig-controlled complete replacement for one market's trigger policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetTriggerMarketConfig {
+    pub market: MarketId,
+    pub expected_current_version: Option<TriggerConfigVersion>,
+    pub enabled: bool,
+    pub max_trigger_slippage_bps: TriggerSlippageBps,
+    pub max_mark_age_ms: TriggerMarkMaxAgeMs,
+    pub max_future_publish_skew_ms: TriggerFutureSkewMs,
+    pub max_active_brackets: TriggerBracketLimit,
+}
+
+impl SetTriggerMarketConfig {
+    pub fn validate_fields(&self) -> Result<(), TriggerValidationError> {
+        if self.max_trigger_slippage_bps.0 > MAX_TRIGGER_SLIPPAGE_BPS {
+            return Err(TriggerValidationError::InvalidSlippage);
+        }
+        if self.enabled
+            && (self.max_trigger_slippage_bps.0 == 0
+                || self.max_mark_age_ms.0 == 0
+                || self.max_future_publish_skew_ms.0 == 0
+                || self.max_active_brackets.0 == 0)
+        {
+            return Err(TriggerValidationError::EnabledConfigMissingBound);
+        }
+        Ok(())
+    }
+}
+
 /// Well-known market ID for the BTC-USD perpetual.
 pub const MARKET_BTC_USD_PERP: MarketId = 1;
 
@@ -649,6 +747,88 @@ pub struct FeeTier {
 // `crate::types::Action` paths continue to work.
 pub use crate::codec::Action;
 
+/// One optional stop-loss or take-profit limb. Direction is derived by the
+/// engine from the live position side; it is intentionally absent on wire.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerLimb {
+    pub trigger_price: u64,
+    pub max_slippage_bps: TriggerSlippageBps,
+    pub client_trigger_id: Option<ClientTriggerId>,
+}
+
+impl TriggerLimb {
+    pub fn validate_fields(&self) -> Result<(), TriggerValidationError> {
+        if self.trigger_price == 0 {
+            return Err(TriggerValidationError::ZeroTriggerPrice);
+        }
+        if !(1..=MAX_TRIGGER_SLIPPAGE_BPS).contains(&self.max_slippage_bps.0) {
+            return Err(TriggerValidationError::InvalidSlippage);
+        }
+        if self.client_trigger_id == Some(ClientTriggerId(0)) {
+            return Err(TriggerValidationError::ZeroClientTriggerId);
+        }
+        Ok(())
+    }
+}
+
+/// Atomically replace the complete stop-loss/take-profit bracket for the
+/// owner's current standalone-perpetual position generation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetPositionTriggers {
+    pub market: MarketId,
+    pub owner: Address,
+    pub expected_position_epoch: PositionEpoch,
+    pub stop_loss: Option<TriggerLimb>,
+    pub take_profit: Option<TriggerLimb>,
+    pub client_group_id: Option<ClientTriggerGroupId>,
+}
+
+impl SetPositionTriggers {
+    /// Validate only invariants that do not require chain state. The engine
+    /// additionally checks the live epoch/side/mark, market policy and ticks.
+    pub fn validate_fields(&self) -> Result<(), TriggerValidationError> {
+        if self.expected_position_epoch.0 == 0 {
+            return Err(TriggerValidationError::ZeroPositionEpoch);
+        }
+        if self.stop_loss.is_none() && self.take_profit.is_none() {
+            return Err(TriggerValidationError::EmptyBracket);
+        }
+        if self.client_group_id == Some(ClientTriggerGroupId(0)) {
+            return Err(TriggerValidationError::ZeroClientGroupId);
+        }
+        if let Some(limb) = &self.stop_loss {
+            limb.validate_fields()?;
+        }
+        if let Some(limb) = &self.take_profit {
+            limb.validate_fields()?;
+        }
+        if let (Some(stop), Some(take)) = (&self.stop_loss, &self.take_profit) {
+            if stop.client_trigger_id.is_some() && stop.client_trigger_id == take.client_trigger_id
+            {
+                return Err(TriggerValidationError::DuplicateClientTriggerId);
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Remove the active bracket for one exact position generation.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CancelPositionTriggers {
+    pub market: MarketId,
+    pub owner: Address,
+    pub expected_position_epoch: PositionEpoch,
+}
+
+impl CancelPositionTriggers {
+    pub fn validate_fields(&self) -> Result<(), TriggerValidationError> {
+        if self.expected_position_epoch.0 == 0 {
+            return Err(TriggerValidationError::ZeroPositionEpoch);
+        }
+        Ok(())
+    }
+}
+
 /// Pick a per-account override on the initial-margin ratio for one
 /// market. The engine uses `max(market.im_bps, user_im_bps)` on
 /// every IM-gated check (place order, withdraw post-trade margin
@@ -1068,6 +1248,101 @@ pub struct FailWithdrawal {
     /// Human-readable reason for the failure (for event logging).
     pub reason: String,
     pub signer: Address,
+}
+
+// ---------------------------------------------------------------------------
+// W28-20 bridge custody: receipt-gated terminal withdrawal actions
+// ---------------------------------------------------------------------------
+//
+// Operator-multisig phase. The legacy relayer `ConfirmWithdrawal` (0x0A) /
+// `FailWithdrawal` (0x0B) trust an authorized-relayer assertion; these new
+// action_types carry a `bridge_core::BridgeReceiptV1` and its operator ed25519
+// proof, and the engine verifies the quorum in consensus before crediting /
+// refunding — no trusted courier assertion. Additive: the legacy actions stay
+// decodable, so this is a MINOR wire change. Engine mirror: exchange-core
+// `BridgeWithdrawalReceipt` / `OperatorReceiptProof` (PR #316).
+
+/// Wire mirror of the frozen `bridge_core::BridgeReceiptV1` (fixed 327-byte
+/// form). Carried by the receipt-gated actions; the engine rebuilds the
+/// `BridgeReceiptV1`, re-encodes, and verifies the operator quorum signed
+/// exactly those bytes. Every field is signed, so tampering fails closed.
+///
+/// Field order and widths are the engine wire — never reorder. Byte fields use
+/// the SDK newtypes, which serialize byte-for-byte identically to the engine's
+/// bare `[u8; N]` / `Vec<u8>` (see `wire.rs`), so the encoded payload matches
+/// the engine golden vectors exactly.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BridgeWithdrawalReceipt {
+    /// `bridge_core::DeploymentId` — pins Proof/Solana genesis, program, mint.
+    pub deployment_id: Pubkey,
+    /// `SHA256(Borsh(WithdrawalAuthorizationV1))`.
+    pub authorization_digest: Pubkey,
+    pub withdrawal_id: u64,
+    /// `1 = Paid`, `2 = Cancelled`.
+    pub terminal_state: u8,
+    /// `bridge_core::VaultTier` wire byte.
+    pub vault_tier: u8,
+    pub proof_owner: Address,
+    pub destination_owner: Pubkey,
+    pub destination_token_acct: Pubkey,
+    pub amount_micro_usdc: u64,
+    pub fee_micro_usdc: u64,
+    pub authorization_signer_epoch: u64,
+    /// Solana tx signature (64 bytes on the wire; length validated downstream).
+    pub solana_tx_signature: SolanaSignature,
+    pub finalized_slot: u64,
+    pub finalized_blockhash: Pubkey,
+    /// `1 = operator m-of-n`, `2 = validator stake`.
+    pub receipt_quorum_kind: u8,
+    pub receipt_authority_epoch: u64,
+}
+
+/// Operator ed25519 proof — mirrors `bridge_core::ReceiptProofV1::OperatorEd25519`.
+/// Bitmap plus one signature per set bit in ascending registry order. Raw
+/// `Vec<u8>` / `Vec<Vec<u8>>` mirror the engine wire exactly.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OperatorReceiptProof {
+    /// `ceil(registry_len / 8)` bytes; unused high bits zero.
+    #[serde(deserialize_with = "crate::wire::hint_capped_bytes")]
+    pub signer_bitmap: Vec<u8>,
+    /// One 64-byte ed25519 signature per set bit, ascending set-bit order.
+    #[serde(deserialize_with = "crate::wire::hint_capped_byte_seqs")]
+    pub signatures: Vec<Vec<u8>>,
+}
+
+/// Receipt-gated confirmation: a finalized `Paid` `BridgeReceiptV1`. Replaces
+/// the relayer assertion in `ConfirmWithdrawal`. Permissionless to submit — the
+/// operator quorum in the receipt is the authority, not the envelope signer.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConfirmWithdrawalReceipt {
+    pub receipt: BridgeWithdrawalReceipt,
+    pub proof: OperatorReceiptProof,
+}
+
+/// Receipt-gated failure: a finalized `Cancelled` `BridgeReceiptV1`. Replaces
+/// the free-text `FailWithdrawal`; refunds `amount` only against a positive
+/// on-chain cancellation proof, never a timeout.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FailWithdrawalReceipt {
+    pub receipt: BridgeWithdrawalReceipt,
+    pub proof: OperatorReceiptProof,
+}
+
+/// Records the operator-quorum-signed `WithdrawalAuthorizationV1` for a
+/// pending withdrawal, binding its digest to the record so a terminal receipt
+/// can only settle an authorization the quorum actually issued. Permissionless
+/// to submit — the operator quorum in `proof` is the authority, not the
+/// envelope signer. Engine mirror: exchange-core `AuthorizeWithdrawal` (0x24).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuthorizeWithdrawal {
+    /// The canonical `WithdrawalAuthorizationV1` bytes the quorum signed
+    /// (`bridge_core::WithdrawalAuthorizationV1::encode`, fixed 221 bytes).
+    /// Raw `Vec<u8>` mirrors the engine wire; length is verified by the
+    /// engine, not reshaped here.
+    #[serde(deserialize_with = "crate::wire::hint_capped_bytes")]
+    pub authorization: Vec<u8>,
+    /// Operator ed25519 quorum proof over the authorization bytes.
+    pub proof: OperatorReceiptProof,
 }
 
 /// Why a Solana deposit was rejected by the relayer. Mirrors the small
@@ -2200,14 +2475,26 @@ pub enum ExecError {
         filled_quantity: u64,
         requested_quantity: u64,
     },
+    /// An atomic basket's notional-weighted aggregate slippage exceeded its
+    /// submitted `max_slippage_bps` budget.
+    SlippageExceeded {
+        aggregate_bps: u32,
+        max_slippage_bps: u32,
+    },
     /// A fill would push aggregate market open interest above the configured
-    /// cap. The current engine also emits code 50 for `SlippageExceeded`;
-    /// numeric-only callers must inspect the engine log for basket rejects.
+    /// cap. Upgraded engines emit the distinct code 51 for this rejection.
     OpenInterestLimitExceeded {
         market: MarketId,
         limit: u64,
         would_be: u64,
     },
+    /// An admin governance action was submitted while no admin signer
+    /// registry exists on this chain; multisig administration is inactive
+    /// and every governance path fails closed.
+    AdminGovernanceInactive,
+    /// The tx signer does not match the action's declared admin actor, or is
+    /// not a member of the current admin signer registry.
+    NotAdminSigner,
 }
 
 impl ExecError {
@@ -2269,7 +2556,10 @@ impl ExecError {
             ExecError::FillOrKillWouldNotFill { .. } => 47,
             ExecError::InvalidCancelReplaceTarget => 48,
             ExecError::AmendBelowFilled { .. } => 49,
-            ExecError::OpenInterestLimitExceeded { .. } => 50,
+            ExecError::SlippageExceeded { .. } => 50,
+            ExecError::OpenInterestLimitExceeded { .. } => 51,
+            ExecError::AdminGovernanceInactive => 52,
+            ExecError::NotAdminSigner => 53,
             ExecError::InternalError(_) => 255,
         }
     }
@@ -2458,8 +2748,17 @@ impl ExecError {
             ExecError::AmendBelowFilled { .. } => {
                 "AmendOrder new quantity is below the quantity already filled while the order rested."
             }
+            ExecError::SlippageExceeded { .. } => {
+                "Atomic basket aggregate slippage exceeded the submitted max_slippage_bps budget."
+            }
             ExecError::OpenInterestLimitExceeded { .. } => {
-                "Fill would push aggregate market open interest past MarketConfig.max_open_interest. Code 50 is also used by AtomicBasketOrder SlippageExceeded; inspect the engine log for basket rejects."
+                "Fill would push aggregate market open interest past MarketConfig.max_open_interest."
+            }
+            ExecError::AdminGovernanceInactive => {
+                "Admin governance action (propose/approve/reject/emergency) was submitted while no admin signer registry exists on this chain; multisig administration is inactive and every governance path fails closed."
+            }
+            ExecError::NotAdminSigner => {
+                "Tx signer does not match the action's declared proposer/approver/rejecter/signer field, or is not a member of the current admin signer registry."
             }
         }
     }
@@ -2636,6 +2935,13 @@ impl fmt::Display for ExecError {
                 f,
                 "amend quantity below filled for order {order_id}: requested total {requested_quantity}, filled {filled_quantity}"
             ),
+            ExecError::SlippageExceeded {
+                aggregate_bps,
+                max_slippage_bps,
+            } => write!(
+                f,
+                "atomic basket aggregate slippage {aggregate_bps} bps exceeds budget {max_slippage_bps} bps"
+            ),
             ExecError::OpenInterestLimitExceeded {
                 market,
                 limit,
@@ -2644,6 +2950,10 @@ impl fmt::Display for ExecError {
                 f,
                 "open interest limit exceeded on market {market}: would be {would_be}, cap {limit}"
             ),
+            ExecError::AdminGovernanceInactive => {
+                write!(f, "admin governance inactive: no signer registry exists")
+            }
+            ExecError::NotAdminSigner => write!(f, "not an authorized admin signer"),
             ExecError::InternalError(msg) => write!(f, "internal error: {msg}"),
         }
     }
@@ -2736,17 +3046,24 @@ define_error_kinds! {
     47  => FillOrKillWouldNotFill       ~ "Fill-or-kill order cannot be fully filled immediately at the submitted limit price.",
     48  => InvalidCancelReplaceTarget   ~ "Cancel-replace must specify exactly one active order target: either orderId or clientOrderId.",
     49  => AmendBelowFilled             ~ "AmendOrder new quantity is below the quantity already filled while the order rested.",
-    50  => OpenInterestLimitExceeded    ~ "Fill would push aggregate market open interest past MarketConfig.max_open_interest. Code 50 is also used by AtomicBasketOrder SlippageExceeded; inspect the engine log for basket rejects.",
+    50  => SlippageExceeded             ~ "Atomic basket aggregate slippage exceeded the submitted max_slippage_bps budget.",
+    51  => OpenInterestLimitExceeded    ~ "Fill would push aggregate market open interest past MarketConfig.max_open_interest.",
+    52  => AdminGovernanceInactive      ~ "Admin governance action was submitted while no admin signer registry exists on this chain; multisig administration is inactive and every governance path fails closed.",
+    53  => NotAdminSigner               ~ "Tx signer does not match the action's declared proposer/approver/rejecter/signer field, or is not a member of the current admin signer registry.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
-/// Safe classification of an engine result code plus its canonical
-/// DeliverTx log. Code 50 is deployed with two meanings, so callers must not
-/// infer one from the integer alone.
+/// Safe classification of an engine result code plus its canonical DeliverTx
+/// log. Upgraded engines use code 50 for slippage and 51 for open interest, but
+/// legacy engines may emit code 50 for open interest during a rolling upgrade.
+/// Callers must not infer the meaning of code 50 from the integer alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodedExecErrorKind {
     Known(ErrorKind),
+    /// Preserved for source compatibility with the original log-aware
+    /// code-50 decoder.
     SlippageExceeded,
+    LegacyOpenInterestLimitExceeded,
     AmbiguousCode50,
 }
 
@@ -2754,7 +3071,9 @@ impl DecodedExecErrorKind {
     pub fn code(self) -> u32 {
         match self {
             Self::Known(kind) => kind.code(),
-            Self::SlippageExceeded | Self::AmbiguousCode50 => 50,
+            Self::SlippageExceeded
+            | Self::LegacyOpenInterestLimitExceeded
+            | Self::AmbiguousCode50 => 50,
         }
     }
 
@@ -2762,6 +3081,7 @@ impl DecodedExecErrorKind {
         match self {
             Self::Known(kind) => kind.name(),
             Self::SlippageExceeded => "SlippageExceeded",
+            Self::LegacyOpenInterestLimitExceeded => "OpenInterestLimitExceeded",
             Self::AmbiguousCode50 => "AmbiguousCode50",
         }
     }
@@ -2772,14 +3092,17 @@ impl DecodedExecErrorKind {
             Self::SlippageExceeded => {
                 "Atomic basket aggregate slippage exceeded the submitted max_slippage_bps budget."
             }
+            Self::LegacyOpenInterestLimitExceeded => {
+                "A legacy engine reported that a fill would push aggregate market open interest past MarketConfig.max_open_interest."
+            }
             Self::AmbiguousCode50 => {
-                "Engine code 50 is shared by OpenInterestLimitExceeded and SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely."
+                "During the rolling upgrade, engine code 50 may mean legacy OpenInterestLimitExceeded or current SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely."
             }
         }
     }
 }
 
-/// Decode an engine error without guessing the meaning of shared code 50.
+/// Decode an engine error without guessing the transitional meaning of code 50.
 pub fn decode_exec_error_kind(code: u32, log: Option<&str>) -> Option<DecodedExecErrorKind> {
     if code == 0 {
         return None;
@@ -2787,7 +3110,7 @@ pub fn decode_exec_error_kind(code: u32, log: Option<&str>) -> Option<DecodedExe
     if code == 50 {
         return Some(match log {
             Some(log) if log.starts_with("open interest limit exceeded on market ") => {
-                DecodedExecErrorKind::Known(ErrorKind::OpenInterestLimitExceeded)
+                DecodedExecErrorKind::LegacyOpenInterestLimitExceeded
             }
             Some(log) if log.starts_with("atomic basket aggregate slippage ") => {
                 DecodedExecErrorKind::SlippageExceeded
@@ -2822,7 +3145,34 @@ mod exec_error_meaning_tests {
 
     #[test]
     #[allow(clippy::unwrap_used)]
-    fn shared_code_50_requires_the_canonical_log() {
+    fn current_code_51_decodes_without_a_log() {
+        let oi = decode_exec_error_kind(51, None).unwrap();
+        assert_eq!(oi.name(), "OpenInterestLimitExceeded");
+        assert_eq!(oi.code(), 51);
+        assert_eq!(
+            decode_exec_error_kind(51, Some("unrecognized")),
+            Some(DecodedExecErrorKind::Known(
+                ErrorKind::OpenInterestLimitExceeded
+            ))
+        );
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn governance_codes_52_53_decode_without_a_log() {
+        let inactive = decode_exec_error_kind(52, None).unwrap();
+        assert_eq!(inactive.name(), "AdminGovernanceInactive");
+        assert_eq!(inactive.code(), 52);
+        let not_signer = decode_exec_error_kind(53, None).unwrap();
+        assert_eq!(not_signer.name(), "NotAdminSigner");
+        assert_eq!(not_signer.code(), 53);
+        assert_eq!(ExecError::AdminGovernanceInactive.code(), 52);
+        assert_eq!(ExecError::NotAdminSigner.code(), 53);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn transitional_code_50_requires_the_canonical_log() {
         let oi = decode_exec_error_kind(
             50,
             Some("open interest limit exceeded on market 7: would be 4, cap 3"),
@@ -2836,6 +3186,7 @@ mod exec_error_meaning_tests {
             Some("atomic basket aggregate slippage 51 bps exceeds budget 50 bps"),
         )
         .unwrap();
+        assert_eq!(slippage, DecodedExecErrorKind::SlippageExceeded);
         assert_eq!(slippage.name(), "SlippageExceeded");
 
         for log in [None, Some(""), Some("unknown code 50 diagnostic")] {
@@ -2959,6 +3310,10 @@ mod exec_error_meaning_tests {
                 filled_quantity: 1,
                 requested_quantity: 0,
             },
+            ExecError::SlippageExceeded {
+                aggregate_bps: 51,
+                max_slippage_bps: 50,
+            },
             ExecError::OpenInterestLimitExceeded {
                 market: 0,
                 limit: 1,
@@ -2994,16 +3349,15 @@ mod exec_error_meaning_tests {
         }
     }
 
-    /// Codes 1..=50 + 255 must all be covered by at least one variant.
-    /// Catches the case where a code is reserved in `code()` but no
-    /// variant maps to it (would surface as an unreachable arm in
-    /// `meaning()`).
+    /// Codes 1..=51 + 255 must all be covered by the public error manifest.
+    /// Catches the case where a code is reserved by the mirrored engine error
+    /// enum but no SDK classification maps to it.
     #[test]
     fn no_code_holes_in_documented_range() {
-        let mut codes: Vec<u32> = one_of_each().iter().map(|e| e.code()).collect();
+        let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=50).chain(std::iter::once(255)).collect();
+        let expected: Vec<u32> = (1u32..=53).chain(std::iter::once(255)).collect();
         assert_eq!(
             codes, expected,
             "ExecError codes covered by variants: {:?}; expected: {:?}. \

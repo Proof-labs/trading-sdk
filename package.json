@@ -1,6 +1,6 @@
 {
   "name": "@proof/trading-sdk",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "TypeScript SDK for Proof Exchange — signing, encoding, querying, and submitting actions.",
   "license": "Apache-2.0",
   "repository": {
@@ -20,6 +20,9 @@
     "messagepack"
   ],
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -38,11 +41,15 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "npm run build:wasm && tsc && npm run copy:wasm",
     "build:wasm": "cargo build -p proof-trading-sdk-wasm --target wasm32-unknown-unknown --release && wasm-bindgen --target web --out-dir src/wasm target/wasm32-unknown-unknown/release/proof_trading_sdk_wasm.wasm",
+    "copy:wasm": "node -e \"require('node:fs').cpSync('src/wasm','dist/wasm',{recursive:true})\"",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build",
+    "pretest": "npm run build:wasm",
     "test": "vitest run",
+    "smoke:browser:prepare": "node scripts/prepare-browser-smoke.mjs .browser-smoke",
+    "smoke:browser": "node scripts/browser-smoke.mjs .browser-smoke",
     "example": "npx tsx examples/connect-and-trade.ts"
   },
   "dependencies": {
@@ -51,7 +58,10 @@
     "@noble/hashes": "^2.2.0"
   },
   "devDependencies": {
+    "playwright": "1.61.1",
+    "prettier": "^3.9.4",
     "typescript": "^6.0.0",
+    "vite": "8.1.5",
     "vitest": "^4.1.0"
   }
 }
