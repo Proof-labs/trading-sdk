@@ -39,6 +39,12 @@ action types.
 
 ### Added
 
+- **`SubmissionPending` (Python)** — a new public exception for the gateway
+  shape that carries a `txHash` but no engine `code`. The gateway broadcast the
+  transaction and could not report its on-chain outcome in time; the tx may
+  still commit, so the caller reconciles by `tx_hash` instead of re-submitting.
+  Exported from `proof_trading_sdk`.
+
 - **Position-linked stop-loss/take-profit support (W32-10)** — canonical
   `SetPositionTriggers` (`0x25`) and `CancelPositionTriggers` (`0x26`) wire
   actions, governed trigger-market configuration tag `0x05`, delegated-owner
@@ -102,6 +108,29 @@ action types.
 
 ### Fixed
 
+- **The Python client no longer reports a rejected submit as a success** (#7).
+  `_check_response` handled a fixed set of statuses and then returned the
+  response, so any other non-2xx (400, 402, 405–428, 431, 3xx) was treated as a
+  successful submit. Every non-2xx now raises: 5xx stays `GatewayError`
+  ("retry with backoff"), and a 3xx/4xx raises `TransportError` carrying
+  `status_code` — it must not be blind-retried.
+- **`submit_action` no longer defaults a missing engine `code` to 0**, and no
+  longer mistakes an unresolved broadcast for a rejection (#7). The four
+  documented `/exchange` shapes are now dispatched by body, matching the
+  contract the TypeScript binding pins in `submitViaGateway`: a structured
+  `code` is authoritative; a code-less `{"status": "ok"}` is a legacy CheckTx
+  ack and **succeeds**; a code-less body carrying a hash raises
+  `SubmissionPending` (reconcile by hash — **not** a rejection, since calling
+  it one would make a trader re-place an order that is about to fill); and a
+  bare error string recovers its leading `"<code>: "` engine code, falling back
+  to 1. A non-JSON body raises `TransportError` instead of propagating a raw
+  `JSONDecodeError`.
+- **A default-constructed `ExchangeClient()` no longer clobbers env/TOML
+  config** (#8). The `config=None` branch passed the falsy constructor defaults
+  (`gateway_url=""`, `api_key=""`, `timeout_secs=0`) straight into
+  `load_config`, so configured values were ignored and every request ran with
+  `httpx.Timeout(0)` and failed instantly. Only truthy overrides are forwarded
+  now, restoring the documented precedence (defaults < env < TOML < explicit).
 - **`wasm-bindgen` is exact-pinned (`=0.2.126`)** so `npm run build:wasm` (and
   the `pretest` / `build` / `prepare` scripts that depend on it) cannot break
   when a new `0.2.x` release ships: the wasm-bindgen CLI hard-errors on any

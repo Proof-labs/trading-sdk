@@ -13,7 +13,11 @@ import httpx
 import pytest
 
 from proof_trading_sdk.client import ExchangeClient
-from proof_trading_sdk.errors import EngineError, GatewayError, ProofTradingSdkError
+from proof_trading_sdk.errors import (
+    EngineError,
+    SubmissionPending,
+    TransportError,
+)
 
 
 def _client(handler) -> ExchangeClient:
@@ -25,21 +29,90 @@ def _client(handler) -> ExchangeClient:
 
 
 def test_submit_action_400_raises():
-    # A 400 (previously fell through `_check_response` as success).
+    # A 400 (previously fell through `_check_response` as success). It is a
+    # TransportError, NOT a GatewayError — GatewayError means "5xx, retry with
+    # backoff" and a 400 must never be blind-retried.
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(400, json={"error": "bad request"})
 
-    with pytest.raises(GatewayError):
+    with pytest.raises(TransportError) as exc:
         _client(handler).submit_action(b"\x00")
+    assert exc.value.status_code == 400
 
 
 def test_submit_action_error_status_no_code_raises():
-    # 200 body carrying no `code` but an explicit error status: NOT code-0 success.
+    # 200 body carrying no `code` and no hash, but an explicit error status:
+    # NOT code-0 success. With no leading "<code>: " in the text the engine code
+    # falls back to 1 (DecodeError), matching the TypeScript binding.
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"status": "error", "message": "rejected"})
 
-    with pytest.raises(ProofTradingSdkError):
+    with pytest.raises(EngineError) as exc:
         _client(handler).submit_action(b"\x00")
+    assert exc.value.code == 1
+
+
+def test_submit_action_error_string_recovers_leading_engine_code():
+    # The gateway keeps the "<code>: <message>" compatibility format, so the
+    # real engine code is recovered from the text rather than flattened to 1.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"status": "error", "error": "12: insufficient margin"}
+        )
+
+    with pytest.raises(EngineError) as exc:
+        _client(handler).submit_action(b"\x00")
+    assert exc.value.code == 12
+    assert exc.value.name == "InsufficientMargin"
+
+
+def test_submit_action_legacy_status_ok_without_code_succeeds():
+    """A code-less `{"status": "ok"}` is a legacy CheckTx ack — a SUCCESS.
+
+    The gateway contract pinned by the TS binding (`submitViaGateway`) treats
+    this shape as accepted-but-unresolved. Raising here would fail every submit
+    against a gateway that has not been upgraded.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "ok"})
+
+    assert _client(handler).submit_action(b"\x00") == {"status": "ok"}
+
+
+def test_submit_action_broadcast_without_result_is_pending_not_rejected():
+    """`status: error` + a hash + no `code` is NOT a rejection.
+
+    The gateway broadcast the tx and could not report the outcome in time. The
+    tx may still commit, so this must surface as a reconcile-by-hash signal.
+    Reporting it as an engine rejection would make a trader re-place an order
+    that is about to fill — a double fill.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "error",
+                "txHash": "0xdeadbeef",
+                "error": "gateway returned no on-chain result; reconcile by hash",
+            },
+        )
+
+    with pytest.raises(SubmissionPending) as exc:
+        _client(handler).submit_action(b"\x00")
+    assert exc.value.tx_hash == "0xdeadbeef"
+    # Never described as a rejection.
+    assert "reject" not in str(exc.value).lower()
+
+
+def test_submit_action_snake_case_tx_hash_also_pending():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "error", "tx_hash": "0xfeed"})
+
+    with pytest.raises(SubmissionPending) as exc:
+        _client(handler).submit_action(b"\x00")
+    assert exc.value.tx_hash == "0xfeed"
 
 
 def test_submit_action_code_zero_still_succeeds():
