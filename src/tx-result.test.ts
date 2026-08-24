@@ -93,7 +93,7 @@ describe("tx-result builders", () => {
     expect(txFromEngineCode(0, { hash: "X" }).outcome).toBe("ok");
     const err = txFromEngineCode(21, { hash: "Y" });
     expect(err.outcome).toBe("engine");
-    expect(err.error?.name).toBe("TimestampNonceRejected");
+    expect(err.error?.name).toBe("InvalidNonce");
     expect(err.hash).toBe("Y");
   });
 });

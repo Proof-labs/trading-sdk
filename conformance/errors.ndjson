@@ -18,6 +18,7 @@
 {"case":"manifest/18","code":18,"log":null,"expect":{"name":"SignatureRequired"}}
 {"case":"manifest/19","code":19,"log":null,"expect":{"name":"AgentNotAuthorized"}}
 {"case":"manifest/20","code":20,"log":null,"expect":{"name":"AgentCannotWithdraw"}}
+{"case":"manifest/21","code":21,"log":null,"expect":{"name":"InvalidNonce"}}
 {"case":"manifest/22","code":22,"log":null,"expect":{"name":"MarketAlreadyExists"}}
 {"case":"manifest/23","code":23,"log":null,"expect":{"name":"InvalidMarketConfig"}}
 {"case":"manifest/24","code":24,"log":null,"expect":{"name":"ImpactMarketAlreadyExists"}}

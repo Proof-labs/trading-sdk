@@ -544,16 +544,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // and had no 51 entry) — `manifest/51` → OpenInterestLimitExceeded and
     // `manifest/50` → SlippageExceeded together pin the split.
     //
-    // Code 21 is skipped: the TS SDK deliberately exposes it as
-    // "TimestampNonceRejected" (pinned in src/errors.test.ts) while the core
-    // names it "InvalidNonce". That is an intentional name divergence, not the
-    // code↔code drift this family guards; pinning it would either fail TS or
-    // force an out-of-scope public rename.
-    const MANIFEST_NAME_DIVERGES: &[u32] = &[21];
+    // Code 21 is now pinned like every other code: the TS SDK was aligned to
+    // the engine/Rust/Python name `InvalidNonce` (#63), removing the
+    // `TimestampNonceRejected` divergence that previously forced a carve-out.
     let mut errors: Vec<cv::ErrorCase> = proof_trading_sdk::types::ERROR_KINDS
         .iter()
         .map(|kind| kind.code())
-        .filter(|code| !MANIFEST_NAME_DIVERGES.contains(code))
         .map(|code| error_case(&format!("manifest/{code}"), code, None))
         .collect();
 
