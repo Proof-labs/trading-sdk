@@ -38,7 +38,13 @@ on:
       - "wasm-v*"
       - "py-v*"
 
-# Serialize publishes so two tag pushes cannot race the same registry.
+# Serialize re-pushes of the SAME tag. Note this does NOT order two different
+# tags against each other: `derive-v*`, `core-v*` and `wasm-v*` land in separate
+# groups and run concurrently, so pushing them together races the crates.io
+# dependency order above. Push one crate tag at a time and wait for it to go
+# green before the next. (A single global group would order them, but GitHub
+# keeps only one run pending per group and cancels the older pending one, which
+# would silently drop a release — worse than a loud failure.)
 concurrency:
   group: publish-${{ github.ref_name }}
   cancel-in-progress: false
@@ -61,10 +67,15 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
           cache: npm
-      # The build compiles the WASM core with a wasm-bindgen CLI whose version
-      # is resolved from the crate graph — the same reproducibility rule ci.yml
-      # uses, so the published .wasm matches what CI tested (resolves #80's WASM
-      # reproducibility point).
+      # The build compiles the WASM core with a wasm-bindgen CLI whose version is
+      # resolved from the crate graph, the same rule ci.yml uses. That guarantees
+      # CLI-to-crate consistency (a mismatch hard-errors on the bindings' schema
+      # check) — it does NOT guarantee the published .wasm is byte-identical to
+      # what CI built: `Cargo.lock` is gitignored, so `cargo generate-lockfile`
+      # below re-resolves the graph at publish time and a dependency released
+      # since the CI run can change it. See #80's WASM reproducibility point;
+      # closing it fully needs a committed lockfile built with `--locked`, or
+      # publishing the exact artifact CI produced.
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
