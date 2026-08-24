@@ -49,7 +49,9 @@ export enum ExecErrorCode {
   SignatureRequired = 18,
   AgentNotAuthorized = 19,
   AgentCannotWithdraw = 20,
-  TimestampNonceRejected = 21,
+  /** Timestamp nonce failed replay-window validation. Named `InvalidNonce` to
+   *  match the engine `ExecError` variant and the Rust/Python bindings. */
+  InvalidNonce = 21,
   MarketAlreadyExists = 22,
   InvalidMarketConfig = 23,
   ImpactMarketAlreadyExists = 24,
@@ -150,7 +152,7 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description: "agent wallets cannot perform withdrawals",
   },
   21: {
-    name: "TimestampNonceRejected",
+    name: "InvalidNonce",
     description:
       "timestamp nonce failed replay-window validation — sign a fresh envelope",
   },

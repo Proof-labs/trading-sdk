@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import time
 import typing as t
 from dataclasses import dataclass, field
@@ -28,6 +29,7 @@ from proof_trading_sdk.errors import (
     ProofTradingSdkError,
     RateLimited,
     SigningError,
+    SubmissionPending,
     TransportError,
 )
 from proof_trading_sdk.nonce import NonceAllocator
@@ -49,6 +51,19 @@ from proof_trading_sdk.trigger_config import (
 log = logging.getLogger("proof_trading_sdk")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+_LEADING_ERROR_CODE = re.compile(r"^(\d+):\s")
+
+
+def _leading_error_code(text: str) -> int | None:
+    """Recover an engine code from the gateway's ``"<code>: <message>"`` string.
+
+    Returns ``None`` when the text carries no leading code, so the caller can
+    apply its own fallback.
+    """
+    m = _LEADING_ERROR_CODE.match(text or "")
+    return int(m.group(1)) if m else None
 
 
 def _to_hex(owner: bytes | str) -> str:
@@ -165,11 +180,16 @@ class ExchangeClient:
                 timeout_secs=timeout_secs or config.timeout_secs,
             )
         else:
-            cfg = load_config(
-                gateway_url=gateway_url,
-                api_key=api_key,
-                timeout_secs=timeout_secs,
-            )
+            # Only pass truthy overrides so absent-and-falsy constructor
+            # defaults ("" / 0) fall back to env/TOML inside load_config.
+            overrides: dict[str, t.Any] = {}
+            if gateway_url:
+                overrides["gateway_url"] = gateway_url
+            if api_key:
+                overrides["api_key"] = api_key
+            if timeout_secs:
+                overrides["timeout_secs"] = timeout_secs
+            cfg = load_config(**overrides)
 
         self._gateway_url = cfg.gateway_url.rstrip("/")
         self._api_key = cfg.api_key
@@ -278,6 +298,16 @@ class ExchangeClient:
 
         if resp.status_code >= 500:
             raise GatewayError(resp.status_code, resp.text)
+
+        # Anything else non-2xx (400, 402, 405-428, 431, 3xx, …) is NOT success.
+        # `GatewayError` specifically means "5xx — retry with backoff"; a 3xx/4xx
+        # is a client-side error that must NOT be blind-retried, so it surfaces
+        # as a plain TransportError carrying the status.
+        if resp.status_code >= 300:
+            raise TransportError(
+                f"unexpected HTTP {resp.status_code}: {resp.text[:200]}",
+                status_code=resp.status_code,
+            )
 
         return resp
 
@@ -409,11 +439,70 @@ class ExchangeClient:
             ``tx_hash``, etc.
         """
         resp = self._post("/exchange", content=envelope)
-        data: dict[str, t.Any] = resp.json()
-        code = data.get("code", 0)
-        if code != 0:
-            raise EngineError(code, data.get("message", ""))
-        return data
+        # Keep the raw text. The gateway still emits engine rejections as a bare
+        # "<code>: <message>" string — a pre-#90 gateway sends ONLY that — and
+        # the TS binding recovers the code from it (`readGatewayBody` keeps the
+        # raw body precisely so the fallback can parse it). A body that IS valid
+        # JSON but is not an object (a bare string, a list, null) is the same
+        # case: `resp.json()` hands back a `str`, which must never reach `.get()`
+        # — in TS `json?.code` on a string is merely `undefined`, but in Python
+        # it is an `AttributeError` escaping the SDK.
+        raw = resp.text
+        try:
+            parsed: t.Any = resp.json()
+        except json.JSONDecodeError:
+            parsed = None
+
+        if not isinstance(parsed, dict):
+            # `_check_response` already raised for every status >= 300, so this
+            # is a 2xx whose body is not an object: the gateway's compatibility
+            # error string. Classify it as an ENGINE error, like the TS binding
+            # does — calling a terminal rejection a transport failure invites a
+            # pointless resubmit. The code comes from the leading "<code>: " and
+            # falls back to 1 (DecodeError) when there is none.
+            text = (parsed if isinstance(parsed, str) else raw or "").strip()
+            raise EngineError(
+                _leading_error_code(text) or 1, text[:200] or "unknown gateway error"
+            )
+        data: dict[str, t.Any] = parsed
+
+        # The gateway's `/exchange` response has four distinct shapes. Which one
+        # arrived is decided by the body, never by defaulting a missing `code`
+        # to 0 — and, just as importantly, never by treating "no code" as a
+        # rejection. This mirrors the contract pinned by the TypeScript binding
+        # (`submitViaGateway` in src/client.ts); the two must agree.
+        code = data.get("code")
+        if isinstance(code, int) and not isinstance(code, bool):
+            # 1. Structured chain verdict — the engine code is authoritative.
+            if code != 0:
+                msg = data.get("message") or data.get("log") or data.get("error") or ""
+                raise EngineError(code, msg)
+            return data
+
+        if data.get("status") == "ok":
+            # 2. Legacy gateway: CheckTx accepted, execution still unknown.
+            #    A code-less `status: ok` is a SUCCESS, not a malformed body.
+            return data
+
+        tx_hash = data.get("txHash") or data.get("tx_hash")
+        if tx_hash:
+            # 3. Broadcast but unresolved — NOT a rejection. The gateway pushed
+            #    the tx and could not report the outcome in time (park deadline
+            #    exceeded, a byte-identical tx already in flight, or a result it
+            #    could not parse). It may still commit, so the caller reconciles
+            #    by hash. Reporting this as an engine rejection would announce a
+            #    phantom reject for an order that is about to fill, and the
+            #    trader would re-place it into a double fill.
+            raise SubmissionPending(str(tx_hash), str(data.get("error") or ""))
+
+        # 4. No code and no hash: an error string is all the gateway gave us. It
+        #    still emits the "<code>: <message>" compatibility format, so recover
+        #    the engine code from the text and fall back to 1 (DecodeError), the
+        #    same conservative default the TS binding uses.
+        err = str(data.get("error") or data.get("message") or "")
+        if err or data.get("status") == "error":
+            raise EngineError(_leading_error_code(err) or 1, err or "engine error")
+        raise TransportError(f"malformed /exchange response (no 'code'): {data!r}"[:200])
 
     # ── Info queries ─────────────────────────────────────────────────────
 
