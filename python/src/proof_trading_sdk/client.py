@@ -439,10 +439,32 @@ class ExchangeClient:
             ``tx_hash``, etc.
         """
         resp = self._post("/exchange", content=envelope)
+        # Keep the raw text. The gateway still emits engine rejections as a bare
+        # "<code>: <message>" string — a pre-#90 gateway sends ONLY that — and
+        # the TS binding recovers the code from it (`readGatewayBody` keeps the
+        # raw body precisely so the fallback can parse it). A body that IS valid
+        # JSON but is not an object (a bare string, a list, null) is the same
+        # case: `resp.json()` hands back a `str`, which must never reach `.get()`
+        # — in TS `json?.code` on a string is merely `undefined`, but in Python
+        # it is an `AttributeError` escaping the SDK.
+        raw = resp.text
         try:
-            data: dict[str, t.Any] = resp.json()
-        except json.JSONDecodeError as e:
-            raise TransportError(f"non-JSON response from /exchange: {resp.text[:200]}") from e
+            parsed: t.Any = resp.json()
+        except json.JSONDecodeError:
+            parsed = None
+
+        if not isinstance(parsed, dict):
+            text = (parsed if isinstance(parsed, str) else raw) or ""
+            recovered = _leading_error_code(text)
+            if recovered is not None:
+                raise EngineError(recovered, text.strip())
+            # No code to recover: an HTML error page or empty body is a
+            # transport failure, not a fabricated engine rejection.
+            raise TransportError(
+                f"unparseable /exchange response: {raw[:200]}",
+                status_code=resp.status_code,
+            )
+        data: dict[str, t.Any] = parsed
 
         # The gateway's `/exchange` response has four distinct shapes. Which one
         # arrived is decided by the body, never by defaulting a missing `code`

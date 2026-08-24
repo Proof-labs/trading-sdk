@@ -140,3 +140,45 @@ def test_env_config_not_clobbered_by_defaults(monkeypatch, tmp_path):
     c = ExchangeClient()
     assert c._gateway_url == "http://env-gateway:9080"
     assert c._timeout_secs == 30
+
+
+def test_submit_action_plain_text_error_recovers_engine_code():
+    """A pre-#90 gateway sends ONLY the "<code>: <message>" string.
+
+    The TS binding keeps the raw body so the fallback can parse it; Python must
+    do the same rather than flattening a real rejection into a transport error.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="12: insufficient margin")
+
+    with pytest.raises(EngineError) as exc:
+        _client(handler).submit_action(b"\x00")
+    assert exc.value.code == 12
+
+
+def test_submit_action_json_string_body_does_not_crash():
+    # `resp.json()` returns a str here, not a dict — it must never reach .get().
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json="12: insufficient margin")
+
+    with pytest.raises(EngineError) as exc:
+        _client(handler).submit_action(b"\x00")
+    assert exc.value.code == 12
+
+
+def test_submit_action_html_page_is_transport_error_not_engine_error():
+    # No recoverable code: do not fabricate an engine rejection.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html><body>502 Bad Gateway</body></html>")
+
+    with pytest.raises(TransportError):
+        _client(handler).submit_action(b"\x00")
+
+
+def test_submit_action_json_list_body_does_not_crash():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[1, 2, 3])
+
+    with pytest.raises(TransportError):
+        _client(handler).submit_action(b"\x00")
