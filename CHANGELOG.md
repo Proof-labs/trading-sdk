@@ -7,6 +7,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [3.0.0] — 2026-08-24
+
+First published release: this is the first version of any of these packages
+to reach npm, crates.io, or PyPI. Earlier entries below describe versions
+that were tagged in this changelog only and never published.
+
 The npm, Rust core, PyO3, and Python packages move to **3.0.0**. The MAJOR bump
 renumbers `OpenInterestLimitExceeded` from result code 50 to 51 (and repurposes
 code 50 to `SlippageExceeded`), which changes the result for any consumer that
@@ -501,7 +509,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...HEAD
+[3.0.0]: https://github.com/Proof-labs/trading-sdk/releases/tag/npm-v3.0.0
 [1.1.0]: https://github.com/Proof-labs/trading-sdk/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Proof-labs/trading-sdk/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/Proof-labs/trading-sdk/releases/tag/v0.1.0
