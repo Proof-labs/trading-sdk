@@ -2058,7 +2058,12 @@ export interface HistoryPositionSnapshot {
 
 /** One executed fill from `/v1/history/fills/{owner}` (or `/v1/fills`). */
 export interface HistoryFill {
-  fillId: number;
+  /** Unsigned 64-bit fill identifier as a decimal string. NOTE: the indexer
+   * currently emits it as a JSON number, so values beyond 2^53 would already
+   * be rounded by JSON.parse before this client sees them — the string shape
+   * here avoids adding a second rounding and is ready for a server-side
+   * string cast (the same treatment price already gets). */
+  fillId: string;
   market: number;
   blockHeight: number;
   /** RFC 3339 with nanoseconds, exactly as the indexer renders it. */

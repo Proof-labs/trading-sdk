@@ -1623,7 +1623,7 @@ export class ExchangeClient {
       : [];
     return {
       fills: rows.map((row) => ({
-        fillId: Number(row.fill_id ?? 0),
+        fillId: String(row.fill_id ?? "0"),
         market: Number(row.market ?? 0),
         blockHeight: Number(row.block_height ?? 0),
         blockTime: String(row.block_time ?? ""),

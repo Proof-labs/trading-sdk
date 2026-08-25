@@ -2353,7 +2353,7 @@ describe("ExchangeClient queryHistoryFills", () => {
     const page = await client.queryHistoryFills(OWNER);
     expect(page.fills).toHaveLength(1);
     const f = page.fills[0];
-    expect(f.fillId).toBe(41_000_777);
+    expect(f.fillId).toBe("41000777");
     expect(f.market).toBe(41600);
     expect(f.blockHeight).toBe(43_600_100);
     expect(f.blockTime).toBe("2026-08-24T10:19:03.123456789Z");
