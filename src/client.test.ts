@@ -2289,17 +2289,22 @@ describe("ExchangeClient queryHistoryFills", () => {
   beforeEach(() => {
     calls = [];
     nextResponses = [];
-    globalThis.fetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
-      const u = url.toString();
-      calls.push({ url: u, init });
-      if (nextResponses.length === 0) {
-        return new Response(JSON.stringify({ error: "unexpected fetch in test" }), {
-          status: 500,
-        });
-      }
-      const responder = nextResponses.shift()!;
-      return responder({ url: u, init });
-    }) as unknown as typeof fetch;
+    globalThis.fetch = vi.fn(
+      async (url: RequestInfo | URL, init?: RequestInit) => {
+        const u = url.toString();
+        calls.push({ url: u, init });
+        if (nextResponses.length === 0) {
+          return new Response(
+            JSON.stringify({ error: "unexpected fetch in test" }),
+            {
+              status: 500,
+            },
+          );
+        }
+        const responder = nextResponses.shift()!;
+        return responder({ url: u, init });
+      },
+    ) as unknown as typeof fetch;
   });
 
   afterEach(() => {
@@ -2324,7 +2329,10 @@ describe("ExchangeClient queryHistoryFills", () => {
 
   it("builds the owner path with epoch-ms bounds and passes the cursor through", async () => {
     nextResponses.push(
-      () => new Response(JSON.stringify({ fills: [fillRow], next_cursor: "abc123" })),
+      () =>
+        new Response(
+          JSON.stringify({ fills: [fillRow], next_cursor: "abc123" }),
+        ),
     );
     const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
     const page = await client.queryHistoryFills(OWNER, {
@@ -2368,7 +2376,10 @@ describe("ExchangeClient queryHistoryFills", () => {
 
   it("throws on an error envelope and on non-OK status", async () => {
     nextResponses.push(
-      () => new Response(JSON.stringify({ error: "owner: invalid" }), { status: 400 }),
+      () =>
+        new Response(JSON.stringify({ error: "owner: invalid" }), {
+          status: 400,
+        }),
     );
     const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
     await expect(client.queryHistoryFills(OWNER)).rejects.toThrow(
