@@ -383,6 +383,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }}
             }),
         ),
+        // UnpauseBridge is a UNIT admin-action variant: it carries no fields
+        // and serializes as the bare string `"UnpauseBridge"` (not a
+        // `{ Variant: {} }` map like the fieldless struct variant HaltTrading).
+        // Byte-for-byte the engine's frozen ProposeAdminAction::UnpauseBridge
+        // vector (exchange-core `admin_action_wire_vectors_frozen`).
+        codec_case(
+            "propose_admin_action/unpause_bridge",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": "UnpauseBridge"
+            }),
+        ),
         codec_case(
             "approve_admin_action/rotate_registry",
             APPROVE_ADMIN_ACTION,

@@ -450,6 +450,7 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CreateImpactMarket: 3,
   Batch: 4,
   SetTriggerMarketConfig: 5,
+  UnpauseBridge: 6,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
@@ -459,6 +460,10 @@ export function decodeAdminAction(
   value: unknown,
   field = "action",
 ): AdminAction {
+  // Unit variants (no fields) arrive as a bare string, not a single-entry map.
+  // Only the known unit variant is accepted here; any other bare string falls
+  // through to `variantOf`, which rejects it as "not an enum variant".
+  if (value === "UnpauseBridge") return { kind: "UnpauseBridge" };
   const { name, payload } = variantOf(value, field);
   switch (name) {
     case "CreateMarket":

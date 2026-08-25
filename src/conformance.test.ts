@@ -395,7 +395,7 @@ function toAction(
         data: {
           proposer: bytes(input.proposer),
           registryVersion: big(input.registry_version),
-          action: toAdminAction(input.action as Record<string, unknown>),
+          action: toAdminAction(input.action),
         },
       };
     case ActionType.ApproveAdminAction:
@@ -410,7 +410,7 @@ function toAction(
           createdHeight: big(input.created_height),
           createdMs: big(input.created_ms),
           expiryMs: big(input.expiry_ms),
-          action: toAdminAction(input.action as Record<string, unknown>),
+          action: toAdminAction(input.action),
           contentHash: bytes(input.content_hash),
         },
       };
@@ -610,9 +610,13 @@ function toAdminBatchItem(
 /** Reconstruct a TS `AdminAction` from the vector's serde map form. Throws
  *  on an unknown variant rather than falling through — a vector this suite
  *  cannot name must fail the run, not mis-parse as a registry update. */
-function toAdminAction(
-  v: Record<string, unknown>,
-): import("./types.js").AdminAction {
+function toAdminAction(input: unknown): import("./types.js").AdminAction {
+  // A unit variant (no fields) is serde's bare variant-name string, not a map.
+  if (typeof input === "string") {
+    if (input === "UnpauseBridge") return { kind: "UnpauseBridge" };
+    throw new Error(`toAdminAction: unknown unit variant ${input}`);
+  }
+  const v = input as Record<string, unknown>;
   if (v.CreateMarket) {
     return {
       kind: "CreateMarket",
@@ -842,9 +846,10 @@ describe("conformance vectors (TypeScript)", () => {
       govTypes.has(c.action_type as number),
     );
     // Guard against the vector file drifting out from under this assertion:
-    // propose (create-market, v2 batch and trigger config), approve, reject,
-    // and all three emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(8);
+    // propose (create-market, v2 batch, trigger config and unpause-bridge),
+    // approve, reject, and all three emergency arms (PauseMarket, HaltTrading,
+    // SetReduceOnly).
+    expect(govCases.length).toBe(9);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

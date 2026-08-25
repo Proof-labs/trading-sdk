@@ -73,6 +73,9 @@ pub enum AdminAction {
     /// Replace one standalone-perpetual market's trigger policy. The engine
     /// admits this arm only after the trigger-index activation gate.
     SetTriggerMarketConfig(SetTriggerMarketConfig),
+    /// Lift a bridge pause under multisig authorization. Unit variant — carries
+    /// no fields; serializes as the bare string `"UnpauseBridge"`.
+    UnpauseBridge,
 }
 
 /// The closed set of actions a `Batch` may carry: market creations only.
@@ -97,6 +100,7 @@ pub enum AdminActionType {
     CreateImpactMarket = 3,
     Batch = 4,
     SetTriggerMarketConfig = 5,
+    UnpauseBridge = 6,
 }
 
 impl AdminAction {
@@ -108,6 +112,7 @@ impl AdminAction {
             AdminAction::CreateImpactMarket(_) => AdminActionType::CreateImpactMarket,
             AdminAction::Batch(_) => AdminActionType::Batch,
             AdminAction::SetTriggerMarketConfig(_) => AdminActionType::SetTriggerMarketConfig,
+            AdminAction::UnpauseBridge => AdminActionType::UnpauseBridge,
         }
     }
 
@@ -462,5 +467,29 @@ mod tests {
         let bytes = rmp_serde::to_vec(&propose).unwrap();
         let back: ProposeAdminAction = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(back.registry_version, propose.registry_version);
+    }
+
+    /// `AdminAction::UnpauseBridge` is a unit variant (inner tag 0x06) and
+    /// serializes as the bare fixstr `"UnpauseBridge"`. The `ProposeAdminAction`
+    /// payload is pinned byte-for-byte to the engine's frozen wire vector
+    /// (exchange-core `codec::tests::admin_action_wire_vectors_frozen`).
+    #[test]
+    fn unpause_bridge_wire_vector_matches_engine_frozen() {
+        assert_eq!(
+            AdminAction::UnpauseBridge.action_type(),
+            AdminActionType::UnpauseBridge
+        );
+        assert_eq!(AdminAction::UnpauseBridge.action_tag(), 0x06);
+
+        let propose = ProposeAdminAction {
+            proposer: SignerAddress([0xA1; 20]),
+            registry_version: RegistryVersion(1),
+            action: AdminAction::UnpauseBridge,
+        };
+        let bytes = rmp_serde::to_vec(&propose).unwrap();
+        assert_eq!(
+            hex_string(&bytes),
+            "93dc0014cca1cca1cca1cca1cca1cca1cca1cca1cca1cca1cca1cca1cca1cca1cca1cca1cca1cca1cca1cca101ad556e7061757365427269646765",
+        );
     }
 }

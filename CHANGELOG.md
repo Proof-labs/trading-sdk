@@ -9,6 +9,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `AdminAction` gains a `UnpauseBridge` unit variant (inner tag `0x06`), a
+  multisig operation that lifts a bridge pause. It carries no fields and
+  serializes as the bare string `"UnpauseBridge"` (distinct from the
+  `{ Variant: {} }` map form a fieldless struct variant takes). Additive
+  (MINOR); mirrors engine `exchange-core` 2.7.0. New conformance vector
+  `propose_admin_action/unpause_bridge` is byte-for-byte the engine's frozen
+  wire vector; `decodeAdminAction` renders it on the governance read path.
 - `ConfirmDeposit` gains a trailing optional `DepositLocator`
   (`{ topIndex, innerIndex? }`) identifying the USDC transfer's instruction
   position within its Solana transaction. Additive/backward-compatible (MINOR):

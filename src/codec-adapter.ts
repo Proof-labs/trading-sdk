@@ -103,6 +103,14 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
 };
 
 /**
+ * Externally-tagged governance enum variants that carry NO fields, so serde
+ * serializes them as a bare string rather than a `{ Variant: … }` map. Keyed
+ * explicitly because a fieldless struct variant (`HaltTrading {}`) is NOT one
+ * of these — it keeps the map form.
+ */
+const GOVERNANCE_UNIT_VARIANTS = new Set<string>(["UnpauseBridge"]);
+
+/**
  * Encode a governance `AdminAction` / `EmergencyAction` for
  * `serde_wasm_bindgen`: an externally-tagged enum whose struct variants are
  * `{ Variant: { snake_case_fields } }` (a MAP). The TS shape is
@@ -112,6 +120,12 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
 function governanceActionToWasm(value: unknown): unknown {
   if (value === null || value === undefined) return value;
   const v = value as { kind: string; value?: unknown };
+  // True UNIT variants (no fields at all) serialize as a bare string, matching
+  // serde's externally-tagged unit-variant form. This is distinct from
+  // fieldless STRUCT variants (e.g. EmergencyAction's `HaltTrading {}`), which
+  // stay in the `{ Variant: {} }` map form — so the set is explicit, not
+  // inferred from a missing `value`.
+  if (GOVERNANCE_UNIT_VARIANTS.has(v.kind)) return v.kind;
   if (v.kind === "SetTriggerMarketConfig") {
     validateSetTriggerMarketConfig(v.value as SetTriggerMarketConfig);
   }
@@ -290,6 +304,8 @@ const BYTE_FIELDS = new Set([
 /** Decode a governance `{ Variant: {...} }` enum back into `{ kind, value }`. */
 function governanceActionFromWasm(value: unknown): unknown {
   if (value === null || value === undefined) return value;
+  // A unit variant comes back from serde-wasm-bindgen as a bare string.
+  if (typeof value === "string") return { kind: value };
   const obj = value as Record<string, unknown>;
   const kind = Object.keys(obj)[0];
   const inner = obj[kind];
@@ -349,7 +365,12 @@ function fromWasmValue(camelKey: string, value: unknown): unknown {
   // through before the generic object branch would iterate its indices.
   if (value instanceof Uint8Array) return value;
   if (camelKey === "oracleSource") return eventOracleSourceFromWasm(value);
-  if (camelKey === "action" && typeof value === "object") {
+  // A governance `action` is either a `{ Variant: … }` map or, for a unit
+  // variant, a bare string — route both through the enum decoder.
+  if (
+    camelKey === "action" &&
+    (typeof value === "object" || typeof value === "string")
+  ) {
     return governanceActionFromWasm(value);
   }
   // `newMembers` is a list of 20-byte addresses (Vec<[u8;20]>); convert each
