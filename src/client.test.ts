@@ -2273,3 +2273,113 @@ describe("ExchangeClient owner byte-coercion (serde array shape)", () => {
     expect(acct?.positions[0].positionEpoch).toBe(9_007_199_254_740_993n);
   });
 });
+
+/**
+ * queryHistoryFills — the fills-history envelope (`{fills, next_cursor}`),
+ * which is an object where the other history routes return bare arrays, and
+ * the only history route with keyset paging. Prices and quantities must stay
+ * strings end to end: the indexer casts NUMERIC to text precisely so a price
+ * never rides through a float, and this client must not undo that.
+ */
+describe("ExchangeClient queryHistoryFills", () => {
+  const originalFetch = globalThis.fetch;
+  let calls: FetchCall[] = [];
+  let nextResponses: Array<(req: FetchCall) => Response> = [];
+
+  beforeEach(() => {
+    calls = [];
+    nextResponses = [];
+    globalThis.fetch = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      const u = url.toString();
+      calls.push({ url: u, init });
+      if (nextResponses.length === 0) {
+        return new Response(JSON.stringify({ error: "unexpected fetch in test" }), {
+          status: 500,
+        });
+      }
+      const responder = nextResponses.shift()!;
+      return responder({ url: u, init });
+    }) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const OWNER = "2b1e0a7543516c02e83bef3efa40376000e80d11";
+
+  const fillRow = {
+    fill_id: 41_000_777,
+    market: 41600,
+    block_height: 43_600_100,
+    block_time: "2026-08-24T10:19:03.123456789Z",
+    price: "3141.590000",
+    quantity: "2.500000",
+    maker_owner: OWNER,
+    taker_owner: "ef129186e4207c93723633729aca31d115e93b46",
+    maker_side: "Buy",
+    taker_fee: 3927,
+    maker_fee: 785,
+  };
+
+  it("builds the owner path with epoch-ms bounds and passes the cursor through", async () => {
+    nextResponses.push(
+      () => new Response(JSON.stringify({ fills: [fillRow], next_cursor: "abc123" })),
+    );
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    const page = await client.queryHistoryFills(OWNER, {
+      market: 41600,
+      fromMs: 1_787_400_000_000,
+      toMs: 1_787_650_000_000,
+      limit: 1000,
+      cursor: "prev-cursor",
+    });
+    expect(calls).toHaveLength(1);
+    const u = new URL(calls[0].url);
+    expect(u.pathname).toBe(`/v1/history/fills/${OWNER}`);
+    expect(u.searchParams.get("market")).toBe("41600");
+    expect(u.searchParams.get("from")).toBe("1787400000000");
+    expect(u.searchParams.get("to")).toBe("1787650000000");
+    expect(u.searchParams.get("limit")).toBe("1000");
+    expect(u.searchParams.get("cursor")).toBe("prev-cursor");
+    expect(page.nextCursor).toBe("abc123");
+  });
+
+  it("decodes rows keeping price and quantity as strings", async () => {
+    nextResponses.push(
+      () => new Response(JSON.stringify({ fills: [fillRow], next_cursor: "" })),
+    );
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    const page = await client.queryHistoryFills(OWNER);
+    expect(page.fills).toHaveLength(1);
+    const f = page.fills[0];
+    expect(f.fillId).toBe(41_000_777);
+    expect(f.market).toBe(41600);
+    expect(f.blockHeight).toBe(43_600_100);
+    expect(f.blockTime).toBe("2026-08-24T10:19:03.123456789Z");
+    expect(f.price).toBe("3141.590000");
+    expect(f.quantity).toBe("2.500000");
+    expect(f.makerOwner).toBe(OWNER);
+    expect(f.makerSide).toBe("Buy");
+    expect(f.takerFee).toBe(3927);
+    expect(f.makerFee).toBe(785);
+    expect(page.nextCursor).toBe("");
+  });
+
+  it("throws on an error envelope and on non-OK status", async () => {
+    nextResponses.push(
+      () => new Response(JSON.stringify({ error: "owner: invalid" }), { status: 400 }),
+    );
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    await expect(client.queryHistoryFills(OWNER)).rejects.toThrow(
+      "API error: owner: invalid",
+    );
+  });
+
+  it("returns an empty last page without fetching when no address is bound", async () => {
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    const page = await client.queryHistoryFills();
+    expect(page).toEqual({ fills: [], nextCursor: "" });
+    expect(calls).toHaveLength(0);
+  });
+});

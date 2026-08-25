@@ -121,6 +121,8 @@ export {
   type MarkSourceMode,
   type BindingScenarioEntry,
   type HistoryCashFlow,
+  type HistoryFill,
+  type HistoryFillsPage,
   type HistoryResolution,
   type HistoryPositionSnapshot,
   type WithdrawalStatus,

@@ -26,6 +26,7 @@ import type {
   BindingScenarioEntry,
   FeeTier,
   HistoryCashFlow,
+  HistoryFillsPage,
   HistoryPositionSnapshot,
   HistoryResolution,
   MarketConfig,
@@ -1578,6 +1579,64 @@ export class ExchangeClient {
       blockHeight: Number(row.block_height ?? 0),
       timestamp: Number(row.timestamp ?? 0),
     }));
+  }
+
+  /**
+   * Executed fills for an owner, newest first, keyset-paged. The endpoint
+   * returns an envelope rather than a bare array: pass `opts.cursor` from a
+   * previous page's `nextCursor` to continue; an empty `nextCursor` is the
+   * last page. `fromMs` is inclusive, `toMs` exclusive (the API's uniform
+   * half-open window), both epoch milliseconds. Omitting `addressHex` with
+   * no bound key yields an empty page, matching the other history queries.
+   */
+  async queryHistoryFills(
+    addressHex?: string,
+    opts?: {
+      market?: number;
+      fromMs?: number;
+      toMs?: number;
+      limit?: number;
+      cursor?: string;
+    },
+  ): Promise<HistoryFillsPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return { fills: [], nextCursor: "" };
+    const params = new URLSearchParams();
+    if (opts?.market !== undefined) params.set("market", String(opts.market));
+    if (opts?.fromMs !== undefined) params.set("from", String(opts.fromMs));
+    if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
+    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+    if (opts?.cursor !== undefined && opts.cursor !== "") {
+      params.set("cursor", opts.cursor);
+    }
+    const qs = params.toString();
+    const url = `${this.readBaseUrl}/v1/history/fills/${hex}${qs ? `?${qs}` : ""}`;
+    const res = await fetch(url);
+    const json = (await res.json()) as unknown;
+    const body = (json ?? {}) as Record<string, unknown>;
+    if (!res.ok || "error" in body) {
+      const msg = (body.error as string) ?? `HTTP ${res.status}`;
+      throw new Error(`API error: ${msg}`);
+    }
+    const rows = Array.isArray(body.fills)
+      ? (body.fills as Array<Record<string, unknown>>)
+      : [];
+    return {
+      fills: rows.map((row) => ({
+        fillId: Number(row.fill_id ?? 0),
+        market: Number(row.market ?? 0),
+        blockHeight: Number(row.block_height ?? 0),
+        blockTime: String(row.block_time ?? ""),
+        price: String(row.price ?? "0"),
+        quantity: String(row.quantity ?? "0"),
+        makerOwner: String(row.maker_owner ?? ""),
+        takerOwner: String(row.taker_owner ?? ""),
+        makerSide: String(row.maker_side ?? ""),
+        takerFee: Number(row.taker_fee ?? 0),
+        makerFee: Number(row.maker_fee ?? 0),
+      })),
+      nextCursor: String(body.next_cursor ?? ""),
+    };
   }
 
   // -----------------------------------------------------------------------
