@@ -1219,6 +1219,16 @@ pub struct WithdrawRequest {
     pub solana_destination: Pubkey,
 }
 
+/// Position of a USDC transfer inside its Solana transaction: the top-level
+/// instruction index plus, for a transfer nested under a CPI, the inner
+/// instruction index (`None` when the transfer is the top-level instruction).
+/// Two transfers in one transaction share a signature and differ only here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DepositLocator {
+    pub top_index: u16,
+    pub inner_index: Option<u16>,
+}
+
 /// Relayer confirms an on-chain USDC deposit from Solana.
 /// Credits the derived internal account.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1228,6 +1238,10 @@ pub struct ConfirmDeposit {
     /// Solana transaction signature (typically 64 bytes) for idempotency.
     pub solana_tx_sig: SolanaSignature,
     pub signer: Address,
+    /// Instruction locator within the signature. `nil` on pre-locator wire
+    /// bytes (which the engine reads as top-level instruction 0, no inner).
+    #[serde(default)]
+    pub locator: Option<DepositLocator>,
 }
 
 /// Relayer confirms a USDC withdrawal was sent on Solana.

@@ -459,10 +459,10 @@ mod tests {
         AmendOrder, ApproveAgent, AuthorizeWithdrawal, BridgeWithdrawalReceipt, CancelOrder,
         CancelPositionTriggers, CancelReplaceOrder, ClientTriggerGroupId, ClientTriggerId,
         ConfirmDeposit, ConfirmWithdrawal, ConfirmWithdrawalReceipt, CreateMarket, Deposit,
-        FailWithdrawal, FailWithdrawalReceipt, MarketOrder, Milliseconds, OperatorReceiptProof,
-        OracleUpdate, OracleUpdateComposite, PlaceOrder, PositionEpoch, RevokeAgent,
-        SetPositionTriggers, Side, TimeInForce, TriggerLimb, TriggerSlippageBps, UpdateMarketFees,
-        Withdraw, WithdrawRequest,
+        DepositLocator, FailWithdrawal, FailWithdrawalReceipt, MarketOrder, Milliseconds,
+        OperatorReceiptProof, OracleUpdate, OracleUpdateComposite, PlaceOrder, PositionEpoch,
+        RevokeAgent, SetPositionTriggers, Side, TimeInForce, TriggerLimb, TriggerSlippageBps,
+        UpdateMarketFees, Withdraw, WithdrawRequest,
     };
     use crate::wire::{Address, Pubkey};
 
@@ -947,6 +947,10 @@ mod tests {
                 amount: 100_000,
                 solana_tx_sig: vec![0xAB; 64].into(),
                 signer: [0x66; 20].into(),
+                locator: Some(DepositLocator {
+                    top_index: 3,
+                    inner_index: Some(1),
+                }),
             }),
             Action::ConfirmWithdrawal(ConfirmWithdrawal {
                 withdrawal_id: 99,
@@ -1296,6 +1300,10 @@ mod tests {
                 amount: u64::MAX,
                 solana_tx_sig: vec![0xFF; 1024].into(),
                 signer: [0xFF; 20].into(),
+                locator: Some(DepositLocator {
+                    top_index: u16::MAX,
+                    inner_index: Some(u16::MAX),
+                }),
             }),
             Action::ConfirmWithdrawal(ConfirmWithdrawal {
                 withdrawal_id: u64::MAX,
@@ -1374,6 +1382,7 @@ mod tests {
                 amount: 0,
                 solana_tx_sig: vec![].into(),
                 signer: [0u8; 20].into(),
+                locator: None,
             }),
             Action::ConfirmWithdrawal(ConfirmWithdrawal {
                 withdrawal_id: 0,
@@ -1473,6 +1482,7 @@ mod tests {
                     amount: i * 300,
                     solana_tx_sig: i.to_le_bytes().to_vec().into(),
                     signer: owner,
+                    locator: None,
                 }),
                 Action::ConfirmWithdrawal(ConfirmWithdrawal {
                     withdrawal_id: i,
@@ -1631,6 +1641,7 @@ mod tests {
                 amount: 1,
                 solana_tx_sig: vec![0; 64].into(),
                 signer: [0; 20].into(),
+                locator: None,
             }),
             Action::ConfirmWithdrawal(ConfirmWithdrawal {
                 withdrawal_id: 1,
@@ -1925,6 +1936,7 @@ mod tests {
                         amount: seq + 1,
                         solana_tx_sig: vec![seq as u8; 64].into(),
                         signer: owner,
+                        locator: None,
                     }),
                     9 => Action::ConfirmWithdrawal(ConfirmWithdrawal {
                         withdrawal_id: seq,

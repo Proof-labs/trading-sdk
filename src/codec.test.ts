@@ -492,6 +492,40 @@ describe("codec v1 all action types", () => {
     },
   );
 
+  it("round-trips ConfirmDeposit with a DepositLocator (full fidelity)", () => {
+    const action: Action = {
+      type: "ConfirmDeposit",
+      data: {
+        owner: OWNER,
+        amount: 100000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        signer: SIGNER,
+        locator: { topIndex: 3, innerIndex: 1 },
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 9n));
+    // The trailing optional locator must survive encode→decode structurally.
+    expect(decoded).toEqual(action);
+  });
+
+  it("round-trips ConfirmDeposit without a locator (trailing nil → null)", () => {
+    const action: Action = {
+      type: "ConfirmDeposit",
+      data: {
+        owner: OWNER,
+        amount: 100000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        signer: SIGNER,
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 9n));
+    expect(decoded.type).toBe("ConfirmDeposit");
+    if (decoded.type === "ConfirmDeposit") {
+      // Absent on the wire (trailing nil) decodes back as null.
+      expect(decoded.data.locator).toBeNull();
+    }
+  });
+
   it("round-trips AuthorizeWithdrawal authorization bytes + operator proof", () => {
     const action: Action = {
       type: "AuthorizeWithdrawal",
