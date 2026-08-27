@@ -7,7 +7,7 @@
 //! the `signer` seam and the `errors` result-code decode, plus the `wire`
 //! byte newtypes and `governance` re-exports.
 
-pub use exchange_wire::{abci_event, codec, crypto, types};
+pub use exchange_wire::{abci_event, codec, crypto, triggers, types};
 
 pub mod errors;
 pub mod governance;
