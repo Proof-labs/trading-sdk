@@ -6,7 +6,7 @@ name: publish
 # single umbrella version. Push the tag for the artifact you are cutting:
 #
 #   npm-v3.0.0      -> npm  @proof/trading-sdk        + the GitHub Release
-#   core-v3.0.0     -> crates.io proof-trading-sdk
+#   v3.0.0          -> crates.io proof-trading-sdk
 #   derive-v1.1.0   -> crates.io proof-trading-sdk-derive
 #   wasm-v2.1.0     -> crates.io proof-trading-sdk-wasm
 #   py-v3.0.0       -> PyPI proof-trading-sdk (the maturin wheel + sdist)
@@ -38,13 +38,13 @@ on:
   push:
     tags:
       - "npm-v*"
-      - "core-v*"
+      - "v[0-9]+.[0-9]+.[0-9]+"
       - "derive-v*"
       - "wasm-v*"
       - "py-v*"
 
 # Serialize re-pushes of the SAME tag. Note this does NOT order two different
-# tags against each other: `derive-v*`, `core-v*` and `wasm-v*` land in separate
+# tags against each other: `derive-v*`, `v*` and `wasm-v*` land in separate
 # groups and run concurrently, so pushing them together races the crates.io
 # dependency order above. Push one crate tag at a time and wait for it to go
 # green before the next. (A single global group would order them, but GitHub
@@ -144,12 +144,17 @@ jobs:
     needs: verify-ci
     # One job for every crate tag; the crate is derived from the tag prefix.
     if: >-
-      startsWith(github.ref_name, 'core-v') ||
+      startsWith(github.ref_name, 'v') ||
       startsWith(github.ref_name, 'derive-v') ||
       startsWith(github.ref_name, 'wasm-v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The workspace currently pins exchange-wire to the private exchange
+      # repository. Cargo resolves that dependency while packaging the crate.
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -158,22 +163,44 @@ jobs:
       # transitively. derive is a proc-macro and verifies natively. The whole
       # step is one shell block so the optional flag rides a bash array
       # ("${verify[@]}") — an empty array vanishes, no word-splitting quibble.
-      - name: Publish to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Validate release tag and package version
         run: |
+          if ! printf '%s' "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$|^(derive|wasm)-v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::invalid release tag $GITHUB_REF_NAME"
+            exit 1
+          fi
           case "$GITHUB_REF_NAME" in
-            core-v*)   crate=proof-trading-sdk;        dir=proof-trading-sdk;        verify=(--no-verify) ;;
-            derive-v*) crate=proof-trading-sdk-derive; dir=proof-trading-sdk-derive; verify=() ;;
-            wasm-v*)   crate=proof-trading-sdk-wasm;   dir=proof-trading-sdk-wasm;   verify=(--no-verify) ;;
+            v*)        dir=proof-trading-sdk ;;
+            derive-v*) dir=proof-trading-sdk-derive ;;
+            wasm-v*)   dir=proof-trading-sdk-wasm ;;
             *) echo "::error::unhandled crate tag $GITHUB_REF_NAME"; exit 1 ;;
           esac
-          tag_version="${GITHUB_REF_NAME#*-v}"
+          tag_version="${GITHUB_REF_NAME##*v}"
           crate_version="$(grep -m1 '^version = ' "crates/$dir/Cargo.toml" | cut -d'"' -f2)"
           if [ "$tag_version" != "$crate_version" ]; then
             echo "::error::tag $GITHUB_REF_NAME implies $tag_version but crate is $crate_version"
             exit 1
           fi
+
+      - name: Dry-run crates.io publish
+        run: |
+          case "$GITHUB_REF_NAME" in
+            v*)        crate=proof-trading-sdk;        verify=(--no-verify) ;;
+            derive-v*) crate=proof-trading-sdk-derive; verify=() ;;
+            wasm-v*)   crate=proof-trading-sdk-wasm;   verify=(--no-verify) ;;
+          esac
+          cargo publish -p "$crate" --dry-run "${verify[@]}"
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          case "$GITHUB_REF_NAME" in
+            v*)        crate=proof-trading-sdk;        verify=(--no-verify) ;;
+            derive-v*) crate=proof-trading-sdk-derive; verify=() ;;
+            wasm-v*)   crate=proof-trading-sdk-wasm;   verify=(--no-verify) ;;
+            *) echo "::error::unhandled crate tag $GITHUB_REF_NAME"; exit 1 ;;
+          esac
           cargo publish -p "$crate" "${verify[@]}"
 
   python:
