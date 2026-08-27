@@ -11,9 +11,9 @@ serde = { version = "1", features = ["derive"] }
 derive_more = { version = "1", features = ["from", "display"] }
 serde_bytes = "0.11"
 rmp-serde = "1"
-# The codec/types were extracted from exchange-core; the proc-macro keeps its
-# original `exchange_derive` import path via the `package` rename.
-exchange-derive = { package = "proof-trading-sdk-derive", path = "../proof-trading-sdk-derive", version = "1" }
+# The wire contract is the shared `exchange-wire` crate (engine + SDK share
+# one definition). Local path for dev; a published/git pin at release time.
+exchange-wire = { git = "ssh://git@github.com/Proof-labs/exchange.git", branch = "refactor/exchange-wire-extraction", version = "1" }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.

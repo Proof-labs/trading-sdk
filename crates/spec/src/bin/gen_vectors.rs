@@ -547,7 +547,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Code 21 is now pinned like every other code: the TS SDK was aligned to
     // the engine/Rust/Python name `InvalidNonce` (#63), removing the
     // `TimestampNonceRejected` divergence that previously forced a carve-out.
-    let mut errors: Vec<cv::ErrorCase> = proof_trading_sdk::types::ERROR_KINDS
+    let mut errors: Vec<cv::ErrorCase> = proof_trading_sdk::errors::ERROR_KINDS
         .iter()
         .map(|kind| kind.code())
         .map(|code| error_case(&format!("manifest/{code}"), code, None))
