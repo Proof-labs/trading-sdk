@@ -11,7 +11,7 @@ pub use exchange_wire::{abci_event, codec, crypto, types};
 
 pub mod errors;
 pub mod governance;
-pub mod read;
+pub mod query;
 pub mod signer;
 pub mod wire;
 

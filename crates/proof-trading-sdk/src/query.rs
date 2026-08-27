@@ -2,4 +2,4 @@
 //! crate so the SDK and the engine share one definition (no positional-wire
 //! drift). Client representation that needs it wraps these.
 
-pub use exchange_wire::read::{AccountInfo, ImpactMarketDisplayInfo, PositionBrief};
+pub use exchange_wire::query::{AccountInfo, ImpactMarketDisplayInfo, PositionBrief};
