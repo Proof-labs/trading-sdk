@@ -2056,6 +2056,38 @@ export interface HistoryPositionSnapshot {
   timestamp: number;
 }
 
+/** One executed fill from `/v1/history/fills/{owner}` (or `/v1/fills`). */
+export interface HistoryFill {
+  /** Unsigned 64-bit fill identifier as a decimal string. NOTE: the indexer
+   * currently emits it as a JSON number, so values beyond 2^53 would already
+   * be rounded by JSON.parse before this client sees them — the string shape
+   * here avoids adding a second rounding and is ready for a server-side
+   * string cast (the same treatment price already gets). */
+  fillId: string;
+  market: number;
+  blockHeight: number;
+  /** RFC 3339 with nanoseconds, exactly as the indexer renders it. */
+  blockTime: string;
+  /** Price in µUSDC as a decimal string — never a float. */
+  price: string;
+  /** Quantity in contracts as a decimal string — never a float. */
+  quantity: string;
+  /** 20-byte maker address as hex. */
+  makerOwner: string;
+  /** 20-byte taker address as hex. */
+  takerOwner: string;
+  /** The maker's side: "Buy" or "Sell"; the taker took the other side. */
+  makerSide: string;
+  takerFee: number;
+  makerFee: number;
+}
+
+/** One page of fills, newest first. An empty `nextCursor` means last page. */
+export interface HistoryFillsPage {
+  fills: HistoryFill[];
+  nextCursor: string;
+}
+
 /** Full account information including balance, positions, and margin state. */
 export interface AccountInfo {
   /** [0] Available USDC balance in microUSDC (6 dp, e.g., 100_000_000_000 = $100,000). */
