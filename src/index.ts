@@ -25,6 +25,7 @@ export {
   type CreateMarket,
   type WithdrawRequest,
   type ConfirmDeposit,
+  type DepositLocator,
   type ConfirmWithdrawal,
   type FailWithdrawal,
   type ConfirmWithdrawalReceipt,

@@ -4,6 +4,7 @@ import {
   encodeSignedTx,
   encodePayloadBytes,
   decodeTx,
+  signEnvelopeFromPayload,
   decodeSigningMessage,
   peekActionType,
   signAndEncode,
@@ -491,6 +492,97 @@ describe("codec v1 all action types", () => {
       expect(decoded).toEqual(action);
     },
   );
+
+  it("round-trips ConfirmDeposit with a DepositLocator (full fidelity)", () => {
+    const action: Action = {
+      type: "ConfirmDeposit",
+      data: {
+        owner: OWNER,
+        amount: 100000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        signer: SIGNER,
+        locator: { topIndex: 3, innerIndex: 1 },
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 9n));
+    // The trailing optional locator must survive encode→decode structurally.
+    expect(decoded).toEqual(action);
+  });
+
+  it("round-trips ConfirmDeposit without a locator (trailing nil → null)", () => {
+    const action: Action = {
+      type: "ConfirmDeposit",
+      data: {
+        owner: OWNER,
+        amount: 100000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        signer: SIGNER,
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 9n));
+    expect(decoded.type).toBe("ConfirmDeposit");
+    if (decoded.type === "ConfirmDeposit") {
+      // Absent on the wire (trailing nil) decodes back as null.
+      expect(decoded.data.locator).toBeNull();
+    }
+  });
+
+  it("round-trips a top-level-transfer locator (present, no inner index)", () => {
+    // A non-CPI transfer: the locator is PRESENT with no inner index, which is
+    // a different wire shape from an absent locator (`92 03 c0` vs `c0`).
+    const action: Action = {
+      type: "ConfirmDeposit",
+      data: {
+        owner: OWNER,
+        amount: 100000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        signer: SIGNER,
+        locator: { topIndex: 3 },
+      },
+    };
+    const payload = encodePayloadBytes(action);
+    expect(Array.from(payload.slice(-3))).toEqual([0x92, 0x03, 0xc0]);
+    const decoded = decodeTx(encodeTx(action, 9n)).action;
+    expect(decoded.type).toBe("ConfirmDeposit");
+    if (decoded.type === "ConfirmDeposit") {
+      expect(decoded.data.locator).toEqual({ topIndex: 3, innerIndex: null });
+    }
+  });
+
+  it("decodes legacy pre-locator ConfirmDeposit bytes (4-element array)", () => {
+    const action: Action = {
+      type: "ConfirmDeposit",
+      data: {
+        owner: OWNER,
+        amount: 100000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        signer: SIGNER,
+      },
+    };
+    const modern = encodePayloadBytes(action);
+    // New encoder: a 5-element array whose absent locator is a trailing nil.
+    expect(modern[0]).toBe(0x95);
+    expect(modern[modern.length - 1]).toBe(0xc0);
+    // Pre-locator engines emitted the same payload as a 4-element array with
+    // no locator slot at all. Those bytes must keep decoding — the
+    // backward-decode half of the MINOR claim for this wire change.
+    const legacy = modern.slice(0, modern.length - 1);
+    legacy[0] = 0x94;
+    const { privateKey } = generateKeypair();
+    const envelope = signEnvelopeFromPayload(
+      UNBOUND_CHAIN_ID,
+      ActionType.ConfirmDeposit,
+      9n,
+      legacy,
+      privateKey,
+    );
+    const decoded = decodeTx(envelope).action;
+    expect(decoded.type).toBe("ConfirmDeposit");
+    if (decoded.type === "ConfirmDeposit") {
+      expect(decoded.data.amount).toBe(100000n);
+      expect(decoded.data.locator).toBeNull();
+    }
+  });
 
   it("round-trips AuthorizeWithdrawal authorization bytes + operator proof", () => {
     const action: Action = {

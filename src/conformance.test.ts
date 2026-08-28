@@ -250,7 +250,8 @@ function toAction(
           solanaDestination: bytes(input.solana_destination),
         },
       };
-    case ActionType.ConfirmDeposit:
+    case ActionType.ConfirmDeposit: {
+      const loc = input.locator as Record<string, unknown> | undefined | null;
       return {
         type: "ConfirmDeposit",
         data: {
@@ -258,8 +259,18 @@ function toAction(
           amount: big(input.amount),
           solanaTxSig: bytes(input.solana_tx_sig),
           signer: bytes(input.signer),
+          ...(loc
+            ? {
+                locator: {
+                  topIndex: Number(loc.top_index),
+                  innerIndex:
+                    loc.inner_index == null ? null : Number(loc.inner_index),
+                },
+              }
+            : {}),
         },
       };
+    }
     case ActionType.ConfirmWithdrawal:
       return {
         type: "ConfirmWithdrawal",
@@ -812,7 +823,6 @@ describe("conformance vectors (TypeScript)", () => {
         "CancelAllOrders",
         "CancelClientOrder",
         "CancelReplaceOrder",
-        "ConfirmDeposit",
         "ConfirmWithdrawal",
         "CreateImpactMarket",
         "Deposit",

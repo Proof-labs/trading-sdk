@@ -122,6 +122,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     const ORACLE_UPDATE_COMPOSITE: u8 = 0x14;
     const MARKET_ORDER: u8 = 0x04;
     const CLOSE_POSITION: u8 = 0x17;
+    const CONFIRM_DEPOSIT: u8 = 0x09;
     const CREATE_MARKET: u8 = 0x07;
     const UPDATE_MARKET_FEES: u8 = 0x10;
     const ATOMIC_BASKET_ORDER: u8 = 0x1C;
@@ -203,6 +204,35 @@ fn main() -> Result<(), Box<dyn Error>> {
             "close_position/basic",
             CLOSE_POSITION,
             json!({ "market": 2, "owner": owner }),
+        ),
+        // ConfirmDeposit (0x09) with the trailing DepositLocator. Mirrors the
+        // engine's own `all_action_variants` fixture (owner 0x55, amount
+        // 100_000, sig 0xAB×64, signer 0x66, locator top=3 inner=Some(1)); the
+        // locator serializes as a 2-element array `[top_index, inner_index]`.
+        codec_case(
+            "confirm_deposit/with_locator",
+            CONFIRM_DEPOSIT,
+            json!({
+                "owner": vec![0x55u8; 20],
+                "amount": 100_000u64,
+                "solana_tx_sig": vec![0xABu8; 64],
+                "signer": vec![0x66u8; 20],
+                "locator": { "top_index": 3, "inner_index": 1 }
+            }),
+        ),
+        // Pre-locator ConfirmDeposit: the locator is absent and encodes as a
+        // trailing `nil`. This is the backward-compatible (MINOR) tail — old
+        // 4-field bytes still decode, and the new encoder appends nil when the
+        // relayer supplies no locator.
+        codec_case(
+            "confirm_deposit/no_locator",
+            CONFIRM_DEPOSIT,
+            json!({
+                "owner": vec![0x55u8; 20],
+                "amount": 100_000u64,
+                "solana_tx_sig": vec![0xABu8; 64],
+                "signer": vec![0x66u8; 20]
+            }),
         ),
         // CreateMarket with the MANDATORY sz_decimals + ticker fields. Pins
         // that a market-creation payload carries them — the gap that left the

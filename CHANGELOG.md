@@ -7,7 +7,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- `ConfirmDeposit` gains a trailing optional `DepositLocator`
+  (`{ topIndex, innerIndex? }`) identifying the USDC transfer's instruction
+  position within its Solana transaction, so two transfers sharing one Solana
+  transaction signature are no longer deduplicated into one credit. Mirrors
+  engine `exchange-wire` 1.1.0 (exchange#434). New conformance vectors
+  `confirm_deposit/with_locator` and `confirm_deposit/no_locator` pin the bytes.
+
+### Changed
+
+- **BREAKING (MAJOR) — `ConfirmDeposit` payloads gain an unconditional fifth
+  element.** The locator is appended as a trailing `nil` even when the caller
+  supplies none, so every `ConfirmDeposit` this SDK emits changes from a
+  4-element positional array (`94 …`) to a 5-element one (`95 … c0`) — including
+  calls whose source code is unchanged. Backward decode holds in one direction
+  only: pre-locator bytes still decode on the new code, but a strict 4-field
+  `rmp-serde` decoder **rejects** what the new code emits, which
+  `exchange-wire`'s own `deposit_locator_is_backward_decodable` test asserts at
+  the pinned revision. Per CLAUDE.md ("if it breaks backward decode in either
+  direction it is a MAJOR bump") this is a MAJOR bump for every package that
+  encodes `ConfirmDeposit` — the same classification this changelog applied to
+  the `CreateMarket` open-interest cap, which grew a positional array by one
+  unconditional trailing element in exactly the same way.
+
+  Compatible engine: `exchange-core >= 2.6.0` **built against
+  `exchange-wire >= 1.1.0`** (exchange#434, rev `2a6d079`). Note `exchange-core`
+  reads 2.6.0 both with and without the locator, so it is the `exchange-wire`
+  floor — not the `exchange-core` version — that distinguishes an engine which
+  accepts these bytes. Pointing this SDK at an engine below that floor fails
+  every deposit confirmation, so upgrade the engine first.
 
 ## [3.0.0] — 2026-08-24
 
