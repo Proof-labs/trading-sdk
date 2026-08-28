@@ -8,7 +8,7 @@ describe("decodeExecError", () => {
 
   it("decodes well-known existing codes", () => {
     expect(decodeExecError(12)?.name).toBe("InsufficientMargin");
-    expect(decodeExecError(21)?.name).toBe("TimestampNonceRejected");
+    expect(decodeExecError(21)?.name).toBe("InvalidNonce");
     expect(decodeExecError(29)?.name).toBe("PositionLimitExceeded");
     expect(decodeExecError(47)?.name).toBe("FillOrKillWouldNotFill");
     expect(decodeExecError(48)?.name).toBe("InvalidCancelReplaceTarget");
@@ -96,7 +96,7 @@ describe("ExecErrorCode enum", () => {
 
   it("exposes the documented well-known codes", () => {
     expect(ExecErrorCode.InsufficientMargin).toBe(12);
-    expect(ExecErrorCode.TimestampNonceRejected).toBe(21);
+    expect(ExecErrorCode.InvalidNonce).toBe(21);
     expect(ExecErrorCode.AmendBelowFilled).toBe(49);
     expect(ExecErrorCode.SlippageExceeded).toBe(50);
     expect(ExecErrorCode.OpenInterestLimitExceeded).toBe(51);

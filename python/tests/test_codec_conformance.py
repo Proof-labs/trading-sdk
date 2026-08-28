@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import proof_trading_sdk as pts
 from proof_trading_sdk import actions
 
@@ -72,6 +73,100 @@ class TestGoldenVectors:
 
 
 class TestEncodeDecodeRoundTrip:
+    def test_position_trigger_actions_match_engine_golden_vectors(self):
+        set_action = actions.SetPositionTriggers(
+            market=7,
+            owner=bytes([0xA5] * 20),
+            expected_position_epoch=3,
+            stop_loss=actions.TriggerLimb(95_000, 75, 11),
+            take_profit=actions.TriggerLimb(110_000, 50, 12),
+            client_group_id=9,
+        )
+        cancel_action = actions.CancelPositionTriggers(
+            market=7,
+            owner=bytes([0xA5] * 20),
+            expected_position_epoch=3,
+        )
+        cases = [
+            (
+                set_action,
+                "9607dc0014cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca50393ce000173184b0b93ce0001adb0320c09",
+                "9602252ac43f9607dc0014cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca50393ce000173184b0b93ce0001adb0320c09c4201111111111111111111111111111111111111111111111111111111111111111c44022222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222",
+            ),
+            (
+                cancel_action,
+                "9307dc0014cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca503",
+                "9602262ac42e9307dc0014cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca503c4201111111111111111111111111111111111111111111111111111111111111111c44022222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222",
+            ),
+        ]
+        for action, payload_hex, envelope_hex in cases:
+            action_type, payload = actions.encode_action(action)
+            assert payload.hex() == payload_hex
+            assert (
+                pts.encode_signed_tx(
+                    action_type,
+                    payload,
+                    42,
+                    bytes([0x11] * 32),
+                    bytes([0x22] * 64),
+                ).hex()
+                == envelope_hex
+            )
+
+    def test_position_trigger_validation_is_typed_and_fail_fast(self):
+        with pytest.raises(ValueError, match="at least one"):
+            actions.SetPositionTriggers(
+                market=7,
+                owner=bytes(20),
+                expected_position_epoch=3,
+            )
+        with pytest.raises(ValueError, match="non-zero"):
+            actions.TriggerLimb(95_000, 0)
+        with pytest.raises(ValueError, match="must differ"):
+            actions.SetPositionTriggers(
+                market=7,
+                owner=bytes(20),
+                expected_position_epoch=3,
+                stop_loss=actions.TriggerLimb(95_000, 75, 11),
+                take_profit=actions.TriggerLimb(110_000, 50, 11),
+            )
+
+    def test_trigger_market_config_admin_hash_matches_engine(self):
+        config = actions.SetTriggerMarketConfig(
+            market=7,
+            expected_current_version=3,
+            enabled=True,
+            max_trigger_slippage_bps=250,
+            max_mark_age_ms=5_000,
+            max_future_publish_skew_ms=1_000,
+            max_active_brackets=32,
+        )
+        digest = pts.admin_proposal_content_hash(
+            bytes([0x11] * 32),
+            42,
+            3,
+            2,
+            bytes([0x22] * 20),
+            7,
+            1_000,
+            259_201_000,
+            {"SetTriggerMarketConfig": config.as_wire()},
+        )
+        assert (
+            digest.hex()
+            == "c707537e8d050389a705df1ce0aa2ad1cf873e67d1c45d10a955dde9b50e933c"
+        )
+
+        with pytest.raises(ValueError, match="enabled must be boolean"):
+            actions.SetTriggerMarketConfig(
+                market=7,
+                enabled=1,  # type: ignore[arg-type]
+                max_trigger_slippage_bps=250,
+                max_mark_age_ms=5_000,
+                max_future_publish_skew_ms=1_000,
+                max_active_brackets=32,
+            )
+
     def test_place_order_round_trip(self):
         act = actions.PlaceOrder(
             market=7,

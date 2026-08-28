@@ -250,7 +250,8 @@ function toAction(
           solanaDestination: bytes(input.solana_destination),
         },
       };
-    case ActionType.ConfirmDeposit:
+    case ActionType.ConfirmDeposit: {
+      const loc = input.locator as Record<string, unknown> | undefined | null;
       return {
         type: "ConfirmDeposit",
         data: {
@@ -258,8 +259,18 @@ function toAction(
           amount: big(input.amount),
           solanaTxSig: bytes(input.solana_tx_sig),
           signer: bytes(input.signer),
+          ...(loc
+            ? {
+                locator: {
+                  topIndex: Number(loc.top_index),
+                  innerIndex:
+                    loc.inner_index == null ? null : Number(loc.inner_index),
+                },
+              }
+            : {}),
         },
       };
+    }
     case ActionType.ConfirmWithdrawal:
       return {
         type: "ConfirmWithdrawal",
@@ -444,6 +455,37 @@ function toAction(
           proof: toOperatorProof(input.proof as Record<string, unknown>),
         },
       };
+    case ActionType.SetPositionTriggers: {
+      const limb = (value: unknown) => {
+        if (value == null) return null;
+        const item = value as Record<string, unknown>;
+        return {
+          triggerPrice: big(item.trigger_price),
+          maxSlippageBps: item.max_slippage_bps as number,
+          clientTriggerId: bigOrNull(item.client_trigger_id),
+        };
+      };
+      return {
+        type: "SetPositionTriggers",
+        data: {
+          market: input.market as number,
+          owner: bytes(input.owner),
+          expectedPositionEpoch: big(input.expected_position_epoch),
+          stopLoss: limb(input.stop_loss),
+          takeProfit: limb(input.take_profit),
+          clientGroupId: bigOrNull(input.client_group_id),
+        },
+      };
+    }
+    case ActionType.CancelPositionTriggers:
+      return {
+        type: "CancelPositionTriggers",
+        data: {
+          market: input.market as number,
+          owner: bytes(input.owner),
+          expectedPositionEpoch: big(input.expected_position_epoch),
+        },
+      };
     default:
       throw new Error(
         `toAction: action_type 0x${actionType.toString(16)} not wired ` +
@@ -598,6 +640,21 @@ function toAdminAction(
       value: {
         newThreshold: Number(big(r.new_threshold)),
         newMembers: (r.new_members as unknown[]).map((a) => bytes(a)),
+      },
+    };
+  }
+  if (v.SetTriggerMarketConfig) {
+    const c = v.SetTriggerMarketConfig as Record<string, unknown>;
+    return {
+      kind: "SetTriggerMarketConfig",
+      value: {
+        market: c.market as number,
+        expectedCurrentVersion: bigOrNull(c.expected_current_version),
+        enabled: c.enabled as boolean,
+        maxTriggerSlippageBps: c.max_trigger_slippage_bps as number,
+        maxMarkAgeMs: big(c.max_mark_age_ms),
+        maxFuturePublishSkewMs: big(c.max_future_publish_skew_ms),
+        maxActiveBrackets: big(c.max_active_brackets),
       },
     };
   }
@@ -769,9 +826,9 @@ describe("conformance vectors (TypeScript)", () => {
       govTypes.has(c.action_type as number),
     );
     // Guard against the vector file drifting out from under this assertion:
-    // propose (create-market and v2 batch), approve, reject, and all three
-    // emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(7);
+    // propose (create-market, v2 batch and trigger config), approve, reject,
+    // and all three emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(8);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

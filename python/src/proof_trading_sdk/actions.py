@@ -227,6 +227,174 @@ class ClosePosition(Action):
         return {"market": self.market, "owner": self.owner}
 
 
+_U64_MAX = (1 << 64) - 1
+_U32_MAX = (1 << 32) - 1
+_U16_MAX = (1 << 16) - 1
+MAX_TRIGGER_SLIPPAGE_BPS = 9_999
+
+
+def _trigger_uint(name: str, value: int, maximum: int, *, nonzero: bool = False) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > maximum:
+        raise ValueError(f"{name} must be an unsigned integer <= {maximum}")
+    if nonzero and value == 0:
+        raise ValueError(f"{name} must be non-zero")
+
+
+@dataclass
+class TriggerLimb:
+    """One optional stop-loss/take-profit limb (not an action by itself)."""
+
+    trigger_price: int
+    max_slippage_bps: int
+    client_trigger_id: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        _trigger_uint("trigger_price", self.trigger_price, _U64_MAX, nonzero=True)
+        _trigger_uint(
+            "max_slippage_bps",
+            self.max_slippage_bps,
+            MAX_TRIGGER_SLIPPAGE_BPS,
+            nonzero=True,
+        )
+        if self.client_trigger_id is not None:
+            _trigger_uint(
+                "client_trigger_id", self.client_trigger_id, _U64_MAX, nonzero=True
+            )
+
+    def as_wire(self) -> dict[str, Any]:
+        return {
+            "trigger_price": self.trigger_price,
+            "max_slippage_bps": self.max_slippage_bps,
+            "client_trigger_id": self.client_trigger_id,
+        }
+
+
+@dataclass
+class SetPositionTriggers(Action):
+    """Atomically replace one exact position generation's complete bracket."""
+
+    ACTION_NAME = "SetPositionTriggers"
+    market: int
+    owner: bytes
+    expected_position_epoch: int
+    stop_loss: Optional[TriggerLimb] = None
+    take_profit: Optional[TriggerLimb] = None
+    client_group_id: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        _trigger_uint("market", self.market, _U32_MAX)
+        if not isinstance(self.owner, bytes) or len(self.owner) != 20:
+            raise ValueError("owner must be exactly 20 bytes")
+        _trigger_uint(
+            "expected_position_epoch",
+            self.expected_position_epoch,
+            _U64_MAX,
+            nonzero=True,
+        )
+        if self.stop_loss is None and self.take_profit is None:
+            raise ValueError("at least one of stop_loss or take_profit is required")
+        if self.client_group_id is not None:
+            _trigger_uint(
+                "client_group_id", self.client_group_id, _U64_MAX, nonzero=True
+            )
+        stop_id = self.stop_loss.client_trigger_id if self.stop_loss else None
+        take_id = self.take_profit.client_trigger_id if self.take_profit else None
+        if stop_id is not None and stop_id == take_id:
+            raise ValueError("stop_loss and take_profit client_trigger_id values must differ")
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "owner": self.owner,
+            "expected_position_epoch": self.expected_position_epoch,
+            "stop_loss": self.stop_loss.as_wire() if self.stop_loss else None,
+            "take_profit": self.take_profit.as_wire() if self.take_profit else None,
+            "client_group_id": self.client_group_id,
+        }
+
+
+@dataclass
+class CancelPositionTriggers(Action):
+    """Cancel the active bracket for one exact position generation."""
+
+    ACTION_NAME = "CancelPositionTriggers"
+    market: int
+    owner: bytes
+    expected_position_epoch: int
+
+    def __post_init__(self) -> None:
+        _trigger_uint("market", self.market, _U32_MAX)
+        if not isinstance(self.owner, bytes) or len(self.owner) != 20:
+            raise ValueError("owner must be exactly 20 bytes")
+        _trigger_uint(
+            "expected_position_epoch",
+            self.expected_position_epoch,
+            _U64_MAX,
+            nonzero=True,
+        )
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "owner": self.owner,
+            "expected_position_epoch": self.expected_position_epoch,
+        }
+
+
+@dataclass
+class SetTriggerMarketConfig:
+    """Typed value for multisig ``AdminAction::SetTriggerMarketConfig`` (tag 5)."""
+
+    market: int
+    enabled: bool
+    max_trigger_slippage_bps: int
+    max_mark_age_ms: int
+    max_future_publish_skew_ms: int
+    max_active_brackets: int
+    expected_current_version: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        _trigger_uint("market", self.market, _U32_MAX)
+        if not isinstance(self.enabled, bool):
+            raise ValueError("enabled must be boolean")
+        if self.expected_current_version is not None:
+            _trigger_uint(
+                "expected_current_version", self.expected_current_version, _U64_MAX
+            )
+        _trigger_uint(
+            "max_trigger_slippage_bps",
+            self.max_trigger_slippage_bps,
+            MAX_TRIGGER_SLIPPAGE_BPS,
+        )
+        for name in (
+            "max_mark_age_ms",
+            "max_future_publish_skew_ms",
+            "max_active_brackets",
+        ):
+            _trigger_uint(name, getattr(self, name), _U64_MAX)
+        if self.enabled and (
+            self.max_trigger_slippage_bps == 0
+            or self.max_mark_age_ms == 0
+            or self.max_future_publish_skew_ms == 0
+            or self.max_active_brackets == 0
+        ):
+            raise ValueError(
+                "enabled trigger config requires non-zero slippage, mark-age, "
+                "future-skew and bracket bounds"
+            )
+
+    def as_wire(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "expected_current_version": self.expected_current_version,
+            "enabled": self.enabled,
+            "max_trigger_slippage_bps": self.max_trigger_slippage_bps,
+            "max_mark_age_ms": self.max_mark_age_ms,
+            "max_future_publish_skew_ms": self.max_future_publish_skew_ms,
+            "max_active_brackets": self.max_active_brackets,
+        }
+
+
 @dataclass
 class CreateImpactMarket(Action):
     ACTION_NAME = "CreateImpactMarket"
@@ -368,12 +536,37 @@ class WithdrawRequest(Action):
 
 
 @dataclass
+class DepositLocator:
+    """Position of a USDC transfer inside its Solana transaction: the
+    top-level instruction index plus, for a transfer nested under a CPI, the
+    inner instruction index (``None`` when the transfer is itself top-level).
+    Two transfers in one transaction share a signature and differ only here.
+    Not an action by itself — the optional trailing field of
+    :class:`ConfirmDeposit`."""
+
+    top_index: int
+    inner_index: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        _trigger_uint("top_index", self.top_index, _U16_MAX)
+        if self.inner_index is not None:
+            _trigger_uint("inner_index", self.inner_index, _U16_MAX)
+
+    def as_wire(self) -> dict[str, Any]:
+        return {
+            "top_index": self.top_index,
+            "inner_index": self.inner_index,
+        }
+
+
+@dataclass
 class ConfirmDeposit(Action):
     ACTION_NAME = "ConfirmDeposit"
     owner: bytes
     amount: int
     solana_tx_sig: bytes
     signer: bytes
+    locator: Optional[DepositLocator] = None
 
     def fields(self) -> dict[str, Any]:
         return {
@@ -381,6 +574,7 @@ class ConfirmDeposit(Action):
             "amount": self.amount,
             "solana_tx_sig": self.solana_tx_sig,
             "signer": self.signer,
+            "locator": self.locator.as_wire() if self.locator else None,
         }
 
 
@@ -599,6 +793,7 @@ __all__ = [
     "RawAction",
     "Side",
     "TimeInForce",
+    "MAX_TRIGGER_SLIPPAGE_BPS",
     "PlaceOrder",
     "MarketOrder",
     "CancelOrder",
@@ -607,11 +802,16 @@ __all__ = [
     "CancelReplaceOrder",
     "AmendOrder",
     "ClosePosition",
+    "TriggerLimb",
+    "SetPositionTriggers",
+    "CancelPositionTriggers",
+    "SetTriggerMarketConfig",
     "ApproveAgent",
     "RevokeAgent",
     "Deposit",
     "Withdraw",
     "WithdrawRequest",
+    "DepositLocator",
     "ConfirmDeposit",
     "ConfirmWithdrawal",
     "FailWithdrawal",

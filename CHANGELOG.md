@@ -7,6 +7,44 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `ConfirmDeposit` gains a trailing optional `DepositLocator`
+  (`{ topIndex, innerIndex? }`) identifying the USDC transfer's instruction
+  position within its Solana transaction, so two transfers sharing one Solana
+  transaction signature are no longer deduplicated into one credit. Mirrors
+  engine `exchange-wire` 1.1.0 (exchange#434). New conformance vectors
+  `confirm_deposit/with_locator` and `confirm_deposit/no_locator` pin the bytes.
+
+### Changed
+
+- **BREAKING (MAJOR) — `ConfirmDeposit` payloads gain an unconditional fifth
+  element.** The locator is appended as a trailing `nil` even when the caller
+  supplies none, so every `ConfirmDeposit` this SDK emits changes from a
+  4-element positional array (`94 …`) to a 5-element one (`95 … c0`) — including
+  calls whose source code is unchanged. Backward decode holds in one direction
+  only: pre-locator bytes still decode on the new code, but a strict 4-field
+  `rmp-serde` decoder **rejects** what the new code emits, which
+  `exchange-wire`'s own `deposit_locator_is_backward_decodable` test asserts at
+  the pinned revision. Per CLAUDE.md ("if it breaks backward decode in either
+  direction it is a MAJOR bump") this is a MAJOR bump for every package that
+  encodes `ConfirmDeposit` — the same classification this changelog applied to
+  the `CreateMarket` open-interest cap, which grew a positional array by one
+  unconditional trailing element in exactly the same way.
+
+  Compatible engine: `exchange-core >= 2.6.0` **built against
+  `exchange-wire >= 1.1.0`** (exchange#434, rev `2a6d079`). Note `exchange-core`
+  reads 2.6.0 both with and without the locator, so it is the `exchange-wire`
+  floor — not the `exchange-core` version — that distinguishes an engine which
+  accepts these bytes. Pointing this SDK at an engine below that floor fails
+  every deposit confirmation, so upgrade the engine first.
+
+## [3.0.0] — 2026-08-24
+
+First published release: this is the first version of any of these packages
+to reach npm, crates.io, or PyPI. Earlier entries below describe versions
+that were tagged in this changelog only and never published.
+
 The npm, Rust core, PyO3, and Python packages move to **3.0.0**. The MAJOR bump
 renumbers `OpenInterestLimitExceeded` from result code 50 to 51 (and repurposes
 code 50 to `SlippageExceeded`), which changes the result for any consumer that
@@ -39,6 +77,23 @@ action types.
 
 ### Added
 
+- **`SubmissionPending` (Python)** — a new public exception for the gateway
+  shape that carries a `txHash` but no engine `code`. The gateway broadcast the
+  transaction and could not report its on-chain outcome in time; the tx may
+  still commit, so the caller reconciles by `tx_hash` instead of re-submitting.
+  Exported from `proof_trading_sdk`.
+
+- **Position-linked stop-loss/take-profit support (W32-10)** — canonical
+  `SetPositionTriggers` (`0x25`) and `CancelPositionTriggers` (`0x26`) wire
+  actions, governed trigger-market configuration tag `0x05`, delegated-owner
+  signing, persistent position-epoch discovery, current trigger/config/status
+  reads, and lossless owner/market lifecycle-history reads now ship across the
+  Rust, WASM/TypeScript, and Python bindings. Engine-produced golden vectors
+  pin both action payloads/envelopes and the administration content hash; all
+  JSON-facing `u64` identifiers remain decimal strings or native lossless
+  integer types. This additive surface folds into the still-uncut `3.0.0`
+  release and requires the coordinated W32-10 engine/gateway contract
+  (`exchange-core >= 2.5.0`) before it is advertised as active.
 - **Receipt-carrying terminal withdrawal actions `ConfirmWithdrawalReceipt`
   (`0x22`) and `FailWithdrawalReceipt` (`0x23`)** — the operator-multisig
   withdrawal-settlement phase (W28-20). Each carries a
@@ -71,6 +126,14 @@ action types.
 
 ### Changed
 
+- **BREAKING — the TypeScript `ExecErrorCode.TimestampNonceRejected` (code 21)
+  is renamed `InvalidNonce`** (#63), aligning the TS SDK with the engine
+  `ExecError` variant and the Rust/Python bindings, which already used that
+  name. `decodeExecError(21).name` / `execErrorName(21)` now return
+  `"InvalidNonce"`; any TS consumer keying on the old string must update. Code
+  21 is now pinned in the `errors` conformance manifest across all three
+  bindings (the `MANIFEST_NAME_DIVERGES` carve-out is removed). Folds into this
+  uncut `3.0.0` release; no separate version bump.
 - **BREAKING — the action codec and signing now run through a WASM build of the
   Rust core** (ADR 0001). `encodeSignedTx` / `signAndEncode` /
   `signEnvelopeFromPayload` / `encodePayloadBytes` / `decodeTx` are byte-identical
@@ -91,6 +154,34 @@ action types.
 
 ### Fixed
 
+- **The Python client no longer reports a rejected submit as a success** (#7).
+  `_check_response` handled a fixed set of statuses and then returned the
+  response, so any other non-2xx (400, 402, 405–428, 431, 3xx) was treated as a
+  successful submit. Every non-2xx now raises: 5xx stays `GatewayError`
+  ("retry with backoff"), and a 3xx/4xx raises `TransportError` carrying
+  `status_code` — it must not be blind-retried.
+- **`submit_action` no longer defaults a missing engine `code` to 0**, and no
+  longer mistakes an unresolved broadcast for a rejection (#7). The four
+  documented `/exchange` shapes are now dispatched by body, matching the
+  contract the TypeScript binding pins in `submitViaGateway`: a structured
+  `code` is authoritative; a code-less `{"status": "ok"}` is a legacy CheckTx
+  ack and **succeeds**; a code-less body carrying a hash raises
+  `SubmissionPending` (reconcile by hash — **not** a rejection, since calling
+  it one would make a trader re-place an order that is about to fill); and a
+  bare error string recovers its leading `"<code>: "` engine code, falling back
+  to 1. Because `_check_response` has already raised for every status >= 300,
+  any non-object body reaching this point is a 2xx compatibility error string
+  and is classified as an `EngineError`, not a transport failure — a terminal
+  rejection reported as transport would invite a pointless resubmit. A body
+  that is valid JSON but not an object (a bare string, a list) no longer
+  escapes as a raw `AttributeError`, and a non-JSON body no longer propagates a
+  raw `JSONDecodeError`.
+- **A default-constructed `ExchangeClient()` no longer clobbers env/TOML
+  config** (#8). The `config=None` branch passed the falsy constructor defaults
+  (`gateway_url=""`, `api_key=""`, `timeout_secs=0`) straight into
+  `load_config`, so configured values were ignored and every request ran with
+  `httpx.Timeout(0)` and failed instantly. Only truthy overrides are forwarded
+  now, restoring the documented precedence (defaults < env < TOML < explicit).
 - **`wasm-bindgen` is exact-pinned (`=0.2.126`)** so `npm run build:wasm` (and
   the `pretest` / `build` / `prepare` scripts that depend on it) cannot break
   when a new `0.2.x` release ships: the wasm-bindgen CLI hard-errors on any
@@ -249,9 +340,9 @@ action types.
   the pre-#55 SDK would have failed); a code plus canonical DeliverTx log pins
   the log-aware decoder (transitional code-50 slippage/open-interest cases →
   `AmbiguousCode50` without a recognized log). Generated from the Rust core and
-  asserted by all three runners. Code 21 is excluded — the TS SDK deliberately
-  names it `TimestampNonceRejected` vs the core's `InvalidNonce`, an intentional
-  name divergence rather than the code↔code drift this family guards.
+  asserted by all three runners. Every code is pinned, including 21 — the TS
+  SDK was aligned to the engine name `InvalidNonce` (see Changed), removing the
+  earlier carve-out.
 - **`ExchangeClient.submitSignedTx(txBytes)` / `submitSignedTxCommit(txBytes)`**
   — public submission of **externally signed** wire bytes (built via
   `signingMessage()` → external signature → `encodeSignedTx()`), for callers
@@ -448,7 +539,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...HEAD
+[3.0.0]: https://github.com/Proof-labs/trading-sdk/releases/tag/npm-v3.0.0
 [1.1.0]: https://github.com/Proof-labs/trading-sdk/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Proof-labs/trading-sdk/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/Proof-labs/trading-sdk/releases/tag/v0.1.0

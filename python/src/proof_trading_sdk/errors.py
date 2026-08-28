@@ -81,6 +81,31 @@ class GatewayError(TransportError):
         )
 
 
+class SubmissionPending(ProofTradingSdkError):
+    """The gateway broadcast the transaction but could not report its outcome.
+
+    This is **not** a rejection. The gateway accepted the envelope and pushed it
+    to the chain, but could not tell us the on-chain result in time (park
+    deadline exceeded, a byte-identical tx already in flight, or a result it
+    could not parse). The transaction may still commit, so the caller must
+    reconcile by ``tx_hash`` — re-submitting an order that is still in flight
+    risks a double fill.
+
+    Attributes:
+        tx_hash: Transaction hash to reconcile the submission against.
+        message: The gateway's own explanation, if it gave one.
+    """
+
+    def __init__(self, tx_hash: str, message: str = "") -> None:
+        self.tx_hash = tx_hash
+        self.message = message
+        detail = message or "gateway returned no on-chain result"
+        super().__init__(
+            f"submission pending: {detail} — reconcile by tx_hash={tx_hash}; "
+            "do NOT re-submit"
+        )
+
+
 class AuthenticationError(ProofTradingSdkError):
     """HTTP 401 — API key missing, invalid, or expired."""
 

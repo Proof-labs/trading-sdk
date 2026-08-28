@@ -122,6 +122,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     const ORACLE_UPDATE_COMPOSITE: u8 = 0x14;
     const MARKET_ORDER: u8 = 0x04;
     const CLOSE_POSITION: u8 = 0x17;
+    const CONFIRM_DEPOSIT: u8 = 0x09;
     const CREATE_MARKET: u8 = 0x07;
     const UPDATE_MARKET_FEES: u8 = 0x10;
     const ATOMIC_BASKET_ORDER: u8 = 0x1C;
@@ -133,10 +134,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     const FAIL_WITHDRAWAL_RECEIPT: u8 = 0x23;
     const AUTHORIZE_WITHDRAWAL: u8 = 0x24;
     // Coverage burn-down (issue #69): the 15 previously-unpinned action types.
+    // (CONFIRM_DEPOSIT is already declared above.)
     const DEPOSIT: u8 = 0x05;
     const WITHDRAW: u8 = 0x06;
     const WITHDRAW_REQUEST: u8 = 0x08;
-    const CONFIRM_DEPOSIT: u8 = 0x09;
     const CONFIRM_WITHDRAWAL: u8 = 0x0a;
     const FAIL_WITHDRAWAL: u8 = 0x0b;
     const APPROVE_AGENT: u8 = 0x0c;
@@ -148,6 +149,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     const CANCEL_ALL_ORDERS: u8 = 0x19;
     const CANCEL_REPLACE_ORDER: u8 = 0x1a;
     const AMEND_ORDER: u8 = 0x1b;
+    const SET_POSITION_TRIGGERS: u8 = 0x25;
+    const CANCEL_POSITION_TRIGGERS: u8 = 0x26;
 
     let owner = vec![0x01u8; 20];
     let signer = vec![0x03u8; 20];
@@ -217,6 +220,35 @@ fn main() -> Result<(), Box<dyn Error>> {
             "close_position/basic",
             CLOSE_POSITION,
             json!({ "market": 2, "owner": owner }),
+        ),
+        // ConfirmDeposit (0x09) with the trailing DepositLocator. Mirrors the
+        // engine's own `all_action_variants` fixture (owner 0x55, amount
+        // 100_000, sig 0xAB×64, signer 0x66, locator top=3 inner=Some(1)); the
+        // locator serializes as a 2-element array `[top_index, inner_index]`.
+        codec_case(
+            "confirm_deposit/with_locator",
+            CONFIRM_DEPOSIT,
+            json!({
+                "owner": vec![0x55u8; 20],
+                "amount": 100_000u64,
+                "solana_tx_sig": vec![0xABu8; 64],
+                "signer": vec![0x66u8; 20],
+                "locator": { "top_index": 3, "inner_index": 1 }
+            }),
+        ),
+        // Pre-locator ConfirmDeposit: the locator is absent and encodes as a
+        // trailing `nil`. This is the backward-compatible (MINOR) tail — old
+        // 4-field bytes still decode, and the new encoder appends nil when the
+        // relayer supplies no locator.
+        codec_case(
+            "confirm_deposit/no_locator",
+            CONFIRM_DEPOSIT,
+            json!({
+                "owner": vec![0x55u8; 20],
+                "amount": 100_000u64,
+                "solana_tx_sig": vec![0xABu8; 64],
+                "signer": vec![0x66u8; 20]
+            }),
         ),
         // CreateMarket with the MANDATORY sz_decimals + ticker fields. Pins
         // that a market-creation payload carries them — the gap that left the
@@ -348,6 +380,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                         "description": "", "rules": ""
                     }}
                 ]}
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/set_trigger_market_config",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "SetTriggerMarketConfig": {
+                    "market": 7,
+                    "expected_current_version": 3u64,
+                    "enabled": true,
+                    "max_trigger_slippage_bps": 250u32,
+                    "max_mark_age_ms": 5_000u64,
+                    "max_future_publish_skew_ms": 1_000u64,
+                    "max_active_brackets": 32u64
+                }}
             }),
         ),
         codec_case(
@@ -569,6 +618,37 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({ "owner": owner, "order_id": 42u64,
                     "new_price": null, "new_quantity": null }),
         ),
+        // W32-10 whole-position bracket actions. This is the literal fixture
+        // from exchange-core's position-trigger golden-vector test.
+        codec_case(
+            "set_position_triggers/engine_golden",
+            SET_POSITION_TRIGGERS,
+            json!({
+                "market": 7,
+                "owner": vec![0xA5u8; 20],
+                "expected_position_epoch": 3u64,
+                "stop_loss": {
+                    "trigger_price": 95_000u64,
+                    "max_slippage_bps": 75u32,
+                    "client_trigger_id": 11u64
+                },
+                "take_profit": {
+                    "trigger_price": 110_000u64,
+                    "max_slippage_bps": 50u32,
+                    "client_trigger_id": 12u64
+                },
+                "client_group_id": 9u64
+            }),
+        ),
+        codec_case(
+            "cancel_position_triggers/engine_golden",
+            CANCEL_POSITION_TRIGGERS,
+            json!({
+                "market": 7,
+                "owner": vec![0xA5u8; 20],
+                "expected_position_epoch": 3u64
+            }),
+        ),
     ];
     write_ndjson(&dir.join(cv::CODEC_FILE), &codec)?;
 
@@ -639,16 +719,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // and had no 51 entry) — `manifest/51` → OpenInterestLimitExceeded and
     // `manifest/50` → SlippageExceeded together pin the split.
     //
-    // Code 21 is skipped: the TS SDK deliberately exposes it as
-    // "TimestampNonceRejected" (pinned in src/errors.test.ts) while the core
-    // names it "InvalidNonce". That is an intentional name divergence, not the
-    // code↔code drift this family guards; pinning it would either fail TS or
-    // force an out-of-scope public rename.
-    const MANIFEST_NAME_DIVERGES: &[u32] = &[21];
-    let mut errors: Vec<cv::ErrorCase> = proof_trading_sdk::types::ERROR_KINDS
+    // Code 21 is now pinned like every other code: the TS SDK was aligned to
+    // the engine/Rust/Python name `InvalidNonce` (#63), removing the
+    // `TimestampNonceRejected` divergence that previously forced a carve-out.
+    let mut errors: Vec<cv::ErrorCase> = proof_trading_sdk::errors::ERROR_KINDS
         .iter()
         .map(|kind| kind.code())
-        .filter(|code| !MANIFEST_NAME_DIVERGES.contains(code))
         .map(|code| error_case(&format!("manifest/{code}"), code, None))
         .collect();
 

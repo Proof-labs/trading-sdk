@@ -372,7 +372,7 @@ fn get_action_types<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
 #[pyfunction]
 fn get_error_code_table<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
     let list = PyList::empty(py);
-    for kind in core_sdk::types::error_code_manifest() {
+    for kind in core_sdk::error_code_manifest() {
         let d = PyDict::new(py);
         d.set_item("code", kind.code())?;
         d.set_item("name", kind.name())?;
@@ -389,7 +389,7 @@ fn get_error_code_table<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
 #[pyfunction]
 #[pyo3(signature = (code, log=None))]
 fn classify_error_name(code: u32, log: Option<&str>) -> Option<&'static str> {
-    core_sdk::types::decode_exec_error_kind(code, log).map(|kind| kind.name())
+    core_sdk::decode_exec_error_kind(code, log).map(|kind| kind.name())
 }
 
 /// Native Python extension module for proof-trading-sdk (internal name: _native).
