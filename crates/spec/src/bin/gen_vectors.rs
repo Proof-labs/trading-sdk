@@ -12,8 +12,9 @@
 //!     (the coverage ratchet in `src/conformance.test.ts` enforces this — the
 //!     debt list is empty, #69). Remaining nice-to-haves are deeper edges, not
 //!     new types: more zero/max-u64 and serde-default-tail permutations, and
-//!     the nested `EventOracleSource` non-default variants (only
-//!     RelayerAttested is exercised today).
+//!     the nested `EventOracleSource` variants — no vector exercises ANY of
+//!     them today (both `oracle_source` fixtures are absent/nil, which is a
+//!     different wire value from the `RelayerAttested` unit variant).
 //!   * signing: more keys / seqs (0,1,MAX) / chain_ids (unbound + bound) /
 //!     payload sizes; more owner cases.
 //!   * nonce: already reasonably covered; add multi-process interleavings if
@@ -556,10 +557,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({ "owner": owner, "agent_pubkey": vec![0xAAu8; 32] }),
         ),
         // Impact-market create (standalone 0x0e) + resolution. oracle_source,
-        // description, and rules are serde(default); the happy case leaves them
-        // absent (RelayerAttested / empty), matching the common relayer path.
+        // description, and rules are serde(default); this case leaves them
+        // absent, so the tail encodes as `c0 a0 a0` (nil, "", ""). Note that an
+        // ABSENT oracle source is not the same wire value as the
+        // `RelayerAttested` unit variant, which would encode as the bare string
+        // — no vector exercises any EventOracleSource variant yet (see the
+        // coverage note in the module header).
         codec_case(
-            "create_impact_market/relayer_attested",
+            "create_impact_market/no_oracle_source",
             CREATE_IMPACT_MARKET,
             json!({
                 "impact_market_id": 91, "underlying_market": 15,
@@ -572,10 +577,26 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "description": "", "rules": ""
             }),
         ),
+        // All three `Outcome` variants are pinned, not just the happy one.
+        // `outcome` is a NUMERIC_ENUM_FIELDS entry in codec-adapter.ts (the
+        // integer-vs-name class the markSourceMode regression belonged to), so
+        // a vector for one variant leaves the other two mappings unproven —
+        // `side` and `time_in_force` are fully covered and this was the one
+        // enum that was not.
         codec_case(
             "resolve_event/yes",
             RESOLVE_EVENT,
             json!({ "impact_market_id": 91, "outcome": "Yes", "signer": signer }),
+        ),
+        codec_case(
+            "resolve_event/no",
+            RESOLVE_EVENT,
+            json!({ "impact_market_id": 91, "outcome": "No", "signer": signer }),
+        ),
+        codec_case(
+            "resolve_event/void",
+            RESOLVE_EVENT,
+            json!({ "impact_market_id": 91, "outcome": "Void", "signer": signer }),
         ),
         // Per-user leverage override.
         codec_case(
