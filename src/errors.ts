@@ -1,7 +1,7 @@
 /**
  * Decoder for engine `ExecError` codes returned in `TxResult.code`.
  *
- * The Rust enum lives at `exchange-core/src/types.rs::ExecError`. Codes
+ * The Rust enum lives at `exchange-wire/src/types.rs::ExecError`. Codes
  * are stable wire-format identifiers — adding a new variant goes at the
  * end with the next free integer. **Keep this map in sync with that
  * `code()` impl** (CI flags drift in the audit `api-drift` lane).
@@ -94,6 +94,27 @@ export enum ExecErrorCode {
   AdminGovernanceInactive = 52,
   /** Signer is not the declared admin actor / not in the signer registry. */
   NotAdminSigner = 53,
+  // Proposal-lifecycle family (multisig governance), mirrored from the engine
+  // ExecError codes 54-71. Decode-only: emitted by the propose/approve/reject
+  // and emergency admin paths.
+  ProposalNotFound = 54,
+  ProposalNotPending = 55,
+  ProposalExpired = 56,
+  DuplicateApproval = 57,
+  DuplicateRejection = 58,
+  ProposalRegistryVersionMismatch = 59,
+  ProposalContentMismatch = 60,
+  InvalidAdminAction = 61,
+  AdminActionTooLarge = 62,
+  TooManyPendingProposals = 63,
+  ProposalIdExhausted = 64,
+  ConflictingVote = 65,
+  MarketIdOutOfRange = 66,
+  EmergencyRateLimited = 67,
+  EmergencyGlobalRateLimited = 68,
+  EmergencyActionRetired = 69,
+  AdminActionRequiresProposal = 70,
+  InvalidAdminRegistry = 71,
   InternalError = 255,
 }
 
@@ -294,6 +315,91 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "NotAdminSigner",
     description:
       "tx signer does not match the action's declared proposer/approver/rejecter/signer field, or is not a member of the current admin signer registry",
+  },
+  54: {
+    name: "ProposalNotFound",
+    description:
+      "no admin proposal exists under this id (never created, or pruned from terminal retention)",
+  },
+  55: {
+    name: "ProposalNotPending",
+    description:
+      "the admin proposal is already terminal — votes are only accepted while pending",
+  },
+  56: {
+    name: "ProposalExpired",
+    description:
+      "the admin proposal passed its TTL — re-propose and collect fresh approvals",
+  },
+  57: {
+    name: "DuplicateApproval",
+    description:
+      "this signer already approved the proposal (the proposer approves at creation)",
+  },
+  58: {
+    name: "DuplicateRejection",
+    description: "this signer already rejected the proposal",
+  },
+  59: {
+    name: "ProposalRegistryVersionMismatch",
+    description:
+      "registry version differs from the current signer registry — re-read and re-sign",
+  },
+  60: {
+    name: "ProposalContentMismatch",
+    description:
+      "approval context does not byte-match the stored proposal — rebuild from the proposals query",
+  },
+  61: {
+    name: "InvalidAdminAction",
+    description:
+      "inner admin/emergency action is invalid: unknown or not-admitted arm, non-zero inner signer, or out-of-bounds field",
+  },
+  62: {
+    name: "AdminActionTooLarge",
+    description: "canonical inner action bytes exceed MAX_ADMIN_ACTION_BYTES",
+  },
+  63: {
+    name: "TooManyPendingProposals",
+    description: "MAX_PENDING_PROPOSALS admin proposals are already pending",
+  },
+  64: {
+    name: "ProposalIdExhausted",
+    description: "a governance id counter is exhausted; ids never wrap",
+  },
+  65: {
+    name: "ConflictingVote",
+    description:
+      "the opposite vote already exists — votes are immutable and disjoint",
+  },
+  66: {
+    name: "MarketIdOutOfRange",
+    description:
+      "market id exceeds the signed-32-bit identity bound (i32::MAX)",
+  },
+  67: {
+    name: "EmergencyRateLimited",
+    description:
+      "per-signer emergency action bound reached within the rolling window",
+  },
+  68: {
+    name: "EmergencyGlobalRateLimited",
+    description:
+      "chain-wide emergency action bound reached within the rolling window",
+  },
+  69: {
+    name: "EmergencyActionRetired",
+    description: "this emergency arm was retired; new submissions fail closed",
+  },
+  70: {
+    name: "AdminActionRequiresProposal",
+    description:
+      "the signer registry exists — this admin action is proposal-only, even for an authorized relayer",
+  },
+  71: {
+    name: "InvalidAdminRegistry",
+    description:
+      "proposed signer roster violates the registry invariants (threshold bounds, sorted unique members, roster size, version headroom)",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

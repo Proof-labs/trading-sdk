@@ -9,6 +9,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Proposal-lifecycle error codes 54-71** - the multisig-governance error
+  family (`ProposalNotFound` ... `InvalidAdminRegistry`) is now mirrored across
+  all three bindings from the engine's `ExecError` and the frozen
+  `exchange/sdk` reference table. `decodeExecError` / `get_error_name`
+  previously returned `null`/unknown for any propose/approve/reject or
+  emergency-admin rejection in this range, so Web Admin and governance tooling
+  could not name those failures. Decode-only and additive (MINOR): no wire
+  change, and the client never constructs these errors, it classifies result
+  codes. The `no_code_holes_in_documented_range` gate now covers `1..=71` and
+  the `errors.ndjson` conformance manifest pins every new code to its name.
 - `AdminAction` gains an `UnpauseBridge` unit variant (inner tag `0x06`), a
   multisig operation that lifts a bridge pause. It carries no fields and
   serializes as the bare string `"UnpauseBridge"` (distinct from the
