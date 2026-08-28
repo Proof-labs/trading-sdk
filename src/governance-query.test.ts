@@ -298,6 +298,14 @@ describe("decodeAdminAction", () => {
     );
   });
 
+  it("decodes the UnpauseBridge unit variant carried as a bare string", () => {
+    // A fieldless admin action serializes as the bare variant name, not a
+    // `{ Variant: {} }` map — the same shape decodeProposalStatus handles.
+    expect(decodeAdminAction("UnpauseBridge")).toEqual({
+      kind: "UnpauseBridge",
+    });
+  });
+
   it("decodes the engine's frozen v2 impact bytes", () => {
     expect(decodeAdminAction(decodeVector(ACTION_IMPACT))).toEqual({
       kind: "CreateImpactMarket",
