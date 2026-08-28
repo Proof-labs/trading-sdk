@@ -13,6 +13,16 @@ GOLDEN_V4 = "5fe2dd718a4aea63492a5ab95eee27588cc861c504643bf68ce3fdd2c45dab99"
 # Admin-actions v2 (engine's ``admin_proposal_content_hash_v2_golden_vectors``)
 GOLDEN_IMPACT = "d57a7faa3a17aac647a0256c38f125f6bd0913d70013e185aeb322efaab9629e"
 GOLDEN_BATCH = "f9a9b17a53b52ad72c1703b583a0ed4ac70295244cbf31f74518d5177dd86e36"
+# The one admin action that is NOT a map: a fieldless unit variant, whose
+# canonical bytes are the bare fixstr "UnpauseBridge". exchange-core has no
+# frozen content-hash vector for this arm yet, so the value comes from the
+# authority itself -- exchange-wire's own ``codec::admin_proposal_content_hash``
+# at the revision pinned in crates/proof-trading-sdk/Cargo.toml. The TypeScript
+# suite pins the identical constant, which is what makes the two bindings
+# provably agree on the unit-variant shape.
+GOLDEN_UNPAUSE_BRIDGE = (
+    "ffa74c9323512ffb8272eea55fc49baf047f55aa8979e56e06229b57d1350f56"
+)
 
 
 def engine_default_create_market() -> dict:
@@ -105,6 +115,23 @@ class TestAdminProposalContentHash:
         }
         h = pts.admin_proposal_content_hash(**kwargs)
         assert h.hex() == GOLDEN_BATCH
+
+    def test_reproduces_unit_variant_hash(self):
+        # A unit variant is passed as the bare variant-name string, not a map.
+        # This is the only arm exercising that shape, and the content hash is
+        # what an approving client recomputes before signing -- if the bare
+        # string did not reach the core correctly, every legitimate
+        # UnpauseBridge approval would be refused.
+        kwargs = golden_kwargs()
+        kwargs["action"] = "UnpauseBridge"
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_UNPAUSE_BRIDGE
+
+    def test_rejects_unknown_unit_variant(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = "NotAnAdminAction"
+        with pytest.raises(ValueError, match="AdminAction"):
+            pts.admin_proposal_content_hash(**kwargs)
 
     def test_rejects_malformed_proposer(self):
         kwargs = golden_kwargs()

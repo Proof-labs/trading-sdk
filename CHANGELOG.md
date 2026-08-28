@@ -48,6 +48,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   accepts these bytes. Pointing this SDK at an engine below that floor fails
   every deposit confirmation, so upgrade the engine first.
 
+- The Python `admin_proposal_content_hash` stub now types `action` as
+  `dict[str, object] | str`, and its docstring names the unit-variant form. The
+  binding already accepted the bare string at runtime, but the declared type
+  rejected it — so a type-checked Python approver could not pass the only
+  canonical `UnpauseBridge` shape without suppressing the error.
+
 - Decoding a governance `action` that arrives as a bare string now throws
   unless the string is a known unit variant, matching the allowlist the encode
   direction already used and the fail-closed posture of `decodeAdminAction`. An

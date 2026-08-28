@@ -92,13 +92,16 @@ def admin_proposal_content_hash(
     created_height: int,
     created_ms: int,
     expiry_ms: int,
-    action: dict[str, object],
+    action: dict[str, object] | str,
 ) -> bytes:
     """Recompute the engine's §2.4 domain-separated admin-proposal content
     hash in the authoritative Rust core, so an approving client can verify a
     server-supplied ``content_hash`` locally. ``action`` is the serde map form
     (``{"Variant": {snake_case_fields}}``), as used by :func:`encode_action`
-    for the governance actions' ``action`` field."""
+    for the governance actions' ``action`` field — except for a fieldless UNIT
+    variant, which serde represents as the bare variant-name string (e.g.
+    ``"UnpauseBridge"``). A fieldless STRUCT variant such as ``HaltTrading {}``
+    is NOT one of those and keeps the ``{"HaltTrading": {}}`` map form."""
     ...
 
 def get_action_types() -> list[dict[str, object]]:
