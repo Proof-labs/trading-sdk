@@ -345,6 +345,7 @@ pub(crate) fn hint_capped_byte_seqs<'de, D: Deserializer<'de>>(
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+    use exchange_wire::types::ExecError;
 
     #[test]
     fn address_wire_identical_to_bare_array() {

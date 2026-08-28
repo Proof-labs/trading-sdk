@@ -166,7 +166,7 @@ pub fn nonce_sequence(last: u64, now_ms: &[u64]) -> Vec<u64> {
 
 /// Canonical manifest name for a numeric code (the `ERROR_KINDS` table).
 pub fn error_manifest_name(code: u32) -> Option<&'static str> {
-    proof_trading_sdk::types::ERROR_KINDS
+    proof_trading_sdk::errors::ERROR_KINDS
         .iter()
         .find(|kind| kind.code() == code)
         .map(|kind| kind.name())
@@ -176,7 +176,7 @@ pub fn error_manifest_name(code: u32) -> Option<&'static str> {
 /// resolves to slippage/open-interest only via its canonical log; a bare or
 /// unrecognized code 50 stays `AmbiguousCode50`.
 pub fn error_classify_name(code: u32, log: Option<&str>) -> Option<&'static str> {
-    proof_trading_sdk::types::decode_exec_error_kind(code, log).map(|kind| kind.name())
+    proof_trading_sdk::errors::decode_exec_error_kind(code, log).map(|kind| kind.name())
 }
 
 /// The reference every runner asserts. A bare code (`log: None`) pins the
