@@ -11,9 +11,12 @@ serde = { version = "1", features = ["derive"] }
 derive_more = { version = "1", features = ["from", "display"] }
 serde_bytes = "0.11"
 rmp-serde = "1"
-# The codec/types were extracted from exchange-core; the proc-macro keeps its
-# original `exchange_derive` import path via the `package` rename.
-exchange-derive = { package = "proof-trading-sdk-derive", path = "../proof-trading-sdk-derive", version = "1" }
+# The wire contract is the shared `exchange-wire` crate (engine + SDK share
+# one definition). Pinned to the merged `dev` rev (exchange#435 — exchange-wire
+# 1.2.0, adds the `AdminAction::UnpauseBridge` inner tag 0x06 on top of the
+# exchange#434 ConfirmDeposit instruction locator); swaps to a published
+# crates.io version once exchange-wire is published.
+exchange-wire = { git = "ssh://git@github.com/Proof-labs/exchange.git", rev = "f4feefd3545f3214d8699d424051afcf005ed336", version = "1" }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.

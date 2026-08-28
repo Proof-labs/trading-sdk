@@ -120,6 +120,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Fetch the private `exchange-wire` git dependency (the wasm build compiles it).
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -197,6 +201,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Fetch the private `exchange-wire` git dependency (Proof-labs/exchange).
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
       - uses: dtolnay/rust-toolchain@stable
       # One shared Rust cache namespace across the `rust` and `python` jobs:
       # maturin builds the PyO3 crate into the same `./target`, so Python reuses
@@ -228,6 +236,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Fetch the private `exchange-wire` git dependency (Proof-labs/exchange).
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
       - uses: dtolnay/rust-toolchain@stable
       # Same shared-key as the `rust` job so the maturin build restores its
       # compiled dependency graph (the expensive part) instead of rebuilding it.

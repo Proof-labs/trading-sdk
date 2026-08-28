@@ -9,19 +9,50 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `AdminAction` gains a `UnpauseBridge` unit variant (inner tag `0x06`), a
+- `AdminAction` gains an `UnpauseBridge` unit variant (inner tag `0x06`), a
   multisig operation that lifts a bridge pause. It carries no fields and
   serializes as the bare string `"UnpauseBridge"` (distinct from the
-  `{ Variant: {} }` map form a fieldless struct variant takes). Additive
-  (MINOR); mirrors engine `exchange-core` 2.7.0. New conformance vector
-  `propose_admin_action/unpause_bridge` is byte-for-byte the engine's frozen
-  wire vector; `decodeAdminAction` renders it on the governance read path.
+  `{ Variant: {} }` map form a fieldless struct variant takes), so it is
+  additive (MINOR): every pre-existing admin-action payload still decodes
+  unchanged. Mirrors engine `exchange-wire` 1.2.0 (exchange#435, DEC-65). New
+  conformance vector `propose_admin_action/unpause_bridge` is byte-for-byte the
+  engine's frozen wire vector; `decodeAdminAction` renders it on the governance
+  read path.
 - `ConfirmDeposit` gains a trailing optional `DepositLocator`
   (`{ topIndex, innerIndex? }`) identifying the USDC transfer's instruction
-  position within its Solana transaction. Additive/backward-compatible (MINOR):
-  the field encodes as a trailing `nil` when absent, so pre-locator bytes still
-  decode. Mirrors engine `exchange-core` 2.6.0. New conformance vectors
+  position within its Solana transaction, so two transfers sharing one Solana
+  transaction signature are no longer deduplicated into one credit. Mirrors
+  engine `exchange-wire` 1.1.0 (exchange#434). New conformance vectors
   `confirm_deposit/with_locator` and `confirm_deposit/no_locator` pin the bytes.
+
+### Changed
+
+- **BREAKING (MAJOR) — `ConfirmDeposit` payloads gain an unconditional fifth
+  element.** The locator is appended as a trailing `nil` even when the caller
+  supplies none, so every `ConfirmDeposit` this SDK emits changes from a
+  4-element positional array (`94 …`) to a 5-element one (`95 … c0`) — including
+  calls whose source code is unchanged. Backward decode holds in one direction
+  only: pre-locator bytes still decode on the new code, but a strict 4-field
+  `rmp-serde` decoder **rejects** what the new code emits, which
+  `exchange-wire`'s own `deposit_locator_is_backward_decodable` test asserts at
+  the pinned revision. Per CLAUDE.md ("if it breaks backward decode in either
+  direction it is a MAJOR bump") this is a MAJOR bump for every package that
+  encodes `ConfirmDeposit` — the same classification this changelog applied to
+  the `CreateMarket` open-interest cap, which grew a positional array by one
+  unconditional trailing element in exactly the same way.
+
+  Compatible engine: `exchange-core >= 2.6.0` **built against
+  `exchange-wire >= 1.1.0`** (exchange#434, rev `2a6d079`). Note `exchange-core`
+  reads 2.6.0 both with and without the locator, so it is the `exchange-wire`
+  floor — not the `exchange-core` version — that distinguishes an engine which
+  accepts these bytes. Pointing this SDK at an engine below that floor fails
+  every deposit confirmation, so upgrade the engine first.
+
+- The Rust core's `exchange-wire` pin moves from rev `2a6d079`
+  (exchange-wire 1.1.0) to rev `f4feefd3` (exchange-wire 1.2.0, exchange#435),
+  which is where `AdminAction::UnpauseBridge` is defined. The wire variant is
+  no longer mirrored in this repository — `crates/proof-trading-sdk` re-exports
+  it from the shared crate, so the SDK and the engine cannot disagree about it.
 
 ## [3.0.0] — 2026-08-24
 

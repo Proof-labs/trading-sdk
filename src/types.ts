@@ -370,6 +370,18 @@ export interface WithdrawRequest {
   solanaDestination: Uint8Array; // 32 bytes
 }
 
+/**
+ * Position of a USDC transfer inside its Solana transaction: the top-level
+ * instruction index plus, for a transfer nested under a CPI, the inner
+ * instruction index (`null`/omitted when the transfer is the top-level
+ * instruction). Two transfers in one transaction share a signature and differ
+ * only here. Encodes as a positional 2-element array `[topIndex, innerIndex]`.
+ */
+export interface DepositLocator {
+  topIndex: number;
+  innerIndex?: number | null;
+}
+
 /** Relayer confirms an on-chain USDC deposit from Solana. Credits the account. */
 /**
  * Position of a USDC transfer inside its Solana transaction: the top-level
@@ -395,7 +407,9 @@ export interface ConfirmDeposit {
   /**
    * Instruction locator within the signature. Omitted/`null` on pre-locator
    * txs (the engine reads that as top-level instruction 0, no inner). Trailing
-   * optional field: absent encodes as a trailing `nil` (backward compatible).
+   * optional field: absent still encodes as a trailing `nil`, so the payload is
+   * a 5-element array either way — an engine predating the locator rejects it.
+   * See the MAJOR-bump entry in CHANGELOG.md for the engine floor.
    */
   locator?: DepositLocator | null;
 }
@@ -2075,6 +2089,38 @@ export interface HistoryPositionSnapshot {
   blockHeight: number;
   /** Unix milliseconds. */
   timestamp: number;
+}
+
+/** One executed fill from `/v1/history/fills/{owner}` (or `/v1/fills`). */
+export interface HistoryFill {
+  /** Unsigned 64-bit fill identifier as a decimal string. NOTE: the indexer
+   * currently emits it as a JSON number, so values beyond 2^53 would already
+   * be rounded by JSON.parse before this client sees them — the string shape
+   * here avoids adding a second rounding and is ready for a server-side
+   * string cast (the same treatment price already gets). */
+  fillId: string;
+  market: number;
+  blockHeight: number;
+  /** RFC 3339 with nanoseconds, exactly as the indexer renders it. */
+  blockTime: string;
+  /** Price in µUSDC as a decimal string — never a float. */
+  price: string;
+  /** Quantity in contracts as a decimal string — never a float. */
+  quantity: string;
+  /** 20-byte maker address as hex. */
+  makerOwner: string;
+  /** 20-byte taker address as hex. */
+  takerOwner: string;
+  /** The maker's side: "Buy" or "Sell"; the taker took the other side. */
+  makerSide: string;
+  takerFee: number;
+  makerFee: number;
+}
+
+/** One page of fills, newest first. An empty `nextCursor` means last page. */
+export interface HistoryFillsPage {
+  fills: HistoryFill[];
+  nextCursor: string;
 }
 
 /** Full account information including balance, positions, and margin state. */

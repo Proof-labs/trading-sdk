@@ -229,6 +229,7 @@ class ClosePosition(Action):
 
 _U64_MAX = (1 << 64) - 1
 _U32_MAX = (1 << 32) - 1
+_U16_MAX = (1 << 16) - 1
 MAX_TRIGGER_SLIPPAGE_BPS = 9_999
 
 
@@ -535,12 +536,37 @@ class WithdrawRequest(Action):
 
 
 @dataclass
+class DepositLocator:
+    """Position of a USDC transfer inside its Solana transaction: the
+    top-level instruction index plus, for a transfer nested under a CPI, the
+    inner instruction index (``None`` when the transfer is itself top-level).
+    Two transfers in one transaction share a signature and differ only here.
+    Not an action by itself — the optional trailing field of
+    :class:`ConfirmDeposit`."""
+
+    top_index: int
+    inner_index: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        _trigger_uint("top_index", self.top_index, _U16_MAX)
+        if self.inner_index is not None:
+            _trigger_uint("inner_index", self.inner_index, _U16_MAX)
+
+    def as_wire(self) -> dict[str, Any]:
+        return {
+            "top_index": self.top_index,
+            "inner_index": self.inner_index,
+        }
+
+
+@dataclass
 class ConfirmDeposit(Action):
     ACTION_NAME = "ConfirmDeposit"
     owner: bytes
     amount: int
     solana_tx_sig: bytes
     signer: bytes
+    locator: Optional[DepositLocator] = None
 
     def fields(self) -> dict[str, Any]:
         return {
@@ -548,6 +574,7 @@ class ConfirmDeposit(Action):
             "amount": self.amount,
             "solana_tx_sig": self.solana_tx_sig,
             "signer": self.signer,
+            "locator": self.locator.as_wire() if self.locator else None,
         }
 
 
@@ -784,6 +811,7 @@ __all__ = [
     "Deposit",
     "Withdraw",
     "WithdrawRequest",
+    "DepositLocator",
     "ConfirmDeposit",
     "ConfirmWithdrawal",
     "FailWithdrawal",
