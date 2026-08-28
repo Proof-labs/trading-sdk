@@ -1,7 +1,7 @@
 /**
  * Decoder for engine `ExecError` codes returned in `TxResult.code`.
  *
- * The Rust enum lives at `exchange-core/src/types.rs::ExecError`. Codes
+ * The Rust enum lives at `exchange-wire/src/types.rs::ExecError`. Codes
  * are stable wire-format identifiers — adding a new variant goes at the
  * end with the next free integer. **Keep this map in sync with that
  * `code()` impl** (CI flags drift in the audit `api-drift` lane).
