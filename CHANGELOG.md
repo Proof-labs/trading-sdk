@@ -9,6 +9,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `AdminAction` gains an `UnpauseBridge` unit variant (inner tag `0x06`), a
+  multisig operation that lifts a bridge pause. It carries no fields and
+  serializes as the bare string `"UnpauseBridge"` (distinct from the
+  `{ Variant: {} }` map form a fieldless struct variant takes), so it is
+  additive (MINOR): every pre-existing admin-action payload still decodes
+  unchanged. Mirrors engine `exchange-wire` 1.2.0 (exchange#435, DEC-65). New
+  conformance vector `propose_admin_action/unpause_bridge` is byte-for-byte the
+  engine's frozen wire vector; `decodeAdminAction` renders it on the governance
+  read path.
 - `ConfirmDeposit` gains a trailing optional `DepositLocator`
   (`{ topIndex, innerIndex? }`) identifying the USDC transfer's instruction
   position within its Solana transaction, so two transfers sharing one Solana
@@ -38,6 +47,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   floor — not the `exchange-core` version — that distinguishes an engine which
   accepts these bytes. Pointing this SDK at an engine below that floor fails
   every deposit confirmation, so upgrade the engine first.
+
+- The Python `admin_proposal_content_hash` stub now types `action` as
+  `dict[str, object] | str`, and its docstring names the unit-variant form. The
+  binding already accepted the bare string at runtime, but the declared type
+  rejected it — so a type-checked Python approver could not pass the only
+  canonical `UnpauseBridge` shape without suppressing the error.
+
+- Decoding a governance `action` that arrives as a bare string now throws
+  unless the string is a known unit variant, matching the allowlist the encode
+  direction already used and the fail-closed posture of `decodeAdminAction`. An
+  SDK build that does not know an operation must not hand callers a `kind`
+  outside the `AdminAction` union for them to render or approve.
+
+- The Rust core's `exchange-wire` pin moves from rev `2a6d079`
+  (exchange-wire 1.1.0) to rev `f4feefd3` (exchange-wire 1.2.0, exchange#435),
+  which is where `AdminAction::UnpauseBridge` is defined. The wire variant is
+  no longer mirrored in this repository — `crates/proof-trading-sdk` re-exports
+  it from the shared crate, so the SDK and the engine cannot disagree about it.
 
 ## [3.0.0] — 2026-08-24
 

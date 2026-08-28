@@ -997,7 +997,10 @@ export type AdminAction =
   | { kind: "UpdateAdminSignerRegistry"; value: UpdateAdminSignerRegistry }
   | { kind: "CreateImpactMarket"; value: CreateImpactMarket }
   | { kind: "Batch"; value: AdminBatchItem[] }
-  | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig };
+  | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig }
+  // Unit variant — no fields; lifts a bridge pause under multisig
+  // authorization. Serializes as the bare string `"UnpauseBridge"`.
+  | { kind: "UnpauseBridge" };
 
 /**
  * Closed set of immediate, loss-reducing single-signer actions. Reverse

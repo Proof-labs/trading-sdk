@@ -598,6 +598,21 @@ describe("codec v1 all action types", () => {
     expect(decoded).toEqual(action);
   });
 
+  it("round-trips ProposeAdminAction with the UnpauseBridge unit variant", () => {
+    const action: Action = {
+      type: "ProposeAdminAction",
+      data: {
+        proposer: new Uint8Array(20).fill(0xa1),
+        registryVersion: 1n,
+        action: { kind: "UnpauseBridge" },
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 12n));
+    // The unit variant serializes as a bare string, not a `{ Variant: {} }`
+    // map; it must survive encode→decode structurally identical.
+    expect(decoded).toEqual(action);
+  });
+
   it("rejects a receipt whose fixed-width deploymentId is not 32 bytes", () => {
     const action: Action = {
       type: "ConfirmWithdrawalReceipt",
