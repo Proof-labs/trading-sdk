@@ -334,3 +334,59 @@ class TestEngineParityActions:
         decoded = pts.decode_action(action_type, payload)
         assert decoded["max_slippage_bps"] == 0
         assert decoded["legs"][0]["reduce_only"] is False
+
+
+class TestConfirmDepositLocator:
+    """The public ConfirmDeposit builder must produce the shared conformance
+    vectors' bytes — the vector runner calls the native codec directly, so it
+    never exercises this builder path."""
+
+    @staticmethod
+    def _vector(case_name):
+        import json
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[2] / "conformance" / "codec.ndjson"
+        with path.open() as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    c = json.loads(line)
+                    if c["case"] == case_name:
+                        return c
+        raise AssertionError(f"vector {case_name!r} not found")
+
+    def _action(self, locator):
+        return pts.actions.ConfirmDeposit(
+            owner=b"\x55" * 20,
+            amount=100_000,
+            solana_tx_sig=b"\xab" * 64,
+            signer=b"\x66" * 20,
+            locator=locator,
+        )
+
+    def test_builder_with_locator_matches_vector(self):
+        vector = self._vector("confirm_deposit/with_locator")
+        action = self._action(pts.DepositLocator(top_index=3, inner_index=1))
+        action_type, payload = pts.encode_action(action)
+        assert action_type == pts.ActionType["ConfirmDeposit"]
+        assert payload.hex() == vector["expect"]["payload_hex"]
+
+    def test_builder_no_locator_matches_vector(self):
+        vector = self._vector("confirm_deposit/no_locator")
+        action_type, payload = pts.encode_action(self._action(None))
+        assert payload.hex() == vector["expect"]["payload_hex"]
+        # The absent locator is a trailing nil, and it decodes back as None.
+        decoded = pts.decode_action(action_type, payload)
+        assert decoded["locator"] is None
+
+    def test_legacy_pre_locator_bytes_still_decode(self):
+        # Pre-locator engines emitted a 4-element array with no locator slot
+        # at all; those bytes must keep decoding (the backward-decode half of
+        # the MINOR claim for this wire change).
+        action_type, payload = pts.encode_action(self._action(None))
+        assert payload[0] == 0x95 and payload[-1] == 0xC0
+        legacy = bytes([0x94]) + payload[1:-1]
+        decoded = pts.decode_action(action_type, legacy)
+        assert decoded["amount"] == 100_000
+        assert decoded["locator"] is None

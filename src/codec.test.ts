@@ -4,6 +4,7 @@ import {
   encodeSignedTx,
   encodePayloadBytes,
   decodeTx,
+  signEnvelopeFromPayload,
   decodeSigningMessage,
   peekActionType,
   signAndEncode,
@@ -522,6 +523,41 @@ describe("codec v1 all action types", () => {
     expect(decoded.type).toBe("ConfirmDeposit");
     if (decoded.type === "ConfirmDeposit") {
       // Absent on the wire (trailing nil) decodes back as null.
+      expect(decoded.data.locator).toBeNull();
+    }
+  });
+
+  it("decodes legacy pre-locator ConfirmDeposit bytes (4-element array)", () => {
+    const action: Action = {
+      type: "ConfirmDeposit",
+      data: {
+        owner: OWNER,
+        amount: 100000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        signer: SIGNER,
+      },
+    };
+    const modern = encodePayloadBytes(action);
+    // New encoder: a 5-element array whose absent locator is a trailing nil.
+    expect(modern[0]).toBe(0x95);
+    expect(modern[modern.length - 1]).toBe(0xc0);
+    // Pre-locator engines emitted the same payload as a 4-element array with
+    // no locator slot at all. Those bytes must keep decoding — the
+    // backward-decode half of the MINOR claim for this wire change.
+    const legacy = modern.slice(0, modern.length - 1);
+    legacy[0] = 0x94;
+    const { privateKey } = generateKeypair();
+    const envelope = signEnvelopeFromPayload(
+      UNBOUND_CHAIN_ID,
+      ActionType.ConfirmDeposit,
+      9n,
+      legacy,
+      privateKey,
+    );
+    const decoded = decodeTx(envelope).action;
+    expect(decoded.type).toBe("ConfirmDeposit");
+    if (decoded.type === "ConfirmDeposit") {
+      expect(decoded.data.amount).toBe(100000n);
       expect(decoded.data.locator).toBeNull();
     }
   });

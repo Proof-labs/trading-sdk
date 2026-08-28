@@ -13,8 +13,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`{ topIndex, innerIndex? }`) identifying the USDC transfer's instruction
   position within its Solana transaction. Additive/backward-compatible (MINOR):
   the field encodes as a trailing `nil` when absent, so pre-locator bytes still
-  decode. Mirrors engine `exchange-core` 2.6.0. New conformance vectors
-  `confirm_deposit/with_locator` and `confirm_deposit/no_locator` pin the bytes.
+  decode. Mirrors engine `exchange-wire` 1.1.0 (exchange#434). New conformance
+  vectors `confirm_deposit/with_locator` and `confirm_deposit/no_locator` pin
+  the bytes.
 
 ## [3.0.0] — 2026-08-24
 

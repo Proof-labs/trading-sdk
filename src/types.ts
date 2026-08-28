@@ -370,7 +370,6 @@ export interface WithdrawRequest {
   solanaDestination: Uint8Array; // 32 bytes
 }
 
-/** Relayer confirms an on-chain USDC deposit from Solana. Credits the account. */
 /**
  * Position of a USDC transfer inside its Solana transaction: the top-level
  * instruction index plus, for a transfer nested under a CPI, the inner
@@ -383,6 +382,7 @@ export interface DepositLocator {
   innerIndex?: number | null;
 }
 
+/** Relayer confirms an on-chain USDC deposit from Solana. Credits the account. */
 export interface ConfirmDeposit {
   /** Account address to credit (20 bytes). */
   owner: Address;
