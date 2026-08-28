@@ -229,6 +229,7 @@ class ClosePosition(Action):
 
 _U64_MAX = (1 << 64) - 1
 _U32_MAX = (1 << 32) - 1
+_U16_MAX = (1 << 16) - 1
 MAX_TRIGGER_SLIPPAGE_BPS = 9_999
 
 
@@ -546,6 +547,11 @@ class DepositLocator:
     top_index: int
     inner_index: Optional[int] = None
 
+    def __post_init__(self) -> None:
+        _trigger_uint("top_index", self.top_index, _U16_MAX)
+        if self.inner_index is not None:
+            _trigger_uint("inner_index", self.inner_index, _U16_MAX)
+
     def as_wire(self) -> dict[str, Any]:
         return {
             "top_index": self.top_index,
@@ -805,6 +811,7 @@ __all__ = [
     "Deposit",
     "Withdraw",
     "WithdrawRequest",
+    "DepositLocator",
     "ConfirmDeposit",
     "ConfirmWithdrawal",
     "FailWithdrawal",

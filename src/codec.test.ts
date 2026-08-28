@@ -527,6 +527,28 @@ describe("codec v1 all action types", () => {
     }
   });
 
+  it("round-trips a top-level-transfer locator (present, no inner index)", () => {
+    // A non-CPI transfer: the locator is PRESENT with no inner index, which is
+    // a different wire shape from an absent locator (`92 03 c0` vs `c0`).
+    const action: Action = {
+      type: "ConfirmDeposit",
+      data: {
+        owner: OWNER,
+        amount: 100000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        signer: SIGNER,
+        locator: { topIndex: 3 },
+      },
+    };
+    const payload = encodePayloadBytes(action);
+    expect(Array.from(payload.slice(-3))).toEqual([0x92, 0x03, 0xc0]);
+    const decoded = decodeTx(encodeTx(action, 9n)).action;
+    expect(decoded.type).toBe("ConfirmDeposit");
+    if (decoded.type === "ConfirmDeposit") {
+      expect(decoded.data.locator).toEqual({ topIndex: 3, innerIndex: null });
+    }
+  });
+
   it("decodes legacy pre-locator ConfirmDeposit bytes (4-element array)", () => {
     const action: Action = {
       type: "ConfirmDeposit",
