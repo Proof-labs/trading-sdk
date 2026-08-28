@@ -395,7 +395,9 @@ export interface ConfirmDeposit {
   /**
    * Instruction locator within the signature. Omitted/`null` on pre-locator
    * txs (the engine reads that as top-level instruction 0, no inner). Trailing
-   * optional field: absent encodes as a trailing `nil` (backward compatible).
+   * optional field: absent still encodes as a trailing `nil`, so the payload is
+   * a 5-element array either way — an engine predating the locator rejects it.
+   * See the MAJOR-bump entry in CHANGELOG.md for the engine floor.
    */
   locator?: DepositLocator | null;
 }
