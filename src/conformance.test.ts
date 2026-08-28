@@ -798,6 +798,33 @@ describe("conformance vectors (TypeScript)", () => {
     }
   });
 
+  it("codec: the vector's case name pins which action the encoder builds", () => {
+    // The byte-exactness test above feeds `c.action_type` INTO `toAction`, so
+    // it can only prove the payload, never the routing. Deposit/Withdraw and
+    // ApproveAgent/RevokeAgent encode IDENTICAL payload layouts, so swapping
+    // either pair's `ActionType` constants would build the opposite action,
+    // emit byte-identical payloads, keep `uncovered` empty — and still put the
+    // opposite operation byte in every signed envelope.
+    //
+    // The case name is authored on the Rust side (gen_vectors.rs), so checking
+    // it against the TypeScript `Action.type` crosses the language boundary
+    // and is not circular the way comparing action_type to itself would be.
+    const pascal = (snake: string) =>
+      snake
+        .split("_")
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join("");
+    for (const c of cases("codec.ndjson")) {
+      const action = toAction(
+        c.action_type as ActionTypeValue,
+        c.input as Record<string, unknown>,
+      );
+      expect(action.type, `vector ${c.case as string}`).toBe(
+        pascal((c.case as string).split("/")[0]),
+      );
+    }
+  });
+
   it("codec: vector coverage of the ActionType registry is pinned", () => {
     const vectorTypes = new Set(
       cases("codec.ndjson").map((c) => c.action_type as number),
@@ -815,29 +842,13 @@ describe("conformance vectors (TypeScript)", () => {
     // ratchet — adding a new ActionType without a vector fails here. Prefer
     // adding a vector in crates/spec/src/bin/gen_vectors.rs; extending this
     // list instead is a conscious, reviewed decision. Remove names as vectors
-    // land; never re-add one.
+    // land; never re-add one. The list is empty (issue #69 burn-down): every
+    // ActionType now carries at least one cross-language codec vector.
     const uncovered = Object.entries(ActionType)
       .filter(([, byte]) => !vectorTypes.has(byte))
       .map(([name]) => name)
       .sort();
-    expect(uncovered).toEqual(
-      [
-        "AmendOrder",
-        "ApproveAgent",
-        "CancelAllOrders",
-        "CancelClientOrder",
-        "CancelReplaceOrder",
-        "ConfirmWithdrawal",
-        "CreateImpactMarket",
-        "Deposit",
-        "FailWithdrawal",
-        "ResolveEvent",
-        "RevokeAgent",
-        "SetUserMarketLeverage",
-        "Withdraw",
-        "WithdrawRequest",
-      ].sort(),
-    );
+    expect(uncovered).toEqual([]);
   });
 
   it("codec: all governance actions encode byte-exact (no silent skip)", () => {
