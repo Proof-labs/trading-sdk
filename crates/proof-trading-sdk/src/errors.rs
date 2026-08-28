@@ -93,6 +93,28 @@ define_error_kinds! {
     51  => OpenInterestLimitExceeded    ~ "Fill would push aggregate market open interest past MarketConfig.max_open_interest.",
     52  => AdminGovernanceInactive      ~ "Admin governance action was submitted while no admin signer registry exists on this chain; multisig administration is inactive and every governance path fails closed.",
     53  => NotAdminSigner               ~ "Tx signer does not match the action's declared proposer/approver/rejecter/signer field, or is not a member of the current admin signer registry.",
+    // Proposal-lifecycle family (multisig governance). Mirrored from the
+    // engine's `ExecError` (exchange-core/src/types.rs, codes 54-71) and the
+    // frozen exchange/sdk reference table. Decode-only on the SDK side — the
+    // client never constructs these, it classifies the result codes.
+    54  => ProposalNotFound                 ~ "No admin proposal exists under this id (never created, or pruned from terminal retention).",
+    55  => ProposalNotPending               ~ "The admin proposal is already terminal — votes are only accepted while pending.",
+    56  => ProposalExpired                  ~ "The admin proposal passed its TTL — re-propose and collect fresh approvals.",
+    57  => DuplicateApproval                ~ "This signer already approved the proposal (the proposer approves at creation).",
+    58  => DuplicateRejection               ~ "This signer already rejected the proposal.",
+    59  => ProposalRegistryVersionMismatch  ~ "Registry version differs from the current signer registry — re-read and re-sign.",
+    60  => ProposalContentMismatch          ~ "Approval context does not byte-match the stored proposal — rebuild from the proposals query.",
+    61  => InvalidAdminAction               ~ "Inner admin/emergency action is invalid: unknown or not-admitted arm, non-zero inner signer, or out-of-bounds field.",
+    62  => AdminActionTooLarge              ~ "Canonical inner action bytes exceed MAX_ADMIN_ACTION_BYTES.",
+    63  => TooManyPendingProposals          ~ "MAX_PENDING_PROPOSALS admin proposals are already pending.",
+    64  => ProposalIdExhausted              ~ "A governance id counter is exhausted; ids never wrap.",
+    65  => ConflictingVote                  ~ "The opposite vote already exists — votes are immutable and disjoint.",
+    66  => MarketIdOutOfRange               ~ "Market id exceeds the signed-32-bit identity bound (i32::MAX).",
+    67  => EmergencyRateLimited             ~ "Per-signer emergency action bound reached within the rolling window.",
+    68  => EmergencyGlobalRateLimited       ~ "Chain-wide emergency action bound reached within the rolling window.",
+    69  => EmergencyActionRetired           ~ "This emergency arm was retired; new submissions fail closed.",
+    70  => AdminActionRequiresProposal      ~ "The signer registry exists — this admin action is proposal-only, even for an authorized relayer.",
+    71  => InvalidAdminRegistry             ~ "Proposed signer roster violates the registry invariants (threshold bounds, sorted unique members, roster size, version headroom).",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -384,7 +406,7 @@ mod exec_error_meaning_tests {
         }
     }
 
-    /// Codes 1..=51 + 255 must all be covered by the public error manifest.
+    /// Codes 1..=71 + 255 must all be covered by the public error manifest.
     /// Catches the case where a code is reserved by the mirrored engine error
     /// enum but no SDK classification maps to it.
     #[test]
@@ -392,7 +414,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=53).chain(std::iter::once(255)).collect();
+        let expected: Vec<u32> = (1u32..=71).chain(std::iter::once(255)).collect();
         assert_eq!(
             codes, expected,
             "ExecError codes covered by variants: {:?}; expected: {:?}. \
