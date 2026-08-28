@@ -304,8 +304,17 @@ const BYTE_FIELDS = new Set([
 /** Decode a governance `{ Variant: {...} }` enum back into `{ kind, value }`. */
 function governanceActionFromWasm(value: unknown): unknown {
   if (value === null || value === undefined) return value;
-  // A unit variant comes back from serde-wasm-bindgen as a bare string.
-  if (typeof value === "string") return { kind: value };
+  // A unit variant comes back from serde-wasm-bindgen as a bare string. Check
+  // it against the same allowlist the encoder uses rather than trusting any
+  // string as a variant name: a newer engine's unit variant must throw here —
+  // the loudness the `markSourceMode` branch below applies — not decode to a
+  // `kind` outside the `AdminAction` union that callers may render or approve.
+  if (typeof value === "string") {
+    if (!GOVERNANCE_UNIT_VARIANTS.has(value)) {
+      throw new Error(`unknown governance unit variant: ${value}`);
+    }
+    return { kind: value };
+  }
   const obj = value as Record<string, unknown>;
   const kind = Object.keys(obj)[0];
   const inner = obj[kind];

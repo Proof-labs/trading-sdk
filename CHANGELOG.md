@@ -48,6 +48,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   accepts these bytes. Pointing this SDK at an engine below that floor fails
   every deposit confirmation, so upgrade the engine first.
 
+- Decoding a governance `action` that arrives as a bare string now throws
+  unless the string is a known unit variant, matching the allowlist the encode
+  direction already used and the fail-closed posture of `decodeAdminAction`. An
+  SDK build that does not know an operation must not hand callers a `kind`
+  outside the `AdminAction` union for them to render or approve.
+
 - The Rust core's `exchange-wire` pin moves from rev `2a6d079`
   (exchange-wire 1.1.0) to rev `f4feefd3` (exchange-wire 1.2.0, exchange#435),
   which is where `AdminAction::UnpauseBridge` is defined. The wire variant is

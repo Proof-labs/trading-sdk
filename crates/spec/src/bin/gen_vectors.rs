@@ -387,7 +387,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         // and serializes as the bare string `"UnpauseBridge"` (not a
         // `{ Variant: {} }` map like the fieldless struct variant HaltTrading).
         // Byte-for-byte the engine's frozen ProposeAdminAction::UnpauseBridge
-        // vector (exchange-core `admin_action_wire_vectors_frozen`).
+        // vector (exchange-wire `codec::tests::admin_action_wire_vectors_frozen`).
         codec_case(
             "propose_admin_action/unpause_bridge",
             PROPOSE_ADMIN_ACTION,

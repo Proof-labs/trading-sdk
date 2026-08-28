@@ -140,6 +140,27 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     );
   });
 
+  it("reproduces the unit-variant (UnpauseBridge) hash bit-for-bit", () => {
+    // The one admin action that is NOT a `{ Variant: … }` map: a fieldless
+    // unit variant, whose canonical bytes are the bare fixstr
+    // `ad 556e7061757365427269646765` ("UnpauseBridge"). That makes it the
+    // only arm exercising the bare-string branch of `adminActionToWasm`, so
+    // without this an approving client could recompute a hash the engine
+    // never produces and refuse every legitimate UnpauseBridge approval.
+    //
+    // exchange-core has no frozen content-hash vector for this arm yet, so the
+    // expected value is taken from the authority itself: exchange-wire's own
+    // `codec::admin_proposal_content_hash` over `AdminAction::UnpauseBridge`
+    // at the revision pinned in crates/proof-trading-sdk/Cargo.toml.
+    const hash = adminProposalContentHash({
+      ...goldenContext(),
+      action: { kind: "UnpauseBridge" },
+    });
+    expect(bytesToHex(hash)).toBe(
+      "ffa74c9323512ffb8272eea55fc49baf047f55aa8979e56e06229b57d1350f56",
+    );
+  });
+
   it("rejects a malformed proposer length", () => {
     expect(() =>
       adminProposalContentHash({
