@@ -694,11 +694,15 @@ function toEmergencyAction(
  * Parse an `EventOracleSource` value from a vector's raw JSON structure
  * (Rust serde wire format) into the SDK's tagged-union shape.
  *
- * Wire format:
- *   - null / absent  → undefined (RelayerAttested default)
+ * Vector JSON (serde_json's externally-tagged form, the same shape the other
+ * nested enums such as `AdminAction` use — struct variants are a one-entry
+ * map of snake_case fields, NOT the positional array rmp-serde puts on the
+ * wire):
+ *   - null / absent  → undefined (encodes as nil; NOT the RelayerAttested
+ *     unit variant, which is the bare string on the wire)
  *   - "RelayerAttested"  → { kind: "RelayerAttested" }
- *   - {"UnderlyingPriceVsStrike": [strikePrice, comparisonStr]}
- *   - {"MarketOracle": [market, strikePrice, comparisonStr]}
+ *   - {"UnderlyingPriceVsStrike": { strike_price, comparison }}
+ *   - {"MarketOracle": { market, strike_price, comparison }}
  */
 function parseOracleSource(v: unknown): any {
   if (typeof v === "string") {
@@ -711,20 +715,26 @@ function parseOracleSource(v: unknown): any {
     if (keys.length !== 1)
       throw new Error(`expected single-key EventOracleSource map`);
     const variant = keys[0];
-    const fields = obj[variant] as unknown[];
+    const fields = obj[variant] as Record<string, unknown>;
+    const comparison = (name: unknown): PriceComparison => {
+      const cmp = PRICE_CMP[name as string];
+      if (cmp === undefined)
+        throw new Error(`unknown PriceComparison: ${String(name)}`);
+      return cmp;
+    };
     if (variant === "UnderlyingPriceVsStrike") {
       return {
         kind: "UnderlyingPriceVsStrike",
-        strikePrice: big(fields[0]),
-        comparison: PRICE_CMP[fields[1] as string],
+        strikePrice: big(fields.strike_price),
+        comparison: comparison(fields.comparison),
       };
     }
     if (variant === "MarketOracle") {
       return {
         kind: "MarketOracle",
-        market: Number(big(fields[0])),
-        strikePrice: big(fields[1]),
-        comparison: PRICE_CMP[fields[2] as string],
+        market: Number(big(fields.market)),
+        strikePrice: big(fields.strike_price),
+        comparison: comparison(fields.comparison),
       };
     }
     throw new Error(`unknown EventOracleSource variant: ${variant}`);
@@ -851,16 +861,44 @@ describe("conformance vectors (TypeScript)", () => {
     expect(uncovered).toEqual([]);
   });
 
+  it("codec: every EventOracleSource variant and PriceComparison value is pinned", () => {
+    // Ratchet for the enum the adapter routes by hand
+    // (eventOracleSourceToWasm / eventOracleSourceFromWasm). An absent
+    // oracle_source encodes as nil, which is a different wire value from the
+    // RelayerAttested unit variant, so `null` fixtures prove nothing about
+    // any variant — each one needs an explicit vector (#98).
+    const seenKinds = new Set<string>();
+    const seenComparisons = new Set<string>();
+    for (const c of cases("codec.ndjson")) {
+      if (c.action_type !== ActionType.CreateImpactMarket) continue;
+      const os = (c.input as Record<string, unknown>).oracle_source;
+      if (os === null || os === undefined) continue;
+      const parsed = parseOracleSource(os) as {
+        kind: string;
+        comparison?: string;
+      };
+      seenKinds.add(parsed.kind);
+      if (parsed.comparison !== undefined)
+        seenComparisons.add(parsed.comparison);
+    }
+    expect([...seenKinds].sort()).toEqual([
+      "MarketOracle",
+      "RelayerAttested",
+      "UnderlyingPriceVsStrike",
+    ]);
+    expect([...seenComparisons].sort()).toEqual(Object.keys(PRICE_CMP).sort());
+  });
+
   it("codec: all governance actions encode byte-exact (no silent skip)", () => {
     const govTypes = new Set<number>([0x1e, 0x1f, 0x20, 0x21]);
     const govCases = cases("codec.ndjson").filter((c) =>
       govTypes.has(c.action_type as number),
     );
     // Guard against the vector file drifting out from under this assertion:
-    // propose (create-market, v2 batch, trigger config and unpause-bridge),
-    // approve, reject, and all three emergency arms (PauseMarket, HaltTrading,
-    // SetReduceOnly).
-    expect(govCases.length).toBe(9);
+    // propose (create-market, v2 batch, trigger config, unpause-bridge and
+    // create-impact-market with a MarketOracle source), approve, reject, and
+    // all three emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(10);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
