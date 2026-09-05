@@ -31,17 +31,24 @@ only ever advances by merging `dev` into it (see the release rule below).
 
 **Before making any code edits:**
 
-1. Branch off **`dev`** using `<type>/<slug>`, where `<type>` is one of `chore`,
-   `feat`, `fix`, `docs`, `hotfix`, `infra`, `refactor`, and open the PR **with
-   `dev` as the base**. Never edit on `dev` or `main` directly, and never point
-   a feature PR at `main`.
-2. Keep each PR to a single logical change, and add a test with every
+1. Branch off **`dev`** and open the PR **with `dev` as the base**. Never edit
+   on `dev` or `main` directly, and never point a feature PR at `main`.
+2. **Embed the GitHub issue number in the branch name** whenever the work
+   closes one: `GH<issue>/<type>/<slug>` (e.g. `GH98/fix/oracle-source-vectors`),
+   where `<type>` is one of `chore`, `feat`, `fix`, `docs`, `hotfix`, `infra`,
+   `refactor`. A ProofOfBrain card with a GitHub issue is
+   `GH<issue>/W##-NN/<slug>`. Without a GitHub issue the existing forms stay:
+   `<type>/<slug>` for Linear-ticket or ad-hoc work (the Linear ticket is
+   attached at PR time, not in the branch name) and `W##-NN/<slug>` for a
+   ProofOfBrain card. Reference the issue in the PR body (`Closes #<issue>`).
+3. Keep each PR to a single logical change, and add a test with every
    behaviour change.
-3. Title each PR with one Conventional Commits prefix.
+4. Title each PR with one Conventional Commits prefix.
 
 The `PreToolUse` hook at `.claude/hooks/pre-tool-use.sh` rejects `Edit` /
-`Write` / `NotebookEdit` calls until the branch matches `<type>/<slug>`. Fix
-the branch rather than bypassing it.
+`Write` / `NotebookEdit` calls until the branch matches one of those shapes
+(writes to the plan file in plan mode are exempt). Fix the branch rather than
+bypassing it.
 
 **Releasing (`dev` → `main`): always use "Create a merge commit" — never
 "Rebase and merge" or "Squash and merge".** A rebase/squash of a sync PR

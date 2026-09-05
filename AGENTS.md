@@ -382,8 +382,10 @@ WebSocket listener is on a separate port.
 
 ## Branches & PRs
 
-1. Branch off `main` using `<type>/<slug>` (`feat/`, `fix/`, `docs/`, `chore/`,
-   `refactor/`, `infra/`, `hotfix/`).
+1. Branch off `dev` using `GH<issue>/<type>/<slug>` when the work closes a
+   GitHub issue, or `<type>/<slug>` when it does not (`feat/`, `fix/`, `docs/`,
+   `chore/`, `refactor/`, `infra/`, `hotfix/`). ProofOfBrain cards:
+   `GH<issue>/W##-NN/<slug>` or `W##-NN/<slug>`. PRs target `dev`.
 2. Keep each PR to a single logical change. Add a test with every behaviour
    change.
 3. Title each PR with a Conventional Commits prefix.
