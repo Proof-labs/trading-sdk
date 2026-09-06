@@ -98,17 +98,15 @@ only ever advances by merging `dev` into it (see the release rule below).
 
 **Before making any code edits:**
 
-1. Branch off **`dev`** using `<type>/<slug>`, where `<type>` is one of `chore`,
-   `feat`, `fix`, `docs`, `hotfix`, `infra`, `refactor`, and open the PR **with
-   `dev` as the base**. Never edit on `dev` or `main` directly, and never point
-   a feature PR at `main`.
-2. Keep each PR to a single logical change, and add a test with every
+1. Branch off **`dev`** and open the PR **with `dev` as the base**. Never edit
+   on `dev` or `main` directly, and never point a feature PR at `main`.
+2. Name the branch per the org policy at the top of this file: `<type>/<slug>`
+   or `W##-NN/<slug>`, led by `GH<issue>/` when the work closes a GitHub issue
+   (e.g. `GH98/fix/oracle-source-vectors`), with `Closes #<issue>` in the PR
+   body. The naming rule lives there, not here, so it cannot drift.
+3. Keep each PR to a single logical change, and add a test with every
    behaviour change.
-3. Title each PR with one Conventional Commits prefix.
-
-The `PreToolUse` hook at `.claude/hooks/pre-tool-use.sh` rejects `Edit` /
-`Write` / `NotebookEdit` calls until the branch matches `<type>/<slug>`. Fix
-the branch rather than bypassing it.
+4. Title each PR with one Conventional Commits prefix.
 
 **Releasing (`dev` → `main`): always use "Create a merge commit" — never
 "Rebase and merge" or "Squash and merge".** A rebase/squash of a sync PR

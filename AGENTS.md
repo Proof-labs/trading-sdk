@@ -445,8 +445,9 @@ WebSocket listener is on a separate port.
 
 ## Branches & PRs
 
-1. Branch off `main` using `<type>/<slug>` (`feat/`, `fix/`, `docs/`, `chore/`,
-   `refactor/`, `infra/`, `hotfix/`).
+1. Branch off `dev`, named per the org policy at the top of this file
+   (`<type>/<slug>` or `W##-NN/<slug>`, led by `GH<issue>/` when the work closes
+   a GitHub issue, with `Closes #<issue>` in the PR body). PRs target `dev`.
 2. Keep each PR to a single logical change. Add a test with every behaviour
    change.
 3. Title each PR with a Conventional Commits prefix.

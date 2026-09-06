@@ -46,11 +46,16 @@ without using "and," split it into separate PRs. (Distilled from
 
 ## Opening a pull request
 
-1. Fork the repository and create a branch from `main` (`<type>/<short-description>`).
+1. Fork the repository and create a branch from `dev`. Embed the GitHub issue
+   number when the work closes one: `GH<issue>/<type>/<slug>` (e.g.
+   `GH98/fix/oracle-source-vectors`); otherwise `<type>/<slug>`. `<type>` is one
+   of `chore`, `feat`, `fix`, `docs`, `hotfix`, `infra`, `refactor`. ProofOfBrain
+   cards use `GH<issue>/W##-NN/<slug>` or, without an issue, `W##-NN/<slug>`.
 2. Make your change with tests, and run the relevant build + test suite.
 3. Keep the public API stable where you can; call out any breaking change clearly in the
    PR description.
-4. Open a PR against `main` with a short summary of **what** changed and **why**.
+4. Open a PR against `dev` with a short summary of **what** changed and **why**, and
+   `Closes #<issue>` when there is one. `main` only advances by merging `dev`.
 
 ## Public API & versioning
 
