@@ -1,0 +1,30 @@
+name: Decision from a comment
+
+# Caller stub — synced to every Proof-labs repository by
+# Proof-labs/.github → scripts/sync-agent-config.sh.
+#
+# Thin by design: all logic lives in the reusable workflow, so a fix reaches
+# every repository on the next run rather than needing eleven re-syncs.
+#
+# `/dec <one-line decision>` on any pull request opens a register stub row.
+# Optional: `/dec type=economic priority=high <decision>`.
+#
+# Credential: the org-installed GitHub App (org secrets, visibility=all). The
+# reusable workflow mints a token scoped to ProofOfBrain that expires in about
+# an hour — nothing standing is stored in any repository.
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  dec:
+    # Cheap pre-filter; the callee does the authoritative parse and the
+    # organisation-member check.
+    if: >-
+      github.event.issue.pull_request != null &&
+      startsWith(github.event.comment.body, '/dec')
+    uses: Proof-labs/.github/.github/workflows/validate-decision-comment.yml@main
+    secrets:
+      vault_app_id:          ${{ secrets.PROOF_ASSISTANT_APP_ID }}
+      vault_app_private_key: ${{ secrets.PROOF_ASSISTANT_PRIVATE_KEY }}
