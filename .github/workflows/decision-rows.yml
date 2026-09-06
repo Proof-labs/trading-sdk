@@ -1,0 +1,25 @@
+name: Decision rows
+
+# Caller stub — synced to every Proof-labs repository by
+# Proof-labs/.github → scripts/sync-agent-config.sh.
+#
+# `ready_for_review` is the important trigger: the decision-routing rule is
+# about what must be true to LEAVE draft, and until this existed nothing
+# checked that transition (the client-side hook only sees `gh pr create`).
+#
+# Credential: the org-installed GitHub App (org secrets PROOF_ASSISTANT_APP_ID
+# and PROOF_ASSISTANT_PRIVATE_KEY, both visibility=all). The reusable workflow
+# mints a token from these that is scoped to ProofOfBrain and expires in about
+# an hour — nothing standing is stored. Repositories whose pull requests never
+# cite DEC-N rows work fine without them.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, ready_for_review]
+
+jobs:
+  decision-rows:
+    uses: Proof-labs/.github/.github/workflows/validate-decision-rows.yml@main
+    secrets:
+      vault_app_id:          ${{ secrets.PROOF_ASSISTANT_APP_ID }}
+      vault_app_private_key: ${{ secrets.PROOF_ASSISTANT_PRIVATE_KEY }}
