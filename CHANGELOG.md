@@ -9,6 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `@proof/trading-sdk/testing` subpath: `registerTestActions()` makes the
+  engine-internal `RunLiquidationSweep` (0x11) and `RunFundingTick` (0x12)
+  actions encodable for dev-stack harnesses. Not exported from the main entry.
 - **Proposal-lifecycle error codes 54-71** - the multisig-governance error
   family (`ProposalNotFound` ... `InvalidAdminRegistry`) is now mirrored across
   all three bindings from the engine's `ExecError` and the frozen
