@@ -79,6 +79,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no longer mirrored in this repository — `crates/proof-trading-sdk` re-exports
   it from the shared crate, so the SDK and the engine cannot disagree about it.
 
+### Fixed
+
+- **Python wheel ABI floor pinned to CPython 3.11** (`cp311-abi3`) via the
+  `pyo3/abi3-py311` feature in `python/pyproject.toml` and the PyO3 crate,
+  instead of bare `abi3`. Bare `abi3` takes the floor from whichever interpreter
+  runs the build, so a wheel built under Python 3.14 was tagged `cp314-abi3` and
+  would not install on 3.11–3.13 even though `requires-python = ">=3.11"`
+  promises them; those users silently fell back to building the sdist, which
+  needs a Rust toolchain. CI happened to build on 3.11, so published wheels were
+  correct by coincidence rather than by construction (#90). Packaging-only:
+  PATCH for the Python distribution, no wire or API change.
+
 ## [3.0.0] — 2026-08-24
 
 First published release: this is the first version of any of these packages
