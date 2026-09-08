@@ -14,3 +14,13 @@ python/
 crates/
 fuzz/
 conformance/
+
+# Org-synced agent config (plain copies / marker-merged from Proof-labs/.github
+# via scripts/sync-agent-config.sh). Formatting them here would make every
+# sync re-dirty them; they are formatted upstream.
+CLAUDE.md
+AGENTS.md
+.cursorrules
+.github/copilot-instructions.md
+.github/workflows/decision-rows.yml
+.github/workflows/decision-from-comment.yml
