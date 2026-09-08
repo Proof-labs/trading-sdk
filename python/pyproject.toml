@@ -19,7 +19,10 @@ dependencies = [
 manifest-path = "../crates/proof-trading-sdk-pyo3/Cargo.toml"
 python-source = "src"
 module-name = "proof_trading_sdk._native"
-features = ["pyo3/extension-module", "pyo3/abi3"]
+# `abi3-py311` pins the wheel's ABI floor to CPython 3.11 (tag `cp311-abi3`)
+# regardless of which interpreter runs the build. Bare `abi3` would take the
+# floor from the building interpreter, silently contradicting `requires-python`.
+features = ["pyo3/extension-module", "pyo3/abi3-py311"]
 
 [project.urls]
 homepage = "https://github.com/Proof-labs/trading-sdk"
