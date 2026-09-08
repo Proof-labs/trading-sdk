@@ -223,6 +223,9 @@ jobs:
             exit 1
           fi
       # abi3 wheel (one wheel spans the 3.11+ ABI) + sdist. Linux only for now.
+      # The cp311 floor comes from the `abi3-py311` feature in pyproject.toml /
+      # the pyo3 crate, not from the `python-version` above, so the tag stays
+      # `cp311-abi3` whichever interpreter builds it.
       # ponytail: single-platform wheels. Add a macOS/Windows matrix via
       # maturin-action's target inputs when a consumer needs a native wheel
       # there; the sdist already lets them build from source meanwhile.
