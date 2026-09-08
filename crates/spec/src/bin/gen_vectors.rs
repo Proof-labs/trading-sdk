@@ -10,11 +10,13 @@
 //! Coverage status:
 //!   * codec: every `ActionType` in the registry now has at least one vector
 //!     (the coverage ratchet in `src/conformance.test.ts` enforces this — the
-//!     debt list is empty, #69). Remaining nice-to-haves are deeper edges, not
-//!     new types: more zero/max-u64 and serde-default-tail permutations, and
-//!     the nested `EventOracleSource` variants — no vector exercises ANY of
-//!     them today (both `oracle_source` fixtures are absent/nil, which is a
-//!     different wire value from the `RelayerAttested` unit variant).
+//!     debt list is empty, #69). Every nested enum reachable through the codec
+//!     adapter is pinned too: `side` (both), `time_in_force` (all three),
+//!     `outcome` (all three), and — as of #98 — all three `EventOracleSource`
+//!     variants with all four `PriceComparison` values, both standalone (0x0e)
+//!     and inside a `ProposeAdminAction`. Remaining nice-to-haves are deeper
+//!     edges, not new types: more zero/max-u64 and serde-default-tail
+//!     permutations.
 //!   * signing: more keys / seqs (0,1,MAX) / chain_ids (unbound + bound) /
 //!     payload sizes; more owner cases.
 //!   * nonce: already reasonably covered; add multi-process interleavings if
@@ -44,6 +46,22 @@ fn write_ndjson<T: Serialize>(path: &std::path::Path, rows: &[T]) -> Result<(), 
     }
     fs::write(path, out)?;
     Ok(())
+}
+
+/// The shared `CreateImpactMarket` fixture (engine golden: impact family 91 on
+/// underlying market 15). Only `oracle_source` varies across the cases, so a
+/// byte difference between them isolates the enum encoding.
+fn impact_market_fields(signer: &[u8], oracle_source: serde_json::Value) -> serde_json::Value {
+    json!({
+        "impact_market_id": 91, "underlying_market": 15,
+        "child_market_base": 9100, "question": "does it land?",
+        "deadline_ms": 1_000_000u64, "resolution_window_ms": 1000u64,
+        "im_bps": 3334, "mm_bps": 1667,
+        "taker_fee_bps": 5, "maker_fee_bps": 2,
+        "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
+        "signer": signer, "oracle_source": oracle_source,
+        "description": "", "rules": ""
+    })
 }
 
 fn codec_case(case: &str, action_type: u8, input: serde_json::Value) -> cv::CodecCase {
@@ -400,6 +418,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }}
             }),
         ),
+        // A struct-variant oracle source inside a governance proposal: impact
+        // market auto-resolution is what the oracle source drives, and the
+        // admin path is where Web Admin actually creates these (#98).
+        codec_case(
+            "propose_admin_action/create_impact_market_market_oracle",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "CreateImpactMarket": impact_market_fields(
+                    &[0u8; 20],
+                    json!({ "MarketOracle": {
+                        "market": 15, "strike_price": 66_750_000_000u64,
+                        "comparison": "GreaterThanOrEqual"
+                    }}),
+                )}
+            }),
+        ),
         // UnpauseBridge is a UNIT admin-action variant: it carries no fields
         // and serializes as the bare string `"UnpauseBridge"` (not a
         // `{ Variant: {} }` map like the fieldless struct variant HaltTrading).
@@ -558,24 +594,70 @@ fn main() -> Result<(), Box<dyn Error>> {
         ),
         // Impact-market create (standalone 0x0e) + resolution. oracle_source,
         // description, and rules are serde(default); this case leaves them
-        // absent, so the tail encodes as `c0 a0 a0` (nil, "", ""). Note that an
-        // ABSENT oracle source is not the same wire value as the
-        // `RelayerAttested` unit variant, which would encode as the bare string
-        // — no vector exercises any EventOracleSource variant yet (see the
-        // coverage note in the module header).
+        // absent, so the tail encodes as `c0 a0 a0` (nil, "", ""). An ABSENT
+        // oracle source is not the same wire value as the `RelayerAttested`
+        // unit variant (bare string) — the cases below pin every variant.
         codec_case(
             "create_impact_market/no_oracle_source",
             CREATE_IMPACT_MARKET,
-            json!({
-                "impact_market_id": 91, "underlying_market": 15,
-                "child_market_base": 9100, "question": "does it land?",
-                "deadline_ms": 1_000_000u64, "resolution_window_ms": 1000u64,
-                "im_bps": 3334, "mm_bps": 1667,
-                "taker_fee_bps": 5, "maker_fee_bps": 2,
-                "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
-                "signer": signer, "oracle_source": null,
-                "description": "", "rules": ""
-            }),
+            impact_market_fields(&signer, json!(null)),
+        ),
+        // Every `EventOracleSource` variant, and every `PriceComparison` value
+        // nested inside the two struct variants, is byte-pinned (#98). The
+        // adapter has dedicated routing for this enum
+        // (`eventOracleSourceToWasm` / `eventOracleSourceFromWasm`); before
+        // these vectors a regression there would have passed the whole suite
+        // while producing bad signed CreateImpactMarket payloads. Externally
+        // tagged: the unit variant is the bare string, struct variants are a
+        // one-entry map whose fields encode as a positional array.
+        codec_case(
+            "create_impact_market/relayer_attested",
+            CREATE_IMPACT_MARKET,
+            impact_market_fields(&signer, json!("RelayerAttested")),
+        ),
+        codec_case(
+            "create_impact_market/underlying_price_vs_strike_gt",
+            CREATE_IMPACT_MARKET,
+            impact_market_fields(
+                &signer,
+                json!({ "UnderlyingPriceVsStrike": {
+                    "strike_price": 66_750_000_000u64, "comparison": "GreaterThan"
+                }}),
+            ),
+        ),
+        codec_case(
+            "create_impact_market/underlying_price_vs_strike_lte",
+            CREATE_IMPACT_MARKET,
+            impact_market_fields(
+                &signer,
+                json!({ "UnderlyingPriceVsStrike": {
+                    "strike_price": 0u64, "comparison": "LessThanOrEqual"
+                }}),
+            ),
+        ),
+        codec_case(
+            "create_impact_market/market_oracle_lt",
+            CREATE_IMPACT_MARKET,
+            impact_market_fields(
+                &signer,
+                json!({ "MarketOracle": {
+                    "market": 15, "strike_price": 250_000u64, "comparison": "LessThan"
+                }}),
+            ),
+        ),
+        // Engine's worst-case fixture (exchange-wire codec tests): u32::MAX
+        // market and u64::MAX strike — also pins u64 precision through the
+        // JSON-carrying bindings.
+        codec_case(
+            "create_impact_market/market_oracle_gte",
+            CREATE_IMPACT_MARKET,
+            impact_market_fields(
+                &signer,
+                json!({ "MarketOracle": {
+                    "market": u32::MAX, "strike_price": u64::MAX,
+                    "comparison": "GreaterThanOrEqual"
+                }}),
+            ),
         ),
         // All three `Outcome` variants are pinned, not just the happy one.
         // `outcome` is a NUMERIC_ENUM_FIELDS entry in codec-adapter.ts (the
