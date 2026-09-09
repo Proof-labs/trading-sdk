@@ -613,6 +613,26 @@ describe("codec v1 all action types", () => {
     expect(decoded).toEqual(action);
   });
 
+  it("round-trips ProposeAdminAction with CancelAllOrdersForAccount, scoped and unscoped", () => {
+    for (const market of [7, null]) {
+      const action: Action = {
+        type: "ProposeAdminAction",
+        data: {
+          proposer: new Uint8Array(20).fill(0xa1),
+          registryVersion: 1n,
+          action: {
+            kind: "CancelAllOrdersForAccount",
+            value: { owner: new Uint8Array(20).fill(0xc1), market },
+          },
+        },
+      };
+      const { action: decoded } = decodeTx(encodeTx(action, 12n));
+      // An omitted market must encode as nil and decode back as null; the
+      // adapter injects the explicit None the engine's plain `Option` needs.
+      expect(decoded).toEqual(action);
+    }
+  });
+
   it("rejects a receipt whose fixed-width deploymentId is not 32 bytes", () => {
     const action: Action = {
       type: "ConfirmWithdrawalReceipt",

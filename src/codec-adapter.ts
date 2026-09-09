@@ -135,9 +135,17 @@ function governanceActionToWasm(value: unknown): unknown {
   if (Array.isArray(v.value)) {
     return { [v.kind]: v.value.map(governanceActionToWasm) };
   }
-  return {
-    [v.kind]: v.value ? convertObject(v.value as Record<string, unknown>) : {},
-  };
+  const fields = v.value
+    ? convertObject(v.value as Record<string, unknown>)
+    : {};
+  // `convertObject` drops nullish keys, which suits `#[serde(default)]`
+  // trailers. `CancelAllOrdersForAccount.market` is a plain `Option` with no
+  // default on the engine side, so an omitted market must still arrive as an
+  // explicit null (serde `None`) rather than a missing field.
+  if (v.kind === "CancelAllOrdersForAccount" && !("market" in fields)) {
+    fields.market = null;
+  }
+  return { [v.kind]: fields };
 }
 
 /**

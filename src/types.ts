@@ -983,6 +983,22 @@ export type AdminBatchItem =
   | { kind: "CreateImpactMarket"; value: CreateImpactMarket };
 
 /**
+ * Governance cancel of every resting order one account holds, optionally
+ * confined to one market. Executes on the engine's owner cancel-all path at
+ * quorum (margin released, one `OrderCancelled` per order with reason
+ * `admin_force`); a one-shot sweep, not a freeze. The engine refuses a
+ * zero `owner` at propose and fails the proposal at execution when `market`
+ * names a market that does not exist. Admitted on chain only from the
+ * lineage's cancel-all-for-account activation height (inner tag `0x08`).
+ */
+export interface CancelAllOrdersForAccount {
+  /** The account whose resting orders are cancelled (20-byte address). */
+  owner: Address;
+  /** Confine the cancel to one market; omit to sweep every market. */
+  market?: number | null;
+}
+
+/**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `CreateImpactMarket.signer` must be
  * zero — governance supplies the authorization, not the embedded address.
@@ -1000,7 +1016,8 @@ export type AdminAction =
   | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig }
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
-  | { kind: "UnpauseBridge" };
+  | { kind: "UnpauseBridge" }
+  | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount };
 
 /**
  * Closed set of immediate, loss-reducing single-signer actions. Reverse

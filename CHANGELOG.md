@@ -9,6 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `AdminAction` gains `CancelAllOrdersForAccount` (inner tag `0x08`,
+  exchange#467 / DEC-151): the multisig kill lever that cancels every resting
+  order of one wallet, optionally confined to one market. Typed on the
+  TypeScript side (`{ owner, market? }`), decoded from proposal reads, and
+  pinned by two conformance vectors (scoped and unscoped) plus a content-hash
+  golden shared with the Python suite. The `exchange-wire` pin moves to the
+  merged exchange#471 revision (wire 1.4.0). Additive (MINOR).
+
 - `@proof/trading-sdk/testing` subpath: `registerTestActions()` makes the
   engine-internal `RunLiquidationSweep` (0x11) and `RunFundingTick` (0x12)
   actions encodable for dev-stack harnesses. Not exported from the main entry.

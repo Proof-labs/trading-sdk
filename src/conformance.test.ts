@@ -647,6 +647,16 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       },
     };
   }
+  if (v.CancelAllOrdersForAccount) {
+    const c = v.CancelAllOrdersForAccount as Record<string, unknown>;
+    return {
+      kind: "CancelAllOrdersForAccount",
+      value: {
+        owner: bytes(c.owner),
+        market: c.market === null ? null : (c.market as number),
+      },
+    };
+  }
   if (v.SetTriggerMarketConfig) {
     const c = v.SetTriggerMarketConfig as Record<string, unknown>;
     return {
@@ -895,10 +905,11 @@ describe("conformance vectors (TypeScript)", () => {
       govTypes.has(c.action_type as number),
     );
     // Guard against the vector file drifting out from under this assertion:
-    // propose (create-market, v2 batch, trigger config, unpause-bridge and
-    // create-impact-market with a MarketOracle source), approve, reject, and
-    // all three emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(10);
+    // propose (create-market, v2 batch, trigger config, unpause-bridge,
+    // cancel-all-for-account scoped and unscoped, and create-impact-market
+    // with a MarketOracle source), approve, reject, and all three emergency
+    // arms (PauseMarket, HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(12);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

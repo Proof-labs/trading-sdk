@@ -161,6 +161,23 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     );
   });
 
+  it("reproduces the CancelAllOrdersForAccount hash bit-for-bit", () => {
+    // Struct variant with a 20-byte newtype address and an Option market.
+    // The expected value comes from exchange-wire's own
+    // `codec::admin_proposal_content_hash` at the pinned revision; the
+    // Python suite pins the identical constant.
+    const hash = adminProposalContentHash({
+      ...goldenContext(),
+      action: {
+        kind: "CancelAllOrdersForAccount",
+        value: { owner: new Uint8Array(20).fill(0xc1), market: 7 },
+      },
+    });
+    expect(bytesToHex(hash)).toBe(
+      "39ededb641adc0e8b9c8f2f0c77fdeb2cc1880b7b882e6d91912535bfd27465e",
+    );
+  });
+
   it("rejects a malformed proposer length", () => {
     expect(() =>
       adminProposalContentHash({

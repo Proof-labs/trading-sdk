@@ -306,6 +306,25 @@ describe("decodeAdminAction", () => {
     });
   });
 
+  it("decodes CancelAllOrdersForAccount with and without a market scope", () => {
+    const owner = Array.from({ length: 20 }, () => 0xc1);
+    expect(
+      decodeAdminAction({ CancelAllOrdersForAccount: [owner, 7] }),
+    ).toEqual({
+      kind: "CancelAllOrdersForAccount",
+      value: { owner: new Uint8Array(20).fill(0xc1), market: 7 },
+    });
+    expect(
+      decodeAdminAction({ CancelAllOrdersForAccount: [owner, null] }),
+    ).toEqual({
+      kind: "CancelAllOrdersForAccount",
+      value: { owner: new Uint8Array(20).fill(0xc1), market: null },
+    });
+    expect(() =>
+      decodeAdminAction({ CancelAllOrdersForAccount: [owner.slice(1), 7] }),
+    ).toThrow(/owner/);
+  });
+
   it("decodes the engine's frozen v2 impact bytes", () => {
     expect(decodeAdminAction(decodeVector(ACTION_IMPACT))).toEqual({
       kind: "CreateImpactMarket",
