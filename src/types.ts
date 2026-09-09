@@ -984,12 +984,10 @@ export type AdminBatchItem =
 
 /**
  * Governance cancel of every resting order one account holds, optionally
- * confined to one market. Executes on the engine's owner cancel-all path at
- * quorum (margin released, one `OrderCancelled` per order with reason
- * `admin_force`); a one-shot sweep, not a freeze. The engine refuses a
- * zero `owner` at propose and fails the proposal at execution when `market`
- * names a market that does not exist. Admitted on chain only from the
- * lineage's cancel-all-for-account activation height (inner tag `0x08`).
+ * confined to one market (inner tag `0x08`). A one-shot sweep at quorum,
+ * not a freeze: the engine emits one `OrderCancelled` per order with reason
+ * `admin_force`. A zero `owner` is refused at propose; a `market` that does
+ * not exist fails the proposal at execution.
  */
 export interface CancelAllOrdersForAccount {
   /** The account whose resting orders are cancelled (20-byte address). */

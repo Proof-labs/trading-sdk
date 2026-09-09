@@ -30,6 +30,11 @@ GOLDEN_UNPAUSE_BRIDGE = (
 GOLDEN_CANCEL_ALL_FOR_ACCOUNT = (
     "39ededb641adc0e8b9c8f2f0c77fdeb2cc1880b7b882e6d91912535bfd27465e"
 )
+# The unscoped twin (market None), pinned in TypeScript too: covers the
+# pythonize None -> Option path.
+GOLDEN_CANCEL_ALL_FOR_ACCOUNT_UNSCOPED = (
+    "4b9e5c528f5bf4578427fcb42018f3df7ce3239e4a3392c8e087230d5bb3358c"
+)
 
 
 
@@ -142,6 +147,14 @@ class TestAdminProposalContentHash:
         }
         h = pts.admin_proposal_content_hash(**kwargs)
         assert h.hex() == GOLDEN_CANCEL_ALL_FOR_ACCOUNT
+
+    def test_cancel_all_orders_for_account_unscoped_hash(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = {
+            "CancelAllOrdersForAccount": {"owner": bytes([0xC1] * 20), "market": None}
+        }
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_CANCEL_ALL_FOR_ACCOUNT_UNSCOPED
 
     def test_rejects_unknown_unit_variant(self):
         kwargs = golden_kwargs()

@@ -278,6 +278,13 @@ describe("decodeProposalStatus — every variant shape", () => {
 // Engine-frozen admin-actions-v2 wire bytes (exchange-core codec.rs,
 // `admin_action_v2_wire_vectors_frozen`) — the exact canonical bytes the
 // engine serializes for the two new arms, byte for byte.
+/** `AdminAction::CancelAllOrdersForAccount { owner: C1×20, market: Some(7) }`
+ *  and the `None` twin — exchange-wire's frozen tag-8 vectors. */
+const ACTION_CANCEL_ALL_SCOPED =
+  "81b943616e63656c416c6c4f7264657273466f724163636f756e7492dc0014ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc107";
+const ACTION_CANCEL_ALL_UNSCOPED =
+  "81b943616e63656c416c6c4f7264657273466f724163636f756e7492dc0014ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1c0";
+
 const ACTION_IMPACT =
   "81b2437265617465496d706163744d61726b6574dc00105b0fcd238cad646f6573206974206c616e643fce000f4240cd03e8cd0d06cd0683050200cd0bb8dc00140000000000000000000000000000000000000000c0a0a0";
 const ACTION_BATCH =
@@ -306,23 +313,24 @@ describe("decodeAdminAction", () => {
     });
   });
 
-  it("decodes CancelAllOrdersForAccount with and without a market scope", () => {
-    const owner = Array.from({ length: 20 }, () => 0xc1);
-    expect(
-      decodeAdminAction({ CancelAllOrdersForAccount: [owner, 7] }),
-    ).toEqual({
+  it("decodes the engine's frozen CancelAllOrdersForAccount bytes, scoped and unscoped", () => {
+    // exchange-wire `cancel_all_orders_for_account_wire_vectors_frozen`: the
+    // `AccountAddress` newtype is transparent, so the payload is a flat
+    // 2-tuple of a 20-element owner array and an Option market.
+    expect(decodeAdminAction(decodeVector(ACTION_CANCEL_ALL_SCOPED))).toEqual({
       kind: "CancelAllOrdersForAccount",
-      value: { owner: new Uint8Array(20).fill(0xc1), market: 7 },
+      value: { owner: addrOf(0xc1), market: 7 },
     });
-    expect(
-      decodeAdminAction({ CancelAllOrdersForAccount: [owner, null] }),
-    ).toEqual({
-      kind: "CancelAllOrdersForAccount",
-      value: { owner: new Uint8Array(20).fill(0xc1), market: null },
-    });
+    expect(decodeAdminAction(decodeVector(ACTION_CANCEL_ALL_UNSCOPED))).toEqual(
+      {
+        kind: "CancelAllOrdersForAccount",
+        value: { owner: addrOf(0xc1), market: null },
+      },
+    );
+    const short = Array.from({ length: 19 }, () => 0xc1);
     expect(() =>
-      decodeAdminAction({ CancelAllOrdersForAccount: [owner.slice(1), 7] }),
-    ).toThrow(/owner/);
+      decodeAdminAction({ CancelAllOrdersForAccount: [short, 7] }),
+    ).toThrow(/owner is 19 bytes, expected 20/);
   });
 
   it("decodes the engine's frozen v2 impact bytes", () => {
@@ -648,6 +656,24 @@ describe("byte-field validation", () => {
     raw[index] = value;
     return () => decodeProposalDisplayInfo(raw);
   }
+
+  it("reads a CancelAllOrdersForAccount proposal under its tag 8", () => {
+    // The kind→tag table row is only exercised through a proposal read: a
+    // wrong tag here would refuse every real tag-8 proposal as a mismatch.
+    const raw = validProposalRaw();
+    raw[11] = 8;
+    raw[12] = { CancelAllOrdersForAccount: [new Array(20).fill(0xc1), 7] };
+    const info = decodeProposalDisplayInfo(raw);
+    expect(info.actionTag).toBe(8);
+    expect(info.action).toEqual({
+      kind: "CancelAllOrdersForAccount",
+      value: { owner: addrOf(0xc1), market: 7 },
+    });
+    raw[11] = 7;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(
+      /actionTag 7 does not match CancelAllOrdersForAccount tag 8/,
+    );
+  });
 
   it("accepts the uncorrupted baseline", () => {
     // Guards the negative cases below: if the baseline itself threw, every

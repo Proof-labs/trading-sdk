@@ -15,7 +15,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   TypeScript side (`{ owner, market? }`), decoded from proposal reads, and
   pinned by two conformance vectors (scoped and unscoped) plus a content-hash
   golden shared with the Python suite. The `exchange-wire` pin moves to the
-  merged exchange#471 revision (wire 1.4.0). Additive (MINOR).
+  merged exchange#471 revision (wire 1.4.0), which also brings 1.3.0's
+  `UpdateAuthoritySet` (inner tag `0x07`) and `AuthorityDomain` into the Rust
+  and Python surfaces; the TypeScript mirror of tag `0x07` is tracked in
+  exchange#472. Additive (MINOR).
 
 - `@proof/trading-sdk/testing` subpath: `registerTestActions()` makes the
   engine-internal `RunLiquidationSweep` (0x11) and `RunFundingTick` (0x12)

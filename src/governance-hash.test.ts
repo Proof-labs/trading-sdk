@@ -176,6 +176,17 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     expect(bytesToHex(hash)).toBe(
       "39ededb641adc0e8b9c8f2f0c77fdeb2cc1880b7b882e6d91912535bfd27465e",
     );
+    // The unscoped twin: the Option None path through the same hash.
+    const unscoped = adminProposalContentHash({
+      ...goldenContext(),
+      action: {
+        kind: "CancelAllOrdersForAccount",
+        value: { owner: new Uint8Array(20).fill(0xc1), market: null },
+      },
+    });
+    expect(bytesToHex(unscoped)).toBe(
+      "4b9e5c528f5bf4578427fcb42018f3df7ce3239e4a3392c8e087230d5bb3358c",
+    );
   });
 
   it("rejects a malformed proposer length", () => {
