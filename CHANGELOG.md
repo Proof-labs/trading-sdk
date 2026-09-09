@@ -9,6 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `ExchangeClient.queryHistoryFills()` — fills-history reads against the
+  gateway's history surface, keyset-paged (`HistoryFillsPage` carrying
+  `nextCursor`), filterable by market and time window, optional
+  `addressHex` override (#91).
 - `@proof/trading-sdk/testing` subpath: `registerTestActions()` makes the
   engine-internal `RunLiquidationSweep` (0x11) and `RunFundingTick` (0x12)
   actions encodable for dev-stack harnesses. Not exported from the main entry.

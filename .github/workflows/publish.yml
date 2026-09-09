@@ -158,11 +158,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      # --no-verify for the crates whose verify build cannot run on the host:
-      # the wasm crate is a wasm32 cdylib and the core is pulled in
-      # transitively. derive is a proc-macro and verifies natively. The whole
-      # step is one shell block so the optional flag rides a bash array
-      # ("${verify[@]}") — an empty array vanishes, no word-splitting quibble.
+      # --no-verify on core and wasm: their packaged manifests require
+      # `exchange-wire`, a private git dependency of Proof-labs/exchange with
+      # no crates.io presence, so the verify build can never resolve
+      # (evidenced by `cargo publish -p proof-trading-sdk --dry-run`,
+      # 2026-09-09). Until exchange-wire itself publishes, a crates.io
+      # artifact of either crate would be unbuildable for consumers — that
+      # decision is tracked in #107. derive is a proc-macro with
+      # registry-resolvable deps and verifies natively. The whole step is one
+      # shell block so the optional flag rides a bash array ("${verify[@]}")
+      # — an empty array vanishes, no word-splitting quibble.
       - name: Validate release tag and package version
         run: |
           if ! printf '%s' "$GITHUB_REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$|^(derive|wasm)-v[0-9]+\.[0-9]+\.[0-9]+$'; then
