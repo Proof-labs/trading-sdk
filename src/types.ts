@@ -1100,6 +1100,32 @@ export interface ConfigureOraclePolicy {
   bundle: Uint8Array;
 }
 
+/** Governance cancel of a wallet's resting orders, optionally one market (tag 8). */
+export interface CancelAllOrdersForAccount {
+  owner: Address;
+  market?: number | null;
+}
+
+/** Authenticated relay attestation, not a cryptographic provider-proof verifier.
+ * Price and confidence are integers in the policy's normalized micro unit. */
+export interface SubmitOracleObservation {
+  market: number;
+  policyVersion: bigint;
+  sourceId: number;
+  publishTimeMs: bigint;
+  priceMicro: bigint;
+  confidenceMicro: bigint | null;
+  evidenceDigest: Uint8Array;
+  signer: Address;
+}
+
+/** The complete canonical policy must be independently decoded and reviewed
+ * before signing. A digest alone is not permission to approve opaque bytes. */
+export interface ConfigureOraclePolicy {
+  effectiveHeight: bigint;
+  bundle: Uint8Array;
+}
+
 /**
  * Closed set of immediate, loss-reducing single-signer actions. Reverse
  * transitions (unpause/resume) are intentionally absent — they require a
