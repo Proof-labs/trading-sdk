@@ -77,6 +77,11 @@ import {
 } from "./trigger-history.js";
 
 const msgpackDecoder = new Decoder({ useBigInt64: true });
+import {
+  decodeOraclePermissions,
+  validateOraclePermissionMarket,
+  type OraclePermissions,
+} from "./oracle-permissions.js";
 
 /**
  * Fetch the 32-byte chain_id binding from a CometBFT RPC's `/status`
@@ -1179,6 +1184,15 @@ export class ExchangeClient {
       throw new Error(`API error: ${message}`);
     }
     return decodeTriggerStatusJson(text);
+  }
+
+  /** One committed oracle dependency, not provider health or action authorization. */
+  async queryOraclePermissions(market: number): Promise<OraclePermissions> {
+    validateOraclePermissionMarket(market);
+    const path = `/v1/oracle/permissions/${market}`;
+    const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return decodeOraclePermissions(msgpackDecoder.decode(bytes), market);
   }
 
   /** Immutable owner-bearing trigger lifecycle history. This always uses the

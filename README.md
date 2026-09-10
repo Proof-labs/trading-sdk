@@ -153,6 +153,7 @@ class ExchangeClient {
   queryMarketsSnapshot(): Promise<MarketsSnapshot>;
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
   queryHealth(): Promise<{ status: string; height: number }>;
+  queryOraclePermissions(market: number): Promise<OraclePermissions>;
   queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null>;
   queryPositionTriggers(addressHex?: string): Promise<PositionTriggerInfo[]>;
   queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]>;
@@ -187,6 +188,13 @@ For chain-pinned, atomic committed market inventory, see
 feature additionally provides committed-time and exact-hash receipt reads plus
 one-shot submission of already-signed bytes. It does not manage a caller's
 durable journal, nonce allocation, retries or cutover authority.
+
+`queryOraclePermissions(market)` reads one underlying perp's committed oracle
+policy, calendar epoch and verdict at an exact finalized height. It preserves
+u64 values as `bigint`, and returns `Legacy` with no permission claim while the
+new policy is inactive. `Satisfied` covers only this oracle dependency, not all
+portfolio dependencies or other trading checks. It never reads provider/observer
+health, and is separate from the prohibited operational-health API in ADR 0002.
 
 Position triggers are exact-position-generation brackets. For an existing
 bracket, `queryPositionTriggers()` returns its epoch; first attach must use the

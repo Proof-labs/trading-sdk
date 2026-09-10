@@ -216,3 +216,12 @@ export {
   type ExchangeClientOptions,
   type WsStreamOptions,
 } from "./client.js";
+export { decodeOraclePermissions } from "./oracle-permissions.js";
+export type {
+  OraclePermissions,
+  OraclePolicyEpoch,
+  OraclePolicySource,
+  CommittedOracleVerdict,
+  OracleVerdictStatus,
+  OracleVerdictReason,
+} from "./oracle-permissions.js";
