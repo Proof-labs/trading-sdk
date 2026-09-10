@@ -17,6 +17,10 @@ element (see Changed); everything else in this release is additive.
 
 ### Added
 
+- `ExchangeClient.queryHistoryFills()` — fills-history reads against the
+  gateway's history surface, keyset-paged (`HistoryFillsPage` carrying
+  `nextCursor`), filterable by market and time window, optional
+  `addressHex` override (#91).
 - `AdminAction` gains `CancelAllOrdersForAccount` (inner tag `0x08`,
   exchange#467 / DEC-151): the multisig kill lever that cancels every resting
   order of one wallet, optionally confined to one market. Typed on the
