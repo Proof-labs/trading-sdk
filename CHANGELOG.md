@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [4.0.0] — 2026-09-10
 
-npm `@proof/trading-sdk` only; the Rust crates and the Python package keep
+npm `@prooftrade/trading-sdk` only; the Rust crates and the Python package keep
 their current versions until their own tags are cut. Compatible engine:
 exchange v2.9.0 (exchange-wire 1.4.0, the pinned `6a640c45`). MAJOR for the
 npm package because `ConfirmDeposit` payloads gain an unconditional fifth
