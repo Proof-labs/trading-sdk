@@ -218,6 +218,13 @@ export {
 } from "./client.js";
 export { decodeOraclePermissions } from "./oracle-permissions.js";
 export {
+  decodeFinancialState,
+  type FinancialStateSelection,
+  type FinancialState,
+  type FinancialAccountState,
+  type FinancialMarketState,
+} from "./financial-state.js";
+export {
   decodeAccountState,
   type AccountState,
   type RawAccountPosition,

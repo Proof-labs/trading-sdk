@@ -1,5 +1,26 @@
 # Proof Trading SDK
 
+### Atomic financial evidence (TypeScript 4.2)
+
+`client.queryFinancialState({ markets: [1], owners: [ownerHex] })` reads one
+finalized-store snapshot through the gateway only. Select 1–8 markets and 1–8
+owners; inputs are copied, sorted and canonicalized, with duplicates rejected.
+The response includes exact selected market fee/funding settings, raw account
+balances and positions, the fee pool, selected markets' insurance pools, and
+optional PLP configuration. The PLP account is automatically included once.
+All integers retain precision and absent stored values remain `null`; at most
+2048 positions total and a one-MiB HTTP response are accepted, within five seconds.
+A framing-only preflight also bounds nesting and aggregate value slots before
+the maintained MessagePack decoder allocates containers; values are not decoded
+by a second codec.
+
+This is not equity, accrued-funding valuation, solvency or trading/withdrawal
+authorization. `feesAccrued` is a lifetime fee/rebate counter, not cash.
+`plp.bootstrapBalance` is a historical baseline, not additional PLP funds;
+actual PLP cash is only its account balance. Do not double-count either field.
+Other endpoints must be bracketed at the same `finalizedHeight` for cross-read
+comparisons; the method does not claim a historical-height query parameter.
+
 `queryAccountState(ownerHex?)` reads exact finalized settled balance and raw
 positions through the gateway, without oracle valuation. Its bigint values are
 not equity, accrued funding, available collateral or authorization. When
