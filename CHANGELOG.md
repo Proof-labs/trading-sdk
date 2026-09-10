@@ -1,11 +1,19 @@
 # Changelog
 
-All notable changes to `@proof/trading-sdk` (and the `proof-trading-sdk` Python
+All notable changes to `@proof-labs/trading-sdk` (and the `proof-trading-sdk` Python
 package) are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [4.0.0] — 2026-09-10
+
+npm `@proof-labs/trading-sdk` only; the Rust crates and the Python package keep
+their current versions until their own tags are cut. Compatible engine:
+exchange v2.9.0 (exchange-wire 1.4.0, the pinned `6a640c45`). MAJOR for the
+npm package because `ConfirmDeposit` payloads gain an unconditional fifth
+element (see Changed); everything else in this release is additive.
 
 ### Added
 
@@ -13,7 +21,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gateway's history surface, keyset-paged (`HistoryFillsPage` carrying
   `nextCursor`), filterable by market and time window, optional
   `addressHex` override (#91).
-- `@proof/trading-sdk/testing` subpath: `registerTestActions()` makes the
+- `AdminAction` gains `CancelAllOrdersForAccount` (inner tag `0x08`,
+  exchange#467 / DEC-151): the multisig kill lever that cancels every resting
+  order of one wallet, optionally confined to one market. Typed on the
+  TypeScript side (`{ owner, market? }`), decoded from proposal reads, and
+  pinned by two conformance vectors (scoped and unscoped) plus a content-hash
+  golden shared with the Python suite. The `exchange-wire` pin moves to the
+  merged exchange#471 revision (wire 1.4.0), which also brings 1.3.0's
+  `UpdateAuthoritySet` (inner tag `0x07`) and `AuthorityDomain` into the Rust
+  and Python surfaces; the TypeScript mirror of tag `0x07` is tracked in
+  exchange#472. Additive (MINOR).
+
+- `@proof-labs/trading-sdk/testing` subpath: `registerTestActions()` makes the
   engine-internal `RunLiquidationSweep` (0x11) and `RunFundingTick` (0x12)
   actions encodable for dev-stack harnesses. Not exported from the main entry.
 - **Proposal-lifecycle error codes 54-71** - the multisig-governance error
@@ -43,6 +62,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `confirm_deposit/with_locator` and `confirm_deposit/no_locator` pin the bytes.
 
 ### Changed
+
+- **BREAKING (npm): the package is now `@proof-labs/trading-sdk`.** The
+  npm scope follows the `proof-labs` organisation that owns it on the
+  registry; `@proof/trading-sdk` was never published. Consumers that
+  install from git rename the dependency key and every import specifier
+  (`@proof-labs/trading-sdk`, `@proof-labs/trading-sdk/testing`). The Rust
+  crate and the Python package keep their names.
 
 - **BREAKING (MAJOR) — `ConfirmDeposit` payloads gain an unconditional fifth
   element.** The locator is appended as a trailing `nil` even when the caller
@@ -595,7 +621,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v4.0.0...HEAD
+[4.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...npm-v4.0.0
 [3.0.0]: https://github.com/Proof-labs/trading-sdk/releases/tag/npm-v3.0.0
 [1.1.0]: https://github.com/Proof-labs/trading-sdk/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Proof-labs/trading-sdk/compare/v0.1.0...v1.0.0

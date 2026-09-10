@@ -12,7 +12,7 @@ import type { Action } from "./types.js";
 
 const signer = new Uint8Array(20).fill(7);
 
-describe("@proof/trading-sdk/testing", () => {
+describe("@proof-labs/trading-sdk/testing", () => {
   it("is not reachable from the main entry", () => {
     expect(
       (main.ActionType as Record<string, number>).RunLiquidationSweep,

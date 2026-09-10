@@ -450,6 +450,35 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": "UnpauseBridge"
             }),
         ),
+        // CancelAllOrdersForAccount (inner tag 0x08, exchange#467): the
+        // governance kill lever for one wallet's resting book. Both shapes
+        // of the optional market scope are pinned — `Some(7)` and `None` —
+        // and the inner bytes match exchange-wire's frozen
+        // `cancel_all_orders_for_account_wire_vectors_frozen` vectors.
+        codec_case(
+            "propose_admin_action/cancel_all_orders_for_account_scoped",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "CancelAllOrdersForAccount": {
+                    "owner": vec![0xC1u8; 20],
+                    "market": 7u32
+                }}
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/cancel_all_orders_for_account_unscoped",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "CancelAllOrdersForAccount": {
+                    "owner": vec![0xC1u8; 20],
+                    "market": null
+                }}
+            }),
+        ),
         codec_case(
             "approve_admin_action/rotate_registry",
             APPROVE_ADMIN_ACTION,

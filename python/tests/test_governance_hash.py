@@ -23,6 +23,19 @@ GOLDEN_BATCH = "f9a9b17a53b52ad72c1703b583a0ed4ac70295244cbf31f74518d5177dd86e36
 GOLDEN_UNPAUSE_BRIDGE = (
     "ffa74c9323512ffb8272eea55fc49baf047f55aa8979e56e06229b57d1350f56"
 )
+# CancelAllOrdersForAccount (inner tag 0x08): a struct variant carrying a
+# 20-byte newtype address and an Option market, over the same golden
+# context. Same authority as above; the TypeScript suite pins the identical
+# constant.
+GOLDEN_CANCEL_ALL_FOR_ACCOUNT = (
+    "39ededb641adc0e8b9c8f2f0c77fdeb2cc1880b7b882e6d91912535bfd27465e"
+)
+# The unscoped twin (market None), pinned in TypeScript too: covers the
+# pythonize None -> Option path.
+GOLDEN_CANCEL_ALL_FOR_ACCOUNT_UNSCOPED = (
+    "4b9e5c528f5bf4578427fcb42018f3df7ce3239e4a3392c8e087230d5bb3358c"
+)
+
 
 
 def engine_default_create_market() -> dict:
@@ -126,6 +139,22 @@ class TestAdminProposalContentHash:
         kwargs["action"] = "UnpauseBridge"
         h = pts.admin_proposal_content_hash(**kwargs)
         assert h.hex() == GOLDEN_UNPAUSE_BRIDGE
+
+    def test_cancel_all_orders_for_account_hash(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = {
+            "CancelAllOrdersForAccount": {"owner": bytes([0xC1] * 20), "market": 7}
+        }
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_CANCEL_ALL_FOR_ACCOUNT
+
+    def test_cancel_all_orders_for_account_unscoped_hash(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = {
+            "CancelAllOrdersForAccount": {"owner": bytes([0xC1] * 20), "market": None}
+        }
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_CANCEL_ALL_FOR_ACCOUNT_UNSCOPED
 
     def test_rejects_unknown_unit_variant(self):
         kwargs = golden_kwargs()

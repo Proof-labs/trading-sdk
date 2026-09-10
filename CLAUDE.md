@@ -187,7 +187,7 @@ internally). See `docs/adr/0001-wasm-core-vs-parallel-types.md`.
 
 ## Versioning & wire-format compatibility
 
-Every package here (the npm `@proof/trading-sdk`, Python distribution, and
+Every package here (the npm `@proof-labs/trading-sdk`, Python distribution, and
 `crates/*` Rust crates) ships **independent semver on the full
 `MAJOR.MINOR.PATCH` line and is kept at `>= 1.0.0`**. We are off `0.x` on
 purpose: under `0.x`, Cargo and npm caret ranges treat the _second_ number as
