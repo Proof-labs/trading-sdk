@@ -5,7 +5,7 @@ name: publish
 # package on its own semver line (see CLAUDE.md "Versioning"), so there is no
 # single umbrella version. Push the tag for the artifact you are cutting:
 #
-#   npm-v3.0.0      -> npm  @proof/trading-sdk        + the GitHub Release
+#   npm-v3.0.0      -> npm  @prooftrade/trading-sdk        + the GitHub Release
 #   v3.0.0          -> crates.io proof-trading-sdk
 #   derive-v1.1.0   -> crates.io proof-trading-sdk-derive
 #   wasm-v2.1.0     -> crates.io proof-trading-sdk-wasm
