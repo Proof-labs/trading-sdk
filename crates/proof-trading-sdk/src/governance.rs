@@ -8,10 +8,10 @@
 //! (These are privileged/admin actions; a future public-surface pass may hide
 //! them behind the `exchange-wire` visibility classifier.)
 
-pub use exchange_wire::codec::{
+pub use proof_wire::codec::{
     admin_proposal_content_hash, canonical_admin_action_bytes, ADMIN_PROPOSAL_HASH_DOMAIN,
 };
-pub use exchange_wire::types::{
+pub use proof_wire::types::{
     AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, EmergencyAction,
     EmergencyActionType, EmergencyAdminAction, ProposalId, ProposeAdminAction, RegistryVersion,
     RejectAdminAction, SignatureThreshold, SignerAddress, UpdateAdminSignerRegistry,
