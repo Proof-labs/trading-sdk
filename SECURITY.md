@@ -1,6 +1,6 @@
 # Security Policy
 
-`@proof/trading-sdk` signs and encodes value-bearing transactions for the Proof
+`@prooftrade/trading-sdk` signs and encodes value-bearing transactions for the Proof
 Exchange. It handles Ed25519 key material and produces signatures over the wire
 envelope. We take vulnerabilities in this code seriously and appreciate reports
 made through the process below.

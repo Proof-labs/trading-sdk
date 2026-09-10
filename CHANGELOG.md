@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `@proof/trading-sdk` (and the `proof-trading-sdk` Python
+All notable changes to `@prooftrade/trading-sdk` (and the `proof-trading-sdk` Python
 package) are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -28,7 +28,7 @@ element (see Changed); everything else in this release is additive.
   and Python surfaces; the TypeScript mirror of tag `0x07` is tracked in
   exchange#472. Additive (MINOR).
 
-- `@proof/trading-sdk/testing` subpath: `registerTestActions()` makes the
+- `@prooftrade/trading-sdk/testing` subpath: `registerTestActions()` makes the
   engine-internal `RunLiquidationSweep` (0x11) and `RunFundingTick` (0x12)
   actions encodable for dev-stack harnesses. Not exported from the main entry.
 - **Proposal-lifecycle error codes 54-71** - the multisig-governance error
@@ -58,6 +58,13 @@ element (see Changed); everything else in this release is additive.
   `confirm_deposit/with_locator` and `confirm_deposit/no_locator` pin the bytes.
 
 ### Changed
+
+- **BREAKING (npm): the package is now `@prooftrade/trading-sdk`.** The
+  npm scope follows the `prooftrade` organisation that owns it on the
+  registry; `@proof/trading-sdk` was never published. Consumers that
+  install from git rename the dependency key and every import specifier
+  (`@prooftrade/trading-sdk`, `@prooftrade/trading-sdk/testing`). The Rust
+  crate and the Python package keep their names.
 
 - **BREAKING (MAJOR) — `ConfirmDeposit` payloads gain an unconditional fifth
   element.** The locator is appended as a trailing `nil` even when the caller

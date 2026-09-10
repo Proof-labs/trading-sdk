@@ -84,7 +84,7 @@ Your address is already funded by Step 2, so skip key generation and the faucet
 entirely. Load your key and trade:
 
 ```typescript
-import { ExchangeClient, hexToBytes, Side } from "@proof/trading-sdk";
+import { ExchangeClient, hexToBytes, Side } from "@prooftrade/trading-sdk";
 
 const client = new ExchangeClient({ chainId: "exchange-devnet-1" });
 client.setPrivateKey(hexToBytes("abc123…")); // privateKeyHex from Step 2

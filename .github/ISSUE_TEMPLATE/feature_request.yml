@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest a capability or improvement for @proof/trading-sdk
+description: Suggest a capability or improvement for @prooftrade/trading-sdk
 labels: ["enhancement"]
 body:
   - type: markdown

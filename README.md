@@ -17,7 +17,7 @@ generate-key → fund → place-order → cancel flow.
 ## Install
 
 ```bash
-npm install @proof/trading-sdk
+npm install @prooftrade/trading-sdk
 ```
 
 ## Connect to the devnet
@@ -33,7 +33,11 @@ The SDK ships configured for the Proof devnet out of the box:
 **Key generation (no server needed):**
 
 ```typescript
-import { generateKeypair, pubkeyToOwner, ownerToHex } from "@proof/trading-sdk";
+import {
+  generateKeypair,
+  pubkeyToOwner,
+  ownerToHex,
+} from "@prooftrade/trading-sdk";
 
 const { publicKey, privateKey } = generateKeypair();
 const address = pubkeyToOwner(publicKey);
@@ -65,7 +69,7 @@ import {
   generateKeypair,
   pubkeyToOwner,
   ownerToHex,
-} from "@proof/trading-sdk";
+} from "@prooftrade/trading-sdk";
 
 const { publicKey, privateKey } = generateKeypair();
 const address = pubkeyToOwner(publicKey);
