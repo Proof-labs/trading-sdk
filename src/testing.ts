@@ -1,5 +1,5 @@
 /**
- * `@prooftrade/trading-sdk/testing` - engine-internal actions that exist only to
+ * `@proof-labs/trading-sdk/testing` - engine-internal actions that exist only to
  * drive a dev stack (integration harnesses, local liquidation / funding
  * experiments). They are deliberately NOT exported from the main entry: a
  * trading integration never needs them, and the engine rejects them from any
