@@ -9,6 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Rust core 3.2.0 adds the optional `gateway` transport: bounded gateway-only
+  chain identity, committed oracle permissions, byte-exact externally signed
+  submission and hash-matched execution receipts. No signing, nonce allocation,
+  automatic retries or operational oracle-health API. Ambiguous submission,
+  CheckTx rejection, committed execution and oracle permission remain distinct;
+  response bodies, credentials and signed bytes are excluded from diagnostics.
+  Existing wire bytes and default codec/WASM dependencies are unchanged.
+
 - Retains current exchange `CreateEvent` governance tag 9 alongside F16 tag 12:
   typed standalone-event proposals and strict proposal-read decoding (not a Batch
   item). Binary market tuples name their event id; conditional perps retain their

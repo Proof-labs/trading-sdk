@@ -196,6 +196,44 @@ new policy is inactive. `Satisfied` covers only this oracle dependency, not all
 portfolio dependencies or other trading checks. It never reads provider/observer
 health, and is separate from the prohibited operational-health API in ADR 0002.
 
+### Optional native Rust gateway transport
+
+Rust `proof-trading-sdk` 3.2.0 exposes `gateway::GatewayClient` with the optional
+`gateway` feature. Default codec/WASM builds do not acquire an HTTP transport.
+The four explicit operations are `chain_identity`, `oracle_permissions`,
+`submit_signed_bytes` and `committed_receipt`; they use only the existing gateway
+routes, with no direct-node fallback, signing, nonce allocation or hidden retry.
+
+Configure an HTTPS origin (HTTP requires a URL-normalized loopback IP, not a DNS
+name; numeric IPv4 aliases that normalize to loopback are allowed), a
+1ms–60s total request deadline and a response cap no larger than 1MiB. Defaults
+are 10 seconds and 256KiB. Redirects, environment proxies and automatic retries
+are disabled. An optional API key is sent only in `X-Api-Key` and is redacted
+from diagnostics. Signed input is limited to 4096 bytes, fitting the gateway's
+default JSON body cap after base64 encoding. These are client resource bounds,
+not production admission policy.
+
+`SubmissionOutcome` distinguishes committed execution, CheckTx rejection,
+pending execution and explicit pre-admission rejection. A transport/error body
+or hash mismatch retains `GatewayError.reconcile_hash`: the transaction may
+have landed, so retain its exact bytes and reconcile rather than re-sign.
+`committed_receipt` requires the requested hash and a positive committed height;
+not-found/not-indexed errors never clear pending state. A code-zero receipt is
+execution success, **not** an oracle permission certificate. Retry-After remains
+an exact delay, an absolute HTTP date, or explicitly `Invalid`; callers must not
+discard an invalid header and retry immediately.
+
+For a deliberately read-only local contract probe, with no signing/key inputs:
+
+```sh
+cargo run -p proof-trading-sdk --features gateway --example gateway_oracle_probe -- \
+  http://127.0.0.1:9080 EXPECTED_CHAIN 1
+```
+
+It checks chain identity before the permission read and reports both heights;
+sequential reads are not a single atomic snapshot. Neither a successful probe
+nor a committed market permission authorizes a portfolio action or release.
+
 Position triggers are exact-position-generation brackets. For an existing
 bracket, `queryPositionTriggers()` returns its epoch; first attach must use the
 epoch on the canonical account position read and must never guess `1`. Submit
