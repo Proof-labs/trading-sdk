@@ -7,6 +7,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [4.0.0] — 2026-09-10
+
+npm `@proof/trading-sdk` only; the Rust crates and the Python package keep
+their current versions until their own tags are cut. Compatible engine:
+exchange v2.9.0 (exchange-wire 1.4.0, the pinned `6a640c45`). MAJOR for the
+npm package because `ConfirmDeposit` payloads gain an unconditional fifth
+element (see Changed); everything else in this release is additive.
+
 ### Added
 
 - `AdminAction` gains `CancelAllOrdersForAccount` (inner tag `0x08`,
@@ -602,7 +610,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v4.0.0...HEAD
+[4.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...npm-v4.0.0
 [3.0.0]: https://github.com/Proof-labs/trading-sdk/releases/tag/npm-v3.0.0
 [1.1.0]: https://github.com/Proof-labs/trading-sdk/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Proof-labs/trading-sdk/compare/v0.1.0...v1.0.0
