@@ -613,6 +613,58 @@ describe("codec v1 all action types", () => {
     expect(decoded).toEqual(action);
   });
 
+  it("encodes an omitted, undefined, or null market identically (serde None)", () => {
+    // The Rust side reads a missing Option field as None without a serde
+    // default, so the adapter needs no special case: all three spellings
+    // must produce one wire encoding.
+    const owner = new Uint8Array(20).fill(0xc1);
+    const encodings = [
+      { owner },
+      { owner, market: undefined },
+      { owner, market: null },
+    ].map((value) =>
+      encodeTx(
+        {
+          type: "ProposeAdminAction",
+          data: {
+            proposer: new Uint8Array(20).fill(0xa1),
+            registryVersion: 1n,
+            action: { kind: "CancelAllOrdersForAccount", value },
+          },
+        },
+        12n,
+      ),
+    );
+    expect(encodings[1]).toEqual(encodings[0]);
+    expect(encodings[2]).toEqual(encodings[0]);
+    const { action } = decodeTx(encodings[0]);
+    expect(
+      action.type === "ProposeAdminAction" &&
+        action.data.action.kind === "CancelAllOrdersForAccount" &&
+        action.data.action.value.market,
+    ).toBeNull();
+  });
+
+  it("round-trips ProposeAdminAction with CancelAllOrdersForAccount, scoped and unscoped", () => {
+    for (const market of [7, null]) {
+      const action: Action = {
+        type: "ProposeAdminAction",
+        data: {
+          proposer: new Uint8Array(20).fill(0xa1),
+          registryVersion: 1n,
+          action: {
+            kind: "CancelAllOrdersForAccount",
+            value: { owner: new Uint8Array(20).fill(0xc1), market },
+          },
+        },
+      };
+      const { action: decoded } = decodeTx(encodeTx(action, 12n));
+      // An omitted market must encode as nil and decode back as null; the
+      // adapter injects the explicit None the engine's plain `Option` needs.
+      expect(decoded).toEqual(action);
+    }
+  });
+
   it("rejects a receipt whose fixed-width deploymentId is not 32 bytes", () => {
     const action: Action = {
       type: "ConfirmWithdrawalReceipt",

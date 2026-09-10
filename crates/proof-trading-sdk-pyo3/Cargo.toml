@@ -1,6 +1,6 @@
 [package]
 name = "proof-trading-sdk-pyo3"
-version = "3.0.0"
+version = "3.1.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "PyO3 bindings for the proof-trading-sdk core: MessagePack codec, Ed25519 signing, and Keccak256 owner derivation."
@@ -16,7 +16,7 @@ default = ["pkcs11"]
 pkcs11 = ["dep:cryptoki"]
 
 [dependencies]
-proof-trading-sdk = { path = "../proof-trading-sdk", version = "3" }
+proof-trading-sdk = { path = "../proof-trading-sdk", version = "3.1" }
 # `abi3-py311` (not bare `abi3`): the ABI floor must match python/pyproject.toml's
 # `requires-python = ">=3.11"` rather than follow the building interpreter.
 pyo3 = { version = "0.29", features = ["extension-module", "abi3-py311"] }

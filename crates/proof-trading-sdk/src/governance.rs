@@ -12,7 +12,8 @@ pub use exchange_wire::codec::{
     admin_proposal_content_hash, canonical_admin_action_bytes, ADMIN_PROPOSAL_HASH_DOMAIN,
 };
 pub use exchange_wire::types::{
-    AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, EmergencyAction,
-    EmergencyActionType, EmergencyAdminAction, ProposalId, ProposeAdminAction, RegistryVersion,
-    RejectAdminAction, SignatureThreshold, SignerAddress, UpdateAdminSignerRegistry,
+    AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, ConfigureOraclePolicy,
+    EmergencyAction, EmergencyActionType, EmergencyAdminAction, ProposalId, ProposeAdminAction,
+    RegistryVersion, RejectAdminAction, SignatureThreshold, SignerAddress,
+    UpdateAdminSignerRegistry,
 };

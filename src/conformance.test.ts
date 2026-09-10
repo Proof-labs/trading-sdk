@@ -107,6 +107,20 @@ function toAction(
   input: Record<string, unknown>,
 ): Action {
   switch (actionType) {
+    case ActionType.SubmitOracleObservation:
+      return {
+        type: "SubmitOracleObservation",
+        data: {
+          market: input.market as number,
+          policyVersion: big(input.policy_version),
+          sourceId: input.source_id as number,
+          publishTimeMs: big(input.publish_time_ms),
+          priceMicro: big(input.price_micro),
+          confidenceMicro: bigOrNull(input.confidence_micro),
+          evidenceDigest: bytes(input.evidence_digest),
+          signer: bytes(input.signer),
+        },
+      };
     case ActionType.PlaceOrder:
       return {
         type: "PlaceOrder",
@@ -617,6 +631,16 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
     throw new Error(`toAdminAction: unknown unit variant ${input}`);
   }
   const v = input as Record<string, unknown>;
+  if (v.ConfigureOraclePolicy) {
+    const policy = v.ConfigureOraclePolicy as Record<string, unknown>;
+    return {
+      kind: "ConfigureOraclePolicy",
+      value: {
+        effectiveHeight: big(policy.effective_height),
+        bundle: bytes(policy.bundle),
+      },
+    };
+  }
   if (v.CreateMarket) {
     return {
       kind: "CreateMarket",
@@ -644,6 +668,16 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       value: {
         newThreshold: Number(big(r.new_threshold)),
         newMembers: (r.new_members as unknown[]).map((a) => bytes(a)),
+      },
+    };
+  }
+  if (v.CancelAllOrdersForAccount) {
+    const c = v.CancelAllOrdersForAccount as Record<string, unknown>;
+    return {
+      kind: "CancelAllOrdersForAccount",
+      value: {
+        owner: bytes(c.owner),
+        market: c.market === null ? null : (c.market as number),
       },
     };
   }
@@ -896,9 +930,9 @@ describe("conformance vectors (TypeScript)", () => {
     );
     // Guard against the vector file drifting out from under this assertion:
     // propose (create-market, v2 batch, trigger config, unpause-bridge and
-    // create-impact-market with a MarketOracle source), approve, reject, and
+    // create-impact-market with a MarketOracle source, oracle policy), approve, reject, and
     // all three emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(10);
+    expect(govCases.length).toBe(13);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

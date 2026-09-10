@@ -1,6 +1,7 @@
 import type {
   Address,
   AdminAction,
+  CancelAllOrdersForAccount,
   AdminBatchItem,
   AdminSignerRegistry,
   CreateImpactMarket,
@@ -409,6 +410,18 @@ function decodeUpdateRegistry(value: unknown): UpdateAdminSignerRegistry {
   };
 }
 
+function decodeCancelAllOrdersForAccount(
+  value: unknown,
+): CancelAllOrdersForAccount {
+  const raw = toTuple(value, "cancelAllOrdersForAccount", 2);
+  const market = raw[1];
+  return {
+    owner: toBytes(raw[0], "cancelAllOrdersForAccount.owner", ADDRESS_LEN),
+    market:
+      market == null ? null : toU32(market, "cancelAllOrdersForAccount.market"),
+  };
+}
+
 function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
   const raw = toTuple(value, "setTriggerMarketConfig", 7);
   if (typeof raw[2] !== "boolean") {
@@ -451,6 +464,9 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   Batch: 4,
   SetTriggerMarketConfig: 5,
   UnpauseBridge: 6,
+  // Tag 7's TypeScript mirror is tracked separately under exchange#472.
+  CancelAllOrdersForAccount: 8,
+  ConfigureOraclePolicy: 12,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
@@ -466,6 +482,24 @@ export function decodeAdminAction(
   if (value === "UnpauseBridge") return { kind: "UnpauseBridge" };
   const { name, payload } = variantOf(value, field);
   switch (name) {
+    case "CancelAllOrdersForAccount":
+      return {
+        kind: "CancelAllOrdersForAccount",
+        value: decodeCancelAllOrdersForAccount(payload),
+      };
+    case "ConfigureOraclePolicy": {
+      const raw = toTuple(payload, "configureOraclePolicy", 2);
+      return {
+        kind: "ConfigureOraclePolicy",
+        value: {
+          effectiveHeight: toU64(
+            raw[0],
+            "configureOraclePolicy.effectiveHeight",
+          ),
+          bundle: toBytes(raw[1], "configureOraclePolicy.bundle"),
+        },
+      };
+    }
     case "CreateMarket":
       return {
         kind: "CreateMarket",

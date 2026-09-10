@@ -9,9 +9,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Integrates the reviewed admin-tag-8 mirror and compatibility vectors from
+  trading-sdk #106 (`09cf55f`) alongside F16. Cancel-all scoped/unscoped bytes,
+  proposal reads, omitted/null scope semantics and content hashes stay pinned.
+  The independent tag-7 TypeScript mirror remains tracked in exchange #472.
+
 - `@proof/trading-sdk/testing` subpath: `registerTestActions()` makes the
   engine-internal `RunLiquidationSweep` (0x11) and `RunFundingTick` (0x12)
   actions encodable for dev-stack harnesses. Not exported from the main entry.
+- Operator `SubmitOracleObservation` (`0x2D`) and multisig
+  `ConfigureOraclePolicy` (inner tag `0x0C`) bindings, shared Rust codec vectors,
+  TypeScript byte-field round trips and typed Python builders. Requires an engine
+  built with `exchange-wire >= 1.5.0` and its separately governed oracle activation;
+  existing actions retain their bytes. Additive MINOR: npm/core/Python/PyO3 3.1.0,
+  WASM binding 2.2.0; unchanged helper crates are not bumped. Relay authentication
+  is not cryptographic provider-proof verification. Opaque policy bytes must be
+  independently decoded/reviewed before signing; no policy defaults, activation,
+  automatic approval or oracle-health read method is introduced (ADR-0002).
+  The draft development dependency pins the exact F16 reconciliation commit;
+  that exchange branch must be published before clean-checkout SDK CI can resolve
+  it. Before release, replace it with the independently reviewed immutable
+  exchange revision and rerun all binding/conformance checks. Local validation
+  against the feature worktree is not proof that this upstream branch or an
+  activated engine artifact has been published. New policy vectors prove only
+  the outer wire encoding, not policy validity or permission to activate it.
+
 - **Proposal-lifecycle error codes 54-71** - the multisig-governance error
   family (`ProposalNotFound` ... `InvalidAdminRegistry`) is now mirrored across
   all three bindings from the engine's `ExecError` and the frozen
