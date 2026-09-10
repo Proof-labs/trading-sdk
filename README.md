@@ -1,5 +1,12 @@
 # Proof Trading SDK
 
+`queryAccountState(ownerHex?)` reads exact finalized settled balance and raw
+positions through the gateway, without oracle valuation. Its bigint values are
+not equity, accrued funding, available collateral or authorization. When
+`queryAccount` fails closed during unsafe oracle conditions, show valuation as
+unavailable; do not substitute this raw cash balance as healthy equity. Match
+`finalizedHeight` across bracketed reads for a coherent economic snapshot.
+
 TypeScript SDK for the [Proof Exchange](https://proof.trade): Ed25519 signing,
 MessagePack codec, timestamp-nonce allocation, and gateway/CometBFT submission
 for every exchange action.
