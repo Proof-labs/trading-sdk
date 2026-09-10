@@ -1,4 +1,4 @@
-// Smoke driver for @prooftrade/trading-sdk — drives the library's value-bearing
+// Smoke driver for @proof-labs/trading-sdk — drives the library's value-bearing
 // OFFLINE path end to end (no network): WASM init -> key generation -> owner
 // derivation -> sign+encode a signed wire envelope -> peek action type ->
 // decode -> assert the round-trip. This is the exact surface the WASM codec
