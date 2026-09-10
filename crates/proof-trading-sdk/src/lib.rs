@@ -10,6 +10,8 @@
 pub use exchange_wire::{abci_event, codec, crypto, triggers, types};
 
 pub mod errors;
+#[cfg(feature = "gateway")]
+pub mod gateway;
 pub mod governance;
 pub mod query;
 pub mod signer;

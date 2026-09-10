@@ -681,6 +681,81 @@ describe("byte-field validation", () => {
     expect(() => decodeProposalDisplayInfo(validProposalRaw())).not.toThrow();
   });
 
+  it("decodes current CreateEvent tag 9 and preserves large settlement times", () => {
+    const raw = validProposalRaw();
+    raw[11] = 9;
+    raw[12] = {
+      CreateEvent: [
+        92,
+        9200,
+        4,
+        "standalone?",
+        9007199254740993n,
+        120000n,
+        5,
+        2,
+        new Array(20).fill(0),
+        "RelayerAttested",
+        "body",
+        "rules",
+      ],
+    };
+    expect(decodeProposalDisplayInfo(raw).action).toEqual({
+      kind: "CreateEvent",
+      value: {
+        eventId: 92,
+        childMarketBase: 9200,
+        poolId: 4,
+        question: "standalone?",
+        settlementMs: 9007199254740993n,
+        resolutionWindowMs: 120000n,
+        takerFeeBps: 5,
+        makerFeeBps: 2,
+        signer: new Uint8Array(20),
+        oracleSource: { kind: "RelayerAttested" },
+        description: "body",
+        rules: "rules",
+      },
+    });
+    raw[11] = 12;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(
+      /does not match CreateEvent tag 9/,
+    );
+  });
+
+  it("mirrors CreateEvent default trailers without admitting it in a Batch", () => {
+    const event = [
+      92,
+      9200,
+      4,
+      "standalone?",
+      1000n,
+      120000n,
+      5,
+      2,
+      new Array(20).fill(0),
+    ];
+    const decoded = decodeAdminAction({ CreateEvent: event });
+    expect(decoded.kind).toBe("CreateEvent");
+    if (decoded.kind !== "CreateEvent") throw new Error("unexpected variant");
+    expect(decoded.value.oracleSource).toBeUndefined();
+    expect(decoded.value.description).toBe("");
+    expect(decoded.value.rules).toBe("");
+    expect(() =>
+      decodeAdminAction({ Batch: [{ CreateEvent: event }] }),
+    ).toThrow(/CreateEvent/);
+    expect(() => decodeAdminAction({ CreateEvent: event.slice(0, 8) })).toThrow(
+      /fields/,
+    );
+    expect(() =>
+      decodeAdminAction({ CreateEvent: [...event, null, "", "", "extra"] }),
+    ).toThrow(/fields/);
+    event[2] = 256;
+    expect(() => decodeAdminAction({ CreateEvent: event })).toThrow(
+      /poolId.*range/,
+    );
+  });
+
   it("rejects missing or trailing positional fields", () => {
     const short = validProposalRaw();
     short.pop();

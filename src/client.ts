@@ -1,4 +1,10 @@
 import { signAndEncode } from "./codec.js";
+import { decodeAccountState, type AccountState } from "./account-state.js";
+import {
+  fetchFinancialState,
+  type FinancialState,
+  type FinancialStateSelection,
+} from "./financial-state.js";
 import { ready as initWasm } from "./wasm-loader.js";
 import {
   txEngineError,
@@ -75,6 +81,11 @@ import {
 } from "./trigger-history.js";
 
 const msgpackDecoder = new Decoder({ useBigInt64: true });
+import {
+  decodeOraclePermissions,
+  validateOraclePermissionMarket,
+  type OraclePermissions,
+} from "./oracle-permissions.js";
 
 /**
  * Fetch the 32-byte chain_id binding from a CometBFT RPC's `/status`
@@ -1167,6 +1178,15 @@ export class ExchangeClient {
     return decodeTriggerStatusJson(text);
   }
 
+  /** One committed oracle dependency, not provider health or action authorization. */
+  async queryOraclePermissions(market: number): Promise<OraclePermissions> {
+    validateOraclePermissionMarket(market);
+    const path = `/v1/oracle/permissions/${market}`;
+    const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return decodeOraclePermissions(msgpackDecoder.decode(bytes), market);
+  }
+
   /** Immutable owner-bearing trigger lifecycle history. This always uses the
    * public gateway, including when the client is configured for direct-node
    * current-state reads; the node does not own indexer history. */
@@ -1305,6 +1325,28 @@ export class ExchangeClient {
       status: raw[4] as WithdrawalStatus,
       requestHeight: BigInt(raw[5] as number | bigint),
     };
+  }
+
+  /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */
+  async queryFinancialState(
+    selection: FinancialStateSelection,
+  ): Promise<FinancialState> {
+    return fetchFinancialState(this.gatewayUrl, selection);
+  }
+
+  /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */
+  async queryAccountState(addressHex?: string): Promise<AccountState> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex || !/^[0-9a-fA-F]{40}$/.test(hex)) {
+      throw new Error("account state owner must be a 40-character hex address");
+    }
+    const owner = hex.toLowerCase();
+    const path = `/v1/account/${owner}/state`;
+    const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
+    return decodeAccountState(
+      msgpackDecoder.decode(fromBase64(requireEncodedData(json, path))),
+      owner,
+    );
   }
 
   async queryAccount(addressHex?: string): Promise<AccountInfo | null> {

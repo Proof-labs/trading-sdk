@@ -319,6 +319,8 @@ const BYTE_FIELDS = new Set([
   // AuthorizeWithdrawal's 221-byte `WithdrawalAuthorizationV1` bytes — the
   // same bare-Vec class as the bitmap.
   "authorization",
+  "evidenceDigest",
+  "bundle",
 ]);
 
 /** Decode a governance `{ Variant: {...} }` enum back into `{ kind, value }`. */
@@ -441,7 +443,12 @@ function fromWasmValue(camelKey: string, value: unknown): unknown {
     // a shape guess would silently byte-convert the first future numeric-list
     // field. Arrays of objects (e.g. legs) recurse; everything else passes.
     if (BYTE_FIELDS.has(camelKey)) {
-      if (!value.every((x) => typeof x === "number" && x >= 0 && x <= 255)) {
+      if (
+        !value.every(
+          (x) =>
+            typeof x === "number" && Number.isInteger(x) && x >= 0 && x <= 255,
+        )
+      ) {
         throw new Error(
           `byte field ${camelKey}: expected an array of u8, got ${JSON.stringify(value)}`,
         );

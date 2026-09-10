@@ -41,6 +41,8 @@ export const ActionType = {
   /** Operator-only: submit a composite-CEX price for the multi-source mark
    *  median (BE-31 Phase B). Feeder infrastructure, not a trading action. */
   OracleUpdateComposite: 0x14,
+  /** Quorum-policy source relay; dormant until the engine's oracle gate. */
+  SubmitOracleObservation: 0x2d,
   /** Place a market order that crosses immediately. */
   MarketOrder: 0x04,
   /** Credit USDC to an account (legacy, prefer ConfirmDeposit). */
@@ -685,6 +687,23 @@ export interface CreateImpactMarket {
   rules?: string;
 }
 
+/** Standalone event creation through governance (inner tag 9), not a Batch item.
+ * The embedded signer must be zero; the engine applies quorum authorization. */
+export interface CreateEvent {
+  eventId: number;
+  childMarketBase: number;
+  poolId: number;
+  question: string;
+  settlementMs: bigint;
+  resolutionWindowMs: bigint;
+  takerFeeBps: number;
+  makerFeeBps: number;
+  signer: Address;
+  oracleSource?: EventOracleSource;
+  description?: string;
+  rules?: string;
+}
+
 /** Resolve an impact-market event. */
 export interface ResolveEvent {
   impactMarketId: number;
@@ -934,6 +953,7 @@ export type TraderAction =
  * AGENTS.md / README.md.
  */
 export type OperatorAction =
+  | { type: "SubmitOracleObservation"; data: SubmitOracleObservation }
   | { type: "OracleUpdate"; data: OracleUpdate }
   | { type: "OracleUpdateComposite"; data: OracleUpdateComposite }
   | { type: "Deposit"; data: Deposit }
@@ -1007,6 +1027,8 @@ export interface CancelAllOrdersForAccount {
  * likewise); the engine refuses the tags below the activation height.
  */
 export type AdminAction =
+  | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
+  | { kind: "CreateEvent"; value: CreateEvent }
   | { kind: "CreateMarket"; value: CreateMarket }
   | { kind: "UpdateAdminSignerRegistry"; value: UpdateAdminSignerRegistry }
   | { kind: "CreateImpactMarket"; value: CreateImpactMarket }
@@ -1016,6 +1038,26 @@ export type AdminAction =
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount };
+
+/** Authenticated relay attestation, not a cryptographic provider-proof verifier.
+ * Price and confidence are integers in the policy's normalized micro unit. */
+export interface SubmitOracleObservation {
+  market: number;
+  policyVersion: bigint;
+  sourceId: number;
+  publishTimeMs: bigint;
+  priceMicro: bigint;
+  confidenceMicro: bigint | null;
+  evidenceDigest: Uint8Array;
+  signer: Address;
+}
+
+/** The complete canonical policy must be independently decoded and reviewed
+ * before signing. A digest alone is not permission to approve opaque bytes. */
+export interface ConfigureOraclePolicy {
+  effectiveHeight: bigint;
+  bundle: Uint8Array;
+}
 
 /**
  * Closed set of immediate, loss-reducing single-signer actions. Reverse
@@ -2163,7 +2205,7 @@ export interface AccountInfo {
 /** Market kind discriminator. Wire shape mirrors the Rust `MarketKind`
  *  enum exactly: `"Perp"` is a bare string, the parameterised variants
  *  are `{ ConditionalPerp: [impactId, branch] }` /
- *  `{ PredictionBinary: [impactId, branch] }`. */
+ *  `{ PredictionBinary: [eventId, branch] }`. ConditionalPerp retains its family id. */
 export type MarketKind =
   | "Perp"
   | { ConditionalPerp: [number, "Yes" | "No"] }
