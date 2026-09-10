@@ -1,4 +1,4 @@
-// Guards that the public package barrel (`@proof/trading-sdk` → src/index.ts)
+// Guards that the public package barrel (`@prooftrade/trading-sdk` → src/index.ts)
 // actually surfaces the governance types and action-type values. The types are
 // erased at runtime, so importing them here is a COMPILE-TIME assertion: if a
 // governance type stops being re-exported from the barrel, `tsc` fails on this

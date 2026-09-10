@@ -69,7 +69,7 @@ try {
           preview: "vite preview",
         },
         dependencies: {
-          "@proof/trading-sdk": "file:./proof-sdk.tgz",
+          "@prooftrade/trading-sdk": "file:./proof-sdk.tgz",
         },
         devDependencies: {
           vite: "8.1.5",
@@ -100,7 +100,7 @@ try {
   decodeTriggerMarketHistoryPage,
   encodePayloadBytes,
   ready,
-} from "@proof/trading-sdk";
+} from "@prooftrade/trading-sdk";
 
 const expected =
   "9901dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463";
