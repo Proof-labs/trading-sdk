@@ -28,6 +28,11 @@ chrono = { version = "0.4", default-features = false, features = ["std"], option
 # that same content. The extraction also removed the deploy-key fetch this
 # dependency used to require.
 proof-wire = { git = "https://github.com/Proof-labs/wire.git", tag = "v1.4.0" }
+# F16 oracle wire types (exchange-wire >= 1.5.0) — in-progress exact F16
+# revision; publish the exchange feature branch before SDK CI can resolve
+# this commit. Replace with the independently approved merged revision
+# before release; no local paths are shipped.
+exchange-wire = { git = "ssh://git@github.com/Proof-labs/exchange.git", rev = "252c9112ea8553091df6070f321c9b7e132748bc", version = "1.5" }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.
