@@ -1,5 +1,10 @@
 import { signAndEncode } from "./codec.js";
 import { decodeAccountState, type AccountState } from "./account-state.js";
+import {
+  fetchFinancialState,
+  type FinancialState,
+  type FinancialStateSelection,
+} from "./financial-state.js";
 import { ready as initWasm } from "./wasm-loader.js";
 import {
   txEngineError,
@@ -1320,6 +1325,13 @@ export class ExchangeClient {
       status: raw[4] as WithdrawalStatus,
       requestHeight: BigInt(raw[5] as number | bigint),
     };
+  }
+
+  /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */
+  async queryFinancialState(
+    selection: FinancialStateSelection,
+  ): Promise<FinancialState> {
+    return fetchFinancialState(this.gatewayUrl, selection);
   }
 
   /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */

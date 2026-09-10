@@ -9,6 +9,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- TypeScript 4.2.0 adds gateway-only `queryFinancialState({markets, owners})`:
+  one finalized snapshot of selected raw accounts, fee/funding market state,
+  fee pool, per-pool insurance and PLP configuration/account. Strict selector,
+  tuple, integer, exact-coverage and 2048-total-position validation; five-second
+  read deadline, one-MiB response limit and pre-decode nesting/allocation budgets.
+  Missing keys remain null. Bootstrap
+  baselines and lifetime fee counters are not additional cash. No valuation,
+  risk authorization, signing or new mutation; Rust/Python/WASM are unchanged.
+
 - Rust core 3.2.0 adds the optional `gateway` transport: bounded gateway-only
   chain identity, committed oracle permissions, byte-exact externally signed
   submission and hash-matched execution receipts. No signing, nonce allocation,
