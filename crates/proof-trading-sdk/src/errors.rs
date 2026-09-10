@@ -3,7 +3,7 @@
 //! The wire *contract* (codec, action table, ExecError codes) lives in
 //! `exchange-wire`; this module is the client-side decode of a numeric result
 //! code into a named, human-meaningful kind. Reconciling `ERROR_KINDS` with
-//! `exchange_wire::types::ExecError::code()` (single-sourcing the table) is a
+//! `proof_wire::types::ExecError::code()` (single-sourcing the table) is a
 //! follow-up.
 
 macro_rules! define_error_kinds {
@@ -198,7 +198,7 @@ pub fn error_code_manifest() -> &'static [ErrorKind] {
 #[cfg(test)]
 mod exec_error_meaning_tests {
     use super::*;
-    use exchange_wire::types::ExecError;
+    use proof_wire::types::ExecError;
 
     #[test]
     #[allow(clippy::unwrap_used)]
