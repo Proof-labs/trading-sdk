@@ -7,7 +7,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [4.0.0] — 2026-09-10
+
+npm `@proof/trading-sdk` only; the Rust crates and the Python package keep
+their current versions until their own tags are cut. Compatible engine:
+exchange v2.9.0 (exchange-wire 1.4.0, the pinned `6a640c45`). MAJOR for the
+npm package because `ConfirmDeposit` payloads gain an unconditional fifth
+element (see Changed); everything else in this release is additive.
+
 ### Added
+
+- `AdminAction` gains `CancelAllOrdersForAccount` (inner tag `0x08`,
+  exchange#467 / DEC-151): the multisig kill lever that cancels every resting
+  order of one wallet, optionally confined to one market. Typed on the
+  TypeScript side (`{ owner, market? }`), decoded from proposal reads, and
+  pinned by two conformance vectors (scoped and unscoped) plus a content-hash
+  golden shared with the Python suite. The `exchange-wire` pin moves to the
+  merged exchange#471 revision (wire 1.4.0), which also brings 1.3.0's
+  `UpdateAuthoritySet` (inner tag `0x07`) and `AuthorityDomain` into the Rust
+  and Python surfaces; the TypeScript mirror of tag `0x07` is tracked in
+  exchange#472. Additive (MINOR).
 
 - `@proof/trading-sdk/testing` subpath: `registerTestActions()` makes the
   engine-internal `RunLiquidationSweep` (0x11) and `RunFundingTick` (0x12)
@@ -591,7 +610,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v4.0.0...HEAD
+[4.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...npm-v4.0.0
 [3.0.0]: https://github.com/Proof-labs/trading-sdk/releases/tag/npm-v3.0.0
 [1.1.0]: https://github.com/Proof-labs/trading-sdk/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Proof-labs/trading-sdk/compare/v0.1.0...v1.0.0
