@@ -216,6 +216,11 @@ export {
   type WsStreamOptions,
 } from "./client.js";
 export { decodeOraclePermissions } from "./oracle-permissions.js";
+export {
+  decodeAccountState,
+  type AccountState,
+  type RawAccountPosition,
+} from "./account-state.js";
 export type {
   OraclePermissions,
   OraclePolicyEpoch,

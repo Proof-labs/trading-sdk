@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- TypeScript SDK 3.3.0 adds `queryAccountState(ownerHex?)`: finalized raw settled
+  balance and six-field positions, independent of oracle valuation. Strict
+  owner binding, integer precision and positional schema validation; no equity,
+  margin or trading/withdrawal permission is inferred. Rust/Python codecs unchanged.
+
 ### Added
 
 - `queryOraclePermissions(market)` reads committed single-dependency policy,
