@@ -687,6 +687,23 @@ export interface CreateImpactMarket {
   rules?: string;
 }
 
+/** Standalone event creation through governance (inner tag 9), not a Batch item.
+ * The embedded signer must be zero; the engine applies quorum authorization. */
+export interface CreateEvent {
+  eventId: number;
+  childMarketBase: number;
+  poolId: number;
+  question: string;
+  settlementMs: bigint;
+  resolutionWindowMs: bigint;
+  takerFeeBps: number;
+  makerFeeBps: number;
+  signer: Address;
+  oracleSource?: EventOracleSource;
+  description?: string;
+  rules?: string;
+}
+
 /** Resolve an impact-market event. */
 export interface ResolveEvent {
   impactMarketId: number;
@@ -986,6 +1003,20 @@ export type AdminBatchItem =
   | { kind: "CreateImpactMarket"; value: CreateImpactMarket };
 
 /**
+ * Governance cancel of every resting order one account holds, optionally
+ * confined to one market (inner tag `0x08`). A one-shot sweep at quorum,
+ * not a freeze: the engine emits one `OrderCancelled` per order with reason
+ * `admin_force`. A zero `owner` is refused at propose; a `market` that does
+ * not exist fails the proposal at execution.
+ */
+export interface CancelAllOrdersForAccount {
+  /** The account whose resting orders are cancelled (20-byte address). */
+  owner: Address;
+  /** Confine the cancel to one market; omit to sweep every market. */
+  market?: number | null;
+}
+
+/**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `CreateImpactMarket.signer` must be
  * zero — governance supplies the authorization, not the embedded address.
@@ -996,8 +1027,8 @@ export type AdminBatchItem =
  * likewise); the engine refuses the tags below the activation height.
  */
 export type AdminAction =
-  | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
+  | { kind: "CreateEvent"; value: CreateEvent }
   | { kind: "CreateMarket"; value: CreateMarket }
   | { kind: "UpdateAdminSignerRegistry"; value: UpdateAdminSignerRegistry }
   | { kind: "CreateImpactMarket"; value: CreateImpactMarket }
@@ -1005,13 +1036,8 @@ export type AdminAction =
   | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig }
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
-  | { kind: "UnpauseBridge" };
-
-/** Governance cancel of a wallet's resting orders, optionally one market (tag 8). */
-export interface CancelAllOrdersForAccount {
-  owner: Address;
-  market?: number | null;
-}
+  | { kind: "UnpauseBridge" }
+  | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount };
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */
@@ -2179,7 +2205,7 @@ export interface AccountInfo {
 /** Market kind discriminator. Wire shape mirrors the Rust `MarketKind`
  *  enum exactly: `"Perp"` is a bare string, the parameterised variants
  *  are `{ ConditionalPerp: [impactId, branch] }` /
- *  `{ PredictionBinary: [impactId, branch] }`. */
+ *  `{ PredictionBinary: [eventId, branch] }`. ConditionalPerp retains its family id. */
 export type MarketKind =
   | "Perp"
   | { ConditionalPerp: [number, "Yes" | "No"] }

@@ -451,6 +451,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )}
             }),
         ),
+        // Current engine dev's standalone event is a singleton governance arm
+        // (tag 9), never an AdminBatchItem. Distinct fields catch transposition.
+        codec_case(
+            "propose_admin_action/create_event",
+            PROPOSE_ADMIN_ACTION,
+            json!({"proposer": vec![0x22u8;20], "registry_version": 3u64,
+            "action": {"CreateEvent": {
+                "event_id": 92, "child_market_base": 9200, "pool_id": 4,
+                "question": "standalone event?", "settlement_ms": 9007199254740993u64,
+                "resolution_window_ms": 120000u64, "taker_fee_bps": 5, "maker_fee_bps": 2,
+                "signer": vec![0u8;20], "oracle_source": "RelayerAttested",
+                "description": "independent event", "rules": "resolved by attestation"
+            }}}),
+        ),
         // Synthetic opaque bytes test the outer wire only, not a valid live policy.
         codec_case(
             "propose_admin_action/configure_oracle_policy",

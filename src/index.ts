@@ -40,6 +40,7 @@ export {
   type ApproveAgent,
   type RevokeAgent,
   type CreateImpactMarket,
+  type CreateEvent,
   type EventOracleSource,
   type PriceComparison,
   type ResolveEvent,

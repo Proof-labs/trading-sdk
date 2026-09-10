@@ -15,7 +15,7 @@ rmp-serde = "1"
 # one definition). In-progress exact F16 revision; publish the exchange feature
 # branch before SDK CI can resolve this commit. Replace with the independently
 # approved merged revision before release; no local paths are shipped.
-exchange-wire = { git = "ssh://git@github.com/Proof-labs/exchange.git", rev = "252c9112ea8553091df6070f321c9b7e132748bc", version = "1.5" }
+exchange-wire = { git = "ssh://git@github.com/Proof-labs/exchange.git", rev = "0b448917398bccf5fb89301d0a9c58f70b9e8348", version = "1.5" }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.

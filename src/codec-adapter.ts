@@ -254,14 +254,14 @@ const ACTION_TYPE_NAMES = Object.fromEntries(
 ) as Record<number, Action["type"]>;
 
 /**
- * Engine-internal test actions registered by `@proof/trading-sdk/testing`.
+ * Engine-internal test actions registered by `@proof-labs/trading-sdk/testing`.
  * Consulted only after the public `ActionType` table, so a registration can
  * never shadow a public byte.
  */
 const TEST_ACTION_TYPES: Record<string, number> = {};
 const TEST_ACTION_TYPE_NAMES: Record<number, string> = {};
 
-/** @internal Used by `@proof/trading-sdk/testing`; not part of the public API. */
+/** @internal Used by `@proof-labs/trading-sdk/testing`; not part of the public API. */
 export function registerTestActionType(name: string, byte: number): void {
   if ((Object.values(ActionType) as number[]).includes(byte)) {
     throw new Error(

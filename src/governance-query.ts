@@ -5,6 +5,7 @@ import type {
   AdminBatchItem,
   AdminSignerRegistry,
   CreateImpactMarket,
+  CreateEvent,
   CreateMarket,
   EventOracleSource,
   ExpiryReason,
@@ -380,6 +381,31 @@ function decodeCreateImpactMarket(value: unknown): CreateImpactMarket {
   return decoded;
 }
 
+/** Standalone event: nine required fields and the engine's three default trailers. */
+function decodeCreateEvent(value: unknown): CreateEvent {
+  const f = "createEvent";
+  const raw = toTupleBetween(value, f, 9, 12);
+  const decoded: CreateEvent = {
+    eventId: toU32(raw[0], `${f}.eventId`),
+    childMarketBase: toU32(raw[1], `${f}.childMarketBase`),
+    poolId: toU8(raw[2], `${f}.poolId`),
+    question: toString(raw[3], `${f}.question`),
+    settlementMs: toU64(raw[4], `${f}.settlementMs`),
+    resolutionWindowMs: toU64(raw[5], `${f}.resolutionWindowMs`),
+    takerFeeBps: toU32(raw[6], `${f}.takerFeeBps`),
+    makerFeeBps: toU32(raw[7], `${f}.makerFeeBps`),
+    signer: toBytes(raw[8], `${f}.signer`, ADDRESS_LEN),
+    description: raw.length > 10 ? toString(raw[10], `${f}.description`) : "",
+    rules: raw.length > 11 ? toString(raw[11], `${f}.rules`) : "",
+  };
+  const oracleSource =
+    raw.length > 9
+      ? decodeOracleSource(raw[9], `${f}.oracleSource`)
+      : undefined;
+  if (oracleSource) decoded.oracleSource = oracleSource;
+  return decoded;
+}
+
 /** One item of a governance `Batch` — the CLOSED market-creation subset.
  *  Fails closed on any other variant name: a batch item this build cannot
  *  decode must never let the batch around it render as understood. */
@@ -418,7 +444,9 @@ function decodeCancelAllOrdersForAccount(
   return {
     owner: toBytes(raw[0], "cancelAllOrdersForAccount.owner", ADDRESS_LEN),
     market:
-      market == null ? null : toU32(market, "cancelAllOrdersForAccount.market"),
+      market === null || market === undefined
+        ? null
+        : toU32(market, "cancelAllOrdersForAccount.market"),
   };
 }
 
@@ -466,6 +494,7 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   UnpauseBridge: 6,
   // Tag 7's TypeScript mirror is tracked separately under exchange#472.
   CancelAllOrdersForAccount: 8,
+  CreateEvent: 9,
   ConfigureOraclePolicy: 12,
 };
 
@@ -482,6 +511,8 @@ export function decodeAdminAction(
   if (value === "UnpauseBridge") return { kind: "UnpauseBridge" };
   const { name, payload } = variantOf(value, field);
   switch (name) {
+    case "CreateEvent":
+      return { kind: "CreateEvent", value: decodeCreateEvent(payload) };
     case "CancelAllOrdersForAccount":
       return {
         kind: "CancelAllOrdersForAccount",
