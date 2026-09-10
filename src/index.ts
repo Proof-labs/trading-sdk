@@ -50,6 +50,7 @@ export {
   type AdminBatchItem,
   type EmergencyAction,
   type UpdateAdminSignerRegistry,
+  type CancelAllOrdersForAccount,
   type ProposeAdminAction,
   type ApproveAdminAction,
   type RejectAdminAction,

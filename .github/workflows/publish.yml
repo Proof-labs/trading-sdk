@@ -5,7 +5,7 @@ name: publish
 # package on its own semver line (see CLAUDE.md "Versioning"), so there is no
 # single umbrella version. Push the tag for the artifact you are cutting:
 #
-#   npm-v3.0.0      -> npm  @proof/trading-sdk        + the GitHub Release
+#   npm-v3.0.0      -> npm  @proof-labs/trading-sdk        + the GitHub Release
 #   v3.0.0          -> crates.io proof-trading-sdk
 #   derive-v1.1.0   -> crates.io proof-trading-sdk-derive
 #   wasm-v2.1.0     -> crates.io proof-trading-sdk-wasm
@@ -108,6 +108,13 @@ jobs:
       # since the CI run can change it. See #80's WASM reproducibility point;
       # closing it fully needs a committed lockfile built with `--locked`, or
       # publishing the exact artifact CI produced.
+      # Fetch the private `exchange-wire` git dependency: `npm run build`
+      # compiles the Rust core to WASM, and since the shared-crate cutover
+      # that core pins exchange-wire from the private engine repository. Same
+      # binding ci.yml uses for the TypeScript job.
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -213,6 +220,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      # Fetch the private `exchange-wire` git dependency: maturin builds the PyO3
+      # core, and since the shared-crate cutover
+      # that core pins exchange-wire from the private engine repository. Same
+      # binding ci.yml uses for the Python job.
+      - uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Verify the tag matches pyproject.toml
         run: |

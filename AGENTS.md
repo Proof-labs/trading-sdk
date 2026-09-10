@@ -64,7 +64,7 @@ All client traffic — SDKs, frontends, bots, scripts — goes through the **API
 # Proof Trading SDK — agent & contributor guide
 
 Guide for AI agents (Claude, Cursor, Copilot, Codex CLI, etc.) and human
-contributors using the `@proof/trading-sdk`.
+contributors using the `@proof-labs/trading-sdk`.
 
 ## In a nutshell
 
@@ -94,7 +94,7 @@ import {
   generateKeypair,
   pubkeyToOwner,
   ownerToHex,
-} from "@proof/trading-sdk";
+} from "@proof-labs/trading-sdk";
 
 // 1. Key
 const { publicKey, privateKey } = generateKeypair();
@@ -229,7 +229,7 @@ A trading integration can type its calls as `TraderAction` to keep operator
 actions out of autocomplete entirely:
 
 ```typescript
-import type { TraderAction } from "@proof/trading-sdk";
+import type { TraderAction } from "@proof-labs/trading-sdk";
 const order: TraderAction = { type: "PlaceOrder", data: {/* … */} };
 await client.submitTx(order); // submitTx still accepts the full Action union
 ```
@@ -392,7 +392,7 @@ import {
   decodeTx,
   fetchChainId,
   chainIdFromString,
-} from "@proof/trading-sdk";
+} from "@proof-labs/trading-sdk";
 
 await ready(); // initialize the WASM codec/signing core once
 
