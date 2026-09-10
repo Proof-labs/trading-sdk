@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `queryOraclePermissions(market)` reads committed single-dependency policy,
+  calendar, activation and frozen verdict state with exact integers. This is not
+  operational oracle health (ADR 0002), nor portfolio-wide trading authorization.
+  npm 3.2 is additive; unchanged Rust/Python packages retain their versions.
+
 - Integrates the reviewed admin-tag-8 mirror and compatibility vectors from
   trading-sdk #106 (`09cf55f`) alongside F16. Cancel-all scoped/unscoped bytes,
   proposal reads, omitted/null scope semantics and content hashes stay pinned.
