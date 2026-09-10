@@ -17,7 +17,7 @@ generate-key → fund → place-order → cancel flow.
 ## Install
 
 ```bash
-npm install @prooftrade/trading-sdk
+npm install @proof-labs/trading-sdk
 ```
 
 ## Connect to the devnet
@@ -37,7 +37,7 @@ import {
   generateKeypair,
   pubkeyToOwner,
   ownerToHex,
-} from "@prooftrade/trading-sdk";
+} from "@proof-labs/trading-sdk";
 
 const { publicKey, privateKey } = generateKeypair();
 const address = pubkeyToOwner(publicKey);
@@ -69,7 +69,7 @@ import {
   generateKeypair,
   pubkeyToOwner,
   ownerToHex,
-} from "@prooftrade/trading-sdk";
+} from "@proof-labs/trading-sdk";
 
 const { publicKey, privateKey } = generateKeypair();
 const address = pubkeyToOwner(publicKey);

@@ -1,9 +1,9 @@
 ---
 name: run-trading-sdk
-description: Build, run, test, and drive the @prooftrade/trading-sdk TypeScript SDK. Use when asked to build the SDK, run its tests, verify signing/encoding works, or exercise the WASM codec end to end.
+description: Build, run, test, and drive the @proof-labs/trading-sdk TypeScript SDK. Use when asked to build the SDK, run its tests, verify signing/encoding works, or exercise the WASM codec end to end.
 ---
 
-`@prooftrade/trading-sdk` is a TypeScript SDK whose value-bearing codec + Ed25519
+`@proof-labs/trading-sdk` is a TypeScript SDK whose value-bearing codec + Ed25519
 signing runs through a WASM build of the Rust core (see ADR 0001). There is no
 GUI or server to "run" — the way an agent drives it is the smoke driver
 **`.claude/skills/run-trading-sdk/driver.mjs`**, which exercises the offline
