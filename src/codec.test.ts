@@ -403,8 +403,12 @@ describe("codec v1 all action types", () => {
       },
     },
     {
-      type: "ResolveEvent",
+      type: "ResolveImpactMarket",
       data: { impactMarketId: 42, outcome: Outcome.Yes, signer: SIGNER },
+    },
+    {
+      type: "ResolveEvent",
+      data: { eventId: 700, outcome: Outcome.No, signer: SIGNER },
     },
     {
       // All fields set — the common "tighten everything" admin call.

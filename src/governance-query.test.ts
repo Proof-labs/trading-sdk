@@ -35,6 +35,7 @@ import {
   decodeAdminSignerRegistry,
   decodeAdminSignerRegistryInfo,
   decodeImpactMarketInfo,
+  decodeEventInfo,
   decodeProposalPage,
   decodeProposalDisplayInfo,
   decodeProposalStatus,
@@ -825,5 +826,28 @@ describe("byte-field validation", () => {
     expect(() =>
       decodeProposalStatus({ Rejected: [new Array(21).fill(1)] }),
     ).toThrow(/Rejected\.by is 21 bytes, expected 20/);
+  });
+});
+
+describe("decodeEventInfo (E1 golden vector)", () => {
+  // The exact bytes emitted by exchange-core query.rs `query_event` for event
+  // 700 (books 70000/70001, "Will the Fed cut rates?", Trading). Shared with
+  // the engine test — a read-model field reorder breaks both. DO NOT edit by
+  // hand; regenerate from the engine if the EventInfo layout changes.
+  const GOLDEN =
+    "9acd02bcce00011170ce00011171b757696c6c2074686520466564206375742072617465733fcf0000019df90ef400cd03e8a754726164696e67cf0000019dc95fec0000c0";
+
+  it("decodes the stored EventInfo positionally", () => {
+    const info = decodeEventInfo(decodeVector(GOLDEN));
+    expect(info.eventId).toBe(700);
+    expect(info.ebyMarket).toBe(70000);
+    expect(info.ebnMarket).toBe(70001);
+    expect(info.question).toBe("Will the Fed cut rates?");
+    expect(info.settlementMs).toBe(1778000000000n);
+    expect(info.resolutionWindowMs).toBe(1000n);
+    expect(info.status).toEqual({ kind: "Trading" });
+    expect(info.createdMs).toBe(1777200000000n);
+    expect(info.resolvedMs).toBe(0n);
+    expect(info.oracleSource).toBeUndefined();
   });
 });

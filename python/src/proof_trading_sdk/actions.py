@@ -437,6 +437,25 @@ class CreateImpactMarket(Action):
 
 
 @dataclass
+class ResolveEvent(Action):
+    """Resolve a standalone event (0x27, DEC-149). YES/NO only — the engine
+    rejects ``Void`` for standalone events. The legacy impact-family resolve is
+    ``ResolveImpactMarket`` (0x0f), reachable via :class:`RawAction`."""
+
+    ACTION_NAME = "ResolveEvent"
+    event_id: int
+    outcome: str
+    signer: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "event_id": self.event_id,
+            "outcome": self.outcome,
+            "signer": self.signer,
+        }
+
+
+@dataclass
 class AtomicBasketLeg:
     """One leg of a native all-or-revert basket. Not an action on its own —
     nested inside :class:`AtomicBasketOrder`."""
@@ -623,46 +642,6 @@ class SetUserMarketLeverage(Action):
         }
 
 
-@dataclass
-class CreateImpactMarket(Action):
-    ACTION_NAME = "CreateImpactMarket"
-    impact_market_id: int
-    underlying_market: int
-    child_market_base: int
-    question: str
-    deadline_ms: int
-    resolution_window_ms: int
-    im_bps: int
-    mm_bps: int
-    taker_fee_bps: int
-    maker_fee_bps: int
-    funding_interval_ms: int
-    max_funding_rate_bps: int
-    signer: bytes
-    oracle_source: Any = None
-    description: str = ""
-    rules: str = ""
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "impact_market_id": self.impact_market_id,
-            "underlying_market": self.underlying_market,
-            "child_market_base": self.child_market_base,
-            "question": self.question,
-            "deadline_ms": self.deadline_ms,
-            "resolution_window_ms": self.resolution_window_ms,
-            "im_bps": self.im_bps,
-            "mm_bps": self.mm_bps,
-            "taker_fee_bps": self.taker_fee_bps,
-            "maker_fee_bps": self.maker_fee_bps,
-            "funding_interval_ms": self.funding_interval_ms,
-            "max_funding_rate_bps": self.max_funding_rate_bps,
-            "signer": self.signer,
-            "oracle_source": self.oracle_source,
-            "description": self.description,
-            "rules": self.rules,
-        }
-
 
 @dataclass
 class UpdateMarketFees(Action):
@@ -722,7 +701,7 @@ class UpdateMarketFees(Action):
 # feeder / relayer, each gated by a dedicated engine allowlist. They live in
 # the public SDK so operator tooling needs no second SDK, but a trading
 # consumer should ignore this section. Most operator actions (OracleUpdate,
-# CreateMarket, Confirm*/Fail*, ResolveEvent, …) are reachable via
+# CreateMarket, Confirm*/Fail*, ResolveImpactMarket, …) are reachable via
 # :class:`RawAction`; OracleUpdateComposite gets a typed builder because Auros'
 # Python feeder requested first-class support.
 
