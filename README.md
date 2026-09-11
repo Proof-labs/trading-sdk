@@ -150,6 +150,7 @@ class ExchangeClient {
   queryOrderbook(market: number): Promise<Orderbook>;
   queryOpenOrders(addressHex?: string): Promise<OpenOrder[]>;
   queryMarkets(): Promise<MarketConfig[]>;
+  queryMarketsSnapshot(): Promise<MarketsSnapshot>;
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
   queryHealth(): Promise<{ status: string; height: number }>;
   queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null>;
@@ -180,6 +181,12 @@ class ExchangeClient {
   disconnect(): void;
 }
 ```
+
+For chain-pinned, atomic committed market inventory, see
+[the snapshot guide](docs/market-snapshot.md). The optional Rust `gateway`
+feature additionally provides committed-time and exact-hash receipt reads plus
+one-shot submission of already-signed bytes. It does not manage a caller's
+durable journal, nonce allocation, retries or cutover authority.
 
 Position triggers are exact-position-generation brackets. For an existing
 bracket, `queryPositionTriggers()` returns its epoch; first attach must use the
