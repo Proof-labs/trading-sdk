@@ -20,6 +20,7 @@ export {
   type OracleUpdate,
   type OracleUpdateComposite,
   type MarketOrder,
+  type MarketsSnapshot,
   type Deposit,
   type Withdraw,
   type CreateMarket,
