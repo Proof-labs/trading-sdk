@@ -1143,9 +1143,18 @@ export class ExchangeClient {
     return raw.map((r, i) => decodeEventInfo(r, i));
   }
 
-  /** A single standalone event by id, or `null` if it does not exist. */
+  /** A single standalone event by id, or `null` if it does not exist. The node
+   *  returns 404 for a missing event (the engine's msgpack-nil, translated like
+   *  the impact-market route), so a raw fetch is used here to map 404 -> null
+   *  while still throwing on real transport / decode failures. */
   async queryEvent(eventId: number): Promise<EventInfo | null> {
-    const json = await fetchApiJson(`${this.readBaseUrl}/v1/event/${eventId}`);
+    const res = await fetch(`${this.readBaseUrl}/v1/event/${eventId}`);
+    if (res.status === 404) return null;
+    const json = (await res.json()) as Record<string, unknown>;
+    if (!res.ok || json.error) {
+      const msg = (json.error as string) ?? `HTTP ${res.status}`;
+      throw new Error(`API error: ${msg}`);
+    }
     if (typeof json.data !== "string") {
       throw new Error(
         "governance decode: event response has no encoded-data envelope",
