@@ -2177,6 +2177,13 @@ export type MarkSourceMode = "OracleOnly" | "Median";
  *  field order in exchange-core/src/types.rs.
  *  Fields after index 7 use `#[serde(default)]` so older on-chain records
  *  decode cleanly. */
+export interface MarketsSnapshot {
+  chainId: Uint8Array;
+  height: bigint;
+  markets: MarketConfig[];
+  impactMarkets: ImpactMarketInfo[];
+}
+
 export interface MarketConfig {
   /** [0] Market identifier (unique integer). */
   market: number;
