@@ -7,6 +7,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Atomic `queryMarketsSnapshot()` through the gateway, with an explicit chain
+  pin, complete typed registry decoding and bounded failure handling. The Rust
+  `market_snapshot` module shares canonical wire records and adds an optional
+  `gateway` feature for the snapshot, committed chain-time and exact-hash receipt
+  reads. Unknown or malformed evidence is an error, never an empty inventory or
+  proof that a pending transaction failed. No signing or action wire changes.
+  The Rust gateway client also submits already-signed bytes once, with bounded
+  request/response sizes, exact-hash verdicts and sanitized typed errors; it
+  never allocates a nonce or retries an ambiguous submission.
+  npm 4.1.0 and Rust core 3.1.0 are additive MINOR changes over current dev;
+  unchanged WASM/Python package versions and exchange-wire 1.4.0 pin are retained.
+
 ## [4.0.0] — 2026-09-10
 
 npm `@proof-labs/trading-sdk` only; the Rust crates and the Python package keep

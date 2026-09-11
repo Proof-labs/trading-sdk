@@ -60,6 +60,8 @@ import {
   decodeProposalPage,
 } from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
+import { readMarketsSnapshot } from "./market-snapshot.js";
+import type { MarketsSnapshot } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import {
   decodePositionTriggerInfos,
@@ -220,6 +222,8 @@ export class ExchangeClient {
    * `/v1/status`, or `${rpcUrl}/status` on the direct path) on first submit.
    */
   private chainId: Uint8Array | null;
+  /** Inventory reconciliation requires the caller's pin, not auto-discovery. */
+  private readonly inventoryChainId: Uint8Array | null;
   private allowUnbound: boolean;
   /** Single-flight guard so concurrent submits share one /status fetch. */
   private chainIdPromise: Promise<Uint8Array> | null = null;
@@ -286,6 +290,7 @@ export class ExchangeClient {
     // path resolveChainId() fetches /status on first submit; on the gateway
     // path chainId must be pinned (the gateway does not serve /status).
     this.chainId = opts.chainId ? chainIdFromString(opts.chainId) : null;
+    this.inventoryChainId = this.chainId?.slice() ?? null;
     this.allowUnbound = opts.allowUnbound ?? false;
     void opts.concurrentNonces;
   }
@@ -1096,6 +1101,15 @@ export class ExchangeClient {
       bids: (raw[0] as unknown[][]).map(parseLevel),
       asks: (raw[1] as unknown[][]).map(parseLevel),
     };
+  }
+
+  /** One atomic committed inventory. Requires explicit chainId; never falls
+   * back to a node or synthesizes inventory from independent list reads. */
+  async queryMarketsSnapshot(): Promise<MarketsSnapshot> {
+    if (!this.inventoryChainId) {
+      throw new Error("market snapshot requires an explicit pinned chainId");
+    }
+    return readMarketsSnapshot(this.gatewayUrl, this.inventoryChainId);
   }
 
   /** List all registered market configs. */
