@@ -214,6 +214,8 @@ jobs:
       # crate — it links libpython and is covered by the `python` job.
       - name: Test workspace (excl. PyO3)
         run: cargo test --workspace --exclude proof-trading-sdk-pyo3 --locked
+      - name: Test canonical gateway snapshot transport
+        run: cargo test -p proof-trading-sdk --features gateway --locked market_snapshot
       # Guard against stale checked-in vectors: regenerating must be a no-op.
       - name: Conformance vectors are fresh
         run: |
