@@ -4,8 +4,10 @@ import type {
   CancelAllOrdersForAccount,
   AdminBatchItem,
   AdminSignerRegistry,
+  CreateEvent,
   CreateImpactMarket,
   CreateMarket,
+  EventInfo,
   EventOracleSource,
   ExpiryReason,
   ImpactMarketInfo,
@@ -348,6 +350,30 @@ export function decodeImpactMarketInfo(
   return info;
 }
 
+/** `EventInfo` (the `get_event` read model, G17) as a positional tuple: 9
+ *  required fields plus the `serde(default)` `oracleSource` trailer. The read
+ *  model IS the stored record — no appended presentation copy. */
+export function decodeEventInfo(value: unknown, index?: number): EventInfo {
+  const f = index == null ? "event" : `event[${index}]`;
+  const raw = toTupleBetween(value, f, 9, 10);
+  const info: EventInfo = {
+    eventId: toU32(raw[0], `${f}.eventId`),
+    ebyMarket: toU32(raw[1], `${f}.ebyMarket`),
+    ebnMarket: toU32(raw[2], `${f}.ebnMarket`),
+    question: toString(raw[3], `${f}.question`),
+    settlementMs: toU64(raw[4], `${f}.settlementMs`),
+    resolutionWindowMs: toU64(raw[5], `${f}.resolutionWindowMs`),
+    status: decodeImpactStatus(raw[6], `${f}.status`),
+    createdMs: toU64(raw[7], `${f}.createdMs`),
+    resolvedMs: toU64(raw[8], `${f}.resolvedMs`),
+  };
+  if (raw.length > 9) {
+    const oracleSource = decodeOracleSource(raw[9], `${f}.oracleSource`);
+    if (oracleSource) info.oracleSource = oracleSource;
+  }
+  return info;
+}
+
 /** `CreateImpactMarket` as the engine's positional payload: 13 required
  *  fields plus three `serde(default)` trailers (oracleSource, description,
  *  rules). The engine's decoder tolerates the trailers' absence, so this
@@ -380,6 +406,31 @@ function decodeCreateImpactMarket(value: unknown): CreateImpactMarket {
   return decoded;
 }
 
+/** `CreateEvent` as the engine's positional payload (admin inner tag 9): 9
+ *  required fields plus three `serde(default)` trailers (oracleSource,
+ *  description, rules). Same tolerance/defaults as the engine decoder. */
+function decodeCreateEvent(value: unknown): CreateEvent {
+  const f = "createEvent";
+  const raw = toTupleBetween(value, f, 9, 12);
+  const decoded: CreateEvent = {
+    eventId: toU32(raw[0], `${f}.eventId`),
+    childMarketBase: toU32(raw[1], `${f}.childMarketBase`),
+    poolId: toU32(raw[2], `${f}.poolId`),
+    question: toString(raw[3], `${f}.question`),
+    settlementMs: toU64(raw[4], `${f}.settlementMs`),
+    resolutionWindowMs: toU64(raw[5], `${f}.resolutionWindowMs`),
+    takerFeeBps: toU32(raw[6], `${f}.takerFeeBps`),
+    makerFeeBps: toU32(raw[7], `${f}.makerFeeBps`),
+    signer: toBytes(raw[8], `${f}.signer`, ADDRESS_LEN),
+    description: raw.length > 10 ? toString(raw[10], `${f}.description`) : "",
+    rules: raw.length > 11 ? toString(raw[11], `${f}.rules`) : "",
+  };
+  const oracleSource =
+    raw.length > 9 ? decodeOracleSource(raw[9], `${f}.oracleSource`) : undefined;
+  if (oracleSource) decoded.oracleSource = oracleSource;
+  return decoded;
+}
+
 /** One item of a governance `Batch` — the CLOSED market-creation subset.
  *  Fails closed on any other variant name: a batch item this build cannot
  *  decode must never let the batch around it render as understood. */
@@ -393,6 +444,8 @@ function decodeBatchItem(value: unknown, field: string): AdminBatchItem {
         kind: "CreateImpactMarket",
         value: decodeCreateImpactMarket(payload),
       };
+    case "CreateEvent":
+      return { kind: "CreateEvent", value: decodeCreateEvent(payload) };
     default:
       throw new Error(
         `governance decode: ${field} has unknown AdminBatchItem variant "${name}" — this SDK build cannot render it`,
@@ -463,6 +516,7 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CreateMarket: 1,
   UpdateAdminSignerRegistry: 2,
   CreateImpactMarket: 3,
+  CreateEvent: 9,
   Batch: 4,
   SetTriggerMarketConfig: 5,
   UnpauseBridge: 6,
@@ -497,6 +551,11 @@ export function decodeAdminAction(
       return {
         kind: "CreateImpactMarket",
         value: decodeCreateImpactMarket(payload),
+      };
+    case "CreateEvent":
+      return {
+        kind: "CreateEvent",
+        value: decodeCreateEvent(payload),
       };
     case "Batch":
       return {

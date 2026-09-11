@@ -162,7 +162,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     const APPROVE_AGENT: u8 = 0x0c;
     const REVOKE_AGENT: u8 = 0x0d;
     const CREATE_IMPACT_MARKET: u8 = 0x0e;
-    const RESOLVE_EVENT: u8 = 0x0f;
+    const RESOLVE_IMPACT_MARKET: u8 = 0x0f;
+    const RESOLVE_EVENT: u8 = 0x27;
     const SET_USER_MARKET_LEVERAGE: u8 = 0x16;
     const CANCEL_CLIENT_ORDER: u8 = 0x18;
     const CANCEL_ALL_ORDERS: u8 = 0x19;
@@ -694,20 +695,33 @@ fn main() -> Result<(), Box<dyn Error>> {
         // a vector for one variant leaves the other two mappings unproven —
         // `side` and `time_in_force` are fully covered and this was the one
         // enum that was not.
+        // DEC-149: byte 0x0f is the legacy impact-family resolve
+        // (ResolveImpactMarket, `impact_market_id`); the standalone-event
+        // resolve is ResolveEvent (0x27, `event_id`, YES/NO only).
+        codec_case(
+            "resolve_impact_market/yes",
+            RESOLVE_IMPACT_MARKET,
+            json!({ "impact_market_id": 91, "outcome": "Yes", "signer": signer }),
+        ),
+        codec_case(
+            "resolve_impact_market/no",
+            RESOLVE_IMPACT_MARKET,
+            json!({ "impact_market_id": 91, "outcome": "No", "signer": signer }),
+        ),
+        codec_case(
+            "resolve_impact_market/void",
+            RESOLVE_IMPACT_MARKET,
+            json!({ "impact_market_id": 91, "outcome": "Void", "signer": signer }),
+        ),
         codec_case(
             "resolve_event/yes",
             RESOLVE_EVENT,
-            json!({ "impact_market_id": 91, "outcome": "Yes", "signer": signer }),
+            json!({ "event_id": 700, "outcome": "Yes", "signer": signer }),
         ),
         codec_case(
             "resolve_event/no",
             RESOLVE_EVENT,
-            json!({ "impact_market_id": 91, "outcome": "No", "signer": signer }),
-        ),
-        codec_case(
-            "resolve_event/void",
-            RESOLVE_EVENT,
-            json!({ "impact_market_id": 91, "outcome": "Void", "signer": signer }),
+            json!({ "event_id": 700, "outcome": "No", "signer": signer }),
         ),
         // Per-user leverage override.
         codec_case(

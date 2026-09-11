@@ -43,6 +43,7 @@ import type {
   AdminSignerRegistry,
   ProposalPage,
   ImpactMarketInfo,
+  EventInfo,
   SetPositionTriggers,
   PositionTriggerInfo,
   TriggerStatus,
@@ -55,6 +56,7 @@ import type {
 import {
   decodeAdminSignerRegistryInfo,
   decodeImpactMarketInfo,
+  decodeEventInfo,
   decodeProposalPage,
 } from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
@@ -1121,6 +1123,37 @@ export class ExchangeClient {
       throw new Error("governance decode: impactMarkets is not an array");
     }
     return raw.map((r, i) => decodeImpactMarketInfo(r, i));
+  }
+
+  /** All standalone events (G17). Each is two prediction-binary books (EBY/EBN)
+   *  under one `EventInfo`, no underlying perp. Fail-closed like the impact
+   *  read: a missing envelope or malformed row is a refusal. Decoder pinned to
+   *  the engine golden vector in governance-query.test.ts. */
+  async queryEvents(): Promise<EventInfo[]> {
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/events`);
+    if (typeof json.data !== "string") {
+      throw new Error(
+        "governance decode: events response has no encoded-data envelope",
+      );
+    }
+    const raw = msgpackDecoder.decode(fromBase64(json.data));
+    if (!Array.isArray(raw)) {
+      throw new Error("governance decode: events is not an array");
+    }
+    return raw.map((r, i) => decodeEventInfo(r, i));
+  }
+
+  /** A single standalone event by id, or `null` if it does not exist. */
+  async queryEvent(eventId: number): Promise<EventInfo | null> {
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/event/${eventId}`);
+    if (typeof json.data !== "string") {
+      throw new Error(
+        "governance decode: event response has no encoded-data envelope",
+      );
+    }
+    const raw = msgpackDecoder.decode(fromBase64(json.data));
+    if (raw == null) return null;
+    return decodeEventInfo(raw);
   }
 
   /** Current whole-position trigger brackets for one owner. Immutable
