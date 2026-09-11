@@ -426,7 +426,9 @@ function decodeCreateEvent(value: unknown): CreateEvent {
     rules: raw.length > 11 ? toString(raw[11], `${f}.rules`) : "",
   };
   const oracleSource =
-    raw.length > 9 ? decodeOracleSource(raw[9], `${f}.oracleSource`) : undefined;
+    raw.length > 9
+      ? decodeOracleSource(raw[9], `${f}.oracleSource`)
+      : undefined;
   if (oracleSource) decoded.oracleSource = oracleSource;
   return decoded;
 }
