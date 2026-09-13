@@ -342,6 +342,33 @@ async fn backend_change_while_waiting_is_refused() {
 }
 
 #[tokio::test]
+async fn confirmation_poll_cannot_erase_a_conflicting_same_height_hash() {
+    // The original before witness is height99, so comparing each later read
+    // only with before would miss two contradictory height100 observations.
+    let responses = vec![
+        (
+            "/v1/status",
+            status_body(99, NOW - 100, 1, 9),
+            Duration::ZERO,
+        ),
+        (
+            "/v1/markets-snapshot",
+            snapshot_body(100, NOW, 1, 2),
+            Duration::ZERO,
+        ),
+        ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
+        ("/v1/status", status_body(100, NOW, 1, 7), Duration::ZERO),
+    ];
+    let (url, task) = server(responses).await;
+    let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
+    assert_eq!(
+        client.read_bound_inventory(chain_id()).await.unwrap_err(),
+        WitnessError::HashMismatch
+    );
+    task.await.unwrap();
+}
+
+#[tokio::test]
 async fn halted_chain_confirmation_wait_respects_the_original_whole_call_deadline() {
     let mut responses = vec![
         ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),

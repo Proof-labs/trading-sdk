@@ -218,6 +218,28 @@ fn validate_bracket(
     Ok(())
 }
 
+fn validate_anchor_progress(
+    previous: &BoundChainIdentity,
+    next: &BoundChainIdentity,
+) -> Result<(), WitnessError> {
+    if previous.node_id != next.node_id {
+        return Err(WitnessError::BackendMismatch);
+    }
+    if next.identity.latest_height < previous.identity.latest_height {
+        return Err(WitnessError::HeightMismatch);
+    }
+    if next.identity.latest_block_time_ms < previous.identity.latest_block_time_ms
+        || (next.identity.latest_height == previous.identity.latest_height
+            && next.identity.latest_block_time_ms != previous.identity.latest_block_time_ms)
+    {
+        return Err(WitnessError::TimeMismatch);
+    }
+    if next.app_hash_height == previous.app_hash_height && next.app_hash != previous.app_hash {
+        return Err(WitnessError::HashMismatch);
+    }
+    Ok(())
+}
+
 /// Validate a completed bracket. `block_body`, when required, is the response
 /// to exactly `/v1/block?height=H+1`, never a generic latest-block read. Wall
 /// age and policy-specific lease limits remain the inventory consumer's job.
@@ -311,8 +333,10 @@ impl MarketsSnapshotClient {
                     break;
                 }
                 tokio::time::sleep(CONFIRMATION_POLL_INTERVAL).await;
-                after = self.chain_identity_bound(expected_chain).await?;
-                validate_bracket(&bound, &before, &after)?;
+                let next = self.chain_identity_bound(expected_chain).await?;
+                validate_anchor_progress(&after, &next)?;
+                validate_bracket(&bound, &before, &next)?;
+                after = next;
             }
             let matching_anchor = [&before, &after]
                 .iter()
