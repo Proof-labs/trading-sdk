@@ -6,7 +6,7 @@
 )]
 
 use super::*;
-use crate::types::{MarkSourceMode, MarketKind};
+use crate::types::{EventId, MarkSourceMode, MarketKind};
 
 fn market() -> MarketConfig {
     MarketConfig {
@@ -49,7 +49,7 @@ fn fixture() -> Vec<u8> {
 }
 
 #[test]
-fn current_engine_g17_snapshot_matches_the_older_shared_wire_contract() {
+fn current_engine_g17_snapshot_matches_the_f16_shared_wire_contract() {
     // Actual exchange-core::query::MarketsSnapshot at dev 0d215eaa, encoded
     // with rmp_serde::to_vec. G17 EventId changed the Rust field name but not
     // the positional PredictionBinary payload [u32, Branch].
@@ -61,7 +61,7 @@ fn current_engine_g17_snapshot_matches_the_older_shared_wire_contract() {
     assert!(matches!(
         snapshot.markets[3].kind,
         MarketKind::PredictionBinary {
-            impact_market_id: 123,
+            event_id: EventId(123),
             ..
         }
     ));
