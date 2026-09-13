@@ -13,6 +13,7 @@ pub mod errors;
 #[cfg(feature = "gateway")]
 pub mod gateway;
 pub mod governance;
+pub mod market_snapshot;
 pub mod query;
 pub mod signer;
 pub mod wire;

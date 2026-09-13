@@ -178,6 +178,7 @@ class ExchangeClient {
   queryOrderbook(market: number): Promise<Orderbook>;
   queryOpenOrders(addressHex?: string): Promise<OpenOrder[]>;
   queryMarkets(): Promise<MarketConfig[]>;
+  queryMarketsSnapshot(): Promise<MarketsSnapshot>;
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
   queryHealth(): Promise<{ status: string; height: number }>;
   queryOraclePermissions(market: number): Promise<OraclePermissions>;
@@ -254,6 +255,12 @@ cargo run -p proof-trading-sdk --features gateway --example gateway_oracle_probe
 It checks chain identity before the permission read and reports both heights;
 sequential reads are not a single atomic snapshot. Neither a successful probe
 nor a committed market permission authorizes a portfolio action or release.
+
+For chain-pinned, atomic committed market inventory, see
+[the snapshot guide](docs/market-snapshot.md). The optional Rust `gateway`
+feature additionally provides committed-time and exact-hash receipt reads plus
+one-shot submission of already-signed bytes. It does not manage a caller's
+durable journal, nonce allocation, retries or cutover authority.
 
 Position triggers are exact-position-generation brackets. For an existing
 bracket, `queryPositionTriggers()` returns its epoch; first attach must use the
