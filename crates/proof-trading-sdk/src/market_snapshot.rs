@@ -247,7 +247,7 @@ impl MarketsSnapshotClient {
 #[cfg(feature = "gateway")]
 mod chain;
 #[cfg(feature = "gateway")]
-pub use chain::{ChainIdentity, CommittedReceipt};
+pub use chain::{ChainIdentity, CommittedReceipt, ReceiptObservation};
 
 #[cfg(feature = "gateway")]
 mod submission;
