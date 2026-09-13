@@ -53,7 +53,7 @@ struct TxExecution {
     code: u32,
 }
 
-fn rpc<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, SnapshotError> {
+pub(super) fn rpc<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, SnapshotError> {
     let response: Rpc<T> = serde_json::from_slice(bytes).map_err(|_| SnapshotError::Malformed)?;
     match (response.result, response.error) {
         (Some(value), None) => Ok(value),
@@ -95,7 +95,10 @@ impl MarketsSnapshotClient {
     }
 }
 
-fn decode_identity(body: &[u8], expected: [u8; 32]) -> Result<ChainIdentity, SnapshotError> {
+pub(super) fn decode_identity(
+    body: &[u8],
+    expected: [u8; 32],
+) -> Result<ChainIdentity, SnapshotError> {
     let status: Status = rpc(body)?;
     let network = status.node_info.network;
     if network.is_empty() || network.len() > 128 || network.chars().any(char::is_control) {
