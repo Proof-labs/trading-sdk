@@ -1,25 +1,137 @@
 name: Decision rows
 
-# Caller stub — synced to every Proof-labs repository by
-# Proof-labs/.github → scripts/sync-agent-config.sh.
-#
-# `ready_for_review` is the important trigger: the decision-routing rule is
-# about what must be true to LEAVE draft, and until this existed nothing
-# checked that transition (the client-side hook only sees `gh pr create`).
-#
-# Credential: the org-installed GitHub App (org secrets PROOF_ASSISTANT_APP_ID
-# and PROOF_ASSISTANT_PRIVATE_KEY, both visibility=all). The reusable workflow
-# mints a token from these that is scoped to ProofOfBrain and expires in about
-# an hour — nothing standing is stored. Repositories whose pull requests never
-# cite DEC-N rows work fine without them.
+# Public-repository variant, synced from Proof-labs/.github via
+# scripts/sync-agent-config.sh. Public repos cannot call the private reusable
+# workflow. Shared-policy parity is tested in the org repository; never bypass
+# the gate when the authoritative register is unavailable.
+# This credential-bearing job does not check out PR code or run repository
+# scripts. PR text is data in environment variables, never shell interpolation.
+# pull_request still uses PR workflow YAML: same-repository workflow authors
+# remain inside GitHub's existing secret trust boundary; forks get no secrets.
 
 on:
   pull_request:
-    types: [opened, edited, reopened, ready_for_review]
+    types: [opened, edited, reopened, synchronize, ready_for_review, converted_to_draft]
+
+permissions:
+  contents: read
 
 jobs:
   decision-rows:
-    uses: Proof-labs/.github/.github/workflows/validate-decision-rows.yml@main
-    secrets:
-      vault_app_id:          ${{ secrets.PROOF_ASSISTANT_APP_ID }}
-      vault_app_private_key: ${{ secrets.PROOF_ASSISTANT_PRIVATE_KEY }}
+    name: decision-rows / validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PR_BODY: ${{ github.event.pull_request.body }}
+      PR_DRAFT: ${{ github.event.pull_request.draft }}
+      HAVE_APP: ${{ secrets.PROOF_ASSISTANT_APP_ID != '' && secrets.PROOF_ASSISTANT_PRIVATE_KEY != '' }}
+    steps:
+      - name: Determine whether a register read is required
+        id: classify
+        shell: python
+        run: |
+          import os
+          import re
+
+          # The final validator independently checks the metadata and register.
+          needed = os.environ.get("PR_DRAFT") == "false" and bool(
+              re.search(r"DEC-(\d+)", os.environ.get("PR_BODY", ""))
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"needs_register={str(needed).lower()}\n")
+
+      - name: Mint a short-lived register-only read token
+        id: vault-token
+        if: steps.classify.outputs.needs_register == 'true' && env.HAVE_APP == 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.PROOF_ASSISTANT_APP_ID }}
+          private-key: ${{ secrets.PROOF_ASSISTANT_PRIVATE_KEY }}
+          owner: Proof-labs
+          repositories: ProofOfBrain
+          permission-contents: read
+
+      - name: Read only the authoritative decision register
+        id: register-checkout
+        if: steps.classify.outputs.needs_register == 'true' && steps.vault-token.outputs.token != ''
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: Proof-labs/ProofOfBrain
+          ref: dev
+          token: ${{ steps.vault-token.outputs.token }}
+          path: .decision-register
+          sparse-checkout: delivery/decision-register.md
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate the cited decision rows
+        id: validate
+        shell: python
+        env:
+          REGISTER_READ_OK: ${{ steps.vault-token.outcome == 'success' && steps.register-checkout.outcome == 'success' }}
+        run: |
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          def notice(message):
+              print(f"::notice title=Decision rows::{message}")
+
+          def fail(message):
+              print(f"::error title=Decision rows::{message}")
+              sys.exit(1)
+
+          draft = os.environ.get("PR_DRAFT")
+          if draft not in ("true", "false"):
+              fail("PR draft metadata is missing or invalid; cannot evaluate the gate.")
+          if draft == "true":
+              notice("Draft PR: decision rows will be enforced when marked ready.")
+              sys.exit(0)
+
+          body = os.environ.get("PR_BODY") or ""
+          rows = sorted({int(n) for n in re.findall(r"DEC-(\d+)", body)})
+          if not rows:
+              notice("No DEC-N references. Decision-bearing changes must cite their decision rows.")
+              sys.exit(0)
+
+          register = Path(".decision-register/delivery/decision-register.md")
+          if (os.environ.get("HAVE_APP") != "true"
+                  or os.environ.get("REGISTER_READ_OK") != "true"
+                  or not register.is_file()):
+              fail("Cannot read the decision register. Restore the scoped GitHub App access; keep the PR draft meanwhile.")
+          try:
+              content = register.read_text(encoding="utf-8")
+          except (OSError, UnicodeError):
+              fail("Cannot read the decision register; keep the PR draft meanwhile.")
+
+          missing, undecided, ambiguous = [], [], []
+          for number in rows:
+              matches = re.findall(rf"^\|\s*DEC-{number}\s*\|.*$", content, re.M)
+              if not matches:
+                  missing.append(number)
+                  continue
+              if len(matches) != 1:
+                  ambiguous.append(number)
+                  continue
+              cells = [cell.strip() for cell in matches[0].split("|")]
+              status = cells[-2] if len(cells) >= 2 else ""
+              # Preserve the shared validator's Markdown/case-tolerant policy.
+              if not re.sub(r"^[\s*_`~]+", "", status).lower().startswith("decided"):
+                  undecided.append(number)
+
+          def labels(numbers):
+              return ", ".join(f"DEC-{number}" for number in numbers)
+
+          # The register is private. Report IDs and categories, never its cells
+          # or PR-body text in public logs (including workflow-command syntax).
+          if missing:
+              fail(f"Unknown decision rows: {labels(missing)}. Keep this PR draft.")
+          if ambiguous:
+              fail(f"Duplicate decision rows: {labels(ambiguous)}. Keep this PR draft.")
+          if undecided:
+              fail(f"Decision rows are not Decided: {labels(undecided)}. Keep this PR draft.")
+          notice(f"All cited decision rows are Decided: {labels(rows)}.")
