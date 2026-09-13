@@ -15,6 +15,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   malformed/hashless/conflicting responses and transport failures stay errors.
   Not-found is not non-inclusion, expiry or accepted-price-effect proof. Existing
   `committed_receipt()` and signing/wire contracts are unchanged.
+  A single well-formed plaintext `price_updated` event in a code-zero receipt
+  is preserved as typed `CommittedPriceUpdate` evidence. Consumers must bind
+  it to their retained signed action before inferring a primary-oracle effect;
+  composite actions share this event. Missing, duplicate, mixed, malformed or
+  unsupported event evidence leaves only the committed receipt, never a proof
+  of price acceptance. No extra HTTP or wire change is introduced.
 
 - Atomic `queryMarketsSnapshot()` through the gateway, with an explicit chain
   pin, complete typed registry decoding and bounded failure handling. The Rust
