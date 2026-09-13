@@ -9,6 +9,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Rust gateway `MarketsSnapshotClient::read_bound_inventory()` binds the
+  snapshot's own finalized clock and post-height app hash to the actual Comet
+  node identity across the read bracket. A bounded exact-H+1 header lookup
+  handles fast chains without comparing pre-H and post-H hashes. Missing or
+  mismatched witnesses fail closed; legacy snapshot/status APIs, receipt
+  handling, signing and wire bytes are unchanged. This additive API requires
+  a Rust MINOR release when published; exact qualified images and unique node
+  keys remain prerequisites because the legacy app hash is not a registry root.
+
+- Rust gateway `MarketsSnapshotClient::receipt_observation()` distinguishes an
+  exact committed receipt from a canonical HTTP 404/500 not-found observation
+  naming only the requested hash. Calls and bodies are bounded; other statuses,
+  malformed/hashless/conflicting responses and transport failures stay errors.
+  Not-found is not non-inclusion, expiry or accepted-price-effect proof. Existing
+  `committed_receipt()` and signing/wire contracts are unchanged.
+  A single well-formed plaintext `price_updated` event in a code-zero receipt
+  is preserved as typed `CommittedPriceUpdate` evidence. Consumers must bind
+  it to their retained signed action before inferring a primary-oracle effect;
+  composite actions share this event. Missing, duplicate, mixed, malformed or
+  unsupported event evidence leaves only the committed receipt, never a proof
+  of price acceptance. No extra HTTP or wire change is introduced.
+
 - Atomic `queryMarketsSnapshot()` through the gateway, with an explicit chain
   pin, complete typed registry decoding and bounded failure handling. The Rust
   `market_snapshot` module shares canonical wire records and adds an optional
