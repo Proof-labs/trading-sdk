@@ -9,6 +9,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Rust gateway `MarketsSnapshotClient::receipt_observation()` distinguishes an
+  exact committed receipt from a canonical HTTP 404/500 not-found observation
+  naming only the requested hash. Calls and bodies are bounded; other statuses,
+  malformed/hashless/conflicting responses and transport failures stay errors.
+  Not-found is not non-inclusion, expiry or accepted-price-effect proof. Existing
+  `committed_receipt()` and signing/wire contracts are unchanged.
+
 - Atomic `queryMarketsSnapshot()` through the gateway, with an explicit chain
   pin, complete typed registry decoding and bounded failure handling. The Rust
   `market_snapshot` module shares canonical wire records and adds an optional
