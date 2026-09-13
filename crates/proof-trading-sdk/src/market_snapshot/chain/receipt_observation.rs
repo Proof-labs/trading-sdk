@@ -8,6 +8,17 @@ use serde::Deserialize;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReceiptObservation {
     Committed(CommittedReceipt),
+    /// A positive, structurally verified `price_updated` event in an exact
+    /// code-zero committed receipt. Composite updates share this event; a
+    /// caller must also bind the hash to its retained signed primary action,
+    /// chain, market and signer before inferring a primary publish-floor effect.
+    /// This is gateway evidence, not a cryptographic consensus inclusion proof.
+    CommittedPriceUpdate {
+        receipt: CommittedReceipt,
+        market: u32,
+        price: u64,
+        signer: [u8; 20],
+    },
     /// The gateway returned the canonical not-found shape for exactly this
     /// requested hash. This is a liveness observation, never finality proof.
     ExactNotFound {
@@ -18,14 +29,96 @@ pub enum ReceiptObservation {
 #[derive(Deserialize)]
 struct NotFoundResponse {
     result: Option<serde_json::Value>,
+    status: Option<String>,
+    jsonrpc: Option<String>,
     error: NotFoundError,
 }
 
 #[derive(Deserialize)]
 #[serde(untagged)]
 enum NotFoundError {
-    Rpc { data: String },
+    Rpc {
+        code: i64,
+        message: String,
+        data: String,
+    },
     Gateway(String),
+}
+
+#[derive(Deserialize)]
+struct ReceiptEvents {
+    result: EventResult,
+}
+#[derive(Deserialize)]
+struct EventResult {
+    tx_result: EventExecution,
+}
+#[derive(Deserialize)]
+struct EventExecution {
+    events: Vec<PriceEvent>,
+}
+#[derive(Deserialize)]
+struct PriceEvent {
+    #[serde(rename = "type")]
+    kind: String,
+    attributes: Vec<EventAttribute>,
+}
+#[derive(Deserialize)]
+struct EventAttribute {
+    key: String,
+    value: String,
+}
+
+fn price_update(body: &[u8], receipt: &CommittedReceipt) -> Option<ReceiptObservation> {
+    if receipt.code != 0 {
+        return None;
+    }
+    // Current OracleUpdate emits exactly one event. Extra, unknown, duplicate,
+    // rejected or malformed events are not accepted-effect proof. Incomplete
+    // event evidence does not erase an otherwise valid committed receipt.
+    let envelope: ReceiptEvents = serde_json::from_slice(body).ok()?;
+    let [event] = envelope.result.tx_result.events.as_slice() else {
+        return None;
+    };
+    if event.kind != "price_updated" || event.attributes.len() != 3 {
+        return None;
+    }
+    let (mut market, mut price, mut signer) = (None, None, None);
+    for attribute in &event.attributes {
+        match attribute.key.as_str() {
+            "market" if market.is_none() => {
+                market = Some(u32::try_from(super::positive_decimal(&attribute.value).ok()?).ok()?);
+            }
+            "price" if price.is_none() => {
+                price = Some(super::positive_decimal(&attribute.value).ok()?);
+            }
+            "signer" if signer.is_none() => {
+                // Current ABCI attributes are strings, not base64 byte slices.
+                // Some(address) is 40 lowercase hex; None is empty and cannot
+                // bind this positive evidence to a retained signing authority.
+                if attribute.value.len() != 40
+                    || !attribute
+                        .value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    return None;
+                }
+                let mut address = [0; 20];
+                for (pair, target) in attribute.value.as_bytes().chunks_exact(2).zip(&mut address) {
+                    *target = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+                }
+                signer = Some(address);
+            }
+            _ => return None,
+        }
+    }
+    Some(ReceiptObservation::CommittedPriceUpdate {
+        receipt: receipt.clone(),
+        market: market?,
+        price: price?,
+        signer: signer?,
+    })
 }
 
 fn classify(status: u16, body: &[u8], hash: [u8; 32]) -> Result<ReceiptObservation, SnapshotError> {
@@ -33,40 +126,51 @@ fn classify(status: u16, body: &[u8], hash: [u8; 32]) -> Result<ReceiptObservati
         return Err(SnapshotError::TooLarge);
     }
     if status == 200 {
-        return decode_receipt(body, hash).map(ReceiptObservation::Committed);
+        let receipt = decode_receipt(body, hash)?;
+        return Ok(price_update(body, &receipt).unwrap_or(ReceiptObservation::Committed(receipt)));
     }
     if !matches!(status, 404 | 500) {
         return Err(SnapshotError::Http(status));
     }
     let response: NotFoundResponse =
         serde_json::from_slice(body).map_err(|_| SnapshotError::Malformed)?;
-    if response.result.is_some() {
+    if response.result.is_some()
+        || response
+            .status
+            .as_deref()
+            .is_some_and(|status| status != "error")
+        || response
+            .jsonrpc
+            .as_deref()
+            .is_some_and(|version| version != "2.0")
+    {
         return Err(SnapshotError::Malformed);
     }
     let text = match response.error {
-        NotFoundError::Rpc { data } | NotFoundError::Gateway(data) => data,
+        NotFoundError::Rpc {
+            code: -32603,
+            message,
+            data,
+        } if message == "Internal error" => data,
+        NotFoundError::Gateway(data) => data,
+        _ => return Err(SnapshotError::RpcUnavailable),
     };
     let text = text.to_ascii_lowercase();
-    if !text.contains("not found") {
+    // Exact Comet/gateway grammar, not just a hash somewhere beside "not found".
+    // Proxy/backend errors and messages naming multiple transactions cannot
+    // become progress evidence for a caller's bounded give-up policy.
+    let token = text
+        .strip_prefix("tx (")
+        .and_then(|text| text.strip_suffix(") not found"))
+        .ok_or(SnapshotError::RpcUnavailable)?;
+    if token.len() != 64 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(SnapshotError::RpcUnavailable);
     }
-    // Match complete hex runs, not a substring of another hash. Every named
-    // 64-hex identity must match; an extra foreign hash rejects the observation.
-    let mut found = false;
-    for token in text.as_bytes().split(|byte| !byte.is_ascii_hexdigit()) {
-        if token.len() != 64 {
-            continue;
+    for (pair, expected) in token.as_bytes().chunks_exact(2).zip(hash) {
+        let pair = std::str::from_utf8(pair).map_err(|_| SnapshotError::Malformed)?;
+        if u8::from_str_radix(pair, 16).map_err(|_| SnapshotError::Malformed)? != expected {
+            return Err(SnapshotError::HashMismatch);
         }
-        for (pair, expected) in token.chunks_exact(2).zip(hash) {
-            let pair = std::str::from_utf8(pair).map_err(|_| SnapshotError::Malformed)?;
-            if u8::from_str_radix(pair, 16).map_err(|_| SnapshotError::Malformed)? != expected {
-                return Err(SnapshotError::HashMismatch);
-            }
-        }
-        found = true;
-    }
-    if !found {
-        return Err(SnapshotError::RpcUnavailable);
     }
     Ok(ReceiptObservation::ExactNotFound { tx_hash: hash })
 }

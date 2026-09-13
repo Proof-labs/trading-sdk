@@ -13,6 +13,130 @@ fn not_found() -> Vec<u8> {
     .unwrap()
 }
 
+fn accepted_body() -> serde_json::Value {
+    json!({"result":{"hash":"AB".repeat(32),"height":"42","tx_result":{"code":0,
+    "events":[{"type":"price_updated","attributes":[
+        {"key":"market","value":"15","index":false},
+        {"key":"price","value":"120","index":false},
+        {"key":"signer","value":"cd".repeat(20),"index":false}
+    ]}]}}})
+}
+
+#[test]
+fn positive_plaintext_event_preserves_effect_metadata_not_primary_action_identity() {
+    let body = serde_json::to_vec(&accepted_body()).unwrap();
+    assert_eq!(
+        classify(200, &body, HASH).unwrap(),
+        ReceiptObservation::CommittedPriceUpdate {
+            receipt: CommittedReceipt {
+                hash: HASH,
+                height: 42,
+                code: 0
+            },
+            market: 15,
+            price: 120,
+            signer: [0xcd; 20],
+        }
+    );
+    assert_eq!(
+        super::super::decode_receipt(&body, HASH).unwrap(),
+        CommittedReceipt {
+            hash: HASH,
+            height: 42,
+            code: 0
+        }
+    );
+    // The accepted price can be clamped; no equality with a submitted price is
+    // inferred by this transport. A consumer supplies its signed tag3 binding.
+    let mut wrong_hash = accepted_body();
+    wrong_hash["result"]["hash"] = json!("CD".repeat(32));
+    assert_eq!(
+        classify(200, &serde_json::to_vec(&wrong_hash).unwrap(), HASH),
+        Err(SnapshotError::HashMismatch)
+    );
+}
+
+#[test]
+fn absent_duplicate_rejected_mixed_or_malformed_events_are_never_effect_proof() {
+    let good_event = accepted_body()["result"]["tx_result"]["events"][0].clone();
+    let mut cases = vec![
+        json!(null),
+        json!([]),
+        json!({}),
+        json!([good_event.clone(), good_event.clone()]),
+        json!([good_event.clone(), {"type":"oracle_update_rejected","attributes":[]}]),
+        json!([{"type":"oracle_update_rejected","attributes":[]}]),
+    ];
+    for (field, value) in [
+        ("type", json!("cHJpY2VfdXBkYXRlZA==")),
+        ("type", json!("future_event")),
+        ("attributes", json!(null)),
+    ] {
+        let mut event = good_event.clone();
+        event[field] = value;
+        cases.push(json!([event]));
+    }
+    for (index, key, value) in [
+        (0, "value", json!("0")),
+        (0, "value", json!("015")),
+        (0, "value", json!("4294967296")),
+        (0, "value", json!(15)),
+        (0, "key", json!("bWFya2V0")),
+        (1, "value", json!("0")),
+        (1, "value", json!("-1")),
+        (1, "value", json!("18446744073709551616")),
+        (1, "key", json!("market")),
+        (2, "value", json!("")),
+        (2, "value", json!("CD".repeat(20))),
+        (2, "value", json!(format!("0x{}", "cd".repeat(20)))),
+        (2, "value", json!("cd".repeat(19))),
+        (2, "value", json!("z".repeat(40))),
+    ] {
+        let mut event = good_event.clone();
+        event["attributes"][index][key] = value;
+        cases.push(json!([event]));
+    }
+    let mut extra_attribute = good_event.clone();
+    extra_attribute["attributes"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"key":"market","value":"15"}));
+    cases.push(json!([extra_attribute]));
+    for events in cases {
+        let mut body = accepted_body();
+        body["result"]["tx_result"]["events"] = events;
+        assert_eq!(
+            classify(200, &serde_json::to_vec(&body).unwrap(), HASH).unwrap(),
+            ReceiptObservation::Committed(CommittedReceipt {
+                hash: HASH,
+                height: 42,
+                code: 0
+            })
+        );
+    }
+    let mut rejected = accepted_body();
+    rejected["result"]["tx_result"]["code"] = json!(21);
+    assert_eq!(
+        classify(200, &serde_json::to_vec(&rejected).unwrap(), HASH).unwrap(),
+        ReceiptObservation::Committed(CommittedReceipt {
+            hash: HASH,
+            height: 42,
+            code: 21
+        })
+    );
+    let duplicate_key = serde_json::to_string(&accepted_body())
+        .unwrap()
+        .replace("\"key\":\"market\"", "\"key\":\"other\",\"key\":\"market\"");
+    assert_eq!(
+        classify(200, duplicate_key.as_bytes(), HASH).unwrap(),
+        ReceiptObservation::Committed(CommittedReceipt {
+            hash: HASH,
+            height: 42,
+            code: 0
+        })
+    );
+}
+
 #[test]
 fn exact_not_found_is_observation_not_a_committed_receipt() {
     for status in [404, 500] {
@@ -98,6 +222,42 @@ fn wrong_missing_foreign_hashes_and_noncanonical_failures_never_count() {
             "AB".repeat(32)
         );
         assert!(classify(status, duplicate.as_bytes(), HASH).is_err());
+        let nested_duplicate = format!(
+            r#"{{"error":{{"code":-32603,"message":"Internal error","data":"tx ({}) not found","data":"tx ({}) not found"}}}}"#,
+            "CD".repeat(32),
+            "AB".repeat(32)
+        );
+        assert!(classify(status, nested_duplicate.as_bytes(), HASH).is_err());
+        for (field, value) in [
+            ("code", json!(0)),
+            ("code", json!("-32603")),
+            ("message", json!("OK")),
+            ("message", json!(null)),
+        ] {
+            let mut body: serde_json::Value = serde_json::from_slice(&not_found()).unwrap();
+            body["error"][field] = value;
+            assert!(classify(status, &serde_json::to_vec(&body).unwrap(), HASH).is_err());
+        }
+        for text in [
+            format!("backend not found while looking up tx {}", "AB".repeat(32)),
+            format!("tx ({}) not found; retry later", "AB".repeat(32)),
+            format!("prefix tx ({}) not found", "AB".repeat(32)),
+        ] {
+            assert!(classify(
+                status,
+                &serde_json::to_vec(&json!({"error":text})).unwrap(),
+                HASH
+            )
+            .is_err());
+        }
+        assert!(classify(
+            status,
+            &serde_json::to_vec(&json!({"status":"ok",
+            "error":format!("tx ({}) not found", "AB".repeat(32))}))
+            .unwrap(),
+            HASH
+        )
+        .is_err());
     }
     assert_eq!(
         classify(500, &vec![b'x'; MAX_SNAPSHOT_BYTES + 1], HASH),
@@ -153,6 +313,23 @@ async fn one_shot_http_preserves_exact_not_found_and_existing_method_behavior() 
         }
         task.await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn positive_event_observation_uses_the_same_bounded_gateway_route() {
+    let body = serde_json::to_vec(&accepted_body()).unwrap();
+    let (url, task) = serve_once(200, body.clone(), body.len(), Duration::ZERO).await;
+    let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
+    assert!(matches!(
+        client.receipt_observation(HASH).await.unwrap(),
+        ReceiptObservation::CommittedPriceUpdate {
+            market: 15,
+            price: 120,
+            signer,
+            ..
+        } if signer == [0xcd; 20]
+    ));
+    task.await.unwrap();
 }
 
 #[tokio::test]
