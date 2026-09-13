@@ -204,8 +204,17 @@ impl MarketsSnapshotClient {
     }
 
     async fn get(&self, path: &str) -> Result<Vec<u8>, SnapshotError> {
+        self.get_with_query(path, None).await
+    }
+
+    async fn get_with_query(
+        &self,
+        path: &str,
+        query: Option<&str>,
+    ) -> Result<Vec<u8>, SnapshotError> {
         let mut endpoint = self.endpoint.clone();
         endpoint.set_path(path);
+        endpoint.set_query(query);
         let request = async {
             let mut response = self.client.get(endpoint).send().await.map_err(|err| {
                 if err.is_timeout() {
@@ -248,6 +257,14 @@ impl MarketsSnapshotClient {
 mod chain;
 #[cfg(feature = "gateway")]
 pub use chain::{ChainIdentity, CommittedReceipt, ReceiptObservation};
+
+#[cfg(feature = "gateway")]
+mod witness;
+#[cfg(feature = "gateway")]
+pub use witness::{
+    decode_bound_identity, decode_bound_snapshot, validate_bound_inventory, BoundChainIdentity,
+    BoundInventorySnapshot, BoundMarketsSnapshot, SnapshotWitness, WitnessError,
+};
 
 #[cfg(feature = "gateway")]
 mod submission;
