@@ -206,6 +206,36 @@ pub struct Submission {
     pub retry_after: Option<RetryAfter>,
 }
 
+/// A refusal of this one HTTP attempt, not proof about an earlier attempt of
+/// these bytes. A journal may retire it only after independently establishing
+/// that this was the sole attempt. Never infer non-inclusion from HTTP alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PreAdmissionRefusal {
+    Unauthorized,
+    RateLimited,
+    Maintenance(MaintenanceMode),
+    Overloaded,
+    VerifierUnavailable,
+    InvalidRequest,
+    InvalidSignature,
+    InvalidEncoding,
+    ProposerOnly,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaintenanceMode {
+    Paused,
+    CancelOnly,
+}
+
+/// Additive evidence API: existing `Submission` and its variants are unchanged.
+/// The local hash is retained in `submission.outcome`, even for a refusal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubmissionEvidence {
+    pub submission: Submission,
+    pub refusal: Option<PreAdmissionRefusal>,
+}
+
 #[derive(Deserialize)]
 struct EncodedRead {
     data: String,
@@ -242,6 +272,33 @@ struct SubmitRead {
     code: Option<u32>,
     height: Option<u64>,
 }
+
+// Preserve the distinction between an absent JSON delay and an invalid/null
+// one. The latter must not authorize an immediate retry. Duplicate known keys
+// fail serde's struct decoder rather than selecting the final occurrence.
+#[derive(Default)]
+struct OptionalJsonField(Option<serde_json::Value>);
+impl<'de> Deserialize<'de> for OptionalJsonField {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        serde_json::Value::deserialize(deserializer).map(|value| Self(Some(value)))
+    }
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RetryBody {
+    #[serde(default)]
+    retry_after_ms: OptionalJsonField,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RefusalRead {
+    status: String,
+    error: String,
+    #[serde(default)]
+    mode: OptionalJsonField,
+    #[serde(default)]
+    retry_after_ms: OptionalJsonField,
+}
 #[derive(Deserialize)]
 struct TxRead {
     hash: String,
@@ -254,6 +311,7 @@ struct TxExecution {
 }
 
 struct ResponseBody {
+    status: reqwest::StatusCode,
     bytes: Vec<u8>,
     retry_after: Option<RetryAfter>,
 }
@@ -312,6 +370,76 @@ fn retry_after(headers: &HeaderMap) -> Option<RetryAfter> {
             .map(RetryAfter::At)
             .unwrap_or(RetryAfter::Invalid),
     )
+}
+
+fn retry_after_body(bytes: &[u8]) -> Option<RetryAfter> {
+    let read: RetryBody = match serde_json::from_slice(bytes) {
+        Ok(read) => read,
+        Err(_) => return Some(RetryAfter::Invalid),
+    };
+    read.retry_after_ms.0.map(|value| {
+        value
+            .as_u64()
+            // Preserve the public enum while never shortening a millisecond
+            // fallback; div_ceil avoids overflow even at u64::MAX.
+            .map(|ms| RetryAfter::DelaySeconds(ms.div_ceil(1000)))
+            .unwrap_or(RetryAfter::Invalid)
+    })
+}
+
+fn pre_admission_refusal(status: u16, bytes: &[u8]) -> Option<PreAdmissionRefusal> {
+    // Bound to api-gateway 3c711c2a3c29ca8f37d2d986fe817d21a9eeebc3:
+    // server.rs authorization/rate/maintenance guards; exchange.rs parse,
+    // verifier-admission branches; types/exchange_response.rs constructors.
+    // Unknown fields (including txHash/code/height/log/events, even null) or
+    // unknown bodies cannot be promoted to pre-broadcast proof.
+    let read: RefusalRead = serde_json::from_slice(bytes).ok()?;
+    if read.status != "error" {
+        return None;
+    }
+    if status == 503 && read.error == "maintenance: signed writes are not open" {
+        if read.retry_after_ms.0.is_some() {
+            return None;
+        }
+        return match read.mode.0.as_ref().and_then(serde_json::Value::as_str) {
+            Some("paused") => Some(PreAdmissionRefusal::Maintenance(MaintenanceMode::Paused)),
+            Some("cancel-only") => Some(PreAdmissionRefusal::Maintenance(
+                MaintenanceMode::CancelOnly,
+            )),
+            _ => None,
+        };
+    }
+    if read.mode.0.is_some() {
+        return None;
+    }
+    if status == 429 && read.error == "rate limited" {
+        return read
+            .retry_after_ms
+            .0
+            .as_ref()
+            .and_then(serde_json::Value::as_u64)
+            .map(|_| PreAdmissionRefusal::RateLimited);
+    }
+    if read.retry_after_ms.0.is_some() {
+        return None;
+    }
+    match (status, read.error.as_str()) {
+        (401, "unauthorized: invalid or missing X-Api-Key") => {
+            Some(PreAdmissionRefusal::Unauthorized)
+        }
+        (503, "service overloaded") => Some(PreAdmissionRefusal::Overloaded),
+        (503, "service unavailable") => Some(PreAdmissionRefusal::VerifierUnavailable),
+        (
+            200,
+            "invalid request body" | "invalid action parameters" | "invalid base64 in action field",
+        ) => Some(PreAdmissionRefusal::InvalidRequest),
+        (200, "invalid signature") => Some(PreAdmissionRefusal::InvalidSignature),
+        (200, "internal encoding error") => Some(PreAdmissionRefusal::InvalidEncoding),
+        (200, "action type 0x1d is proposer-only and cannot enter through the gateway") => {
+            Some(PreAdmissionRefusal::ProposerOnly)
+        }
+        _ => None,
+    }
 }
 
 impl GatewayClient {
@@ -373,6 +501,18 @@ impl GatewayClient {
         path: &str,
         body: Option<&SignedRequest>,
     ) -> Result<ResponseBody, GatewayError> {
+        self.request_body(operation, method, path, body, false)
+            .await
+    }
+
+    async fn request_body(
+        &self,
+        operation: Operation,
+        method: Method,
+        path: &str,
+        body: Option<&SignedRequest>,
+        read_error_body: bool,
+    ) -> Result<ResponseBody, GatewayError> {
         let url = self
             .base
             .join(path)
@@ -397,7 +537,8 @@ impl GatewayClient {
             retry_after,
             ..GatewayError::new(operation, kind)
         };
-        if !response.status().is_success() {
+        let status = response.status();
+        if !status.is_success() && !read_error_body {
             return Err(error(ErrorKind::HttpStatus(response.status().as_u16())));
         }
         if response
@@ -417,7 +558,11 @@ impl GatewayClient {
             }
             bytes.extend_from_slice(&chunk);
         }
-        Ok(ResponseBody { bytes, retry_after })
+        Ok(ResponseBody {
+            status,
+            bytes,
+            retry_after,
+        })
     }
 
     pub async fn chain_identity(&self) -> Result<ChainIdentity, GatewayError> {
@@ -465,23 +610,55 @@ impl GatewayClient {
     /// Sends the supplied signed envelope exactly once, byte-for-byte. A timeout,
     /// bad response, hash mismatch or HTTP failure never proves non-inclusion.
     pub async fn submit_signed_bytes(&self, bytes: &[u8]) -> Result<Submission, GatewayError> {
+        self.submit_once(bytes, false)
+            .await
+            .map(|read| read.submission)
+    }
+
+    /// One exact-byte POST with strictly classified, per-attempt refusal
+    /// evidence. HTTP 401/429/503/404 alone is never terminal. The caller must
+    /// qualify the gateway contract and prove this was its sole attempt before
+    /// retiring pending bytes; refusal cannot settle earlier ambiguity.
+    /// Header Retry-After wins (including Invalid); only an absent header uses
+    /// JSON retryAfterMs, conservatively rounded up to whole seconds.
+    pub async fn submit_signed_bytes_with_evidence(
+        &self,
+        bytes: &[u8],
+    ) -> Result<SubmissionEvidence, GatewayError> {
+        self.submit_once(bytes, true).await
+    }
+
+    async fn submit_once(
+        &self,
+        bytes: &[u8],
+        strict_evidence: bool,
+    ) -> Result<SubmissionEvidence, GatewayError> {
         let op = Operation::Submit;
         if bytes.is_empty() || bytes.len() > MAX_SIGNED_BYTES {
             return Err(GatewayError::new(op, ErrorKind::InvalidInput));
         }
         let hash = TxHash::of_signed_bytes(bytes);
         let result = async {
-            let body = self
-                .request(
+            let mut body = self
+                .request_body(
                     op,
                     Method::POST,
                     "/exchange",
                     Some(&SignedRequest {
                         action: STANDARD.encode(bytes),
                     }),
+                    strict_evidence,
                 )
                 .await?;
-            let read: SubmitRead = body.decode(op)?;
+            if strict_evidence && body.retry_after.is_none() {
+                body.retry_after = retry_after_body(&body.bytes);
+            }
+            let read: SubmitRead = body.decode(op).map_err(|mut error| {
+                if !body.status.is_success() {
+                    error.kind = ErrorKind::HttpStatus(body.status.as_u16());
+                }
+                error
+            })?;
             let invalid = || GatewayError {
                 retry_after: body.retry_after,
                 ..GatewayError::new(op, ErrorKind::InvalidResponse)
@@ -494,6 +671,15 @@ impl GatewayClient {
                     e.retry_after = body.retry_after;
                     e
                 })?;
+            }
+            let refusal = strict_evidence
+                .then(|| pre_admission_refusal(body.status.as_u16(), &body.bytes))
+                .flatten();
+            if !body.status.is_success() && refusal.is_none() {
+                return Err(GatewayError {
+                    retry_after: body.retry_after,
+                    ..GatewayError::new(op, ErrorKind::HttpStatus(body.status.as_u16()))
+                });
             }
             let has_hash = read.tx_hash.is_some();
             let outcome = match (read.code, read.height, read.tx_hash) {
@@ -519,14 +705,19 @@ impl GatewayClient {
                 (None, None, Some(_)) | (None, None, None) if read.status == "ok" || has_hash => {
                     SubmissionOutcome::Pending { hash }
                 }
-                (None, None, None) if read.status == "error" => {
+                (None, None, None)
+                    if read.status == "error" && (!strict_evidence || refusal.is_some()) =>
+                {
                     SubmissionOutcome::RejectedBeforeAdmission { hash }
                 }
                 _ => return Err(invalid()),
             };
-            Ok(Submission {
-                outcome,
-                retry_after: body.retry_after,
+            Ok(SubmissionEvidence {
+                submission: Submission {
+                    outcome,
+                    retry_after: body.retry_after,
+                },
+                refusal,
             })
         }
         .await;
