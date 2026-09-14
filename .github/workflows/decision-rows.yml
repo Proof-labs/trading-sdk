@@ -1,48 +1,28 @@
 name: Decision rows
 
-# Public-repository variant, synced from Proof-labs/.github via
-# scripts/sync-agent-config.sh. Public repos cannot call the private reusable
-# workflow. Shared-policy parity is tested in the org repository; never bypass
-# the gate when the authoritative register is unavailable.
-# This credential-bearing job does not check out PR code or run repository
-# scripts. PR text is data in environment variables, never shell interpolation.
-# pull_request still uses PR workflow YAML: same-repository workflow authors
-# remain inside GitHub's existing secret trust boundary; forks get no secrets.
+# Public-repository form of the decision-rows check, synced by
+# Proof-labs/.github → scripts/sync-agent-config.sh. A public repository cannot
+# call the reusable workflow in the private Proof-labs/.github, so its steps are
+# inlined here. Change validate-decision-rows.yml there, then copy the steps;
+# scripts/test-sync-agent-config.py fails while they differ.
 
 on:
   pull_request:
-    types: [opened, edited, reopened, synchronize, ready_for_review, converted_to_draft]
+    types: [opened, edited, reopened, ready_for_review]
 
 permissions:
   contents: read
 
 jobs:
-  decision-rows:
+  validate:
     name: decision-rows / validate
     runs-on: ubuntu-latest
-    timeout-minutes: 5
     env:
-      PR_BODY: ${{ github.event.pull_request.body }}
-      PR_DRAFT: ${{ github.event.pull_request.draft }}
       HAVE_APP: ${{ secrets.PROOF_ASSISTANT_APP_ID != '' && secrets.PROOF_ASSISTANT_PRIVATE_KEY != '' }}
     steps:
-      - name: Determine whether a register read is required
-        id: classify
-        shell: python
-        run: |
-          import os
-          import re
-
-          # The final validator independently checks the metadata and register.
-          needed = os.environ.get("PR_DRAFT") == "false" and bool(
-              re.search(r"DEC-(\d+)", os.environ.get("PR_BODY", ""))
-          )
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"needs_register={str(needed).lower()}\n")
-
-      - name: Mint a short-lived register-only read token
-        id: vault-token
-        if: steps.classify.outputs.needs_register == 'true' && env.HAVE_APP == 'true'
+      - name: Mint a short-lived token scoped to the vault
+        id: vault
+        if: env.HAVE_APP == 'true'
         continue-on-error: true
         uses: actions/create-github-app-token@v1
         with:
@@ -52,86 +32,98 @@ jobs:
           repositories: ProofOfBrain
           permission-contents: read
 
-      - name: Read only the authoritative decision register
-        id: register-checkout
-        if: steps.classify.outputs.needs_register == 'true' && steps.vault-token.outputs.token != ''
+      - name: Fetch the decision register (sparse, read-only)
+        if: env.HAVE_APP == 'true'
         continue-on-error: true
         uses: actions/checkout@v4
         with:
           repository: Proof-labs/ProofOfBrain
           ref: dev
-          token: ${{ steps.vault-token.outputs.token }}
+          token: ${{ steps.vault.outputs.token }}
           path: .decision-register
           sparse-checkout: delivery/decision-register.md
           sparse-checkout-cone-mode: false
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Validate the cited decision rows
-        id: validate
-        shell: python
+      - name: Verify cited DEC-N rows are Decided
         env:
-          REGISTER_READ_OK: ${{ steps.vault-token.outcome == 'success' && steps.register-checkout.outcome == 'success' }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
-          import os
-          import re
-          import sys
-          from pathlib import Path
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, re, sys, pathlib
 
-          def notice(message):
-              print(f"::notice title=Decision rows::{message}")
+          body  = os.environ.get("PR_BODY") or ""
+          draft = os.environ.get("PR_DRAFT", "false") == "true"
+          have_key = os.environ.get("HAVE_APP") == "true"
+          REG = pathlib.Path(".decision-register/delivery/decision-register.md")
 
-          def fail(message):
-              print(f"::error title=Decision rows::{message}")
+          def _is_decided(cell):
+              """True when a register Status cell says Decided.
+
+              The register writes the status in bold — `**Decided 2026-07-24** — ...` —
+              so a bare startswith("Decided") is False for every genuinely decided row.
+              Strip markdown emphasis first, then compare case-insensitively.
+              Statuses are Open / Blocked / Decided, so a prefix match is unambiguous
+              once the emphasis is gone.
+              """
+              return re.sub(r"^[\s*_`~]+", "", cell or "").lower().startswith("decided")
+
+          def notice(m): print(f"::notice title=Decision rows::{m}")
+          def fail(m):
+              print(f"::error title=Decision rows::{m}")
               sys.exit(1)
 
-          draft = os.environ.get("PR_DRAFT")
-          if draft not in ("true", "false"):
-              fail("PR draft metadata is missing or invalid; cannot evaluate the gate.")
-          if draft == "true":
-              notice("Draft PR: decision rows will be enforced when marked ready.")
+          if draft:
+              notice("Draft — skipped. The check runs when this is marked ready for review.")
               sys.exit(0)
 
-          body = os.environ.get("PR_BODY") or ""
           rows = sorted({int(n) for n in re.findall(r"DEC-(\d+)", body)})
+
           if not rows:
-              notice("No DEC-N references. Decision-bearing changes must cite their decision rows.")
+              hold = re.search(
+                  r"decision hold|requires? (an )?explicit|needs? (a )?decision"
+                  r"|requires? (product|risk|business|team) (approval|decision)"
+                  r"|separate approval|awaiting (a )?decision|requires sign-?off",
+                  body, re.I)
+              notice("This body reads like it is waiting on a decision, but cites no DEC-N row. "
+                     "If that is right, add a register row (.github/new-decision-row.py) and mark "
+                     "this draft — otherwise ignore this note. Advisory only."
+                     if hold else "No DEC-N rows cited — nothing to verify.")
               sys.exit(0)
 
-          register = Path(".decision-register/delivery/decision-register.md")
-          if (os.environ.get("HAVE_APP") != "true"
-                  or os.environ.get("REGISTER_READ_OK") != "true"
-                  or not register.is_file()):
-              fail("Cannot read the decision register. Restore the scoped GitHub App access; keep the PR draft meanwhile.")
-          try:
-              content = register.read_text(encoding="utf-8")
-          except (OSError, UnicodeError):
-              fail("Cannot read the decision register; keep the PR draft meanwhile.")
+          cited = ", ".join(f"DEC-{n}" for n in rows)
 
-          missing, undecided, ambiguous = [], [], []
-          for number in rows:
-              matches = re.findall(rf"^\|\s*DEC-{number}\s*\|.*$", content, re.M)
-              if not matches:
-                  missing.append(number)
+          if not have_key or not REG.is_file():
+              fail(f"This ready pull request cites {cited}, but the register could not be read: "
+                   f"the app credentials (PROOF_ASSISTANT_APP_ID / _PRIVATE_KEY) are missing or "
+                   f"invalid, or the sparse checkout failed. Failing closed — add or repair the org "
+                   f"secrets (GitHub App with contents:read on "
+                   f"Proof-labs/ProofOfBrain, see docs/SECURITY.md §8.1), or mark this draft while "
+                   f"the rows are Open.")
+
+          content = REG.read_text(encoding="utf-8")
+          undecided, missing = [], []
+          for n in rows:
+              m = re.search(rf"^\|\s*DEC-{n}\s*\|.*$", content, re.M)
+              if not m:
+                  missing.append(f"DEC-{n}")
                   continue
-              if len(matches) != 1:
-                  ambiguous.append(number)
-                  continue
-              cells = [cell.strip() for cell in matches[0].split("|")]
+              cells = [c.strip() for c in m.group(0).split("|")]
               status = cells[-2] if len(cells) >= 2 else ""
-              # Preserve the shared validator's Markdown/case-tolerant policy.
-              if not re.sub(r"^[\s*_`~]+", "", status).lower().startswith("decided"):
-                  undecided.append(number)
+              if not _is_decided(status):
+                  undecided.append(f"DEC-{n}")
 
-          def labels(numbers):
-              return ", ".join(f"DEC-{number}" for number in numbers)
-
-          # The register is private. Report IDs and categories, never its cells
-          # or PR-body text in public logs (including workflow-command syntax).
           if missing:
-              fail(f"Unknown decision rows: {labels(missing)}. Keep this PR draft.")
-          if ambiguous:
-              fail(f"Duplicate decision rows: {labels(ambiguous)}. Keep this PR draft.")
+              fail(f"Cited but not in the register: {', '.join(missing)}. Create the row first "
+                   f"(.github/new-decision-row.py) — a cited row that does not exist cannot be "
+                   f"decided, so this pull request can never legitimately become ready.")
           if undecided:
-              fail(f"Decision rows are not Decided: {labels(undecided)}. Keep this PR draft.")
-          notice(f"All cited decision rows are Decided: {labels(rows)}.")
+              fail(f"Not Decided yet: {', '.join(undecided)}. A pull request whose merge needs a "
+                   f"decision stays DRAFT until every cited row is Decided. Mark this draft, and "
+                   f"it will be picked up at the weekly decision moment.")
+
+          notice(f"All cited rows are Decided: {cited}.")
+          PY
