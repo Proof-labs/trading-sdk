@@ -24,6 +24,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   response bodies, credentials and signed bytes are excluded from diagnostics.
   Existing wire bytes and default codec/WASM dependencies are unchanged.
 
+- Rust native gateway `submit_signed_bytes_with_evidence` adds typed,
+  source-qualified per-attempt pre-admission refusal and maintenance evidence,
+  plus header-first JSON `retryAfterMs` fallback rounded up without overflow.
+  Unknown HTTP/body outcomes retain the local reconciliation hash; no earlier
+  attempt is declared absent. The existing `Submission`/`SubmissionOutcome`,
+  original submission method, TS/Python API and wire bytes are unchanged.
+  This additive native API requires a Rust MINOR release when published;
+  it authorizes no activation, retry or durable-journal retirement by itself.
+
 - TypeScript 4.2.0 adds gateway-only `queryFinancialState({markets, owners})`:
   one finalized snapshot of selected raw accounts, fee/funding market state,
   fee pool, per-pool insurance and PLP configuration/account. Strict selector,
