@@ -26,8 +26,14 @@ name: publish
 # publish — crates.io cannot be un-published and npm unpublish is limited to
 # 72 hours — so the tag alone is not accepted as proof the code works.
 #
+# npm needs no secret: it trusts this workflow directly (trusted publishing,
+# OpenID Connect). The package's npm settings accept only publish.yml in
+# Proof-labs/trading-sdk running in the `npm-publish` environment, which only
+# `npm-v*` tags can enter, and only for `npm stage publish`. A staged version
+# is not public: a maintainer approves it on npm with their own 2FA, so neither
+# this workflow nor anyone who can push a tag can publish on their own.
+#
 # Required repository secrets (none of these exist yet — see #80):
-#   NPM_TOKEN             npm automation token, publish scope
 #   CARGO_REGISTRY_TOKEN  crates.io API token
 #   MATURIN_PYPI_TOKEN    PyPI API token
 #
@@ -89,16 +95,27 @@ jobs:
     needs: verify-ci
     if: startsWith(github.ref_name, 'npm-v')
     runs-on: ubuntu-latest
+    # Must match the environment named in the package's npm trusted-publisher
+    # settings exactly; the environment only admits `npm-v*` tags.
+    environment: npm-publish
     permissions:
       contents: write # cut the GitHub Release
-      id-token: write # npm provenance
+      id-token: write # the OIDC token npm trusts, and provenance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          # npm 12 (below) needs Node 22.22.2 or newer; never reuse an older
+          # 22.x the runner image happens to have cached.
+          check-latest: true
           registry-url: "https://registry.npmjs.org"
           cache: npm
+      # Staged publishing and staging through a trusted publisher need npm 12;
+      # Node 22 bundles npm 10. Pinned to the major so a future breaking npm
+      # cannot change the release path unreviewed.
+      - name: Upgrade npm
+        run: npm install -g npm@12
       # The build compiles the WASM core with a wasm-bindgen CLI whose version is
       # resolved from the crate graph, the same rule ci.yml uses. That guarantees
       # CLI-to-crate consistency (a mismatch hard-errors on the bindings' schema
@@ -130,14 +147,17 @@ jobs:
             exit 1
           fi
       - run: npm run build
-      - name: Publish to npm
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Stages, never publishes: no token is involved (npm trusts this job via
+      # OIDC), and the version becomes public only when a maintainer approves
+      # it on npm with 2FA (`npm stage list` / `npm stage approve <id>`).
+      - name: Stage on npm
+        run: npm stage publish --provenance --access public
       - name: Cut the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "See CHANGELOG.md for this release."
+        run: >-
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME"
+          --notes "Staged on npm; public once a maintainer approves the staged version. See CHANGELOG.md for this release."
 
   crate:
     name: crates.io publish
