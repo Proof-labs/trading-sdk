@@ -771,6 +771,62 @@ class OracleUpdateComposite(Action):
 # ── Codec helpers (delegate to the shared Rust core) ─────────────────────────
 
 
+@dataclass
+class SubmitOracleObservation(Action):
+    """Operator-only relay attestation; not external-provider proof verification.
+
+    The engine enforces source-key/policy authorization and activation. Prices
+    and confidence are integer normalized micro units, never floating point.
+    """
+
+    ACTION_NAME = "SubmitOracleObservation"
+    market: int
+    policy_version: int
+    source_id: int
+    publish_time_ms: int
+    price_micro: int
+    confidence_micro: Optional[int]
+    evidence_digest: bytes
+    signer: bytes
+
+    def __post_init__(self) -> None:
+        _trigger_uint("market", self.market, _U32_MAX)
+        _trigger_uint("source_id", self.source_id, _U32_MAX)
+        for name in ("policy_version", "publish_time_ms", "price_micro"):
+            _trigger_uint(name, getattr(self, name), _U64_MAX)
+        if self.confidence_micro is not None:
+            _trigger_uint("confidence_micro", self.confidence_micro, _U64_MAX)
+        for name, size in (("evidence_digest", 32), ("signer", 20)):
+            if not isinstance(getattr(self, name), bytes) or len(getattr(self, name)) != size:
+                raise ValueError(f"{name} must contain exactly {size} bytes")
+
+    def fields(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in (
+            "market", "policy_version", "source_id", "publish_time_ms", "price_micro",
+            "confidence_micro", "evidence_digest", "signer",
+        )}
+
+
+@dataclass
+class ConfigureOraclePolicy:
+    """Multisig policy bytes and activation height, not approval of their contents.
+
+    Independently decode and review the complete canonical policy before signing.
+    This wrapper deliberately does not invent market/source/calendar defaults.
+    """
+
+    effective_height: int
+    bundle: bytes
+
+    def __post_init__(self) -> None:
+        _trigger_uint("effective_height", self.effective_height, _U64_MAX)
+        if not isinstance(self.bundle, bytes):
+            raise ValueError("bundle must be canonical policy bytes")
+
+    def as_wire(self) -> dict[str, Any]:
+        return {"effective_height": self.effective_height, "bundle": self.bundle}
+
+
 def encode_action(action: Action) -> tuple[int, bytes]:
     """Encode *action* to ``(action_type, payload_bytes)`` via the core.
 
@@ -819,6 +875,8 @@ __all__ = [
     "CreateImpactMarket",
     "UpdateMarketFees",
     "OracleUpdateComposite",
+    "SubmitOracleObservation",
+    "ConfigureOraclePolicy",
     "encode_action",
     "decode_action",
 ]
