@@ -16,14 +16,3 @@ pub use proof_wire::types::{
     EmergencyActionType, EmergencyAdminAction, ProposalId, ProposeAdminAction, RegistryVersion,
     RejectAdminAction, SignatureThreshold, SignerAddress, UpdateAdminSignerRegistry,
 };
-/// Canonical MessagePack policy bytes and the first block that may use them.
-///
-/// Defined locally until proof-wire carries this type (tracked as F16 wire
-/// sync). The struct is byte-compatible with the engine's
-/// `exchange-wire::types::ConfigureOraclePolicy`.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct ConfigureOraclePolicy {
-    pub effective_height: u64,
-    #[serde(with = "proof_wire::wire_bytes::vec")]
-    pub bundle: Vec<u8>,
-}
