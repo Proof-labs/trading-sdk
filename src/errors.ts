@@ -199,7 +199,7 @@ const TABLE: Record<number, ExecErrorInfo> = {
   },
   28: {
     name: "InvalidResolution",
-    description: "ResolveEvent rejected — invalid outcome for current state",
+    description: "resolve rejected — invalid outcome for current state",
   },
   29: {
     name: "PositionLimitExceeded",

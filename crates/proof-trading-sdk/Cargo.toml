@@ -23,11 +23,11 @@ chrono = { version = "0.4", default-features = false, features = ["std"], option
 # The wire contract is the shared `proof-wire` crate (engine + SDK share
 # one definition), extracted to the public Proof-labs/wire repository on
 # 2026-09-09 and pinned to its release tag. Replaces the rev-pinned private
-# fetch from Proof-labs/exchange (last pinned 6a640c45 — wire 1.4.0 with
-# exchange#471's CancelAllOrdersForAccount); v1.4.0 of this crate carries
-# that same content. The extraction also removed the deploy-key fetch this
-# dependency used to require.
-proof-wire = { git = "https://github.com/Proof-labs/wire.git", tag = "v1.4.0" }
+# fetch from Proof-labs/exchange. v1.6.0 carries the standalone-events
+# surface this SDK exposes: CreateEvent at admin inner tag 0x09 (v1.5.0,
+# EN-01) and ResolveEvent at 0x27 with 0x0F renamed ResolveImpactMarket
+# (v1.6.0, DEC-149) — the content of exchange#504, now merged.
+proof-wire = { git = "https://github.com/Proof-labs/wire.git", tag = "v1.6.0" }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.

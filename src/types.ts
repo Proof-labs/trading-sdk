@@ -78,8 +78,11 @@ export const ActionType = {
   RevokeAgent: 0x0d,
   /** Create a 5-book impact-market family (admin). */
   CreateImpactMarket: 0x0e,
-  /** Resolve an impact-market event with an outcome (admin). */
-  ResolveEvent: 0x0f,
+  /** Resolve an impact-market family with an outcome (admin). DEC-149: was
+   *  `ResolveEvent`; the standalone-event resolve is `ResolveEvent` (0x27). */
+  ResolveImpactMarket: 0x0f,
+  /** Resolve a standalone event with a YES/NO outcome (0x27, DEC-149). */
+  ResolveEvent: 0x27,
   /** Update a subset of `MarketConfig` tunables on a live market (admin).
    *  Fee tiering, funding-rate cap tightening, position-limit updates
    *  without a chain rebase. */
@@ -685,11 +688,57 @@ export interface CreateImpactMarket {
   rules?: string;
 }
 
-/** Resolve an impact-market event. */
-export interface ResolveEvent {
+/** Resolve an impact-market family (DEC-149: formerly `ResolveEvent`, 0x0f). */
+export interface ResolveImpactMarket {
   impactMarketId: number;
   outcome: Outcome;
   signer: Address;
+}
+
+/** Resolve a standalone event (0x27). YES/NO only — the engine rejects `Void`. */
+export interface ResolveEvent {
+  eventId: number;
+  outcome: Outcome;
+  signer: Address;
+}
+
+/**
+ * Create a standalone event (admin-actions v2 inner tag `0x09`): two
+ * prediction-binary books (EBY at `childMarketBase`, EBN at +1) under one
+ * `EventInfo`, no underlying perp and no conditional legs. The embedded
+ * `signer` must be zero — governance supplies the authorization.
+ */
+export interface CreateEvent {
+  eventId: number;
+  childMarketBase: number;
+  poolId: number;
+  question: string;
+  settlementMs: bigint;
+  resolutionWindowMs: bigint;
+  takerFeeBps: number;
+  makerFeeBps: number;
+  signer: Address;
+  /** How YES/NO is determined; `undefined` (wire `nil`) = `RelayerAttested`. */
+  oracleSource?: EventOracleSource;
+  /** Optional body text; encodes as "" when absent (`serde(default)`). */
+  description?: string;
+  /** Optional resolution criteria; encodes as "" when absent. */
+  rules?: string;
+}
+
+/** Stored record for a standalone event — the `get_event` read model (G17). */
+export interface EventInfo {
+  eventId: number;
+  ebyMarket: number;
+  ebnMarket: number;
+  question: string;
+  settlementMs: bigint;
+  resolutionWindowMs: bigint;
+  status: ImpactMarketStatus;
+  createdMs: bigint;
+  resolvedMs: bigint;
+  /** `undefined` (wire `nil`) means `RelayerAttested`. */
+  oracleSource?: EventOracleSource;
 }
 
 /**
@@ -946,6 +995,7 @@ export type OperatorAction =
   | { type: "FailWithdrawalReceipt"; data: FailWithdrawalReceipt }
   | { type: "AuthorizeWithdrawal"; data: AuthorizeWithdrawal }
   | { type: "CreateImpactMarket"; data: CreateImpactMarket }
+  | { type: "ResolveImpactMarket"; data: ResolveImpactMarket }
   | { type: "ResolveEvent"; data: ResolveEvent }
   | { type: "UpdateMarketFees"; data: UpdateMarketFees };
 
@@ -980,7 +1030,8 @@ export interface UpdateAdminSignerRegistry {
  */
 export type AdminBatchItem =
   | { kind: "CreateMarket"; value: CreateMarket }
-  | { kind: "CreateImpactMarket"; value: CreateImpactMarket };
+  | { kind: "CreateImpactMarket"; value: CreateImpactMarket }
+  | { kind: "CreateEvent"; value: CreateEvent };
 
 /**
  * Governance cancel of every resting order one account holds, optionally
@@ -1010,6 +1061,7 @@ export type AdminAction =
   | { kind: "CreateMarket"; value: CreateMarket }
   | { kind: "UpdateAdminSignerRegistry"; value: UpdateAdminSignerRegistry }
   | { kind: "CreateImpactMarket"; value: CreateImpactMarket }
+  | { kind: "CreateEvent"; value: CreateEvent }
   | { kind: "Batch"; value: AdminBatchItem[] }
   | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig }
   // Unit variant — no fields; lifts a bridge pause under multisig

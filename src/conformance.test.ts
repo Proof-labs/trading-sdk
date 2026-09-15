@@ -310,11 +310,20 @@ function toAction(
         type: "CreateImpactMarket",
         data: toCreateImpactMarketValue(input),
       };
+    case ActionType.ResolveImpactMarket:
+      return {
+        type: "ResolveImpactMarket",
+        data: {
+          impactMarketId: input.impact_market_id as number,
+          outcome: OUTCOME[input.outcome as string],
+          signer: bytes(input.signer),
+        },
+      };
     case ActionType.ResolveEvent:
       return {
         type: "ResolveEvent",
         data: {
-          impactMarketId: input.impact_market_id as number,
+          eventId: input.event_id as number,
           outcome: OUTCOME[input.outcome as string],
           signer: bytes(input.signer),
         },
