@@ -6,7 +6,7 @@
 )]
 
 use super::*;
-use crate::types::{MarkSourceMode, MarketKind};
+use crate::types::{EventId, MarkSourceMode, MarketKind};
 
 fn market() -> MarketConfig {
     MarketConfig {
@@ -61,7 +61,7 @@ fn current_engine_g17_snapshot_matches_the_older_shared_wire_contract() {
     assert!(matches!(
         snapshot.markets[3].kind,
         MarketKind::PredictionBinary {
-            impact_market_id: 123,
+            event_id: EventId(123),
             ..
         }
     ));
