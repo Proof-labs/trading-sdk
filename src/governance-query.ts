@@ -524,7 +524,6 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   UnpauseBridge: 6,
   // 7 is UpdateAuthoritySet, not yet mirrored here (exchange#472).
   CancelAllOrdersForAccount: 8,
-  ConfigureOraclePolicy: 12,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
@@ -540,24 +539,6 @@ export function decodeAdminAction(
   if (value === "UnpauseBridge") return { kind: "UnpauseBridge" };
   const { name, payload } = variantOf(value, field);
   switch (name) {
-    case "CancelAllOrdersForAccount":
-      return {
-        kind: "CancelAllOrdersForAccount",
-        value: decodeCancelAllOrdersForAccount(payload),
-      };
-    case "ConfigureOraclePolicy": {
-      const raw = toTuple(payload, "configureOraclePolicy", 2);
-      return {
-        kind: "ConfigureOraclePolicy",
-        value: {
-          effectiveHeight: toU64(
-            raw[0],
-            "configureOraclePolicy.effectiveHeight",
-          ),
-          bundle: toBytes(raw[1], "configureOraclePolicy.bundle"),
-        },
-      };
-    }
     case "CreateMarket":
       return {
         kind: "CreateMarket",

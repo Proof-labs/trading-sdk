@@ -62,8 +62,6 @@ from proof_trading_sdk.actions import (  # noqa: F401
     ResolveEvent,
     UpdateMarketFees,
     OracleUpdateComposite,
-    SubmitOracleObservation,
-    ConfigureOraclePolicy,
     encode_action,
     decode_action,
 )
@@ -151,8 +149,6 @@ __all__ = [
     "ResolveEvent",
     "UpdateMarketFees",
     "OracleUpdateComposite",
-    "SubmitOracleObservation",
-    "ConfigureOraclePolicy",
     "encode_action",
     "decode_action",
     "NonceAllocator",

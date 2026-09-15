@@ -41,8 +41,6 @@ export const ActionType = {
   /** Operator-only: submit a composite-CEX price for the multi-source mark
    *  median (BE-31 Phase B). Feeder infrastructure, not a trading action. */
   OracleUpdateComposite: 0x14,
-  /** Quorum-policy source relay; dormant until the engine's oracle gate. */
-  SubmitOracleObservation: 0x2d,
   /** Place a market order that crosses immediately. */
   MarketOrder: 0x04,
   /** Credit USDC to an account (legacy, prefer ConfirmDeposit). */
@@ -985,7 +983,6 @@ export type TraderAction =
  * AGENTS.md / README.md.
  */
 export type OperatorAction =
-  | { type: "SubmitOracleObservation"; data: SubmitOracleObservation }
   | { type: "OracleUpdate"; data: OracleUpdate }
   | { type: "OracleUpdateComposite"; data: OracleUpdateComposite }
   | { type: "Deposit"; data: Deposit }
@@ -1061,8 +1058,6 @@ export interface CancelAllOrdersForAccount {
  * likewise); the engine refuses the tags below the activation height.
  */
 export type AdminAction =
-  | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
-  | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
   | { kind: "CreateMarket"; value: CreateMarket }
   | { kind: "UpdateAdminSignerRegistry"; value: UpdateAdminSignerRegistry }
   | { kind: "CreateImpactMarket"; value: CreateImpactMarket }
@@ -1073,32 +1068,6 @@ export type AdminAction =
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount };
-
-/** Governance cancel of a wallet's resting orders, optionally one market (tag 8). */
-export interface CancelAllOrdersForAccount {
-  owner: Address;
-  market?: number | null;
-}
-
-/** Authenticated relay attestation, not a cryptographic provider-proof verifier.
- * Price and confidence are integers in the policy's normalized micro unit. */
-export interface SubmitOracleObservation {
-  market: number;
-  policyVersion: bigint;
-  sourceId: number;
-  publishTimeMs: bigint;
-  priceMicro: bigint;
-  confidenceMicro: bigint | null;
-  evidenceDigest: Uint8Array;
-  signer: Address;
-}
-
-/** The complete canonical policy must be independently decoded and reviewed
- * before signing. A digest alone is not permission to approve opaque bytes. */
-export interface ConfigureOraclePolicy {
-  effectiveHeight: bigint;
-  bundle: Uint8Array;
-}
 
 /**
  * Closed set of immediate, loss-reducing single-signer actions. Reverse

@@ -16,5 +16,3 @@ pub use proof_wire::types::{
     EmergencyActionType, EmergencyAdminAction, ProposalId, ProposeAdminAction, RegistryVersion,
     RejectAdminAction, SignatureThreshold, SignerAddress, UpdateAdminSignerRegistry,
 };
-// F16 oracle types from exchange-wire >= 1.5.0 (not yet in proof-wire v1.4.0).
-pub use exchange_wire::types::ConfigureOraclePolicy;
