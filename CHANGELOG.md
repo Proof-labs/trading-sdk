@@ -7,6 +7,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- TypeScript 4.2.0 adds gateway-only `queryFinancialState({markets, owners})`:
+  one finalized snapshot of selected raw accounts, fee/funding market state,
+  fee pool, per-pool insurance and PLP configuration/account. Strict selector,
+  tuple, integer, exact-coverage and 2048-total-position validation; five-second
+  read deadline, one-MiB response limit and pre-decode nesting/allocation budgets.
+  Missing keys remain null. Bootstrap
+  baselines and lifetime fee counters are not additional cash. No valuation,
+  risk authorization, signing or new mutation; Rust/Python/WASM are unchanged.
+
+- Rust core 3.2.0 adds the optional `gateway` transport: bounded gateway-only
+  chain identity, committed oracle permissions, byte-exact externally signed
+  submission and hash-matched execution receipts. No signing, nonce allocation,
+  automatic retries or operational oracle-health API. Ambiguous submission,
+  CheckTx rejection, committed execution and oracle permission remain distinct;
+  response bodies, credentials and signed bytes are excluded from diagnostics.
+  Existing wire bytes and default codec/WASM dependencies are unchanged.
+
+- Retains current exchange `CreateEvent` governance tag 9 alongside F16 tag 12:
+  typed standalone-event proposals and strict proposal-read decoding (not a Batch
+  item). Binary market tuples name their event id; conditional perps retain their
+  family id. Existing action vectors and tag-8 cancel semantics remain unchanged.
+
+- TypeScript SDK 4.1.0 adds `queryAccountState(ownerHex?)`: finalized raw settled
+  balance and six-field positions, independent of oracle valuation. Strict
+  owner binding, integer precision and positional schema validation; no equity,
+  margin or trading/withdrawal permission is inferred. Rust/Python codecs unchanged.
+
 ### Added
 
 - Atomic `queryMarketsSnapshot()` through the gateway, with an explicit chain
@@ -24,6 +51,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gateway's history surface, keyset-paged (`HistoryFillsPage` carrying
   `nextCursor`), filterable by market and time window, optional
   `addressHex` override (#91).
+- `queryOraclePermissions(market)` reads committed single-dependency policy,
+  calendar, activation and frozen verdict state with exact integers. This is not
+  operational oracle health (ADR 0002), nor portfolio-wide trading authorization.
+  npm 3.2 is additive; unchanged Rust/Python packages retain their versions.
+- Integrates the reviewed admin-tag-8 mirror and compatibility vectors from
+  trading-sdk #106 (`09cf55f`) alongside F16. Cancel-all scoped/unscoped bytes,
+  proposal reads, omitted/null scope semantics and content hashes stay pinned.
+  The independent tag-7 TypeScript mirror remains tracked in exchange #472.
 
 ## [4.0.0] — 2026-09-10
 
@@ -49,6 +84,23 @@ element (see Changed); everything else in this release is additive.
 - `@proof-labs/trading-sdk/testing` subpath: `registerTestActions()` makes the
   engine-internal `RunLiquidationSweep` (0x11) and `RunFundingTick` (0x12)
   actions encodable for dev-stack harnesses. Not exported from the main entry.
+- Operator `SubmitOracleObservation` (`0x2D`) and multisig
+  `ConfigureOraclePolicy` (inner tag `0x0C`) bindings, shared Rust codec vectors,
+  TypeScript byte-field round trips and typed Python builders. Requires an engine
+  built with `exchange-wire >= 1.5.0` and its separately governed oracle activation;
+  existing actions retain their bytes. Additive MINOR: npm/core/Python/PyO3 3.1.0,
+  WASM binding 2.2.0; unchanged helper crates are not bumped. Relay authentication
+  is not cryptographic provider-proof verification. Opaque policy bytes must be
+  independently decoded/reviewed before signing; no policy defaults, activation,
+  automatic approval or oracle-health read method is introduced (ADR-0002).
+  The draft development dependency pins the exact F16 reconciliation commit;
+  that exchange branch must be published before clean-checkout SDK CI can resolve
+  it. Before release, replace it with the independently reviewed immutable
+  exchange revision and rerun all binding/conformance checks. Local validation
+  against the feature worktree is not proof that this upstream branch or an
+  activated engine artifact has been published. New policy vectors prove only
+  the outer wire encoding, not policy validity or permission to activate it.
+
 - **Proposal-lifecycle error codes 54-71** - the multisig-governance error
   family (`ProposalNotFound` ... `InvalidAdminRegistry`) is now mirrored across
   all three bindings from the engine's `ExecError` and the frozen

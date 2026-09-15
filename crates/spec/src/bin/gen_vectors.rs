@@ -171,6 +171,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     const AMEND_ORDER: u8 = 0x1b;
     const SET_POSITION_TRIGGERS: u8 = 0x25;
     const CANCEL_POSITION_TRIGGERS: u8 = 0x26;
+    const SUBMIT_ORACLE_OBSERVATION: u8 = 0x2D;
 
     let owner = vec![0x01u8; 20];
     let signer = vec![0x03u8; 20];
@@ -213,6 +214,20 @@ fn main() -> Result<(), Box<dyn Error>> {
             "oracle_update/no_publish_time",
             ORACLE_UPDATE,
             json!({ "market": 1, "price": 5000, "signer": signer, "publish_time_ms": 0 }),
+        ),
+        codec_case(
+            "submit_oracle_observation/max_u64_with_confidence",
+            SUBMIT_ORACLE_OBSERVATION,
+            json!({"market": 7, "policy_version": u64::MAX, "source_id": 2,
+                   "publish_time_ms": 1700000000123u64, "price_micro": u64::MAX,
+                   "confidence_micro": 25000u64, "evidence_digest": vec![0xA5u8;32], "signer": signer}),
+        ),
+        codec_case(
+            "submit_oracle_observation/no_confidence",
+            SUBMIT_ORACLE_OBSERVATION,
+            json!({"market": 1, "policy_version": 1, "source_id": 1,
+                   "publish_time_ms": 1700000000123u64, "price_micro": 67000000000u64,
+                   "confidence_micro": null, "evidence_digest": vec![0x5Au8;32], "signer": signer}),
         ),
         // OracleUpdateComposite (0x14) — BE-31 composite-CEX feeder action.
         // Operator-only; pins the cross-language wire shape now that the TS
@@ -436,6 +451,14 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }}),
                 )}
             }),
+        ),
+        // Synthetic opaque bytes test the outer wire only, not a valid live policy.
+        codec_case(
+            "propose_admin_action/configure_oracle_policy",
+            PROPOSE_ADMIN_ACTION,
+            json!({"proposer": vec![0xA1u8;20], "registry_version": 1u64,
+                   "action": {"ConfigureOraclePolicy": {"effective_height": u64::MAX,
+                               "bundle": vec![0x91u8, 0xC0, 0xFF]}}}),
         ),
         // UnpauseBridge is a UNIT admin-action variant: it carries no fields
         // and serializes as the bare string `"UnpauseBridge"` (not a
