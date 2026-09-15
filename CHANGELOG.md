@@ -20,6 +20,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   never allocates a nonce or retries an ambiguous submission.
   npm 4.1.0 and Rust core 3.1.0 are additive MINOR changes over current dev;
   unchanged WASM/Python package versions and exchange-wire 1.4.0 pin are retained.
+- `ExchangeClient.queryHistoryFills()` — fills-history reads against the
+  gateway's history surface, keyset-paged (`HistoryFillsPage` carrying
+  `nextCursor`), filterable by market and time window, optional
+  `addressHex` override (#91).
 
 ## [4.0.0] — 2026-09-10
 
