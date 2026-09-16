@@ -669,6 +669,63 @@ describe("codec v1 all action types", () => {
     }
   });
 
+  it("round-trips ProposeAdminAction with CreateEvent (admin inner tag 9)", () => {
+    // The standalone-event arm: eventId, childMarketBase, poolId, question,
+    // settlementMs, resolutionWindowMs, both fees, the (zero) governance
+    // signer, and the text trailers must all survive encode→decode
+    // structurally identical. The oracle source is left absent (wire nil),
+    // matching the `propose_admin_action/create_event` conformance vector.
+    const action: Action = {
+      type: "ProposeAdminAction",
+      data: {
+        proposer: new Uint8Array(20).fill(0x22),
+        registryVersion: 3n,
+        action: {
+          kind: "CreateEvent",
+          value: {
+            eventId: 700,
+            childMarketBase: 70_000,
+            poolId: 0,
+            question: "Will the Fed cut rates?",
+            settlementMs: 1_778_000_000_000n,
+            resolutionWindowMs: 1_000n,
+            takerFeeBps: 5,
+            makerFeeBps: 2,
+            signer: new Uint8Array(20),
+            description: "body",
+            rules: "criteria",
+          },
+        },
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 12n));
+    expect(decoded).toEqual(action);
+  });
+
+  it("decodes the frozen legacy ResolveImpactMarket (0x0f) payload", () => {
+    // DEC-149: byte 0x0f stays the impact-family resolve. These are the exact
+    // payload bytes of the `resolve_impact_market/yes` conformance vector
+    // (conformance/codec.ndjson), wrapped in an envelope by hand so the
+    // decoder — not the encoder — is what produces the fields.
+    const frozenPayload = hexToBytes(
+      "935ba3596573dc00140303030303030303030303030303030303030303",
+    );
+    const wire = new Encoder({ useBigInt64: true }).encode([
+      ENVELOPE_VERSION,
+      ActionType.ResolveImpactMarket,
+      1n,
+      frozenPayload,
+      ZERO_PUBKEY,
+      ZERO_SIG,
+    ]);
+    const { action: decoded } = decodeTx(wire);
+    expect(decoded.type).toBe("ResolveImpactMarket");
+    if (decoded.type !== "ResolveImpactMarket") throw new Error("narrowing");
+    expect(decoded.data.impactMarketId).toBe(91);
+    expect(decoded.data.outcome).toBe(Outcome.Yes);
+    expect(decoded.data.signer).toEqual(new Uint8Array(20).fill(0x03));
+  });
+
   it("rejects a receipt whose fixed-width deploymentId is not 32 bytes", () => {
     const action: Action = {
       type: "ConfirmWithdrawalReceipt",

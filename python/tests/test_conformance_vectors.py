@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 
 import proof_trading_sdk as pts
-from proof_trading_sdk import _native
+from proof_trading_sdk import _native, actions
 from proof_trading_sdk.nonce import NonceAllocator
 
 _DIR = Path(__file__).resolve().parents[2] / "conformance"
@@ -61,6 +61,67 @@ class TestCodecVectors:
             assert payload.hex() == expected
             decoded = _native.decode_action(case["action_type"], payload)
             assert decoded["max_open_interest"] == 0
+
+
+class TestResolveActionVectors:
+    """DEC-149: byte 0x0f is the legacy impact-family resolve
+    (``ResolveImpactMarket``, reachable only through ``RawAction``); the
+    standalone-event resolve is ``ResolveEvent`` (0x27) with a dedicated
+    builder. Both bytes come from the core, and both builders are pinned to
+    the authoritative codec vectors — not to hand-copied hex."""
+
+    def test_resolve_action_bytes_come_from_the_core(self):
+        table = {e["name"]: e["code"] for e in _native.get_action_types()}
+        assert table["ResolveImpactMarket"] == 0x0F
+        assert table["ResolveEvent"] == 0x27
+        assert actions.ActionType["ResolveImpactMarket"] == 0x0F
+        assert actions.ActionType["ResolveEvent"] == 0x27
+
+    def test_resolve_event_builder_matches_both_0x27_vectors(self):
+        seen = 0
+        for n, c in _cases("codec.ndjson"):
+            if not c["case"].startswith("resolve_event/"):
+                continue
+            assert c["action_type"] == 0x27, f"codec.ndjson:{n}"
+            act = actions.ResolveEvent(
+                event_id=c["input"]["event_id"],
+                outcome=c["input"]["outcome"],
+                signer=bytes(c["input"]["signer"]),
+            )
+            action_type, payload = actions.encode_action(act)
+            assert action_type == 0x27
+            assert payload.hex() == c["expect"]["payload_hex"], (
+                f"codec.ndjson:{n} case {c['case']!r}"
+            )
+            seen += 1
+        assert seen == 2, "expected the resolve_event/yes and /no vectors"
+
+    def test_resolve_impact_market_raw_action_matches_all_three_0x0f_vectors(self):
+        seen = 0
+        for n, c in _cases("codec.ndjson"):
+            if not c["case"].startswith("resolve_impact_market/"):
+                continue
+            assert c["action_type"] == 0x0F, f"codec.ndjson:{n}"
+            act = actions.RawAction(
+                actions.ActionType.ResolveImpactMarket,
+                {
+                    "impact_market_id": c["input"]["impact_market_id"],
+                    "outcome": c["input"]["outcome"],
+                    "signer": bytes(c["input"]["signer"]),
+                },
+            )
+            action_type, payload = actions.encode_action(act)
+            assert action_type == 0x0F
+            assert payload.hex() == c["expect"]["payload_hex"], (
+                f"codec.ndjson:{n} case {c['case']!r}"
+            )
+            # The frozen bytes decode back to the same fields (Yes / No / Void).
+            decoded = actions.decode_action(action_type, payload)
+            assert decoded["impact_market_id"] == c["input"]["impact_market_id"]
+            assert decoded["outcome"] == c["input"]["outcome"]
+            assert bytes(decoded["signer"]) == bytes(c["input"]["signer"])
+            seen += 1
+        assert seen == 3, "expected the yes / no / void vectors"
 
 
 class TestSigningVectors:

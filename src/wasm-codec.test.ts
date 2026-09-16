@@ -78,4 +78,26 @@ describe.skipIf(!built)("wasm codec ↔ authoritative vectors", () => {
       expect(reencoded, v.case).toBe(v.expect.payload_hex);
     }
   });
+
+  it("decode_payload reads the frozen legacy ResolveImpactMarket (0x0f) payload by field", () => {
+    // DEC-149: byte 0x0f stays the impact-family resolve. The round-trip
+    // above only proves re-encoding; this pins the decoded FIELDS of the
+    // frozen `resolve_impact_market/yes` bytes so a swapped field or a
+    // renamed variant fails here, not in a downstream consumer.
+    const frozen = vectors.find((v) => v.case === "resolve_impact_market/yes");
+    if (!frozen) throw new Error("missing resolve_impact_market/yes vector");
+    expect(frozen.action_type).toBe(0x0f);
+    expect(frozen.expect.payload_hex).toBe(
+      "935ba3596573dc00140303030303030303030303030303030303030303",
+    );
+    const decoded = wasm.decode_payload(
+      0x0f,
+      Uint8Array.from(Buffer.from(frozen.expect.payload_hex, "hex")),
+    ) as Record<string, unknown>;
+    expect(decoded.impact_market_id).toBe(91);
+    expect(decoded.outcome).toBe("Yes");
+    expect(Array.from(decoded.signer as ArrayLike<number>)).toEqual(
+      new Array(20).fill(0x03),
+    );
+  });
 });

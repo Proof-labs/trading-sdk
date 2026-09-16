@@ -607,6 +607,38 @@ function toCreateImpactMarketValue(
   };
 }
 
+/** Reconstruct a TS `CreateEvent` value from the vector's serde map form —
+ *  the standalone-event `AdminAction` arm (admin inner tag 9). Same trailer
+ *  handling as `toCreateImpactMarketValue`: an empty/absent text trailer is
+ *  `undefined` on the TS side and re-encodes as the serde default. */
+function toCreateEventValue(
+  input: Record<string, unknown>,
+): import("./types.js").CreateEvent {
+  const os = input.oracle_source;
+  const parsedOs =
+    os === null || os === undefined ? undefined : parseOracleSource(os);
+  return {
+    eventId: input.event_id as number,
+    childMarketBase: input.child_market_base as number,
+    poolId: input.pool_id as number,
+    question: input.question as string,
+    settlementMs: big(input.settlement_ms),
+    resolutionWindowMs: big(input.resolution_window_ms),
+    takerFeeBps: input.taker_fee_bps as number,
+    makerFeeBps: input.maker_fee_bps as number,
+    signer: bytes(input.signer),
+    oracleSource: parsedOs,
+    description:
+      input.description === "" || input.description == null
+        ? undefined
+        : (input.description as string),
+    rules:
+      input.rules === "" || input.rules == null
+        ? undefined
+        : (input.rules as string),
+  };
+}
+
 /** One governance `Batch` item — the closed market-creation subset. */
 function toAdminBatchItem(
   v: Record<string, unknown>,
@@ -662,6 +694,12 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       value: toCreateImpactMarketValue(
         v.CreateImpactMarket as Record<string, unknown>,
       ),
+    };
+  }
+  if (v.CreateEvent) {
+    return {
+      kind: "CreateEvent",
+      value: toCreateEventValue(v.CreateEvent as Record<string, unknown>),
     };
   }
   if (v.Batch) {
@@ -940,9 +978,10 @@ describe("conformance vectors (TypeScript)", () => {
     // Guard against the vector file drifting out from under this assertion:
     // propose (create-market, v2 batch, trigger config, unpause-bridge,
     // cancel-all-for-account scoped and unscoped, create-impact-market
-    // with a MarketOracle source, and oracle policy), approve, reject, and
-    // all three emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(13);
+    // with a MarketOracle source, create-event (standalone, inner tag 9),
+    // and oracle policy), approve, reject, and all three emergency arms
+    // (PauseMarket, HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(14);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

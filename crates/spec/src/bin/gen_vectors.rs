@@ -452,6 +452,30 @@ fn main() -> Result<(), Box<dyn Error>> {
                 )}
             }),
         ),
+        // Standalone event (admin inner tag 9, G17): two prediction-binary
+        // books (EBY at `child_market_base`, EBN at +1) under one `EventInfo`,
+        // no underlying perp. The fixture is the E1 golden event (700, books
+        // 70000/70001, "Will the Fed cut rates?") whose stored read model is
+        // pinned in `src/governance-query.test.ts`, so the propose payload and
+        // the query decode describe the same event. The serde(default)
+        // trailers are explicitly absent (`c0 a0 a0`), as in the impact case.
+        codec_case(
+            "propose_admin_action/create_event",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "CreateEvent": {
+                    "event_id": 700, "child_market_base": 70_000, "pool_id": 0,
+                    "question": "Will the Fed cut rates?",
+                    "settlement_ms": 1_778_000_000_000u64,
+                    "resolution_window_ms": 1000u64,
+                    "taker_fee_bps": 5, "maker_fee_bps": 2,
+                    "signer": vec![0u8; 20], "oracle_source": null,
+                    "description": "", "rules": ""
+                }}
+            }),
+        ),
         // Synthetic opaque bytes test the outer wire only, not a valid live policy.
         codec_case(
             "propose_admin_action/configure_oracle_policy",
@@ -848,6 +872,22 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let envelope = cv::sign_envelope(&unbound, PLACE_ORDER, 1, &po_payload, &sk)?;
 
+    // DEC-149: the legacy impact-family resolve keeps byte 0x0f on the wire.
+    // Its payload is the frozen `resolve_impact_market/yes` codec vector (the
+    // generator asserts that here, so the signing case can never drift from
+    // the codec case), signed under the same key/seq/chain as `place_order`
+    // above — so the only thing this envelope adds is the 0x0f operation byte.
+    let rim_payload = cv::codec_payload(
+        RESOLVE_IMPACT_MARKET,
+        &json!({ "impact_market_id": 91, "outcome": "Yes", "signer": signer }),
+    )?;
+    assert_eq!(
+        hex::encode(&rim_payload),
+        "935ba3596573dc00140303030303030303030303030303030303030303",
+        "resolve_impact_market/yes payload drifted from the frozen 0x0f bytes"
+    );
+    let rim_envelope = cv::sign_envelope(&unbound, RESOLVE_IMPACT_MARKET, 1, &rim_payload, &sk)?;
+
     let pk_42 = ed25519_dalek::SigningKey::from_bytes(&sk)
         .verifying_key()
         .to_bytes();
@@ -864,6 +904,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             payload_hex: hex::encode(&po_payload),
             secret_key: sk.to_vec(),
             expect_envelope_hex: hex::encode(&envelope),
+        },
+        cv::SigningCase::Sign {
+            case: "resolve_impact_market/yes@seq1/unbound".to_string(),
+            chain_id: unbound.to_vec(),
+            action_type: RESOLVE_IMPACT_MARKET,
+            seq: 1,
+            payload_hex: hex::encode(&rim_payload),
+            secret_key: sk.to_vec(),
+            expect_envelope_hex: hex::encode(&rim_envelope),
         },
         cv::SigningCase::Owner {
             case: "owner/key_0x42".to_string(),

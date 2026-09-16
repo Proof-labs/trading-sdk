@@ -246,4 +246,48 @@ describe("ExchangeClient governance reads (W30-11)", () => {
       /impactMarket\[1\] has 11 fields, expected 12-15/,
     );
   });
+
+  // The E1 golden `EventInfo` row — the exact bytes exchange-core's
+  // `query_event` emits for event 700 (see governance-query.test.ts for the
+  // provenance). Fed to the client verbatim, not re-encoded, so the read
+  // path is proven against the engine's own serializer output.
+  const E1_GOLDEN_EVENT_ROW =
+    "9acd02bcce00011170ce00011171b757696c6c2074686520466564206375742072617465733fcf0000019df90ef400cd03e8a754726164696e67cf0000019dc95fec0000c0";
+
+  it("queryEvents routes through the gateway and decodes the E1 golden row", async () => {
+    // `Vec<EventInfo>` with one row: a msgpack fixarray(1) around the row.
+    stubFetch(toB64(Buffer.from("91" + E1_GOLDEN_EVENT_ROW, "hex")));
+    const got = await makeClient().queryEvents();
+    expect(calls).toEqual(["http://test-gateway/v1/events"]);
+    expect(got).toEqual([
+      {
+        eventId: 700,
+        ebyMarket: 70_000,
+        ebnMarket: 70_001,
+        question: "Will the Fed cut rates?",
+        settlementMs: 1_778_000_000_000n,
+        resolutionWindowMs: 1_000n,
+        status: { kind: "Trading" },
+        createdMs: 1_777_200_000_000n,
+        resolvedMs: 0n,
+      },
+    ]);
+  });
+
+  it("queryEvent(700) routes through the gateway and decodes the E1 golden row", async () => {
+    stubFetch(toB64(Buffer.from(E1_GOLDEN_EVENT_ROW, "hex")));
+    const got = await makeClient().queryEvent(700);
+    expect(calls).toEqual(["http://test-gateway/v1/event/700"]);
+    expect(got).toEqual({
+      eventId: 700,
+      ebyMarket: 70_000,
+      ebnMarket: 70_001,
+      question: "Will the Fed cut rates?",
+      settlementMs: 1_778_000_000_000n,
+      resolutionWindowMs: 1_000n,
+      status: { kind: "Trading" },
+      createdMs: 1_777_200_000_000n,
+      resolvedMs: 0n,
+    });
+  });
 });
