@@ -7,7 +7,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Local Web-UI SDK support (not published): add multiplexed `/ws` feeds, named
+- Add Web-UI integration support: multiplexed `/ws` feeds, named
   gateway reads, portfolio history pages, external async Ed25519 signers and
   per-transaction delivery waits. Preserve existing wire bytes and action IDs.
   Account subscriptions can renew existing signed auth on reconnect; no replay
