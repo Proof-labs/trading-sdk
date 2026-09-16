@@ -69,8 +69,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Ambiguous submissions retain their hash and HTTP diagnostics for reconciliation;
-  delivery cancellation returns uncertainty without retrying writes.
+- Ambiguous submissions retain their hash and HTTP diagnostics for reconciliation.
 
 ### Fixed
 
