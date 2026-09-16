@@ -36,6 +36,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `ExchangeClient.reads().oracleHealth()` forwards gateway freshness responses
+  for existing Web-UI warnings and order guards, preserving unavailable-feeder
+  data, HTTP failures and caller cancellation. Thresholds remain in the frontend;
+  ADR 0003 proposes this narrow exception to ADR 0002.
 - `queryHistoryPositionsPage()` preserves nullable close fields, exact indexer
   timestamps and opaque pagination cursors alongside the existing array API.
 - External async Ed25519 signers, per-transaction delivery waits and optional

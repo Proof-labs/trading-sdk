@@ -288,24 +288,21 @@ and may be firewalled off in a public deployment.
   default it for the public SDK, and never add a fresh hard-coded `rpcUrl` /
   `apiUrl` call that bypasses the base getters.
 
-## Out of scope — do not implement
+## Oracle-health scope
 
-Some surfaces have been explicitly rejected. Do not add them back without a new
-product decision that reverses the one on record (link a superseding ADR).
+[ADR 0002](docs/adr/0002-oracle-health-out-of-scope.md) rejected oracle-health
+reads when no trading or admin consumer required them. Draft PR #131 implements
+the narrow exception proposed in
+[ADR 0003](docs/adr/0003-oracle-freshness-for-trading-ui.md):
+`ExchangeClient.reads().oracleHealth()` forwards the existing gateway response
+for Web-UI freshness warnings and order guards. Keep the PR draft while that
+scope decision is under review.
 
-- **Oracle health (`queryOracleHealth()` / any read of `/v1/oracle/health`).**
-  **Prohibited.** Feed liveness/freshness is an operational-monitoring concern
-  owned by **Grafana (Markets Health)**, not the SDK; no trading or admin caller
-  needs it. Proposed in PR #26 and **closed unmerged** (2026-07-06 weekly
-  meeting; Web Admin is read-only and does not consume it). Full rationale and
-  the (narrow) scope of the ban — including that `MarketConfig.maxOpenInterest`
-  is only _deferred_, not banned — are in
-  [docs/adr/0002-oracle-health-out-of-scope.md](docs/adr/0002-oracle-health-out-of-scope.md).
-  Oracle _operation_ (`OracleUpdate` / `OracleUpdateComposite`) stays in the
-  SDK, but as `OperatorAction`s for operator-tooling completeness only —
-  **not** for the SDK's primary trader users (allowlist-gated; see AGENTS.md
-  "Operator actions — privileged, not for trading integrations"). Oracle
-  _health monitoring_ is not a wire action at all and does not belong here.
+Keep the raw response, HTTP errors and cancellation intact. Freshness thresholds
+and UI policy stay in the application. Do not add a second typed
+`queryOracleHealth()` API, infer trading authorization, or expand this exception
+into an SDK monitoring service. Grafana retains operational monitoring ownership.
+Oracle operations remain allowlist-gated `OperatorAction`s.
 
 ## Security notes
 

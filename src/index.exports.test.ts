@@ -131,12 +131,12 @@ describe("public barrel: governance surface", () => {
   });
 });
 
-it("keeps response reads on ExchangeClient and excludes prohibited or obsolete APIs", async () => {
+it("keeps response reads on ExchangeClient and excludes redundant or obsolete APIs", async () => {
   const sdk = await import("./index.js");
   expect("GatewayReads" in sdk).toBe(false);
   const client = new sdk.ExchangeClient();
   expect("syncNonce" in client).toBe(false);
-  expect("oracleHealth" in client.reads()).toBe(false);
+  expect(client.reads().oracleHealth).toBeTypeOf("function");
   expect("queryOracleHealth" in client).toBe(false);
   expect(client.reads().meta).toBeTypeOf("function");
 });

@@ -117,6 +117,65 @@ describe("named gateway reads", () => {
     ).rejects.toThrow();
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+  it.each([
+    [
+      "fresh feeder",
+      {
+        status: "ok",
+        embedded_feeder: true,
+        markets: {
+          "1": { last_update_unix_ms: 1714678234000, stale_seconds: 0.5 },
+        },
+      },
+    ],
+    [
+      "stale feeder",
+      {
+        status: "ok",
+        embedded_feeder: true,
+        markets: {
+          "1": { last_update_unix_ms: 1714678234000, stale_seconds: 65 },
+        },
+      },
+    ],
+    [
+      "unavailable feeder",
+      { status: "ok", embedded_feeder: false, note: "feeder not enabled" },
+    ],
+  ])(
+    "preserves %s evidence without deriving a trading verdict",
+    async (_, payload) => {
+      const response = json(payload);
+      const fetch = vi.fn(async () => response);
+      const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+      const signal = new AbortController().signal;
+      const result = await reads.oracleHealth({ signal });
+      expect(fetch).toHaveBeenCalledExactlyOnceWith("/v1/oracle/health", {
+        method: "GET",
+        signal,
+      });
+      expect(result).toBe(response);
+      expect(result.bodyUsed).toBe(false);
+      expect(await result.json()).toEqual(payload);
+    },
+  );
+  it("preserves oracle-health failures and cancellation instead of returning healthy data", async () => {
+    const response = json({ status: "error", embedded_feeder: false }, 503);
+    const fetch = vi.fn(async () => response);
+    const reads = new ExchangeClient().reads({ fetch });
+    await expect(reads.oracleHealth()).rejects.toMatchObject({
+      name: "GatewayHttpError",
+      status: 503,
+      response,
+    });
+    await expect(
+      reads.oracleHealth({ signal: AbortSignal.abort() }),
+    ).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const abort = new DOMException("cancelled", "AbortError");
+    fetch.mockRejectedValueOnce(abort);
+    await expect(reads.oracleHealth()).rejects.toBe(abort);
+  });
 });
 
 it("reads without URLSearchParams.size", async () => {
@@ -155,4 +214,8 @@ it("uses the configured gateway for response reads even in internal node mode", 
   });
   await client.reads({ fetch }).health();
   expect(fetch.mock.calls[0][0]).toBe("https://gateway.example/v1/health");
+  await client.reads({ fetch }).oracleHealth();
+  expect(fetch.mock.calls[1][0]).toBe(
+    "https://gateway.example/v1/oracle/health",
+  );
 });

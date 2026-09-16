@@ -141,6 +141,12 @@ export class GatewayReads {
   health(opts: GatewayReadOptions = {}) {
     return this.get("/v1/health", {}, opts);
   }
+  /** Operational freshness for trading UI guards; not trading authorization.
+   * Preserve unavailable-feeder responses; thresholds belong to the caller.
+   */
+  oracleHealth(opts: GatewayReadOptions = {}) {
+    return this.get("/v1/oracle/health", {}, opts);
+  }
   candles(params: CandleHistoryParams, opts: GatewayReadOptions = {}) {
     return this.get("/v1/history/candles", params, opts);
   }

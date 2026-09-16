@@ -1,9 +1,13 @@
 # ADR 0002 — Oracle health is out of scope for the SDK (do not implement)
 
-- **Status:** Accepted — **prohibited feature**
+- **Status:** Accepted — **prohibited feature**; narrow exception proposed in [ADR 0003](0003-oracle-freshness-for-trading-ui.md).
 - **Date:** 2026-07-07
 - **Deciders:** Ramon van de Ven (`Ramon2000`), Aleksandr Petrosyan
 - **Applies to:** `src/client.ts` (`ExchangeClient` read methods), `src/types.ts`.
+
+Draft PR #131 implements a narrow Web-UI freshness-read exception proposed in
+[ADR 0003](0003-oracle-freshness-for-trading-ui.md). The original decision below
+is retained; the exception remains under review with that draft.
 
 ## Prohibition
 
