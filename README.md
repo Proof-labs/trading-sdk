@@ -198,6 +198,7 @@ class ExchangeClient {
   queryHistoryWithdrawals(...): Promise<HistoryCashFlow[]>;
   queryHistoryResolutions(...): Promise<HistoryResolution[]>;
   queryHistoryPositions(...): Promise<HistoryPositionSnapshot[]>;
+  queryHistoryPositionsPage(...): Promise<HistoryPositionsPage>;
 
   // Blocks
   getBlock(height?: number): Promise<Record<string, unknown>>;

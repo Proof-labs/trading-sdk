@@ -2347,8 +2347,7 @@ describe("ExchangeClient owner byte-coercion (serde array shape)", () => {
 
 /**
  * queryHistoryFills — the fills-history envelope (`{fills, next_cursor}`),
- * which is an object where the other history routes return bare arrays, and
- * the only history route with keyset paging. Prices and quantities must stay
+ * with an opaque keyset cursor. Prices and quantities must stay
  * strings end to end: the indexer casts NUMERIC to text precisely so a price
  * never rides through a float, and this client must not undo that.
  */

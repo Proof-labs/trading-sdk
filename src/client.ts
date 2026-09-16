@@ -12,6 +12,12 @@ import {
 } from "./portfolio-history.js";
 import { GatewayReads, type GatewayFetch } from "./gateway-reads.js";
 import { GatewayHttpError } from "./errors.js";
+import {
+  decodeCashFlowEvents,
+  decodeHistoryPositionsPage,
+  historyOwner,
+  historySearchParams,
+} from "./history.js";
 import { toWasmFields } from "./codec-adapter.js";
 import { signAndEncode, encodePayloadBytes, encodeSignedTx } from "./codec.js";
 import { decodeAccountState, type AccountState } from "./account-state.js";
@@ -52,6 +58,7 @@ import type {
   HistoryCashFlow,
   HistoryFillsPage,
   HistoryPositionSnapshot,
+  HistoryPositionsPage,
   HistoryResolution,
   MarketConfig,
   MarketKind,
@@ -1652,9 +1659,8 @@ export class ExchangeClient {
     };
   }
 
-  /** Per-user deposit log — every `deposit_confirmed` event for this
-   * owner, newest first. Feeds Portfolio EquityChart equity-over-time
-   * reconstruction (P2 #6). */
+  /** Direct relayer deposits and custody-confirmed deposits, newest first.
+   * Returns a bounded merged head, not a cursor over the complete history. */
   async queryHistoryDeposits(
     addressHex?: string,
     opts?: { fromMs?: number; toMs?: number; limit?: number },
@@ -1662,9 +1668,11 @@ export class ExchangeClient {
     return this.queryHistoryCashFlow("deposits", addressHex, opts);
   }
 
-  /** Per-user withdrawal lifecycle log — withdraw_requested /
-   * withdrawal_confirmed / withdrawal_failed, newest first. Filter by
-   * `kind` client-side if you want only pending requests. P2 #6. */
+  /** Direct relayer withdrawals and indexed custody events, newest first,
+   * capped after merging each kind's first page. This is not withdrawal status:
+   * ownerless confirmation events
+   * are not indexed for the account. Use queryWithdrawal(id) for status.
+   * Request/refund amounts exclude fees; unknown signedDelta stays empty. */
   async queryHistoryWithdrawals(
     addressHex?: string,
     opts?: { fromMs?: number; toMs?: number; limit?: number },
@@ -1672,36 +1680,46 @@ export class ExchangeClient {
     return this.queryHistoryCashFlow("withdrawals", addressHex, opts);
   }
 
-  /** Internal: shared decoder for the two cash-flow endpoints. They
-   * return identical row shapes (HistoryCashFlow); the difference is
-   * which kinds the server includes. */
+  /** Owner-filtered indexer events; never the removed node history routes. */
   private async queryHistoryCashFlow(
     path: "deposits" | "withdrawals",
     addressHex?: string,
-    opts?: { fromMs?: number; toMs?: number; limit?: number },
+    opts: { fromMs?: number; toMs?: number; limit?: number } = {},
   ): Promise<HistoryCashFlow[]> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return [];
-    const params = new URLSearchParams();
-    if (opts?.fromMs !== undefined) params.set("from", String(opts.fromMs));
-    if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
-    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
-    const qs = params.toString();
-    const url = `${this.readBaseUrl}/v1/history/${path}/${hex}${qs ? `?${qs}` : ""}`;
-    const json = await fetchApiArray(url);
-    return (json as Array<Record<string, unknown>>).map((row) => ({
-      kind: row.kind as HistoryCashFlow["kind"],
-      owner: String(row.owner ?? ""),
-      amount: String(row.amount ?? ""),
-      signedDelta: String(row.signed_delta ?? "0"),
-      newBalance: String(row.new_balance ?? ""),
-      withdrawalId: String(row.withdrawal_id ?? ""),
-      solanaTxSig: String(row.solana_tx_sig ?? ""),
-      solanaDestination: String(row.solana_destination ?? ""),
-      reason: String(row.reason ?? ""),
-      blockHeight: Number(row.block_height ?? 0),
-      timestamp: Number(row.timestamp ?? 0),
-    }));
+    const owner = historyOwner(hex);
+    const limit = opts.limit ?? 200;
+    const params = historySearchParams({ ...opts, limit });
+    params.set("owner", owner);
+    params.set("order", "desc");
+    const kinds: HistoryCashFlow["kind"][] =
+      path === "deposits"
+        ? ["deposited", "deposit_confirmed"]
+        : [
+            "withdrawn",
+            "withdraw_requested",
+            "withdrawal_confirmed",
+            "withdrawal_failed",
+          ];
+    const pages = await Promise.all(
+      kinds.map(async (kind) => {
+        const query = new URLSearchParams(params);
+        query.set("event_type", kind);
+        const json = await fetchApiJson(
+          `${this.gatewayUrl}/v1/history/account-events?${query}`,
+        );
+        return decodeCashFlowEvents(json, owner, kind);
+      }),
+    );
+    return pages
+      .flat()
+      .sort((a, b) => {
+        if (a.nanos !== b.nanos) return a.nanos > b.nanos ? -1 : 1;
+        return a.eventId > b.eventId ? -1 : a.eventId < b.eventId ? 1 : 0;
+      })
+      .slice(0, limit)
+      .map((event) => event.cashFlow);
   }
 
   /** Per-user position-at-resolution log — each row is one settlement or
@@ -1777,13 +1795,9 @@ export class ExchangeClient {
     return decodePortfolioHistoryPage(page, canonicalOwner, opts);
   }
 
-  /** Per-user position-history snapshot log. Each row is one
-   * point-in-time snapshot persisted after a fill that changes the
-   * position. A `size === "0"` row is a CLOSE event; the immediately
-   * preceding non-zero snapshot for the same `(owner, market, side)`
-   * carries the entry price. Feeds the trading-UI Position History tab
-   * (FE-23). Optional `market` filter scopes to one book; `fromMs` /
-   * `toMs` window the timestamps; `limit` caps server-side at 5000. */
+  /** Compatibility array of position snapshots. Absent close fields are empty
+   * strings and timestamps are milliseconds. Use queryHistoryPositionsPage for
+   * nullable fields, exact block times and opaque cursor continuation. */
   async queryHistoryPositions(
     addressHex?: string,
     opts?: {
@@ -1793,25 +1807,48 @@ export class ExchangeClient {
       limit?: number;
     },
   ): Promise<HistoryPositionSnapshot[]> {
-    const hex = addressHex ?? this.addressHex;
-    if (!hex) return [];
-    const params = new URLSearchParams();
-    if (opts?.market !== undefined) params.set("market", String(opts.market));
-    if (opts?.fromMs !== undefined) params.set("from", String(opts.fromMs));
-    if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
-    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
-    const qs = params.toString();
-    const url = `${this.readBaseUrl}/v1/history/positions/${hex}${qs ? `?${qs}` : ""}`;
-    const json = await fetchApiArray(url);
-    return (json as Array<Record<string, unknown>>).map((row) => ({
-      owner: String(row.owner ?? ""),
-      market: String(row.market ?? ""),
-      side: String(row.side ?? ""),
-      entryPrice: String(row.entry_price ?? "0"),
-      size: String(row.size ?? "0"),
-      blockHeight: Number(row.block_height ?? 0),
-      timestamp: Number(row.timestamp ?? 0),
+    const page = await this.queryHistoryPositionsPage(addressHex, opts);
+    return page.positions.map((row) => ({
+      owner: row.owner,
+      market: String(row.market),
+      side: row.side ?? "",
+      entryPrice: row.entryPrice ?? "",
+      size: row.size,
+      blockHeight: row.blockHeight,
+      timestamp: Date.parse(row.blockTime),
     }));
+  }
+
+  /** Gateway/indexer snapshots, newest first. Preserve filters when passing an
+   * opaque nextCursor back in opts.cursor. Null close fields stay null. */
+  async queryHistoryPositionsPage(
+    addressHex?: string,
+    opts: {
+      market?: number;
+      fromMs?: number;
+      toMs?: number;
+      limit?: number;
+      cursor?: string;
+    } = {},
+  ): Promise<HistoryPositionsPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return { positions: [], nextCursor: "" };
+    const owner = historyOwner(hex);
+    const params = historySearchParams(opts);
+    if (opts.market !== undefined) {
+      if (
+        !Number.isInteger(opts.market) ||
+        opts.market < 0 ||
+        opts.market > 0x7fffffff
+      )
+        throw new Error("Invalid history market");
+      params.set("market", String(opts.market));
+    }
+    const query = params.toString();
+    const json = await fetchApiJson(
+      `${this.gatewayUrl}/v1/history/positions/${owner}${query ? `?${query}` : ""}`,
+    );
+    return decodeHistoryPositionsPage(json, owner, opts.market);
   }
 
   /**

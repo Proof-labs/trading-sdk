@@ -36,6 +36,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `queryHistoryPositionsPage()` preserves nullable close fields, exact indexer
+  timestamps and opaque pagination cursors alongside the existing array API.
 - External async Ed25519 signers, per-transaction delivery waits and optional
   DeliverTx `info`, preserving private-key compatibility and signed bytes.
 - Multiplexed `/ws` orderbook, trades and account subscriptions with refcounts,
@@ -73,6 +75,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Position-history reads decode the indexer's page envelope and `entry_px` /
+  `block_time` fields. The array API retains string fields, using empty strings
+  for absent close data; the paged API preserves nulls.
+- Deposit and withdrawal history use owner-filtered account events through the
+  gateway, including direct `deposited` / `withdrawn` events. Results are bounded
+  merged event lists, not final withdrawal status;
+  ownerless confirmations are absent from the current index. Unknown withdrawal
+  debit/refund deltas remain empty because event amounts exclude custody fees.
 - Delivery polling accepts omitted zero codes and numeric-string codes only in a
   valid transaction result; malformed reads remain uncertain.
 - Timestamp allocation rejects clock-window exhaustion without reusing a nonce.

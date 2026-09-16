@@ -131,6 +131,8 @@ export {
   type HistoryFillsPage,
   type HistoryResolution,
   type HistoryPositionSnapshot,
+  type HistoryPosition,
+  type HistoryPositionsPage,
   type WithdrawalStatus,
   type WithdrawalRecord,
   type MarketKind,
