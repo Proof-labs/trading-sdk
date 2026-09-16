@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   txEngineError,
   txFromEngineCode,
+  txFromQueryResponse,
   txOk,
   txTimeout,
   txTransportError,
@@ -96,4 +97,50 @@ describe("tx-result builders", () => {
     expect(err.error?.name).toBe("InvalidNonce");
     expect(err.hash).toBe("Y");
   });
+});
+
+describe("CometBFT verdict decoding", () => {
+  it.each([
+    {},
+    { code: 0 },
+    { code: "0" },
+    { code: "12" },
+    { code: 4294967295 },
+  ])("accepts documented code shape %j", (exec) => {
+    const r = txFromQueryResponse(
+      { result: { height: "42", tx_result: exec } },
+      "HASH",
+    );
+    expect(r).toMatchObject({
+      hash: "HASH",
+      height: 42,
+      code: Number("code" in exec ? exec.code : 0),
+    });
+  });
+  it.each([
+    null,
+    [],
+    "bad",
+    false,
+    0,
+    { code: null },
+    { code: true },
+    { code: "" },
+    { code: "1x" },
+    { code: "-1" },
+    { code: 1.5 },
+    { code: -1 },
+    { code: "4294967296" },
+    { code: {} },
+  ])("rejects unreadable ExecTxResult %j", (exec) => {
+    expect(
+      txFromQueryResponse({ result: { tx_result: exec } }, "HASH"),
+    ).toBeNull();
+  });
+  it.each([null, [], {}, { result: [] }, { result: {} }, { result: null }])(
+    "rejects missing result objects %j",
+    (body) => {
+      expect(txFromQueryResponse(body, "HASH")).toBeNull();
+    },
+  );
 });

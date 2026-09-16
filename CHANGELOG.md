@@ -60,6 +60,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   proposal reads, omitted/null scope semantics and content hashes stay pinned.
   The independent tag-7 TypeScript mirror remains tracked in exchange #472.
 
+### Changed
+
+- Ambiguous submissions retain their hash and HTTP diagnostics for reconciliation.
+
+### Fixed
+
+- Delivery polling accepts omitted zero codes and numeric-string codes only in a
+  valid transaction result; malformed reads remain uncertain.
+- Timestamp allocation rejects clock-window exhaustion without reusing a nonce.
+
 ## [4.0.0] — 2026-09-10
 
 npm `@proof-labs/trading-sdk` only; the Rust crates and the Python package keep

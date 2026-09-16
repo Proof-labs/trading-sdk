@@ -58,6 +58,71 @@ function primeNextNonce(client: ExchangeClient, offsetMs = 1_000n): bigint {
   return floor + 1n;
 }
 
+describe("ExchangeClient uncertain submission reconciliation", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function clientAndAction() {
+    const client = new ExchangeClient({
+      gatewayUrl: "https://gateway.example",
+      chainId: "test-chain",
+    });
+    client.setPrivateKey(generateKeypair().privateKey);
+    client.setUnsafeFastSubmit(true);
+    const action: Action = {
+      type: "CancelAllOrders",
+      data: { owner: client.getAddress()!, market: 1 },
+    };
+    return { client, action };
+  }
+
+  it.each(["network", "5xx", "malformed"])(
+    "retains the local transaction hash after %s without a second write",
+    async (kind) => {
+      const fetch = vi.fn(async () => {
+        if (kind === "network") throw new Error("connection lost");
+        return new Response("unavailable", {
+          status: kind === "5xx" ? 502 : 200,
+        });
+      });
+      vi.stubGlobal("fetch", fetch);
+      const { client, action } = clientAndAction();
+      const result = await client.submitTx(action);
+      expect(result).toMatchObject({ outcome: "timeout", code: -1 });
+      expect(result.hash).toMatch(/^[0-9A-F]{64}$/);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([{}, { code: "0" }, { code: "12" }])(
+    "reconciles a lost response with %j after ignoring malformed status data",
+    async (exec) => {
+      const fetch = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("connection lost"))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ result: { tx_result: [] } })),
+        )
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ result: { height: "42", tx_result: exec } }),
+          ),
+        );
+      vi.stubGlobal("fetch", fetch);
+      const { client, action } = clientAndAction();
+      const result = await client.submitTxCommit(action);
+      expect(result.code).toBe(Number("code" in exec ? exec.code : 0));
+      expect(result.height).toBe(42);
+      expect(
+        fetch.mock.calls.filter(([, init]) => init?.method === "POST"),
+      ).toHaveLength(1);
+      expect(fetch.mock.calls[1][0]).toBe(
+        `https://gateway.example/v1/tx/${result.hash}`,
+      );
+      expect(fetch.mock.calls[2][0]).toBe(fetch.mock.calls[1][0]);
+    },
+  );
+});
+
 describe("ExchangeClient timestamp nonce submission", () => {
   const originalFetch = globalThis.fetch;
   let calls: FetchCall[] = [];
@@ -1077,14 +1142,19 @@ describe("ExchangeClient submitTx gateway path", () => {
     ).toBe(firstNonce + 99n);
   });
 
-  it("nextTimestampNonce caps at now + 60_000ms even under heavy bursts", () => {
+  it("nextTimestampNonce refuses clock-window overflow without rewinding", () => {
     const client = makeGatewayClient();
+    const floor = BigInt(Date.now()) + 1_000_000n;
     (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce =
-      BigInt(Date.now()) + 1_000_000n;
-    const next = (
-      client as unknown as { nextTimestampNonce(): bigint }
-    ).nextTimestampNonce();
-    expect(next).toBeLessThanOrEqual(BigInt(Date.now()) + 60_000n);
+      floor;
+    expect(() =>
+      (
+        client as unknown as { nextTimestampNonce(): bigint }
+      ).nextTimestampNonce(),
+    ).toThrow("clock safety window");
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(floor);
   });
 
   it("timestamp nonce rejection through gateway does not resync or rewind", async () => {
@@ -1467,7 +1537,7 @@ describe("ExchangeClient submitTx gateway path", () => {
     ).toBe(expectedNonce);
   });
 
-  it("HTTP 5xx from gateway maps to code 500 and keeps the allocated timestamp nonce", async () => {
+  it("HTTP 5xx from gateway remains uncertain and keeps the allocated timestamp nonce", async () => {
     const client = makeGatewayClient();
     client.setUnsafeFastSubmit(true);
     const expectedNonce = primeNextNonce(client);
@@ -1489,8 +1559,9 @@ describe("ExchangeClient submitTx gateway path", () => {
       },
     });
 
-    expect(r.code).toBe(500);
-    expect(r.log).toContain("bad gateway");
+    expect(r.outcome).toBe("timeout");
+    expect(r.hash).toMatch(/^[0-9A-F]{64}$/);
+    expect(r.log).toContain("502");
     expect(
       (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
     ).toBe(expectedNonce);

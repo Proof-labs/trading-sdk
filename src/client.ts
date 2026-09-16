@@ -9,6 +9,7 @@ import { ready as initWasm } from "./wasm-loader.js";
 import {
   txEngineError,
   txFromEngineCode,
+  txFromQueryResponse,
   txOk,
   txTimeout,
   txTransportError,
@@ -470,21 +471,22 @@ export class ExchangeClient {
   /**
    * Allocate the next timestamp nonce.
    *
-   * Algorithm: `max(now_ms, last_nonce + 1)` capped at `now_ms + 60s` to
-   * bound the growth if the clock stops ticking.
+   * Algorithm: `max(now_ms, last_nonce + 1)`. Refuse allocation above
+   * `now_ms + 60s` without rewinding or repeating the last nonce.
    *
    * Engine window: `[block_time - 2 days, block_time + 1 day]`. All four
    * rejection modes (too old, too far future, replay, below oldest) map to
    * code 21 `InvalidNonce`. Nonces are burned on success — no rewinding.
    *
-   * Thread-safe only through external serialization (caller's responsibility).
+   * Concurrent calls on this client reserve distinct nonces synchronously.
    */
   private nextTimestampNonce(): bigint {
     const now = BigInt(Date.now());
     const max = now + 60_000n;
-    let next =
+    const next =
       this.lastTimestampNonce >= now ? this.lastTimestampNonce + 1n : now;
-    if (next > max) next = max;
+    if (next > max)
+      throw new Error("Timestamp nonce allocation exceeds clock safety window");
     this.lastTimestampNonce = next;
     return next;
   }
@@ -624,12 +626,22 @@ export class ExchangeClient {
     if (this.apiKey) headers["X-Api-Key"] = this.apiKey;
 
     const body = JSON.stringify({ action: toBase64(txBytes) });
-    const res = await fetch(`${this.gatewayUrl}/exchange`, {
-      method: "POST",
-      headers,
-      body,
-    });
-    const gatewayBody = await readGatewayBody(res);
+    let res: Response;
+    let gatewayBody: Awaited<ReturnType<typeof readGatewayBody>>;
+    try {
+      res = await fetch(`${this.gatewayUrl}/exchange`, {
+        method: "POST",
+        headers,
+        body,
+      });
+      gatewayBody = await readGatewayBody(res);
+    } catch {
+      // A dropped response does not prove the signed transaction was rejected.
+      return txTimeout(
+        txHash,
+        "gateway transport interrupted; reconcile by hash",
+      );
+    }
 
     // Auth/rate-limit transport failures don't have a JSON body the
     // engine produced — synthesize an HTTP-status code and tag the result
@@ -655,13 +667,9 @@ export class ExchangeClient {
       );
     }
     if (res.status >= 500) {
-      return txTransportError(
-        500,
-        gatewayBody.error
-          ? `gateway error: ${gatewayBody.error}`
-          : gatewayBody.raw
-            ? `gateway error: ${res.status} ${res.statusText}: ${gatewayBody.raw}`
-            : `gateway error: ${res.status} ${res.statusText}`,
+      return txTimeout(
+        txHash,
+        `gateway HTTP ${res.status}; reconcile by hash${gatewayBody.error || gatewayBody.raw ? `: ${gatewayBody.error ?? gatewayBody.raw}` : ""}`,
       );
     }
 
@@ -735,10 +743,12 @@ export class ExchangeClient {
     // Fallback: the code embedded in the string as "<engine_code>: <message>".
     // The gateway still emits this format for compatibility, so this path also
     // covers a pre-#90 gateway that sends ONLY the string. Parse the leading code;
-    // if missing, surface 1 (DecodeError) as the conservative default.
+    // Without a code, retain the hash for reconciliation; no rejection is proven.
     const errMsg = json?.error ?? gatewayBody.raw ?? "unknown gateway error";
-    const code = parseLeadingErrorCode(errMsg) ?? 1;
-    return txEngineError(code, { log: errMsg });
+    const code = parseLeadingErrorCode(errMsg);
+    return code === null
+      ? txTimeout(txHash, "gateway returned no verdict; reconcile by hash")
+      : txEngineError(code, { log: errMsg });
   }
 
   /**
@@ -808,21 +818,10 @@ export class ExchangeClient {
           pollDelay = Math.min(pollDelay + 100, 600);
           try {
             const res = await fetch(this.txStatusUrl(txHash));
-            const json = await res.json();
-            const txResult = json.result?.tx_result;
-            if (txResult) {
-              const code = txResult.code ?? 0;
-              const height = json.result.height
-                ? Number(json.result.height)
-                : undefined;
-              this.deliveryResults.push(
-                txFromEngineCode(code, {
-                  hash: txHash,
-                  height,
-                  log: txResult.log ?? "",
-                  events: txResult.events,
-                }),
-              );
+            if (!res.ok) continue;
+            const result = txFromQueryResponse(await res.json(), txHash);
+            if (result) {
+              this.deliveryResults.push(result);
               return;
             }
             // Tx not yet indexed — keep polling.
@@ -942,17 +941,9 @@ export class ExchangeClient {
       pollDelay = Math.min(pollDelay + 100, 600);
       try {
         const res = await fetch(this.txStatusUrl(txHash));
-        const json = await res.json();
-        const txResult = json.result?.tx_result;
-        if (txResult) {
-          const code = txResult.code ?? 0;
-          return txFromEngineCode(code, {
-            hash: txHash,
-            height: json.result.height ? Number(json.result.height) : undefined,
-            log: txResult.log,
-            events: txResult.events,
-          });
-        }
+        if (!res.ok) continue;
+        const result = txFromQueryResponse(await res.json(), txHash);
+        if (result) return result;
         // tx not yet indexed → keep polling
       } catch {
         // network blip — retry
