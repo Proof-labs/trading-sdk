@@ -7,6 +7,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Local Web-UI SDK support (not published): add multiplexed `/ws` feeds, named
+  gateway reads, portfolio history pages, external async Ed25519 signers and
+  per-transaction delivery waits. Preserve existing wire bytes and action IDs.
+  Account subscriptions can renew existing signed auth on reconnect; no replay
+  guarantee is added to `/ws`. Optional DeliverTx `info` survives all verdict paths.
+- Timestamp nonce compatibility reads record observed values without importing a
+  sequential or future floor. Allocation stays locally monotonic, refuses reuse
+  at clock-window exhaustion, and never retries writes automatically. CometBFT
+  verdict parsing accepts omitted zero codes in a present result and valid decimal
+  string codes; malformed results remain uncertain. Lost responses and HTTP 5xx
+  preserve the transaction hash and diagnostics as uncertain outcomes.
+- Poll cancellation interrupts delays; browser signing no longer requires
+  `structuredClone`, and new reads/waits avoid `URLSearchParams.size` and
+  `AbortSignal.any`/`timeout`. Existing private-key signing stays byte-identical.
+
 - TypeScript 4.2.0 adds gateway-only `queryFinancialState({markets, owners})`:
   one finalized snapshot of selected raw accounts, fee/funding market state,
   fee pool, per-pool insurance and PLP configuration/account. Strict selector,

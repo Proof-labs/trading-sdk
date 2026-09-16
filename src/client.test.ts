@@ -1077,14 +1077,17 @@ describe("ExchangeClient submitTx gateway path", () => {
     ).toBe(firstNonce + 99n);
   });
 
-  it("nextTimestampNonce caps at now + 60_000ms even under heavy bursts", () => {
+  it("nextTimestampNonce refuses clock-window overflow without rewinding", () => {
     const client = makeGatewayClient();
+    const floor = BigInt(Date.now()) + 1_000_000n;
     (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce =
-      BigInt(Date.now()) + 1_000_000n;
-    const next = (
-      client as unknown as { nextTimestampNonce(): bigint }
-    ).nextTimestampNonce();
-    expect(next).toBeLessThanOrEqual(BigInt(Date.now()) + 60_000n);
+      floor;
+    expect(() =>
+      (
+        client as unknown as { nextTimestampNonce(): bigint }
+      ).nextTimestampNonce(),
+    ).toThrow("clock safety window");
+    expect(client.currentNonce).toBe(floor);
   });
 
   it("timestamp nonce rejection through gateway does not resync or rewind", async () => {
@@ -1467,7 +1470,7 @@ describe("ExchangeClient submitTx gateway path", () => {
     ).toBe(expectedNonce);
   });
 
-  it("HTTP 5xx from gateway maps to code 500 and keeps the allocated timestamp nonce", async () => {
+  it("HTTP 5xx from gateway remains uncertain and keeps the allocated timestamp nonce", async () => {
     const client = makeGatewayClient();
     client.setUnsafeFastSubmit(true);
     const expectedNonce = primeNextNonce(client);
@@ -1489,8 +1492,9 @@ describe("ExchangeClient submitTx gateway path", () => {
       },
     });
 
-    expect(r.code).toBe(500);
-    expect(r.log).toContain("bad gateway");
+    expect(r.outcome).toBe("timeout");
+    expect(r.hash).toMatch(/^[0-9A-F]{64}$/);
+    expect(r.log).toContain("502");
     expect(
       (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
     ).toBe(expectedNonce);

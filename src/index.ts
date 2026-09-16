@@ -240,3 +240,28 @@ export type {
   OracleVerdictStatus,
   OracleVerdictReason,
 } from "./oracle-permissions.js";
+
+export {
+  GatewayFeed,
+  type GatewayFeedOptions,
+  type AccountFeedAuth,
+  type AccountAuthProvider,
+  type WebSocketLike,
+  type WebSocketFactory,
+} from "./feed.js";
+export type * from "./feed-types.js";
+export {
+  GatewayReads,
+  GatewayHttpError,
+  type GatewayReadOptions,
+  type GatewayFetch,
+  type HistoryWindow,
+  type OwnerHistoryParams,
+  type CandleHistoryParams,
+  type AccountEventsParams,
+} from "./gateway-reads.js";
+export type { ExternalSigner } from "./client.js";
+export type {
+  PortfolioHistoryOptions,
+  PortfolioHistoryPage,
+} from "./portfolio-history.js";

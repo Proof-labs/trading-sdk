@@ -1607,6 +1607,8 @@ export interface TxResult {
   height?: number;
   /** Human-readable log message (populated on error). */
   log?: string;
+  /** Optional ABCI diagnostic info, preserved without interpretation. */
+  info?: string;
   /** ABCI events emitted by the transaction. */
   events?: TxEvent[];
 }
