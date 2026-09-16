@@ -189,8 +189,9 @@ export {
 } from "./governance-query.js";
 export { fetchChainId } from "./client.js";
 
-// Error decoder
+// Errors
 export {
+  GatewayHttpError,
   type ExecErrorInfo,
   ExecErrorCode,
   decodeExecError,
@@ -249,10 +250,22 @@ export {
   type WebSocketLike,
   type WebSocketFactory,
 } from "./feed.js";
-export type * from "./feed-types.js";
+export type {
+  FeedChannel,
+  FeedOrderbookLevel,
+  OrderbookSnapshotFrame,
+  OrderbookUpdateFrame,
+  OrderbookFrame,
+  TradeFrame,
+  AccountSnapshotFrame,
+  AccountEventFrame,
+  AccountFrame,
+  FeedFrame,
+  FeedErrorFrame,
+  FeedState,
+} from "./feed-types.js";
 export {
-  GatewayReads,
-  GatewayHttpError,
+  type GatewayReads,
   type GatewayReadOptions,
   type GatewayFetch,
   type HistoryWindow,

@@ -96,7 +96,6 @@ try {
   Side,
   ExchangeClient,
   GatewayFeed,
-  GatewayReads,
   getPublicKey,
   sign,
   decodeTx,
@@ -171,7 +170,7 @@ try {
   if (bytesToHex(signed) !== bytesToHex(signAndEncode(client.getChainId(), action, seq, seed))) {
     throw new Error("external signer browser byte parity failed");
   }
-  const reads = new GatewayReads({ gatewayUrl: "", fetch: async (url, init) => {
+  const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch: async (url, init) => {
     if (url !== "/info" || JSON.parse(init.body).type !== "impactMarkets") throw new Error("browser named read contract");
     return new Response(JSON.stringify({ data: "unchanged" }));
   }});

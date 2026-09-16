@@ -1,3 +1,5 @@
+import { GatewayHttpError } from "./errors.js";
+
 /** Named gateway reads for consumers that retain their own decoders and caches.
  * Responses are unmodified, including msgpack envelopes and pagination keys.
  * Inject fetch to retain application deadlines, scheduling and error policy.
@@ -34,25 +36,11 @@ export interface AccountEventsParams {
   from?: string;
   to?: string;
 }
-export class GatewayHttpError extends Error {
-  constructor(
-    public readonly status: number,
-    public readonly response: Response,
-  ) {
-    super(`Gateway request failed (${status})`);
-    this.name = "GatewayHttpError";
-  }
-}
 export class GatewayReads {
-  private readonly base: string;
-  private readonly transport: GatewayFetch;
-  constructor(opts: { gatewayUrl?: string; fetch?: GatewayFetch } = {}) {
-    this.base = (opts.gatewayUrl ?? "https://api.dev.proof.trade").replace(
-      /\/+$/,
-      "",
-    );
-    this.transport = opts.fetch ?? ((url, init) => fetch(url, init));
-  }
+  constructor(
+    private readonly base: string,
+    private readonly transport: GatewayFetch,
+  ) {}
   private async request(
     path: string,
     init: RequestInit,
@@ -104,12 +92,6 @@ export class GatewayReads {
   impactMarket(id: number, opts: GatewayReadOptions = {}) {
     return this.info("impactMarket", { id }, opts);
   }
-  allEvents(opts: GatewayReadOptions = {}) {
-    return this.info("events", {}, opts);
-  }
-  event(id: number, opts: GatewayReadOptions = {}) {
-    return this.info("event", { id }, opts);
-  }
   l2Book(market: number, opts: GatewayReadOptions = {}) {
     return this.info("l2Book", { market }, opts);
   }
@@ -118,9 +100,6 @@ export class GatewayReads {
   }
   clearinghouseState(user: string, opts: GatewayReadOptions = {}) {
     return this.info("clearinghouseState", { user }, opts);
-  }
-  nonce(user: string, opts: GatewayReadOptions = {}) {
-    return this.info("nonce", { user }, opts);
   }
   openOrders(
     user: string,
@@ -161,9 +140,6 @@ export class GatewayReads {
   }
   health(opts: GatewayReadOptions = {}) {
     return this.get("/v1/health", {}, opts);
-  }
-  oracleHealth(opts: GatewayReadOptions = {}) {
-    return this.get("/v1/oracle/health", {}, opts);
   }
   candles(params: CandleHistoryParams, opts: GatewayReadOptions = {}) {
     return this.get("/v1/history/candles", params, opts);

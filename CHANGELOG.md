@@ -7,21 +7,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Add Web-UI integration support: multiplexed `/ws` feeds, named
-  gateway reads, portfolio history pages, external async Ed25519 signers and
-  per-transaction delivery waits. Preserve existing wire bytes and action IDs.
-  Account subscriptions can renew existing signed auth on reconnect; no replay
-  guarantee is added to `/ws`. Optional DeliverTx `info` survives all verdict paths.
-- Timestamp nonce compatibility reads record observed values without importing a
-  sequential or future floor. Allocation stays locally monotonic, refuses reuse
-  at clock-window exhaustion, and never retries writes automatically. CometBFT
-  verdict parsing accepts omitted zero codes in a present result and valid decimal
-  string codes; malformed results remain uncertain. Lost responses and HTTP 5xx
-  preserve the transaction hash and diagnostics as uncertain outcomes.
-- Poll cancellation interrupts delays; browser signing no longer requires
-  `structuredClone`, and new reads/waits avoid `URLSearchParams.size` and
-  `AbortSignal.any`/`timeout`. Existing private-key signing stays byte-identical.
-
 - TypeScript 4.2.0 adds gateway-only `queryFinancialState({markets, owners})`:
   one finalized snapshot of selected raw accounts, fee/funding market state,
   fee pool, per-pool insurance and PLP configuration/account. Strict selector,
@@ -51,6 +36,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- External async Ed25519 signers, per-transaction delivery waits and optional
+  DeliverTx `info`, preserving private-key compatibility and signed bytes.
+- Multiplexed `/ws` orderbook, trades and account subscriptions with refcounts,
+  reconnect authentication and cleanup. Snapshot plus live; no missed-event replay.
+- Named gateway responses through `ExchangeClient.reads()` and validated portfolio
+  history pages with opaque cursors, micro-USDC values and source provenance.
+
 - Atomic `queryMarketsSnapshot()` through the gateway, with an explicit chain
   pin, complete typed registry decoding and bounded failure handling. The Rust
   `market_snapshot` module shares canonical wire records and adds an optional
@@ -74,6 +66,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   trading-sdk #106 (`09cf55f`) alongside F16. Cancel-all scoped/unscoped bytes,
   proposal reads, omitted/null scope semantics and content hashes stay pinned.
   The independent tag-7 TypeScript mirror remains tracked in exchange #472.
+
+### Changed
+
+- Ambiguous submissions retain their hash and HTTP diagnostics for reconciliation;
+  delivery cancellation returns uncertainty without retrying writes.
+
+### Fixed
+
+- Delivery polling accepts omitted zero codes and numeric-string codes only in a
+  valid transaction result; malformed reads remain uncertain.
+- Timestamp allocation rejects clock-window exhaustion without reusing a nonce.
 
 ## [4.0.0] — 2026-09-10
 

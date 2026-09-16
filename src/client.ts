@@ -1,4 +1,3 @@
-import { cloneSigningInput, abortableDelay, readDeadline } from "./runtime.js";
 import {
   GatewayFeed,
   type GatewayFeedOptions,
@@ -6,11 +5,13 @@ import {
 } from "./feed.js";
 import type { AccountFrame, OrderbookFrame, TradeFrame } from "./feed-types.js";
 import {
-  fetchPortfolioHistory,
+  portfolioHistorySearchParams,
+  decodePortfolioHistoryPage,
   type PortfolioHistoryOptions,
   type PortfolioHistoryPage,
 } from "./portfolio-history.js";
-import { GatewayReads } from "./gateway-reads.js";
+import { GatewayReads, type GatewayFetch } from "./gateway-reads.js";
+import { GatewayHttpError } from "./errors.js";
 import { toWasmFields } from "./codec-adapter.js";
 import { signAndEncode, encodePayloadBytes, encodeSignedTx } from "./codec.js";
 import { decodeAccountState, type AccountState } from "./account-state.js";
@@ -269,7 +270,6 @@ export class ExchangeClient {
   private address: Uint8Array | null = null;
   private addressHex: string | null = null;
   private lastTimestampNonce = 0n;
-  private observedNonceHints = new Set<bigint>();
   /** Unsubscribe handles for every open WebSocket stream, so `disconnect()`
    *  can tear them all down at once. */
   private activeStreams = new Set<() => void>();
@@ -611,10 +611,8 @@ export class ExchangeClient {
   private nextTimestampNonce(): bigint {
     const now = BigInt(Date.now());
     const max = now + 60_000n;
-    let next =
+    const next =
       this.lastTimestampNonce >= now ? this.lastTimestampNonce + 1n : now;
-    // The compatibility read reports the latest retained timestamp, not a floor.
-    while (this.observedNonceHints.has(next)) next++;
     if (next > max)
       throw new Error("Timestamp nonce allocation exceeds clock safety window");
     this.lastTimestampNonce = next;
@@ -624,38 +622,6 @@ export class ExchangeClient {
   /** Highest locally allocated nonce; never rewound after rejection. */
   get currentNonce(): bigint {
     return this.lastTimestampNonce;
-  }
-
-  /** Compatibility diagnostic: remembers an observed value to avoid reuse, never imports a sequential floor. */
-  async syncNonce(opts: { signal?: AbortSignal } = {}): Promise<void> {
-    const owner = this.addressHex;
-    const revision = this.signerRevision;
-    if (!owner) throw new Error("No signer set");
-    const res = await new GatewayReads({ gatewayUrl: this.gatewayUrl }).nonce(
-      owner,
-      opts,
-    );
-    const json = await res.json();
-    opts.signal?.throwIfAborted();
-    if (revision !== this.signerRevision)
-      throw new Error("Signing connection changed");
-    if (typeof json?.data !== "string")
-      throw new Error("Invalid nonce response");
-    const value = msgpackDecoder.decode(fromBase64(json.data));
-    if (
-      (typeof value !== "bigint" &&
-        (typeof value !== "number" || !Number.isSafeInteger(value))) ||
-      BigInt(value as number | bigint) < 0n
-    )
-      throw new Error("Invalid nonce response");
-    const retained = BigInt(value as number | bigint);
-    // Timestamp nonces are accepted out of order. A different device may have
-    // submitted a future value; do not poison this client's allocation floor.
-    this.observedNonceHints.add(retained);
-    if (this.observedNonceHints.size > 100)
-      this.observedNonceHints.delete(
-        this.observedNonceHints.values().next().value!,
-      );
   }
 
   // -----------------------------------------------------------------------
@@ -900,7 +866,7 @@ export class ExchangeClient {
     // Fallback: the code embedded in the string as "<engine_code>: <message>".
     // The gateway still emits this format for compatibility, so this path also
     // covers a pre-#90 gateway that sends ONLY the string. Parse the leading code;
-    // if missing, surface 1 (DecodeError) as the conservative default.
+    // Without a code, retain the hash for reconciliation; no rejection is proven.
     const errMsg = json?.error ?? gatewayBody.raw ?? "unknown gateway error";
     const code = parseLeadingErrorCode(errMsg);
     return code === null
@@ -1779,12 +1745,36 @@ export class ExchangeClient {
     }));
   }
 
-  /** One oldest-first portfolio page; keep bounds fixed across opaque cursors. */
-  queryPortfolioHistory(
+  /** Named gateway responses for HTTP consumers that own body parsing, deadlines
+   * and scheduling. Prefer typed query methods when raw response metadata is unnecessary.
+   * Uses this client's gateway; never targets a node, even in internal node mode.
+   */
+  reads(opts: { fetch?: GatewayFetch } = {}): GatewayReads {
+    return new GatewayReads(
+      this.gatewayUrl,
+      opts.fetch ?? ((url, init) => fetch(url, init)),
+    );
+  }
+
+  /** Gateway/indexer portfolio page, including in internal node mode.
+   * Keep bounds fixed across opaque cursors. */
+  async queryPortfolioHistory(
     owner: string,
     opts: PortfolioHistoryOptions,
   ): Promise<PortfolioHistoryPage> {
-    return fetchPortfolioHistory(this.readBaseUrl, owner, opts);
+    const canonicalOwner = owner.replace(/^0x/i, "").toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(canonicalOwner))
+      throw new Error("Invalid portfolio owner");
+    const params = portfolioHistorySearchParams(opts);
+    opts.signal?.throwIfAborted();
+    const res = await fetch(
+      `${this.gatewayUrl}/v1/history/portfolio/${canonicalOwner}?${params}`,
+      { signal: opts.signal },
+    );
+    if (!res.ok) throw new GatewayHttpError(res.status, res);
+    const page: unknown = await res.json();
+    opts.signal?.throwIfAborted();
+    return decodePortfolioHistoryPage(page, canonicalOwner, opts);
   }
 
   /** Per-user position-history snapshot log. Each row is one
@@ -2438,5 +2428,56 @@ function decodeMarketConfig(raw: unknown[]): MarketConfig {
     szDecimals: raw[22] == null ? undefined : Number(raw[22]),
     ticker: raw[23] == null ? undefined : String(raw[23]),
     maxOpenInterest: optBig(raw[24]),
+  };
+}
+
+/** Copy protocol inputs without structuredClone or cross-realm instanceof checks. */
+function cloneSigningInput<T>(value: T): T {
+  if (
+    ArrayBuffer.isView(value) &&
+    Object.prototype.toString.call(value) === "[object Uint8Array]"
+  ) {
+    const bytes = value as unknown as Uint8Array;
+    return new Uint8Array(bytes) as T;
+  }
+  if (Array.isArray(value)) return value.map(cloneSigningInput) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, cloneSigningInput(v)]),
+    ) as T;
+  }
+  return value;
+}
+
+/** Abort interrupts the sleep; callers inspect the signal for their own result policy. */
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+/** Per-read deadline with explicit cleanup, without AbortSignal.any/timeout. */
+function readDeadline(
+  ms: number,
+  parent?: AbortSignal,
+): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController();
+  const abort = () => controller.abort(parent?.reason);
+  if (parent?.aborted) abort();
+  else parent?.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(() => controller.abort(), ms);
+  return {
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", abort);
+    },
   };
 }

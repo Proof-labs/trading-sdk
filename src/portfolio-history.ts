@@ -1,5 +1,3 @@
-import { GatewayHttpError } from "./gateway-reads.js";
-
 export interface PortfolioHistoryOptions {
   /** Millisecond bounds must stay fixed across pages. */
   fromMs: number;
@@ -13,13 +11,9 @@ export interface PortfolioHistoryPage {
   points: { t: string; accountValue: bigint; equitySource: string | null }[];
   nextCursor: string;
 }
-export async function fetchPortfolioHistory(
-  base: string,
-  owner: string,
+export function portfolioHistorySearchParams(
   opts: PortfolioHistoryOptions,
-): Promise<PortfolioHistoryPage> {
-  if (!/^(?:0x)?[a-fA-F0-9]{40}$/.test(owner))
-    throw new Error("Invalid portfolio owner");
+): URLSearchParams {
   if (
     !Number.isSafeInteger(opts.fromMs) ||
     !Number.isSafeInteger(opts.toMs) ||
@@ -37,13 +31,20 @@ export async function fetchPortfolioHistory(
     limit: String(limit),
   });
   if (opts.cursor) params.set("cursor", opts.cursor);
-  const res = await fetch(
-    `${base}/v1/history/portfolio/${encodeURIComponent(owner)}?${params}`,
-    { signal: opts.signal },
-  );
-  if (!res.ok) throw new GatewayHttpError(res.status, res);
-  const json = await res.json();
-  opts.signal?.throwIfAborted();
+  return params;
+}
+
+/** Validate one oldest-first page without changing units, cursors or provenance. */
+export function decodePortfolioHistoryPage(
+  value: unknown,
+  owner: string,
+  opts: PortfolioHistoryOptions,
+): PortfolioHistoryPage {
+  const json = value as {
+    owner?: unknown;
+    points?: unknown;
+    next_cursor?: unknown;
+  } | null;
   if (
     !json ||
     !Array.isArray(json.points) ||

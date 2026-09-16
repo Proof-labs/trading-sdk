@@ -2,13 +2,14 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   ActionType,
+  type Action,
   Side,
   chainIdFromString,
   encodeSignedTx,
+  bytesToHex,
   ready,
   signingMessage,
 } from "./index.js";
-import legacy from "./fixtures/web-legacy-codec-vectors.json";
 
 const SEQ = 1_754_000_000_000n;
 const PUBKEY = new Uint8Array(32).fill(7);
@@ -20,7 +21,7 @@ const OWNER = new Uint8Array(20).fill(3);
  * order, a cancel, and a multi-leg atomic basket (the most structurally
  * complex payload the app builds).
  */
-const CASES: { name: string; action: unknown }[] = [
+const CASES: { name: string; action: Action }[] = [
   {
     name: "AmendOrder",
     action: {
@@ -128,7 +129,7 @@ const CASES: { name: string; action: unknown }[] = [
     name: "CancelOrder",
     action: {
       type: "CancelOrder",
-      data: { market: 3, owner: OWNER, orderId: 918_273_645n },
+      data: { owner: OWNER, orderId: 918_273_645n },
     },
   },
   {
@@ -212,43 +213,145 @@ const CASES: { name: string; action: unknown }[] = [
         owner: OWNER,
         side: Side.Buy,
         quantity: 120n,
-        reduceOnly: true,
       },
     },
   },
 ];
 
-describe("public SDK byte parity with incumbent fixtures", () => {
+// Captured from incumbent @exchange/sdk 0.4.0 (ten original actions) and @proof/trading-sdk 3.0.0 (position triggers and edit actions), extracted from base 6dde028684845a7f389761c55989dcd0a03371ed; never regenerate from the replacement SDK.
+// Factored literal envelopes; every reconstruction checked against all 105 archived bytes.
+const NONCES = [
+  ["0", "00"],
+  ["1", "01"],
+  ["127", "7f"],
+  ["128", "cc80"],
+  ["65535", "cdffff"],
+  ["1754000000000", "cf00000198628c0400"],
+  ["9223372036854775807", "cf7fffffffffffffff"],
+] as const;
+const PAYLOADS: Record<string, readonly [string, string]> = {
+  "PlaceOrder (limit, GTC)": [
+    "01",
+    "c42c9903dc00140303030303030303030303030303030303030303a3427579ce04ad14f0cd0190c0c2c2a3477463",
+  ],
+  "PlaceOrder (reduce-only IOC)": [
+    "01",
+    "c42b9907dc00140303030303030303030303030303030303030303a453656c6cce001312d019c0c2c3a3496f63",
+  ],
+  CancelOrder: [
+    "02",
+    "c41d92ce36bbbe6ddc00140303030303030303030303030303030303030303",
+  ],
+  "AtomicBasketOrder (multi-leg, mixed optionals)": [
+    "1c",
+    "c43e93dc00140303030303030303030303030303030303030303929603a3427579ce04ad14f0cd01902ac296cd1c84a453656c6cce000900b0cd055dc0c3cc96",
+  ],
+  "AtomicBasketOrder (single leg, omitted optionals)": [
+    "1c",
+    "c42493dc00140303030303030303030303030303030303030303919601a34275790101c0c200",
+  ],
+  Withdraw: [
+    "06",
+    "c43493dc00140303030303030303030303030303030303030303ce0016e360dc00140303030303030303030303030303030303030303",
+  ],
+  WithdrawRequest: [
+    "08",
+    "c44093dc00140303030303030303030303030303030303030303ce0280de80dc00200505050505050505050505050505050505050505050505050505050505050505",
+  ],
+  ApproveAgent: [
+    "0c",
+    "c43b92dc00140303030303030303030303030303030303030303dc00200808080808080808080808080808080808080808080808080808080808080808",
+  ],
+  RevokeAgent: [
+    "0d",
+    "c43b92dc00140303030303030303030303030303030303030303dc00200808080808080808080808080808080808080808080808080808080808080808",
+  ],
+  MarketOrder: [
+    "04",
+    "c41f9503dc00140303030303030303030303030303030303030303a342757978c0",
+  ],
+  "SetPositionTriggers (both limbs)": [
+    "25",
+    "c42d9603dc001403030303030303030303030303030303030303030993ce00989680cc962a93ce01312d00ccc8c011",
+  ],
+  CancelPositionTriggers: [
+    "26",
+    "c41a9303dc0014030303030303030303030303030303030303030309",
+  ],
+  AmendOrder: [
+    "1b",
+    "c42194dc00140303030303030303030303030303030303030303ce36bbbe6dc0cd01f4",
+  ],
+  "CancelReplaceOrder (GTC)": [
+    "1a",
+    "c4329bdc00140303030303030303030303030303030303030303ce36bbbe6dc003a3427579ce04ad14f0cd01902ac3c2a3477463",
+  ],
+  "CancelReplaceOrder (IOC)": [
+    "1a",
+    "c4339bdc00140303030303030303030303030303030303030303ce36bbbe6dc003a453656c6cce04ad14f0cd0190c0c2c3a3496f63",
+  ],
+};
+const CHAIN_HEX =
+  "876ca857ab380e8f03c22f73aeaaacb22370751a81baa82fce762710f9936fd9";
+const SIGNING_MESSAGES = [
+  {
+    type: 1,
+    hex: "50726f6f6645786368616e67652d7633876ca857ab380e8f03c22f73aeaaacb22370751a81baa82fce762710f9936fd90100000198628c04000102030405",
+  },
+  {
+    type: 37,
+    hex: "50726f6f6645786368616e67652d7633876ca857ab380e8f03c22f73aeaaacb22370751a81baa82fce762710f9936fd92500000198628c04000102030405",
+  },
+  {
+    type: 38,
+    hex: "50726f6f6645786368616e67652d7633876ca857ab380e8f03c22f73aeaaacb22370751a81baa82fce762710f9936fd92600000198628c04000102030405",
+  },
+];
+const ACTION_IDS = {
+  PlaceOrder: 1,
+  CancelOrder: 2,
+  MarketOrder: 4,
+  AtomicBasketOrder: 28,
+  AmendOrder: 27,
+  CancelReplaceOrder: 26,
+};
+
+describe("incumbent codec compatibility", () => {
   beforeAll(async () => {
     await ready();
   });
   for (const { name, action } of CASES) {
     it(`preserves ${name} bytes across nonce widths`, () => {
-      const fixture = legacy.vectors.find((v) => v.name === name)!;
-      for (const { seq, hex } of fixture.encodings) {
+      const [tag, payload] = PAYLOADS[name];
+      for (const [seq, encodedNonce] of NONCES) {
+        const expected =
+          "9602" +
+          tag +
+          encodedNonce +
+          payload +
+          "c420" +
+          "07".repeat(32) +
+          "c440" +
+          "09".repeat(64);
         expect(
-          Buffer.from(
-            encodeSignedTx(action as never, BigInt(seq), PUBKEY, SIGNATURE),
-          ).toString("hex"),
-        ).toBe(hex);
+          bytesToHex(encodeSignedTx(action, BigInt(seq), PUBKEY, SIGNATURE)),
+        ).toBe(expected);
       }
     });
   }
-  it("preserves the chain binding and signing domain", () => {
+  it("preserves chain binding and signing domain", () => {
     const chainId = chainIdFromString("exchange-devnet-1");
-    expect(Buffer.from(chainId).toString("hex")).toBe(legacy.chainId);
-    for (const { type, hex } of legacy.signingMessages) {
+    expect(bytesToHex(chainId)).toBe(CHAIN_HEX);
+    for (const { type, hex } of SIGNING_MESSAGES)
       expect(
-        Buffer.from(
+        bytesToHex(
           signingMessage(chainId, type, SEQ, new Uint8Array([1, 2, 3, 4, 5])),
-        ).toString("hex"),
+        ),
       ).toBe(hex);
-    }
   });
   it("preserves action IDs including position protection", () => {
-    for (const [key, value] of Object.entries(legacy.actionTypes)) {
+    for (const [key, value] of Object.entries(ACTION_IDS))
       expect((ActionType as Record<string, number>)[key]).toBe(value);
-    }
     expect(ActionType.SetPositionTriggers).toBe(37);
     expect(ActionType.CancelPositionTriggers).toBe(38);
   });
