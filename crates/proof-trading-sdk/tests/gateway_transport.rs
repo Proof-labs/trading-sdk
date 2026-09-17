@@ -163,7 +163,7 @@ async fn submit_classifies_checktx_ambiguous_and_pre_admission_without_retry() {
         ),
         (
             json!({"status":"error","error":"validation rejected"}),
-            SubmissionOutcome::RejectedBeforeAdmission { hash },
+            SubmissionOutcome::RejectedBeforeAdmission { hash, refusal: () },
         ),
     ] {
         let (client, task) = fixture(body).await;

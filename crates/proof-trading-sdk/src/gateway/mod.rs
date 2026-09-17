@@ -185,8 +185,11 @@ pub struct CommittedReceipt {
     pub height: NonZeroU64,
     pub code: u32,
 }
+/// `R` is what a pre-admission rejection carries: `()` from
+/// `submit_signed_bytes`, the classified [`PreAdmissionRefusal`] from
+/// `submit_signed_bytes_with_evidence`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SubmissionOutcome {
+pub enum SubmissionOutcome<R = ()> {
     Committed(CommittedReceipt),
     CheckTxRejected {
         hash: TxHash,
@@ -198,11 +201,12 @@ pub enum SubmissionOutcome {
     },
     RejectedBeforeAdmission {
         hash: TxHash,
+        refusal: R,
     },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Submission {
-    pub outcome: SubmissionOutcome,
+pub struct Submission<R = ()> {
+    pub outcome: SubmissionOutcome<R>,
     pub retry_after: Option<RetryAfter>,
 }
 
@@ -228,13 +232,9 @@ pub enum MaintenanceMode {
     CancelOnly,
 }
 
-/// Additive evidence API: existing `Submission` and its variants are unchanged.
-/// The local hash is retained in `submission.outcome`, even for a refusal.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SubmissionEvidence {
-    pub submission: Submission,
-    pub refusal: Option<PreAdmissionRefusal>,
-}
+/// A submission whose pre-admission rejection names its refusal. Every outcome
+/// retains the locally calculated hash, including a refusal.
+pub type SubmissionEvidence = Submission<PreAdmissionRefusal>;
 
 #[derive(Deserialize)]
 struct EncodedRead {
@@ -442,6 +442,29 @@ fn pre_admission_refusal(status: u16, bytes: &[u8]) -> Option<PreAdmissionRefusa
     }
 }
 
+/// What a hashless `"error"` response records as its pre-admission refusal.
+/// `None` leaves the submission unresolved.
+trait RefusalEvidence: Sized {
+    /// Non-2xx bodies are read and classified, and an absent `Retry-After`
+    /// header falls back to the JSON `retryAfterMs` field.
+    const CLASSIFIES_ERROR_BODIES: bool;
+    fn classify(status: u16, bytes: &[u8]) -> Option<Self>;
+}
+
+impl RefusalEvidence for () {
+    const CLASSIFIES_ERROR_BODIES: bool = false;
+    fn classify(_: u16, _: &[u8]) -> Option<Self> {
+        Some(())
+    }
+}
+
+impl RefusalEvidence for PreAdmissionRefusal {
+    const CLASSIFIES_ERROR_BODIES: bool = true;
+    fn classify(status: u16, bytes: &[u8]) -> Option<Self> {
+        pre_admission_refusal(status, bytes)
+    }
+}
+
 impl GatewayClient {
     /// HTTPS for remote hosts; HTTP requires a URL-normalized loopback IP (no
     /// DNS names). Numeric IPv4 aliases that normalize to loopback are allowed.
@@ -610,9 +633,7 @@ impl GatewayClient {
     /// Sends the supplied signed envelope exactly once, byte-for-byte. A timeout,
     /// bad response, hash mismatch or HTTP failure never proves non-inclusion.
     pub async fn submit_signed_bytes(&self, bytes: &[u8]) -> Result<Submission, GatewayError> {
-        self.submit_once(bytes, false)
-            .await
-            .map(|read| read.submission)
+        self.submit_once(bytes).await
     }
 
     /// One exact-byte POST with strictly classified, per-attempt refusal
@@ -625,14 +646,13 @@ impl GatewayClient {
         &self,
         bytes: &[u8],
     ) -> Result<SubmissionEvidence, GatewayError> {
-        self.submit_once(bytes, true).await
+        self.submit_once(bytes).await
     }
 
-    async fn submit_once(
+    async fn submit_once<R: RefusalEvidence>(
         &self,
         bytes: &[u8],
-        strict_evidence: bool,
-    ) -> Result<SubmissionEvidence, GatewayError> {
+    ) -> Result<Submission<R>, GatewayError> {
         let op = Operation::Submit;
         if bytes.is_empty() || bytes.len() > MAX_SIGNED_BYTES {
             return Err(GatewayError::new(op, ErrorKind::InvalidInput));
@@ -647,10 +667,10 @@ impl GatewayClient {
                     Some(&SignedRequest {
                         action: STANDARD.encode(bytes),
                     }),
-                    strict_evidence,
+                    R::CLASSIFIES_ERROR_BODIES,
                 )
                 .await?;
-            if strict_evidence && body.retry_after.is_none() {
+            if R::CLASSIFIES_ERROR_BODIES && body.retry_after.is_none() {
                 body.retry_after = retry_after_body(&body.bytes);
             }
             let read: SubmitRead = body.decode(op).map_err(|mut error| {
@@ -672,9 +692,7 @@ impl GatewayClient {
                     e
                 })?;
             }
-            let refusal = strict_evidence
-                .then(|| pre_admission_refusal(body.status.as_u16(), &body.bytes))
-                .flatten();
+            let refusal = R::classify(body.status.as_u16(), &body.bytes);
             if !body.status.is_success() && refusal.is_none() {
                 return Err(GatewayError {
                     retry_after: body.retry_after,
@@ -705,19 +723,15 @@ impl GatewayClient {
                 (None, None, Some(_)) | (None, None, None) if read.status == "ok" || has_hash => {
                     SubmissionOutcome::Pending { hash }
                 }
-                (None, None, None)
-                    if read.status == "error" && (!strict_evidence || refusal.is_some()) =>
-                {
-                    SubmissionOutcome::RejectedBeforeAdmission { hash }
-                }
+                (None, None, None) if read.status == "error" => match refusal {
+                    Some(refusal) => SubmissionOutcome::RejectedBeforeAdmission { hash, refusal },
+                    None => return Err(invalid()),
+                },
                 _ => return Err(invalid()),
             };
-            Ok(SubmissionEvidence {
-                submission: Submission {
-                    outcome,
-                    retry_after: body.retry_after,
-                },
-                refusal,
+            Ok(Submission {
+                outcome,
+                retry_after: body.retry_after,
             })
         }
         .await;

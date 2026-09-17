@@ -269,9 +269,12 @@ an exact delay, an absolute HTTP date, or explicitly `Invalid`; callers must not
 discard an invalid header and retry immediately.
 
 `submit_signed_bytes_with_evidence` adds strict **per-attempt** refusal evidence
-without changing `Submission` or the original method. Its result contains
-`submission` (including the locally calculated hash) and optional typed
-`refusal`. Only exact source-qualified body/status pairs qualify: authorization,
+without changing the original method's behaviour. It returns
+`SubmissionEvidence`, a `Submission<PreAdmissionRefusal>`: every outcome keeps
+the locally calculated hash, and only `RejectedBeforeAdmission` carries the
+typed `refusal`, so a refusal cannot disagree with its outcome. The original
+method returns `Submission`, whose `RejectedBeforeAdmission` carries
+`refusal: ()`. Only exact source-qualified body/status pairs qualify: authorization,
 rate limiting, maintenance, admission overload/verifier disconnection, and
 specific parse/signature refusals. Generic HTTP errors, unrecognized bodies,
 unknown fields or a hash-bearing 503 remain unresolved. Maintenance requires

@@ -65,8 +65,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   source-qualified per-attempt pre-admission refusal and maintenance evidence,
   plus header-first JSON `retryAfterMs` fallback rounded up without overflow.
   Unknown HTTP/body outcomes retain the local reconciliation hash; no earlier
-  attempt is declared absent. The existing `Submission`/`SubmissionOutcome`,
-  original submission method, TS/Python API and wire bytes are unchanged.
+  attempt is declared absent. `SubmissionOutcome::RejectedBeforeAdmission`
+  carries the classified refusal (`()` from the original submission method), so
+  a refusal cannot disagree with its outcome. The original method's behaviour,
+  TypeScript/Python API and wire bytes are unchanged.
   This additive native API requires a Rust MINOR release when published;
   it authorizes no activation, retry or durable-journal retirement by itself.
 

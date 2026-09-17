@@ -192,11 +192,11 @@ async fn exact_pre_broadcast_contracts_have_typed_per_attempt_evidence() {
             .submit_signed_bytes_with_evidence(BYTES)
             .await
             .unwrap();
-        assert_eq!(result.refusal, Some(reason));
         assert_eq!(
-            result.submission.outcome,
+            result.outcome,
             SubmissionOutcome::RejectedBeforeAdmission {
-                hash: TxHash::of_signed_bytes(BYTES)
+                hash: TxHash::of_signed_bytes(BYTES),
+                refusal: reason,
             }
         );
         assert!(!format!("{result:?}").contains(KEY));
@@ -340,8 +340,7 @@ async fn exact_hash_execution_outcomes_keep_the_existing_contract() {
             .submit_signed_bytes_with_evidence(BYTES)
             .await
             .unwrap();
-        assert_eq!(result.refusal, None);
-        assert_eq!(result.submission.outcome, expected);
+        assert_eq!(result.outcome, expected);
         assert_one_exact_post(task).await;
     }
 }
@@ -388,8 +387,14 @@ async fn retry_after_headers_win_and_body_milliseconds_round_up_without_overflow
             .submit_signed_bytes_with_evidence(BYTES)
             .await
             .unwrap();
-        assert_eq!(result.refusal, Some(PreAdmissionRefusal::RateLimited));
-        assert_eq!(result.submission.retry_after, Some(expected));
+        assert_eq!(
+            result.outcome,
+            SubmissionOutcome::RejectedBeforeAdmission {
+                hash: TxHash::of_signed_bytes(BYTES),
+                refusal: PreAdmissionRefusal::RateLimited,
+            }
+        );
+        assert_eq!(result.retry_after, Some(expected));
         assert_one_exact_post(task).await;
     }
 }
