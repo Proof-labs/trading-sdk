@@ -149,6 +149,9 @@ describe("TR-6 trigger history decoder", () => {
     ).toThrow(/unexpected or missing/);
 
     const numeric = executedEvent();
+    // Deliberately a NUMBER (not a string) to prove the decoder rejects it; the
+    // magnitude is illustrative (u64::MAX-shaped), so its precision is moot.
+    // eslint-disable-next-line no-loss-of-precision
     (numeric.payload as Record<string, unknown>).execution_order_id =
       18_446_744_073_709_551_615;
     expect(() =>
