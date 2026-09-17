@@ -198,6 +198,7 @@ class ExchangeClient {
   queryHistoryWithdrawals(...): Promise<HistoryCashFlow[]>;
   queryHistoryResolutions(...): Promise<HistoryResolution[]>;
   queryHistoryPositions(...): Promise<HistoryPositionSnapshot[]>;
+  queryHistoryPositionsPage(...): Promise<HistoryPositionsPage>;
 
   // Blocks
   getBlock(height?: number): Promise<Record<string, unknown>>;
@@ -222,7 +223,23 @@ policy, calendar epoch and verdict at an exact finalized height. It preserves
 u64 values as `bigint`, and returns `Legacy` with no permission claim while the
 new policy is inactive. `Satisfied` covers only this oracle dependency, not all
 portfolio dependencies or other trading checks. It never reads provider/observer
-health, and is separate from the prohibited operational-health API in ADR 0002.
+health; feeder freshness is a separate operational read, described below.
+
+### Oracle freshness for trading UIs
+
+```typescript
+const response = await client.reads().oracleHealth({ signal });
+const health = await response.json();
+```
+
+This forwards `GET /v1/oracle/health` through the configured gateway, preserving
+the response body, HTTP errors and cancellation. The Web-UI uses feeder freshness
+for its existing delay warnings and order guards. Thresholds and display policy
+remain in the application; `status: "ok"` alone does not mean fresh data, and
+`embedded_feeder: false` must remain unavailable. This is operational evidence,
+not trading authorization. Like every other gateway interaction, admin calls
+included, it goes through the SDK
+([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md)).
 
 ### Optional native Rust gateway transport
 
