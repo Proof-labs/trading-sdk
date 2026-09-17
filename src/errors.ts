@@ -451,3 +451,14 @@ export function execErrorName(code: number, log?: string): string {
   if (code === 0) return "Ok";
   return decodeExecError(code, log)?.name ?? "UnknownError";
 }
+
+/** Non-success gateway HTTP response; its unconsumed body remains available to callers. */
+export class GatewayHttpError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly response: Response,
+  ) {
+    super(`Gateway request failed (${status})`);
+    this.name = "GatewayHttpError";
+  }
+}

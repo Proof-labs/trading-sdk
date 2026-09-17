@@ -131,6 +131,8 @@ export {
   type HistoryFillsPage,
   type HistoryResolution,
   type HistoryPositionSnapshot,
+  type HistoryPosition,
+  type HistoryPositionsPage,
   type WithdrawalStatus,
   type WithdrawalRecord,
   type MarketKind,
@@ -189,8 +191,9 @@ export {
 } from "./governance-query.js";
 export { fetchChainId } from "./client.js";
 
-// Error decoder
+// Errors
 export {
+  GatewayHttpError,
   type ExecErrorInfo,
   ExecErrorCode,
   decodeExecError,
@@ -240,3 +243,40 @@ export type {
   OracleVerdictStatus,
   OracleVerdictReason,
 } from "./oracle-permissions.js";
+
+export {
+  GatewayFeed,
+  type GatewayFeedOptions,
+  type AccountFeedAuth,
+  type AccountAuthProvider,
+  type WebSocketLike,
+  type WebSocketFactory,
+} from "./feed.js";
+export type {
+  FeedChannel,
+  FeedOrderbookLevel,
+  OrderbookSnapshotFrame,
+  OrderbookUpdateFrame,
+  OrderbookFrame,
+  TradeFrame,
+  AccountSnapshotFrame,
+  AccountEventFrame,
+  AccountFrame,
+  FeedFrame,
+  FeedErrorFrame,
+  FeedState,
+} from "./feed-types.js";
+export {
+  type GatewayReads,
+  type GatewayReadOptions,
+  type GatewayFetch,
+  type HistoryWindow,
+  type OwnerHistoryParams,
+  type CandleHistoryParams,
+  type AccountEventsParams,
+} from "./gateway-reads.js";
+export type { ExternalSigner } from "./client.js";
+export type {
+  PortfolioHistoryOptions,
+  PortfolioHistoryPage,
+} from "./portfolio-history.js";

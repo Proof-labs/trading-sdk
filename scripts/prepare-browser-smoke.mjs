@@ -94,6 +94,12 @@ try {
     join(outputDir, "src/main.js"),
     `import {
   Side,
+  ExchangeClient,
+  GatewayFeed,
+  getPublicKey,
+  sign,
+  decodeTx,
+  signAndEncode,
   TimeInForce,
   bytesToHex,
   decodeTriggerMarketConfigInfos,
@@ -155,6 +161,30 @@ try {
   if (configs.length !== 1 || configs[0].state.current?.maxTriggerSlippageBps !== 250) {
     throw new Error("trigger market config package export returned malformed policy");
   }
+  const client = new ExchangeClient({ gatewayUrl: "", chainId: "exchange-devnet-1" });
+  const seed = new Uint8Array(32).fill(13);
+  client.setExternalSigner({ publicKey: getPublicKey(seed), signRaw: async message => sign(seed, message) });
+  const action = { type: "CancelAllOrders", data: { owner: client.getAddress(), market: 1 } };
+  const signed = await client.signTx(action);
+  const seq = decodeTx(signed).seq;
+  if (bytesToHex(signed) !== bytesToHex(signAndEncode(client.getChainId(), action, seq, seed))) {
+    throw new Error("external signer browser byte parity failed");
+  }
+  const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch: async (url, init) => {
+    if (url !== "/info" || JSON.parse(init.body).type !== "impactMarkets") throw new Error("browser named read contract");
+    return new Response(JSON.stringify({ data: "unchanged" }));
+  }});
+  if ((await (await reads.impactMarkets()).json()).data !== "unchanged") throw new Error("browser response contract");
+  if (!(client.feed() instanceof GatewayFeed)) throw new Error("feed export missing");
+  const auth = await client.accountAuth();
+  if (typeof auth.timestamp_ms !== "number" || auth.public_key !== bytesToHex(getPublicKey(seed))) throw new Error("browser account auth contract");
+  const savedFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response(JSON.stringify({result:{height:"42",tx_result:{info:"browser-omitted-code"}}}));
+    const delivered = await client.waitForDelivery({ok:false,outcome:"timeout",code:-1,error:null,hash:"SMOKE"});
+    if (delivered.code !== 0 || delivered.info !== "browser-omitted-code") throw new Error("browser delivery parsing contract");
+  } finally { globalThis.fetch = savedFetch; }
+  client.disconnect();
   globalThis.__proofSdkSmoke = { status: "passed", payloadHex, triggerPayloadHex };
   result.textContent = \`proof-sdk-wasm-ok:\${triggerPayloadHex}\`;
 } catch (error) {
