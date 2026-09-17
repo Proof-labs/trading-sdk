@@ -590,11 +590,6 @@ export function decodeAdminAction(
         kind: "SetTriggerMarketConfig",
         value: decodeSetTriggerMarketConfig(payload),
       };
-    case "CancelAllOrdersForAccount":
-      return {
-        kind: "CancelAllOrdersForAccount",
-        value: decodeCancelAllOrdersForAccount(payload),
-      };
     default:
       throw new Error(
         `governance decode: ${field} has unknown AdminAction variant "${name}" — this SDK build cannot render it`,
