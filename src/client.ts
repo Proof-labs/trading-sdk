@@ -1582,14 +1582,14 @@ export class ExchangeClient {
 
   /** Per-user position-at-resolution log — each row is one settlement or
    * voided-conditional snapshot. Feeds the Portfolio "Resolved" tab
-   * (P2 #7). Optional `impactMarketId` filter scopes to one event family.
+   * (P2 #7). Optional `eventId` filter scopes to one event.
    *
    * `fromMs` / `toMs` are unix-ms timestamps; omit for unbounded.
    * `limit` caps at 1000 server-side. Results are newest-first. */
   async queryHistoryResolutions(
     addressHex?: string,
     opts?: {
-      impactMarketId?: number;
+      eventId?: number;
       fromMs?: number;
       toMs?: number;
       limit?: number;
@@ -1598,8 +1598,8 @@ export class ExchangeClient {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return [];
     const params = new URLSearchParams();
-    if (opts?.impactMarketId !== undefined)
-      params.set("impact_market_id", String(opts.impactMarketId));
+    if (opts?.eventId !== undefined)
+      params.set("event_id", String(opts.eventId));
     if (opts?.fromMs !== undefined) params.set("from", String(opts.fromMs));
     if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
     if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
@@ -1608,7 +1608,7 @@ export class ExchangeClient {
     const json = await fetchApiArray(url);
     return (json as Array<Record<string, unknown>>).map((row) => ({
       kind: row.kind as HistoryResolution["kind"],
-      impactMarketId: String(row.impact_market_id ?? ""),
+      eventId: String(row.event_id ?? ""),
       market: String(row.market ?? ""),
       owner: String(row.owner ?? ""),
       side: String(row.side ?? ""),

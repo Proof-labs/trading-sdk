@@ -2130,8 +2130,8 @@ export interface HistoryCashFlow {
 export interface HistoryResolution {
   /** One of "conditional_settled" | "conditional_voided" | "prediction_settled". */
   kind: "conditional_settled" | "conditional_voided" | "prediction_settled";
-  /** Impact-market family ID the resolved position belonged to. */
-  impactMarketId: string;
+  /** Event the resolved position belonged to, as a decimal string. */
+  eventId: string;
   /** Child market ID (CPY/CPN or EBY/EBN). */
   market: string;
   /** 20-byte owner address as hex. */
