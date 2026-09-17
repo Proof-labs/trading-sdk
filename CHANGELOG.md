@@ -24,32 +24,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   response bodies, credentials and signed bytes are excluded from diagnostics.
   Existing wire bytes and default codec/WASM dependencies are unchanged.
 
-- Rust native gateway `submit_signed_bytes_with_evidence` adds typed,
-  source-qualified per-attempt pre-admission refusal and maintenance evidence,
-  plus header-first JSON `retryAfterMs` fallback rounded up without overflow.
-  Unknown HTTP/body outcomes retain the local reconciliation hash; no earlier
-  attempt is declared absent. The existing `Submission`/`SubmissionOutcome`,
-  original submission method, TS/Python API and wire bytes are unchanged.
-  This additive native API requires a Rust MINOR release when published;
-  it authorizes no activation, retry or durable-journal retirement by itself.
-
-- TypeScript 4.2.0 adds gateway-only `queryFinancialState({markets, owners})`:
-  one finalized snapshot of selected raw accounts, fee/funding market state,
-  fee pool, per-pool insurance and PLP configuration/account. Strict selector,
-  tuple, integer, exact-coverage and 2048-total-position validation; five-second
-  read deadline, one-MiB response limit and pre-decode nesting/allocation budgets.
-  Missing keys remain null. Bootstrap
-  baselines and lifetime fee counters are not additional cash. No valuation,
-  risk authorization, signing or new mutation; Rust/Python/WASM are unchanged.
-
-- Rust core 3.2.0 adds the optional `gateway` transport: bounded gateway-only
-  chain identity, committed oracle permissions, byte-exact externally signed
-  submission and hash-matched execution receipts. No signing, nonce allocation,
-  automatic retries or operational oracle-health API. Ambiguous submission,
-  CheckTx rejection, committed execution and oracle permission remain distinct;
-  response bodies, credentials and signed bytes are excluded from diagnostics.
-  Existing wire bytes and default codec/WASM dependencies are unchanged.
-
 - Retains current exchange `CreateEvent` governance tag 9 alongside F16 tag 12:
   typed standalone-event proposals and strict proposal-read decoding (not a Batch
   item). Binary market tuples name their event id; conditional perps retain their
@@ -61,6 +35,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   margin or trading/withdrawal permission is inferred. Rust/Python codecs unchanged.
 
 ### Added
+
+- Rust native gateway `submit_signed_bytes_with_evidence` adds typed,
+  source-qualified per-attempt pre-admission refusal and maintenance evidence,
+  plus header-first JSON `retryAfterMs` fallback rounded up without overflow.
+  Unknown HTTP/body outcomes retain the local reconciliation hash; no earlier
+  attempt is declared absent. The existing `Submission`/`SubmissionOutcome`,
+  original submission method, TS/Python API and wire bytes are unchanged.
+  This additive native API requires a Rust MINOR release when published;
+  it authorizes no activation, retry or durable-journal retirement by itself.
 
 - Rust gateway `MarketsSnapshotClient::read_bound_inventory()` binds the
   snapshot's own finalized clock and post-height app hash to the actual Comet
