@@ -16,10 +16,10 @@ describe("decodeExecError", () => {
     expect(decodeExecError(255)?.name).toBe("InternalError");
   });
 
-  it("decodes the new variants added in the audit batch (31, 32)", () => {
-    const e31 = decodeExecError(31);
-    expect(e31?.name).toBe("TooManyActiveImpactMarkets");
-    expect(e31?.description).toContain("scenario margin engine");
+  it("decodes the event cap and the settle-price mismatch (96, 32)", () => {
+    const e96 = decodeExecError(96);
+    expect(e96?.name).toBe("TooManyActiveEvents");
+    expect(e96?.description).toContain("scenario margin engine");
 
     const e32 = decodeExecError(32);
     expect(e32?.name).toBe("SettlementPriceMismatch");
@@ -72,7 +72,8 @@ describe("execErrorName", () => {
 
   it("returns variant name for known codes", () => {
     expect(execErrorName(12)).toBe("InsufficientMargin");
-    expect(execErrorName(31)).toBe("TooManyActiveImpactMarkets");
+    expect(execErrorName(96)).toBe("TooManyActiveEvents");
+    expect(execErrorName(31)).toBe("UnknownError");
     expect(execErrorName(32)).toBe("SettlementPriceMismatch");
   });
 

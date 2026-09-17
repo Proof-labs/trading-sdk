@@ -39,44 +39,39 @@ function engineDefaultCreateMarket(): AdminAction {
   };
 }
 
-/** Mirrors the engine's admin-actions-v2 golden fixture
- *  (`admin_proposal_content_hash_v2_golden_vectors` in `codec.rs`) — the
- *  omitted trailers (oracleSource, description, rules) encode as
- *  nil / "" / "", exactly what the engine's instance carries. */
-function engineV2Impact(): AdminAction {
+/** Mirrors the engine's attach fixture (`admin_action_attach_and_batch_wire_vectors_frozen`
+ *  in `codec.rs`): event 91's conditional on perp 15, books from 9100, the
+ *  open-interest trailer at its zero default. */
+function engineV2Attach(): AdminAction {
   return {
-    kind: "CreateImpactMarket",
+    kind: "AttachConditional",
     value: {
-      impactMarketId: 91,
+      eventId: 91,
       underlyingMarket: 15,
       childMarketBase: 9_100,
-      question: "does it land?",
-      deadlineMs: 1_000_000n,
-      resolutionWindowMs: 1_000n,
       imBps: 3334,
       mmBps: 1667,
       takerFeeBps: 5,
       makerFeeBps: 2,
-      fundingIntervalMs: 0n,
-      maxFundingRateBps: 3000,
       signer: new Uint8Array(20),
+      maxOpenInterest: 0n,
     },
   };
 }
 
 /** The engine's golden batch: the default perp re-pointed at market 15,
- *  then the impact family above — one proposal, two creations. */
+ *  then its attachment above — one proposal, a perp and its conditional. */
 function engineV2Batch(): AdminAction {
   const perp = engineDefaultCreateMarket();
-  const impact = engineV2Impact();
-  if (perp.kind !== "CreateMarket" || impact.kind !== "CreateImpactMarket") {
+  const attach = engineV2Attach();
+  if (perp.kind !== "CreateMarket" || attach.kind !== "AttachConditional") {
     throw new Error("unreachable: fixture kinds are fixed");
   }
   return {
     kind: "Batch",
     value: [
       { kind: "CreateMarket", value: { ...perp.value, market: 15 } },
-      { kind: "CreateImpactMarket", value: impact.value },
+      { kind: "AttachConditional", value: attach.value },
     ],
   };
 }
@@ -118,25 +113,25 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     );
   });
 
-  it("reproduces the engine's v2 impact hash bit-for-bit", () => {
+  it("reproduces the engine's attach hash bit-for-bit", () => {
     const hash = adminProposalContentHash({
       ...goldenContext(),
-      action: engineV2Impact(),
+      action: engineV2Attach(),
     });
     expect(bytesToHex(hash)).toBe(
-      "d57a7faa3a17aac647a0256c38f125f6bd0913d70013e185aeb322efaab9629e",
+      "3ffeb7f420cf9f4f50bade95919d885dfc590c7f8c92fb69eacc1704d4662be4",
     );
   });
 
   it("reproduces the engine's v2 batch hash bit-for-bit", () => {
     // Exercises the whole nested-enum path: the Batch arm's list payload,
-    // both item variants, and the impact trailers' default encoding.
+    // both item variants, and the attachment trailer's default encoding.
     const hash = adminProposalContentHash({
       ...goldenContext(),
       action: engineV2Batch(),
     });
     expect(bytesToHex(hash)).toBe(
-      "f9a9b17a53b52ad72c1703b583a0ed4ac70295244cbf31f74518d5177dd86e36",
+      "c099245946aaded3b995198f5ff0592d771729ab314fcf5736036ffb6f559fcd",
     );
   });
 

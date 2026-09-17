@@ -54,14 +54,13 @@ export enum ExecErrorCode {
   InvalidNonce = 21,
   MarketAlreadyExists = 22,
   InvalidMarketConfig = 23,
-  ImpactMarketAlreadyExists = 24,
-  ImpactMarketNotFound = 25,
+  // 24 and 25 belonged to the retired impact-market family; never reassigned.
   MarketClosedForTrading = 26,
   BinaryPriceOutOfRange = 27,
   InvalidResolution = 28,
   PositionLimitExceeded = 29,
   OracleTimestampNotMonotonic = 30,
-  TooManyActiveImpactMarkets = 31,
+  // 31 belonged to the retired impact-market family; never reassigned.
   SettlementPriceMismatch = 32,
   OracleNotApplicable = 33,
   PostOnlyWouldCross = 34,
@@ -115,6 +114,27 @@ export enum ExecErrorCode {
   EmergencyActionRetired = 69,
   AdminActionRequiresProposal = 70,
   InvalidAdminRegistry = 71,
+  BridgeReceiptRegistryInactive = 72,
+  BridgeReceiptInvalid = 73,
+  BridgeReceiptMismatch = 74,
+  WithdrawalBelowMinimum = 75,
+  WithdrawalTerminalGated = 76,
+  // 77-81 are reserved on the wire for oracle-observation and oracle-policy errors.
+  OracleGuardUnset = 82,
+  SubAccountNotFound = 83,
+  SubAccountAlreadyExists = 84,
+  SubAccountTransferSameAccount = 85,
+  SubAccountTransferBothChildren = 86,
+  SubAccountTransferInsufficientBalance = 87,
+  SubAccountIdZero = 88,
+  SubAccountTransferZeroAmount = 89,
+  SubAccountsInactive = 90,
+  WithdrawalPayoutLeaseActive = 91,
+  EventAlreadyExists = 92,
+  EventNotFound = 93,
+  UnderlyingAlreadyAttached = 94,
+  TooManyAttachedConditionals = 95,
+  TooManyActiveEvents = 96,
   InternalError = 255,
 }
 
@@ -182,15 +202,10 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "InvalidMarketConfig",
     description: "invalid market configuration",
   },
-  24: {
-    name: "ImpactMarketAlreadyExists",
-    description: "impact market already exists",
-  },
-  25: { name: "ImpactMarketNotFound", description: "impact market not found" },
   26: {
     name: "MarketClosedForTrading",
     description:
-      "order on a CP/binary book whose parent impact market is resolved or voided",
+      "order on a conditional or binary book whose event is past settlement or resolved",
   },
   27: {
     name: "BinaryPriceOutOfRange",
@@ -199,7 +214,8 @@ const TABLE: Record<number, ExecErrorInfo> = {
   },
   28: {
     name: "InvalidResolution",
-    description: "resolve rejected — invalid outcome for current state",
+    description:
+      "resolve rejected — already resolved, before settlement, attachments still open, or outcome contradicts the oracle source",
   },
   29: {
     name: "PositionLimitExceeded",
@@ -211,11 +227,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "OracleUpdate publish_time_ms must be strictly greater than the last accepted update (audit B3)",
   },
-  31: {
-    name: "TooManyActiveImpactMarkets",
-    description:
-      "account would touch more impact markets than the scenario margin engine can enumerate (cap = 4)",
-  },
   32: {
     name: "SettlementPriceMismatch",
     description:
@@ -224,7 +235,7 @@ const TABLE: Record<number, ExecErrorInfo> = {
   33: {
     name: "OracleNotApplicable",
     description:
-      "OracleUpdate targets a market kind that doesn't take oracle prices (impact-family children mark off the book)",
+      "OracleUpdate targets a market kind that doesn't take oracle prices (conditional and binary books mark off the book)",
   },
   34: {
     name: "PostOnlyWouldCross",
@@ -400,6 +411,89 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "InvalidAdminRegistry",
     description:
       "proposed signer roster violates the registry invariants (threshold bounds, sorted unique members, roster size, version headroom)",
+  },
+  72: {
+    name: "BridgeReceiptRegistryInactive",
+    description:
+      "receipt-gated withdrawal action while no operator receipt registry exists; the path fails closed",
+  },
+  73: {
+    name: "BridgeReceiptInvalid",
+    description:
+      "operator quorum proof failed verification (structure, member count or signature)",
+  },
+  74: {
+    name: "BridgeReceiptMismatch",
+    description:
+      "signed receipt does not bind to this withdrawal or deployment; the log names the field",
+  },
+  75: {
+    name: "WithdrawalBelowMinimum",
+    description:
+      "net withdrawal amount is below the effective minimum (dust-griefing gate)",
+  },
+  76: {
+    name: "WithdrawalTerminalGated",
+    description:
+      "retired legacy relayer terminal submitted at or above the receipt cutover",
+  },
+  82: {
+    name: "OracleGuardUnset",
+    description:
+      "mark-dependent read refused: the oracle-guard gate is active and the market's max oracle age is unset",
+  },
+  83: {
+    name: "SubAccountNotFound",
+    description: "no sub-account for this master and id",
+  },
+  84: {
+    name: "SubAccountAlreadyExists",
+    description: "a sub-account with this master and id already exists",
+  },
+  85: {
+    name: "SubAccountTransferSameAccount",
+    description: "sub-account transfer from and to are the same account",
+  },
+  86: {
+    name: "SubAccountTransferBothChildren",
+    description: "neither side of the sub-account transfer is the master",
+  },
+  87: {
+    name: "SubAccountTransferInsufficientBalance",
+    description: "source sub-account balance is below the transfer amount",
+  },
+  88: {
+    name: "SubAccountIdZero",
+    description: "sub-account id zero is not valid",
+  },
+  89: {
+    name: "SubAccountTransferZeroAmount",
+    description: "sub-account transfer amount must be greater than zero",
+  },
+  90: {
+    name: "SubAccountsInactive",
+    description:
+      "sub-account actions decode but the chain has not enabled them yet",
+  },
+  91: {
+    name: "WithdrawalPayoutLeaseActive",
+    description:
+      "a live payout lease on this withdrawal is held by a different watcher",
+  },
+  92: { name: "EventAlreadyExists", description: "event id already exists" },
+  93: { name: "EventNotFound", description: "no event under this id" },
+  94: {
+    name: "UnderlyingAlreadyAttached",
+    description: "this underlying is already attached to the event",
+  },
+  95: {
+    name: "TooManyAttachedConditionals",
+    description: "the event's attachment cap is reached",
+  },
+  96: {
+    name: "TooManyActiveEvents",
+    description:
+      "account would touch more events than the scenario margin engine can enumerate (per-account cap)",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

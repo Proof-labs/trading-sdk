@@ -48,7 +48,6 @@ import type {
   WithdrawalStatus,
   AdminSignerRegistry,
   ProposalPage,
-  ImpactMarketInfo,
   EventInfo,
   SetPositionTriggers,
   PositionTriggerInfo,
@@ -61,7 +60,6 @@ import type {
 } from "./types.js";
 import {
   decodeAdminSignerRegistryInfo,
-  decodeImpactMarketInfo,
   decodeEventInfo,
   decodeProposalPage,
 } from "./governance-query.js";
@@ -1131,29 +1129,10 @@ export class ExchangeClient {
     return raw.map((m) => decodeMarketConfig(m));
   }
 
-  /** List all impact-market families (the 5-book event structures: an
-   *  underlying perp plus CPY/CPN/EBY/EBN children). Fail-closed like the
-   *  governance reads: a missing envelope or a malformed row is a refusal,
-   *  never a partially-rendered list (decoder pinned to engine golden bytes
-   *  in governance-query.test.ts). */
-  async queryImpactMarkets(): Promise<ImpactMarketInfo[]> {
-    const json = await fetchApiJson(`${this.readBaseUrl}/v1/impact_markets`);
-    if (typeof json.data !== "string") {
-      throw new Error(
-        "governance decode: impact-markets response has no encoded-data envelope",
-      );
-    }
-    const raw = msgpackDecoder.decode(fromBase64(json.data));
-    if (!Array.isArray(raw)) {
-      throw new Error("governance decode: impactMarkets is not an array");
-    }
-    return raw.map((r, i) => decodeImpactMarketInfo(r, i));
-  }
-
-  /** All standalone events (G17). Each is two prediction-binary books (EBY/EBN)
-   *  under one `EventInfo`, no underlying perp. Fail-closed like the impact
-   *  read: a missing envelope or malformed row is a refusal. Decoder pinned to
-   *  the engine golden vector in governance-query.test.ts. */
+  /** All events: each is two prediction-binary books (EBY/EBN) under one
+   *  `EventInfo`, plus every conditional attached to it. Fail-closed like the
+   *  governance reads: a missing envelope or malformed row is a refusal.
+   *  Decoder pinned to the engine golden vector in governance-query.test.ts. */
   async queryEvents(): Promise<EventInfo[]> {
     const json = await fetchApiJson(`${this.readBaseUrl}/v1/events`);
     if (typeof json.data !== "string") {
@@ -1168,10 +1147,10 @@ export class ExchangeClient {
     return raw.map((r, i) => decodeEventInfo(r, i));
   }
 
-  /** A single standalone event by id, or `null` if it does not exist. The node
-   *  returns 404 for a missing event (the engine's msgpack-nil, translated like
-   *  the impact-market route), so a raw fetch is used here to map 404 -> null
-   *  while still throwing on real transport / decode failures. */
+  /** A single event by id, or `null` if it does not exist. The node returns
+   *  404 for a missing event (the engine's msgpack-nil), so a raw fetch is used
+   *  here to map 404 -> null while still throwing on real transport / decode
+   *  failures. */
   async queryEvent(eventId: number): Promise<EventInfo | null> {
     const res = await fetch(`${this.readBaseUrl}/v1/event/${eventId}`);
     if (res.status === 404) return null;
@@ -1458,7 +1437,7 @@ export class ExchangeClient {
       bindingScenario = ((raw[6] as unknown[]) ?? []).map((e) => {
         const t = e as [number | bigint, string];
         return {
-          impactMarketId: Number(t[0]),
+          eventId: Number(t[0]),
           branch: t[1] as "Yes" | "No",
         };
       });

@@ -319,18 +319,31 @@ function toAction(
           agentPubkey: bytes(input.agent_pubkey),
         },
       };
-    case ActionType.CreateImpactMarket:
+    case ActionType.CreateSubAccount:
       return {
-        type: "CreateImpactMarket",
-        data: toCreateImpactMarketValue(input),
-      };
-    case ActionType.ResolveImpactMarket:
-      return {
-        type: "ResolveImpactMarket",
+        type: "CreateSubAccount",
         data: {
-          impactMarketId: input.impact_market_id as number,
-          outcome: OUTCOME[input.outcome as string],
-          signer: bytes(input.signer),
+          owner: bytes(input.owner),
+          subAccountId: input.sub_account_id as number,
+          name: bytes(input.name),
+        },
+      };
+    case ActionType.SubAccountTransfer:
+      return {
+        type: "SubAccountTransfer",
+        data: {
+          owner: bytes(input.owner),
+          from: bytes(input.from),
+          to: bytes(input.to),
+          amount: big(input.amount),
+        },
+      };
+    case ActionType.ClaimWithdrawalPayout:
+      return {
+        type: "ClaimWithdrawalPayout",
+        data: {
+          withdrawalId: big(input.withdrawal_id),
+          holder: bytes(input.holder),
         },
       };
     case ActionType.ResolveEvent:
@@ -572,28 +585,40 @@ function toCreateMarketValue(
   };
 }
 
-/** Reconstruct a TS `CreateImpactMarket` value from the vector's serde map
- *  form — shared by the relayer action (0x0e), the `AdminAction` arm, and
- *  `Batch` items. */
-function toCreateImpactMarketValue(
+/** Reconstruct a TS `AttachConditional` value from the vector's serde map
+ *  form — shared by the `AdminAction` arm and `Batch` items. */
+function toAttachConditionalValue(
   input: Record<string, unknown>,
-): import("./types.js").CreateImpactMarket {
-  const os = input.oracle_source;
-  const parsedOs =
-    os === null || os === undefined ? undefined : parseOracleSource(os);
+): import("./types.js").AttachConditional {
   return {
-    impactMarketId: input.impact_market_id as number,
+    eventId: input.event_id as number,
     underlyingMarket: input.underlying_market as number,
     childMarketBase: input.child_market_base as number,
-    question: input.question as string,
-    deadlineMs: big(input.deadline_ms),
-    resolutionWindowMs: big(input.resolution_window_ms),
     imBps: input.im_bps as number,
     mmBps: input.mm_bps as number,
     takerFeeBps: input.taker_fee_bps as number,
     makerFeeBps: input.maker_fee_bps as number,
-    fundingIntervalMs: big(input.funding_interval_ms),
-    maxFundingRateBps: input.max_funding_rate_bps as number,
+    signer: bytes(input.signer),
+    maxOpenInterest: big(input.max_open_interest),
+  };
+}
+
+/** Reconstruct a TS `CreateEvent` value from the vector's serde map form. */
+function toCreateEventValue(
+  input: Record<string, unknown>,
+): import("./types.js").CreateEvent {
+  const os = input.oracle_source;
+  const parsedOs =
+    os === null || os === undefined ? undefined : parseOracleSource(os);
+  return {
+    eventId: input.event_id as number,
+    childMarketBase: input.child_market_base as number,
+    poolId: input.pool_id as number,
+    question: input.question as string,
+    settlementMs: big(input.settlement_ms),
+    resolutionWindowMs: big(input.resolution_window_ms),
+    takerFeeBps: input.taker_fee_bps as number,
+    makerFeeBps: input.maker_fee_bps as number,
     signer: bytes(input.signer),
     oracleSource: parsedOs,
     description:
@@ -604,6 +629,7 @@ function toCreateImpactMarketValue(
       input.rules === "" || input.rules == null
         ? undefined
         : (input.rules as string),
+    maxOpenInterest: big(input.max_open_interest),
   };
 }
 
@@ -617,11 +643,11 @@ function toAdminBatchItem(
       value: toCreateMarketValue(v.CreateMarket as Record<string, unknown>),
     };
   }
-  if (v.CreateImpactMarket) {
+  if (v.AttachConditional) {
     return {
-      kind: "CreateImpactMarket",
-      value: toCreateImpactMarketValue(
-        v.CreateImpactMarket as Record<string, unknown>,
+      kind: "AttachConditional",
+      value: toAttachConditionalValue(
+        v.AttachConditional as Record<string, unknown>,
       ),
     };
   }
@@ -656,11 +682,17 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       value: toCreateMarketValue(v.CreateMarket as Record<string, unknown>),
     };
   }
-  if (v.CreateImpactMarket) {
+  if (v.CreateEvent) {
     return {
-      kind: "CreateImpactMarket",
-      value: toCreateImpactMarketValue(
-        v.CreateImpactMarket as Record<string, unknown>,
+      kind: "CreateEvent",
+      value: toCreateEventValue(v.CreateEvent as Record<string, unknown>),
+    };
+  }
+  if (v.AttachConditional) {
+    return {
+      kind: "AttachConditional",
+      value: toAttachConditionalValue(
+        v.AttachConditional as Record<string, unknown>,
       ),
     };
   }
@@ -913,8 +945,12 @@ describe("conformance vectors (TypeScript)", () => {
     const seenKinds = new Set<string>();
     const seenComparisons = new Set<string>();
     for (const c of cases("codec.ndjson")) {
-      if (c.action_type !== ActionType.CreateImpactMarket) continue;
-      const os = (c.input as Record<string, unknown>).oracle_source;
+      if (c.action_type !== ActionType.ProposeAdminAction) continue;
+      const action = (c.input as Record<string, unknown>).action as
+        Record<string, unknown> | undefined;
+      const event = action?.CreateEvent as Record<string, unknown> | undefined;
+      if (!event) continue;
+      const os = event.oracle_source;
       if (os === null || os === undefined) continue;
       const parsed = parseOracleSource(os) as {
         kind: string;
@@ -938,11 +974,12 @@ describe("conformance vectors (TypeScript)", () => {
       govTypes.has(c.action_type as number),
     );
     // Guard against the vector file drifting out from under this assertion:
-    // propose (create-market, v2 batch, trigger config, unpause-bridge,
-    // cancel-all-for-account scoped and unscoped, create-impact-market
-    // with a MarketOracle source, and oracle policy), approve, reject, and
-    // all three emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(13);
+    // propose (create-market, the perp-plus-attach batch, the attach
+    // singleton, six create-event oracle-source shapes, trigger config,
+    // unpause-bridge, cancel-all-for-account scoped and unscoped, and oracle
+    // policy), approve, reject, and all three emergency arms (PauseMarket,
+    // HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(19);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

@@ -265,7 +265,7 @@ client.submit_tx(OracleUpdateComposite(
 
 Other operator actions (`OracleUpdate`, `CreateMarket`, `UpdateMarketFees`,
 `ConfirmDeposit`/`ConfirmWithdrawal`/`FailWithdrawal`, `Deposit`/`Withdraw`,
-`CreateImpactMarket`, `ResolveEvent`) are in `OperatorAction`; the Python SDK
+`ResolveEvent`, `ClaimWithdrawalPayout`) are in `OperatorAction`; the Python SDK
 exposes them via typed builders where present or `RawAction` otherwise. See
 `src/types.ts` for every payload shape.
 
@@ -276,7 +276,7 @@ read endpoints as follows:
 
 | Endpoint                                                                                                                                                 | Gateway            | Notes                                         |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | --------------------------------------------- |
-| `/v1/markets`, `/v1/orderbook/*`, `/v1/candles/*`, `/v1/trades/*`, `/v1/funding/*`, `/v1/fee-tiers/*`, `/v1/impact_*`, `/v1/health`, `/v1/oracle/health` | ✅ Proxied to node | Public, no auth                               |
+| `/v1/markets`, `/v1/orderbook/*`, `/v1/candles/*`, `/v1/trades/*`, `/v1/funding/*`, `/v1/fee-tiers/*`, `/v1/events`, `/v1/event/*`, `/v1/health`, `/v1/oracle/health` | ✅ Proxied to node | Public, no auth                               |
 | `POST /info`                                                                                                                                             | ✅ Routed          | Structured queries (clearinghouseState, etc.) |
 | `/v1/account/{hex}`                                                                                                                                      | ❌ **Not routed**  | 404s on gateway                               |
 | `/v1/account/{hex}/recent-nonces`, `/v1/nonce/{hex}`                                                                                                     | ✅ Routed          | Diagnostic                                    |
