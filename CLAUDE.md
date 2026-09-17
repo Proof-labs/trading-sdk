@@ -288,21 +288,27 @@ and may be firewalled off in a public deployment.
   default it for the public SDK, and never add a fresh hard-coded `rpcUrl` /
   `apiUrl` call that bypasses the base getters.
 
-## Oracle-health scope
+## SDK scope — every gateway interaction, admin calls included
 
-[ADR 0002](docs/adr/0002-oracle-health-out-of-scope.md) rejected oracle-health
-reads when no trading or admin consumer required them. Draft PR #131 implements
-the narrow exception proposed in
-[ADR 0003](docs/adr/0003-oracle-freshness-for-trading-ui.md):
-`ExchangeClient.reads().oracleHealth()` forwards the existing gateway response
-for Web-UI freshness warnings and order guards. Keep the PR draft while that
-scope decision is under review.
+**Every gateway interaction an application makes goes through the SDK**:
+trading actions, reads, streams, the oracle health check and admin calls alike
+([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md),
+accepted 2026-09-16, which supersedes
+[ADR 0002](docs/adr/0002-oracle-health-out-of-scope.md)). No gateway call is
+out of scope for being "operational" or "admin-only". When Web-UI, Web Admin, a
+bot or a script needs a gateway route the SDK does not cover, add the SDK
+method; do not leave the caller to hand-roll it.
 
-Keep the raw response, HTTP errors and cancellation intact. Freshness thresholds
-and UI policy stay in the application. Do not add a second typed
-`queryOracleHealth()` API, infer trading authorization, or expand this exception
-into an SDK monitoring service. Grafana retains operational monitoring ownership.
-Oracle operations remain allowlist-gated `OperatorAction`s.
+- **Oracle health.** `ExchangeClient.reads().oracleHealth()` forwards
+  `GET /v1/oracle/health` with the response body, HTTP errors and cancellation
+  intact. Freshness thresholds and display policy stay in the application, and
+  the read is not trading authorization. Extend it rather than adding a parallel
+  `queryOracleHealth()`. Grafana Markets Health remains the operational
+  dashboard; the SDK does not become a monitoring service.
+- **Admin and operator calls.** They ship in the SDK for their consumers, but
+  the engine still gates them behind allowlists and multisig: being in the SDK
+  grants no authority. Trading integrations can keep typing their calls as
+  `TraderAction`.
 
 ## Security notes
 

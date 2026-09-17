@@ -237,8 +237,9 @@ the response body, HTTP errors and cancellation. The Web-UI uses feeder freshnes
 for its existing delay warnings and order guards. Thresholds and display policy
 remain in the application; `status: "ok"` alone does not mean fresh data, and
 `embedded_feeder: false` must remain unavailable. This is operational evidence,
-not trading authorization. [ADR 0003](docs/adr/0003-oracle-freshness-for-trading-ui.md)
-proposes the narrow exception to ADR 0002 for this consumer.
+not trading authorization. Like every other gateway interaction, admin calls
+included, it goes through the SDK
+([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md)).
 
 ### Optional native Rust gateway transport
 

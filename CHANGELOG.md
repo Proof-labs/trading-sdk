@@ -38,8 +38,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `ExchangeClient.reads().oracleHealth()` forwards gateway freshness responses
   for existing Web-UI warnings and order guards, preserving unavailable-feeder
-  data, HTTP failures and caller cancellation. Thresholds remain in the frontend;
-  ADR 0003 proposes this narrow exception to ADR 0002.
+  data, HTTP failures and caller cancellation. Thresholds remain in the frontend.
+  ADR 0003 supersedes ADR 0002: every gateway interaction, including oracle
+  health and admin calls, goes through the SDK.
 - `queryHistoryPositionsPage()` preserves nullable close fields, exact indexer
   timestamps and opaque pagination cursors alongside the existing array API.
 - External async Ed25519 signers, per-transaction delivery waits and optional
@@ -66,7 +67,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `addressHex` override (#91).
 - `queryOraclePermissions(market)` reads committed single-dependency policy,
   calendar, activation and frozen verdict state with exact integers. This is not
-  operational oracle health (ADR 0002), nor portfolio-wide trading authorization.
+  operational oracle health (`reads().oracleHealth()`), nor portfolio-wide
+  trading authorization.
   npm 3.2 is additive; unchanged Rust/Python packages retain their versions.
 - Integrates the reviewed admin-tag-8 mirror and compatibility vectors from
   trading-sdk #106 (`09cf55f`) alongside F16. Cancel-all scoped/unscoped bytes,
