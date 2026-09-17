@@ -8,22 +8,62 @@ use serde::Deserialize;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReceiptObservation {
     Committed(CommittedReceipt),
-    /// A positive, structurally verified `price_updated` event in an exact
-    /// code-zero committed receipt. Composite updates share this event; a
-    /// caller must also bind the hash to its retained signed primary action,
-    /// chain, market and signer before inferring a primary publish-floor effect.
-    /// This is gateway evidence, not a cryptographic consensus inclusion proof.
-    CommittedPriceUpdate {
-        receipt: CommittedReceipt,
-        market: u32,
-        price: u64,
-        signer: [u8; 20],
-    },
+    CommittedPriceUpdate(CommittedPriceUpdate),
     /// The gateway returned the canonical not-found shape for exactly this
     /// requested hash. This is a liveness observation, never finality proof.
     ExactNotFound {
         tx_hash: [u8; 32],
     },
+}
+
+/// A positive, structurally verified `price_updated` event in an exact
+/// code-zero committed receipt, built only by
+/// [`MarketsSnapshotClient::receipt_observation`]. Composite updates share this
+/// event; a caller must also bind the hash to its retained signed primary
+/// action, chain, market and signer before inferring a primary publish-floor
+/// effect. This is gateway evidence, not a cryptographic consensus inclusion
+/// proof.
+///
+/// ```
+/// # use proof_trading_sdk::market_snapshot::{CommittedPriceUpdate, ReceiptObservation};
+/// fn updated_market(observation: &ReceiptObservation) -> Option<u32> {
+///     match observation {
+///         ReceiptObservation::CommittedPriceUpdate(update) => Some(update.market()),
+///         _ => None,
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// # use proof_trading_sdk::market_snapshot::{CommittedPriceUpdate, CommittedReceipt};
+/// fn forge(receipt: CommittedReceipt) -> CommittedPriceUpdate {
+///     CommittedPriceUpdate { receipt, market: 1, price: 1, signer: [1; 20] }
+/// }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommittedPriceUpdate {
+    receipt: CommittedReceipt,
+    market: u32,
+    price: u64,
+    signer: [u8; 20],
+}
+
+impl CommittedPriceUpdate {
+    pub fn receipt(&self) -> &CommittedReceipt {
+        &self.receipt
+    }
+
+    pub fn market(&self) -> u32 {
+        self.market
+    }
+
+    pub fn price(&self) -> u64 {
+        self.price
+    }
+
+    pub fn signer(&self) -> [u8; 20] {
+        self.signer
+    }
 }
 
 #[derive(Deserialize)]
@@ -113,12 +153,14 @@ fn price_update(body: &[u8], receipt: &CommittedReceipt) -> Option<ReceiptObserv
             _ => return None,
         }
     }
-    Some(ReceiptObservation::CommittedPriceUpdate {
-        receipt: receipt.clone(),
-        market: market?,
-        price: price?,
-        signer: signer?,
-    })
+    Some(ReceiptObservation::CommittedPriceUpdate(
+        CommittedPriceUpdate {
+            receipt: receipt.clone(),
+            market: market?,
+            price: price?,
+            signer: signer?,
+        },
+    ))
 }
 
 fn classify(status: u16, body: &[u8], hash: [u8; 32]) -> Result<ReceiptObservation, SnapshotError> {

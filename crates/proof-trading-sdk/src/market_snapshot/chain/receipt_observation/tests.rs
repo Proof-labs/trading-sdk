@@ -27,7 +27,7 @@ fn positive_plaintext_event_preserves_effect_metadata_not_primary_action_identit
     let body = serde_json::to_vec(&accepted_body()).unwrap();
     assert_eq!(
         classify(200, &body, HASH).unwrap(),
-        ReceiptObservation::CommittedPriceUpdate {
+        ReceiptObservation::CommittedPriceUpdate(CommittedPriceUpdate {
             receipt: CommittedReceipt {
                 hash: HASH,
                 height: 42,
@@ -36,7 +36,7 @@ fn positive_plaintext_event_preserves_effect_metadata_not_primary_action_identit
             market: 15,
             price: 120,
             signer: [0xcd; 20],
-        }
+        })
     );
     assert_eq!(
         super::super::decode_receipt(&body, HASH).unwrap(),
@@ -322,12 +322,8 @@ async fn positive_event_observation_uses_the_same_bounded_gateway_route() {
     let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
     assert!(matches!(
         client.receipt_observation(HASH).await.unwrap(),
-        ReceiptObservation::CommittedPriceUpdate {
-            market: 15,
-            price: 120,
-            signer,
-            ..
-        } if signer == [0xcd; 20]
+        ReceiptObservation::CommittedPriceUpdate(update)
+            if (update.market(), update.price(), update.signer()) == (15, 120, [0xcd; 20])
     ));
     task.await.unwrap();
 }

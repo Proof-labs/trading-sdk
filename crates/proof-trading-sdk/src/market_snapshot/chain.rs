@@ -5,7 +5,7 @@ use super::{MarketsSnapshotClient, SnapshotError};
 use serde::{de::DeserializeOwned, Deserialize};
 
 mod receipt_observation;
-pub use receipt_observation::ReceiptObservation;
+pub use receipt_observation::{CommittedPriceUpdate, ReceiptObservation};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChainIdentity {

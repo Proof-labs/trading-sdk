@@ -22,28 +22,112 @@ pub struct SnapshotWitness {
     pub app_hash: [u8; 32],
 }
 
+/// A decoded snapshot and its witness, built only by [`decode_bound_snapshot`].
+///
+/// ```compile_fail
+/// # use proof_trading_sdk::market_snapshot::{BoundMarketsSnapshot, MarketsSnapshot, SnapshotWitness};
+/// fn forge(snapshot: MarketsSnapshot, witness: SnapshotWitness) -> BoundMarketsSnapshot {
+///     BoundMarketsSnapshot { snapshot, witness }
+/// }
+/// ```
 #[derive(Debug)]
 pub struct BoundMarketsSnapshot {
-    pub snapshot: MarketsSnapshot,
-    pub witness: SnapshotWitness,
+    snapshot: MarketsSnapshot,
+    witness: SnapshotWitness,
 }
 
+impl BoundMarketsSnapshot {
+    pub fn snapshot(&self) -> &MarketsSnapshot {
+        &self.snapshot
+    }
+
+    pub fn witness(&self) -> &SnapshotWitness {
+        &self.witness
+    }
+}
+
+/// A decoded status read with its node identity and app hash, built only by
+/// [`decode_bound_identity`].
+///
+/// ```compile_fail
+/// # use proof_trading_sdk::market_snapshot::{BoundChainIdentity, ChainIdentity};
+/// fn forge(identity: ChainIdentity) -> BoundChainIdentity {
+///     BoundChainIdentity { identity, node_id: [1; 20], app_hash: [2; 32], app_hash_height: 1 }
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundChainIdentity {
-    pub identity: ChainIdentity,
-    pub node_id: [u8; 20],
-    pub app_hash: [u8; 32],
-    /// `/status.latest_app_hash` comes from the latest block HEADER and is
-    /// therefore post-(latest_height - 1), not post-latest_height.
-    pub app_hash_height: u64,
+    identity: ChainIdentity,
+    node_id: [u8; 20],
+    app_hash: [u8; 32],
+    app_hash_height: u64,
 }
 
+impl BoundChainIdentity {
+    pub fn identity(&self) -> &ChainIdentity {
+        &self.identity
+    }
+
+    pub fn node_id(&self) -> [u8; 20] {
+        self.node_id
+    }
+
+    pub fn app_hash(&self) -> [u8; 32] {
+        self.app_hash
+    }
+
+    /// `/status.latest_app_hash` comes from the latest block HEADER and is
+    /// therefore post-(latest_height - 1), not post-latest_height.
+    pub fn app_hash_height(&self) -> u64 {
+        self.app_hash_height
+    }
+}
+
+/// A snapshot whose witness passed [`validate_bound_inventory`] against the
+/// status reads before and after it. Only that validator builds one, and its
+/// parts are read-only.
+///
+/// ```
+/// # use proof_trading_sdk::market_snapshot::BoundInventorySnapshot;
+/// fn witnessed_height(bound: &BoundInventorySnapshot) -> u64 {
+///     bound.witness().height
+/// }
+/// ```
+///
+/// ```compile_fail
+/// # use proof_trading_sdk::market_snapshot::BoundInventorySnapshot;
+/// fn forge(bound: &mut BoundInventorySnapshot) {
+///     bound.witness.node_id = [0; 20];
+/// }
+/// ```
 #[derive(Debug)]
 pub struct BoundInventorySnapshot {
-    pub snapshot: MarketsSnapshot,
-    pub witness: SnapshotWitness,
-    pub before: BoundChainIdentity,
-    pub after: BoundChainIdentity,
+    snapshot: MarketsSnapshot,
+    witness: SnapshotWitness,
+    before: BoundChainIdentity,
+    after: BoundChainIdentity,
+}
+
+impl BoundInventorySnapshot {
+    pub fn snapshot(&self) -> &MarketsSnapshot {
+        &self.snapshot
+    }
+
+    pub fn witness(&self) -> &SnapshotWitness {
+        &self.witness
+    }
+
+    pub fn before(&self) -> &BoundChainIdentity {
+        &self.before
+    }
+
+    pub fn after(&self) -> &BoundChainIdentity {
+        &self.after
+    }
+
+    pub fn into_snapshot(self) -> MarketsSnapshot {
+        self.snapshot
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
