@@ -159,6 +159,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- TypeScript submission treats a fixed, known set of structured, hashless
+  HTTP 200/503 gateway refusals as terminal transport errors with the
+  original reason, mirroring the Rust core's exact allowlist. Any other
+  hashless HTTP 200/503 body — an unrecognized message, in particular —
+  still reconciles by transaction hash without resubmission, same as
+  before, since an unfamiliar message is not proof the transaction never
+  reached the broadcaster.
+
 - Position-history reads decode the indexer's page envelope and `entry_px` /
   `block_time` fields. The array API retains string fields, using empty strings
   for absent close data; the paged API preserves nulls.

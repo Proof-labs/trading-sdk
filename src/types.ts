@@ -1593,8 +1593,9 @@ export type ExchangeEvent =
  * - `"engine"`    — the engine rejected it with an `ExecError` (`code` 1..53/255);
  *                   see {@link TxResult.error} for the decoded name/description.
  * - `"transport"` — a gateway/HTTP-level failure (auth, rate-limit, body too
- *                   large, 5xx, non-JSON body). `code` is the synthesized HTTP
- *                   status, not an engine code.
+ *                   large, or a structured pre-admission refusal at HTTP
+ *                   200/503). `code` is synthetic (1 for HTTP 200), not an
+ *                   engine code. Unrecognized 5xx responses stay `timeout`.
  * - `"timeout"`   — no final chain verdict is available yet (`code === -1`):
  *                   either the gateway returned a hash-only ambiguous response
  *                   or inclusion polling expired. The tx may still land.
