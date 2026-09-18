@@ -45,8 +45,6 @@ describe("gateway finality", () => {
     [200, "invalid action parameters", 1],
     [503, "service overloaded", 503],
     [503, "service unavailable", 503],
-    [503, "position-trigger activation status is unavailable", 503],
-    [503, "invalid signature", 503],
   ])(
     "keeps hashless HTTP %i refusal terminal (%s)",
     async (status, reason, code) => {
@@ -127,6 +125,16 @@ describe("gateway finality", () => {
     [503, { status: "error", error: "service overloaded", retryAfterMs: 500 }],
     [200, { status: "error", error: "unknown", events: [] }],
     [200, { status: "error", error: "unknown", code: "12" }],
+    [503, { status: "error", error: "invalid signature" }],
+    [
+      503,
+      {
+        status: "error",
+        error: "position-trigger activation status is unavailable",
+      },
+    ],
+    [503, { status: "error", error: "unknown edge failure" }],
+    [200, { status: "error", error: "unknown edge failure" }],
   ])("reconciles HTTP %i ambiguous envelope %j", async (status, body) => {
     const fetch = vi
       .fn()

@@ -792,7 +792,7 @@ export class ExchangeClient {
           "request body exceeds max size (default 8192 bytes)",
       );
     }
-    const refusal = preAdmissionRefusal(gatewayBody.json);
+    const refusal = preAdmissionRefusal(res.status, gatewayBody.json);
     // Gateway ExchangeResponse::err is hashless: a structured 503 proves
     // the transaction never entered the broadcaster queue.
     if (res.status === 503 && refusal !== undefined) {
@@ -815,18 +815,7 @@ export class ExchangeClient {
       return txTransportError(1, errMsg);
     }
 
-    const json = gatewayBody.json as
-      | {
-          status?: string;
-          error?: string;
-          txHash?: string;
-          code?: number;
-          log?: string;
-          info?: string;
-          height?: number;
-          events?: TxEvent[];
-        }
-      | undefined;
+    const json = gatewayBody.json as GatewayResponseBody | undefined;
 
     // The gateway is synchronous on the on-chain result (api-gateway#90): it
     // parks the response on the tx hash and answers with the chain's own
@@ -2332,24 +2321,78 @@ function computeCometTxHash(txBytes: Uint8Array): string {
   return bytesToHex(sha256(txBytes)).toUpperCase();
 }
 
-/** Follow the gateway's response shape, not a fixed list of error messages.
- * ExchangeResponse::err omits admission/verdict and rate-limit fields;
- * contradictory evidence must not become a retry-safe refusal. */
-function preAdmissionRefusal(value: unknown): string | undefined {
+/** Shape of a gateway `/exchange` JSON response body — the same envelope
+ * both the engine-result decode below and `preAdmissionRefusal` read, kept
+ * as one declaration so a new field is visible to both. */
+interface GatewayResponseBody {
+  status?: string;
+  error?: string;
+  txHash?: string;
+  code?: number;
+  log?: string;
+  info?: string;
+  height?: number;
+  events?: TxEvent[];
+  mode?: string;
+  retryAfterMs?: number;
+}
+
+/** Only a fixed, known set of (HTTP status, message) pairs is hashless proof
+ * of a pre-admission refusal — mirrors
+ * `crates/proof-trading-sdk/src/gateway/mod.rs::pre_admission_refusal`
+ * exactly for the statuses reached here (200, 503). ExchangeResponse::err
+ * omits admission/verdict and rate-limit fields, but the shape alone is not
+ * enough: an unrecognized message in that same shape can come from a generic
+ * failure (an intermediary, a proxy) rather than the gateway's own refusal
+ * path, and contradictory or unknown evidence must not become a terminal
+ * refusal for a transaction that may have executed. */
+function preAdmissionRefusal(
+  status: number,
+  value: unknown,
+): string | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
-  const body = value as Record<string, unknown>;
+  const body = value as GatewayResponseBody;
   if (
-    body.status === "error" &&
-    typeof body.error === "string" &&
-    body.error.trim().length > 0 &&
-    body.txHash === undefined &&
-    body.code === undefined &&
-    body.log === undefined &&
-    body.retryAfterMs === undefined &&
-    body.height === undefined &&
-    body.events === undefined
+    body.status !== "error" ||
+    typeof body.error !== "string" ||
+    body.txHash !== undefined ||
+    body.code !== undefined ||
+    body.log !== undefined ||
+    body.height !== undefined ||
+    body.events !== undefined
+  )
+    return undefined;
+
+  if (
+    status === 503 &&
+    body.error === "maintenance: signed writes are not open"
+  ) {
+    if (body.retryAfterMs !== undefined) return undefined;
+    return body.mode === "paused" || body.mode === "cancel-only"
+      ? body.error
+      : undefined;
+  }
+  if (body.mode !== undefined || body.retryAfterMs !== undefined)
+    return undefined;
+
+  if (
+    status === 503 &&
+    (body.error === "service overloaded" ||
+      body.error === "service unavailable")
   )
     return body.error;
+  if (
+    status === 200 &&
+    (body.error === "invalid request body" ||
+      body.error === "invalid action parameters" ||
+      body.error === "invalid base64 in action field" ||
+      body.error === "invalid signature" ||
+      body.error === "internal encoding error" ||
+      body.error ===
+        "action type 0x1d is proposer-only and cannot enter through the gateway")
+  )
+    return body.error;
+  return undefined;
 }
 
 async function readGatewayBody(res: Response): Promise<{
