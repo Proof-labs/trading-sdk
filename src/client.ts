@@ -2346,20 +2346,26 @@ interface GatewayResponseBody {
  * failure (an intermediary, a proxy) rather than the gateway's own refusal
  * path, and contradictory or unknown evidence must not become a terminal
  * refusal for a transaction that may have executed. */
+const PRE_ADMISSION_REFUSAL_FIELDS = new Set([
+  "status",
+  "error",
+  "mode",
+  "retryAfterMs",
+]);
+
 function preAdmissionRefusal(
   status: number,
   value: unknown,
 ): string | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return;
   const body = value as GatewayResponseBody;
+  // Mirrors `RefusalRead`'s `#[serde(deny_unknown_fields)]`: any field
+  // outside this exact set — including ones this SDK doesn't know about
+  // yet — makes the body unrecognized, not refusal evidence.
   if (
     body.status !== "error" ||
     typeof body.error !== "string" ||
-    body.txHash !== undefined ||
-    body.code !== undefined ||
-    body.log !== undefined ||
-    body.height !== undefined ||
-    body.events !== undefined
+    Object.keys(body).some((key) => !PRE_ADMISSION_REFUSAL_FIELDS.has(key))
   )
     return undefined;
 

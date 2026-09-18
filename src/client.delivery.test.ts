@@ -135,6 +135,11 @@ describe("gateway finality", () => {
     ],
     [503, { status: "error", error: "unknown edge failure" }],
     [200, { status: "error", error: "unknown edge failure" }],
+    [
+      503,
+      { status: "error", error: "service overloaded", info: "outcome unknown" },
+    ],
+    [200, { status: "error", error: "invalid signature", txHash: null }],
   ])("reconciles HTTP %i ambiguous envelope %j", async (status, body) => {
     const fetch = vi
       .fn()
