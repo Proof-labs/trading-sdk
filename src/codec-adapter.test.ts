@@ -85,7 +85,7 @@ describe("codec-adapter byte fields", () => {
   });
 });
 
-describe("codec-adapter pre-fill trigger fields (WIRE-PENDING on bytes)", () => {
+describe("codec-adapter pre-fill trigger fields", () => {
   const owner = new Uint8Array(20).fill(1);
   const limb = { triggerPrice: 95_000n, maxSlippageBps: 75, clientTriggerId: 11n };
 

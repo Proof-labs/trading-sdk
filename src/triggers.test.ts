@@ -2,6 +2,7 @@ import { Decoder, Encoder } from "@msgpack/msgpack";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   adminProposalContentHash,
+  decodeTx,
   encodePayloadBytes,
   encodeSignedTx,
 } from "./codec.js";
@@ -341,5 +342,65 @@ describe("F2 pre-fill order trigger validation", () => {
     expect(() =>
       validateOrderTriggers({ takeProfit: limb(), reduceOnly: true }),
     ).toThrow(/reduceOnly/);
+  });
+});
+
+describe("F2 pre-fill trigger wire contract (proof-wire 2.1.0)", () => {
+  // Frozen vectors from Proof-labs/exchange exchange-wire/vectors/
+  // (draft PR #655, rev 592735c6): full signed envelopes, test key 0x42×32,
+  // UNBOUND_CHAIN_ID. The same bytes are pinned in conformance/signing.ndjson.
+  const WITH_TRIGGERS_ENVELOPE =
+    "96020101c4369b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a347746393ce000173184b0b93ce0001adb0320cc4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c440dc991c8b31063e6cd1d26cd61e3dcf91f6af2e1d9092db51ca49808316e7b3640c3f9622cb55036adbb39424508f56e1e5acdb59aa56088d2ecea3d309307e05";
+  const NO_TRIGGERS_ENVELOPE =
+    "96020102c4269901dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463c4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c44063588d198e83ae1e4862432b1cf58d23fc95c6638db6e0b0c2d76b2248552a67d4200214b0299aff617aab73b91183e43def96d0e23b3d83be22a75722460b0d";
+  const NO_TRIGGERS_CANONICAL_PAYLOAD =
+    "9b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463c0c0";
+
+  const hexToBytes = (hex: string): Uint8Array => {
+    const out = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < out.length; i += 1) {
+      out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    }
+    return out;
+  };
+
+  it("decodes the frozen with-triggers envelope to typed limbs and re-encodes byte-exactly", () => {
+    const WITH_TRIGGERS_PAYLOAD =
+      "9b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a347746393ce000173184b0b93ce0001adb0320c";
+    const decoded = decodeTx(hexToBytes(WITH_TRIGGERS_ENVELOPE));
+    expect(decoded.action.type).toBe("PlaceOrder");
+    const data = decoded.action.data as Record<string, unknown>;
+    // decode → typed: limbs come back as TriggerLimb values, u64s as bigint.
+    expect(data.stopLoss).toEqual({
+      triggerPrice: 95_000n,
+      maxSlippageBps: 75,
+      clientTriggerId: 11n,
+    });
+    expect(data.takeProfit).toEqual({
+      triggerPrice: 110_000n,
+      maxSlippageBps: 50,
+      clientTriggerId: 12n,
+    });
+    // typed → re-encode: byte-identical payload through the SDK codec (the
+    // full signed envelope itself is pinned byte-exactly in
+    // conformance/signing.ndjson as place_order/with_triggers@seq1/unbound).
+    expect(bytesToHex(encodePayloadBytes(decoded.action))).toBe(
+      WITH_TRIGGERS_PAYLOAD,
+    );
+  });
+
+  it("keeps pre-2.1.0 order bytes decoding with absent limbs, re-encoding canonically", () => {
+    // The frozen pre-2.1.0 envelope carries a 9-field payload (no trailing
+    // nils) — non-canonical by design now, but it must keep decoding.
+    const decoded = decodeTx(hexToBytes(NO_TRIGGERS_ENVELOPE));
+    expect(decoded.action.type).toBe("PlaceOrder");
+    const data = decoded.action.data as Record<string, unknown>;
+    expect(data.stopLoss ?? null).toBeNull();
+    expect(data.takeProfit ?? null).toBeNull();
+    // Re-encode is the canonical 2.1.0 form: 11 fields with two trailing
+    // nils — byte-exactly the checked-in no_triggers_canonical codec vector.
+    expect(bytesToHex(encodePayloadBytes(decoded.action))).toBe(
+      NO_TRIGGERS_CANONICAL_PAYLOAD,
+    );
   });
 });

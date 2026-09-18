@@ -99,10 +99,8 @@ class PlaceOrder(Action):
 
     ``stop_loss``/``take_profit`` attach a pre-fill (pending) SL/TP bracket:
     installed on the position resulting from the order's first fill,
-    discarded if the order terminates without filling. WIRE-PENDING: the
-    trailing wire fields ship with proof-wire 2.1.0 — against the currently
-    pinned 2.0.0 core the values are validated here but dropped by the
-    encoder.
+    discarded if the order terminates without filling. Encoded as the
+    trailing wire fields added by proof-wire 2.1.0 (nil when absent).
     """
 
     ACTION_NAME = "PlaceOrder"

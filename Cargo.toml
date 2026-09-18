@@ -7,3 +7,13 @@ members = [
     "crates/spec",
 ]
 resolver = "2"
+
+# INTERIM PIN — proof-wire 2.1.0 (F2 trigger expansion): the 2.1.0 wire
+# ships first on Proof-labs/exchange (branch `feat/trigger-wire`, draft
+# PR #655, rev 592735c603a501021252e18644164d8662511f2b); the
+# Proof-labs/wire mirror tag follows on merge. This patch redirects the
+# `proof-wire = { git = "…/wire.git", tag = … }` dependency above to that
+# rev. When the wire PR merges and the mirror tag is cut, delete this
+# section and move the tag pin up to 2.1.0.
+[patch."https://github.com/Proof-labs/wire.git"]
+proof-wire = { git = "https://github.com/Proof-labs/exchange", rev = "592735c603a501021252e18644164d8662511f2b" }

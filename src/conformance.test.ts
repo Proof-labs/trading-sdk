@@ -81,6 +81,21 @@ const PRICE_CMP: Record<string, PriceComparison> = {
   LessThanOrEqual: "LessThanOrEqual",
 };
 
+/** Vector limb dict (snake_case) → the SDK's camelCase `TriggerLimb`. */
+function limb(v: unknown): {
+  triggerPrice: bigint;
+  maxSlippageBps: number;
+  clientTriggerId: bigint | null;
+} | null {
+  if (v === null || v === undefined) return null;
+  const l = v as Record<string, unknown>;
+  return {
+    triggerPrice: big(l.trigger_price),
+    maxSlippageBps: l.max_slippage_bps as number,
+    clientTriggerId: bigOrNull(l.client_trigger_id),
+  };
+}
+
 /** u8-array (vector byte field) → Uint8Array. */
 function bytes(v: unknown): Uint8Array {
   return Uint8Array.from(v as number[]);
@@ -134,6 +149,8 @@ function toAction(
           postOnly: input.post_only as boolean,
           reduceOnly: input.reduce_only as boolean,
           timeInForce: TIF[input.time_in_force as string],
+          stopLoss: limb(input.stop_loss),
+          takeProfit: limb(input.take_profit),
         },
       };
     case ActionType.CancelOrder:
@@ -172,6 +189,8 @@ function toAction(
           postOnly: input.post_only as boolean,
           reduceOnly: input.reduce_only as boolean,
           timeInForce: TIF[input.time_in_force as string],
+          stopLoss: limb(input.stop_loss),
+          takeProfit: limb(input.take_profit),
         },
       };
     case ActionType.AmendOrder:
@@ -215,6 +234,8 @@ function toAction(
           side: SIDE[input.side as string],
           quantity: big(input.quantity),
           clientOrderId: bigOrNull(input.client_order_id),
+          stopLoss: limb(input.stop_loss),
+          takeProfit: limb(input.take_profit),
         },
       };
     case ActionType.Deposit:
@@ -910,13 +931,20 @@ describe("conformance vectors (TypeScript)", () => {
         .split("_")
         .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
         .join("");
+    // Case names normally mirror the action; `set_position_triggers_2_1`
+    // deliberately mirrors the engine's frozen-vector FILENAME instead
+    // (the proof-wire 2.1.0 era pin), so it gets one explicit override.
+    const caseNameActionOverrides: Record<string, string> = {
+      set_position_triggers_2_1: "SetPositionTriggers",
+    };
     for (const c of cases("codec.ndjson")) {
       const action = toAction(
         c.action_type as ActionTypeValue,
         c.input as Record<string, unknown>,
       );
       expect(action.type, `vector ${c.case as string}`).toBe(
-        pascal((c.case as string).split("/")[0]),
+        caseNameActionOverrides[c.case as string] ??
+          pascal((c.case as string).split("/")[0]),
       );
     }
   });

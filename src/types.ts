@@ -162,9 +162,8 @@ export interface PlaceOrder {
    * Optional whole-position SL/TP bracket attached at placement time
    * (pre-fill trigger). Installed on the position resulting from this
    * order's first fill; discarded if the order terminates without filling.
-   * WIRE-PENDING: the trailing wire fields ship with proof-wire 2.1.0 —
-   * against the currently pinned 2.0.0 core the values are validated here
-   * but dropped by the encoder.
+   * Encodes as the trailing `stop_loss`/`take_profit` wire fields (nil
+   * when absent) added by proof-wire 2.1.0.
    */
   stopLoss?: TriggerLimb | null;
   /** Optional take-profit limb; see {@link PlaceOrder.stopLoss}. */
@@ -223,8 +222,7 @@ export interface CancelReplaceOrder {
    * Optional whole-position SL/TP bracket for the replacement order
    * (pre-fill trigger; see {@link PlaceOrder.stopLoss}). The replaced
    * order's pending payload is always discarded — replacement is a full
-   * payload replacement. WIRE-PENDING: encodes once the core pins
-   * proof-wire 2.1.0.
+   * payload replacement.
    */
   stopLoss?: TriggerLimb | null;
   /** Optional take-profit limb; see {@link CancelReplaceOrder.stopLoss}. */
@@ -308,7 +306,7 @@ export interface MarketOrder {
    * Optional whole-position SL/TP bracket attached at placement time
    * (pre-fill trigger; see {@link PlaceOrder.stopLoss}). A market order
    * has no limit price, so the bracket's placement mark is the current
-   * mark. WIRE-PENDING: encodes once the core pins proof-wire 2.1.0.
+   * mark. Encodes as the trailing wire fields added by proof-wire 2.1.0.
    */
   stopLoss?: TriggerLimb | null;
   /** Optional take-profit limb; see {@link MarketOrder.stopLoss}. */

@@ -19,10 +19,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   order — the code is pinned in the TypeScript and Rust error tables and the
   `errors.ndjson` conformance manifest. Gateway read types for the additive
   `/v1/triggers/{owner}` `pending` section and `market_kind` on position rows
-  are added to `GatewayReads` (§7-G). **WIRE-PENDING:** the trailing wire
-  fields and the five contract §1.7 codec vectors activate when the vendored
-  proof-wire pin flips to the 2.1.0 release (wire PR pending); against the
-  pinned 2.0.0 core the new fields validate but do not encode.
+  are added to `GatewayReads` (§7-G). Encoding activates via an interim
+  rev-pin of proof-wire 2.1.0 (`[patch]` → Proof-labs/exchange
+  `feat/trigger-wire` @ 592735c6, draft PR #655); the five contract §1.7
+  vectors are pinned byte-exactly in `conformance/` — payloads in
+  `codec.ndjson`, full signed envelopes in `signing.ndjson` — and the
+  pre-2.1.0 9-field PlaceOrder bytes are pinned (signing row + TS
+  decode-compat test) as decode-compat: they decode with absent limbs and
+  re-encode canonically with the two trailing nils. The pin flips to the
+  published Proof-labs/wire release tag when PR #655 merges.
 
 - Mirrors the `UpdateAuthoritySet` governance arm (inner tag `0x07`,
   exchange#422 / DEC-87): addition/removal of members in one privileged

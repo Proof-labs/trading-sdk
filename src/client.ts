@@ -1103,7 +1103,7 @@ export class ExchangeClient {
    * `submitTx({ type: "PlaceOrder", data: { ...params, owner } })`.
    * Optional `stopLoss`/`takeProfit` limbs attach a pre-fill bracket that
    * installs on the order's first fill (validated client-side here and in
-   * the codec path; WIRE-PENDING on the proof-wire 2.1.0 encoder).
+   * the codec path; encoded as the proof-wire 2.1.0 trailing fields).
    */
   async placeOrder(params: Omit<PlaceOrder, "owner">): Promise<TxResult> {
     validateOrderTriggers(params);

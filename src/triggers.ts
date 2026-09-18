@@ -92,10 +92,6 @@ export function validateCancelPositionTriggers(
  * (`TriggerOrderIncompatible`, code 97): a reduce-only entry cannot open
  * the exposure the limbs are meant to protect. Absent limbs mean "no
  * bracket requested" and pass.
- *
- * WIRE-PENDING: the trailing wire fields ship with proof-wire 2.1.0;
- * against the pinned 2.0.0 core these values are validated here but
- * dropped by the encoder.
  */
 export interface OrderTriggerFields {
   stopLoss?: TriggerLimb | null;
