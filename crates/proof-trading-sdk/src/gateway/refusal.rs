@@ -83,11 +83,16 @@ fn pre_admission_refusal(status: u16, bytes: &[u8]) -> Option<PreAdmissionRefusa
         if read.retry_after_ms.0.is_some() {
             return None;
         }
-        // An unknown mode is not a refusal this SDK can act on.
+        // The mode must be one of the two strings. An unknown one, or a
+        // container that happens to name one, is not a refusal this SDK acts
+        // on: serde's enum decoder would otherwise read {"paused": null} as
+        // Paused.
         return read
             .mode
             .0
-            .and_then(|mode| serde_json::from_value::<MaintenanceMode>(mode).ok())
+            .as_ref()
+            .filter(|mode| mode.is_string())
+            .and_then(|mode| serde_json::from_value::<MaintenanceMode>(mode.clone()).ok())
             .map(PreAdmissionRefusal::Maintenance);
     }
     if read.mode.0.is_some() {
