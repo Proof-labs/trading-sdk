@@ -89,7 +89,7 @@ export function validateCancelPositionTriggers(
  * Mirrors `validateSetPositionTriggers`' limb parity — at least one limb
  * when a bracket is requested, `triggerPrice > 0`, bps in `1..=9999`,
  * distinct limb client ids — plus the engine's reduce-only incompatibility
- * (`TriggerOrderIncompatible`, code 97): a reduce-only entry cannot open
+ * (`TriggerOrderIncompatible`, code 98): a reduce-only entry cannot open
  * the exposure the limbs are meant to protect. Absent limbs mean "no
  * bracket requested" and pass.
  */
@@ -105,7 +105,7 @@ export function validateOrderTriggers(action: OrderTriggerFields): void {
   if (stopLoss == null && takeProfit == null) return;
   if (action.reduceOnly === true) {
     throw new Error(
-      "stopLoss/takeProfit cannot be attached to a reduceOnly order (TriggerOrderIncompatible, code 97)",
+      "stopLoss/takeProfit cannot be attached to a reduceOnly order (TriggerOrderIncompatible, code 98)",
     );
   }
   if (stopLoss != null) validateLimb("stopLoss", stopLoss);

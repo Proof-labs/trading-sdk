@@ -119,7 +119,7 @@ describe("codec-adapter pre-fill trigger fields", () => {
           type,
           data: { stopLoss: limb, reduceOnly: true },
         } as Action),
-      ).toThrow(/TriggerOrderIncompatible, code 97/);
+      ).toThrow(/TriggerOrderIncompatible, code 98/);
       expect(() =>
         toWasmFields({
           type,

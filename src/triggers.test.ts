@@ -335,9 +335,9 @@ describe("F2 pre-fill order trigger validation", () => {
     );
   });
 
-  it("rejects trigger fields on a reduce-only order (TriggerOrderIncompatible, code 97)", () => {
+  it("rejects trigger fields on a reduce-only order (TriggerOrderIncompatible, code 98)", () => {
     expect(() => validateOrderTriggers({ stopLoss: limb(), reduceOnly: true })).toThrow(
-      /reduceOnly order \(TriggerOrderIncompatible, code 97\)/,
+      /reduceOnly order \(TriggerOrderIncompatible, code 98\)/,
     );
     expect(() =>
       validateOrderTriggers({ takeProfit: limb(), reduceOnly: true }),

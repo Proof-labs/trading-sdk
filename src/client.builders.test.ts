@@ -178,7 +178,7 @@ describe("pre-fill SL/TP limbs on order builders", () => {
         stopLoss: { triggerPrice: 90_000n, maxSlippageBps: 50 },
         reduceOnly: true,
       }),
-    ).rejects.toThrow(/TriggerOrderIncompatible, code 97/);
+    ).rejects.toThrow(/TriggerOrderIncompatible, code 98/);
     expect(spy).not.toHaveBeenCalled();
   });
 
