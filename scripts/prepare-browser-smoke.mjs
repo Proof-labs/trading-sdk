@@ -171,10 +171,10 @@ try {
     throw new Error("external signer browser byte parity failed");
   }
   const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch: async (url, init) => {
-    if (url !== "/info" || JSON.parse(init.body).type !== "impactMarkets") throw new Error("browser named read contract");
+    if (url !== "/info" || JSON.parse(init.body).type !== "events") throw new Error("browser named read contract");
     return new Response(JSON.stringify({ data: "unchanged" }));
   }});
-  if ((await (await reads.impactMarkets()).json()).data !== "unchanged") throw new Error("browser response contract");
+  if ((await (await reads.events()).json()).data !== "unchanged") throw new Error("browser response contract");
   if (!(client.feed() instanceof GatewayFeed)) throw new Error("feed export missing");
   const auth = await client.accountAuth();
   if (typeof auth.timestamp_ms !== "number" || auth.public_key !== bytesToHex(getPublicKey(seed))) throw new Error("browser account auth contract");
