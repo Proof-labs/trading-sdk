@@ -98,6 +98,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `BoundMarketsSnapshot`, `BoundChainIdentity` and `BoundInventorySnapshot`
   expose read-only getters; only the SDK decoders and `validate_bound_inventory`
   construct them, so a caller cannot forge or alter a validated witness.
+  Node identities, app hashes, heights, market ids and micro-USDC amounts on
+  this surface are `NodeId`, `AppHash`, `BlockHeight`, `MarketId` and
+  `MicroUsdc` rather than bare integers and byte arrays, and receipt reads take
+  the existing `TxHash`. Each type carries the check its decoder performed.
 
 - Rust gateway `MarketsSnapshotClient::receipt_observation()` distinguishes an
   exact committed receipt from a canonical HTTP 404/500 not-found observation

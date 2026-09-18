@@ -266,6 +266,9 @@ impl MarketsSnapshotClient {
     }
 }
 
+mod values;
+pub use values::{AppHash, BlockHeight, MarketId, MicroUsdc, NodeId};
+
 #[cfg(feature = "gateway")]
 mod chain;
 #[cfg(feature = "gateway")]
