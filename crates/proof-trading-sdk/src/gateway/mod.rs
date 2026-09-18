@@ -9,6 +9,7 @@ mod refusal;
 use refusal::{ErrorBody, RefusalEvidence};
 pub use refusal::{MaintenanceMode, PreAdmissionRefusal};
 
+use crate::market_snapshot::BlockHeight;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{
     header::{HeaderMap, HeaderValue, RETRY_AFTER},
@@ -18,7 +19,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fmt,
-    num::{NonZeroU32, NonZeroU64},
+    num::NonZeroU32,
     time::{Duration, SystemTime},
 };
 
@@ -178,15 +179,17 @@ impl fmt::Debug for GatewayClient {
 pub struct ChainIdentity {
     pub network: String,
     pub chain_binding: [u8; 32],
-    pub latest_height: u64,
+    pub latest_height: BlockHeight,
     /// Provider capture must be checked against consensus time, never local time alone.
     pub latest_block_time_ms: u64,
+    /// Always false on the `market_snapshot` reads, which refuse a node that is
+    /// still catching up rather than reporting one.
     pub catching_up: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommittedReceipt {
     pub hash: TxHash,
-    pub height: NonZeroU64,
+    pub height: BlockHeight,
     pub code: u32,
 }
 /// `R` is what a pre-admission rejection carries: `()` from
@@ -467,7 +470,8 @@ impl GatewayClient {
         Ok(ChainIdentity {
             chain_binding: crate::crypto::chain_id_from_string(&network),
             network,
-            latest_height: decimal(&status.sync_info.latest_block_height, op)?,
+            latest_height: BlockHeight::new(decimal(&status.sync_info.latest_block_height, op)?)
+                .ok_or_else(|| GatewayError::new(op, ErrorKind::InvalidResponse))?,
             latest_block_time_ms,
             catching_up: status.sync_info.catching_up,
         })
@@ -571,7 +575,7 @@ impl GatewayClient {
                     SubmissionOutcome::Committed(CommittedReceipt {
                         hash,
                         code,
-                        height: NonZeroU64::new(height).ok_or_else(invalid)?,
+                        height: BlockHeight::new(height).ok_or_else(invalid)?,
                     })
                 }
                 (Some(code), None, Some(_)) if code != 0 && read.status == "error" => {
@@ -612,7 +616,7 @@ impl GatewayClient {
         matching_hash(&read.hash, hash, op)?;
         Ok(CommittedReceipt {
             hash,
-            height: NonZeroU64::new(decimal(&read.height, op)?)
+            height: BlockHeight::new(decimal(&read.height, op)?)
                 .ok_or_else(|| GatewayError::new(op, ErrorKind::InvalidResponse))?,
             code: read.tx_result.code,
         })

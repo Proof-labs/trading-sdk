@@ -8,6 +8,7 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use proof_trading_sdk::gateway::*;
+use proof_trading_sdk::market_snapshot::BlockHeight;
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::{
@@ -317,7 +318,7 @@ async fn exact_hash_execution_outcomes_keep_the_existing_contract() {
             json!({"status":"ok","txHash":hash.to_string(),"code":0,"height":12}),
             SubmissionOutcome::Committed(CommittedReceipt {
                 hash,
-                height: 12.try_into().unwrap(),
+                height: BlockHeight::new(12).expect("a positive fixture height"),
                 code: 0,
             }),
         ),
@@ -325,7 +326,7 @@ async fn exact_hash_execution_outcomes_keep_the_existing_contract() {
             json!({"status":"error","txHash":hash.to_string(),"code":21,"height":12}),
             SubmissionOutcome::Committed(CommittedReceipt {
                 hash,
-                height: 12.try_into().unwrap(),
+                height: BlockHeight::new(12).expect("a positive fixture height"),
                 code: 21,
             }),
         ),
