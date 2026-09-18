@@ -61,8 +61,9 @@ fn positive_plaintext_event_preserves_effect_metadata_not_primary_action_identit
             code: 0
         }
     );
-    // The accepted price can be clamped; no equality with a submitted price is
-    // inferred by this transport. A consumer supplies its signed tag3 binding.
+    // The accepted price can be clamped, so this transport infers no equality
+    // with a submitted price. A consumer binds the hash to its own retained
+    // signed action.
     let mut wrong_hash = accepted_body();
     wrong_hash["result"]["hash"] = json!("CD".repeat(32));
     assert_eq!(
@@ -474,10 +475,16 @@ async fn serve_once(
     let url = format!("http://{}", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
-        let mut request = [0; 1024];
-        let n = socket.read(&mut request).await.unwrap();
-        assert!(std::str::from_utf8(&request[..n])
-            .unwrap()
+        // Read until the request headers end: one read can return less.
+        let mut request = Vec::new();
+        while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+            let mut chunk = [0; 1024];
+            let read = socket.read(&mut chunk).await.unwrap();
+            assert!(read > 0, "client closed before sending request headers");
+            request.extend_from_slice(&chunk[..read]);
+            assert!(request.len() <= 16_384);
+        }
+        assert!(String::from_utf8_lossy(&request)
             .starts_with(&format!("GET /v1/tx/{} HTTP/1.1\r\n", "AB".repeat(32))));
         socket.write_all(format!("HTTP/1.1 {status} Fixture\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
         tokio::time::sleep(delay).await;

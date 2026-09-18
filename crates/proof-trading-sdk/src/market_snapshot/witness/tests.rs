@@ -117,7 +117,7 @@ fn duplicate_fields_and_missing_node_identity_fail_closed() {
         .unwrap()
         .remove("id");
     assert!(decode_bound_identity(&bytes(&status), chain_id()).is_err());
-    // The old time-only method remains backward compatible.
+    // decode_identity reads the same body without the node identity.
     assert!(chain::decode_identity(&bytes(&status), chain_id()).is_ok());
     let status = String::from_utf8(bytes(&status_body(100, NOW, 1, 1))).unwrap();
     let duplicate = status.replace(

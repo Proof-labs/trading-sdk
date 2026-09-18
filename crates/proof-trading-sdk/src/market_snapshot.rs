@@ -280,6 +280,20 @@ impl MarketsSnapshotClient {
         path: &str,
         query: Option<&str>,
     ) -> Result<Vec<u8>, SnapshotError> {
+        self.read_bounded(path, query, &[200])
+            .await
+            .map(|(_, body)| body)
+    }
+
+    /// One bounded GET under the whole-call deadline. `accepted` are the
+    /// statuses whose body is read and returned with it; every other status is
+    /// an error before the body is touched.
+    async fn read_bounded(
+        &self,
+        path: &str,
+        query: Option<&str>,
+        accepted: &[u16],
+    ) -> Result<(u16, Vec<u8>), SnapshotError> {
         let mut endpoint = self.endpoint.clone();
         endpoint.set_path(path);
         endpoint.set_query(query);
@@ -291,8 +305,9 @@ impl MarketsSnapshotClient {
                     SnapshotError::Transport
                 }
             })?;
-            if response.status() != reqwest::StatusCode::OK {
-                return Err(SnapshotError::Http(response.status().as_u16()));
+            let status = response.status().as_u16();
+            if !accepted.contains(&status) {
+                return Err(SnapshotError::Http(status));
             }
             if response
                 .content_length()
@@ -313,7 +328,7 @@ impl MarketsSnapshotClient {
                 }
                 body.extend_from_slice(&chunk);
             }
-            Ok(body)
+            Ok((status, body))
         };
         tokio::time::timeout(self.timeout, request)
             .await

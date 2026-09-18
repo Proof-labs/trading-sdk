@@ -68,10 +68,27 @@ fn positive_height(text: &str) -> Result<BlockHeight, SnapshotError> {
 }
 
 fn positive_decimal(text: &str) -> Result<u64, SnapshotError> {
-    if text.is_empty() || text.starts_with('0') || !text.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(SnapshotError::Malformed);
+    super::values::positive_decimal(text).ok_or(SnapshotError::Malformed)
+}
+
+/// The exact-hash rule both receipt reads share: a well-formed hash that is
+/// not the requested one is a mismatch, not a malformed body.
+pub(super) fn matching_hash(text: &str, expected: TxHash) -> Result<(), SnapshotError> {
+    let read: [u8; 32] = super::values::hex_array(text).ok_or(SnapshotError::Malformed)?;
+    if read != expected.bytes() {
+        return Err(SnapshotError::HashMismatch);
     }
-    text.parse().map_err(|_| SnapshotError::Malformed)
+    Ok(())
+}
+
+/// `/v1/tx/{hash}`, the one path both receipt reads request.
+pub(super) fn receipt_path(hash: TxHash) -> String {
+    let mut path = String::from("/v1/tx/");
+    for byte in hash.bytes() {
+        // 32 bytes of uppercase hexadecimal, the form CometBFT indexes by.
+        path.push_str(&format!("{byte:02X}"));
+    }
+    path
 }
 
 impl MarketsSnapshotClient {
@@ -88,12 +105,7 @@ impl MarketsSnapshotClient {
     /// mismatch or malformed body) leaves the submission unresolved. No retry,
     /// nonce allocation or inference from elapsed wall time occurs here.
     pub async fn committed_receipt(&self, hash: TxHash) -> Result<CommittedReceipt, SnapshotError> {
-        use std::fmt::Write;
-        let mut path = String::from("/v1/tx/");
-        for byte in hash.bytes() {
-            write!(&mut path, "{byte:02X}").map_err(|_| SnapshotError::Malformed)?;
-        }
-        decode_receipt(&self.get(&path).await?, hash)
+        decode_receipt(&self.get(&receipt_path(hash)).await?, hash)
     }
 }
 
@@ -130,16 +142,7 @@ pub(super) fn decode_identity(
 
 fn decode_receipt(body: &[u8], hash: TxHash) -> Result<CommittedReceipt, SnapshotError> {
     let read: TxRead = rpc(body)?;
-    if read.hash.len() != 64 || !read.hash.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(SnapshotError::Malformed);
-    }
-    for (pair, expected) in read.hash.as_bytes().chunks_exact(2).zip(hash.bytes()) {
-        let pair = std::str::from_utf8(pair).map_err(|_| SnapshotError::Malformed)?;
-        let byte = u8::from_str_radix(pair, 16).map_err(|_| SnapshotError::Malformed)?;
-        if byte != expected {
-            return Err(SnapshotError::HashMismatch);
-        }
-    }
+    matching_hash(&read.hash, hash)?;
     Ok(CommittedReceipt {
         hash,
         height: positive_height(&read.height)?,

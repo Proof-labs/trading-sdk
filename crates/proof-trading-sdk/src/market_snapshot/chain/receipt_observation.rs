@@ -176,25 +176,14 @@ fn price_event_decode_failure(body: &[u8]) -> PriceEvidence {
     })
 }
 
-/// Current ABCI attributes are strings, not base64 byte slices. An address is
-/// 40 lowercase hexadecimal digits; anything else cannot bind this evidence to
-/// a retained signing authority.
+/// ABCI attributes are strings, not base64 byte slices. An address is 40
+/// lowercase hexadecimal digits; anything else cannot bind this evidence to a
+/// retained signing authority.
 fn signer_address(text: &str) -> Option<[u8; 20]> {
-    if text.len() != 40
-        || !text
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return None;
-    }
-    let mut address = [0; 20];
-    for (pair, target) in text.as_bytes().chunks_exact(2).zip(&mut address) {
-        *target = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
-    }
-    Some(address)
+    crate::market_snapshot::values::lowercase_hex_array(text)
 }
 
-/// Current OracleUpdate emits exactly one event. Extra, unknown, duplicate or
+/// An accepted oracle update emits exactly one event. Extra, unknown, duplicate or
 /// malformed attributes are never accepted-effect proof; incomplete evidence
 /// does not erase an otherwise valid committed receipt, it only names why the
 /// event was refused.
@@ -270,6 +259,10 @@ fn price_update(body: &[u8], receipt: &CommittedReceipt) -> PriceEvidence {
     })
 }
 
+/// The statuses this read accepts: a receipt, or the canonical not-found
+/// shapes. Anything else is refused before its body is read.
+const ACCEPTED_STATUSES: [u16; 3] = [200, 404, 500];
+
 fn classify(status: u16, body: &[u8], hash: TxHash) -> Result<ReceiptObservation, SnapshotError> {
     if body.len() > MAX_SNAPSHOT_BYTES {
         return Err(SnapshotError::TooLarge);
@@ -284,7 +277,7 @@ fn classify(status: u16, body: &[u8], hash: TxHash) -> Result<ReceiptObservation
             PriceEvidence::Absent => ReceiptObservation::Committed(receipt),
         });
     }
-    if !matches!(status, 404 | 500) {
+    if !ACCEPTED_STATUSES.contains(&status) {
         return Err(SnapshotError::Http(status));
     }
     let response: NotFoundResponse =
@@ -318,70 +311,29 @@ fn classify(status: u16, body: &[u8], hash: TxHash) -> Result<ReceiptObservation
         .strip_prefix("tx (")
         .and_then(|text| text.strip_suffix(") not found"))
         .ok_or(SnapshotError::RpcUnavailable)?;
-    if token.len() != 64 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(SnapshotError::RpcUnavailable);
-    }
-    for (pair, expected) in token.as_bytes().chunks_exact(2).zip(hash.bytes()) {
-        let pair = std::str::from_utf8(pair).map_err(|_| SnapshotError::Malformed)?;
-        if u8::from_str_radix(pair, 16).map_err(|_| SnapshotError::Malformed)? != expected {
-            return Err(SnapshotError::HashMismatch);
-        }
+    // A message that is not this grammar, hash included, is some other
+    // backend failure and never progress evidence.
+    let named: [u8; 32] =
+        crate::market_snapshot::values::hex_array(token).ok_or(SnapshotError::RpcUnavailable)?;
+    if named != hash.bytes() {
+        return Err(SnapshotError::HashMismatch);
     }
     Ok(ReceiptObservation::ExactNotFound { tx_hash: hash })
 }
 
 impl MarketsSnapshotClient {
-    /// One gateway receipt observation with a whole-call deadline and bounded
-    /// body. No retries, redirects, direct-node fallback, or pending-state
-    /// changes. Existing `committed_receipt` behavior remains unchanged.
+    /// One gateway receipt read, classified: a committed receipt, price-update
+    /// evidence, a refusal reason, or the canonical not-found shape for exactly
+    /// this hash. One whole-call deadline and a bounded body; no retries,
+    /// redirects, direct-node fallback or pending-state changes.
     pub async fn receipt_observation(
         &self,
         hash: TxHash,
     ) -> Result<ReceiptObservation, SnapshotError> {
-        use std::fmt::Write;
-        let mut path = String::from("/v1/tx/");
-        for byte in hash.bytes() {
-            write!(&mut path, "{byte:02X}").map_err(|_| SnapshotError::Malformed)?;
-        }
-        let mut endpoint = self.endpoint.clone();
-        endpoint.set_path(&path);
-        let request = async {
-            let mut response = self
-                .client
-                .get(endpoint)
-                .send()
-                .await
-                .map_err(transport_error)?;
-            let status = response.status().as_u16();
-            if !matches!(status, 200 | 404 | 500) {
-                return Err(SnapshotError::Http(status));
-            }
-            if response
-                .content_length()
-                .is_some_and(|n| n > MAX_SNAPSHOT_BYTES as u64)
-            {
-                return Err(SnapshotError::TooLarge);
-            }
-            let mut body = Vec::new();
-            while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
-                if body.len().saturating_add(chunk.len()) > MAX_SNAPSHOT_BYTES {
-                    return Err(SnapshotError::TooLarge);
-                }
-                body.extend_from_slice(&chunk);
-            }
-            classify(status, &body, hash)
-        };
-        tokio::time::timeout(self.timeout, request)
-            .await
-            .map_err(|_| SnapshotError::Timeout)?
-    }
-}
-
-fn transport_error(error: reqwest::Error) -> SnapshotError {
-    if error.is_timeout() {
-        SnapshotError::Timeout
-    } else {
-        SnapshotError::Transport
+        let (status, body) = self
+            .read_bounded(&super::receipt_path(hash), None, &ACCEPTED_STATUSES)
+            .await?;
+        classify(status, &body, hash)
     }
 }
 
