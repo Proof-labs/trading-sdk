@@ -73,7 +73,6 @@ import type {
   WithdrawalStatus,
   AdminSignerRegistry,
   ProposalPage,
-  ImpactMarketInfo,
   EventInfo,
   SetPositionTriggers,
   PositionTriggerInfo,
@@ -86,7 +85,6 @@ import type {
 } from "./types.js";
 import {
   decodeAdminSignerRegistryInfo,
-  decodeImpactMarketInfo,
   decodeEventInfo,
   decodeProposalPage,
 } from "./governance-query.js";
@@ -1241,29 +1239,10 @@ export class ExchangeClient {
     return raw.map((m) => decodeMarketConfig(m));
   }
 
-  /** List all impact-market families (the 5-book event structures: an
-   *  underlying perp plus CPY/CPN/EBY/EBN children). Fail-closed like the
-   *  governance reads: a missing envelope or a malformed row is a refusal,
-   *  never a partially-rendered list (decoder pinned to engine golden bytes
-   *  in governance-query.test.ts). */
-  async queryImpactMarkets(): Promise<ImpactMarketInfo[]> {
-    const json = await fetchApiJson(`${this.readBaseUrl}/v1/impact_markets`);
-    if (typeof json.data !== "string") {
-      throw new Error(
-        "governance decode: impact-markets response has no encoded-data envelope",
-      );
-    }
-    const raw = msgpackDecoder.decode(fromBase64(json.data));
-    if (!Array.isArray(raw)) {
-      throw new Error("governance decode: impactMarkets is not an array");
-    }
-    return raw.map((r, i) => decodeImpactMarketInfo(r, i));
-  }
-
-  /** All standalone events (G17). Each is two prediction-binary books (EBY/EBN)
-   *  under one `EventInfo`, no underlying perp. Fail-closed like the impact
-   *  read: a missing envelope or malformed row is a refusal. Decoder pinned to
-   *  the engine golden vector in governance-query.test.ts. */
+  /** All events: each is two prediction-binary books (EBY/EBN) under one
+   *  `EventInfo`, plus every conditional attached to it. Fail-closed like the
+   *  governance reads: a missing envelope or malformed row is a refusal.
+   *  Decoder pinned to the engine golden vector in governance-query.test.ts. */
   async queryEvents(): Promise<EventInfo[]> {
     const json = await fetchApiJson(`${this.readBaseUrl}/v1/events`);
     if (typeof json.data !== "string") {
@@ -1278,10 +1257,10 @@ export class ExchangeClient {
     return raw.map((r, i) => decodeEventInfo(r, i));
   }
 
-  /** A single standalone event by id, or `null` if it does not exist. The node
-   *  returns 404 for a missing event (the engine's msgpack-nil, translated like
-   *  the impact-market route), so a raw fetch is used here to map 404 -> null
-   *  while still throwing on real transport / decode failures. */
+  /** A single event by id, or `null` if it does not exist. The node returns
+   *  404 for a missing event (the engine's msgpack-nil), so a raw fetch is used
+   *  here to map 404 -> null while still throwing on real transport / decode
+   *  failures. */
   async queryEvent(eventId: number): Promise<EventInfo | null> {
     const res = await fetch(`${this.readBaseUrl}/v1/event/${eventId}`);
     if (res.status === 404) return null;
@@ -1568,7 +1547,7 @@ export class ExchangeClient {
       bindingScenario = ((raw[6] as unknown[]) ?? []).map((e) => {
         const t = e as [number | bigint, string];
         return {
-          impactMarketId: Number(t[0]),
+          eventId: Number(t[0]),
           branch: t[1] as "Yes" | "No",
         };
       });
@@ -1724,14 +1703,14 @@ export class ExchangeClient {
 
   /** Per-user position-at-resolution log — each row is one settlement or
    * voided-conditional snapshot. Feeds the Portfolio "Resolved" tab
-   * (P2 #7). Optional `impactMarketId` filter scopes to one event family.
+   * (P2 #7). Optional `eventId` filter scopes to one event.
    *
    * `fromMs` / `toMs` are unix-ms timestamps; omit for unbounded.
    * `limit` caps at 1000 server-side. Results are newest-first. */
   async queryHistoryResolutions(
     addressHex?: string,
     opts?: {
-      impactMarketId?: number;
+      eventId?: number;
       fromMs?: number;
       toMs?: number;
       limit?: number;
@@ -1740,8 +1719,8 @@ export class ExchangeClient {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return [];
     const params = new URLSearchParams();
-    if (opts?.impactMarketId !== undefined)
-      params.set("impact_market_id", String(opts.impactMarketId));
+    if (opts?.eventId !== undefined)
+      params.set("event_id", String(opts.eventId));
     if (opts?.fromMs !== undefined) params.set("from", String(opts.fromMs));
     if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
     if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
@@ -1750,7 +1729,7 @@ export class ExchangeClient {
     const json = await fetchApiArray(url);
     return (json as Array<Record<string, unknown>>).map((row) => ({
       kind: row.kind as HistoryResolution["kind"],
-      impactMarketId: String(row.impact_market_id ?? ""),
+      eventId: String(row.event_id ?? ""),
       market: String(row.market ?? ""),
       owner: String(row.owner ?? ""),
       side: String(row.side ?? ""),

@@ -63,16 +63,15 @@ define_error_kinds! {
     21  => InvalidNonce                 ~ "Timestamp nonce failed replay-window validation. Use a unique millisecond Unix timestamp within [block_time-2d, block_time+1d]; included failures burn their nonce.",
     22  => MarketAlreadyExists          ~ "Attempted CreateMarket for a market ID already in the registry.",
     23  => InvalidMarketConfig          ~ "MarketConfig fields fail validation (e.g. fee bps out of range, lot/tick zero, IM/MM ratio inverted).",
-    24  => ImpactMarketAlreadyExists    ~ "Attempted CreateImpactMarket for an impact market ID already in the registry.",
-    25  => ImpactMarketNotFound         ~ "Impact market ID does not exist; cannot resolve, cash-out, or query.",
-    26  => MarketClosedForTrading       ~ "Order placement attempted on a conditional/binary book whose parent impact market is already resolved or voided.",
+    // 24 and 25 belonged to the retired impact-market family; never reassigned.
+    26  => MarketClosedForTrading       ~ "Order placement attempted on a conditional or binary book whose event is past its settlement time or already resolved.",
     27  => BinaryPriceOutOfRange        ~ "Binary-book order price is outside the [0, BINARY_PRICE_MAX] range.",
-    28  => InvalidResolution            ~ "ResolveEvent called with an outcome incompatible with the current state (already resolved, outcome not in the configured set, etc.).",
+    28  => InvalidResolution            ~ "ResolveEvent refused: the event is already resolved, not yet at its settlement time, still carries attached conditionals, or the asserted outcome contradicts the oracle source.",
     29  => PositionLimitExceeded        ~ "Fill would push absolute net position past MarketConfig.max_position_size. Engine cap enforced at placement time independent of margin.",
     30  => OracleTimestampNotMonotonic  ~ "OracleUpdate publish_time_ms is not strictly greater than the last accepted update for this market — replay protection per audit B3 (2026-04-23).",
-    31  => TooManyActiveImpactMarkets   ~ "Account would touch more impact markets than the scenario margin engine can enumerate (MAX_IMPACT_MARKETS_PER_ACCOUNT). Close a leg before opening another.",
+    // 31 belonged to the retired impact-market family; never reassigned.
     32  => SettlementPriceMismatch      ~ "Net-delta margin grouping found legs with disagreeing settle prices (data corruption across same underlying_market_id).",
-    33  => OracleNotApplicable          ~ "OracleUpdate targets an impact-family market (CPY/CPN/EBY/EBN), which marks off the book and has no oracle layer.",
+    33  => OracleNotApplicable          ~ "OracleUpdate targets a conditional or binary book, which marks off the book and has no oracle layer.",
     34  => PostOnlyWouldCross           ~ "PlaceOrder with post_only=true would have crossed the book. Rejected so makers retain maker-side fills.",
     35  => ReduceOnlyWouldIncrease      ~ "PlaceOrder/MarketOrder with reduce_only=true was same-side as the existing position (would increase exposure) or no position existed.",
     36  => TestActionRejected           ~ "Test/admin action rejected because the engine isn't configured to accept them, or the position the action referenced does not exist.",
@@ -115,6 +114,30 @@ define_error_kinds! {
     69  => EmergencyActionRetired           ~ "This emergency arm was retired; new submissions fail closed.",
     70  => AdminActionRequiresProposal      ~ "The signer registry exists — this admin action is proposal-only, even for an authorized relayer.",
     71  => InvalidAdminRegistry             ~ "Proposed signer roster violates the registry invariants (threshold bounds, sorted unique members, roster size, version headroom).",
+    // Operator-custody withdrawals (receipt-gated terminals).
+    72  => BridgeReceiptRegistryInactive    ~ "A receipt-gated withdrawal action was submitted while no operator receipt registry exists on this chain; the operator custody phase is inactive and the path fails closed.",
+    73  => BridgeReceiptInvalid             ~ "The operator quorum proof failed verification: bad structure, fewer distinct members than the threshold, or an invalid signature.",
+    74  => BridgeReceiptMismatch            ~ "The signed receipt does not bind to this withdrawal or deployment (id, owner, amount, destination, epoch or terminal state differs); the log names the field.",
+    75  => WithdrawalBelowMinimum           ~ "The net withdrawal amount is below the effective minimum (the configured minimum, floored at the flat fee): the payout would be worth less than it costs to settle.",
+    76  => WithdrawalTerminalGated          ~ "A retired legacy relayer terminal (ConfirmWithdrawal / FailWithdrawal) was submitted at or above the receipt cutover; rejected as a normal failed action.",
+    // 77-81 are reserved on the wire for oracle-observation and oracle-policy errors.
+    82  => OracleGuardUnset                 ~ "A mark-dependent read was refused because the oracle-guard gate is active and the market's mark_price_max_oracle_age_ms is still unset; governance sets the guard first.",
+    // Sub-accounts (dormant behind their activation).
+    83  => SubAccountNotFound               ~ "No sub-account exists for the given master and id.",
+    84  => SubAccountAlreadyExists          ~ "A sub-account with this master and id already exists.",
+    85  => SubAccountTransferSameAccount    ~ "Sub-account transfer with from equal to to is a no-op and is rejected.",
+    86  => SubAccountTransferBothChildren   ~ "Neither side of a sub-account transfer is the master owner; both are derived children.",
+    87  => SubAccountTransferInsufficientBalance ~ "The source sub-account balance is below the transfer amount.",
+    88  => SubAccountIdZero                 ~ "Sub-account id zero is not a valid id.",
+    89  => SubAccountTransferZeroAmount     ~ "A sub-account transfer amount must be greater than zero.",
+    90  => SubAccountsInactive              ~ "Sub-account actions decode on this wire version but the chain has not enabled them yet; submissions before the activation fail closed.",
+    91  => WithdrawalPayoutLeaseActive      ~ "A live Solana payout lease on this withdrawal is held by a different watcher, so this ClaimWithdrawalPayout is rejected; the rejected claimer must not sign a payout.",
+    // Events and attached conditionals.
+    92  => EventAlreadyExists               ~ "CreateEvent for an event id already in the registry.",
+    93  => EventNotFound                    ~ "No event exists under this id: nothing can attach to it, resolve it or read it.",
+    94  => UnderlyingAlreadyAttached        ~ "AttachConditional for an underlying that is already attached to this event.",
+    95  => TooManyAttachedConditionals      ~ "AttachConditional would exceed the event's attachment cap; the log names the count and the cap.",
+    96  => TooManyActiveEvents              ~ "Account would touch more events than the scenario margin engine can enumerate (the per-account event cap). Close a leg on another event before opening this one.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -297,8 +320,6 @@ mod exec_error_meaning_tests {
             ExecError::NonceBelowOldest { oldest: 0, got: 0 },
             ExecError::MarketAlreadyExists(0),
             ExecError::InvalidMarketConfig("e".into()),
-            ExecError::ImpactMarketAlreadyExists(0),
-            ExecError::ImpactMarketNotFound(0),
             ExecError::MarketClosedForTrading(0),
             ExecError::BinaryPriceOutOfRange,
             ExecError::InvalidResolution("e".into()),
@@ -312,7 +333,6 @@ mod exec_error_meaning_tests {
                 stored: 0,
                 submitted: 0,
             },
-            ExecError::TooManyActiveImpactMarkets { current: 0, max: 0 },
             ExecError::SettlementPriceMismatch {
                 market: 0,
                 expected: 0,
@@ -376,6 +396,33 @@ mod exec_error_meaning_tests {
                 limit: 1,
                 would_be: 2,
             },
+            ExecError::BridgeReceiptRegistryInactive,
+            ExecError::BridgeReceiptInvalid("e".into()),
+            ExecError::BridgeReceiptMismatch("e".into()),
+            ExecError::WithdrawalBelowMinimum { amount: 0, min: 1 },
+            ExecError::WithdrawalTerminalGated("e".into()),
+            ExecError::OracleGuardUnset { market: 0 },
+            ExecError::SubAccountNotFound,
+            ExecError::SubAccountAlreadyExists,
+            ExecError::SubAccountTransferSameAccount,
+            ExecError::SubAccountTransferBothChildren,
+            ExecError::SubAccountTransferInsufficientBalance,
+            ExecError::SubAccountIdZero,
+            ExecError::SubAccountTransferZeroAmount,
+            ExecError::SubAccountsInactive,
+            ExecError::WithdrawalPayoutLeaseActive,
+            ExecError::EventAlreadyExists(crate::types::EventId(0)),
+            ExecError::EventNotFound(crate::types::EventId(0)),
+            ExecError::UnderlyingAlreadyAttached {
+                event_id: crate::types::EventId(0),
+                underlying_market: 0,
+            },
+            ExecError::TooManyAttachedConditionals {
+                event_id: crate::types::EventId(0),
+                current: 0,
+                max: 0,
+            },
+            ExecError::TooManyActiveEvents { current: 0, max: 0 },
         ]
     }
 
@@ -406,15 +453,20 @@ mod exec_error_meaning_tests {
         }
     }
 
-    /// Codes 1..=71 + 255 must all be covered by the public error manifest.
-    /// Catches the case where a code is reserved by the mirrored engine error
-    /// enum but no SDK classification maps to it.
+    /// Every engine code must be covered by the public error manifest, with
+    /// the holes the wire itself carries: 24, 25 and 31 (the retired
+    /// impact-market family) and 77-81 (reserved for oracle errors). Catches
+    /// the case where a code is reserved by the mirrored engine error enum
+    /// but no SDK classification maps to it.
     #[test]
     fn no_code_holes_in_documented_range() {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=71).chain(std::iter::once(255)).collect();
+        let expected: Vec<u32> = (1u32..=96)
+            .filter(|c| !matches!(c, 24 | 25 | 31 | 77..=81))
+            .chain(std::iter::once(255))
+            .collect();
         assert_eq!(
             codes, expected,
             "ExecError codes covered by variants: {:?}; expected: {:?}. \
@@ -431,14 +483,14 @@ mod exec_error_meaning_tests {
 
 pub mod prelude {
     pub use crate::types::{
-        AccountFeeOverride, Action, AmendOrder, ApproveAgent, Branch, CancelAllOrders,
-        CancelClientOrder, CancelOrder, CancelReason, CancelReplaceOrder, ClosePosition,
-        ConfirmDeposit, ConfirmWithdrawal, CreateImpactMarket, CreateMarket, Deposit, Event,
-        EventOracleSource, ExecError, FailDepositReason, FailWithdrawal, FillId, ImpactMarketId,
-        ImpactMarketInfo, ImpactMarketStatus, MarkSourceMode, MarketConfig, MarketId, MarketKind,
-        MarketOrder, OracleUpdate, Order, OrderId, Outcome, PlaceOrder, Position, ResolveEvent,
-        RevokeAgent, SetUserMarketLeverage, Side, TimeInForce, UpdateMarketFees, Withdraw,
-        WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX, DEFAULT_CEX_COMPOSITE_STALENESS_MS,
-        DEFAULT_MAX_MARK_SPREAD_BPS,
+        AccountFeeOverride, Action, AmendOrder, ApproveAgent, AttachConditional,
+        AttachedConditional, Branch, CancelAllOrders, CancelClientOrder, CancelOrder, CancelReason,
+        CancelReplaceOrder, ClosePosition, ConfirmDeposit, ConfirmWithdrawal, CreateEvent,
+        CreateMarket, Deposit, Event, EventId, EventInfo, EventOracleSource, EventStatus,
+        ExecError, FailDepositReason, FailWithdrawal, FillId, MarkSourceMode, MarketConfig,
+        MarketId, MarketKind, MarketOrder, OracleUpdate, Order, OrderId, Outcome, PlaceOrder,
+        Position, ResolveEvent, RevokeAgent, SetUserMarketLeverage, Side, TimeInForce,
+        UpdateMarketFees, Withdraw, WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX,
+        DEFAULT_CEX_COMPOSITE_STALENESS_MS, DEFAULT_MAX_MARK_SPREAD_BPS,
     };
 }

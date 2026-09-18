@@ -396,51 +396,62 @@ class SetTriggerMarketConfig:
 
 
 @dataclass
-class CreateImpactMarket(Action):
-    ACTION_NAME = "CreateImpactMarket"
-    impact_market_id: int
-    underlying_market: int
-    child_market_base: int
-    question: str
-    deadline_ms: int
-    resolution_window_ms: int
-    im_bps: int
-    mm_bps: int
-    taker_fee_bps: int
-    maker_fee_bps: int
-    funding_interval_ms: int
-    max_funding_rate_bps: int
-    signer: bytes
-    oracle_source: Optional[Any] = None
-    description: str = ""
-    rules: str = ""
+class CreateSubAccount(Action):
+    """Create a derived sub-account under the signing master (0x28). Dormant
+    behind the sub-account activation: the engine refuses it as
+    ``SubAccountsInactive`` until then."""
+
+    ACTION_NAME = "CreateSubAccount"
+    owner: bytes
+    sub_account_id: int
+    name: bytes
 
     def fields(self) -> dict[str, Any]:
         return {
-            "impact_market_id": self.impact_market_id,
-            "underlying_market": self.underlying_market,
-            "child_market_base": self.child_market_base,
-            "question": self.question,
-            "deadline_ms": self.deadline_ms,
-            "resolution_window_ms": self.resolution_window_ms,
-            "im_bps": self.im_bps,
-            "mm_bps": self.mm_bps,
-            "taker_fee_bps": self.taker_fee_bps,
-            "maker_fee_bps": self.maker_fee_bps,
-            "funding_interval_ms": self.funding_interval_ms,
-            "max_funding_rate_bps": self.max_funding_rate_bps,
-            "signer": self.signer,
-            "oracle_source": self.oracle_source,
-            "description": self.description,
-            "rules": self.rules,
+            "owner": self.owner,
+            "sub_account_id": self.sub_account_id,
+            "name": self.name,
         }
 
 
 @dataclass
+class SubAccountTransfer(Action):
+    """Move balance between a master and one of its sub-accounts (0x29);
+    dormant like :class:`CreateSubAccount`."""
+
+    ACTION_NAME = "SubAccountTransfer"
+    owner: bytes
+    from_account: bytes
+    to_account: bytes
+    amount: int
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "owner": self.owner,
+            "from": self.from_account,
+            "to": self.to_account,
+            "amount": self.amount,
+        }
+
+
+@dataclass
+class ClaimWithdrawalPayout(Action):
+    """**Operator-only.** Acquire the single-holder Solana payout lease on a
+    pending withdrawal (0x2e); ``holder`` is the claiming watcher's own
+    address."""
+
+    ACTION_NAME = "ClaimWithdrawalPayout"
+    withdrawal_id: int
+    holder: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {"withdrawal_id": self.withdrawal_id, "holder": self.holder}
+
+
+@dataclass
 class ResolveEvent(Action):
-    """Resolve a standalone event (0x27, DEC-149). YES/NO only — the engine
-    rejects ``Void`` for standalone events. The legacy impact-family resolve is
-    ``ResolveImpactMarket`` (0x0f), reachable via :class:`RawAction`."""
+    """Resolve an event (0x27) to YES or NO; the engine rejects ``Void`` and
+    refuses an event that still carries attached conditionals."""
 
     ACTION_NAME = "ResolveEvent"
     event_id: int
@@ -701,7 +712,7 @@ class UpdateMarketFees(Action):
 # feeder / relayer, each gated by a dedicated engine allowlist. They live in
 # the public SDK so operator tooling needs no second SDK, but a trading
 # consumer should ignore this section. Most operator actions (OracleUpdate,
-# CreateMarket, Confirm*/Fail*, ResolveImpactMarket, …) are reachable via
+# CreateMarket, Confirm*/Fail*, ResolveEvent, …) are reachable via
 # :class:`RawAction`; OracleUpdateComposite gets a typed builder because Auros'
 # Python feeder requested first-class support.
 
@@ -851,7 +862,9 @@ __all__ = [
     "ConfirmWithdrawal",
     "FailWithdrawal",
     "SetUserMarketLeverage",
-    "CreateImpactMarket",
+    "CreateSubAccount",
+    "SubAccountTransfer",
+    "ClaimWithdrawalPayout",
     "UpdateMarketFees",
     "OracleUpdateComposite",
     "SubmitOracleObservation",

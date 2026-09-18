@@ -1272,7 +1272,7 @@ class ExchangeClient:
     def history_resolutions(
         self,
         owner: bytes | str,
-        impact_market_id: int | None = None,
+        event_id: int | None = None,
         from_ms: int | None = None,
         to_ms: int | None = None,
         limit: int | None = None,
@@ -1281,8 +1281,8 @@ class ExchangeClient:
         if isinstance(owner, bytes):
             owner = owner.hex()
         params: dict[str, t.Any] = {}
-        if impact_market_id is not None:
-            params["impact_market_id"] = impact_market_id
+        if event_id is not None:
+            params["event_id"] = event_id
         if from_ms is not None:
             params["from"] = from_ms
         if to_ms is not None:

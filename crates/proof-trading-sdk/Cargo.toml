@@ -1,6 +1,6 @@
 [package]
 name = "proof-trading-sdk"
-version = "3.2.0"
+version = "4.0.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Rust core for the Proof trading SDK: MessagePack codec, Ed25519 signing, and wire types. Hub of the wheel-and-spokes SDK."
@@ -28,7 +28,7 @@ rmpv = { version = "1.3.1", features = ["with-serde"] }
 # surface: SubmitOracleObservation (0x2D), ConfigureOraclePolicy (inner
 # 0x0C), SetOracleGuards (inner 0x0D), MarketOracleGuards,
 # OracleRejectReason, FundingSkipReason, and ExecError code 82.
-proof-wire = { git = "https://github.com/Proof-labs/wire.git", tag = "v1.7.0" }
+proof-wire = { git = "https://github.com/Proof-labs/wire.git", tag = "v2.0.0" }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.

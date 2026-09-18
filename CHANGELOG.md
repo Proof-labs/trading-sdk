@@ -7,6 +7,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **BREAKING (MAJOR) — proof-wire 2.0.0: the impact-market family is gone and
+  every conditional belongs to an event.** The npm package moves to **5.0.0**,
+  the Rust core to **4.0.0**, the PyO3 and Python packages to **4.0.0**.
+  - Removed: `CreateImpactMarket` (0x0e) and `ResolveImpactMarket` (0x0f) in
+    every language, the `ImpactMarketInfo` / `ImpactMarketStatus` types, the
+    `CreateImpactMarket` governance arm and batch item, `queryImpactMarkets()`,
+    and error codes 24, 25 and 31. The retired bytes never decode again.
+  - Changed: `MarketKind` conditional and binary payloads carry the event id;
+    `EventInfo` gains `attachedConditionals` (`[underlying, cpy, cpn]`
+    triples) and its status type is `EventStatus`; `MarketsSnapshot.events`
+    replaces `impactMarkets`; `AccountInfo.bindingScenario` entries name
+    `eventId`; `CreateEvent` gains a per-book `maxOpenInterest` trailer;
+    `queryHistoryResolutions` / `history_resolutions` filter on `eventId` /
+    `event_id` and each row names its `eventId` (the indexer's route moved
+    with the wire).
+  - Added: the `AttachConditional` governance arm (inner tag 10) as a
+    singleton and as the second `Batch` item, with its own `maxOpenInterest`
+    trailer; typed `CreateSubAccount` (0x28), `SubAccountTransfer` (0x29) and
+    `ClaimWithdrawalPayout` (0x2e) actions absorbed from wire 1.9.0 and
+    1.10.0; error codes 72–76, 82 and 83–96 classified.
+  - Conformance vectors regenerated: the family cases leave, the attach,
+    batch, create-event oracle-source and new outer-action cases arrive; the
+    engine snapshot fixture is `engine-349fa9b.hex`. The wire pin is the
+    `v2.0.0` tag.
+
 - TypeScript 4.2.0 adds gateway-only `queryFinancialState({markets, owners})`:
   one finalized snapshot of selected raw accounts, fee/funding market state,
   fee pool, per-pool insurance and PLP configuration/account. Strict selector,

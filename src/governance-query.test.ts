@@ -34,7 +34,6 @@ import {
   decodeAdminAction,
   decodeAdminSignerRegistry,
   decodeAdminSignerRegistryInfo,
-  decodeImpactMarketInfo,
   decodeEventInfo,
   decodeProposalPage,
   decodeProposalDisplayInfo,
@@ -94,30 +93,6 @@ const PAGE_STATUS_EXPIRED_REGISTRY_CHANGED =
 
 /** `ProposalPage { items: [], next_cursor: None }` */
 const PAGE_EMPTY = "9290c0";
-
-/**
- * `GET /v1/impact_markets` rows — `Vec<ImpactMarketDisplayInfo>` from
- * exchange-core's own serializer (same harvest recipe as above), one vector
- * per shape the read has ever had:
- *  - IMPACT_ROW_CURRENT15: today's 15-slot row — status `Resolved(Yes)`,
- *    `Some(MarketOracle)` with a >u32 strike (arrives as bigint), and
- *    non-empty description/rules.
- *  - IMPACT_ROW_LEGACY13: the BE-54-era 13-slot row (oracle trailer only,
- *    `None`), status `Trading`.
- *  - IMPACT_ROW_LEGACY12: the pre-BE-54 12-slot row, status `PreResolution`.
- */
-const IMPACT_ROW_CURRENT15 =
-  "919f5b0fcd238ccd238dcd238ecd238fad646f6573206974206c616e643fce000f4240cd03e881a85265736f6c766564a3596573cd022bcd030981ac4d61726b65744f7261636c659303cf0000000f224d4a00b2477265617465725468616e4f72457175616ca4626f6479a86372697465726961";
-const IMPACT_ROW_LEGACY13 =
-  "919d5b0fcd238ccd238dcd238ecd238fad646f6573206974206c616e643fce000f4240cd03e8a754726164696e67cd022b00c0";
-const IMPACT_ROW_LEGACY12 =
-  "919c5b0fcd238ccd238dcd238ecd238fad646f6573206974206c616e643fce000f4240cd03e8ad5072655265736f6c7574696f6ecd022b00";
-
-/** Pull the single row out of a one-row impact-markets vector. */
-function firstImpactRow(hex: string): unknown {
-  const rows = decodeVector(hex) as unknown[];
-  return rows[0];
-}
 
 /** Pull the single proposal out of a one-item page vector. */
 function firstProposal(hex: string) {
@@ -286,10 +261,10 @@ const ACTION_CANCEL_ALL_SCOPED =
 const ACTION_CANCEL_ALL_UNSCOPED =
   "81b943616e63656c416c6c4f7264657273466f724163636f756e7492dc0014ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1c0";
 
-const ACTION_IMPACT =
-  "81b2437265617465496d706163744d61726b6574dc00105b0fcd238cad646f6573206974206c616e643fce000f4240cd03e8cd0d06cd0683050200cd0bb8dc00140000000000000000000000000000000000000000c0a0a0";
+const ACTION_ATTACH =
+  "81b1417474616368436f6e646974696f6e616c995b0fcd238ccd0d06cd06830502dc0014000000000000000000000000000000000000000000";
 const ACTION_BATCH =
-  "81a542617463689281ac4372656174654d61726b65749c0fcd0d06cd06830502dc00140000000000000000000000000000000000000000cdea60cd0bb80000a00081b2437265617465496d706163744d61726b6574dc00105b0fcd238cad646f6573206974206c616e643fce000f4240cd03e8cd0d06cd0683050200cd0bb8dc00140000000000000000000000000000000000000000c0a0a0";
+  "81a542617463689281ac4372656174654d61726b65749c0fcd0d06cd06830502dc00140000000000000000000000000000000000000000cdea60cd0bb80000a00081b1417474616368436f6e646974696f6e616c995b0fcd238ccd0d06cd06830502dc0014000000000000000000000000000000000000000000";
 const ACTION_TRIGGER_CONFIG =
   "81b6536574547269676765724d61726b6574436f6e666967970703c3ccfacd1388cd03e820";
 
@@ -334,27 +309,19 @@ describe("decodeAdminAction", () => {
     ).toThrow(/owner is 19 bytes, expected 20/);
   });
 
-  it("decodes the engine's frozen v2 impact bytes", () => {
-    expect(decodeAdminAction(decodeVector(ACTION_IMPACT))).toEqual({
-      kind: "CreateImpactMarket",
+  it("decodes the engine's frozen attach bytes (admin tag 10)", () => {
+    expect(decodeAdminAction(decodeVector(ACTION_ATTACH))).toEqual({
+      kind: "AttachConditional",
       value: {
-        impactMarketId: 91,
+        eventId: 91,
         underlyingMarket: 15,
         childMarketBase: 9_100,
-        question: "does it land?",
-        deadlineMs: 1_000_000n,
-        resolutionWindowMs: 1_000n,
         imBps: 3334,
         mmBps: 1667,
         takerFeeBps: 5,
         makerFeeBps: 2,
-        fundingIntervalMs: 0n,
-        maxFundingRateBps: 3000,
         signer: new Uint8Array(20),
-        // The nil oracle source stays ABSENT (not `undefined`-assigned);
-        // the empty text trailers decode as "".
-        description: "",
-        rules: "",
+        maxOpenInterest: 0n,
       },
     });
   });
@@ -363,17 +330,17 @@ describe("decodeAdminAction", () => {
     const action = decodeAdminAction(decodeVector(ACTION_BATCH));
     if (action.kind !== "Batch") throw new Error("expected Batch");
     expect(action.value).toHaveLength(2);
-    const [perp, impact] = action.value;
+    const [perp, attach] = action.value;
     if (perp!.kind !== "CreateMarket") throw new Error("expected CreateMarket");
     expect(perp!.value.market).toBe(15);
     expect(perp!.value.imBps).toBe(3334);
     expect(perp!.value.fundingIntervalMs).toBe(60_000n);
-    if (impact!.kind !== "CreateImpactMarket") {
-      throw new Error("expected CreateImpactMarket");
+    if (attach!.kind !== "AttachConditional") {
+      throw new Error("expected AttachConditional");
     }
-    expect(impact!.value.impactMarketId).toBe(91);
-    expect(impact!.value.underlyingMarket).toBe(15);
-    expect(impact!.value.childMarketBase).toBe(9_100);
+    expect(attach!.value.eventId).toBe(91);
+    expect(attach!.value.underlyingMarket).toBe(15);
+    expect(attach!.value.childMarketBase).toBe(9_100);
   });
 
   it("decodes the engine's frozen trigger-config bytes (admin tag 5)", () => {
@@ -392,33 +359,44 @@ describe("decodeAdminAction", () => {
   });
 
   it("tolerates the serde(default) trailers' absence, like the engine", () => {
-    // 13 slots — a payload written before the oracle-source/description/
-    // rules trailers existed. The engine's decoder defaults them; the
-    // mirror must too, not refuse the whole proposal list.
-    const bare = {
-      CreateImpactMarket: [
+    // 8 slots — an attachment written before the open-interest trailer
+    // existed, and 9 slots — an event written before its trailers. The
+    // engine's decoder defaults them; the mirror must too, not refuse the
+    // whole proposal list.
+    const attach = decodeAdminAction({
+      AttachConditional: [
         91,
         15,
         9_100,
-        "does it land?",
-        1_000_000,
-        1_000,
         3334,
         1667,
         5,
         2,
-        0,
-        3000,
         new Array(20).fill(0),
       ],
-    };
-    const action = decodeAdminAction(bare);
-    if (action.kind !== "CreateImpactMarket") {
-      throw new Error("expected CreateImpactMarket");
+    });
+    if (attach.kind !== "AttachConditional") {
+      throw new Error("expected AttachConditional");
     }
-    expect(action.value.oracleSource).toBeUndefined();
-    expect(action.value.description).toBe("");
-    expect(action.value.rules).toBe("");
+    expect(attach.value.maxOpenInterest).toBe(0n);
+    const event = decodeAdminAction({
+      CreateEvent: [
+        700,
+        70_000,
+        0,
+        "Will the Fed cut rates?",
+        1_778_000_000_000,
+        1_000,
+        5,
+        2,
+        new Array(20).fill(0),
+      ],
+    });
+    if (event.kind !== "CreateEvent") throw new Error("expected CreateEvent");
+    expect(event.value.oracleSource).toBeUndefined();
+    expect(event.value.description).toBe("");
+    expect(event.value.rules).toBe("");
+    expect(event.value.maxOpenInterest).toBe(0n);
   });
 
   it("fails closed on a batch item outside the closed market-creation set", () => {
@@ -468,139 +446,6 @@ describe("page envelope", () => {
     );
     expect(() => decodeProposalPage([[], null, "trailing"])).toThrow(
       /proposalPage has 3 fields, expected exactly 2/,
-    );
-  });
-});
-
-describe("decodeImpactMarketInfo (engine golden vectors)", () => {
-  /** The 12 base fields every shape shares, decoded. */
-  const base = {
-    impactMarketId: 91,
-    underlyingMarket: 15,
-    cpyMarket: 9_100,
-    cpnMarket: 9_101,
-    ebyMarket: 9_102,
-    ebnMarket: 9_103,
-    question: "does it land?",
-    deadlineMs: 1_000_000n,
-    resolutionWindowMs: 1_000n,
-    createdMs: 555n,
-  };
-
-  it("decodes the current 15-slot row — trailers, resolved status, bigint strike", () => {
-    expect(
-      decodeImpactMarketInfo(firstImpactRow(IMPACT_ROW_CURRENT15)),
-    ).toEqual({
-      ...base,
-      status: { kind: "Resolved", outcome: Outcome.Yes },
-      resolvedMs: 777n,
-      oracleSource: {
-        kind: "MarketOracle",
-        market: 3,
-        strikePrice: 65_000_000_000n,
-        comparison: "GreaterThanOrEqual",
-      },
-      description: "body",
-      rules: "criteria",
-    });
-  });
-
-  it("decodes the BE-54-era 13-slot row — nil oracle, no text trailers", () => {
-    // `oracleSource` present-but-nil stays ABSENT; description/rules were
-    // not served, so they stay `undefined` (not ""), letting callers tell
-    // "not served" from "empty".
-    expect(decodeImpactMarketInfo(firstImpactRow(IMPACT_ROW_LEGACY13))).toEqual(
-      {
-        ...base,
-        status: { kind: "Trading" },
-        resolvedMs: 0n,
-      },
-    );
-  });
-
-  it("decodes the pre-BE-54 12-slot row", () => {
-    expect(decodeImpactMarketInfo(firstImpactRow(IMPACT_ROW_LEGACY12))).toEqual(
-      {
-        ...base,
-        status: { kind: "PreResolution" },
-        resolvedMs: 0n,
-      },
-    );
-  });
-
-  /** The current row as a mutable decoded array, for negative variants. */
-  function currentRow(): unknown[] {
-    return [...(firstImpactRow(IMPACT_ROW_CURRENT15) as unknown[])];
-  }
-
-  it("rejects tuple lengths outside the supported 12-15 shapes", () => {
-    expect(() => decodeImpactMarketInfo(currentRow().slice(0, 11))).toThrow(
-      /expected 12-15/,
-    );
-    expect(() => decodeImpactMarketInfo([...currentRow(), "trailing"])).toThrow(
-      /expected 12-15/,
-    );
-    expect(() => decodeImpactMarketInfo("not a row")).toThrow(/not an array/);
-  });
-
-  it("fails closed on a status or outcome this build does not know", () => {
-    const unknownStatus = currentRow();
-    unknownStatus[9] = "Superseded";
-    expect(() => decodeImpactMarketInfo(unknownStatus)).toThrow(
-      /not a known ImpactMarketStatus/,
-    );
-    const unknownVariant = currentRow();
-    unknownVariant[9] = { Vetoed: [1] };
-    expect(() => decodeImpactMarketInfo(unknownVariant)).toThrow(
-      /unknown ImpactMarketStatus variant "Vetoed"/,
-    );
-    const unknownOutcome = currentRow();
-    unknownOutcome[9] = { Resolved: "Maybe" };
-    expect(() => decodeImpactMarketInfo(unknownOutcome)).toThrow(
-      /unknown Outcome/,
-    );
-    const numericOutcome = currentRow();
-    numericOutcome[9] = { Resolved: 1 };
-    expect(() => decodeImpactMarketInfo(numericOutcome)).toThrow(
-      /unknown Outcome/,
-    );
-  });
-
-  it("rejects malformed integer and text fields instead of coercing", () => {
-    // The old permissive decoder turned these into NaN / 0n / stringified
-    // garbage; each is now a named refusal.
-    const stringId = currentRow();
-    stringId[0] = "91";
-    expect(() => decodeImpactMarketInfo(stringId)).toThrow(
-      /impactMarketId is not a safe unsigned integer/,
-    );
-    const overflowId = currentRow();
-    overflowId[0] = 2 ** 32;
-    expect(() => decodeImpactMarketInfo(overflowId)).toThrow(
-      /impactMarketId is outside/,
-    );
-    const numericQuestion = currentRow();
-    numericQuestion[6] = 7;
-    expect(() => decodeImpactMarketInfo(numericQuestion)).toThrow(
-      /question is not a string/,
-    );
-    const nilDeadline = currentRow();
-    nilDeadline[7] = null;
-    expect(() => decodeImpactMarketInfo(nilDeadline)).toThrow(
-      /deadlineMs is not a safe unsigned integer/,
-    );
-    const numericDescription = currentRow();
-    numericDescription[13] = 42;
-    expect(() => decodeImpactMarketInfo(numericDescription)).toThrow(
-      /description is not a string/,
-    );
-  });
-
-  it("fails closed on an oracle-source variant this build does not know", () => {
-    const row = currentRow();
-    row[12] = { PriceAtDeadline: [1, 2] };
-    expect(() => decodeImpactMarketInfo(row)).toThrow(
-      /unknown EventOracleSource variant "PriceAtDeadline"/,
     );
   });
 });
@@ -835,7 +680,11 @@ describe("decodeEventInfo (E1 golden vector)", () => {
   // the engine test — a read-model field reorder breaks both. DO NOT edit by
   // hand; regenerate from the engine if the EventInfo layout changes.
   const GOLDEN =
-    "9acd02bcce00011170ce00011171b757696c6c2074686520466564206375742072617465733fcf0000019df90ef400cd03e8a754726164696e67cf0000019dc95fec0000c0";
+    "9bcd02bcce00011170ce00011171b757696c6c2074686520466564206375742072617465733fcf0000019df90ef400cd03e8a754726164696e67cf0000019dc95fec0000c090";
+  // Event 91 as the markets snapshot serves it: one conditional attached on
+  // perp 15 with its books at 9100/9101, binaries at 9102/9103.
+  const ATTACHED =
+    "9b5bcd238ecd238fad646f6573206974206c616e643fce000f4240cd03e8a754726164696e670500c091930fcd238ccd238d";
 
   it("decodes the stored EventInfo positionally", () => {
     const info = decodeEventInfo(decodeVector(GOLDEN));
@@ -849,5 +698,23 @@ describe("decodeEventInfo (E1 golden vector)", () => {
     expect(info.createdMs).toBe(1777200000000n);
     expect(info.resolvedMs).toBe(0n);
     expect(info.oracleSource).toBeUndefined();
+    expect(info.attachedConditionals).toEqual([]);
+  });
+
+  it("decodes an event's attachment list", () => {
+    const info = decodeEventInfo(decodeVector(ATTACHED));
+    expect(info.eventId).toBe(91);
+    expect(info.ebyMarket).toBe(9102);
+    expect(info.ebnMarket).toBe(9103);
+    expect(info.attachedConditionals).toEqual([
+      { underlyingMarket: 15, cpyMarket: 9100, cpnMarket: 9101 },
+    ]);
+  });
+
+  it("tolerates the pre-attachment ten-field record", () => {
+    const info = decodeEventInfo(
+      decodeVector(GOLDEN.slice(0, -2).replace(/^9b/, "9a")),
+    );
+    expect(info.attachedConditionals).toEqual([]);
   });
 });

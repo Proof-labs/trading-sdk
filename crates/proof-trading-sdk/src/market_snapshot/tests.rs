@@ -6,7 +6,7 @@
 )]
 
 use super::*;
-use crate::types::{EventId, MarkSourceMode, MarketKind};
+use crate::types::{AttachedConditional, Branch, EventId, MarkSourceMode, MarketKind};
 
 fn market() -> MarketConfig {
     MarketConfig {
@@ -43,32 +43,54 @@ fn fixture() -> Vec<u8> {
         chain_id: [7; 32],
         height: u64::MAX,
         markets: vec![market()],
-        impact_markets: vec![],
+        events: vec![],
     })
     .unwrap()
 }
 
 #[test]
-fn current_engine_g17_snapshot_matches_the_f16_shared_wire_contract() {
-    // Actual exchange-core::query::MarketsSnapshot at dev 0d215eaa, encoded
-    // with rmp_serde::to_vec. G17 EventId changed the Rust field name but not
-    // the positional PredictionBinary payload [u32, Branch].
-    let bytes = hex::decode(include_str!("engine-0d215eaa.hex").trim()).unwrap();
+fn current_engine_snapshot_with_an_attached_event_decodes() {
+    // Bytes produced by exchange-core::query::query_markets_snapshot on the
+    // event-keyed wire: two perps, one event with its binaries and one
+    // conditional attached on the second perp.
+    let bytes = hex::decode(include_str!("engine-349fa9b.hex").trim()).unwrap();
     let snapshot = decode_snapshot(&envelope(&bytes), [7; 32]).unwrap();
     assert_eq!(snapshot.height, 9_007_199_254_740_993);
-    assert_eq!(snapshot.markets.len(), 5);
-    assert_eq!(snapshot.markets[3].market, 201);
-    assert!(matches!(
-        snapshot.markets[3].kind,
-        MarketKind::PredictionBinary {
-            event_id: EventId(123),
-            ..
+    assert_eq!(
+        snapshot
+            .markets
+            .iter()
+            .map(|m| m.market)
+            .collect::<Vec<_>>(),
+        vec![0, 15, 9100, 9101, 9102, 9103]
+    );
+    assert_eq!(
+        snapshot.markets[2].kind,
+        MarketKind::ConditionalPerp {
+            event_id: EventId(91),
+            branch: Branch::Yes,
         }
-    ));
+    );
+    assert_eq!(
+        snapshot.markets[5].kind,
+        MarketKind::PredictionBinary {
+            event_id: EventId(91),
+            branch: Branch::No,
+        }
+    );
     assert_eq!(snapshot.markets[0].fee_tiers[0].maker_fee_tenth_bps, -7);
     assert_eq!(snapshot.markets[0].max_open_interest, u64::MAX);
-    assert_eq!(snapshot.impact_markets[0].impact_market_id, 77);
-    assert_eq!(snapshot.impact_markets[0].eby_market, 0);
+    let event = &snapshot.events[0];
+    assert_eq!(event.event_id, EventId(91));
+    assert_eq!((event.eby_market, event.ebn_market), (9102, 9103));
+    assert_eq!(
+        event.attached_conditionals,
+        vec![AttachedConditional {
+            underlying_market: 15,
+            cpy_market: 9100,
+            cpn_market: 9101,
+        }]
+    );
 }
 
 fn envelope(bytes: &[u8]) -> Vec<u8> {
@@ -92,7 +114,7 @@ fn actual_shared_wire_snapshot_round_trips_without_numeric_loss() {
     assert_eq!(snapshot.height, u64::MAX);
     assert_eq!(snapshot.markets[0].max_open_interest, u64::MAX);
     assert_eq!(snapshot.markets[0].kind, MarketKind::Perp);
-    assert!(snapshot.impact_markets.is_empty());
+    assert!(snapshot.events.is_empty());
     // Rust-produced golden vector also consumed by the TypeScript decoder.
     println!("snapshot-golden={}", hex::encode(fixture()));
 }

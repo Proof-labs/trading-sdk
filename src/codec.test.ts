@@ -385,26 +385,21 @@ describe("codec v1 all action types", () => {
       data: { owner: OWNER, agentPubkey: new Uint8Array(32).fill(0x02) },
     },
     {
-      type: "CreateImpactMarket",
+      type: "CreateSubAccount",
+      data: { owner: OWNER, subAccountId: 1, name: new Uint8Array(32) },
+    },
+    {
+      type: "SubAccountTransfer",
       data: {
-        impactMarketId: 42,
-        underlyingMarket: 1,
-        childMarketBase: 100,
-        question: "BTC above $100k on Apr 30",
-        deadlineMs: 4_000_000_000_000n,
-        resolutionWindowMs: 3_600_000n,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        fundingIntervalMs: 60_000n,
-        maxFundingRateBps: 3000,
-        signer: SIGNER,
+        owner: OWNER,
+        from: OWNER,
+        to: new Uint8Array(20).fill(0x02),
+        amount: 1_000_000n,
       },
     },
     {
-      type: "ResolveImpactMarket",
-      data: { impactMarketId: 42, outcome: Outcome.Yes, signer: SIGNER },
+      type: "ClaimWithdrawalPayout",
+      data: { withdrawalId: 777n, holder: new Uint8Array(20).fill(0x05) },
     },
     {
       type: "ResolveEvent",
@@ -1074,131 +1069,6 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.defaultTtlMs).toBe(120_000n);
     expect(decoded.data.takerFeeBps).toBeNull();
     expect(decoded.data.maxPositionSize).toBeNull();
-  });
-
-  // BE-54: oracleSource round-trip — three flavors. Default (undefined)
-  // omits the field on the wire (length-tolerant decode preserves
-  // pre-BE-54 SDK output); explicit RelayerAttested and the two
-  // auto-resolve modes carry the full enum payload.
-  it("BE-54: round-trips CreateImpactMarket without oracleSource (default)", () => {
-    const action: Action = {
-      type: "CreateImpactMarket",
-      data: {
-        impactMarketId: 42,
-        underlyingMarket: 1,
-        childMarketBase: 100,
-        question: "BTC above $100k on Apr 30",
-        deadlineMs: 4_000_000_000_000n,
-        resolutionWindowMs: 3_600_000n,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        fundingIntervalMs: 60_000n,
-        maxFundingRateBps: 3000,
-        signer: SIGNER,
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "CreateImpactMarket")
-      throw new Error("type narrowing");
-    expect(decoded.data.oracleSource).toBeUndefined();
-  });
-
-  it("BE-54: round-trips CreateImpactMarket with UnderlyingPriceVsStrike oracleSource", () => {
-    const action: Action = {
-      type: "CreateImpactMarket",
-      data: {
-        impactMarketId: 42,
-        underlyingMarket: 1,
-        childMarketBase: 100,
-        question: "BTC above $100k on Apr 30",
-        deadlineMs: 4_000_000_000_000n,
-        resolutionWindowMs: 3_600_000n,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        fundingIntervalMs: 60_000n,
-        maxFundingRateBps: 3000,
-        signer: SIGNER,
-        oracleSource: {
-          kind: "UnderlyingPriceVsStrike",
-          strikePrice: 10_000_000n,
-          comparison: "GreaterThan",
-        },
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "CreateImpactMarket")
-      throw new Error("type narrowing");
-    expect(decoded.data.oracleSource).toEqual({
-      kind: "UnderlyingPriceVsStrike",
-      strikePrice: 10_000_000n,
-      comparison: "GreaterThan",
-    });
-  });
-
-  it("BE-54: round-trips CreateImpactMarket with MarketOracle oracleSource", () => {
-    const action: Action = {
-      type: "CreateImpactMarket",
-      data: {
-        impactMarketId: 42,
-        underlyingMarket: 1,
-        childMarketBase: 100,
-        question: "ETH above $4k at expiry",
-        deadlineMs: 4_000_000_000_000n,
-        resolutionWindowMs: 3_600_000n,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        fundingIntervalMs: 60_000n,
-        maxFundingRateBps: 3000,
-        signer: SIGNER,
-        oracleSource: {
-          kind: "MarketOracle",
-          market: 7,
-          strikePrice: 4_000_000n,
-          comparison: "GreaterThanOrEqual",
-        },
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "CreateImpactMarket")
-      throw new Error("type narrowing");
-    expect(decoded.data.oracleSource).toEqual({
-      kind: "MarketOracle",
-      market: 7,
-      strikePrice: 4_000_000n,
-      comparison: "GreaterThanOrEqual",
-    });
-  });
-
-  it("BE-54: round-trips CreateImpactMarket with RelayerAttested oracleSource", () => {
-    const action: Action = {
-      type: "CreateImpactMarket",
-      data: {
-        impactMarketId: 42,
-        underlyingMarket: 1,
-        childMarketBase: 100,
-        question: "Did Apple announce X?",
-        deadlineMs: 4_000_000_000_000n,
-        resolutionWindowMs: 3_600_000n,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        fundingIntervalMs: 60_000n,
-        maxFundingRateBps: 3000,
-        signer: SIGNER,
-        oracleSource: { kind: "RelayerAttested" },
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "CreateImpactMarket")
-      throw new Error("type narrowing");
-    expect(decoded.data.oracleSource).toEqual({ kind: "RelayerAttested" });
   });
 });
 
