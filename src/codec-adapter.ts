@@ -404,9 +404,16 @@ function fromWasmValue(camelKey: string, value: unknown): unknown {
   ) {
     return governanceActionFromWasm(value);
   }
-  // `newMembers` is a list of 20-byte addresses (Vec<[u8;20]>); convert each
-  // element to a Uint8Array, unlike the single-address BYTE_FIELDS above.
-  if (camelKey === "newMembers" && Array.isArray(value)) {
+  // `newMembers` (UpdateAdminSignerRegistry) and `add`/`remove`
+  // (UpdateAuthoritySet) are each a list of 20-byte addresses
+  // (Vec<[u8;20]>); convert every element to a Uint8Array, unlike the
+  // single-address BYTE_FIELDS above.
+  if (
+    (camelKey === "newMembers" ||
+      camelKey === "add" ||
+      camelKey === "remove") &&
+    Array.isArray(value)
+  ) {
     return value.map((m) =>
       m instanceof Uint8Array ? m : Uint8Array.from(m as number[]),
     );
