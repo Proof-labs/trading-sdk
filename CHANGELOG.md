@@ -61,6 +61,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Rust native gateway `submit_signed_bytes_with_evidence` adds typed,
+  source-qualified per-attempt pre-admission refusal and maintenance evidence,
+  plus header-first JSON `retryAfterMs` fallback rounded up without overflow.
+  Unknown HTTP/body outcomes retain the local reconciliation hash; no earlier
+  attempt is declared absent. The existing `Submission`/`SubmissionOutcome`,
+  original submission method, TS/Python API and wire bytes are unchanged.
+  This additive native API requires a Rust MINOR release when published;
+  it authorizes no activation, retry or durable-journal retirement by itself.
+
+- Rust gateway `MarketsSnapshotClient::read_bound_inventory()` binds the
+  snapshot's own finalized clock and post-height app hash to the actual Comet
+  node identity across the read bracket. A bounded exact-H+1 header lookup
+  handles fast chains without comparing pre-H and post-H hashes. Missing or
+  mismatched witnesses fail closed; legacy snapshot/status APIs, receipt
+  handling, signing and wire bytes are unchanged. This additive API requires
+  a Rust MINOR release when published; exact qualified images and unique node
+  keys remain prerequisites because the legacy app hash is not a registry root.
+
+- Rust gateway `MarketsSnapshotClient::receipt_observation()` distinguishes an
+  exact committed receipt from a canonical HTTP 404/500 not-found observation
+  naming only the requested hash. Calls and bodies are bounded; other statuses,
+  malformed/hashless/conflicting responses and transport failures stay errors.
+  Not-found is not non-inclusion, expiry or accepted-price-effect proof. Existing
+  `committed_receipt()` and signing/wire contracts are unchanged.
+  A single well-formed plaintext `price_updated` event in a code-zero receipt
+  is preserved as typed `CommittedPriceUpdate` evidence. Consumers must bind
+  it to their retained signed action before inferring a primary-oracle effect;
+  composite actions share this event. Missing, duplicate, mixed, malformed or
+  unsupported event evidence leaves only the committed receipt, never a proof
+  of price acceptance. No extra HTTP or wire change is introduced.
+
 - `ExchangeClient.reads().oracleHealth()` forwards gateway freshness responses
   for existing Web-UI warnings and order guards, preserving unavailable-feeder
   data, HTTP failures and caller cancellation. Thresholds remain in the frontend.

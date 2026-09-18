@@ -268,6 +268,35 @@ execution success, **not** an oracle permission certificate. Retry-After remains
 an exact delay, an absolute HTTP date, or explicitly `Invalid`; callers must not
 discard an invalid header and retry immediately.
 
+`submit_signed_bytes_with_evidence` adds strict **per-attempt** refusal evidence
+without changing `Submission` or the original method. Its result contains
+`submission` (including the locally calculated hash) and optional typed
+`refusal`. Only exact source-qualified body/status pairs qualify: authorization,
+rate limiting, maintenance, admission overload/verifier disconnection, and
+specific parse/signature refusals. Generic HTTP errors, unrecognized bodies,
+unknown fields or a hash-bearing 503 remain unresolved. Maintenance requires
+the exact error and `paused` or `cancel-only` mode; substring matching is not
+used. These contracts are checked against
+[`api-gateway@3c711c2`](https://github.com/Proof-labs/api-gateway/tree/3c711c2a3c29ca8f37d2d986fe817d21a9eeebc3)
+(`src/server.rs`, `src/exchange.rs`, `src/types/exchange_response.rs`). Qualify
+the actual deployed gateway image against that contract before using the
+evidence operationally; a loopback fixture is not deployment qualification.
+
+A refusal describes **this one request only**. The SDK does not know a
+journal's earlier attempts: preserve any previous ambiguity, and retire an
+entry on this evidence only after independently establishing the sole-attempt
+condition. Neither method retries, re-signs, allocates a nonce or changes live
+state beyond the caller-requested POST. Receipts remain exact-hash reads;
+not-found is never proof that the transaction cannot execute.
+
+The evidence method retains a `Retry-After` header even if it is invalid or
+duplicated. Only an absent header uses JSON `retryAfterMs`, rounding **up** to
+the existing whole-second representation without overflow or shortening. Null,
+negative, fractional, non-numeric, duplicate or overflowing JSON delay values
+are invalid, not an absent hint; invalid rate-limit bodies do not qualify as
+pre-admission evidence. The caller owns its quiet period and reconciliation;
+this SDK performs no sleep or automatic resubmission.
+
 For a deliberately read-only local contract probe, with no signing/key inputs:
 
 ```sh
