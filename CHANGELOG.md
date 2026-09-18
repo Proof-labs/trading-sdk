@@ -111,6 +111,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   this surface are `NodeId`, `AppHash`, `BlockHeight`, `MarketId` and
   `MicroUsdc` rather than bare integers and byte arrays, and receipt reads take
   the existing `TxHash`. Each type carries the check its decoder performed.
+  `ChainIdentity` and `CommittedReceipt` have one definition, shared by the
+  gateway client and the snapshot client, with `BlockHeight` heights; the
+  snapshot reads report `catching_up: false`, having refused a catching-up node.
   `read_bound_inventory()` takes its confirmation-poll schedule from the client:
   `MarketsSnapshotClient::with_confirmation_polling` accepts a
   `ConfirmationPolling { polls, interval }`, defaulting to the previous 8 polls

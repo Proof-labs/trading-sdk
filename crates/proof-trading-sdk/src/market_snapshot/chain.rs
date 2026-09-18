@@ -8,20 +8,9 @@ use serde::{de::DeserializeOwned, Deserialize};
 mod receipt_observation;
 pub use receipt_observation::{CommittedPriceUpdate, PriceEvidenceRejection, ReceiptObservation};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChainIdentity {
-    pub network: String,
-    pub chain_binding: [u8; 32],
-    pub latest_height: BlockHeight,
-    pub latest_block_time_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommittedReceipt {
-    pub hash: TxHash,
-    pub height: BlockHeight,
-    pub code: u32,
-}
+// One definition each, shared with the gateway client: the same node answers
+// both, and two shapes for one answer only invited them to drift.
+pub use crate::gateway::{ChainIdentity, CommittedReceipt};
 
 #[derive(Deserialize)]
 struct Rpc<T> {
@@ -137,6 +126,8 @@ pub(super) fn decode_identity(
         chain_binding,
         latest_height: positive_height(&status.sync_info.latest_block_height)?,
         latest_block_time_ms,
+        // A catching-up node was refused above, so this read never reports one.
+        catching_up: false,
     })
 }
 

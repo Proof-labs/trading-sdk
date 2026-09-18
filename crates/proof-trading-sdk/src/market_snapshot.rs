@@ -342,9 +342,22 @@ pub use values::{AppHash, BlockHeight, MarketId, MicroUsdc, NodeId};
 #[cfg(feature = "gateway")]
 mod chain;
 #[cfg(feature = "gateway")]
+/// `ChainIdentity` and `CommittedReceipt` are the gateway module's types, not
+/// copies: one node answers both clients, so one shape describes its answer.
+///
+/// ```
+/// # use proof_trading_sdk::{gateway, market_snapshot};
+/// fn one_receipt_type(receipt: gateway::CommittedReceipt) -> market_snapshot::CommittedReceipt {
+///     receipt
+/// }
+/// fn one_identity_type(identity: market_snapshot::ChainIdentity) -> gateway::ChainIdentity {
+///     identity
+/// }
+/// ```
+pub use chain::ChainIdentity;
+#[cfg(feature = "gateway")]
 pub use chain::{
-    ChainIdentity, CommittedPriceUpdate, CommittedReceipt, PriceEvidenceRejection,
-    ReceiptObservation,
+    CommittedPriceUpdate, CommittedReceipt, PriceEvidenceRejection, ReceiptObservation,
 };
 
 #[cfg(feature = "gateway")]
