@@ -1,6 +1,7 @@
 import type {
   Address,
   AdminAction,
+  AuthorityDomain,
   CancelAllOrdersForAccount,
   AdminBatchItem,
   AdminSignerRegistry,
@@ -18,6 +19,7 @@ import type {
   ProposalStatus,
   SetTriggerMarketConfig,
   UpdateAdminSignerRegistry,
+  UpdateAuthoritySet,
 } from "./types.js";
 import { Outcome } from "./types.js";
 
@@ -451,6 +453,40 @@ function decodeCancelAllOrdersForAccount(
   };
 }
 
+const AUTHORITY_DOMAINS: ReadonlySet<AuthorityDomain> = new Set([
+  "Oracle",
+  "CexComposite",
+  "Relayer",
+  "Custody",
+  "MarketParams",
+  "ScheduledOps",
+]);
+
+function decodeAuthorityDomain(value: unknown, field: string): AuthorityDomain {
+  if (
+    typeof value === "string" &&
+    AUTHORITY_DOMAINS.has(value as AuthorityDomain)
+  ) {
+    return value as AuthorityDomain;
+  }
+  throw new Error(
+    `governance decode: ${field} is not a known AuthorityDomain: ${JSON.stringify(value)}`,
+  );
+}
+
+function decodeUpdateAuthoritySet(value: unknown): UpdateAuthoritySet {
+  const raw = toTuple(value, "updateAuthoritySet", 3);
+  return {
+    domain: decodeAuthorityDomain(raw[0], "updateAuthoritySet.domain"),
+    add: toArray(raw[1], "updateAuthoritySet.add").map((a, i) =>
+      toBytes(a, `updateAuthoritySet.add[${i}]`, ADDRESS_LEN),
+    ),
+    remove: toArray(raw[2], "updateAuthoritySet.remove").map((a, i) =>
+      toBytes(a, `updateAuthoritySet.remove[${i}]`, ADDRESS_LEN),
+    ),
+  };
+}
+
 function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
   const raw = toTuple(value, "setTriggerMarketConfig", 7);
   if (typeof raw[2] !== "boolean") {
@@ -494,7 +530,7 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   Batch: 4,
   SetTriggerMarketConfig: 5,
   UnpauseBridge: 6,
-  // 7 is UpdateAuthoritySet, not yet mirrored here (exchange#472).
+  UpdateAuthoritySet: 7,
   CancelAllOrdersForAccount: 8,
   ConfigureOraclePolicy: 12,
 };
@@ -561,6 +597,11 @@ export function decodeAdminAction(
       return {
         kind: "SetTriggerMarketConfig",
         value: decodeSetTriggerMarketConfig(payload),
+      };
+    case "UpdateAuthoritySet":
+      return {
+        kind: "UpdateAuthoritySet",
+        value: decodeUpdateAuthoritySet(payload),
       };
     default:
       throw new Error(

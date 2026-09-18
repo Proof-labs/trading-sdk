@@ -35,6 +35,16 @@ GOLDEN_CANCEL_ALL_FOR_ACCOUNT = (
 GOLDEN_CANCEL_ALL_FOR_ACCOUNT_UNSCOPED = (
     "4b9e5c528f5bf4578427fcb42018f3df7ce3239e4a3392c8e087230d5bb3358c"
 )
+# UpdateAuthoritySet (inner tag 0x07): a struct variant carrying an
+# externally-tagged bare-string domain and two address-list fields, over the
+# same golden context. Same authority as above; the TypeScript suite pins
+# the identical constants.
+GOLDEN_UPDATE_AUTHORITY_SET_ADD = (
+    "9f344b099fd7771f04d62f186595a5d58165463dcc638adcef71be9c35ea889f"
+)
+GOLDEN_UPDATE_AUTHORITY_SET_REMOVE = (
+    "a4f4828d828c4e3e5f50ea883568e63b21d49c620f4848542dec498a292b847d"
+)
 
 
 
@@ -147,6 +157,30 @@ class TestAdminProposalContentHash:
         }
         h = pts.admin_proposal_content_hash(**kwargs)
         assert h.hex() == GOLDEN_CANCEL_ALL_FOR_ACCOUNT_UNSCOPED
+
+    def test_update_authority_set_add_hash(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = {
+            "UpdateAuthoritySet": {
+                "domain": "MarketParams",
+                "add": [bytes([0xB2] * 20)],
+                "remove": [],
+            }
+        }
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_UPDATE_AUTHORITY_SET_ADD
+
+    def test_update_authority_set_remove_hash(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = {
+            "UpdateAuthoritySet": {
+                "domain": "Relayer",
+                "add": [],
+                "remove": [bytes([0xC3] * 20)],
+            }
+        }
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_UPDATE_AUTHORITY_SET_REMOVE
 
     def test_rejects_unknown_unit_variant(self):
         kwargs = golden_kwargs()

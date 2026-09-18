@@ -184,6 +184,40 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     );
   });
 
+  it("reproduces the UpdateAuthoritySet hash bit-for-bit", () => {
+    // Struct variant with an externally-tagged bare-string domain and two
+    // address-array fields — the shapes `CancelAllOrdersForAccount` above
+    // doesn't exercise (a plain enum-name string, and `Vec<Address>`).
+    const added = adminProposalContentHash({
+      ...goldenContext(),
+      action: {
+        kind: "UpdateAuthoritySet",
+        value: {
+          domain: "MarketParams",
+          add: [new Uint8Array(20).fill(0xb2)],
+          remove: [],
+        },
+      },
+    });
+    expect(bytesToHex(added)).toBe(
+      "9f344b099fd7771f04d62f186595a5d58165463dcc638adcef71be9c35ea889f",
+    );
+    const removed = adminProposalContentHash({
+      ...goldenContext(),
+      action: {
+        kind: "UpdateAuthoritySet",
+        value: {
+          domain: "Relayer",
+          add: [],
+          remove: [new Uint8Array(20).fill(0xc3)],
+        },
+      },
+    });
+    expect(bytesToHex(removed)).toBe(
+      "a4f4828d828c4e3e5f50ea883568e63b21d49c620f4848542dec498a292b847d",
+    );
+  });
+
   it("rejects a malformed proposer length", () => {
     expect(() =>
       adminProposalContentHash({
