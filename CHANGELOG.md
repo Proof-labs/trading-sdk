@@ -32,6 +32,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     engine snapshot fixture is `engine-349fa9b.hex`. The wire pin is the
     `v2.0.0` tag.
 
+### Added
+
 - TypeScript 4.2.0 adds gateway-only `queryFinancialState({markets, owners})`:
   one finalized snapshot of selected raw accounts, fee/funding market state,
   fee pool, per-pool insurance and PLP configuration/account. Strict selector,
@@ -58,8 +60,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   balance and six-field positions, independent of oracle valuation. Strict
   owner binding, integer precision and positional schema validation; no equity,
   margin or trading/withdrawal permission is inferred. Rust/Python codecs unchanged.
-
-### Added
 
 - Rust native gateway `submit_signed_bytes_with_evidence` adds typed,
   source-qualified per-attempt pre-admission refusal and maintenance evidence,

@@ -1075,8 +1075,7 @@ export type AdminAction =
   | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig }
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
-  | { kind: "UnpauseBridge" }
-  | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount };
+  | { kind: "UnpauseBridge" };
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */
