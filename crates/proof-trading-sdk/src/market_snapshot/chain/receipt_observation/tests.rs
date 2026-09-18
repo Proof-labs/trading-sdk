@@ -1,10 +1,21 @@
 #![allow(clippy::unwrap_used, clippy::arithmetic_side_effects)]
 use super::*;
+use crate::market_snapshot::BlockHeight;
 use serde_json::json;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const HASH: [u8; 32] = [0xab; 32];
+const RAW_HASH: [u8; 32] = [0xab; 32];
+
+fn hash() -> TxHash {
+    TxHash::from_bytes(RAW_HASH)
+}
+fn height(height: u64) -> BlockHeight {
+    BlockHeight::new(height).expect("heights in these fixtures are positive")
+}
+fn market(market: u32) -> MarketId {
+    MarketId::new(market).expect("market ids in these fixtures are positive")
+}
 
 fn not_found() -> Vec<u8> {
     serde_json::to_vec(&json!({"jsonrpc":"2.0","error":{
@@ -26,23 +37,23 @@ fn accepted_body() -> serde_json::Value {
 fn positive_plaintext_event_preserves_effect_metadata_not_primary_action_identity() {
     let body = serde_json::to_vec(&accepted_body()).unwrap();
     assert_eq!(
-        classify(200, &body, HASH).unwrap(),
+        classify(200, &body, hash()).unwrap(),
         ReceiptObservation::CommittedPriceUpdate(CommittedPriceUpdate {
             receipt: CommittedReceipt {
-                hash: HASH,
-                height: 42,
+                hash: hash(),
+                height: height(42),
                 code: 0
             },
-            market: 15,
-            price: 120,
+            market: market(15),
+            price: MicroUsdc::new(120),
             signer: [0xcd; 20],
         })
     );
     assert_eq!(
-        super::super::decode_receipt(&body, HASH).unwrap(),
+        super::super::decode_receipt(&body, hash()).unwrap(),
         CommittedReceipt {
-            hash: HASH,
-            height: 42,
+            hash: hash(),
+            height: height(42),
             code: 0
         }
     );
@@ -51,7 +62,7 @@ fn positive_plaintext_event_preserves_effect_metadata_not_primary_action_identit
     let mut wrong_hash = accepted_body();
     wrong_hash["result"]["hash"] = json!("CD".repeat(32));
     assert_eq!(
-        classify(200, &serde_json::to_vec(&wrong_hash).unwrap(), HASH),
+        classify(200, &serde_json::to_vec(&wrong_hash).unwrap(), hash()),
         Err(SnapshotError::HashMismatch)
     );
 }
@@ -60,14 +71,14 @@ fn positive_plaintext_event_preserves_effect_metadata_not_primary_action_identit
 fn absent_duplicate_rejected_mixed_or_malformed_events_are_never_effect_proof() {
     let good_event = accepted_body()["result"]["tx_result"]["events"][0].clone();
     let committed = ReceiptObservation::Committed(CommittedReceipt {
-        hash: HASH,
-        height: 42,
+        hash: hash(),
+        height: height(42),
         code: 0,
     });
     let refused = |rejection| ReceiptObservation::RejectedPriceEvidence {
         receipt: CommittedReceipt {
-            hash: HASH,
-            height: 42,
+            hash: hash(),
+            height: height(42),
             code: 0,
         },
         rejection,
@@ -210,7 +221,7 @@ fn absent_duplicate_rejected_mixed_or_malformed_events_are_never_effect_proof() 
         let mut body = accepted_body();
         body["result"]["tx_result"]["events"] = events.clone();
         assert_eq!(
-            classify(200, &serde_json::to_vec(&body).unwrap(), HASH).unwrap(),
+            classify(200, &serde_json::to_vec(&body).unwrap(), hash()).unwrap(),
             expected,
             "{events}"
         );
@@ -219,10 +230,10 @@ fn absent_duplicate_rejected_mixed_or_malformed_events_are_never_effect_proof() 
     let mut rejected = accepted_body();
     rejected["result"]["tx_result"]["code"] = json!(21);
     assert_eq!(
-        classify(200, &serde_json::to_vec(&rejected).unwrap(), HASH).unwrap(),
+        classify(200, &serde_json::to_vec(&rejected).unwrap(), hash()).unwrap(),
         ReceiptObservation::Committed(CommittedReceipt {
-            hash: HASH,
-            height: 42,
+            hash: hash(),
+            height: height(42),
             code: 21
         })
     );
@@ -232,7 +243,7 @@ fn absent_duplicate_rejected_mixed_or_malformed_events_are_never_effect_proof() 
         .unwrap()
         .replace("\"key\":\"market\"", "\"key\":\"other\",\"key\":\"market\"");
     assert_eq!(
-        classify(200, duplicate_key.as_bytes(), HASH).unwrap(),
+        classify(200, duplicate_key.as_bytes(), hash()).unwrap(),
         refused(PriceEvidenceRejection::MalformedPriceEvent)
     );
 }
@@ -262,11 +273,11 @@ fn malformed_price_event_attributes_preserve_the_committed_receipt() {
         let mut body = accepted_body();
         body["result"]["tx_result"]["events"] = json!([event]);
         assert_eq!(
-            classify(200, &serde_json::to_vec(&body).unwrap(), HASH).unwrap(),
+            classify(200, &serde_json::to_vec(&body).unwrap(), hash()).unwrap(),
             ReceiptObservation::RejectedPriceEvidence {
                 receipt: CommittedReceipt {
-                    hash: HASH,
-                    height: 42,
+                    hash: hash(),
+                    height: height(42),
                     code: 0
                 },
                 rejection: PriceEvidenceRejection::MalformedPriceEvent,
@@ -275,10 +286,10 @@ fn malformed_price_event_attributes_preserve_the_committed_receipt() {
         );
         body["result"]["tx_result"]["code"] = json!(21);
         assert_eq!(
-            classify(200, &serde_json::to_vec(&body).unwrap(), HASH).unwrap(),
+            classify(200, &serde_json::to_vec(&body).unwrap(), hash()).unwrap(),
             ReceiptObservation::Committed(CommittedReceipt {
-                hash: HASH,
-                height: 42,
+                hash: hash(),
+                height: height(42),
                 code: 21
             }),
         );
@@ -288,8 +299,8 @@ fn malformed_price_event_attributes_preserve_the_committed_receipt() {
 #[test]
 fn missing_or_unrecognized_price_events_do_not_report_a_rejection() {
     let expected = ReceiptObservation::Committed(CommittedReceipt {
-        hash: HASH,
-        height: 42,
+        hash: hash(),
+        height: height(42),
         code: 0,
     });
     let mut missing = accepted_body();
@@ -298,7 +309,7 @@ fn missing_or_unrecognized_price_events_do_not_report_a_rejection() {
         .unwrap()
         .remove("events");
     assert_eq!(
-        classify(200, &serde_json::to_vec(&missing).unwrap(), HASH).unwrap(),
+        classify(200, &serde_json::to_vec(&missing).unwrap(), hash()).unwrap(),
         expected
     );
     for events in [
@@ -314,7 +325,7 @@ fn missing_or_unrecognized_price_events_do_not_report_a_rejection() {
         let mut body = accepted_body();
         body["result"]["tx_result"]["events"] = events;
         assert_eq!(
-            classify(200, &serde_json::to_vec(&body).unwrap(), HASH).unwrap(),
+            classify(200, &serde_json::to_vec(&body).unwrap(), hash()).unwrap(),
             expected,
             "{body}"
         );
@@ -325,15 +336,15 @@ fn missing_or_unrecognized_price_events_do_not_report_a_rejection() {
 fn exact_not_found_is_observation_not_a_committed_receipt() {
     for status in [404, 500] {
         assert_eq!(
-            classify(status, &not_found(), HASH).unwrap(),
-            ReceiptObservation::ExactNotFound { tx_hash: HASH }
+            classify(status, &not_found(), hash()).unwrap(),
+            ReceiptObservation::ExactNotFound { tx_hash: hash() }
         );
         let flat = serde_json::to_vec(&json!({"status":"error",
             "error":format!("tx ({}) not found", "ab".repeat(32))}))
         .unwrap();
         assert_eq!(
-            classify(status, &flat, HASH).unwrap(),
-            ReceiptObservation::ExactNotFound { tx_hash: HASH }
+            classify(status, &flat, hash()).unwrap(),
+            ReceiptObservation::ExactNotFound { tx_hash: hash() }
         );
     }
 }
@@ -345,15 +356,15 @@ fn committed_receipts_still_require_exact_hash_height_and_code() {
             "hash":"AB".repeat(32),"height":"42","tx_result":{"code":code}}}))
         .unwrap();
         assert_eq!(
-            classify(200, &body, HASH).unwrap(),
+            classify(200, &body, hash()).unwrap(),
             ReceiptObservation::Committed(CommittedReceipt {
-                hash: HASH,
-                height: 42,
+                hash: hash(),
+                height: height(42),
                 code
             })
         );
         for status in [404, 500, 503] {
-            assert!(classify(status, &body, HASH).is_err());
+            assert!(classify(status, &body, hash()).is_err());
         }
     }
     for result in [
@@ -365,7 +376,7 @@ fn committed_receipts_still_require_exact_hash_height_and_code() {
         assert!(classify(
             200,
             &serde_json::to_vec(&json!({"result":result})).unwrap(),
-            HASH
+            hash()
         )
         .is_err());
     }
@@ -375,7 +386,7 @@ fn committed_receipts_still_require_exact_hash_height_and_code() {
 fn wrong_missing_foreign_hashes_and_noncanonical_failures_never_count() {
     for status in [200, 201, 301, 400, 401, 429, 502, 503, 504] {
         assert!(
-            classify(status, &not_found(), HASH).is_err(),
+            classify(status, &not_found(), hash()).is_err(),
             "status {status}"
         );
     }
@@ -392,26 +403,26 @@ fn wrong_missing_foreign_hashes_and_noncanonical_failures_never_count() {
     ];
     for status in [404, 500] {
         for body in &bodies {
-            assert!(classify(status, &serde_json::to_vec(body).unwrap(), HASH).is_err());
+            assert!(classify(status, &serde_json::to_vec(body).unwrap(), hash()).is_err());
         }
         for body in [
             b"<html>not found</html>".as_slice(),
             b"{\"error\":",
             b"null",
         ] {
-            assert!(classify(status, body, HASH).is_err());
+            assert!(classify(status, body, hash()).is_err());
         }
         let duplicate = format!(
             r#"{{"error":"unrelated","error":"tx ({}) not found"}}"#,
             "AB".repeat(32)
         );
-        assert!(classify(status, duplicate.as_bytes(), HASH).is_err());
+        assert!(classify(status, duplicate.as_bytes(), hash()).is_err());
         let nested_duplicate = format!(
             r#"{{"error":{{"code":-32603,"message":"Internal error","data":"tx ({}) not found","data":"tx ({}) not found"}}}}"#,
             "CD".repeat(32),
             "AB".repeat(32)
         );
-        assert!(classify(status, nested_duplicate.as_bytes(), HASH).is_err());
+        assert!(classify(status, nested_duplicate.as_bytes(), hash()).is_err());
         for (field, value) in [
             ("code", json!(0)),
             ("code", json!("-32603")),
@@ -420,7 +431,7 @@ fn wrong_missing_foreign_hashes_and_noncanonical_failures_never_count() {
         ] {
             let mut body: serde_json::Value = serde_json::from_slice(&not_found()).unwrap();
             body["error"][field] = value;
-            assert!(classify(status, &serde_json::to_vec(&body).unwrap(), HASH).is_err());
+            assert!(classify(status, &serde_json::to_vec(&body).unwrap(), hash()).is_err());
         }
         for text in [
             format!("backend not found while looking up tx {}", "AB".repeat(32)),
@@ -430,7 +441,7 @@ fn wrong_missing_foreign_hashes_and_noncanonical_failures_never_count() {
             assert!(classify(
                 status,
                 &serde_json::to_vec(&json!({"error":text})).unwrap(),
-                HASH
+                hash()
             )
             .is_err());
         }
@@ -439,12 +450,12 @@ fn wrong_missing_foreign_hashes_and_noncanonical_failures_never_count() {
             &serde_json::to_vec(&json!({"status":"ok",
             "error":format!("tx ({}) not found", "AB".repeat(32))}))
             .unwrap(),
-            HASH
+            hash()
         )
         .is_err());
     }
     assert_eq!(
-        classify(500, &vec![b'x'; MAX_SNAPSHOT_BYTES + 1], HASH),
+        classify(500, &vec![b'x'; MAX_SNAPSHOT_BYTES + 1], hash()),
         Err(SnapshotError::TooLarge)
     );
 }
@@ -486,12 +497,12 @@ async fn one_shot_http_preserves_exact_not_found_and_existing_method_behavior() 
         let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
         if observation {
             assert_eq!(
-                client.receipt_observation(HASH).await.unwrap(),
-                ReceiptObservation::ExactNotFound { tx_hash: HASH }
+                client.receipt_observation(hash()).await.unwrap(),
+                ReceiptObservation::ExactNotFound { tx_hash: hash() }
             );
         } else {
             assert_eq!(
-                client.committed_receipt(HASH).await,
+                client.committed_receipt(hash()).await,
                 Err(SnapshotError::Http(500))
             );
         }
@@ -505,9 +516,10 @@ async fn positive_event_observation_uses_the_same_bounded_gateway_route() {
     let (url, task) = serve_once(200, body.clone(), body.len(), Duration::ZERO).await;
     let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
     assert!(matches!(
-        client.receipt_observation(HASH).await.unwrap(),
+        client.receipt_observation(hash()).await.unwrap(),
         ReceiptObservation::CommittedPriceUpdate(update)
-            if (update.market(), update.price(), update.signer()) == (15, 120, [0xcd; 20])
+            if (update.market(), update.price(), update.signer())
+                == (market(15), MicroUsdc::new(120), [0xcd; 20])
     ));
     task.await.unwrap();
 }
@@ -518,8 +530,8 @@ async fn malformed_price_event_is_reported_through_the_gateway_client() {
     body["result"]["tx_result"]["events"][0]["attributes"][1]["value"] = json!(120);
     let body = serde_json::to_vec(&body).unwrap();
     let receipt = CommittedReceipt {
-        hash: HASH,
-        height: 42,
+        hash: hash(),
+        height: height(42),
         code: 0,
     };
     for observe in [true, false] {
@@ -527,14 +539,14 @@ async fn malformed_price_event_is_reported_through_the_gateway_client() {
         let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
         if observe {
             assert_eq!(
-                client.receipt_observation(HASH).await.unwrap(),
+                client.receipt_observation(hash()).await.unwrap(),
                 ReceiptObservation::RejectedPriceEvidence {
                     receipt: receipt.clone(),
                     rejection: PriceEvidenceRejection::MalformedPriceEvent,
                 }
             );
         } else {
-            assert_eq!(client.committed_receipt(HASH).await.unwrap(), receipt);
+            assert_eq!(client.committed_receipt(hash()).await.unwrap(), receipt);
         }
         task.await.unwrap();
     }
@@ -567,7 +579,7 @@ async fn transport_truncation_size_timeout_and_shed_are_sanitized_errors() {
     ] {
         let (url, task) = serve_once(status, body.clone(), declared, delay).await;
         let client = MarketsSnapshotClient::new(&url, Duration::from_millis(80)).unwrap();
-        let error = client.receipt_observation(HASH).await.unwrap_err();
+        let error = client.receipt_observation(hash()).await.unwrap_err();
         assert_eq!(error, expected);
         assert!(!error.to_string().contains(&url));
         assert!(!format!("{error:?}").contains("ABAB"));

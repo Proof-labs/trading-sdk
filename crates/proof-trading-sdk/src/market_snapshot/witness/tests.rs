@@ -1,6 +1,13 @@
 #![allow(clippy::unwrap_used, clippy::arithmetic_side_effects)]
 
 use super::*;
+
+fn node(id: u8) -> NodeId {
+    NodeId::new([id; 20]).expect("fixture node ids are non-zero")
+}
+fn hash(byte: u8) -> AppHash {
+    AppHash::new([byte; 32]).expect("fixture app hashes are non-zero")
+}
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
@@ -125,7 +132,7 @@ fn hashes_are_compared_at_state_height_not_reported_header_height() {
     assert_eq!(pre.app_hash_height, 99);
     assert_ne!(pre.app_hash, snapshot(1).witness.app_hash);
     let verified = validate_bound_inventory(snapshot(1), pre, after(), None).unwrap();
-    assert_eq!(verified.witness.app_hash, [2; 32]);
+    assert_eq!(verified.witness.app_hash, hash(2));
     assert_eq!(verified.after.app_hash_height, 100);
     // Status H exposes the previous state. It cannot commit snapshot post-H.
     assert_eq!(
@@ -141,13 +148,13 @@ fn cross_replica_aba_and_wrong_matching_hash_are_rejected() {
         WitnessError::BackendMismatch
     );
     let mut other = after();
-    other.node_id = [3; 20];
+    other.node_id = node(3);
     assert_eq!(
         validate_bound_inventory(snapshot(1), before(), other, None).unwrap_err(),
         WitnessError::BackendMismatch
     );
     let mut wrong = after();
-    wrong.app_hash = [3; 32];
+    wrong.app_hash = hash(3);
     assert_eq!(
         validate_bound_inventory(snapshot(1), before(), wrong, None).unwrap_err(),
         WitnessError::HashMismatch
@@ -265,7 +272,7 @@ async fn fast_chain_whole_flow_uses_gateway_exact_height_query() {
     let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
     let verified = client.read_bound_inventory(chain_id()).await.unwrap();
     assert_eq!(verified.snapshot.height, 100);
-    assert_eq!(verified.witness.node_id, [1; 20]);
+    assert_eq!(verified.witness.node_id, node(1));
     task.await.unwrap();
 }
 
@@ -312,7 +319,7 @@ async fn same_height_reads_wait_for_next_header_without_resnapshot_or_clock_rene
     let verified = client.read_bound_inventory(chain_id()).await.unwrap();
     assert_eq!(verified.snapshot.height, 100);
     assert_eq!(verified.witness.finalized_block_time_ms, NOW);
-    assert_eq!(verified.after.identity.latest_height, 101);
+    assert_eq!(verified.after.identity.latest_height.get(), 101);
     task.await.unwrap();
 }
 

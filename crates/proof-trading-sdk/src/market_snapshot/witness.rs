@@ -4,7 +4,8 @@
 //! Qualified images and unique node keys remain deployment prerequisites: the
 //! legacy app hash is not a state-root commitment to the market registry.
 
-use super::{chain, decode_snapshot, ChainIdentity, MarketsSnapshot, MarketsSnapshotClient};
+use super::{chain, decode_snapshot, AppHash, BlockHeight, ChainIdentity, MarketsSnapshot};
+use super::{MarketsSnapshotClient, NodeId};
 use super::{SnapshotError, MAX_SNAPSHOT_BYTES};
 use serde::Deserialize;
 use std::fmt;
@@ -15,11 +16,11 @@ const CONFIRMATION_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotWitness {
-    pub node_id: [u8; 20],
-    pub height: u64,
+    pub node_id: NodeId,
+    pub height: BlockHeight,
     pub finalized_block_time_ms: u64,
     /// Engine state after `height`. Header `height + 1` commits this value.
-    pub app_hash: [u8; 32],
+    pub app_hash: AppHash,
 }
 
 /// A decoded snapshot and its witness, built only by [`decode_bound_snapshot`].
@@ -50,16 +51,16 @@ impl BoundMarketsSnapshot {
 /// [`decode_bound_identity`].
 ///
 /// ```compile_fail
-/// # use proof_trading_sdk::market_snapshot::{BoundChainIdentity, ChainIdentity};
-/// fn forge(identity: ChainIdentity) -> BoundChainIdentity {
-///     BoundChainIdentity { identity, node_id: [1; 20], app_hash: [2; 32], app_hash_height: 1 }
+/// # use proof_trading_sdk::market_snapshot::{AppHash, BoundChainIdentity, ChainIdentity, NodeId};
+/// fn forge(identity: ChainIdentity, node_id: NodeId, app_hash: AppHash) -> BoundChainIdentity {
+///     BoundChainIdentity { identity, node_id, app_hash, app_hash_height: 1 }
 /// }
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoundChainIdentity {
     identity: ChainIdentity,
-    node_id: [u8; 20],
-    app_hash: [u8; 32],
+    node_id: NodeId,
+    app_hash: AppHash,
     app_hash_height: u64,
 }
 
@@ -68,16 +69,17 @@ impl BoundChainIdentity {
         &self.identity
     }
 
-    pub fn node_id(&self) -> [u8; 20] {
+    pub fn node_id(&self) -> NodeId {
         self.node_id
     }
 
-    pub fn app_hash(&self) -> [u8; 32] {
+    pub fn app_hash(&self) -> AppHash {
         self.app_hash
     }
 
     /// `/status.latest_app_hash` comes from the latest block HEADER and is
-    /// therefore post-(latest_height - 1), not post-latest_height.
+    /// therefore post-(latest_height - 1), not post-latest_height. Zero is a
+    /// real value here: it is the state before the first block.
     pub fn app_hash_height(&self) -> u64 {
         self.app_hash_height
     }
@@ -88,8 +90,8 @@ impl BoundChainIdentity {
 /// parts are read-only.
 ///
 /// ```
-/// # use proof_trading_sdk::market_snapshot::BoundInventorySnapshot;
-/// fn witnessed_height(bound: &BoundInventorySnapshot) -> u64 {
+/// # use proof_trading_sdk::market_snapshot::{BlockHeight, BoundInventorySnapshot};
+/// fn witnessed_height(bound: &BoundInventorySnapshot) -> BlockHeight {
 ///     bound.witness().height
 /// }
 /// ```
@@ -203,6 +205,18 @@ fn positive_decimal(text: &str) -> Result<u64, WitnessError> {
     text.parse().map_err(|_| WitnessError::Malformed)
 }
 
+fn node_id(text: &str) -> Result<NodeId, WitnessError> {
+    NodeId::new(nonzero_hex(text)?).ok_or(WitnessError::Malformed)
+}
+
+fn app_hash(text: &str) -> Result<AppHash, WitnessError> {
+    AppHash::new(nonzero_hex(text)?).ok_or(WitnessError::Malformed)
+}
+
+fn block_height(text: &str) -> Result<BlockHeight, WitnessError> {
+    BlockHeight::new(positive_decimal(text)?).ok_or(WitnessError::Malformed)
+}
+
 fn nonzero_hex<const N: usize>(text: &str) -> Result<[u8; N], WitnessError> {
     if text.len() != N.saturating_mul(2) || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(WitnessError::Malformed);
@@ -231,12 +245,12 @@ pub fn decode_bound_snapshot(
         return Err(WitnessError::Malformed);
     }
     let witness = SnapshotWitness {
-        node_id: nonzero_hex(&raw.node_id)?,
-        height: positive_decimal(&raw.height)?,
+        node_id: node_id(&raw.node_id)?,
+        height: block_height(&raw.height)?,
         finalized_block_time_ms: positive_decimal(&raw.finalized_block_time_ms)?,
-        app_hash: nonzero_hex(&raw.app_hash)?,
+        app_hash: app_hash(&raw.app_hash)?,
     };
-    if witness.height != snapshot.height {
+    if witness.height.get() != snapshot.height {
         return Err(WitnessError::HeightMismatch);
     }
     Ok(BoundMarketsSnapshot { snapshot, witness })
@@ -253,12 +267,13 @@ pub fn decode_bound_identity(
     let raw: BoundStatus = chain::rpc(body)?;
     let app_hash_height = identity
         .latest_height
+        .get()
         .checked_sub(1)
         .ok_or(WitnessError::Uncommitted)?;
     Ok(BoundChainIdentity {
         identity,
-        node_id: nonzero_hex(&raw.node_info.id)?,
-        app_hash: nonzero_hex(&raw.sync_info.latest_app_hash)?,
+        node_id: node_id(&raw.node_info.id)?,
+        app_hash: app_hash(&raw.sync_info.latest_app_hash)?,
         app_hash_height,
     })
 }
@@ -278,20 +293,20 @@ fn validate_bracket(
     {
         return Err(SnapshotError::WrongChain.into());
     }
-    if witness.height != snapshot.height
-        || before.identity.latest_height > snapshot.height
-        || snapshot.height > after.identity.latest_height
-        || before.app_hash_height.checked_add(1) != Some(before.identity.latest_height)
-        || after.app_hash_height.checked_add(1) != Some(after.identity.latest_height)
+    if witness.height.get() != snapshot.height
+        || before.identity.latest_height.get() > snapshot.height
+        || snapshot.height > after.identity.latest_height.get()
+        || before.app_hash_height.checked_add(1) != Some(before.identity.latest_height.get())
+        || after.app_hash_height.checked_add(1) != Some(after.identity.latest_height.get())
     {
         return Err(WitnessError::HeightMismatch);
     }
     let time = witness.finalized_block_time_ms;
     if before.identity.latest_block_time_ms > time
         || time > after.identity.latest_block_time_ms
-        || (before.identity.latest_height == snapshot.height
+        || (before.identity.latest_height.get() == snapshot.height
             && before.identity.latest_block_time_ms != time)
-        || (after.identity.latest_height == snapshot.height
+        || (after.identity.latest_height.get() == snapshot.height
             && after.identity.latest_block_time_ms != time)
     {
         return Err(WitnessError::TimeMismatch);
@@ -336,7 +351,7 @@ pub fn validate_bound_inventory(
     validate_bracket(&bound, &before, &after)?;
     let mut matched = false;
     for anchor in [&before, &after] {
-        if anchor.app_hash_height == bound.witness.height {
+        if anchor.app_hash_height == bound.witness.height.get() {
             if anchor.app_hash != bound.witness.app_hash {
                 return Err(WitnessError::HashMismatch);
             }
@@ -347,9 +362,10 @@ pub fn validate_bound_inventory(
         let target = bound
             .witness
             .height
+            .get()
             .checked_add(1)
             .ok_or(WitnessError::HeightMismatch)?;
-        if after.identity.latest_height < target {
+        if after.identity.latest_height.get() < target {
             return Err(WitnessError::Uncommitted);
         }
         let body = block_body.ok_or(WitnessError::Uncommitted)?;
@@ -364,7 +380,7 @@ pub fn validate_bound_inventory(
         if header.chain_id != before.identity.network || header.chain_id != after.identity.network {
             return Err(SnapshotError::WrongChain.into());
         }
-        if nonzero_hex::<32>(&header.app_hash)? != bound.witness.app_hash {
+        if app_hash(&header.app_hash)? != bound.witness.app_hash {
             return Err(WitnessError::HashMismatch);
         }
     }
@@ -407,13 +423,14 @@ impl MarketsSnapshotClient {
             let target = bound
                 .witness
                 .height
+                .get()
                 .checked_add(1)
                 .ok_or(WitnessError::HeightMismatch)?;
             // Keep the same candidate and its original clock while waiting for
             // the next committed header. Starting over with a newer snapshot
             // can phase-lock fast reads to the head and never verify anything.
             for _ in 0..MAX_CONFIRMATION_POLLS {
-                if after.identity.latest_height >= target {
+                if after.identity.latest_height.get() >= target {
                     break;
                 }
                 tokio::time::sleep(CONFIRMATION_POLL_INTERVAL).await;
@@ -424,11 +441,11 @@ impl MarketsSnapshotClient {
             }
             let matching_anchor = [&before, &after]
                 .iter()
-                .any(|anchor| anchor.app_hash_height == bound.witness.height);
+                .any(|anchor| anchor.app_hash_height == bound.witness.height.get());
             let block_body = if matching_anchor {
                 None
             } else {
-                if after.identity.latest_height < target {
+                if after.identity.latest_height.get() < target {
                     return Err(WitnessError::Uncommitted);
                 }
                 Some(

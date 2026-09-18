@@ -2,7 +2,8 @@
 //! expiry, an accepted price effect, or permission to release a pending slot.
 
 use super::{decode_receipt, CommittedReceipt, MarketsSnapshotClient, SnapshotError};
-use crate::market_snapshot::MAX_SNAPSHOT_BYTES;
+use crate::gateway::TxHash;
+use crate::market_snapshot::{MarketId, MicroUsdc, MAX_SNAPSHOT_BYTES};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,7 +21,7 @@ pub enum ReceiptObservation {
     /// The gateway returned the canonical not-found shape for exactly this
     /// requested hash. This is a liveness observation, never finality proof.
     ExactNotFound {
-        tx_hash: [u8; 32],
+        tx_hash: TxHash,
     },
 }
 
@@ -59,8 +60,8 @@ pub enum PriceEvidenceRejection {
 /// proof.
 ///
 /// ```
-/// # use proof_trading_sdk::market_snapshot::{CommittedPriceUpdate, ReceiptObservation};
-/// fn updated_market(observation: &ReceiptObservation) -> Option<u32> {
+/// # use proof_trading_sdk::market_snapshot::{CommittedPriceUpdate, MarketId, ReceiptObservation};
+/// fn updated_market(observation: &ReceiptObservation) -> Option<MarketId> {
 ///     match observation {
 ///         ReceiptObservation::CommittedPriceUpdate(update) => Some(update.market()),
 ///         _ => None,
@@ -77,8 +78,8 @@ pub enum PriceEvidenceRejection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommittedPriceUpdate {
     receipt: CommittedReceipt,
-    market: u32,
-    price: u64,
+    market: MarketId,
+    price: MicroUsdc,
     signer: [u8; 20],
 }
 
@@ -87,11 +88,11 @@ impl CommittedPriceUpdate {
         &self.receipt
     }
 
-    pub fn market(&self) -> u32 {
+    pub fn market(&self) -> MarketId {
         self.market
     }
 
-    pub fn price(&self) -> u64 {
+    pub fn price(&self) -> MicroUsdc {
         self.price
     }
 
@@ -234,13 +235,16 @@ fn price_update(body: &[u8], receipt: &CommittedReceipt) -> PriceEvidence {
             "market" => {
                 market = super::positive_decimal(&attribute.value)
                     .ok()
-                    .and_then(|value| u32::try_from(value).ok());
+                    .and_then(|value| u32::try_from(value).ok())
+                    .and_then(MarketId::new);
                 if market.is_none() {
                     return PriceEvidence::Rejected(Refused::InvalidMarket);
                 }
             }
             "price" => {
-                price = super::positive_decimal(&attribute.value).ok();
+                price = super::positive_decimal(&attribute.value)
+                    .ok()
+                    .map(MicroUsdc::new);
                 if price.is_none() {
                     return PriceEvidence::Rejected(Refused::InvalidPrice);
                 }
@@ -266,7 +270,7 @@ fn price_update(body: &[u8], receipt: &CommittedReceipt) -> PriceEvidence {
     })
 }
 
-fn classify(status: u16, body: &[u8], hash: [u8; 32]) -> Result<ReceiptObservation, SnapshotError> {
+fn classify(status: u16, body: &[u8], hash: TxHash) -> Result<ReceiptObservation, SnapshotError> {
     if body.len() > MAX_SNAPSHOT_BYTES {
         return Err(SnapshotError::TooLarge);
     }
@@ -317,7 +321,7 @@ fn classify(status: u16, body: &[u8], hash: [u8; 32]) -> Result<ReceiptObservati
     if token.len() != 64 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(SnapshotError::RpcUnavailable);
     }
-    for (pair, expected) in token.as_bytes().chunks_exact(2).zip(hash) {
+    for (pair, expected) in token.as_bytes().chunks_exact(2).zip(hash.bytes()) {
         let pair = std::str::from_utf8(pair).map_err(|_| SnapshotError::Malformed)?;
         if u8::from_str_radix(pair, 16).map_err(|_| SnapshotError::Malformed)? != expected {
             return Err(SnapshotError::HashMismatch);
@@ -332,11 +336,11 @@ impl MarketsSnapshotClient {
     /// changes. Existing `committed_receipt` behavior remains unchanged.
     pub async fn receipt_observation(
         &self,
-        hash: [u8; 32],
+        hash: TxHash,
     ) -> Result<ReceiptObservation, SnapshotError> {
         use std::fmt::Write;
         let mut path = String::from("/v1/tx/");
-        for byte in hash {
+        for byte in hash.bytes() {
             write!(&mut path, "{byte:02X}").map_err(|_| SnapshotError::Malformed)?;
         }
         let mut endpoint = self.endpoint.clone();
