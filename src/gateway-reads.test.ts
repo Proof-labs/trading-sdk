@@ -15,8 +15,8 @@ describe("named gateway reads", () => {
     const signal = new AbortController().signal;
     const cases: [string, () => Promise<Response>, object][] = [
       ["meta", () => reads.meta({ signal }), {}],
-      ["impactMarkets", () => reads.impactMarkets({ signal }), {}],
-      ["impactMarket", () => reads.impactMarket(43, { signal }), { id: 43 }],
+      ["events", () => reads.events({ signal }), {}],
+      ["event", () => reads.event(43, { signal }), { id: 43 }],
       ["l2Book", () => reads.l2Book(2, { signal }), { market: 2 }],
       ["fundingRate", () => reads.fundingRate(2, { signal }), { market: 2 }],
       [
@@ -52,11 +52,8 @@ describe("named gateway reads", () => {
       [
         "historyResolutions",
         () =>
-          reads.historyResolutions(
-            { user: owner, impact_market_id: 43 },
-            { signal },
-          ),
-        { user: owner, impact_market_id: 43 },
+          reads.historyResolutions({ user: owner, event_id: 43 }, { signal }),
+        { user: owner, event_id: 43 },
       ],
     ];
     for (const [type, call, params] of cases) {
