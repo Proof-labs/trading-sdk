@@ -13,7 +13,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Removed: `CreateImpactMarket` (0x0e) and `ResolveImpactMarket` (0x0f) in
     every language, the `ImpactMarketInfo` / `ImpactMarketStatus` types, the
     `CreateImpactMarket` governance arm and batch item, `queryImpactMarkets()`,
-    and error codes 24, 25 and 31. The retired bytes never decode again.
+    `GatewayReads.impactMarkets()` / `impactMarket(id)`, and error codes 24,
+    25 and 31. The retired bytes never decode again.
   - Changed: `MarketKind` conditional and binary payloads carry the event id;
     `EventInfo` gains `attachedConditionals` (`[underlying, cpy, cpn]`
     triples) and its status type is `EventStatus`; `MarketsSnapshot.events`
@@ -21,12 +22,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `eventId`; `CreateEvent` gains a per-book `maxOpenInterest` trailer;
     `queryHistoryResolutions` / `history_resolutions` filter on `eventId` /
     `event_id` and each row names its `eventId` (the indexer's route moved
-    with the wire).
+    with the wire). `GatewayReads.historyResolutions()` likewise accepts
+    `event_id` instead of `impact_market_id`.
   - Added: the `AttachConditional` governance arm (inner tag 10) as a
     singleton and as the second `Batch` item, with its own `maxOpenInterest`
     trailer; typed `CreateSubAccount` (0x28), `SubAccountTransfer` (0x29) and
     `ClaimWithdrawalPayout` (0x2e) actions absorbed from wire 1.9.0 and
     1.10.0; error codes 72–76, 82 and 83–96 classified.
+    `GatewayReads.events()` / `event(id)` use the gateway's event queries.
   - Conformance vectors regenerated: the family cases leave, the attach,
     batch, create-event oracle-source and new outer-action cases arrive; the
     engine snapshot fixture is `engine-349fa9b.hex`. The wire pin is the
