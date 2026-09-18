@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { queryOraclePriceHistoryPage } from "./index.js";
+import { ExchangeClient, queryOraclePriceHistoryPage } from "./index.js";
 
 const fromMs = Date.UTC(2026, 8, 18, 0);
 const toMs = fromMs + 60_000;
@@ -307,5 +307,22 @@ describe("oracle price history page", () => {
       }),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(transport).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ExchangeClient.queryOraclePriceHistory", () => {
+  it("binds the client's own gatewayUrl instead of requiring the caller to pass one", async () => {
+    const event = update(1, fromMs, "42000000000");
+    const fetch = vi.fn(async () => page([event]));
+    vi.stubGlobal("fetch", fetch);
+    const client = new ExchangeClient({ gatewayUrl: "https://gateway.test" });
+    const result = await client.queryOraclePriceHistory(1, range);
+    expect(result.points).toEqual([
+      { t: event.block_time, p: event.payload.price, eventId: event.event_id },
+    ]);
+    const url = new URL(fetch.mock.calls[0][0] as string);
+    expect(url.origin + url.pathname).toBe(
+      "https://gateway.test/v1/history/admin-events",
+    );
   });
 });

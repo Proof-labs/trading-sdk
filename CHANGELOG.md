@@ -80,6 +80,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   history through the gateway, preserving exact prices, opaque cursors,
   cancellation and HTTP errors. Primary and composite updates share the
   upstream event shape; the API does not distinguish their sources.
+  `ExchangeClient.queryOraclePriceHistory()` wraps it bound to the client's
+  own `gatewayUrl`, matching the trigger-history convention of an exported
+  low-level function plus a client method — direct callers no longer have to
+  thread a gateway URL themselves.
 
 - Rust native gateway `submit_signed_bytes_with_evidence` adds typed,
   source-qualified per-attempt pre-admission refusal and maintenance evidence,

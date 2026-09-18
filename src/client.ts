@@ -10,6 +10,11 @@ import {
   type PortfolioHistoryOptions,
   type PortfolioHistoryPage,
 } from "./portfolio-history.js";
+import {
+  queryOraclePriceHistoryPage,
+  type OraclePriceHistoryOptions,
+  type OraclePriceHistoryPage,
+} from "./oracle-price-history.js";
 import { GatewayReads, type GatewayFetch } from "./gateway-reads.js";
 import { GatewayHttpError } from "./errors.js";
 import {
@@ -1769,6 +1774,15 @@ export class ExchangeClient {
     const page: unknown = await res.json();
     opts.signal?.throwIfAborted();
     return decodePortfolioHistoryPage(page, canonicalOwner, opts);
+  }
+
+  /** One newest-first gateway page of a market's indexed `price_updated`
+   * history. Keep market and bounds fixed across opaque cursors. */
+  async queryOraclePriceHistory(
+    market: number,
+    options: OraclePriceHistoryOptions,
+  ): Promise<OraclePriceHistoryPage> {
+    return queryOraclePriceHistoryPage(this.gatewayUrl, market, options);
   }
 
   /** Compatibility array of position snapshots. Absent close fields are empty
