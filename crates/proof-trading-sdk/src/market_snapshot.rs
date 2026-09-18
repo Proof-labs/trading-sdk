@@ -266,10 +266,16 @@ impl MarketsSnapshotClient {
     }
 }
 
+mod values;
+pub use values::{AppHash, BlockHeight, MarketId, MicroUsdc, NodeId};
+
 #[cfg(feature = "gateway")]
 mod chain;
 #[cfg(feature = "gateway")]
-pub use chain::{ChainIdentity, CommittedPriceUpdate, CommittedReceipt, ReceiptObservation};
+pub use chain::{
+    ChainIdentity, CommittedPriceUpdate, CommittedReceipt, PriceEvidenceRejection,
+    ReceiptObservation,
+};
 
 #[cfg(feature = "gateway")]
 mod witness;

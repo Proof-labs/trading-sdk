@@ -1,24 +1,25 @@
 //! Established gateway chain/receipt read semantics, scoped to the inventory
 //! lifecycle. Errors are never evidence that an in-flight action was rejected.
 
-use super::{MarketsSnapshotClient, SnapshotError};
+use super::{BlockHeight, MarketsSnapshotClient, SnapshotError};
+use crate::gateway::TxHash;
 use serde::{de::DeserializeOwned, Deserialize};
 
 mod receipt_observation;
-pub use receipt_observation::{CommittedPriceUpdate, ReceiptObservation};
+pub use receipt_observation::{CommittedPriceUpdate, PriceEvidenceRejection, ReceiptObservation};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChainIdentity {
     pub network: String,
     pub chain_binding: [u8; 32],
-    pub latest_height: u64,
+    pub latest_height: BlockHeight,
     pub latest_block_time_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommittedReceipt {
-    pub hash: [u8; 32],
-    pub height: u64,
+    pub hash: TxHash,
+    pub height: BlockHeight,
     pub code: u32,
 }
 
@@ -62,6 +63,10 @@ pub(super) fn rpc<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, SnapshotError>
     }
 }
 
+fn positive_height(text: &str) -> Result<BlockHeight, SnapshotError> {
+    BlockHeight::new(positive_decimal(text)?).ok_or(SnapshotError::Malformed)
+}
+
 fn positive_decimal(text: &str) -> Result<u64, SnapshotError> {
     if text.is_empty() || text.starts_with('0') || !text.bytes().all(|b| b.is_ascii_digit()) {
         return Err(SnapshotError::Malformed);
@@ -82,13 +87,10 @@ impl MarketsSnapshotClient {
     /// One exact-hash receipt read. Any error (404, RPC not-found, timeout,
     /// mismatch or malformed body) leaves the submission unresolved. No retry,
     /// nonce allocation or inference from elapsed wall time occurs here.
-    pub async fn committed_receipt(
-        &self,
-        hash: [u8; 32],
-    ) -> Result<CommittedReceipt, SnapshotError> {
+    pub async fn committed_receipt(&self, hash: TxHash) -> Result<CommittedReceipt, SnapshotError> {
         use std::fmt::Write;
         let mut path = String::from("/v1/tx/");
-        for byte in hash {
+        for byte in hash.bytes() {
             write!(&mut path, "{byte:02X}").map_err(|_| SnapshotError::Malformed)?;
         }
         decode_receipt(&self.get(&path).await?, hash)
@@ -121,17 +123,17 @@ pub(super) fn decode_identity(
     Ok(ChainIdentity {
         network,
         chain_binding,
-        latest_height: positive_decimal(&status.sync_info.latest_block_height)?,
+        latest_height: positive_height(&status.sync_info.latest_block_height)?,
         latest_block_time_ms,
     })
 }
 
-fn decode_receipt(body: &[u8], hash: [u8; 32]) -> Result<CommittedReceipt, SnapshotError> {
+fn decode_receipt(body: &[u8], hash: TxHash) -> Result<CommittedReceipt, SnapshotError> {
     let read: TxRead = rpc(body)?;
     if read.hash.len() != 64 || !read.hash.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(SnapshotError::Malformed);
     }
-    for (pair, expected) in read.hash.as_bytes().chunks_exact(2).zip(hash) {
+    for (pair, expected) in read.hash.as_bytes().chunks_exact(2).zip(hash.bytes()) {
         let pair = std::str::from_utf8(pair).map_err(|_| SnapshotError::Malformed)?;
         let byte = u8::from_str_radix(pair, 16).map_err(|_| SnapshotError::Malformed)?;
         if byte != expected {
@@ -140,7 +142,7 @@ fn decode_receipt(body: &[u8], hash: [u8; 32]) -> Result<CommittedReceipt, Snaps
     }
     Ok(CommittedReceipt {
         hash,
-        height: positive_decimal(&read.height)?,
+        height: positive_height(&read.height)?,
         code: read.tx_result.code,
     })
 }
@@ -159,7 +161,7 @@ mod tests {
     fn committed_time_requires_exact_chain_height_and_caught_up_state() {
         let expected = crate::crypto::chain_id_from_string("proof-test");
         let decoded = decode_identity(&serde_json::to_vec(&status()).unwrap(), expected).unwrap();
-        assert_eq!(decoded.latest_height, 9_007_199_254_740_993);
+        assert_eq!(decoded.latest_height.get(), 9_007_199_254_740_993);
         assert_eq!(decoded.latest_block_time_ms, 1_789_128_000_123);
         for (field, value) in [
             ("catching_up", json!(true)),
@@ -180,12 +182,13 @@ mod tests {
     #[test]
     fn only_matching_committed_receipts_are_terminal() {
         let base = json!({"result":{"hash":"AA".repeat(32),"height":"42","tx_result":{"code":0}}});
-        let receipt = decode_receipt(&serde_json::to_vec(&base).unwrap(), [0xaa; 32]).unwrap();
-        assert_eq!((receipt.height, receipt.code), (42, 0));
+        let hash = TxHash::from_bytes([0xaa; 32]);
+        let receipt = decode_receipt(&serde_json::to_vec(&base).unwrap(), hash).unwrap();
+        assert_eq!((receipt.height.get(), receipt.code), (42, 0));
         let mut rejected = base.clone();
         rejected["result"]["tx_result"]["code"] = json!(23);
         assert_eq!(
-            decode_receipt(&serde_json::to_vec(&rejected).unwrap(), [0xaa; 32])
+            decode_receipt(&serde_json::to_vec(&rejected).unwrap(), hash)
                 .unwrap()
                 .code,
             23
@@ -197,7 +200,7 @@ mod tests {
             json!({"result":{"hash":"BB".repeat(32),"height":"42","tx_result":{"code":0}}}),
             json!({"result":{"hash":"AA".repeat(32),"height":"42","tx_result":{}}}),
         ] {
-            assert!(decode_receipt(&serde_json::to_vec(&body).unwrap(), [0xaa; 32]).is_err());
+            assert!(decode_receipt(&serde_json::to_vec(&body).unwrap(), hash).is_err());
         }
     }
 
@@ -234,9 +237,12 @@ mod tests {
             .chain_identity(crate::crypto::chain_id_from_string("proof-test"))
             .await
             .unwrap();
-        assert_eq!(identity.latest_height, 9_007_199_254_740_993);
-        let receipt = client.committed_receipt([0xaa; 32]).await.unwrap();
-        assert_eq!((receipt.height, receipt.code), (42, 7));
+        assert_eq!(identity.latest_height.get(), 9_007_199_254_740_993);
+        let receipt = client
+            .committed_receipt(TxHash::from_bytes([0xaa; 32]))
+            .await
+            .unwrap();
+        assert_eq!((receipt.height.get(), receipt.code), (42, 7));
         task.await.unwrap();
     }
 }

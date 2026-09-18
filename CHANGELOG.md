@@ -107,6 +107,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `BoundMarketsSnapshot`, `BoundChainIdentity` and `BoundInventorySnapshot`
   expose read-only getters; only the SDK decoders and `validate_bound_inventory`
   construct them, so a caller cannot forge or alter a validated witness.
+  Node identities, app hashes, heights, market ids and micro-USDC amounts on
+  this surface are `NodeId`, `AppHash`, `BlockHeight`, `MarketId` and
+  `MicroUsdc` rather than bare integers and byte arrays, and receipt reads take
+  the existing `TxHash`. Each type carries the check its decoder performed.
 
 - Rust gateway `MarketsSnapshotClient::receipt_observation()` distinguishes an
   exact committed receipt from a canonical HTTP 404/500 not-found observation
@@ -119,7 +123,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it to their retained signed action before inferring a primary-oracle effect;
   composite actions share this event. Missing, duplicate, mixed, malformed or
   unsupported event evidence leaves only the committed receipt, never a proof
-  of price acceptance. No extra HTTP or wire change is introduced.
+  of price acceptance. When a `price_updated` event is present but fails a
+  structural check, the observation is `RejectedPriceEvidence` and names the
+  reason as a typed `PriceEvidenceRejection`, so a consumer can count or alert
+  on evidence it expected to be usable. `MalformedPriceEvent` identifies a
+  single `price_updated` event whose attributes cannot be decoded, including
+  missing fields, non-string values and duplicate JSON keys. A receipt with
+  no identifiable price event, or a non-zero execution code, stays `Committed`.
+  No extra HTTP or wire change is introduced.
   `ReceiptObservation::CommittedPriceUpdate` carries a `CommittedPriceUpdate`
   struct with read-only getters that only the receipt classifier constructs.
 
