@@ -186,6 +186,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let signer = vec![0x03u8; 20];
 
     // ── codec family ─────────────────────────────────────────────────────
+    // F2 trigger expansion (proof-wire 2.1.0): the engine's frozen vectors
+    // from Proof-labs/exchange `exchange-wire/vectors/` (draft PR #655, rev
+    // 592735c6). The .hex files there are FULL SIGNED ENVELOPES (test key
+    // 0x42×32, UNBOUND_CHAIN_ID); the payload segment of each is pinned here
+    // byte-exactly, and the full envelopes themselves are pinned in the
+    // signing family below (`…@seqN/unbound` cases). `place_order_no_triggers`
+    // freezes the pre-2.1.0 byte string (no trailing nils) — non-canonical by
+    // design now — so its codec row pins the 2.1.0 canonical form (trailing
+    // nils) while the old bytes ride the signing row + the TS decode-compat
+    // round-trip test.
     let codec = vec![
         codec_case(
             "place_order/min",
@@ -855,6 +865,93 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "expected_position_epoch": 3u64
             }),
         ),
+        // F2 frozen vectors (payload segments of the exchange envelopes):
+        // place_order with both limbs, post_only/reduce_only/GTC set.
+        codec_case(
+            "place_order/with_triggers",
+            PLACE_ORDER,
+            json!({
+                "market": 1, "owner": owner, "side": "Buy",
+                "price": 100, "quantity": 10, "client_order_id": null,
+                "post_only": false, "reduce_only": false, "time_in_force": "Gtc",
+                "stop_loss": {
+                    "trigger_price": 95_000u64,
+                    "max_slippage_bps": 75u32,
+                    "client_trigger_id": 11u64
+                },
+                "take_profit": {
+                    "trigger_price": 110_000u64,
+                    "max_slippage_bps": 50u32,
+                    "client_trigger_id": 12u64
+                }
+            }),
+        ),
+        // Same order without limbs: the 2.1.0 canonical form carries the two
+        // trailing nils (pre-2.1.0 encoders emitted the 9-field array that
+        // `place_order_no_triggers@seq2/unbound` freezes below).
+        codec_case(
+            "place_order/no_triggers_canonical",
+            PLACE_ORDER,
+            json!({
+                "market": 1, "owner": owner, "side": "Buy",
+                "price": 100, "quantity": 10, "client_order_id": null,
+                "post_only": false, "reduce_only": false, "time_in_force": "Gtc"
+            }),
+        ),
+        // market_order with a stop-loss limb only.
+        codec_case(
+            "market_order/with_triggers",
+            MARKET_ORDER,
+            json!({
+                "market": 1, "owner": owner, "side": "Sell",
+                "quantity": 10, "client_order_id": null,
+                "stop_loss": {
+                    "trigger_price": 95_000u64,
+                    "max_slippage_bps": 75u32,
+                    "client_trigger_id": 11u64
+                },
+                "take_profit": null
+            }),
+        ),
+        // cancel_replace with a take-profit limb only.
+        codec_case(
+            "cancel_replace_order/with_triggers",
+            CANCEL_REPLACE_ORDER,
+            json!({
+                "owner": vec![0x02u8; 20], "cancel_order_id": 42u64,
+                "cancel_client_order_id": null, "market": 1, "side": "Sell",
+                "price": 100, "quantity": 10, "client_order_id": null,
+                "post_only": false, "reduce_only": false, "time_in_force": "Gtc",
+                "stop_loss": null,
+                "take_profit": {
+                    "trigger_price": 110_000u64,
+                    "max_slippage_bps": 50u32,
+                    "client_trigger_id": 12u64
+                }
+            }),
+        ),
+        // SetPositionTriggers round-trip in the 2.1.0 era (shape unchanged
+        // from the engine golden above — the pin says so).
+        codec_case(
+            "set_position_triggers_2_1",
+            SET_POSITION_TRIGGERS,
+            json!({
+                "market": 7,
+                "owner": vec![0xA5u8; 20],
+                "expected_position_epoch": 3u64,
+                "stop_loss": {
+                    "trigger_price": 95_000u64,
+                    "max_slippage_bps": 75u32,
+                    "client_trigger_id": 11u64
+                },
+                "take_profit": {
+                    "trigger_price": 110_000u64,
+                    "max_slippage_bps": 50u32,
+                    "client_trigger_id": 12u64
+                },
+                "client_group_id": 9u64
+            }),
+        ),
     ];
     write_ndjson(&dir.join(cv::CODEC_FILE), &codec)?;
 
@@ -899,6 +996,94 @@ fn main() -> Result<(), Box<dyn Error>> {
             expect_owner_hex: hex::encode(cv::owner_of(&pk_01)?),
         },
     ];
+
+    // ── F2 frozen envelopes (proof-wire 2.1.0) ───────────────────────────
+    // Byte-exact pins of Proof-labs/exchange `exchange-wire/vectors/*.hex`
+    // (draft PR #655, rev 592735c6): full signed envelopes, test key
+    // 0x42×32 over UNBOUND_CHAIN_ID. Generation panics if the core's
+    // envelope framing drifts from the engine's frozen bytes. The
+    // `no_triggers` row signs the pre-2.1.0 9-field payload verbatim —
+    // old bytes keep verifying; canonical 2.1.0 encodes add the two
+    // trailing nils (see the codec row + TS decode-compat test).
+    fn frozen_envelope_case(
+        case: &str,
+        action_type: u8,
+        seq: u64,
+        payload_hex: &str,
+        exchange_envelope_hex: &str,
+        unbound: &[u8; 32],
+        sk: &[u8; 32],
+    ) -> cv::SigningCase {
+        let payload = hex::decode(payload_hex)
+            .unwrap_or_else(|e| panic!("frozen vector {case}: bad payload hex: {e}"));
+        let computed = cv::sign_envelope(unbound, action_type, seq, &payload, sk)
+            .unwrap_or_else(|e| panic!("frozen vector {case}: core signing failed: {e}"));
+        assert_eq!(
+            hex::encode(&computed),
+            exchange_envelope_hex,
+            "frozen vector {case}: the SDK core's signed envelope drifted from the \
+             engine's frozen exchange-wire vector (proof-wire 2.1.0 @ exchange#655)"
+        );
+        cv::SigningCase::Sign {
+            case: case.to_string(),
+            chain_id: unbound.to_vec(),
+            action_type,
+            seq,
+            payload_hex: payload_hex.to_string(),
+            secret_key: sk.to_vec(),
+            expect_envelope_hex: exchange_envelope_hex.to_string(),
+        }
+    }
+
+    let frozen: Vec<cv::SigningCase> = vec![
+        frozen_envelope_case(
+            "place_order/with_triggers@seq1/unbound",
+            PLACE_ORDER,
+            1,
+            "9b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a347746393ce000173184b0b93ce0001adb0320c",
+            "96020101c4369b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a347746393ce000173184b0b93ce0001adb0320cc4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c440dc991c8b31063e6cd1d26cd61e3dcf91f6af2e1d9092db51ca49808316e7b3640c3f9622cb55036adbb39424508f56e1e5acdb59aa56088d2ecea3d309307e05",
+            &unbound,
+            &sk,
+        ),
+        frozen_envelope_case(
+            "place_order_no_triggers@seq2/unbound",
+            PLACE_ORDER,
+            2,
+            "9901dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463",
+            "96020102c4269901dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463c4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c44063588d198e83ae1e4862432b1cf58d23fc95c6638db6e0b0c2d76b2248552a67d4200214b0299aff617aab73b91183e43def96d0e23b3d83be22a75722460b0d",
+            &unbound,
+            &sk,
+        ),
+        frozen_envelope_case(
+            "market_order/with_triggers@seq4/unbound",
+            MARKET_ORDER,
+            4,
+            "9701dc00140101010101010101010101010101010101010101a453656c6c0ac093ce000173184b0bc0",
+            "96020404c4299701dc00140101010101010101010101010101010101010101a453656c6c0ac093ce000173184b0bc0c4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c4407da0887ef1326b5a33afa7d640c19ff1247cf510f1031ab2b087034133296bd93222a52cf0f02219b3ad3d18ba81f7e1e9bc990357412055d101da65b272b007",
+            &unbound,
+            &sk,
+        ),
+        frozen_envelope_case(
+            "cancel_replace_order/with_triggers@seq5/unbound",
+            CANCEL_REPLACE_ORDER,
+            5,
+            "9ddc001402020202020202020202020202020202020202022ac001a453656c6c640ac0c2c2a3477463c093ce0001adb0320c",
+            "96021a05c4329ddc001402020202020202020202020202020202020202022ac001a453656c6c640ac0c2c2a3477463c093ce0001adb0320cc4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c44035407ea3e33d205d46df0365b77cecdcda92469756a4a931804830a81f408fa3e9e2fd18190ae6821925511803ca6a3516282ff02cc3902fd4ce8173782a7501",
+            &unbound,
+            &sk,
+        ),
+        frozen_envelope_case(
+            "set_position_triggers_2_1@seq6/unbound",
+            SET_POSITION_TRIGGERS,
+            6,
+            "9607dc0014cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca50393ce000173184b0b93ce0001adb0320c09",
+            "96022506c43f9607dc0014cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca50393ce000173184b0b93ce0001adb0320c09c4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c4405827ea9a5c11acf104654fd8aeca56d353ecd275a62cb35b36fbb488e5e1310987e440f3030d04b2beae73ae85174d0be33a7df4f086429cf09decb45c030705",
+            &unbound,
+            &sk,
+        ),
+    ];
+    let mut signing = signing;
+    signing.extend(frozen);
     write_ndjson(&dir.join(cv::SIGNING_FILE), &signing)?;
 
     // ── nonce family ─────────────────────────────────────────────────────

@@ -135,6 +135,8 @@ export enum ExecErrorCode {
   UnderlyingAlreadyAttached = 94,
   TooManyAttachedConditionals = 95,
   TooManyActiveEvents = 96,
+  /** F2 trigger expansion: the order cannot carry attached SL/TP limbs. */
+  TriggerOrderIncompatible = 98,
   InternalError = 255,
 }
 
@@ -494,6 +496,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "TooManyActiveEvents",
     description:
       "account would touch more events than the scenario margin engine can enumerate (per-account cap)",
+  },
+  98: {
+    name: "TriggerOrderIncompatible",
+    description:
+      "order cannot carry attached SL/TP (reduce-only order, ineligible market, or inactive feature)",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

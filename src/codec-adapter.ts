@@ -26,6 +26,7 @@ import {
 } from "./types.js";
 import {
   validateCancelPositionTriggers,
+  validateOrderTriggers,
   validateSetPositionTriggers,
   validateSetTriggerMarketConfig,
 } from "./triggers.js";
@@ -222,6 +223,14 @@ export function toWasmFields(action: Action): {
     validateSetPositionTriggers(action.data);
   } else if (action.type === "CancelPositionTriggers") {
     validateCancelPositionTriggers(action.data);
+  } else if (
+    action.type === "PlaceOrder" ||
+    action.type === "MarketOrder" ||
+    action.type === "CancelReplaceOrder"
+  ) {
+    // Pre-fill SL/TP limbs on order actions: same client-side parity as the
+    // 0x25/0x26 validators above (absent limbs pass — no bracket requested).
+    validateOrderTriggers(action.data);
   }
   const actionType = (ActionType[action.type] ??
     TEST_ACTION_TYPES[action.type]) as ActionTypeValue;
