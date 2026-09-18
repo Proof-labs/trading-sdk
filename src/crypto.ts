@@ -130,11 +130,13 @@ export function deriveSubAccount(
   subAccountId: number,
 ): Uint8Array {
   if (master.length !== 20) {
-    throw new Error(
-      `master must be 20 bytes, got ${master.length}`,
-    );
+    throw new Error(`master must be 20 bytes, got ${master.length}`);
   }
-  if (!Number.isInteger(subAccountId) || subAccountId < 1 || subAccountId > 0xffffffff) {
+  if (
+    !Number.isInteger(subAccountId) ||
+    subAccountId < 1 ||
+    subAccountId > 0xffffffff
+  ) {
     throw new Error(
       `subAccountId must be an integer in 1..=4294967295, got ${subAccountId}`,
     );

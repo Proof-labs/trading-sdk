@@ -55,9 +55,7 @@ describe("deriveSubAccount", () => {
     // pins the big-endian order already, but assert the property directly.
     const master = new Uint8Array(20).fill(0xaa);
     const id1 = bytesToHex(deriveSubAccount(master, 1));
-    const swapped = bytesToHex(
-      deriveSubAccount(master, 0x01000000),
-    );
+    const swapped = bytesToHex(deriveSubAccount(master, 0x01000000));
     expect(id1).not.toBe(swapped);
   });
 
