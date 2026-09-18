@@ -9,11 +9,45 @@ use serde::Deserialize;
 pub enum ReceiptObservation {
     Committed(CommittedReceipt),
     CommittedPriceUpdate(CommittedPriceUpdate),
+    /// A code-zero receipt carrying a `price_updated` event that failed a
+    /// structural check. The receipt stands; the price effect is unproven,
+    /// exactly as for [`Committed`](Self::Committed). `rejection` exists so a
+    /// consumer can count or alert on evidence it expected to be usable.
+    RejectedPriceEvidence {
+        receipt: CommittedReceipt,
+        rejection: PriceEvidenceRejection,
+    },
     /// The gateway returned the canonical not-found shape for exactly this
     /// requested hash. This is a liveness observation, never finality proof.
     ExactNotFound {
         tx_hash: [u8; 32],
     },
+}
+
+/// Why a `price_updated` event was refused as evidence. A receipt without such
+/// an event, or with a non-zero code, is not a rejection: the event the caller
+/// expected may simply belong to a different action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PriceEvidenceRejection {
+    /// A single `price_updated` event cannot be decoded into the expected
+    /// attribute shape (string keys and values).
+    MalformedPriceEvent,
+    /// The receipt carries a `price_updated` event alongside other events, so
+    /// no single event can be read as the canonical effect.
+    MultipleEvents,
+    /// The event does not carry exactly the `market`, `price` and `signer`
+    /// attributes.
+    UnexpectedAttributeCount,
+    /// An attribute key outside those three.
+    UnknownAttribute,
+    /// One of the three attributes appears more than once.
+    DuplicateAttribute,
+    /// `market` is not a positive decimal that fits `u32`.
+    InvalidMarket,
+    /// `price` is not a positive decimal that fits `u64`.
+    InvalidPrice,
+    /// `signer` is not 40 lowercase hexadecimal digits.
+    InvalidSigner,
 }
 
 /// A positive, structurally verified `price_updated` event in an exact
@@ -109,58 +143,127 @@ struct EventAttribute {
     value: String,
 }
 
-fn price_update(body: &[u8], receipt: &CommittedReceipt) -> Option<ReceiptObservation> {
-    if receipt.code != 0 {
+enum PriceEvidence {
+    Accepted(CommittedPriceUpdate),
+    Rejected(PriceEvidenceRejection),
+    /// A non-zero code or no identifiable `price_updated` event to read.
+    Absent,
+}
+
+/// Diagnose a failed strict decode without treating permissively parsed JSON
+/// as accepted evidence. Only an explicit event type identifies price evidence.
+fn price_event_decode_failure(body: &[u8]) -> PriceEvidence {
+    let Ok(envelope) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return PriceEvidence::Absent;
+    };
+    let Some(events) = envelope
+        .pointer("/result/tx_result/events")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return PriceEvidence::Absent;
+    };
+    if !events
+        .iter()
+        .any(|event| event.get("type").and_then(serde_json::Value::as_str) == Some("price_updated"))
+    {
+        return PriceEvidence::Absent;
+    }
+    PriceEvidence::Rejected(if events.len() == 1 {
+        PriceEvidenceRejection::MalformedPriceEvent
+    } else {
+        PriceEvidenceRejection::MultipleEvents
+    })
+}
+
+/// Current ABCI attributes are strings, not base64 byte slices. An address is
+/// 40 lowercase hexadecimal digits; anything else cannot bind this evidence to
+/// a retained signing authority.
+fn signer_address(text: &str) -> Option<[u8; 20]> {
+    if text.len() != 40
+        || !text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
         return None;
     }
-    // Current OracleUpdate emits exactly one event. Extra, unknown, duplicate,
-    // rejected or malformed events are not accepted-effect proof. Incomplete
-    // event evidence does not erase an otherwise valid committed receipt.
-    let envelope: ReceiptEvents = serde_json::from_slice(body).ok()?;
-    let [event] = envelope.result.tx_result.events.as_slice() else {
-        return None;
+    let mut address = [0; 20];
+    for (pair, target) in text.as_bytes().chunks_exact(2).zip(&mut address) {
+        *target = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(address)
+}
+
+/// Current OracleUpdate emits exactly one event. Extra, unknown, duplicate or
+/// malformed attributes are never accepted-effect proof; incomplete evidence
+/// does not erase an otherwise valid committed receipt, it only names why the
+/// event was refused.
+fn price_update(body: &[u8], receipt: &CommittedReceipt) -> PriceEvidence {
+    use PriceEvidenceRejection as Refused;
+    if receipt.code != 0 {
+        return PriceEvidence::Absent;
+    }
+    let Ok(envelope) = serde_json::from_slice::<ReceiptEvents>(body) else {
+        return price_event_decode_failure(body);
     };
-    if event.kind != "price_updated" || event.attributes.len() != 3 {
-        return None;
+    let events = envelope.result.tx_result.events;
+    let [event] = events.as_slice() else {
+        return if events.iter().any(|event| event.kind == "price_updated") {
+            PriceEvidence::Rejected(Refused::MultipleEvents)
+        } else {
+            PriceEvidence::Absent
+        };
+    };
+    if event.kind != "price_updated" {
+        return PriceEvidence::Absent;
+    }
+    if event.attributes.len() != 3 {
+        return PriceEvidence::Rejected(Refused::UnexpectedAttributeCount);
     }
     let (mut market, mut price, mut signer) = (None, None, None);
     for attribute in &event.attributes {
         match attribute.key.as_str() {
-            "market" if market.is_none() => {
-                market = Some(u32::try_from(super::positive_decimal(&attribute.value).ok()?).ok()?);
+            "market" if market.is_some() => {
+                return PriceEvidence::Rejected(Refused::DuplicateAttribute)
             }
-            "price" if price.is_none() => {
-                price = Some(super::positive_decimal(&attribute.value).ok()?);
+            "price" if price.is_some() => {
+                return PriceEvidence::Rejected(Refused::DuplicateAttribute)
             }
-            "signer" if signer.is_none() => {
-                // Current ABCI attributes are strings, not base64 byte slices.
-                // Some(address) is 40 lowercase hex; None is empty and cannot
-                // bind this positive evidence to a retained signing authority.
-                if attribute.value.len() != 40
-                    || !attribute
-                        .value
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                {
-                    return None;
+            "signer" if signer.is_some() => {
+                return PriceEvidence::Rejected(Refused::DuplicateAttribute)
+            }
+            "market" => {
+                market = super::positive_decimal(&attribute.value)
+                    .ok()
+                    .and_then(|value| u32::try_from(value).ok());
+                if market.is_none() {
+                    return PriceEvidence::Rejected(Refused::InvalidMarket);
                 }
-                let mut address = [0; 20];
-                for (pair, target) in attribute.value.as_bytes().chunks_exact(2).zip(&mut address) {
-                    *target = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
-                }
-                signer = Some(address);
             }
-            _ => return None,
+            "price" => {
+                price = super::positive_decimal(&attribute.value).ok();
+                if price.is_none() {
+                    return PriceEvidence::Rejected(Refused::InvalidPrice);
+                }
+            }
+            "signer" => {
+                signer = signer_address(&attribute.value);
+                if signer.is_none() {
+                    return PriceEvidence::Rejected(Refused::InvalidSigner);
+                }
+            }
+            _ => return PriceEvidence::Rejected(Refused::UnknownAttribute),
         }
     }
-    Some(ReceiptObservation::CommittedPriceUpdate(
-        CommittedPriceUpdate {
-            receipt: receipt.clone(),
-            market: market?,
-            price: price?,
-            signer: signer?,
-        },
-    ))
+    // Three attributes, each a distinct known key, fill all three slots.
+    let (Some(market), Some(price), Some(signer)) = (market, price, signer) else {
+        return PriceEvidence::Rejected(Refused::UnexpectedAttributeCount);
+    };
+    PriceEvidence::Accepted(CommittedPriceUpdate {
+        receipt: receipt.clone(),
+        market,
+        price,
+        signer,
+    })
 }
 
 fn classify(status: u16, body: &[u8], hash: [u8; 32]) -> Result<ReceiptObservation, SnapshotError> {
@@ -169,7 +272,13 @@ fn classify(status: u16, body: &[u8], hash: [u8; 32]) -> Result<ReceiptObservati
     }
     if status == 200 {
         let receipt = decode_receipt(body, hash)?;
-        return Ok(price_update(body, &receipt).unwrap_or(ReceiptObservation::Committed(receipt)));
+        return Ok(match price_update(body, &receipt) {
+            PriceEvidence::Accepted(update) => ReceiptObservation::CommittedPriceUpdate(update),
+            PriceEvidence::Rejected(rejection) => {
+                ReceiptObservation::RejectedPriceEvidence { receipt, rejection }
+            }
+            PriceEvidence::Absent => ReceiptObservation::Committed(receipt),
+        });
     }
     if !matches!(status, 404 | 500) {
         return Err(SnapshotError::Http(status));
