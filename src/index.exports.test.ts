@@ -139,4 +139,8 @@ it("keeps response reads on ExchangeClient and excludes redundant or obsolete AP
   expect(client.reads().oracleHealth).toBeTypeOf("function");
   expect("queryOracleHealth" in client).toBe(false);
   expect(client.reads().meta).toBeTypeOf("function");
+  expect(client.reads().events).toBeTypeOf("function");
+  expect(client.reads().event).toBeTypeOf("function");
+  expect("impactMarkets" in client.reads()).toBe(false);
+  expect("impactMarket" in client.reads()).toBe(false);
 });
