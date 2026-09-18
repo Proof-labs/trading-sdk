@@ -26,6 +26,14 @@ describe("decodeExecError", () => {
     expect(e32?.description).toContain("net-delta margin grouping");
   });
 
+  it("decodes the F2 trigger-order incompatibility (97)", () => {
+    expect(ExecErrorCode.TriggerOrderIncompatible).toBe(97);
+    const e97 = decodeExecError(97);
+    expect(e97?.name).toBe("TriggerOrderIncompatible");
+    expect(e97?.description).toContain("SL/TP");
+    expect(execErrorName(97)).toBe("TriggerOrderIncompatible");
+  });
+
   it("decodes code 51 as open-interest-cap rejection without a log", () => {
     expect(decodeExecError(51)?.name).toBe("OpenInterestLimitExceeded");
     expect(decodeExecError(51, "unrecognized")?.name).toBe(

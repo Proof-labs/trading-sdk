@@ -116,3 +116,84 @@ describe("convenience action builders", () => {
     ).rejects.toThrow(/No signer key loaded/);
   });
 });
+
+describe("pre-fill SL/TP limbs on order builders", () => {
+  it("placeOrder passes valid limbs through to the action", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+
+    await client.placeOrder({
+      market: 1,
+      side: Side.Buy,
+      price: 100_000n,
+      quantity: 2n,
+      stopLoss: { triggerPrice: 90_000n, maxSlippageBps: 50, clientTriggerId: 1n },
+      takeProfit: { triggerPrice: 120_000n, maxSlippageBps: 50, clientTriggerId: 2n },
+    });
+
+    const action = spy.mock.calls[0][0];
+    expect(action.data).toMatchObject({
+      stopLoss: { triggerPrice: 90_000n },
+      takeProfit: { triggerPrice: 120_000n },
+    });
+  });
+
+  it("marketOrder passes a single limb through to the action", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+
+    await client.marketOrder({
+      market: 1,
+      side: Side.Sell,
+      quantity: 2n,
+      stopLoss: { triggerPrice: 90_000n, maxSlippageBps: 50 },
+    });
+
+    const action = spy.mock.calls[0][0];
+    expect(action.type).toBe("MarketOrder");
+    expect(action.data).toMatchObject({
+      stopLoss: { triggerPrice: 90_000n, maxSlippageBps: 50 },
+    });
+  });
+
+  it("placeOrder rejects invalid limbs before any submission", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+
+    await expect(
+      client.placeOrder({
+        market: 1,
+        side: Side.Buy,
+        price: 100_000n,
+        quantity: 2n,
+        stopLoss: { triggerPrice: 0n, maxSlippageBps: 50 },
+      }),
+    ).rejects.toThrow(/stopLoss\.triggerPrice must be non-zero/);
+    await expect(
+      client.placeOrder({
+        market: 1,
+        side: Side.Buy,
+        price: 100_000n,
+        quantity: 2n,
+        stopLoss: { triggerPrice: 90_000n, maxSlippageBps: 50 },
+        reduceOnly: true,
+      }),
+    ).rejects.toThrow(/TriggerOrderIncompatible, code 97/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("marketOrder rejects invalid limbs before any submission", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+
+    await expect(
+      client.marketOrder({
+        market: 1,
+        side: Side.Sell,
+        quantity: 2n,
+        stopLoss: { triggerPrice: 90_000n, maxSlippageBps: 0 },
+      }),
+    ).rejects.toThrow(/maxSlippageBps must be in 1..=9999/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+});

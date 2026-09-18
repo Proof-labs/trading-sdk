@@ -83,6 +83,46 @@ export function validateCancelPositionTriggers(
   assertU64("expectedPositionEpoch", action.expectedPositionEpoch, true);
 }
 
+/**
+ * Validate the placement-time SL/TP limbs carried on an order action
+ * (`PlaceOrder` 0x01, `MarketOrder` 0x04, `CancelReplaceOrder` 0x1A).
+ * Mirrors `validateSetPositionTriggers`' limb parity — at least one limb
+ * when a bracket is requested, `triggerPrice > 0`, bps in `1..=9999`,
+ * distinct limb client ids — plus the engine's reduce-only incompatibility
+ * (`TriggerOrderIncompatible`, code 97): a reduce-only entry cannot open
+ * the exposure the limbs are meant to protect. Absent limbs mean "no
+ * bracket requested" and pass.
+ *
+ * WIRE-PENDING: the trailing wire fields ship with proof-wire 2.1.0;
+ * against the pinned 2.0.0 core these values are validated here but
+ * dropped by the encoder.
+ */
+export interface OrderTriggerFields {
+  stopLoss?: TriggerLimb | null;
+  takeProfit?: TriggerLimb | null;
+  /** Absent on `MarketOrder` — the wire struct carries no such field. */
+  reduceOnly?: boolean;
+}
+
+export function validateOrderTriggers(action: OrderTriggerFields): void {
+  const { stopLoss, takeProfit } = action;
+  if (stopLoss == null && takeProfit == null) return;
+  if (action.reduceOnly === true) {
+    throw new Error(
+      "stopLoss/takeProfit cannot be attached to a reduceOnly order (TriggerOrderIncompatible, code 97)",
+    );
+  }
+  if (stopLoss != null) validateLimb("stopLoss", stopLoss);
+  if (takeProfit != null) validateLimb("takeProfit", takeProfit);
+  const stopId = stopLoss?.clientTriggerId;
+  const takeId = takeProfit?.clientTriggerId;
+  if (stopId != null && takeId != null && stopId === takeId) {
+    throw new Error(
+      "stopLoss and takeProfit clientTriggerId values must differ",
+    );
+  }
+}
+
 /** Validate the state-independent portion of admin action tag 0x05. */
 export function validateSetTriggerMarketConfig(
   config: SetTriggerMarketConfig,

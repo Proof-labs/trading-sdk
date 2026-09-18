@@ -11,6 +11,7 @@ import {
   decodePositionTriggerInfos,
   decodeTriggerMarketConfigInfos,
   decodeTriggerStatusJson,
+  validateOrderTriggers,
   validateSetPositionTriggers,
 } from "./triggers.js";
 import type { Action, AdminAction, SetPositionTriggers } from "./types.js";
@@ -268,5 +269,77 @@ describe("W32-10 trigger read models", () => {
     expect(() => decodePositionTriggerInfos([corrupt])).toThrow(
       /duplicate limb identity/,
     );
+  });
+});
+
+describe("F2 pre-fill order trigger validation", () => {
+  const limb = (over: Partial<{ triggerPrice: bigint; maxSlippageBps: number; clientTriggerId: bigint }> = {}) => ({
+    triggerPrice: 95_000n,
+    maxSlippageBps: 75,
+    clientTriggerId: 11n,
+    ...over,
+  });
+
+  it("passes with no limbs on any order action — no bracket requested", () => {
+    expect(validateOrderTriggers({})).toBeUndefined();
+    expect(validateOrderTriggers({ stopLoss: null, takeProfit: null })).toBeUndefined();
+    // Reduce-only without limbs is an ordinary reduce-only order.
+    expect(validateOrderTriggers({ reduceOnly: true })).toBeUndefined();
+  });
+
+  it("passes with one or two well-formed limbs", () => {
+    expect(validateOrderTriggers({ stopLoss: limb(), takeProfit: null })).toBeUndefined();
+    expect(
+      validateOrderTriggers({
+        stopLoss: limb(),
+        takeProfit: limb({ triggerPrice: 110_000n, clientTriggerId: 12n }),
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects a zero or negative trigger price by field name", () => {
+    expect(() => validateOrderTriggers({ stopLoss: limb({ triggerPrice: 0n }) })).toThrow(
+      /stopLoss\.triggerPrice must be non-zero/,
+    );
+    expect(() =>
+      validateOrderTriggers({ takeProfit: limb({ triggerPrice: -1n }) }),
+    ).toThrow(/takeProfit\.triggerPrice must be an unsigned 64-bit bigint/);
+  });
+
+  it("keeps the bps collar in 1..=9999", () => {
+    expect(() => validateOrderTriggers({ stopLoss: limb({ maxSlippageBps: 0 }) })).toThrow(
+      /stopLoss\.maxSlippageBps must be in 1..=9999/,
+    );
+    expect(() =>
+      validateOrderTriggers({ stopLoss: limb({ maxSlippageBps: 10_000 }) }),
+    ).toThrow(/stopLoss\.maxSlippageBps must be in 1..=9999/);
+    expect(validateOrderTriggers({ stopLoss: limb({ maxSlippageBps: 9_999 }) })).toBeUndefined();
+  });
+
+  it("rejects duplicate limb client ids — limbs must stay distinguishable", () => {
+    expect(() =>
+      validateOrderTriggers({
+        stopLoss: limb({ clientTriggerId: 7n }),
+        takeProfit: limb({ clientTriggerId: 7n }),
+      }),
+    ).toThrow(/must differ/);
+  });
+
+  it("rejects a zero client trigger id on either limb", () => {
+    expect(() => validateOrderTriggers({ stopLoss: limb({ clientTriggerId: 0n }) })).toThrow(
+      /stopLoss\.clientTriggerId must be non-zero/,
+    );
+    expect(() => validateOrderTriggers({ takeProfit: limb({ clientTriggerId: 0n }) })).toThrow(
+      /takeProfit\.clientTriggerId must be non-zero/,
+    );
+  });
+
+  it("rejects trigger fields on a reduce-only order (TriggerOrderIncompatible, code 97)", () => {
+    expect(() => validateOrderTriggers({ stopLoss: limb(), reduceOnly: true })).toThrow(
+      /reduceOnly order \(TriggerOrderIncompatible, code 97\)/,
+    );
+    expect(() =>
+      validateOrderTriggers({ takeProfit: limb(), reduceOnly: true }),
+    ).toThrow(/reduceOnly/);
   });
 });

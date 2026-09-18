@@ -158,6 +158,17 @@ export interface PlaceOrder {
    * visible crossing book can fill the whole order immediately.
    */
   timeInForce?: TimeInForce;
+  /**
+   * Optional whole-position SL/TP bracket attached at placement time
+   * (pre-fill trigger). Installed on the position resulting from this
+   * order's first fill; discarded if the order terminates without filling.
+   * WIRE-PENDING: the trailing wire fields ship with proof-wire 2.1.0 —
+   * against the currently pinned 2.0.0 core the values are validated here
+   * but dropped by the encoder.
+   */
+  stopLoss?: TriggerLimb | null;
+  /** Optional take-profit limb; see {@link PlaceOrder.stopLoss}. */
+  takeProfit?: TriggerLimb | null;
 }
 
 /** Cancel an existing resting order by its engine-assigned ID. */
@@ -208,6 +219,16 @@ export interface CancelReplaceOrder {
   reduceOnly?: boolean;
   /** Replacement time-in-force policy. Defaults to GTC. */
   timeInForce?: TimeInForce;
+  /**
+   * Optional whole-position SL/TP bracket for the replacement order
+   * (pre-fill trigger; see {@link PlaceOrder.stopLoss}). The replaced
+   * order's pending payload is always discarded — replacement is a full
+   * payload replacement. WIRE-PENDING: encodes once the core pins
+   * proof-wire 2.1.0.
+   */
+  stopLoss?: TriggerLimb | null;
+  /** Optional take-profit limb; see {@link CancelReplaceOrder.stopLoss}. */
+  takeProfit?: TriggerLimb | null;
 }
 
 /** Amend a resting order without changing its exchange order ID. */
@@ -283,6 +304,15 @@ export interface MarketOrder {
   quantity: bigint;
   /** Optional client-assigned order ID for tracking. */
   clientOrderId?: bigint | null;
+  /**
+   * Optional whole-position SL/TP bracket attached at placement time
+   * (pre-fill trigger; see {@link PlaceOrder.stopLoss}). A market order
+   * has no limit price, so the bracket's placement mark is the current
+   * mark. WIRE-PENDING: encodes once the core pins proof-wire 2.1.0.
+   */
+  stopLoss?: TriggerLimb | null;
+  /** Optional take-profit limb; see {@link MarketOrder.stopLoss}. */
+  takeProfit?: TriggerLimb | null;
 }
 
 /**

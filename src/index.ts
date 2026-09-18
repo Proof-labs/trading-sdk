@@ -148,6 +148,7 @@ export {
   MAX_TRIGGER_SLIPPAGE_BPS,
   validateSetPositionTriggers,
   validateCancelPositionTriggers,
+  validateOrderTriggers,
   validateSetTriggerMarketConfig,
   decodePositionTriggerInfos,
   decodeTriggerMarketConfigInfos,

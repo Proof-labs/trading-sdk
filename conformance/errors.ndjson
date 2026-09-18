@@ -86,6 +86,7 @@
 {"case":"manifest/94","code":94,"log":null,"expect":{"name":"UnderlyingAlreadyAttached"}}
 {"case":"manifest/95","code":95,"log":null,"expect":{"name":"TooManyAttachedConditionals"}}
 {"case":"manifest/96","code":96,"log":null,"expect":{"name":"TooManyActiveEvents"}}
+{"case":"manifest/97","code":97,"log":null,"expect":{"name":"TriggerOrderIncompatible"}}
 {"case":"manifest/255","code":255,"log":null,"expect":{"name":"InternalError"}}
 {"case":"code50/oi_log","code":50,"log":"open interest limit exceeded on market 7: would be 4, cap 3","expect":{"name":"OpenInterestLimitExceeded"}}
 {"case":"code50/slippage_log","code":50,"log":"atomic basket aggregate slippage 51 bps exceeds budget 50 bps","expect":{"name":"SlippageExceeded"}}

@@ -186,6 +186,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     let signer = vec![0x03u8; 20];
 
     // ── codec family ─────────────────────────────────────────────────────
+    // WIRE-PENDING (F2 trigger expansion, contract §1.7): the five vectors
+    // below are specified but cannot be generated against the currently
+    // pinned proof-wire 2.0.0 core — its order structs have no
+    // stop_loss/take_profit fields, so `codec_payload` would silently drop
+    // the limbs and pin 2.0.0-shaped bytes under 2.1.0 case names. Add
+    // these cases (and regenerate this file) when the dependency flips to
+    // the 2.1.0 release:
+    //   1. place_order/with_triggers      — 0x01, both limbs, post_only +
+    //                                       reduce_only + GTC set
+    //   2. place_order/no_triggers        — the exact pre-2.1.0 byte string
+    //                                       (old encodes keep decoding)
+    //   3. market_order/with_triggers     — 0x04, stop-loss limb only
+    //   4. cancel_replace_order/with_triggers — 0x1A, take-profit limb only
+    //   5. set_position_triggers_2_1      — 0x25 round-trip (unchanged
+    //                                       shape, pins the 2.1.0 era)
     let codec = vec![
         codec_case(
             "place_order/min",

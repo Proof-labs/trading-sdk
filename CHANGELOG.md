@@ -7,6 +7,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Pre-fill (pending) SL/TP limbs on the order actions and the F2 trigger
+  expansion's client surface (contract: ProofOfBrain
+  `delivery/epics/trigger-expansion-binary-conditional-prefill.md`, §7-T).
+  `PlaceOrder` (0x01), `MarketOrder` (0x04) and `CancelReplaceOrder` (0x1A)
+  gain optional `stopLoss` / `takeProfit` (`TriggerLimb`) fields in TypeScript,
+  Python and the Rust/WASM core's shared wire contract, validated client-side
+  with the same parity rules as `SetPositionTriggers` (at least one limb,
+  non-zero trigger price, bps `1..=9999`, distinct limb client ids) plus the
+  engine's new `TriggerOrderIncompatible` (code 97) for limbs on a reduce-only
+  order — the code is pinned in the TypeScript and Rust error tables and the
+  `errors.ndjson` conformance manifest. Gateway read types for the additive
+  `/v1/triggers/{owner}` `pending` section and `market_kind` on position rows
+  are added to `GatewayReads` (§7-G). **WIRE-PENDING:** the trailing wire
+  fields and the five contract §1.7 codec vectors activate when the vendored
+  proof-wire pin flips to the 2.1.0 release (wire PR pending); against the
+  pinned 2.0.0 core the new fields validate but do not encode.
+
 - Mirrors the `UpdateAuthoritySet` governance arm (inner tag `0x07`,
   exchange#422 / DEC-87): addition/removal of members in one privileged
   authority allowlist (`Oracle`, `CexComposite`, `Relayer`, `Custody`,

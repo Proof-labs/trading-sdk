@@ -138,6 +138,8 @@ define_error_kinds! {
     94  => UnderlyingAlreadyAttached        ~ "AttachConditional for an underlying that is already attached to this event.",
     95  => TooManyAttachedConditionals      ~ "AttachConditional would exceed the event's attachment cap; the log names the count and the cap.",
     96  => TooManyActiveEvents              ~ "Account would touch more events than the scenario margin engine can enumerate (the per-account event cap). Close a leg on another event before opening this one.",
+    // F2 trigger expansion: pre-fill (pending) SL/TP limbs on order actions.
+    97  => TriggerOrderIncompatible         ~ "Order cannot carry attached SL/TP (reduce-only order, ineligible market, or inactive feature).",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -463,7 +465,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=96)
+        let expected: Vec<u32> = (1u32..=97)
             .filter(|c| !matches!(c, 24 | 25 | 31 | 77..=81))
             .chain(std::iter::once(255))
             .collect();
