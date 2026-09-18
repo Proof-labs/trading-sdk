@@ -40,6 +40,153 @@ afterEach(() => {
 });
 
 describe("gateway finality", () => {
+  it.each([
+    [200, "invalid signature", 1],
+    [200, "invalid action parameters", 1],
+    [503, "service overloaded", 503],
+    [503, "service unavailable", 503],
+  ])(
+    "keeps hashless HTTP %i refusal terminal (%s)",
+    async (status, reason, code) => {
+      const fetch = vi.fn(async (_url: string) =>
+        json({ status: "error", error: reason }, Number(status)),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const client = external();
+      // Normal submitTx must not spawn a verifier for a proven refusal.
+      client.setUnsafeFastSubmit(false);
+      const result = await client.submitTx(action);
+      expect(result).toMatchObject({
+        ok: false,
+        outcome: "transport",
+        code,
+        log: reason,
+        hash: "",
+        error: null,
+      });
+      expect(await client.waitForDelivery(result)).toBe(result);
+      expect(await client.awaitPendingVerifies()).toEqual([]);
+      expect(await client.submitTxCommit(action)).toMatchObject({
+        outcome: "transport",
+        code,
+        log: reason,
+      });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(fetch.mock.calls.every(([url]) => url === "/exchange")).toBe(true);
+    },
+  );
+
+  it.each(["paused", "cancel-only"])(
+    "keeps maintenance mode %s refusal terminal",
+    async (mode) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          json(
+            {
+              status: "error",
+              error: "maintenance: signed writes are not open",
+              mode,
+            },
+            503,
+          ),
+        ),
+      );
+      expect(await external().submitTx(action)).toMatchObject({
+        outcome: "transport",
+        code: 503,
+        log: "maintenance: signed writes are not open",
+        hash: "",
+      });
+    },
+  );
+
+  it.each([
+    [
+      200,
+      { status: "error", error: "outcome unknown", txHash: "A".repeat(64) },
+    ],
+    [
+      503,
+      { status: "error", error: "outcome unknown", txHash: "A".repeat(64) },
+    ],
+    [502, { status: "error", error: "upstream unavailable" }],
+    [504, { status: "error", error: "deadline exceeded" }],
+    [503, { error: "proxy failure" }],
+    [503, { status: "error", error: "" }],
+    [503, { status: "error", error: "   " }],
+    [503, "service overloaded"],
+    [503, []],
+    [503, { status: "error", error: "unknown", txHash: null }],
+    [503, { status: "error", error: "unknown", txHash: "" }],
+    [503, { status: "error", error: "unknown", code: 12 }],
+    [503, { status: "error", error: "unknown", height: 42 }],
+    [200, { status: "error", error: "unknown", log: "nonce too old" }],
+    [503, { status: "error", error: "service overloaded", retryAfterMs: 500 }],
+    [200, { status: "error", error: "unknown", events: [] }],
+    [200, { status: "error", error: "unknown", code: "12" }],
+    [503, { status: "error", error: "invalid signature" }],
+    [
+      503,
+      {
+        status: "error",
+        error: "position-trigger activation status is unavailable",
+      },
+    ],
+    [503, { status: "error", error: "unknown edge failure" }],
+    [200, { status: "error", error: "unknown edge failure" }],
+    [
+      503,
+      { status: "error", error: "service overloaded", info: "outcome unknown" },
+    ],
+    [200, { status: "error", error: "invalid signature", txHash: null }],
+  ])("reconciles HTTP %i ambiguous envelope %j", async (status, body) => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(json(body, Number(status)))
+      .mockResolvedValue(
+        json({ result: { height: "44", tx_result: { code: 0 } } }),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const client = external();
+    const result = await client.submitTx(action);
+    expect(result.outcome).toBe("timeout");
+    expect(result.hash).toMatch(/^[0-9A-F]{64}$/);
+    expect(await client.waitForDelivery(result)).toMatchObject({
+      outcome: "ok",
+      height: 44,
+    });
+    expect(
+      fetch.mock.calls.filter(([, init]) => init?.method === "POST"),
+    ).toHaveLength(1);
+    expect(fetch.mock.calls[1][0]).toBe(`/v1/tx/${result.hash}`);
+  });
+
+  it("keeps an unstructured 503 uncertain", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("service overloaded", { status: 503 })),
+    );
+    expect(await external().submitTx(action)).toMatchObject({
+      outcome: "timeout",
+      hash: expect.stringMatching(/^[0-9A-F]{64}$/),
+    });
+  });
+
+  it("retains legacy numeric engine rejections", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        json({ status: "error", error: "12: insufficient margin" }),
+      ),
+    );
+    expect(await external().submitTx(action)).toMatchObject({
+      outcome: "engine",
+      code: 12,
+      log: "12: insufficient margin",
+    });
+  });
+
   it.each([401, 413, 429])("keeps HTTP %i terminal", async (status) => {
     const fetch = vi
       .fn()

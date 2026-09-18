@@ -53,6 +53,7 @@
     "prepublishOnly": "npm run build",
     "pretest": "npm run build:wasm",
     "test": "vitest run",
+    "lint": "eslint .",
     "smoke:browser:prepare": "node scripts/prepare-browser-smoke.mjs .browser-smoke",
     "smoke:browser": "node scripts/browser-smoke.mjs .browser-smoke",
     "example": "npx tsx examples/connect-and-trade.ts"
@@ -63,6 +64,9 @@
     "@noble/hashes": "^2.2.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.15.0",
+    "@typescript-eslint/parser": "^8.15.0",
+    "eslint": "^9.15.0",
     "playwright": "1.61.1",
     "prettier": "^3.9.4",
     "typescript": "^6.0.0",

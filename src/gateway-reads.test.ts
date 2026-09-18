@@ -69,6 +69,48 @@ describe("named gateway reads", () => {
       expect(JSON.parse(init.body as string)).toEqual({ type, ...params });
     }
   });
+  it("preserves event resolution filters and the gateway's raw response", async () => {
+    const body = [{ event_id: "0", market: "101", kind: "prediction_settled" }];
+    const response = json(body);
+    const transport = vi.fn(
+      async (_url: string, _init?: RequestInit) => response,
+    );
+    const reads = new ExchangeClient({
+      gatewayUrl: "https://gateway.example",
+    }).reads({ fetch: transport });
+    const result = await reads.historyResolutions({
+      user: owner,
+      event_id: 0,
+      from: 10,
+      to: 20,
+      limit: 5,
+    });
+    expect(result).toBe(response);
+    expect(await result.json()).toEqual(body);
+    expect(transport.mock.calls[0][0]).toBe("https://gateway.example/info");
+    expect(JSON.parse(transport.mock.calls[0][1]!.body as string)).toEqual({
+      type: "historyResolutions",
+      user: owner,
+      event_id: 0,
+      from: 10,
+      to: 20,
+      limit: 5,
+    });
+  });
+  it("keeps a missing event and a cancelled event catalog observable", async () => {
+    const response = json({ error: "event not found" }, 404);
+    const transport = vi.fn(async () => response);
+    const reads = new ExchangeClient().reads({ fetch: transport });
+    await expect(reads.event(999)).rejects.toMatchObject({
+      name: "GatewayHttpError",
+      status: 404,
+      response,
+    });
+    await expect(
+      reads.events({ signal: AbortSignal.abort() }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
   it("preserves REST query strings, opaque cursors and ISO candle windows", async () => {
     const fetch = vi.fn(async () => json({ next_cursor: "opaque" }));
     const reads = new ExchangeClient({

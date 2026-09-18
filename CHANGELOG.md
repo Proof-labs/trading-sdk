@@ -7,13 +7,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Mirrors the `UpdateAuthoritySet` governance arm (inner tag `0x07`,
+  exchange#422 / DEC-87): addition/removal of members in one privileged
+  authority allowlist (`Oracle`, `CexComposite`, `Relayer`, `Custody`,
+  `MarketParams`, `ScheduledOps`). TypeScript decode (`governance-query.ts`)
+  and encode (`codec-adapter.ts`) both went through the generic struct path
+  already used by `UpdateAdminSignerRegistry`; `add`/`remove` needed one
+  addition to the decode-side byte-field allowlist to come back as
+  `Uint8Array[]` rather than plain objects. Content-hash golden vectors
+  pinned identically in the TypeScript (WASM) and Python (PyO3) suites.
+  Closes exchange#472 — the last gateway/SDK gap from the `CancelAllOrdersForAccount`
+  kill lever (exchange#467, DEC-151); the gateway side landed in api-gateway#150.
+
 - **BREAKING (MAJOR) — proof-wire 2.0.0: the impact-market family is gone and
   every conditional belongs to an event.** The npm package moves to **5.0.0**,
   the Rust core to **4.0.0**, the PyO3 and Python packages to **4.0.0**.
   - Removed: `CreateImpactMarket` (0x0e) and `ResolveImpactMarket` (0x0f) in
     every language, the `ImpactMarketInfo` / `ImpactMarketStatus` types, the
     `CreateImpactMarket` governance arm and batch item, `queryImpactMarkets()`,
-    and error codes 24, 25 and 31. The retired bytes never decode again.
+    `GatewayReads.impactMarkets()` / `impactMarket(id)`, and error codes 24,
+    25 and 31. The retired bytes never decode again.
   - Changed: `MarketKind` conditional and binary payloads carry the event id;
     `EventInfo` gains `attachedConditionals` (`[underlying, cpy, cpn]`
     triples) and its status type is `EventStatus`; `MarketsSnapshot.events`
@@ -29,10 +42,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     trailer; typed `CreateSubAccount` (0x28), `SubAccountTransfer` (0x29) and
     `ClaimWithdrawalPayout` (0x2e) actions absorbed from wire 1.9.0 and
     1.10.0; error codes 72–76, 82 and 83–96 classified.
+    `GatewayReads.events()` / `event(id)` use the gateway's event queries.
   - Conformance vectors regenerated: the family cases leave, the attach,
     batch, create-event oracle-source and new outer-action cases arrive; the
     engine snapshot fixture is `engine-349fa9b.hex`. The wire pin is the
     `v2.0.0` tag.
+
+### Added
 
 - TypeScript 4.2.0 adds gateway-only `queryFinancialState({markets, owners})`:
   one finalized snapshot of selected raw accounts, fee/funding market state,
@@ -61,7 +77,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   owner binding, integer precision and positional schema validation; no equity,
   margin or trading/withdrawal permission is inferred. Rust/Python codecs unchanged.
 
-### Added
+- TypeScript `queryOraclePriceHistoryPage` reads market-filtered `price_updated`
+  history through the gateway, preserving exact prices, opaque cursors,
+  cancellation and HTTP errors. Primary and composite updates share the
+  upstream event shape; the API does not distinguish their sources.
+  `ExchangeClient.queryOraclePriceHistory()` wraps it bound to the client's
+  own `gatewayUrl`, matching the trigger-history convention of an exported
+  low-level function plus a client method — direct callers no longer have to
+  thread a gateway URL themselves.
 
 - Rust native gateway `submit_signed_bytes_with_evidence` adds typed,
   source-qualified per-attempt pre-admission refusal and maintenance evidence,
@@ -85,6 +108,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `BoundMarketsSnapshot`, `BoundChainIdentity` and `BoundInventorySnapshot`
   expose read-only getters; only the SDK decoders and `validate_bound_inventory`
   construct them, so a caller cannot forge or alter a validated witness.
+  Node identities, app hashes, heights, market ids and micro-USDC amounts on
+  this surface are `NodeId`, `AppHash`, `BlockHeight`, `MarketId` and
+  `MicroUsdc` rather than bare integers and byte arrays, and receipt reads take
+  the existing `TxHash`. Each type carries the check its decoder performed.
+  `read_bound_inventory()` takes its confirmation-poll schedule from the client:
+  `MarketsSnapshotClient::with_confirmation_polling` accepts a
+  `ConfirmationPolling { polls, interval }`, defaulting to the previous 8 polls
+  250 ms apart, with 64 polls and a five-second interval as the outer ceiling.
+  The whole-call deadline still ends the wait.
+  `WitnessError` names one fault per variant: an unsupported witness version
+  (carrying the version), a malformed witness field, a witness/snapshot height
+  disagreement, an out-of-order bracket, an inconsistent anchor height, a
+  header answered for the wrong height, an `H + 1` overflow, a clock mismatch,
+  an app-hash mismatch, a missing caller-supplied block body, and a height that
+  is simply not committed yet.
 
 - Rust gateway `MarketsSnapshotClient::receipt_observation()` distinguishes an
   exact committed receipt from a canonical HTTP 404/500 not-found observation
@@ -97,7 +135,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it to their retained signed action before inferring a primary-oracle effect;
   composite actions share this event. Missing, duplicate, mixed, malformed or
   unsupported event evidence leaves only the committed receipt, never a proof
-  of price acceptance. No extra HTTP or wire change is introduced.
+  of price acceptance. When a `price_updated` event is present but fails a
+  structural check, the observation is `RejectedPriceEvidence` and names the
+  reason as a typed `PriceEvidenceRejection`, so a consumer can count or alert
+  on evidence it expected to be usable. `MalformedPriceEvent` identifies a
+  single `price_updated` event whose attributes cannot be decoded, including
+  missing fields, non-string values and duplicate JSON keys. A receipt with
+  no identifiable price event, or a non-zero execution code, stays `Committed`.
+  No extra HTTP or wire change is introduced.
   `ReceiptObservation::CommittedPriceUpdate` carries a `CommittedPriceUpdate`
   struct with read-only getters that only the receipt classifier constructs.
 
@@ -145,6 +190,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Ambiguous submissions retain their hash and HTTP diagnostics for reconciliation.
 
 ### Fixed
+
+- TypeScript submission treats a fixed, known set of structured, hashless
+  HTTP 200/503 gateway refusals as terminal transport errors with the
+  original reason, mirroring the Rust core's exact allowlist. Any other
+  hashless HTTP 200/503 body — an unrecognized message, in particular —
+  still reconciles by transaction hash without resubmission, same as
+  before, since an unfamiliar message is not proof the transaction never
+  reached the broadcaster.
 
 - Position-history reads decode the indexer's page envelope and `entry_px` /
   `block_time` fields. The array API retains string fields, using empty strings

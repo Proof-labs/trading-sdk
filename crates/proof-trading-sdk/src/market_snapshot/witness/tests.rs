@@ -1,6 +1,18 @@
-#![allow(clippy::unwrap_used, clippy::arithmetic_side_effects)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::arithmetic_side_effects
+)]
 
 use super::*;
+use crate::market_snapshot::ConfirmationPolling;
+
+fn node(id: u8) -> NodeId {
+    NodeId::new([id; 20]).expect("fixture node ids are non-zero")
+}
+fn hash(byte: u8) -> AppHash {
+    AppHash::new([byte; 32]).expect("fixture app hashes are non-zero")
+}
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
@@ -78,11 +90,17 @@ fn legacy_snapshot_decode_is_unchanged_but_bound_method_requires_witness() {
             "{field}"
         );
     }
+    let mut unsupported = full.clone();
+    unsupported["witness"]["version"] = json!(2);
+    assert_eq!(
+        decode_bound_snapshot(&bytes(&unsupported), chain_id()).unwrap_err(),
+        WitnessError::UnsupportedWitnessVersion { version: 2 }
+    );
     let mut bad = full;
     bad["witness"]["height"] = json!("101");
     assert_eq!(
         decode_bound_snapshot(&bytes(&bad), chain_id()).unwrap_err(),
-        WitnessError::HeightMismatch
+        WitnessError::WitnessHeightMismatch
     );
 }
 
@@ -99,7 +117,7 @@ fn duplicate_fields_and_missing_node_identity_fail_closed() {
         .unwrap()
         .remove("id");
     assert!(decode_bound_identity(&bytes(&status), chain_id()).is_err());
-    // The old time-only method remains backward compatible.
+    // decode_identity reads the same body without the node identity.
     assert!(chain::decode_identity(&bytes(&status), chain_id()).is_ok());
     let status = String::from_utf8(bytes(&status_body(100, NOW, 1, 1))).unwrap();
     let duplicate = status.replace(
@@ -125,12 +143,12 @@ fn hashes_are_compared_at_state_height_not_reported_header_height() {
     assert_eq!(pre.app_hash_height, 99);
     assert_ne!(pre.app_hash, snapshot(1).witness.app_hash);
     let verified = validate_bound_inventory(snapshot(1), pre, after(), None).unwrap();
-    assert_eq!(verified.witness.app_hash, [2; 32]);
+    assert_eq!(verified.witness.app_hash, hash(2));
     assert_eq!(verified.after.app_hash_height, 100);
     // Status H exposes the previous state. It cannot commit snapshot post-H.
     assert_eq!(
         validate_bound_inventory(snapshot(1), before(), before(), None).unwrap_err(),
-        WitnessError::Uncommitted
+        WitnessError::NotYetCommitted
     );
 }
 
@@ -141,16 +159,16 @@ fn cross_replica_aba_and_wrong_matching_hash_are_rejected() {
         WitnessError::BackendMismatch
     );
     let mut other = after();
-    other.node_id = [3; 20];
+    other.node_id = node(3);
     assert_eq!(
         validate_bound_inventory(snapshot(1), before(), other, None).unwrap_err(),
         WitnessError::BackendMismatch
     );
     let mut wrong = after();
-    wrong.app_hash = [3; 32];
+    wrong.app_hash = hash(3);
     assert_eq!(
         validate_bound_inventory(snapshot(1), before(), wrong, None).unwrap_err(),
-        WitnessError::HashMismatch
+        WitnessError::AppHashMismatch
     );
 }
 
@@ -160,13 +178,13 @@ fn snapshot_clock_cannot_be_replaced_with_fresh_status_clock() {
     stale.witness.finalized_block_time_ms = NOW - 10_000;
     assert_eq!(
         validate_bound_inventory(stale, before(), after(), None).unwrap_err(),
-        WitnessError::TimeMismatch
+        WitnessError::ClockMismatch
     );
     let mut future = snapshot(1);
     future.witness.finalized_block_time_ms = NOW + 100;
     assert_eq!(
         validate_bound_inventory(future, before(), after(), None).unwrap_err(),
-        WitnessError::TimeMismatch
+        WitnessError::ClockMismatch
     );
     let verified = validate_bound_inventory(snapshot(1), before(), after(), None).unwrap();
     assert_eq!(verified.witness.finalized_block_time_ms, NOW);
@@ -189,13 +207,22 @@ fn fast_chain_uses_exact_next_header_and_rejects_wrong_height_chain_or_hash() {
     .is_ok());
     assert_eq!(
         validate_bound_inventory(snapshot(1), before(), advanced(), None).unwrap_err(),
-        WitnessError::Uncommitted
+        WitnessError::MissingBlockBody
     );
-    for body in [
-        block_body(100, 2),
-        block_body(101, 3),
-        json!({"error":{"code":-32603}}),
-    ] {
+    for height in [100, 102] {
+        assert_eq!(
+            validate_bound_inventory(
+                snapshot(1),
+                before(),
+                advanced(),
+                Some(&bytes(&block_body(height, 2)))
+            )
+            .unwrap_err(),
+            WitnessError::HeaderHeightMismatch,
+            "header height {height} must not satisfy the requested height 101"
+        );
+    }
+    for body in [block_body(101, 3), json!({"error":{"code":-32603}})] {
         assert!(
             validate_bound_inventory(snapshot(1), before(), advanced(), Some(&bytes(&body)))
                 .is_err()
@@ -207,6 +234,18 @@ fn fast_chain_uses_exact_next_header_and_rejects_wrong_height_chain_or_hash() {
         validate_bound_inventory(snapshot(1), before(), advanced(), Some(&bytes(&foreign)))
             .unwrap_err(),
         WitnessError::Snapshot(SnapshotError::WrongChain)
+    );
+}
+
+#[test]
+fn maximum_snapshot_height_reports_height_overflow() {
+    let bound =
+        decode_bound_snapshot(&bytes(&snapshot_body(u64::MAX, NOW, 1, 2)), chain_id()).unwrap();
+    let anchor =
+        decode_bound_identity(&bytes(&status_body(u64::MAX, NOW, 1, 1)), chain_id()).unwrap();
+    assert_eq!(
+        validate_bound_inventory(bound, anchor.clone(), anchor, None).unwrap_err(),
+        WitnessError::HeightOverflow
     );
 }
 
@@ -265,7 +304,60 @@ async fn fast_chain_whole_flow_uses_gateway_exact_height_query() {
     let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
     let verified = client.read_bound_inventory(chain_id()).await.unwrap();
     assert_eq!(verified.snapshot.height, 100);
-    assert_eq!(verified.witness.node_id, [1; 20]);
+    assert_eq!(verified.witness.node_id, node(1));
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn gateway_wrong_header_height_reports_header_height_mismatch() {
+    let responses = vec![
+        ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
+        (
+            "/v1/markets-snapshot",
+            snapshot_body(100, NOW, 1, 2),
+            Duration::ZERO,
+        ),
+        (
+            "/v1/status",
+            status_body(105, NOW + 500, 1, 8),
+            Duration::ZERO,
+        ),
+        ("/v1/block?height=101", block_body(102, 2), Duration::ZERO),
+    ];
+    let (url, task) = server(responses).await;
+    let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
+    assert_eq!(
+        client.read_bound_inventory(chain_id()).await.unwrap_err(),
+        WitnessError::HeaderHeightMismatch
+    );
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn gateway_maximum_snapshot_height_reports_height_overflow() {
+    let responses = vec![
+        (
+            "/v1/status",
+            status_body(u64::MAX, NOW, 1, 1),
+            Duration::ZERO,
+        ),
+        (
+            "/v1/markets-snapshot",
+            snapshot_body(u64::MAX, NOW, 1, 2),
+            Duration::ZERO,
+        ),
+        (
+            "/v1/status",
+            status_body(u64::MAX, NOW, 1, 1),
+            Duration::ZERO,
+        ),
+    ];
+    let (url, task) = server(responses).await;
+    let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
+    assert_eq!(
+        client.read_bound_inventory(chain_id()).await.unwrap_err(),
+        WitnessError::HeightOverflow
+    );
     task.await.unwrap();
 }
 
@@ -312,7 +404,7 @@ async fn same_height_reads_wait_for_next_header_without_resnapshot_or_clock_rene
     let verified = client.read_bound_inventory(chain_id()).await.unwrap();
     assert_eq!(verified.snapshot.height, 100);
     assert_eq!(verified.witness.finalized_block_time_ms, NOW);
-    assert_eq!(verified.after.identity.latest_height, 101);
+    assert_eq!(verified.after.identity.latest_height.get(), 101);
     task.await.unwrap();
 }
 
@@ -363,7 +455,7 @@ async fn confirmation_poll_cannot_erase_a_conflicting_same_height_hash() {
     let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
     assert_eq!(
         client.read_bound_inventory(chain_id()).await.unwrap_err(),
-        WitnessError::HashMismatch
+        WitnessError::AppHashMismatch
     );
     task.await.unwrap();
 }
@@ -379,7 +471,7 @@ async fn halted_chain_confirmation_wait_respects_the_original_whole_call_deadlin
         ),
         ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
     ];
-    for _ in 0..MAX_CONFIRMATION_POLLS {
+    for _ in 0..ConfirmationPolling::DEFAULT_POLLS {
         responses.push(("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO));
     }
     let (url, task) = server(responses).await;
@@ -394,6 +486,72 @@ async fn halted_chain_confirmation_wait_respects_the_original_whole_call_deadlin
 }
 
 #[tokio::test]
+async fn a_configured_schedule_replaces_the_default_poll_count() {
+    let mut responses = vec![
+        ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
+        (
+            "/v1/markets-snapshot",
+            snapshot_body(100, NOW, 1, 2),
+            Duration::ZERO,
+        ),
+        ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
+    ];
+    // Two polls, not the default eight: the third status read never happens.
+    for _ in 0..2 {
+        responses.push(("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO));
+    }
+    let (url, task) = server(responses).await;
+    let client = MarketsSnapshotClient::with_confirmation_polling(
+        &url,
+        Duration::from_secs(5),
+        ConfirmationPolling {
+            polls: 2,
+            interval: Duration::from_millis(10),
+        },
+    )
+    .expect("two polls are inside the ceiling");
+    let start = Instant::now();
+    assert_eq!(
+        client.read_bound_inventory(chain_id()).await.unwrap_err(),
+        WitnessError::NotYetCommitted
+    );
+    // Eight polls at the default interval could not finish this quickly.
+    assert!(start.elapsed() < Duration::from_millis(500));
+    task.abort();
+}
+
+#[test]
+fn a_schedule_outside_the_safety_ceiling_is_refused() {
+    for polling in [
+        ConfirmationPolling {
+            polls: ConfirmationPolling::MAX_POLLS + 1,
+            interval: ConfirmationPolling::DEFAULT_INTERVAL,
+        },
+        ConfirmationPolling {
+            polls: 1,
+            interval: ConfirmationPolling::MAX_INTERVAL + Duration::from_millis(1),
+        },
+    ] {
+        assert!(matches!(
+            MarketsSnapshotClient::with_confirmation_polling(
+                "http://127.0.0.1:9080",
+                Duration::from_secs(5),
+                polling,
+            ),
+            Err(SnapshotError::InvalidConfirmationPolling)
+        ));
+    }
+    // A schedule longer than the deadline is a caller's choice, not an error:
+    // the whole-call deadline ends the wait.
+    assert!(MarketsSnapshotClient::with_confirmation_polling(
+        "http://127.0.0.1:9080",
+        Duration::from_millis(100),
+        ConfirmationPolling::default(),
+    )
+    .is_ok());
+}
+
+#[tokio::test]
 async fn confirmation_poll_cap_is_finite_even_when_the_call_budget_is_longer() {
     let mut responses = vec![
         ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
@@ -404,14 +562,14 @@ async fn confirmation_poll_cap_is_finite_even_when_the_call_budget_is_longer() {
         ),
         ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
     ];
-    for _ in 0..MAX_CONFIRMATION_POLLS {
+    for _ in 0..ConfirmationPolling::DEFAULT_POLLS {
         responses.push(("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO));
     }
     let (url, task) = server(responses).await;
     let client = MarketsSnapshotClient::new(&url, Duration::from_secs(5)).unwrap();
     assert_eq!(
         client.read_bound_inventory(chain_id()).await.unwrap_err(),
-        WitnessError::Uncommitted
+        WitnessError::NotYetCommitted
     );
     task.await.unwrap();
 }

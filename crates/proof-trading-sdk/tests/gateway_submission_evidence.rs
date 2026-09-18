@@ -247,6 +247,16 @@ async fn hashless_unknown_or_wrong_status_and_maintenance_bodies_remain_unresolv
             503,
             json!({"status":"error","error":"maintenance: signed writes are not open","mode":null}),
         ),
+        // A container that names a mode is not the mode: only the two exact
+        // strings qualify.
+        (
+            503,
+            json!({"status":"error","error":"maintenance: signed writes are not open","mode":{"paused":null}}),
+        ),
+        (
+            503,
+            json!({"status":"error","error":"maintenance: signed writes are not open","mode":["cancel-only"]}),
+        ),
         (
             503,
             json!({"status":"error","error":"maintenance: signed writes are not open","mode":"paused","retryAfterMs":1}),

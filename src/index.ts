@@ -207,6 +207,8 @@ export {
   generateKeypair,
   getPublicKey,
   pubkeyToOwner,
+  deriveSubAccount,
+  SUB_ACCOUNT_DERIVATION_DOMAIN,
   ownerToHex,
   hexToBytes,
   bytesToHex,
@@ -282,3 +284,9 @@ export type {
   PortfolioHistoryOptions,
   PortfolioHistoryPage,
 } from "./portfolio-history.js";
+export {
+  queryOraclePriceHistoryPage,
+  type OraclePriceHistoryPoint,
+  type OraclePriceHistoryPage,
+  type OraclePriceHistoryOptions,
+} from "./oracle-price-history.js";

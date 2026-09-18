@@ -737,6 +737,17 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       },
     };
   }
+  if (v.UpdateAuthoritySet) {
+    const u = v.UpdateAuthoritySet as Record<string, unknown>;
+    return {
+      kind: "UpdateAuthoritySet",
+      value: {
+        domain: u.domain as import("./types.js").AuthorityDomain,
+        add: (u.add as unknown[]).map((a) => bytes(a)),
+        remove: (u.remove as unknown[]).map((a) => bytes(a)),
+      },
+    };
+  }
   throw new Error(`toAdminAction: unknown variant ${Object.keys(v).join(",")}`);
 }
 
@@ -976,10 +987,10 @@ describe("conformance vectors (TypeScript)", () => {
     // Guard against the vector file drifting out from under this assertion:
     // propose (create-market, the perp-plus-attach batch, the attach
     // singleton, six create-event oracle-source shapes, trigger config,
-    // unpause-bridge, cancel-all-for-account scoped and unscoped, and oracle
-    // policy), approve, reject, and all three emergency arms (PauseMarket,
-    // HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(19);
+    // unpause-bridge, update-authority-set add and remove, cancel-all-for
+    // -account scoped and unscoped, and oracle policy), approve, reject,
+    // and all three emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(21);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

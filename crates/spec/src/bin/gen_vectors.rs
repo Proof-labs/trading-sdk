@@ -536,6 +536,38 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": "UnpauseBridge"
             }),
         ),
+        // UpdateAuthoritySet (inner tag 0x07, exchange#422 / DEC-87,
+        // exchange#472): addition/removal of members in one privileged
+        // authority allowlist. `domain` is externally tagged as its bare
+        // variant name (fact 2), never a numeric discriminant — both a
+        // capability-set domain (`MarketParams`) and a genesis-seeded one
+        // (`Relayer`) are pinned so the string is exercised, not inferred.
+        codec_case(
+            "propose_admin_action/update_authority_set_add",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "UpdateAuthoritySet": {
+                    "domain": "MarketParams",
+                    "add": [vec![0xB2u8; 20]],
+                    "remove": []
+                }}
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/update_authority_set_remove",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "UpdateAuthoritySet": {
+                    "domain": "Relayer",
+                    "add": [],
+                    "remove": [vec![0xC3u8; 20]]
+                }}
+            }),
+        ),
         // CancelAllOrdersForAccount (inner tag 0x08, exchange#467): the
         // governance kill lever for one wallet's resting book. Both shapes
         // of the optional market scope are pinned — `Some(7)` and `None` —

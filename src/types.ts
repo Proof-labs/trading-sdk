@@ -1053,6 +1053,33 @@ export interface CancelAllOrdersForAccount {
   market?: number | null;
 }
 
+/** One operator-authority allowlist an `UpdateAuthoritySet` action targets.
+ *  Externally tagged on the wire, so the domain arrives as this bare
+ *  string, never a numeric discriminant. `Custody`/`MarketParams`/
+ *  `ScheduledOps` are the capability-split sets; `Oracle`/`CexComposite`/
+ *  `Relayer` are the genesis-seeded presence sets. */
+export type AuthorityDomain =
+  | "Oracle"
+  | "CexComposite"
+  | "Relayer"
+  | "Custody"
+  | "MarketParams"
+  | "ScheduledOps";
+
+/**
+ * Governance addition/removal of members in one privileged authorization
+ * set (inner tag `0x07`). `add` and `remove` are each canonically sorted,
+ * duplicate-free, and disjoint; the engine refuses a proposal that would
+ * leave the domain's net set empty.
+ */
+export interface UpdateAuthoritySet {
+  domain: AuthorityDomain;
+  /** Addresses to add to the domain (each a 20-byte address). */
+  add: Address[];
+  /** Addresses to remove from the domain (each a 20-byte address). */
+  remove: Address[];
+}
+
 /**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
@@ -1076,13 +1103,7 @@ export type AdminAction =
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
-  | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount };
-
-/** Governance cancel of a wallet's resting orders, optionally one market (tag 8). */
-export interface CancelAllOrdersForAccount {
-  owner: Address;
-  market?: number | null;
-}
+  | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet };
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */
@@ -1572,8 +1593,9 @@ export type ExchangeEvent =
  * - `"engine"`    — the engine rejected it with an `ExecError` (`code` 1..53/255);
  *                   see {@link TxResult.error} for the decoded name/description.
  * - `"transport"` — a gateway/HTTP-level failure (auth, rate-limit, body too
- *                   large, 5xx, non-JSON body). `code` is the synthesized HTTP
- *                   status, not an engine code.
+ *                   large, or a structured pre-admission refusal at HTTP
+ *                   200/503). `code` is synthetic (1 for HTTP 200), not an
+ *                   engine code. Unrecognized 5xx responses stay `timeout`.
  * - `"timeout"`   — no final chain verdict is available yet (`code === -1`):
  *                   either the gateway returned a hash-only ambiguous response
  *                   or inclusion polling expired. The tx may still land.
