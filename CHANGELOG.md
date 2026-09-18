@@ -144,6 +144,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- TypeScript submission treats structured, hashless HTTP 200/503 gateway
+  refusals as terminal transport errors with the original reason. Ambiguous
+  responses still reconcile by transaction hash without resubmission.
+
 - Position-history reads decode the indexer's page envelope and `entry_px` /
   `block_time` fields. The array API retains string fields, using empty strings
   for absent close data; the paged API preserves nulls.

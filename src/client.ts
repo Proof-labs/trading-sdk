@@ -792,6 +792,12 @@ export class ExchangeClient {
           "request body exceeds max size (default 8192 bytes)",
       );
     }
+    const refusal = preAdmissionRefusal(gatewayBody.json);
+    // Gateway ExchangeResponse::err is hashless: a structured 503 proves
+    // the transaction never entered the broadcaster queue.
+    if (res.status === 503 && refusal !== undefined) {
+      return txTransportError(503, refusal);
+    }
     if (res.status >= 500) {
       return txTimeout(
         txHash,
@@ -871,12 +877,14 @@ export class ExchangeClient {
     // Fallback: the code embedded in the string as "<engine_code>: <message>".
     // The gateway still emits this format for compatibility, so this path also
     // covers a pre-#90 gateway that sends ONLY the string. Parse the leading code;
-    // Without a code, retain the hash for reconciliation; no rejection is proven.
+    // Hashless gateway refusals are terminal; unrecognized bodies remain unknown.
     const errMsg = json?.error ?? gatewayBody.raw ?? "unknown gateway error";
     const code = parseLeadingErrorCode(errMsg);
-    return code === null
-      ? txTimeout(txHash, "gateway returned no verdict; reconcile by hash")
-      : txEngineError(code, { log: errMsg });
+    if (code !== null) return txEngineError(code, { log: errMsg });
+    if (res.status === 200 && refusal !== undefined) {
+      return txTransportError(1, refusal);
+    }
+    return txTimeout(txHash, "gateway returned no verdict; reconcile by hash");
   }
 
   /**
@@ -2322,6 +2330,26 @@ function deriveNodeUrl(gatewayUrl: string, fallbackPort: string): string {
 
 function computeCometTxHash(txBytes: Uint8Array): string {
   return bytesToHex(sha256(txBytes)).toUpperCase();
+}
+
+/** Follow the gateway's response shape, not a fixed list of error messages.
+ * ExchangeResponse::err omits admission/verdict and rate-limit fields;
+ * contradictory evidence must not become a retry-safe refusal. */
+function preAdmissionRefusal(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const body = value as Record<string, unknown>;
+  if (
+    body.status === "error" &&
+    typeof body.error === "string" &&
+    body.error.trim().length > 0 &&
+    body.txHash === undefined &&
+    body.code === undefined &&
+    body.log === undefined &&
+    body.retryAfterMs === undefined &&
+    body.height === undefined &&
+    body.events === undefined
+  )
+    return body.error;
 }
 
 async function readGatewayBody(res: Response): Promise<{
