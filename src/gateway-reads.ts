@@ -86,11 +86,11 @@ export class GatewayReads {
   meta(opts: GatewayReadOptions = {}) {
     return this.info("meta", {}, opts);
   }
-  impactMarkets(opts: GatewayReadOptions = {}) {
-    return this.info("impactMarkets", {}, opts);
+  events(opts: GatewayReadOptions = {}) {
+    return this.info("events", {}, opts);
   }
-  impactMarket(id: number, opts: GatewayReadOptions = {}) {
-    return this.info("impactMarket", { id }, opts);
+  event(id: number, opts: GatewayReadOptions = {}) {
+    return this.info("event", { id }, opts);
   }
   l2Book(market: number, opts: GatewayReadOptions = {}) {
     return this.info("l2Book", { market }, opts);
@@ -130,7 +130,7 @@ export class GatewayReads {
     return this.info("historyPositions", params, opts);
   }
   historyResolutions(
-    params: OwnerHistoryParams & { impact_market_id?: number },
+    params: OwnerHistoryParams & { event_id?: number },
     opts: GatewayReadOptions = {},
   ) {
     return this.info("historyResolutions", params, opts);
