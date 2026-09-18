@@ -78,6 +78,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   handling, signing and wire bytes are unchanged. This additive API requires
   a Rust MINOR release when published; exact qualified images and unique node
   keys remain prerequisites because the legacy app hash is not a registry root.
+  `BoundMarketsSnapshot`, `BoundChainIdentity` and `BoundInventorySnapshot`
+  expose read-only getters; only the SDK decoders and `validate_bound_inventory`
+  construct them, so a caller cannot forge or alter a validated witness.
 
 - Rust gateway `MarketsSnapshotClient::receipt_observation()` distinguishes an
   exact committed receipt from a canonical HTTP 404/500 not-found observation
@@ -91,6 +94,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   composite actions share this event. Missing, duplicate, mixed, malformed or
   unsupported event evidence leaves only the committed receipt, never a proof
   of price acceptance. No extra HTTP or wire change is introduced.
+  `ReceiptObservation::CommittedPriceUpdate` carries a `CommittedPriceUpdate`
+  struct with read-only getters that only the receipt classifier constructs.
 
 - `ExchangeClient.reads().oracleHealth()` forwards gateway freshness responses
   for existing Web-UI warnings and order guards, preserving unavailable-feeder
