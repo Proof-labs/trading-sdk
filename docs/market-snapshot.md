@@ -4,7 +4,7 @@ Use `GET /v1/markets-snapshot` through the gateway for registration reconciliati
 The node returns one committed state view, not two independently sampled lists:
 
 ```text
-JSON { data: base64(MessagePack [chain_id, height, markets, impact_markets]) }
+JSON { data: base64(MessagePack [chain_id, height, markets, events]) }
 ```
 
 `chain_id` is exactly 32 bytes, `height` is a positive uint64, and both registries
@@ -85,16 +85,15 @@ The caller separately enforces non-regressing snapshot heights, staleness,
 complete source mappings and worker-transition/drain policy. A complete snapshot
 does not permit abandoning pending work for a removed market.
 
-The current endpoint serializes full 25-field `MarketConfig` and 15-field
-`ImpactMarketDisplayInfo` rows. Future fields may be appended; existing fields
-cannot be removed, reordered or silently defaulted. Unknown market kinds or
-resolution modes fail closed and require an SDK upgrade. No exchange-wire pin
-change is needed for the current engine: the committed
-`engine-0d215eaa.hex` fixture is actual `rmp_serde::to_vec` output from
-`exchange-core::query::MarketsSnapshot` at
-`0d215eaa326dc79776f5c329c7b6c01775fc5e17`, consumed by both Rust and TypeScript
-tests. It covers Perp, both conditional branches, both G17 `EventId(123)` binary
-branches, signed maker rebates, a MarketOracle impact record and uint64 bounds.
-The G17 parent-field rename preserves the positional `[u32, Branch]` payload;
-the older Rust wire type still names that binary parent `impact_market_id`.
-Do not reinterpret that field as a current impact-family foreign key.
+The current endpoint serializes full 25-field `MarketConfig` rows and 11-field
+`EventInfo` rows, each event carrying its attachment list as `[underlying, cpy,
+cpn]` triples. Future fields may be appended; existing fields cannot be removed,
+reordered or silently defaulted. Unknown market kinds or resolution modes fail
+closed and require an SDK upgrade. The committed `engine-349fa9b.hex` fixture is
+actual `rmp_serde::to_vec` output from `exchange-core::query::MarketsSnapshot`
+on the event-keyed wire (proof-wire 2.0.0), consumed by both Rust and TypeScript
+tests. It covers Perp, both conditional branches and both binary branches of
+`EventId(91)`, one attachment on perp 15, signed maker rebates and uint64
+bounds. Conditional and binary parents are the event id in the positional
+`[u32, Branch]` payload; the impact-market family and its `impact_market_id`
+no longer exist on the wire.

@@ -1,5 +1,5 @@
 import { Decoder } from "@msgpack/msgpack";
-import { decodeImpactMarketInfo } from "./governance-query.js";
+import { decodeEventInfo } from "./governance-query.js";
 import type { MarketConfig, MarketKind, MarketsSnapshot } from "./types.js";
 
 export const MAX_SNAPSHOT_BYTES = 1024 * 1024;
@@ -230,16 +230,15 @@ export function decodeMarketsSnapshot(
   const height = uint(top[1]);
   if (height === 0n) throw new Error("market snapshot: uncommitted height");
   const markets = tuple(top[2], 0).map(market);
-  const impactMarkets = tuple(top[3], 0).map((value, index) =>
-    decodeImpactMarketInfo(tuple(value, 15).slice(0, 15), index),
+  const events = tuple(top[3], 0).map((value, index) =>
+    decodeEventInfo(tuple(value, 11).slice(0, 11), index),
   );
   if (
     new Set(markets.map((m) => m.market)).size !== markets.length ||
-    new Set(impactMarkets.map((m) => m.impactMarketId)).size !==
-      impactMarkets.length
+    new Set(events.map((e) => e.eventId)).size !== events.length
   )
     invalid();
-  return { chainId, height, markets, impactMarkets };
+  return { chainId, height, markets, events };
 }
 
 /** Gateway-only, bounded one-shot read. No retry, node fallback or health inference. */

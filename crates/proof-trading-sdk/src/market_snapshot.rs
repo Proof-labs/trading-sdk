@@ -9,8 +9,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rmpv::Value;
 use serde::{Deserialize, Serialize};
 
-use crate::query::ImpactMarketDisplayInfo;
-use crate::types::MarketConfig;
+use crate::types::{EventInfo, MarketConfig};
 
 /// Whole HTTP response limit, before decoding its base64 envelope.
 pub const MAX_SNAPSHOT_BYTES: usize = 1024 * 1024;
@@ -25,7 +24,9 @@ pub struct MarketsSnapshot {
     pub chain_id: [u8; 32],
     pub height: u64,
     pub markets: Vec<MarketConfig>,
-    pub impact_markets: Vec<ImpactMarketDisplayInfo>,
+    /// Every event with its binaries and its attached conditionals; the
+    /// stored `EventInfo` record, no display view.
+    pub events: Vec<EventInfo>,
 }
 
 /// Deliberately excludes request URLs, response bodies and provider credentials.
@@ -92,7 +93,7 @@ pub fn decode_snapshot(
     validate_value(&value)?;
     let top = tuple(&mut value, 4)?;
     top.truncate(4);
-    for (slot, width) in [(2, 25), (3, 15)] {
+    for (slot, width) in [(2, 25), (3, 11)] {
         let rows = match top.get_mut(slot) {
             Some(Value::Array(rows)) => rows,
             _ => return Err(SnapshotError::Malformed),
@@ -101,7 +102,19 @@ pub fn decode_snapshot(
             return Err(SnapshotError::TooLarge);
         }
         for row in rows {
-            tuple(row, width)?.truncate(width);
+            let fields = tuple(row, width)?;
+            fields.truncate(width);
+            if slot == 3 {
+                // An event's attachment list: one `[underlying, cpy, cpn]`
+                // tuple per attachment, bounded like the rows themselves.
+                let attachments = tuple(&mut fields[10], 0)?;
+                if attachments.len() > MAX_SNAPSHOT_ROWS {
+                    return Err(SnapshotError::TooLarge);
+                }
+                for attachment in attachments {
+                    tuple(attachment, 3)?.truncate(3);
+                }
+            }
         }
     }
     let mut canonical = Vec::new();
@@ -120,9 +133,9 @@ pub fn decode_snapshot(
             return Err(SnapshotError::DuplicateMarket);
         }
     }
-    let mut impacts = BTreeSet::new();
-    for market in &snapshot.impact_markets {
-        if !impacts.insert(market.impact_market_id) {
+    let mut events = BTreeSet::new();
+    for event in &snapshot.events {
+        if !events.insert(event.event_id) {
             return Err(SnapshotError::DuplicateMarket);
         }
     }
