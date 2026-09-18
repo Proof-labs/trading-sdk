@@ -61,8 +61,9 @@ fn positive_plaintext_event_preserves_effect_metadata_not_primary_action_identit
             code: 0
         }
     );
-    // The accepted price can be clamped; no equality with a submitted price is
-    // inferred by this transport. A consumer supplies its signed tag3 binding.
+    // The accepted price can be clamped, so this transport infers no equality
+    // with a submitted price. A consumer binds the hash to its own retained
+    // signed action.
     let mut wrong_hash = accepted_body();
     wrong_hash["result"]["hash"] = json!("CD".repeat(32));
     assert_eq!(

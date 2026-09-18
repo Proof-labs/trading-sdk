@@ -176,7 +176,7 @@ fn price_event_decode_failure(body: &[u8]) -> PriceEvidence {
     })
 }
 
-/// Current ABCI attributes are strings, not base64 byte slices. An address is
+/// ABCI attributes are strings, not base64 byte slices. An address is
 /// 40 lowercase hexadecimal digits; anything else cannot bind this evidence to
 /// a retained signing authority.
 fn signer_address(text: &str) -> Option<[u8; 20]> {
@@ -194,7 +194,7 @@ fn signer_address(text: &str) -> Option<[u8; 20]> {
     Some(address)
 }
 
-/// Current OracleUpdate emits exactly one event. Extra, unknown, duplicate or
+/// An accepted oracle update emits exactly one event. Extra, unknown, duplicate or
 /// malformed attributes are never accepted-effect proof; incomplete evidence
 /// does not erase an otherwise valid committed receipt, it only names why the
 /// event was refused.
@@ -331,9 +331,10 @@ fn classify(status: u16, body: &[u8], hash: TxHash) -> Result<ReceiptObservation
 }
 
 impl MarketsSnapshotClient {
-    /// One gateway receipt observation with a whole-call deadline and bounded
-    /// body. No retries, redirects, direct-node fallback, or pending-state
-    /// changes. Existing `committed_receipt` behavior remains unchanged.
+    /// One gateway receipt read, classified: a committed receipt, price-update
+    /// evidence, a refusal reason, or the canonical not-found shape for exactly
+    /// this hash. One whole-call deadline and a bounded body; no retries,
+    /// redirects, direct-node fallback or pending-state changes.
     pub async fn receipt_observation(
         &self,
         hash: TxHash,

@@ -254,8 +254,9 @@ fn nonzero_hex<const N: usize>(text: &str) -> Result<[u8; N], WitnessError> {
     Ok(result)
 }
 
-/// Additive decoder. The legacy four-field MessagePack decoder is unchanged;
-/// only this explicit bound API requires the node's new witness envelope.
+/// Decodes a snapshot together with the `witness` envelope that binds it to a
+/// node and a state hash. A response carrying no witness is refused here;
+/// [`decode_snapshot`] reads the same body without one.
 pub fn decode_bound_snapshot(
     body: &[u8],
     expected_chain: [u8; 32],
@@ -440,7 +441,7 @@ impl MarketsSnapshotClient {
     /// Three reads, the client's confirmation polls and one header lookup, under
     /// ONE whole-call deadline. A fast-moving chain does not require the final
     /// status response to happen to land at exactly H+1. No snapshot retry or
-    /// alternate-backend fallback; the candidate clock is never renewed.
+    /// alternate-backend fallback; the snapshot's own clock is never renewed.
     pub async fn read_bound_inventory(
         &self,
         expected_chain: [u8; 32],
@@ -456,9 +457,9 @@ impl MarketsSnapshotClient {
                 .get()
                 .checked_add(1)
                 .ok_or(WitnessError::HeightOverflow)?;
-            // Keep the same candidate and its original clock while waiting for
-            // the next committed header. Starting over with a newer snapshot
-            // can phase-lock fast reads to the head and never verify anything.
+            // Wait for the next committed header with the same snapshot and
+            // its original clock. Reading a newer snapshot each round can
+            // phase-lock to the head of a fast chain and verify nothing.
             for _ in 0..self.confirmation.polls {
                 if after.identity.latest_height.get() >= target {
                     break;

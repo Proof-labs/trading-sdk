@@ -388,9 +388,9 @@ fn retry_after_body(bytes: &[u8]) -> Option<RetryAfter> {
 }
 
 fn pre_admission_refusal(status: u16, bytes: &[u8]) -> Option<PreAdmissionRefusal> {
-    // Bound to api-gateway 3c711c2a3c29ca8f37d2d986fe817d21a9eeebc3:
-    // server.rs authorization/rate/maintenance guards; exchange.rs parse,
-    // verifier-admission branches; types/exchange_response.rs constructors.
+    // Contract source: api-gateway 3c711c2a3c29ca8f37d2d986fe817d21a9eeebc3,
+    // src/server.rs (authorization, rate limit, maintenance), src/exchange.rs
+    // (parse and verifier admission), src/types/exchange_response.rs.
     // Unknown fields (including txHash/code/height/log/events, even null) or
     // unknown bodies cannot be promoted to pre-broadcast proof.
     let read: RefusalRead = serde_json::from_slice(bytes).ok()?;
