@@ -59,61 +59,152 @@ fn positive_plaintext_event_preserves_effect_metadata_not_primary_action_identit
 #[test]
 fn absent_duplicate_rejected_mixed_or_malformed_events_are_never_effect_proof() {
     let good_event = accepted_body()["result"]["tx_result"]["events"][0].clone();
+    let committed = ReceiptObservation::Committed(CommittedReceipt {
+        hash: HASH,
+        height: 42,
+        code: 0,
+    });
+    let refused = |rejection| ReceiptObservation::RejectedPriceEvidence {
+        receipt: CommittedReceipt {
+            hash: HASH,
+            height: 42,
+            code: 0,
+        },
+        rejection,
+    };
+    // No price_updated event to read: nothing was refused, so nothing is named.
     let mut cases = vec![
-        json!(null),
-        json!([]),
-        json!({}),
-        json!([good_event.clone(), good_event.clone()]),
-        json!([good_event.clone(), {"type":"oracle_update_rejected","attributes":[]}]),
-        json!([{"type":"oracle_update_rejected","attributes":[]}]),
+        (json!(null), committed.clone()),
+        (json!([]), committed.clone()),
+        (json!({}), committed.clone()),
+        (
+            json!([{"type":"oracle_update_rejected","attributes":[]}]),
+            committed.clone(),
+        ),
+        (
+            json!([good_event.clone(), good_event.clone()]),
+            refused(PriceEvidenceRejection::MultipleEvents),
+        ),
+        (
+            json!([good_event.clone(), {"type":"oracle_update_rejected","attributes":[]}]),
+            refused(PriceEvidenceRejection::MultipleEvents),
+        ),
     ];
-    for (field, value) in [
-        ("type", json!("cHJpY2VfdXBkYXRlZA==")),
-        ("type", json!("future_event")),
-        ("attributes", json!(null)),
+    for (field, value, expected) in [
+        ("type", json!("cHJpY2VfdXBkYXRlZA=="), committed.clone()),
+        ("type", json!("future_event"), committed.clone()),
+        ("attributes", json!(null), committed.clone()),
     ] {
         let mut event = good_event.clone();
         event[field] = value;
-        cases.push(json!([event]));
+        cases.push((json!([event]), expected));
     }
-    for (index, key, value) in [
-        (0, "value", json!("0")),
-        (0, "value", json!("015")),
-        (0, "value", json!("4294967296")),
-        (0, "value", json!(15)),
-        (0, "key", json!("bWFya2V0")),
-        (1, "value", json!("0")),
-        (1, "value", json!("-1")),
-        (1, "value", json!("18446744073709551616")),
-        (1, "key", json!("market")),
-        (2, "value", json!("")),
-        (2, "value", json!("CD".repeat(20))),
-        (2, "value", json!(format!("0x{}", "cd".repeat(20)))),
-        (2, "value", json!("cd".repeat(19))),
-        (2, "value", json!("z".repeat(40))),
+    for (index, key, value, expected) in [
+        (
+            0,
+            "value",
+            json!("0"),
+            refused(PriceEvidenceRejection::InvalidMarket),
+        ),
+        (
+            0,
+            "value",
+            json!("015"),
+            refused(PriceEvidenceRejection::InvalidMarket),
+        ),
+        (
+            0,
+            "value",
+            json!("4294967296"),
+            refused(PriceEvidenceRejection::InvalidMarket),
+        ),
+        // A non-string attribute value does not decode at all, so the event
+        // shape is unknown rather than refused.
+        (0, "value", json!(15), committed.clone()),
+        (
+            0,
+            "key",
+            json!("bWFya2V0"),
+            refused(PriceEvidenceRejection::UnknownAttribute),
+        ),
+        (
+            1,
+            "value",
+            json!("0"),
+            refused(PriceEvidenceRejection::InvalidPrice),
+        ),
+        (
+            1,
+            "value",
+            json!("-1"),
+            refused(PriceEvidenceRejection::InvalidPrice),
+        ),
+        (
+            1,
+            "value",
+            json!("18446744073709551616"),
+            refused(PriceEvidenceRejection::InvalidPrice),
+        ),
+        (
+            1,
+            "key",
+            json!("market"),
+            refused(PriceEvidenceRejection::DuplicateAttribute),
+        ),
+        (
+            2,
+            "value",
+            json!(""),
+            refused(PriceEvidenceRejection::InvalidSigner),
+        ),
+        (
+            2,
+            "value",
+            json!("CD".repeat(20)),
+            refused(PriceEvidenceRejection::InvalidSigner),
+        ),
+        (
+            2,
+            "value",
+            json!(format!("0x{}", "cd".repeat(20))),
+            refused(PriceEvidenceRejection::InvalidSigner),
+        ),
+        (
+            2,
+            "value",
+            json!("cd".repeat(19)),
+            refused(PriceEvidenceRejection::InvalidSigner),
+        ),
+        (
+            2,
+            "value",
+            json!("z".repeat(40)),
+            refused(PriceEvidenceRejection::InvalidSigner),
+        ),
     ] {
         let mut event = good_event.clone();
         event["attributes"][index][key] = value;
-        cases.push(json!([event]));
+        cases.push((json!([event]), expected));
     }
     let mut extra_attribute = good_event.clone();
     extra_attribute["attributes"]
         .as_array_mut()
         .unwrap()
         .push(json!({"key":"market","value":"15"}));
-    cases.push(json!([extra_attribute]));
-    for events in cases {
+    cases.push((
+        json!([extra_attribute]),
+        refused(PriceEvidenceRejection::UnexpectedAttributeCount),
+    ));
+    for (events, expected) in cases {
         let mut body = accepted_body();
-        body["result"]["tx_result"]["events"] = events;
+        body["result"]["tx_result"]["events"] = events.clone();
         assert_eq!(
             classify(200, &serde_json::to_vec(&body).unwrap(), HASH).unwrap(),
-            ReceiptObservation::Committed(CommittedReceipt {
-                hash: HASH,
-                height: 42,
-                code: 0
-            })
+            expected,
+            "{events}"
         );
     }
+    // A non-zero code is an execution verdict, not refused price evidence.
     let mut rejected = accepted_body();
     rejected["result"]["tx_result"]["code"] = json!(21);
     assert_eq!(
@@ -124,16 +215,13 @@ fn absent_duplicate_rejected_mixed_or_malformed_events_are_never_effect_proof() 
             code: 21
         })
     );
+    // A duplicated JSON key fails serde before any event is read.
     let duplicate_key = serde_json::to_string(&accepted_body())
         .unwrap()
         .replace("\"key\":\"market\"", "\"key\":\"other\",\"key\":\"market\"");
     assert_eq!(
         classify(200, duplicate_key.as_bytes(), HASH).unwrap(),
-        ReceiptObservation::Committed(CommittedReceipt {
-            hash: HASH,
-            height: 42,
-            code: 0
-        })
+        committed
     );
 }
 

@@ -110,7 +110,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it to their retained signed action before inferring a primary-oracle effect;
   composite actions share this event. Missing, duplicate, mixed, malformed or
   unsupported event evidence leaves only the committed receipt, never a proof
-  of price acceptance. No extra HTTP or wire change is introduced.
+  of price acceptance. When a `price_updated` event is present but fails a
+  structural check, the observation is `RejectedPriceEvidence` and names the
+  reason as a typed `PriceEvidenceRejection`, so a consumer can count or alert
+  on evidence it expected to be usable; a receipt with no such event stays
+  `Committed`. No extra HTTP or wire change is introduced.
   `ReceiptObservation::CommittedPriceUpdate` carries a `CommittedPriceUpdate`
   struct with read-only getters that only the receipt classifier constructs.
 
