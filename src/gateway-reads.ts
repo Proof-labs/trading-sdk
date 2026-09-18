@@ -86,9 +86,12 @@ export class GatewayReads {
   meta(opts: GatewayReadOptions = {}) {
     return this.info("meta", {}, opts);
   }
+  /** Every event with its binaries and attached conditionals (the node's
+   * default page; the gateway proxies `GET /v1/events`). */
   events(opts: GatewayReadOptions = {}) {
     return this.info("events", {}, opts);
   }
+  /** One event by id; the gateway passes the node's 404 through. */
   event(id: number, opts: GatewayReadOptions = {}) {
     return this.info("event", { id }, opts);
   }

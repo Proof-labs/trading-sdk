@@ -34,8 +34,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `eventId`; `CreateEvent` gains a per-book `maxOpenInterest` trailer;
     `queryHistoryResolutions` / `history_resolutions` filter on `eventId` /
     `event_id` and each row names its `eventId` (the indexer's route moved
-    with the wire). `GatewayReads.historyResolutions()` likewise accepts
-    `event_id` instead of `impact_market_id`.
+    with the wire); the raw read surface follows: `reads().events()` /
+    `reads().event(id)` replace `impactMarkets()` / `impactMarket(id)`, and
+    `reads().historyResolutions` filters on `event_id`.
   - Added: the `AttachConditional` governance arm (inner tag 10) as a
     singleton and as the second `Batch` item, with its own `maxOpenInterest`
     trailer; typed `CreateSubAccount` (0x28), `SubAccountTransfer` (0x29) and
