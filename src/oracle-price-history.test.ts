@@ -176,32 +176,91 @@ describe("oracle price history page", () => {
     ).rejects.toThrow("Invalid oracle history update");
   });
 
+  it.each([{ market: -1 }, { market: 1.5 }, { market: 2 ** 32 }])(
+    "rejects invalid market %j before fetching",
+    async ({ market }) => {
+      const transport = vi.fn();
+      await expect(
+        queryOraclePriceHistoryPage("", market, { ...range, fetch: transport }),
+      ).rejects.toThrow("Invalid oracle history market");
+      expect(transport).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
-    { market: -1 },
-    { market: 1.5 },
-    { market: 2 ** 32 },
     { fromMs: NaN },
     { fromMs: toMs + 1 },
     { fromMs: -1 },
     { toMs: Infinity },
     { toMs: 8.64e15 + 1 },
-    { limit: 0 },
-    { limit: 1001 },
-    { limit: 1.5 },
-  ])(
-    "rejects invalid request %j before fetching",
-    async ({ market = 1, ...options }) => {
+  ])("rejects invalid range %j before fetching", async (options) => {
+    const transport = vi.fn();
+    await expect(
+      queryOraclePriceHistoryPage("", 1, {
+        ...range,
+        ...options,
+        fetch: transport,
+      }),
+    ).rejects.toThrow("Invalid oracle history range");
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it.each([{ limit: 0 }, { limit: 1001 }, { limit: 1.5 }])(
+    "rejects invalid limit %j before fetching",
+    async (options) => {
       const transport = vi.fn();
       await expect(
-        queryOraclePriceHistoryPage("", market, {
+        queryOraclePriceHistoryPage("", 1, {
           ...range,
           ...options,
           fetch: transport,
         }),
-      ).rejects.toThrow("Invalid oracle history range, market or limit");
+      ).rejects.toThrow("Invalid oracle history limit");
       expect(transport).not.toHaveBeenCalled();
     },
   );
+
+  it("does not validate a malformed record outside the requested window", async () => {
+    const outOfWindowAndMalformed = update(1, fromMs - 1, "not-a-number");
+    const inWindow = update(1, fromMs, "77000000000");
+    const result = await queryOraclePriceHistoryPage("", 1, {
+      ...range,
+      fetch: async () => page([outOfWindowAndMalformed, inWindow]),
+    });
+    expect(result.points).toEqual([
+      {
+        t: inWindow.block_time,
+        p: inWindow.payload.price,
+        eventId: inWindow.event_id,
+      },
+    ]);
+  });
+
+  it("rejects a page that is not newest-first", async () => {
+    const older = update(1, fromMs, "100000000");
+    const newer = update(1, fromMs + 1000, "200000000");
+    await expect(
+      queryOraclePriceHistoryPage("", 1, {
+        ...range,
+        fetch: async () => page([older, newer]),
+      }),
+    ).rejects.toThrow("page is not newest-first");
+  });
+
+  it("rejects a non-canonical price and a price above u64::MAX", async () => {
+    await expect(
+      queryOraclePriceHistoryPage("", 1, {
+        ...range,
+        fetch: async () => page([update(1, fromMs, "007700000000")]),
+      }),
+    ).rejects.toThrow("payload.price is not canonical unsigned decimal");
+    await expect(
+      queryOraclePriceHistoryPage("", 1, {
+        ...range,
+        fetch: async () => page([update(1, fromMs, "18446744073709551616")]),
+      }),
+    ).rejects.toThrow("payload.price is out of range");
+  });
 
   it("preserves HTTP failures, malformed JSON and transport errors", async () => {
     const response = new Response("history unavailable", { status: 503 });

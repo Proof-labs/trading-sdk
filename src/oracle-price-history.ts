@@ -25,6 +25,9 @@ export interface OraclePriceHistoryOptions {
   fetch?: typeof globalThis.fetch;
 }
 
+const MAX_DATE_MS = 8_640_000_000_000_000; // ECMA-262 Date range boundary
+const U64_MAX = (1n << 64n) - 1n;
+
 /** One newest-first page of indexed price_updated events from the gateway.
  * Primary and composite updates share this event shape; this endpoint cannot
  * distinguish their sources, so the page is not a primary-only price series.
@@ -38,21 +41,9 @@ export async function queryOraclePriceHistoryPage(
 ): Promise<OraclePriceHistoryPage> {
   const { fromMs, toMs, signal } = options;
   const limit = options.limit ?? 1000;
-  if (
-    !Number.isSafeInteger(market) ||
-    market < 0 ||
-    market > 0xffff_ffff ||
-    !Number.isSafeInteger(fromMs) ||
-    fromMs < 0 ||
-    !Number.isSafeInteger(toMs) ||
-    toMs > 8.64e15 ||
-    fromMs > toMs ||
-    !Number.isInteger(limit) ||
-    limit < 1 ||
-    limit > 1000
-  ) {
-    throw new Error("Invalid oracle history range, market or limit");
-  }
+  assertValidMarket(market);
+  assertValidRange(fromMs, toMs);
+  assertValidLimit(limit);
   signal?.throwIfAborted();
   const params = new URLSearchParams({
     event_type: "price_updated",
@@ -77,6 +68,7 @@ export async function queryOraclePriceHistoryPage(
     throw new Error("Invalid oracle history page");
   }
   const points: OraclePriceHistoryPoint[] = [];
+  let previousTimeMs: number | undefined;
   for (const event of body.admin_events) {
     // Admin-event history does not filter by market upstream.
     if (!isRecord(event) || event.event_type !== "price_updated") continue;
@@ -85,29 +77,93 @@ export async function queryOraclePriceHistoryPage(
       continue;
     const timeMs =
       typeof event.block_time === "string" ? Date.parse(event.block_time) : NaN;
-    if (
-      !Number.isFinite(timeMs) ||
-      typeof payload.price !== "string" ||
-      !/^[0-9]+$/.test(payload.price) ||
-      BigInt(payload.price) <= 0n ||
-      !(
-        (typeof event.event_id === "string" &&
-          /^[0-9]+$/.test(event.event_id)) ||
-        (typeof event.event_id === "number" &&
-          Number.isSafeInteger(event.event_id) &&
-          event.event_id >= 0)
-      )
-    ) {
-      throw new Error("Invalid oracle history update");
+    // A record outside the requested window is never in the result, so it
+    // must not be able to abort the page just for being malformed.
+    if (Number.isFinite(timeMs) && (timeMs < fromMs || timeMs >= toMs))
+      continue;
+    if (!Number.isFinite(timeMs)) {
+      throw new Error(
+        "Invalid oracle history update: block_time is not a valid RFC3339 timestamp",
+      );
     }
-    if (timeMs < fromMs || timeMs >= toMs) continue;
-    points.push({
-      t: event.block_time as string,
-      p: payload.price,
-      eventId: String(event.event_id),
-    });
+    const price = unsignedDecimal(
+      payload.price,
+      "payload.price",
+      U64_MAX,
+      true,
+    );
+    const eventId = eventIdOf(event.event_id);
+    if (previousTimeMs !== undefined && timeMs > previousTimeMs) {
+      throw new Error("Invalid oracle history page: page is not newest-first");
+    }
+    previousTimeMs = timeMs;
+    points.push({ t: event.block_time as string, p: price, eventId });
   }
   return { market, points, nextCursor: body.next_cursor };
+}
+
+function assertValidMarket(market: number): void {
+  if (!Number.isSafeInteger(market) || market < 0 || market > 0xffff_ffff) {
+    throw new Error("Invalid oracle history market: must be a uint32");
+  }
+}
+
+function assertValidRange(fromMs: number, toMs: number): void {
+  if (!Number.isSafeInteger(fromMs) || fromMs < 0) {
+    throw new Error(
+      "Invalid oracle history range: fromMs must be a non-negative integer",
+    );
+  }
+  if (!Number.isSafeInteger(toMs) || toMs > MAX_DATE_MS) {
+    throw new Error(
+      "Invalid oracle history range: toMs must be an integer within the Date range",
+    );
+  }
+  if (fromMs > toMs) {
+    throw new Error(
+      "Invalid oracle history range: fromMs must not exceed toMs",
+    );
+  }
+}
+
+function assertValidLimit(limit: number): void {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) {
+    throw new Error(
+      "Invalid oracle history limit: must be an integer in [1, 1000]",
+    );
+  }
+}
+
+/** Canonical unsigned decimal, matching `trigger-history.ts`'s `unsigned()`:
+ * no leading zeros, bounded, and never silently truncated. */
+function unsignedDecimal(
+  value: unknown,
+  name: string,
+  maximum: bigint,
+  nonzero: boolean,
+): string {
+  if (typeof value !== "string" || !/^(?:0|[1-9][0-9]*)$/.test(value)) {
+    throw new Error(
+      `Invalid oracle history update: ${name} is not canonical unsigned decimal`,
+    );
+  }
+  const parsed = BigInt(value);
+  if (parsed > maximum || (nonzero && parsed === 0n)) {
+    throw new Error(`Invalid oracle history update: ${name} is out of range`);
+  }
+  return value;
+}
+
+function eventIdOf(value: unknown): string {
+  if (typeof value === "string") {
+    return unsignedDecimal(value, "event_id", U64_MAX, false);
+  }
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    return String(value);
+  }
+  throw new Error(
+    "Invalid oracle history update: event_id must be a non-negative safe integer or a canonical unsigned decimal string",
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
