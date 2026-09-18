@@ -4,7 +4,8 @@
 //! Qualified images and unique node keys remain deployment prerequisites: the
 //! legacy app hash is not a state-root commitment to the market registry.
 
-use super::{chain, decode_snapshot, AppHash, BlockHeight, ChainIdentity, MarketsSnapshot};
+use super::MarketsSnapshot;
+use super::{chain, decode_snapshot, values, AppHash, BlockHeight, ChainIdentity};
 use super::{MarketsSnapshotClient, NodeId};
 use super::{SnapshotError, MAX_SNAPSHOT_BYTES};
 use serde::Deserialize;
@@ -221,37 +222,25 @@ struct BlockHeader {
 }
 
 fn positive_decimal(text: &str) -> Result<u64, WitnessError> {
-    if text.is_empty() || text.starts_with('0') || !text.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(WitnessError::MalformedWitness);
-    }
-    text.parse().map_err(|_| WitnessError::MalformedWitness)
+    values::positive_decimal(text).ok_or(WitnessError::MalformedWitness)
 }
 
 fn node_id(text: &str) -> Result<NodeId, WitnessError> {
-    NodeId::new(nonzero_hex(text)?).ok_or(WitnessError::MalformedWitness)
+    values::hex_array(text)
+        .and_then(NodeId::new)
+        .ok_or(WitnessError::MalformedWitness)
 }
 
 fn app_hash(text: &str) -> Result<AppHash, WitnessError> {
-    AppHash::new(nonzero_hex(text)?).ok_or(WitnessError::MalformedWitness)
+    values::hex_array(text)
+        .and_then(AppHash::new)
+        .ok_or(WitnessError::MalformedWitness)
 }
 
 fn block_height(text: &str) -> Result<BlockHeight, WitnessError> {
-    BlockHeight::new(positive_decimal(text)?).ok_or(WitnessError::MalformedWitness)
-}
-
-fn nonzero_hex<const N: usize>(text: &str) -> Result<[u8; N], WitnessError> {
-    if text.len() != N.saturating_mul(2) || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(WitnessError::MalformedWitness);
-    }
-    let mut result = [0; N];
-    for (out, pair) in result.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
-        let pair = std::str::from_utf8(pair).map_err(|_| WitnessError::MalformedWitness)?;
-        *out = u8::from_str_radix(pair, 16).map_err(|_| WitnessError::MalformedWitness)?;
-    }
-    if result == [0; N] {
-        return Err(WitnessError::MalformedWitness);
-    }
-    Ok(result)
+    values::positive_decimal(text)
+        .and_then(BlockHeight::new)
+        .ok_or(WitnessError::MalformedWitness)
 }
 
 /// Decodes a snapshot together with the `witness` envelope that binds it to a
@@ -309,9 +298,12 @@ fn validate_bracket(
     before: &BoundChainIdentity,
     after: &BoundChainIdentity,
 ) -> Result<(), WitnessError> {
+    // The two anchors must first agree with each other: one node, a clock that
+    // moves forward, and one app hash per state height.
+    validate_anchor_progress(before, after)?;
     let snapshot = &bound.snapshot;
     let witness = &bound.witness;
-    if witness.node_id != before.node_id || witness.node_id != after.node_id {
+    if witness.node_id != before.node_id {
         return Err(WitnessError::BackendMismatch);
     }
     if before.identity.chain_binding != snapshot.chain_id
@@ -341,9 +333,6 @@ fn validate_bracket(
             && after.identity.latest_block_time_ms != time)
     {
         return Err(WitnessError::ClockMismatch);
-    }
-    if before.app_hash_height == after.app_hash_height && before.app_hash != after.app_hash {
-        return Err(WitnessError::AppHashMismatch);
     }
     Ok(())
 }

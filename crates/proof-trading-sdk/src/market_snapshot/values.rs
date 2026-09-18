@@ -78,6 +78,39 @@ impl MicroUsdc {
     }
 }
 
+/// A decimal with no leading zero and no sign, so one value has one spelling.
+/// Zero is refused: every field read through this is positive by contract.
+pub(crate) fn positive_decimal(text: &str) -> Option<u64> {
+    if text.is_empty() || text.starts_with('0') || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// Exactly `N` bytes of hexadecimal, either case.
+pub(crate) fn hex_array<const N: usize>(text: &str) -> Option<[u8; N]> {
+    hex_array_with(text, u8::is_ascii_hexdigit)
+}
+
+/// Exactly `N` bytes of lowercase hexadecimal, for values whose source emits
+/// one spelling and whose consumer compares them as text elsewhere.
+pub(crate) fn lowercase_hex_array<const N: usize>(text: &str) -> Option<[u8; N]> {
+    hex_array_with(text, |byte| {
+        byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)
+    })
+}
+
+fn hex_array_with<const N: usize>(text: &str, accepted: impl Fn(&u8) -> bool) -> Option<[u8; N]> {
+    if text.len() != N.checked_mul(2)? || !text.as_bytes().iter().all(accepted) {
+        return None;
+    }
+    let mut result = [0; N];
+    for (out, pair) in result.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
+        *out = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(result)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
@@ -97,5 +130,19 @@ mod tests {
         assert_eq!(BlockHeight::new(7).expect("positive height").get(), 7);
         assert_eq!(MarketId::new(15).expect("positive market").get(), 15);
         assert_eq!(MicroUsdc::new(0).micro(), 0);
+    }
+
+    #[test]
+    fn parsers_accept_one_spelling_per_value() {
+        assert_eq!(positive_decimal("42"), Some(42));
+        for refused in ["", "0", "042", "-1", "4 2", "0x2a", "18446744073709551616"] {
+            assert_eq!(positive_decimal(refused), None, "{refused}");
+        }
+        assert_eq!(hex_array::<2>("aB0f"), Some([0xab, 0x0f]));
+        assert_eq!(lowercase_hex_array::<2>("ab0f"), Some([0xab, 0x0f]));
+        assert_eq!(lowercase_hex_array::<2>("aB0f"), None);
+        for refused in ["", "abc", "zz", "ab0f1c"] {
+            assert_eq!(hex_array::<2>(refused), None, "{refused}");
+        }
     }
 }
