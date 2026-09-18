@@ -664,6 +664,33 @@ describe("codec v1 all action types", () => {
     }
   });
 
+  it("round-trips ProposeAdminAction with UpdateAuthoritySet, add and remove", () => {
+    const cases: Array<{
+      domain: "MarketParams" | "Relayer";
+      add: Uint8Array[];
+      remove: Uint8Array[];
+    }> = [
+      {
+        domain: "MarketParams",
+        add: [new Uint8Array(20).fill(0xb2)],
+        remove: [],
+      },
+      { domain: "Relayer", add: [], remove: [new Uint8Array(20).fill(0xc3)] },
+    ];
+    for (const value of cases) {
+      const action: Action = {
+        type: "ProposeAdminAction",
+        data: {
+          proposer: new Uint8Array(20).fill(0xa1),
+          registryVersion: 1n,
+          action: { kind: "UpdateAuthoritySet", value },
+        },
+      };
+      const { action: decoded } = decodeTx(encodeTx(action, 12n));
+      expect(decoded).toEqual(action);
+    }
+  });
+
   it("rejects a receipt whose fixed-width deploymentId is not 32 bytes", () => {
     const action: Action = {
       type: "ConfirmWithdrawalReceipt",

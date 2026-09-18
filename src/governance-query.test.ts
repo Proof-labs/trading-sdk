@@ -261,6 +261,17 @@ const ACTION_CANCEL_ALL_SCOPED =
 const ACTION_CANCEL_ALL_UNSCOPED =
   "81b943616e63656c416c6c4f7264657273466f724163636f756e7492dc0014ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1c0";
 
+/** `AdminAction::UpdateAuthoritySet { domain: MarketParams, add: [B2×20], remove: [] }`
+ *  and the `{ domain: Relayer, add: [], remove: [C3×20] }` twin — the
+ *  SDK's own `conformance/codec.ndjson` frozen tag-7 vectors
+ *  (`propose_admin_action/update_authority_set_add` and `_remove`),
+ *  generated from the real Rust core via `cargo run -p
+ *  proof-trading-sdk-conformance --bin gen-vectors`. */
+const ACTION_UPDATE_AUTHORITY_SET_ADD =
+  "81b2557064617465417574686f7269747953657493ac4d61726b6574506172616d7391dc0014ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb290";
+const ACTION_UPDATE_AUTHORITY_SET_REMOVE =
+  "81b2557064617465417574686f7269747953657493a752656c617965729091dc0014ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3";
+
 const ACTION_ATTACH =
   "81b1417474616368436f6e646974696f6e616c995b0fcd238ccd0d06cd06830502dc0014000000000000000000000000000000000000000000";
 const ACTION_BATCH =
@@ -307,6 +318,26 @@ describe("decodeAdminAction", () => {
     expect(() =>
       decodeAdminAction({ CancelAllOrdersForAccount: [short, 7] }),
     ).toThrow(/owner is 19 bytes, expected 20/);
+  });
+
+  it("decodes the engine's frozen UpdateAuthoritySet bytes, add and remove", () => {
+    // `domain` is externally tagged as its bare variant name, so the
+    // positional payload is [domain: string, add: Address[], remove: Address[]].
+    expect(
+      decodeAdminAction(decodeVector(ACTION_UPDATE_AUTHORITY_SET_ADD)),
+    ).toEqual({
+      kind: "UpdateAuthoritySet",
+      value: { domain: "MarketParams", add: [addrOf(0xb2)], remove: [] },
+    });
+    expect(
+      decodeAdminAction(decodeVector(ACTION_UPDATE_AUTHORITY_SET_REMOVE)),
+    ).toEqual({
+      kind: "UpdateAuthoritySet",
+      value: { domain: "Relayer", add: [], remove: [addrOf(0xc3)] },
+    });
+    expect(() =>
+      decodeAdminAction({ UpdateAuthoritySet: ["NotADomain", [], []] }),
+    ).toThrow(/not a known AuthorityDomain/);
   });
 
   it("decodes the engine's frozen attach bytes (admin tag 10)", () => {
@@ -518,6 +549,24 @@ describe("byte-field validation", () => {
     raw[11] = 7;
     expect(() => decodeProposalDisplayInfo(raw)).toThrow(
       /actionTag 7 does not match CancelAllOrdersForAccount tag 8/,
+    );
+  });
+
+  it("reads an UpdateAuthoritySet proposal under its tag 7", () => {
+    const raw = validProposalRaw();
+    raw[11] = 7;
+    raw[12] = {
+      UpdateAuthoritySet: ["Oracle", [new Array(20).fill(0xb2)], []],
+    };
+    const info = decodeProposalDisplayInfo(raw);
+    expect(info.actionTag).toBe(7);
+    expect(info.action).toEqual({
+      kind: "UpdateAuthoritySet",
+      value: { domain: "Oracle", add: [addrOf(0xb2)], remove: [] },
+    });
+    raw[11] = 8;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(
+      /actionTag 8 does not match UpdateAuthoritySet tag 7/,
     );
   });
 

@@ -7,6 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Mirrors the `UpdateAuthoritySet` governance arm (inner tag `0x07`,
+  exchange#422 / DEC-87): addition/removal of members in one privileged
+  authority allowlist (`Oracle`, `CexComposite`, `Relayer`, `Custody`,
+  `MarketParams`, `ScheduledOps`). TypeScript decode (`governance-query.ts`)
+  and encode (`codec-adapter.ts`) both went through the generic struct path
+  already used by `UpdateAdminSignerRegistry`; `add`/`remove` needed one
+  addition to the decode-side byte-field allowlist to come back as
+  `Uint8Array[]` rather than plain objects. Content-hash golden vectors
+  pinned identically in the TypeScript (WASM) and Python (PyO3) suites.
+  Closes exchange#472 — the last gateway/SDK gap from the `CancelAllOrdersForAccount`
+  kill lever (exchange#467, DEC-151); the gateway side landed in api-gateway#150.
+
 - **BREAKING (MAJOR) — proof-wire 2.0.0: the impact-market family is gone and
   every conditional belongs to an event.** The npm package moves to **5.0.0**,
   the Rust core to **4.0.0**, the PyO3 and Python packages to **4.0.0**.
