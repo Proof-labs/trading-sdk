@@ -1,4 +1,25 @@
-import { signAndEncode } from "./codec.js";
+import {
+  GatewayFeed,
+  type GatewayFeedOptions,
+  type AccountFeedAuth,
+} from "./feed.js";
+import type { AccountFrame, OrderbookFrame, TradeFrame } from "./feed-types.js";
+import {
+  portfolioHistorySearchParams,
+  decodePortfolioHistoryPage,
+  type PortfolioHistoryOptions,
+  type PortfolioHistoryPage,
+} from "./portfolio-history.js";
+import { GatewayReads, type GatewayFetch } from "./gateway-reads.js";
+import { GatewayHttpError } from "./errors.js";
+import {
+  decodeCashFlowEvents,
+  decodeHistoryPositionsPage,
+  historyOwner,
+  historySearchParams,
+} from "./history.js";
+import { toWasmFields } from "./codec-adapter.js";
+import { signAndEncode, encodePayloadBytes, encodeSignedTx } from "./codec.js";
 import { decodeAccountState, type AccountState } from "./account-state.js";
 import {
   fetchFinancialState,
@@ -9,6 +30,7 @@ import { ready as initWasm } from "./wasm-loader.js";
 import {
   txEngineError,
   txFromEngineCode,
+  txFromQueryResponse,
   txOk,
   txTimeout,
   txTransportError,
@@ -19,6 +41,8 @@ import {
   ownerToHex,
   bytesToHex,
   sign,
+  verify,
+  signingMessage,
   UNBOUND_CHAIN_ID,
   chainIdFromString,
 } from "./crypto.js";
@@ -34,6 +58,7 @@ import type {
   HistoryCashFlow,
   HistoryFillsPage,
   HistoryPositionSnapshot,
+  HistoryPositionsPage,
   HistoryResolution,
   MarketConfig,
   MarketKind,
@@ -109,6 +134,12 @@ export async function fetchChainId(rpcUrl: string): Promise<Uint8Array> {
     throw new Error("/status response missing result.node_info.network");
   }
   return chainIdFromString(network);
+}
+
+/** Vendor-neutral Ed25519 signer. The SDK owns domain, encoding and nonces. */
+export interface ExternalSigner {
+  publicKey: Uint8Array;
+  signRaw(message: Uint8Array): Promise<Uint8Array>;
 }
 
 export interface ExchangeClientOptions {
@@ -237,6 +268,9 @@ export class ExchangeClient {
   /** Single-flight guard so concurrent submits share one /status fetch. */
   private chainIdPromise: Promise<Uint8Array> | null = null;
   private privateKey: Uint8Array | null = null;
+  private externalSigner: ExternalSigner | null = null;
+  private signerRevision = 0;
+  private gatewayFeed: GatewayFeed | null = null;
   private publicKey: Uint8Array | null = null;
   private address: Uint8Array | null = null;
   private addressHex: string | null = null;
@@ -420,10 +454,112 @@ export class ExchangeClient {
 
   /** Set the private key for signing transactions. */
   setPrivateKey(key: Uint8Array): void {
+    this.externalSigner = null;
+    this.signerRevision++;
     this.privateKey = key;
     this.publicKey = getPublicKey(key);
     this.address = pubkeyToOwner(this.publicKey);
     this.addressHex = ownerToHex(this.address);
+  }
+
+  /** Replace the signing connection; no private key is retained. */
+  setExternalSigner(signer: ExternalSigner): void {
+    if (signer.publicKey.length !== 32)
+      throw new Error("External signer public key must be 32 bytes");
+    this.signerRevision++;
+    this.privateKey = null;
+    this.externalSigner = {
+      publicKey: signer.publicKey.slice(),
+      signRaw: signer.signRaw.bind(signer),
+    };
+    this.publicKey = this.externalSigner.publicKey.slice();
+    this.address = pubkeyToOwner(this.publicKey);
+    this.addressHex = ownerToHex(this.address);
+  }
+
+  /** Sign only. Cancellation or a replaced connection prevents submission. */
+  async signTx(
+    action: Action,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<Uint8Array> {
+    opts.signal?.throwIfAborted();
+    const signer = this.externalSigner;
+    const key = this.privateKey?.slice();
+    const revision = this.signerRevision;
+    if (!signer && !key) throw new Error("No signer set");
+    // Freeze caller-owned inputs before any await (wallet prompts may be long).
+    const snapshot = cloneSigningInput(action);
+    const [chainId] = await Promise.all([this.resolveChainId(), initWasm()]);
+    opts.signal?.throwIfAborted();
+    if (revision !== this.signerRevision)
+      throw new Error("Signing connection changed");
+    const seq = this.nextTimestampNonce();
+    if (!signer) return signAndEncode(chainId, snapshot, seq, key!);
+    const payload = encodePayloadBytes(snapshot);
+    const message = signingMessage(
+      chainId,
+      toWasmFields(snapshot).actionType,
+      seq,
+      payload,
+    );
+    const signature = cloneSigningInput(await signer.signRaw(message.slice()));
+    opts.signal?.throwIfAborted();
+    if (revision !== this.signerRevision)
+      throw new Error("Signing connection changed");
+    if (
+      !(signature instanceof Uint8Array) ||
+      signature.length !== 64 ||
+      !verify(signer.publicKey, signature, message)
+    ) {
+      throw new Error("External signer returned an invalid signature");
+    }
+    return encodeSignedTx(snapshot, seq, signer.publicKey, signature);
+  }
+
+  /** Sign existing gateway account-events auth bytes; call again per reconnect.
+   * Direct owner keys only; no delegated-owner authorization is inferred.
+   */
+  async accountAuth(
+    owner = this.addressHex ?? "",
+    afterId = 0n,
+  ): Promise<AccountFeedAuth> {
+    const ownerHex = owner.replace(/^0x/i, "").toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(ownerHex) || ownerHex !== this.addressHex)
+      throw new Error("Account auth owner does not match signer");
+    if (afterId < 0n || afterId > BigInt(Number.MAX_SAFE_INTEGER))
+      throw new Error("Invalid account auth cursor");
+    const signer = this.externalSigner;
+    const key = this.privateKey?.slice();
+    const publicKey = this.publicKey?.slice();
+    const revision = this.signerRevision;
+    if (!publicKey || (!signer && !key)) throw new Error("No signer set");
+    const chainId = await this.resolveChainId();
+    if (revision !== this.signerRevision)
+      throw new Error("Signing connection changed");
+    const timestampMs = BigInt(Date.now());
+    const message = accountWsAuthMessage(
+      chainId,
+      ownerHex,
+      afterId,
+      timestampMs,
+    );
+    const signature = signer
+      ? cloneSigningInput(await signer.signRaw(message.slice()))
+      : sign(key!, message);
+    if (revision !== this.signerRevision)
+      throw new Error("Signing connection changed");
+    if (
+      !ArrayBuffer.isView(signature) ||
+      signature.byteLength !== 64 ||
+      !verify(publicKey, signature, message)
+    )
+      throw new Error("External signer returned an invalid signature");
+    return {
+      public_key: bytesToHex(publicKey),
+      signature: bytesToHex(signature),
+      timestamp_ms: Number(timestampMs),
+      ...(afterId > 0n ? { after_id: Number(afterId) } : {}),
+    };
   }
 
   getAddress(): Uint8Array | null {
@@ -468,23 +604,29 @@ export class ExchangeClient {
   /**
    * Allocate the next timestamp nonce.
    *
-   * Algorithm: `max(now_ms, last_nonce + 1)` capped at `now_ms + 60s` to
-   * bound the growth if the clock stops ticking.
+   * Algorithm: `max(now_ms, last_nonce + 1)`. Refuse allocation above
+   * `now_ms + 60s` without rewinding or repeating the last nonce.
    *
    * Engine window: `[block_time - 2 days, block_time + 1 day]`. All four
    * rejection modes (too old, too far future, replay, below oldest) map to
    * code 21 `InvalidNonce`. Nonces are burned on success — no rewinding.
    *
-   * Thread-safe only through external serialization (caller's responsibility).
+   * Concurrent calls on this client reserve distinct nonces synchronously.
    */
   private nextTimestampNonce(): bigint {
     const now = BigInt(Date.now());
     const max = now + 60_000n;
-    let next =
+    const next =
       this.lastTimestampNonce >= now ? this.lastTimestampNonce + 1n : now;
-    if (next > max) next = max;
+    if (next > max)
+      throw new Error("Timestamp nonce allocation exceeds clock safety window");
     this.lastTimestampNonce = next;
     return next;
+  }
+
+  /** Highest locally allocated nonce; never rewound after rejection. */
+  get currentNonce(): bigint {
+    return this.lastTimestampNonce;
   }
 
   // -----------------------------------------------------------------------
@@ -579,19 +721,7 @@ export class ExchangeClient {
    * Both paths submit identical signed wire bytes.
    */
   private async broadcastSigned(action: Action): Promise<TxResult> {
-    if (!this.privateKey) throw new Error("No private key set");
-
-    // Initialize the WASM codec/signing core and resolve the chain_id
-    // concurrently; both are cached, so only the first submit pays for either.
-    const [chainId] = await Promise.all([this.resolveChainId(), initWasm()]);
-    const seq = this.nextTimestampNonce();
-    const txBytes = signAndEncode(chainId, action, seq, this.privateKey);
-
-    const r = this.useGateway
-      ? await this.submitViaGateway(txBytes)
-      : await this.submitViaCometBFT(txBytes);
-
-    return r;
+    return this.broadcastSignedBytes(await this.signTx(action));
   }
 
   /**
@@ -622,12 +752,22 @@ export class ExchangeClient {
     if (this.apiKey) headers["X-Api-Key"] = this.apiKey;
 
     const body = JSON.stringify({ action: toBase64(txBytes) });
-    const res = await fetch(`${this.gatewayUrl}/exchange`, {
-      method: "POST",
-      headers,
-      body,
-    });
-    const gatewayBody = await readGatewayBody(res);
+    let res: Response;
+    let gatewayBody: Awaited<ReturnType<typeof readGatewayBody>>;
+    try {
+      res = await fetch(`${this.gatewayUrl}/exchange`, {
+        method: "POST",
+        headers,
+        body,
+      });
+      gatewayBody = await readGatewayBody(res);
+    } catch {
+      // A dropped response does not prove the signed transaction was rejected.
+      return txTimeout(
+        txHash,
+        "gateway transport interrupted; reconcile by hash",
+      );
+    }
 
     // Auth/rate-limit transport failures don't have a JSON body the
     // engine produced — synthesize an HTTP-status code and tag the result
@@ -653,13 +793,9 @@ export class ExchangeClient {
       );
     }
     if (res.status >= 500) {
-      return txTransportError(
-        500,
-        gatewayBody.error
-          ? `gateway error: ${gatewayBody.error}`
-          : gatewayBody.raw
-            ? `gateway error: ${res.status} ${res.statusText}: ${gatewayBody.raw}`
-            : `gateway error: ${res.status} ${res.statusText}`,
+      return txTimeout(
+        txHash,
+        `gateway HTTP ${res.status}; reconcile by hash${gatewayBody.error || gatewayBody.raw ? `: ${gatewayBody.error ?? gatewayBody.raw}` : ""}`,
       );
     }
 
@@ -680,6 +816,7 @@ export class ExchangeClient {
           txHash?: string;
           code?: number;
           log?: string;
+          info?: string;
           height?: number;
           events?: TxEvent[];
         }
@@ -707,6 +844,7 @@ export class ExchangeClient {
         hash,
         height: json.height,
         log: json.log ?? json.error,
+        info: json.info,
         events: json.events,
       });
     }
@@ -733,10 +871,12 @@ export class ExchangeClient {
     // Fallback: the code embedded in the string as "<engine_code>: <message>".
     // The gateway still emits this format for compatibility, so this path also
     // covers a pre-#90 gateway that sends ONLY the string. Parse the leading code;
-    // if missing, surface 1 (DecodeError) as the conservative default.
+    // Without a code, retain the hash for reconciliation; no rejection is proven.
     const errMsg = json?.error ?? gatewayBody.raw ?? "unknown gateway error";
-    const code = parseLeadingErrorCode(errMsg) ?? 1;
-    return txEngineError(code, { log: errMsg });
+    const code = parseLeadingErrorCode(errMsg);
+    return code === null
+      ? txTimeout(txHash, "gateway returned no verdict; reconcile by hash")
+      : txEngineError(code, { log: errMsg });
   }
 
   /**
@@ -798,38 +938,11 @@ export class ExchangeClient {
     let self: Promise<void>;
     const verify = async (): Promise<void> => {
       try {
-        // Poll up to 5 s — enough for normal block time (~1 s).
-        const deadline = Date.now() + 5_000;
-        let pollDelay = 250;
-        while (Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, pollDelay));
-          pollDelay = Math.min(pollDelay + 100, 600);
-          try {
-            const res = await fetch(this.txStatusUrl(txHash));
-            const json = await res.json();
-            const txResult = json.result?.tx_result;
-            if (txResult) {
-              const code = txResult.code ?? 0;
-              const height = json.result.height
-                ? Number(json.result.height)
-                : undefined;
-              this.deliveryResults.push(
-                txFromEngineCode(code, {
-                  hash: txHash,
-                  height,
-                  log: txResult.log ?? "",
-                  events: txResult.events,
-                }),
-              );
-              return;
-            }
-            // Tx not yet indexed — keep polling.
-          } catch {
-            // Network blip — retry.
-          }
-        }
-        // Timed out without seeing the result. The timestamp nonce may have
-        // landed or may be reusable only if never included; do not rewind.
+        const result = await this.waitForDelivery(
+          txTimeout(txHash, "awaiting delivery"),
+          { timeoutMs: 5_000 },
+        );
+        if (result.outcome !== "timeout") this.deliveryResults.push(result);
       } finally {
         this.pendingVerifies.delete(self);
       }
@@ -880,8 +993,6 @@ export class ExchangeClient {
    * `broadcast_tx_commit` subscription.
    */
   async submitTxCommit(action: Action): Promise<TxResult> {
-    if (!this.privateKey) throw new Error("No private key set");
-
     // Step 1: broadcast via sync (returns after CheckTx). Use the internal
     // path so we don't double-spawn a background verifier — we're going to
     // do our own synchronous verification below.
@@ -913,52 +1024,51 @@ export class ExchangeClient {
    * unknown.
    */
   private async awaitCommit(sync: TxResult): Promise<TxResult> {
-    if (this.isFinalResult(sync)) {
-      // Either the gateway already returned the on-chain result (the
-      // synchronous submit path — nothing to wait for), or the tx was rejected
-      // at CheckTx / never reached the chain, in which case no DeliverTx will
-      // ever run. This is the case H14 was filed about: a confirmed order used
-      // to cost a 9-second poll loop, and now costs one round-trip.
-      return sync;
-    }
-    if (!sync.ok && sync.outcome !== "timeout") {
-      return sync;
-    }
+    return this.waitForDelivery(sync);
+  }
 
-    // Step 2: the outcome is still unknown (a pre-#90 gateway that only acks
-    // CheckTx, the direct-to-CometBFT path, or a gateway that broadcast the tx
-    // but could not report the result in time). Poll /tx?hash=... until found
-    // or timeout (~9 seconds).
-    const txHash = sync.hash;
-    if (!txHash) {
-      throw new Error("submitTx returned no tx hash");
-    }
-    const deadline = Date.now() + 9_000;
+  /** Per-submission finality. Timeout/cancellation retains the hash as unknown.
+   * Never resubmits writes. Use setUnsafeFastSubmit(true) to avoid a second poller.
+   */
+  async waitForDelivery(
+    sync: TxResult,
+    opts: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<TxResult> {
+    if (this.isFinalResult(sync)) return sync;
+    if (!sync.hash) throw new Error("submitTx returned no tx hash");
+    const timeoutMs = opts.timeoutMs ?? 9_000;
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
+      throw new Error("Invalid delivery timeout");
+    const deadline = Date.now() + timeoutMs;
     let pollDelay = 200;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, pollDelay));
+    while (Date.now() < deadline && !opts.signal?.aborted) {
+      await abortableDelay(
+        Math.min(pollDelay, deadline - Date.now()),
+        opts.signal,
+      );
       pollDelay = Math.min(pollDelay + 100, 600);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0 || opts.signal?.aborted) break;
+      const request = readDeadline(Math.ceil(remaining), opts.signal);
       try {
-        const res = await fetch(this.txStatusUrl(txHash));
-        const json = await res.json();
-        const txResult = json.result?.tx_result;
-        if (txResult) {
-          const code = txResult.code ?? 0;
-          return txFromEngineCode(code, {
-            hash: txHash,
-            height: json.result.height ? Number(json.result.height) : undefined,
-            log: txResult.log,
-            events: txResult.events,
-          });
-        }
-        // tx not yet indexed → keep polling
+        const res = await fetch(this.txStatusUrl(sync.hash), {
+          signal: request.signal,
+        });
+        if (!res.ok) continue;
+        const result = txFromQueryResponse(await res.json(), sync.hash);
+        if (!opts.signal?.aborted && result) return result;
       } catch {
-        // network blip — retry
+        /* Read failures leave the write outcome unknown. */
+      } finally {
+        request.dispose();
       }
     }
-    // Timed out waiting for inclusion. We don't know whether it landed, so
-    // do not reuse or rewind the timestamp nonce.
-    return txTimeout(txHash, "submitTxCommit: timed out polling /tx after 9s");
+    return txTimeout(
+      sync.hash,
+      opts.signal?.aborted
+        ? "delivery wait cancelled; reconcile by hash"
+        : "delivery wait timed out; reconcile by hash",
+    );
   }
 
   // -----------------------------------------------------------------------
@@ -1528,9 +1638,8 @@ export class ExchangeClient {
     };
   }
 
-  /** Per-user deposit log — every `deposit_confirmed` event for this
-   * owner, newest first. Feeds Portfolio EquityChart equity-over-time
-   * reconstruction (P2 #6). */
+  /** Direct relayer deposits and custody-confirmed deposits, newest first.
+   * Returns a bounded merged head, not a cursor over the complete history. */
   async queryHistoryDeposits(
     addressHex?: string,
     opts?: { fromMs?: number; toMs?: number; limit?: number },
@@ -1538,9 +1647,11 @@ export class ExchangeClient {
     return this.queryHistoryCashFlow("deposits", addressHex, opts);
   }
 
-  /** Per-user withdrawal lifecycle log — withdraw_requested /
-   * withdrawal_confirmed / withdrawal_failed, newest first. Filter by
-   * `kind` client-side if you want only pending requests. P2 #6. */
+  /** Direct relayer withdrawals and indexed custody events, newest first,
+   * capped after merging each kind's first page. This is not withdrawal status:
+   * ownerless confirmation events
+   * are not indexed for the account. Use queryWithdrawal(id) for status.
+   * Request/refund amounts exclude fees; unknown signedDelta stays empty. */
   async queryHistoryWithdrawals(
     addressHex?: string,
     opts?: { fromMs?: number; toMs?: number; limit?: number },
@@ -1548,36 +1659,46 @@ export class ExchangeClient {
     return this.queryHistoryCashFlow("withdrawals", addressHex, opts);
   }
 
-  /** Internal: shared decoder for the two cash-flow endpoints. They
-   * return identical row shapes (HistoryCashFlow); the difference is
-   * which kinds the server includes. */
+  /** Owner-filtered indexer events; never the removed node history routes. */
   private async queryHistoryCashFlow(
     path: "deposits" | "withdrawals",
     addressHex?: string,
-    opts?: { fromMs?: number; toMs?: number; limit?: number },
+    opts: { fromMs?: number; toMs?: number; limit?: number } = {},
   ): Promise<HistoryCashFlow[]> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return [];
-    const params = new URLSearchParams();
-    if (opts?.fromMs !== undefined) params.set("from", String(opts.fromMs));
-    if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
-    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
-    const qs = params.toString();
-    const url = `${this.readBaseUrl}/v1/history/${path}/${hex}${qs ? `?${qs}` : ""}`;
-    const json = await fetchApiArray(url);
-    return (json as Array<Record<string, unknown>>).map((row) => ({
-      kind: row.kind as HistoryCashFlow["kind"],
-      owner: String(row.owner ?? ""),
-      amount: String(row.amount ?? ""),
-      signedDelta: String(row.signed_delta ?? "0"),
-      newBalance: String(row.new_balance ?? ""),
-      withdrawalId: String(row.withdrawal_id ?? ""),
-      solanaTxSig: String(row.solana_tx_sig ?? ""),
-      solanaDestination: String(row.solana_destination ?? ""),
-      reason: String(row.reason ?? ""),
-      blockHeight: Number(row.block_height ?? 0),
-      timestamp: Number(row.timestamp ?? 0),
-    }));
+    const owner = historyOwner(hex);
+    const limit = opts.limit ?? 200;
+    const params = historySearchParams({ ...opts, limit });
+    params.set("owner", owner);
+    params.set("order", "desc");
+    const kinds: HistoryCashFlow["kind"][] =
+      path === "deposits"
+        ? ["deposited", "deposit_confirmed"]
+        : [
+            "withdrawn",
+            "withdraw_requested",
+            "withdrawal_confirmed",
+            "withdrawal_failed",
+          ];
+    const pages = await Promise.all(
+      kinds.map(async (kind) => {
+        const query = new URLSearchParams(params);
+        query.set("event_type", kind);
+        const json = await fetchApiJson(
+          `${this.gatewayUrl}/v1/history/account-events?${query}`,
+        );
+        return decodeCashFlowEvents(json, owner, kind);
+      }),
+    );
+    return pages
+      .flat()
+      .sort((a, b) => {
+        if (a.nanos !== b.nanos) return a.nanos > b.nanos ? -1 : 1;
+        return a.eventId > b.eventId ? -1 : a.eventId < b.eventId ? 1 : 0;
+      })
+      .slice(0, limit)
+      .map((event) => event.cashFlow);
   }
 
   /** Per-user position-at-resolution log — each row is one settlement or
@@ -1621,13 +1742,41 @@ export class ExchangeClient {
     }));
   }
 
-  /** Per-user position-history snapshot log. Each row is one
-   * point-in-time snapshot persisted after a fill that changes the
-   * position. A `size === "0"` row is a CLOSE event; the immediately
-   * preceding non-zero snapshot for the same `(owner, market, side)`
-   * carries the entry price. Feeds the trading-UI Position History tab
-   * (FE-23). Optional `market` filter scopes to one book; `fromMs` /
-   * `toMs` window the timestamps; `limit` caps server-side at 5000. */
+  /** Named gateway responses for HTTP consumers that own body parsing, deadlines
+   * and scheduling. Prefer typed query methods when raw response metadata is unnecessary.
+   * Uses this client's gateway; never targets a node, even in internal node mode.
+   */
+  reads(opts: { fetch?: GatewayFetch } = {}): GatewayReads {
+    return new GatewayReads(
+      this.gatewayUrl,
+      opts.fetch ?? ((url, init) => fetch(url, init)),
+    );
+  }
+
+  /** Gateway/indexer portfolio page, including in internal node mode.
+   * Keep bounds fixed across opaque cursors. */
+  async queryPortfolioHistory(
+    owner: string,
+    opts: PortfolioHistoryOptions,
+  ): Promise<PortfolioHistoryPage> {
+    const canonicalOwner = owner.replace(/^0x/i, "").toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(canonicalOwner))
+      throw new Error("Invalid portfolio owner");
+    const params = portfolioHistorySearchParams(opts);
+    opts.signal?.throwIfAborted();
+    const res = await fetch(
+      `${this.gatewayUrl}/v1/history/portfolio/${canonicalOwner}?${params}`,
+      { signal: opts.signal },
+    );
+    if (!res.ok) throw new GatewayHttpError(res.status, res);
+    const page: unknown = await res.json();
+    opts.signal?.throwIfAborted();
+    return decodePortfolioHistoryPage(page, canonicalOwner, opts);
+  }
+
+  /** Compatibility array of position snapshots. Absent close fields are empty
+   * strings and timestamps are milliseconds. Use queryHistoryPositionsPage for
+   * nullable fields, exact block times and opaque cursor continuation. */
   async queryHistoryPositions(
     addressHex?: string,
     opts?: {
@@ -1637,25 +1786,48 @@ export class ExchangeClient {
       limit?: number;
     },
   ): Promise<HistoryPositionSnapshot[]> {
-    const hex = addressHex ?? this.addressHex;
-    if (!hex) return [];
-    const params = new URLSearchParams();
-    if (opts?.market !== undefined) params.set("market", String(opts.market));
-    if (opts?.fromMs !== undefined) params.set("from", String(opts.fromMs));
-    if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
-    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
-    const qs = params.toString();
-    const url = `${this.readBaseUrl}/v1/history/positions/${hex}${qs ? `?${qs}` : ""}`;
-    const json = await fetchApiArray(url);
-    return (json as Array<Record<string, unknown>>).map((row) => ({
-      owner: String(row.owner ?? ""),
-      market: String(row.market ?? ""),
-      side: String(row.side ?? ""),
-      entryPrice: String(row.entry_price ?? "0"),
-      size: String(row.size ?? "0"),
-      blockHeight: Number(row.block_height ?? 0),
-      timestamp: Number(row.timestamp ?? 0),
+    const page = await this.queryHistoryPositionsPage(addressHex, opts);
+    return page.positions.map((row) => ({
+      owner: row.owner,
+      market: String(row.market),
+      side: row.side ?? "",
+      entryPrice: row.entryPrice ?? "",
+      size: row.size,
+      blockHeight: row.blockHeight,
+      timestamp: Date.parse(row.blockTime),
     }));
+  }
+
+  /** Gateway/indexer snapshots, newest first. Preserve filters when passing an
+   * opaque nextCursor back in opts.cursor. Null close fields stay null. */
+  async queryHistoryPositionsPage(
+    addressHex?: string,
+    opts: {
+      market?: number;
+      fromMs?: number;
+      toMs?: number;
+      limit?: number;
+      cursor?: string;
+    } = {},
+  ): Promise<HistoryPositionsPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return { positions: [], nextCursor: "" };
+    const owner = historyOwner(hex);
+    const params = historySearchParams(opts);
+    if (opts.market !== undefined) {
+      if (
+        !Number.isInteger(opts.market) ||
+        opts.market < 0 ||
+        opts.market > 0x7fffffff
+      )
+        throw new Error("Invalid history market");
+      params.set("market", String(opts.market));
+    }
+    const query = params.toString();
+    const json = await fetchApiJson(
+      `${this.gatewayUrl}/v1/history/positions/${owner}${query ? `?${query}` : ""}`,
+    );
+    return decodeHistoryPositionsPage(json, owner, opts.market);
   }
 
   /**
@@ -1760,8 +1932,8 @@ export class ExchangeClient {
    *
    * Auth: account streams require auth only when the gateway runs with
    * `--api-key`. A browser `WebSocket` cannot send the `X-Api-Key` header, so
-   * the SDK uses the gateway's signed-query auth instead — when a private key
-   * is loaded (`setPrivateKey`) it signs the `ProofExchange-account-events-v1`
+   * the SDK uses the gateway's signed-query auth instead — when a private key or external signer
+   * is connected it signs the `ProofExchange-account-events-v1`
    * message and appends `public_key` / `signature` / `timestamp_ms`. Against
    * an unauthenticated gateway (e.g. devnet) the owner alone is enough.
    *
@@ -1770,7 +1942,7 @@ export class ExchangeClient {
   subscribeAccountEvents(
     owner: Uint8Array | string,
     onEvent: (event: Record<string, unknown>) => void,
-    opts: WsStreamOptions = {},
+    opts: WsStreamOptions & { auth?: false } = {},
   ): () => void {
     const ownerHex = (
       owner instanceof Uint8Array ? bytesToHex(owner) : owner.replace(/^0x/, "")
@@ -1782,18 +1954,10 @@ export class ExchangeClient {
     const buildUrl = async (): Promise<string> => {
       const params = new URLSearchParams({ owner: ownerHex });
       if (afterId > 0n) params.set("after_id", afterId.toString());
-      if (this.privateKey && this.publicKey) {
-        const chainId = await this.resolveChainId();
-        const timestampMs = BigInt(Date.now());
-        const msg = accountWsAuthMessage(
-          chainId,
-          ownerHex,
-          afterId,
-          timestampMs,
-        );
-        params.set("public_key", bytesToHex(this.publicKey));
-        params.set("signature", bytesToHex(sign(this.privateKey, msg)));
-        params.set("timestamp_ms", timestampMs.toString());
+      if (opts.auth !== false && (this.privateKey || this.externalSigner)) {
+        const auth = await this.accountAuth(ownerHex, afterId);
+        for (const [key, value] of Object.entries(auth))
+          params.set(key, String(value));
       }
       return `${this.wsUrl}/account-events?${params.toString()}`;
     };
@@ -1928,8 +2092,56 @@ export class ExchangeClient {
     return unsubscribe;
   }
 
+  /** Shared multiplexed /ws feed. Options apply on first creation only.
+   * Reconnect restores snapshots, not missed events. Default auth reads the current signer.
+   */
+  feed(opts: Partial<GatewayFeedOptions> = {}): GatewayFeed {
+    if (!this.gatewayFeed) {
+      let base = this.wsUrl;
+      if (!base && typeof globalThis.location !== "undefined")
+        base = globalThis.location.origin.replace(/^http/, "ws");
+      this.gatewayFeed = new GatewayFeed({
+        url: `${base}/ws`,
+        accountAuth: async (owner) =>
+          this.privateKey || this.externalSigner ? this.accountAuth(owner) : {},
+        headers: this.apiKey ? { "X-Api-Key": this.apiKey } : undefined,
+        ...opts,
+      });
+    }
+    return this.gatewayFeed;
+  }
+
+  /** Account snapshot plus live stream, with auth renewed per reconnect. */
+  subscribeAccount(
+    onFrame: (frame: AccountFrame) => void,
+    opts: { owner?: string; auth?: false } = {},
+  ): () => void {
+    const owner = opts.owner ?? this.addressHex;
+    if (!owner) throw new Error("No account owner available");
+    return this.feed().subscribeAccount(owner, onFrame, async (address) =>
+      opts.auth !== false && (this.privateKey || this.externalSigner)
+        ? this.accountAuth(address)
+        : {},
+    );
+  }
+
+  subscribeOrderbook(
+    market: number,
+    onFrame: (frame: OrderbookFrame) => void,
+  ): () => void {
+    return this.feed().subscribeOrderbook(market, onFrame);
+  }
+
+  subscribeTrades(
+    market: number,
+    onFrame: (frame: TradeFrame) => void,
+  ): () => void {
+    return this.feed().subscribeTrades(market, onFrame);
+  }
+
   /** Close every open WebSocket stream and stop their reconnect loops. */
   disconnect() {
+    this.gatewayFeed?.close();
     for (const unsub of [...this.activeStreams]) unsub();
   }
 }
@@ -2232,5 +2444,56 @@ function decodeMarketConfig(raw: unknown[]): MarketConfig {
     szDecimals: raw[22] == null ? undefined : Number(raw[22]),
     ticker: raw[23] == null ? undefined : String(raw[23]),
     maxOpenInterest: optBig(raw[24]),
+  };
+}
+
+/** Copy protocol inputs without structuredClone or cross-realm instanceof checks. */
+function cloneSigningInput<T>(value: T): T {
+  if (
+    ArrayBuffer.isView(value) &&
+    Object.prototype.toString.call(value) === "[object Uint8Array]"
+  ) {
+    const bytes = value as unknown as Uint8Array;
+    return new Uint8Array(bytes) as T;
+  }
+  if (Array.isArray(value)) return value.map(cloneSigningInput) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, cloneSigningInput(v)]),
+    ) as T;
+  }
+  return value;
+}
+
+/** Abort interrupts the sleep; callers inspect the signal for their own result policy. */
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+/** Per-read deadline with explicit cleanup, without AbortSignal.any/timeout. */
+function readDeadline(
+  ms: number,
+  parent?: AbortSignal,
+): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController();
+  const abort = () => controller.abort(parent?.reason);
+  if (parent?.aborted) abort();
+  else parent?.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(() => controller.abort(), ms);
+  return {
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", abort);
+    },
   };
 }

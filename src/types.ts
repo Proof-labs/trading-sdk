@@ -1611,6 +1611,8 @@ export interface TxResult {
   height?: number;
   /** Human-readable log message (populated on error). */
   log?: string;
+  /** Optional ABCI diagnostic info, preserved without interpretation. */
+  info?: string;
   /** ABCI events emitted by the transaction. */
   events?: TxEvent[];
 }
@@ -2078,35 +2080,30 @@ export interface BindingScenarioEntry {
   branch: "Yes" | "No";
 }
 
-/** One row of the per-user deposit/withdraw cash-flow log. Covers four
- * event kinds — see the `kind` field. Feeds the Portfolio EquityChart
- * "equity over time" reconstruction (Jesse's P2 #6).
- *
- * Returned by `GET /v1/history/deposits/{address}` and `GET
- * /v1/history/withdrawals/{address}`, and by the `historyDeposits` /
- * `historyWithdrawals` InfoRequests. Shipped 2026-04-24. */
+/** One deposit/withdrawal event from owner- and event-filtered
+ * `/v1/history/account-events` pages. */
 export interface HistoryCashFlow {
-  /** One of the four Rust event kinds. */
+  /** Original engine event kind, including direct relayer credits/debits. */
   kind:
+    | "deposited"
+    | "withdrawn"
     | "deposit_confirmed"
     | "withdraw_requested"
     | "withdrawal_confirmed"
     | "withdrawal_failed";
   /** 20-byte owner address as hex. */
   owner: string;
-  /** Amount in µUSDC (always positive). Use `signedDelta` for signed
-   * balance-change reconstruction. May be empty for
-   * `withdrawal_confirmed` (engine doesn't emit amount on ack). */
+  /** Principal amount in micro-USDC. Custody requests/refunds omit fees.
+   * Empty on owner-scoped confirmations from compatible deployments; the
+   * current indexer omits ownerless withdrawal_confirmed events entirely. */
   amount: string;
-  /** Signed balance delta for this event:
-   *   +amount for deposit_confirmed + withdrawal_failed (credit)
-   *   -amount for withdraw_requested                    (debit)
-   *   "0"     for withdrawal_confirmed                  (no change) */
+  /** Exact event balance delta: deposit amount, negated direct withdrawal
+   * amount, or "0" on confirmation. Empty on withdrawal request/failure:
+   * their payloads omit the custody fee included in the actual debit/refund. */
   signedDelta: string;
-  /** Post-event balance. Available for deposit/request/failed;
-   * empty for confirmed (no balance change on that event). */
+  /** Post-event balance when emitted; empty when absent from the event. */
   newBalance: string;
-  /** Present on withdrawal events (request, confirmed, failed). */
+  /** Present on custody withdrawal events (request, confirmed, failed). */
   withdrawalId: string;
   /** Present on deposit_confirmed + withdrawal_confirmed. */
   solanaTxSig: string;
@@ -2154,24 +2151,19 @@ export interface HistoryResolution {
   timestamp: number;
 }
 
-/** One row of the per-user position-history snapshot log. Each entry is
- * a point-in-time snapshot of a position written after each fill that
- * changes its state (open → grow → reduce → close). When `size` is "0"
- * the snapshot represents a CLOSE event; the immediately preceding
- * non-zero snapshot for the same `(owner, market, side)` carries the
- * weighted-average entry price.
- *
- * Returned by `GET /v1/history/positions/{address}` and the
- * `historyPositions` InfoRequest. The HTTP endpoint accepts optional
- * `?market=&from=&to=&limit=` filters; results are newest-first. */
+/** Compatibility row from queryHistoryPositions(). A zero size is a closed
+ * position; absent side/entry price become empty strings and block time is
+ * projected to milliseconds. Use queryHistoryPositionsPage() for exact times,
+ * nullable fields and pagination. */
 export interface HistoryPositionSnapshot {
   /** 20-byte owner address as hex. */
   owner: string;
   /** Market ID as a decimal string. */
   market: string;
-  /** Position side: "Buy" = long, "Sell" = short. */
+  /** Position side as served; empty when a closed position has no side.
+   * Use HistoryPosition for the nullable representation. */
   side: string;
-  /** Weighted-average entry price in µUSDC at the time of the snapshot. */
+  /** Entry price in micro-USDC, or empty when absent on a close. */
   entryPrice: string;
   /** Absolute position size in contracts. "0" = closed. */
   size: string;
@@ -2179,6 +2171,26 @@ export interface HistoryPositionSnapshot {
   blockHeight: number;
   /** Unix milliseconds. */
   timestamp: number;
+}
+
+/** Indexer position snapshot with exact timestamp and absent close fields retained. */
+export interface HistoryPosition {
+  owner: string;
+  market: number;
+  side: string | null;
+  /** Micro-USDC decimal text; null when the closed position has no entry price. */
+  entryPrice: string | null;
+  /** Integer contracts as decimal text; zero denotes a closed position. */
+  size: string;
+  blockHeight: number;
+  /** RFC 3339 timestamp, retaining the indexer's fractional-second precision. */
+  blockTime: string;
+}
+
+/** One newest-first page. An empty nextCursor means there are no further rows. */
+export interface HistoryPositionsPage {
+  positions: HistoryPosition[];
+  nextCursor: string;
 }
 
 /** One executed fill from `/v1/history/fills/{owner}` (or `/v1/fills`). */

@@ -288,24 +288,27 @@ and may be firewalled off in a public deployment.
   default it for the public SDK, and never add a fresh hard-coded `rpcUrl` /
   `apiUrl` call that bypasses the base getters.
 
-## Out of scope — do not implement
+## SDK scope — every gateway interaction, admin calls included
 
-Some surfaces have been explicitly rejected. Do not add them back without a new
-product decision that reverses the one on record (link a superseding ADR).
+**Every gateway interaction an application makes goes through the SDK**:
+trading actions, reads, streams, the oracle health check and admin calls alike
+([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md),
+accepted 2026-09-16, which supersedes
+[ADR 0002](docs/adr/0002-oracle-health-out-of-scope.md)). No gateway call is
+out of scope for being "operational" or "admin-only". When Web-UI, Web Admin, a
+bot or a script needs a gateway route the SDK does not cover, add the SDK
+method; do not leave the caller to hand-roll it.
 
-- **Oracle health (`queryOracleHealth()` / any read of `/v1/oracle/health`).**
-  **Prohibited.** Feed liveness/freshness is an operational-monitoring concern
-  owned by **Grafana (Markets Health)**, not the SDK; no trading or admin caller
-  needs it. Proposed in PR #26 and **closed unmerged** (2026-07-06 weekly
-  meeting; Web Admin is read-only and does not consume it). Full rationale and
-  the (narrow) scope of the ban — including that `MarketConfig.maxOpenInterest`
-  is only _deferred_, not banned — are in
-  [docs/adr/0002-oracle-health-out-of-scope.md](docs/adr/0002-oracle-health-out-of-scope.md).
-  Oracle _operation_ (`OracleUpdate` / `OracleUpdateComposite`) stays in the
-  SDK, but as `OperatorAction`s for operator-tooling completeness only —
-  **not** for the SDK's primary trader users (allowlist-gated; see AGENTS.md
-  "Operator actions — privileged, not for trading integrations"). Oracle
-  _health monitoring_ is not a wire action at all and does not belong here.
+- **Oracle health.** `ExchangeClient.reads().oracleHealth()` forwards
+  `GET /v1/oracle/health` with the response body, HTTP errors and cancellation
+  intact. Freshness thresholds and display policy stay in the application, and
+  the read is not trading authorization. Extend it rather than adding a parallel
+  `queryOracleHealth()`. Grafana Markets Health remains the operational
+  dashboard; the SDK does not become a monitoring service.
+- **Admin and operator calls.** They ship in the SDK for their consumers, but
+  the engine still gates them behind allowlists and multisig: being in the SDK
+  grants no authority. Trading integrations can keep typing their calls as
+  `TraderAction`.
 
 ## Security notes
 

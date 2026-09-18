@@ -61,6 +61,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `ExchangeClient.reads().oracleHealth()` forwards gateway freshness responses
+  for existing Web-UI warnings and order guards, preserving unavailable-feeder
+  data, HTTP failures and caller cancellation. Thresholds remain in the frontend.
+  ADR 0003 supersedes ADR 0002: every gateway interaction, including oracle
+  health and admin calls, goes through the SDK.
+- `queryHistoryPositionsPage()` preserves nullable close fields, exact indexer
+  timestamps and opaque pagination cursors alongside the existing array API.
+- External async Ed25519 signers, per-transaction delivery waits and optional
+  DeliverTx `info`, preserving private-key compatibility and signed bytes.
+- Multiplexed `/ws` orderbook, trades and account subscriptions with refcounts,
+  reconnect authentication and cleanup. Snapshot plus live; no missed-event replay.
+- Named gateway responses through `ExchangeClient.reads()` and validated portfolio
+  history pages with opaque cursors, micro-USDC values and source provenance.
+
 - Atomic `queryMarketsSnapshot()` through the gateway, with an explicit chain
   pin, complete typed registry decoding and bounded failure handling. The Rust
   `market_snapshot` module shares canonical wire records and adds an optional
@@ -78,12 +92,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `addressHex` override (#91).
 - `queryOraclePermissions(market)` reads committed single-dependency policy,
   calendar, activation and frozen verdict state with exact integers. This is not
-  operational oracle health (ADR 0002), nor portfolio-wide trading authorization.
+  operational oracle health (`reads().oracleHealth()`), nor portfolio-wide
+  trading authorization.
   npm 3.2 is additive; unchanged Rust/Python packages retain their versions.
 - Integrates the reviewed admin-tag-8 mirror and compatibility vectors from
   trading-sdk #106 (`09cf55f`) alongside F16. Cancel-all scoped/unscoped bytes,
   proposal reads, omitted/null scope semantics and content hashes stay pinned.
   The independent tag-7 TypeScript mirror remains tracked in exchange #472.
+
+### Changed
+
+- Ambiguous submissions retain their hash and HTTP diagnostics for reconciliation.
+
+### Fixed
+
+- Position-history reads decode the indexer's page envelope and `entry_px` /
+  `block_time` fields. The array API retains string fields, using empty strings
+  for absent close data; the paged API preserves nulls.
+- Deposit and withdrawal history use owner-filtered account events through the
+  gateway, including direct `deposited` / `withdrawn` events. Results are bounded
+  merged event lists, not final withdrawal status;
+  ownerless confirmations are absent from the current index. Unknown withdrawal
+  debit/refund deltas remain empty because event amounts exclude custody fees.
+- Delivery polling accepts omitted zero codes and numeric-string codes only in a
+  valid transaction result; malformed reads remain uncertain.
+- Timestamp allocation rejects clock-window exhaustion without reusing a nonce.
 
 ## [4.0.0] — 2026-09-10
 
