@@ -113,8 +113,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   of price acceptance. When a `price_updated` event is present but fails a
   structural check, the observation is `RejectedPriceEvidence` and names the
   reason as a typed `PriceEvidenceRejection`, so a consumer can count or alert
-  on evidence it expected to be usable; a receipt with no such event stays
-  `Committed`. No extra HTTP or wire change is introduced.
+  on evidence it expected to be usable. `MalformedPriceEvent` identifies a
+  single `price_updated` event whose attributes cannot be decoded, including
+  missing fields, non-string values and duplicate JSON keys. A receipt with
+  no identifiable price event, or a non-zero execution code, stays `Committed`.
+  No extra HTTP or wire change is introduced.
   `ReceiptObservation::CommittedPriceUpdate` carries a `CommittedPriceUpdate`
   struct with read-only getters that only the receipt classifier constructs.
 

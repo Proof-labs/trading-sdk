@@ -89,11 +89,19 @@ fn absent_duplicate_rejected_mixed_or_malformed_events_are_never_effect_proof() 
             json!([good_event.clone(), {"type":"oracle_update_rejected","attributes":[]}]),
             refused(PriceEvidenceRejection::MultipleEvents),
         ),
+        (
+            json!([good_event.clone(), {"type":"future_event","attributes":null}]),
+            refused(PriceEvidenceRejection::MultipleEvents),
+        ),
     ];
     for (field, value, expected) in [
         ("type", json!("cHJpY2VfdXBkYXRlZA=="), committed.clone()),
         ("type", json!("future_event"), committed.clone()),
-        ("attributes", json!(null), committed.clone()),
+        (
+            "attributes",
+            json!(null),
+            refused(PriceEvidenceRejection::MalformedPriceEvent),
+        ),
     ] {
         let mut event = good_event.clone();
         event[field] = value;
@@ -118,9 +126,12 @@ fn absent_duplicate_rejected_mixed_or_malformed_events_are_never_effect_proof() 
             json!("4294967296"),
             refused(PriceEvidenceRejection::InvalidMarket),
         ),
-        // A non-string attribute value does not decode at all, so the event
-        // shape is unknown rather than refused.
-        (0, "value", json!(15), committed.clone()),
+        (
+            0,
+            "value",
+            json!(15),
+            refused(PriceEvidenceRejection::MalformedPriceEvent),
+        ),
         (
             0,
             "key",
@@ -215,14 +226,99 @@ fn absent_duplicate_rejected_mixed_or_malformed_events_are_never_effect_proof() 
             code: 21
         })
     );
-    // A duplicated JSON key fails serde before any event is read.
+    // Duplicate JSON keys must never become accepted evidence after a
+    // permissive parse identifies the event kind.
     let duplicate_key = serde_json::to_string(&accepted_body())
         .unwrap()
         .replace("\"key\":\"market\"", "\"key\":\"other\",\"key\":\"market\"");
     assert_eq!(
         classify(200, duplicate_key.as_bytes(), HASH).unwrap(),
-        committed
+        refused(PriceEvidenceRejection::MalformedPriceEvent)
     );
+}
+
+#[test]
+fn malformed_price_event_attributes_preserve_the_committed_receipt() {
+    let good_event = accepted_body()["result"]["tx_result"]["events"][0].clone();
+    let mut events = vec![
+        json!({"type":"price_updated"}),
+        json!({"type":"price_updated","attributes":{}}),
+        json!({"type":"price_updated","attributes":[null]}),
+    ];
+    for field in ["key", "value"] {
+        let mut missing = good_event.clone();
+        missing["attributes"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        events.push(missing);
+        for value in [json!(null), json!(120), json!(false), json!({}), json!([])] {
+            let mut event = good_event.clone();
+            event["attributes"][1][field] = value;
+            events.push(event);
+        }
+    }
+    for event in events {
+        let mut body = accepted_body();
+        body["result"]["tx_result"]["events"] = json!([event]);
+        assert_eq!(
+            classify(200, &serde_json::to_vec(&body).unwrap(), HASH).unwrap(),
+            ReceiptObservation::RejectedPriceEvidence {
+                receipt: CommittedReceipt {
+                    hash: HASH,
+                    height: 42,
+                    code: 0
+                },
+                rejection: PriceEvidenceRejection::MalformedPriceEvent,
+            },
+            "{body}"
+        );
+        body["result"]["tx_result"]["code"] = json!(21);
+        assert_eq!(
+            classify(200, &serde_json::to_vec(&body).unwrap(), HASH).unwrap(),
+            ReceiptObservation::Committed(CommittedReceipt {
+                hash: HASH,
+                height: 42,
+                code: 21
+            }),
+        );
+    }
+}
+
+#[test]
+fn missing_or_unrecognized_price_events_do_not_report_a_rejection() {
+    let expected = ReceiptObservation::Committed(CommittedReceipt {
+        hash: HASH,
+        height: 42,
+        code: 0,
+    });
+    let mut missing = accepted_body();
+    missing["result"]["tx_result"]
+        .as_object_mut()
+        .unwrap()
+        .remove("events");
+    assert_eq!(
+        classify(200, &serde_json::to_vec(&missing).unwrap(), HASH).unwrap(),
+        expected
+    );
+    for events in [
+        json!(null),
+        json!([]),
+        json!({}),
+        json!([null]),
+        json!([{"attributes":null}]),
+        json!([{"type":123,"attributes":null}]),
+        json!([{"type":"future_event","attributes":null}]),
+        json!([{"type":"future_event","attributes":[{"key":"note","value":"price_updated"}]}]),
+    ] {
+        let mut body = accepted_body();
+        body["result"]["tx_result"]["events"] = events;
+        assert_eq!(
+            classify(200, &serde_json::to_vec(&body).unwrap(), HASH).unwrap(),
+            expected,
+            "{body}"
+        );
+    }
 }
 
 #[test]
@@ -414,6 +510,34 @@ async fn positive_event_observation_uses_the_same_bounded_gateway_route() {
             if (update.market(), update.price(), update.signer()) == (15, 120, [0xcd; 20])
     ));
     task.await.unwrap();
+}
+
+#[tokio::test]
+async fn malformed_price_event_is_reported_through_the_gateway_client() {
+    let mut body = accepted_body();
+    body["result"]["tx_result"]["events"][0]["attributes"][1]["value"] = json!(120);
+    let body = serde_json::to_vec(&body).unwrap();
+    let receipt = CommittedReceipt {
+        hash: HASH,
+        height: 42,
+        code: 0,
+    };
+    for observe in [true, false] {
+        let (url, task) = serve_once(200, body.clone(), body.len(), Duration::ZERO).await;
+        let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
+        if observe {
+            assert_eq!(
+                client.receipt_observation(HASH).await.unwrap(),
+                ReceiptObservation::RejectedPriceEvidence {
+                    receipt: receipt.clone(),
+                    rejection: PriceEvidenceRejection::MalformedPriceEvent,
+                }
+            );
+        } else {
+            assert_eq!(client.committed_receipt(HASH).await.unwrap(), receipt);
+        }
+        task.await.unwrap();
+    }
 }
 
 #[tokio::test]

@@ -29,6 +29,9 @@ pub enum ReceiptObservation {
 /// expected may simply belong to a different action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PriceEvidenceRejection {
+    /// A single `price_updated` event cannot be decoded into the expected
+    /// attribute shape (string keys and values).
+    MalformedPriceEvent,
     /// The receipt carries a `price_updated` event alongside other events, so
     /// no single event can be read as the canonical effect.
     MultipleEvents,
@@ -143,9 +146,33 @@ struct EventAttribute {
 enum PriceEvidence {
     Accepted(CommittedPriceUpdate),
     Rejected(PriceEvidenceRejection),
-    /// No `price_updated` event to read: a non-zero code, no events, another
-    /// action's event, or a body whose event shape does not decode at all.
+    /// A non-zero code or no identifiable `price_updated` event to read.
     Absent,
+}
+
+/// Diagnose a failed strict decode without treating permissively parsed JSON
+/// as accepted evidence. Only an explicit event type identifies price evidence.
+fn price_event_decode_failure(body: &[u8]) -> PriceEvidence {
+    let Ok(envelope) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return PriceEvidence::Absent;
+    };
+    let Some(events) = envelope
+        .pointer("/result/tx_result/events")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return PriceEvidence::Absent;
+    };
+    if !events
+        .iter()
+        .any(|event| event.get("type").and_then(serde_json::Value::as_str) == Some("price_updated"))
+    {
+        return PriceEvidence::Absent;
+    }
+    PriceEvidence::Rejected(if events.len() == 1 {
+        PriceEvidenceRejection::MalformedPriceEvent
+    } else {
+        PriceEvidenceRejection::MultipleEvents
+    })
 }
 
 /// Current ABCI attributes are strings, not base64 byte slices. An address is
@@ -176,7 +203,7 @@ fn price_update(body: &[u8], receipt: &CommittedReceipt) -> PriceEvidence {
         return PriceEvidence::Absent;
     }
     let Ok(envelope) = serde_json::from_slice::<ReceiptEvents>(body) else {
-        return PriceEvidence::Absent;
+        return price_event_decode_failure(body);
     };
     let events = envelope.result.tx_result.events;
     let [event] = events.as_slice() else {
