@@ -73,6 +73,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   owner binding, integer precision and positional schema validation; no equity,
   margin or trading/withdrawal permission is inferred. Rust/Python codecs unchanged.
 
+- TypeScript `queryOraclePriceHistoryPage` reads market-filtered `price_updated`
+  history through the gateway, preserving exact prices, opaque cursors,
+  cancellation and HTTP errors. Primary and composite updates share the
+  upstream event shape; the API does not distinguish their sources.
+
 - Rust native gateway `submit_signed_bytes_with_evidence` adds typed,
   source-qualified per-attempt pre-admission refusal and maintenance evidence,
   plus header-first JSON `retryAfterMs` fallback rounded up without overflow.

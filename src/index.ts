@@ -284,3 +284,9 @@ export type {
   PortfolioHistoryOptions,
   PortfolioHistoryPage,
 } from "./portfolio-history.js";
+export {
+  queryOraclePriceHistoryPage,
+  type OraclePriceHistoryPoint,
+  type OraclePriceHistoryPage,
+  type OraclePriceHistoryOptions,
+} from "./oracle-price-history.js";
