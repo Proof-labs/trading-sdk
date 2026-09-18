@@ -163,7 +163,7 @@ async fn submit_classifies_checktx_ambiguous_and_pre_admission_without_retry() {
         ),
         (
             json!({"status":"error","error":"validation rejected"}),
-            SubmissionOutcome::RejectedBeforeAdmission { hash },
+            SubmissionOutcome::RejectedBeforeAdmission { hash, refusal: () },
         ),
     ] {
         let (client, task) = fixture(body).await;
@@ -477,8 +477,14 @@ async fn total_deadline_includes_a_stalled_response_body_and_preserves_retry_aft
     let url = format!("http://{}", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
-        let mut request = [0u8; 2048];
-        stream.read(&mut request).await.unwrap();
+        let mut request = Vec::new();
+        while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+            let mut chunk = [0u8; 2048];
+            let count = stream.read(&mut chunk).await.unwrap();
+            assert!(count > 0, "client closed before sending request headers");
+            request.extend_from_slice(&chunk[..count]);
+            assert!(request.len() <= 16_384);
+        }
         stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nRetry-After: 7\r\nConnection: close\r\n\r\n{").await.unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
     });

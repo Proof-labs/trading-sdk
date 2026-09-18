@@ -69,10 +69,10 @@ describe("atomic market snapshot", () => {
       ),
     ).toThrow();
   });
-  it("reads the actual current-engine G17 snapshot with all market kinds", () => {
+  it("reads the actual current-engine snapshot with an attached event", () => {
     const hex = readFileSync(
       new URL(
-        "../crates/proof-trading-sdk/src/market_snapshot/engine-0d215eaa.hex",
+        "../crates/proof-trading-sdk/src/market_snapshot/engine-349fa9b.hex",
         import.meta.url,
       ),
       "utf8",
@@ -83,16 +83,20 @@ describe("atomic market snapshot", () => {
     );
     expect(decoded.height).toBe(9_007_199_254_740_993n);
     expect(decoded.markets.map((m) => m.market)).toEqual([
-      1, 101, 102, 201, 202,
+      0, 15, 9100, 9101, 9102, 9103,
     ]);
-    expect(decoded.markets[3].kind).toEqual({ PredictionBinary: [123, "Yes"] });
+    expect(decoded.markets[2].kind).toEqual({ ConditionalPerp: [91, "Yes"] });
+    expect(decoded.markets[5].kind).toEqual({ PredictionBinary: [91, "No"] });
     expect(decoded.markets[0].feeTiers?.[0].makerFeeTenthBps).toBe(-7);
     expect(decoded.markets[0].maxOpenInterest).toBe(
       18_446_744_073_709_551_615n,
     );
-    expect(decoded.impactMarkets[0].impactMarketId).toBe(77);
-    expect(decoded.impactMarkets[0].ebyMarket).toBe(0);
+    expect(decoded.events[0].eventId).toBe(91);
+    expect(decoded.events[0].attachedConditionals).toEqual([
+      { underlyingMarket: 15, cpyMarket: 9100, cpnMarket: 9101 },
+    ]);
   });
+
   it("decodes a Rust-produced shared-wire vector losslessly", () => {
     const hex =
       "94dc00200707070707070707070707070707070707070707070707070707070707070707cfffffffffffffffff91dc001901cd03e8cd01f40502ce0036ee8064a4506572700000c200cd7530906401c000aa4f7261636c654f6e6c790000c205a3425443cfffffffffffffffff90";

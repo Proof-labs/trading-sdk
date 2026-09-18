@@ -7,6 +7,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- **BREAKING (MAJOR) — proof-wire 2.0.0: the impact-market family is gone and
+  every conditional belongs to an event.** The npm package moves to **5.0.0**,
+  the Rust core to **4.0.0**, the PyO3 and Python packages to **4.0.0**.
+  - Removed: `CreateImpactMarket` (0x0e) and `ResolveImpactMarket` (0x0f) in
+    every language, the `ImpactMarketInfo` / `ImpactMarketStatus` types, the
+    `CreateImpactMarket` governance arm and batch item, `queryImpactMarkets()`,
+    and error codes 24, 25 and 31. The retired bytes never decode again.
+  - Changed: `MarketKind` conditional and binary payloads carry the event id;
+    `EventInfo` gains `attachedConditionals` (`[underlying, cpy, cpn]`
+    triples) and its status type is `EventStatus`; `MarketsSnapshot.events`
+    replaces `impactMarkets`; `AccountInfo.bindingScenario` entries name
+    `eventId`; `CreateEvent` gains a per-book `maxOpenInterest` trailer;
+    `queryHistoryResolutions` / `history_resolutions` filter on `eventId` /
+    `event_id` and each row names its `eventId` (the indexer's route moved
+    with the wire).
+  - Added: the `AttachConditional` governance arm (inner tag 10) as a
+    singleton and as the second `Batch` item, with its own `maxOpenInterest`
+    trailer; typed `CreateSubAccount` (0x28), `SubAccountTransfer` (0x29) and
+    `ClaimWithdrawalPayout` (0x2e) actions absorbed from wire 1.9.0 and
+    1.10.0; error codes 72–76, 82 and 83–96 classified.
+  - Conformance vectors regenerated: the family cases leave, the attach,
+    batch, create-event oracle-source and new outer-action cases arrive; the
+    engine snapshot fixture is `engine-349fa9b.hex`. The wire pin is the
+    `v2.0.0` tag.
+
 - TypeScript 4.2.0 adds gateway-only `queryFinancialState({markets, owners})`:
   one finalized snapshot of selected raw accounts, fee/funding market state,
   fee pool, per-pool insurance and PLP configuration/account. Strict selector,
@@ -35,6 +60,44 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   margin or trading/withdrawal permission is inferred. Rust/Python codecs unchanged.
 
 ### Added
+
+- Rust native gateway `submit_signed_bytes_with_evidence` adds typed,
+  source-qualified per-attempt pre-admission refusal and maintenance evidence,
+  plus header-first JSON `retryAfterMs` fallback rounded up without overflow.
+  Unknown HTTP/body outcomes retain the local reconciliation hash; no earlier
+  attempt is declared absent. `SubmissionOutcome::RejectedBeforeAdmission`
+  carries the classified refusal (`()` from the original submission method), so
+  a refusal cannot disagree with its outcome. The original method's behaviour,
+  TypeScript/Python API and wire bytes are unchanged.
+  This additive native API requires a Rust MINOR release when published;
+  it authorizes no activation, retry or durable-journal retirement by itself.
+
+- Rust gateway `MarketsSnapshotClient::read_bound_inventory()` binds the
+  snapshot's own finalized clock and post-height app hash to the actual Comet
+  node identity across the read bracket. A bounded exact-H+1 header lookup
+  handles fast chains without comparing pre-H and post-H hashes. Missing or
+  mismatched witnesses fail closed; legacy snapshot/status APIs, receipt
+  handling, signing and wire bytes are unchanged. This additive API requires
+  a Rust MINOR release when published; exact qualified images and unique node
+  keys remain prerequisites because the legacy app hash is not a registry root.
+  `BoundMarketsSnapshot`, `BoundChainIdentity` and `BoundInventorySnapshot`
+  expose read-only getters; only the SDK decoders and `validate_bound_inventory`
+  construct them, so a caller cannot forge or alter a validated witness.
+
+- Rust gateway `MarketsSnapshotClient::receipt_observation()` distinguishes an
+  exact committed receipt from a canonical HTTP 404/500 not-found observation
+  naming only the requested hash. Calls and bodies are bounded; other statuses,
+  malformed/hashless/conflicting responses and transport failures stay errors.
+  Not-found is not non-inclusion, expiry or accepted-price-effect proof. Existing
+  `committed_receipt()` and signing/wire contracts are unchanged.
+  A single well-formed plaintext `price_updated` event in a code-zero receipt
+  is preserved as typed `CommittedPriceUpdate` evidence. Consumers must bind
+  it to their retained signed action before inferring a primary-oracle effect;
+  composite actions share this event. Missing, duplicate, mixed, malformed or
+  unsupported event evidence leaves only the committed receipt, never a proof
+  of price acceptance. No extra HTTP or wire change is introduced.
+  `ReceiptObservation::CommittedPriceUpdate` carries a `CommittedPriceUpdate`
+  struct with read-only getters that only the receipt classifier constructs.
 
 - `ExchangeClient.reads().oracleHealth()` forwards gateway freshness responses
   for existing Web-UI warnings and order guards, preserving unavailable-feeder

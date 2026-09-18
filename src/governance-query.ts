@@ -4,14 +4,14 @@ import type {
   CancelAllOrdersForAccount,
   AdminBatchItem,
   AdminSignerRegistry,
+  AttachConditional,
+  AttachedConditional,
   CreateEvent,
-  CreateImpactMarket,
   CreateMarket,
   EventInfo,
   EventOracleSource,
+  EventStatus,
   ExpiryReason,
-  ImpactMarketInfo,
-  ImpactMarketStatus,
   PriceComparison,
   ProposalPage,
   ProposalDisplayInfo,
@@ -24,7 +24,7 @@ import { Outcome } from "./types.js";
 /**
  * Typed decoders for the engine's governance READ model — the responses
  * behind `GET /v1/admin/signer-registry`, `GET /v1/proposals`, and
- * `GET /v1/impact_markets`.
+ * `GET /v1/events`.
  *
  * These mirror engine structs (`exchange-core/src/query.rs`), they do not
  * define them. The engine serializes with `rmp_serde::to_vec` — the COMPACT
@@ -242,7 +242,7 @@ function toPriceComparison(value: unknown, field: string): PriceComparison {
  *  bare string (fact 2), the struct variants are single-entry maps with
  *  positional payloads (fact 3). Fails closed on an unknown variant — a
  *  resolution mode this build cannot name must never render as one it can.
- *  Exported for the client's impact-market read, which carries the same
+ *  Exported for the client's event read, which carries the same
  *  enum in the same compact-rmp form. */
 export function decodeOracleSource(
   value: unknown,
@@ -282,20 +282,20 @@ const OUTCOMES: Record<string, Outcome> = {
   Void: Outcome.Void,
 };
 
-/** Impact-market lifecycle status: unit variants are bare strings (fact 2);
+/** Event lifecycle status: unit variants are bare strings (fact 2);
  *  `Resolved(Outcome)` is a single-entry map whose newtype payload is the
  *  outcome's variant name — a bare string, no array wrapper (confirmed from
  *  engine bytes, not inferred). Fails closed: a status or outcome this build
- *  cannot name must never render as one it can — these drive settle/void
+ *  cannot name must never render as one it can — these drive settle
  *  displays. */
-function decodeImpactStatus(value: unknown, field: string): ImpactMarketStatus {
+function decodeEventStatus(value: unknown, field: string): EventStatus {
   if (value === "Trading") return { kind: "Trading" };
   if (value === "PreResolution") return { kind: "PreResolution" };
   if (typeof value === "object" && value !== null && !Array.isArray(value)) {
     const { name, payload } = variantOf(value, field);
     if (name !== "Resolved") {
       throw new Error(
-        `governance decode: ${field} has unknown ImpactMarketStatus variant "${name}"`,
+        `governance decode: ${field} has unknown EventStatus variant "${name}"`,
       );
     }
     const outcome = typeof payload === "string" ? OUTCOMES[payload] : undefined;
@@ -306,56 +306,30 @@ function decodeImpactStatus(value: unknown, field: string): ImpactMarketStatus {
     }
     return { kind: "Resolved", outcome };
   }
-  throw new Error(
-    `governance decode: ${field} is not a known ImpactMarketStatus`,
-  );
+  throw new Error(`governance decode: ${field} is not a known EventStatus`);
 }
 
-/**
- * One `ImpactMarketDisplayInfo` row from `GET /v1/impact_markets` /
- * `/v1/impact_market/{id}` (exchange-core/src/query.rs), as the engine's
- * positional array: 12 required slots, plus trailers shipped incrementally —
- * [12] `oracleSource` (BE-54), [13] `description` and [14] `rules`
- * (admin-actions v2). Older gateways serve shorter tuples; missing trailers
- * stay `undefined` so callers can tell "not served" from "empty". Anything
- * outside the supported 12–15 shapes — including trailing fields — is a
- * refusal, same fail-closed posture as every decoder in this file.
- */
-export function decodeImpactMarketInfo(
+/** One `AttachedConditional` entry of an event's attachment list: the
+ *  positional `[underlying, cpy, cpn]` triple. */
+function decodeAttachedConditional(
   value: unknown,
-  index?: number,
-): ImpactMarketInfo {
-  const f = index == null ? "impactMarket" : `impactMarket[${index}]`;
-  const raw = toTupleBetween(value, f, 12, 15);
-  const info: ImpactMarketInfo = {
-    impactMarketId: toU32(raw[0], `${f}.impactMarketId`),
-    underlyingMarket: toU32(raw[1], `${f}.underlyingMarket`),
-    cpyMarket: toU32(raw[2], `${f}.cpyMarket`),
-    cpnMarket: toU32(raw[3], `${f}.cpnMarket`),
-    ebyMarket: toU32(raw[4], `${f}.ebyMarket`),
-    ebnMarket: toU32(raw[5], `${f}.ebnMarket`),
-    question: toString(raw[6], `${f}.question`),
-    deadlineMs: toU64(raw[7], `${f}.deadlineMs`),
-    resolutionWindowMs: toU64(raw[8], `${f}.resolutionWindowMs`),
-    status: decodeImpactStatus(raw[9], `${f}.status`),
-    createdMs: toU64(raw[10], `${f}.createdMs`),
-    resolvedMs: toU64(raw[11], `${f}.resolvedMs`),
+  field: string,
+): AttachedConditional {
+  const raw = toTuple(value, field, 3);
+  return {
+    underlyingMarket: toU32(raw[0], `${field}.underlyingMarket`),
+    cpyMarket: toU32(raw[1], `${field}.cpyMarket`),
+    cpnMarket: toU32(raw[2], `${field}.cpnMarket`),
   };
-  if (raw.length > 12) {
-    const oracleSource = decodeOracleSource(raw[12], `${f}.oracleSource`);
-    if (oracleSource) info.oracleSource = oracleSource;
-  }
-  if (raw.length > 13) info.description = toString(raw[13], `${f}.description`);
-  if (raw.length > 14) info.rules = toString(raw[14], `${f}.rules`);
-  return info;
 }
 
-/** `EventInfo` (the `get_event` read model, G17) as a positional tuple: 9
- *  required fields plus the `serde(default)` `oracleSource` trailer. The read
- *  model IS the stored record — no appended presentation copy. */
+/** `EventInfo` (the `get_event` read model) as a positional tuple: 9
+ *  required fields plus the `serde(default)` trailers `oracleSource` and
+ *  `attachedConditionals`. The read model IS the stored record — no appended
+ *  presentation copy. */
 export function decodeEventInfo(value: unknown, index?: number): EventInfo {
   const f = index == null ? "event" : `event[${index}]`;
-  const raw = toTupleBetween(value, f, 9, 10);
+  const raw = toTupleBetween(value, f, 9, 11);
   const info: EventInfo = {
     eventId: toU32(raw[0], `${f}.eventId`),
     ebyMarket: toU32(raw[1], `${f}.ebyMarket`),
@@ -363,55 +337,53 @@ export function decodeEventInfo(value: unknown, index?: number): EventInfo {
     question: toString(raw[3], `${f}.question`),
     settlementMs: toU64(raw[4], `${f}.settlementMs`),
     resolutionWindowMs: toU64(raw[5], `${f}.resolutionWindowMs`),
-    status: decodeImpactStatus(raw[6], `${f}.status`),
+    status: decodeEventStatus(raw[6], `${f}.status`),
     createdMs: toU64(raw[7], `${f}.createdMs`),
     resolvedMs: toU64(raw[8], `${f}.resolvedMs`),
+    attachedConditionals: [],
   };
   if (raw.length > 9) {
     const oracleSource = decodeOracleSource(raw[9], `${f}.oracleSource`);
     if (oracleSource) info.oracleSource = oracleSource;
   }
+  if (raw.length > 10) {
+    info.attachedConditionals = toArray(
+      raw[10],
+      `${f}.attachedConditionals`,
+    ).map((entry, i) =>
+      decodeAttachedConditional(entry, `${f}.attachedConditionals[${i}]`),
+    );
+  }
   return info;
 }
 
-/** `CreateImpactMarket` as the engine's positional payload: 13 required
- *  fields plus three `serde(default)` trailers (oracleSource, description,
- *  rules). The engine's decoder tolerates the trailers' absence, so this
- *  mirror does too — same tolerance, same defaults. */
-function decodeCreateImpactMarket(value: unknown): CreateImpactMarket {
-  const f = "createImpactMarket";
-  const raw = toTupleBetween(value, f, 13, 16);
-  const decoded: CreateImpactMarket = {
-    impactMarketId: toU32(raw[0], `${f}.impactMarketId`),
+/** `AttachConditional` as the engine's positional payload (admin inner tag
+ *  10): 8 required fields plus the `serde(default)` `maxOpenInterest`
+ *  trailer. */
+function decodeAttachConditional(value: unknown): AttachConditional {
+  const f = "attachConditional";
+  const raw = toTupleBetween(value, f, 8, 9);
+  return {
+    eventId: toU32(raw[0], `${f}.eventId`),
     underlyingMarket: toU32(raw[1], `${f}.underlyingMarket`),
     childMarketBase: toU32(raw[2], `${f}.childMarketBase`),
-    question: toString(raw[3], `${f}.question`),
-    deadlineMs: toU64(raw[4], `${f}.deadlineMs`),
-    resolutionWindowMs: toU64(raw[5], `${f}.resolutionWindowMs`),
-    imBps: toU32(raw[6], `${f}.imBps`),
-    mmBps: toU32(raw[7], `${f}.mmBps`),
-    takerFeeBps: toU32(raw[8], `${f}.takerFeeBps`),
-    makerFeeBps: toU32(raw[9], `${f}.makerFeeBps`),
-    fundingIntervalMs: toU64(raw[10], `${f}.fundingIntervalMs`),
-    maxFundingRateBps: toU32(raw[11], `${f}.maxFundingRateBps`),
-    signer: toBytes(raw[12], `${f}.signer`, ADDRESS_LEN),
-    description: raw.length > 14 ? toString(raw[14], `${f}.description`) : "",
-    rules: raw.length > 15 ? toString(raw[15], `${f}.rules`) : "",
+    imBps: toU32(raw[3], `${f}.imBps`),
+    mmBps: toU32(raw[4], `${f}.mmBps`),
+    takerFeeBps: toU32(raw[5], `${f}.takerFeeBps`),
+    makerFeeBps: toU32(raw[6], `${f}.makerFeeBps`),
+    signer: toBytes(raw[7], `${f}.signer`, ADDRESS_LEN),
+    maxOpenInterest:
+      raw.length > 8 ? toU64(raw[8], `${f}.maxOpenInterest`) : 0n,
   };
-  const oracleSource =
-    raw.length > 13
-      ? decodeOracleSource(raw[13], `${f}.oracleSource`)
-      : undefined;
-  if (oracleSource) decoded.oracleSource = oracleSource;
-  return decoded;
 }
 
 /** `CreateEvent` as the engine's positional payload (admin inner tag 9): 9
- *  required fields plus three `serde(default)` trailers (oracleSource,
- *  description, rules). Same tolerance/defaults as the engine decoder. */
+ *  required fields plus four `serde(default)` trailers (oracleSource,
+ *  description, rules, maxOpenInterest). Same tolerance/defaults as the
+ *  engine decoder. */
 function decodeCreateEvent(value: unknown): CreateEvent {
   const f = "createEvent";
-  const raw = toTupleBetween(value, f, 9, 12);
+  const raw = toTupleBetween(value, f, 9, 13);
   const decoded: CreateEvent = {
     eventId: toU32(raw[0], `${f}.eventId`),
     childMarketBase: toU32(raw[1], `${f}.childMarketBase`),
@@ -424,6 +396,8 @@ function decodeCreateEvent(value: unknown): CreateEvent {
     signer: toBytes(raw[8], `${f}.signer`, ADDRESS_LEN),
     description: raw.length > 10 ? toString(raw[10], `${f}.description`) : "",
     rules: raw.length > 11 ? toString(raw[11], `${f}.rules`) : "",
+    maxOpenInterest:
+      raw.length > 12 ? toU64(raw[12], `${f}.maxOpenInterest`) : 0n,
   };
   const oracleSource =
     raw.length > 9
@@ -441,13 +415,11 @@ function decodeBatchItem(value: unknown, field: string): AdminBatchItem {
   switch (name) {
     case "CreateMarket":
       return { kind: "CreateMarket", value: decodeCreateMarket(payload) };
-    case "CreateImpactMarket":
+    case "AttachConditional":
       return {
-        kind: "CreateImpactMarket",
-        value: decodeCreateImpactMarket(payload),
+        kind: "AttachConditional",
+        value: decodeAttachConditional(payload),
       };
-    case "CreateEvent":
-      return { kind: "CreateEvent", value: decodeCreateEvent(payload) };
     default:
       throw new Error(
         `governance decode: ${field} has unknown AdminBatchItem variant "${name}" — this SDK build cannot render it`,
@@ -517,8 +489,8 @@ function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
 const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CreateMarket: 1,
   UpdateAdminSignerRegistry: 2,
-  CreateImpactMarket: 3,
   CreateEvent: 9,
+  AttachConditional: 10,
   Batch: 4,
   SetTriggerMarketConfig: 5,
   UnpauseBridge: 6,
@@ -568,15 +540,15 @@ export function decodeAdminAction(
         kind: "UpdateAdminSignerRegistry",
         value: decodeUpdateRegistry(payload),
       };
-    case "CreateImpactMarket":
-      return {
-        kind: "CreateImpactMarket",
-        value: decodeCreateImpactMarket(payload),
-      };
     case "CreateEvent":
       return {
         kind: "CreateEvent",
         value: decodeCreateEvent(payload),
+      };
+    case "AttachConditional":
+      return {
+        kind: "AttachConditional",
+        value: decodeAttachConditional(payload),
       };
     case "Batch":
       return {

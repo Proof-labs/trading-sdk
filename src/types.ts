@@ -78,13 +78,17 @@ export const ActionType = {
   ApproveAgent: 0x0c,
   /** Revoke a previously approved agent wallet. */
   RevokeAgent: 0x0d,
-  /** Create a 5-book impact-market family (admin). */
-  CreateImpactMarket: 0x0e,
-  /** Resolve an impact-market family with an outcome (admin). DEC-149: was
-   *  `ResolveEvent`; the standalone-event resolve is `ResolveEvent` (0x27). */
-  ResolveImpactMarket: 0x0f,
-  /** Resolve a standalone event with a YES/NO outcome (0x27, DEC-149). */
+  /** Resolve an event with a YES/NO outcome (0x27). */
   ResolveEvent: 0x27,
+  /** Create a derived sub-account under the signing master (0x28). Dormant
+   *  behind the sub-account activation: refused as `SubAccountsInactive`. */
+  CreateSubAccount: 0x28,
+  /** Move balance between a master and one of its sub-accounts (0x29);
+   *  dormant like `CreateSubAccount`. */
+  SubAccountTransfer: 0x29,
+  /** Acquire the single-holder Solana payout lease on a pending withdrawal
+   *  (0x2e). Custody-authorized watchers only. */
+  ClaimWithdrawalPayout: 0x2e,
   /** Update a subset of `MarketConfig` tunables on a live market (admin).
    *  Fee tiering, funding-rate cap tightening, position-limit updates
    *  without a chain rebase. */
@@ -613,7 +617,7 @@ export enum Branch {
   No = 2,
 }
 
-/** Outcome of an impact-market event. */
+/** Outcome of an event. */
 export enum Outcome {
   Yes = 1,
   No = 2,
@@ -632,8 +636,8 @@ export type PriceComparison =
   "GreaterThan" | "LessThan" | "GreaterThanOrEqual" | "LessThanOrEqual";
 
 /**
- * BE-54: how an impact-market event's YES/NO outcome is determined at
- * deadline. Carried optionally on `CreateImpactMarket`; `undefined`
+ * How an event's YES/NO outcome is determined at settlement. Carried
+ * optionally on `CreateEvent`; `undefined`
  * (the wire `nil`) means `RelayerAttested` — the legacy default where
  * the resolver supplies the outcome and the engine trusts it. The two
  * auto-resolve modes derive YES/NO from an on-chain oracle reading and
@@ -655,46 +659,54 @@ export type EventOracleSource =
     }
   | { kind: "RelayerAttested" };
 
-/** Create an impact-market family with 4 child books (CPY/CPN/EBY/EBN). */
-export interface CreateImpactMarket {
-  impactMarketId: number;
+/**
+ * Attach a conditional to an existing event (admin-actions inner tag `0x0a`):
+ * the YES conditional book at `childMarketBase` and the NO book at +1, on
+ * `underlyingMarket`, recorded on the event's attachment list and settling
+ * through the event's two binaries. Governance-only: the embedded `signer`
+ * must be zero.
+ */
+export interface AttachConditional {
+  eventId: number;
+  /** An existing perpetual, not yet attached to this event. */
   underlyingMarket: number;
+  /** `childMarketBase` = CPY, +1 = CPN; both ids must be free. */
   childMarketBase: number;
-  question: string;
-  deadlineMs: bigint;
-  resolutionWindowMs: bigint;
   imBps: number;
   mmBps: number;
   takerFeeBps: number;
   makerFeeBps: number;
-  fundingIntervalMs: bigint;
-  maxFundingRateBps: number;
   signer: Address;
-  /**
-   * BE-54: how this event's YES/NO outcome is determined at deadline.
-   * Optional — `undefined` (the wire `nil`) means `RelayerAttested`,
-   * which preserves the legacy behavior where the resolver supplies the
-   * outcome and the engine trusts it. Setting `UnderlyingPriceVsStrike`
-   * or `MarketOracle` makes the resolution self-verifying: the engine
-   * derives YES/NO from the named oracle's reading and rejects any
-   * `ResolveEvent` whose `outcome` doesn't match. `Outcome.Void`
-   * overrides the auto-derivation in either auto-resolve mode (operator
-   * escape hatch for unresolvable events).
-   */
-  oracleSource?: EventOracleSource;
-  /** Optional event body text for frontend detail pages. Encodes as "" when
-   *  absent (matches the engine's `serde(default)`). */
-  description?: string;
-  /** Optional resolution criteria text. Encodes as "" when absent (matches
-   *  the engine's `serde(default)`). */
-  rules?: string;
+  /** Open-interest cap for each of the two conditional books, in the
+   *  underlying's size scale; `undefined` or `0n` = uncapped (encodes as 0). */
+  maxOpenInterest?: bigint;
 }
 
-/** Resolve an impact-market family (DEC-149: formerly `ResolveEvent`, 0x0f). */
-export interface ResolveImpactMarket {
-  impactMarketId: number;
-  outcome: Outcome;
-  signer: Address;
+/** Create a derived sub-account under the signing master (0x28). */
+export interface CreateSubAccount {
+  /** The master account (20-byte address). */
+  owner: Address;
+  /** Non-zero id, unique per master. */
+  subAccountId: number;
+  /** 32-byte display name, zero-padded. */
+  name: Uint8Array;
+}
+
+/** Move balance between a master and one of its sub-accounts (0x29). One
+ *  side must be the master; the other a derived child. */
+export interface SubAccountTransfer {
+  owner: Address;
+  from: Address;
+  to: Address;
+  /** Micro-USDC, greater than zero. */
+  amount: bigint;
+}
+
+/** Acquire the single-holder Solana payout lease on a pending withdrawal
+ *  (0x2e). `holder` is the claiming watcher's own address. */
+export interface ClaimWithdrawalPayout {
+  withdrawalId: bigint;
+  holder: Address;
 }
 
 /** Resolve a standalone event (0x27). YES/NO only — the engine rejects `Void`. */
@@ -726,9 +738,21 @@ export interface CreateEvent {
   description?: string;
   /** Optional resolution criteria; encodes as "" when absent. */
   rules?: string;
+  /** Open-interest cap for each of the event's two binary books, in
+   *  contracts; `undefined` or `0n` = uncapped (encodes as 0). */
+  maxOpenInterest?: bigint;
 }
 
-/** Stored record for a standalone event — the `get_event` read model (G17). */
+/** One conditional attached to an event: the underlying perpetual and the
+ *  YES/NO conditional books that settle against it. */
+export interface AttachedConditional {
+  underlyingMarket: number;
+  cpyMarket: number;
+  cpnMarket: number;
+}
+
+/** Stored record for an event — the `get_event` read model: its two binary
+ *  books and every conditional attached to it. */
 export interface EventInfo {
   eventId: number;
   ebyMarket: number;
@@ -736,11 +760,13 @@ export interface EventInfo {
   question: string;
   settlementMs: bigint;
   resolutionWindowMs: bigint;
-  status: ImpactMarketStatus;
+  status: EventStatus;
   createdMs: bigint;
   resolvedMs: bigint;
   /** `undefined` (wire `nil`) means `RelayerAttested`. */
   oracleSource?: EventOracleSource;
+  /** Every attachment, in attachment order; empty for a binary-only event. */
+  attachedConditionals: AttachedConditional[];
 }
 
 /**
@@ -859,35 +885,12 @@ export interface UpdateMarketFees {
   maxOpenInterest?: bigint | null;
 }
 
-/** Lifecycle status of an impact-market family. */
-export type ImpactMarketStatus =
+/** Lifecycle status of an event: `Trading` until its settlement time,
+ *  `Resolved(outcome)` once settled. */
+export type EventStatus =
   | { kind: "Trading" }
   | { kind: "PreResolution" }
   | { kind: "Resolved"; outcome: Outcome };
-
-/** On-chain info for an impact-market family. */
-export interface ImpactMarketInfo {
-  impactMarketId: number;
-  underlyingMarket: number;
-  cpyMarket: number;
-  cpnMarket: number;
-  ebyMarket: number;
-  ebnMarket: number;
-  question: string;
-  deadlineMs: bigint;
-  resolutionWindowMs: bigint;
-  status: ImpactMarketStatus;
-  createdMs: bigint;
-  resolvedMs: bigint;
-  /** BE-54: how the YES/NO outcome is determined at deadline. `undefined`
-   *  (older gateways / pre-BE-54 records) means `RelayerAttested`. */
-  oracleSource?: EventOracleSource;
-  /** Event body text; `""` when the record has none. `undefined` only on
-   *  gateways older than admin-actions v2 (field not served). */
-  description?: string;
-  /** Resolution criteria text; same shipping note as `description`. */
-  rules?: string;
-}
 
 // ---------------------------------------------------------------------------
 // Action union type
@@ -973,7 +976,9 @@ export type TraderAction =
   | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage }
   | { type: "ClosePosition"; data: ClosePosition }
   | { type: "SetPositionTriggers"; data: SetPositionTriggers }
-  | { type: "CancelPositionTriggers"; data: CancelPositionTriggers };
+  | { type: "CancelPositionTriggers"; data: CancelPositionTriggers }
+  | { type: "CreateSubAccount"; data: CreateSubAccount }
+  | { type: "SubAccountTransfer"; data: SubAccountTransfer };
 
 /**
  * Operator actions — privileged infrastructure submitted by the operator's
@@ -997,9 +1002,8 @@ export type OperatorAction =
   | { type: "ConfirmWithdrawalReceipt"; data: ConfirmWithdrawalReceipt }
   | { type: "FailWithdrawalReceipt"; data: FailWithdrawalReceipt }
   | { type: "AuthorizeWithdrawal"; data: AuthorizeWithdrawal }
-  | { type: "CreateImpactMarket"; data: CreateImpactMarket }
-  | { type: "ResolveImpactMarket"; data: ResolveImpactMarket }
   | { type: "ResolveEvent"; data: ResolveEvent }
+  | { type: "ClaimWithdrawalPayout"; data: ClaimWithdrawalPayout }
   | { type: "UpdateMarketFees"; data: UpdateMarketFees };
 
 /**
@@ -1033,8 +1037,7 @@ export interface UpdateAdminSignerRegistry {
  */
 export type AdminBatchItem =
   | { kind: "CreateMarket"; value: CreateMarket }
-  | { kind: "CreateImpactMarket"; value: CreateImpactMarket }
-  | { kind: "CreateEvent"; value: CreateEvent };
+  | { kind: "AttachConditional"; value: AttachConditional };
 
 /**
  * Governance cancel of every resting order one account holds, optionally
@@ -1052,21 +1055,22 @@ export interface CancelAllOrdersForAccount {
 
 /**
  * Closed, typed set of operations executable through the multisig. The
- * embedded `CreateMarket.signer` / `CreateImpactMarket.signer` must be
+ * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
  * zero — governance supplies the authorization, not the embedded address.
  *
  * `Batch` executes its items atomically in order against one overlay:
  * all succeed or the proposal fails with no partial state. Admitted on
- * chain only once admin-actions v2 activates (`CreateImpactMarket`
- * likewise); the engine refuses the tags below the activation height.
+ * chain only once admin-actions v2 activates; `CreateEvent` and
+ * `AttachConditional` ride the standalone-events activation. The engine
+ * refuses every tag below its activation height.
  */
 export type AdminAction =
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
   | { kind: "CreateMarket"; value: CreateMarket }
   | { kind: "UpdateAdminSignerRegistry"; value: UpdateAdminSignerRegistry }
-  | { kind: "CreateImpactMarket"; value: CreateImpactMarket }
   | { kind: "CreateEvent"; value: CreateEvent }
+  | { kind: "AttachConditional"; value: AttachConditional }
   | { kind: "Batch"; value: AdminBatchItem[] }
   | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig }
   // Unit variant — no fields; lifts a bridge pause under multisig
@@ -2060,13 +2064,13 @@ export interface PositionInfo {
   positionEpoch?: bigint;
 }
 
-/** One entry per active impact market the account touches. Tuple of
- * (impactMarketId, branch) where branch is "Yes" or "No". Ordering is
- * ascending by impactMarketId (deterministic across nodes).
+/** One entry per active event the account touches through a conditional.
+ * Tuple of (eventId, branch) where branch is "Yes" or "No". Ordering is
+ * ascending by eventId (deterministic across nodes).
  *
  * See AccountInfo.bindingScenario for semantics. */
 export interface BindingScenarioEntry {
-  impactMarketId: number;
+  eventId: number;
   branch: "Yes" | "No";
 }
 
@@ -2117,8 +2121,8 @@ export interface HistoryCashFlow {
 export interface HistoryResolution {
   /** One of "conditional_settled" | "conditional_voided" | "prediction_settled". */
   kind: "conditional_settled" | "conditional_voided" | "prediction_settled";
-  /** Impact-market family ID the resolved position belonged to. */
-  impactMarketId: string;
+  /** Event the resolved position belonged to, as a decimal string. */
+  eventId: string;
   /** Child market ID (CPY/CPN or EBY/EBN). */
   market: string;
   /** 20-byte owner address as hex. */
@@ -2232,7 +2236,7 @@ export interface AccountInfo {
   /** [5] Margin ratio in basis points (equity / total notional * 10000). */
   marginRatioBps: bigint;
   /** [6] Resolution scenario that maximizes totalMm — the "binding" outcome.
-   * One entry per active impact market, ascending by impactMarketId.
+   * One entry per active event, ascending by eventId.
    * Empty for perp-only accounts. Undefined on responses from gateways
    * older than 2026-04-24 (backward compat — the SDK decoder reads
    * msgpack arrays by index). See Jesse's P1 #3 in docs/api-scope.md. */
@@ -2251,8 +2255,8 @@ export interface AccountInfo {
 
 /** Market kind discriminator. Wire shape mirrors the Rust `MarketKind`
  *  enum exactly: `"Perp"` is a bare string, the parameterised variants
- *  are `{ ConditionalPerp: [impactId, branch] }` /
- *  `{ PredictionBinary: [impactId, branch] }`. */
+ *  are `{ ConditionalPerp: [eventId, branch] }` /
+ *  `{ PredictionBinary: [eventId, branch] }` — both keyed by the event. */
 export type MarketKind =
   | "Perp"
   | { ConditionalPerp: [number, "Yes" | "No"] }
@@ -2270,7 +2274,8 @@ export interface MarketsSnapshot {
   chainId: Uint8Array;
   height: bigint;
   markets: MarketConfig[];
-  impactMarkets: ImpactMarketInfo[];
+  /** Every event with its binaries and attached conditionals. */
+  events: EventInfo[];
 }
 
 export interface MarketConfig {

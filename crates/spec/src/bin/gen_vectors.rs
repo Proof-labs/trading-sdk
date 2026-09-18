@@ -48,19 +48,27 @@ fn write_ndjson<T: Serialize>(path: &std::path::Path, rows: &[T]) -> Result<(), 
     Ok(())
 }
 
-/// The shared `CreateImpactMarket` fixture (engine golden: impact family 91 on
-/// underlying market 15). Only `oracle_source` varies across the cases, so a
+/// The shared `CreateEvent` fixture (the engine's golden event 700 with its
+/// binaries from 70000). Only `oracle_source` varies across the cases, so a
 /// byte difference between them isolates the enum encoding.
-fn impact_market_fields(signer: &[u8], oracle_source: serde_json::Value) -> serde_json::Value {
+fn event_fields(oracle_source: serde_json::Value) -> serde_json::Value {
     json!({
-        "impact_market_id": 91, "underlying_market": 15,
-        "child_market_base": 9100, "question": "does it land?",
-        "deadline_ms": 1_000_000u64, "resolution_window_ms": 1000u64,
-        "im_bps": 3334, "mm_bps": 1667,
+        "event_id": 700, "child_market_base": 70000, "pool_id": 0,
+        "question": "Will the Fed cut rates?",
+        "settlement_ms": 1_778_000_000_000u64, "resolution_window_ms": 1000u64,
         "taker_fee_bps": 5, "maker_fee_bps": 2,
-        "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
-        "signer": signer, "oracle_source": oracle_source,
-        "description": "", "rules": ""
+        "signer": vec![0u8; 20], "oracle_source": oracle_source,
+        "description": "", "rules": "", "max_open_interest": 0u64
+    })
+}
+
+/// The shared `AttachConditional` fixture: the perp on market 15 attached to
+/// event 700 with its conditional books from 9100.
+fn attach_fields() -> serde_json::Value {
+    json!({
+        "event_id": 700, "underlying_market": 15, "child_market_base": 9100,
+        "im_bps": 3334, "mm_bps": 1667, "taker_fee_bps": 5, "maker_fee_bps": 2,
+        "signer": vec![0u8; 20], "max_open_interest": 0u64
     })
 }
 
@@ -161,9 +169,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     const FAIL_WITHDRAWAL: u8 = 0x0b;
     const APPROVE_AGENT: u8 = 0x0c;
     const REVOKE_AGENT: u8 = 0x0d;
-    const CREATE_IMPACT_MARKET: u8 = 0x0e;
-    const RESOLVE_IMPACT_MARKET: u8 = 0x0f;
     const RESOLVE_EVENT: u8 = 0x27;
+    const CREATE_SUB_ACCOUNT: u8 = 0x28;
+    const SUB_ACCOUNT_TRANSFER: u8 = 0x29;
+    const CLAIM_WITHDRAWAL_PAYOUT: u8 = 0x2e;
     const SET_USER_MARKET_LEVERAGE: u8 = 0x16;
     const CANCEL_CLIENT_ORDER: u8 = 0x18;
     const CANCEL_ALL_ORDERS: u8 = 0x19;
@@ -387,12 +396,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             }),
         ),
         // Admin-actions v2: a Batch proposal carrying both item variants —
-        // the engine's own golden fixture (perp on market 15 + impact
-        // family 91), so the nested-enum path (list payload, both items,
-        // the impact serde(default) trailers) is pinned across all three
+        // a perp on market 15 and its attachment to event 700 in one
+        // ceremony — so the nested-enum path (list payload, both items, the
+        // attachment's serde(default) trailer) is pinned across all three
         // language bindings.
         codec_case(
-            "propose_admin_action/batch_perp_plus_impact",
+            "propose_admin_action/batch_perp_plus_attach",
             PROPOSE_ADMIN_ACTION,
             json!({
                 "proposer": vec![0x22u8; 20],
@@ -404,17 +413,18 @@ fn main() -> Result<(), Box<dyn Error>> {
                         "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
                         "pool_id": 0, "sz_decimals": 0, "ticker": "", "max_open_interest": 0u64
                     }},
-                    { "CreateImpactMarket": {
-                        "impact_market_id": 91, "underlying_market": 15,
-                        "child_market_base": 9100, "question": "does it land?",
-                        "deadline_ms": 1000000u64, "resolution_window_ms": 1000u64,
-                        "im_bps": 3334, "mm_bps": 1667,
-                        "taker_fee_bps": 5, "maker_fee_bps": 2,
-                        "funding_interval_ms": 0u64, "max_funding_rate_bps": 3000,
-                        "signer": vec![0u8; 20], "oracle_source": null,
-                        "description": "", "rules": ""
-                    }}
+                    { "AttachConditional": attach_fields() }
                 ]}
+            }),
+        ),
+        // The singleton attachment arm (inner admin tag 10).
+        codec_case(
+            "propose_admin_action/attach_conditional",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "AttachConditional": attach_fields() }
             }),
         ),
         codec_case(
@@ -434,22 +444,74 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }}
             }),
         ),
-        // A struct-variant oracle source inside a governance proposal: impact
-        // market auto-resolution is what the oracle source drives, and the
-        // admin path is where Web Admin actually creates these (#98).
+        // `CreateEvent` (inner admin tag 9) with every `EventOracleSource`
+        // shape: absent (`c0`), the bare-string unit variant, and the two
+        // struct variants with both comparison directions. Externally tagged:
+        // a struct variant is a one-entry map whose fields encode as a
+        // positional array. The `UnderlyingPriceVsStrike` case is wire
+        // coverage only — the engine refuses that mode for an event, which
+        // has no underlying.
         codec_case(
-            "propose_admin_action/create_impact_market_market_oracle",
+            "propose_admin_action/create_event_no_oracle_source",
             PROPOSE_ADMIN_ACTION,
             json!({
                 "proposer": vec![0x22u8; 20],
                 "registry_version": 3u64,
-                "action": { "CreateImpactMarket": impact_market_fields(
-                    &[0u8; 20],
-                    json!({ "MarketOracle": {
-                        "market": 15, "strike_price": 66_750_000_000u64,
-                        "comparison": "GreaterThanOrEqual"
-                    }}),
-                )}
+                "action": { "CreateEvent": event_fields(json!(null)) }
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/create_event_relayer_attested",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "CreateEvent": event_fields(json!("RelayerAttested")) }
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/create_event_market_oracle_gte",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "CreateEvent": event_fields(json!({ "MarketOracle": {
+                    "market": u32::MAX, "strike_price": u64::MAX,
+                    "comparison": "GreaterThanOrEqual"
+                }})) }
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/create_event_market_oracle_lt",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "CreateEvent": event_fields(json!({ "MarketOracle": {
+                    "market": 15, "strike_price": 250_000u64, "comparison": "LessThan"
+                }})) }
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/create_event_underlying_price_vs_strike_lte",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "CreateEvent": event_fields(json!({ "UnderlyingPriceVsStrike": {
+                    "strike_price": 0u64, "comparison": "LessThanOrEqual"
+                }})) }
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/create_event_underlying_price_vs_strike_gt",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0x22u8; 20],
+                "registry_version": 3u64,
+                "action": { "CreateEvent": event_fields(json!({ "UnderlyingPriceVsStrike": {
+                    "strike_price": 66_750_000_000u64, "comparison": "GreaterThan"
+                }})) }
             }),
         ),
         // Synthetic opaque bytes test the outer wire only, not a valid live policy.
@@ -645,97 +707,26 @@ fn main() -> Result<(), Box<dyn Error>> {
             REVOKE_AGENT,
             json!({ "owner": owner, "agent_pubkey": vec![0xAAu8; 32] }),
         ),
-        // Impact-market create (standalone 0x0e) + resolution. oracle_source,
-        // description, and rules are serde(default); this case leaves them
-        // absent, so the tail encodes as `c0 a0 a0` (nil, "", ""). An ABSENT
-        // oracle source is not the same wire value as the `RelayerAttested`
-        // unit variant (bare string) — the cases below pin every variant.
+        // Sub-accounts (0x28, 0x29) and the withdrawal payout lease (0x2e):
+        // the wire's own frozen envelopes use these fixtures.
         codec_case(
-            "create_impact_market/no_oracle_source",
-            CREATE_IMPACT_MARKET,
-            impact_market_fields(&signer, json!(null)),
-        ),
-        // Every `EventOracleSource` variant, and every `PriceComparison` value
-        // nested inside the two struct variants, is byte-pinned (#98). The
-        // adapter has dedicated routing for this enum
-        // (`eventOracleSourceToWasm` / `eventOracleSourceFromWasm`); before
-        // these vectors a regression there would have passed the whole suite
-        // while producing bad signed CreateImpactMarket payloads. Externally
-        // tagged: the unit variant is the bare string, struct variants are a
-        // one-entry map whose fields encode as a positional array.
-        codec_case(
-            "create_impact_market/relayer_attested",
-            CREATE_IMPACT_MARKET,
-            impact_market_fields(&signer, json!("RelayerAttested")),
+            "create_sub_account/basic",
+            CREATE_SUB_ACCOUNT,
+            json!({ "owner": owner, "sub_account_id": 1, "name": vec![0u8; 32] }),
         ),
         codec_case(
-            "create_impact_market/underlying_price_vs_strike_gt",
-            CREATE_IMPACT_MARKET,
-            impact_market_fields(
-                &signer,
-                json!({ "UnderlyingPriceVsStrike": {
-                    "strike_price": 66_750_000_000u64, "comparison": "GreaterThan"
-                }}),
-            ),
+            "sub_account_transfer/basic",
+            SUB_ACCOUNT_TRANSFER,
+            json!({ "owner": owner, "from": owner, "to": vec![0x02u8; 20], "amount": 1_000_000u64 }),
         ),
         codec_case(
-            "create_impact_market/underlying_price_vs_strike_lte",
-            CREATE_IMPACT_MARKET,
-            impact_market_fields(
-                &signer,
-                json!({ "UnderlyingPriceVsStrike": {
-                    "strike_price": 0u64, "comparison": "LessThanOrEqual"
-                }}),
-            ),
+            "claim_withdrawal_payout/basic",
+            CLAIM_WITHDRAWAL_PAYOUT,
+            json!({ "withdrawal_id": 777u64, "holder": vec![0x05u8; 20] }),
         ),
-        codec_case(
-            "create_impact_market/market_oracle_lt",
-            CREATE_IMPACT_MARKET,
-            impact_market_fields(
-                &signer,
-                json!({ "MarketOracle": {
-                    "market": 15, "strike_price": 250_000u64, "comparison": "LessThan"
-                }}),
-            ),
-        ),
-        // Engine's worst-case fixture (exchange-wire codec tests): u32::MAX
-        // market and u64::MAX strike — also pins u64 precision through the
-        // JSON-carrying bindings.
-        codec_case(
-            "create_impact_market/market_oracle_gte",
-            CREATE_IMPACT_MARKET,
-            impact_market_fields(
-                &signer,
-                json!({ "MarketOracle": {
-                    "market": u32::MAX, "strike_price": u64::MAX,
-                    "comparison": "GreaterThanOrEqual"
-                }}),
-            ),
-        ),
-        // All three `Outcome` variants are pinned, not just the happy one.
         // `outcome` is a NUMERIC_ENUM_FIELDS entry in codec-adapter.ts (the
-        // integer-vs-name class the markSourceMode regression belonged to), so
-        // a vector for one variant leaves the other two mappings unproven —
-        // `side` and `time_in_force` are fully covered and this was the one
-        // enum that was not.
-        // DEC-149: byte 0x0f is the legacy impact-family resolve
-        // (ResolveImpactMarket, `impact_market_id`); the standalone-event
-        // resolve is ResolveEvent (0x27, `event_id`, YES/NO only).
-        codec_case(
-            "resolve_impact_market/yes",
-            RESOLVE_IMPACT_MARKET,
-            json!({ "impact_market_id": 91, "outcome": "Yes", "signer": signer }),
-        ),
-        codec_case(
-            "resolve_impact_market/no",
-            RESOLVE_IMPACT_MARKET,
-            json!({ "impact_market_id": 91, "outcome": "No", "signer": signer }),
-        ),
-        codec_case(
-            "resolve_impact_market/void",
-            RESOLVE_IMPACT_MARKET,
-            json!({ "impact_market_id": 91, "outcome": "Void", "signer": signer }),
-        ),
+        // integer-vs-name class the markSourceMode regression belonged to);
+        // both outcomes an event can take are pinned (Void is refused).
         codec_case(
             "resolve_event/yes",
             RESOLVE_EVENT,
