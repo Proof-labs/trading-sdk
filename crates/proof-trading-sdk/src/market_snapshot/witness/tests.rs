@@ -5,6 +5,7 @@
 )]
 
 use super::*;
+use crate::market_snapshot::ConfirmationPolling;
 
 fn node(id: u8) -> NodeId {
     NodeId::new([id; 20]).expect("fixture node ids are non-zero")
@@ -470,7 +471,7 @@ async fn halted_chain_confirmation_wait_respects_the_original_whole_call_deadlin
         ),
         ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
     ];
-    for _ in 0..MAX_CONFIRMATION_POLLS {
+    for _ in 0..ConfirmationPolling::DEFAULT_POLLS {
         responses.push(("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO));
     }
     let (url, task) = server(responses).await;
@@ -485,6 +486,72 @@ async fn halted_chain_confirmation_wait_respects_the_original_whole_call_deadlin
 }
 
 #[tokio::test]
+async fn a_configured_schedule_replaces_the_default_poll_count() {
+    let mut responses = vec![
+        ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
+        (
+            "/v1/markets-snapshot",
+            snapshot_body(100, NOW, 1, 2),
+            Duration::ZERO,
+        ),
+        ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
+    ];
+    // Two polls, not the default eight: the third status read never happens.
+    for _ in 0..2 {
+        responses.push(("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO));
+    }
+    let (url, task) = server(responses).await;
+    let client = MarketsSnapshotClient::with_confirmation_polling(
+        &url,
+        Duration::from_secs(5),
+        ConfirmationPolling {
+            polls: 2,
+            interval: Duration::from_millis(10),
+        },
+    )
+    .expect("two polls are inside the ceiling");
+    let start = Instant::now();
+    assert_eq!(
+        client.read_bound_inventory(chain_id()).await.unwrap_err(),
+        WitnessError::NotYetCommitted
+    );
+    // Eight polls at the default interval could not finish this quickly.
+    assert!(start.elapsed() < Duration::from_millis(500));
+    task.abort();
+}
+
+#[test]
+fn a_schedule_outside_the_safety_ceiling_is_refused() {
+    for polling in [
+        ConfirmationPolling {
+            polls: ConfirmationPolling::MAX_POLLS + 1,
+            interval: ConfirmationPolling::DEFAULT_INTERVAL,
+        },
+        ConfirmationPolling {
+            polls: 1,
+            interval: ConfirmationPolling::MAX_INTERVAL + Duration::from_millis(1),
+        },
+    ] {
+        assert!(matches!(
+            MarketsSnapshotClient::with_confirmation_polling(
+                "http://127.0.0.1:9080",
+                Duration::from_secs(5),
+                polling,
+            ),
+            Err(SnapshotError::InvalidConfirmationPolling)
+        ));
+    }
+    // A schedule longer than the deadline is a caller's choice, not an error:
+    // the whole-call deadline ends the wait.
+    assert!(MarketsSnapshotClient::with_confirmation_polling(
+        "http://127.0.0.1:9080",
+        Duration::from_millis(100),
+        ConfirmationPolling::default(),
+    )
+    .is_ok());
+}
+
+#[tokio::test]
 async fn confirmation_poll_cap_is_finite_even_when_the_call_budget_is_longer() {
     let mut responses = vec![
         ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
@@ -495,7 +562,7 @@ async fn confirmation_poll_cap_is_finite_even_when_the_call_budget_is_longer() {
         ),
         ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
     ];
-    for _ in 0..MAX_CONFIRMATION_POLLS {
+    for _ in 0..ConfirmationPolling::DEFAULT_POLLS {
         responses.push(("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO));
     }
     let (url, task) = server(responses).await;

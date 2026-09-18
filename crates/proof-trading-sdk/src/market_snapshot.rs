@@ -45,6 +45,8 @@ pub enum SnapshotError {
     CatchingUp,
     RpcUnavailable,
     HashMismatch,
+    /// A confirmation-poll schedule outside the safety ceiling.
+    InvalidConfirmationPolling,
 }
 
 impl fmt::Display for SnapshotError {
@@ -169,6 +171,38 @@ fn validate_value(value: &Value) -> Result<(), SnapshotError> {
     }
 }
 
+/// How long `read_bound_inventory` waits for the header that commits a
+/// snapshot's app hash, inside the one whole-call deadline. The defaults are
+/// [`ConfirmationPolling::DEFAULT_POLLS`] polls,
+/// [`ConfirmationPolling::DEFAULT_INTERVAL`] apart; the constants below are the
+/// outer safety ceiling, not a policy.
+#[cfg(feature = "gateway")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConfirmationPolling {
+    pub polls: usize,
+    pub interval: std::time::Duration,
+}
+
+#[cfg(feature = "gateway")]
+impl ConfirmationPolling {
+    pub const DEFAULT_POLLS: usize = 8;
+    pub const DEFAULT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+    /// A caller that wants to wait longer waits through its own deadline, not
+    /// through an unbounded number of reads against one node.
+    pub const MAX_POLLS: usize = 64;
+    pub const MAX_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+}
+
+#[cfg(feature = "gateway")]
+impl Default for ConfirmationPolling {
+    fn default() -> Self {
+        Self {
+            polls: Self::DEFAULT_POLLS,
+            interval: Self::DEFAULT_INTERVAL,
+        }
+    }
+}
+
 /// One-shot canonical gateway transport. No signing, nonce allocation, retry,
 /// node fallback, caching or partial inventory reconciliation lives here.
 #[cfg(feature = "gateway")]
@@ -177,11 +211,23 @@ pub struct MarketsSnapshotClient {
     client: reqwest::Client,
     endpoint: reqwest::Url,
     timeout: std::time::Duration,
+    confirmation: ConfirmationPolling,
 }
 
 #[cfg(feature = "gateway")]
 impl MarketsSnapshotClient {
+    /// The default confirmation-poll schedule. Use
+    /// [`with_confirmation_polling`](Self::with_confirmation_polling) to choose
+    /// another.
     pub fn new(gateway_url: &str, timeout: std::time::Duration) -> Result<Self, SnapshotError> {
+        Self::with_confirmation_polling(gateway_url, timeout, ConfirmationPolling::default())
+    }
+
+    pub fn with_confirmation_polling(
+        gateway_url: &str,
+        timeout: std::time::Duration,
+        confirmation: ConfirmationPolling,
+    ) -> Result<Self, SnapshotError> {
         let mut base =
             reqwest::Url::parse(gateway_url).map_err(|_| SnapshotError::InvalidEndpoint)?;
         if !matches!(base.scheme(), "http" | "https")
@@ -205,10 +251,19 @@ impl MarketsSnapshotClient {
             .timeout(timeout)
             .build()
             .map_err(|_| SnapshotError::Transport)?;
+        // A schedule longer than the deadline is allowed: the whole-call
+        // deadline already ends the wait, and a caller may want the polls to
+        // run only as far as a short deadline reaches.
+        if confirmation.polls > ConfirmationPolling::MAX_POLLS
+            || confirmation.interval > ConfirmationPolling::MAX_INTERVAL
+        {
+            return Err(SnapshotError::InvalidConfirmationPolling);
+        }
         Ok(Self {
             client,
             endpoint: base,
             timeout,
+            confirmation,
         })
     }
 

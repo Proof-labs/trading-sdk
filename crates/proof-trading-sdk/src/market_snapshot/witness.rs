@@ -9,10 +9,6 @@ use super::{MarketsSnapshotClient, NodeId};
 use super::{SnapshotError, MAX_SNAPSHOT_BYTES};
 use serde::Deserialize;
 use std::fmt;
-use std::time::Duration;
-
-const MAX_CONFIRMATION_POLLS: usize = 8;
-const CONFIRMATION_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotWitness {
@@ -441,8 +437,8 @@ impl MarketsSnapshotClient {
         decode_bound_identity(&self.get("/v1/status").await?, expected_chain)
     }
 
-    /// Three reads, at most eight confirmation polls and one header lookup, under ONE
-    /// whole-call deadline. A fast-moving chain does not require the final
+    /// Three reads, the client's confirmation polls and one header lookup, under
+    /// ONE whole-call deadline. A fast-moving chain does not require the final
     /// status response to happen to land at exactly H+1. No snapshot retry or
     /// alternate-backend fallback; the candidate clock is never renewed.
     pub async fn read_bound_inventory(
@@ -463,11 +459,11 @@ impl MarketsSnapshotClient {
             // Keep the same candidate and its original clock while waiting for
             // the next committed header. Starting over with a newer snapshot
             // can phase-lock fast reads to the head and never verify anything.
-            for _ in 0..MAX_CONFIRMATION_POLLS {
+            for _ in 0..self.confirmation.polls {
                 if after.identity.latest_height.get() >= target {
                     break;
                 }
-                tokio::time::sleep(CONFIRMATION_POLL_INTERVAL).await;
+                tokio::time::sleep(self.confirmation.interval).await;
                 let next = self.chain_identity_bound(expected_chain).await?;
                 validate_anchor_progress(&after, &next)?;
                 validate_bracket(&bound, &before, &next)?;

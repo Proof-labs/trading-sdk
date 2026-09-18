@@ -111,6 +111,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   this surface are `NodeId`, `AppHash`, `BlockHeight`, `MarketId` and
   `MicroUsdc` rather than bare integers and byte arrays, and receipt reads take
   the existing `TxHash`. Each type carries the check its decoder performed.
+  `read_bound_inventory()` takes its confirmation-poll schedule from the client:
+  `MarketsSnapshotClient::with_confirmation_polling` accepts a
+  `ConfirmationPolling { polls, interval }`, defaulting to the previous 8 polls
+  250 ms apart, with 64 polls and a five-second interval as the outer ceiling.
+  The whole-call deadline still ends the wait.
   `WitnessError` names one fault per variant: an unsupported witness version
   (carrying the version), a malformed witness field, a witness/snapshot height
   disagreement, an out-of-order bracket, an inconsistent anchor height, a
