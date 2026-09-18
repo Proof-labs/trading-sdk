@@ -1053,6 +1053,33 @@ export interface CancelAllOrdersForAccount {
   market?: number | null;
 }
 
+/** One operator-authority allowlist an `UpdateAuthoritySet` action targets.
+ *  Externally tagged on the wire, so the domain arrives as this bare
+ *  string, never a numeric discriminant. `Custody`/`MarketParams`/
+ *  `ScheduledOps` are the capability-split sets; `Oracle`/`CexComposite`/
+ *  `Relayer` are the genesis-seeded presence sets. */
+export type AuthorityDomain =
+  | "Oracle"
+  | "CexComposite"
+  | "Relayer"
+  | "Custody"
+  | "MarketParams"
+  | "ScheduledOps";
+
+/**
+ * Governance addition/removal of members in one privileged authorization
+ * set (inner tag `0x07`). `add` and `remove` are each canonically sorted,
+ * duplicate-free, and disjoint; the engine refuses a proposal that would
+ * leave the domain's net set empty.
+ */
+export interface UpdateAuthoritySet {
+  domain: AuthorityDomain;
+  /** Addresses to add to the domain (each a 20-byte address). */
+  add: Address[];
+  /** Addresses to remove from the domain (each a 20-byte address). */
+  remove: Address[];
+}
+
 /**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
@@ -1076,7 +1103,7 @@ export type AdminAction =
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
-  | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount };
+  | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet };
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */
