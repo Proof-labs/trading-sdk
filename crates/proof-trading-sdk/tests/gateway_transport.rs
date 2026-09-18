@@ -8,6 +8,7 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use proof_trading_sdk::gateway::*;
+use proof_trading_sdk::market_snapshot::BlockHeight;
 use serde_json::{json, Value};
 use std::{num::NonZeroU32, time::Duration};
 use tokio::{
@@ -125,7 +126,7 @@ async fn exact_signed_request_and_committed_execution_are_distinct_from_permissi
         result.outcome,
         SubmissionOutcome::Committed(CommittedReceipt {
             hash,
-            height: 17.try_into().unwrap(),
+            height: BlockHeight::new(17).expect("a positive fixture height"),
             code: 21
         })
     );
@@ -244,7 +245,7 @@ async fn chain_identity_uses_gateway_status_and_real_chain_binding_and_time() {
         chain.chain_binding,
         proof_trading_sdk::crypto::chain_id_from_string("proof-fixture")
     );
-    assert_eq!(chain.latest_height, 9_007_199_254_740_993);
+    assert_eq!(chain.latest_height.get(), 9_007_199_254_740_993);
     assert_eq!(chain.latest_block_time_ms, 1_789_043_696_123);
     assert!(!chain.catching_up);
     assert!(String::from_utf8(task.await.unwrap())
