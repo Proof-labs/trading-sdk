@@ -30,7 +30,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Conformance vectors regenerated: the family cases leave, the attach,
     batch, create-event oracle-source and new outer-action cases arrive; the
     engine snapshot fixture is `engine-349fa9b.hex`. The wire pin is the
-    2.0.0 branch commit until `v2.0.0` is tagged.
+    `v2.0.0` tag.
 
 - TypeScript 4.2.0 adds gateway-only `queryFinancialState({markets, owners})`:
   one finalized snapshot of selected raw accounts, fee/funding market state,
