@@ -169,6 +169,10 @@ jobs:
       # `--ignore-scripts` skips the `prepare` build so an install failure is
       # not confused with a compile failure; we build explicitly next.
       - run: npm ci --ignore-scripts
+      # eslint:recommended — a logic-bug gate tsc structurally is not (duplicate
+      # switch case / redeclared interface, unreachable code, dup object keys).
+      # No wasm/rust needed, so it runs before the build. See eslint.config.js.
+      - run: npm run lint
       # Post-cutover this builds the WASM core then tsc; pre-cutover it is tsc
       # only. Either way the toolchain above satisfies it.
       - run: npm run build

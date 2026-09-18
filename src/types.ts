@@ -1078,12 +1078,6 @@ export type AdminAction =
   | { kind: "UnpauseBridge" }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount };
 
-/** Governance cancel of a wallet's resting orders, optionally one market (tag 8). */
-export interface CancelAllOrdersForAccount {
-  owner: Address;
-  market?: number | null;
-}
-
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */
 export interface SubmitOracleObservation {
