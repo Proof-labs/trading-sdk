@@ -135,14 +135,40 @@ impl BoundInventorySnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WitnessError {
+    /// The snapshot, status or block read itself failed.
     Snapshot(SnapshotError),
+    /// The snapshot response carries no `witness` object.
     MissingWitness,
-    Malformed,
+    /// The witness object announces a version this SDK does not decode.
+    UnsupportedWitnessVersion { version: u8 },
+    /// A witness or status field is not the hexadecimal or decimal shape its
+    /// contract requires, or is the empty value that names nothing.
+    MalformedWitness,
+    /// The three reads did not come from one node.
     BackendMismatch,
-    HeightMismatch,
-    TimeMismatch,
-    HashMismatch,
-    Uncommitted,
+    /// The witness names a different height than the snapshot it accompanies.
+    WitnessHeightMismatch,
+    /// The status reads do not bracket the snapshot's height.
+    BracketOutOfOrder,
+    /// A status read's app hash does not sit exactly one height below its own
+    /// latest height, so the two cannot describe the same node.
+    AnchorHeightInconsistent,
+    /// `/v1/block` answered for a height other than the requested `H + 1`.
+    HeaderHeightMismatch,
+    /// `H + 1` does not fit a `u64`.
+    HeightOverflow,
+    /// The snapshot's finalized clock sits outside its bracket, or a same-height
+    /// read reports a different clock.
+    ClockMismatch,
+    /// Two reads of the same state height report different app hashes, or the
+    /// committing header does not carry the witness's app hash.
+    AppHashMismatch,
+    /// The bracket needs the `/v1/block?height=H+1` body and the caller passed
+    /// none.
+    MissingBlockBody,
+    /// Height `H + 1` is not committed yet, so nothing commits the witness's
+    /// app hash. The read is unfinished, not refused.
+    NotYetCommitted,
 }
 
 impl From<SnapshotError> for WitnessError {
@@ -200,34 +226,34 @@ struct BlockHeader {
 
 fn positive_decimal(text: &str) -> Result<u64, WitnessError> {
     if text.is_empty() || text.starts_with('0') || !text.bytes().all(|b| b.is_ascii_digit()) {
-        return Err(WitnessError::Malformed);
+        return Err(WitnessError::MalformedWitness);
     }
-    text.parse().map_err(|_| WitnessError::Malformed)
+    text.parse().map_err(|_| WitnessError::MalformedWitness)
 }
 
 fn node_id(text: &str) -> Result<NodeId, WitnessError> {
-    NodeId::new(nonzero_hex(text)?).ok_or(WitnessError::Malformed)
+    NodeId::new(nonzero_hex(text)?).ok_or(WitnessError::MalformedWitness)
 }
 
 fn app_hash(text: &str) -> Result<AppHash, WitnessError> {
-    AppHash::new(nonzero_hex(text)?).ok_or(WitnessError::Malformed)
+    AppHash::new(nonzero_hex(text)?).ok_or(WitnessError::MalformedWitness)
 }
 
 fn block_height(text: &str) -> Result<BlockHeight, WitnessError> {
-    BlockHeight::new(positive_decimal(text)?).ok_or(WitnessError::Malformed)
+    BlockHeight::new(positive_decimal(text)?).ok_or(WitnessError::MalformedWitness)
 }
 
 fn nonzero_hex<const N: usize>(text: &str) -> Result<[u8; N], WitnessError> {
     if text.len() != N.saturating_mul(2) || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(WitnessError::Malformed);
+        return Err(WitnessError::MalformedWitness);
     }
     let mut result = [0; N];
     for (out, pair) in result.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
-        let pair = std::str::from_utf8(pair).map_err(|_| WitnessError::Malformed)?;
-        *out = u8::from_str_radix(pair, 16).map_err(|_| WitnessError::Malformed)?;
+        let pair = std::str::from_utf8(pair).map_err(|_| WitnessError::MalformedWitness)?;
+        *out = u8::from_str_radix(pair, 16).map_err(|_| WitnessError::MalformedWitness)?;
     }
     if result == [0; N] {
-        return Err(WitnessError::Malformed);
+        return Err(WitnessError::MalformedWitness);
     }
     Ok(result)
 }
@@ -239,10 +265,13 @@ pub fn decode_bound_snapshot(
     expected_chain: [u8; 32],
 ) -> Result<BoundMarketsSnapshot, WitnessError> {
     let snapshot = decode_snapshot(body, expected_chain)?;
-    let raw: WireEnvelope = serde_json::from_slice(body).map_err(|_| WitnessError::Malformed)?;
+    let raw: WireEnvelope =
+        serde_json::from_slice(body).map_err(|_| WitnessError::MalformedWitness)?;
     let raw = raw.witness.ok_or(WitnessError::MissingWitness)?;
     if raw.version != 1 {
-        return Err(WitnessError::Malformed);
+        return Err(WitnessError::UnsupportedWitnessVersion {
+            version: raw.version,
+        });
     }
     let witness = SnapshotWitness {
         node_id: node_id(&raw.node_id)?,
@@ -251,7 +280,7 @@ pub fn decode_bound_snapshot(
         app_hash: app_hash(&raw.app_hash)?,
     };
     if witness.height.get() != snapshot.height {
-        return Err(WitnessError::HeightMismatch);
+        return Err(WitnessError::WitnessHeightMismatch);
     }
     Ok(BoundMarketsSnapshot { snapshot, witness })
 }
@@ -269,7 +298,7 @@ pub fn decode_bound_identity(
         .latest_height
         .get()
         .checked_sub(1)
-        .ok_or(WitnessError::Uncommitted)?;
+        .ok_or(WitnessError::NotYetCommitted)?;
     Ok(BoundChainIdentity {
         identity,
         node_id: node_id(&raw.node_info.id)?,
@@ -293,13 +322,18 @@ fn validate_bracket(
     {
         return Err(SnapshotError::WrongChain.into());
     }
-    if witness.height.get() != snapshot.height
-        || before.identity.latest_height.get() > snapshot.height
+    if witness.height.get() != snapshot.height {
+        return Err(WitnessError::WitnessHeightMismatch);
+    }
+    if before.identity.latest_height.get() > snapshot.height
         || snapshot.height > after.identity.latest_height.get()
-        || before.app_hash_height.checked_add(1) != Some(before.identity.latest_height.get())
+    {
+        return Err(WitnessError::BracketOutOfOrder);
+    }
+    if before.app_hash_height.checked_add(1) != Some(before.identity.latest_height.get())
         || after.app_hash_height.checked_add(1) != Some(after.identity.latest_height.get())
     {
-        return Err(WitnessError::HeightMismatch);
+        return Err(WitnessError::AnchorHeightInconsistent);
     }
     let time = witness.finalized_block_time_ms;
     if before.identity.latest_block_time_ms > time
@@ -309,10 +343,10 @@ fn validate_bracket(
         || (after.identity.latest_height.get() == snapshot.height
             && after.identity.latest_block_time_ms != time)
     {
-        return Err(WitnessError::TimeMismatch);
+        return Err(WitnessError::ClockMismatch);
     }
     if before.app_hash_height == after.app_hash_height && before.app_hash != after.app_hash {
-        return Err(WitnessError::HashMismatch);
+        return Err(WitnessError::AppHashMismatch);
     }
     Ok(())
 }
@@ -325,16 +359,16 @@ fn validate_anchor_progress(
         return Err(WitnessError::BackendMismatch);
     }
     if next.identity.latest_height < previous.identity.latest_height {
-        return Err(WitnessError::HeightMismatch);
+        return Err(WitnessError::BracketOutOfOrder);
     }
     if next.identity.latest_block_time_ms < previous.identity.latest_block_time_ms
         || (next.identity.latest_height == previous.identity.latest_height
             && next.identity.latest_block_time_ms != previous.identity.latest_block_time_ms)
     {
-        return Err(WitnessError::TimeMismatch);
+        return Err(WitnessError::ClockMismatch);
     }
     if next.app_hash_height == previous.app_hash_height && next.app_hash != previous.app_hash {
-        return Err(WitnessError::HashMismatch);
+        return Err(WitnessError::AppHashMismatch);
     }
     Ok(())
 }
@@ -353,7 +387,7 @@ pub fn validate_bound_inventory(
     for anchor in [&before, &after] {
         if anchor.app_hash_height == bound.witness.height.get() {
             if anchor.app_hash != bound.witness.app_hash {
-                return Err(WitnessError::HashMismatch);
+                return Err(WitnessError::AppHashMismatch);
             }
             matched = true;
         }
@@ -364,24 +398,24 @@ pub fn validate_bound_inventory(
             .height
             .get()
             .checked_add(1)
-            .ok_or(WitnessError::HeightMismatch)?;
+            .ok_or(WitnessError::HeightOverflow)?;
         if after.identity.latest_height.get() < target {
-            return Err(WitnessError::Uncommitted);
+            return Err(WitnessError::NotYetCommitted);
         }
-        let body = block_body.ok_or(WitnessError::Uncommitted)?;
+        let body = block_body.ok_or(WitnessError::MissingBlockBody)?;
         if body.len() > MAX_SNAPSHOT_BYTES {
             return Err(SnapshotError::TooLarge.into());
         }
         let result: BlockResult = chain::rpc(body)?;
         let header = result.block.header;
         if positive_decimal(&header.height)? != target {
-            return Err(WitnessError::HeightMismatch);
+            return Err(WitnessError::HeaderHeightMismatch);
         }
         if header.chain_id != before.identity.network || header.chain_id != after.identity.network {
             return Err(SnapshotError::WrongChain.into());
         }
         if app_hash(&header.app_hash)? != bound.witness.app_hash {
-            return Err(WitnessError::HashMismatch);
+            return Err(WitnessError::AppHashMismatch);
         }
     }
     Ok(BoundInventorySnapshot {
@@ -425,7 +459,7 @@ impl MarketsSnapshotClient {
                 .height
                 .get()
                 .checked_add(1)
-                .ok_or(WitnessError::HeightMismatch)?;
+                .ok_or(WitnessError::HeightOverflow)?;
             // Keep the same candidate and its original clock while waiting for
             // the next committed header. Starting over with a newer snapshot
             // can phase-lock fast reads to the head and never verify anything.
@@ -446,7 +480,7 @@ impl MarketsSnapshotClient {
                 None
             } else {
                 if after.identity.latest_height.get() < target {
-                    return Err(WitnessError::Uncommitted);
+                    return Err(WitnessError::NotYetCommitted);
                 }
                 Some(
                     self.get_with_query("/v1/block", Some(&format!("height={target}")))

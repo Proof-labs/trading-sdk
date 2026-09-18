@@ -111,6 +111,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   this surface are `NodeId`, `AppHash`, `BlockHeight`, `MarketId` and
   `MicroUsdc` rather than bare integers and byte arrays, and receipt reads take
   the existing `TxHash`. Each type carries the check its decoder performed.
+  `WitnessError` names one fault per variant: an unsupported witness version
+  (carrying the version), a malformed witness field, a witness/snapshot height
+  disagreement, an out-of-order bracket, an inconsistent anchor height, a
+  header answered for the wrong height, an `H + 1` overflow, a clock mismatch,
+  an app-hash mismatch, a missing caller-supplied block body, and a height that
+  is simply not committed yet.
 
 - Rust gateway `MarketsSnapshotClient::receipt_observation()` distinguishes an
   exact committed receipt from a canonical HTTP 404/500 not-found observation

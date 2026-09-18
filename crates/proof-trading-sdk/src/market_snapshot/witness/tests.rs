@@ -89,11 +89,17 @@ fn legacy_snapshot_decode_is_unchanged_but_bound_method_requires_witness() {
             "{field}"
         );
     }
+    let mut unsupported = full.clone();
+    unsupported["witness"]["version"] = json!(2);
+    assert_eq!(
+        decode_bound_snapshot(&bytes(&unsupported), chain_id()).unwrap_err(),
+        WitnessError::UnsupportedWitnessVersion { version: 2 }
+    );
     let mut bad = full;
     bad["witness"]["height"] = json!("101");
     assert_eq!(
         decode_bound_snapshot(&bytes(&bad), chain_id()).unwrap_err(),
-        WitnessError::HeightMismatch
+        WitnessError::WitnessHeightMismatch
     );
 }
 
@@ -141,7 +147,7 @@ fn hashes_are_compared_at_state_height_not_reported_header_height() {
     // Status H exposes the previous state. It cannot commit snapshot post-H.
     assert_eq!(
         validate_bound_inventory(snapshot(1), before(), before(), None).unwrap_err(),
-        WitnessError::Uncommitted
+        WitnessError::NotYetCommitted
     );
 }
 
@@ -161,7 +167,7 @@ fn cross_replica_aba_and_wrong_matching_hash_are_rejected() {
     wrong.app_hash = hash(3);
     assert_eq!(
         validate_bound_inventory(snapshot(1), before(), wrong, None).unwrap_err(),
-        WitnessError::HashMismatch
+        WitnessError::AppHashMismatch
     );
 }
 
@@ -171,13 +177,13 @@ fn snapshot_clock_cannot_be_replaced_with_fresh_status_clock() {
     stale.witness.finalized_block_time_ms = NOW - 10_000;
     assert_eq!(
         validate_bound_inventory(stale, before(), after(), None).unwrap_err(),
-        WitnessError::TimeMismatch
+        WitnessError::ClockMismatch
     );
     let mut future = snapshot(1);
     future.witness.finalized_block_time_ms = NOW + 100;
     assert_eq!(
         validate_bound_inventory(future, before(), after(), None).unwrap_err(),
-        WitnessError::TimeMismatch
+        WitnessError::ClockMismatch
     );
     let verified = validate_bound_inventory(snapshot(1), before(), after(), None).unwrap();
     assert_eq!(verified.witness.finalized_block_time_ms, NOW);
@@ -200,13 +206,22 @@ fn fast_chain_uses_exact_next_header_and_rejects_wrong_height_chain_or_hash() {
     .is_ok());
     assert_eq!(
         validate_bound_inventory(snapshot(1), before(), advanced(), None).unwrap_err(),
-        WitnessError::Uncommitted
+        WitnessError::MissingBlockBody
     );
-    for body in [
-        block_body(100, 2),
-        block_body(101, 3),
-        json!({"error":{"code":-32603}}),
-    ] {
+    for height in [100, 102] {
+        assert_eq!(
+            validate_bound_inventory(
+                snapshot(1),
+                before(),
+                advanced(),
+                Some(&bytes(&block_body(height, 2)))
+            )
+            .unwrap_err(),
+            WitnessError::HeaderHeightMismatch,
+            "header height {height} must not satisfy the requested height 101"
+        );
+    }
+    for body in [block_body(101, 3), json!({"error":{"code":-32603}})] {
         assert!(
             validate_bound_inventory(snapshot(1), before(), advanced(), Some(&bytes(&body)))
                 .is_err()
@@ -218,6 +233,18 @@ fn fast_chain_uses_exact_next_header_and_rejects_wrong_height_chain_or_hash() {
         validate_bound_inventory(snapshot(1), before(), advanced(), Some(&bytes(&foreign)))
             .unwrap_err(),
         WitnessError::Snapshot(SnapshotError::WrongChain)
+    );
+}
+
+#[test]
+fn maximum_snapshot_height_reports_height_overflow() {
+    let bound =
+        decode_bound_snapshot(&bytes(&snapshot_body(u64::MAX, NOW, 1, 2)), chain_id()).unwrap();
+    let anchor =
+        decode_bound_identity(&bytes(&status_body(u64::MAX, NOW, 1, 1)), chain_id()).unwrap();
+    assert_eq!(
+        validate_bound_inventory(bound, anchor.clone(), anchor, None).unwrap_err(),
+        WitnessError::HeightOverflow
     );
 }
 
@@ -277,6 +304,59 @@ async fn fast_chain_whole_flow_uses_gateway_exact_height_query() {
     let verified = client.read_bound_inventory(chain_id()).await.unwrap();
     assert_eq!(verified.snapshot.height, 100);
     assert_eq!(verified.witness.node_id, node(1));
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn gateway_wrong_header_height_reports_header_height_mismatch() {
+    let responses = vec![
+        ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
+        (
+            "/v1/markets-snapshot",
+            snapshot_body(100, NOW, 1, 2),
+            Duration::ZERO,
+        ),
+        (
+            "/v1/status",
+            status_body(105, NOW + 500, 1, 8),
+            Duration::ZERO,
+        ),
+        ("/v1/block?height=101", block_body(102, 2), Duration::ZERO),
+    ];
+    let (url, task) = server(responses).await;
+    let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
+    assert_eq!(
+        client.read_bound_inventory(chain_id()).await.unwrap_err(),
+        WitnessError::HeaderHeightMismatch
+    );
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn gateway_maximum_snapshot_height_reports_height_overflow() {
+    let responses = vec![
+        (
+            "/v1/status",
+            status_body(u64::MAX, NOW, 1, 1),
+            Duration::ZERO,
+        ),
+        (
+            "/v1/markets-snapshot",
+            snapshot_body(u64::MAX, NOW, 1, 2),
+            Duration::ZERO,
+        ),
+        (
+            "/v1/status",
+            status_body(u64::MAX, NOW, 1, 1),
+            Duration::ZERO,
+        ),
+    ];
+    let (url, task) = server(responses).await;
+    let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
+    assert_eq!(
+        client.read_bound_inventory(chain_id()).await.unwrap_err(),
+        WitnessError::HeightOverflow
+    );
     task.await.unwrap();
 }
 
@@ -374,7 +454,7 @@ async fn confirmation_poll_cannot_erase_a_conflicting_same_height_hash() {
     let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
     assert_eq!(
         client.read_bound_inventory(chain_id()).await.unwrap_err(),
-        WitnessError::HashMismatch
+        WitnessError::AppHashMismatch
     );
     task.await.unwrap();
 }
@@ -422,7 +502,7 @@ async fn confirmation_poll_cap_is_finite_even_when_the_call_budget_is_longer() {
     let client = MarketsSnapshotClient::new(&url, Duration::from_secs(5)).unwrap();
     assert_eq!(
         client.read_bound_inventory(chain_id()).await.unwrap_err(),
-        WitnessError::Uncommitted
+        WitnessError::NotYetCommitted
     );
     task.await.unwrap();
 }
