@@ -1,3 +1,5 @@
+export { validateSetOracleGuards } from "./oracle-guards.js";
+
 // Types
 export {
   type Address,
@@ -36,6 +38,7 @@ export {
   type SetPositionTriggers,
   type CancelPositionTriggers,
   type SetTriggerMarketConfig,
+  type SetOracleGuards,
   type BridgeWithdrawalReceipt,
   type OperatorReceiptProof,
   type ApproveAgent,
