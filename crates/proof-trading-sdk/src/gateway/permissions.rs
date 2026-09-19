@@ -127,6 +127,12 @@ pub struct CertifiedPrice {
     pub provider_time: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnchorCoverageInfo {
+    pub price: Option<u64>,
+    pub covered_ms: u64,
+    pub required_ms: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommittedVerdict {
     pub height: u64,
     pub block_time: u64,
@@ -134,6 +140,12 @@ pub struct CommittedVerdict {
     pub reason: VerdictReason,
     pub certified: Option<CertifiedPrice>,
     pub eligible_since: Option<u64>,
+    pub faults: u32,
+    pub valid_sources: u8,
+    pub current_times: [Option<u64>; 2],
+    pub evidence: [Option<[u8; 32]>; 2],
+    pub last_good: Option<CertifiedPrice>,
+    pub anchor: AnchorCoverageInfo,
 }
 /// One oracle dependency, never portfolio-wide trading/withdrawal authorization.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,6 +180,12 @@ type VerdictWire = (
     VerdictReason,
     Option<(u64, u64)>,
     Option<u64>,
+    u32,
+    u8,
+    [Option<u64>; 2],
+    [Option<[u8; 32]>; 2],
+    Option<(u64, u64)>,
+    (Option<u64>, u64, u64),
 );
 type PermissionWire = (
     u32,
@@ -232,6 +250,19 @@ fn verdict(w: VerdictWire) -> Result<CommittedVerdict, GatewayError> {
             provider_time: c.1,
         }),
         eligible_since: w.5,
+        faults: w.6,
+        valid_sources: w.7,
+        current_times: w.8,
+        evidence: w.9,
+        last_good: w.10.map(|c| CertifiedPrice {
+            price: c.0,
+            provider_time: c.1,
+        }),
+        anchor: AnchorCoverageInfo {
+            price: (w.11).0,
+            covered_ms: (w.11).1,
+            required_ms: (w.11).2,
+        },
     })
 }
 
