@@ -1307,7 +1307,14 @@ export class ExchangeClient {
   }
 
   /** Read the fail-closed next-height trigger admission predicate. Heights
-   * are parsed from raw JSON into bigint without a lossy Number round-trip. */
+   * are parsed from raw JSON into bigint without a lossy Number round-trip.
+   *
+   * @deprecated `GET /v1/triggers/status` is deleted upstream: the node
+   * dropped it with its activation gates (exchange#619, genesis-first) and
+   * the gateway drops it in gateway 4.0.0 (api-gateway#175). Trigger actions
+   * are permanently active, so there is nothing to read. Against a gateway or
+   * node that no longer serves the route this rejects with an `API error`
+   * for the 404 response. It will be removed in the next major version. */
   async queryTriggerStatus(): Promise<TriggerStatus> {
     const path = "/v1/triggers/status";
     const res = await fetch(`${this.readBaseUrl}${path}`);
