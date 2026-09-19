@@ -18,9 +18,11 @@ import type {
   ProposalDisplayInfo,
   ProposalStatus,
   SetTriggerMarketConfig,
+  SetOracleGuards,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
 } from "./types.js";
+import { validateSetOracleGuards } from "./oracle-guards.js";
 import { Outcome } from "./types.js";
 
 /**
@@ -533,6 +535,7 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   UpdateAuthoritySet: 7,
   CancelAllOrdersForAccount: 8,
   ConfigureOraclePolicy: 12,
+  SetOracleGuards: 13,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
@@ -553,6 +556,22 @@ export function decodeAdminAction(
         kind: "CancelAllOrdersForAccount",
         value: decodeCancelAllOrdersForAccount(payload),
       };
+    case "SetOracleGuards": {
+      const raw = toTuple(payload, "setOracleGuards", 3);
+      const value: SetOracleGuards = {
+        market: toU32(raw[0], "setOracleGuards.market"),
+        markPriceMaxOracleAgeMs:
+          raw[1] == null
+            ? null
+            : toU64(raw[1], "setOracleGuards.markPriceMaxOracleAgeMs"),
+        maxOracleDeviationBps:
+          raw[2] == null
+            ? null
+            : toU32(raw[2], "setOracleGuards.maxOracleDeviationBps"),
+      };
+      validateSetOracleGuards(value);
+      return { kind: "SetOracleGuards", value };
+    }
     case "ConfigureOraclePolicy": {
       const raw = toTuple(payload, "configureOraclePolicy", 2);
       return {

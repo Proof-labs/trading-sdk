@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Adds the typed `SetOracleGuards` multisig action (inner tag 13), proposal
+  read decoding, and client-side engine-shape validation. Optional fields stay
+  unchanged; zero/unset guards are rejected. Wire-pinned codec/signing vectors
+  cover both fields and each field alone (trading-sdk#165).
+
 - Mirrors the `UpdateAuthoritySet` governance arm (inner tag `0x07`,
   exchange#422 / DEC-87): addition/removal of members in one privileged
   authority allowlist (`Oracle`, `CexComposite`, `Relayer`, `Custody`,

@@ -666,6 +666,17 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
     throw new Error(`toAdminAction: unknown unit variant ${input}`);
   }
   const v = input as Record<string, unknown>;
+  if (v.SetOracleGuards) {
+    const guards = v.SetOracleGuards as Record<string, unknown>;
+    return {
+      kind: "SetOracleGuards",
+      value: {
+        market: guards.market as number,
+        markPriceMaxOracleAgeMs: bigOrNull(guards.mark_price_max_oracle_age_ms),
+        maxOracleDeviationBps: guards.max_oracle_deviation_bps as number | null,
+      },
+    };
+  }
   if (v.ConfigureOraclePolicy) {
     const policy = v.ConfigureOraclePolicy as Record<string, unknown>;
     return {
@@ -990,7 +1001,7 @@ describe("conformance vectors (TypeScript)", () => {
     // unpause-bridge, update-authority-set add and remove, cancel-all-for
     // -account scoped and unscoped, and oracle policy), approve, reject,
     // and all three emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(21);
+    expect(govCases.length).toBe(25);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

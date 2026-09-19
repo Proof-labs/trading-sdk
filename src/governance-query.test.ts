@@ -534,6 +534,24 @@ describe("byte-field validation", () => {
     return () => decodeProposalDisplayInfo(raw);
   }
 
+  it("reads a SetOracleGuards proposal only under its tag 13", () => {
+    const raw = validProposalRaw();
+    raw[11] = 13;
+    raw[12] = { SetOracleGuards: [10, 30_000, 2_000] };
+    expect(decodeProposalDisplayInfo(raw).action).toEqual({
+      kind: "SetOracleGuards",
+      value: {
+        market: 10,
+        markPriceMaxOracleAgeMs: 30_000n,
+        maxOracleDeviationBps: 2_000,
+      },
+    });
+    raw[11] = 12;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(
+      /does not match SetOracleGuards tag 13/,
+    );
+  });
+
   it("reads a CancelAllOrdersForAccount proposal under its tag 8", () => {
     // The kind→tag table row is only exercised through a proposal read: a
     // wrong tag here would refuse every real tag-8 proposal as a mismatch.
