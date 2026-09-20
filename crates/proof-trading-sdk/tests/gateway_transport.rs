@@ -95,7 +95,7 @@ fn committed() -> Value {
         "Satisfied",
         policy(1),
         null,
-        [15, 1_000, "Fresh", "Fresh", [123, 990], 999]
+        [15, 1_000, "Fresh", "Fresh", [123, 990], 999, 0, 2, [990, 950], [null, null], null, [123, 3_600_000, 3_600_000]]
     ])
 }
 fn encoded(value: Value) -> Value {
@@ -288,7 +288,7 @@ async fn permissions_preserve_exact_typed_epoch_and_truthful_unavailability() {
             "Unavailable",
             policy(1),
             null,
-            [15, 1000, "Stale", "ExpiredSource", null, null]
+            [15, 1000, "Stale", "ExpiredSource", null, null, 0, 2, [null, null], [null, null], null, [null, 0, 3_600_000]]
         ]),
     ] {
         let (client, task) = fixture(encoded(wire.clone())).await;

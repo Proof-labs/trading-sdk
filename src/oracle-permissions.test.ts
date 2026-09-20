@@ -27,7 +27,7 @@ const fresh = (): unknown[] => [
   "Satisfied",
   policy(),
   null,
-  [14, 1000, "Fresh", "Fresh", [100000000, 900], 950],
+  [14, 1000, "Fresh", "Fresh", [100000000, 900], 950, 0, 2, [900, 850], [null, null], null, [100000000, 3600000, 3600000]],
 ];
 const encode = (data: unknown) =>
   Buffer.from(new Encoder({ useBigInt64: true }).encode(data)).toString(
@@ -94,7 +94,7 @@ describe("committed oracle permissions", () => {
   it("retains stale reason without authorizing a last-good price", () => {
     const raw = fresh();
     raw[5] = "Unavailable";
-    raw[8] = [14, 9000, "Stale", "ExpiredSource", null, null];
+    raw[8] = [14, 9000, "Stale", "ExpiredSource", null, null, 0, 2, [null, null], [null, null], null, [null, 0, 3600000]];
     expect(decodeOraclePermissions(raw).verdict).toMatchObject({
       status: "Stale",
       reason: "ExpiredSource",
