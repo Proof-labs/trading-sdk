@@ -7,10 +7,3 @@ members = [
     "crates/spec",
 ]
 resolver = "2"
-
-# TODO: proof-wire 2.1.0 is not on the Proof-labs/wire mirror yet. Until its
-# tag exists, resolve it from the exchange commit that merged it. Then delete
-# this section and bump the `proof-wire` tag in
-# crates/proof-trading-sdk/Cargo.toml.
-[patch."https://github.com/Proof-labs/wire.git"]
-proof-wire = { git = "https://github.com/Proof-labs/exchange", rev = "2f188e28922759e8d5781ff0703906c91611de37" }
