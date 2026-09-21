@@ -18,6 +18,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `isMissingMark(error)` — type guard that returns `true` when the error is a
   503 `GatewayHttpError` with `errorCode === "MissingMark"`. Companion to the
   DEC-175 contract in `exchange/docs/account-query-errors.md`.
+- `GatewayClient::account_valuation` — the typed account-valuation read
+  (`POST /info` → `clearinghouseState`). Oracle unavailability surfaces as the
+  new `gateway::ErrorKind::MissingMark` instead of a generic HTTP failure,
+  mirroring the engine's restored `503 errorCode=MissingMark` contract
+  (DEC-175; exchange#704). Additive: Rust crate 4.0.0 → 4.1.0.
 
 ### Changed
 
@@ -26,7 +31,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of `Error`. Callers that caught `Error` and inspected `message` will
   see a different class and message format; callers using `isMissingMark` or
   checking `error instanceof GatewayHttpError` are unaffected.
-
 - Pre-fill (pending) SL/TP limbs on the order actions and the F2 trigger
   expansion's client surface (contract: ProofOfBrain
   `delivery/epics/trigger-expansion-binary-conditional-prefill.md`, §7-T).
