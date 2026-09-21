@@ -562,11 +562,31 @@ export function execErrorName(code: number, log?: string): string {
 
 /** Non-success gateway HTTP response; its unconsumed body remains available to callers. */
 export class GatewayHttpError extends Error {
+  public readonly errorCode: string | undefined;
   constructor(
     public readonly status: number,
     public readonly response: Response,
+    errorCode?: string,
   ) {
-    super(`Gateway request failed (${status})`);
+    super(
+      errorCode
+        ? `Gateway request failed (${status}): ${errorCode}`
+        : `Gateway request failed (${status})`,
+    );
     this.name = "GatewayHttpError";
+    this.errorCode = errorCode;
   }
+}
+
+/**
+ * Type guard: true when the error is a 503 `GatewayHttpError` whose
+ * `errorCode` is `"MissingMark"` — a required oracle mark was unavailable
+ * for account valuation. Callers should retry after the oracle recovers.
+ */
+export function isMissingMark(error: unknown): error is GatewayHttpError {
+  return (
+    error instanceof GatewayHttpError &&
+    error.status === 503 &&
+    error.errorCode === "MissingMark"
+  );
 }

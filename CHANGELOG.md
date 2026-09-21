@@ -7,6 +7,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `GatewayHttpError.errorCode` — optional typed error code extracted from the
+  gateway's JSON response body (e.g. `"MissingMark"`). The `GatewayReads`
+  path clones the response to parse the code while leaving the original body
+  unconsumed; the `postInfoJson` path (owner-scoped reads via `POST /info`)
+  now throws `GatewayHttpError` instead of a plain `Error`, preserving both
+  `status` and `errorCode`.
+- `isMissingMark(error)` — type guard that returns `true` when the error is a
+  503 `GatewayHttpError` with `errorCode === "MissingMark"`. Companion to the
+  DEC-175 contract in `exchange/docs/account-query-errors.md`.
+
+### Changed
+
+- `postInfoJson` (internal, used by `queryAccount` / `queryOpenOrders` /
+  `queryWithdrawals` under `useGateway: true`) now throws `GatewayHttpError`
+  instead of `Error`. Callers that caught `Error` and inspected `message` will
+  see a different class and message format; callers using `isMissingMark` or
+  checking `error instanceof GatewayHttpError` are unaffected.
+
 - Pre-fill (pending) SL/TP limbs on the order actions and the F2 trigger
   expansion's client surface (contract: ProofOfBrain
   `delivery/epics/trigger-expansion-binary-conditional-prefill.md`, §7-T).

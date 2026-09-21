@@ -2268,8 +2268,9 @@ async function postInfoJson(
   });
   const json = (await res.json()) as Record<string, unknown>;
   if (!res.ok || json.error) {
-    const msg = (json.error as string) ?? `HTTP ${res.status}`;
-    throw new Error(`API error: ${msg}`);
+    const errorCode =
+      typeof json.errorCode === "string" ? json.errorCode : undefined;
+    throw new GatewayHttpError(res.status, res, errorCode);
   }
   return json;
 }
