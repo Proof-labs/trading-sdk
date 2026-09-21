@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `GatewayClient::account_valuation` — the typed account-valuation read
+  (`POST /info` → `clearinghouseState`). Oracle unavailability surfaces as the
+  new `gateway::ErrorKind::MissingMark` instead of a generic HTTP failure,
+  mirroring the engine's restored `503 errorCode=MissingMark` contract
+  (DEC-175; exchange#704). Additive: Rust crate 4.0.0 → 4.1.0.
 - Pre-fill (pending) SL/TP limbs on the order actions and the F2 trigger
   expansion's client surface (contract: ProofOfBrain
   `delivery/epics/trigger-expansion-binary-conditional-prefill.md`, §7-T).

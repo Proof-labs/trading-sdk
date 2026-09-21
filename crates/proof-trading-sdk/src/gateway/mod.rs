@@ -10,6 +10,7 @@ use refusal::{ErrorBody, RefusalEvidence};
 pub use refusal::{MaintenanceMode, PreAdmissionRefusal};
 
 use crate::market_snapshot::BlockHeight;
+use crate::query::AccountInfo;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{
     header::{HeaderMap, HeaderValue, RETRY_AFTER},
@@ -32,6 +33,7 @@ pub enum Operation {
     Configuration,
     ChainIdentity,
     OraclePermissions,
+    AccountValuation,
     Submit,
     Receipt,
 }
@@ -42,6 +44,11 @@ pub enum ErrorKind {
     Transport,
     Timeout,
     BodyTooLarge,
+    /// The account-valuation read found no usable required mark: the node's
+    /// typed `503 errorCode=MissingMark` contract (DEC-175). Distinct from a
+    /// transport failure so callers can implement fallback instead of
+    /// misreading oracle unavailability as an error.
+    MissingMark,
     HttpStatus(u16),
     InvalidResponse,
     HashMismatch,
@@ -249,6 +256,41 @@ struct SyncInfo {
 struct SignedRequest {
     action: String,
 }
+
+#[derive(Deserialize)]
+struct DataEnvelope {
+    data: String,
+}
+
+/// The node's typed unavailability marker (DEC-175): a 503 body carrying
+/// `errorCode=MissingMark` means the required account-valuation mark was
+/// unavailable, not that the request or the node failed.
+fn missing_mark_envelope(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()
+        .and_then(|envelope| {
+            envelope
+                .get("errorCode")
+                .and_then(|code| code.as_str())
+                .map(str::to_owned)
+        })
+        .as_deref()
+        == Some("MissingMark")
+}
+
+/// The gateway accepts exactly the unprefixed 40-hex-character internal
+/// address (mirrors the gateway's own address validation).
+fn valuation_address(user: &str) -> Result<&str, GatewayError> {
+    let addr = user.strip_prefix("0x").unwrap_or(user);
+    if addr.len() == 40 && addr.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(addr)
+    } else {
+        Err(GatewayError::new(
+            Operation::AccountValuation,
+            ErrorKind::InvalidInput,
+        ))
+    }
+}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SubmitRead {
@@ -388,7 +430,7 @@ impl GatewayClient {
         operation: Operation,
         method: Method,
         path: &str,
-        body: Option<&SignedRequest>,
+        body: Option<&serde_json::Value>,
     ) -> Result<ResponseBody, GatewayError> {
         self.request_body(operation, method, path, body, ErrorBody::Refuse)
             .await
@@ -399,7 +441,7 @@ impl GatewayClient {
         operation: Operation,
         method: Method,
         path: &str,
-        body: Option<&SignedRequest>,
+        body: Option<&serde_json::Value>,
         error_body: ErrorBody,
     ) -> Result<ResponseBody, GatewayError> {
         let url = self
@@ -516,6 +558,41 @@ impl GatewayClient {
         self.submit_once(bytes).await
     }
 
+    /// The account-valuation read (`POST /info` with `clearinghouseState`).
+    /// Oracle unavailability is typed: the gateway passes the node's
+    /// `503 errorCode=MissingMark` envelope through (DEC-175) and this method
+    /// maps it to [`ErrorKind::MissingMark`] so callers implement fallback
+    /// instead of misreading oracle unavailability as a generic failure.
+    pub async fn account_valuation(&self, user: &str) -> Result<AccountInfo, GatewayError> {
+        let op = Operation::AccountValuation;
+        let addr = valuation_address(user)?;
+        let body = self
+            .request_body(
+                op,
+                Method::POST,
+                "/info",
+                Some(&serde_json::json!({
+                    "type": "clearinghouseState",
+                    "user": addr,
+                })),
+                ErrorBody::Classify,
+            )
+            .await?;
+        if body.status.as_u16() == 503 && missing_mark_envelope(&body.bytes) {
+            return Err(GatewayError::new(op, ErrorKind::MissingMark));
+        }
+        let envelope: DataEnvelope = body.decode(op).map_err(|mut error| {
+            if !body.status.is_success() {
+                error.kind = ErrorKind::HttpStatus(body.status.as_u16());
+            }
+            error
+        })?;
+        let bytes = STANDARD
+            .decode(envelope.data)
+            .map_err(|_| GatewayError::new(op, ErrorKind::InvalidResponse))?;
+        rmp_serde::from_slice(&bytes).map_err(|_| GatewayError::new(op, ErrorKind::InvalidResponse))
+    }
+
     async fn submit_once<R: RefusalEvidence>(
         &self,
         bytes: &[u8],
@@ -525,17 +602,13 @@ impl GatewayClient {
             return Err(GatewayError::new(op, ErrorKind::InvalidInput));
         }
         let hash = TxHash::of_signed_bytes(bytes);
+        let encoded = serde_json::to_value(&SignedRequest {
+            action: STANDARD.encode(bytes),
+        })
+        .map_err(|_| GatewayError::new(op, ErrorKind::InvalidInput))?;
         let result = async {
             let mut body = self
-                .request_body(
-                    op,
-                    Method::POST,
-                    "/exchange",
-                    Some(&SignedRequest {
-                        action: STANDARD.encode(bytes),
-                    }),
-                    R::ERROR_BODY,
-                )
+                .request_body(op, Method::POST, "/exchange", Some(&encoded), R::ERROR_BODY)
                 .await?;
             if R::ERROR_BODY == ErrorBody::Classify && body.retry_after.is_none() {
                 body.retry_after = refusal::retry_after_body(&body.bytes);
