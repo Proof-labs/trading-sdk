@@ -87,7 +87,11 @@ describe("codec-adapter byte fields", () => {
 
 describe("codec-adapter pre-fill trigger fields", () => {
   const owner = new Uint8Array(20).fill(1);
-  const limb = { triggerPrice: 95_000n, maxSlippageBps: 75, clientTriggerId: 11n };
+  const limb = {
+    triggerPrice: 95_000n,
+    maxSlippageBps: 75,
+    clientTriggerId: 11n,
+  };
 
   it("maps stopLoss/takeProfit to the trailing snake_case wire fields on PlaceOrder", () => {
     const { fields } = toWasmFields({
@@ -112,8 +116,12 @@ describe("codec-adapter pre-fill trigger fields", () => {
     expect(fields).not.toHaveProperty("take_profit");
   });
 
-  it("passes order-trigger validation for all three order actions", () => {
-    for (const type of ["PlaceOrder", "MarketOrder", "CancelReplaceOrder"] as const) {
+  it("applies order-trigger validation to all three order actions", () => {
+    for (const type of [
+      "PlaceOrder",
+      "MarketOrder",
+      "CancelReplaceOrder",
+    ] as const) {
       expect(() =>
         toWasmFields({
           type,

@@ -132,8 +132,8 @@ class PlaceOrder(Action):
             "post_only": self.post_only,
             "reduce_only": self.reduce_only,
             "time_in_force": self.time_in_force,
-            "stop_loss": self.stop_loss.as_wire() if self.stop_loss else None,
-            "take_profit": self.take_profit.as_wire() if self.take_profit else None,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
         }
 
 
@@ -167,8 +167,8 @@ class MarketOrder(Action):
             "side": self.side,
             "quantity": self.quantity,
             "client_order_id": self.client_order_id,
-            "stop_loss": self.stop_loss.as_wire() if self.stop_loss else None,
-            "take_profit": self.take_profit.as_wire() if self.take_profit else None,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
         }
 
 
@@ -244,8 +244,8 @@ class CancelReplaceOrder(Action):
             "post_only": self.post_only,
             "reduce_only": self.reduce_only,
             "time_in_force": self.time_in_force,
-            "stop_loss": self.stop_loss.as_wire() if self.stop_loss else None,
-            "take_profit": self.take_profit.as_wire() if self.take_profit else None,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
         }
 
 
@@ -289,6 +289,24 @@ def _trigger_uint(name: str, value: int, maximum: int, *, nonzero: bool = False)
         raise ValueError(f"{name} must be non-zero")
 
 
+# Engine code for an order that cannot carry attached SL/TP limbs; a test pins
+# it to the native error table so the message cannot drift from the engine.
+TRIGGER_ORDER_INCOMPATIBLE_CODE = 98
+
+
+def _limb_wire(limb: Optional[TriggerLimb]) -> Optional[dict[str, Any]]:
+    return limb.as_wire() if limb else None
+
+
+def _assert_distinct_limb_client_ids(
+    stop_loss: Optional[TriggerLimb], take_profit: Optional[TriggerLimb]
+) -> None:
+    stop_id = stop_loss.client_trigger_id if stop_loss else None
+    take_id = take_profit.client_trigger_id if take_profit else None
+    if stop_id is not None and stop_id == take_id:
+        raise ValueError("stop_loss and take_profit client_trigger_id values must differ")
+
+
 def _validate_order_triggers(
     stop_loss: Optional[TriggerLimb],
     take_profit: Optional[TriggerLimb],
@@ -299,20 +317,18 @@ def _validate_order_triggers(
 
     Per-limb bounds are enforced by :class:`TriggerLimb.__post_init__`; this
     adds the order-level rules: a reduce-only order cannot carry limbs
-    (engine code 98), and the two limbs' client ids must differ. Both limbs
-    absent means "no bracket requested" and passes.
+    (engine code :data:`TRIGGER_ORDER_INCOMPATIBLE_CODE`), and the two limbs'
+    client ids must differ. Both limbs absent means "no bracket requested"
+    and passes.
     """
     if stop_loss is None and take_profit is None:
         return
     if reduce_only:
         raise ValueError(
             "stop_loss/take_profit cannot be attached to a reduce_only order "
-            "(TriggerOrderIncompatible, code 98)"
+            f"(TriggerOrderIncompatible, code {TRIGGER_ORDER_INCOMPATIBLE_CODE})"
         )
-    stop_id = stop_loss.client_trigger_id if stop_loss else None
-    take_id = take_profit.client_trigger_id if take_profit else None
-    if stop_id is not None and stop_id == take_id:
-        raise ValueError("stop_loss and take_profit client_trigger_id values must differ")
+    _assert_distinct_limb_client_ids(stop_loss, take_profit)
 
 
 @dataclass
@@ -372,18 +388,15 @@ class SetPositionTriggers(Action):
             _trigger_uint(
                 "client_group_id", self.client_group_id, _U64_MAX, nonzero=True
             )
-        stop_id = self.stop_loss.client_trigger_id if self.stop_loss else None
-        take_id = self.take_profit.client_trigger_id if self.take_profit else None
-        if stop_id is not None and stop_id == take_id:
-            raise ValueError("stop_loss and take_profit client_trigger_id values must differ")
+        _assert_distinct_limb_client_ids(self.stop_loss, self.take_profit)
 
     def fields(self) -> dict[str, Any]:
         return {
             "market": self.market,
             "owner": self.owner,
             "expected_position_epoch": self.expected_position_epoch,
-            "stop_loss": self.stop_loss.as_wire() if self.stop_loss else None,
-            "take_profit": self.take_profit.as_wire() if self.take_profit else None,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
             "client_group_id": self.client_group_id,
         }
 

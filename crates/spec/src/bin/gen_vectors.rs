@@ -975,7 +975,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .verifying_key()
         .to_bytes();
 
-    let signing = vec![
+    let mut signing = vec![
         cv::SigningCase::Sign {
             case: "place_order/min@seq1/unbound".to_string(),
             chain_id: unbound.to_vec(),
@@ -1082,7 +1082,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             &sk,
         ),
     ];
-    let mut signing = signing;
     signing.extend(frozen);
     write_ndjson(&dir.join(cv::SIGNING_FILE), &signing)?;
 

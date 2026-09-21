@@ -6,7 +6,7 @@ import {
   encodePayloadBytes,
   encodeSignedTx,
 } from "./codec.js";
-import { bytesToHex } from "./crypto.js";
+import { bytesToHex, hexToBytes } from "./crypto.js";
 import { ready } from "./wasm-loader.js";
 import {
   decodePositionTriggerInfos,
@@ -274,7 +274,13 @@ describe("W32-10 trigger read models", () => {
 });
 
 describe("F2 pre-fill order trigger validation", () => {
-  const limb = (over: Partial<{ triggerPrice: bigint; maxSlippageBps: number; clientTriggerId: bigint }> = {}) => ({
+  const limb = (
+    over: Partial<{
+      triggerPrice: bigint;
+      maxSlippageBps: number;
+      clientTriggerId: bigint;
+    }> = {},
+  ) => ({
     triggerPrice: 95_000n,
     maxSlippageBps: 75,
     clientTriggerId: 11n,
@@ -283,13 +289,17 @@ describe("F2 pre-fill order trigger validation", () => {
 
   it("passes with no limbs on any order action — no bracket requested", () => {
     expect(validateOrderTriggers({})).toBeUndefined();
-    expect(validateOrderTriggers({ stopLoss: null, takeProfit: null })).toBeUndefined();
+    expect(
+      validateOrderTriggers({ stopLoss: null, takeProfit: null }),
+    ).toBeUndefined();
     // Reduce-only without limbs is an ordinary reduce-only order.
     expect(validateOrderTriggers({ reduceOnly: true })).toBeUndefined();
   });
 
   it("passes with one or two well-formed limbs", () => {
-    expect(validateOrderTriggers({ stopLoss: limb(), takeProfit: null })).toBeUndefined();
+    expect(
+      validateOrderTriggers({ stopLoss: limb(), takeProfit: null }),
+    ).toBeUndefined();
     expect(
       validateOrderTriggers({
         stopLoss: limb(),
@@ -299,22 +309,24 @@ describe("F2 pre-fill order trigger validation", () => {
   });
 
   it("rejects a zero or negative trigger price by field name", () => {
-    expect(() => validateOrderTriggers({ stopLoss: limb({ triggerPrice: 0n }) })).toThrow(
-      /stopLoss\.triggerPrice must be non-zero/,
-    );
+    expect(() =>
+      validateOrderTriggers({ stopLoss: limb({ triggerPrice: 0n }) }),
+    ).toThrow(/stopLoss\.triggerPrice must be non-zero/);
     expect(() =>
       validateOrderTriggers({ takeProfit: limb({ triggerPrice: -1n }) }),
     ).toThrow(/takeProfit\.triggerPrice must be an unsigned 64-bit bigint/);
   });
 
   it("keeps the bps collar in 1..=9999", () => {
-    expect(() => validateOrderTriggers({ stopLoss: limb({ maxSlippageBps: 0 }) })).toThrow(
-      /stopLoss\.maxSlippageBps must be in 1..=9999/,
-    );
+    expect(() =>
+      validateOrderTriggers({ stopLoss: limb({ maxSlippageBps: 0 }) }),
+    ).toThrow(/stopLoss\.maxSlippageBps must be in 1..=9999/);
     expect(() =>
       validateOrderTriggers({ stopLoss: limb({ maxSlippageBps: 10_000 }) }),
     ).toThrow(/stopLoss\.maxSlippageBps must be in 1..=9999/);
-    expect(validateOrderTriggers({ stopLoss: limb({ maxSlippageBps: 9_999 }) })).toBeUndefined();
+    expect(
+      validateOrderTriggers({ stopLoss: limb({ maxSlippageBps: 9_999 }) }),
+    ).toBeUndefined();
   });
 
   it("rejects duplicate limb client ids — limbs must stay distinguishable", () => {
@@ -327,18 +339,18 @@ describe("F2 pre-fill order trigger validation", () => {
   });
 
   it("rejects a zero client trigger id on either limb", () => {
-    expect(() => validateOrderTriggers({ stopLoss: limb({ clientTriggerId: 0n }) })).toThrow(
-      /stopLoss\.clientTriggerId must be non-zero/,
-    );
-    expect(() => validateOrderTriggers({ takeProfit: limb({ clientTriggerId: 0n }) })).toThrow(
-      /takeProfit\.clientTriggerId must be non-zero/,
-    );
+    expect(() =>
+      validateOrderTriggers({ stopLoss: limb({ clientTriggerId: 0n }) }),
+    ).toThrow(/stopLoss\.clientTriggerId must be non-zero/);
+    expect(() =>
+      validateOrderTriggers({ takeProfit: limb({ clientTriggerId: 0n }) }),
+    ).toThrow(/takeProfit\.clientTriggerId must be non-zero/);
   });
 
   it("rejects trigger fields on a reduce-only order (TriggerOrderIncompatible, code 98)", () => {
-    expect(() => validateOrderTriggers({ stopLoss: limb(), reduceOnly: true })).toThrow(
-      /reduceOnly order \(TriggerOrderIncompatible, code 98\)/,
-    );
+    expect(() =>
+      validateOrderTriggers({ stopLoss: limb(), reduceOnly: true }),
+    ).toThrow(/reduceOnly order \(TriggerOrderIncompatible, code 98\)/);
     expect(() =>
       validateOrderTriggers({ takeProfit: limb(), reduceOnly: true }),
     ).toThrow(/reduceOnly/);
@@ -355,14 +367,6 @@ describe("F2 pre-fill trigger wire contract (proof-wire 2.1.0)", () => {
     "96020102c4269901dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463c4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c44063588d198e83ae1e4862432b1cf58d23fc95c6638db6e0b0c2d76b2248552a67d4200214b0299aff617aab73b91183e43def96d0e23b3d83be22a75722460b0d";
   const NO_TRIGGERS_CANONICAL_PAYLOAD =
     "9b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a3477463c0c0";
-
-  const hexToBytes = (hex: string): Uint8Array => {
-    const out = new Uint8Array(hex.length / 2);
-    for (let i = 0; i < out.length; i += 1) {
-      out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-    }
-    return out;
-  };
 
   it("decodes the frozen with-triggers envelope to typed limbs and re-encodes byte-exactly", () => {
     const WITH_TRIGGERS_PAYLOAD =

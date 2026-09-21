@@ -19,7 +19,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   order — the code is pinned in the TypeScript and Rust error tables and the
   `errors.ndjson` conformance manifest. Gateway read types for the additive
   `/v1/triggers/{owner}` `pending` section and `market_kind` on position rows
-  are added to `GatewayReads` (§7-G). Encoding activates via an interim
+  are added to the gateway reads module (§7-G). Encoding activates via an interim
   rev-pin of proof-wire 2.1.0 (`[patch]` → Proof-labs/exchange
   `feat/trigger-wire` @ 592735c6, draft PR #655); the five contract §1.7
   vectors are pinned byte-exactly in `conformance/` — payloads in

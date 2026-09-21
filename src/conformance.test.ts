@@ -35,6 +35,7 @@ import {
   TimeInForce,
   type Action,
   type ActionTypeValue,
+  type TriggerLimb,
 } from "./types.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -82,11 +83,7 @@ const PRICE_CMP: Record<string, PriceComparison> = {
 };
 
 /** Vector limb dict (snake_case) → the SDK's camelCase `TriggerLimb`. */
-function limb(v: unknown): {
-  triggerPrice: bigint;
-  maxSlippageBps: number;
-  clientTriggerId: bigint | null;
-} | null {
+function limb(v: unknown): TriggerLimb | null {
   if (v === null || v === undefined) return null;
   const l = v as Record<string, unknown>;
   return {

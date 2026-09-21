@@ -229,6 +229,10 @@ class TestEncodeDecodeRoundTrip:
         # A reduce-only order without limbs is an ordinary reduce-only order.
         actions.PlaceOrder(**order, price=100, reduce_only=True)
 
+    def test_trigger_order_incompatible_code_matches_the_native_error_table(self):
+        code = actions.TRIGGER_ORDER_INCOMPATIBLE_CODE
+        assert pts.get_error_name(code) == "TriggerOrderIncompatible"
+
     def test_trigger_market_config_admin_hash_matches_engine(self):
         config = actions.SetTriggerMarketConfig(
             market=7,

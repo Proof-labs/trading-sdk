@@ -149,6 +149,7 @@ export {
   validateSetPositionTriggers,
   validateCancelPositionTriggers,
   validateOrderTriggers,
+  type OrderTriggerFields,
   validateSetTriggerMarketConfig,
   decodePositionTriggerInfos,
   decodeTriggerMarketConfigInfos,

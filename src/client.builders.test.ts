@@ -127,8 +127,16 @@ describe("pre-fill SL/TP limbs on order builders", () => {
       side: Side.Buy,
       price: 100_000n,
       quantity: 2n,
-      stopLoss: { triggerPrice: 90_000n, maxSlippageBps: 50, clientTriggerId: 1n },
-      takeProfit: { triggerPrice: 120_000n, maxSlippageBps: 50, clientTriggerId: 2n },
+      stopLoss: {
+        triggerPrice: 90_000n,
+        maxSlippageBps: 50,
+        clientTriggerId: 1n,
+      },
+      takeProfit: {
+        triggerPrice: 120_000n,
+        maxSlippageBps: 50,
+        clientTriggerId: 2n,
+      },
     });
 
     const action = spy.mock.calls[0][0];
