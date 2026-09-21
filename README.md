@@ -185,6 +185,7 @@ class ExchangeClient {
   queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null>;
   queryPositionTriggers(addressHex?: string): Promise<PositionTriggerInfo[]>;
   queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]>;
+  // Deprecated: GET /v1/triggers/status is deleted upstream; see below.
   queryTriggerStatus(): Promise<TriggerStatus>;
   queryPositionTriggerHistory(addressHex?: string, filters?: PositionTriggerHistoryFilters): Promise<PositionTriggerHistoryPage>;
   queryTriggerMarketHistory(market: number, filters?: TriggerMarketHistoryFilters): Promise<TriggerMarketHistoryPage>;
@@ -326,9 +327,14 @@ absence means disabled. The optional pending policy is shown with its accepted
 and next-block effective heights. The SDK rejects malformed, empty, unsorted,
 or version-skipping policy state rather than inventing a default.
 
-`queryTriggerStatus()` reports the fail-closed next-height activation
-predicate. `queryPositionTriggerHistory()` returns immutable owner-bearing
-lifecycle events; `queryTriggerMarketHistory()` returns the shared market
+`queryTriggerStatus()` is deprecated: `GET /v1/triggers/status` is deleted
+upstream (the node dropped it with its activation gates, exchange#619,
+genesis-first; the gateway drops it in gateway 4.0.0, api-gateway#175). Trigger
+actions are permanently active, so there is nothing to read, and the call
+rejects with an `API error` once a gateway or node stops serving the route. It
+will be removed in the next major version.
+`queryPositionTriggerHistory()` returns immutable owner-bearing lifecycle
+events; `queryTriggerMarketHistory()` returns the shared market
 deferred/resumed stream. Both history methods always use the gateway, return an
 opaque filter-bound cursor, and preserve every coordinate/id as a decimal
 string—pass those strings and the cursor through unchanged.
