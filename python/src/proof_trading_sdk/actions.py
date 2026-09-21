@@ -95,6 +95,14 @@ class RawAction(Action):
 
 @dataclass
 class PlaceOrder(Action):
+    """Place a resting limit order.
+
+    ``stop_loss``/``take_profit`` attach a pre-fill (pending) SL/TP bracket:
+    installed on the position resulting from the order's first fill,
+    discarded if the order terminates without filling. Encoded as the
+    trailing wire fields added by proof-wire 2.1.0 (nil when absent).
+    """
+
     ACTION_NAME = "PlaceOrder"
     market: int
     owner: bytes
@@ -105,6 +113,13 @@ class PlaceOrder(Action):
     post_only: bool = False
     reduce_only: bool = False
     time_in_force: str = TimeInForce.Gtc
+    stop_loss: Optional[TriggerLimb] = None
+    take_profit: Optional[TriggerLimb] = None
+
+    def __post_init__(self) -> None:
+        _validate_order_triggers(
+            self.stop_loss, self.take_profit, reduce_only=self.reduce_only
+        )
 
     def fields(self) -> dict[str, Any]:
         return {
@@ -117,17 +132,33 @@ class PlaceOrder(Action):
             "post_only": self.post_only,
             "reduce_only": self.reduce_only,
             "time_in_force": self.time_in_force,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
         }
 
 
 @dataclass
 class MarketOrder(Action):
+    """Place a market order that crosses immediately against resting orders.
+
+    ``stop_loss``/``take_profit`` carry the same pre-fill bracket as
+    :class:`PlaceOrder` (a market order has no limit price, so the engine
+    validates the limbs against the current mark).
+    """
+
     ACTION_NAME = "MarketOrder"
     market: int
     owner: bytes
     side: str
     quantity: int
     client_order_id: Optional[int] = None
+    stop_loss: Optional[TriggerLimb] = None
+    take_profit: Optional[TriggerLimb] = None
+
+    def __post_init__(self) -> None:
+        _validate_order_triggers(
+            self.stop_loss, self.take_profit, reduce_only=False
+        )
 
     def fields(self) -> dict[str, Any]:
         return {
@@ -136,6 +167,8 @@ class MarketOrder(Action):
             "side": self.side,
             "quantity": self.quantity,
             "client_order_id": self.client_order_id,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
         }
 
 
@@ -171,6 +204,13 @@ class CancelAllOrders(Action):
 
 @dataclass
 class CancelReplaceOrder(Action):
+    """Atomically cancel a resting order and place its replacement.
+
+    ``stop_loss``/``take_profit`` attach the replacement order's pre-fill
+    bracket; the replaced order's pending payload is always discarded —
+    replacement is a full payload replacement.
+    """
+
     ACTION_NAME = "CancelReplaceOrder"
     owner: bytes
     market: int
@@ -183,6 +223,13 @@ class CancelReplaceOrder(Action):
     post_only: bool = False
     reduce_only: bool = False
     time_in_force: str = TimeInForce.Gtc
+    stop_loss: Optional[TriggerLimb] = None
+    take_profit: Optional[TriggerLimb] = None
+
+    def __post_init__(self) -> None:
+        _validate_order_triggers(
+            self.stop_loss, self.take_profit, reduce_only=self.reduce_only
+        )
 
     def fields(self) -> dict[str, Any]:
         return {
@@ -197,6 +244,8 @@ class CancelReplaceOrder(Action):
             "post_only": self.post_only,
             "reduce_only": self.reduce_only,
             "time_in_force": self.time_in_force,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
         }
 
 
@@ -238,6 +287,48 @@ def _trigger_uint(name: str, value: int, maximum: int, *, nonzero: bool = False)
         raise ValueError(f"{name} must be an unsigned integer <= {maximum}")
     if nonzero and value == 0:
         raise ValueError(f"{name} must be non-zero")
+
+
+# Engine code for an order that cannot carry attached SL/TP limbs; a test pins
+# it to the native error table so the message cannot drift from the engine.
+TRIGGER_ORDER_INCOMPATIBLE_CODE = 98
+
+
+def _limb_wire(limb: Optional[TriggerLimb]) -> Optional[dict[str, Any]]:
+    return limb.as_wire() if limb else None
+
+
+def _assert_distinct_limb_client_ids(
+    stop_loss: Optional[TriggerLimb], take_profit: Optional[TriggerLimb]
+) -> None:
+    stop_id = stop_loss.client_trigger_id if stop_loss else None
+    take_id = take_profit.client_trigger_id if take_profit else None
+    if stop_id is not None and stop_id == take_id:
+        raise ValueError("stop_loss and take_profit client_trigger_id values must differ")
+
+
+def _validate_order_triggers(
+    stop_loss: Optional[TriggerLimb],
+    take_profit: Optional[TriggerLimb],
+    *,
+    reduce_only: bool,
+) -> None:
+    """Shared placement-time SL/TP parity for the order actions (0x01/0x04/0x1A).
+
+    Per-limb bounds are enforced by :class:`TriggerLimb.__post_init__`; this
+    adds the order-level rules: a reduce-only order cannot carry limbs
+    (engine code :data:`TRIGGER_ORDER_INCOMPATIBLE_CODE`), and the two limbs'
+    client ids must differ. Both limbs absent means "no bracket requested"
+    and passes.
+    """
+    if stop_loss is None and take_profit is None:
+        return
+    if reduce_only:
+        raise ValueError(
+            "stop_loss/take_profit cannot be attached to a reduce_only order "
+            f"(TriggerOrderIncompatible, code {TRIGGER_ORDER_INCOMPATIBLE_CODE})"
+        )
+    _assert_distinct_limb_client_ids(stop_loss, take_profit)
 
 
 @dataclass
@@ -297,18 +388,15 @@ class SetPositionTriggers(Action):
             _trigger_uint(
                 "client_group_id", self.client_group_id, _U64_MAX, nonzero=True
             )
-        stop_id = self.stop_loss.client_trigger_id if self.stop_loss else None
-        take_id = self.take_profit.client_trigger_id if self.take_profit else None
-        if stop_id is not None and stop_id == take_id:
-            raise ValueError("stop_loss and take_profit client_trigger_id values must differ")
+        _assert_distinct_limb_client_ids(self.stop_loss, self.take_profit)
 
     def fields(self) -> dict[str, Any]:
         return {
             "market": self.market,
             "owner": self.owner,
             "expected_position_epoch": self.expected_position_epoch,
-            "stop_loss": self.stop_loss.as_wire() if self.stop_loss else None,
-            "take_profit": self.take_profit.as_wire() if self.take_profit else None,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
             "client_group_id": self.client_group_id,
         }
 

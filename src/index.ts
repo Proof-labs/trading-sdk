@@ -149,6 +149,8 @@ export {
   MAX_TRIGGER_SLIPPAGE_BPS,
   validateSetPositionTriggers,
   validateCancelPositionTriggers,
+  validateOrderTriggers,
+  type OrderTriggerFields,
   validateSetTriggerMarketConfig,
   decodePositionTriggerInfos,
   decodeTriggerMarketConfigInfos,
@@ -281,6 +283,9 @@ export {
   type OwnerHistoryParams,
   type CandleHistoryParams,
   type AccountEventsParams,
+  type GatewayTriggerLimbJson,
+  type GatewayPendingTriggerRow,
+  type GatewayTriggerPositionRow,
 } from "./gateway-reads.js";
 export type { ExternalSigner } from "./client.js";
 export type {

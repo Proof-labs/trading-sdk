@@ -84,3 +84,59 @@ describe("codec-adapter byte fields", () => {
     ).toThrow(/byte field owner: expected an array of u8/);
   });
 });
+
+describe("codec-adapter pre-fill trigger fields", () => {
+  const owner = new Uint8Array(20).fill(1);
+  const limb = {
+    triggerPrice: 95_000n,
+    maxSlippageBps: 75,
+    clientTriggerId: 11n,
+  };
+
+  it("maps stopLoss/takeProfit to the trailing snake_case wire fields on PlaceOrder", () => {
+    const { fields } = toWasmFields({
+      type: "PlaceOrder",
+      data: {
+        market: 1,
+        owner,
+        side: Side.Buy,
+        price: 100n,
+        quantity: 10n,
+        stopLoss: limb,
+        takeProfit: null,
+      },
+    });
+    expect(fields.stop_loss).toEqual({
+      trigger_price: 95_000n,
+      max_slippage_bps: 75,
+      client_trigger_id: 11n,
+    });
+    // Nullish limbs are dropped, never passed as null: serde applies
+    // `#[serde(default)]` to the missing key and it encodes as nil.
+    expect(fields).not.toHaveProperty("take_profit");
+  });
+
+  it("applies order-trigger validation to all three order actions", () => {
+    for (const type of [
+      "PlaceOrder",
+      "MarketOrder",
+      "CancelReplaceOrder",
+    ] as const) {
+      expect(() =>
+        toWasmFields({
+          type,
+          data: { stopLoss: limb, reduceOnly: true },
+        } as Action),
+      ).toThrow(/TriggerOrderIncompatible, code 98/);
+      expect(() =>
+        toWasmFields({
+          type,
+          data: {
+            stopLoss: limb,
+            takeProfit: { ...limb },
+          },
+        } as Action),
+      ).toThrow(/must differ/);
+    }
+  });
+});

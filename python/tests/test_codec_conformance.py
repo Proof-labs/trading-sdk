@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import msgpack
 import pytest
 import proof_trading_sdk as pts
 from proof_trading_sdk import actions
@@ -33,7 +34,12 @@ def _sign(action_type: int, payload: bytes, seq: int) -> bytes:
 
 
 class TestGoldenVectors:
-    def test_place_order_matches_rust_golden(self):
+    def test_place_order_canonical_encode_extends_the_pre_2_1_golden(self):
+        # place_order.hex is the engine's frozen pre-2.1.0 envelope: a nil-less
+        # 9-field payload, non-canonical since proof-wire 2.1.0. It must keep
+        # decoding with absent limbs, and the canonical encode of the same order
+        # is that payload with the array header raised to 11 fields and two
+        # trailing nils.
         act = actions.PlaceOrder(
             market=1,
             owner=bytes([0x01] * 20),
@@ -46,8 +52,14 @@ class TestGoldenVectors:
             time_in_force=actions.TimeInForce.Gtc,
         )
         action_type, payload = actions.encode_action(act)
-        envelope = _sign(action_type, payload, 1)
-        assert envelope.hex() == _golden("place_order.hex")
+        frozen = msgpack.unpackb(bytes.fromhex(_golden("place_order.hex")))
+        frozen_action_type, frozen_payload = frozen[1], frozen[3]
+        assert action_type == frozen_action_type
+        assert frozen_payload[0] == 0x99
+        decoded = actions.decode_action(frozen_action_type, frozen_payload)
+        assert decoded["stop_loss"] is None
+        assert decoded["take_profit"] is None
+        assert payload == b"\x9b" + frozen_payload[1:] + b"\xc0\xc0"
 
     def test_cancel_order_matches_rust_golden(self):
         act = actions.CancelOrder(order_id=42, owner=bytes([0x02] * 20))
@@ -130,6 +142,96 @@ class TestEncodeDecodeRoundTrip:
                 stop_loss=actions.TriggerLimb(95_000, 75, 11),
                 take_profit=actions.TriggerLimb(110_000, 50, 11),
             )
+
+    def test_order_actions_with_limbs_match_engine_frozen_payloads(self):
+        # Payload segments of the engine's frozen exchange-wire vectors
+        # (place_order_with_triggers, market_order_with_triggers,
+        # cancel_replace_with_triggers); gen-vectors pins the full envelopes.
+        stop_loss = actions.TriggerLimb(95_000, 75, 11)
+        take_profit = actions.TriggerLimb(110_000, 50, 12)
+        cases = [
+            (
+                actions.PlaceOrder(
+                    market=1,
+                    owner=bytes([0x01] * 20),
+                    side=actions.Side.Buy,
+                    price=100,
+                    quantity=10,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                ),
+                "9b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a347746393ce000173184b0b93ce0001adb0320c",
+            ),
+            (
+                actions.MarketOrder(
+                    market=1,
+                    owner=bytes([0x01] * 20),
+                    side=actions.Side.Sell,
+                    quantity=10,
+                    stop_loss=stop_loss,
+                ),
+                "9701dc00140101010101010101010101010101010101010101a453656c6c0ac093ce000173184b0bc0",
+            ),
+            (
+                actions.CancelReplaceOrder(
+                    owner=bytes([0x02] * 20),
+                    market=1,
+                    side=actions.Side.Sell,
+                    price=100,
+                    quantity=10,
+                    cancel_order_id=42,
+                    take_profit=take_profit,
+                ),
+                "9ddc001402020202020202020202020202020202020202022ac001a453656c6c640ac0c2c2a3477463c093ce0001adb0320c",
+            ),
+        ]
+        for action, payload_hex in cases:
+            _, payload = actions.encode_action(action)
+            assert payload.hex() == payload_hex
+
+    def test_each_order_limb_round_trips_independently(self):
+        # The frozen vectors above carry one limb on the market and cancel-replace
+        # actions; this covers the other limb of each so neither can be dropped.
+        order = {"market": 1, "owner": bytes(20), "side": actions.Side.Buy}
+        limb = actions.TriggerLimb(95_000, 75, 11)
+        for action in (
+            actions.MarketOrder(**order, quantity=10, take_profit=limb),
+            actions.CancelReplaceOrder(
+                **order, price=100, quantity=10, cancel_order_id=42, stop_loss=limb
+            ),
+        ):
+            action_type, payload = actions.encode_action(action)
+            decoded = actions.decode_action(action_type, payload)
+            present, absent = (
+                ("take_profit", "stop_loss")
+                if action.take_profit
+                else ("stop_loss", "take_profit")
+            )
+            assert decoded[present] == limb.as_wire()
+            assert decoded[absent] is None
+
+    def test_order_trigger_validation_is_typed_and_fail_fast(self):
+        limb = actions.TriggerLimb(95_000, 75, 11)
+        order = {
+            "market": 1,
+            "owner": bytes(20),
+            "side": actions.Side.Buy,
+            "quantity": 10,
+        }
+        with pytest.raises(ValueError, match="reduce_only order.*code 98"):
+            actions.PlaceOrder(**order, price=100, reduce_only=True, stop_loss=limb)
+        with pytest.raises(ValueError, match="reduce_only order.*code 98"):
+            actions.CancelReplaceOrder(
+                **order, price=100, reduce_only=True, take_profit=limb
+            )
+        with pytest.raises(ValueError, match="must differ"):
+            actions.MarketOrder(**order, stop_loss=limb, take_profit=limb)
+        # A reduce-only order without limbs is an ordinary reduce-only order.
+        actions.PlaceOrder(**order, price=100, reduce_only=True)
+
+    def test_trigger_order_incompatible_code_matches_the_native_error_table(self):
+        code = actions.TRIGGER_ORDER_INCOMPATIBLE_CODE
+        assert pts.get_error_name(code) == "TriggerOrderIncompatible"
 
     def test_trigger_market_config_admin_hash_matches_engine(self):
         config = actions.SetTriggerMarketConfig(

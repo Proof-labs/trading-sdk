@@ -1,4 +1,5 @@
 import { GatewayHttpError } from "./errors.js";
+import type { MarketKind } from "./types.js";
 
 /** Named gateway reads for consumers that retain their own decoders and caches.
  * Responses are unmodified, including msgpack envelopes and pagination keys.
@@ -35,6 +36,48 @@ export interface AccountEventsParams {
   cursor?: string;
   from?: string;
   to?: string;
+}
+
+// ---------------------------------------------------------------------------
+// F2 trigger-expansion read shapes (contract §7-G)
+// ---------------------------------------------------------------------------
+
+/** One SL/TP limb as gateway JSON emits it (snake_case wire fields,
+ *  micro-USDC integers). Mirrors the SDK's camelCase `TriggerLimb`. */
+export interface GatewayTriggerLimbJson {
+  trigger_price: number;
+  max_slippage_bps: number;
+  client_trigger_id: number | null;
+}
+
+/**
+ * One pending (pre-fill) trigger row from the additive `pending` section
+ * of `GET /v1/triggers/{owner}` (contract §7-G). The row exists only while
+ * its bound order is live and unfilled: the order's first fill promotes it
+ * into a real bracket (it disappears from `pending`), and any terminal
+ * order state discards it. `client_order_id` is null when the order
+ * carried no client id.
+ */
+export interface GatewayPendingTriggerRow {
+  market: number;
+  order_id: number;
+  client_order_id: number | null;
+  side: "Buy" | "Sell";
+  stop_loss?: GatewayTriggerLimbJson | null;
+  take_profit?: GatewayTriggerLimbJson | null;
+  accepted_height: number;
+}
+
+/**
+ * F2 addition to the owner trigger read's position rows: `market_kind`
+ * tells clients which market family a bracket protects, so binary-market
+ * trigger levels can be rendered in dollars at display time
+ * (µUSDC / 1_000_000) without transforming signed values. Absent on
+ * pre-2.1.0 gateways — treat presence as a capability probe, never
+ * require it.
+ */
+export interface GatewayTriggerPositionRow {
+  market_kind?: MarketKind;
 }
 export class GatewayReads {
   constructor(

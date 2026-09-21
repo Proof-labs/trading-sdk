@@ -102,6 +102,7 @@ import {
   decodeTriggerMarketConfigInfos,
   decodeTriggerStatusJson,
   validateCancelPositionTriggers,
+  validateOrderTriggers,
   validateSetPositionTriggers,
 } from "./triggers.js";
 import {
@@ -1100,16 +1101,25 @@ export class ExchangeClient {
    * Place a limit order for the loaded signer. `owner` is supplied
    * automatically. Equivalent to
    * `submitTx({ type: "PlaceOrder", data: { ...params, owner } })`.
+   * Optional `stopLoss`/`takeProfit` limbs attach a pre-fill bracket that
+   * installs on the order's first fill (validated client-side here and in
+   * the codec path; encoded as the proof-wire 2.1.0 trailing fields).
    */
   async placeOrder(params: Omit<PlaceOrder, "owner">): Promise<TxResult> {
+    validateOrderTriggers(params);
     return this.submitTx({
       type: "PlaceOrder",
       data: { ...params, owner: this.requireOwner() },
     });
   }
 
-  /** Place a market order (crosses immediately) for the loaded signer. */
+  /**
+   * Place a market order (crosses immediately) for the loaded signer.
+   * Optional `stopLoss`/`takeProfit` limbs are validated like
+   * {@link ExchangeClient.placeOrder}.
+   */
   async marketOrder(params: Omit<MarketOrder, "owner">): Promise<TxResult> {
+    validateOrderTriggers(params);
     return this.submitTx({
       type: "MarketOrder",
       data: { ...params, owner: this.requireOwner() },

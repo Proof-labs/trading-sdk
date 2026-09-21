@@ -229,14 +229,20 @@ const NONCES = [
   ["1754000000000", "cf00000198628c0400"],
   ["9223372036854775807", "cf7fffffffffffffff"],
 ] as const;
+// Payloads are the 2.1.0 canonical forms: the F2 trigger expansion appended
+// optional stop_loss/take_profit to the three order actions, so canonical
+// encodes carry two trailing nils (fixarray +2 fields) even when no bracket
+// is attached. Pre-2.1.0 byte strings keep DECODING — that compat direction
+// is pinned by conformance/signing.ndjson (`place_order_no_triggers@seq2`)
+// and the decode-compat test in triggers.test.ts.
 const PAYLOADS: Record<string, readonly [string, string]> = {
   "PlaceOrder (limit, GTC)": [
     "01",
-    "c42c9903dc00140303030303030303030303030303030303030303a3427579ce04ad14f0cd0190c0c2c2a3477463",
+    "c42e9b03dc00140303030303030303030303030303030303030303a3427579ce04ad14f0cd0190c0c2c2a3477463c0c0",
   ],
   "PlaceOrder (reduce-only IOC)": [
     "01",
-    "c42b9907dc00140303030303030303030303030303030303030303a453656c6cce001312d019c0c2c3a3496f63",
+    "c42d9b07dc00140303030303030303030303030303030303030303a453656c6cce001312d019c0c2c3a3496f63c0c0",
   ],
   CancelOrder: [
     "02",
@@ -268,7 +274,7 @@ const PAYLOADS: Record<string, readonly [string, string]> = {
   ],
   MarketOrder: [
     "04",
-    "c41f9503dc00140303030303030303030303030303030303030303a342757978c0",
+    "c4219703dc00140303030303030303030303030303030303030303a342757978c0c0c0",
   ],
   "SetPositionTriggers (both limbs)": [
     "25",
@@ -284,11 +290,11 @@ const PAYLOADS: Record<string, readonly [string, string]> = {
   ],
   "CancelReplaceOrder (GTC)": [
     "1a",
-    "c4329bdc00140303030303030303030303030303030303030303ce36bbbe6dc003a3427579ce04ad14f0cd01902ac3c2a3477463",
+    "c4349ddc00140303030303030303030303030303030303030303ce36bbbe6dc003a3427579ce04ad14f0cd01902ac3c2a3477463c0c0",
   ],
   "CancelReplaceOrder (IOC)": [
     "1a",
-    "c4339bdc00140303030303030303030303030303030303030303ce36bbbe6dc003a453656c6cce04ad14f0cd0190c0c2c3a3496f63",
+    "c4359ddc00140303030303030303030303030303030303030303ce36bbbe6dc003a453656c6cce04ad14f0cd0190c0c2c3a3496f63c0c0",
   ],
 };
 const CHAIN_HEX =

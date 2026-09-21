@@ -1,3 +1,4 @@
+import { ExecErrorCode } from "./errors.js";
 import type {
   CancelPositionTriggers,
   PositionTriggerBracket,
@@ -48,6 +49,20 @@ function validateLimb(name: string, limb: TriggerLimb): void {
   }
 }
 
+/** The two limbs of one bracket must stay distinguishable by client id. */
+function assertDistinctLimbClientIds(
+  stopLoss: TriggerLimb | null | undefined,
+  takeProfit: TriggerLimb | null | undefined,
+): void {
+  const stopId = stopLoss?.clientTriggerId;
+  const takeId = takeProfit?.clientTriggerId;
+  if (stopId != null && takeId != null && stopId === takeId) {
+    throw new Error(
+      "stopLoss and takeProfit clientTriggerId values must differ",
+    );
+  }
+}
+
 /** Validate all state-independent invariants for action 0x25. */
 export function validateSetPositionTriggers(action: SetPositionTriggers): void {
   assertU32("market", action.market);
@@ -63,13 +78,7 @@ export function validateSetPositionTriggers(action: SetPositionTriggers): void {
   if (action.clientGroupId != null) {
     assertU64("clientGroupId", action.clientGroupId, true);
   }
-  const stopId = action.stopLoss?.clientTriggerId;
-  const takeId = action.takeProfit?.clientTriggerId;
-  if (stopId != null && takeId != null && stopId === takeId) {
-    throw new Error(
-      "stopLoss and takeProfit clientTriggerId values must differ",
-    );
-  }
+  assertDistinctLimbClientIds(action.stopLoss, action.takeProfit);
 }
 
 /** Validate all state-independent invariants for action 0x26. */
@@ -81,6 +90,38 @@ export function validateCancelPositionTriggers(
     throw new Error("owner must be exactly 20 bytes");
   }
   assertU64("expectedPositionEpoch", action.expectedPositionEpoch, true);
+}
+
+/**
+ * Order fields the placement-time SL/TP validation reads. `reduceOnly` is
+ * absent on `MarketOrder`: the wire struct carries no such field.
+ */
+export interface OrderTriggerFields {
+  stopLoss?: TriggerLimb | null;
+  takeProfit?: TriggerLimb | null;
+  reduceOnly?: boolean;
+}
+
+/**
+ * Validate the placement-time SL/TP limbs carried on an order action
+ * (`PlaceOrder` 0x01, `MarketOrder` 0x04, `CancelReplaceOrder` 0x1A).
+ * Mirrors `validateSetPositionTriggers`' limb parity (`triggerPrice > 0`,
+ * bps in `1..=9999`, distinct limb client ids) plus the engine's reduce-only
+ * incompatibility (`TriggerOrderIncompatible`): a reduce-only entry cannot
+ * open the exposure the limbs are meant to protect. Absent limbs mean "no
+ * bracket requested" and pass.
+ */
+export function validateOrderTriggers(action: OrderTriggerFields): void {
+  const { stopLoss, takeProfit } = action;
+  if (stopLoss == null && takeProfit == null) return;
+  if (action.reduceOnly === true) {
+    throw new Error(
+      `stopLoss/takeProfit cannot be attached to a reduceOnly order (TriggerOrderIncompatible, code ${ExecErrorCode.TriggerOrderIncompatible})`,
+    );
+  }
+  if (stopLoss != null) validateLimb("stopLoss", stopLoss);
+  if (takeProfit != null) validateLimb("takeProfit", takeProfit);
+  assertDistinctLimbClientIds(stopLoss, takeProfit);
 }
 
 /** Validate the state-independent portion of admin action tag 0x05. */

@@ -7,6 +7,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Pre-fill (pending) SL/TP limbs on the order actions and the F2 trigger
+  expansion's client surface (contract: ProofOfBrain
+  `delivery/epics/trigger-expansion-binary-conditional-prefill.md`, §7-T).
+  `PlaceOrder` (0x01), `MarketOrder` (0x04) and `CancelReplaceOrder` (0x1A)
+  gain optional `stopLoss` / `takeProfit` (`TriggerLimb`) fields in TypeScript,
+  Python and the Rust/WASM core's shared wire contract, validated client-side
+  with the same parity rules as `SetPositionTriggers` (at least one limb,
+  non-zero trigger price, bps `1..=9999`, distinct limb client ids) plus the
+  engine's new `TriggerOrderIncompatible` (code 98) for limbs on a reduce-only
+  order — the code is pinned in the TypeScript and Rust error tables and the
+  `errors.ndjson` conformance manifest. Gateway read types for the additive
+  `/v1/triggers/{owner}` `pending` section and `market_kind` on position rows
+  are added to the gateway reads module (§7-G). Encoding activates via an interim
+  pin of proof-wire 2.1.0 (`[patch]` → the Proof-labs/exchange commit that
+  merged it, 2f188e28) until the Proof-labs/wire mirror publishes the tag; the five contract §1.7
+  vectors are pinned byte-exactly in `conformance/` — payloads in
+  `codec.ndjson`, full signed envelopes in `signing.ndjson` — and the
+  pre-2.1.0 9-field PlaceOrder bytes are pinned (signing row + TS
+  decode-compat test) as decode-compat: they decode with absent limbs and
+  re-encode canonically with the two trailing nils. The pin flips to the
+  published Proof-labs/wire release tag once the mirror publishes 2.1.0.
+
+- The TypeScript error table gains `MarkUnavailable` (code 97), matching the
+  Rust table and the engine, and the checked-in `errors.ndjson` manifest gains
+  its `manifest/97` row. The new gateway trigger read types
+  (`GatewayPendingTriggerRow`, `GatewayTriggerPositionRow`,
+  `GatewayTriggerLimbJson`) are exported from the package entry point.
+
 - Adds the typed `SetOracleGuards` multisig action (inner tag 13), proposal
   read decoding, and client-side engine-shape validation. Optional fields stay
   unchanged; zero/unset guards are rejected. Wire-pinned codec/signing vectors
