@@ -18,9 +18,11 @@ import type {
   ProposalDisplayInfo,
   ProposalStatus,
   SetTriggerMarketConfig,
+  SetOracleGuards,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
 } from "./types.js";
+import { validateSetOracleGuards } from "./oracle-guards.js";
 import { Outcome } from "./types.js";
 
 /**
@@ -487,6 +489,23 @@ function decodeUpdateAuthoritySet(value: unknown): UpdateAuthoritySet {
   };
 }
 
+function decodeSetOracleGuards(value: unknown): SetOracleGuards {
+  const raw = toTuple(value, "setOracleGuards", 3);
+  const guards: SetOracleGuards = {
+    market: toU32(raw[0], "setOracleGuards.market"),
+    markPriceMaxOracleAgeMs:
+      raw[1] == null
+        ? null
+        : toU64(raw[1], "setOracleGuards.markPriceMaxOracleAgeMs"),
+    maxOracleDeviationBps:
+      raw[2] == null
+        ? null
+        : toU32(raw[2], "setOracleGuards.maxOracleDeviationBps"),
+  };
+  validateSetOracleGuards(guards);
+  return guards;
+}
+
 function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
   const raw = toTuple(value, "setTriggerMarketConfig", 7);
   if (typeof raw[2] !== "boolean") {
@@ -533,6 +552,7 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   UpdateAuthoritySet: 7,
   CancelAllOrdersForAccount: 8,
   ConfigureOraclePolicy: 12,
+  SetOracleGuards: 13,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
@@ -552,6 +572,11 @@ export function decodeAdminAction(
       return {
         kind: "CancelAllOrdersForAccount",
         value: decodeCancelAllOrdersForAccount(payload),
+      };
+    case "SetOracleGuards":
+      return {
+        kind: "SetOracleGuards",
+        value: decodeSetOracleGuards(payload),
       };
     case "ConfigureOraclePolicy": {
       const raw = toTuple(payload, "configureOraclePolicy", 2);

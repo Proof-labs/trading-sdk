@@ -479,7 +479,12 @@ export function decodePositionTriggerInfos(
   });
 }
 
-/** Parse trigger-status JSON without routing 64-bit heights through Number. */
+/** Parse trigger-status JSON without routing 64-bit heights through Number.
+ *
+ * @deprecated Only `queryTriggerStatus()` used this, and the route it parses,
+ * `GET /v1/triggers/status`, is deleted upstream (exchange#619, genesis-first;
+ * api-gateway#175, gateway 4.0.0). Trigger actions are permanently active, so
+ * there is nothing to decode. It will be removed in the next major version. */
 export function decodeTriggerStatusJson(text: string): TriggerStatus {
   const protectedText = text.replace(
     /("(?:finalized_height|admission_height)"\s*:\s*)(-?\d+)/g,

@@ -27,7 +27,20 @@ const fresh = (): unknown[] => [
   "Satisfied",
   policy(),
   null,
-  [14, 1000, "Fresh", "Fresh", [100000000, 900], 950],
+  [
+    14,
+    1000,
+    "Fresh",
+    "Fresh",
+    [100000000, 900],
+    950,
+    0,
+    2,
+    [900, 850],
+    [null, null],
+    null,
+    [100000000, 3600000, 3600000],
+  ],
 ];
 const encode = (data: unknown) =>
   Buffer.from(new Encoder({ useBigInt64: true }).encode(data)).toString(
@@ -63,6 +76,37 @@ describe("committed oracle permissions", () => {
     expect(decoded.policy?.sources[1].authority).toBe("05".repeat(32));
     expect(decoded.verdict?.certified?.price).toBe(100000000n);
   });
+  it("decodes the twelve-field verdict with evidence digests and last-good", () => {
+    const raw = fresh();
+    raw[8] = [
+      14,
+      1000,
+      "Fresh",
+      "Fresh",
+      [100000000, 900],
+      950,
+      0,
+      2,
+      [900, 850],
+      [Array(32).fill(7), Array(32).fill(9)],
+      [50000000, 800],
+      [100000000, 3600000, 7200000],
+    ];
+    const verdict = decodeOraclePermissions(raw, 1).verdict!;
+    expect(verdict.faults).toBe(0);
+    expect(verdict.validSources).toBe(2);
+    expect(verdict.currentTimes).toEqual([900n, 850n]);
+    expect(verdict.evidence).toEqual([
+      new Uint8Array(Array(32).fill(7)),
+      new Uint8Array(Array(32).fill(9)),
+    ]);
+    expect(verdict.lastGood).toEqual({ price: 50000000n, providerTime: 800n });
+    expect(verdict.anchor).toEqual({
+      price: 100000000n,
+      coveredMs: 3600000n,
+      requiredMs: 7200000n,
+    });
+  });
   it("does not invent a permission for legacy or an absent policy", () => {
     expect(
       decodeOraclePermissions([
@@ -94,7 +138,20 @@ describe("committed oracle permissions", () => {
   it("retains stale reason without authorizing a last-good price", () => {
     const raw = fresh();
     raw[5] = "Unavailable";
-    raw[8] = [14, 9000, "Stale", "ExpiredSource", null, null];
+    raw[8] = [
+      14,
+      9000,
+      "Stale",
+      "ExpiredSource",
+      null,
+      null,
+      0,
+      2,
+      [null, null],
+      [null, null],
+      null,
+      [null, 0, 3600000],
+    ];
     expect(decodeOraclePermissions(raw).verdict).toMatchObject({
       status: "Stale",
       reason: "ExpiredSource",
@@ -140,6 +197,12 @@ describe("committed oracle permissions", () => {
     },
     (r: unknown[]) => {
       (r[8] as unknown[])[5] = 1001;
+    },
+    (r: unknown[]) => {
+      (r[8] as unknown[])[10] = [0, 800];
+    },
+    (r: unknown[]) => {
+      (r[8] as unknown[])[10] = [50000000, 2000];
     },
   ])("rejects malformed or falsely permissive state", (change) => {
     const raw = fresh();

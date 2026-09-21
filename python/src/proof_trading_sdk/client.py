@@ -932,6 +932,13 @@ class ExchangeClient:
     def trigger_status(self) -> dict[str, t.Any]:
         """Fail-closed next-height trigger admission status.
 
+        Deprecated: ``GET /v1/triggers/status`` is deleted upstream. The node
+        dropped it with its activation gates (exchange#619, genesis-first) and
+        the gateway drops it in gateway 4.0.0 (api-gateway#175). Trigger
+        actions are permanently active, so there is nothing to read, and this
+        call fails with the 404 response error once a gateway or node stops
+        serving the route. It will be removed in the next major version.
+
         Python's JSON decoder preserves arbitrary-size integers, so both
         heights remain exact ``int`` values.
         """

@@ -68,7 +68,6 @@ client.set_position_triggers(
     expected_position_epoch=epoch,
     stop_loss=TriggerLimb(trigger_price=95_000, max_slippage_bps=75),
 )
-status = client.trigger_status()
 
 page = client.history_triggers(owner, market=7, limit=100)
 while page.next_cursor:
@@ -77,11 +76,16 @@ while page.next_cursor:
     )
 ```
 
-`position_triggers()` is the current-state `/v1/triggers/{owner}` read;
-`trigger_status()` is the fail-closed next-height admission predicate. For a
-first attach, take the epoch from the canonical account position read; never
-guess `1`. `owner` defaults to the signer, but a version-active trading agent
-may pass its delegated owner and let the engine verify authorization.
+`position_triggers()` is the current-state `/v1/triggers/{owner}` read.
+`trigger_status()` is deprecated: `GET /v1/triggers/status` is deleted upstream
+(the node dropped it with its activation gates, exchange#619, genesis-first;
+the gateway drops it in gateway 4.0.0, api-gateway#175). Trigger actions are
+permanently active, so there is nothing to read, and the call fails with the
+404 response error once a gateway or node stops serving the route. It will be
+removed in the next major version. For a first attach, take the epoch from the
+canonical account position read; never guess `1`. `owner` defaults to the
+signer, but a version-active trading agent may pass its delegated owner and let
+the engine verify authorization.
 `trigger_market_configs()` is the strict source for the current and scheduled
 market policy; absence means disabled and no client default is substituted.
 

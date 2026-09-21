@@ -45,6 +45,12 @@ export interface CommittedOracleVerdict {
   reason: OracleVerdictReason;
   certified: { price: bigint; providerTime: bigint } | null;
   eligibleSince: bigint | null;
+  faults: number;
+  validSources: number;
+  currentTimes: [bigint | null, bigint | null];
+  evidence: [Uint8Array | null, Uint8Array | null];
+  lastGood: { price: bigint; providerTime: bigint } | null;
+  anchor: { price: bigint | null; coveredMs: bigint; requiredMs: bigint };
 }
 
 export interface OraclePermissions {
@@ -100,6 +106,26 @@ function hash(raw: unknown, field: string): string {
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("");
 }
+function digest(raw: unknown, field: string): Uint8Array {
+  if (raw instanceof Uint8Array) {
+    if (raw.length !== 32) return invalid(field);
+    return raw;
+  }
+  if (!Array.isArray(raw)) return invalid(field);
+  const bytes = raw as unknown[];
+  if (
+    bytes.length !== 32 ||
+    bytes.some(
+      (value) =>
+        typeof value !== "number" ||
+        !Number.isInteger(value) ||
+        value < 0 ||
+        value > 255,
+    )
+  )
+    return invalid(field);
+  return new Uint8Array(bytes as number[]);
+}
 function policy(raw: unknown): OraclePolicyEpoch {
   const p = tuple(raw, 8, "policy");
   const sources = tuple(p[7], 2, "sources").map((raw) => {
@@ -135,7 +161,7 @@ function policy(raw: unknown): OraclePolicyEpoch {
   return value;
 }
 function verdict(raw: unknown): CommittedOracleVerdict {
-  const v = tuple(raw, 6, "verdict");
+  const v = tuple(raw, 12, "verdict");
   const status = v[2];
   const reason = v[3];
   if (status !== "Fresh" && status !== "Stale" && status !== "Unpriceable")
@@ -152,6 +178,9 @@ function verdict(raw: unknown): CommittedOracleVerdict {
       providerTime: uint(c[1], "certified.providerTime"),
     };
   });
+  const currentTimesRaw = tuple(v[8], 2, "verdict.currentTimes");
+  const evidenceRaw = tuple(v[9], 2, "verdict.evidence");
+  const anchorRaw = tuple(v[11], 3, "verdict.anchor");
   const value: CommittedOracleVerdict = {
     height: uint(v[0], "verdict.height"),
     blockTime: uint(v[1], "verdict.blockTime"),
@@ -159,12 +188,35 @@ function verdict(raw: unknown): CommittedOracleVerdict {
     reason: reason as OracleVerdictReason,
     certified,
     eligibleSince: optional(v[5], (raw) => uint(raw, "eligibleSince")),
+    faults: Number(uint(v[6], "verdict.faults", 0xffff_ffffn)),
+    validSources: Number(uint(v[7], "verdict.validSources", 0xffn)),
+    currentTimes: [
+      optional(currentTimesRaw[0], (raw) => uint(raw, "currentTimes[0]")),
+      optional(currentTimesRaw[1], (raw) => uint(raw, "currentTimes[1]")),
+    ],
+    evidence: [
+      optional(evidenceRaw[0], (raw) => digest(raw, "evidence[0]")),
+      optional(evidenceRaw[1], (raw) => digest(raw, "evidence[1]")),
+    ],
+    lastGood: optional(v[10], (raw) => {
+      const c = tuple(raw, 2, "lastGood");
+      return {
+        price: positive(c[0], "lastGood.price"),
+        providerTime: uint(c[1], "lastGood.providerTime"),
+      };
+    }),
+    anchor: {
+      price: optional(anchorRaw[0], (raw) => uint(raw, "anchor.price")),
+      coveredMs: uint(anchorRaw[1], "anchor.coveredMs"),
+      requiredMs: uint(anchorRaw[2], "anchor.requiredMs"),
+    },
   };
   if (
     (status === "Fresh") !== (reason === "Fresh") ||
     (status === "Fresh") !== (certified !== null) ||
     (status === "Fresh") !== (value.eligibleSince !== null) ||
     (certified && certified.providerTime > value.blockTime) ||
+    (value.lastGood && value.lastGood.providerTime > value.blockTime) ||
     (value.eligibleSince !== null && value.eligibleSince > value.blockTime)
   )
     return invalid("verdict consistency");

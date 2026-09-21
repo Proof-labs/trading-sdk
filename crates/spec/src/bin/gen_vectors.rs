@@ -524,6 +524,39 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }})) }
             }),
         ),
+        // Tag 13 inner bytes match proof-wire's frozen SetOracleGuards vectors.
+        codec_case(
+            "propose_admin_action/set_oracle_guards_both",
+            PROPOSE_ADMIN_ACTION,
+            json!({"proposer": vec![0xA1u8;20], "registry_version": 1u64,
+                   "action": {"SetOracleGuards": {"market": 10u32,
+                       "mark_price_max_oracle_age_ms": 30_000u64,
+                       "max_oracle_deviation_bps": 2_000u32}}}),
+        ),
+        codec_case(
+            "propose_admin_action/set_oracle_guards_age_only",
+            PROPOSE_ADMIN_ACTION,
+            json!({"proposer": vec![0xA1u8;20], "registry_version": 1u64,
+                   "action": {"SetOracleGuards": {"market": 10u32,
+                       "mark_price_max_oracle_age_ms": 30_000u64,
+                       "max_oracle_deviation_bps": null}}}),
+        ),
+        codec_case(
+            "propose_admin_action/set_oracle_guards_band_only",
+            PROPOSE_ADMIN_ACTION,
+            json!({"proposer": vec![0xA1u8;20], "registry_version": 1u64,
+                   "action": {"SetOracleGuards": {"market": 10u32,
+                       "mark_price_max_oracle_age_ms": null,
+                       "max_oracle_deviation_bps": 2_000u32}}}),
+        ),
+        codec_case(
+            "propose_admin_action/set_oracle_guards_u64_max",
+            PROPOSE_ADMIN_ACTION,
+            json!({"proposer": vec![0xA1u8;20], "registry_version": 1u64,
+                   "action": {"SetOracleGuards": {"market": 10u32,
+                       "mark_price_max_oracle_age_ms": u64::MAX,
+                       "max_oracle_deviation_bps": 10_000u32}}}),
+        ),
         // Synthetic opaque bytes test the outer wire only, not a valid live policy.
         codec_case(
             "propose_admin_action/configure_oracle_policy",
@@ -967,6 +1000,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         }),
     )?;
     let envelope = cv::sign_envelope(&unbound, PLACE_ORDER, 1, &po_payload, &sk)?;
+    let guard_chain = [0x11u8; 32];
+    let guard_payload = cv::codec_payload(
+        PROPOSE_ADMIN_ACTION,
+        &json!({"proposer": vec![0xA1u8;20], "registry_version": 1u64,
+                "action": {"SetOracleGuards": {"market": 10u32,
+                    "mark_price_max_oracle_age_ms": 30_000u64,
+                    "max_oracle_deviation_bps": 2_000u32}}}),
+    )?;
+    let guard_envelope =
+        cv::sign_envelope(&guard_chain, PROPOSE_ADMIN_ACTION, 2, &guard_payload, &sk)?;
 
     let pk_42 = ed25519_dalek::SigningKey::from_bytes(&sk)
         .verifying_key()
@@ -976,6 +1019,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         .to_bytes();
 
     let mut signing = vec![
+        cv::SigningCase::Sign {
+            case: "propose_admin_action/set_oracle_guards@seq2/bound".to_string(),
+            chain_id: guard_chain.to_vec(),
+            action_type: PROPOSE_ADMIN_ACTION,
+            seq: 2,
+            payload_hex: hex::encode(&guard_payload),
+            secret_key: sk.to_vec(),
+            expect_envelope_hex: hex::encode(&guard_envelope),
+        },
         cv::SigningCase::Sign {
             case: "place_order/min@seq1/unbound".to_string(),
             chain_id: unbound.to_vec(),
