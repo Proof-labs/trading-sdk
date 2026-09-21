@@ -305,6 +305,39 @@ async fn permissions_preserve_exact_typed_epoch_and_truthful_unavailability() {
 }
 
 #[tokio::test]
+async fn committed_verdict_decodes_all_twelve_fields_with_evidence_and_last_good() {
+    let wire = json!([
+        1,
+        15,
+        10,
+        true,
+        "Committed",
+        "Satisfied",
+        policy(1),
+        null,
+        [15, 1_000, "Fresh", "Fresh", [123, 990], 999, 0, 2, [990, 950], [([1u8; 32]), ([2u8; 32])], [111, 900], [123, 3_600_000, 7_200_000]]
+    ]);
+    let (client, task) = fixture(encoded(wire)).await;
+    let read = client.oracle_permissions(market()).await.unwrap();
+    let v = read.verdict.unwrap();
+    assert_eq!(v.faults, 0);
+    assert_eq!(v.valid_sources, 2);
+    assert_eq!(v.current_times, [Some(990), Some(950)]);
+    assert_eq!(v.evidence, [Some([1u8; 32]), Some([2u8; 32])]);
+    assert_eq!(
+        v.last_good,
+        Some(CertifiedPrice {
+            price: 111,
+            provider_time: 900,
+        })
+    );
+    assert_eq!(v.anchor.price, Some(123));
+    assert_eq!(v.anchor.covered_ms, 3_600_000);
+    assert_eq!(v.anchor.required_ms, 7_200_000);
+    task.await.unwrap();
+}
+
+#[tokio::test]
 async fn malformed_or_false_permission_evidence_never_decodes_as_healthy() {
     let mut cases = vec![
         json!({"market":1}),
