@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- TypeScript 5.1.0-f23.0 adds `reads().marketStats({ markets })` and strict
+  `queryMarketStats(reads, markets, { signal })` decoding for F23/UI18's batched
+  rolling 24-hour statistics. Contract quantities, raw micro-USDC prices,
+  decimal USDC notional and signed decimal basis points stay exact strings;
+  freshness, partial coverage and unavailable open interest remain explicit.
+  This compatibility snapshot is based on released npm 5.0.0 and retains its
+  proof-wire 2.0.0 codec, Rust and Python packages without modification.
+
+
 - Mirrors the `UpdateAuthoritySet` governance arm (inner tag `0x07`,
   exchange#422 / DEC-87): addition/removal of members in one privileged
   authority allowlist (`Oracle`, `CexComposite`, `Relayer`, `Custody`,

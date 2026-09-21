@@ -520,3 +520,30 @@ See [AGENTS.md](AGENTS.md) for guidance on using this SDK with AI agents
 ## License
 
 Apache-2.0.
+
+### Rolling market statistics (F23/UI18)
+
+```typescript
+import { queryMarketStats } from "@proof-labs/trading-sdk";
+
+const snapshot = await queryMarketStats(client.reads(), [1, 2], { signal });
+```
+
+The batch accepts 1–50 distinct market IDs (0–2147483647) and uses
+`GET /v1/history/market-stats` through the configured gateway. The raw
+`client.reads().marketStats({ markets: [1, 2] }, { signal })` read preserves the
+upstream `Response`; the helper validates the response and requested market
+coverage. It returns a true trailing 24-hour window, including the start and
+excluding the end, together with the indexer's committed frontier and freshness.
+
+All numeric quantities remain strings: prices are integer micro-USDC; volume
+is available both as raw contracts and exact decimal USDC **dollars** already
+adjusted for the market's `sz_decimals`. Open interest is raw contracts **per
+side**, so divide each side by `10 ** sz_decimals` for base units; adding long
+and short double-counts matched exposure. Price change is signed decimal basis
+points relative to the last trade at or before the window start. A missing
+baseline leaves change null, even when volume is available. Treat null as
+unavailable, never zero. Top-level status describes frontier freshness; inspect
+market status, `unavailable_reason` and `open_interest_unavailable_reason` too.
+The server freshness budget is `stale_after_seconds`; the application must age
+cached responses and label stale data. None of these reads authorize trading.
