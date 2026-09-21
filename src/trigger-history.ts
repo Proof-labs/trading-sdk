@@ -1,4 +1,5 @@
 import type {
+  PendingTriggerDiscardReason,
   PositionTriggerHistoryEvent,
   PositionTriggerHistoryEventType,
   PositionTriggerHistoryFilters,
@@ -25,6 +26,27 @@ const OWNER_EVENT_TYPES = new Set<PositionTriggerHistoryEventType>([
   "position_trigger_activated",
   "position_trigger_executed",
   "position_trigger_deferred",
+  "pending_triggers_attached",
+  "pending_triggers_discarded",
+]);
+
+/** Owner lifecycle types bound to a position: they carry `position_epoch` and `group_id`. */
+const POSITION_EVENT_TYPES = new Set<PositionTriggerHistoryEventType>([
+  "position_triggers_set",
+  "position_triggers_cancelled",
+  "position_triggers_invalidated",
+  "position_trigger_activated",
+  "position_trigger_executed",
+  "position_trigger_deferred",
+]);
+
+const PENDING_DISCARD_REASONS = new Set<PendingTriggerDiscardReason>([
+  "order_cancelled",
+  "order_expired",
+  "order_replaced",
+  "unfilled_terminal",
+  "install_rejected",
+  "position_closed",
 ]);
 
 const MARKET_EVENT_TYPES = new Set<TriggerMarketHistoryEventType>([
@@ -212,6 +234,23 @@ function requireNonemptyPayload(
   return string(payload[key], `payload.${key}`);
 }
 
+/**
+ * The wire's limb render for one pending-bracket limb: present is
+ * `trigger_price=<u64>,max_slippage_bps=<u64>,client_trigger_id=<u64|none>`
+ * (that exact shape and order); absent is the key with an empty value.
+ */
+const LIMB_RENDER =
+  /^trigger_price=(?:0|[1-9][0-9]*),max_slippage_bps=(?:0|[1-9][0-9]*),client_trigger_id=(?:none|(?:0|[1-9][0-9]*))$/;
+
+function requireLimbRender(value: string, name: string): void {
+  if (value === "") return;
+  if (!LIMB_RENDER.test(value)) {
+    throw new Error(
+      `trigger history decode: ${name} is not the wire limb render`,
+    );
+  }
+}
+
 function validatePayload(
   payload: Record<string, string>,
   eventType: TriggerHistoryEventType,
@@ -247,7 +286,13 @@ function validatePayload(
         "trigger history decode: payload owner disagrees with event",
       );
     }
-    requireUnsignedPayload(payload, ["position_epoch", "group_id"]);
+    // A pending bracket is bound to a not-yet-filled order: it has no position
+    // identity yet, so it carries `order_id` instead of epoch/group.
+    if (
+      POSITION_EVENT_TYPES.has(eventType as PositionTriggerHistoryEventType)
+    ) {
+      requireUnsignedPayload(payload, ["position_epoch", "group_id"]);
+    }
   } else if ("owner" in payload) {
     throw new Error(
       "trigger history decode: shared market payload carries owner",
@@ -277,10 +322,43 @@ function validatePayload(
           "trigger history decode: set event has no trigger limbs",
         );
       }
+      // Additive since schema 39: the placement order whose first fill
+      // installed the bracket. "0" is the engine's none-sentinel; absent on
+      // rows projected before the attribute existed.
+      if (payload.source_order_id !== undefined) {
+        unsigned(payload.source_order_id, "payload.source_order_id");
+      }
       break;
     }
     case "position_triggers_cancelled":
+      break;
     case "position_triggers_invalidated":
+      // Additive since schema 39: the engine's u8 invalidation attribute,
+      // "0" = unspecified; absent on pre-upgrade rows.
+      if (payload.invalidation_reason !== undefined) {
+        unsigned(
+          payload.invalidation_reason,
+          "payload.invalidation_reason",
+          255n,
+        );
+      }
+      break;
+    case "pending_triggers_attached": {
+      requireLimbRender(payload.stop_loss, "payload.stop_loss");
+      requireLimbRender(payload.take_profit, "payload.take_profit");
+      if (payload.stop_loss === "" && payload.take_profit === "") {
+        throw new Error(
+          "trigger history decode: pending attach carries no trigger limbs",
+        );
+      }
+      unsigned(payload.order_id, "payload.order_id", U64_MAX, true);
+      // "0" = the order carried no client order id.
+      unsigned(payload.client_order_id, "payload.client_order_id");
+      break;
+    }
+    case "pending_triggers_discarded":
+      unsigned(payload.order_id, "payload.order_id", U64_MAX, true);
+      enumString(payload.reason, PENDING_DISCARD_REASONS, "payload.reason");
       break;
     case "position_trigger_activated":
       requireUnsignedPayload(payload, [

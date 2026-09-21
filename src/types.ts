@@ -1871,7 +1871,23 @@ export type PositionTriggerHistoryEventType =
   | "position_triggers_invalidated"
   | "position_trigger_activated"
   | "position_trigger_executed"
-  | "position_trigger_deferred";
+  | "position_trigger_deferred"
+  | "pending_triggers_attached"
+  | "pending_triggers_discarded";
+
+/**
+ * Why a pending (pre-fill) bracket left the live set without installing.
+ * `install_rejected` is the silent protection-loss path: the order's fill
+ * stands but the bracket could not install, so the position is live and
+ * unprotected — surfaces it.
+ */
+export type PendingTriggerDiscardReason =
+  | "order_cancelled"
+  | "order_expired"
+  | "order_replaced"
+  | "unfilled_terminal"
+  | "install_rejected"
+  | "position_closed";
 
 export type TriggerMarketHistoryEventType =
   "trigger_market_deferred" | "trigger_market_resumed";
@@ -1895,21 +1911,64 @@ export interface OwnerTriggerHistoryPayloadBase extends TriggerHistoryPayloadBas
   group_id: string;
 }
 
-export interface PositionTriggersSetHistoryPayload extends OwnerTriggerHistoryPayloadBase {
-  client_group_id: string;
-  stop_limb_id: string;
-  stop_client_trigger_id: string;
-  take_profit_limb_id: string;
-  take_profit_client_trigger_id: string;
-  accepted_height: string;
-  active_from_height: string;
-  replaced_group_id: string;
+/**
+ * The pending (pre-fill) lifecycle's own owner base: coordinates and owner as
+ * usual, but the bracket is bound to a not-yet-filled order, so it carries
+ * `order_id` and no position identity — an attach has no position yet.
+ */
+export interface PendingTriggerHistoryPayloadBase extends TriggerHistoryPayloadBase {
+  owner: string;
+  /** The live, unfilled order the bracket is bound to; never "0". */
+  order_id: string;
 }
+
+export interface PendingTriggersAttachedHistoryPayload extends PendingTriggerHistoryPayloadBase {
+  /** "0" = the order carried no client order id (the engine's flatten). */
+  client_order_id: string;
+  /**
+   * The wire's limb render — `trigger_price=<u64>,max_slippage_bps=<u64>,
+   * client_trigger_id=<u64|none>` — or the empty string when the limb is
+   * absent. At least one limb is present on every attach.
+   */
+  stop_loss: string;
+  /** See {@link PendingTriggersAttachedHistoryPayload.stop_loss}. */
+  take_profit: string;
+}
+
+export interface PendingTriggersDiscardedHistoryPayload extends PendingTriggerHistoryPayloadBase {
+  reason: PendingTriggerDiscardReason;
+}
+
+/**
+ * Additive since schema 39: `source_order_id` — the placement order whose
+ * first fill installed this bracket, "0" = none (the engine's sentinel).
+ * Optional because rows projected before the attribute existed lack it.
+ */
+export type PositionTriggersSetHistoryPayload =
+  OwnerTriggerHistoryPayloadBase & {
+    client_group_id: string;
+    stop_limb_id: string;
+    stop_client_trigger_id: string;
+    take_profit_limb_id: string;
+    take_profit_client_trigger_id: string;
+    accepted_height: string;
+    active_from_height: string;
+    replaced_group_id: string;
+    source_order_id?: string;
+  };
 
 export type PositionTriggersCancelledHistoryPayload =
   OwnerTriggerHistoryPayloadBase;
+
+/**
+ * Additive since schema 39: `invalidation_reason` — the engine's u8
+ * attribute, "0" = unspecified. Optional because rows projected before the
+ * attribute existed lack it.
+ */
 export type PositionTriggersInvalidatedHistoryPayload =
-  OwnerTriggerHistoryPayloadBase;
+  OwnerTriggerHistoryPayloadBase & {
+    invalidation_reason?: string;
+  };
 
 export interface PositionTriggerActivatedHistoryPayload extends OwnerTriggerHistoryPayloadBase {
   limb_id: string;
@@ -1999,6 +2058,16 @@ export type PositionTriggerHistoryEvent =
       "position_trigger_deferred",
       string,
       PositionTriggerDeferredHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "pending_triggers_attached",
+      string,
+      PendingTriggersAttachedHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "pending_triggers_discarded",
+      string,
+      PendingTriggersDiscardedHistoryPayload
     >;
 
 export type TriggerMarketHistoryEvent =
