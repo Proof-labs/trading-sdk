@@ -7,6 +7,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Trigger history decodes the pending (pre-fill) lifecycle (contract §7-I,
+  indexer #247): `pending_triggers_attached` (order id, client order id, and
+  both limb renders — present as
+  `trigger_price=<u64>,max_slippage_bps=<u64>,client_trigger_id=<u64|none>`,
+  absent as the empty value, at least one limb required) and
+  `pending_triggers_discarded` (order id plus one of six reasons:
+  `order_cancelled`, `order_expired`, `order_replaced`, `unfilled_terminal`,
+  `install_rejected`, `position_closed`). The two rows previously failed the
+  owner-history decoder outright. `install_rejected` is the silent
+  protection-loss path — the fill stands but the bracket could not install —
+  and now survives decoding verbatim so clients can surface it. The additive
+  schema-39 attributes decode alongside: `source_order_id` on
+  `position_triggers_set` ("0" = none) and `invalidation_reason` on
+  `position_triggers_invalidated` (u8, "0" = unspecified), both optional on
+  rows projected before the upgrade. TypeScript and Python decoders move in
+  lockstep (TR-6 parity); the Python `PendingTriggerDiscardReason` alias is
+  exported alongside the TypeScript union.
+
 - Pre-fill (pending) SL/TP limbs on the order actions and the F2 trigger
   expansion's client surface (contract: ProofOfBrain
   `delivery/epics/trigger-expansion-binary-conditional-prefill.md`, §7-T).
