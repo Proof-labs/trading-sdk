@@ -20,14 +20,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `errors.ndjson` conformance manifest. Gateway read types for the additive
   `/v1/triggers/{owner}` `pending` section and `market_kind` on position rows
   are added to the gateway reads module (§7-G). Encoding activates via an interim
-  rev-pin of proof-wire 2.1.0 (`[patch]` → Proof-labs/exchange
-  `feat/trigger-wire` @ 592735c6, draft PR #655); the five contract §1.7
+  pin of proof-wire 2.1.0 (`[patch]` → the Proof-labs/exchange commit that
+  merged it, 2f188e28) until the Proof-labs/wire mirror publishes the tag; the five contract §1.7
   vectors are pinned byte-exactly in `conformance/` — payloads in
   `codec.ndjson`, full signed envelopes in `signing.ndjson` — and the
   pre-2.1.0 9-field PlaceOrder bytes are pinned (signing row + TS
   decode-compat test) as decode-compat: they decode with absent limbs and
   re-encode canonically with the two trailing nils. The pin flips to the
-  published Proof-labs/wire release tag when PR #655 merges.
+  published Proof-labs/wire release tag once the mirror publishes 2.1.0.
 
 - The TypeScript error table gains `MarkUnavailable` (code 97), matching the
   Rust table and the engine, and the checked-in `errors.ndjson` manifest gains

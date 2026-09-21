@@ -358,9 +358,9 @@ describe("F2 pre-fill order trigger validation", () => {
 });
 
 describe("F2 pre-fill trigger wire contract (proof-wire 2.1.0)", () => {
-  // Frozen vectors from Proof-labs/exchange exchange-wire/vectors/
-  // (draft PR #655, rev 592735c6): full signed envelopes, test key 0x42×32,
-  // UNBOUND_CHAIN_ID. The same bytes are pinned in conformance/signing.ndjson.
+  // Frozen vectors from Proof-labs/exchange exchange-wire/vectors/: full
+  // signed envelopes, test key 0x42×32, UNBOUND_CHAIN_ID. The same bytes are
+  // pinned in conformance/signing.ndjson.
   const WITH_TRIGGERS_ENVELOPE =
     "96020101c4369b01dc00140101010101010101010101010101010101010101a3427579640ac0c2c2a347746393ce000173184b0b93ce0001adb0320cc4202152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12c440dc991c8b31063e6cd1d26cd61e3dcf91f6af2e1d9092db51ca49808316e7b3640c3f9622cb55036adbb39424508f56e1e5acdb59aa56088d2ecea3d309307e05";
   const NO_TRIGGERS_ENVELOPE =

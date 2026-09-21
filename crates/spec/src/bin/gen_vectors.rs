@@ -186,9 +186,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let signer = vec![0x03u8; 20];
 
     // ── codec family ─────────────────────────────────────────────────────
-    // F2 trigger expansion (proof-wire 2.1.0): the engine's frozen vectors
-    // from Proof-labs/exchange `exchange-wire/vectors/` (draft PR #655, rev
-    // 592735c6). The .hex files there are FULL SIGNED ENVELOPES (test key
+    // Trigger expansion (proof-wire 2.1.0): the engine's frozen vectors from
+    // Proof-labs/exchange `exchange-wire/vectors/`. The .hex files there are
+    // FULL SIGNED ENVELOPES (test key
     // 0x42×32, UNBOUND_CHAIN_ID); the payload segment of each is pinned here
     // byte-exactly, and the full envelopes themselves are pinned in the
     // signing family below (`…@seqN/unbound` cases). `place_order_no_triggers`
@@ -1049,10 +1049,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         },
     ];
 
-    // ── F2 frozen envelopes (proof-wire 2.1.0) ───────────────────────────
-    // Byte-exact pins of Proof-labs/exchange `exchange-wire/vectors/*.hex`
-    // (draft PR #655, rev 592735c6): full signed envelopes, test key
-    // 0x42×32 over UNBOUND_CHAIN_ID. Generation panics if the core's
+    // ── Frozen envelopes (proof-wire 2.1.0) ──────────────────────────────
+    // Byte-exact pins of Proof-labs/exchange `exchange-wire/vectors/*.hex`:
+    // full signed envelopes, test key 0x42×32 over UNBOUND_CHAIN_ID. Generation panics if the core's
     // envelope framing drifts from the engine's frozen bytes. The
     // `no_triggers` row signs the pre-2.1.0 9-field payload verbatim —
     // old bytes keep verifying; canonical 2.1.0 encodes add the two
