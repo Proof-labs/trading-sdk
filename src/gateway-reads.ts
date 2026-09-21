@@ -144,9 +144,12 @@ export class GatewayReads {
     params: { markets: readonly number[] },
     opts: GatewayReadOptions = {},
   ) {
-    return this.get(
-      "/v1/history/market-stats",
-      { markets: marketStatsMarketIds(params.markets) },
+    const query = new URLSearchParams({
+      markets: marketStatsMarketIds(params.markets),
+    });
+    return this.request(
+      `/v1/history/market-stats?${query}`,
+      { method: "GET", cache: "no-store" },
       opts,
     );
   }

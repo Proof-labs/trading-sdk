@@ -56,7 +56,7 @@ describe("rolling market statistics", () => {
     );
     expect(fetch).toHaveBeenCalledExactlyOnceWith(
       "https://gateway.example/v1/history/market-stats?markets=2147483647%2C0",
-      { method: "GET", signal },
+      { method: "GET", cache: "no-store", signal },
     );
   });
   it("returns raw Response unchanged from the named read", async () => {
