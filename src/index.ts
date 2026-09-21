@@ -1,5 +1,3 @@
-export { validateSetOracleGuards } from "./oracle-guards.js";
-
 // Types
 export {
   type Address,
@@ -156,6 +154,8 @@ export {
   decodeTriggerMarketConfigInfos,
   decodeTriggerStatusJson,
 } from "./triggers.js";
+
+export { validateSetOracleGuards } from "./oracle-guards.js";
 
 export {
   decodePositionTriggerHistoryPage,
