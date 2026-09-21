@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Adds the typed `SetOracleGuards` multisig action (inner tag 13), proposal
+  read decoding, and client-side engine-shape validation. Optional fields stay
+  unchanged; zero/unset guards are rejected. Wire-pinned codec/signing vectors
+  cover both fields and each field alone (trading-sdk#165).
+
 - Mirrors the `UpdateAuthoritySet` governance arm (inner tag `0x07`,
   exchange#422 / DEC-87): addition/removal of members in one privileged
   authority allowlist (`Oracle`, `CexComposite`, `Relayer`, `Custody`,
@@ -191,6 +196,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Ambiguous submissions retain their hash and HTTP diagnostics for reconciliation.
+
+### Deprecated
+
+- TypeScript `queryTriggerStatus()`, `decodeTriggerStatusJson` and the
+  `TriggerStatus` type, and Python `trigger_status()`. `GET /v1/triggers/status`
+  is deleted upstream: the node dropped it with its activation gates
+  (exchange#619, genesis-first) and the gateway drops it in gateway 4.0.0
+  (api-gateway#175). Trigger actions are permanently active, so there is
+  nothing left to read; once a gateway or node stops serving the route the
+  calls fail with the 404 response error. Behaviour is unchanged and they will
+  be removed in the next major version. The `proof-integration` scenario
+  `src/scenarios/trigger-surfaces.ts` lists `queryTriggerStatus` in its
+  required-method list; it must drop it only when that removal release lands,
+  not now. Refs #166.
 
 ### Fixed
 
