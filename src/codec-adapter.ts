@@ -23,7 +23,9 @@ import {
   type EventOracleSource,
   type PriceComparison,
   type SetTriggerMarketConfig,
+  type SetOracleGuards,
 } from "./types.js";
+import { validateSetOracleGuards } from "./oracle-guards.js";
 import {
   validateCancelPositionTriggers,
   validateSetPositionTriggers,
@@ -128,6 +130,9 @@ function governanceActionToWasm(value: unknown): unknown {
   if (GOVERNANCE_UNIT_VARIANTS.has(v.kind)) return v.kind;
   if (v.kind === "SetTriggerMarketConfig") {
     validateSetTriggerMarketConfig(v.value as SetTriggerMarketConfig);
+  }
+  if (v.kind === "SetOracleGuards") {
+    validateSetOracleGuards(v.value as SetOracleGuards);
   }
   // `Batch` is the one variant whose payload is a LIST of nested enum items
   // (`AdminBatchItem[]`) rather than a struct — each item is itself

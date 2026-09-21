@@ -1080,6 +1080,16 @@ export interface UpdateAuthoritySet {
   remove: Address[];
 }
 
+/** Update oracle safety bounds through multisig governance (inner tag 13).
+ * Omitted/null fields stay unchanged; clearing either guard is not permitted. */
+export interface SetOracleGuards {
+  market: number;
+  /** Positive u64 milliseconds; omit to leave unchanged. */
+  markPriceMaxOracleAgeMs?: bigint | null;
+  /** Integer basis points in 1..=10_000; omit to leave unchanged. */
+  maxOracleDeviationBps?: number | null;
+}
+
 /**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
@@ -1092,6 +1102,7 @@ export interface UpdateAuthoritySet {
  * refuses every tag below its activation height.
  */
 export type AdminAction =
+  | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
   | { kind: "CreateMarket"; value: CreateMarket }

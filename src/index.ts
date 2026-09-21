@@ -36,6 +36,7 @@ export {
   type SetPositionTriggers,
   type CancelPositionTriggers,
   type SetTriggerMarketConfig,
+  type SetOracleGuards,
   type BridgeWithdrawalReceipt,
   type OperatorReceiptProof,
   type ApproveAgent,
@@ -153,6 +154,8 @@ export {
   decodeTriggerMarketConfigInfos,
   decodeTriggerStatusJson,
 } from "./triggers.js";
+
+export { validateSetOracleGuards } from "./oracle-guards.js";
 
 export {
   decodePositionTriggerHistoryPage,
