@@ -26,6 +26,14 @@ describe("decodeExecError", () => {
     expect(e32?.description).toContain("net-delta margin grouping");
   });
 
+  it("decodes the unavailable-mark rejection (97)", () => {
+    expect(ExecErrorCode.MarkUnavailable).toBe(97);
+    const e97 = decodeExecError(97);
+    expect(e97?.name).toBe("MarkUnavailable");
+    expect(e97?.description).toContain("no mark price");
+    expect(execErrorName(97)).toBe("MarkUnavailable");
+  });
+
   it("decodes the F2 trigger-order incompatibility (98)", () => {
     expect(ExecErrorCode.TriggerOrderIncompatible).toBe(98);
     const e98 = decodeExecError(98);

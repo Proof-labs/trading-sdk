@@ -15,7 +15,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Python and the Rust/WASM core's shared wire contract, validated client-side
   with the same parity rules as `SetPositionTriggers` (at least one limb,
   non-zero trigger price, bps `1..=9999`, distinct limb client ids) plus the
-  engine's new `TriggerOrderIncompatible` (code 97) for limbs on a reduce-only
+  engine's new `TriggerOrderIncompatible` (code 98) for limbs on a reduce-only
   order — the code is pinned in the TypeScript and Rust error tables and the
   `errors.ndjson` conformance manifest. Gateway read types for the additive
   `/v1/triggers/{owner}` `pending` section and `market_kind` on position rows
@@ -28,6 +28,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decode-compat test) as decode-compat: they decode with absent limbs and
   re-encode canonically with the two trailing nils. The pin flips to the
   published Proof-labs/wire release tag when PR #655 merges.
+
+- The TypeScript error table gains `MarkUnavailable` (code 97), matching the
+  Rust table and the engine, and the checked-in `errors.ndjson` manifest gains
+  its `manifest/97` row. The new gateway trigger read types
+  (`GatewayPendingTriggerRow`, `GatewayTriggerPositionRow`,
+  `GatewayTriggerLimbJson`) are exported from the package entry point.
 
 - Mirrors the `UpdateAuthoritySet` governance arm (inner tag `0x07`,
   exchange#422 / DEC-87): addition/removal of members in one privileged

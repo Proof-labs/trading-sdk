@@ -299,7 +299,7 @@ def _validate_order_triggers(
 
     Per-limb bounds are enforced by :class:`TriggerLimb.__post_init__`; this
     adds the order-level rules: a reduce-only order cannot carry limbs
-    (engine code 97), and the two limbs' client ids must differ. Both limbs
+    (engine code 98), and the two limbs' client ids must differ. Both limbs
     absent means "no bracket requested" and passes.
     """
     if stop_loss is None and take_profit is None:
@@ -307,7 +307,7 @@ def _validate_order_triggers(
     if reduce_only:
         raise ValueError(
             "stop_loss/take_profit cannot be attached to a reduce_only order "
-            "(TriggerOrderIncompatible, code 97)"
+            "(TriggerOrderIncompatible, code 98)"
         )
     stop_id = stop_loss.client_trigger_id if stop_loss else None
     take_id = take_profit.client_trigger_id if take_profit else None

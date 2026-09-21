@@ -135,6 +135,8 @@ export enum ExecErrorCode {
   UnderlyingAlreadyAttached = 94,
   TooManyAttachedConditionals = 95,
   TooManyActiveEvents = 96,
+  /** No mark price exists for the market (impact-family book, no fallback). */
+  MarkUnavailable = 97,
   /** F2 trigger expansion: the order cannot carry attached SL/TP limbs. */
   TriggerOrderIncompatible = 98,
   InternalError = 255,
@@ -496,6 +498,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "TooManyActiveEvents",
     description:
       "account would touch more events than the scenario margin engine can enumerate (per-account cap)",
+  },
+  97: {
+    name: "MarkUnavailable",
+    description:
+      "no mark price is available for the market: an impact-family book has no recent-trade EWMA and no oracle fallback value",
   },
   98: {
     name: "TriggerOrderIncompatible",

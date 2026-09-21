@@ -279,6 +279,9 @@ export {
   type OwnerHistoryParams,
   type CandleHistoryParams,
   type AccountEventsParams,
+  type GatewayTriggerLimbJson,
+  type GatewayPendingTriggerRow,
+  type GatewayTriggerPositionRow,
 } from "./gateway-reads.js";
 export type { ExternalSigner } from "./client.js";
 export type {
