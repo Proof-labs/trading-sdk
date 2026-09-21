@@ -1803,7 +1803,12 @@ export interface PositionTriggerInfo {
   availability: TriggerEffectiveAvailability;
 }
 
-/** Next-height admission predicate returned by `GET /v1/triggers/status`. */
+/** Next-height admission predicate returned by `GET /v1/triggers/status`.
+ *
+ * @deprecated `GET /v1/triggers/status` is deleted upstream (exchange#619,
+ * genesis-first; api-gateway#175, gateway 4.0.0). Trigger actions are
+ * permanently active, so there is nothing to read. It will be removed in the
+ * next major version. */
 export interface TriggerStatus {
   finalizedHeight: bigint;
   admissionHeight: bigint;
