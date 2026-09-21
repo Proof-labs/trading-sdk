@@ -363,6 +363,8 @@ async fn malformed_or_false_permission_evidence_never_decodes_as_healthy() {
         (3, json!("MissingSource")),
         (4, Value::Null),
         (5, json!(1001)),
+        (10, json!([0, 800])),
+        (10, json!([111, 2_000])),
     ] {
         let mut bad = committed();
         bad[8][index] = replacement;

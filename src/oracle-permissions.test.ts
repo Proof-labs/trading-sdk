@@ -198,6 +198,12 @@ describe("committed oracle permissions", () => {
     (r: unknown[]) => {
       (r[8] as unknown[])[5] = 1001;
     },
+    (r: unknown[]) => {
+      (r[8] as unknown[])[10] = [0, 800];
+    },
+    (r: unknown[]) => {
+      (r[8] as unknown[])[10] = [50000000, 2000];
+    },
   ])("rejects malformed or falsely permissive state", (change) => {
     const raw = fresh();
     change(raw);

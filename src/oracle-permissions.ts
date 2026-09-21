@@ -216,6 +216,7 @@ function verdict(raw: unknown): CommittedOracleVerdict {
     (status === "Fresh") !== (certified !== null) ||
     (status === "Fresh") !== (value.eligibleSince !== null) ||
     (certified && certified.providerTime > value.blockTime) ||
+    (value.lastGood && value.lastGood.providerTime > value.blockTime) ||
     (value.eligibleSince !== null && value.eligibleSince > value.blockTime)
   )
     return invalid("verdict consistency");

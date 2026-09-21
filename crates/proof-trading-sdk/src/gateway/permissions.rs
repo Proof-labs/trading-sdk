@@ -237,6 +237,7 @@ fn verdict(w: VerdictWire) -> Result<CommittedVerdict, GatewayError> {
         || fresh != w.5.is_some()
         || w.4.is_some_and(|c| c.0 == 0 || c.1 > w.1)
         || w.5.is_some_and(|t| t > w.1)
+        || w.10.is_some_and(|c| c.0 == 0 || c.1 > w.1)
     {
         return Err(invalid());
     }
