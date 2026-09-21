@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- TypeScript 5.1.0 adds `reads().marketStats({ markets })` and strict
+  `queryMarketStats(reads, markets, { signal })` decoding for F23/UI18's batched
+  rolling 24-hour statistics. Contract quantities, raw micro-USDC prices,
+  decimal USDC notional and signed decimal basis points stay exact strings;
+  freshness, partial coverage and unavailable open interest remain explicit.
+  This additive read API leaves the engine wire and Rust/Python packages unchanged.
+
 - Pre-fill (pending) SL/TP limbs on the order actions and the F2 trigger
   expansion's client surface (contract: ProofOfBrain
   `delivery/epics/trigger-expansion-binary-conditional-prefill.md`, §7-T).
