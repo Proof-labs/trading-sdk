@@ -7,6 +7,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [5.1.0] — 2026-09-22
+
+npm `@proof-labs/trading-sdk` only; the Rust crates and the Python package keep
+their current versions until their own tags are cut. Compatible engine:
+exchange v2.12.0 (proof-wire 2.1.0: standalone events Phase 3 and the TR-02
+position triggers on the genesis-first node). Required by api-gateway 4.1.0,
+whose structured order ingress verifies a signature over the 2.1.0 order
+payload only and refuses a 5.0.0 signature as `invalid signature`. MINOR: the
+new order fields are optional and 5.0.0 order bytes still decode.
+
 - Pre-fill (pending) SL/TP limbs on the order actions and the F2 trigger
   expansion's client surface (contract: ProofOfBrain
   `delivery/epics/trigger-expansion-binary-conditional-prefill.md`, §7-T).
@@ -19,15 +29,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   order — the code is pinned in the TypeScript and Rust error tables and the
   `errors.ndjson` conformance manifest. Gateway read types for the additive
   `/v1/triggers/{owner}` `pending` section and `market_kind` on position rows
-  are added to the gateway reads module (§7-G). Encoding activates via an interim
-  pin of proof-wire 2.1.0 (`[patch]` → the Proof-labs/exchange commit that
-  merged it, 2f188e28) until the Proof-labs/wire mirror publishes the tag; the five contract §1.7
+  are added to the gateway reads module (§7-G). Encoding is pinned to the
+  published Proof-labs/wire release tag `v2.1.0`; the five contract §1.7
   vectors are pinned byte-exactly in `conformance/` — payloads in
   `codec.ndjson`, full signed envelopes in `signing.ndjson` — and the
   pre-2.1.0 9-field PlaceOrder bytes are pinned (signing row + TS
   decode-compat test) as decode-compat: they decode with absent limbs and
-  re-encode canonically with the two trailing nils. The pin flips to the
-  published Proof-labs/wire release tag once the mirror publishes 2.1.0.
+  re-encode canonically with the two trailing nils.
 
 - The TypeScript error table gains `MarkUnavailable` (code 97), matching the
   Rust table and the engine, and the checked-in `errors.ndjson` manifest gains
@@ -51,6 +59,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pinned identically in the TypeScript (WASM) and Python (PyO3) suites.
   Closes exchange#472 — the last gateway/SDK gap from the `CancelAllOrdersForAccount`
   kill lever (exchange#467, DEC-151); the gateway side landed in api-gateway#150.
+
+### Deprecated
+
+- TypeScript `queryTriggerStatus()`, `decodeTriggerStatusJson` and the
+  `TriggerStatus` type, and Python `trigger_status()`. `GET /v1/triggers/status`
+  is deleted upstream: the node dropped it with its activation gates
+  (exchange#619, genesis-first) and the gateway drops it in gateway 4.0.0
+  (api-gateway#175). Trigger actions are permanently active, so there is
+  nothing left to read; once a gateway or node stops serving the route the
+  calls fail with the 404 response error. Behaviour is unchanged and they will
+  be removed in the next major version. The `proof-integration` scenario
+  `src/scenarios/trigger-surfaces.ts` lists `queryTriggerStatus` in its
+  required-method list; it must drop it only when that removal release lands,
+  not now. Refs #166.
+
+## [5.0.0] — 2026-09-18
+
+npm `@proof-labs/trading-sdk` 5.0.0 (tag `npm-v5.0.0`); the Rust core, PyO3 and
+Python packages move to 4.0.0 in the same commit. Compatible engine: the
+exchange `dev` merge of standalone events Phase 2 (proof-wire 2.0.0). MAJOR:
+the impact-market family is gone from every surface (see the first entry).
 
 - **BREAKING (MAJOR) — proof-wire 2.0.0: the impact-market family is gone and
   every conditional belongs to an event.** The npm package moves to **5.0.0**,
@@ -224,20 +253,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Ambiguous submissions retain their hash and HTTP diagnostics for reconciliation.
-
-### Deprecated
-
-- TypeScript `queryTriggerStatus()`, `decodeTriggerStatusJson` and the
-  `TriggerStatus` type, and Python `trigger_status()`. `GET /v1/triggers/status`
-  is deleted upstream: the node dropped it with its activation gates
-  (exchange#619, genesis-first) and the gateway drops it in gateway 4.0.0
-  (api-gateway#175). Trigger actions are permanently active, so there is
-  nothing left to read; once a gateway or node stops serving the route the
-  calls fail with the 404 response error. Behaviour is unchanged and they will
-  be removed in the next major version. The `proof-integration` scenario
-  `src/scenarios/trigger-surfaces.ts` lists `queryTriggerStatus` in its
-  required-method list; it must drop it only when that removal release lands,
-  not now. Refs #166.
 
 ### Fixed
 
@@ -888,7 +903,9 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v4.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v5.1.0...HEAD
+[5.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v5.0.0...npm-v5.1.0
+[5.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v4.0.0...npm-v5.0.0
 [4.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...npm-v4.0.0
 [3.0.0]: https://github.com/Proof-labs/trading-sdk/releases/tag/npm-v3.0.0
 [1.1.0]: https://github.com/Proof-labs/trading-sdk/compare/v1.0.0...v1.1.0
