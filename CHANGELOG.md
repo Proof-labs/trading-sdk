@@ -11,12 +11,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Rust crate 4.0.0 → 4.1.0** — the market-snapshot witness bracket no longer
   requires all three reads (pre-status, snapshot, post-status) to come from the
-  same CometBFT node. Consistency is enforced by height ordering, app-hash
-  agreement, chain-id matching, and clock monotonicity — the same invariants as
-  before, minus the node-ID equality check. This allows the bracket to work
-  behind a load balancer that fans reads across multiple full nodes
-  (api-gateway#185). `WitnessError::BackendMismatch` is deprecated and no
-  longer returned.
+  same CometBFT node, so it works behind a load balancer that fans reads across
+  several full nodes (api-gateway#185, trading-sdk#177). Chain id, height
+  ordering, clock monotonicity and the witness app hash against a committed
+  header are still checked. The legacy app hash is still not a registry root:
+  the bracket proves consistency, not authenticity, and every backend behind
+  the load balancer must run a qualified image.
+
+### Deprecated
+
+- `WitnessError::BackendMismatch` is never returned; the bracket does not
+  compare node ids.
 
 ## [5.1.0] — 2026-09-22
 
