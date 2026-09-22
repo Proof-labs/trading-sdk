@@ -1599,6 +1599,66 @@ export interface OrderbookLevelUpdatedEvent {
   orderCount: string;
 }
 
+/** EN-13: Emitted when a position slice is transferred to a backstop vault during liquidation. */
+export interface BackstopLotCreatedEvent {
+  type: "BackstopLotCreated";
+  /** Hex-encoded address of the liquidated account. */
+  liquidatedOwner: string;
+  /** Hex-encoded backstop vault address that received the slice. */
+  backstopAddress: string;
+  /** Market identifier. */
+  market: string;
+  /** Position side ("Buy" or "Sell"). */
+  side: string;
+  /** Size in contracts (integer lots). */
+  size: string;
+  /** Entry price in micro-USDC (6 dp). */
+  entryPrice: string;
+}
+
+/** EN-13: Emitted when a backstop lot is settled (closed at the current mark price). */
+export interface BackstopLotSettledEvent {
+  type: "BackstopLotSettled";
+  /** Hex-encoded backstop vault address. */
+  backstopAddress: string;
+  /** Market identifier. */
+  market: string;
+  /** Position side ("Buy" or "Sell"). */
+  side: string;
+  /** Size in contracts (integer lots). */
+  size: string;
+  /** Entry price in micro-USDC (6 dp). */
+  entryPrice: string;
+  /** Settlement price in micro-USDC (6 dp). */
+  settlementPrice: string;
+  /** Realized PnL in micro-USDC (signed). */
+  realizedPnl: string;
+}
+
+/** EN-13: Emitted when the 100 bps penalty is applied to residual equity after netting (DEC-127). */
+export interface BackstopPenaltyAppliedEvent {
+  type: "BackstopPenaltyApplied";
+  /** Hex-encoded address of the liquidated account. */
+  owner: string;
+  /** Gross residual before penalty in micro-USDC. */
+  grossResidual: string;
+  /** Penalty deducted (100 bps of gross) in micro-USDC. */
+  penalty: string;
+  /** Net residual credited back to the owner in micro-USDC. */
+  netResidual: string;
+}
+
+/** EN-13: Emitted when open interest offset is applied after a backstop transfer. */
+export interface OpenInterestOffsetAppliedEvent {
+  type: "OpenInterestOffsetApplied";
+  /** Market identifier. */
+  market: string;
+  /** Size transferred in this event (integer lots). */
+  transferredSize: string;
+  /** Cumulative offset after this transfer (integer lots). */
+  cumulativeOffset: string;
+}
+
 /** Union of all exchange events. */
 export type ExchangeEvent =
   | OrderPlacedEvent
@@ -1617,7 +1677,11 @@ export type ExchangeEvent =
   | AgentApprovedEvent
   | AgentRevokedEvent
   | MarketOrderProcessedEvent
-  | OrderbookLevelUpdatedEvent;
+  | OrderbookLevelUpdatedEvent
+  | BackstopLotCreatedEvent
+  | BackstopLotSettledEvent
+  | BackstopPenaltyAppliedEvent
+  | OpenInterestOffsetAppliedEvent;
 
 // ---------------------------------------------------------------------------
 // Result types

@@ -7,6 +7,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- EN-13 event interfaces: `BackstopLotCreatedEvent`, `BackstopLotSettledEvent`,
+  `BackstopPenaltyAppliedEvent`, `OpenInterestOffsetAppliedEvent` added to
+  `ExchangeEvent` union in `types.ts`. These track backstop lot lifecycle,
+  penalty application, and open interest offset during HLP Tier-0 liquidation.
+
 ## [5.1.0] — 2026-09-22
 
 npm `@proof-labs/trading-sdk` only; the Rust crates and the Python package keep
