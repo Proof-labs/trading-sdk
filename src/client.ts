@@ -2268,13 +2268,18 @@ async function postInfoJson(
   });
   // The error keeps an unread copy, so callers can still read the body.
   const unread = res.clone();
-  let json: Record<string, unknown>;
+  let parsed: unknown;
   try {
-    json = (await res.json()) as Record<string, unknown>;
+    parsed = await res.json();
   } catch (error) {
     if (!res.ok) throw new GatewayHttpError(res.status, unread);
     throw error;
   }
+  // A JSON `null` or scalar body has no fields; it must not hide the status.
+  const json: Record<string, unknown> =
+    parsed !== null && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
   if (!res.ok || json.error) {
     const errorCode =
       typeof json.errorCode === "string" ? json.errorCode : undefined;

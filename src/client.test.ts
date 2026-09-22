@@ -2125,6 +2125,14 @@ describe("gateway owner-read failures", () => {
       "<html>bad gateway</html>",
     );
   });
+
+  it("reports a JSON null failure by status", async () => {
+    answer("null", 503);
+    const error = await failedRead();
+    expect(error).toBeInstanceOf(GatewayHttpError);
+    expect((error as GatewayHttpError).status).toBe(503);
+    expect(isMissingMark(error)).toBe(false);
+  });
 });
 
 /**
