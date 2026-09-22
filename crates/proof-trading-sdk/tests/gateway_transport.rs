@@ -691,12 +691,12 @@ async fn account_valuation_maps_the_missing_mark_envelope_to_a_typed_error() {
 
     let error = match client.account_valuation(&"a".repeat(40)).await {
         Err(error) => error,
-        Ok(_) => panic!("DEC-175: the MissingMark envelope must map to a typed error"),
+        Ok(_) => panic!("the MissingMark envelope must map to a typed error"),
     };
     assert_eq!(
         error.kind,
         ErrorKind::MissingMark,
-        "DEC-175: oracle unavailability is typed, not a generic failure"
+        "oracle unavailability is typed, not a generic HTTP failure"
     );
     let request = String::from_utf8(task.await.unwrap()).unwrap();
     assert!(request.contains("clearinghouseState"));
