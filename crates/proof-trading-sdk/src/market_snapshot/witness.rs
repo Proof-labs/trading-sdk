@@ -1,8 +1,11 @@
 //! Bound market-inventory reads, not an oracle-health or light-client API.
 //!
-//! The public Comet node ID binds the three reads to one configured backend.
-//! Qualified images and unique node keys remain deployment prerequisites: the
-//! legacy app hash is not a state-root commitment to the market registry.
+//! The bracket checks chain id, height ordering, clock monotonicity and the
+//! witness app hash against a committed header. Node IDs are recorded but not
+//! compared, so the three reads may come from different full nodes behind a
+//! load balancer. The legacy app hash is not a state-root commitment to the
+//! market registry, so the bracket proves consistency, not authenticity: every
+//! backend that can answer the snapshot read must run a qualified image.
 
 use super::MarketsSnapshot;
 use super::{chain, decode_snapshot, values, AppHash, BlockHeight, ChainIdentity};
@@ -141,7 +144,8 @@ pub enum WitnessError {
     /// A witness or status field is not the hexadecimal or decimal shape its
     /// contract requires, or is the empty value that names nothing.
     MalformedWitness,
-    /// The three reads did not come from one node.
+    /// Never returned: the bracket does not compare node ids.
+    #[deprecated = "never returned; the bracket does not compare node ids"]
     BackendMismatch,
     /// The witness names a different height than the snapshot it accompanies.
     WitnessHeightMismatch,
@@ -298,14 +302,9 @@ fn validate_bracket(
     before: &BoundChainIdentity,
     after: &BoundChainIdentity,
 ) -> Result<(), WitnessError> {
-    // The two anchors must first agree with each other: one node, a clock that
-    // moves forward, and one app hash per state height.
     validate_anchor_progress(before, after)?;
     let snapshot = &bound.snapshot;
     let witness = &bound.witness;
-    if witness.node_id != before.node_id {
-        return Err(WitnessError::BackendMismatch);
-    }
     if before.identity.chain_binding != snapshot.chain_id
         || after.identity.chain_binding != snapshot.chain_id
     {
@@ -341,9 +340,6 @@ fn validate_anchor_progress(
     previous: &BoundChainIdentity,
     next: &BoundChainIdentity,
 ) -> Result<(), WitnessError> {
-    if previous.node_id != next.node_id {
-        return Err(WitnessError::BackendMismatch);
-    }
     if next.identity.latest_height < previous.identity.latest_height {
         return Err(WitnessError::BracketOutOfOrder);
     }

@@ -53,6 +53,11 @@ fn before() -> BoundChainIdentity {
 fn after() -> BoundChainIdentity {
     decode_bound_identity(&bytes(&status_body(101, NOW + 100, 1, 2)), chain_id()).unwrap()
 }
+/// A status read past `H + 1`, so only the exact header can commit the witness.
+fn advanced_on(node: u8) -> BoundChainIdentity {
+    decode_bound_identity(&bytes(&status_body(105, NOW + 500, node, 8)), chain_id())
+        .expect("fixture status decodes")
+}
 
 #[test]
 fn legacy_snapshot_decode_is_unchanged_but_bound_method_requires_witness() {
@@ -153,21 +158,46 @@ fn hashes_are_compared_at_state_height_not_reported_header_height() {
 }
 
 #[test]
-fn cross_replica_aba_and_wrong_matching_hash_are_rejected() {
-    assert_eq!(
-        validate_bound_inventory(snapshot(2), before(), after(), None).unwrap_err(),
-        WitnessError::BackendMismatch
-    );
+fn mixed_backends_with_consistent_state_are_accepted() {
+    let verified = validate_bound_inventory(snapshot(2), before(), after(), None)
+        .expect("a status anchor from another node commits the witness app hash");
+    assert_eq!(verified.witness().node_id, node(2));
+    assert_eq!(verified.before().node_id(), node(1));
+
     let mut other = after();
     other.node_id = node(3);
-    assert_eq!(
-        validate_bound_inventory(snapshot(1), before(), other, None).unwrap_err(),
-        WitnessError::BackendMismatch
-    );
+    let verified = validate_bound_inventory(snapshot(1), before(), other, None)
+        .expect("the after status may come from a third node");
+    assert_eq!(verified.after().node_id(), node(3));
+
+    let verified = validate_bound_inventory(
+        snapshot(2),
+        before(),
+        advanced_on(3),
+        Some(&bytes(&block_body(101, 2))),
+    )
+    .expect("the exact H + 1 header commits the witness whichever node served each read");
+    assert_eq!(verified.after().node_id(), node(3));
+}
+
+#[test]
+fn wrong_app_hash_is_rejected_regardless_of_backend() {
     let mut wrong = after();
+    wrong.node_id = node(3);
     wrong.app_hash = hash(3);
     assert_eq!(
-        validate_bound_inventory(snapshot(1), before(), wrong, None).unwrap_err(),
+        validate_bound_inventory(snapshot(2), before(), wrong, None)
+            .expect_err("a status anchor with another app hash at H refuses the witness"),
+        WitnessError::AppHashMismatch
+    );
+    assert_eq!(
+        validate_bound_inventory(
+            snapshot(2),
+            before(),
+            advanced_on(3),
+            Some(&bytes(&block_body(101, 3)))
+        )
+        .expect_err("a header that does not commit the witness app hash refuses it"),
         WitnessError::AppHashMismatch
     );
 }
@@ -409,7 +439,7 @@ async fn same_height_reads_wait_for_next_header_without_resnapshot_or_clock_rene
 }
 
 #[tokio::test]
-async fn backend_change_while_waiting_is_refused() {
+async fn backend_change_while_waiting_is_accepted_when_state_is_consistent() {
     let responses = vec![
         ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
         (
@@ -426,10 +456,13 @@ async fn backend_change_while_waiting_is_refused() {
     ];
     let (url, task) = server(responses).await;
     let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
-    assert_eq!(
-        client.read_bound_inventory(chain_id()).await.unwrap_err(),
-        WitnessError::BackendMismatch
-    );
+    let verified = client
+        .read_bound_inventory(chain_id())
+        .await
+        .expect("a node change while waiting does not refuse a consistent bracket");
+    assert_eq!(verified.snapshot().height, 100);
+    assert_eq!(verified.before().node_id(), node(1));
+    assert_eq!(verified.after().node_id(), node(2));
     task.await.unwrap();
 }
 
