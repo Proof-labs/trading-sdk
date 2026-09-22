@@ -579,15 +579,18 @@ impl GatewayClient {
                 ErrorBody::Classify,
             )
             .await?;
-        if body.status.as_u16() == 503 && missing_mark_envelope(&body.bytes) {
-            return Err(GatewayError::new(op, ErrorKind::MissingMark));
+        if !body.status.is_success() {
+            let kind = if body.status.as_u16() == 503 && missing_mark_envelope(&body.bytes) {
+                ErrorKind::MissingMark
+            } else {
+                ErrorKind::HttpStatus(body.status.as_u16())
+            };
+            return Err(GatewayError {
+                retry_after: body.retry_after,
+                ..GatewayError::new(op, kind)
+            });
         }
-        let envelope: DataEnvelope = body.decode(op).map_err(|mut error| {
-            if !body.status.is_success() {
-                error.kind = ErrorKind::HttpStatus(body.status.as_u16());
-            }
-            error
-        })?;
+        let envelope: DataEnvelope = body.decode(op)?;
         let bytes = STANDARD
             .decode(envelope.data)
             .map_err(|_| GatewayError::new(op, ErrorKind::InvalidResponse))?;

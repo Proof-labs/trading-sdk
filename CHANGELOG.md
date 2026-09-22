@@ -28,9 +28,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `postInfoJson` (internal, used by `queryAccount` / `queryOpenOrders` /
   `queryWithdrawals` under `useGateway: true`) now throws `GatewayHttpError`
-  instead of `Error`. Callers that caught `Error` and inspected `message` will
-  see a different class and message format; callers using `isMissingMark` or
-  checking `error instanceof GatewayHttpError` are unaffected.
+  instead of `Error`. The message changes from `API error: <reason>` to
+  `Gateway request failed (<status>): <reason>`, the error's `response` body
+  stays unread, and a non-JSON failure reports its status instead of a JSON
+  parse error. `GatewayHttpError` takes an optional fourth `detail` argument
+  for the gateway's own error text.
 
 ## [5.1.0] — 2026-09-22
 

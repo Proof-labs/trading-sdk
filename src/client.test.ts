@@ -12,6 +12,7 @@ import {
   pubkeyToOwner,
   verify,
 } from "./crypto.js";
+import { GatewayHttpError, isMissingMark } from "./errors.js";
 import { Side, type Action } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 
@@ -2069,6 +2070,60 @@ describe("ExchangeClient owner-scoped reads via /info", () => {
     await client.queryAccount("c".repeat(40));
     expect(calls[0].url).toBe(`http://test-api/v1/account/${"c".repeat(40)}`);
     expect(calls[0].init?.method ?? "GET").toBe("GET");
+  });
+});
+
+describe("gateway owner-read failures", () => {
+  const originalFetch = globalThis.fetch;
+  const answer = (body: string, status: number) => {
+    globalThis.fetch = vi.fn(
+      async () => new Response(body, { status }),
+    ) as unknown as typeof fetch;
+  };
+  const failedRead = (): Promise<unknown> =>
+    new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" })
+      .queryAccount("a".repeat(40))
+      .catch((error: unknown) => error);
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("keeps the gateway's reason and an unread body", async () => {
+    answer(JSON.stringify({ error: "owner: invalid" }), 400);
+    const error = await failedRead();
+    expect(error).toBeInstanceOf(GatewayHttpError);
+    const http = error as GatewayHttpError;
+    expect(http.status).toBe(400);
+    expect(http.message).toBe("Gateway request failed (400): owner: invalid");
+    expect(await http.response.json()).toEqual({ error: "owner: invalid" });
+    expect(isMissingMark(error)).toBe(false);
+  });
+
+  it("classifies the node's MissingMark envelope", async () => {
+    answer(
+      JSON.stringify({
+        error:
+          "query failed: MissingMark: required account valuation mark unavailable",
+        errorCode: "MissingMark",
+      }),
+      503,
+    );
+    const error = await failedRead();
+    expect(isMissingMark(error)).toBe(true);
+    expect((error as GatewayHttpError).message).toContain(
+      "required account valuation mark unavailable",
+    );
+  });
+
+  it("reports a non-JSON failure by status instead of a parse error", async () => {
+    answer("<html>bad gateway</html>", 502);
+    const error = await failedRead();
+    expect(error).toBeInstanceOf(GatewayHttpError);
+    expect((error as GatewayHttpError).status).toBe(502);
+    expect(await (error as GatewayHttpError).response.text()).toBe(
+      "<html>bad gateway</html>",
+    );
   });
 });
 

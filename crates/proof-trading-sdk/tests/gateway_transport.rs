@@ -703,6 +703,41 @@ async fn account_valuation_maps_the_missing_mark_envelope_to_a_typed_error() {
 }
 
 #[tokio::test]
+async fn account_valuation_refuses_a_failed_status_even_with_a_data_envelope() {
+    let data = STANDARD.encode(
+        rmp_serde::to_vec(&proof_trading_sdk::query::AccountInfo {
+            balance: 1,
+            positions: vec![],
+            equity: 1,
+            total_mm: 0,
+            total_im: 0,
+            margin_ratio_bps: 0,
+            binding_scenario: vec![],
+            fees_accrued: 0,
+            volume_30d_micro_usdc: 0,
+            cashout_equity: 1,
+        })
+        .expect("a fixture account encodes"),
+    );
+    let body = json!({ "data": data }).to_string();
+    for status in [500, 503] {
+        let (url, task) = server(response(status, &body, ""), Duration::ZERO).await;
+        let client = GatewayClient::new(&url, GatewayOptions::default())
+            .expect("a local gateway URL is valid");
+        let error = match client.account_valuation(&"a".repeat(40)).await {
+            Err(error) => error,
+            Ok(_) => panic!("a {status} response must not decode as a valuation"),
+        };
+        assert_eq!(
+            error.kind,
+            ErrorKind::HttpStatus(status),
+            "only a MissingMark envelope is typed; every other failure keeps its status"
+        );
+        task.await.expect("the stub gateway answered once");
+    }
+}
+
+#[tokio::test]
 async fn account_valuation_rejects_non_hex_owners_before_any_request() {
     let client = GatewayClient::new("http://127.0.0.1:9", GatewayOptions::default()).unwrap();
     for user in [

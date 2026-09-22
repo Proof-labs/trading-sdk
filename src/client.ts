@@ -2266,11 +2266,20 @@ async function postInfoJson(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(info),
   });
-  const json = (await res.json()) as Record<string, unknown>;
+  // The error keeps an unread copy, so callers can still read the body.
+  const unread = res.clone();
+  let json: Record<string, unknown>;
+  try {
+    json = (await res.json()) as Record<string, unknown>;
+  } catch (error) {
+    if (!res.ok) throw new GatewayHttpError(res.status, unread);
+    throw error;
+  }
   if (!res.ok || json.error) {
     const errorCode =
       typeof json.errorCode === "string" ? json.errorCode : undefined;
-    throw new GatewayHttpError(res.status, res, errorCode);
+    const detail = typeof json.error === "string" ? json.error : undefined;
+    throw new GatewayHttpError(res.status, unread, errorCode, detail);
   }
   return json;
 }

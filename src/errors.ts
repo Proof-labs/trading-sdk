@@ -560,17 +560,23 @@ export function execErrorName(code: number, log?: string): string {
   return decodeExecError(code, log)?.name ?? "UnknownError";
 }
 
-/** Non-success gateway HTTP response; its unconsumed body remains available to callers. */
+/**
+ * Non-success gateway HTTP response; its unconsumed body remains available to
+ * callers. `detail` is the gateway's own error text, when the caller already
+ * read it; the message carries it in place of the bare `errorCode`.
+ */
 export class GatewayHttpError extends Error {
   public readonly errorCode: string | undefined;
   constructor(
     public readonly status: number,
     public readonly response: Response,
     errorCode?: string,
+    detail?: string,
   ) {
+    const reason = detail ?? errorCode;
     super(
-      errorCode
-        ? `Gateway request failed (${status}): ${errorCode}`
+      reason
+        ? `Gateway request failed (${status}): ${reason}`
         : `Gateway request failed (${status})`,
     );
     this.name = "GatewayHttpError";
