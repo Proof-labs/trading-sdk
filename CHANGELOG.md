@@ -7,6 +7,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Sub-account registry read: `GatewayReads.subAccountList(user)` posts the
+  gateway's `subAccountList` /info query (proxied to the node's
+  `GET /v1/sub_accounts/{addr}`) and `decodeSubAccountList` unwraps the
+  verbatim `{"data": "<base64 msgpack>"}` envelope into typed
+  `SubAccountListRow`s — strict, fail-closed validation of the wire
+  `SubAccount` named maps (snake_case fields, fixed 20/32-byte fields as
+  bins or arrays, id 1..=u32, duplicate id/address rejection, 4096-row
+  decode budget). Python parity: `ExchangeClient.sub_account_list()`.
+  The node route answers 501 until the engine's registry query ships;
+  consumers must treat that as "not yet available", never as an empty
+  registry. UI consumer: Web-UI W39-12 (ProofOfBrain
+  `delivery/epics/sub-accounts.md` §Reads).
+
 - Pre-fill (pending) SL/TP limbs on the order actions and the F2 trigger
   expansion's client surface (contract: ProofOfBrain
   `delivery/epics/trigger-expansion-binary-conditional-prefill.md`, §7-T).

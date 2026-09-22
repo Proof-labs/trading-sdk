@@ -97,6 +97,64 @@ def test_open_orders_posts_info():
     assert orders[0]["owner"] == b"\x01" * 20
 
 
+def test_sub_account_list_posts_info_and_decodes_registry_rows():
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.read())
+        # Wire SubAccount named maps: snake_case, bins for fixed fields.
+        rows = [
+            {
+                "sub_addr": b"\x11" * 20,
+                "master": b"\xaa" * 20,
+                "id": 1,
+                "name": b"grid" + b"\x00" * 28,
+                "created_height": 947727,
+            },
+            {
+                "sub_addr": list(b"\x22" * 20),
+                "master": list(b"\xaa" * 20),
+                "id": 2,
+                "name": list(b"basis" + b"\x00" * 27),
+                "created_height": 947800,
+            },
+        ]
+        return _info_response(rows)
+
+    rows = _client(handler).sub_account_list("aa" * 20)
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/info"
+    assert captured["body"] == {"type": "subAccountList", "user": "aa" * 20}
+    assert rows[0]["address"] == b"\x11" * 20
+    assert rows[0]["master"] == b"\xaa" * 20
+    assert rows[0]["id"] == 1
+    assert rows[0]["name"] == "grid"
+    assert rows[0]["created_height"] == 947727
+    # Array-encoded fixed fields (serde without serde_bytes) coerce too:
+    assert rows[1]["address"] == b"\x22" * 20
+    assert rows[1]["name"] == "basis"
+
+
+def test_sub_account_list_skips_malformed_rows():
+    def handler(request: httpx.Request) -> httpx.Response:
+        rows = [
+            {"not": "a row"},
+            {"sub_addr": b"\x11" * 20, "master": b"\xaa" * 20, "id": 0,
+             "name": b"\x00" * 32, "created_height": 1},  # id 0: never valid
+            {"sub_addr": b"\x22" * 20, "master": b"\xaa" * 20, "id": 3,
+             "name": b"ok" + b"\x00" * 30, "created_height": 5},
+        ]
+        return _info_response(rows)
+
+    rows = _client(handler).sub_account_list("aa" * 20)
+
+    assert [row["id"] for row in rows] == [3]
+    assert rows[0]["name"] == "ok"
+
+
 def test_withdrawal_status_none_when_nil():
     def handler(request: httpx.Request) -> httpx.Response:
         return _info_response(None)  # engine encodes "not found" as msgpack nil

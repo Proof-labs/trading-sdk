@@ -659,6 +659,42 @@ class ExchangeClient:
             if isinstance(o, (list, tuple)) and len(o) >= 6
         ]
 
+    def sub_account_list(self, owner: bytes | str) -> list[dict[str, t.Any]]:
+        """Registry rows for *owner* via ``POST /info`` (``subAccountList``).
+
+        Each row decodes from the wire ``SubAccount`` named map (snake_case
+        fields, fixed byte fields as bins or arrays — mirrors the TS
+        ``decodeSubAccountList``). The node route answers 501 until the
+        engine's registry query ships; that raises like any other non-OK
+        response and must be treated as "not yet available", never as an
+        empty registry.
+        """
+        raw = self._post_info({"type": "subAccountList", "user": _to_hex(owner)})
+        if not isinstance(raw, (list, tuple)):
+            return []
+        rows: list[dict[str, t.Any]] = []
+        seen_ids: set[int] = set()
+        required = ("sub_addr", "master", "id", "name", "created_height")
+        for row in raw:
+            if not isinstance(row, dict) or any(k not in row for k in required):
+                continue
+            row_id = int(row["id"])
+            if row_id < 1 or row_id > 0xFFFFFFFF or row_id in seen_ids:
+                continue
+            seen_ids.add(row_id)
+            rows.append(
+                {
+                    "address": self._to_bytes(row["sub_addr"]),
+                    "master": self._to_bytes(row["master"]),
+                    "id": row_id,
+                    "name": bytes(self._to_bytes(row["name"]))
+                    .rstrip(b"\x00")
+                    .decode("utf-8"),
+                    "created_height": int(row["created_height"]),
+                }
+            )
+        return rows
+
     def withdrawal_status(self, withdrawal_id: int) -> dict[str, t.Any] | None:
         """Withdrawal record by id via ``POST /info`` (``withdrawalStatus``).
 

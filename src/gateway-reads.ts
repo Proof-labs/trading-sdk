@@ -147,6 +147,16 @@ export class GatewayReads {
   clearinghouseState(user: string, opts: GatewayReadOptions = {}) {
     return this.info("clearinghouseState", { user }, opts);
   }
+  /** Registry rows for one master: derived child addresses, ids, names,
+   *  creation heights. The gateway proxies the node's
+   *  `GET /v1/sub_accounts/{addr}` and returns the verbatim
+   *  `{"data": "<base64 msgpack>"}` envelope; `decodeSubAccountList`
+   *  (from `./sub-accounts.js`) unwraps and validates it. The node route
+   *  answers 501 until the engine's registry query ships — a 501 is
+   *  "not yet available", never an empty list. */
+  subAccountList(user: string, opts: GatewayReadOptions = {}) {
+    return this.info("subAccountList", { user }, opts);
+  }
   openOrders(
     user: string,
     opts: GatewayReadOptions & { market?: number; limit?: number } = {},
