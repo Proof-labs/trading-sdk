@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Rust crate 4.0.0 → 4.1.0** — the market-snapshot witness bracket no longer
+  requires all three reads (pre-status, snapshot, post-status) to come from the
+  same CometBFT node. Consistency is enforced by height ordering, app-hash
+  agreement, chain-id matching, and clock monotonicity — the same invariants as
+  before, minus the node-ID equality check. This allows the bracket to work
+  behind a load balancer that fans reads across multiple full nodes
+  (api-gateway#185). `WitnessError::BackendMismatch` is deprecated and no
+  longer returned.
+
 ## [5.1.0] — 2026-09-22
 
 npm `@proof-labs/trading-sdk` only; the Rust crates and the Python package keep

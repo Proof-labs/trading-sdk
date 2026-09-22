@@ -153,17 +153,19 @@ fn hashes_are_compared_at_state_height_not_reported_header_height() {
 }
 
 #[test]
-fn cross_replica_aba_and_wrong_matching_hash_are_rejected() {
-    assert_eq!(
-        validate_bound_inventory(snapshot(2), before(), after(), None).unwrap_err(),
-        WitnessError::BackendMismatch
-    );
+fn mixed_backends_with_consistent_state_are_accepted() {
+    let verified = validate_bound_inventory(snapshot(2), before(), after(), None).unwrap();
+    assert_eq!(verified.witness().node_id, node(2));
+    assert_eq!(verified.before().node_id(), node(1));
+
     let mut other = after();
     other.node_id = node(3);
-    assert_eq!(
-        validate_bound_inventory(snapshot(1), before(), other, None).unwrap_err(),
-        WitnessError::BackendMismatch
-    );
+    let verified = validate_bound_inventory(snapshot(1), before(), other, None).unwrap();
+    assert_eq!(verified.after().node_id(), node(3));
+}
+
+#[test]
+fn wrong_app_hash_is_rejected_regardless_of_backend() {
     let mut wrong = after();
     wrong.app_hash = hash(3);
     assert_eq!(
@@ -409,7 +411,7 @@ async fn same_height_reads_wait_for_next_header_without_resnapshot_or_clock_rene
 }
 
 #[tokio::test]
-async fn backend_change_while_waiting_is_refused() {
+async fn backend_change_while_waiting_is_accepted_when_state_is_consistent() {
     let responses = vec![
         ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
         (
@@ -426,10 +428,10 @@ async fn backend_change_while_waiting_is_refused() {
     ];
     let (url, task) = server(responses).await;
     let client = MarketsSnapshotClient::new(&url, Duration::from_secs(1)).unwrap();
-    assert_eq!(
-        client.read_bound_inventory(chain_id()).await.unwrap_err(),
-        WitnessError::BackendMismatch
-    );
+    let verified = client.read_bound_inventory(chain_id()).await.unwrap();
+    assert_eq!(verified.snapshot().height, 100);
+    assert_eq!(verified.before().node_id(), node(1));
+    assert_eq!(verified.after().node_id(), node(2));
     task.await.unwrap();
 }
 

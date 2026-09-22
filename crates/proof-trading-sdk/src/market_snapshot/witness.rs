@@ -1,8 +1,9 @@
 //! Bound market-inventory reads, not an oracle-health or light-client API.
 //!
-//! The public Comet node ID binds the three reads to one configured backend.
-//! Qualified images and unique node keys remain deployment prerequisites: the
-//! legacy app hash is not a state-root commitment to the market registry.
+//! The bracket validates consistency through height ordering, app-hash
+//! agreement, chain-id matching, and clock monotonicity. Node IDs are
+//! recorded but not required to match, so the bracket works behind a
+//! load balancer that fans reads across multiple full nodes.
 
 use super::MarketsSnapshot;
 use super::{chain, decode_snapshot, values, AppHash, BlockHeight, ChainIdentity};
@@ -141,7 +142,10 @@ pub enum WitnessError {
     /// A witness or status field is not the hexadecimal or decimal shape its
     /// contract requires, or is the empty value that names nothing.
     MalformedWitness,
-    /// The three reads did not come from one node.
+    /// Formerly: the three reads did not come from one node. No longer
+    /// returned — the bracket tolerates mixed backends when height ordering
+    /// and app-hash consistency hold. Retained for match-arm compatibility.
+    #[deprecated = "no longer returned; consistency is enforced by app-hash"]
     BackendMismatch,
     /// The witness names a different height than the snapshot it accompanies.
     WitnessHeightMismatch,
@@ -298,14 +302,9 @@ fn validate_bracket(
     before: &BoundChainIdentity,
     after: &BoundChainIdentity,
 ) -> Result<(), WitnessError> {
-    // The two anchors must first agree with each other: one node, a clock that
-    // moves forward, and one app hash per state height.
     validate_anchor_progress(before, after)?;
     let snapshot = &bound.snapshot;
     let witness = &bound.witness;
-    if witness.node_id != before.node_id {
-        return Err(WitnessError::BackendMismatch);
-    }
     if before.identity.chain_binding != snapshot.chain_id
         || after.identity.chain_binding != snapshot.chain_id
     {
@@ -341,9 +340,6 @@ fn validate_anchor_progress(
     previous: &BoundChainIdentity,
     next: &BoundChainIdentity,
 ) -> Result<(), WitnessError> {
-    if previous.node_id != next.node_id {
-        return Err(WitnessError::BackendMismatch);
-    }
     if next.identity.latest_height < previous.identity.latest_height {
         return Err(WitnessError::BracketOutOfOrder);
     }
