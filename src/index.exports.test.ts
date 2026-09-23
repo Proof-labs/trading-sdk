@@ -28,6 +28,10 @@ import {
   type PositionTriggerHistoryPage,
   type TriggerMarketHistoryPage,
   type TriggerMarketConfigInfo,
+  type ExchangeEvent,
+  type InsuranceFundUpdatedEvent,
+  type PositionAutoDeleveragedEvent,
+  type HlpAbsorbedEvent,
   decodeTriggerMarketConfigInfos,
   decodePositionTriggerHistoryPage,
   decodeTriggerMarketHistoryPage,
@@ -128,6 +132,48 @@ describe("public barrel: governance surface", () => {
     expect(decodePositionTriggerHistoryPage).toBeTypeOf("function");
     expect(decodeTriggerMarketHistoryPage).toBeTypeOf("function");
     expect(decodeTriggerMarketConfigInfos).toBeTypeOf("function");
+  });
+});
+
+describe("public barrel: bad-debt waterfall events", () => {
+  it("re-exports the waterfall event types as ExchangeEvent members", () => {
+    const insurance: InsuranceFundUpdatedEvent = {
+      type: "InsuranceFundUpdated",
+      poolId: "1",
+      balance: "-2500000",
+      delta: "-7500000",
+    };
+    const adl: PositionAutoDeleveragedEvent = {
+      type: "PositionAutoDeleveraged",
+      owner: "11".repeat(20),
+      market: "1",
+      side: "Buy",
+      size: "3",
+      closePrice: "65000000000",
+      closePriceSpec: "65000000000",
+      realizedPnl: "1200000",
+    };
+    const hlp: HlpAbsorbedEvent = {
+      type: "HlpAbsorbed",
+      poolId: "0",
+      amount: "4000000",
+      hlpBalanceAfter: "996000000",
+    };
+    const events: ExchangeEvent[] = [insurance, adl, hlp];
+
+    const fields = events.map((event) => {
+      switch (event.type) {
+        case "InsuranceFundUpdated":
+          return event.delta;
+        case "PositionAutoDeleveraged":
+          return event.closePriceSpec;
+        case "HlpAbsorbed":
+          return event.hlpBalanceAfter;
+        default:
+          return null;
+      }
+    });
+    expect(fields).toEqual(["-7500000", "65000000000", "996000000"]);
   });
 });
 

@@ -217,6 +217,17 @@ export class GatewayReads {
   oracleHealth(opts: GatewayReadOptions = {}) {
     return this.get("/v1/oracle/health", {}, opts);
   }
+  /** History pipeline freshness (`GET /v1/history/status`, the indexer's
+   * watermarks and ingest liveness). Lets a caller tell an empty history from
+   * one that has not caught up; thresholds belong to the caller.
+   */
+  historyStatus(opts: GatewayReadOptions = {}) {
+    return this.request(
+      "/v1/history/status",
+      { method: "GET", cache: "no-store" },
+      opts,
+    );
+  }
   candles(params: CandleHistoryParams, opts: GatewayReadOptions = {}) {
     return this.get("/v1/history/candles", params, opts);
   }

@@ -217,6 +217,44 @@ describe("named gateway reads", () => {
   });
 });
 
+describe("history status read", () => {
+  it("forwards the indexer status uncached with its body unread", async () => {
+    const payload = {
+      ok: true,
+      reconciliation: { ok: true, watermarks: { block_progress: 87371 } },
+      ingest: { block_lag_seconds: 43, stale: false },
+    };
+    const response = json(payload);
+    const fetch = vi.fn(async () => response);
+    const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+    const signal = new AbortController().signal;
+    const result = await reads.historyStatus({ signal });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith("/v1/history/status", {
+      method: "GET",
+      cache: "no-store",
+      signal,
+    });
+    expect(result).toBe(response);
+    expect(result.bodyUsed).toBe(false);
+    expect(await result.json()).toEqual(payload);
+  });
+
+  it("surfaces an unavailable history service instead of a status", async () => {
+    const response = json({ error: "history_status_timeout" }, 502);
+    const fetch = vi.fn(async () => response);
+    const reads = new ExchangeClient().reads({ fetch });
+    await expect(reads.historyStatus()).rejects.toMatchObject({
+      name: "GatewayHttpError",
+      status: 502,
+      response,
+    });
+    await expect(
+      reads.historyStatus({ signal: AbortSignal.abort() }),
+    ).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
 it("reads without URLSearchParams.size", async () => {
   vi.spyOn(URLSearchParams.prototype, "size", "get").mockImplementation(() => {
     throw new Error("not supported");

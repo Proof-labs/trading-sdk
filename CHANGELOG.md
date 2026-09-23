@@ -17,6 +17,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Requests bypass HTTP caches. MINOR: this additive TypeScript read API keeps
   the released npm 5.1.0 codec and proof-wire 2.1.0 contract (exchange v2.12.0 /
   api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
+- `InsuranceFundUpdatedEvent` (`poolId`, `balance`, `delta`),
+  `PositionAutoDeleveragedEvent` (`owner`, `market`, `side`, `size`,
+  `closePrice`, `closePriceSpec`, `realizedPnl`) and `HlpAbsorbedEvent`
+  (`poolId`, `amount`, `hlpBalanceAfter`) join the `ExchangeEvent` union and
+  the package barrel. They type the bad-debt waterfall events the engine
+  already emits on proof-wire 2.1.0 (exchange dev `exchange-wire` `Event`), with
+  the same stringified-number convention as `AccountLiquidatedEvent`.
+  TypeScript types only: no codec, wire or Rust/Python change.
+- `reads().historyStatus()` forwards `GET /v1/history/status` (the gateway's
+  proxy of the indexer's watermarks and ingest liveness) uncached, with the
+  response body, HTTP errors and cancellation intact. Applications use it to
+  tell an empty history from one the indexer has not caught up on; freshness
+  thresholds stay with the caller.
 - `GatewayHttpError.errorCode` — optional typed error code extracted from the
   gateway's JSON response body (e.g. `"MissingMark"`). The `GatewayReads`
   path clones the response to parse the code while leaving the original body
