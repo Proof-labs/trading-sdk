@@ -201,6 +201,7 @@ export { fetchChainId } from "./client.js";
 // Errors
 export {
   GatewayHttpError,
+  isMissingMark,
   type ExecErrorInfo,
   ExecErrorCode,
   decodeExecError,

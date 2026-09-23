@@ -95,7 +95,20 @@ fn committed() -> Value {
         "Satisfied",
         policy(1),
         null,
-        [15, 1_000, "Fresh", "Fresh", [123, 990], 999, 0, 2, [990, 950], [null, null], null, [123, 3_600_000, 3_600_000]]
+        [
+            15,
+            1_000,
+            "Fresh",
+            "Fresh",
+            [123, 990],
+            999,
+            0,
+            2,
+            [990, 950],
+            [null, null],
+            null,
+            [123, 3_600_000, 3_600_000]
+        ]
     ])
 }
 fn encoded(value: Value) -> Value {
@@ -288,7 +301,20 @@ async fn permissions_preserve_exact_typed_epoch_and_truthful_unavailability() {
             "Unavailable",
             policy(1),
             null,
-            [15, 1000, "Stale", "ExpiredSource", null, null, 0, 2, [null, null], [null, null], null, [null, 0, 3_600_000]]
+            [
+                15,
+                1000,
+                "Stale",
+                "ExpiredSource",
+                null,
+                null,
+                0,
+                2,
+                [null, null],
+                [null, null],
+                null,
+                [null, 0, 3_600_000]
+            ]
         ]),
     ] {
         let (client, task) = fixture(encoded(wire.clone())).await;
@@ -315,7 +341,20 @@ async fn committed_verdict_decodes_all_twelve_fields_with_evidence_and_last_good
         "Satisfied",
         policy(1),
         null,
-        [15, 1_000, "Fresh", "Fresh", [123, 990], 999, 0, 2, [990, 950], [([1u8; 32]), ([2u8; 32])], [111, 900], [123, 3_600_000, 7_200_000]]
+        [
+            15,
+            1_000,
+            "Fresh",
+            "Fresh",
+            [123, 990],
+            999,
+            0,
+            2,
+            [990, 950],
+            [([1u8; 32]), ([2u8; 32])],
+            [111, 900],
+            [123, 3_600_000, 7_200_000]
+        ]
     ]);
     let (client, task) = fixture(encoded(wire)).await;
     let read = client.oracle_permissions(market()).await.unwrap();
@@ -605,5 +644,112 @@ async fn invalid_signed_input_is_rejected_before_network() {
         let error = client.submit_signed_bytes(&bytes).await.unwrap_err();
         assert_eq!(error.kind, ErrorKind::InvalidInput);
         assert_eq!(error.reconcile_hash, None);
+    }
+}
+
+#[tokio::test]
+async fn account_valuation_decodes_the_base64_msgpack_envelope() {
+    let info = proof_trading_sdk::query::AccountInfo {
+        balance: 1_000,
+        positions: vec![],
+        equity: 950,
+        total_mm: 400,
+        total_im: 500,
+        margin_ratio_bps: 23_750,
+        binding_scenario: vec![],
+        fees_accrued: -5,
+        volume_30d_micro_usdc: 12_345,
+        cashout_equity: 940,
+    };
+    let data = STANDARD.encode(rmp_serde::to_vec(&info).unwrap());
+    let (client, task) = fixture(json!({ "data": data })).await;
+
+    let decoded = match client.account_valuation(&"a".repeat(40)).await {
+        Ok(decoded) => decoded,
+        Err(error) => panic!("expected a decoded valuation, got {error:?}"),
+    };
+    assert_eq!(decoded.balance, 1_000);
+    assert_eq!(decoded.equity, 950);
+    assert_eq!(decoded.margin_ratio_bps, 23_750);
+
+    let request = String::from_utf8(task.await.unwrap()).unwrap();
+    assert!(request.starts_with("POST /info HTTP/1.1\r\n"));
+    assert!(
+        request.contains("\"type\":\"clearinghouseState\""),
+        "the valuation read goes through the gateway's /info surface"
+    );
+}
+
+#[tokio::test]
+async fn account_valuation_maps_the_missing_mark_envelope_to_a_typed_error() {
+    let body = json!({
+        "error": "query failed (path=\"account/ab\"): MissingMark: required account valuation mark unavailable (rc=-2)",
+        "errorCode": "MissingMark",
+    });
+    let (url, task) = server(response(503, &body.to_string(), ""), Duration::ZERO).await;
+    let client = GatewayClient::new(&url, GatewayOptions::default()).unwrap();
+
+    let error = match client.account_valuation(&"a".repeat(40)).await {
+        Err(error) => error,
+        Ok(_) => panic!("the MissingMark envelope must map to a typed error"),
+    };
+    assert_eq!(
+        error.kind,
+        ErrorKind::MissingMark,
+        "oracle unavailability is typed, not a generic HTTP failure"
+    );
+    let request = String::from_utf8(task.await.unwrap()).unwrap();
+    assert!(request.contains("clearinghouseState"));
+}
+
+#[tokio::test]
+async fn account_valuation_refuses_a_failed_status_even_with_a_data_envelope() {
+    let data = STANDARD.encode(
+        rmp_serde::to_vec(&proof_trading_sdk::query::AccountInfo {
+            balance: 1,
+            positions: vec![],
+            equity: 1,
+            total_mm: 0,
+            total_im: 0,
+            margin_ratio_bps: 0,
+            binding_scenario: vec![],
+            fees_accrued: 0,
+            volume_30d_micro_usdc: 0,
+            cashout_equity: 1,
+        })
+        .expect("a fixture account encodes"),
+    );
+    let body = json!({ "data": data }).to_string();
+    for status in [500, 503] {
+        let (url, task) = server(response(status, &body, ""), Duration::ZERO).await;
+        let client = GatewayClient::new(&url, GatewayOptions::default())
+            .expect("a local gateway URL is valid");
+        let error = match client.account_valuation(&"a".repeat(40)).await {
+            Err(error) => error,
+            Ok(_) => panic!("a {status} response must not decode as a valuation"),
+        };
+        assert_eq!(
+            error.kind,
+            ErrorKind::HttpStatus(status),
+            "only a MissingMark envelope is typed; every other failure keeps its status"
+        );
+        task.await.expect("the stub gateway answered once");
+    }
+}
+
+#[tokio::test]
+async fn account_valuation_rejects_non_hex_owners_before_any_request() {
+    let client = GatewayClient::new("http://127.0.0.1:9", GatewayOptions::default()).unwrap();
+    for user in [
+        "nothex",
+        "0xzz",
+        "a".repeat(39).as_str(),
+        "a".repeat(41).as_str(),
+    ] {
+        let error = match client.account_valuation(user).await {
+            Err(error) => error,
+            Ok(_) => panic!("a non-hex owner must be rejected before any request"),
+        };
+        assert_eq!(error.kind, ErrorKind::InvalidInput);
     }
 }

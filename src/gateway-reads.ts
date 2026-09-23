@@ -95,7 +95,16 @@ export class GatewayReads {
       ...init,
       signal: opts.signal,
     });
-    if (!res.ok) throw new GatewayHttpError(res.status, res);
+    if (!res.ok) {
+      let errorCode: string | undefined;
+      try {
+        const body = await res.clone().json();
+        if (typeof body?.errorCode === "string") errorCode = body.errorCode;
+      } catch {
+        /* non-JSON error body — leave errorCode undefined */
+      }
+      throw new GatewayHttpError(res.status, res, errorCode);
+    }
     return res;
   }
   private info(

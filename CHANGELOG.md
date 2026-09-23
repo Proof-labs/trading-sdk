@@ -17,6 +17,44 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Requests bypass HTTP caches. MINOR: this additive TypeScript read API keeps
   the released npm 5.1.0 codec and proof-wire 2.1.0 contract (exchange v2.12.0 /
   api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
+- `GatewayHttpError.errorCode` — optional typed error code extracted from the
+  gateway's JSON response body (e.g. `"MissingMark"`). The `GatewayReads`
+  path clones the response to parse the code while leaving the original body
+  unconsumed; the `postInfoJson` path (owner-scoped reads via `POST /info`)
+  now throws `GatewayHttpError` instead of a plain `Error`, preserving both
+  `status` and `errorCode`.
+- `isMissingMark(error)` — type guard that returns `true` when the error is a
+  503 `GatewayHttpError` with `errorCode === "MissingMark"`. Companion to the
+  DEC-175 contract in `exchange/docs/account-query-errors.md`.
+- `GatewayClient::account_valuation` — the typed account-valuation read
+  (`POST /info` → `clearinghouseState`). Oracle unavailability surfaces as the
+  new `gateway::ErrorKind::MissingMark` instead of a generic HTTP failure,
+  mirroring the engine's restored `503 errorCode=MissingMark` contract
+  (DEC-175; exchange#704). Additive: Rust crate 4.0.0 → 4.1.0.
+
+### Changed
+
+- **Rust crate 4.0.0 → 4.1.0** — the market-snapshot witness bracket no longer
+  requires all three reads (pre-status, snapshot, post-status) to come from the
+  same CometBFT node, so it works behind a load balancer that fans reads across
+  several full nodes (api-gateway#185, trading-sdk#177). Chain id, height
+  ordering, clock monotonicity and the witness app hash against a committed
+  header are still checked. The legacy app hash is still not a registry root:
+  the bracket proves consistency, not authenticity, and every backend behind
+  the load balancer must run a qualified image.
+
+- `postInfoJson` (internal, used by `queryAccount` / `queryOpenOrders` /
+  `queryWithdrawals` under `useGateway: true`) now throws `GatewayHttpError`
+  instead of `Error`. The message changes from `API error: <reason>` to
+  `Gateway request failed (<status>): <reason>`, the error's `response` body
+  stays unread, and a non-JSON failure reports its status instead of a JSON
+  parse error. `GatewayHttpError` takes an optional fourth `detail` argument
+  for the gateway's own error text.
+
+### Deprecated
+
+- `WitnessError::BackendMismatch` is never returned; the bracket does not
+  compare node ids.
 
 ## [5.1.0] — 2026-09-22
 
