@@ -9,6 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- TypeScript 5.2.0 adds `reads().marketStats({ markets })` and strict
+  `queryMarketStats(reads, markets, { signal })` decoding for F23/UI18's batched
+  rolling 24-hour statistics. Contract quantities, raw micro-USDC prices,
+  decimal USDC notional and signed decimal basis points stay exact strings;
+  freshness, partial coverage and unavailable open interest remain explicit.
+  Requests bypass HTTP caches. MINOR: this additive TypeScript read API keeps
+  the released npm 5.1.0 codec and proof-wire 2.1.0 contract (exchange v2.12.0 /
+  api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
 - `GatewayHttpError.errorCode` — optional typed error code extracted from the
   gateway's JSON response body (e.g. `"MissingMark"`). The `GatewayReads`
   path clones the response to parse the code while leaving the original body
