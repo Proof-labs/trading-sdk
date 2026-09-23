@@ -10,6 +10,7 @@ use refusal::{ErrorBody, RefusalEvidence};
 pub use refusal::{MaintenanceMode, PreAdmissionRefusal};
 
 use crate::market_snapshot::BlockHeight;
+use crate::query::AccountInfo;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{
     header::{HeaderMap, HeaderValue, RETRY_AFTER},
@@ -32,6 +33,7 @@ pub enum Operation {
     Configuration,
     ChainIdentity,
     OraclePermissions,
+    AccountValuation,
     Submit,
     Receipt,
 }
@@ -42,6 +44,11 @@ pub enum ErrorKind {
     Transport,
     Timeout,
     BodyTooLarge,
+    /// The account-valuation read found no usable required mark: the node's
+    /// typed `503 errorCode=MissingMark` answer. Distinct from a transport
+    /// failure so callers can fall back instead of misreading oracle
+    /// unavailability as an error.
+    MissingMark,
     HttpStatus(u16),
     InvalidResponse,
     HashMismatch,
@@ -249,6 +256,41 @@ struct SyncInfo {
 struct SignedRequest {
     action: String,
 }
+
+/// The `POST /info` request body, tagged by `type` as the gateway reads it.
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum InfoRequest<'a> {
+    ClearinghouseState { user: &'a str },
+}
+
+/// The node's query-error body; only `errorCode` is read.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QueryErrorBody {
+    error_code: Option<String>,
+}
+
+/// A body carrying `errorCode=MissingMark`: the required account-valuation
+/// mark was unavailable, not the request or the node.
+fn missing_mark_envelope(bytes: &[u8]) -> bool {
+    serde_json::from_slice::<QueryErrorBody>(bytes)
+        .is_ok_and(|body| body.error_code.as_deref() == Some("MissingMark"))
+}
+
+/// The 40-hex-digit owner address without its optional `0x` prefix, as the
+/// gateway validates it.
+fn valuation_address(user: &str) -> Result<&str, GatewayError> {
+    let addr = user.strip_prefix("0x").unwrap_or(user);
+    if addr.len() == 40 && addr.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(addr)
+    } else {
+        Err(GatewayError::new(
+            Operation::AccountValuation,
+            ErrorKind::InvalidInput,
+        ))
+    }
+}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SubmitRead {
@@ -394,12 +436,12 @@ impl GatewayClient {
             .await
     }
 
-    async fn request_body(
+    async fn request_body<B: Serialize + ?Sized>(
         &self,
         operation: Operation,
         method: Method,
         path: &str,
-        body: Option<&SignedRequest>,
+        body: Option<&B>,
         error_body: ErrorBody,
     ) -> Result<ResponseBody, GatewayError> {
         let url = self
@@ -514,6 +556,40 @@ impl GatewayClient {
         bytes: &[u8],
     ) -> Result<SubmissionEvidence, GatewayError> {
         self.submit_once(bytes).await
+    }
+
+    /// The account-valuation read (`POST /info` with `clearinghouseState`).
+    /// The gateway passes the node's `503 errorCode=MissingMark` answer
+    /// through; it maps to [`ErrorKind::MissingMark`], and every other
+    /// non-success status to [`ErrorKind::HttpStatus`].
+    pub async fn account_valuation(&self, user: &str) -> Result<AccountInfo, GatewayError> {
+        let op = Operation::AccountValuation;
+        let addr = valuation_address(user)?;
+        let body = self
+            .request_body(
+                op,
+                Method::POST,
+                "/info",
+                Some(&InfoRequest::ClearinghouseState { user: addr }),
+                ErrorBody::Classify,
+            )
+            .await?;
+        if !body.status.is_success() {
+            let kind = if body.status.as_u16() == 503 && missing_mark_envelope(&body.bytes) {
+                ErrorKind::MissingMark
+            } else {
+                ErrorKind::HttpStatus(body.status.as_u16())
+            };
+            return Err(GatewayError {
+                retry_after: body.retry_after,
+                ..GatewayError::new(op, kind)
+            });
+        }
+        let envelope: EncodedRead = body.decode(op)?;
+        let bytes = STANDARD
+            .decode(envelope.data)
+            .map_err(|_| GatewayError::new(op, ErrorKind::InvalidResponse))?;
+        rmp_serde::from_slice(&bytes).map_err(|_| GatewayError::new(op, ErrorKind::InvalidResponse))
     }
 
     async fn submit_once<R: RefusalEvidence>(

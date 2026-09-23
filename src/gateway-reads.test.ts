@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ExchangeClient } from "./index.js";
+import { ExchangeClient, isMissingMark } from "./index.js";
 const owner = "03".repeat(20);
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });
@@ -242,6 +242,42 @@ it("keeps caller Response bodies, HTTP errors and aborts intact", async () => {
   const abort = new DOMException("cancelled", "AbortError");
   transport.mockRejectedValueOnce(abort);
   await expect(reads.health()).rejects.toBe(abort);
+});
+
+it("extracts errorCode from 503 MissingMark on clearinghouseState", async () => {
+  const body = {
+    error: "MissingMark: required account valuation mark unavailable",
+    errorCode: "MissingMark",
+  };
+  const response = json(body, 503);
+  const transport = vi.fn(async () => response);
+  const reads = new ExchangeClient({ gatewayUrl: "" }).reads({
+    fetch: transport,
+  });
+  const err = await reads
+    .clearinghouseState("03".repeat(20))
+    .catch((e: unknown) => e);
+  expect(err).toMatchObject({
+    name: "GatewayHttpError",
+    status: 503,
+    errorCode: "MissingMark",
+  });
+  expect(isMissingMark(err)).toBe(true);
+});
+
+it("leaves errorCode undefined when 503 body has no errorCode field", async () => {
+  const response = new Response("upstream body", { status: 503 });
+  const transport = vi.fn(async () => response);
+  const reads = new ExchangeClient({ gatewayUrl: "" }).reads({
+    fetch: transport,
+  });
+  const err = await reads.health().catch((e: unknown) => e);
+  expect(err).toMatchObject({
+    name: "GatewayHttpError",
+    status: 503,
+  });
+  expect((err as { errorCode?: string }).errorCode).toBeUndefined();
+  expect(isMissingMark(err)).toBe(false);
 });
 
 it("uses the configured gateway for response reads even in internal node mode", async () => {
