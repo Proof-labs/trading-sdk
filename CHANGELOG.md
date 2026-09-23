@@ -26,6 +26,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Rust crate 4.0.0 → 4.1.0** — the market-snapshot witness bracket no longer
+  requires all three reads (pre-status, snapshot, post-status) to come from the
+  same CometBFT node, so it works behind a load balancer that fans reads across
+  several full nodes (api-gateway#185, trading-sdk#177). Chain id, height
+  ordering, clock monotonicity and the witness app hash against a committed
+  header are still checked. The legacy app hash is still not a registry root:
+  the bracket proves consistency, not authenticity, and every backend behind
+  the load balancer must run a qualified image.
+
 - `postInfoJson` (internal, used by `queryAccount` / `queryOpenOrders` /
   `queryWithdrawals` under `useGateway: true`) now throws `GatewayHttpError`
   instead of `Error`. The message changes from `API error: <reason>` to
@@ -33,6 +42,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stays unread, and a non-JSON failure reports its status instead of a JSON
   parse error. `GatewayHttpError` takes an optional fourth `detail` argument
   for the gateway's own error text.
+
+### Deprecated
+
+- `WitnessError::BackendMismatch` is never returned; the bracket does not
+  compare node ids.
 
 ## [5.1.0] — 2026-09-22
 
