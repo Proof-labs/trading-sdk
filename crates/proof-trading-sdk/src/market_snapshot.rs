@@ -172,8 +172,8 @@ fn validate_value(value: &Value) -> Result<(), SnapshotError> {
 }
 
 /// How long `read_bound_inventory` waits for the header that commits a
-/// snapshot's app hash, inside the one whole-call deadline. The defaults are
-/// [`ConfirmationPolling::DEFAULT_POLLS`] polls,
+/// snapshot's app hash, per bracket attempt and inside the one whole-call
+/// deadline. The defaults are [`ConfirmationPolling::DEFAULT_POLLS`] polls,
 /// [`ConfirmationPolling::DEFAULT_INTERVAL`] apart; the constants below are the
 /// outer safety ceiling, not a policy.
 #[cfg(feature = "gateway")]
@@ -203,8 +203,10 @@ impl Default for ConfirmationPolling {
     }
 }
 
-/// One-shot canonical gateway transport. No signing, nonce allocation, retry,
-/// node fallback, caching or partial inventory reconciliation lives here.
+/// Canonical gateway transport. Every HTTP read is one-shot: no signing, nonce
+/// allocation, request retry, node fallback, caching or partial inventory
+/// reconciliation lives here. The one bounded retry is `read_bound_inventory`
+/// reading a whole new bracket after one refused as out of height order.
 #[cfg(feature = "gateway")]
 #[derive(Clone)]
 pub struct MarketsSnapshotClient {

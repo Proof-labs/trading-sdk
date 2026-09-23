@@ -56,6 +56,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `WitnessError::BackendMismatch` is never returned; the bracket does not
   compare node ids.
 
+### Fixed
+
+- **Rust crate 4.1.0 → 4.1.1** — `MarketsSnapshotClient::read_bound_inventory`
+  now reads a whole new bracket, up to three attempts in all and 150 ms apart
+  inside the same whole-call deadline, when one is refused with
+  `WitnessError::BracketOutOfOrder` (#184). Behind a load-balanced gateway the
+  pre-status, snapshot and post-status reads (and the confirmation polls) can
+  land on full nodes a block apart, so honest, committed reads arrived out of
+  height order and fenced the DevNet oracle feeder every few minutes. Every
+  other refusal is still returned at once, no read is carried between attempts,
+  and each attempt passes the unchanged bracket validation; a persistent
+  out-of-order bracket still ends in `BracketOutOfOrder`. PATCH: no wire or
+  public API change.
+
 ## [5.1.0] — 2026-09-22
 
 npm `@proof-labs/trading-sdk` only; the Rust crates and the Python package keep
