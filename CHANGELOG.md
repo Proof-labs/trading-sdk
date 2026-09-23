@@ -27,6 +27,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Requests bypass HTTP caches. MINOR: this additive TypeScript read API keeps
   the released npm 5.1.0 codec and proof-wire 2.1.0 contract (exchange v2.12.0 /
   api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
+- `HistoryResolution.convertedSize` and `HistoryResolution.fallbackReason`
+  (with the `ConversionFallbackReason` type) — winning conditional-perp
+  positions now convert into a perpetual position on the underlying at
+  resolution (exchange v2.13.0, proof-wire 2.2.0). `convertedSize` is the
+  quantity that converted (`"0"` when paid in cash only); `fallbackReason`
+  names why a winner was paid in cash only (`""` otherwise). Rows from an
+  indexer that does not serve the fields yet read as `"0"` and `""`. The
+  Python `history_resolutions` returns the raw rows, so it carries both keys
+  as served.
 - `GatewayHttpError.errorCode` — optional typed error code extracted from the
   gateway's JSON response body (e.g. `"MissingMark"`). The `GatewayReads`
   path clones the response to parse the code while leaving the original body

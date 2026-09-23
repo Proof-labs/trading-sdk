@@ -481,3 +481,47 @@ describe("cash-flow history through account events", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("resolution history", () => {
+  const settled = {
+    kind: "conditional_settled",
+    event_id: "42",
+    market: "100",
+    owner,
+    side: "buy",
+    size: "25",
+    entry_price: "101000000",
+    settlement_price: "105000000",
+    realized_pnl: "100000000",
+    block_height: 100,
+    timestamp: 1776630600000,
+  };
+
+  it("maps a converted winner and a winner paid in cash with its reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        json([
+          { ...settled, converted_size: "25", fallback_reason: "" },
+          {
+            ...settled,
+            converted_size: "0",
+            fallback_reason: "initial_margin",
+          },
+        ]),
+      ),
+    );
+    const [converted, cash] = await client().queryHistoryResolutions(owner);
+    expect(converted.convertedSize).toBe("25");
+    expect(converted.fallbackReason).toBe("");
+    expect(cash.convertedSize).toBe("0");
+    expect(cash.fallbackReason).toBe("initial_margin");
+  });
+
+  it("reads a row without the conversion keys as paid in cash", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json([settled])));
+    const [row] = await client().queryHistoryResolutions(owner);
+    expect(row.convertedSize).toBe("0");
+    expect(row.fallbackReason).toBe("");
+  });
+});

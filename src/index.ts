@@ -133,6 +133,7 @@ export {
   type HistoryFill,
   type HistoryFillsPage,
   type HistoryResolution,
+  type ConversionFallbackReason,
   type HistoryPositionSnapshot,
   type HistoryPosition,
   type HistoryPositionsPage,

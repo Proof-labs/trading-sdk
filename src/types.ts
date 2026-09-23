@@ -2183,6 +2183,16 @@ export interface HistoryCashFlow {
   timestamp: number;
 }
 
+/** Why a winning conditional-perp position was paid in cash only instead of
+ * converting into a perpetual position on its underlying, as the engine names
+ * it on `conditional_settled`. */
+export type ConversionFallbackReason =
+  | "initial_margin"
+  | "position_size_cap"
+  | "open_interest_cap"
+  | "cannot_price_or_margin"
+  | "insufficient_balance";
+
 /** One row of the per-user position-at-resolution log. Covers three
  * kinds — see `kind` field. Feeds Portfolio Resolved tab + Impact /
  * Prediction resolved-state "your outcome" block.
@@ -2211,6 +2221,13 @@ export interface HistoryResolution {
   settlementPrice: string;
   /** Signed realized PnL in µUSDC. conditional_voided → "0". */
   realizedPnl: string;
+  /** Quantity, in integer lots, that became a perpetual position on the
+   *  underlying at `settlementPrice`: the whole `size` when a winner converted,
+   *  "0" when it was paid in cash only, and "0" on every other kind. */
+  convertedSize: string;
+  /** Why a conditional_settled winner was paid in cash only instead of
+   *  converting; "" when it converted and on every other kind. */
+  fallbackReason: ConversionFallbackReason | "";
   /** Block height at which the resolution landed. */
   blockHeight: number;
   /** Unix milliseconds. */
