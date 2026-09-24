@@ -201,6 +201,7 @@ export { fetchChainId } from "./client.js";
 // Errors
 export {
   GatewayHttpError,
+  isMissingMark,
   type ExecErrorInfo,
   ExecErrorCode,
   decodeExecError,
@@ -302,3 +303,11 @@ export {
   type OraclePriceHistoryPage,
   type OraclePriceHistoryOptions,
 } from "./oracle-price-history.js";
+
+export {
+  queryMarketStats,
+  decodeMarketStatsResponse,
+  type MarketStatsResponse,
+  type MarketStats,
+  type MarketStatsStatus,
+} from "./market-stats.js";

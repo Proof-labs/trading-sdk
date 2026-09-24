@@ -1,4 +1,5 @@
 import { GatewayHttpError } from "./errors.js";
+import { marketStatsMarketIds } from "./market-stats.js";
 import type { MarketKind } from "./types.js";
 
 /** Named gateway reads for consumers that retain their own decoders and caches.
@@ -94,7 +95,16 @@ export class GatewayReads {
       ...init,
       signal: opts.signal,
     });
-    if (!res.ok) throw new GatewayHttpError(res.status, res);
+    if (!res.ok) {
+      let errorCode: string | undefined;
+      try {
+        const body = await res.clone().json();
+        if (typeof body?.errorCode === "string") errorCode = body.errorCode;
+      } catch {
+        /* non-JSON error body — leave errorCode undefined */
+      }
+      throw new GatewayHttpError(res.status, res, errorCode);
+    }
     return res;
   }
   private info(
@@ -190,6 +200,20 @@ export class GatewayReads {
     opts: GatewayReadOptions = {},
   ) {
     return this.info("historyResolutions", params, opts);
+  }
+  /** Raw indexed rolling statistics; use queryMarketStats for strict decoding. */
+  marketStats(
+    params: { markets: readonly number[] },
+    opts: GatewayReadOptions = {},
+  ) {
+    const query = new URLSearchParams({
+      markets: marketStatsMarketIds(params.markets),
+    });
+    return this.request(
+      `/v1/history/market-stats?${query}`,
+      { method: "GET", cache: "no-store" },
+      opts,
+    );
   }
   ticker(market: number, opts: GatewayReadOptions = {}) {
     return this.get(`/v1/ticker/${market}`, {}, opts);
