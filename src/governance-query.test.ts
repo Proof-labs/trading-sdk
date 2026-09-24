@@ -552,6 +552,27 @@ describe("byte-field validation", () => {
     );
   });
 
+  it("reads a SetHlpConfig proposal only under its tag 16", () => {
+    const raw = validProposalRaw();
+    raw[11] = 16;
+    raw[12] = {
+      SetHlpConfig: [Array(20).fill(0xaa), 12_500_000_000, 5_000_000_000, true],
+    };
+    expect(decodeProposalDisplayInfo(raw).action).toEqual({
+      kind: "SetHlpConfig",
+      value: {
+        address: new Uint8Array(20).fill(0xaa),
+        bootstrapBalance: 12_500_000_000n,
+        minBalanceFloor: 5_000_000_000n,
+        enabled: true,
+      },
+    });
+    raw[11] = 13;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(
+      /does not match SetHlpConfig tag 16/,
+    );
+  });
+
   it("reads a CancelAllOrdersForAccount proposal under its tag 8", () => {
     // The kind→tag table row is only exercised through a proposal read: a
     // wrong tag here would refuse every real tag-8 proposal as a mismatch.

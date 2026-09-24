@@ -9,6 +9,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `SetHlpConfig` governance action (inner admin tag 16 / `0x10`, proof-wire
+  2.3.0, exchange#748, EN-12): writes or replaces the global HLP backstop
+  configuration (`address`, `bootstrapBalance`, `minBalanceFloor`,
+  `enabled`). Typed `AdminAction` arm, encode through the WASM core,
+  `validateSetHlpConfig` mirroring the engine's shape rules (non-zero
+  address, positive bootstrap when enabled, floor at most bootstrap, u64
+  balances) before signing or hashing, and fail-closed proposal reads under
+  tag 16. `decodeHlpConfigUpdatedEvent` decodes the engine's
+  `hlp_config_updated` ABCI event into `HlpConfigUpdatedEvent` and throws on
+  any shape the engine would not emit. Conformance vectors pin proof-wire's
+  frozen `set_hlp_config_wire_vectors_frozen` inner bytes. The Rust core pins
+  proof-wire to the published Proof-labs/wire `v2.3.0` tag (exchange v2.14.0).
 - Sub-account registry read: `GatewayReads.subAccountList(user)` posts the
   gateway's `subAccountList` /info query and `decodeSubAccountList` unwraps the
   `{"data": "<base64 msgpack>"}` envelope into typed `SubAccountListRow`s. Rows

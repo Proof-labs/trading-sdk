@@ -14,6 +14,6 @@ pub use proof_wire::codec::{
 pub use proof_wire::types::{
     AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, ConfigureOraclePolicy,
     EmergencyAction, EmergencyActionType, EmergencyAdminAction, ProposalId, ProposeAdminAction,
-    RegistryVersion, RejectAdminAction, SetOracleGuards, SignatureThreshold, SignerAddress,
-    UpdateAdminSignerRegistry,
+    RegistryVersion, RejectAdminAction, SetHlpConfig, SetOracleGuards, SignatureThreshold,
+    SignerAddress, UpdateAdminSignerRegistry,
 };

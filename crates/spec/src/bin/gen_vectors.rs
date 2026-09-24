@@ -85,6 +85,38 @@ fn codec_case(case: &str, action_type: u8, input: serde_json::Value) -> cv::Code
     }
 }
 
+/// proof-wire 2.3.0 `codec::tests::set_hlp_config_wire_vectors_frozen`
+/// (exchange#748): canonical inner `AdminAction::SetHlpConfig` bytes for
+/// address 0xAA×20, enabled (12_500_000_000 / 5_000_000_000) and disabled
+/// (0 / 0). The proposal content hash commits exactly these bytes.
+const SET_HLP_CONFIG_ENABLED_FROZEN: &str = "81ac536574486c70436f6e66696794dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaacf00000002e90edd00cf000000012a05f200c3";
+const SET_HLP_CONFIG_DISABLED_FROZEN: &str = "81ac536574486c70436f6e66696794dc0014ccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaaccaa0000c2";
+
+/// A `ProposeAdminAction` codec row (proposer 0xA1×20, registry version 1)
+/// carrying `action`. When `frozen_inner_hex` is given, generation panics
+/// unless the payload ends with those engine-frozen inner bytes — the inner
+/// `AdminAction` is the final field of the positional payload.
+fn frozen_admin_case(
+    case: &str,
+    action: serde_json::Value,
+    frozen_inner_hex: Option<&str>,
+) -> cv::CodecCase {
+    const PROPOSE_ADMIN_ACTION: u8 = 0x1E;
+    let row = codec_case(
+        case,
+        PROPOSE_ADMIN_ACTION,
+        json!({"proposer": vec![0xA1u8; 20], "registry_version": 1u64, "action": action}),
+    );
+    if let Some(frozen) = frozen_inner_hex {
+        assert!(
+            row.expect.payload_hex.ends_with(frozen),
+            "{case}: the SDK core's inner AdminAction bytes drifted from the \
+             engine's frozen proof-wire 2.3.0 vector"
+        );
+    }
+    row
+}
+
 /// The engine golden `BridgeWithdrawalReceipt` fixture (mirrors exchange-core
 /// `codec::tests::golden_receipt`). `terminal_state` is `1 = Paid` for a
 /// confirm, `2 = Cancelled` for a fail; every other field is fixed.
@@ -557,6 +589,32 @@ fn main() -> Result<(), Box<dyn Error>> {
                        "mark_price_max_oracle_age_ms": u64::MAX,
                        "max_oracle_deviation_bps": 10_000u32}}}),
         ),
+        // SetHlpConfig (inner tag 16 / 0x10, proof-wire 2.3.0, exchange#748):
+        // the global HLP backstop config. The enabled and disabled rows pin
+        // proof-wire's frozen `set_hlp_config_wire_vectors_frozen` inner bytes
+        // (asserted below); the u64::MAX row covers the full width of both
+        // balances (floor == bootstrap is the engine's inclusive bound).
+        frozen_admin_case(
+            "propose_admin_action/set_hlp_config_enabled",
+            json!({"SetHlpConfig": {"address": vec![0xAAu8; 20],
+                   "bootstrap_balance": 12_500_000_000u64,
+                   "min_balance_floor": 5_000_000_000u64, "enabled": true}}),
+            Some(SET_HLP_CONFIG_ENABLED_FROZEN),
+        ),
+        frozen_admin_case(
+            "propose_admin_action/set_hlp_config_disabled",
+            json!({"SetHlpConfig": {"address": vec![0xAAu8; 20],
+                   "bootstrap_balance": 0u64, "min_balance_floor": 0u64,
+                   "enabled": false}}),
+            Some(SET_HLP_CONFIG_DISABLED_FROZEN),
+        ),
+        frozen_admin_case(
+            "propose_admin_action/set_hlp_config_u64_max",
+            json!({"SetHlpConfig": {"address": vec![0xA7u8; 20],
+                   "bootstrap_balance": u64::MAX, "min_balance_floor": u64::MAX,
+                   "enabled": true}}),
+            None,
+        ),
         // Synthetic opaque bytes test the outer wire only, not a valid live policy.
         codec_case(
             "propose_admin_action/configure_oracle_policy",
@@ -1010,6 +1068,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let guard_envelope =
         cv::sign_envelope(&guard_chain, PROPOSE_ADMIN_ACTION, 2, &guard_payload, &sk)?;
+    let hlp_payload = cv::codec_payload(
+        PROPOSE_ADMIN_ACTION,
+        &json!({"proposer": vec![0xA1u8;20], "registry_version": 1u64,
+                "action": {"SetHlpConfig": {"address": vec![0xAAu8; 20],
+                    "bootstrap_balance": 12_500_000_000u64,
+                    "min_balance_floor": 5_000_000_000u64, "enabled": true}}}),
+    )?;
+    let hlp_envelope = cv::sign_envelope(&guard_chain, PROPOSE_ADMIN_ACTION, 3, &hlp_payload, &sk)?;
 
     let pk_42 = ed25519_dalek::SigningKey::from_bytes(&sk)
         .verifying_key()
@@ -1027,6 +1093,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             payload_hex: hex::encode(&guard_payload),
             secret_key: sk.to_vec(),
             expect_envelope_hex: hex::encode(&guard_envelope),
+        },
+        cv::SigningCase::Sign {
+            case: "propose_admin_action/set_hlp_config@seq3/bound".to_string(),
+            chain_id: guard_chain.to_vec(),
+            action_type: PROPOSE_ADMIN_ACTION,
+            seq: 3,
+            payload_hex: hex::encode(&hlp_payload),
+            secret_key: sk.to_vec(),
+            expect_envelope_hex: hex::encode(&hlp_envelope),
         },
         cv::SigningCase::Sign {
             case: "place_order/min@seq1/unbound".to_string(),

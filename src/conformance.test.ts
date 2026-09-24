@@ -684,6 +684,18 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
     throw new Error(`toAdminAction: unknown unit variant ${input}`);
   }
   const v = input as Record<string, unknown>;
+  if (v.SetHlpConfig) {
+    const hlp = v.SetHlpConfig as Record<string, unknown>;
+    return {
+      kind: "SetHlpConfig",
+      value: {
+        address: bytes(hlp.address),
+        bootstrapBalance: big(hlp.bootstrap_balance),
+        minBalanceFloor: big(hlp.min_balance_floor),
+        enabled: hlp.enabled as boolean,
+      },
+    };
+  }
   if (v.SetOracleGuards) {
     const guards = v.SetOracleGuards as Record<string, unknown>;
     return {
@@ -1024,10 +1036,10 @@ describe("conformance vectors (TypeScript)", () => {
     // propose (create-market, the perp-plus-attach batch, the attach
     // singleton, six create-event oracle-source shapes, trigger config,
     // unpause-bridge, update-authority-set add and remove, cancel-all-for
-    // -account scoped and unscoped, four set-oracle-guards shapes, and
-    // oracle policy), approve, reject, and all three emergency arms
-    // (PauseMarket, HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(25);
+    // -account scoped and unscoped, four set-oracle-guards shapes, three
+    // set-hlp-config shapes, and oracle policy), approve, reject, and all
+    // three emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(28);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
