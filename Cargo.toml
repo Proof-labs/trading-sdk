@@ -8,12 +8,3 @@ members = [
 ]
 resolver = "2"
 
-# DRAFT-ONLY interim pin — do not release on this. proof-wire 2.3.0
-# (AdminAction::SetHlpConfig at inner tag 0x10, Event::HlpConfigUpdated) is
-# not on the Proof-labs/wire mirror yet: it lands with exchange#748
-# (feat/f7-foundations), which is unmerged. Until the mirror publishes the
-# v2.3.0 tag, resolve the crate from the #748 head commit. When #748 merges
-# and v2.3.0 is minted: delete this section and bump the `proof-wire` tag in
-# crates/proof-trading-sdk/Cargo.toml to "v2.3.0".
-[patch."https://github.com/Proof-labs/wire.git"]
-proof-wire = { git = "https://github.com/Proof-labs/exchange", rev = "deda4e847c703cb526abcb6ee9f092adac3b1bca" }

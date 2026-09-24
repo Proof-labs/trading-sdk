@@ -19,9 +19,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tag 16. `decodeHlpConfigUpdatedEvent` decodes the engine's
   `hlp_config_updated` ABCI event into `HlpConfigUpdatedEvent` and throws on
   any shape the engine would not emit. Conformance vectors pin proof-wire's
-  frozen `set_hlp_config_wire_vectors_frozen` inner bytes. Draft-only: the
-  Rust core resolves proof-wire from the exchange#748 head through an interim
-  `[patch]` until the `v2.3.0` tag is published.
+  frozen `set_hlp_config_wire_vectors_frozen` inner bytes. The Rust core pins
+  proof-wire to the published Proof-labs/wire `v2.3.0` tag (exchange v2.14.0).
 - Sub-account registry read: `GatewayReads.subAccountList(user)` posts the
   gateway's `subAccountList` /info query and `decodeSubAccountList` unwraps the
   `{"data": "<base64 msgpack>"}` envelope into typed `SubAccountListRow`s. Rows
