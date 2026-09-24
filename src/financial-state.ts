@@ -3,6 +3,7 @@ import {
   decodeAccountState,
   type RawAccountPosition,
 } from "./account-state.js";
+import { validateSetLiquidationConfig } from "./f7-admin.js";
 
 /** Bounded selection for one finalized-store read; not historical or risk authorization. */
 export interface FinancialStateSelection {
@@ -36,15 +37,57 @@ export interface FinancialMarketState {
   lastFundingTimeMs: bigint | null;
   markEwma: bigint | null;
 }
+/**
+ * PROVISIONAL format-2 layouts. Three unmerged exchange draft PRs each bump
+ * the snapshot to "format 2" with different extra slots, so the number alone
+ * is ambiguous until they merge and settle numbering. The decoder accepts
+ * exactly these layouts, distinguished by shape, and names which one it saw:
+ *
+ * - `"badDebtLedger"` (#793 `feat/en-26-bad-debt-ledger`): eight slots; each
+ *   insurance entry gains `realizedBadDebt?`, `badDebtAlarmBudget?` and
+ *   `badDebtAlarm?`.
+ * - `"liquidationConfig"` (#796 `feat/liquidation-config-record`): nine
+ *   slots; appends `liquidationConfig?`.
+ * - `"insuranceFunding"` (#798 `feat/en-11-if-funding-action`): ten slots;
+ *   appends `treasurySources` and `insuranceFunded`.
+ *
+ * Any other format-2 shape (including a merged layout) is rejected until the
+ * SDK is updated for it.
+ */
+export type FinancialFormat2Layout =
+  "badDebtLedger" | "liquidationConfig" | "insuranceFunding";
+
+/** Per-pool insurance ledger. The bad-debt fields are present (possibly
+ *  `null` for an absent record) only in the `"badDebtLedger"` layout. */
+export interface FinancialInsurancePool {
+  pool: number;
+  /** Signed stored balance; negative is unfunded debt. */
+  balance: bigint | null;
+  /** Lifetime realized bad debt (u64); `null` means never recorded. */
+  realizedBadDebt?: bigint | null;
+  /** Governed per-epoch alarm budget (u64); `null` means never set (the
+   *  engine reads that as 0). */
+  badDebtAlarmBudget?: bigint | null;
+  /** Counter for the UTC day of the latest record, as stored. */
+  badDebtAlarm?: {
+    epoch: bigint;
+    epochBadDebt: bigint;
+    raised: boolean;
+  } | null;
+}
+
 /** Raw stored amounts, including absence. No equity, solvency or withdrawal verdict. */
 export interface FinancialState {
-  format: 1;
+  /** 1, or 2 for one of the provisional {@link FinancialFormat2Layout}s. */
+  format: 1 | 2;
+  /** Which provisional format-2 layout was decoded; absent for format 1. */
+  format2Layout?: FinancialFormat2Layout;
   finalizedHeight: bigint;
   finalizedTimeMs: bigint;
   accounts: FinancialAccountState[];
   markets: FinancialMarketState[];
   feePool: bigint | null;
-  insurancePools: { pool: number; balance: bigint | null }[];
+  insurancePools: FinancialInsurancePool[];
   plp: {
     owner: string;
     /** Stored bootstrap baseline, NOT additional cash to add to the PLP account balance. */
@@ -52,6 +95,22 @@ export interface FinancialState {
     minBalanceFloor: bigint;
     enabled: boolean;
   } | null;
+  /** `"liquidationConfig"` layout only: the stored governed liquidation
+   *  config, or `null` when none is stored (the engine then applies the
+   *  decided defaults, 100 bps split 5000/5000; the read does not project
+   *  them). */
+  liquidationConfig?: {
+    penaltyBps: number;
+    insuranceShareBps: number;
+    plpShareBps: number;
+  } | null;
+  /** `"insuranceFunding"` layout only: the treasury-source allowlist
+   *  (DEC-195), sorted by account. Membership is not cash. */
+  treasurySources?: { source: string; registeredBy: bigint }[];
+  /** `"insuranceFunding"` layout only: cumulative `FundInsuranceFund`
+   *  credits per pool, same pools and order as `insurancePools`. A provenance
+   *  counter, not additional balance. */
+  insuranceFunded?: { pool: number; cumulativeFunded: bigint | null }[];
 }
 
 function invalid(field: string): never {
@@ -146,8 +205,22 @@ export function decodeFinancialState(
   selection: FinancialStateSelection,
 ): FinancialState {
   const expected = canonicalFinancialSelection(selection);
-  const r = tuple(raw, 8, "response");
-  if (integer(r[0], "format") !== 1n) return invalid("format");
+  if (!Array.isArray(raw)) return invalid("response");
+  const format = integer(raw[0], "format");
+  let layout: FinancialFormat2Layout | undefined;
+  if (format === 1n) {
+    tuple(raw, 8, "response");
+  } else if (format === 2n) {
+    // PROVISIONAL: see FinancialFormat2Layout. Slot count picks the layout;
+    // the eight-slot one is further pinned by five-element insurance entries.
+    if (raw.length === 8) layout = "badDebtLedger";
+    else if (raw.length === 9) layout = "liquidationConfig";
+    else if (raw.length === 10) layout = "insuranceFunding";
+    else return invalid("response");
+  } else {
+    return invalid("format");
+  }
+  const r = raw;
   const finalizedHeight = integer(r[1], "height");
   const finalizedTimeMs = integer(r[2], "time");
   if (finalizedHeight > 0n && finalizedTimeMs === 0n)
@@ -237,20 +310,44 @@ export function decodeFinancialState(
     expected.markets,
     "market coverage/order",
   );
-  const insurancePools = list(r[6], 1, 8, "insurance pools").map((value) => {
-    const p = tuple(value, 2, "insurance pool");
-    return {
-      pool: small(p[0], "insurance pool", 8),
-      balance: optional(p[1], (v) => integer(v, "insurance balance", 64, true)),
-    };
-  });
+  const badDebt = layout === "badDebtLedger";
+  const insurancePools = list(r[6], 1, 8, "insurance pools").map(
+    (value): FinancialInsurancePool => {
+      const p = tuple(value, badDebt ? 5 : 2, "insurance pool");
+      const pool: FinancialInsurancePool = {
+        pool: small(p[0], "insurance pool", 8),
+        balance: optional(p[1], (v) =>
+          integer(v, "insurance balance", 64, true),
+        ),
+      };
+      if (badDebt) {
+        pool.realizedBadDebt = optional(p[2], (v) =>
+          integer(v, "realized bad debt"),
+        );
+        pool.badDebtAlarmBudget = optional(p[3], (v) =>
+          integer(v, "bad-debt alarm budget"),
+        );
+        pool.badDebtAlarm = optional(p[4], (v) => {
+          const a = tuple(v, 3, "bad-debt alarm");
+          if (typeof a[2] !== "boolean")
+            return invalid("bad-debt alarm raised");
+          return {
+            epoch: integer(a[0], "bad-debt alarm epoch"),
+            epochBadDebt: integer(a[1], "bad-debt alarm total"),
+            raised: a[2],
+          };
+        });
+      }
+      return pool;
+    },
+  );
   equal(
     insurancePools.map((p) => p.pool),
     [...new Set(markets.map((m) => m.pool))].sort((a, b) => a - b),
     "insurance coverage/order",
   );
-  return {
-    format: 1,
+  const state: FinancialState = {
+    format: layout ? 2 : 1,
     finalizedHeight,
     finalizedTimeMs,
     accounts,
@@ -259,6 +356,59 @@ export function decodeFinancialState(
     insurancePools,
     plp,
   };
+  if (layout) state.format2Layout = layout;
+  if (layout === "liquidationConfig") {
+    state.liquidationConfig = optional(r[8], (v) => {
+      const c = tuple(v, 3, "liquidation config");
+      const config = {
+        penaltyBps: small(c[0], "liquidation penalty"),
+        insuranceShareBps: small(c[1], "liquidation insurance share"),
+        plpShareBps: small(c[2], "liquidation PLP share"),
+      };
+      // Only the governed, validated action writes this record.
+      try {
+        validateSetLiquidationConfig(config);
+      } catch {
+        return invalid("liquidation config");
+      }
+      return config;
+    });
+  }
+  if (layout === "insuranceFunding") {
+    const treasurySources = list(r[8], 0, 8, "treasury sources").map(
+      (value) => {
+        const t = tuple(value, 2, "treasury source");
+        const source = owner(t[0]);
+        if (/^0+$/.test(source)) return invalid("treasury source");
+        return { source, registeredBy: integer(t[1], "treasury proposal") };
+      },
+    );
+    if (
+      treasurySources.some(
+        (t, i) => i > 0 && treasurySources[i - 1].source >= t.source,
+      )
+    )
+      return invalid("treasury source order");
+    const insuranceFunded = list(r[9], 1, 8, "insurance funded").map(
+      (value) => {
+        const f = tuple(value, 2, "insurance funded");
+        return {
+          pool: small(f[0], "insurance funded pool", 8),
+          cumulativeFunded: optional(f[1], (v) =>
+            integer(v, "cumulative funded"),
+          ),
+        };
+      },
+    );
+    equal(
+      insuranceFunded.map((f) => f.pool),
+      insurancePools.map((p) => p.pool),
+      "insurance funded coverage/order",
+    );
+    state.treasurySources = treasurySources;
+    state.insuranceFunded = insuranceFunded;
+  }
+  return state;
 }
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
