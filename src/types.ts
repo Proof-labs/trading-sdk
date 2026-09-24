@@ -1119,6 +1119,26 @@ export interface SetOracleGuards {
 }
 
 /**
+ * Write (or replace) the global HLP backstop configuration through multisig
+ * governance (inner tag 16 / `0x10`, proof-wire 2.3.0). Executing it replaces
+ * the stored `HlpConfig` record wholesale and emits `HlpConfigUpdated`.
+ * Engine shape rules (mirrored by `validateSetHlpConfig`): `address` is
+ * non-zero, `bootstrapBalance` is positive when `enabled`, and
+ * `minBalanceFloor <= bootstrapBalance`.
+ */
+export interface SetHlpConfig {
+  /** Trading account that absorbs deficits at Tier 0 (20-byte address). */
+  address: Address;
+  /** Backstop equity baseline in microUSDC (u64). Non-zero when `enabled`. */
+  bootstrapBalance: bigint;
+  /** Balance the backstop keeps in microUSDC (u64); Tier 0 draws only above
+   *  it. At most `bootstrapBalance`. */
+  minBalanceFloor: bigint;
+  /** Whether Tier 0 draws from the backstop. */
+  enabled: boolean;
+}
+
+/**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
  * zero — governance supplies the authorization, not the embedded address.
@@ -1130,6 +1150,7 @@ export interface SetOracleGuards {
  * refuses every tag below its activation height.
  */
 export type AdminAction =
+  | { kind: "SetHlpConfig"; value: SetHlpConfig }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
@@ -1492,6 +1513,26 @@ export interface MarketCreatedEvent {
   maxFundingRateBps: string;
 }
 
+/**
+ * Emitted when a `SetHlpConfig` proposal executes (ABCI type
+ * `hlp_config_updated`). Carries the full post-write backstop configuration.
+ * Decode a raw {@link TxEvent} with `decodeHlpConfigUpdatedEvent`, which
+ * fails closed on any shape the engine would not emit.
+ */
+export interface HlpConfigUpdatedEvent {
+  type: "HlpConfigUpdated";
+  /** Lowercase hex-encoded HLP vault address (40 characters, no `0x`). */
+  address: string;
+  /** Backstop equity baseline in microUSDC (canonical u64 decimal). */
+  bootstrapBalance: string;
+  /** Balance the backstop keeps in microUSDC (canonical u64 decimal). */
+  minBalanceFloor: string;
+  /** Whether Tier 0 draws from the backstop. */
+  enabled: boolean;
+  /** The executed governance proposal (canonical u64 decimal). */
+  proposalId: string;
+}
+
 /** Emitted when an account is liquidated due to insufficient maintenance margin. */
 export interface AccountLiquidatedEvent {
   type: "AccountLiquidated";
@@ -1602,6 +1643,7 @@ export interface OrderbookLevelUpdatedEvent {
 /** Union of all exchange events. */
 export type ExchangeEvent =
   | OrderPlacedEvent
+  | HlpConfigUpdatedEvent
   | OrderCancelledEvent
   | TradeExecutedEvent
   | FeesCollectedEvent

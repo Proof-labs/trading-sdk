@@ -37,6 +37,7 @@ export {
   type CancelPositionTriggers,
   type SetTriggerMarketConfig,
   type SetOracleGuards,
+  type SetHlpConfig,
   type BridgeWithdrawalReceipt,
   type OperatorReceiptProof,
   type ApproveAgent,
@@ -85,6 +86,7 @@ export {
   type FundingSettledEvent,
   type AccountLiquidatedEvent,
   type MarketCreatedEvent,
+  type HlpConfigUpdatedEvent,
   type AdlQueueEntry,
   type Ticker,
   type Orderbook,
@@ -158,6 +160,11 @@ export {
 } from "./triggers.js";
 
 export { validateSetOracleGuards } from "./oracle-guards.js";
+export {
+  validateSetHlpConfig,
+  decodeHlpConfigUpdatedEvent,
+  HLP_CONFIG_UPDATED_EVENT_TYPE,
+} from "./hlp-config.js";
 
 export {
   decodePositionTriggerHistoryPage,

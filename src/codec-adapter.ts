@@ -24,8 +24,10 @@ import {
   type PriceComparison,
   type SetTriggerMarketConfig,
   type SetOracleGuards,
+  type SetHlpConfig,
 } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
+import { validateSetHlpConfig } from "./hlp-config.js";
 import {
   validateCancelPositionTriggers,
   validateOrderTriggers,
@@ -134,6 +136,9 @@ function governanceActionToWasm(value: unknown): unknown {
   }
   if (v.kind === "SetOracleGuards") {
     validateSetOracleGuards(v.value as SetOracleGuards);
+  }
+  if (v.kind === "SetHlpConfig") {
+    validateSetHlpConfig(v.value as SetHlpConfig);
   }
   // `Batch` is the one variant whose payload is a LIST of nested enum items
   // (`AdminBatchItem[]`) rather than a struct — each item is itself
@@ -335,6 +340,8 @@ const BYTE_FIELDS = new Set([
   "authorization",
   "evidenceDigest",
   "bundle",
+  // SetHlpConfig's `AccountAddress([u8; 20])` newtype (a sequence on decode).
+  "address",
 ]);
 
 /** Decode a governance `{ Variant: {...} }` enum back into `{ kind, value }`. */

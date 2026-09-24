@@ -19,10 +19,12 @@ import type {
   ProposalStatus,
   SetTriggerMarketConfig,
   SetOracleGuards,
+  SetHlpConfig,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
 } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
+import { validateSetHlpConfig } from "./hlp-config.js";
 import { Outcome } from "./types.js";
 
 /**
@@ -506,6 +508,29 @@ function decodeSetOracleGuards(value: unknown): SetOracleGuards {
   return guards;
 }
 
+/** `SetHlpConfig` as the engine's 4-field positional payload
+ *  `[address, bootstrap_balance, min_balance_floor, enabled]`, then held to
+ *  the engine's shape rules: a proposal the engine would refuse to execute is
+ *  refused here rather than rendered as approvable. */
+function decodeSetHlpConfig(value: unknown): SetHlpConfig {
+  const raw = toTuple(value, "setHlpConfig", 4);
+  if (typeof raw[3] !== "boolean") {
+    throw new Error("governance decode: setHlpConfig.enabled is not boolean");
+  }
+  const config: SetHlpConfig = {
+    address: toBytes(raw[0], "setHlpConfig.address", ADDRESS_LEN),
+    bootstrapBalance: toU64(raw[1], "setHlpConfig.bootstrapBalance"),
+    minBalanceFloor: toU64(raw[2], "setHlpConfig.minBalanceFloor"),
+    enabled: raw[3],
+  };
+  try {
+    validateSetHlpConfig(config);
+  } catch (e) {
+    throw new Error(`governance decode: ${(e as Error).message}`);
+  }
+  return config;
+}
+
 function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
   const raw = toTuple(value, "setTriggerMarketConfig", 7);
   if (typeof raw[2] !== "boolean") {
@@ -553,6 +578,7 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CancelAllOrdersForAccount: 8,
   ConfigureOraclePolicy: 12,
   SetOracleGuards: 13,
+  SetHlpConfig: 16,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
@@ -577,6 +603,11 @@ export function decodeAdminAction(
       return {
         kind: "SetOracleGuards",
         value: decodeSetOracleGuards(payload),
+      };
+    case "SetHlpConfig":
+      return {
+        kind: "SetHlpConfig",
+        value: decodeSetHlpConfig(payload),
       };
     case "ConfigureOraclePolicy": {
       const raw = toTuple(payload, "configureOraclePolicy", 2);
