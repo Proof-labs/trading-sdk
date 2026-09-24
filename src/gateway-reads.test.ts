@@ -25,6 +25,11 @@ describe("named gateway reads", () => {
         { user: owner },
       ],
       [
+        "subAccountList",
+        () => reads.subAccountList(owner, { signal }),
+        { user: owner },
+      ],
+      [
         "openOrders",
         () => reads.openOrders(owner, { signal }),
         { user: owner },

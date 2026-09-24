@@ -9,6 +9,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Sub-account registry read: `GatewayReads.subAccountList(user)` posts the
+  gateway's `subAccountList` /info query and `decodeSubAccountList` unwraps the
+  `{"data": "<base64 msgpack>"}` envelope into typed `SubAccountListRow`s. Rows
+  decode from the positional `proof-wire` `SubAccount` array
+  `[master, sub_account_id, address, name, created_height]` with strict,
+  fail-closed validation (exact 20/32-byte fields as bins or integer arrays,
+  id 1..=u32, u64 height, duplicate id/address rejection, 4096-row decode
+  budget). Python parity: `ExchangeClient.sub_account_list()`, which raises on
+  the same malformed input. An HTTP 501 from the node route means the registry
+  query is not available yet, never an empty registry.
 - TypeScript 5.2.0 adds `reads().marketStats({ markets })` and strict
   `queryMarketStats(reads, markets, { signal })` decoding for F23/UI18's batched
   rolling 24-hour statistics. Contract quantities, raw micro-USDC prices,
