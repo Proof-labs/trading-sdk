@@ -76,6 +76,43 @@ def _to_hex(owner: bytes | str) -> str:
         return owner.hex()
     return owner.removeprefix("0x")
 
+# Sub-account registry rows: `proof-wire` `SubAccount` field count (later
+# fields are appended as optional) and a decode budget that only stops a
+# hostile payload from allocating unbounded rows.
+_SUB_ACCOUNT_ROW_FIELDS = 5
+_SUB_ACCOUNT_MAX_ROWS = 4096
+
+
+def _sub_account_bytes(value: t.Any, length: int, field_name: str) -> bytes:
+    """Exact-length fixed byte field, as a bin or an array of integer bytes."""
+    if isinstance(value, (list, tuple)):
+        if any(
+            isinstance(b, bool) or not isinstance(b, int) or not 0 <= b <= 255
+            for b in value
+        ):
+            raise CodecError(f"sub-account list decode: {field_name} byte")
+        value = bytes(value)
+    if not isinstance(value, (bytes, bytearray)):
+        raise CodecError(f"sub-account list decode: {field_name} encoding")
+    if len(value) != length:
+        raise CodecError(f"sub-account list decode: {field_name} length")
+    return bytes(value)
+
+
+def _sub_account_int(value: t.Any, low: int, high: int, field_name: str) -> int:
+    """Integer field within ``low..=high``; booleans and floats are rejected."""
+    if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+        raise CodecError(f"sub-account list decode: {field_name}")
+    return value
+
+
+def _sub_account_name(value: t.Any) -> str:
+    """32-byte zero-padded UTF-8 display name, padding stripped."""
+    try:
+        return _sub_account_bytes(value, 32, "name").rstrip(b"\x00").decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise CodecError("sub-account list decode: name (invalid UTF-8)") from e
+
 # ── Constants ────────────────────────────────────────────────────────────────
 
 ENVELOPE_VERSION = 2
@@ -662,37 +699,47 @@ class ExchangeClient:
     def sub_account_list(self, owner: bytes | str) -> list[dict[str, t.Any]]:
         """Registry rows for *owner* via ``POST /info`` (``subAccountList``).
 
-        Each row decodes from the wire ``SubAccount`` named map (snake_case
-        fields, fixed byte fields as bins or arrays — mirrors the TS
-        ``decodeSubAccountList``). The node route answers 501 until the
-        engine's registry query ships; that raises like any other non-OK
-        response and must be treated as "not yet available", never as an
-        empty registry.
+        Each row decodes from the ``proof-wire`` ``SubAccount`` positional
+        array ``[master, sub_account_id, address, name, created_height]``,
+        fixed byte fields as integer arrays or bins (mirrors the TS
+        ``decodeSubAccountList``). Any malformed payload, row or field raises
+        ``CodecError`` rather than degrading to an empty registry. An HTTP 501
+        from the route raises like any other non-OK response and means the
+        registry query is not available, never an empty registry.
         """
         raw = self._post_info({"type": "subAccountList", "user": _to_hex(owner)})
         if not isinstance(raw, (list, tuple)):
-            return []
+            raise CodecError(f"sub-account list decode: expected an array, got {type(raw).__name__}")
+        if len(raw) > _SUB_ACCOUNT_MAX_ROWS:
+            raise CodecError(
+                f"sub-account list decode: exceeds {_SUB_ACCOUNT_MAX_ROWS} rows"
+            )
         rows: list[dict[str, t.Any]] = []
         seen_ids: set[int] = set()
-        required = ("sub_addr", "master", "id", "name", "created_height")
+        seen_addresses: set[bytes] = set()
         for row in raw:
-            if not isinstance(row, dict) or any(k not in row for k in required):
-                continue
-            row_id = int(row["id"])
-            if row_id < 1 or row_id > 0xFFFFFFFF or row_id in seen_ids:
-                continue
-            seen_ids.add(row_id)
-            rows.append(
-                {
-                    "address": self._to_bytes(row["sub_addr"]),
-                    "master": self._to_bytes(row["master"]),
-                    "id": row_id,
-                    "name": bytes(self._to_bytes(row["name"]))
-                    .rstrip(b"\x00")
-                    .decode("utf-8"),
-                    "created_height": int(row["created_height"]),
-                }
-            )
+            if not isinstance(row, (list, tuple)):
+                raise CodecError("sub-account list decode: row (expected a positional array)")
+            if len(row) < _SUB_ACCOUNT_ROW_FIELDS:
+                raise CodecError(
+                    f"sub-account list decode: row (expected "
+                    f"{_SUB_ACCOUNT_ROW_FIELDS} fields, got {len(row)})"
+                )
+            master, row_id, address, name, height = row[:_SUB_ACCOUNT_ROW_FIELDS]
+            decoded = {
+                "address": _sub_account_bytes(address, 20, "address"),
+                "master": _sub_account_bytes(master, 20, "master"),
+                "id": _sub_account_int(row_id, 1, 0xFFFFFFFF, "id"),
+                "name": _sub_account_name(name),
+                "created_height": _sub_account_int(height, 0, 2**64 - 1, "created_height"),
+            }
+            if decoded["id"] in seen_ids:
+                raise CodecError(f"sub-account list decode: duplicate id {decoded['id']}")
+            if decoded["address"] in seen_addresses:
+                raise CodecError("sub-account list decode: duplicate address")
+            seen_ids.add(decoded["id"])
+            seen_addresses.add(decoded["address"])
+            rows.append(decoded)
         return rows
 
     def withdrawal_status(self, withdrawal_id: int) -> dict[str, t.Any] | None:

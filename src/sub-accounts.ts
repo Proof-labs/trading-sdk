@@ -1,17 +1,16 @@
-/** Sub-account registry read (ProofOfBrain `delivery/epics/sub-accounts.md`,
- *  §Reads). The gateway serves `POST /info {"type":"subAccountList","user"}`
- *  by proxying the node's `GET /v1/sub_accounts/{addr}` verbatim, so the body
- *  is the house envelope `{"data": "<base64 msgpack>"}`. The inner payload is
- *  a msgpack array of registry rows in the wire `SubAccount` shape
- *  (`sub_addr`, `master`, `id`, `name`, `created_height`; fixed byte fields
- *  as bins under serde_bytes, decoded as either Uint8Array or number[]).
+/** Sub-account registry read. The gateway serves
+ *  `POST /info {"type":"subAccountList","user"}` by proxying the node's
+ *  `GET /v1/sub_accounts/{addr}` verbatim, so the body is the house envelope
+ *  `{"data": "<base64 msgpack>"}`. The inner payload is a msgpack array of
+ *  `proof-wire` `SubAccount` rows. rmp-serde encodes each row as a positional
+ *  array `[master, sub_account_id, address, name, created_height]`, and each
+ *  fixed byte field as an array of integers (a bin is accepted too).
  *
  *  Fail-closed like every decode module here: a malformed envelope, row or
  *  field throws rather than degrading a value-bearing read to empty state.
- *  The node route answers 501 until the engine's registry query ships —
- *  callers must treat that HTTP status as "not yet available", never as an
- *  empty registry. */
-import { decode as msgpackDecode } from "@msgpack/msgpack";
+ *  An HTTP 501 from the route means the registry query is not available,
+ *  never an empty registry. */
+import { Decoder } from "@msgpack/msgpack";
 
 export interface SubAccountListRow {
   /** Derived child address, 40-char lowercase hex, no `0x` prefix. */
@@ -36,8 +35,8 @@ function invalid(detail: string): never {
   throw new Error(`sub-account list decode: ${detail}`);
 }
 
-/** serde encodes `[u8; N]` as a msgpack ARRAY, but `serde_bytes`-tagged
- *  fields arrive as BIN — accept both, require the exact byte length. */
+/** `wire_bytes` encodes `[u8; N]` as a msgpack ARRAY of integers; a BIN is
+ *  accepted too. Either way the exact byte length is required. */
 function fixedBytes(value: unknown, length: number, field: string): Uint8Array {
   if (value instanceof Uint8Array) {
     if (value.length !== length) return invalid(`${field} length`);
@@ -45,7 +44,7 @@ function fixedBytes(value: unknown, length: number, field: string): Uint8Array {
   }
   if (Array.isArray(value)) {
     if (value.length !== length) return invalid(`${field} length`);
-    if (value.some((b) => typeof b !== "number" || b < 0 || b > 255))
+    if (value.some((b) => !Number.isInteger(b) || b < 0 || b > 255))
       return invalid(`${field} byte`);
     return Uint8Array.from(value as number[]);
   }
@@ -57,21 +56,20 @@ function hex(bytes: Uint8Array): string {
 }
 
 function rowId(value: unknown): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value))
+  // A 64-bit msgpack integer decodes as a bigint; it is still an id, only
+  // out of range.
+  if (typeof value !== "bigint" && !Number.isSafeInteger(value))
     return invalid("id");
-  if (value < 1 || value > 0xffffffff)
+  const id = value as number | bigint;
+  if (id < 1 || id > 0xffffffff)
     return invalid("id range (1..=0xFFFFFFFF, 0 is not a valid child id)");
-  return value;
+  return Number(id);
 }
 
 function createdHeight(value: unknown): bigint {
   if (typeof value === "number" && Number.isSafeInteger(value))
     value = BigInt(value);
-  if (
-    typeof value !== "bigint" ||
-    value < 0n ||
-    value >= 1n << 64n
-  )
+  if (typeof value !== "bigint" || value < 0n || value >= 1n << 64n)
     return invalid("created_height");
   return value;
 }
@@ -80,25 +78,36 @@ function rowName(value: unknown): string {
   const bytes = fixedBytes(value, 32, "name");
   let end = bytes.length;
   while (end > 0 && bytes[end - 1] === 0) end -= 1;
-  return new TextDecoder().decode(bytes.slice(0, end));
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      bytes.slice(0, end),
+    );
+  } catch {
+    return invalid("name (invalid UTF-8)");
+  }
 }
 
+/** Wire field count of `SubAccount`. Later fields are appended as optional,
+ *  so a longer row still decodes; a shorter one is malformed. */
+const ROW_FIELDS = 5;
+
 function decodeRow(raw: unknown): SubAccountListRow {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
-    return invalid("row (expected a named map)");
-  const row = raw as Record<string, unknown>;
+  if (!Array.isArray(raw)) return invalid("row (expected a positional array)");
+  if (raw.length < ROW_FIELDS)
+    return invalid(`row (expected ${ROW_FIELDS} fields, got ${raw.length})`);
+  const [master, id, address, name, height] = raw;
   return {
-    address: hex(fixedBytes(row.sub_addr, 20, "sub_addr")),
-    master: hex(fixedBytes(row.master, 20, "master")),
-    id: rowId(row.id),
-    name: rowName(row.name),
-    createdHeight: createdHeight(row.created_height),
+    address: hex(fixedBytes(address, 20, "address")),
+    master: hex(fixedBytes(master, 20, "master")),
+    id: rowId(id),
+    name: rowName(name),
+    createdHeight: createdHeight(height),
   };
 }
 
 /** Decode a `/info` `subAccountList` response: validate the
  *  `{"data": "<base64 msgpack>"}` envelope, decode the msgpack array of
- *  named-map registry rows, and return typed rows. Throws on any deviation —
+ *  positional registry rows, and return typed rows. Throws on any deviation —
  *  including duplicate ids or addresses, which the registry never emits. */
 export function decodeSubAccountList(body: unknown): SubAccountListRow[] {
   if (body === null || typeof body !== "object" || Array.isArray(body))
@@ -116,7 +125,7 @@ export function decodeSubAccountList(body: unknown): SubAccountListRow[] {
   }
   let payload: unknown;
   try {
-    payload = msgpackDecode(bytes);
+    payload = new Decoder({ useBigInt64: true }).decode(bytes);
   } catch {
     return invalid("payload (invalid msgpack)");
   }

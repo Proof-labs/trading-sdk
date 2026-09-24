@@ -161,9 +161,8 @@ export class GatewayReads {
    *  creation heights. The gateway proxies the node's
    *  `GET /v1/sub_accounts/{addr}` and returns the verbatim
    *  `{"data": "<base64 msgpack>"}` envelope; `decodeSubAccountList`
-   *  (from `./sub-accounts.js`) unwraps and validates it. The node route
-   *  answers 501 until the engine's registry query ships — a 501 is
-   *  "not yet available", never an empty list. */
+   *  (from `./sub-accounts.js`) unwraps and validates it. A 501 means the
+   *  registry query is not available, never an empty list. */
   subAccountList(user: string, opts: GatewayReadOptions = {}) {
     return this.info("subAccountList", { user }, opts);
   }
