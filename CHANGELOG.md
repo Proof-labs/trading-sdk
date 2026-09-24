@@ -9,6 +9,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- F7 event types and fail-closed decoders, **provisional** until exchange
+  draft PRs #781, #793, #796 and #798 merge and a proof-wire release carries
+  them: `LiquidationTransferred`, `OpenInterestOffsetRecorded`,
+  `LiquidationPenaltyCharged`, `BadDebtRecorded`, `BadDebtAlarmRaised`,
+  `BadDebtAlarmBudgetSet`, `LiquidationConfigUpdated`,
+  `TreasurySourceRegistryUpdated`, `TreasurySourceDebited` and
+  `InsuranceFundFunded`, with a `decodeF7Event` dispatcher. Each decoder
+  requires the exact ordered attribute set, canonical values and the engine's
+  documented identities (for example `assessed == collected + waived` and
+  `collected == to_insurance + to_plp` on the penalty). Fixtures are the
+  engines' own `encode_abci` output from those branches.
+- Pending-engine-merge admin actions `SetLiquidationConfig` (inner tag
+  `0x11`, penalty `1..=100` bps per DEC-216), `FundInsuranceFund` (`0x12`)
+  and `UpdateTreasurySources` (`0x13`, the DEC-195 source allowlist):
+  payload types, validators mirroring the engine's shape rules, and
+  canonical inner-action encode/decode pinned to the engine's frozen bytes.
+  They are not `AdminAction` members yet: proof-wire v2.3.0 has no such
+  arms, so the WASM core cannot sign or submit them.
+- `decodeFinancialState` accepts the three provisional format-2 layouts
+  (#793 bad-debt ledger, #796 liquidation config, #798 insurance funding)
+  alongside format 1 and reports which one in `format2Layout`. Format 1
+  decodes unchanged.
+
 - `SetHlpConfig` governance action (inner admin tag 16 / `0x10`, proof-wire
   2.3.0, exchange#748, EN-12): writes or replaces the global HLP backstop
   configuration (`address`, `bootstrapBalance`, `minBalanceFloor`,

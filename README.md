@@ -21,6 +21,15 @@ actual PLP cash is only its account balance. Do not double-count either field.
 Other endpoints must be bracketed at the same `finalizedHeight` for cross-read
 comparisons; the method does not claim a historical-height query parameter.
 
+**Provisional format 2.** Three unmerged engine PRs each bump the snapshot to
+format 2 with different extra slots (#793 per-pool `realizedBadDebt`,
+`badDebtAlarmBudget` and `badDebtAlarm`; #796 `liquidationConfig`; #798
+`treasurySources` and `insuranceFunded`). The decoder accepts format 1 and
+exactly those three shapes, reports which one in `format2Layout`, and rejects
+any other format-2 shape. `realizedBadDebt` counts losses, not cash;
+`insuranceFunded` is a provenance counter already inside the pool balance.
+This will be narrowed to the settled layout once the engine PRs merge.
+
 `queryAccountState(ownerHex?)` reads exact finalized settled balance and raw
 positions through the gateway, without oracle valuation. Its bigint values are
 not equity, accrued funding, available collateral or authorization. When

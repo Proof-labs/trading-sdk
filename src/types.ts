@@ -1533,6 +1533,185 @@ export interface HlpConfigUpdatedEvent {
   proposalId: string;
 }
 
+// ---------------------------------------------------------------------------
+// F7 liquidation-counterparty, bad-debt and insurance-funding events.
+//
+// PROVISIONAL: these mirror `Event` variants on unmerged exchange draft PRs
+// (#781 `feat/en-13-plp-transfer`, #793 `feat/en-26-bad-debt-ledger`, #796
+// `feat/liquidation-config-record`, #798 `feat/en-11-if-funding-action`).
+// Their ABCI rendering comes from the engine's `AbciEvent` derive: snake_case
+// variant name, one attribute per field in field order, integers as
+// decimals, addresses as 40 lowercase hex characters, an absent `Option` as
+// an empty value. Shapes may change until those PRs merge and a proof-wire
+// release carries them. Decode a raw {@link TxEvent} with the matching
+// `decode*Event` function in `f7-events.ts`; each fails closed.
+// ---------------------------------------------------------------------------
+
+/** Why a closed position was recorded in its market's open-interest offset
+ *  (`OffsetReason`, #781). Every reason but `auto_deleveraged` is a reason
+ *  the PLP could not take a liquidated position. */
+export type OffsetReason =
+  | "no_plp_config"
+  | "plp_disabled"
+  | "self_transfer"
+  | "position_limit"
+  | "account_market_limit"
+  | "below_floor"
+  | "plp_trigger_policy"
+  | "auto_deleveraged"
+  | "plp_mark_unavailable"
+  | "plp_cash_short";
+
+/** The loss behind a {@link BadDebtRecordedEvent} (`BadDebtSource`, #793). */
+export type BadDebtSource = "liquidation" | "resolution" | "funding";
+
+/**
+ * A liquidated position moved to the PLP (ABCI `liquidation_transferred`,
+ * #781, provisional): the owner's `side` position of `size` closed and
+ * `counterparty` took the same side and size, both at `price`.
+ */
+export interface LiquidationTransferredEvent {
+  type: "LiquidationTransferred";
+  /** Liquidated owner, 40 lowercase hex characters. */
+  owner: string;
+  /** Account that took the position (the PLP), never the owner. */
+  counterparty: string;
+  /** Market id (canonical u32 decimal). */
+  market: string;
+  side: "buy" | "sell";
+  /** Size moved, in lots (canonical u64 decimal). */
+  size: string;
+  /** Transfer price in microUSDC (canonical u64 decimal). */
+  price: string;
+}
+
+/**
+ * A position closed with no counterparty (ABCI
+ * `open_interest_offset_recorded`, #781, provisional): a liquidated position
+ * the PLP could not take, or a counterparty closed by auto-deleveraging.
+ */
+export interface OpenInterestOffsetRecordedEvent {
+  type: "OpenInterestOffsetRecorded";
+  owner: string;
+  market: string;
+  side: "buy" | "sell";
+  size: string;
+  price: string;
+  reason: OffsetReason;
+  /** The market's signed open-interest offset after this close (canonical
+   *  i64 decimal). */
+  netSize: string;
+}
+
+/**
+ * The liquidation penalty on one liquidated account (ABCI
+ * `liquidation_penalty_charged`, #781, provisional). The decoder enforces
+ * `assessed == collected + waived` and `collected == toInsurance + toPlp`;
+ * `plp` is `null` exactly when nothing could be credited to a PLP, in which
+ * case `toPlp` is zero.
+ */
+export interface LiquidationPenaltyChargedEvent {
+  type: "LiquidationPenaltyCharged";
+  owner: string;
+  assessed: string;
+  collected: string;
+  /** Uncollected part of the charge; not carried as a debt. */
+  waived: string;
+  toInsurance: string;
+  toPlp: string;
+  /** PLP account credited `toPlp`, or `null` when none was. */
+  plp: string | null;
+}
+
+/**
+ * An insurance-fund debit that the pool's positive balance did not cover in
+ * full (ABCI `bad_debt_recorded`, #793, provisional). `unfunded` is in
+ * `1..=requested` and `cumulative` is the pool's lifetime realized bad debt
+ * after this record. `eventId` is set exactly for a `resolution` loss.
+ */
+export interface BadDebtRecordedEvent {
+  type: "BadDebtRecorded";
+  /** Insurance pool id (canonical u8 decimal). */
+  poolId: string;
+  deficitMarket: string;
+  source: BadDebtSource;
+  owner: string;
+  /** Resolved prediction event id (canonical u32 decimal), or `null`. */
+  eventId: string | null;
+  requested: string;
+  unfunded: string;
+  cumulative: string;
+}
+
+/**
+ * A pool's realized bad debt in one UTC-day epoch first exceeded its alarm
+ * budget (ABCI `bad_debt_alarm_raised`, #793, provisional). At most one per
+ * pool per epoch; `epochBadDebt > budget`. Changes no balance or outcome.
+ */
+export interface BadDebtAlarmRaisedEvent {
+  type: "BadDebtAlarmRaised";
+  poolId: string;
+  /** `block_time_ms / 86_400_000` (canonical u64 decimal). */
+  epoch: string;
+  epochBadDebt: string;
+  budget: string;
+}
+
+/** The admin quorum wrote a pool's bad-debt alarm budget (ABCI
+ *  `bad_debt_alarm_budget_set`, #793, provisional). */
+export interface BadDebtAlarmBudgetSetEvent {
+  type: "BadDebtAlarmBudgetSet";
+  poolId: string;
+  budget: string;
+  proposalId: string;
+}
+
+/** The admin quorum wrote the global liquidation configuration (ABCI
+ *  `liquidation_config_updated`, #796, provisional). Carries the full
+ *  post-write state, held to the `SetLiquidationConfig` shape rules. */
+export interface LiquidationConfigUpdatedEvent {
+  type: "LiquidationConfigUpdated";
+  /** Penalty in bps of the closed notional, `1..=100` (DEC-216). */
+  penaltyBps: number;
+  insuranceShareBps: number;
+  plpShareBps: number;
+  proposalId: string;
+}
+
+/** The admin quorum registered or deregistered one treasury-source account
+ *  (ABCI `treasury_source_registry_updated`, #798, provisional). */
+export interface TreasurySourceRegistryUpdatedEvent {
+  type: "TreasurySourceRegistryUpdated";
+  source: string;
+  registered: boolean;
+  proposalId: string;
+}
+
+/** A `FundInsuranceFund` debited its registered treasury source (ABCI
+ *  `treasury_source_debited`, #798, provisional). `amount` is the sum of the
+ *  allocations, in `1..=i64::MAX`. */
+export interface TreasurySourceDebitedEvent {
+  type: "TreasurySourceDebited";
+  fundingId: string;
+  source: string;
+  amount: string;
+  balanceAfter: string;
+  proposalId: string;
+}
+
+/** One allocation of a `FundInsuranceFund` credited a pool (ABCI
+ *  `insurance_fund_funded`, #798, provisional). `cumulativeFunded` is the
+ *  pool's running funded total including this allocation. */
+export interface InsuranceFundFundedEvent {
+  type: "InsuranceFundFunded";
+  fundingId: string;
+  source: string;
+  poolId: string;
+  amount: string;
+  cumulativeFunded: string;
+  proposalId: string;
+}
+
 /** Emitted when an account is liquidated due to insufficient maintenance margin. */
 export interface AccountLiquidatedEvent {
   type: "AccountLiquidated";
@@ -1644,6 +1823,16 @@ export interface OrderbookLevelUpdatedEvent {
 export type ExchangeEvent =
   | OrderPlacedEvent
   | HlpConfigUpdatedEvent
+  | LiquidationTransferredEvent
+  | OpenInterestOffsetRecordedEvent
+  | LiquidationPenaltyChargedEvent
+  | BadDebtRecordedEvent
+  | BadDebtAlarmRaisedEvent
+  | BadDebtAlarmBudgetSetEvent
+  | LiquidationConfigUpdatedEvent
+  | TreasurySourceRegistryUpdatedEvent
+  | TreasurySourceDebitedEvent
+  | InsuranceFundFundedEvent
   | OrderCancelledEvent
   | TradeExecutedEvent
   | FeesCollectedEvent
