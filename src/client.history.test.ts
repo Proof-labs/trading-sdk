@@ -481,3 +481,81 @@ describe("cash-flow history through account events", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("resolution history", () => {
+  const settled = {
+    kind: "conditional_settled",
+    event_id: "42",
+    market: "100",
+    owner,
+    side: "buy",
+    size: "25",
+    entry_price: "101000000",
+    settlement_price: "105000000",
+    realized_pnl: "100000000",
+    block_height: 100,
+    timestamp: 1776630600000,
+  };
+
+  it("maps a converted winner and a winner paid in cash with its reason", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        json([
+          {
+            ...settled,
+            converted_size: "25",
+            fallback_reason: "",
+            cash_delta: "0",
+          },
+          {
+            ...settled,
+            converted_size: "0",
+            fallback_reason: "initial_margin",
+            cash_delta: "100000000",
+          },
+        ]),
+      ),
+    );
+    const [converted, cash] = await client().queryHistoryResolutions(owner);
+    // Converted at the conditional's entry: the result rides the perpetual,
+    // no cash moved.
+    expect(converted.convertedSize).toBe("25");
+    expect(converted.fallbackReason).toBe("");
+    expect(converted.realizedPnl).toBe("100000000");
+    expect(converted.cashDelta).toBe("0");
+    // Paid in cash: the result moved to the balance.
+    expect(cash.convertedSize).toBe("0");
+    expect(cash.fallbackReason).toBe("initial_margin");
+    expect(cash.realizedPnl).toBe("100000000");
+    expect(cash.cashDelta).toBe("100000000");
+  });
+
+  it("keeps cashDelta null on a row that does not record it, never 0", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        json([
+          // An indexer that predates the key, or a row it serves as null.
+          { ...settled, converted_size: "25", fallback_reason: "" },
+          {
+            ...settled,
+            converted_size: "25",
+            fallback_reason: "",
+            cash_delta: null,
+          },
+        ]),
+      ),
+    );
+    const rows = await client().queryHistoryResolutions(owner);
+    expect(rows.map((row) => row.cashDelta)).toEqual([null, null]);
+  });
+
+  it("reads a row without the conversion keys as paid in cash", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json([settled])));
+    const [row] = await client().queryHistoryResolutions(owner);
+    expect(row.convertedSize).toBe("0");
+    expect(row.fallbackReason).toBe("");
+    expect(row.cashDelta).toBeNull();
+  });
+});

@@ -1756,6 +1756,14 @@ export class ExchangeClient {
       entryPrice: String(row.entry_price ?? ""),
       settlementPrice: String(row.settlement_price ?? ""),
       realizedPnl: String(row.realized_pnl ?? "0"),
+      convertedSize: String(row.converted_size || "0"),
+      fallbackReason: String(
+        row.fallback_reason ?? "",
+      ) as HistoryResolution["fallbackReason"],
+      cashDelta:
+        row.cash_delta === undefined || row.cash_delta === null
+          ? null
+          : String(row.cash_delta),
       blockHeight: Number(row.block_height ?? 0),
       timestamp: Number(row.timestamp ?? 0),
     }));
