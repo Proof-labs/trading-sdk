@@ -9,6 +9,41 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- F7 event types and fail-closed decoders, **provisional** until exchange
+  draft PRs #781, #793, #796 and #798 merge and a proof-wire release carries
+  them: `LiquidationTransferred`, `OpenInterestOffsetRecorded`,
+  `LiquidationPenaltyCharged`, `BadDebtRecorded`, `BadDebtAlarmRaised`,
+  `BadDebtAlarmBudgetSet`, `LiquidationConfigUpdated`,
+  `TreasurySourceRegistryUpdated`, `TreasurySourceDebited` and
+  `InsuranceFundFunded`, with a `decodeF7Event` dispatcher. Each decoder
+  requires the exact ordered attribute set, canonical values and the engine's
+  documented identities (for example `assessed == collected + waived` and
+  `collected == to_insurance + to_plp` on the penalty). Fixtures are the
+  engines' own `encode_abci` output from those branches.
+- Pending-engine-merge admin actions `SetLiquidationConfig` (inner tag
+  `0x11`, penalty `1..=100` bps per DEC-216), `FundInsuranceFund` (`0x12`)
+  and `UpdateTreasurySources` (`0x13`, the DEC-195 source allowlist):
+  payload types, validators mirroring the engine's shape rules, and
+  canonical inner-action encode/decode pinned to the engine's frozen bytes.
+  They are not `AdminAction` members yet: proof-wire v2.3.0 has no such
+  arms, so the WASM core cannot sign or submit them.
+- `decodeFinancialState` accepts the three provisional format-2 layouts
+  (#793 bad-debt ledger, #796 liquidation config, #798 insurance funding)
+  alongside format 1 and reports which one in `format2Layout`. Format 1
+  decodes unchanged.
+
+- `SetHlpConfig` governance action (inner admin tag 16 / `0x10`, proof-wire
+  2.3.0, exchange#748, EN-12): writes or replaces the global HLP backstop
+  configuration (`address`, `bootstrapBalance`, `minBalanceFloor`,
+  `enabled`). Typed `AdminAction` arm, encode through the WASM core,
+  `validateSetHlpConfig` mirroring the engine's shape rules (non-zero
+  address, positive bootstrap when enabled, floor at most bootstrap, u64
+  balances) before signing or hashing, and fail-closed proposal reads under
+  tag 16. `decodeHlpConfigUpdatedEvent` decodes the engine's
+  `hlp_config_updated` ABCI event into `HlpConfigUpdatedEvent` and throws on
+  any shape the engine would not emit. Conformance vectors pin proof-wire's
+  frozen `set_hlp_config_wire_vectors_frozen` inner bytes. The Rust core pins
+  proof-wire to the published Proof-labs/wire `v2.3.0` tag (exchange v2.14.0).
 - Sub-account registry read: `GatewayReads.subAccountList(user)` posts the
   gateway's `subAccountList` /info query and `decodeSubAccountList` unwraps the
   `{"data": "<base64 msgpack>"}` envelope into typed `SubAccountListRow`s. Rows
@@ -27,6 +62,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Requests bypass HTTP caches. MINOR: this additive TypeScript read API keeps
   the released npm 5.1.0 codec and proof-wire 2.1.0 contract (exchange v2.12.0 /
   api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
+- `InsuranceFundUpdatedEvent` (`poolId`, `balance`, `delta`),
+  `PositionAutoDeleveragedEvent` (`owner`, `market`, `side`, `size`,
+  `closePrice`, `closePriceSpec`, `realizedPnl`) and `HlpAbsorbedEvent`
+  (`poolId`, `amount`, `hlpBalanceAfter`) join the `ExchangeEvent` union and
+  the package barrel. They type the bad-debt waterfall events the engine
+  already emits on proof-wire 2.1.0 (exchange dev `exchange-wire` `Event`), with
+  the same stringified-number convention as `AccountLiquidatedEvent`.
+  TypeScript types only: no codec, wire or Rust/Python change.
+- `reads().historyStatus()` forwards `GET /v1/history/status` (the gateway's
+  proxy of the indexer's watermarks and ingest liveness) uncached, with the
+  response body, HTTP errors and cancellation intact. Applications use it to
+  tell an empty history from one the indexer has not caught up on; freshness
+  thresholds stay with the caller.
 - `GatewayHttpError.errorCode` — optional typed error code extracted from the
   gateway's JSON response body (e.g. `"MissingMark"`). The `GatewayReads`
   path clones the response to parse the code while leaving the original body

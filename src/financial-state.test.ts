@@ -1,4 +1,4 @@
-import { Encoder } from "@msgpack/msgpack";
+import { Decoder, Encoder } from "@msgpack/msgpack";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { decodeFinancialState, ExchangeClient } from "./index.js";
 import { canonicalFinancialSelection } from "./financial-state.js";
@@ -641,5 +641,252 @@ describe("atomic finalized financial state", () => {
     await vi.advanceTimersByTimeAsync(5000);
     await result;
     expect(fetch).toHaveBeenCalledOnce();
+  });
+});
+
+// PROVISIONAL format-2 layouts from unmerged exchange draft PRs. The first two
+// goldens are the engine's own spec/query-vectors/financial-state-v2.hex on
+// those branches; #798 ships no v2 hex, so its golden is built exactly the way
+// its engine test pins it: `9a02 ++ v1[4..] ++ <empty registry> ++
+// <never-funded pools 0 and 7>`.
+const RUST_FINANCIAL_V2_BAD_DEBT_HEX = // #793 feat/en-26-bad-debt-ledger
+  "980200cd04d29296dc001402020202020202020202020202020202020202027bc0c0c09096dc00140404040404040404040404040404040404040404c0f892ceffffffff009264ccc89296dc0014040404040404040404040404040404040404040401a453656c6c7b03d3800000000000000096dc00140404040404040404040404040404040404040404cd0101a453656c6c7b03d38000000000000000929c010000020390cdea6064d38000000000000000d09ccd03e8c09c020700020390cdea6064c0c0c0c0cf7fffffffffffffff929500efc0c0c09507d38000000000000000cfffffffffffffffffcf00000005d21dba0093cd50f0cf00000006fc23ac00c394dc00140202020202020202020202020202020202020202cd03e7cd01f4c3";
+const RUST_FINANCIAL_V2_LIQUIDATION_CONFIG_HEX = // #796 feat/liquidation-config-record
+  "990200cd04d29296dc001402020202020202020202020202020202020202027bc0c0c09096dc00140404040404040404040404040404040404040404c0f892ceffffffff009264ccc89296dc0014040404040404040404040404040404040404040401a453656c6c7b03d3800000000000000096dc00140404040404040404040404040404040404040404cd0101a453656c6c7b03d38000000000000000929c010000020390cdea6064d38000000000000000d09ccd03e8c09c020700020390cdea6064c0c0c0c0cf7fffffffffffffff929200ef9207d3800000000000000094dc00140202020202020202020202020202020202020202cd03e7cd01f4c3c0";
+const RUST_FINANCIAL_V2_INSURANCE_FUNDING_HEX = // #798 feat/en-11-if-funding-action
+  "9a02" + RUST_FINANCIAL_V1_HEX.slice(4) + "90" + "92" + "9200c0" + "9207c0";
+const goldenSelection = { markets: [1, 2], owners: [owner] };
+const decodeHex = (hex: string): unknown =>
+  new Decoder({ useBigInt64: true }).decode(Buffer.from(hex, "hex"));
+
+describe("financial state format 2 (provisional, pending engine merge)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("decodes the #793 bad-debt-ledger golden through the gateway transport", async () => {
+    const data = Buffer.from(RUST_FINANCIAL_V2_BAD_DEBT_HEX, "hex").toString(
+      "base64",
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify({ data }))),
+    );
+    const result = await client().queryFinancialState(goldenSelection);
+    expect(result.format).toBe(2);
+    expect(result.format2Layout).toBe("badDebtLedger");
+    expect(result.insurancePools).toEqual([
+      {
+        pool: 0,
+        balance: -17n,
+        realizedBadDebt: null,
+        badDebtAlarmBudget: null,
+        badDebtAlarm: null,
+      },
+      {
+        pool: 7,
+        balance: -(1n << 63n),
+        realizedBadDebt: (1n << 64n) - 1n,
+        badDebtAlarmBudget: 25_000_000_000n,
+        badDebtAlarm: {
+          epoch: 20_720n,
+          epochBadDebt: 30_000_000_000n,
+          raised: true,
+        },
+      },
+    ]);
+    expect(result).not.toHaveProperty("liquidationConfig");
+    expect(result).not.toHaveProperty("treasurySources");
+    // Every format-1 slot decodes identically.
+    const v1 = decodeFinancialState(
+      decodeHex(RUST_FINANCIAL_V1_HEX),
+      goldenSelection,
+    );
+    expect(result.accounts).toEqual(v1.accounts);
+    expect(result.markets).toEqual(v1.markets);
+    expect(result.plp).toEqual(v1.plp);
+  });
+
+  it("decodes the #796 liquidation-config golden (absent record stays null)", () => {
+    const r = decodeHex(RUST_FINANCIAL_V2_LIQUIDATION_CONFIG_HEX) as unknown[];
+    const result = decodeFinancialState(r, goldenSelection);
+    expect(result).toMatchObject({
+      format: 2,
+      format2Layout: "liquidationConfig",
+      liquidationConfig: null,
+    });
+    expect(result.insurancePools).toEqual([
+      { pool: 0, balance: -17n },
+      { pool: 7, balance: -(1n << 63n) },
+    ]);
+    r[8] = [100, 5000, 5000];
+    expect(decodeFinancialState(r, goldenSelection).liquidationConfig).toEqual({
+      penaltyBps: 100,
+      insuranceShareBps: 5000,
+      plpShareBps: 5000,
+    });
+    for (const bad of [
+      [0, 5000, 5000],
+      [101, 5000, 5000],
+      [100, 5000, 4999],
+      [100, 5000],
+      [100, 5000, 5000, 0],
+    ]) {
+      r[8] = bad;
+      expect(() => decodeFinancialState(r, goldenSelection)).toThrow(
+        "liquidation",
+      );
+    }
+  });
+
+  it("decodes the #798 insurance-funding layout", () => {
+    const r = decodeHex(RUST_FINANCIAL_V2_INSURANCE_FUNDING_HEX) as unknown[];
+    expect(decodeFinancialState(r, goldenSelection)).toMatchObject({
+      format: 2,
+      format2Layout: "insuranceFunding",
+      treasurySources: [],
+      insuranceFunded: [
+        { pool: 0, cumulativeFunded: null },
+        { pool: 7, cumulativeFunded: null },
+      ],
+    });
+    r[8] = [
+      [Array(20).fill(0x0a), 9],
+      [new Uint8Array(20).fill(0x0b), 5],
+    ];
+    r[9] = [
+      [0, (1n << 64n) - 1n],
+      [7, 0],
+    ];
+    const result = decodeFinancialState(r, goldenSelection);
+    expect(result.treasurySources).toEqual([
+      { source: "0a".repeat(20), registeredBy: 9n },
+      { source: "0b".repeat(20), registeredBy: 5n },
+    ]);
+    expect(result.insuranceFunded).toEqual([
+      { pool: 0, cumulativeFunded: (1n << 64n) - 1n },
+      { pool: 7, cumulativeFunded: 0n },
+    ]);
+  });
+
+  it.each([
+    [
+      "unsorted treasury sources",
+      (r: unknown[]) => {
+        r[8] = [
+          [Array(20).fill(0x0b), 5],
+          [Array(20).fill(0x0a), 9],
+        ];
+      },
+    ],
+    [
+      "duplicate treasury sources",
+      (r: unknown[]) => {
+        r[8] = [
+          [Array(20).fill(0x0a), 5],
+          [Array(20).fill(0x0a), 9],
+        ];
+      },
+    ],
+    [
+      "the zero treasury source",
+      (r: unknown[]) => {
+        r[8] = [[Array(20).fill(0), 5]];
+      },
+    ],
+    [
+      "more than eight treasury sources",
+      (r: unknown[]) => {
+        r[8] = Array.from({ length: 9 }, (_, i) => [Array(20).fill(i + 1), 1]);
+      },
+    ],
+    [
+      "funded pools out of step with insurance pools",
+      (r: unknown[]) => {
+        r[9] = [[0, null]];
+      },
+    ],
+    [
+      "a negative funded total",
+      (r: unknown[]) => {
+        r[9] = [
+          [0, -1],
+          [7, null],
+        ];
+      },
+    ],
+  ])("rejects the #798 layout with %s", (_name, mutate) => {
+    const r = decodeHex(RUST_FINANCIAL_V2_INSURANCE_FUNDING_HEX) as unknown[];
+    mutate(r);
+    expect(() => decodeFinancialState(r, goldenSelection)).toThrow(
+      "financial state decode",
+    );
+  });
+
+  it.each([
+    [
+      "format 2 with format-1 insurance entries in eight slots",
+      () => {
+        const r = decodeHex(RUST_FINANCIAL_V1_HEX) as unknown[];
+        r[0] = 2;
+        return r;
+      },
+    ],
+    [
+      "format 1 with a bad-debt insurance entry",
+      () => {
+        const r = decodeHex(RUST_FINANCIAL_V2_BAD_DEBT_HEX) as unknown[];
+        r[0] = 1;
+        return r;
+      },
+    ],
+    [
+      "format 1 with an appended slot",
+      () => {
+        const r = decodeHex(
+          RUST_FINANCIAL_V2_LIQUIDATION_CONFIG_HEX,
+        ) as unknown[];
+        r[0] = 1;
+        return r;
+      },
+    ],
+    [
+      "a bad-debt alarm with a non-boolean flag",
+      () => {
+        const r = decodeHex(RUST_FINANCIAL_V2_BAD_DEBT_HEX) as unknown[];
+        ((r[6] as unknown[][])[1] as unknown[])[4] = [1, 2, 1];
+        return r;
+      },
+    ],
+    [
+      "a negative realized bad debt",
+      () => {
+        const r = decodeHex(RUST_FINANCIAL_V2_BAD_DEBT_HEX) as unknown[];
+        ((r[6] as unknown[][])[1] as unknown[])[2] = -1;
+        return r;
+      },
+    ],
+    [
+      "a merged eleven-slot layout",
+      () => {
+        const r = decodeHex(
+          RUST_FINANCIAL_V2_INSURANCE_FUNDING_HEX,
+        ) as unknown[];
+        r.push(null);
+        return r;
+      },
+    ],
+    [
+      "format 3",
+      () => {
+        const r = decodeHex(
+          RUST_FINANCIAL_V2_LIQUIDATION_CONFIG_HEX,
+        ) as unknown[];
+        r[0] = 3;
+        return r;
+      },
+    ],
+  ])("fails closed on %s", (_name, build) => {
+    expect(() => decodeFinancialState(build(), goldenSelection)).toThrow(
+      "financial state decode",
+    );
   });
 });

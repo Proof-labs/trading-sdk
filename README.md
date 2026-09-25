@@ -21,6 +21,15 @@ actual PLP cash is only its account balance. Do not double-count either field.
 Other endpoints must be bracketed at the same `finalizedHeight` for cross-read
 comparisons; the method does not claim a historical-height query parameter.
 
+**Provisional format 2.** Three unmerged engine PRs each bump the snapshot to
+format 2 with different extra slots (#793 per-pool `realizedBadDebt`,
+`badDebtAlarmBudget` and `badDebtAlarm`; #796 `liquidationConfig`; #798
+`treasurySources` and `insuranceFunded`). The decoder accepts format 1 and
+exactly those three shapes, reports which one in `format2Layout`, and rejects
+any other format-2 shape. `realizedBadDebt` counts losses, not cash;
+`insuranceFunded` is a provenance counter already inside the pool balance.
+This will be narrowed to the settled layout once the engine PRs merge.
+
 `queryAccountState(ownerHex?)` reads exact finalized settled balance and raw
 positions through the gateway, without oracle valuation. Its bigint values are
 not equity, accrued funding, available collateral or authorization. When
@@ -241,6 +250,18 @@ remain in the application; `status: "ok"` alone does not mean fresh data, and
 not trading authorization. Like every other gateway interaction, admin calls
 included, it goes through the SDK
 ([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md)).
+
+### History freshness
+
+```typescript
+const response = await client.reads().historyStatus({ signal });
+const status = await response.json();
+```
+
+This forwards `GET /v1/history/status` (the indexer's watermarks and ingest
+liveness) uncached, with the same body, error and cancellation guarantees. Use
+it before presenting an empty history as definitive: an indexer that has not
+caught up returns empty pages too. Thresholds remain in the application.
 
 ### Optional native Rust gateway transport
 

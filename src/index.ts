@@ -37,6 +37,7 @@ export {
   type CancelPositionTriggers,
   type SetTriggerMarketConfig,
   type SetOracleGuards,
+  type SetHlpConfig,
   type BridgeWithdrawalReceipt,
   type OperatorReceiptProof,
   type ApproveAgent,
@@ -84,7 +85,23 @@ export {
   type FundingAppliedEvent,
   type FundingSettledEvent,
   type AccountLiquidatedEvent,
+  type InsuranceFundUpdatedEvent,
+  type PositionAutoDeleveragedEvent,
+  type HlpAbsorbedEvent,
   type MarketCreatedEvent,
+  type HlpConfigUpdatedEvent,
+  type OffsetReason,
+  type BadDebtSource,
+  type LiquidationTransferredEvent,
+  type OpenInterestOffsetRecordedEvent,
+  type LiquidationPenaltyChargedEvent,
+  type BadDebtRecordedEvent,
+  type BadDebtAlarmRaisedEvent,
+  type BadDebtAlarmBudgetSetEvent,
+  type LiquidationConfigUpdatedEvent,
+  type TreasurySourceRegistryUpdatedEvent,
+  type TreasurySourceDebitedEvent,
+  type InsuranceFundFundedEvent,
   type AdlQueueEntry,
   type Ticker,
   type Orderbook,
@@ -158,6 +175,47 @@ export {
 } from "./triggers.js";
 
 export { validateSetOracleGuards } from "./oracle-guards.js";
+export {
+  validateSetHlpConfig,
+  decodeHlpConfigUpdatedEvent,
+  HLP_CONFIG_UPDATED_EVENT_TYPE,
+} from "./hlp-config.js";
+
+// F7 events and admin actions: PROVISIONAL / pending engine merge (exchange
+// draft PRs #781, #793, #796, #798). See the module headers.
+export {
+  F7_EVENT_TYPES,
+  decodeF7Event,
+  decodeLiquidationTransferredEvent,
+  decodeOpenInterestOffsetRecordedEvent,
+  decodeLiquidationPenaltyChargedEvent,
+  decodeBadDebtRecordedEvent,
+  decodeBadDebtAlarmRaisedEvent,
+  decodeBadDebtAlarmBudgetSetEvent,
+  decodeLiquidationConfigUpdatedEvent,
+  decodeTreasurySourceRegistryUpdatedEvent,
+  decodeTreasurySourceDebitedEvent,
+  decodeInsuranceFundFundedEvent,
+  type F7Event,
+} from "./f7-events.js";
+export {
+  PENDING_F7_ADMIN_TAGS,
+  MAX_LIQUIDATION_PENALTY_BPS,
+  LIQUIDATION_SPLIT_TOTAL_BPS,
+  MAX_TREASURY_SOURCES,
+  MAX_INSURANCE_FUNDING_ALLOCATIONS,
+  validateSetLiquidationConfig,
+  validateFundInsuranceFund,
+  validateUpdateTreasurySources,
+  validatePendingF7AdminAction,
+  encodePendingF7AdminAction,
+  decodePendingF7AdminAction,
+  type SetLiquidationConfig,
+  type FundInsuranceFund,
+  type InsuranceFundAllocation,
+  type UpdateTreasurySources,
+  type PendingF7AdminAction,
+} from "./f7-admin.js";
 
 export {
   decodePositionTriggerHistoryPage,
@@ -239,6 +297,8 @@ export {
   type FinancialState,
   type FinancialAccountState,
   type FinancialMarketState,
+  type FinancialInsurancePool,
+  type FinancialFormat2Layout,
 } from "./financial-state.js";
 export {
   decodeAccountState,
