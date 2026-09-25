@@ -282,10 +282,23 @@ fn maximum_snapshot_height_reports_height_overflow() {
 async fn server(
     responses: Vec<(&'static str, Value, Duration)>,
 ) -> (String, tokio::task::JoinHandle<()>) {
+    server_with_status(
+        responses
+            .into_iter()
+            .map(|(path, body, delay)| (path, 200, body, delay))
+            .collect(),
+    )
+    .await
+}
+
+/// [`server`] with each response's HTTP status scripted too.
+async fn server_with_status(
+    responses: Vec<(&'static str, u16, Value, Duration)>,
+) -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
-        for (path, body, delay) in responses {
+        for (path, status, body, delay) in responses {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut input = Vec::new();
             while !input.windows(4).any(|w| w == b"\r\n\r\n") {
@@ -300,7 +313,7 @@ async fn server(
             tokio::time::sleep(delay).await;
             let body = bytes(&body);
             let header = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 {status} Scripted\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             );
             if socket.write_all(header.as_bytes()).await.is_err() {
@@ -813,6 +826,236 @@ async fn refusals_other_than_out_of_order_are_not_retried() {
                 .expect_err("the scripted bracket is refused"),
             expected
         );
+        served_every_scripted_read(task).await;
+    }
+}
+
+/// CometBFT's `/block` answer, forwarded verbatim by the gateway with HTTP
+/// 500, when the node serving it has committed only up to `node_height`.
+fn lagging_block_body(requested: u64, node_height: u64) -> Value {
+    json!({"jsonrpc":"2.0","id":-1,"error":{"code":-32603,"message":"Internal error",
+        "data":format!("height {requested} must be less than or equal to the current blockchain height {node_height}")}})
+}
+
+/// A bracket whose post-status is past `H + 1`, so the attempt needs the
+/// exact `/v1/block?height=101` header.
+fn header_bracket() -> Vec<(&'static str, u16, Value, Duration)> {
+    vec![
+        (
+            "/v1/status",
+            200,
+            status_body(100, NOW, 1, 1),
+            Duration::ZERO,
+        ),
+        (
+            "/v1/markets-snapshot",
+            200,
+            snapshot_body(100, NOW, 2, 2),
+            Duration::ZERO,
+        ),
+        (
+            "/v1/status",
+            200,
+            status_body(105, NOW + 500, 3, 8),
+            Duration::ZERO,
+        ),
+    ]
+}
+
+/// A header bracket whose `H + 1` lookup lands on a node still at height 100.
+fn lagging_header_bracket() -> Vec<(&'static str, u16, Value, Duration)> {
+    let mut responses = header_bracket();
+    responses.push((
+        "/v1/block?height=101",
+        500,
+        lagging_block_body(101, 100),
+        Duration::ZERO,
+    ));
+    responses
+}
+
+#[test]
+fn only_cometbft_height_above_current_for_the_requested_height_is_a_lagging_header() {
+    assert_eq!(
+        classify_header_failure(&bytes(&lagging_block_body(101, 100)), 101),
+        WitnessError::HeaderBehind { node_height: 100 }
+    );
+    let refused = WitnessError::Snapshot(SnapshotError::Http(500));
+    let pruned = json!({"jsonrpc":"2.0","id":-1,"error":{"code":-32603,"message":"Internal error",
+        "data":"height 101 is not available, lowest height is 200"}});
+    let mut other_code = lagging_block_body(101, 100);
+    other_code["error"]["code"] = json!(-32600);
+    let mut padded = lagging_block_body(101, 100);
+    padded["error"]["data"] =
+        json!("height 101 must be less than or equal to the current blockchain height 0100");
+    for (body, why) in [
+        (bytes(&pruned), "a pruned height is not a lagging node"),
+        (bytes(&other_code), "another JSON-RPC code"),
+        (
+            bytes(&lagging_block_body(102, 100)),
+            "the refusal names another height than the one requested",
+        ),
+        (
+            bytes(&lagging_block_body(101, 101)),
+            "a node height at or past the target contradicts the refusal",
+        ),
+        (bytes(&padded), "a non-canonical node height"),
+        (bytes(&json!({"result":{}})), "no error object"),
+        (b"upstream exploded".to_vec(), "not JSON"),
+        (Vec::new(), "empty body"),
+    ] {
+        assert_eq!(classify_header_failure(&body, 101), refused, "{why}");
+    }
+}
+
+#[tokio::test]
+async fn lagging_header_lookup_is_read_again_and_accepted() {
+    let mut responses = lagging_header_bracket();
+    responses.extend(header_bracket());
+    responses.push((
+        "/v1/block?height=101",
+        200,
+        block_body(101, 2),
+        Duration::ZERO,
+    ));
+    let (url, task) = server_with_status(responses).await;
+    let client =
+        MarketsSnapshotClient::new(&url, Duration::from_secs(2)).expect("valid loopback client");
+    let start = Instant::now();
+    let read = client.read_bound_inventory_reporting(chain_id()).await;
+    assert!(start.elapsed() >= BRACKET_RETRY_DELAY);
+    let verified = read
+        .result
+        .expect("a fresh bracket whose header lookup finds H + 1 is accepted");
+    assert_eq!(verified.snapshot().height, 100);
+    assert_eq!(verified.witness().app_hash, hash(2));
+    assert_eq!(
+        read.retried,
+        vec![WitnessError::HeaderBehind { node_height: 100 }]
+    );
+    assert!(!read.deadline_expired);
+    served_every_scripted_read(task).await;
+}
+
+#[tokio::test]
+async fn lagging_header_on_every_attempt_refuses_with_the_lagging_header_after_the_limit() {
+    let mut responses = Vec::new();
+    for _ in 0..BRACKET_ATTEMPTS {
+        responses.extend(lagging_header_bracket());
+    }
+    let (url, task) = server_with_status(responses).await;
+    let client =
+        MarketsSnapshotClient::new(&url, Duration::from_secs(5)).expect("valid loopback client");
+    let read = client.read_bound_inventory_reporting(chain_id()).await;
+    assert_eq!(
+        read.result
+            .expect_err("a header lookup that never finds H + 1 is refused"),
+        WitnessError::HeaderBehind { node_height: 100 }
+    );
+    assert_eq!(
+        read.retried,
+        vec![WitnessError::HeaderBehind { node_height: 100 }; BRACKET_ATTEMPTS - 1]
+    );
+    assert!(!read.deadline_expired);
+    served_every_scripted_read(task).await;
+}
+
+#[tokio::test]
+async fn deadline_during_a_retry_reports_the_discarded_attempts_refusal() {
+    // The deadline ends the second attempt while it waits on a slow status
+    // read: the caller learns the reads were out of order, not only that time
+    // ran out.
+    let mut responses: Vec<_> = out_of_order_bracket()
+        .into_iter()
+        .map(|(path, body, delay)| (path, 200, body, delay))
+        .collect();
+    responses.push((
+        "/v1/status",
+        200,
+        status_body(101, NOW + 100, 1, 2),
+        Duration::from_secs(2),
+    ));
+    let (url, task) = server_with_status(responses).await;
+    let client = MarketsSnapshotClient::new(&url, Duration::from_millis(400))
+        .expect("valid loopback client");
+    let start = Instant::now();
+    let read = client.read_bound_inventory_reporting(chain_id()).await;
+    assert!(start.elapsed() < Duration::from_millis(900));
+    assert_eq!(
+        read.result.expect_err("the deadline ends the call"),
+        WitnessError::BracketOutOfOrder
+    );
+    assert_eq!(read.retried, vec![WitnessError::BracketOutOfOrder]);
+    assert!(read.deadline_expired);
+    task.abort();
+
+    // The deadline cuts the pause after a lagging header lookup: the lagging
+    // header is reported, through the plain call too. Any deadline shorter
+    // than the pause ends inside it once the first attempt has finished.
+    assert!(Duration::from_millis(140) < BRACKET_RETRY_DELAY);
+    let (url, task) = server_with_status(lagging_header_bracket()).await;
+    let client = MarketsSnapshotClient::new(&url, Duration::from_millis(140))
+        .expect("valid loopback client");
+    assert_eq!(
+        client
+            .read_bound_inventory(chain_id())
+            .await
+            .expect_err("the deadline ends the call during the pause"),
+        WitnessError::HeaderBehind { node_height: 100 }
+    );
+    served_every_scripted_read(task).await;
+}
+
+#[tokio::test]
+async fn deadline_in_the_first_attempt_is_still_a_bare_timeout() {
+    let responses = vec![(
+        "/v1/status",
+        status_body(100, NOW, 1, 1),
+        Duration::from_secs(2),
+    )];
+    let (url, task) = server(responses).await;
+    let client = MarketsSnapshotClient::new(&url, Duration::from_millis(100))
+        .expect("valid loopback client");
+    let read = client.read_bound_inventory_reporting(chain_id()).await;
+    assert_eq!(
+        read.result.expect_err("the deadline ends the call"),
+        WitnessError::Snapshot(SnapshotError::Timeout)
+    );
+    assert!(read.retried.is_empty());
+    assert!(read.deadline_expired);
+    task.abort();
+}
+
+#[tokio::test]
+async fn header_lookup_failures_other_than_a_lagging_node_are_not_retried() {
+    let pruned = json!({"jsonrpc":"2.0","id":-1,"error":{"code":-32603,"message":"Internal error",
+        "data":"height 101 is not available, lowest height is 200"}});
+    let cases = vec![
+        (500, pruned, 500),
+        (500, lagging_block_body(102, 100), 500),
+        (500, json!("not an RPC body"), 500),
+        (
+            502,
+            json!({"status":"error","error":"upstream unavailable"}),
+            502,
+        ),
+        (404, json!({}), 404),
+        (503, lagging_block_body(101, 100), 503),
+    ];
+    for (status, body, expected) in cases {
+        let mut responses = header_bracket();
+        responses.push(("/v1/block?height=101", status, body, Duration::ZERO));
+        let (url, task) = server_with_status(responses).await;
+        let client = MarketsSnapshotClient::new(&url, Duration::from_secs(2))
+            .expect("valid loopback client");
+        let read = client.read_bound_inventory_reporting(chain_id()).await;
+        // A second attempt would find the listener gone and fail as transport.
+        assert_eq!(
+            read.result.expect_err("the header lookup is refused"),
+            WitnessError::Snapshot(SnapshotError::Http(expected)),
+            "HTTP {status}"
+        );
+        assert!(read.retried.is_empty(), "HTTP {status}");
         served_every_scripted_read(task).await;
     }
 }

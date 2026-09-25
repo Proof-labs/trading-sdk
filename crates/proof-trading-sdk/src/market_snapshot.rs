@@ -206,7 +206,8 @@ impl Default for ConfirmationPolling {
 /// Canonical gateway transport. Every HTTP read is one-shot: no signing, nonce
 /// allocation, request retry, node fallback, caching or partial inventory
 /// reconciliation lives here. The one bounded retry is `read_bound_inventory`
-/// reading a whole new bracket after one refused as out of height order.
+/// reading a whole new bracket after one refused as a lagging read (out of
+/// height order, or an `H + 1` header lookup on a node without that block).
 #[cfg(feature = "gateway")]
 #[derive(Clone)]
 pub struct MarketsSnapshotClient {
@@ -367,7 +368,8 @@ mod witness;
 #[cfg(feature = "gateway")]
 pub use witness::{
     decode_bound_identity, decode_bound_snapshot, validate_bound_inventory, BoundChainIdentity,
-    BoundInventorySnapshot, BoundMarketsSnapshot, SnapshotWitness, WitnessError,
+    BoundInventoryRead, BoundInventorySnapshot, BoundMarketsSnapshot, SnapshotWitness,
+    WitnessError,
 };
 
 #[cfg(feature = "gateway")]

@@ -41,6 +41,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   new `gateway::ErrorKind::MissingMark` instead of a generic HTTP failure,
   mirroring the engine's restored `503 errorCode=MissingMark` contract
   (DEC-175; exchange#704). Additive: Rust crate 4.0.0 → 4.1.0.
+- **Rust crate 4.1.1 → 4.2.0** —
+  `MarketsSnapshotClient::read_bound_inventory_reporting` returns a
+  `BoundInventoryRead`: the same result as `read_bound_inventory`, the refusal
+  of every bracket attempt it discarded and read again (`retried`), and whether
+  the whole-call deadline ended it (`deadline_expired`), so the oracle feeder
+  can log or count discarded out-of-order attempts, which a faulty node can
+  cause as well as a lagging one (#194). Also new:
+  `WitnessError::HeaderBehind { node_height }` (see Fixed). MINOR: additive
+  API on a `#[non_exhaustive]` error; no wire change.
 
 ### Changed
 
@@ -80,6 +89,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   out-of-order bracket still ends in `BracketOutOfOrder`. The exact `H+1`
   header lookup is not retried when it lands on a lagging node (#191). PATCH:
   no wire or public API change.
+- **Rust crate 4.1.1 → 4.2.0** — the exact `/v1/block?height=H+1` header
+  lookup in `read_bound_inventory` is now retried like an out-of-order bracket
+  when it lands on a full node that has not committed `H+1` yet (#191). The
+  gateway forwards CometBFT's answer verbatim, and CometBFT refuses a height
+  above its own with HTTP 500 and JSON-RPC error `-32603` whose `data` is
+  `height H+1 must be less than or equal to the current blockchain height N`;
+  only that shape, for the requested height and `N < H+1`, becomes the new
+  `WitnessError::HeaderBehind { node_height: N }` and earns another attempt
+  within the same three attempts and whole-call deadline. Every other header
+  failure (a pruned height, another RPC error, a gateway 502, any other
+  status) is still `Snapshot(Http(status))` and final at once.
+- **Rust crate 4.1.1 → 4.2.0** — when the whole-call deadline ends
+  `read_bound_inventory` after an attempt was already discarded, the call now
+  returns that attempt's refusal (`BracketOutOfOrder` or `HeaderBehind`)
+  instead of a bare `Snapshot(Timeout)`, so the cause is not hidden (#194). A
+  deadline that ends the first attempt is still `Snapshot(Timeout)`. Deadline
+  guidance: one attempt with the default confirmation schedule (8 × 250 ms) can
+  take about 2 s, so the oracle feeder's current 2 s timeout usually leaves no
+  room for a retry. Give the inventory client at least
+  `3 × (polls × interval + 4 reads) + 2 × 150 ms` (about 7–8 s with the
+  defaults, still inside the feeder's ~10 s inventory refresh), or shorten the
+  schedule with `with_confirmation_polling`.
 
 ## [5.1.0] — 2026-09-22
 
