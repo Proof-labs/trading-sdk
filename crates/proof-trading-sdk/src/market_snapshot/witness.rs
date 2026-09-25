@@ -412,7 +412,7 @@ pub fn validate_bound_inventory(
 /// makes, counting the first. Only [`WitnessError::BracketOutOfOrder`] earns
 /// another attempt: behind a load balancer the status and snapshot reads can
 /// land on full nodes a block apart, so an honest, committed set of reads can
-/// arrive out of height order (#184). Every other refusal is final at once.
+/// arrive out of height order. Every other refusal is final at once.
 const BRACKET_ATTEMPTS: usize = 3;
 /// Pause before a fresh bracket, long enough for a lagging full node to catch
 /// up by a block and short enough to leave most of the whole-call deadline.
@@ -464,10 +464,10 @@ impl MarketsSnapshotClient {
     }
 
     /// One complete bracket: pre-status, snapshot, post-status, confirmation
-    /// polls and, when needed, the exact `H + 1` header. Both places a
-    /// load-balanced read can land out of height order (the bracket itself and
-    /// a confirmation poll behind the previous status) refuse the attempt with
-    /// [`WitnessError::BracketOutOfOrder`].
+    /// polls and, when needed, the exact `H + 1` header. A bracket read or a
+    /// confirmation poll that lands behind a previous read refuses the attempt
+    /// with [`WitnessError::BracketOutOfOrder`]. An `H + 1` header lookup that
+    /// lands on a node without that block fails as a [`SnapshotError`] instead.
     async fn read_bound_inventory_once(
         &self,
         expected_chain: [u8; 32],

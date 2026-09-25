@@ -67,8 +67,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   height order and fenced the DevNet oracle feeder every few minutes. Every
   other refusal is still returned at once, no read is carried between attempts,
   and each attempt passes the unchanged bracket validation; a persistent
-  out-of-order bracket still ends in `BracketOutOfOrder`. PATCH: no wire or
-  public API change.
+  out-of-order bracket still ends in `BracketOutOfOrder`. The exact `H+1`
+  header lookup is not retried when it lands on a lagging node (#191). PATCH:
+  no wire or public API change.
 
 ## [5.1.0] — 2026-09-22
 
