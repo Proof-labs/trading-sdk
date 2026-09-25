@@ -87,7 +87,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   other refusal is still returned at once, no read is carried between attempts,
   and each attempt passes the unchanged bracket validation; a persistent
   out-of-order bracket still ends in `BracketOutOfOrder`. The exact `H+1`
-  header lookup is not retried when it lands on a lagging node (#191). PATCH:
+  header lookup on a lagging node was left unretried here; 4.2.0 below
+  retries it (#191). PATCH:
   no wire or public API change.
 - **Rust crate 4.1.1 → 4.2.0** — the exact `/v1/block?height=H+1` header
   lookup in `read_bound_inventory` is now retried like an out-of-order bracket
