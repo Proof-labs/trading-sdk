@@ -631,3 +631,188 @@ async fn timeout_is_one_budget_for_the_entire_bracket_not_each_read() {
     assert!(start.elapsed() < Duration::from_millis(350));
     task.abort();
 }
+
+/// One bracket whose pre-status came from a node a block ahead of the node
+/// that served the snapshot: honest, committed reads in the wrong height order.
+fn out_of_order_bracket() -> Vec<(&'static str, Value, Duration)> {
+    vec![
+        (
+            "/v1/status",
+            status_body(101, NOW + 100, 1, 2),
+            Duration::ZERO,
+        ),
+        (
+            "/v1/markets-snapshot",
+            snapshot_body(100, NOW, 2, 2),
+            Duration::ZERO,
+        ),
+        (
+            "/v1/status",
+            status_body(101, NOW + 100, 3, 2),
+            Duration::ZERO,
+        ),
+    ]
+}
+
+/// The same reads once every node serves height 101: an in-order bracket
+/// whose post-status commits the snapshot's app hash.
+fn in_order_bracket() -> Vec<(&'static str, Value, Duration)> {
+    vec![
+        (
+            "/v1/status",
+            status_body(101, NOW + 100, 1, 2),
+            Duration::ZERO,
+        ),
+        (
+            "/v1/markets-snapshot",
+            snapshot_body(101, NOW + 100, 2, 3),
+            Duration::ZERO,
+        ),
+        (
+            "/v1/status",
+            status_body(102, NOW + 200, 3, 3),
+            Duration::ZERO,
+        ),
+    ]
+}
+
+/// The scripted server answers each response once, in order, then drops its
+/// listener. A caller that stops early leaves the task waiting, and one that
+/// asks again after the script ends is refused with a transport error, so a
+/// finished task plus the expected error pins the exact number of requests.
+async fn served_every_scripted_read(task: tokio::task::JoinHandle<()>) {
+    tokio::time::timeout(Duration::from_secs(2), task)
+        .await
+        .expect("the client made every scripted request")
+        .expect("every request matched its scripted path");
+}
+
+#[tokio::test]
+async fn out_of_order_bracket_is_read_again_and_accepted_when_in_order() {
+    let mut responses = out_of_order_bracket();
+    responses.extend(in_order_bracket());
+    let (url, task) = server(responses).await;
+    let client =
+        MarketsSnapshotClient::new(&url, Duration::from_secs(2)).expect("valid loopback client");
+    let start = Instant::now();
+    let verified = client
+        .read_bound_inventory(chain_id())
+        .await
+        .expect("a fresh in-order bracket is accepted after an out-of-order one");
+    assert!(start.elapsed() >= BRACKET_RETRY_DELAY);
+    // Every part comes from the second attempt; nothing is carried over.
+    assert_eq!(verified.snapshot().height, 101);
+    assert_eq!(verified.witness().app_hash, hash(3));
+    assert_eq!(verified.before().identity().latest_height.get(), 101);
+    assert_eq!(verified.after().identity().latest_height.get(), 102);
+    served_every_scripted_read(task).await;
+}
+
+#[tokio::test]
+async fn out_of_order_on_every_attempt_refuses_after_the_attempt_limit() {
+    let mut responses = Vec::new();
+    for _ in 0..BRACKET_ATTEMPTS {
+        responses.extend(out_of_order_bracket());
+    }
+    assert_eq!(responses.len(), 3 * BRACKET_ATTEMPTS);
+    let (url, task) = server(responses).await;
+    let client =
+        MarketsSnapshotClient::new(&url, Duration::from_secs(5)).expect("valid loopback client");
+    let start = Instant::now();
+    assert_eq!(
+        client
+            .read_bound_inventory(chain_id())
+            .await
+            .expect_err("reads that never land in order are refused"),
+        WitnessError::BracketOutOfOrder
+    );
+    // One pause between each pair of attempts.
+    let pauses = u32::try_from(BRACKET_ATTEMPTS - 1).expect("the attempt limit fits a u32");
+    assert!(start.elapsed() >= BRACKET_RETRY_DELAY * pauses);
+    served_every_scripted_read(task).await;
+}
+
+#[tokio::test]
+async fn confirmation_poll_behind_the_previous_status_is_read_again() {
+    // The post-status sits at the snapshot height, so the client polls; the
+    // poll lands on a node one block behind and the attempt is refused as out
+    // of order, then a fresh bracket is accepted.
+    let mut responses = vec![
+        ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
+        (
+            "/v1/markets-snapshot",
+            snapshot_body(100, NOW, 2, 2),
+            Duration::ZERO,
+        ),
+        ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
+        (
+            "/v1/status",
+            status_body(99, NOW - 100, 3, 9),
+            Duration::ZERO,
+        ),
+    ];
+    responses.extend(in_order_bracket());
+    let (url, task) = server(responses).await;
+    let client = MarketsSnapshotClient::with_confirmation_polling(
+        &url,
+        Duration::from_secs(2),
+        ConfirmationPolling {
+            polls: 2,
+            interval: Duration::from_millis(10),
+        },
+    )
+    .expect("two polls are inside the ceiling");
+    let verified = client
+        .read_bound_inventory(chain_id())
+        .await
+        .expect("a fresh bracket after a lagging poll is accepted");
+    assert_eq!(verified.snapshot().height, 101);
+    served_every_scripted_read(task).await;
+}
+
+#[tokio::test]
+async fn refusals_other_than_out_of_order_are_not_retried() {
+    let mut bad_witness = snapshot_body(100, NOW, 2, 2);
+    bad_witness["witness"]["nodeId"] = json!("");
+    let cases = vec![
+        (
+            // The post-status commits another app hash at the snapshot height.
+            vec![
+                ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
+                (
+                    "/v1/markets-snapshot",
+                    snapshot_body(100, NOW, 2, 2),
+                    Duration::ZERO,
+                ),
+                (
+                    "/v1/status",
+                    status_body(101, NOW + 100, 3, 3),
+                    Duration::ZERO,
+                ),
+            ],
+            WitnessError::AppHashMismatch,
+        ),
+        (
+            // The snapshot's witness names no node; the attempt ends there.
+            vec![
+                ("/v1/status", status_body(100, NOW, 1, 1), Duration::ZERO),
+                ("/v1/markets-snapshot", bad_witness, Duration::ZERO),
+            ],
+            WitnessError::MalformedWitness,
+        ),
+    ];
+    for (responses, expected) in cases {
+        let (url, task) = server(responses).await;
+        let client = MarketsSnapshotClient::new(&url, Duration::from_secs(2))
+            .expect("valid loopback client");
+        // A second attempt would find the listener gone and fail as transport.
+        assert_eq!(
+            client
+                .read_bound_inventory(chain_id())
+                .await
+                .expect_err("the scripted bracket is refused"),
+            expected
+        );
+        served_every_scripted_read(task).await;
+    }
+}

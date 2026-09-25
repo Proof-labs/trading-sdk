@@ -408,6 +408,16 @@ pub fn validate_bound_inventory(
     })
 }
 
+/// Whole-bracket attempts [`MarketsSnapshotClient::read_bound_inventory`]
+/// makes, counting the first. Only [`WitnessError::BracketOutOfOrder`] earns
+/// another attempt: behind a load balancer the status and snapshot reads can
+/// land on full nodes a block apart, so an honest, committed set of reads can
+/// arrive out of height order. Every other refusal is final at once.
+const BRACKET_ATTEMPTS: usize = 3;
+/// Pause before a fresh bracket, long enough for a lagging full node to catch
+/// up by a block and short enough to leave most of the whole-call deadline.
+const BRACKET_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+
 impl MarketsSnapshotClient {
     pub async fn read_bound(
         &self,
@@ -425,54 +435,81 @@ impl MarketsSnapshotClient {
 
     /// Three reads, the client's confirmation polls and one header lookup, under
     /// ONE whole-call deadline. A fast-moving chain does not require the final
-    /// status response to happen to land at exactly H+1. No snapshot retry or
-    /// alternate-backend fallback; the snapshot's own clock is never renewed.
+    /// status response to happen to land at exactly H+1.
+    ///
+    /// A bracket refused with [`WitnessError::BracketOutOfOrder`] (the reads
+    /// landed on full nodes at different heights) is discarded and read again
+    /// from scratch, up to three attempts in all, a short pause apart and
+    /// inside the same deadline; the last attempt's result is returned. No
+    /// other refusal is retried, no read is carried from one attempt into the
+    /// next, and every attempt passes the same validation. Within an attempt
+    /// the snapshot is never re-read and its own clock is never renewed.
     pub async fn read_bound_inventory(
         &self,
         expected_chain: [u8; 32],
     ) -> Result<BoundInventorySnapshot, WitnessError> {
         tokio::time::timeout(self.timeout, async {
-            let before = self.chain_identity_bound(expected_chain).await?;
-            let bound = self.read_bound(expected_chain).await?;
-            let mut after = self.chain_identity_bound(expected_chain).await?;
-            validate_bracket(&bound, &before, &after)?;
-            let target = bound
-                .witness
-                .height
-                .get()
-                .checked_add(1)
-                .ok_or(WitnessError::HeightOverflow)?;
-            // Wait for the next committed header with the same snapshot and
-            // its original clock. Reading a newer snapshot each round can
-            // phase-lock to the head of a fast chain and verify nothing.
-            for _ in 0..self.confirmation.polls {
-                if after.identity.latest_height.get() >= target {
-                    break;
+            for _ in 1..BRACKET_ATTEMPTS {
+                match self.read_bound_inventory_once(expected_chain).await {
+                    Err(WitnessError::BracketOutOfOrder) => {
+                        tokio::time::sleep(BRACKET_RETRY_DELAY).await;
+                    }
+                    result => return result,
                 }
-                tokio::time::sleep(self.confirmation.interval).await;
-                let next = self.chain_identity_bound(expected_chain).await?;
-                validate_anchor_progress(&after, &next)?;
-                validate_bracket(&bound, &before, &next)?;
-                after = next;
             }
-            let matching_anchor = [&before, &after]
-                .iter()
-                .any(|anchor| anchor.app_hash_height == bound.witness.height.get());
-            let block_body = if matching_anchor {
-                None
-            } else {
-                if after.identity.latest_height.get() < target {
-                    return Err(WitnessError::NotYetCommitted);
-                }
-                Some(
-                    self.get_with_query("/v1/block", Some(&format!("height={target}")))
-                        .await?,
-                )
-            };
-            validate_bound_inventory(bound, before, after, block_body.as_deref())
+            self.read_bound_inventory_once(expected_chain).await
         })
         .await
         .map_err(|_| WitnessError::Snapshot(SnapshotError::Timeout))?
+    }
+
+    /// One complete bracket: pre-status, snapshot, post-status, confirmation
+    /// polls and, when needed, the exact `H + 1` header. A bracket read or a
+    /// confirmation poll that lands behind a previous read refuses the attempt
+    /// with [`WitnessError::BracketOutOfOrder`]. An `H + 1` header lookup that
+    /// lands on a node without that block fails as a [`SnapshotError`] instead.
+    async fn read_bound_inventory_once(
+        &self,
+        expected_chain: [u8; 32],
+    ) -> Result<BoundInventorySnapshot, WitnessError> {
+        let before = self.chain_identity_bound(expected_chain).await?;
+        let bound = self.read_bound(expected_chain).await?;
+        let mut after = self.chain_identity_bound(expected_chain).await?;
+        validate_bracket(&bound, &before, &after)?;
+        let target = bound
+            .witness
+            .height
+            .get()
+            .checked_add(1)
+            .ok_or(WitnessError::HeightOverflow)?;
+        // Wait for the next committed header with the same snapshot and
+        // its original clock. Reading a newer snapshot each round can
+        // phase-lock to the head of a fast chain and verify nothing.
+        for _ in 0..self.confirmation.polls {
+            if after.identity.latest_height.get() >= target {
+                break;
+            }
+            tokio::time::sleep(self.confirmation.interval).await;
+            let next = self.chain_identity_bound(expected_chain).await?;
+            validate_anchor_progress(&after, &next)?;
+            validate_bracket(&bound, &before, &next)?;
+            after = next;
+        }
+        let matching_anchor = [&before, &after]
+            .iter()
+            .any(|anchor| anchor.app_hash_height == bound.witness.height.get());
+        let block_body = if matching_anchor {
+            None
+        } else {
+            if after.identity.latest_height.get() < target {
+                return Err(WitnessError::NotYetCommitted);
+            }
+            Some(
+                self.get_with_query("/v1/block", Some(&format!("height={target}")))
+                    .await?,
+            )
+        };
+        validate_bound_inventory(bound, before, after, block_body.as_deref())
     }
 }
 
