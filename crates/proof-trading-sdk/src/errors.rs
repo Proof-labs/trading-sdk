@@ -120,7 +120,8 @@ define_error_kinds! {
     74  => BridgeReceiptMismatch            ~ "The signed receipt does not bind to this withdrawal or deployment (id, owner, amount, destination, epoch or terminal state differs); the log names the field.",
     75  => WithdrawalBelowMinimum           ~ "The net withdrawal amount is below the effective minimum (the configured minimum, floored at the flat fee): the payout would be worth less than it costs to settle.",
     76  => WithdrawalTerminalGated          ~ "A retired legacy relayer terminal (ConfirmWithdrawal / FailWithdrawal) was submitted at or above the receipt cutover; rejected as a normal failed action.",
-    // 77-81 are reserved on the wire for oracle-observation and oracle-policy errors.
+    // Oracle policy (77-81 block; 78-81 still reserved on the wire).
+    77  => OracleVerdictUnavailable         ~ "The oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed); mark-dependent actions are refused until a later block certifies a price.",
     82  => OracleGuardUnset                 ~ "A mark-dependent read was refused because the oracle-guard gate is active and the market's mark_price_max_oracle_age_ms is still unset; governance sets the guard first.",
     // Sub-accounts (dormant behind their activation).
     83  => SubAccountNotFound               ~ "No sub-account exists for the given master and id.",
@@ -237,6 +238,25 @@ mod exec_error_meaning_tests {
                 ErrorKind::OpenInterestLimitExceeded
             ))
         );
+    }
+
+    /// exchange#811: code 77 opens the block reserved for oracle-policy
+    /// errors. The pinned proof-wire tag predates the variant, so the code is
+    /// asserted here rather than through `one_of_each`.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn oracle_verdict_unavailable_is_code_77() {
+        let kind = decode_exec_error_kind(77, None).unwrap();
+        assert_eq!(
+            kind,
+            DecodedExecErrorKind::Known(ErrorKind::OracleVerdictUnavailable)
+        );
+        assert_eq!(kind.code(), 77);
+        assert_eq!(kind.name(), "OracleVerdictUnavailable");
+        assert!(kind.meaning().contains("no certified verdict"));
+        for reserved in 78..=81 {
+            assert_eq!(decode_exec_error_kind(reserved, None), None);
+        }
     }
 
     #[test]
@@ -457,7 +477,7 @@ mod exec_error_meaning_tests {
 
     /// Every engine code must be covered by the public error manifest, with
     /// the holes the wire itself carries: 24, 25 and 31 (the retired
-    /// impact-market family) and 77-81 (reserved for oracle errors). Catches
+    /// impact-market family) and 78-81 (reserved for oracle errors). Catches
     /// the case where a code is reserved by the mirrored engine error enum
     /// but no SDK classification maps to it.
     #[test]
@@ -466,7 +486,7 @@ mod exec_error_meaning_tests {
         codes.sort();
         codes.dedup();
         let expected: Vec<u32> = (1u32..=98)
-            .filter(|c| !matches!(c, 24 | 25 | 31 | 77..=81))
+            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(
