@@ -1760,6 +1760,10 @@ export class ExchangeClient {
       fallbackReason: String(
         row.fallback_reason ?? "",
       ) as HistoryResolution["fallbackReason"],
+      cashDelta:
+        row.cash_delta === undefined || row.cash_delta === null
+          ? null
+          : String(row.cash_delta),
       blockHeight: Number(row.block_height ?? 0),
       timestamp: Number(row.timestamp ?? 0),
     }));

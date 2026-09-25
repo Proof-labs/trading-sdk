@@ -27,15 +27,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Requests bypass HTTP caches. MINOR: this additive TypeScript read API keeps
   the released npm 5.1.0 codec and proof-wire 2.1.0 contract (exchange v2.12.0 /
   api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
-- `HistoryResolution.convertedSize` and `HistoryResolution.fallbackReason`
-  (with the `ConversionFallbackReason` type) — winning conditional-perp
-  positions now convert into a perpetual position on the underlying at
-  resolution (exchange v2.13.0, proof-wire 2.2.0). `convertedSize` is the
-  quantity that converted (`"0"` when paid in cash only); `fallbackReason`
-  names why a winner was paid in cash only (`""` otherwise). Rows from an
-  indexer that does not serve the fields yet read as `"0"` and `""`. The
-  Python `history_resolutions` returns the raw rows, so it carries both keys
-  as served.
+- TypeScript 5.3.0: `HistoryResolution.convertedSize`,
+  `HistoryResolution.fallbackReason` (with the `ConversionFallbackReason` type)
+  and `HistoryResolution.cashDelta` for conditional-perp resolutions. A winning
+  conditional now converts at resolution into a perpetual position on the
+  underlying **at the conditional's entry price** and is paid no cash; a winner
+  that cannot convert is paid its result in cash (exchange v2.15.0,
+  proof-wire 2.4.0; served by the indexer's `GET /v1/history/resolutions`).
+  `convertedSize` is the size that converted (the whole `size`, or `"0"` for a
+  winner paid in cash); `fallbackReason` names why a winner was paid in cash
+  (`""` otherwise); `cashDelta` is the signed µUSDC moved to the owner's balance
+  at resolution — `"0"` for a converted winner, `realizedPnl` for one paid in
+  cash. The Python `history_resolutions` returns the raw rows, so it carries
+  `converted_size`, `fallback_reason` and `cash_delta` as served. MINOR: the new
+  fields are additive on a read; no codec, order encoding, Rust or Python
+  package change.
 - `GatewayHttpError.errorCode` — optional typed error code extracted from the
   gateway's JSON response body (e.g. `"MissingMark"`). The `GatewayReads`
   path clones the response to parse the code while leaving the original body
@@ -53,6 +59,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `HistoryResolution.realizedPnl` on a `conditional_settled` row now means the
+  trade's result, `(settlementPrice − entryPrice) × size` signed by side, not
+  the cash paid. Before exchange v2.15.0 every settled winner was paid this
+  amount in cash (and, on engines that converted, the perpetual opened at
+  `settlementPrice`); from v2.15.0 a converted winner carries it inside its
+  perpetual and receives no cash. Tell the rows apart by `cashDelta`: `null`
+  means an older engine wrote the row (or the indexer does not serve the key)
+  and `realizedPnl` was paid in cash; a string is the cash that actually moved.
+  Do not sum `realizedPnl` as cash received across rows.
 - **Rust crate 4.0.0 → 4.1.0** — the market-snapshot witness bracket no longer
   requires all three reads (pre-status, snapshot, post-status) to come from the
   same CometBFT node, so it works behind a load balancer that fans reads across
