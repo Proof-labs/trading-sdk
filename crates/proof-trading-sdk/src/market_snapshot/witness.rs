@@ -170,6 +170,20 @@ pub enum WitnessError {
     /// Height `H + 1` is not committed yet, so nothing commits the witness's
     /// app hash. The read is unfinished, not refused.
     NotYetCommitted,
+    /// A status read already showed `H + 1` committed, but the exact
+    /// `/v1/block?height=H+1` lookup landed on a full node whose latest
+    /// committed height, `node_height`, is still below it. Behind a load
+    /// balancer this is a lagging node, not a refusal of the witness.
+    HeaderBehind { node_height: u64 },
+}
+
+impl WitnessError {
+    /// A refusal that only says the reads landed on full nodes at different
+    /// heights. [`MarketsSnapshotClient::read_bound_inventory`] reads a whole
+    /// new bracket after one; every other refusal is final.
+    fn is_lagging_read(&self) -> bool {
+        matches!(self, Self::BracketOutOfOrder | Self::HeaderBehind { .. })
+    }
 }
 
 impl From<SnapshotError> for WitnessError {
@@ -223,6 +237,48 @@ struct BlockHeader {
     chain_id: String,
     height: String,
     app_hash: String,
+}
+#[derive(Deserialize)]
+struct RpcFailure {
+    error: RpcFailureDetail,
+}
+#[derive(Deserialize)]
+struct RpcFailureDetail {
+    code: i64,
+    data: String,
+}
+
+/// JSON-RPC "Internal error": the code CometBFT's URI handler wraps every
+/// method error in, and answers with HTTP 500.
+const RPC_INTERNAL_ERROR: i64 = -32603;
+
+/// Classifies an HTTP 500 answer to `/v1/block?height={target}`. The gateway
+/// forwards the upstream CometBFT status and body verbatim, and CometBFT's
+/// `/block` refuses a height above its own committed height with a JSON-RPC
+/// `-32603` error whose `data` is exactly
+/// `height {target} must be less than or equal to the current blockchain height {node_height}`.
+/// Only that shape, for the requested height and a node height below it, is
+/// a lagging node. Anything else (a pruned height, another error, a gateway
+/// failure, an unparsable body) stays the `HTTP 500` it was.
+fn classify_header_failure(body: &[u8], target: u64) -> WitnessError {
+    let lagging = serde_json::from_slice::<RpcFailure>(body)
+        .ok()
+        .filter(|failure| failure.error.code == RPC_INTERNAL_ERROR)
+        .and_then(|failure| {
+            let prefix = format!(
+                "height {target} must be less than or equal to the current blockchain height "
+            );
+            failure
+                .error
+                .data
+                .strip_prefix(&prefix)
+                .and_then(values::positive_decimal)
+        })
+        .filter(|node_height| *node_height < target);
+    match lagging {
+        Some(node_height) => WitnessError::HeaderBehind { node_height },
+        None => SnapshotError::Http(500).into(),
+    }
 }
 
 fn positive_decimal(text: &str) -> Result<u64, WitnessError> {
@@ -409,14 +465,32 @@ pub fn validate_bound_inventory(
 }
 
 /// Whole-bracket attempts [`MarketsSnapshotClient::read_bound_inventory`]
-/// makes, counting the first. Only [`WitnessError::BracketOutOfOrder`] earns
-/// another attempt: behind a load balancer the status and snapshot reads can
-/// land on full nodes a block apart, so an honest, committed set of reads can
-/// arrive out of height order. Every other refusal is final at once.
+/// makes, counting the first. Only a lagging read earns another attempt:
+/// [`WitnessError::BracketOutOfOrder`] and [`WitnessError::HeaderBehind`].
+/// Behind a load balancer the status, snapshot and header reads can land on
+/// full nodes a block apart, so an honest, committed set of reads can arrive
+/// out of height order. Every other refusal is final at once.
 const BRACKET_ATTEMPTS: usize = 3;
 /// Pause before a fresh bracket, long enough for a lagging full node to catch
 /// up by a block and short enough to leave most of the whole-call deadline.
 const BRACKET_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// One [`MarketsSnapshotClient::read_bound_inventory_reporting`] call: its
+/// result and the attempts it discarded on the way.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct BoundInventoryRead {
+    /// What [`MarketsSnapshotClient::read_bound_inventory`] returns.
+    pub result: Result<BoundInventorySnapshot, WitnessError>,
+    /// The refusal of each attempt that was discarded and read again, in
+    /// order: always [`WitnessError::BracketOutOfOrder`] or
+    /// [`WitnessError::HeaderBehind`]. A faulty node can cause these as well
+    /// as a lagging one, so a caller that sees them often should say so.
+    pub retried: Vec<WitnessError>,
+    /// The whole-call deadline ended the call. When an attempt was already
+    /// discarded, `result` is its refusal rather than a bare timeout.
+    pub deadline_expired: bool,
+}
 
 impl MarketsSnapshotClient {
     pub async fn read_bound(
@@ -437,37 +511,95 @@ impl MarketsSnapshotClient {
     /// ONE whole-call deadline. A fast-moving chain does not require the final
     /// status response to happen to land at exactly H+1.
     ///
-    /// A bracket refused with [`WitnessError::BracketOutOfOrder`] (the reads
-    /// landed on full nodes at different heights) is discarded and read again
-    /// from scratch, up to three attempts in all, a short pause apart and
-    /// inside the same deadline; the last attempt's result is returned. No
-    /// other refusal is retried, no read is carried from one attempt into the
-    /// next, and every attempt passes the same validation. Within an attempt
-    /// the snapshot is never re-read and its own clock is never renewed.
+    /// A bracket refused as a lagging read ([`WitnessError::BracketOutOfOrder`]:
+    /// the reads landed on full nodes at different heights, or
+    /// [`WitnessError::HeaderBehind`]: the exact `H + 1` header lookup landed
+    /// on a node without that block yet) is discarded and read again from
+    /// scratch, up to three attempts in all, a short pause apart and inside
+    /// the same deadline; the last attempt's result is returned. No other
+    /// refusal is retried, no read is carried from one attempt into the next,
+    /// and every attempt passes the same validation. Within an attempt the
+    /// snapshot is never re-read and its own clock is never renewed.
+    ///
+    /// When the deadline ends the call after an attempt was discarded, the
+    /// discarded attempt's refusal is returned, not
+    /// `Snapshot(SnapshotError::Timeout)`: it is the real cause. A deadline
+    /// that ends the first attempt still returns `Snapshot(Timeout)`.
+    /// [`read_bound_inventory_reporting`](Self::read_bound_inventory_reporting)
+    /// also reports each discarded attempt.
+    ///
+    /// # Choosing the deadline
+    ///
+    /// The client's `timeout` is this whole call. An attempt is four gateway
+    /// reads plus up to `polls` confirmation reads `interval` apart; with the
+    /// default schedule (8 × 250 ms) an attempt that waits for `H + 1` can take
+    /// about 2 s on its own, so a 2 s deadline often leaves no room for a
+    /// retry at all. To give every attempt its full schedule, set
+    /// the timeout to at least `3 × (polls × interval + 4 reads) + 2 × 150 ms`,
+    /// about 7 to 8 s with the defaults, or shorten the schedule with
+    /// [`with_confirmation_polling`](Self::with_confirmation_polling).
     pub async fn read_bound_inventory(
         &self,
         expected_chain: [u8; 32],
     ) -> Result<BoundInventorySnapshot, WitnessError> {
-        tokio::time::timeout(self.timeout, async {
-            for _ in 1..BRACKET_ATTEMPTS {
-                match self.read_bound_inventory_once(expected_chain).await {
-                    Err(WitnessError::BracketOutOfOrder) => {
-                        tokio::time::sleep(BRACKET_RETRY_DELAY).await;
-                    }
-                    result => return result,
+        self.read_bound_inventory_reporting(expected_chain)
+            .await
+            .result
+    }
+
+    /// [`read_bound_inventory`](Self::read_bound_inventory), plus the refusal
+    /// of every attempt it discarded and whether the deadline ended it, for a
+    /// caller that logs or counts them.
+    pub async fn read_bound_inventory_reporting(
+        &self,
+        expected_chain: [u8; 32],
+    ) -> BoundInventoryRead {
+        let mut retried = Vec::new();
+        let attempts = self.read_bound_inventory_attempts(expected_chain, &mut retried);
+        // Each read's own timeout is the same duration as the whole call, so a
+        // read timing out also means the whole-call deadline has run out.
+        match tokio::time::timeout(self.timeout, attempts).await {
+            Ok(Err(WitnessError::Snapshot(SnapshotError::Timeout))) | Err(_) => {
+                BoundInventoryRead {
+                    result: Err(retried
+                        .last()
+                        .cloned()
+                        .unwrap_or(WitnessError::Snapshot(SnapshotError::Timeout))),
+                    retried,
+                    deadline_expired: true,
                 }
             }
-            self.read_bound_inventory_once(expected_chain).await
-        })
-        .await
-        .map_err(|_| WitnessError::Snapshot(SnapshotError::Timeout))?
+            Ok(result) => BoundInventoryRead {
+                result,
+                retried,
+                deadline_expired: false,
+            },
+        }
+    }
+
+    async fn read_bound_inventory_attempts(
+        &self,
+        expected_chain: [u8; 32],
+        retried: &mut Vec<WitnessError>,
+    ) -> Result<BoundInventorySnapshot, WitnessError> {
+        for _ in 1..BRACKET_ATTEMPTS {
+            match self.read_bound_inventory_once(expected_chain).await {
+                Err(error) if error.is_lagging_read() => {
+                    retried.push(error);
+                    tokio::time::sleep(BRACKET_RETRY_DELAY).await;
+                }
+                result => return result,
+            }
+        }
+        self.read_bound_inventory_once(expected_chain).await
     }
 
     /// One complete bracket: pre-status, snapshot, post-status, confirmation
     /// polls and, when needed, the exact `H + 1` header. A bracket read or a
     /// confirmation poll that lands behind a previous read refuses the attempt
-    /// with [`WitnessError::BracketOutOfOrder`]. An `H + 1` header lookup that
-    /// lands on a node without that block fails as a [`SnapshotError`] instead.
+    /// with [`WitnessError::BracketOutOfOrder`]; an `H + 1` header lookup that
+    /// lands on a node without that block refuses it with
+    /// [`WitnessError::HeaderBehind`].
     async fn read_bound_inventory_once(
         &self,
         expected_chain: [u8; 32],
@@ -504,12 +636,24 @@ impl MarketsSnapshotClient {
             if after.identity.latest_height.get() < target {
                 return Err(WitnessError::NotYetCommitted);
             }
-            Some(
-                self.get_with_query("/v1/block", Some(&format!("height={target}")))
-                    .await?,
-            )
+            Some(self.committed_header(target).await?)
         };
         validate_bound_inventory(bound, before, after, block_body.as_deref())
+    }
+
+    /// The exact `/v1/block?height={target}` body. Only an HTTP 500 body is
+    /// read besides a 200, and only to tell a lagging node apart
+    /// ([`classify_header_failure`]); every other status is refused unread,
+    /// as before.
+    async fn committed_header(&self, target: u64) -> Result<Vec<u8>, WitnessError> {
+        let query = format!("height={target}");
+        match self
+            .read_bounded("/v1/block", Some(&query), &[200, 500])
+            .await?
+        {
+            (500, body) => Err(classify_header_failure(&body, target)),
+            (_, body) => Ok(body),
+        }
     }
 }
 
