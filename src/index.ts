@@ -288,6 +288,10 @@ export {
   type GatewayPendingTriggerRow,
   type GatewayTriggerPositionRow,
 } from "./gateway-reads.js";
+export {
+  decodeSubAccountList,
+  type SubAccountListRow,
+} from "./sub-accounts.js";
 export type { ExternalSigner } from "./client.js";
 export type {
   PortfolioHistoryOptions,
