@@ -226,6 +226,15 @@ new policy is inactive. `Satisfied` covers only this oracle dependency, not all
 portfolio dependencies or other trading checks. It never reads provider/observer
 health; feeder freshness is a separate operational read, described below.
 
+Nodes running the primary-with-fallback policy (exchange#831) serve a
+fourteen-field verdict: `format: 3`, the `selected` slot (`"Primary"` or
+`"Fallback"`) and a `diagnostics` bitset (`diagnosticFlags`: `OnFallback`,
+`PrimaryRefusedDivergence`, `DivergenceUnchecked`, `FallbackUnusable`), which
+are monitoring signals rather than faults. Older nodes serve the twelve-field
+`format: 2` verdict, with `selected` null. Both formats share one `faults` bit
+layout (`ORACLE_FAULT_BITS`, named in `faultReasons`); `Disagreement` and
+`PairTimeMismatch` keep their bits but are no longer produced.
+
 ### Oracle freshness for trading UIs
 
 ```typescript

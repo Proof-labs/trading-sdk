@@ -9,6 +9,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Depends on exchange#831 and the exchange#811 split PR (both unmerged).**
+  npm 5.2.0 → 5.3.0, Rust core 4.1.1 → 4.2.0, Python 4.0.0 → 4.1.0. MINOR:
+  every read an earlier SDK accepted still decodes the same way, and the
+  pinned proof-wire tag (v2.1.0), codec and signing bytes are unchanged. The
+  WASM and PyO3 crates keep their versions.
+  - Oracle permission reads decode the committed verdict in both layouts. The
+    fourteen-field format-3 read from exchange#831 (primary with fallback)
+    appends `selected` (`"Primary"` / `"Fallback"`, or null) and a
+    `diagnostics` u8 bitset: `OnFallback` (bit 0),
+    `PrimaryRefusedDivergence` (1), `DivergenceUnchecked` (2),
+    `FallbackUnusable` (3). The twelve-field format-2 read of earlier nodes
+    still decodes, with `selected` null. The TypeScript `CommittedOracleVerdict`
+    gains `format`, `selected`, `diagnostics`, `diagnosticFlags` and
+    `faultReasons`, and exports `ORACLE_FAULT_BITS` and
+    `ORACLE_DIAGNOSTIC_BITS`. The Rust `CommittedVerdict` gains `format`,
+    `selected` and `diagnostics`, with `fault_reasons()` and
+    `diagnostic_flags()`. Both layouts share one fault-bit layout.
+    `Disagreement` (bit 7) and `PairTimeMismatch` (bit 13) keep their bits
+    but are no longer produced. A format-3 verdict is refused when its
+    selected slot, source mask, diagnostics and fault word contradict the
+    engine's selection rules. Vectors captured from the exchange encoding are
+    in `conformance/oracle-permissions-committed.ndjson`.
+  - `ReferenceUnavailable`, the current exchange name of the old
+    `AnchorUnavailable` reason, is now an accepted verdict reason. Before
+    this, a committed verdict carrying it was refused. `AnchorUnavailable`
+    is still accepted from older nodes.
+  - Error code 77 `OracleVerdictUnavailable` (exchange#811, proof-wire
+    2.4.0) is in the TypeScript, Rust and Python (via the Rust core) error
+    tables and in the `errors.ndjson` manifest. The oracle policy has no
+    certified verdict for the market in this block, so the action can be
+    retried in a later block. Codes 78-81 stay reserved.
 - Sub-account registry read: `GatewayReads.subAccountList(user)` posts the
   gateway's `subAccountList` /info query and `decodeSubAccountList` unwraps the
   `{"data": "<base64 msgpack>"}` envelope into typed `SubAccountListRow`s. Rows
