@@ -88,6 +88,7 @@ from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.client import ExchangeClient
 from proof_trading_sdk.streams import AccountEventStream, OrderbookDeltaStream
 from proof_trading_sdk.trigger_history import (
+    PendingTriggerDiscardReason,
     PositionTriggerHistoryEventType,
     PositionTriggerHistoryPage,
     TriggerHistoryEvent,
@@ -162,6 +163,7 @@ __all__ = [
     "NonceAllocator",
     "ExchangeClient",
     "PositionTriggerHistoryEventType",
+    "PendingTriggerDiscardReason",
     "TriggerMarketHistoryEventType",
     "TriggerHistoryEventType",
     "TriggerHistoryTime",

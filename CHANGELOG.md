@@ -10,7 +10,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **Depends on exchange#831 and the exchange#811 split PR (both unmerged).**
-  npm 5.2.0 → 5.3.0, Rust core 4.1.1 → 4.2.0, Python 4.0.0 → 4.1.0. MINOR:
+  npm 5.3.0 → 5.4.0, Rust core 4.2.0 → 4.3.0, Python 4.0.0 → 4.1.0. MINOR:
   every read an earlier SDK accepted still decodes the same way, and the
   pinned proof-wire tag (v2.1.0), codec and signing bytes are unchanged. The
   WASM and PyO3 crates keep their versions.
@@ -40,6 +40,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     tables and in the `errors.ndjson` manifest. The oracle policy has no
     certified verdict for the market in this block, so the action can be
     retried in a later block. Codes 78-81 stay reserved.
+- TypeScript 5.3.0 adds trigger-history decoding of the pending (pre-fill)
+  lifecycle (contract §7-I, indexer #247): `pending_triggers_attached` (order
+  id, client order id, and both limb renders — present as
+  `trigger_price=<u64>,max_slippage_bps=<u64>,client_trigger_id=<u64|none>`,
+  absent as the empty value, at least one limb required) and
+  `pending_triggers_discarded` (order id plus one of six reasons:
+  `order_cancelled`, `order_expired`, `order_replaced`, `unfilled_terminal`,
+  `install_rejected`, `position_closed`). The two rows previously failed the
+  owner-history decoder outright. `install_rejected` is the silent
+  protection-loss path — the fill stands but the bracket could not install —
+  and now survives decoding verbatim so clients can surface it. The additive
+  schema-39 attributes decode alongside: `source_order_id` on
+  `position_triggers_set` ("0" = none) and `invalidation_reason` on
+  `position_triggers_invalidated` (u8, "0" = unspecified), both optional on
+  rows projected before the upgrade. TypeScript and Python decoders move in
+  lockstep (TR-6 parity); the Python `PendingTriggerDiscardReason` alias is
+  exported alongside the TypeScript union. MINOR: this additive decoding
+  keeps the released npm 5.2.0 codec and proof-wire 2.1.0 contract; order
+  encoding is unchanged, and the Python and Rust packages stay on their own
+  release lines.
 - Sub-account registry read: `GatewayReads.subAccountList(user)` posts the
   gateway's `subAccountList` /info query and `decodeSubAccountList` unwraps the
   `{"data": "<base64 msgpack>"}` envelope into typed `SubAccountListRow`s. Rows
@@ -72,6 +92,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   new `gateway::ErrorKind::MissingMark` instead of a generic HTTP failure,
   mirroring the engine's restored `503 errorCode=MissingMark` contract
   (DEC-175; exchange#704). Additive: Rust crate 4.0.0 → 4.1.0.
+- **Rust crate 4.1.1 → 4.2.0** —
+  `MarketsSnapshotClient::read_bound_inventory_reporting` returns a
+  `BoundInventoryRead`: the same result as `read_bound_inventory`, the refusal
+  of every bracket attempt it discarded and read again (`retried`), and whether
+  the whole-call deadline ended it (`deadline_expired`), so the oracle feeder
+  can log or count discarded out-of-order attempts, which a faulty node can
+  cause as well as a lagging one (#194). Also new:
+  `WitnessError::HeaderBehind { node_height }` (see Fixed). MINOR: additive
+  API on a `#[non_exhaustive]` error; no wire change.
 
 ### Changed
 
@@ -109,8 +138,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   other refusal is still returned at once, no read is carried between attempts,
   and each attempt passes the unchanged bracket validation; a persistent
   out-of-order bracket still ends in `BracketOutOfOrder`. The exact `H+1`
-  header lookup is not retried when it lands on a lagging node (#191). PATCH:
+  header lookup on a lagging node was left unretried here; 4.2.0 below
+  retries it (#191). PATCH:
   no wire or public API change.
+- **Rust crate 4.1.1 → 4.2.0** — the exact `/v1/block?height=H+1` header
+  lookup in `read_bound_inventory` is now retried like an out-of-order bracket
+  when it lands on a full node that has not committed `H+1` yet (#191). The
+  gateway forwards CometBFT's answer verbatim, and CometBFT refuses a height
+  above its own with HTTP 500 and JSON-RPC error `-32603` whose `data` is
+  `height H+1 must be less than or equal to the current blockchain height N`;
+  only that shape, for the requested height and `N < H+1`, becomes the new
+  `WitnessError::HeaderBehind { node_height: N }` and earns another attempt
+  within the same three attempts and whole-call deadline. Every other header
+  failure (a pruned height, another RPC error, a gateway 502, any other
+  status) is still `Snapshot(Http(status))` and final at once.
+- **Rust crate 4.1.1 → 4.2.0** — when the whole-call deadline ends
+  `read_bound_inventory` after an attempt was already discarded, the call now
+  returns that attempt's refusal (`BracketOutOfOrder` or `HeaderBehind`)
+  instead of a bare `Snapshot(Timeout)`, so the cause is not hidden (#194). A
+  deadline that ends the first attempt is still `Snapshot(Timeout)`. Deadline
+  guidance: one attempt with the default confirmation schedule (8 × 250 ms) can
+  take about 2 s, so the oracle feeder's current 2 s timeout usually leaves no
+  room for a retry. Give the inventory client at least
+  `3 × (polls × interval + 4 reads) + 2 × 150 ms` (about 7–8 s with the
+  defaults, still inside the feeder's ~10 s inventory refresh), or shorten the
+  schedule with `with_confirmation_polling`.
 
 ## [5.1.0] — 2026-09-22
 
