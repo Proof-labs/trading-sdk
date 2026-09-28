@@ -19,11 +19,14 @@ import type {
   ProposalStatus,
   SetTriggerMarketConfig,
   SetOracleGuards,
+  ScheduleUpgrade,
+  CancelUpgrade,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
   AuthoritiesSnapshot,
 } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
+import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import { Outcome } from "./types.js";
 
 /**
@@ -507,6 +510,23 @@ function decodeSetOracleGuards(value: unknown): SetOracleGuards {
   return guards;
 }
 
+function decodeScheduleUpgrade(value: unknown): ScheduleUpgrade {
+  const raw = toTuple(value, "scheduleUpgrade", 4);
+  const plan: ScheduleUpgrade = {
+    targetHeight: toU64(raw[0], "scheduleUpgrade.targetHeight"),
+    major: toU32(raw[1], "scheduleUpgrade.major"),
+    minor: toU32(raw[2], "scheduleUpgrade.minor"),
+    successorSha256: toBytes(raw[3], "scheduleUpgrade.successorSha256", 32),
+  };
+  validateScheduleUpgrade(plan);
+  return plan;
+}
+
+function decodeCancelUpgrade(value: unknown): CancelUpgrade {
+  const raw = toTuple(value, "cancelUpgrade", 1);
+  return { targetHeight: toU64(raw[0], "cancelUpgrade.targetHeight") };
+}
+
 function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
   const raw = toTuple(value, "setTriggerMarketConfig", 7);
   if (typeof raw[2] !== "boolean") {
@@ -554,6 +574,8 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CancelAllOrdersForAccount: 8,
   ConfigureOraclePolicy: 12,
   SetOracleGuards: 13,
+  ScheduleUpgrade: 14,
+  CancelUpgrade: 15,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
@@ -628,6 +650,16 @@ export function decodeAdminAction(
       return {
         kind: "UpdateAuthoritySet",
         value: decodeUpdateAuthoritySet(payload),
+      };
+    case "ScheduleUpgrade":
+      return {
+        kind: "ScheduleUpgrade",
+        value: decodeScheduleUpgrade(payload),
+      };
+    case "CancelUpgrade":
+      return {
+        kind: "CancelUpgrade",
+        value: decodeCancelUpgrade(payload),
       };
     default:
       throw new Error(

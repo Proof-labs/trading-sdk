@@ -17,6 +17,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   An empty list is a real chain state; any other shape throws, so a missing
   set never renders as an empty one. It is for the WebAdmin authorities view
   (GV-06).
+- `ScheduleUpgrade` (inner tag 14) and `CancelUpgrade` (inner tag 15) in the
+  `AdminAction` union, so a client can propose and approve an on-chain engine
+  upgrade (#185). `ScheduleUpgrade` carries the target height, the
+  successor's engine release `major`/`minor`, and the `successorSha256` pin;
+  `validateScheduleUpgrade` mirrors the engine's refusals (zero major,
+  all-zero pin) on encode and on proposal decode. Conformance vectors cover
+  both inside `ProposeAdminAction`. The Rust crate re-exports both types and
+  moves to proof-wire v3.0.0, whose only break is this `ScheduleUpgrade`
+  shape (it replaced `protocol_version` with `major`/`minor`).
 - TypeScript 5.3.0 adds trigger-history decoding of the pending (pre-fill)
   lifecycle (contract §7-I, indexer #247): `pending_triggers_attached` (order
   id, client order id, and both limb renders — present as

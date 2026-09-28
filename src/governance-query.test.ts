@@ -552,6 +552,34 @@ describe("byte-field validation", () => {
     );
   });
 
+  it("reads ScheduleUpgrade and CancelUpgrade proposals under tags 14 and 15", () => {
+    const raw = validProposalRaw();
+    raw[11] = 14;
+    raw[12] = { ScheduleUpgrade: [50_780_000, 2, 1, new Array(32).fill(0xab)] };
+    expect(decodeProposalDisplayInfo(raw).action).toEqual({
+      kind: "ScheduleUpgrade",
+      value: {
+        targetHeight: 50_780_000n,
+        major: 2,
+        minor: 1,
+        successorSha256: new Uint8Array(32).fill(0xab),
+      },
+    });
+    raw[11] = 15;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(
+      /does not match ScheduleUpgrade tag 14/,
+    );
+    raw[12] = { ScheduleUpgrade: [50_780_000, 2, 1, new Array(32).fill(0)] };
+    raw[11] = 14;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(/all-zero/);
+    raw[11] = 15;
+    raw[12] = { CancelUpgrade: [50_780_000] };
+    expect(decodeProposalDisplayInfo(raw).action).toEqual({
+      kind: "CancelUpgrade",
+      value: { targetHeight: 50_780_000n },
+    });
+  });
+
   it("reads a CancelAllOrdersForAccount proposal under its tag 8", () => {
     // The kind→tag table row is only exercised through a proposal read: a
     // wrong tag here would refuse every real tag-8 proposal as a mismatch.

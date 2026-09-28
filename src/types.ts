@@ -1118,6 +1118,23 @@ export interface SetOracleGuards {
   maxOracleDeviationBps?: number | null;
 }
 
+/** Schedule a coordinated engine upgrade through multisig governance (inner
+ * tag 14). `major`/`minor` is the successor's engine release, which must
+ * exceed the running one; `successorSha256` pins the library bytes. */
+export interface ScheduleUpgrade {
+  /** First height the successor engine runs. */
+  targetHeight: bigint;
+  major: number;
+  minor: number;
+  /** SHA-256 of the successor engine library (32 bytes). */
+  successorSha256: Uint8Array;
+}
+
+/** Cancel the pending upgrade plan, named by its target height (inner tag 15). */
+export interface CancelUpgrade {
+  targetHeight: bigint;
+}
+
 /**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
@@ -1142,7 +1159,9 @@ export type AdminAction =
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
-  | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet };
+  | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet }
+  | { kind: "ScheduleUpgrade"; value: ScheduleUpgrade }
+  | { kind: "CancelUpgrade"; value: CancelUpgrade };
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */

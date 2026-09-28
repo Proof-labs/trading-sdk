@@ -695,6 +695,25 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       },
     };
   }
+  if (v.ScheduleUpgrade) {
+    const plan = v.ScheduleUpgrade as Record<string, unknown>;
+    return {
+      kind: "ScheduleUpgrade",
+      value: {
+        targetHeight: big(plan.target_height),
+        major: plan.major as number,
+        minor: plan.minor as number,
+        successorSha256: bytes(plan.successor_sha256),
+      },
+    };
+  }
+  if (v.CancelUpgrade) {
+    const cancel = v.CancelUpgrade as Record<string, unknown>;
+    return {
+      kind: "CancelUpgrade",
+      value: { targetHeight: big(cancel.target_height) },
+    };
+  }
   if (v.ConfigureOraclePolicy) {
     const policy = v.ConfigureOraclePolicy as Record<string, unknown>;
     return {
@@ -1025,9 +1044,10 @@ describe("conformance vectors (TypeScript)", () => {
     // singleton, six create-event oracle-source shapes, trigger config,
     // unpause-bridge, update-authority-set add and remove, cancel-all-for
     // -account scoped and unscoped, four set-oracle-guards shapes, and
-    // oracle policy), approve, reject, and all three emergency arms
-    // (PauseMarket, HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(25);
+    // oracle policy, two schedule-upgrade shapes and cancel-upgrade),
+    // approve, reject, and all three emergency arms (PauseMarket,
+    // HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(28);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
