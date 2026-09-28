@@ -2266,10 +2266,25 @@ async function postInfoJson(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(info),
   });
-  const json = (await res.json()) as Record<string, unknown>;
+  // The error keeps an unread copy, so callers can still read the body.
+  const unread = res.clone();
+  let parsed: unknown;
+  try {
+    parsed = await res.json();
+  } catch (error) {
+    if (!res.ok) throw new GatewayHttpError(res.status, unread);
+    throw error;
+  }
+  // A JSON `null` or scalar body has no fields; it must not hide the status.
+  const json: Record<string, unknown> =
+    parsed !== null && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
   if (!res.ok || json.error) {
-    const msg = (json.error as string) ?? `HTTP ${res.status}`;
-    throw new Error(`API error: ${msg}`);
+    const errorCode =
+      typeof json.errorCode === "string" ? json.errorCode : undefined;
+    const detail = typeof json.error === "string" ? json.error : undefined;
+    throw new GatewayHttpError(res.status, unread, errorCode, detail);
   }
   return json;
 }

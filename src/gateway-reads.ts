@@ -1,4 +1,5 @@
 import { GatewayHttpError } from "./errors.js";
+import { marketStatsMarketIds } from "./market-stats.js";
 import type { MarketKind } from "./types.js";
 
 /** Named gateway reads for consumers that retain their own decoders and caches.
@@ -94,7 +95,16 @@ export class GatewayReads {
       ...init,
       signal: opts.signal,
     });
-    if (!res.ok) throw new GatewayHttpError(res.status, res);
+    if (!res.ok) {
+      let errorCode: string | undefined;
+      try {
+        const body = await res.clone().json();
+        if (typeof body?.errorCode === "string") errorCode = body.errorCode;
+      } catch {
+        /* non-JSON error body — leave errorCode undefined */
+      }
+      throw new GatewayHttpError(res.status, res, errorCode);
+    }
     return res;
   }
   private info(
@@ -147,6 +157,15 @@ export class GatewayReads {
   clearinghouseState(user: string, opts: GatewayReadOptions = {}) {
     return this.info("clearinghouseState", { user }, opts);
   }
+  /** Registry rows for one master: derived child addresses, ids, names,
+   *  creation heights. The gateway proxies the node's
+   *  `GET /v1/sub_accounts/{addr}` and returns the verbatim
+   *  `{"data": "<base64 msgpack>"}` envelope; `decodeSubAccountList`
+   *  (from `./sub-accounts.js`) unwraps and validates it. A 501 means the
+   *  registry query is not available, never an empty list. */
+  subAccountList(user: string, opts: GatewayReadOptions = {}) {
+    return this.info("subAccountList", { user }, opts);
+  }
   openOrders(
     user: string,
     opts: GatewayReadOptions & { market?: number; limit?: number } = {},
@@ -180,6 +199,20 @@ export class GatewayReads {
     opts: GatewayReadOptions = {},
   ) {
     return this.info("historyResolutions", params, opts);
+  }
+  /** Raw indexed rolling statistics; use queryMarketStats for strict decoding. */
+  marketStats(
+    params: { markets: readonly number[] },
+    opts: GatewayReadOptions = {},
+  ) {
+    const query = new URLSearchParams({
+      markets: marketStatsMarketIds(params.markets),
+    });
+    return this.request(
+      `/v1/history/market-stats?${query}`,
+      { method: "GET", cache: "no-store" },
+      opts,
+    );
   }
   ticker(market: number, opts: GatewayReadOptions = {}) {
     return this.get(`/v1/ticker/${market}`, {}, opts);

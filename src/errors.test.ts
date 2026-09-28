@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { ExecErrorCode, decodeExecError, execErrorName } from "./errors.js";
+import {
+  ExecErrorCode,
+  GatewayHttpError,
+  decodeExecError,
+  execErrorName,
+  isMissingMark,
+} from "./errors.js";
 
 describe("decodeExecError", () => {
   it("returns null for code 0 (success)", () => {
@@ -118,5 +124,59 @@ describe("ExecErrorCode enum", () => {
     expect(ExecErrorCode.SlippageExceeded).toBe(50);
     expect(ExecErrorCode.OpenInterestLimitExceeded).toBe(51);
     expect(ExecErrorCode.InternalError).toBe(255);
+  });
+});
+
+describe("GatewayHttpError", () => {
+  it("carries errorCode when provided", () => {
+    const res = new Response("", { status: 503 });
+    const err = new GatewayHttpError(503, res, "MissingMark");
+    expect(err.status).toBe(503);
+    expect(err.errorCode).toBe("MissingMark");
+    expect(err.message).toBe("Gateway request failed (503): MissingMark");
+    expect(err.name).toBe("GatewayHttpError");
+    expect(err.response).toBe(res);
+  });
+
+  it("omits errorCode from message when absent", () => {
+    const res = new Response("", { status: 429 });
+    const err = new GatewayHttpError(429, res);
+    expect(err.errorCode).toBeUndefined();
+    expect(err.message).toBe("Gateway request failed (429)");
+  });
+});
+
+describe("isMissingMark", () => {
+  it("returns true for a 503 GatewayHttpError with errorCode MissingMark", () => {
+    const err = new GatewayHttpError(
+      503,
+      new Response("", { status: 503 }),
+      "MissingMark",
+    );
+    expect(isMissingMark(err)).toBe(true);
+  });
+
+  it("returns false for a 503 without errorCode", () => {
+    const err = new GatewayHttpError(503, new Response("", { status: 503 }));
+    expect(isMissingMark(err)).toBe(false);
+  });
+
+  it("returns false for a non-503 with MissingMark errorCode", () => {
+    const err = new GatewayHttpError(
+      500,
+      new Response("", { status: 500 }),
+      "MissingMark",
+    );
+    expect(isMissingMark(err)).toBe(false);
+  });
+
+  it("returns false for a plain Error", () => {
+    expect(isMissingMark(new Error("something"))).toBe(false);
+  });
+
+  it("returns false for non-error values", () => {
+    expect(isMissingMark(null)).toBe(false);
+    expect(isMissingMark(undefined)).toBe(false);
+    expect(isMissingMark("MissingMark")).toBe(false);
   });
 });

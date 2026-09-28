@@ -16,7 +16,7 @@ import msgpack
 import pytest
 
 from proof_trading_sdk.client import ExchangeClient
-from proof_trading_sdk.errors import GatewayError, ProofTradingSdkError
+from proof_trading_sdk.errors import CodecError, GatewayError, ProofTradingSdkError
 
 
 def _client(handler) -> ExchangeClient:
@@ -95,6 +95,96 @@ def test_open_orders_posts_info():
     assert orders[0]["id"] == 7
     assert orders[0]["price"] == 6_675_000
     assert orders[0]["owner"] == b"\x01" * 20
+
+
+def _sub_account_row(
+    *,
+    master: object = b"\xaa" * 20,
+    sub_account_id: object = 1,
+    address: object = b"\x11" * 20,
+    name: object = b"grid" + b"\x00" * 28,
+    created_height: object = 947727,
+) -> list[object]:
+    """A registry row exactly as rmp-serde encodes `proof-wire` `SubAccount`:
+    positional `[master, sub_account_id, address, name, created_height]`, fixed
+    byte fields as arrays of integers."""
+
+    def as_array(v: object) -> object:
+        return list(v) if isinstance(v, bytes) else v
+
+    return [as_array(master), sub_account_id, as_array(address), as_array(name), created_height]
+
+
+def test_sub_account_list_posts_info_and_decodes_registry_rows():
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.read())
+        second = _sub_account_row(
+            sub_account_id=2, address=b"\x22" * 20, name=b"basis" + b"\x00" * 27,
+            created_height=947800,
+        )
+        second[2] = b"\x22" * 20  # a bin byte field decodes too
+        return _info_response([_sub_account_row(), second])
+
+    rows = _client(handler).sub_account_list("aa" * 20)
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/info"
+    assert captured["body"] == {"type": "subAccountList", "user": "aa" * 20}
+    assert rows == [
+        {
+            "address": b"\x11" * 20,
+            "master": b"\xaa" * 20,
+            "id": 1,
+            "name": "grid",
+            "created_height": 947727,
+        },
+        {
+            "address": b"\x22" * 20,
+            "master": b"\xaa" * 20,
+            "id": 2,
+            "name": "basis",
+            "created_height": 947800,
+        },
+    ]
+
+
+def test_sub_account_list_accepts_empty_registry_and_trailing_fields():
+    assert _client(lambda r: _info_response([])).sub_account_list("aa" * 20) == []
+    rows = _client(
+        lambda r: _info_response([_sub_account_row() + [None]])
+    ).sub_account_list("aa" * 20)
+    assert [row["id"] for row in rows] == [1]
+
+
+@pytest.mark.parametrize(
+    "payload, match",
+    [
+        (None, "expected an array"),
+        ({"not": "a list"}, "expected an array"),
+        ([{"not": "a row"}], "positional array"),
+        ([_sub_account_row()[:4]], "expected 5 fields"),
+        ([_sub_account_row(sub_account_id=0)], "id"),
+        ([_sub_account_row(sub_account_id=1.9)], "id"),
+        ([_sub_account_row(sub_account_id=True)], "id"),
+        ([_sub_account_row(sub_account_id=2**32)], "id"),
+        ([_sub_account_row(created_height=-1)], "created_height"),
+        ([_sub_account_row(address="bad")], "address encoding"),
+        ([_sub_account_row(master=[])], "master length"),
+        ([_sub_account_row(address=[1.5] * 20)], "address byte"),
+        ([_sub_account_row(name=b"\xff" + b"\x00" * 31)], "invalid UTF-8"),
+        ([_sub_account_row(), _sub_account_row(address=b"\x22" * 20)], "duplicate id 1"),
+        ([_sub_account_row(), _sub_account_row(sub_account_id=2)], "duplicate address"),
+        # A valid row next to a malformed one must not yield a partial registry.
+        ([_sub_account_row(), {"not": "a row"}], "positional array"),
+    ],
+)
+def test_sub_account_list_raises_on_malformed_payload(payload, match):
+    with pytest.raises(CodecError, match=match):
+        _client(lambda r: _info_response(payload)).sub_account_list("aa" * 20)
 
 
 def test_withdrawal_status_none_when_nil():
