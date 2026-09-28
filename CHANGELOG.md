@@ -7,9 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-- Trigger history decodes the pending (pre-fill) lifecycle (contract §7-I,
-  indexer #247): `pending_triggers_attached` (order id, client order id, and
-  both limb renders — present as
+### Added
+
+- TypeScript 5.3.0 adds trigger-history decoding of the pending (pre-fill)
+  lifecycle (contract §7-I, indexer #247): `pending_triggers_attached` (order
+  id, client order id, and both limb renders — present as
   `trigger_price=<u64>,max_slippage_bps=<u64>,client_trigger_id=<u64|none>`,
   absent as the empty value, at least one limb required) and
   `pending_triggers_discarded` (order id plus one of six reasons:
@@ -23,9 +25,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `position_triggers_invalidated` (u8, "0" = unspecified), both optional on
   rows projected before the upgrade. TypeScript and Python decoders move in
   lockstep (TR-6 parity); the Python `PendingTriggerDiscardReason` alias is
-  exported alongside the TypeScript union.
-### Added
-
+  exported alongside the TypeScript union. MINOR: this additive decoding
+  keeps the released npm 5.2.0 codec and proof-wire 2.1.0 contract; order
+  encoding is unchanged, and the Python and Rust packages stay on their own
+  release lines.
 - Sub-account registry read: `GatewayReads.subAccountList(user)` posts the
   gateway's `subAccountList` /info query and `decodeSubAccountList` unwraps the
   `{"data": "<base64 msgpack>"}` envelope into typed `SubAccountListRow`s. Rows
