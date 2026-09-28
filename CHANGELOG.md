@@ -64,10 +64,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the cash paid. Before exchange v2.15.0 every settled winner was paid this
   amount in cash (and, on engines that converted, the perpetual opened at
   `settlementPrice`); from v2.15.0 a converted winner carries it inside its
-  perpetual and receives no cash. Tell the rows apart by `cashDelta`: `null`
-  means an older engine wrote the row (or the indexer does not serve the key)
-  and `realizedPnl` was paid in cash; a string is the cash that actually moved.
-  Do not sum `realizedPnl` as cash received across rows.
+  perpetual and receives no cash. Tell the rows apart by `cashDelta`: a string
+  is the cash that actually moved; `null` means the row does not say. That is
+  the case both for a row an older engine wrote, where `realizedPnl` was paid
+  in cash, and for any row from an indexer that does not serve the key, where
+  a v2.15.0 converted winner received nothing. Treat `null` as cash paid only
+  when you know the row predates v2.15.0; otherwise read from an indexer that
+  serves `cash_delta`. Do not sum `realizedPnl` as cash received across rows.
 - **Rust crate 4.0.0 → 4.1.0** — the market-snapshot witness bracket no longer
   requires all three reads (pre-status, snapshot, post-status) to come from the
   same CometBFT node, so it works behind a load balancer that fans reads across
