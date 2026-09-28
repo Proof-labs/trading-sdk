@@ -24,8 +24,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `validateScheduleUpgrade` mirrors the engine's refusals (zero major,
   all-zero pin) on encode and on proposal decode. Conformance vectors cover
   both inside `ProposeAdminAction`. The Rust crate re-exports both types and
-  moves to proof-wire v3.0.0, whose only break is this `ScheduleUpgrade`
-  shape (it replaced `protocol_version` with `major`/`minor`).
+  moves to proof-wire v5.0.0. Its break is this `ScheduleUpgrade` shape (it
+  replaced `protocol_version` with `major`/`minor`); it also carries v3.0.0's
+  retirement of `RunLiquidationSweep` (0x11) and v4.0.0.
 - `queryUpgrades()` reads the pending upgrade plan and executed activation
   ledger (`GET /v1/upgrades`), and `queryNodeVersion()` the answering node's
   loaded engine release (`GET /v1/version`).

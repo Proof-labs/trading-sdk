@@ -27,10 +27,10 @@ rmpv = { version = "1.3.1", features = ["with-serde"] }
 # fetch from Proof-labs/exchange. v1.7.0 carries the F16 oracle-policy
 # surface: SubmitOracleObservation (0x2D), ConfigureOraclePolicy (inner
 # 0x0C), SetOracleGuards (inner 0x0D), MarketOracleGuards,
-# OracleRejectReason, FundingSkipReason, and ExecError code 82. v3.0.0
+# OracleRejectReason, FundingSkipReason, and ExecError code 82. v5.0.0
 # carries ScheduleUpgrade (inner 0x0E) with the successor's (major, minor)
 # release, and CancelUpgrade (inner 0x0F).
-proof-wire = { git = "https://github.com/Proof-labs/wire.git", tag = "v3.0.0" }
+proof-wire = { git = "https://github.com/Proof-labs/wire.git", tag = "v5.0.0" }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.
