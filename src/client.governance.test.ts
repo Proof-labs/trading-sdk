@@ -41,6 +41,36 @@ describe("ExchangeClient governance reads (W30-11)", () => {
     globalThis.fetch = originalFetch;
   });
 
+  it("queryAuthorities routes through the gateway and decodes all six sets", async () => {
+    // Captured from devnet on 2026-09-28: relayer and oracle each hold one
+    // signer; the other four sets are empty.
+    stubFetch("lpHcABTM98zOzIzM2cyaRV4jzIPM1czeS8yvKVFHDcyaZsy/kdwAFGYBzOgyzJU9MDHMi30fNjhqJBtZzLfM0szXkJCQkA==");
+    const got = await makeClient().queryAuthorities();
+    expect(calls).toEqual(["http://test-gateway/v1/admin/authorities"]);
+    expect(got.relayer.map((a) => Buffer.from(a).toString("hex"))).toEqual([
+      "f7ce8cd99a455e2383d5de4baf2951470d9a66bf",
+    ]);
+    expect(got.oracle.map((a) => Buffer.from(a).toString("hex"))).toEqual([
+      "6601e832953d30318b7d1f36386a241b59b7d2d7",
+    ]);
+    expect(got.cexComposite).toEqual([]);
+    expect(got.custody).toEqual([]);
+    expect(got.marketParams).toEqual([]);
+    expect(got.scheduledOps).toEqual([]);
+  });
+
+  it("queryAuthorities fails closed on a snapshot that is not six sets", async () => {
+    stubFetch(toB64(encoder.encode([[], [], []]) as Uint8Array));
+    await expect(makeClient().queryAuthorities()).rejects.toThrow(
+      /authorities has 3 fields, expected exactly 6/,
+    );
+    const short = Array.from({ length: 19 }, () => 1);
+    stubFetch(toB64(encoder.encode([[short], [], [], [], [], []]) as Uint8Array));
+    await expect(makeClient().queryAuthorities()).rejects.toThrow(
+      /authorities\.relayer\[0\] is 19 bytes, expected 20/,
+    );
+  });
+
   it("queryAdminSignerRegistry routes through the gateway and decodes a present registry", async () => {
     // Proxy shape: msgpack `[registry|nil]`. serde encodes `[u8; 20]` as a
     // msgpack ARRAY of integers, so members arrive as number[][] and the

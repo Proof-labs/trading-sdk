@@ -21,6 +21,7 @@ import type {
   SetOracleGuards,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
+  AuthoritiesSnapshot,
 } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { Outcome } from "./types.js";
@@ -751,6 +752,31 @@ export function decodeAdminSignerRegistry(
       toBytes(m, `registry.members[${i}]`, ADDRESS_LEN),
     ),
   };
+}
+
+const AUTHORITIES_FIELDS = [
+  "relayer",
+  "oracle",
+  "cexComposite",
+  "custody",
+  "marketParams",
+  "scheduledOps",
+] as const;
+
+/**
+ * Decode the engine's six-field `AuthoritiesSnapshot`. Fails closed on any
+ * other shape: a partially decoded set would present a missing authority as
+ * an empty one.
+ */
+export function decodeAuthoritiesSnapshot(raw: unknown): AuthoritiesSnapshot {
+  const fields = toTuple(raw, "authorities", AUTHORITIES_FIELDS.length);
+  const out = {} as AuthoritiesSnapshot;
+  AUTHORITIES_FIELDS.forEach((name, i) => {
+    out[name] = toArray(fields[i], `authorities.${name}`).map((a, j) =>
+      toBytes(a, `authorities.${name}[${j}]`, ADDRESS_LEN),
+    );
+  });
+  return out;
 }
 
 /** Decode the engine's one-field `AdminSignerRegistryInfo` envelope. */

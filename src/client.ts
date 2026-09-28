@@ -77,6 +77,7 @@ import type {
   WithdrawalRecord,
   WithdrawalStatus,
   AdminSignerRegistry,
+  AuthoritiesSnapshot,
   ProposalPage,
   EventInfo,
   SetPositionTriggers,
@@ -90,6 +91,7 @@ import type {
 } from "./types.js";
 import {
   decodeAdminSignerRegistryInfo,
+  decodeAuthoritiesSnapshot,
   decodeEventInfo,
   decodeProposalPage,
 } from "./governance-query.js";
@@ -1410,6 +1412,19 @@ export class ExchangeClient {
       requireEncodedData(json, "/v1/admin/signer-registry"),
     );
     return decodeAdminSignerRegistryInfo(msgpackDecoder.decode(bytes));
+  }
+
+  /**
+   * Read the engine's privileged authorization sets via the gateway proxy
+   * (`GET /v1/admin/authorities`): relayer, oracle, CEX composite, custody,
+   * market parameters and scheduled operations. An empty set means no signer
+   * holds that authority; a failed read throws, so it can never render as an
+   * empty set.
+   */
+  async queryAuthorities(): Promise<AuthoritiesSnapshot> {
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/admin/authorities`);
+    const bytes = fromBase64(requireEncodedData(json, "/v1/admin/authorities"));
+    return decodeAuthoritiesSnapshot(msgpackDecoder.decode(bytes));
   }
 
   /**

@@ -9,6 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `ExchangeClient.queryAuthorities()` reads the engine's privileged
+  authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
+  api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,
+  `cexComposite`, `custody`, `marketParams` and `scheduledOps`, each a list of
+  20-byte addresses. `decodeAuthoritiesSnapshot` is exported for offline use.
+  An empty list is a real chain state; any other shape throws, so a missing
+  set never renders as an empty one. It is for the WebAdmin authorities view
+  (GV-06).
 - TypeScript 5.3.0 adds trigger-history decoding of the pending (pre-fill)
   lifecycle (contract §7-I, indexer #247): `pending_triggers_attached` (order
   id, client order id, and both limb renders — present as
