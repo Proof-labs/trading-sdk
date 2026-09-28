@@ -32,6 +32,7 @@ import {
   type FinancialStateSelection,
 } from "./financial-state.js";
 import { ready as initWasm } from "./wasm-loader.js";
+import { fetchFinancialAudit, type FinancialAudit } from "./financial-audit.js";
 import {
   txEngineError,
   txFromEngineCode,
@@ -1511,6 +1512,13 @@ export class ExchangeClient {
     selection: FinancialStateSelection,
   ): Promise<FinancialState> {
     return fetchFinancialState(this.gatewayUrl, selection);
+  }
+
+  /** Same-height ledgers and instrument/OI evidence; not a complete owner inventory. */
+  async queryFinancialAudit(
+    selection: FinancialStateSelection,
+  ): Promise<FinancialAudit> {
+    return fetchFinancialAudit(this.gatewayUrl, selection);
   }
 
   /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */

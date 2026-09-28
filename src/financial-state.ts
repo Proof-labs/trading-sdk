@@ -267,7 +267,9 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
  * The stack is at most eight counters; declared container lengths never allocate.
  * An admitted 2048-position snapshot uses fewer than 60k aggregate value slots.
  */
-function validateMessagePackBudget(bytes: Uint8Array): void {
+function validateMessagePackBudget(bytes: Uint8Array, audit = false): void {
+  const maxString = audit ? 16 : 4;
+  const maxDepth = audit ? 9 : 8;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const remaining = [1];
   let offset = 0;
@@ -311,7 +313,7 @@ function validateMessagePackBudget(bytes: Uint8Array): void {
     } else if (tag >= 0x90 && tag <= 0x9f) {
       arrayLength = tag & 15;
     } else if (tag >= 0xa0 && tag <= 0xbf) {
-      payload(tag & 31, 4);
+      payload(tag & 31, maxString);
     } else {
       switch (tag) {
         case 0xcc:
@@ -331,13 +333,13 @@ function validateMessagePackBudget(bytes: Uint8Array): void {
           take(8);
           break;
         case 0xd9:
-          payload(size(1), 4);
+          payload(size(1), maxString);
           break;
         case 0xda:
-          payload(size(2), 4);
+          payload(size(2), maxString);
           break;
         case 0xdb:
-          payload(size(4), 4);
+          payload(size(4), maxString);
           break;
         case 0xc4:
           payload(size(1), 20);
@@ -364,7 +366,7 @@ function validateMessagePackBudget(bytes: Uint8Array): void {
       if (arrayLength > 2048 || slots > 65536)
         invalid("MessagePack resource limit");
       if (arrayLength > 0) {
-        if (remaining.length >= 8) invalid("MessagePack depth limit");
+        if (remaining.length >= maxDepth) invalid("MessagePack depth limit");
         remaining.push(arrayLength);
       }
     }
@@ -377,8 +379,20 @@ export async function fetchFinancialState(
   gatewayUrl: string,
   selection: FinancialStateSelection,
 ): Promise<FinancialState> {
+  return decodeFinancialState(
+    await fetchFinancialPayload(gatewayUrl, selection, "state"),
+    selection,
+  );
+}
+
+/** Shared bounded transport for the two explicit read contracts. */
+export async function fetchFinancialPayload(
+  gatewayUrl: string,
+  selection: FinancialStateSelection,
+  resource: "state" | "audit",
+): Promise<unknown> {
   const expected = canonicalFinancialSelection(selection);
-  const url = `${gatewayUrl}/v1/financial/state?markets=${expected.markets.join(",")}&owners=${expected.owners.join(",")}`;
+  const url = `${gatewayUrl}/v1/financial/${resource}?markets=${expected.markets.join(",")}&owners=${expected.owners.join(",")}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -426,18 +440,15 @@ export async function fetchFinancialState(
     const binary = atob(data);
     if (btoa(binary) !== data) return invalid("canonical base64");
     const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    validateMessagePackBudget(bytes);
-    return decodeFinancialState(
-      new Decoder({
-        useBigInt64: true,
-        maxArrayLength: 2048,
-        maxMapLength: 0,
-        maxStrLength: 4,
-        maxBinLength: 20,
-        maxExtLength: 0,
-      }).decode(bytes),
-      expected,
-    );
+    validateMessagePackBudget(bytes, resource === "audit");
+    return new Decoder({
+      useBigInt64: true,
+      maxArrayLength: 2048,
+      maxMapLength: 0,
+      maxStrLength: resource === "audit" ? 16 : 4,
+      maxBinLength: 20,
+      maxExtLength: 0,
+    }).decode(bytes);
   } finally {
     clearTimeout(timeout);
     controller.abort();
