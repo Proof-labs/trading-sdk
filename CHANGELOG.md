@@ -26,6 +26,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   both inside `ProposeAdminAction`. The Rust crate re-exports both types and
   moves to proof-wire v3.0.0, whose only break is this `ScheduleUpgrade`
   shape (it replaced `protocol_version` with `major`/`minor`).
+- `queryUpgrades()` reads the pending upgrade plan and executed activation
+  ledger (`GET /v1/upgrades`), and `queryNodeVersion()` the answering node's
+  loaded engine release (`GET /v1/version`).
 - TypeScript 5.3.0 adds trigger-history decoding of the pending (pre-fill)
   lifecycle (contract §7-I, indexer #247): `pending_triggers_attached` (order
   id, client order id, and both limb renders — present as

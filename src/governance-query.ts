@@ -21,9 +21,12 @@ import type {
   SetOracleGuards,
   ScheduleUpgrade,
   CancelUpgrade,
+  NodeVersion,
+  PendingUpgradePlan,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
   AuthoritiesSnapshot,
+  UpgradesInfo,
 } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
@@ -833,5 +836,56 @@ export function decodeProposalPage(raw: unknown): ProposalPage {
     proposals,
     nextCursor:
       fields[1] == null ? null : toU64(fields[1], "proposalPage.nextCursor"),
+  };
+}
+
+/** Decode the engine's `UpgradesInfo` (`GET /v1/upgrades`). */
+export function decodeUpgradesInfo(raw: unknown): UpgradesInfo {
+  const fields = toTuple(raw, "upgrades", 2);
+  let plan: PendingUpgradePlan | null = null;
+  if (fields[0] != null) {
+    const p = toTuple(fields[0], "upgrades.plan", 5);
+    plan = {
+      targetHeight: toU64(p[0], "upgrades.plan.targetHeight"),
+      major: toU32(p[1], "upgrades.plan.major"),
+      minor: toU32(p[2], "upgrades.plan.minor"),
+      successorSha256: toBytes(p[3], "upgrades.plan.successorSha256", HASH_LEN),
+      scheduledHeight: toU64(p[4], "upgrades.plan.scheduledHeight"),
+    };
+  }
+  const executed = toArray(fields[1], "upgrades.executed").map((e, i) => {
+    const x = toTuple(e, `upgrades.executed[${i}]`, 3);
+    return {
+      activatedHeight: toU64(x[0], `upgrades.executed[${i}].activatedHeight`),
+      major: toU32(x[1], `upgrades.executed[${i}].major`),
+      minor: toU32(x[2], `upgrades.executed[${i}].minor`),
+    };
+  });
+  return { plan, executed };
+}
+
+/** Validate the node's JSON `GET /v1/version` body. */
+export function decodeNodeVersion(raw: unknown): NodeVersion {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("version decode: body is not an object");
+  }
+  const o = raw as Record<string, unknown>;
+  const str = (k: string): string => {
+    if (typeof o[k] !== "string") {
+      throw new Error(`version decode: ${k} is not a string`);
+    }
+    return o[k] as string;
+  };
+  const sha = str("engine_lib_sha256");
+  if (!/^[0-9a-f]{64}$/.test(sha)) {
+    throw new Error("version decode: engine_lib_sha256 is not 64 hex chars");
+  }
+  return {
+    node: str("node"),
+    engine: str("engine"),
+    engineAbiVersion: toU32(o.engine_abi_version, "version.engine_abi_version"),
+    engineMajor: toU32(o.engine_major, "version.engine_major"),
+    engineMinor: toU32(o.engine_minor, "version.engine_minor"),
+    engineLibSha256: sha,
   };
 }
