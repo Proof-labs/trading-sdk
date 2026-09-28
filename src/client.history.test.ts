@@ -511,7 +511,7 @@ describe("resolution history", () => {
           {
             ...settled,
             converted_size: "0",
-            fallback_reason: "initial_margin",
+            fallback_reason: "maintenance_margin",
             cash_delta: "100000000",
           },
         ]),
@@ -526,7 +526,7 @@ describe("resolution history", () => {
     expect(converted.cashDelta).toBe("0");
     // Paid in cash: the result moved to the balance.
     expect(cash.convertedSize).toBe("0");
-    expect(cash.fallbackReason).toBe("initial_margin");
+    expect(cash.fallbackReason).toBe("maintenance_margin");
     expect(cash.realizedPnl).toBe("100000000");
     expect(cash.cashDelta).toBe("100000000");
   });

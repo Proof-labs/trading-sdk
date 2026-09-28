@@ -2187,7 +2187,7 @@ export interface HistoryCashFlow {
  * instead of converting into a perpetual position on its underlying, as the
  * engine names it on `conditional_settled`. */
 export type ConversionFallbackReason =
-  | "initial_margin"
+  | "maintenance_margin"
   | "position_size_cap"
   | "open_interest_cap"
   | "cannot_price_or_margin"
