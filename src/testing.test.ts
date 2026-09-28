@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { decode as decodeMessagePack } from "@msgpack/msgpack";
+import {
+  decode as decodeMessagePack,
+  encode as encodeMessagePack,
+} from "@msgpack/msgpack";
 
 import * as main from "./index.js";
 import { encodeSignedTx, encodePayloadBytes, decodeTx } from "./codec.js";
@@ -26,7 +29,6 @@ describe("@proof-labs/trading-sdk/testing", () => {
       data: { market: 3, signer },
     };
     expect(() => encodePayloadBytes(tick as Action)).toThrow();
-
     registerTestActions();
     registerTestActions(); // idempotent
 
@@ -45,5 +47,27 @@ describe("@proof-labs/trading-sdk/testing", () => {
 
     const decoded = decodeTx(wire);
     expect(decoded.action).toEqual(tick);
+  });
+
+  it("refuses retired RunLiquidationSweep after test-action registration", () => {
+    registerTestActions();
+    expect("RunLiquidationSweep" in TestActionType).toBe(false);
+    expect("RunLiquidationSweep" in main.ActionType).toBe(false);
+    expect(() =>
+      encodePayloadBytes({
+        type: "RunLiquidationSweep",
+        data: { signer },
+      } as unknown as Action),
+    ).toThrow();
+    // A valid old envelope must fail on its retired tag, not on malformed bytes.
+    const oldWire = encodeMessagePack([
+      2,
+      0x11,
+      1,
+      encodeMessagePack([Array.from(signer)]),
+      new Uint8Array(32),
+      new Uint8Array(64),
+    ]);
+    expect(() => decodeTx(oldWire)).toThrow();
   });
 });
