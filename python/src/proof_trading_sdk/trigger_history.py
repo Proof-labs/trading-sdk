@@ -16,6 +16,8 @@ PositionTriggerHistoryEventType: t.TypeAlias = t.Literal[
     "position_trigger_activated",
     "position_trigger_executed",
     "position_trigger_deferred",
+    "pending_triggers_attached",
+    "pending_triggers_discarded",
 ]
 TriggerMarketHistoryEventType: t.TypeAlias = t.Literal[
     "trigger_market_deferred",
@@ -24,6 +26,14 @@ TriggerMarketHistoryEventType: t.TypeAlias = t.Literal[
 TriggerHistoryEventType: t.TypeAlias = (
     PositionTriggerHistoryEventType | TriggerMarketHistoryEventType
 )
+PendingTriggerDiscardReason: t.TypeAlias = t.Literal[
+    "order_cancelled",
+    "order_expired",
+    "order_replaced",
+    "unfilled_terminal",
+    "install_rejected",
+    "position_closed",
+]
 TriggerHistoryTime: t.TypeAlias = str | int
 
 _EventTypeT = t.TypeVar("_EventTypeT", bound=str)
@@ -69,6 +79,27 @@ _OWNER_TYPES = {
     "position_trigger_activated",
     "position_trigger_executed",
     "position_trigger_deferred",
+    "pending_triggers_attached",
+    "pending_triggers_discarded",
+}
+# Owner lifecycle types bound to a position: they carry `position_epoch` and
+# `group_id`. A pending bracket is bound to a not-yet-filled order and has no
+# position identity yet.
+_POSITION_TYPES = {
+    "position_triggers_set",
+    "position_triggers_cancelled",
+    "position_triggers_invalidated",
+    "position_trigger_activated",
+    "position_trigger_executed",
+    "position_trigger_deferred",
+}
+_PENDING_DISCARD_REASONS = {
+    "order_cancelled",
+    "order_expired",
+    "order_replaced",
+    "unfilled_terminal",
+    "install_rejected",
+    "position_closed",
 }
 _MARKET_TYPES = {"trigger_market_deferred", "trigger_market_resumed"}
 _REASONS = {
@@ -125,6 +156,14 @@ _EVENT_KEYS = {
 _UINT_RE = re.compile(r"^(?:0|[1-9][0-9]*)$")
 _INT_RE = re.compile(r"^(?:0|-?[1-9][0-9]*)$")
 _OWNER_RE = re.compile(r"^[0-9a-f]{40}$")
+# The wire's limb render for one pending-bracket limb: present is
+# `trigger_price=<u64>,max_slippage_bps=<u64>,client_trigger_id=<u64|none>`
+# (that exact shape and order); absent is the key with an empty value.
+_LIMB_RENDER_RE = re.compile(
+    r"^trigger_price=(?:0|[1-9][0-9]*),"
+    r"max_slippage_bps=(?:0|[1-9][0-9]*),"
+    r"client_trigger_id=(?:none|(?:0|[1-9][0-9]*))$"
+)
 _RFC3339_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$"
 )
@@ -309,6 +348,14 @@ def _require_unsigned(payload: dict[str, str], keys: t.Iterable[str]) -> None:
         _unsigned(payload.get(key), f"payload.{key}")
 
 
+def _require_limb_render(value: str | None, name: str) -> None:
+    """The wire's limb render, or the empty string when the limb is absent."""
+    if value == "":
+        return
+    if value is None or _LIMB_RENDER_RE.match(value) is None:
+        raise _error(f"{name} is not the wire limb render")
+
+
 def _validate_payload(
     payload: dict[str, str],
     event_type: str,
@@ -338,7 +385,11 @@ def _validate_payload(
             or _response_owner(payload.get("owner"), "payload.owner") != event_owner
         ):
             raise _error("payload owner disagrees with event")
-        _require_unsigned(payload, ("position_epoch", "group_id"))
+        # A pending bracket is bound to a not-yet-filled order: it has no
+        # position identity yet, so it carries `order_id` instead of
+        # epoch/group.
+        if event_type in _POSITION_TYPES:
+            _require_unsigned(payload, ("position_epoch", "group_id"))
     elif "owner" in payload:
         raise _error("shared market payload carries owner")
 
@@ -360,8 +411,37 @@ def _validate_payload(
             raise _error("invalid active_from_height")
         if payload["stop_limb_id"] == "0" and payload["take_profit_limb_id"] == "0":
             raise _error("set event has no trigger limbs")
-    elif event_type in {"position_triggers_cancelled", "position_triggers_invalidated"}:
+        # Additive since schema 39: the placement order whose first fill
+        # installed the bracket. "0" is the engine's none-sentinel; absent on
+        # rows projected before the attribute existed.
+        if "source_order_id" in payload:
+            _unsigned(payload.get("source_order_id"), "payload.source_order_id")
+    elif event_type == "position_triggers_cancelled":
         pass
+    elif event_type == "position_triggers_invalidated":
+        # Additive since schema 39: the engine's u8 invalidation attribute,
+        # "0" = unspecified; absent on pre-upgrade rows.
+        if "invalidation_reason" in payload:
+            _unsigned(
+                payload.get("invalidation_reason"),
+                "payload.invalidation_reason",
+                255,
+            )
+    elif event_type == "pending_triggers_attached":
+        _require_limb_render(payload.get("stop_loss"), "payload.stop_loss")
+        _require_limb_render(payload.get("take_profit"), "payload.take_profit")
+        if payload.get("stop_loss") == "" and payload.get("take_profit") == "":
+            raise _error("pending attach carries no trigger limbs")
+        _unsigned(payload.get("order_id"), "payload.order_id", nonzero=True)
+        # "0" = the order carried no client order id.
+        _unsigned(payload.get("client_order_id"), "payload.client_order_id")
+    elif event_type == "pending_triggers_discarded":
+        _unsigned(payload.get("order_id"), "payload.order_id", nonzero=True)
+        _enum(
+            payload.get("reason"),
+            _PENDING_DISCARD_REASONS,
+            "payload.reason",
+        )
     elif event_type == "position_trigger_activated":
         _require_unsigned(
             payload,
@@ -542,6 +622,7 @@ def _filter_time(value: TriggerHistoryTime, name: str) -> str:
 
 __all__ = [
     "PositionTriggerHistoryEventType",
+    "PendingTriggerDiscardReason",
     "TriggerMarketHistoryEventType",
     "TriggerHistoryEventType",
     "TriggerHistoryTime",
