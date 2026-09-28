@@ -1263,6 +1263,22 @@ export interface AdminSignerRegistry {
   members: Address[];
 }
 
+/**
+ * The engine's privileged authorization sets, as read from
+ * `GET /v1/admin/authorities` (engine `AuthoritiesSnapshot`, field order
+ * relayer, oracle, cex_composite, custody, market_params, scheduled_ops).
+ * Each is a list of 20-byte addresses. An empty list is a real chain state:
+ * no signer holds that authority.
+ */
+export interface AuthoritiesSnapshot {
+  relayer: Address[];
+  oracle: Address[];
+  cexComposite: Address[];
+  custody: Address[];
+  marketParams: Address[];
+  scheduledOps: Address[];
+}
+
 /** Why a pending proposal expired. */
 export type ExpiryReason = "Ttl" | "RegistryChanged";
 
