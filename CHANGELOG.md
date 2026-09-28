@@ -98,6 +98,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   parse error. `GatewayHttpError` takes an optional fourth `detail` argument
   for the gateway's own error text.
 
+### Removed
+
+- TypeScript 6.0.0 drops `RunLiquidationSweep` (0x11) from the
+  `@proof-labs/trading-sdk/testing` subpath: the `RunLiquidationSweep` type,
+  its `TestActionType` entry and its `TestAction` variant. The engine retired
+  the action and rejects it at decode (exchange#850). `RunFundingTick` (0x12)
+  is unchanged. MAJOR: a removed export breaks callers that name it; the main
+  entry and all other action bytes are unaffected.
+
 ### Deprecated
 
 - `WitnessError::BackendMismatch` is never returned; the bracket does not
