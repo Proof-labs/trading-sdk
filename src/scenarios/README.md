@@ -18,7 +18,7 @@ End-to-end behaviour tests for the exchange. Each file corresponds to a single s
 
 ```bash
 # One-time: boot a clean local stack WITHOUT market-makers (see below).
-./scripts/dev-stack.sh up --fresh --no-ui --no-mm --no-hlp
+./scripts/dev-stack.sh up --fresh --no-ui --no-mm
 
 # Seed markets + oracles
 npx tsx scripts/seed.ts setup     # first time only
@@ -42,7 +42,7 @@ Each scenario creates fresh random-key users (`alice`, `bob`, `carol`) and funds
 - **Markets seeded** (`scripts/seed.ts` — creates BTC-PERP=1, ETH-PERP=2, SOL-PERP=3).
 - **Oracle prices set** (same script).
 - **Relayer + oracle keys exposed** via env vars (the seed script writes both to `~/.exchanged/seed-keys.json`).
-- **No competing traders.** Scenarios depend on positionSymmetry (Σ signed positions = 0 across the seeded users) and on order-book emptiness around the test prices. Concurrent MM activity (`spawn-mms`, `spawn-impact-mms`, `spawn-event-mms`, `hlp.ts`, etc.) breaks both: a market-maker bid at $77k will eat a scenario sell at $50k. **Run scenarios on a dedicated node started without MMs** (`./scripts/dev-stack.sh up --no-mm --no-hlp --no-impact-mms --no-event-mms` or the equivalent flag set).
+- **No competing traders.** Scenarios depend on positionSymmetry (Σ signed positions = 0 across the seeded users) and on order-book emptiness around the test prices. Concurrent MM activity (`spawn-mms`, `spawn-impact-mms`, `spawn-event-mms`, the Proof liquidity provider (PLP) market maker, etc.) breaks both: a market-maker bid at $77k will eat a scenario sell at $50k. **Run scenarios on a dedicated node started without MMs** (`./scripts/dev-stack.sh up --no-mm --no-impact-mms --no-event-mms` or the equivalent flag set).
 
 If you must run against an MM-active stack, comment out `positionSymmetry` in `invariants.ts` and pick scenario prices that won't cross the live book — but the assertions about exact positions / fill prices won't hold and tests will fail intermittently.
 

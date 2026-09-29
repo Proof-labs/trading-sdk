@@ -231,7 +231,7 @@ export interface ExchangeClientOptions {
    *
    * - `false`: the legacy direct-node path — submission goes to CometBFT
    *   `broadcast_tx_sync` over `rpcUrl`, reads to `apiUrl`, and chain
-   *   queries to `rpcUrl`. Kept only for in-cluster tools (MMs, HLP,
+   *   queries to `rpcUrl`. Kept only for in-cluster tools (MMs, the PLP,
    *   oracle feeder, retail-flow taker) and the scenario harness that
    *   reach the node directly and don't need the gateway. Never expose
    *   this to external callers.
