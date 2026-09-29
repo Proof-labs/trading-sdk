@@ -542,7 +542,7 @@ function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
  *  a compile error (`Record` over the closed union), never a silently
  *  inherited neighbour's tag. Mirrors `AdminActionType` in the engine and
  *  `action_type()` in the Rust core — 1/2 are v1, 3/4 are admin-actions v2. */
-const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
+export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CreateMarket: 1,
   UpdateAdminSignerRegistry: 2,
   CreateEvent: 9,
@@ -554,6 +554,8 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CancelAllOrdersForAccount: 8,
   ConfigureOraclePolicy: 12,
   SetOracleGuards: 13,
+  SetWithdrawalLimit: 19,
+  SetOperatorReceiptRegistry: 20,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
