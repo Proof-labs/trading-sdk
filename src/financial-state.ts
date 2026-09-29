@@ -380,19 +380,18 @@ export async function fetchFinancialState(
   selection: FinancialStateSelection,
 ): Promise<FinancialState> {
   return decodeFinancialState(
-    await fetchFinancialPayload(gatewayUrl, selection, "state"),
+    await fetchFinancialPayload(gatewayUrl, selection),
     selection,
   );
 }
 
-/** Shared bounded transport for the two explicit read contracts. */
-export async function fetchFinancialPayload(
+/** Bounded transport for the existing format-1 state route only. */
+async function fetchFinancialPayload(
   gatewayUrl: string,
   selection: FinancialStateSelection,
-  resource: "state" | "audit",
 ): Promise<unknown> {
   const expected = canonicalFinancialSelection(selection);
-  const url = `${gatewayUrl}/v1/financial/${resource}?markets=${expected.markets.join(",")}&owners=${expected.owners.join(",")}`;
+  const url = `${gatewayUrl}/v1/financial/state?markets=${expected.markets.join(",")}&owners=${expected.owners.join(",")}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
@@ -434,24 +433,30 @@ export async function fetchFinancialPayload(
       !json.data.length
     )
       return invalid("response wrapper");
-    const data = json.data;
-    if (data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data))
-      return invalid("base64");
-    const binary = atob(data);
-    if (btoa(binary) !== data) return invalid("canonical base64");
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    validateMessagePackBudget(bytes, resource === "audit");
-    return new Decoder({
-      useBigInt64: true,
-      maxArrayLength: 2048,
-      maxMapLength: 0,
-      maxStrLength: resource === "audit" ? 16 : 4,
-      maxBinLength: 20,
-      maxExtLength: 0,
-    }).decode(bytes);
+    return decodeFinancialPayload(json.data);
   } finally {
     clearTimeout(timeout);
     controller.abort();
     await reader?.cancel().catch(() => undefined);
   }
+}
+
+/** Internal bounded binary decoder shared by live state and offline audit artifacts. */
+export function decodeFinancialPayload(data: string, audit = false): unknown {
+  if (!data.length || data.length > MAX_RESPONSE_BYTES)
+    return invalid("response size");
+  if (data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data))
+    return invalid("base64");
+  const binary = atob(data);
+  if (btoa(binary) !== data) return invalid("canonical base64");
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  validateMessagePackBudget(bytes, audit);
+  return new Decoder({
+    useBigInt64: true,
+    maxArrayLength: 2048,
+    maxMapLength: 0,
+    maxStrLength: audit ? 16 : 4,
+    maxBinLength: 20,
+    maxExtLength: 0,
+  }).decode(bytes);
 }

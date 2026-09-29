@@ -1,6 +1,10 @@
 import { Decoder, Encoder } from "@msgpack/msgpack";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { decodeFinancialAudit, ExchangeClient } from "./index.js";
+import { createHash } from "node:crypto";
+import {
+  decodeFinancialAudit,
+  decodeFinancialAuditArtifact as decodePinnedArtifact,
+} from "./index.js";
 
 // Generated and asserted by exchange query::financial::tests::
 // audit_preserves_v1_bytes_absence_and_exact_open_interest_without_writes.
@@ -16,24 +20,64 @@ const encode = (value: unknown) =>
     "base64",
   );
 
+const pins = {
+  snapshotSha256: "ab".repeat(32),
+  executableSha256: "cd".repeat(32),
+  chainId: "audit-test",
+  height: 0n,
+  timeMs: 1234n,
+};
+const digest = (text: string) =>
+  createHash("sha256").update(text).digest("hex");
+// Deliberately malformed synthetic fixtures are re-pinned to exercise structural checks.
+const decodeFinancialAuditArtifact = (
+  text: string,
+  expected: typeof pins,
+  selected: typeof selection,
+) =>
+  decodePinnedArtifact(
+    text,
+    { ...expected, artifactSha256: digest(text) },
+    selected,
+  );
+const artifact = () => ({
+  protocol: "proof-financial-audit/offline-v1",
+  trust: "operator-attested-local-snapshot-not-full-state-proof",
+  provenance: "operator export record",
+  snapshotSha256: pins.snapshotSha256,
+  executableSha256: pins.executableSha256,
+  chainId: pins.chainId,
+  height: "0",
+  timeMs: "1234",
+  timeSource: "operator-attested-same-height-header",
+  markets: "1,2",
+  owners: selection.owners[0],
+  data: Buffer.from(golden, "hex").toString("base64"),
+});
+
 describe("financial audit format2", () => {
-  afterEach(() => vi.unstubAllGlobals());
-  it("decodes the independent Rust vector through the gateway even in node mode", async () => {
-    const fetcher = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          data: Buffer.from(golden, "hex").toString("base64"),
-        }),
+  it("rejects output tampering against an independently recorded artifact digest", () => {
+    const original = JSON.stringify(artifact());
+    expect(() =>
+      decodePinnedArtifact(
+        original.replace("operator export record", "altered export record"),
+        { ...pins, artifactSha256: digest(original) },
+        selection,
       ),
-    );
-    vi.stubGlobal("fetch", fetcher);
-    const client = new ExchangeClient({
-      gatewayUrl: "http://gateway",
-      apiUrl: "http://node",
-      useGateway: false,
-      chainId: "test",
+    ).toThrow("artifact digest");
+  });
+  afterEach(() => vi.unstubAllGlobals());
+  it("decodes the independent Rust vector offline without any network access", () => {
+    const fetcher = vi.fn(() => {
+      throw new Error("network forbidden");
     });
-    const result = await client.queryFinancialAudit(selection);
+    vi.stubGlobal("fetch", fetcher);
+    const { audit: result, trust } = decodeFinancialAuditArtifact(
+      JSON.stringify(artifact()),
+      pins,
+      selection,
+    );
+    expect(trust).toBe("operator-attested-local-snapshot-not-full-state-proof");
     expect(result.format).toBe(2);
     expect(result.ledger.finalizedTimeMs).toBe(1234n);
     expect(result.markets[0].openInterest).toEqual({
@@ -41,10 +85,7 @@ describe("financial audit format2", () => {
       short: 17n,
     });
     expect(result.markets[1].openInterest).toBeNull();
-    expect(fetcher.mock.calls[0][0]).toBe(
-      `http://gateway/v1/financial/audit?markets=1,2&owners=${selection.owners[0]}`,
-    );
-    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher).not.toHaveBeenCalled();
   });
   it("decodes conditional and binary metadata without coercing event phases", () => {
     const r = raw();
@@ -137,22 +178,68 @@ describe("financial audit format2", () => {
       "unselected position",
     );
   });
-  it("bounds audit transport and never retries unsupported endpoints", async () => {
-    const client = new ExchangeClient({
-      gatewayUrl: "http://gateway",
-      chainId: "test",
-    });
-    const fetcher = vi
-      .fn()
-      .mockResolvedValue(new Response("unavailable", { status: 503 }));
-    vi.stubGlobal("fetch", fetcher);
-    await expect(client.queryFinancialAudit(selection)).rejects.toThrow("503");
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    fetcher.mockResolvedValue(
-      new Response(JSON.stringify({ data: encode([2, ["a".repeat(17)], []]) })),
-    );
-    await expect(client.queryFinancialAudit(selection)).rejects.toThrow(
-      "resource limit",
-    );
+  it("bounds offline binary decoding", () => {
+    expect(() =>
+      decodeFinancialAuditArtifact(
+        JSON.stringify({
+          ...artifact(),
+          data: encode([2, ["a".repeat(17)], []]),
+        }),
+        pins,
+        selection,
+      ),
+    ).toThrow("resource limit");
+    expect(() =>
+      decodeFinancialAuditArtifact(
+        "x".repeat(1024 * 1024 + 8193),
+        pins,
+        selection,
+      ),
+    ).toThrow("artifact size");
+  });
+  it.each([
+    "protocol",
+    "trust",
+    "provenance",
+    "snapshotSha256",
+    "executableSha256",
+    "chainId",
+    "height",
+    "timeMs",
+    "timeSource",
+    "markets",
+    "owners",
+    "data",
+  ])("rejects mismatched artifact %s", (field) => {
+    expect(() =>
+      decodeFinancialAuditArtifact(
+        JSON.stringify({ ...artifact(), [field]: "" }),
+        pins,
+        selection,
+      ),
+    ).toThrow();
+  });
+  it("rejects unknown fields, noncanonical base64 and inconsistent ledger time", () => {
+    expect(() =>
+      decodeFinancialAuditArtifact(
+        JSON.stringify({ ...artifact(), extra: 1 }),
+        pins,
+        selection,
+      ),
+    ).toThrow("wrapper");
+    expect(() =>
+      decodeFinancialAuditArtifact(
+        JSON.stringify({ ...artifact(), data: artifact().data + "=" }),
+        pins,
+        selection,
+      ),
+    ).toThrow("base64");
+    expect(() =>
+      decodeFinancialAuditArtifact(
+        JSON.stringify({ ...artifact(), timeMs: "1235" }),
+        { ...pins, timeMs: 1235n },
+        selection,
+      ),
+    ).toThrow("ledger height/time");
   });
 });

@@ -1,7 +1,8 @@
+import { sha256 } from "@noble/hashes/sha2.js";
 import {
   canonicalFinancialSelection,
   decodeFinancialState,
-  fetchFinancialPayload,
+  decodeFinancialPayload,
   type FinancialState,
   type FinancialStateSelection,
 } from "./financial-state.js";
@@ -107,12 +108,104 @@ export function decodeFinancialAudit(
   }
   return { format: 2, ledger, markets };
 }
-export async function fetchFinancialAudit(
-  gatewayUrl: string,
+export interface FinancialAuditPins {
+  artifactSha256: string;
+  snapshotSha256: string;
+  executableSha256: string;
+  chainId: string;
+  height: bigint;
+  timeMs: bigint;
+}
+
+/** Decode an operator-attested local artifact, not a cryptographic state proof.
+ * Pins must come from the separately trusted export/build record, not this artifact. */
+export function decodeFinancialAuditArtifact(
+  text: string,
+  pins: FinancialAuditPins,
   selection: FinancialStateSelection,
-): Promise<FinancialAudit> {
-  return decodeFinancialAudit(
-    await fetchFinancialPayload(gatewayUrl, selection, "audit"),
-    selection,
+): {
+  audit: FinancialAudit;
+  provenance: string;
+  trust: "operator-attested-local-snapshot-not-full-state-proof";
+} {
+  if (text.length > 1024 * 1024 + 8192) return invalid("artifact size");
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length > 1024 * 1024 + 8192) return invalid("artifact size");
+  const digest = Array.from(sha256(bytes), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+  if (
+    !/^[0-9a-f]{64}$/.test(pins.artifactSha256) ||
+    digest !== pins.artifactSha256
+  )
+    return invalid("artifact digest");
+  const r: unknown = JSON.parse(text);
+  const keys = [
+    "protocol",
+    "trust",
+    "provenance",
+    "snapshotSha256",
+    "executableSha256",
+    "chainId",
+    "height",
+    "timeMs",
+    "timeSource",
+    "markets",
+    "owners",
+    "data",
+  ];
+  if (
+    !r ||
+    typeof r !== "object" ||
+    Array.isArray(r) ||
+    Object.keys(r).length !== keys.length
+  )
+    return invalid("artifact wrapper");
+  const record = r as Record<string, unknown>;
+  if (keys.some((k) => typeof record[k] !== "string"))
+    return invalid("artifact fields");
+  const trust = "operator-attested-local-snapshot-not-full-state-proof";
+  if (
+    record.protocol !== "proof-financial-audit/offline-v1" ||
+    record.trust !== trust ||
+    record.timeSource !== "operator-attested-same-height-header"
+  )
+    return invalid("artifact trust contract");
+  if (
+    !/^[0-9a-f]{64}$/.test(pins.snapshotSha256) ||
+    !/^[0-9a-f]{64}$/.test(pins.executableSha256) ||
+    record.snapshotSha256 !== pins.snapshotSha256 ||
+    record.executableSha256 !== pins.executableSha256 ||
+    record.chainId !== pins.chainId ||
+    !pins.chainId.length ||
+    pins.chainId.length > 128
+  )
+    return invalid("artifact pins");
+  const height = uint(pins.height, 64);
+  const time = uint(pins.timeMs, 64);
+  if (
+    record.height !== height.toString() ||
+    record.timeMs !== time.toString() ||
+    (height > 0n && time === 0n)
+  )
+    return invalid("artifact height/time");
+  const expected = canonicalFinancialSelection(selection);
+  if (
+    record.markets !== expected.markets.join(",") ||
+    record.owners !== expected.owners.join(",")
+  )
+    return invalid("artifact selectors");
+  const provenance = record.provenance as string;
+  if (!provenance.trim() || provenance.length > 512)
+    return invalid("artifact provenance");
+  const audit = decodeFinancialAudit(
+    decodeFinancialPayload(record.data as string, true),
+    expected,
   );
+  if (
+    audit.ledger.finalizedHeight !== height ||
+    audit.ledger.finalizedTimeMs !== time
+  )
+    return invalid("artifact ledger height/time");
+  return { audit, provenance, trust };
 }

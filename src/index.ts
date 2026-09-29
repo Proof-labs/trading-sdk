@@ -248,6 +248,8 @@ export {
 } from "./financial-state.js";
 export {
   decodeFinancialAudit,
+  decodeFinancialAuditArtifact,
+  type FinancialAuditPins,
   type FinancialAudit,
   type FinancialMarketEvidence,
 } from "./financial-audit.js";
