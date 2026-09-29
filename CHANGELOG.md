@@ -55,19 +55,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Requests bypass HTTP caches. MINOR: this additive TypeScript read API keeps
   the released npm 5.1.0 codec and proof-wire 2.1.0 contract (exchange v2.12.0 /
   api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
-- TypeScript 5.3.0: `HistoryResolution.convertedSize`,
+- TypeScript 6.1.0: `HistoryResolution.convertedSize` and
   `HistoryResolution.fallbackReason` (with the `ConversionFallbackReason` type)
-  and `HistoryResolution.cashDelta` for conditional-perp resolutions. A winning
-  conditional now converts at resolution into a perpetual position on the
-  underlying **at the conditional's entry price** and is paid no cash; a winner
-  that cannot convert is paid its result in cash (exchange v2.15.0,
-  proof-wire 2.4.0; served by the indexer's `GET /v1/history/resolutions`).
-  `convertedSize` is the size that converted (the whole `size`, or `"0"` for a
-  winner paid in cash); `fallbackReason` names why a winner was paid in cash
-  (`""` otherwise); `cashDelta` is the signed µUSDC moved to the owner's balance
-  at resolution — `"0"` for a converted winner, `realizedPnl` for one paid in
-  cash. The Python `history_resolutions` returns the raw rows, so it carries
-  `converted_size`, `fallback_reason` and `cash_delta` as served. MINOR: the new
+  for conditional-perp resolutions, as the exchange release after 2.14.0
+  (exchange #830) emits them on `conditional_settled` and the indexer's
+  `GET /v1/history/resolutions` serves them. A winning conditional converts at
+  resolution into a perpetual position on the underlying opened at the
+  settlement price, and its result is paid in cash exactly as a winner that
+  cannot convert is. `convertedSize` is the size that converted (the whole
+  `size`, or `"0"` when it did not); `fallbackReason` says why a winner did not
+  convert (`""` otherwise; the margin case is `"maintenance_margin"`).
+  `realizedPnl` is unchanged: it is the cash paid for every `conditional_settled`
+  row, converted or not. The Python `history_resolutions` returns the raw rows,
+  so it carries `converted_size` and `fallback_reason` as served. MINOR: the new
   fields are additive on a read; no codec, order encoding, Rust or Python
   package change.
 - `GatewayHttpError.errorCode` — optional typed error code extracted from the
@@ -96,18 +96,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `HistoryResolution.realizedPnl` on a `conditional_settled` row now means the
-  trade's result, `(settlementPrice − entryPrice) × size` signed by side, not
-  the cash paid. Before exchange v2.15.0 every settled winner was paid this
-  amount in cash (and, on engines that converted, the perpetual opened at
-  `settlementPrice`); from v2.15.0 a converted winner carries it inside its
-  perpetual and receives no cash. Tell the rows apart by `cashDelta`: a string
-  is the cash that actually moved; `null` means the row does not say. That is
-  the case both for a row an older engine wrote, where `realizedPnl` was paid
-  in cash, and for any row from an indexer that does not serve the key, where
-  a v2.15.0 converted winner received nothing. Treat `null` as cash paid only
-  when you know the row predates v2.15.0; otherwise read from an indexer that
-  serves `cash_delta`. Do not sum `realizedPnl` as cash received across rows.
 - **Rust crate 4.0.0 → 4.1.0** — the market-snapshot witness bracket no longer
   requires all three reads (pre-status, snapshot, post-status) to come from the
   same CometBFT node, so it works behind a load balancer that fans reads across

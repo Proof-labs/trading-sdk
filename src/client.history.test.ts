@@ -506,56 +506,31 @@ describe("resolution history", () => {
             ...settled,
             converted_size: "25",
             fallback_reason: "",
-            cash_delta: "0",
           },
           {
             ...settled,
             converted_size: "0",
             fallback_reason: "maintenance_margin",
-            cash_delta: "100000000",
           },
         ]),
       ),
     );
     const [converted, cash] = await client().queryHistoryResolutions(owner);
-    // Converted at the conditional's entry: the result rides the perpetual,
-    // no cash moved.
+    // Converted: the perpetual opens at the settlement price and the result
+    // is paid in cash, as for a fallback.
     expect(converted.convertedSize).toBe("25");
     expect(converted.fallbackReason).toBe("");
     expect(converted.realizedPnl).toBe("100000000");
-    expect(converted.cashDelta).toBe("0");
-    // Paid in cash: the result moved to the balance.
+    // Fell back: no perpetual, the result is paid in cash.
     expect(cash.convertedSize).toBe("0");
     expect(cash.fallbackReason).toBe("maintenance_margin");
     expect(cash.realizedPnl).toBe("100000000");
-    expect(cash.cashDelta).toBe("100000000");
   });
 
-  it("keeps cashDelta null on a row that does not record it, never 0", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValueOnce(
-        json([
-          // An indexer that predates the key, or a row it serves as null.
-          { ...settled, converted_size: "25", fallback_reason: "" },
-          {
-            ...settled,
-            converted_size: "25",
-            fallback_reason: "",
-            cash_delta: null,
-          },
-        ]),
-      ),
-    );
-    const rows = await client().queryHistoryResolutions(owner);
-    expect(rows.map((row) => row.cashDelta)).toEqual([null, null]);
-  });
-
-  it("reads a row without the conversion keys as paid in cash", async () => {
+  it("reads a row without the conversion keys as not converted", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json([settled])));
     const [row] = await client().queryHistoryResolutions(owner);
     expect(row.convertedSize).toBe("0");
     expect(row.fallbackReason).toBe("");
-    expect(row.cashDelta).toBeNull();
   });
 });
