@@ -159,7 +159,10 @@ function toArray(value: unknown, field: string): unknown[] {
 function decodeSetWithdrawalLimit(value: unknown): SetWithdrawalLimit {
   const raw = toTuple(value, "setWithdrawalLimit", 2);
   const limit: SetWithdrawalLimit = {
-    perAccountCapMicroUsdc: toU64(raw[0], "setWithdrawalLimit.perAccountCapMicroUsdc"),
+    perAccountCapMicroUsdc: toU64(
+      raw[0],
+      "setWithdrawalLimit.perAccountCapMicroUsdc",
+    ),
     windowSecs: toU32(raw[1], "setWithdrawalLimit.windowSecs"),
   };
   return limit;
@@ -176,12 +179,21 @@ function decodeSetOperatorReceiptRegistry(
   const raw = toTuple(value, "setOperatorReceiptRegistry", 4);
   const keysJson = toArray(raw[3], "setOperatorReceiptRegistry.operatorKeys");
   const registry: SetOperatorReceiptRegistry = {
-    deploymentId: toBytes(raw[0], "setOperatorReceiptRegistry.deploymentId", 32),
+    deploymentId: toBytes(
+      raw[0],
+      "setOperatorReceiptRegistry.deploymentId",
+      32,
+    ),
     epoch: toU64(raw[1], "setOperatorReceiptRegistry.epoch"),
     threshold: toU32(raw[2], "setOperatorReceiptRegistry.threshold"),
-    operatorKeys: keysJson.map((k) => toBytes(k, "setOperatorReceiptRegistry.operatorKeys[i]", 32)),
+    operatorKeys: keysJson.map((k) =>
+      toBytes(k, "setOperatorReceiptRegistry.operatorKeys[i]", 32),
+    ),
   };
-  if (registry.threshold === 0 || registry.threshold > registry.operatorKeys.length) {
+  if (
+    registry.threshold === 0 ||
+    registry.threshold > registry.operatorKeys.length
+  ) {
     throw new Error(
       `governance decode: setOperatorReceiptRegistry threshold ${registry.threshold} is outside 1..=${registry.operatorKeys.length}`,
     );
