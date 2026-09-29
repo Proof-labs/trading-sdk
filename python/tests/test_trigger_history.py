@@ -272,3 +272,163 @@ def test_history_request_filters_fail_before_transport():
     with pytest.raises(ValueError, match="RFC3339"):
         client.history_triggers(OWNER, from_="yesterday")
     assert called is False
+
+
+def _pending_attach_event() -> dict:
+    return {
+        "event_key": "99:7:0",
+        "block_height": "99",
+        "execution_ordinal": "7",
+        "event_ordinal": "0",
+        "block_time": "2026-04-19T20:05:00Z",
+        "event_type": "pending_triggers_attached",
+        "owner": OWNER,
+        "market": "7",
+        "payload": {
+            "event_key": "99:7:0",
+            "block_height": "99",
+            "execution_ordinal": "7",
+            "event_ordinal": "0",
+            "owner": OWNER,
+            "market": "7",
+            "order_id": "2001",
+            "client_order_id": "77",
+            "stop_loss": "trigger_price=50000,max_slippage_bps=100,client_trigger_id=5",
+            "take_profit": "",
+        },
+    }
+
+
+def _pending_discard_event(reason: str = "install_rejected") -> dict:
+    return {
+        "event_key": "102:9:1",
+        "block_height": "102",
+        "execution_ordinal": "9",
+        "event_ordinal": "1",
+        "block_time": "2026-04-19T20:55:00Z",
+        "event_type": "pending_triggers_discarded",
+        "owner": OWNER,
+        "market": "7",
+        "payload": {
+            "event_key": "102:9:1",
+            "block_height": "102",
+            "execution_ordinal": "9",
+            "event_ordinal": "1",
+            "owner": OWNER,
+            "market": "7",
+            "order_id": "2001",
+            "reason": reason,
+        },
+    }
+
+
+def test_history_decodes_the_pending_lifecycle_install_rejected_included():
+    page = decode_position_trigger_history_page(
+        {
+            "trigger_events": [
+                _pending_discard_event("install_rejected"),
+                _pending_attach_event(),
+            ],
+            "next_cursor": "",
+        },
+        OWNER,
+        7,
+    )
+    assert [event.event_type for event in page.trigger_events] == [
+        "pending_triggers_discarded",
+        "pending_triggers_attached",
+    ]
+    attached = page.trigger_events[1]
+    assert attached.payload["order_id"] == "2001"
+    assert attached.payload["client_order_id"] == "77"
+    assert attached.payload["take_profit"] == ""
+    # The one silent protection-loss path: the fill stands, the bracket does
+    # not. The reason survives decoding verbatim.
+    assert page.trigger_events[0].payload["reason"] == "install_rejected"
+
+
+def test_history_pending_payloads_fail_closed():
+    no_limbs = _pending_attach_event()
+    no_limbs["payload"]["stop_loss"] = ""
+    with pytest.raises(ProofTradingSdkError, match="no trigger limbs"):
+        decode_position_trigger_history_page(
+            {"trigger_events": [no_limbs], "next_cursor": ""}, OWNER, 7
+        )
+
+    mangled = _pending_attach_event()
+    mangled["payload"]["stop_loss"] = (
+        "trigger_price=50000,max_slippage_bps=100,client_trigger_id="
+    )
+    with pytest.raises(ProofTradingSdkError, match="not the wire limb render"):
+        decode_position_trigger_history_page(
+            {"trigger_events": [mangled], "next_cursor": ""}, OWNER, 7
+        )
+
+    zero_order = _pending_attach_event()
+    zero_order["payload"]["order_id"] = "0"
+    with pytest.raises(ProofTradingSdkError, match="order_id is out of range"):
+        decode_position_trigger_history_page(
+            {"trigger_events": [zero_order], "next_cursor": ""}, OWNER, 7
+        )
+
+    unknown_reason = _pending_discard_event("because")
+    with pytest.raises(ProofTradingSdkError, match="unknown payload.reason"):
+        decode_position_trigger_history_page(
+            {"trigger_events": [unknown_reason], "next_cursor": ""}, OWNER, 7
+        )
+
+    # A pending bracket has no position identity yet: epoch/group are not
+    # demanded of it, and the owner identity check still applies.
+    wrong_owner = _pending_attach_event()
+    wrong_owner["owner"] = "b" * 40
+    wrong_owner["payload"]["owner"] = "b" * 40
+    with pytest.raises(ProofTradingSdkError, match="owner does not match"):
+        decode_position_trigger_history_page(
+            {"trigger_events": [wrong_owner], "next_cursor": ""}, OWNER, 7
+        )
+
+
+def test_history_surfaces_and_bounds_the_additive_schema39_attributes():
+    def _invalidated(reason: str | None = None) -> dict:
+        payload = {
+            "event_key": "103:2:0",
+            "block_height": "103",
+            "execution_ordinal": "2",
+            "event_ordinal": "0",
+            "owner": OWNER,
+            "market": "7",
+            "position_epoch": "3",
+            "group_id": "9",
+        }
+        if reason is not None:
+            payload["invalidation_reason"] = reason
+        return {
+            "event_key": "103:2:0",
+            "block_height": "103",
+            "execution_ordinal": "2",
+            "event_ordinal": "0",
+            "block_time": "2026-04-19T21:00:00Z",
+            "event_type": "position_triggers_invalidated",
+            "owner": OWNER,
+            "market": "7",
+            "payload": payload,
+        }
+
+    set_event = _set_event()
+    set_event["payload"]["source_order_id"] = "840"
+    page = decode_position_trigger_history_page(
+        {"trigger_events": [_invalidated("3"), set_event], "next_cursor": ""},
+        OWNER,
+        7,
+    )
+    assert page.trigger_events[0].payload["invalidation_reason"] == "3"
+    assert page.trigger_events[1].payload["source_order_id"] == "840"
+
+    with pytest.raises(
+        ProofTradingSdkError, match="invalidation_reason is out of range"
+    ):
+        decode_position_trigger_history_page(
+            {"trigger_events": [_invalidated("256")], "next_cursor": ""},
+            OWNER,
+            7,
+        )
