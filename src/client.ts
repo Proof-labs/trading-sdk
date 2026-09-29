@@ -1579,11 +1579,18 @@ export class ExchangeClient {
     let bindingScenario: BindingScenarioEntry[] | undefined;
     if (raw[6] !== undefined) {
       bindingScenario = ((raw[6] as unknown[]) ?? []).map((e) => {
-        const t = e as [number | bigint, string];
-        return {
+        const t = e as unknown[];
+        const entry: BindingScenarioEntry = {
           eventId: Number(t[0]),
           branch: t[1] as "Yes" | "No",
         };
+        // exchange-wire 3.2.0 appended a `void` flag, widening the row to
+        // (eventId, branch, void); pre-3.2 nodes send (eventId, branch) and
+        // the flag stays absent. When void is true the wire branch carries
+        // the canonical don't-care "Yes" — the raw value is kept as decoded
+        // and callers must gate on `void`, not on `branch`.
+        if (t.length >= 3) entry.void = t[2] as boolean;
+        return entry;
       });
     }
     // Index [7] — added 2026-05-03 (BE-45). Cumulative trading fees

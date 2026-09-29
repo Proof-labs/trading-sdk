@@ -2222,13 +2222,23 @@ export interface PositionInfo {
 }
 
 /** One entry per active event the account touches through a conditional.
- * Tuple of (eventId, branch) where branch is "Yes" or "No". Ordering is
- * ascending by eventId (deterministic across nodes).
+ * Wire tuple of (eventId, branch) where branch is "Yes" or "No";
+ * exchange-wire 3.2.0 appends a third element, the `void` flag —
+ * (eventId, branch, void). Ordering is ascending by eventId (deterministic
+ * across nodes).
  *
  * See AccountInfo.bindingScenario for semantics. */
 export interface BindingScenarioEntry {
   eventId: number;
+  /** Raw decoded branch. Meaningless when `void` is true: the node emits the
+   * canonical don't-care "Yes" for a voided row, so gate UI copy on `void`,
+   * never on `branch`. */
   branch: "Yes" | "No";
+  /** True when the event this binding row refers to has been voided; the row
+   * is retained but its `branch` carries no meaning (see above). Introduced
+   * by exchange-wire 3.2.0; absent (`undefined`) means the responding node
+   * predates 3.2.0 and always sends the two-element (eventId, branch) tuple. */
+  void?: boolean;
 }
 
 /** One deposit/withdrawal event from owner- and event-filtered
