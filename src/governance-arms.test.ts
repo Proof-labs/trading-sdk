@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { adminActionToWasm } from './codec-adapter'
-import { ACTION_TAG_BY_KIND } from './governance-query'
+import { ACTION_TAG_BY_KIND, decodeAdminAction } from './governance-query'
 
 /**
  * The CU-06 withdrawal limit (inner tag 19) and the operator receipt
@@ -52,5 +52,50 @@ describe('withdrawal-limit + receipt-registry governance arms', () => {
         operator_keys: [key],
       },
     })
+  })
+})
+
+
+describe('decode side of the two arms', () => {
+  // The payload arrives msgpack-decoded as a positional tuple (encoding
+  // fact: struct fields in declaration order). A proposal an approver must
+  // render — and a rotation they must verify — fails closed on any field
+  // that does not match the engine's layout.
+  it('renders a withdrawal-limit proposal from its wire tuple', () => {
+    const decoded = decodeAdminAction({
+      SetWithdrawalLimit: [30_000_000n, 86_400],
+    })
+    expect(decoded).toEqual({
+      kind: 'SetWithdrawalLimit',
+      value: { perAccountCapMicroUsdc: 30_000_000n, windowSecs: 86_400 },
+    })
+  })
+
+  it('renders a registry-rotation proposal from its wire tuple', () => {
+    const decoded = decodeAdminAction({
+      SetOperatorReceiptRegistry: [
+        Array(32).fill(0x11),
+        2n,
+        1,
+        [Array(32).fill(0x01)],
+      ],
+    })
+    expect(decoded).toEqual({
+      kind: 'SetOperatorReceiptRegistry',
+      value: {
+        deploymentId: new Uint8Array(32).fill(0x11),
+        epoch: 2n,
+        threshold: 1,
+        operatorKeys: [new Uint8Array(32).fill(0x01)],
+      },
+    })
+  })
+
+  it('fails closed on a malformed rotation tuple', () => {
+    expect(() =>
+      decodeAdminAction({
+        SetOperatorReceiptRegistry: [Array(32).fill(0x11), 2n],
+      }),
+    ).toThrow()
   })
 })
