@@ -1119,6 +1119,38 @@ export interface SetOracleGuards {
 }
 
 /**
+ * Per-account fixed withdrawal window (CU-06, inner tag 19). A cap of 0 is
+ * the deliberate off-switch; `window_secs >= 1` (production 86_400). The
+ * window anchors at the account's own first withdrawal after the previous
+ * one expires, so the cap cannot be doubled by timing across a calendar
+ * edge. Enforcement lives in the engine's withdrawal path (S39).
+ */
+export interface SetWithdrawalLimit {
+  /** Max aggregate (amount + fee) per account per window, microUSDC; 0 disables. */
+  perAccountCapMicroUsdc: bigint;
+  /** Fixed window length in seconds; >= 1. */
+  windowSecs: number;
+}
+
+/**
+ * The operator receipt registry (W28-20, inner tag 20, DEC-112): the
+ * operator quorum every custody receipt terminal verifies against. The
+ * epoch must strictly exceed the stored one — a rotation, never a rewrite
+ * — and the roster is re-validated at the store seam on execution
+ * (ed25519 validity, duplicates, threshold range, cap 128).
+ */
+export interface SetOperatorReceiptRegistry {
+  /** `bridge_core::DeploymentId` bytes every receipt must match. */
+  deploymentId: Uint8Array;
+  /** Registry epoch the receipts pin to; strictly increases per rotation. */
+  epoch: bigint;
+  /** *m* — distinct operator members required; 1..=roster length. */
+  threshold: number;
+  /** The *n* operator ed25519 verification keys (32 bytes each). */
+  operatorKeys: Uint8Array[];
+}
+
+/**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
  * zero — governance supplies the authorization, not the embedded address.
@@ -1153,6 +1185,8 @@ export type AdminAction =
   | { kind: "AttachConditional"; value: AttachConditional }
   | { kind: "Batch"; value: AdminBatchItem[] }
   | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig }
+  | { kind: "SetWithdrawalLimit"; value: SetWithdrawalLimit }
+  | { kind: "SetOperatorReceiptRegistry"; value: SetOperatorReceiptRegistry }
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
