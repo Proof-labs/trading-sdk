@@ -13,7 +13,8 @@ pub use proof_wire::codec::{
 };
 pub use proof_wire::types::{
     AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, ConfigureOraclePolicy,
-    EmergencyAction, EmergencyActionType, EmergencyAdminAction, ProposalId, ProposeAdminAction,
-    RegistryVersion, RejectAdminAction, SetOracleGuards, SignatureThreshold, SignerAddress,
-    UpdateAdminSignerRegistry,
+    EmergencyAction, EmergencyActionType, EmergencyAdminAction, FundInsuranceFund, FundingId,
+    InsuranceFundAllocation, InsurancePoolId, InsuranceWithdrawalId, ProposalId,
+    ProposeAdminAction, RegistryVersion, RejectAdminAction, SetOracleGuards, SignatureThreshold,
+    SignerAddress, UpdateAdminSignerRegistry, WithdrawInsuranceFund,
 };

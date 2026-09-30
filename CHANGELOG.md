@@ -9,6 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Prepared governed insurance funding (exchange #886): TypeScript
+  `FundInsuranceFund` and `WithdrawInsuranceFund` proposal types, strict
+  pre-signing shape validation, compact proposal decoding and Rust governance
+  re-exports. Encoding remains in the shared Rust/WASM wire implementation;
+  existing codec fixtures still pass. This client work is not release-ready
+  until the public wire artifact containing #886 is pinned and the affected
+  package versions are advanced under the compatibility policy. No treasury
+  source, live allocation or signed funding transaction is created by the SDK.
 - `ExchangeClient.queryAuthorities()` reads the engine's privileged
   authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
   api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,

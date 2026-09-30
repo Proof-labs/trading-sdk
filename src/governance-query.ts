@@ -24,6 +24,10 @@ import type {
   AuthoritiesSnapshot,
 } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
+import {
+  validateFundInsuranceFund,
+  validateWithdrawInsuranceFund,
+} from "./insurance-funding.js";
 import { Outcome } from "./types.js";
 
 /**
@@ -554,6 +558,8 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CancelAllOrdersForAccount: 8,
   ConfigureOraclePolicy: 12,
   SetOracleGuards: 13,
+  FundInsuranceFund: 18,
+  WithdrawInsuranceFund: 20,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
@@ -569,6 +575,43 @@ export function decodeAdminAction(
   if (value === "UnpauseBridge") return { kind: "UnpauseBridge" };
   const { name, payload } = variantOf(value, field);
   switch (name) {
+    case "FundInsuranceFund": {
+      const raw = toTuple(payload, field, 3);
+      const decoded: AdminAction & { kind: "FundInsuranceFund" } = {
+        kind: "FundInsuranceFund",
+        value: {
+          fundingId: toU64(raw[0], `${field}.fundingId`),
+          source: toBytes(raw[1], `${field}.source`, ADDRESS_LEN),
+          allocations: toArray(raw[2], `${field}.allocations`).map(
+            (value, i) => {
+              const row = toTuple(value, `${field}.allocations[${i}]`, 2);
+              return {
+                poolId: toU8(row[0], `${field}.poolId`),
+                amount: toU64(row[1], `${field}.amount`),
+              };
+            },
+          ),
+        },
+      };
+      validateFundInsuranceFund(decoded.value);
+      return decoded;
+    }
+    case "WithdrawInsuranceFund": {
+      const raw = toTuple(payload, field, 3);
+      const decoded = {
+        withdrawalId: toU64(raw[0], `${field}.withdrawalId`),
+        recipient: toBytes(raw[1], `${field}.recipient`, ADDRESS_LEN),
+        allocations: toArray(raw[2], `${field}.allocations`).map((value, i) => {
+          const row = toTuple(value, `${field}.allocations[${i}]`, 2);
+          return {
+            poolId: toU8(row[0], `${field}.poolId`),
+            amount: toU64(row[1], `${field}.amount`),
+          };
+        }),
+      };
+      validateWithdrawInsuranceFund(decoded);
+      return { kind: "WithdrawInsuranceFund", value: decoded };
+    }
     case "CancelAllOrdersForAccount":
       return {
         kind: "CancelAllOrdersForAccount",

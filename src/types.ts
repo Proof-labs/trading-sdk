@@ -1129,7 +1129,21 @@ export interface SetOracleGuards {
  * `AttachConditional` ride the standalone-events activation. The engine
  * refuses every tag below its activation height.
  */
+export interface FundInsuranceFund {
+  fundingId: bigint;
+  source: Address;
+  allocations: { poolId: number; amount: bigint }[];
+}
+
+export interface WithdrawInsuranceFund {
+  withdrawalId: bigint;
+  recipient: Address;
+  allocations: { poolId: number; amount: bigint }[];
+}
+
 export type AdminAction =
+  | { kind: "FundInsuranceFund"; value: FundInsuranceFund }
+  | { kind: "WithdrawInsuranceFund"; value: WithdrawInsuranceFund }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }

@@ -21,14 +21,9 @@ derive_more = { version = "1", features = ["from", "display"] }
 serde_bytes = "0.11"
 rmp-serde = "1"
 rmpv = { version = "1.3.1", features = ["with-serde"] }
-# The wire contract is the shared `proof-wire` crate (engine + SDK share
-# one definition), extracted to the public Proof-labs/wire repository on
-# 2026-09-09 and pinned to its release tag. Replaces the rev-pinned private
-# fetch from Proof-labs/exchange. v1.7.0 carries the F16 oracle-policy
-# surface: SubmitOracleObservation (0x2D), ConfigureOraclePolicy (inner
-# 0x0C), SetOracleGuards (inner 0x0D), MarketOracleGuards,
-# OracleRejectReason, FundingSkipReason, and ExecError code 82.
-proof-wire = { git = "https://github.com/Proof-labs/wire.git", tag = "v3.0.0" }
+# Exact review-only #886 wire; replace with its reviewed public release tag
+# before release. Version asserts the compatible major; no mirrored codec.
+proof-wire = { git = "https://github.com/Proof-labs/exchange.git", rev = "9c79206803a8c4a1b4795ca9297cbecc2911abae", version = "4" }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.

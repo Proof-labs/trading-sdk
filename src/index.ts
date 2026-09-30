@@ -37,6 +37,8 @@ export {
   type CancelPositionTriggers,
   type SetTriggerMarketConfig,
   type SetOracleGuards,
+  type FundInsuranceFund,
+  type WithdrawInsuranceFund,
   type BridgeWithdrawalReceipt,
   type OperatorReceiptProof,
   type ApproveAgent,
