@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { adminActionToWasm } from "./codec-adapter.js";
 import { decodeTx, encodeSignedTx } from "./codec.js";
-import { decodeAdminAction } from "./governance-query.js";
+import {
+  decodeAdminAction,
+  decodeProposalDisplayInfo,
+} from "./governance-query.js";
 import {
   validateFundInsuranceFund,
   validateWithdrawInsuranceFund,
@@ -16,6 +19,31 @@ const funding = (): FundInsuranceFund => ({
 });
 
 describe("governed insurance funding", () => {
+  it("uses the revised withdrawal tag and refuses the receipt-registry tag", () => {
+    const proposal = [
+      1,
+      "Pending",
+      "Pending",
+      1,
+      2,
+      Array.from(address(2)),
+      [],
+      [],
+      100,
+      1000,
+      2000,
+      21,
+      { WithdrawInsuranceFund: [7, Array.from(address(3)), [[0, 12]]] },
+      [],
+      Array(32).fill(0),
+    ];
+    expect(decodeProposalDisplayInfo(proposal).actionTag).toBe(21);
+    expect(() =>
+      decodeProposalDisplayInfo(
+        proposal.map((value, index) => (index === 11 ? 20 : value)),
+      ),
+    ).toThrow(/does not match/);
+  });
   it("round trips both proposals through the authoritative Rust/WASM codec", () => {
     const actions: AdminAction[] = [
       { kind: "FundInsuranceFund", value: funding() },

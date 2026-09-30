@@ -559,7 +559,7 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   ConfigureOraclePolicy: 12,
   SetOracleGuards: 13,
   FundInsuranceFund: 18,
-  WithdrawInsuranceFund: 20,
+  WithdrawInsuranceFund: 21,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown

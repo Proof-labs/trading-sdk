@@ -17,6 +17,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   until the public wire artifact containing #886 is pinned and the affected
   package versions are advanced under the compatibility policy. No treasury
   source, live allocation or signed funding transaction is created by the SDK.
+  The prototype withdrawal now uses inner tag `0x15`; merged receipt-registry
+  rotation retains `0x14` and the withdrawal-limit reservation retains `0x13`.
 - `ExchangeClient.queryAuthorities()` reads the engine's privileged
   authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
   api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,

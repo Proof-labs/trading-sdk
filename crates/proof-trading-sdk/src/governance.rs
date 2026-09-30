@@ -18,3 +18,15 @@ pub use proof_wire::types::{
     ProposeAdminAction, RegistryVersion, RejectAdminAction, SetOracleGuards, SignatureThreshold,
     SignerAddress, UpdateAdminSignerRegistry, WithdrawInsuranceFund,
 };
+
+#[cfg(test)]
+mod insurance_tag_tests {
+    use super::AdminActionType;
+
+    #[test]
+    fn insurance_withdrawal_does_not_alias_the_merged_receipt_registry() {
+        assert_eq!(AdminActionType::FundInsuranceFund as u8, 18);
+        assert_eq!(AdminActionType::SetOperatorReceiptRegistry as u8, 20);
+        assert_eq!(AdminActionType::WithdrawInsuranceFund as u8, 21);
+    }
+}
