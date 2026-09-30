@@ -26,6 +26,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Fetch only the exact reviewed wire. Checkout removes its SSH credential
+      # before any PR-controlled build/test code runs; Cargo uses a local mirror.
+      - name: Checkout review wire without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Proof-labs/exchange
+          ref: 9c79206803a8c4a1b4795ca9297cbecc2911abae
+          ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .ci-wire-review
+      - name: Prepare credential-free Cargo wire mirror
+        shell: bash
+        run: |
+          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-wire-review" "$RUNNER_TEMP/wire-review.git"
+          git config --global url."file://$RUNNER_TEMP/wire-review.git".insteadOf https://github.com/Proof-labs/exchange.git
+          rm -rf "$GITHUB_WORKSPACE/.ci-wire-review"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Install the latest cargo-audit: the RustSec DB now carries CVSS 4.0
@@ -46,6 +63,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Fetch only the exact reviewed wire. Checkout removes its SSH credential
+      # before any PR-controlled build/test code runs; Cargo uses a local mirror.
+      - name: Checkout review wire without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Proof-labs/exchange
+          ref: 9c79206803a8c4a1b4795ca9297cbecc2911abae
+          ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .ci-wire-review
+      - name: Prepare credential-free Cargo wire mirror
+        shell: bash
+        run: |
+          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-wire-review" "$RUNNER_TEMP/wire-review.git"
+          git config --global url."file://$RUNNER_TEMP/wire-review.git".insteadOf https://github.com/Proof-labs/exchange.git
+          rm -rf "$GITHUB_WORKSPACE/.ci-wire-review"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:

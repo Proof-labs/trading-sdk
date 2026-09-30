@@ -120,6 +120,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Fetch only the exact reviewed wire. Checkout removes its SSH credential
+      # before any PR-controlled build/test code runs; Cargo uses a local mirror.
+      - name: Checkout review wire without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Proof-labs/exchange
+          ref: 9c79206803a8c4a1b4795ca9297cbecc2911abae
+          ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .ci-wire-review
+      - name: Prepare credential-free Cargo wire mirror
+        shell: bash
+        run: |
+          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-wire-review" "$RUNNER_TEMP/wire-review.git"
+          git config --global url."file://$RUNNER_TEMP/wire-review.git".insteadOf https://github.com/Proof-labs/exchange.git
+          rm -rf "$GITHUB_WORKSPACE/.ci-wire-review"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -201,6 +218,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Fetch only the exact reviewed wire. Checkout removes its SSH credential
+      # before any PR-controlled build/test code runs; Cargo uses a local mirror.
+      - name: Checkout review wire without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Proof-labs/exchange
+          ref: 9c79206803a8c4a1b4795ca9297cbecc2911abae
+          ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .ci-wire-review
+      - name: Prepare credential-free Cargo wire mirror
+        shell: bash
+        run: |
+          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-wire-review" "$RUNNER_TEMP/wire-review.git"
+          git config --global url."file://$RUNNER_TEMP/wire-review.git".insteadOf https://github.com/Proof-labs/exchange.git
+          rm -rf "$GITHUB_WORKSPACE/.ci-wire-review"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       # One shared Rust cache namespace across the `rust` and `python` jobs:
       # maturin builds the PyO3 crate into the same `./target`, so Python reuses
@@ -236,6 +270,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Fetch only the exact reviewed wire. Checkout removes its SSH credential
+      # before any PR-controlled build/test code runs; Cargo uses a local mirror.
+      - name: Checkout review wire without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Proof-labs/exchange
+          ref: 9c79206803a8c4a1b4795ca9297cbecc2911abae
+          ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .ci-wire-review
+      - name: Prepare credential-free Cargo wire mirror
+        shell: bash
+        run: |
+          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-wire-review" "$RUNNER_TEMP/wire-review.git"
+          git config --global url."file://$RUNNER_TEMP/wire-review.git".insteadOf https://github.com/Proof-labs/exchange.git
+          rm -rf "$GITHUB_WORKSPACE/.ci-wire-review"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       # Same shared-key as the `rust` job so the maturin build restores its
       # compiled dependency graph (the expensive part) instead of rebuilding it.
