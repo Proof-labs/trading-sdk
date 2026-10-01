@@ -88,6 +88,9 @@ import type {
   TriggerMarketHistoryFilters,
   TriggerMarketHistoryPage,
   TriggerMarketConfigInfo,
+  AuthorizeWithdrawal,
+  ConfirmWithdrawalReceipt,
+  FailWithdrawalReceipt,
 } from "./types.js";
 import {
   decodeAdminSignerRegistryInfo,
@@ -1142,6 +1145,41 @@ export class ExchangeClient {
       type: "CancelClientOrder",
       data: { clientOrderId, owner: this.requireOwner() },
     });
+  }
+
+  /**
+   * Submit the operator-quorum authorization for a pending withdrawal
+   * (action 0x24). Permissionless: the quorum proof inside is the authority,
+   * not the envelope signer. The canonical authorization bytes come from
+   * `encodeWithdrawalAuthorization` and the proof from operators signing
+   * those bytes — see the `bridge` module.
+   */
+  async authorizeWithdrawal(params: AuthorizeWithdrawal): Promise<TxResult> {
+    return this.submitTx({ type: "AuthorizeWithdrawal", data: params });
+  }
+
+  /**
+   * Settle a paid withdrawal through its finalized operator-quorum receipt
+   * (action 0x22). Permissionless: the quorum proof inside is the authority,
+   * not the envelope signer. The canonical message the proof signs comes
+   * from `encodeBridgeReceipt`.
+   */
+  async confirmWithdrawalReceipt(
+    params: ConfirmWithdrawalReceipt,
+  ): Promise<TxResult> {
+    return this.submitTx({ type: "ConfirmWithdrawalReceipt", data: params });
+  }
+
+  /**
+   * Refund a cancelled withdrawal through its finalized operator-quorum
+   * receipt (action 0x23). Permissionless: the quorum proof inside is the
+   * authority, not the envelope signer. Positive cancellation proof only —
+   * a timeout or RPC error is never failure evidence.
+   */
+  async failWithdrawalReceipt(
+    params: FailWithdrawalReceipt,
+  ): Promise<TxResult> {
+    return this.submitTx({ type: "FailWithdrawalReceipt", data: params });
   }
 
   /**
