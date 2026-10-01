@@ -147,6 +147,8 @@ export enum ExecErrorCode {
    *  past the configured per-account cap; capacity returns gradually as
    *  in-window outflows age out. */
   WithdrawalLimitExceeded = 99,
+  // 100 (MarginMethodNotImplemented) arrives with
+  // Proof-labs/exchange#868's merge — added then, not before.
   InternalError = 255,
 }
 
