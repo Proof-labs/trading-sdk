@@ -24,8 +24,26 @@ jobs:
   audit:
     name: cargo audit
     runs-on: ubuntu-latest
+    env:
+      # The WASM crate's bridge-core git dependency is private: fetch via the
+      # system git CLI with the insteadOf rewrite the auth step completes.
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: url.https://github.com/Proof-labs/bridge.git.insteadOf
+      GIT_CONFIG_VALUE_0: ssh://git@github.com/Proof-labs/bridge.git
     steps:
       - uses: actions/checkout@v4
+      - name: Authenticate the bridge-core fetch
+        env:
+          BRIDGE_READ_TOKEN: ${{ secrets.BRIDGE_READ_TOKEN }}
+        run: |
+          set -eu
+          auth=$(printf 'x-access-token:%s' "$BRIDGE_READ_TOKEN" | base64 | tr -d '\n')
+          {
+            echo "GIT_CONFIG_KEY_1=http.https://github.com/Proof-labs/bridge.git.extraheader"
+            echo "GIT_CONFIG_VALUE_1=AUTHORIZATION: basic $auth"
+          } >> "$GITHUB_ENV"
+          echo "GIT_CONFIG_COUNT=2" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Install the latest cargo-audit: the RustSec DB now carries CVSS 4.0
