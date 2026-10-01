@@ -37,6 +37,7 @@ jobs:
           set -eu
           install -m 700 -d "$RUNNER_TEMP/bridge-ssh"
           printf '%s\n' "$BRIDGE_DEPLOY_KEY" > "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          chmod 600 "$RUNNER_TEMP/bridge-ssh/id_ed25519"
           echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/bridge-ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2

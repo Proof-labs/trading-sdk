@@ -137,6 +137,7 @@ jobs:
           set -eu
           install -m 700 -d "$RUNNER_TEMP/bridge-ssh"
           printf '%s\n' "$BRIDGE_DEPLOY_KEY" > "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          chmod 600 "$RUNNER_TEMP/bridge-ssh/id_ed25519"
           echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/bridge-ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
@@ -230,6 +231,7 @@ jobs:
           set -eu
           install -m 700 -d "$RUNNER_TEMP/bridge-ssh"
           printf '%s\n' "$BRIDGE_DEPLOY_KEY" > "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          chmod 600 "$RUNNER_TEMP/bridge-ssh/id_ed25519"
           echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/bridge-ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       # One shared Rust cache namespace across the `rust` and `python` jobs:
@@ -278,6 +280,7 @@ jobs:
           set -eu
           install -m 700 -d "$RUNNER_TEMP/bridge-ssh"
           printf '%s\n' "$BRIDGE_DEPLOY_KEY" > "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          chmod 600 "$RUNNER_TEMP/bridge-ssh/id_ed25519"
           echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/bridge-ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       # Same shared-key as the `rust` job so the maturin build restores its
