@@ -22,6 +22,14 @@ proof-trading-sdk = { path = "../proof-trading-sdk", version = "4.0" }
 # the CLI version from the crate graph automatically (#58).
 wasm-bindgen = "=0.2.126"
 serde-wasm-bindgen = "0.6"
+# The custody-path canonical payloads (W39-07): the same frozen v1
+# bridge-core the exchange engine's Cargo.lock resolves, so the bytes the
+# SDK signs are the bytes the engine verifies by construction — no parallel
+# layout to drift. Git-tag pin per bridge-core's own versioning note
+# (never on crates.io). sha2 (the default `rust-crypto` feature) compiles on
+# wasm32; nothing here pulls `getrandom`.
+bridge-core = { git = "ssh://git@github.com/Proof-labs/bridge.git", version = "1", tag = "v1.0.0" }
+serde = { version = "1", default-features = false, features = ["derive"] }
 # Deterministic Ed25519 signing only (SigningKey::from_bytes + sign) — no
 # `rand_core` feature, so nothing pulls `getrandom`, which would fail to build
 # on wasm32-unknown-unknown without the `js` backend.
