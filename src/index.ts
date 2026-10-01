@@ -39,6 +39,8 @@ export {
   type SetOracleGuards,
   type FundInsuranceFund,
   type WithdrawInsuranceFund,
+  type PublishLiquidationPolicy,
+  type RevokeLiquidationPolicy,
   type BridgeWithdrawalReceipt,
   type OperatorReceiptProof,
   type ApproveAgent,

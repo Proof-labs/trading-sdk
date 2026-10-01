@@ -9,6 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Prepared dormant liquidation-policy publish/revoke governance transport:
+  typed proposal display, shape validation and exact Rust/WASM codec support.
+  Metadata is not funded cash or activation authority. Calibrated values,
+  shared decisions and a reviewed public wire release remain prerequisites.
 - Prepared governed insurance funding (exchange #886): TypeScript
   `FundInsuranceFund` and `WithdrawInsuranceFund` proposal types, strict
   pre-signing shape validation, compact proposal decoding and Rust governance

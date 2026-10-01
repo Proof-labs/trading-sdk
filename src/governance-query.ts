@@ -31,6 +31,7 @@ import {
   validateWithdrawInsuranceFund,
 } from "./insurance-funding.js";
 import { Outcome } from "./types.js";
+import { decodeLiquidationPolicy } from "./liquidation-policy.js";
 
 /**
  * Typed decoders for the engine's governance READ model — the responses
@@ -609,6 +610,8 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   SetOracleGuards: 13,
   FundInsuranceFund: 18,
   WithdrawInsuranceFund: 21,
+  PublishLiquidationPolicy: 22,
+  RevokeLiquidationPolicy: 23,
   SetWithdrawalLimit: 19,
   SetOperatorReceiptRegistry: 20,
 };
@@ -626,6 +629,15 @@ export function decodeAdminAction(
   if (value === "UnpauseBridge") return { kind: "UnpauseBridge" };
   const { name, payload } = variantOf(value, field);
   switch (name) {
+    case "PublishLiquidationPolicy":
+      return { kind: name, value: decodeLiquidationPolicy(payload) };
+    case "RevokeLiquidationPolicy":
+      return {
+        kind: name,
+        value: {
+          revision: toU64(toTuple(payload, field, 1)[0], `${field}.revision`),
+        },
+      };
     case "FundInsuranceFund": {
       const raw = toTuple(payload, field, 3);
       const decoded: AdminAction & { kind: "FundInsuranceFund" } = {

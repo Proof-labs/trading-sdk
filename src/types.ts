@@ -1174,6 +1174,8 @@ export interface WithdrawInsuranceFund {
 }
 
 export type AdminAction =
+  | { kind: "PublishLiquidationPolicy"; value: PublishLiquidationPolicy }
+  | { kind: "RevokeLiquidationPolicy"; value: RevokeLiquidationPolicy }
   | { kind: "FundInsuranceFund"; value: FundInsuranceFund }
   | { kind: "WithdrawInsuranceFund"; value: WithdrawInsuranceFund }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
@@ -1191,6 +1193,51 @@ export type AdminAction =
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
   | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet };
+
+/** Dormant privileged settings; metadata is not funding or activation. */
+export interface PublishLiquidationPolicy {
+  expectedRevision: bigint | null;
+  revision: bigint;
+  funding: {
+    id: Uint8Array;
+    committedHeight: bigint;
+    eligibleMicroUsdc: bigint;
+  };
+  reference: {
+    maximumAgeMs: bigint;
+    maximumBookSpreadBps: number;
+    minimumSideNotionalMicroUsdc: bigint;
+    executionCollarBps: number;
+    referenceOrdersPerSide: number;
+  };
+  lifetimeBlocks: bigint;
+  noProgressBlocks: bigint;
+  work: {
+    maximumPlanLegs: number;
+    maximumOwnerOrders: number;
+    owners: number;
+    legs: number;
+    levels: number;
+    orders: number;
+    fills: number;
+    candidates: number;
+    pointReads: number;
+    indexRows: number;
+    readBytes: number;
+    checkpointBytes: number;
+  };
+  insurance: {
+    planBps: number;
+    ownerBps: number;
+    marketBps: number;
+    poolBps: number;
+    globalBps: number;
+    protectedFloorBps: number;
+  };
+}
+export interface RevokeLiquidationPolicy {
+  revision: bigint;
+}
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */
