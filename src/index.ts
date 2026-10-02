@@ -1,5 +1,10 @@
 // Types
 export {
+  decodeLiquidationCashAudit,
+  type LiquidationCashAudit,
+} from "./liquidation-cash-audit.js";
+
+export {
   type Address,
   Side,
   TimeInForce,

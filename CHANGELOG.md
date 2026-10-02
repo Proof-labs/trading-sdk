@@ -9,6 +9,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `decodeLiquidationCashAudit` decodes the draft terminal insured-close audit
+  without narrowing u64/i64 cash, PnL or IDs. It returns reported final
+  balances, not another cash movement; malformed widths, addresses, identity
+  and unsupported representations refuse. Decoding does not authenticate
+  provenance, provide replay protection or authorize runtime activation.
+
 - Prepared dormant liquidation-policy publish/revoke governance transport:
   typed proposal display, shape validation and exact Rust/WASM codec support.
   Metadata is not funded cash or activation authority. Calibrated values,
