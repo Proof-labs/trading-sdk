@@ -2406,6 +2406,47 @@ describe("ExchangeClient owner byte-coercion (serde array shape)", () => {
     const acct = await client.queryAccount(hex);
     expect(acct?.positions[0].positionEpoch).toBe(9_007_199_254_740_993n);
   });
+
+  it("queryAccount decodes a legacy length-2 binding row with void absent", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      infoResponse([1_000n, [], 0n, 0n, 0n, 0n, [[7, "Yes"]]]),
+    ) as unknown as typeof fetch;
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    const acct = await client.queryAccount(hex);
+    const row = acct!.bindingScenario![0];
+    // Exact key list pins the pre-exchange-wire-3.2.0 shape: no void key
+    // at all (absent, not merely undefined), branch decoded exactly as before.
+    expect(Object.keys(row)).toEqual(["eventId", "branch"]);
+    expect(row.eventId).toBe(7);
+    expect(row.branch).toBe("Yes");
+    expect(row.void).toBeUndefined();
+  });
+
+  it("queryAccount exposes void=true on an exchange-wire 3.2.0 length-3 binding row", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      infoResponse([1_000n, [], 0n, 0n, 0n, 0n, [[7, "Yes", true]]]),
+    ) as unknown as typeof fetch;
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    const acct = await client.queryAccount(hex);
+    const row = acct!.bindingScenario![0];
+    expect(row.eventId).toBe(7);
+    // The raw decoded branch is kept as-is — for a voided row the wire
+    // branch is the canonical don't-care "Yes"; the SDK surfaces `void`
+    // and never rewrites `branch`, so callers can gate on the flag.
+    expect(row.branch).toBe("Yes");
+    expect(row.void).toBe(true);
+  });
+
+  it("queryAccount exposes void=false on an exchange-wire 3.2.0 length-3 binding row", async () => {
+    globalThis.fetch = vi.fn(async () =>
+      infoResponse([1_000n, [], 0n, 0n, 0n, 0n, [[9, "No", false]]]),
+    ) as unknown as typeof fetch;
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    const acct = await client.queryAccount(hex);
+    expect(acct!.bindingScenario).toEqual([
+      { eventId: 9, branch: "No", void: false },
+    ]);
+  });
 });
 
 /**
