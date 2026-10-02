@@ -143,12 +143,10 @@ export enum ExecErrorCode {
   MarkUnavailable = 97,
   /** F2 trigger expansion: the order cannot carry attached SL/TP limbs. */
   TriggerOrderIncompatible = 98,
-  /** CU-06: the withdrawal would push the account's rolling-window outflow
-   *  past the configured per-account cap; capacity returns gradually as
-   *  in-window outflows age out. */
+  /** The withdrawal would push the account's rolling-window outflow past
+   *  the configured per-account cap; capacity returns gradually as in-window
+   *  outflows age out. */
   WithdrawalLimitExceeded = 99,
-  // 100 (MarginMethodNotImplemented) arrives with
-  // Proof-labs/exchange#868's merge — added then, not before.
   InternalError = 255,
 }
 
@@ -527,7 +525,7 @@ const TABLE: Record<number, ExecErrorInfo> = {
   99: {
     name: "WithdrawalLimitExceeded",
     description:
-      "the withdrawal would push the account's rolling-window outflow past the configured per-account cap (CU-06) — the attempted debit, the cap, and the moment the oldest in-window outflow expires are on the error's Display and log; capacity returns gradually as in-window outflows age out",
+      "the withdrawal would push the account's rolling-window outflow past the configured per-account cap — the attempted debit, the cap, and the moment the oldest in-window outflow expires are on the error's Display and log; capacity returns gradually as in-window outflows age out",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
