@@ -21,9 +21,9 @@ derive_more = { version = "1", features = ["from", "display"] }
 serde_bytes = "0.11"
 rmp-serde = "1"
 rmpv = { version = "1.3.1", features = ["with-serde"] }
-# Exact review-only #886 wire; replace with its reviewed public release tag
+# Exact review-only combined wire; replace with its reviewed public release tag
 # before release. Version asserts the compatible major; no mirrored codec.
-proof-wire = { git = "https://github.com/Proof-labs/exchange.git", rev = "470fb9826a740b838d2d560a0c3f54bdc80c7b97", version = "4" }
+proof-wire = { git = "https://github.com/Proof-labs/exchange.git", rev = "04ebaadb3f673729be2da769e677421e802cedc9", version = "5" }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.
