@@ -205,3 +205,59 @@ describe("pre-fill SL/TP limbs on order builders", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe("operator-receipt submission methods", () => {
+  it("authorizeWithdrawal maps to the 0x24 action, proof intact", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+
+    const params = {
+      authorization: new Uint8Array(221).fill(1),
+      proof: {
+        signerBitmap: new Uint8Array([0b1]),
+        signatures: [new Uint8Array(64)],
+      },
+    };
+    await client.authorizeWithdrawal(params);
+
+    const action = spy.mock.calls[0][0];
+    expect(action.type).toBe("AuthorizeWithdrawal");
+    expect(action.data).toBe(params);
+  });
+
+  it("confirmWithdrawalReceipt / failWithdrawalReceipt map to 0x22 / 0x23", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+
+    const params = {
+      receipt: {
+        deploymentId: new Uint8Array(32),
+        authorizationDigest: new Uint8Array(32),
+        withdrawalId: 1n,
+        terminalState: 1,
+        vaultTier: 1,
+        proofOwner: new Uint8Array(20),
+        destinationOwner: new Uint8Array(32),
+        destinationTokenAcct: new Uint8Array(32),
+        amountMicroUsdc: 1n,
+        feeMicroUsdc: 0n,
+        authorizationSignerEpoch: 1n,
+        solanaTxSignature: new Uint8Array(64),
+        finalizedSlot: 1n,
+        finalizedBlockhash: new Uint8Array(32),
+        receiptQuorumKind: 1,
+        receiptAuthorityEpoch: 1n,
+      },
+      proof: {
+        signerBitmap: new Uint8Array([0b1]),
+        signatures: [new Uint8Array(64)],
+      },
+    };
+    await client.confirmWithdrawalReceipt(params);
+    await client.failWithdrawalReceipt(params);
+
+    expect(spy.mock.calls[0][0].type).toBe("ConfirmWithdrawalReceipt");
+    expect(spy.mock.calls[1][0].type).toBe("FailWithdrawalReceipt");
+    expect(spy.mock.calls[0][0].data).toBe(params);
+  });
+});
