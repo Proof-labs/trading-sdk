@@ -56,7 +56,7 @@ describe("decodeExecError", () => {
     expect(execErrorName(77)).toBe("OracleVerdictUnavailable");
   });
 
-  it("decodes the CU-06 withdrawal-limit rejection (99)", () => {
+  it("decodes the withdrawal-limit rejection (99)", () => {
     expect(ExecErrorCode.WithdrawalLimitExceeded).toBe(99);
     const e99 = decodeExecError(99);
     expect(e99?.name).toBe("WithdrawalLimitExceeded");

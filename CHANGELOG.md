@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The error tables gain `OracleVerdictUnavailable` (code 77) and
+  `WithdrawalLimitExceeded` (code 99), matching the engine: in TypeScript
+  (`ExecErrorCode` and `decodeExecError`), in the Rust table, and therefore in
+  Python's `get_error_name`. The `errors.ndjson` conformance manifest gains
+  `manifest/77` and `manifest/99`. Codes 78-81 stay reserved.
 - `ExchangeClient.queryAuthorities()` reads the engine's privileged
   authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
   api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,
