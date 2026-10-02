@@ -4,9 +4,9 @@
  * The 2025 Hyperliquid JELLY incident: a single concentrated long
  * position on a low-liquidity perp blew up when the oracle dropped
  * 80%, triggering a cascading liquidation that exhausted the
- * insurance fund. The protocol-owned MM (HLP) was forced to inherit
- * the stuck position, taking a $10M+ unrealized loss while quoting
- * downward for hours.
+ * insurance fund. Hyperliquid's protocol-owned market maker
+ * (Hyperliquid's HLP) was forced to inherit the stuck position,
+ * taking a $10M+ unrealized loss while quoting downward for hours.
  *
  * This scenario replays the shape — single whale, thin book, sharp
  * adverse move — against Proof's four-tier waterfall to verify:
@@ -16,9 +16,9 @@
  *      to trigger the cascade. (Proof's `MarketConfig.max_position_size`
  *      is the structural fix Hyperliquid lacked.)
  *   2. If the cap were disabled or the position grew within it,
- *      the four-tier waterfall (HLP → IF → socialized → ADL) absorbs
- *      the bad debt cleanly without forcing HLP to hold inherited
- *      positions.
+ *      the four-tier waterfall (Proof liquidity provider (PLP) → IF →
+ *      socialized → ADL) absorbs the bad debt cleanly without forcing
+ *      the PLP to hold inherited positions.
  *   3. No trader account left underwater post-event.
  *
  * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK21).

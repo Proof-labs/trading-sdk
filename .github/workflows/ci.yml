@@ -118,8 +118,27 @@ jobs:
     needs: changes
     if: needs.changes.outputs.ts == 'true'
     runs-on: ubuntu-latest
+    env:
+      # The WASM crate's bridge-core git dependency is private: fetch via the
+      # system git CLI, which honours the insteadOf rewrite + auth header the
+      # step below configures (libgit2 ignores GIT_CONFIG_*).
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
+      # The WASM crate pulls the private Proof-labs/bridge crate (bridge-core)
+      # as a git dependency. Cargo's built-in git client can't present a
+      # deploy key, so the fetch goes through the system git CLI with the
+      # read-only deploy key on the agent — the same BRIDGE_DEPLOY_KEY
+      # pattern the exchange repo's image build uses for this dependency.
+      - name: Configure bridge-core ssh auth
+        env:
+          BRIDGE_DEPLOY_KEY: ${{ secrets.BRIDGE_DEPLOY_KEY }}
+        run: |
+          set -eu
+          install -m 700 -d "$RUNNER_TEMP/bridge-ssh"
+          printf '%s\n' "$BRIDGE_DEPLOY_KEY" > "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          chmod 600 "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/bridge-ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -199,8 +218,21 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    env:
+      # The WASM crate's bridge-core git dependency is private: fetch via the
+      # system git CLI with the deploy key the step below configures.
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
+      - name: Configure bridge-core ssh auth
+        env:
+          BRIDGE_DEPLOY_KEY: ${{ secrets.BRIDGE_DEPLOY_KEY }}
+        run: |
+          set -eu
+          install -m 700 -d "$RUNNER_TEMP/bridge-ssh"
+          printf '%s\n' "$BRIDGE_DEPLOY_KEY" > "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          chmod 600 "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/bridge-ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       # One shared Rust cache namespace across the `rust` and `python` jobs:
       # maturin builds the PyO3 crate into the same `./target`, so Python reuses
@@ -234,8 +266,22 @@ jobs:
     needs: changes
     if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
+    env:
+      # The workspace lockfile spans the WASM crate's private bridge-core git
+      # dependency: fetch via the system git CLI with the deploy key the step
+      # below configures.
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
+      - name: Configure bridge-core ssh auth
+        env:
+          BRIDGE_DEPLOY_KEY: ${{ secrets.BRIDGE_DEPLOY_KEY }}
+        run: |
+          set -eu
+          install -m 700 -d "$RUNNER_TEMP/bridge-ssh"
+          printf '%s\n' "$BRIDGE_DEPLOY_KEY" > "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          chmod 600 "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/bridge-ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       # Same shared-key as the `rust` job so the maturin build restores its
       # compiled dependency graph (the expensive part) instead of rebuilding it.

@@ -19,8 +19,11 @@ import type {
   ProposalStatus,
   SetTriggerMarketConfig,
   SetOracleGuards,
+  SetWithdrawalLimit,
+  SetOperatorReceiptRegistry,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
+  AuthoritiesSnapshot,
 } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { Outcome } from "./types.js";
@@ -149,6 +152,53 @@ function toBytes(
 function toArray(value: unknown, field: string): unknown[] {
   if (Array.isArray(value)) return value;
   throw new Error(`governance decode: ${field} is not an array`);
+}
+
+/// CU-06 (inner tag 19): the per-account fixed withdrawal window. Tuple
+/// layout matches `SetWithdrawalLimit`'s declaration order: [cap, window].
+function decodeSetWithdrawalLimit(value: unknown): SetWithdrawalLimit {
+  const raw = toTuple(value, "setWithdrawalLimit", 2);
+  const limit: SetWithdrawalLimit = {
+    perAccountCapMicroUsdc: toU64(
+      raw[0],
+      "setWithdrawalLimit.perAccountCapMicroUsdc",
+    ),
+    windowSecs: toU32(raw[1], "setWithdrawalLimit.windowSecs"),
+  };
+  return limit;
+}
+
+/// DEC-112 (inner tag 20): the operator receipt registry rotation. Tuple
+/// layout matches `SetOperatorReceiptRegistry`'s declaration order:
+/// [deploymentId, epoch, threshold, operatorKeys]. The keys are 32-byte
+/// ed25519 verification keys — validated as bytes here; point validity is
+/// the store seam's job (validate_operator_registry).
+function decodeSetOperatorReceiptRegistry(
+  value: unknown,
+): SetOperatorReceiptRegistry {
+  const raw = toTuple(value, "setOperatorReceiptRegistry", 4);
+  const keysJson = toArray(raw[3], "setOperatorReceiptRegistry.operatorKeys");
+  const registry: SetOperatorReceiptRegistry = {
+    deploymentId: toBytes(
+      raw[0],
+      "setOperatorReceiptRegistry.deploymentId",
+      32,
+    ),
+    epoch: toU64(raw[1], "setOperatorReceiptRegistry.epoch"),
+    threshold: toU32(raw[2], "setOperatorReceiptRegistry.threshold"),
+    operatorKeys: keysJson.map((k) =>
+      toBytes(k, "setOperatorReceiptRegistry.operatorKeys[i]", 32),
+    ),
+  };
+  if (
+    registry.threshold === 0 ||
+    registry.threshold > registry.operatorKeys.length
+  ) {
+    throw new Error(
+      `governance decode: setOperatorReceiptRegistry threshold ${registry.threshold} is outside 1..=${registry.operatorKeys.length}`,
+    );
+  }
+  return registry;
 }
 
 function toTuple(
@@ -541,7 +591,7 @@ function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
  *  a compile error (`Record` over the closed union), never a silently
  *  inherited neighbour's tag. Mirrors `AdminActionType` in the engine and
  *  `action_type()` in the Rust core — 1/2 are v1, 3/4 are admin-actions v2. */
-const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
+export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CreateMarket: 1,
   UpdateAdminSignerRegistry: 2,
   CreateEvent: 9,
@@ -553,6 +603,8 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CancelAllOrdersForAccount: 8,
   ConfigureOraclePolicy: 12,
   SetOracleGuards: 13,
+  SetWithdrawalLimit: 19,
+  SetOperatorReceiptRegistry: 20,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
@@ -577,6 +629,16 @@ export function decodeAdminAction(
       return {
         kind: "SetOracleGuards",
         value: decodeSetOracleGuards(payload),
+      };
+    case "SetWithdrawalLimit":
+      return {
+        kind: "SetWithdrawalLimit",
+        value: decodeSetWithdrawalLimit(payload),
+      };
+    case "SetOperatorReceiptRegistry":
+      return {
+        kind: "SetOperatorReceiptRegistry",
+        value: decodeSetOperatorReceiptRegistry(payload),
       };
     case "ConfigureOraclePolicy": {
       const raw = toTuple(payload, "configureOraclePolicy", 2);
@@ -751,6 +813,31 @@ export function decodeAdminSignerRegistry(
       toBytes(m, `registry.members[${i}]`, ADDRESS_LEN),
     ),
   };
+}
+
+const AUTHORITIES_FIELDS = [
+  "relayer",
+  "oracle",
+  "cexComposite",
+  "custody",
+  "marketParams",
+  "scheduledOps",
+] as const;
+
+/**
+ * Decode the engine's six-field `AuthoritiesSnapshot`. Fails closed on any
+ * other shape: a partially decoded set would present a missing authority as
+ * an empty one.
+ */
+export function decodeAuthoritiesSnapshot(raw: unknown): AuthoritiesSnapshot {
+  const fields = toTuple(raw, "authorities", AUTHORITIES_FIELDS.length);
+  const out = {} as AuthoritiesSnapshot;
+  AUTHORITIES_FIELDS.forEach((name, i) => {
+    out[name] = toArray(fields[i], `authorities.${name}`).map((a, j) =>
+      toBytes(a, `authorities.${name}[${j}]`, ADDRESS_LEN),
+    );
+  });
+  return out;
 }
 
 /** Decode the engine's one-field `AdminSignerRegistryInfo` envelope. */

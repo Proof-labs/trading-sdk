@@ -40,7 +40,7 @@ describeScenario("SDK02: partial fill then cancel", () => {
     expect(await w.position("bob", BTC_PERP)).toBe(-sellQty);
 
     // Alice's 3-lot remainder sits at the $50k level. Find it by price;
-    // other ambient bids (from MMs, HLP, etc.) may share the book, so
+    // other ambient bids (from MMs, the Proof liquidity provider (PLP), etc.) may share the book, so
     // we cannot assume this is `bids[0]`.
     const bookBefore = await w.orderbook(BTC_PERP);
     const aliceLevelBefore = bookBefore.bids.find((l) => l.price === price);

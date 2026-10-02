@@ -77,6 +77,7 @@ import type {
   WithdrawalRecord,
   WithdrawalStatus,
   AdminSignerRegistry,
+  AuthoritiesSnapshot,
   ProposalPage,
   EventInfo,
   SetPositionTriggers,
@@ -87,9 +88,13 @@ import type {
   TriggerMarketHistoryFilters,
   TriggerMarketHistoryPage,
   TriggerMarketConfigInfo,
+  AuthorizeWithdrawal,
+  ConfirmWithdrawalReceipt,
+  FailWithdrawalReceipt,
 } from "./types.js";
 import {
   decodeAdminSignerRegistryInfo,
+  decodeAuthoritiesSnapshot,
   decodeEventInfo,
   decodeProposalPage,
 } from "./governance-query.js";
@@ -229,7 +234,7 @@ export interface ExchangeClientOptions {
    *
    * - `false`: the legacy direct-node path — submission goes to CometBFT
    *   `broadcast_tx_sync` over `rpcUrl`, reads to `apiUrl`, and chain
-   *   queries to `rpcUrl`. Kept only for in-cluster tools (MMs, HLP,
+   *   queries to `rpcUrl`. Kept only for in-cluster tools (MMs, the PLP,
    *   oracle feeder, retail-flow taker) and the scenario harness that
    *   reach the node directly and don't need the gateway. Never expose
    *   this to external callers.
@@ -1143,6 +1148,41 @@ export class ExchangeClient {
   }
 
   /**
+   * Submit the operator-quorum authorization for a pending withdrawal
+   * (action 0x24). Permissionless: the quorum proof inside is the authority,
+   * not the envelope signer. The canonical authorization bytes come from
+   * `encodeWithdrawalAuthorization` and the proof from operators signing
+   * those bytes — see the `bridge` module.
+   */
+  async authorizeWithdrawal(params: AuthorizeWithdrawal): Promise<TxResult> {
+    return this.submitTx({ type: "AuthorizeWithdrawal", data: params });
+  }
+
+  /**
+   * Settle a paid withdrawal through its finalized operator-quorum receipt
+   * (action 0x22). Permissionless: the quorum proof inside is the authority,
+   * not the envelope signer. The canonical message the proof signs comes
+   * from `encodeBridgeReceipt`.
+   */
+  async confirmWithdrawalReceipt(
+    params: ConfirmWithdrawalReceipt,
+  ): Promise<TxResult> {
+    return this.submitTx({ type: "ConfirmWithdrawalReceipt", data: params });
+  }
+
+  /**
+   * Refund a cancelled withdrawal through its finalized operator-quorum
+   * receipt (action 0x23). Permissionless: the quorum proof inside is the
+   * authority, not the envelope signer. Positive cancellation proof only —
+   * a timeout or RPC error is never failure evidence.
+   */
+  async failWithdrawalReceipt(
+    params: FailWithdrawalReceipt,
+  ): Promise<TxResult> {
+    return this.submitTx({ type: "FailWithdrawalReceipt", data: params });
+  }
+
+  /**
    * Cancel all resting orders for the loaded signer. Pass a `market` to
    * scope the cancel to one market; omit it to cancel across all markets.
    */
@@ -1410,6 +1450,19 @@ export class ExchangeClient {
       requireEncodedData(json, "/v1/admin/signer-registry"),
     );
     return decodeAdminSignerRegistryInfo(msgpackDecoder.decode(bytes));
+  }
+
+  /**
+   * Read the engine's privileged authorization sets via the gateway proxy
+   * (`GET /v1/admin/authorities`): relayer, oracle, CEX composite, custody,
+   * market parameters and scheduled operations. An empty set means no signer
+   * holds that authority; a failed read throws, so it can never render as an
+   * empty set.
+   */
+  async queryAuthorities(): Promise<AuthoritiesSnapshot> {
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/admin/authorities`);
+    const bytes = fromBase64(requireEncodedData(json, "/v1/admin/authorities"));
+    return decodeAuthoritiesSnapshot(msgpackDecoder.decode(bytes));
   }
 
   /**
@@ -1756,6 +1809,10 @@ export class ExchangeClient {
       entryPrice: String(row.entry_price ?? ""),
       settlementPrice: String(row.settlement_price ?? ""),
       realizedPnl: String(row.realized_pnl ?? "0"),
+      convertedSize: String(row.converted_size || "0"),
+      fallbackReason: String(
+        row.fallback_reason ?? "",
+      ) as HistoryResolution["fallbackReason"],
       blockHeight: Number(row.block_height ?? 0),
       timestamp: Number(row.timestamp ?? 0),
     }));

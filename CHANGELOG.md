@@ -9,10 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Depends on exchange#831 and the exchange#811 split PR (both unmerged).**
-  npm 5.3.0 → 5.4.0, Rust core 4.2.0 → 4.3.0, Python 4.0.0 → 4.1.0. MINOR:
+- **Depends on exchange#831 (unmerged); code 77 is from exchange#832, on
+  exchange dev.**
+  npm 6.4.0 → 6.5.0, Rust core 4.2.0 → 4.3.0, Python 4.0.0 → 4.1.0. MINOR:
   every read an earlier SDK accepted still decodes the same way, and the
-  pinned proof-wire tag (v2.1.0), codec and signing bytes are unchanged. The
+  pinned proof-wire tag (v4.1.0), codec and signing bytes are unchanged. The
   WASM and PyO3 crates keep their versions.
   - Oracle permission reads decode the committed verdict in both layouts. The
     fourteen-field format-3 read from exchange#831 (primary with fallback)
@@ -35,11 +36,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `AnchorUnavailable` reason, is now an accepted verdict reason. Before
     this, a committed verdict carrying it was refused. `AnchorUnavailable`
     is still accepted from older nodes.
-  - Error code 77 `OracleVerdictUnavailable` (exchange#811, proof-wire
-    2.4.0) is in the TypeScript, Rust and Python (via the Rust core) error
+  - Error code 77 `OracleVerdictUnavailable` (exchange#832, proof-wire
+    2.4.0+) is in the TypeScript, Rust and Python (via the Rust core) error
     tables and in the `errors.ndjson` manifest. The oracle policy has no
     certified verdict for the market in this block, so the action can be
     retried in a later block. Codes 78-81 stay reserved.
+- `ExchangeClient.queryAuthorities()` reads the engine's privileged
+  authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
+  api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,
+  `cexComposite`, `custody`, `marketParams` and `scheduledOps`, each a list of
+  20-byte addresses. `decodeAuthoritiesSnapshot` is exported for offline use.
+  An empty list is a real chain state; any other shape throws, so a missing
+  set never renders as an empty one. It is for the WebAdmin authorities view
+  (GV-06).
 - TypeScript 5.3.0 adds trigger-history decoding of the pending (pre-fill)
   lifecycle (contract §7-I, indexer #247): `pending_triggers_attached` (order
   id, client order id, and both limb renders — present as
@@ -78,6 +87,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Requests bypass HTTP caches. MINOR: this additive TypeScript read API keeps
   the released npm 5.1.0 codec and proof-wire 2.1.0 contract (exchange v2.12.0 /
   api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
+- TypeScript 6.1.0: `HistoryResolution.convertedSize` and
+  `HistoryResolution.fallbackReason` (with the `ConversionFallbackReason` type)
+  for conditional-perp resolutions, as the exchange release after 2.14.0
+  (exchange #830) emits them on `conditional_settled` and the indexer's
+  `GET /v1/history/resolutions` serves them. A winning conditional converts at
+  resolution into a perpetual position on the underlying opened at the
+  settlement price, and its result is paid in cash exactly as a winner that
+  cannot convert is. `convertedSize` is the size that converted (the whole
+  `size`, or `"0"` when it did not); `fallbackReason` says why a winner did not
+  convert (`""` otherwise; the margin case is `"maintenance_margin"`).
+  `realizedPnl` is unchanged: it is the cash paid for every `conditional_settled`
+  row, converted or not. The Python `history_resolutions` returns the raw rows,
+  so it carries `converted_size` and `fallback_reason` as served. MINOR: the new
+  fields are additive on a read; no codec, order encoding, Rust or Python
+  package change.
 - `GatewayHttpError.errorCode` — optional typed error code extracted from the
   gateway's JSON response body (e.g. `"MissingMark"`). The `GatewayReads`
   path clones the response to parse the code while leaving the original body
@@ -120,6 +144,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stays unread, and a non-JSON failure reports its status instead of a JSON
   parse error. `GatewayHttpError` takes an optional fourth `detail` argument
   for the gateway's own error text.
+
+### Removed
+
+- TypeScript 6.0.0 drops `RunLiquidationSweep` (0x11) from the
+  `@proof-labs/trading-sdk/testing` subpath: the `RunLiquidationSweep` type,
+  its `TestActionType` entry and its `TestAction` variant. The engine retired
+  the action and rejects it at decode (exchange#850). `RunFundingTick` (0x12)
+  is unchanged. MAJOR: a removed export breaks callers that name it; the main
+  entry and all other action bytes are unaffected.
 
 ### Deprecated
 
