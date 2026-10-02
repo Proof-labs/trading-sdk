@@ -244,6 +244,13 @@ included, it goes through the SDK
 
 ### Optional native Rust gateway transport
 
+For operational artifact evidence, `await client.reads().version({ signal })`
+forwards `GET /v1/version` with `cache: "no-store"`. The raw response includes
+the upstream node's reported loaded engine version and library hash. A missing
+route, authentication failure or transport failure stays an error; there is no
+direct-node fallback. This identifies only the responding upstream, not every
+validator, and does not prove consensus compatibility or authorize a rollout.
+
 Rust `proof-trading-sdk` 3.2.0 exposes `gateway::GatewayClient` with the optional
 `gateway` feature. Default codec/WASM builds do not acquire an HTTP transport.
 The four explicit operations are `chain_identity`, `oracle_permissions`,

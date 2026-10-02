@@ -220,6 +220,16 @@ export class GatewayReads {
   health(opts: GatewayReadOptions = {}) {
     return this.get("/v1/health", {}, opts);
   }
+  /** Node-local loaded engine identity, not validator-wide qualification.
+   * Do not cache an artifact identity across a rollout. Errors remain errors.
+   */
+  version(opts: GatewayReadOptions = {}) {
+    return this.request(
+      "/v1/version",
+      { method: "GET", cache: "no-store" },
+      opts,
+    );
+  }
   /** Operational freshness for trading UI guards; not trading authorization.
    * Preserve unavailable-feeder responses; thresholds belong to the caller.
    */
