@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { decodeLiquidationCashAudit } from "./liquidation-cash-audit.js";
 
 const fixture = () => ({
@@ -26,6 +27,18 @@ const fixture = () => ({
 });
 
 describe("terminal liquidation cash audit decoding", () => {
+  it("matches the frozen attributes asserted against actual Rust ABCI bytes", () => {
+    const golden: unknown = JSON.parse(
+      readFileSync(
+        new URL("./fixtures/liquidation_cash_finalized.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    expect(golden).toEqual(fixture());
+    expect(decodeLiquidationCashAudit(golden)).toEqual(
+      decodeLiquidationCashAudit(fixture()),
+    );
+  });
   it("retains full widths and distinguishes an audit snapshot from another cash movement", () => {
     const attrs = fixture();
     const original = { ...attrs };
