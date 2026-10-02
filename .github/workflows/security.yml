@@ -24,8 +24,21 @@ jobs:
   audit:
     name: cargo audit
     runs-on: ubuntu-latest
+    env:
+      # The WASM crate's bridge-core git dependency is private: fetch via the
+      # system git CLI with the deploy key the step below configures.
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
+      - name: Configure bridge-core ssh auth
+        env:
+          BRIDGE_DEPLOY_KEY: ${{ secrets.BRIDGE_DEPLOY_KEY }}
+        run: |
+          set -eu
+          install -m 700 -d "$RUNNER_TEMP/bridge-ssh"
+          printf '%s\n' "$BRIDGE_DEPLOY_KEY" > "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          chmod 600 "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/bridge-ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Install the latest cargo-audit: the RustSec DB now carries CVSS 4.0
