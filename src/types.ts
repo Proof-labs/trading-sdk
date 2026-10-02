@@ -1119,6 +1119,38 @@ export interface SetOracleGuards {
 }
 
 /**
+ * Per-account fixed withdrawal window (CU-06, inner tag 19). A cap of 0 is
+ * the deliberate off-switch; `window_secs >= 1` (production 86_400). The
+ * window anchors at the account's own first withdrawal after the previous
+ * one expires, so the cap cannot be doubled by timing across a calendar
+ * edge. Enforcement lives in the engine's withdrawal path (S39).
+ */
+export interface SetWithdrawalLimit {
+  /** Max aggregate (amount + fee) per account per window, microUSDC; 0 disables. */
+  perAccountCapMicroUsdc: bigint;
+  /** Fixed window length in seconds; >= 1. */
+  windowSecs: number;
+}
+
+/**
+ * The operator receipt registry (W28-20, inner tag 20, DEC-112): the
+ * operator quorum every custody receipt terminal verifies against. The
+ * epoch must strictly exceed the stored one — a rotation, never a rewrite
+ * — and the roster is re-validated at the store seam on execution
+ * (ed25519 validity, duplicates, threshold range, cap 128).
+ */
+export interface SetOperatorReceiptRegistry {
+  /** `bridge_core::DeploymentId` bytes every receipt must match. */
+  deploymentId: Uint8Array;
+  /** Registry epoch the receipts pin to; strictly increases per rotation. */
+  epoch: bigint;
+  /** *m* — distinct operator members required; 1..=roster length. */
+  threshold: number;
+  /** The *n* operator ed25519 verification keys (32 bytes each). */
+  operatorKeys: Uint8Array[];
+}
+
+/**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
  * zero — governance supplies the authorization, not the embedded address.
@@ -1139,6 +1171,8 @@ export type AdminAction =
   | { kind: "AttachConditional"; value: AttachConditional }
   | { kind: "Batch"; value: AdminBatchItem[] }
   | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig }
+  | { kind: "SetWithdrawalLimit"; value: SetWithdrawalLimit }
+  | { kind: "SetOperatorReceiptRegistry"; value: SetOperatorReceiptRegistry }
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
@@ -1261,6 +1295,22 @@ export interface AdminSignerRegistry {
   threshold: number;
   /** Canonically sorted, duplicate-free roster (each a 20-byte address). */
   members: Address[];
+}
+
+/**
+ * The engine's privileged authorization sets, as read from
+ * `GET /v1/admin/authorities` (engine `AuthoritiesSnapshot`, field order
+ * relayer, oracle, cex_composite, custody, market_params, scheduled_ops).
+ * Each is a list of 20-byte addresses. An empty list is a real chain state:
+ * no signer holds that authority.
+ */
+export interface AuthoritiesSnapshot {
+  relayer: Address[];
+  oracle: Address[];
+  cexComposite: Address[];
+  custody: Address[];
+  marketParams: Address[];
+  scheduledOps: Address[];
 }
 
 /** Why a pending proposal expired. */
@@ -2308,6 +2358,16 @@ export interface HistoryCashFlow {
   timestamp: number;
 }
 
+/** Why a winning conditional-perp position did not convert into a
+ * perpetual position on its underlying, as the engine names it on
+ * `conditional_settled`. The result is paid in cash either way. */
+export type ConversionFallbackReason =
+  | "maintenance_margin"
+  | "position_size_cap"
+  | "open_interest_cap"
+  | "cannot_price_or_margin"
+  | "insufficient_balance";
+
 /** One row of the per-user position-at-resolution log. Covers three
  * kinds — see `kind` field. Feeds Portfolio Resolved tab + Impact /
  * Prediction resolved-state "your outcome" block.
@@ -2330,12 +2390,26 @@ export interface HistoryResolution {
   size: string;
   /** Weighted-average entry price of the resolved position. */
   entryPrice: string;
-  /** Settlement price. conditional_settled → mark_price;
+  /** Settlement price. conditional_settled → the underlying's oracle price
+   *  at or after the event's settlement time;
    *  prediction_settled → payoff_per_share (BINARY_PRICE_MAX winner, 0 loser);
    *  conditional_voided → "" (no mark; void path returns margin, no cash movement). */
   settlementPrice: string;
-  /** Signed realized PnL in µUSDC. conditional_voided → "0". */
+  /** Signed µUSDC paid to the owner's balance at resolution.
+   *  conditional_settled → (settlementPrice − entryPrice) × size signed by
+   *  side, for a converted winner and a winner that fell back alike: a
+   *  converted winner's perpetual opens at the settlement price and its
+   *  result is paid in cash, exactly as a fallback's is;
+   *  prediction_settled → the cash paid; conditional_voided → "0". */
   realizedPnl: string;
+  /** Quantity, in integer lots, that became a perpetual position on the
+   *  underlying, opened at the settlement price (`settlementPrice`): the
+   *  whole `size` when a winner converted, "0" when it did not, and "0" on
+   *  every other kind. Either way the result is paid in cash (`realizedPnl`). */
+  convertedSize: string;
+  /** Why a conditional_settled winner did not convert into a perpetual; ""
+   *  when it converted and on every other kind. */
+  fallbackReason: ConversionFallbackReason | "";
   /** Block height at which the resolution landed. */
   blockHeight: number;
   /** Unix milliseconds. */

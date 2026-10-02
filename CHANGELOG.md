@@ -9,6 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `ExchangeClient.queryAuthorities()` reads the engine's privileged
+  authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
+  api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,
+  `cexComposite`, `custody`, `marketParams` and `scheduledOps`, each a list of
+  20-byte addresses. `decodeAuthoritiesSnapshot` is exported for offline use.
+  An empty list is a real chain state; any other shape throws, so a missing
+  set never renders as an empty one. It is for the WebAdmin authorities view
+  (GV-06).
 - TypeScript 5.3.0 adds trigger-history decoding of the pending (pre-fill)
   lifecycle (contract §7-I, indexer #247): `pending_triggers_attached` (order
   id, client order id, and both limb renders — present as
@@ -52,7 +60,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `closePrice`, `closePriceSpec`, `realizedPnl`) and `PlpAbsorbedEvent`
   (`poolId`, `amount`, `plpBalanceAfter`) join the `ExchangeEvent` union and
   the package barrel. They type the bad-debt waterfall events the engine
-  already emits on proof-wire 2.1.0 (exchange dev `exchange-wire` `Event`), with
+  already emits on proof-wire 4.1.0 (exchange dev `exchange-wire` `Event`), with
   the same stringified-number convention as `AccountLiquidatedEvent`.
   TypeScript types only: no codec, wire or Rust/Python change.
 - `reads().historyStatus()` forwards `GET /v1/history/status` (the gateway's
@@ -60,6 +68,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   response body, HTTP errors and cancellation intact. Applications use it to
   tell an empty history from one the indexer has not caught up on; freshness
   thresholds stay with the caller.
+- TypeScript 6.1.0: `HistoryResolution.convertedSize` and
+  `HistoryResolution.fallbackReason` (with the `ConversionFallbackReason` type)
+  for conditional-perp resolutions, as the exchange release after 2.14.0
+  (exchange #830) emits them on `conditional_settled` and the indexer's
+  `GET /v1/history/resolutions` serves them. A winning conditional converts at
+  resolution into a perpetual position on the underlying opened at the
+  settlement price, and its result is paid in cash exactly as a winner that
+  cannot convert is. `convertedSize` is the size that converted (the whole
+  `size`, or `"0"` when it did not); `fallbackReason` says why a winner did not
+  convert (`""` otherwise; the margin case is `"maintenance_margin"`).
+  `realizedPnl` is unchanged: it is the cash paid for every `conditional_settled`
+  row, converted or not. The Python `history_resolutions` returns the raw rows,
+  so it carries `converted_size` and `fallback_reason` as served. MINOR: the new
+  fields are additive on a read; no codec, order encoding, Rust or Python
+  package change.
 - `GatewayHttpError.errorCode` — optional typed error code extracted from the
   gateway's JSON response body (e.g. `"MissingMark"`). The `GatewayReads`
   path clones the response to parse the code while leaving the original body
@@ -102,6 +125,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stays unread, and a non-JSON failure reports its status instead of a JSON
   parse error. `GatewayHttpError` takes an optional fourth `detail` argument
   for the gateway's own error text.
+
+### Removed
+
+- TypeScript 6.0.0 drops `RunLiquidationSweep` (0x11) from the
+  `@proof-labs/trading-sdk/testing` subpath: the `RunLiquidationSweep` type,
+  its `TestActionType` entry and its `TestAction` variant. The engine retired
+  the action and rejects it at decode (exchange#850). `RunFundingTick` (0x12)
+  is unchanged. MAJOR: a removed export breaks callers that name it; the main
+  entry and all other action bytes are unaffected.
 
 ### Deprecated
 
