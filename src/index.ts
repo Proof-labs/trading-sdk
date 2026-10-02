@@ -214,6 +214,24 @@ export {
 } from "./governance-query.js";
 export { fetchChainId } from "./client.js";
 
+// Bridge custody: canonical bridge-core v1 payload encoders — the bytes the
+// engine's receipt path signs and verifies.
+export {
+  BRIDGE_RECEIPT_LEN,
+  QUORUM_OPERATOR_M_OF_N,
+  TERMINAL_CANCELLED,
+  TERMINAL_PAID,
+  VAULT_TIER_COLD,
+  VAULT_TIER_HOT,
+  VAULT_TIER_WARM,
+  WITHDRAWAL_AUTHORIZATION_LEN,
+  encodeBridgeReceipt,
+  encodeWithdrawalAuthorization,
+  signOperatorReceipt,
+  withdrawalAuthorizationDigest,
+  type WithdrawalAuthorizationV1,
+} from "./bridge.js";
+
 // Errors
 export {
   GatewayHttpError,

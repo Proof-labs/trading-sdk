@@ -23,6 +23,8 @@ import type {
   CancelUpgrade,
   NodeVersion,
   PendingUpgradePlan,
+  SetWithdrawalLimit,
+  SetOperatorReceiptRegistry,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
   AuthoritiesSnapshot,
@@ -156,6 +158,53 @@ function toBytes(
 function toArray(value: unknown, field: string): unknown[] {
   if (Array.isArray(value)) return value;
   throw new Error(`governance decode: ${field} is not an array`);
+}
+
+/// CU-06 (inner tag 19): the per-account fixed withdrawal window. Tuple
+/// layout matches `SetWithdrawalLimit`'s declaration order: [cap, window].
+function decodeSetWithdrawalLimit(value: unknown): SetWithdrawalLimit {
+  const raw = toTuple(value, "setWithdrawalLimit", 2);
+  const limit: SetWithdrawalLimit = {
+    perAccountCapMicroUsdc: toU64(
+      raw[0],
+      "setWithdrawalLimit.perAccountCapMicroUsdc",
+    ),
+    windowSecs: toU32(raw[1], "setWithdrawalLimit.windowSecs"),
+  };
+  return limit;
+}
+
+/// DEC-112 (inner tag 20): the operator receipt registry rotation. Tuple
+/// layout matches `SetOperatorReceiptRegistry`'s declaration order:
+/// [deploymentId, epoch, threshold, operatorKeys]. The keys are 32-byte
+/// ed25519 verification keys — validated as bytes here; point validity is
+/// the store seam's job (validate_operator_registry).
+function decodeSetOperatorReceiptRegistry(
+  value: unknown,
+): SetOperatorReceiptRegistry {
+  const raw = toTuple(value, "setOperatorReceiptRegistry", 4);
+  const keysJson = toArray(raw[3], "setOperatorReceiptRegistry.operatorKeys");
+  const registry: SetOperatorReceiptRegistry = {
+    deploymentId: toBytes(
+      raw[0],
+      "setOperatorReceiptRegistry.deploymentId",
+      32,
+    ),
+    epoch: toU64(raw[1], "setOperatorReceiptRegistry.epoch"),
+    threshold: toU32(raw[2], "setOperatorReceiptRegistry.threshold"),
+    operatorKeys: keysJson.map((k) =>
+      toBytes(k, "setOperatorReceiptRegistry.operatorKeys[i]", 32),
+    ),
+  };
+  if (
+    registry.threshold === 0 ||
+    registry.threshold > registry.operatorKeys.length
+  ) {
+    throw new Error(
+      `governance decode: setOperatorReceiptRegistry threshold ${registry.threshold} is outside 1..=${registry.operatorKeys.length}`,
+    );
+  }
+  return registry;
 }
 
 function toTuple(
@@ -565,7 +614,7 @@ function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
  *  a compile error (`Record` over the closed union), never a silently
  *  inherited neighbour's tag. Mirrors `AdminActionType` in the engine and
  *  `action_type()` in the Rust core — 1/2 are v1, 3/4 are admin-actions v2. */
-const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
+export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CreateMarket: 1,
   UpdateAdminSignerRegistry: 2,
   CreateEvent: 9,
@@ -579,6 +628,8 @@ const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   SetOracleGuards: 13,
   ScheduleUpgrade: 14,
   CancelUpgrade: 15,
+  SetWithdrawalLimit: 19,
+  SetOperatorReceiptRegistry: 20,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
@@ -603,6 +654,16 @@ export function decodeAdminAction(
       return {
         kind: "SetOracleGuards",
         value: decodeSetOracleGuards(payload),
+      };
+    case "SetWithdrawalLimit":
+      return {
+        kind: "SetWithdrawalLimit",
+        value: decodeSetWithdrawalLimit(payload),
+      };
+    case "SetOperatorReceiptRegistry":
+      return {
+        kind: "SetOperatorReceiptRegistry",
+        value: decodeSetOperatorReceiptRegistry(payload),
       };
     case "ConfigureOraclePolicy": {
       const raw = toTuple(payload, "configureOraclePolicy", 2);
