@@ -86,7 +86,7 @@ export {
   type AccountLiquidatedEvent,
   type InsuranceFundUpdatedEvent,
   type PositionAutoDeleveragedEvent,
-  type HlpAbsorbedEvent,
+  type PlpAbsorbedEvent,
   type MarketCreatedEvent,
   type AdlQueueEntry,
   type Ticker,

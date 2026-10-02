@@ -1547,17 +1547,19 @@ export interface PositionAutoDeleveragedEvent {
 }
 
 /**
- * Emitted when HLP absorbs liquidation deficit (Tier 0 of the bad-debt
- * waterfall). Stops firing once the HLP balance reaches its floor.
+ * Emitted when the Proof liquidity provider (PLP) absorbs liquidation deficit
+ * (Tier 0 of the bad-debt waterfall). Emitted only while PLP is enabled and
+ * above its floor; once PLP reaches the floor, deficits route to Tier 1 and
+ * this event stops firing.
  */
-export interface HlpAbsorbedEvent {
-  type: "HlpAbsorbed";
+export interface PlpAbsorbedEvent {
+  type: "PlpAbsorbed";
   /** Insurance pool the liquidation came from (informational). */
   poolId: string;
-  /** Deficit absorbed by HLP in this draw, in microUSDC. */
+  /** Deficit absorbed by PLP in this draw, in microUSDC. */
   amount: string;
-  /** HLP balance after the draw in microUSDC (signed). */
-  hlpBalanceAfter: string;
+  /** PLP balance after the draw in microUSDC (signed). */
+  plpBalanceAfter: string;
 }
 
 /** Emitted when periodic funding is applied to a market. */
@@ -1665,7 +1667,7 @@ export type ExchangeEvent =
   | AccountLiquidatedEvent
   | InsuranceFundUpdatedEvent
   | PositionAutoDeleveragedEvent
-  | HlpAbsorbedEvent
+  | PlpAbsorbedEvent
   | FundingAppliedEvent
   | FundingSettledEvent
   | AgentApprovedEvent

@@ -49,8 +49,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
 - `InsuranceFundUpdatedEvent` (`poolId`, `balance`, `delta`),
   `PositionAutoDeleveragedEvent` (`owner`, `market`, `side`, `size`,
-  `closePrice`, `closePriceSpec`, `realizedPnl`) and `HlpAbsorbedEvent`
-  (`poolId`, `amount`, `hlpBalanceAfter`) join the `ExchangeEvent` union and
+  `closePrice`, `closePriceSpec`, `realizedPnl`) and `PlpAbsorbedEvent`
+  (`poolId`, `amount`, `plpBalanceAfter`) join the `ExchangeEvent` union and
   the package barrel. They type the bad-debt waterfall events the engine
   already emits on proof-wire 2.1.0 (exchange dev `exchange-wire` `Event`), with
   the same stringified-number convention as `AccountLiquidatedEvent`.

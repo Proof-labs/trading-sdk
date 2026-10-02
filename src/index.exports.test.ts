@@ -31,7 +31,7 @@ import {
   type ExchangeEvent,
   type InsuranceFundUpdatedEvent,
   type PositionAutoDeleveragedEvent,
-  type HlpAbsorbedEvent,
+  type PlpAbsorbedEvent,
   decodeTriggerMarketConfigInfos,
   decodePositionTriggerHistoryPage,
   decodeTriggerMarketHistoryPage,
@@ -153,13 +153,13 @@ describe("public barrel: bad-debt waterfall events", () => {
       closePriceSpec: "65000000000",
       realizedPnl: "1200000",
     };
-    const hlp: HlpAbsorbedEvent = {
-      type: "HlpAbsorbed",
+    const plp: PlpAbsorbedEvent = {
+      type: "PlpAbsorbed",
       poolId: "0",
       amount: "4000000",
-      hlpBalanceAfter: "996000000",
+      plpBalanceAfter: "996000000",
     };
-    const events: ExchangeEvent[] = [insurance, adl, hlp];
+    const events: ExchangeEvent[] = [insurance, adl, plp];
 
     const fields = events.map((event) => {
       switch (event.type) {
@@ -167,8 +167,8 @@ describe("public barrel: bad-debt waterfall events", () => {
           return event.delta;
         case "PositionAutoDeleveraged":
           return event.closePriceSpec;
-        case "HlpAbsorbed":
-          return event.hlpBalanceAfter;
+        case "PlpAbsorbed":
+          return event.plpBalanceAfter;
         default:
           return null;
       }
