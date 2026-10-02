@@ -22,6 +22,53 @@ function envelope(payload: unknown): Record<string, string> {
   };
 }
 
+// ─── hand-assembled wire bytes ─────────────────────────────────────────────
+// The library's encoder never emits the float families for whole numbers, so
+// the float-rejection tests plant the type bytes by hand.
+
+function rawEnvelope(bytes: Uint8Array): Record<string, string> {
+  return { data: btoa(String.fromCharCode(...bytes)) };
+}
+
+function rawList(fields: Array<number | Uint8Array>): Uint8Array {
+  const parts: Uint8Array[] = [
+    Uint8Array.from([0x91]), // one row
+    Uint8Array.from([0x90 + fields.length]), // fixarray row
+    ...fields.map((f) => (typeof f === "number" ? Uint8Array.from([f]) : f)),
+  ];
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+}
+
+const bin8 = (payload: Uint8Array) =>
+  Uint8Array.from([0xc4, payload.length, ...payload]);
+const u32 = (v: number) =>
+  Uint8Array.from([
+    0xce,
+    (v >>> 24) & 0xff,
+    (v >>> 16) & 0xff,
+    (v >>> 8) & 0xff,
+    v & 0xff,
+  ]);
+const f32 = (v: number) => {
+  const b = new Uint8Array(5);
+  new DataView(b.buffer).setFloat32(1, v);
+  b[0] = 0xca;
+  return b;
+};
+const f64 = (v: number) => {
+  const b = new Uint8Array(9);
+  new DataView(b.buffer).setFloat64(1, v);
+  b[0] = 0xcb;
+  return b;
+};
+
 interface WireRow {
   master: unknown;
   subAccountId: unknown;
@@ -200,7 +247,7 @@ describe("decodeSubAccountList", () => {
       decodeSubAccountList(envelope([wireRow({ subAccountId: 1.5 })])),
     ).toThrow(/id/);
     expect(() =>
-      decodeSubAccountList(envelope([wireRow({ subAccountId: 0x100000000 })])),
+      decodeSubAccountList(envelope([wireRow({ subAccountId: 2n ** 32n })])),
     ).toThrow(/id range/);
     // Short address:
     expect(() =>
@@ -241,5 +288,72 @@ describe("decodeSubAccountList", () => {
         envelope([wireRow(), wireRow({ subAccountId: 2, address: CHILD_A })]),
       ),
     ).toThrow(/duplicate address/);
+  });
+
+  it("rejects an integral float in the id at both float widths", () => {
+    // `forceIntegerToFloat`-style rows: float32/float64 holding a whole
+    // number decode to the same JS number as the integer, so only the raw
+    // type byte can tell them apart.
+    for (const enc of [f32(1), f64(1)]) {
+      expect(() =>
+        decodeSubAccountList(
+          rawEnvelope(
+            rawList([
+              bin8(MASTER),
+              enc,
+              bin8(CHILD_A),
+              bin8(NAME_A),
+              u32(947727),
+            ]),
+          ),
+        ),
+      ).toThrow(/id \(msgpack float where the wire has an integer\)/);
+    }
+  });
+
+  it("rejects an integral float in created_height", () => {
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawList([
+            bin8(MASTER),
+            0x01,
+            bin8(CHILD_A),
+            bin8(NAME_A),
+            f64(947727),
+          ]),
+        ),
+      ),
+    ).toThrow(/created_height \(msgpack float where the wire has an integer\)/);
+  });
+
+  it("rejects an integral float inside the array form of a byte field", () => {
+    const address = Uint8Array.from([
+      0xdc,
+      0x00,
+      0x14, // array16 of 20
+      ...f64(0x11),
+      ...Array<number>(19).fill(0x11),
+    ]);
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawList([bin8(MASTER), 0x01, address, bin8(NAME_A), u32(1)]),
+        ),
+      ),
+    ).toThrow(/address byte \(msgpack float where the wire has an integer\)/);
+  });
+
+  it("does not blind-scan: float-family bytes inside a bin are data", () => {
+    const master = new Uint8Array(20);
+    master[0] = 0xca;
+    master[1] = 0xcb;
+    const rows = decodeSubAccountList(envelope([wireRow({ master })]));
+    expect(rows[0]?.master.startsWith("cacb")).toBe(true);
+  });
+
+  it("keeps future optional fields unconstrained, floats included", () => {
+    const rows = decodeSubAccountList(envelope([[...wireRow(), 1.5]]));
+    expect(rows[0]?.id).toBe(1);
   });
 });

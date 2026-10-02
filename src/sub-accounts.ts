@@ -91,6 +91,223 @@ function rowName(value: unknown): string {
  *  so a longer row still decodes; a shorter one is malformed. */
 const ROW_FIELDS = 5;
 
+// ─── raw MessagePack float walk ────────────────────────────────────────────
+// `@msgpack/msgpack` decodes the float families (0xca/0xcb) into the same JS
+// number as an integer, so `Number.isSafeInteger` cannot tell a wire uint
+// from an integral float. `proof-wire SubAccount` has no float field, so an
+// integral float in any known position is malformed bytes regardless of its
+// value — and the Python decoder already rejects those rows, because Python
+// keeps float and int distinct. This walk is the byte-level equivalent, run
+// over the raw payload before the value decode.
+//
+// The walk only ever ADDS rejections: when the bytes deviate from the strict
+// shape in any other way it stands down and lets the value decode produce
+// its message (every payload the decoder accepts parses cleanly here, so a
+// float in a known position can never slip past a stand-down). Fields past
+// the five-field prefix are future-optional and skipped generically — their
+// types are not constrained, floats included.
+
+/** Offset past an unsigned-integer field, or null when the bytes are
+ *  anything else (the decoder's verdict, not this walk's). A float family
+ *  byte in this position is the one thing that throws: the decoder would
+ *  silently accept it when the value happens to be integral. */
+function walkUintOffset(
+  bytes: Uint8Array,
+  offset: number,
+  field: string,
+): number | null {
+  const lead = bytes[offset];
+  if (lead === undefined) return null;
+  if (lead === 0xca || lead === 0xcb)
+    return invalid(`${field} (msgpack float where the wire has an integer)`);
+  if (lead <= 0x7f) return offset + 1; // positive fixint
+  const width = { 0xcc: 2, 0xcd: 3, 0xce: 5, 0xcf: 9 }[lead];
+  if (width === undefined) return null;
+  return offset + width <= bytes.length ? offset + width : null;
+}
+
+/** Offset past a fixed-length byte field — a bin of exactly `length` bytes,
+ *  or an array of exactly `length` unsigned bytes. */
+function walkFixedBytesOffset(
+  bytes: Uint8Array,
+  offset: number,
+  length: number,
+  field: string,
+): number | null {
+  const lead = bytes[offset];
+  if (lead === undefined) return null;
+  if (lead === 0xc4 || lead === 0xc5 || lead === 0xc6) {
+    const header = lead === 0xc4 ? 2 : lead === 0xc5 ? 3 : 5;
+    let size = 0;
+    for (let i = 1; i < header; i++) size = size * 256 + bytes[offset + i];
+    if (size !== length) return null; // decoder: `${field} length`
+    const end = offset + header + size;
+    return end <= bytes.length ? end : null;
+  }
+  let count: number;
+  let header: number;
+  if (lead >= 0x90 && lead <= 0x9f) {
+    count = lead & 0x0f;
+    header = 1;
+  } else if (lead === 0xdc || lead === 0xdd) {
+    header = lead === 0xdc ? 3 : 5;
+    count = 0;
+    for (let i = 1; i < header; i++) count = count * 256 + bytes[offset + i];
+  } else {
+    return null; // decoder: `${field} encoding`
+  }
+  if (count !== length) return null; // decoder: `${field} length`
+  let o = offset + header;
+  for (let i = 0; i < count; i++) {
+    const next = walkUintOffset(bytes, o, `${field} byte`);
+    if (next === null) return null;
+    o = next;
+  }
+  return o;
+}
+
+/** Array header — element count and the offset of the first element. */
+function walkArrayHeader(
+  bytes: Uint8Array,
+  offset: number,
+): { count: number; next: number } | null {
+  const lead = bytes[offset];
+  if (lead === undefined) return null;
+  if (lead >= 0x90 && lead <= 0x9f)
+    return { count: lead & 0x0f, next: offset + 1 };
+  if (lead === 0xdc || lead === 0xdd) {
+    const header = lead === 0xdc ? 3 : 5;
+    let count = 0;
+    for (let i = 1; i < header; i++) count = count * 256 + bytes[offset + i];
+    return { count, next: offset + header };
+  }
+  return null;
+}
+
+/** Offset past any single well-formed value — used only for the fields past
+ *  the five-field prefix, whose types are unconstrained. Bounds and depth
+ *  failures stand down to the decoder. */
+function walkExtraValueOffset(
+  bytes: Uint8Array,
+  offset: number,
+  depth: number,
+): number | null {
+  if (depth > 32) return null;
+  const lead = bytes[offset];
+  if (lead === undefined) return null;
+  const fixed = {
+    0xcc: 2,
+    0xcd: 3,
+    0xce: 5,
+    0xcf: 9,
+    0xd0: 2,
+    0xd1: 3,
+    0xd2: 5,
+    0xd3: 9,
+    0xca: 5,
+    0xcb: 9,
+    0xc0: 1,
+    0xc2: 1,
+    0xc3: 1,
+    0xd4: 3,
+    0xd5: 4,
+    0xd6: 6,
+    0xd7: 10,
+    0xd8: 18,
+  }[lead];
+  if (fixed !== undefined)
+    return offset + fixed <= bytes.length ? offset + fixed : null;
+  if (lead <= 0x7f || lead >= 0xe0) return offset + 1; // (negative) fixint
+  if (lead >= 0xa0 && lead <= 0xbf) {
+    const end = offset + 1 + (lead & 0x1f);
+    return end <= bytes.length ? end : null;
+  }
+  let size = 0;
+  let header = 0;
+  switch (lead) {
+    case 0xc4:
+    case 0xd9:
+    case 0xc7:
+      header = 2;
+      break;
+    case 0xc5:
+    case 0xda:
+    case 0xc8:
+      header = 3;
+      break;
+    case 0xc6:
+    case 0xdb:
+    case 0xc9:
+      header = 5;
+      break;
+    default:
+      break;
+  }
+  if (header > 0) {
+    for (let i = 1; i < header; i++) size = size * 256 + bytes[offset + i];
+    const end = offset + header + size;
+    return end <= bytes.length ? end : null;
+  }
+  const array = walkArrayHeader(bytes, offset);
+  if (array) {
+    let o = array.next;
+    for (let i = 0; i < array.count; i++) {
+      const next = walkExtraValueOffset(bytes, o, depth + 1);
+      if (next === null) return null;
+      o = next;
+    }
+    return o;
+  }
+  // Map: count pairs.
+  let count = 0;
+  let mapHeader = 0;
+  if (lead >= 0x80 && lead <= 0x8f) {
+    count = lead & 0x0f;
+    mapHeader = 1;
+  } else if (lead === 0xde || lead === 0xdf) {
+    mapHeader = lead === 0xde ? 3 : 5;
+    for (let i = 1; i < mapHeader; i++) count = count * 256 + bytes[offset + i];
+  } else {
+    return null;
+  }
+  let o = offset + mapHeader;
+  for (let i = 0; i < count * 2; i++) {
+    const next = walkExtraValueOffset(bytes, o, depth + 1);
+    if (next === null) return null;
+    o = next;
+  }
+  return o;
+}
+
+/** Throw on an integral float in any known position of the wire shape. */
+function rejectFloatsInSubAccountWire(bytes: Uint8Array): void {
+  const outer = walkArrayHeader(bytes, 0);
+  if (!outer) return;
+  let o = outer.next;
+  for (let r = 0; r < outer.count; r++) {
+    const row = walkArrayHeader(bytes, o);
+    if (!row || row.count < ROW_FIELDS) return;
+    o = row.next;
+    const steps = [
+      () => walkFixedBytesOffset(bytes, o, 20, "master"),
+      () => walkUintOffset(bytes, o, "id"),
+      () => walkFixedBytesOffset(bytes, o, 20, "address"),
+      () => walkFixedBytesOffset(bytes, o, 32, "name"),
+      () => walkUintOffset(bytes, o, "created_height"),
+    ];
+    for (const step of steps) {
+      const next = step();
+      if (next === null) return;
+      o = next;
+    }
+    for (let e = ROW_FIELDS; e < row.count; e++) {
+      const next = walkExtraValueOffset(bytes, o, 0);
+      if (next === null) return;
+      o = next;
+    }
+  }
+}
+
 function decodeRow(raw: unknown): SubAccountListRow {
   if (!Array.isArray(raw)) return invalid("row (expected a positional array)");
   if (raw.length < ROW_FIELDS)
@@ -123,6 +340,7 @@ export function decodeSubAccountList(body: unknown): SubAccountListRow[] {
   } catch {
     return invalid("envelope data (invalid base64)");
   }
+  rejectFloatsInSubAccountWire(bytes);
   let payload: unknown;
   try {
     payload = new Decoder({ useBigInt64: true }).decode(bytes);
