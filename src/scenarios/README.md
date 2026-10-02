@@ -42,7 +42,7 @@ npm run stack:down
 
 Each scenario creates fresh random-key users (`alice`, `bob`, `carol`) and funds them via the relayer-signed `Deposit` flow (engine `handle_deposit` gates on the on-chain relayer allowlist — audit B1, 2026-04-23). The test node must therefore have:
 
-- **Markets seeded** (`npm run stack:up:fresh` in proof-integration — creates BTC=1, SOL=3, ETH=15).
+- **Markets seeded** (`npm run stack:up:fresh` in proof-integration — creates BTC=1, ETH=2, SOL=3).
 - **Oracle prices set** (same command).
 - **Relayer + oracle keys exposed** via env vars (the fresh stack writes both to `~/.exchanged/seed-keys.json`; set `EXCHANGED_HOME` to move it).
 - **No competing traders.** Scenarios depend on positionSymmetry (Σ signed positions = 0 across the seeded users) and on order-book emptiness around the test prices. Any concurrent market maker (proof-integration's `mm` component, the Proof liquidity provider (PLP) market maker, and so on) breaks both: a market-maker bid at $77k will eat a scenario sell at $50k. **Run scenarios on a stack started without market makers**: proof-integration's default stack, without `WITH_MM=1`, and with no `mm` in `STACK_COMPONENTS`.
