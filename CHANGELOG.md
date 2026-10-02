@@ -9,6 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `GatewayReads.version()` forwards `GET /v1/version` without caching, preserving
+  the raw loaded-engine identity, HTTP errors and caller cancellation. It reports
+  one upstream node, not validator-wide compatibility or rollout qualification.
 - `ExchangeClient.queryAuthorities()` reads the engine's privileged
   authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
   api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,
