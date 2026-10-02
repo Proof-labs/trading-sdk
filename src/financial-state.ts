@@ -267,7 +267,9 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
  * The stack is at most eight counters; declared container lengths never allocate.
  * An admitted 2048-position snapshot uses fewer than 60k aggregate value slots.
  */
-function validateMessagePackBudget(bytes: Uint8Array): void {
+function validateMessagePackBudget(bytes: Uint8Array, audit = false): void {
+  const maxString = audit ? 16 : 4;
+  const maxDepth = audit ? 9 : 8;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const remaining = [1];
   let offset = 0;
@@ -311,7 +313,7 @@ function validateMessagePackBudget(bytes: Uint8Array): void {
     } else if (tag >= 0x90 && tag <= 0x9f) {
       arrayLength = tag & 15;
     } else if (tag >= 0xa0 && tag <= 0xbf) {
-      payload(tag & 31, 4);
+      payload(tag & 31, maxString);
     } else {
       switch (tag) {
         case 0xcc:
@@ -331,13 +333,13 @@ function validateMessagePackBudget(bytes: Uint8Array): void {
           take(8);
           break;
         case 0xd9:
-          payload(size(1), 4);
+          payload(size(1), maxString);
           break;
         case 0xda:
-          payload(size(2), 4);
+          payload(size(2), maxString);
           break;
         case 0xdb:
-          payload(size(4), 4);
+          payload(size(4), maxString);
           break;
         case 0xc4:
           payload(size(1), 20);
@@ -364,7 +366,7 @@ function validateMessagePackBudget(bytes: Uint8Array): void {
       if (arrayLength > 2048 || slots > 65536)
         invalid("MessagePack resource limit");
       if (arrayLength > 0) {
-        if (remaining.length >= 8) invalid("MessagePack depth limit");
+        if (remaining.length >= maxDepth) invalid("MessagePack depth limit");
         remaining.push(arrayLength);
       }
     }
@@ -377,6 +379,17 @@ export async function fetchFinancialState(
   gatewayUrl: string,
   selection: FinancialStateSelection,
 ): Promise<FinancialState> {
+  return decodeFinancialState(
+    await fetchFinancialPayload(gatewayUrl, selection),
+    selection,
+  );
+}
+
+/** Bounded transport for the existing format-1 state route only. */
+async function fetchFinancialPayload(
+  gatewayUrl: string,
+  selection: FinancialStateSelection,
+): Promise<unknown> {
   const expected = canonicalFinancialSelection(selection);
   const url = `${gatewayUrl}/v1/financial/state?markets=${expected.markets.join(",")}&owners=${expected.owners.join(",")}`;
   const controller = new AbortController();
@@ -420,27 +433,30 @@ export async function fetchFinancialState(
       !json.data.length
     )
       return invalid("response wrapper");
-    const data = json.data;
-    if (data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data))
-      return invalid("base64");
-    const binary = atob(data);
-    if (btoa(binary) !== data) return invalid("canonical base64");
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    validateMessagePackBudget(bytes);
-    return decodeFinancialState(
-      new Decoder({
-        useBigInt64: true,
-        maxArrayLength: 2048,
-        maxMapLength: 0,
-        maxStrLength: 4,
-        maxBinLength: 20,
-        maxExtLength: 0,
-      }).decode(bytes),
-      expected,
-    );
+    return decodeFinancialPayload(json.data);
   } finally {
     clearTimeout(timeout);
     controller.abort();
     await reader?.cancel().catch(() => undefined);
   }
+}
+
+/** Internal bounded binary decoder shared by live state and offline audit artifacts. */
+export function decodeFinancialPayload(data: string, audit = false): unknown {
+  if (!data.length || data.length > MAX_RESPONSE_BYTES)
+    return invalid("response size");
+  if (data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data))
+    return invalid("base64");
+  const binary = atob(data);
+  if (btoa(binary) !== data) return invalid("canonical base64");
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  validateMessagePackBudget(bytes, audit);
+  return new Decoder({
+    useBigInt64: true,
+    maxArrayLength: 2048,
+    maxMapLength: 0,
+    maxStrLength: audit ? 16 : 4,
+    maxBinLength: 20,
+    maxExtLength: 0,
+  }).decode(bytes);
 }
