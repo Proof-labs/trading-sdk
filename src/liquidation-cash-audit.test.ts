@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { ExchangeClient } from "./client.js";
 import { decodeLiquidationCashAudit } from "./liquidation-cash-audit.js";
 
 const fixture = () => ({
@@ -27,6 +28,52 @@ const fixture = () => ({
 });
 
 describe("terminal liquidation cash audit decoding", () => {
+  it("uses the existing gateway account-history transport without changing payloads or cursors", async () => {
+    const body = {
+      account_events: [
+        {
+          event_id: 7,
+          owner: fixture().counterparty_owner,
+          block_height: 4,
+          block_time: "2026-10-02T00:00:00.123456789Z",
+          tx_hash: "synthetic-tx",
+          event_index: 0,
+          event_type: "liquidation_cash_finalized",
+          payload: fixture(),
+        },
+      ],
+      next_cursor: "opaque+/=?",
+    };
+    const response = new Response(JSON.stringify(body), { status: 200 });
+    const transport = vi.fn(async () => response);
+    const reads = new ExchangeClient({
+      gatewayUrl: "http://gateway",
+      apiUrl: "http://internal-node",
+      useGateway: false,
+    }).reads({ fetch: transport });
+    const result = await reads.accountEvents({
+      owner: fixture().counterparty_owner,
+      order: "desc",
+      event_type: "liquidation_cash_finalized",
+      cursor: body.next_cursor,
+    });
+    expect(result).toBe(response);
+    const url = new URL((transport.mock.calls[0] as unknown as [string])[0]);
+    expect(url.origin + url.pathname).toBe(
+      "http://gateway/v1/history/account-events",
+    );
+    expect(url.searchParams.get("cursor")).toBe(body.next_cursor);
+    expect(url.searchParams.get("owner")).toBe(fixture().counterparty_owner);
+    expect(url.searchParams.get("event_type")).toBe(
+      "liquidation_cash_finalized",
+    );
+    expect(url.searchParams.get("order")).toBe("desc");
+    const page = await result.json();
+    expect(page).toEqual(body);
+    expect(decodeLiquidationCashAudit(page.account_events[0].payload)).toEqual(
+      decodeLiquidationCashAudit(fixture()),
+    );
+  });
   it("matches the frozen attributes asserted against actual Rust ABCI bytes", () => {
     const golden: unknown = JSON.parse(
       readFileSync(
