@@ -242,6 +242,18 @@ not trading authorization. Like every other gateway interaction, admin calls
 included, it goes through the SDK
 ([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md)).
 
+### History freshness
+
+```typescript
+const response = await client.reads().historyStatus({ signal });
+const status = await response.json();
+```
+
+This forwards `GET /v1/history/status` (the indexer's watermarks and ingest
+liveness) uncached, with the same body, error and cancellation guarantees. Use
+it before presenting an empty history as definitive: an indexer that has not
+caught up returns empty pages too. Thresholds remain in the application.
+
 ### Optional native Rust gateway transport
 
 Rust `proof-trading-sdk` 3.2.0 exposes `gateway::GatewayClient` with the optional
