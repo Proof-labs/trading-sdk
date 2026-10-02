@@ -66,8 +66,10 @@ import type {
   HistoryPositionsPage,
   HistoryResolution,
   MarketConfig,
+  MarginMethod,
   MarketKind,
   MarkSourceMode,
+  UpdateMarketFees,
   OpenOrder,
   AdlQueueEntry,
   Orderbook,
@@ -1232,6 +1234,32 @@ export class ExchangeClient {
     };
     validateCancelPositionTriggers(data);
     return this.submitTx({ type: "CancelPositionTriggers", data });
+  }
+
+  /**
+   * Update configurable fields on an existing market — the relayer-signed
+   * `UpdateMarketFees` action (0x10). `signer` is filled from the loaded
+   * key, which must be the market's authorized relayer; any other signer is
+   * rejected by the engine. Equivalent to
+   * `submitTx({ type: "UpdateMarketFees", data: { ...params, signer } })`.
+   *
+   * Every field is optional; omit it (or pass `null`) to leave the current
+   * value untouched. `marginMethod` selects the market's margin evaluation:
+   * `"WorstCase"` (the legacy default, the only method the engine implements
+   * today) or `"ShockConditionalOnly"`. Non-`"WorstCase"` methods are
+   * refused with `MarginMethodNotImplemented` (code 100) until the
+   * approach-4 margin method lands — the engine will not accept a setting
+   * it cannot honor, and the market keeps its current method. The applied
+   * method reads back at the `MarketConfig` tuple index [25] via
+   * {@link ExchangeClient.queryMarkets}.
+   */
+  async updateMarket(
+    params: Omit<UpdateMarketFees, "signer">,
+  ): Promise<TxResult> {
+    return this.submitTx({
+      type: "UpdateMarketFees",
+      data: { ...params, signer: this.requireOwner() },
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -2624,6 +2652,7 @@ function decodeMarketConfig(raw: unknown[]): MarketConfig {
     szDecimals: raw[22] == null ? undefined : Number(raw[22]),
     ticker: raw[23] == null ? undefined : String(raw[23]),
     maxOpenInterest: optBig(raw[24]),
+    marginMethod: raw[25] == null ? undefined : (raw[25] as MarginMethod),
   };
 }
 

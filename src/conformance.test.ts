@@ -383,6 +383,8 @@ function toAction(
       const optBytes = (v: unknown): Uint8Array | null =>
         v === null || v === undefined ? null : bytes(v);
       const msMode = optNum(input.mark_source_mode);
+      const marginMethod = (v: unknown): string | null =>
+        v === "WorstCase" || v === "ShockConditionalOnly" ? v : null;
       return {
         type: "UpdateMarketFees",
         data: {
@@ -407,6 +409,7 @@ function toAction(
           imBps: optNum(input.im_bps),
           mmBps: optNum(input.mm_bps),
           maxOpenInterest: optBig(input.max_open_interest),
+          marginMethod: marginMethod(input.margin_method),
         },
       };
     }

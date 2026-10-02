@@ -6,7 +6,9 @@
 )]
 
 use super::*;
-use crate::types::{AttachedConditional, Branch, EventId, MarkSourceMode, MarketKind};
+use crate::types::{
+    AttachedConditional, Branch, EventId, MarginMethod, MarkSourceMode, MarketKind,
+};
 
 fn market() -> MarketConfig {
     MarketConfig {
@@ -35,6 +37,7 @@ fn market() -> MarketConfig {
         sz_decimals: 5,
         ticker: "BTC".into(),
         max_open_interest: u64::MAX,
+        margin_method: MarginMethod::WorstCase,
     }
 }
 

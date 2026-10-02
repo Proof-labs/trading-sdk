@@ -798,6 +798,19 @@ export interface EventInfo {
 }
 
 /**
+ * Which maintenance/initial-margin evaluation a market's scenario check
+ * runs. Mirrors the engine's `MarginMethod` enum (a string-keyed msgpack
+ * enum, like `MarkSourceMode`): the variant name travels on the wire
+ * verbatim.
+ *
+ * `"WorstCase"` is the legacy (and currently only implemented) evaluator
+ * and the default for every existing and freshly-created market, so
+ * omitting the field is byte-compatible with pre-seam engines. New
+ * variants append; existing names are never renamed or reused.
+ */
+export type MarginMethod = "WorstCase" | "ShockConditionalOnly";
+
+/**
  * Update a subset of `MarketConfig` fields on an existing market.
  * Every tunable is optional; `null`/`undefined` leaves the current
  * value untouched. Requires relayer authorization.
@@ -911,6 +924,23 @@ export interface UpdateMarketFees {
    * 0 disables the cap.
    */
   maxOpenInterest?: bigint | null;
+  /**
+   * Select the market's margin evaluation method. Omit (or null) to leave
+   * unchanged. `"WorstCase"` is the legacy two-universe worst-case
+   * evaluator and the market's default; `"ShockConditionalOnly"` applies
+   * the branch shock to the conditional legs only.
+   *
+   * F8 seam: appended at the tail of the payload, so a pre-seam engine
+   * (or any engine between this SDK build and the seam) drops the field
+   * silently — the method is refused with
+   * `ExecError::MarginMethodNotImplemented` (code 100) until the
+   * approach-4 margin method lands; the engine must not accept a setting
+   * it cannot honor, and the market keeps its current method.
+   *
+   * The applied method reads back at `MarketConfig` index [25]
+   * (`queryMarkets()` → `marginMethod`).
+   */
+  marginMethod?: MarginMethod | null;
 }
 
 /** Lifecycle status of an event: `Trading` until its settlement time,
@@ -2545,6 +2575,13 @@ export interface MarketConfig {
   ticker?: string;
   /** [24] Aggregate market open-interest cap in contracts. 0 = no cap. */
   maxOpenInterest?: bigint;
+  /**
+   * [25] Which margin evaluation this market runs (F8 seam). `"WorstCase"`
+   * is the legacy default; absent on pre-seam engine rows. New methods are
+   * refused with `MarginMethodNotImplemented` (code 100) until their engine
+   * path lands.
+   */
+  marginMethod?: MarginMethod;
 }
 
 /** Per-tier fee schedule for the BE-47 volume-based maker-rebate program. */

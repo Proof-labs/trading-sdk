@@ -9,6 +9,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `ExchangeClient.updateMarket()` submits the relayer-signed
+  `UpdateMarketFees` action (0x10) with the full optional tunable set —
+  fees, funding, tick/lot, oracle gates, mark-source mode, IM/MM, the
+  open-interest cap — plus the F8 seam's `marginMethod` (`"WorstCase"`
+  default | `"ShockConditionalOnly"`). The variant travels as the wire's
+  string-keyed enum at the payload tail; a pre-seam engine drops it
+  silently, and non-`"WorstCase"` methods are refused with
+  `MarginMethodNotImplemented` (code 100) until the approach-4 margin
+  method lands. The applied method reads back at `MarketConfig` index [25]
+  via `queryMarkets()`, which now decodes both the 25-field pre-seam and
+  26-field post-seam row shapes. The Python `UpdateMarketFees` builder
+  gains the same `margin_method` field. Interim: `proof-wire` resolves
+  from exchange#868 (`GH862/feat/f8-margin-method-seam` @ `10c42e31`)
+  through a draft-only `[patch]` until the Proof-labs/wire mirror tags the
+  seam — flip to the published tag on merge, as edbf787 did for the F7
+  pin. MINOR: additive tail field; the pre-seam 21-slot payload form stays
+  pinned decode-compat.
 - `ExchangeClient.queryAuthorities()` reads the engine's privileged
   authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
   api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,

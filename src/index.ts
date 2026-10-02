@@ -133,6 +133,7 @@ export {
   type PositionInfo,
   type MarketConfig,
   type MarkSourceMode,
+  type MarginMethod,
   type BindingScenarioEntry,
   type HistoryCashFlow,
   type HistoryFill,

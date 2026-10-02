@@ -194,6 +194,10 @@ class ExchangeClient {
   setPositionTriggers(params: Omit<SetPositionTriggers, "owner"> & { owner?: Uint8Array }): Promise<TxResult>;
   cancelPositionTriggers(market: number, expectedPositionEpoch: bigint, owner?: Uint8Array): Promise<TxResult>;
 
+  // Relayer-signed market config update; signer must be the market's
+  // authorized relayer.
+  updateMarket(params: Omit<UpdateMarketFees, "signer">): Promise<TxResult>;
+
   // History
   queryHistoryDeposits(...): Promise<HistoryCashFlow[]>;
   queryHistoryWithdrawals(...): Promise<HistoryCashFlow[]>;

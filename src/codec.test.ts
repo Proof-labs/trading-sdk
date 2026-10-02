@@ -918,6 +918,7 @@ describe("codec v1 all action types", () => {
         imBps: 3334,
         mmBps: 1667,
         maxOpenInterest: 2_000_000n,
+        marginMethod: "WorstCase",
       },
     };
     const { action: decoded } = decodeTx(encodeTx(action, 1n));
@@ -943,6 +944,7 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.imBps).toBe(3334);
     expect(decoded.data.mmBps).toBe(1667);
     expect(decoded.data.maxOpenInterest).toBe(2_000_000n);
+    expect(decoded.data.marginMethod).toBe("WorstCase");
   });
 
   it("round-trips UpdateMarketFees with only BE-48/BE-50 fields set", () => {
@@ -1077,6 +1079,120 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.imBps).toBeNull();
     expect(decoded.data.mmBps).toBeNull();
     expect(decoded.data.maxOpenInterest).toBeNull();
+  });
+
+  it("round-trips UpdateMarketFees marginMethod ShockConditionalOnly (F8 seam)", () => {
+    const action: Action = {
+      type: "UpdateMarketFees",
+      data: {
+        market: 9,
+        signer: SIGNER,
+        marginMethod: "ShockConditionalOnly",
+      },
+    };
+    // The seam field is the payload tail: 22 slots (21 pre-seam fields plus
+    // margin_method), the variant as a msgpack string in slot 21.
+    const payload = encodePayloadBytes(action);
+    expect(bytesToHex(payload.slice(0, 3))).toBe("dc0016");
+    const { action: decoded } = decodeTx(encodeTx(action, 1n));
+    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
+    expect(decoded.data.marginMethod).toBe("ShockConditionalOnly");
+    // Re-encoding the decoded action reproduces the exact bytes — the
+    // string-keyed enum survives the round trip unchanged.
+    expect(bytesToHex(encodePayloadBytes(decoded))).toBe(bytesToHex(payload));
+  });
+
+  it("UpdateMarketFees marginMethod null encodes as the field omitted, no invented default", () => {
+    // null and absent must produce identical bytes: the pre-seam engines
+    // drop unknown keys silently, so the codec must not conjure "WorstCase"
+    // (or anything else) for the "leave unchanged" case.
+    const base: Action = {
+      type: "UpdateMarketFees",
+      data: { market: 7, signer: SIGNER, maxOpenInterest: 500_000n },
+    };
+    const explicitNull: Action = {
+      type: "UpdateMarketFees",
+      data: {
+        market: 7,
+        signer: SIGNER,
+        maxOpenInterest: 500_000n,
+        marginMethod: null,
+      },
+    };
+    expect(bytesToHex(encodePayloadBytes(explicitNull))).toBe(
+      bytesToHex(encodePayloadBytes(base)),
+    );
+    // Decoded, the untouched method reads back null — the engine-side
+    // default is a state fact, never a codec-invented value.
+    const { action: decoded } = decodeTx(encodeTx(base, 1n));
+    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
+    expect(decoded.data.marginMethod).toBeNull();
+  });
+
+  it("decodes the pre-seam 21-field UpdateMarketFees payload (margin_method absent)", () => {
+    // A pre-seam engine signs 21 slots; the seam decoder must read the known
+    // prefix and leave marginMethod null — never default it to "WorstCase".
+    const encoder = new Encoder({ useBigInt64: true });
+    const payload = encoder.encode([
+      7,
+      Array.from(SIGNER),
+      ...Array(19).fill(null),
+    ]);
+    const wire = encoder.encode([
+      ENVELOPE_VERSION,
+      ActionType.UpdateMarketFees,
+      1n,
+      payload,
+      ZERO_PUBKEY,
+      ZERO_SIG,
+    ]);
+
+    const { action: decoded } = decodeTx(wire);
+    if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
+    expect(decoded.data.maxOpenInterest).toBeNull();
+    expect(decoded.data.marginMethod).toBeNull();
+  });
+
+  it("rejects an unknown marginMethod spelling by field name", () => {
+    const action: Action = {
+      type: "UpdateMarketFees",
+      data: {
+        market: 7,
+        signer: SIGNER,
+        // @ts-expect-error deliberate unknown variant — asserts the runtime
+        // guard by field name, not just the type system
+        marginMethod: "WorstCaseButLouder",
+      },
+    };
+    expect(() => encodePayloadBytes(action)).toThrow(
+      "unknown marginMethod value: WorstCaseButLouder",
+    );
+  });
+
+  it("rejects an unknown marginMethod variant on decode by field name", () => {
+    // A newer engine's appended variant must fail loudly, never decode to a
+    // silent unknown value. The rejection comes from the authoritative core
+    // (it deserializes before the adapter sees the field) and names the
+    // expected variants.
+    const encoder = new Encoder({ useBigInt64: true });
+    const payload = encoder.encode([
+      7,
+      Array.from(SIGNER),
+      ...Array(19).fill(null),
+      "BranchAware",
+    ]);
+    const wire = encoder.encode([
+      ENVELOPE_VERSION,
+      ActionType.UpdateMarketFees,
+      1n,
+      payload,
+      ZERO_PUBKEY,
+      ZERO_SIG,
+    ]);
+
+    expect(() => decodeTx(wire)).toThrow(
+      /unknown variant `BranchAware`, expected `WorstCase` or `ShockConditionalOnly`/,
+    );
   });
 
   it("round-trips UpdateMarketFees with only defaultTtlMs set (operator-only path)", () => {

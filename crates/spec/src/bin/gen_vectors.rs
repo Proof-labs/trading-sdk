@@ -369,6 +369,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "max_open_interest": 750_000u64
             }),
         ),
+        // F8 seam: the margin-method tail, appended after the OI cap. The
+        // variant travels as a string-keyed msgpack enum (the serde
+        // externally-tagged unit-variant form, like MarketKind). The engine
+        // refuses ShockConditionalOnly at execution
+        // (MarginMethodNotImplemented, code 100) until the approach-4 method
+        // lands — the wire carries it, which is what this vector pins.
+        codec_case(
+            "update_market_fees/margin_method_shock_conditional_only",
+            UPDATE_MARKET_FEES,
+            json!({
+                "market": 45, "signer": signer,
+                "margin_method": "ShockConditionalOnly"
+            }),
+        ),
         // AtomicBasketOrder (0x1c) — multi-leg, mixed leg optionals; pins the
         // action that was entirely absent from the SDK. max_slippage_bps is
         // serde(default) and encodes as 0 when absent.

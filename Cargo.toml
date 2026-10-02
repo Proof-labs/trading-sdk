@@ -7,3 +7,16 @@ members = [
     "crates/spec",
 ]
 resolver = "2"
+
+# DRAFT-ONLY interim pin — do not release on this. The F8 margin-method seam
+# (`UpdateMarketFees.margin_method`, `MarketConfig.margin_method` at read
+# index 25, the `MarginMethod` enum, `ExecError::MarginMethodNotImplemented`
+# code 100) is not on the Proof-labs/wire mirror yet: it lands with
+# exchange#868 (branch GH862/feat/f8-margin-method-seam), which is unmerged.
+# Until the mirror publishes the tag carrying it, resolve the crate from the
+# #868 head commit. When #868 merges and the mirror tags it: delete this
+# section and bump the `proof-wire` tag in
+# crates/proof-trading-sdk/Cargo.toml (the same flip edbf787 made for the
+# F7 interim pin).
+[patch."https://github.com/Proof-labs/wire.git"]
+proof-wire = { git = "https://github.com/Proof-labs/exchange", rev = "10c42e31d1d33811603645c68bcdbbfcda623126" }

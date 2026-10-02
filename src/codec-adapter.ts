@@ -106,6 +106,18 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
 };
 
 /**
+ * `MarginMethod` (F8 seam) is a string-keyed msgpack enum like
+ * `MarkSourceMode`, but the TS surface already speaks the wire spelling —
+ * the variant name travels verbatim, so no numeric mapping is needed. Only
+ * loud validation: an unknown spelling must throw here, by field name,
+ * instead of surfacing as an unrelated serde error from inside the core.
+ */
+const MARGIN_METHOD_VARIANTS: ReadonlySet<string> = new Set([
+  "WorstCase",
+  "ShockConditionalOnly",
+]);
+
+/**
  * Externally-tagged governance enum variants that carry NO fields, so serde
  * serializes them as a bare string rather than a `{ Variant: … }` map. Keyed
  * explicitly because a fieldless struct variant (`HaltTrading {}`) is NOT one
@@ -175,6 +187,14 @@ function convertValue(camelKey: string, value: unknown): unknown {
       throw new Error(`unknown markSourceMode value: ${value}`);
     }
     return name;
+  }
+  // `MarginMethod` passes through as the wire string after validation; the
+  // nullish "leave unchanged" case never reaches here (dropped above).
+  if (camelKey === "marginMethod" && typeof value === "string") {
+    if (!MARGIN_METHOD_VARIANTS.has(value)) {
+      throw new Error(`unknown marginMethod value: ${value}`);
+    }
+    return value;
   }
   const enumMap = NUMERIC_ENUM_FIELDS[camelKey];
   if (enumMap && typeof value === "number") {
@@ -450,6 +470,16 @@ function fromWasmValue(camelKey: string, value: unknown): unknown {
       throw new Error(`unknown markSourceMode variant: ${value}`);
     }
     return num;
+  }
+  // The authoritative core rejects an unknown `MarginMethod` variant during
+  // `decode_payload` (it deserializes the enum first), so a valid string is
+  // all that can reach here; the check keeps the same loudness if a future
+  // core ever relaxes that deserialize-time validation.
+  if (camelKey === "marginMethod" && typeof value === "string") {
+    if (!MARGIN_METHOD_VARIANTS.has(value)) {
+      throw new Error(`unknown marginMethod variant: ${value}`);
+    }
+    return value;
   }
   const enumMap = NUMERIC_ENUM_FIELDS[camelKey];
   if (enumMap && typeof value === "string") {

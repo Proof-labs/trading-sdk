@@ -2527,3 +2527,86 @@ describe("ExchangeClient queryHistoryFills", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+/**
+ * MarketConfig rows are positional msgpack tuples from `GET /v1/markets`.
+ * The F8 seam appends `margin_method` at index [25]; the decoder must read
+ * the known prefix and tolerate both the post-seam (26-field) and pre-seam
+ * (25-field) row shapes — an appended field never breaks an older SDK.
+ */
+describe("ExchangeClient queryMarkets MarketConfig decode", () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new Encoder({ useBigInt64: true });
+  const relayer = new Uint8Array(20).fill(0x21);
+
+  // The engine's MarketConfig read tuple, indices 0..25 (F8 seam onward).
+  const postSeamRow = [
+    1, // [0] market
+    1000, // [1] imBps
+    500, // [2] mmBps
+    5, // [3] takerFeeBps
+    2, // [4] makerFeeBps
+    60_000_000n, // [5] fundingIntervalMs
+    100, // [6] maxFundingRateBps
+    "Perp", // [7] kind
+    1_000n, // [8] maxPositionSize
+    60_000n, // [9] defaultTtlMs
+    true, // [10] netDeltaMargin
+    0, // [11] poolId
+    5_000n, // [12] markPriceMaxOracleAgeMs
+    [], // [13] feeTiers
+    100n, // [14] tickSize
+    10n, // [15] lotSize
+    relayer, // [16] primaryOracleSigner
+    30_000n, // [17] oracleStalenessMs
+    "OracleOnly", // [18] markSourceMode
+    75, // [19] maxMarkSpreadBps
+    15_000n, // [20] cexCompositeStalenessMs
+    false, // [21] partialLiquidationEnabled
+    4, // [22] szDecimals
+    "BTC", // [23] ticker
+    2_000_000n, // [24] maxOpenInterest
+    "ShockConditionalOnly", // [25] marginMethod
+  ];
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("decodes a 26-field post-seam row including marginMethod at [25]", async () => {
+    const payload = encoder.encode([postSeamRow]);
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: Buffer.from(payload).toString("base64"),
+          }),
+          { status: 200 },
+        ),
+    ) as unknown as typeof fetch;
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+
+    const [config] = await client.queryMarkets();
+    expect(config.maxOpenInterest).toBe(2_000_000n);
+    expect(config.marginMethod).toBe("ShockConditionalOnly");
+  });
+
+  it("decodes a pre-seam 25-field row with marginMethod left undefined", async () => {
+    const preSeamRow = postSeamRow.slice(0, 25);
+    const payload = encoder.encode([preSeamRow]);
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: Buffer.from(payload).toString("base64"),
+          }),
+          { status: 200 },
+        ),
+    ) as unknown as typeof fetch;
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+
+    const [config] = await client.queryMarkets();
+    expect(config.maxOpenInterest).toBe(2_000_000n);
+    expect(config.marginMethod).toBeUndefined();
+  });
+});

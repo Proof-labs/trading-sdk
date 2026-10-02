@@ -766,6 +766,11 @@ class UpdateMarketFees(Action):
     im_bps: Optional[int] = None
     mm_bps: Optional[int] = None
     max_open_interest: Optional[int] = None
+    # F8 seam: the variant name travels verbatim (string-keyed msgpack enum).
+    # Non-"WorstCase" methods are refused with MarginMethodNotImplemented
+    # (code 100) until the approach-4 margin method lands; the applied
+    # method reads back at MarketConfig index [25].
+    margin_method: Optional[str] = None
 
     def fields(self) -> dict[str, Any]:
         return {
@@ -790,6 +795,7 @@ class UpdateMarketFees(Action):
             "im_bps": self.im_bps,
             "mm_bps": self.mm_bps,
             "max_open_interest": self.max_open_interest,
+            "margin_method": self.margin_method,
         }
 
 
