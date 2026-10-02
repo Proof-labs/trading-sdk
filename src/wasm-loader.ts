@@ -56,6 +56,12 @@ export interface WasmCore {
     expiryMs: bigint,
     action: unknown,
   ): Uint8Array;
+  /** bridge-core v1 canonical 221-byte `WithdrawalAuthorizationV1` (camelCase fields in, bytes out). */
+  encode_withdrawal_authorization(fields: unknown): Uint8Array;
+  /** bridge-core v1 `SHA256(canonical authorization)` — the identity the engine binds. */
+  withdrawal_authorization_digest(fields: unknown): Uint8Array;
+  /** bridge-core v1 canonical 327-byte `BridgeReceiptV1` — the operator-quorum signed message. */
+  encode_bridge_receipt(fields: unknown): Uint8Array;
 }
 
 let cached: WasmCore | null = null;

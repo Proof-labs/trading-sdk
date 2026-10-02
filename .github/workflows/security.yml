@@ -24,6 +24,10 @@ jobs:
   audit:
     name: cargo audit
     runs-on: ubuntu-latest
+    env:
+      # The WASM crate's bridge-core git dependency is private: fetch via the
+      # system git CLI with the deploy key the step below configures.
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
       # Fetch only the exact reviewed wire. Checkout removes its SSH credential
@@ -43,6 +47,24 @@ jobs:
           git config --global url."file://$RUNNER_TEMP/wire-review.git".insteadOf https://github.com/Proof-labs/exchange.git
           rm -rf "$GITHUB_WORKSPACE/.ci-wire-review"
           echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+      # Preserve upstream bridge support without leaving a deploy key available
+      # to PR-controlled compilation or tests. Mirror the pinned bridge tag.
+      - name: Checkout bridge dependency without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Proof-labs/bridge
+          ref: v1.0.0
+          fetch-depth: 0
+          ssh-key: ${{ secrets.BRIDGE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .ci-bridge-review
+      - name: Prepare credential-free Cargo bridge mirror
+        shell: bash
+        run: |
+          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-bridge-review" "$RUNNER_TEMP/bridge-review.git"
+          git --git-dir="$RUNNER_TEMP/bridge-review.git" rev-parse refs/tags/v1.0.0
+          git config --global url."file://$RUNNER_TEMP/bridge-review.git".insteadOf ssh://git@github.com/Proof-labs/bridge.git
+          rm -rf "$GITHUB_WORKSPACE/.ci-bridge-review"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Install the latest cargo-audit: the RustSec DB now carries CVSS 4.0
