@@ -209,6 +209,12 @@ class TestErrors:
         assert pts.get_error_name(71) == "InvalidAdminRegistry"
         assert pts.EngineError(67, "").name == "EmergencyRateLimited"
 
+    def test_oracle_verdict_unavailable_code_77(self):
+        # exchange#811: first code of the 77-81 oracle-policy block.
+        assert pts.get_error_name(77) == "OracleVerdictUnavailable"
+        assert pts.EngineError(77, "").name == "OracleVerdictUnavailable"
+        assert pts.get_error_name(78) is None
+
     def test_transitional_code_50_uses_delivertx_log(self):
         oi = "open interest limit exceeded on market 7: would be 4, cap 3"
         slip = "atomic basket aggregate slippage 51 bps exceeds budget 50 bps"

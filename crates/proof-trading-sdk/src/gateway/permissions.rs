@@ -1,4 +1,9 @@
 //! Typed decoding of the gateway's existing nine-slot consensus read.
+//!
+//! The committed verdict arrives in two layouts: the fourteen-field format-3
+//! primary-with-fallback read (exchange#831), which appends `selected` and
+//! `diagnostics`, and the twelve-field format-2 read of earlier nodes. Both
+//! share one fault-bit layout ([`ORACLE_FAULT_BITS`]).
 
 use super::{ErrorKind, GatewayError, Operation};
 use serde::Deserialize;
@@ -30,16 +35,84 @@ pub enum VerdictReason {
     SessionUnknown,
     SessionClosed,
     BadQuality,
+    /// No longer produced under the primary-with-fallback policy
+    /// (exchange#831); kept for encoding stability and older nodes.
     Disagreement,
+    /// The pre-rename name of [`VerdictReason::ReferenceUnavailable`], still
+    /// accepted from nodes that predate the exchange rename.
     AnchorUnavailable,
     MovementBound,
     MissingSource,
     ExpiredSource,
     OutsideSession,
+    /// No longer produced under the primary-with-fallback policy
+    /// (exchange#831); kept for encoding stability and older nodes.
     PairTimeMismatch,
     RecoveryPending,
     Fresh,
+    ReferenceUnavailable,
 }
+
+/// Fault bits of the committed verdict in exchange `ReasonFlags::FAULTS`
+/// order: bit `i` is `ORACLE_FAULT_BITS[i]`, in both verdict formats.
+/// `Disagreement` (bit 7) and `PairTimeMismatch` (bit 13) are no longer
+/// produced but keep their positions.
+pub const ORACLE_FAULT_BITS: [VerdictReason; 15] = [
+    VerdictReason::InvalidPolicy,
+    VerdictReason::UpdateLimitExceeded,
+    VerdictReason::ClockRegression,
+    VerdictReason::ManualHalt,
+    VerdictReason::SessionUnknown,
+    VerdictReason::SessionClosed,
+    VerdictReason::BadQuality,
+    VerdictReason::Disagreement,
+    VerdictReason::ReferenceUnavailable,
+    VerdictReason::MovementBound,
+    VerdictReason::MissingSource,
+    VerdictReason::ExpiredSource,
+    VerdictReason::OutsideSession,
+    VerdictReason::PairTimeMismatch,
+    VerdictReason::RecoveryPending,
+];
+
+/// Which committed-verdict layout a node served.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerdictFormat {
+    /// Twelve fields: two-source agreement, before exchange#831.
+    V2,
+    /// Fourteen fields: primary with fallback (exchange#831).
+    V3,
+}
+
+/// The policy slot that priced: slot 0 is the primary, slot 1 the fallback.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectedSource {
+    Primary,
+    Fallback,
+}
+
+/// Source-selection diagnostics of a format-3 verdict. Monitoring signals,
+/// not faults: none of them withholds a certificate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VerdictDiagnostic {
+    /// The fallback was selected.
+    OnFallback,
+    /// The primary deviated from a time-aligned usable fallback by more than
+    /// the policy's divergence bound and was refused.
+    PrimaryRefusedDivergence,
+    /// Both slots were usable but too far apart in time to compare.
+    DivergenceUnchecked,
+    /// The fallback slot was not usable.
+    FallbackUnusable,
+}
+
+/// Diagnostic bits in exchange `DiagnosticFlags::ALL` order.
+pub const ORACLE_DIAGNOSTIC_BITS: [VerdictDiagnostic; 4] = [
+    VerdictDiagnostic::OnFallback,
+    VerdictDiagnostic::PrimaryRefusedDivergence,
+    VerdictDiagnostic::DivergenceUnchecked,
+    VerdictDiagnostic::FallbackUnusable,
+];
 
 // Serde's derived enum decoder also accepts numeric ordinals and maps. Those
 // are not this public read contract: the TS decoder and OpenAPI require STR.
@@ -96,7 +169,9 @@ string_enum!(VerdictReason {
     PairTimeMismatch,
     RecoveryPending,
     Fresh,
+    ReferenceUnavailable,
 });
+string_enum!(SelectedSource { Primary, Fallback });
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PolicySource {
@@ -146,6 +221,36 @@ pub struct CommittedVerdict {
     pub evidence: [Option<[u8; 32]>; 2],
     pub last_good: Option<CertifiedPrice>,
     pub anchor: AnchorCoverageInfo,
+    pub format: VerdictFormat,
+    /// Format 3: the usable slot chosen by priority, present even when a
+    /// later fault withholds the certificate. Always `None` in format 2.
+    pub selected: Option<SelectedSource>,
+    /// Format 3: raw diagnostic bitset over [`ORACLE_DIAGNOSTIC_BITS`].
+    /// `None` in format 2.
+    pub diagnostics: Option<u8>,
+}
+
+impl CommittedVerdict {
+    /// `faults` named in bit order.
+    pub fn fault_reasons(&self) -> Vec<VerdictReason> {
+        ORACLE_FAULT_BITS
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| self.faults & (1_u32 << bit) != 0)
+            .map(|(_, reason)| *reason)
+            .collect()
+    }
+
+    /// `diagnostics` named in bit order; empty in format 2.
+    pub fn diagnostic_flags(&self) -> Vec<VerdictDiagnostic> {
+        let bits = self.diagnostics.unwrap_or(0);
+        ORACLE_DIAGNOSTIC_BITS
+            .iter()
+            .enumerate()
+            .filter(|(bit, _)| bits & (1_u8 << bit) != 0)
+            .map(|(_, flag)| *flag)
+            .collect()
+    }
 }
 /// One oracle dependency, never portfolio-wide trading/withdrawal authorization.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -173,20 +278,72 @@ type PolicyWire = (
     u64,
     [SourceWire; 2],
 );
-type VerdictWire = (
-    u64,
-    u64,
-    VerdictStatus,
-    VerdictReason,
-    Option<(u64, u64)>,
-    Option<u64>,
-    u32,
-    u8,
-    [Option<u64>; 2],
-    [Option<[u8; 32]>; 2],
-    Option<(u64, u64)>,
-    (Option<u64>, u64, u64),
-);
+type CertifiedWire = Option<(u64, u64)>;
+/// The committed verdict in either layout: twelve format-2 fields, or the
+/// same twelve followed by `selected` and `diagnostics` (format 3). Any other
+/// length is refused.
+struct VerdictWire {
+    height: u64,
+    block_time: u64,
+    status: VerdictStatus,
+    reason: VerdictReason,
+    certified: CertifiedWire,
+    eligible_since: Option<u64>,
+    faults: u32,
+    valid_sources: u8,
+    current_times: [Option<u64>; 2],
+    evidence: [Option<[u8; 32]>; 2],
+    last_good: CertifiedWire,
+    anchor: (Option<u64>, u64, u64),
+    /// `None` for format 2.
+    selection: Option<(Option<SelectedSource>, u8)>,
+}
+
+impl<'de> Deserialize<'de> for VerdictWire {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct Fields;
+        impl<'de> serde::de::Visitor<'de> for Fields {
+            type Value = VerdictWire;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a twelve- or fourteen-field committed verdict")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                fn next<'de, T: Deserialize<'de>, A: serde::de::SeqAccess<'de>>(
+                    seq: &mut A,
+                ) -> Result<T, A::Error> {
+                    seq.next_element()?
+                        .ok_or_else(|| serde::de::Error::custom("short committed verdict"))
+                }
+                let mut value = VerdictWire {
+                    height: next(&mut seq)?,
+                    block_time: next(&mut seq)?,
+                    status: next(&mut seq)?,
+                    reason: next(&mut seq)?,
+                    certified: next(&mut seq)?,
+                    eligible_since: next(&mut seq)?,
+                    faults: next(&mut seq)?,
+                    valid_sources: next(&mut seq)?,
+                    current_times: next(&mut seq)?,
+                    evidence: next(&mut seq)?,
+                    last_good: next(&mut seq)?,
+                    anchor: next(&mut seq)?,
+                    selection: None,
+                };
+                if let Some(selected) = seq.next_element::<Option<SelectedSource>>()? {
+                    value.selection = Some((selected, next(&mut seq)?));
+                    if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
+                        return Err(serde::de::Error::custom("long committed verdict"));
+                    }
+                }
+                Ok(value)
+            }
+        }
+        d.deserialize_seq(Fields)
+    }
+}
 type PermissionWire = (
     u32,
     u64,
@@ -231,40 +388,75 @@ fn policy(w: PolicyWire) -> Result<PolicyEpoch, GatewayError> {
     })
 }
 fn verdict(w: VerdictWire) -> Result<CommittedVerdict, GatewayError> {
-    let fresh = w.2 == VerdictStatus::Fresh;
-    if fresh != (w.3 == VerdictReason::Fresh)
-        || fresh != w.4.is_some()
-        || fresh != w.5.is_some()
-        || w.4.is_some_and(|c| c.0 == 0 || c.1 > w.1)
-        || w.5.is_some_and(|t| t > w.1)
-        || w.10.is_some_and(|c| c.0 == 0 || c.1 > w.1)
+    let fresh = w.status == VerdictStatus::Fresh;
+    if fresh != (w.reason == VerdictReason::Fresh)
+        || fresh != w.certified.is_some()
+        || fresh != w.eligible_since.is_some()
+        || w.certified.is_some_and(|c| c.0 == 0 || c.1 > w.block_time)
+        || w.eligible_since.is_some_and(|t| t > w.block_time)
+        || w.last_good.is_some_and(|c| c.0 == 0 || c.1 > w.block_time)
     {
         return Err(invalid());
     }
-    Ok(CommittedVerdict {
-        height: w.0,
-        block_time: w.1,
-        status: w.2,
-        reason: w.3,
-        certified: w.4.map(|c| CertifiedPrice {
+    let (format, selected, diagnostics) = match w.selection {
+        None => (VerdictFormat::V2, None, None),
+        Some((selected, diagnostics)) => (VerdictFormat::V3, selected, Some(diagnostics)),
+    };
+    let value = CommittedVerdict {
+        height: w.height,
+        block_time: w.block_time,
+        status: w.status,
+        reason: w.reason,
+        certified: w.certified.map(|c| CertifiedPrice {
             price: c.0,
             provider_time: c.1,
         }),
-        eligible_since: w.5,
-        faults: w.6,
-        valid_sources: w.7,
-        current_times: w.8,
-        evidence: w.9,
-        last_good: w.10.map(|c| CertifiedPrice {
+        eligible_since: w.eligible_since,
+        faults: w.faults,
+        valid_sources: w.valid_sources,
+        current_times: w.current_times,
+        evidence: w.evidence,
+        last_good: w.last_good.map(|c| CertifiedPrice {
             price: c.0,
             provider_time: c.1,
         }),
         anchor: AnchorCoverageInfo {
-            price: (w.11).0,
-            covered_ms: (w.11).1,
-            required_ms: (w.11).2,
+            price: w.anchor.0,
+            covered_ms: w.anchor.1,
+            required_ms: w.anchor.2,
         },
-    })
+        format,
+        selected,
+        diagnostics,
+    };
+    if format == VerdictFormat::V3 && !primary_fallback_consistent(&value) {
+        return Err(invalid());
+    }
+    Ok(value)
+}
+
+/// Invariants of exchange#831's source selection as exposed by the read:
+/// the fault word is exactly the named faults (and names the primary
+/// reason), the usable-slot mask agrees with the selected slot, and each
+/// diagnostic implies the slot state that raises it.
+fn primary_fallback_consistent(v: &CommittedVerdict) -> bool {
+    let fresh = v.status == VerdictStatus::Fresh;
+    let valid = v.valid_sources;
+    let flags = v.diagnostic_flags();
+    let has = |flag| flags.contains(&flag);
+    v.faults >> ORACLE_FAULT_BITS.len() == 0
+        && fresh == (v.faults == 0)
+        && (fresh || v.fault_reasons().contains(&v.reason))
+        && v.diagnostics.unwrap_or(0) >> ORACLE_DIAGNOSTIC_BITS.len() == 0
+        && valid <= 0b11
+        && (!fresh || v.selected.is_some())
+        && (v.selected == Some(SelectedSource::Primary)) == (valid & 0b01 != 0)
+        && (v.selected == Some(SelectedSource::Fallback)) == (valid == 0b10)
+        && has(VerdictDiagnostic::OnFallback) == (v.selected == Some(SelectedSource::Fallback))
+        && (!has(VerdictDiagnostic::PrimaryRefusedDivergence)
+            || v.selected == Some(SelectedSource::Fallback))
+        && (!has(VerdictDiagnostic::DivergenceUnchecked) || valid == 0b11)
+        && (!has(VerdictDiagnostic::FallbackUnusable) || valid & 0b10 == 0)
 }
 
 pub(super) fn decode(
@@ -345,4 +537,219 @@ pub(super) fn decode(
         return Err(invalid());
     }
     Ok(value)
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::arithmetic_side_effects
+)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    /// Captured from exchange-core `query_oracle_permissions` (rmp_serde) at
+    /// the `exchange` commit on each row: format 3 from exchange#831, format
+    /// 2 from exchange dev before it.
+    const COMMITTED: &str =
+        include_str!("../../../../conformance/oracle-permissions-committed.ndjson");
+
+    fn cases() -> Vec<Value> {
+        COMMITTED
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+    fn case(name: &str) -> Value {
+        cases()
+            .into_iter()
+            .find(|c| c["case"] == name)
+            .unwrap_or_else(|| panic!("missing case {name}"))
+    }
+    fn bytes(case: &Value) -> Vec<u8> {
+        hex::decode(case["hex"].as_str().unwrap()).unwrap()
+    }
+    fn reason(name: &str) -> VerdictReason {
+        rmp_serde::from_slice(&rmp_serde::to_vec(name).unwrap()).unwrap()
+    }
+    fn diagnostic(name: &str) -> VerdictDiagnostic {
+        *ORACLE_DIAGNOSTIC_BITS
+            .iter()
+            .find(|d| format!("{d:?}") == name)
+            .unwrap()
+    }
+    /// Re-encode `case` with its verdict edited as a generic value tree.
+    fn edited(case: &Value, edit: impl FnOnce(&mut Vec<rmpv::Value>)) -> Vec<u8> {
+        let mut root = rmpv::decode::read_value(&mut bytes(case).as_slice()).unwrap();
+        let rmpv::Value::Array(fields) = &mut root else {
+            panic!("response is an array")
+        };
+        let rmpv::Value::Array(verdict) = &mut fields[8] else {
+            panic!("committed verdict is an array")
+        };
+        edit(verdict);
+        let mut out = Vec::new();
+        rmpv::encode::write_value(&mut out, &root).unwrap();
+        out
+    }
+
+    #[test]
+    fn exchange_encoded_committed_reads_decode_exactly() {
+        let all = cases();
+        assert!(all.iter().any(|c| c["format"] == 2));
+        assert!(all.iter().any(|c| c["format"] == 3));
+        for c in all {
+            let name = c["case"].as_str().unwrap();
+            let e = &c["expect"];
+            let read = decode(&bytes(&c), 1).unwrap_or_else(|_| panic!("{name}"));
+            assert_eq!(read.state, ReadState::Committed, "{name}");
+            let v = read.verdict.unwrap();
+            let format = if c["format"] == 3 {
+                VerdictFormat::V3
+            } else {
+                VerdictFormat::V2
+            };
+            assert_eq!(v.format, format, "{name}");
+            assert_eq!(v.height, e["height"].as_u64().unwrap(), "{name}");
+            assert_eq!(format!("{:?}", v.status), e["status"], "{name}");
+            assert_eq!(v.reason, reason(e["reason"].as_str().unwrap()), "{name}");
+            assert_eq!(
+                v.certified.as_ref().map(|c| c.price),
+                e["certified_price"].as_u64(),
+                "{name}"
+            );
+            assert_eq!(u64::from(v.faults), e["faults"].as_u64().unwrap(), "{name}");
+            let faults: Vec<_> = e["fault_reasons"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| reason(r.as_str().unwrap()))
+                .collect();
+            assert_eq!(v.fault_reasons(), faults, "{name}");
+            assert_eq!(
+                u64::from(v.valid_sources),
+                e["valid_sources"].as_u64().unwrap(),
+                "{name}"
+            );
+            assert_eq!(
+                v.selected.map(|s| format!("{s:?}")),
+                e["selected"].as_str().map(str::to_owned),
+                "{name}"
+            );
+            assert_eq!(
+                v.diagnostics.map(u64::from),
+                e["diagnostics"].as_u64(),
+                "{name}"
+            );
+            let flags: Vec<_> = e["diagnostic_flags"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|d| diagnostic(d.as_str().unwrap()))
+                .collect();
+            assert_eq!(v.diagnostic_flags(), flags, "{name}");
+        }
+    }
+
+    #[test]
+    fn one_fault_bit_layout_serves_both_formats() {
+        let v3 = decode(
+            &bytes(&case("v3/unpriceable_warmup_reference_unavailable")),
+            1,
+        )
+        .unwrap()
+        .verdict
+        .unwrap();
+        let v2 = decode(
+            &bytes(&case("v2/unpriceable_warmup_reference_unavailable")),
+            1,
+        )
+        .unwrap()
+        .verdict
+        .unwrap();
+        assert_eq!(v3.faults, (1 << 8) | (1 << 14));
+        assert_eq!(v3.faults, v2.faults);
+        assert_eq!(ORACLE_FAULT_BITS[7], VerdictReason::Disagreement);
+        assert_eq!(ORACLE_FAULT_BITS[13], VerdictReason::PairTimeMismatch);
+    }
+
+    #[test]
+    fn fallback_certificate_is_the_fallback_slots_own_record() {
+        let v = decode(
+            &bytes(&case("v3/fresh_fallback_primary_refused_divergence")),
+            1,
+        )
+        .unwrap()
+        .verdict
+        .unwrap();
+        assert_eq!(v.selected, Some(SelectedSource::Fallback));
+        assert_eq!(v.certified.map(|c| c.provider_time), v.current_times[1]);
+    }
+
+    #[test]
+    fn impossible_or_malformed_selection_never_decodes() {
+        use rmpv::Value as V;
+        let fresh = case("v3/fresh_primary");
+        type Edit = Box<dyn FnOnce(&mut Vec<V>)>;
+        let edits: Vec<(&str, Edit)> = vec![
+            (
+                "thirteen fields",
+                Box::new(|v| {
+                    v.pop();
+                }),
+            ),
+            ("fifteen fields", Box::new(|v| v.push(V::from(0)))),
+            ("unknown slot", Box::new(|v| v[12] = V::from("Secondary"))),
+            ("slot ordinal", Box::new(|v| v[12] = V::from(0))),
+            ("diagnostic bit 4", Box::new(|v| v[13] = V::from(0x10))),
+            ("diagnostic above u8", Box::new(|v| v[13] = V::from(0x100))),
+            ("fresh without a slot", Box::new(|v| v[12] = V::Nil)),
+            (
+                "fallback while primary usable",
+                Box::new(|v| {
+                    v[12] = V::from("Fallback");
+                    v[13] = V::from(1);
+                }),
+            ),
+            ("OnFallback on primary", Box::new(|v| v[13] = V::from(1))),
+            (
+                "unchecked without both usable",
+                Box::new(|v| {
+                    v[7] = V::from(1);
+                    v[13] = V::from(0b100);
+                }),
+            ),
+            (
+                "fallback unusable but usable",
+                Box::new(|v| v[13] = V::from(8)),
+            ),
+            ("fault word on fresh", Box::new(|v| v[6] = V::from(1))),
+            ("fault bit 15", Box::new(|v| v[6] = V::from(1 << 15))),
+            ("mask past slot 1", Box::new(|v| v[7] = V::from(7))),
+        ];
+        for (name, edit) in edits {
+            assert!(decode(&edited(&fresh, edit), 1).is_err(), "{name}");
+        }
+        let stale = case("v3/unpriceable_no_usable_source");
+        assert!(
+            decode(&edited(&stale, |v| v[3] = V::from("ManualHalt")), 1).is_err(),
+            "a non-fresh reason missing from the fault word"
+        );
+    }
+
+    #[test]
+    fn format_two_reasons_from_older_nodes_still_decode() {
+        let stale = case("v2/unpriceable_no_usable_source");
+        for name in [
+            "Disagreement",
+            "PairTimeMismatch",
+            "AnchorUnavailable",
+            "ReferenceUnavailable",
+        ] {
+            let read = decode(&edited(&stale, |v| v[3] = rmpv::Value::from(name)), 1).unwrap();
+            assert_eq!(read.verdict.unwrap().reason, reason(name));
+        }
+    }
 }

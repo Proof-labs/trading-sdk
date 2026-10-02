@@ -32,6 +32,17 @@ describe("decodeExecError", () => {
     expect(e32?.description).toContain("net-delta margin grouping");
   });
 
+  it("decodes the oracle-policy verdict gap (77, exchange#811)", () => {
+    expect(ExecErrorCode.OracleVerdictUnavailable).toBe(77);
+    const e77 = decodeExecError(77);
+    expect(e77?.name).toBe("OracleVerdictUnavailable");
+    expect(e77?.description).toContain("no certified verdict");
+    expect(execErrorName(77)).toBe("OracleVerdictUnavailable");
+    // 78-81 stay reserved for the rest of the oracle-policy block.
+    for (const code of [78, 79, 80, 81])
+      expect(decodeExecError(code)).toBeFalsy();
+  });
+
   it("decodes the unavailable-mark rejection (97)", () => {
     expect(ExecErrorCode.MarkUnavailable).toBe(97);
     const e97 = decodeExecError(97);

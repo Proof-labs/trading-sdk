@@ -71,6 +71,7 @@
 {"case":"manifest/74","code":74,"log":null,"expect":{"name":"BridgeReceiptMismatch"}}
 {"case":"manifest/75","code":75,"log":null,"expect":{"name":"WithdrawalBelowMinimum"}}
 {"case":"manifest/76","code":76,"log":null,"expect":{"name":"WithdrawalTerminalGated"}}
+{"case":"manifest/77","code":77,"log":null,"expect":{"name":"OracleVerdictUnavailable"}}
 {"case":"manifest/82","code":82,"log":null,"expect":{"name":"OracleGuardUnset"}}
 {"case":"manifest/83","code":83,"log":null,"expect":{"name":"SubAccountNotFound"}}
 {"case":"manifest/84","code":84,"log":null,"expect":{"name":"SubAccountAlreadyExists"}}

@@ -9,6 +9,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Depends on exchange#831 (unmerged); code 77 is from exchange#832, on
+  exchange dev.**
+  npm 6.4.0 → 6.5.0, Rust core 4.2.0 → 4.3.0, Python 4.0.0 → 4.1.0. MINOR:
+  every read an earlier SDK accepted still decodes the same way, and the
+  pinned proof-wire tag (v4.1.0), codec and signing bytes are unchanged. The
+  WASM and PyO3 crates keep their versions.
+  - Oracle permission reads decode the committed verdict in both layouts. The
+    fourteen-field format-3 read from exchange#831 (primary with fallback)
+    appends `selected` (`"Primary"` / `"Fallback"`, or null) and a
+    `diagnostics` u8 bitset: `OnFallback` (bit 0),
+    `PrimaryRefusedDivergence` (1), `DivergenceUnchecked` (2),
+    `FallbackUnusable` (3). The twelve-field format-2 read of earlier nodes
+    still decodes, with `selected` null. The TypeScript `CommittedOracleVerdict`
+    gains `format`, `selected`, `diagnostics`, `diagnosticFlags` and
+    `faultReasons`, and exports `ORACLE_FAULT_BITS` and
+    `ORACLE_DIAGNOSTIC_BITS`. The Rust `CommittedVerdict` gains `format`,
+    `selected` and `diagnostics`, with `fault_reasons()` and
+    `diagnostic_flags()`. Both layouts share one fault-bit layout.
+    `Disagreement` (bit 7) and `PairTimeMismatch` (bit 13) keep their bits
+    but are no longer produced. A format-3 verdict is refused when its
+    selected slot, source mask, diagnostics and fault word contradict the
+    engine's selection rules. Vectors captured from the exchange encoding are
+    in `conformance/oracle-permissions-committed.ndjson`.
+  - `ReferenceUnavailable`, the current exchange name of the old
+    `AnchorUnavailable` reason, is now an accepted verdict reason. Before
+    this, a committed verdict carrying it was refused. `AnchorUnavailable`
+    is still accepted from older nodes.
+  - Error code 77 `OracleVerdictUnavailable` (exchange#832, proof-wire
+    2.4.0+) is in the TypeScript, Rust and Python (via the Rust core) error
+    tables and in the `errors.ndjson` manifest. The oracle policy has no
+    certified verdict for the market in this block, so the action can be
+    retried in a later block. Codes 78-81 stay reserved.
 - `ExchangeClient.queryAuthorities()` reads the engine's privileged
   authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
   api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,

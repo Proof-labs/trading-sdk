@@ -119,7 +119,8 @@ export enum ExecErrorCode {
   BridgeReceiptMismatch = 74,
   WithdrawalBelowMinimum = 75,
   WithdrawalTerminalGated = 76,
-  // 77-81 are reserved on the wire for oracle-observation and oracle-policy errors.
+  OracleVerdictUnavailable = 77,
+  // 78-81 are reserved on the wire for oracle-observation and oracle-policy errors.
   OracleGuardUnset = 82,
   SubAccountNotFound = 83,
   SubAccountAlreadyExists = 84,
@@ -440,6 +441,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "WithdrawalTerminalGated",
     description:
       "retired legacy relayer terminal submitted at or above the receipt cutover",
+  },
+  77: {
+    name: "OracleVerdictUnavailable",
+    description:
+      "oracle policy has no certified verdict for this market in this block (stale, unpriceable or not yet committed); retry in a later block",
   },
   82: {
     name: "OracleGuardUnset",
