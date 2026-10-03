@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Incident-bound `ReleaseLiquidationPlan` proposals carry distinct original
+  incident and current safety revisions through the shared codec. Existing
+  admin quorum and mandatory current safety checks remain on-chain; transport
+  support cannot override them, erase debt or activate the dormant executor.
+
 - Plan-bound `RestartLiquidationPlan` governance transport and the bounded
   gateway-only `queryLiquidationPlan(owner)` read. Checkpoint hashes and window
   generations bind operator proposals without granting authority, resetting

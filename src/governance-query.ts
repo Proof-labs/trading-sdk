@@ -34,6 +34,7 @@ import { Outcome } from "./types.js";
 import {
   decodeLiquidationPolicy,
   decodeLiquidationRestart,
+  decodeLiquidationRelease,
 } from "./liquidation-policy.js";
 
 /**
@@ -616,6 +617,7 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   PublishLiquidationPolicy: 22,
   RevokeLiquidationPolicy: 23,
   RestartLiquidationPlan: 24,
+  ReleaseLiquidationPlan: 25,
   SetWithdrawalLimit: 19,
   SetOperatorReceiptRegistry: 20,
 };
@@ -637,6 +639,8 @@ export function decodeAdminAction(
       return { kind: name, value: decodeLiquidationPolicy(payload) };
     case "RestartLiquidationPlan":
       return { kind: name, value: decodeLiquidationRestart(payload) };
+    case "ReleaseLiquidationPlan":
+      return { kind: name, value: decodeLiquidationRelease(payload) };
     case "RevokeLiquidationPolicy":
       return {
         kind: name,

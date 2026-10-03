@@ -47,6 +47,7 @@ export {
   type PublishLiquidationPolicy,
   type RevokeLiquidationPolicy,
   type RestartLiquidationPlan,
+  type ReleaseLiquidationPlan,
   type BridgeWithdrawalReceipt,
   type OperatorReceiptProof,
   type ApproveAgent,

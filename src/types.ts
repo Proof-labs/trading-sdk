@@ -1177,6 +1177,7 @@ export type AdminAction =
   | { kind: "PublishLiquidationPolicy"; value: PublishLiquidationPolicy }
   | { kind: "RevokeLiquidationPolicy"; value: RevokeLiquidationPolicy }
   | { kind: "RestartLiquidationPlan"; value: RestartLiquidationPlan }
+  | { kind: "ReleaseLiquidationPlan"; value: ReleaseLiquidationPlan }
   | { kind: "FundInsuranceFund"; value: FundInsuranceFund }
   | { kind: "WithdrawInsuranceFund"; value: WithdrawInsuranceFund }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
@@ -1250,6 +1251,16 @@ export interface RestartLiquidationPlan {
   targetRevision: bigint;
   lifetimeBlocks: bigint;
   noProgressBlocks: bigint;
+}
+
+/** Incident-bound quorum request; current on-chain safety checks cannot be overridden. */
+export interface ReleaseLiquidationPlan {
+  owner: Address;
+  planId: bigint;
+  expectedRevision: bigint;
+  safetyRevision: bigint;
+  expectedCheckpointHash: Uint8Array;
+  expectedWindowGeneration: bigint;
 }
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.

@@ -28,10 +28,12 @@ import {
   type WithdrawInsuranceFund,
   type PublishLiquidationPolicy,
   type RestartLiquidationPlan,
+  type ReleaseLiquidationPlan,
 } from "./types.js";
 import {
   validateLiquidationPolicy,
   validateLiquidationRestart,
+  validateLiquidationRelease,
 } from "./liquidation-policy.js";
 import {
   validateFundInsuranceFund,
@@ -155,6 +157,8 @@ function governanceActionToWasm(value: unknown): unknown {
     validateLiquidationPolicy(v.value as PublishLiquidationPolicy);
   if (v.kind === "RestartLiquidationPlan")
     validateLiquidationRestart(v.value as RestartLiquidationPlan);
+  if (v.kind === "ReleaseLiquidationPlan")
+    validateLiquidationRelease(v.value as ReleaseLiquidationPlan);
   // `Batch` is the one variant whose payload is a LIST of nested enum items
   // (`AdminBatchItem[]`) rather than a struct — each item is itself
   // `{ kind, value }` and converts through this same function.

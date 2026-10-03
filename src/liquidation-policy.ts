@@ -1,6 +1,7 @@
 import type {
   PublishLiquidationPolicy,
   RestartLiquidationPlan,
+  ReleaseLiquidationPlan,
 } from "./types.js";
 
 const U64_MAX = (1n << 64n) - 1n;
@@ -63,6 +64,33 @@ export function validateLiquidationRestart(p: RestartLiquidationPlan): void {
     p.targetRevision,
     p.lifetimeBlocks,
     p.noProgressBlocks,
+  ]);
+}
+
+/** Shape only: immutable incident revision and current safety revision are distinct. */
+export function decodeLiquidationRelease(raw: unknown): ReleaseLiquidationPlan {
+  const p = tuple(raw, 6);
+  const owner = p[0] instanceof Uint8Array ? Array.from(p[0]) : tuple(p[0], 20);
+  if (owner.length !== 20 || owner.some((v) => u32(v) > 255))
+    throw new Error("liquidation owner must be 20 bytes");
+  return {
+    owner: Uint8Array.from(owner as number[]),
+    planId: u64(p[1]),
+    expectedRevision: u64(p[2]),
+    safetyRevision: u64(p[3]),
+    expectedCheckpointHash: id(p[4]),
+    expectedWindowGeneration: u64(p[5]),
+  };
+}
+
+export function validateLiquidationRelease(p: ReleaseLiquidationPlan): void {
+  decodeLiquidationRelease([
+    p.owner,
+    p.planId,
+    p.expectedRevision,
+    p.safetyRevision,
+    p.expectedCheckpointHash,
+    p.expectedWindowGeneration,
   ]);
 }
 /** Compact wire field order, not calibration, authority or funding proof. */

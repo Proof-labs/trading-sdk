@@ -6,6 +6,8 @@ import {
   validateLiquidationPolicy,
   decodeLiquidationRestart,
   validateLiquidationRestart,
+  decodeLiquidationRelease,
+  validateLiquidationRelease,
 } from "./liquidation-policy.js";
 import type { Action, AdminAction } from "./types.js";
 
@@ -31,6 +33,14 @@ const restartRaw = (): unknown[] => [
   U64,
   U64,
 ];
+const releaseRaw = (): unknown[] => [
+  Array(20).fill(3),
+  U64,
+  U64 - 1n,
+  U64,
+  Array(32).fill(7),
+  U64,
+];
 
 describe("dormant liquidation governance transport", () => {
   it("preserves widest wire integers without supplying economic defaults", () => {
@@ -49,6 +59,7 @@ describe("dormant liquidation governance transport", () => {
     expect(ACTION_TAG_BY_KIND.PublishLiquidationPolicy).toBe(22);
     expect(ACTION_TAG_BY_KIND.RevokeLiquidationPolicy).toBe(23);
     expect(ACTION_TAG_BY_KIND.RestartLiquidationPlan).toBe(24);
+    expect(ACTION_TAG_BY_KIND.ReleaseLiquidationPlan).toBe(25);
     for (const action of [
       {
         kind: "PublishLiquidationPolicy",
@@ -58,6 +69,10 @@ describe("dormant liquidation governance transport", () => {
       {
         kind: "RestartLiquidationPlan",
         value: decodeLiquidationRestart(restartRaw()),
+      },
+      {
+        kind: "ReleaseLiquidationPlan",
+        value: decodeLiquidationRelease(releaseRaw()),
       },
     ] satisfies AdminAction[]) {
       const proposal: Action = {
@@ -88,6 +103,83 @@ describe("dormant liquidation governance transport", () => {
       kind: "RevokeLiquidationPolicy",
       value: { revision: U64 },
     });
+  });
+  it("keeps release incident and active safety revisions distinct and copies commitments", () => {
+    const raw = releaseRaw();
+    const value = decodeLiquidationRelease(raw);
+    validateLiquidationRelease(value);
+    expect(value.expectedRevision).toBe(U64 - 1n);
+    expect(value.safetyRevision).toBe(U64);
+    expect(decodeAdminAction({ ReleaseLiquidationPlan: raw })).toEqual({
+      kind: "ReleaseLiquidationPlan",
+      value,
+    });
+    (raw[0] as number[])[0] = 4;
+    (raw[4] as number[])[0] = 8;
+    expect(value.owner[0]).toBe(3);
+    expect(value.expectedCheckpointHash[0]).toBe(7);
+  });
+  it("rejects incomplete release authority shapes and unsafe integer fields", () => {
+    for (const raw of [releaseRaw().slice(1), [...releaseRaw(), 0]])
+      expect(() => decodeLiquidationRelease(raw)).toThrow();
+    for (const [index, bad] of [
+      [0, Array(19).fill(0)],
+      [0, Array(20).fill(256)],
+      [4, Array(31).fill(0)],
+      [4, Array(32).fill(-1)],
+    ] as [number, unknown][]) {
+      const raw = releaseRaw();
+      raw[index] = bad;
+      expect(() => decodeLiquidationRelease(raw)).toThrow();
+    }
+    for (const index of [1, 2, 3, 5]) {
+      for (const bad of [
+        -1n,
+        1n << 64n,
+        Number.MAX_SAFE_INTEGER + 1,
+        undefined,
+        "1",
+      ]) {
+        const raw = releaseRaw();
+        raw[index] = bad;
+        expect(() => decodeLiquidationRelease(raw)).toThrow();
+      }
+    }
+  });
+  it("binds every release identity field in authoritative proposal bytes", () => {
+    const original = decodeLiquidationRelease(releaseRaw());
+    const encode = (value: typeof original) =>
+      encodeSignedTx(
+        {
+          type: "ProposeAdminAction",
+          data: {
+            proposer: new Uint8Array(20).fill(3),
+            registryVersion: 1n,
+            action: { kind: "ReleaseLiquidationPlan", value },
+          },
+        },
+        123n,
+        new Uint8Array(32),
+        new Uint8Array(64),
+      );
+    const baseline = encode(original);
+    for (const changed of [
+      { ...original, owner: new Uint8Array(20).fill(4) },
+      { ...original, planId: U64 - 1n },
+      { ...original, expectedRevision: U64 - 2n },
+      { ...original, safetyRevision: U64 - 1n },
+      { ...original, expectedCheckpointHash: new Uint8Array(32).fill(8) },
+      { ...original, expectedWindowGeneration: U64 - 1n },
+    ]) {
+      expect(encode(changed)).not.toEqual(baseline);
+      const decoded = decodeTx(encode(changed)).action;
+      expect(decoded).toMatchObject({
+        type: "ProposeAdminAction",
+        data: {
+          action: { kind: "ReleaseLiquidationPlan", value: changed },
+        },
+      });
+    }
   });
   it("binds every restart field without narrowing u64 or inventing defaults", () => {
     const raw = restartRaw();

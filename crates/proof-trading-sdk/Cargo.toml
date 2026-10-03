@@ -23,7 +23,7 @@ rmp-serde = "1"
 rmpv = { version = "1.3.1", features = ["with-serde"] }
 # Exact review-only combined wire; replace with its reviewed public release tag
 # before release. Version asserts the compatible major; no mirrored codec.
-proof-wire = { git = "https://github.com/Proof-labs/exchange.git", rev = "af9e4e68e8c044670f27fa21c202a9aa10d74ff2", version = "5" }
+proof-wire = { git = "https://github.com/Proof-labs/exchange.git", rev = "1f460e8f3b79ce18c57359742487d5c254fcec40", version = "5" }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.
