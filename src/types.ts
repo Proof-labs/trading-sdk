@@ -1176,6 +1176,7 @@ export interface WithdrawInsuranceFund {
 export type AdminAction =
   | { kind: "PublishLiquidationPolicy"; value: PublishLiquidationPolicy }
   | { kind: "RevokeLiquidationPolicy"; value: RevokeLiquidationPolicy }
+  | { kind: "RestartLiquidationPlan"; value: RestartLiquidationPlan }
   | { kind: "FundInsuranceFund"; value: FundInsuranceFund }
   | { kind: "WithdrawInsuranceFund"; value: WithdrawInsuranceFund }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
@@ -1237,6 +1238,18 @@ export interface PublishLiquidationPolicy {
 }
 export interface RevokeLiquidationPolicy {
   revision: bigint;
+}
+
+/** Exact expired-plan authorization; no new financial budget or release. */
+export interface RestartLiquidationPlan {
+  owner: Address;
+  planId: bigint;
+  expectedRevision: bigint;
+  expectedCheckpointHash: Uint8Array;
+  expectedWindowGeneration: bigint;
+  targetRevision: bigint;
+  lifetimeBlocks: bigint;
+  noProgressBlocks: bigint;
 }
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.

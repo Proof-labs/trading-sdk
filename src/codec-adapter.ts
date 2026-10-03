@@ -27,8 +27,12 @@ import {
   type FundInsuranceFund,
   type WithdrawInsuranceFund,
   type PublishLiquidationPolicy,
+  type RestartLiquidationPlan,
 } from "./types.js";
-import { validateLiquidationPolicy } from "./liquidation-policy.js";
+import {
+  validateLiquidationPolicy,
+  validateLiquidationRestart,
+} from "./liquidation-policy.js";
 import {
   validateFundInsuranceFund,
   validateWithdrawInsuranceFund,
@@ -149,6 +153,8 @@ function governanceActionToWasm(value: unknown): unknown {
     validateWithdrawInsuranceFund(v.value as WithdrawInsuranceFund);
   if (v.kind === "PublishLiquidationPolicy")
     validateLiquidationPolicy(v.value as PublishLiquidationPolicy);
+  if (v.kind === "RestartLiquidationPlan")
+    validateLiquidationRestart(v.value as RestartLiquidationPlan);
   // `Batch` is the one variant whose payload is a LIST of nested enum items
   // (`AdminBatchItem[]`) rather than a struct — each item is itself
   // `{ kind, value }` and converts through this same function.
@@ -340,6 +346,7 @@ const BYTE_FIELDS = new Set([
   "approver",
   "rejecter",
   "contentHash",
+  "expectedCheckpointHash",
   // Receipt-proof bitmap (raw `Vec<u8>` on the wire → number[] on decode).
   // The receipt's own byte fields decode as `Uint8Array` (newtype
   // serialize_bytes) and hit the early `instanceof Uint8Array` return, so only

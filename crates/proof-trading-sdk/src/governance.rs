@@ -13,7 +13,8 @@ pub use proof_wire::codec::{
 };
 pub use proof_wire::liquidation_policy::{
     LiquidationFundingSnapshot, LiquidationInsuranceRatios, LiquidationReferenceSettings,
-    LiquidationWorkSettings, PublishLiquidationPolicy, RevokeLiquidationPolicy,
+    LiquidationWorkSettings, PublishLiquidationPolicy, RestartLiquidationPlan,
+    RevokeLiquidationPolicy,
 };
 pub use proof_wire::types::{
     AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, ConfigureOraclePolicy,

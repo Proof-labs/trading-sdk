@@ -9,6 +9,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Plan-bound `RestartLiquidationPlan` governance transport and the bounded
+  gateway-only `queryLiquidationPlan(owner)` read. Checkpoint hashes and window
+  generations bind operator proposals without granting authority, resetting
+  financial limits or releasing containment. Unavailable or corrupt plan
+  evidence fails closed rather than appearing absent.
+
 - `decodeLiquidationCashAudit` decodes the draft terminal insured-close audit
   without narrowing u64/i64 cash, PnL or IDs. It returns reported final
   balances, not another cash movement; malformed widths, addresses, identity

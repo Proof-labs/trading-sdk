@@ -1,4 +1,7 @@
-import type { PublishLiquidationPolicy } from "./types.js";
+import type {
+  PublishLiquidationPolicy,
+  RestartLiquidationPlan,
+} from "./types.js";
 
 const U64_MAX = (1n << 64n) - 1n;
 const U32_MAX = 0xffffffff;
@@ -30,6 +33,37 @@ function id(value: unknown): Uint8Array {
   if (bytes.length !== 32 || bytes.some((v) => u32(v) > 255))
     throw new Error("liquidation funding snapshot ID must be 32 bytes");
   return Uint8Array.from(bytes as number[]);
+}
+
+/** Shape-only codec; quorum, checkpoint equality and current policy are on-chain checks. */
+export function decodeLiquidationRestart(raw: unknown): RestartLiquidationPlan {
+  const p = tuple(raw, 8);
+  const owner = p[0] instanceof Uint8Array ? Array.from(p[0]) : tuple(p[0], 20);
+  if (owner.length !== 20 || owner.some((v) => u32(v) > 255))
+    throw new Error("liquidation owner must be 20 bytes");
+  return {
+    owner: Uint8Array.from(owner as number[]),
+    planId: u64(p[1]),
+    expectedRevision: u64(p[2]),
+    expectedCheckpointHash: id(p[3]),
+    expectedWindowGeneration: u64(p[4]),
+    targetRevision: u64(p[5]),
+    lifetimeBlocks: u64(p[6]),
+    noProgressBlocks: u64(p[7]),
+  };
+}
+
+export function validateLiquidationRestart(p: RestartLiquidationPlan): void {
+  decodeLiquidationRestart([
+    p.owner,
+    p.planId,
+    p.expectedRevision,
+    p.expectedCheckpointHash,
+    p.expectedWindowGeneration,
+    p.targetRevision,
+    p.lifetimeBlocks,
+    p.noProgressBlocks,
+  ]);
 }
 /** Compact wire field order, not calibration, authority or funding proof. */
 export function decodeLiquidationPolicy(

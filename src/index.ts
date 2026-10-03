@@ -46,6 +46,7 @@ export {
   type WithdrawInsuranceFund,
   type PublishLiquidationPolicy,
   type RevokeLiquidationPolicy,
+  type RestartLiquidationPlan,
   type BridgeWithdrawalReceipt,
   type OperatorReceiptProof,
   type ApproveAgent,
@@ -274,6 +275,11 @@ export {
   type FinancialAccountState,
   type FinancialMarketState,
 } from "./financial-state.js";
+export {
+  decodeLiquidationPlan,
+  type LiquidationPlanState,
+  type LiquidationDisposition,
+} from "./liquidation-plan.js";
 export {
   decodeAccountState,
   type AccountState,
