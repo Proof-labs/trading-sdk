@@ -1161,7 +1161,25 @@ export interface SetOperatorReceiptRegistry {
  * `AttachConditional` ride the standalone-events activation. The engine
  * refuses every tag below its activation height.
  */
+export interface FundInsuranceFund {
+  fundingId: bigint;
+  source: Address;
+  allocations: { poolId: number; amount: bigint }[];
+}
+
+export interface WithdrawInsuranceFund {
+  withdrawalId: bigint;
+  recipient: Address;
+  allocations: { poolId: number; amount: bigint }[];
+}
+
 export type AdminAction =
+  | { kind: "PublishLiquidationPolicy"; value: PublishLiquidationPolicy }
+  | { kind: "RevokeLiquidationPolicy"; value: RevokeLiquidationPolicy }
+  | { kind: "RestartLiquidationPlan"; value: RestartLiquidationPlan }
+  | { kind: "ReleaseLiquidationPlan"; value: ReleaseLiquidationPlan }
+  | { kind: "FundInsuranceFund"; value: FundInsuranceFund }
+  | { kind: "WithdrawInsuranceFund"; value: WithdrawInsuranceFund }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
@@ -1177,6 +1195,73 @@ export type AdminAction =
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
   | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet };
+
+/** Dormant privileged settings; metadata is not funding or activation. */
+export interface PublishLiquidationPolicy {
+  expectedRevision: bigint | null;
+  revision: bigint;
+  funding: {
+    id: Uint8Array;
+    committedHeight: bigint;
+    eligibleMicroUsdc: bigint;
+  };
+  reference: {
+    maximumAgeMs: bigint;
+    maximumBookSpreadBps: number;
+    minimumSideNotionalMicroUsdc: bigint;
+    executionCollarBps: number;
+    referenceOrdersPerSide: number;
+  };
+  lifetimeBlocks: bigint;
+  noProgressBlocks: bigint;
+  work: {
+    maximumPlanLegs: number;
+    maximumOwnerOrders: number;
+    owners: number;
+    legs: number;
+    levels: number;
+    orders: number;
+    fills: number;
+    candidates: number;
+    pointReads: number;
+    indexRows: number;
+    readBytes: number;
+    checkpointBytes: number;
+  };
+  insurance: {
+    planBps: number;
+    ownerBps: number;
+    marketBps: number;
+    poolBps: number;
+    globalBps: number;
+    protectedFloorBps: number;
+  };
+}
+export interface RevokeLiquidationPolicy {
+  revision: bigint;
+}
+
+/** Exact expired-plan authorization; no new financial budget or release. */
+export interface RestartLiquidationPlan {
+  owner: Address;
+  planId: bigint;
+  expectedRevision: bigint;
+  expectedCheckpointHash: Uint8Array;
+  expectedWindowGeneration: bigint;
+  targetRevision: bigint;
+  lifetimeBlocks: bigint;
+  noProgressBlocks: bigint;
+}
+
+/** Incident-bound quorum request; current on-chain safety checks cannot be overridden. */
+export interface ReleaseLiquidationPlan {
+  owner: Address;
+  planId: bigint;
+  expectedRevision: bigint;
+  safetyRevision: bigint;
+  expectedCheckpointHash: Uint8Array;
+  expectedWindowGeneration: bigint;
+}
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */

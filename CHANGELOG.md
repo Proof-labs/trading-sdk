@@ -9,6 +9,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Incident-bound `ReleaseLiquidationPlan` proposals carry distinct original
+  incident and current safety revisions through the shared codec. Existing
+  admin quorum and mandatory current safety checks remain on-chain; transport
+  support cannot override them, erase debt or activate the dormant executor.
+
+- Plan-bound `RestartLiquidationPlan` governance transport and the bounded
+  gateway-only `queryLiquidationPlan(owner)` read. Checkpoint hashes and window
+  generations bind operator proposals without granting authority, resetting
+  financial limits or releasing containment. Unavailable or corrupt plan
+  evidence fails closed rather than appearing absent.
+
+- `decodeLiquidationCashAudit` decodes the draft terminal insured-close audit
+  without narrowing u64/i64 cash, PnL or IDs. It returns reported final
+  balances, not another cash movement; malformed widths, addresses, identity
+  and unsupported representations refuse. Decoding does not authenticate
+  provenance, provide replay protection or authorize runtime activation.
+
+- Prepared dormant liquidation-policy publish/revoke governance transport:
+  typed proposal display, shape validation and exact Rust/WASM codec support.
+  Metadata is not funded cash or activation authority. Calibrated values,
+  shared decisions and a reviewed public wire release remain prerequisites.
+- Prepared governed insurance funding (exchange #886): TypeScript
+  `FundInsuranceFund` and `WithdrawInsuranceFund` proposal types, strict
+  pre-signing shape validation, compact proposal decoding and Rust governance
+  re-exports. Encoding remains in the shared Rust/WASM wire implementation;
+  existing codec fixtures still pass. This client work is not release-ready
+  until the public wire artifact containing #886 is pinned and the affected
+  package versions are advanced under the compatibility policy. No treasury
+  source, live allocation or signed funding transaction is created by the SDK.
+  The prototype withdrawal now uses inner tag `0x15`; merged receipt-registry
+  rotation retains `0x14` and the withdrawal-limit reservation retains `0x13`.
 - `ExchangeClient.queryAuthorities()` reads the engine's privileged
   authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
   api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,
