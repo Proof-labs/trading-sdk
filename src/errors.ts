@@ -147,6 +147,8 @@ export enum ExecErrorCode {
    *  the configured per-account cap; capacity returns gradually as in-window
    *  outflows age out. */
   WithdrawalLimitExceeded = 99,
+  /** The account already holds the maximum number of resting orders. */
+  AccountOrderCapReached = 100,
   InternalError = 255,
 }
 
@@ -526,6 +528,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "WithdrawalLimitExceeded",
     description:
       "the withdrawal would push the account's rolling-window outflow past the configured per-account cap — the attempted debit, the cap, and the moment the oldest in-window outflow expires are on the error's Display and log; capacity returns gradually as in-window outflows age out",
+  },
+  100: {
+    name: "AccountOrderCapReached",
+    description:
+      "the account already holds the maximum number of resting orders — cancel one before placing another",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
