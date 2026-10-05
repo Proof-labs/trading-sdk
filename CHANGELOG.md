@@ -55,6 +55,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Requests bypass HTTP caches. MINOR: this additive TypeScript read API keeps
   the released npm 5.1.0 codec and proof-wire 2.1.0 contract (exchange v2.12.0 /
   api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
+- TypeScript 6.1.0: `HistoryResolution.convertedSize` and
+  `HistoryResolution.fallbackReason` (with the `ConversionFallbackReason` type)
+  for conditional-perp resolutions, as the exchange release after 2.14.0
+  (exchange #830) emits them on `conditional_settled` and the indexer's
+  `GET /v1/history/resolutions` serves them. A winning conditional converts at
+  resolution into a perpetual position on the underlying opened at the
+  settlement price, and its result is paid in cash exactly as a winner that
+  cannot convert is. `convertedSize` is the size that converted (the whole
+  `size`, or `"0"` when it did not); `fallbackReason` says why a winner did not
+  convert (`""` otherwise; the margin case is `"maintenance_margin"`).
+  `realizedPnl` is unchanged: it is the cash paid for every `conditional_settled`
+  row, converted or not. The Python `history_resolutions` returns the raw rows,
+  so it carries `converted_size` and `fallback_reason` as served. MINOR: the new
+  fields are additive on a read; no codec, order encoding, Rust or Python
+  package change.
 - `GatewayHttpError.errorCode` — optional typed error code extracted from the
   gateway's JSON response body (e.g. `"MissingMark"`). The `GatewayReads`
   path clones the response to parse the code while leaving the original body

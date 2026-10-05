@@ -19,7 +19,7 @@
  * Validation:
  *   - Every long is closed after the drop.
  *   - No account is underwater.
- *   - HLP/IF deficits are bounded by their respective layers
+ *   - Proof liquidity provider (PLP) and IF deficits are bounded by their respective layers
  *     (no single tier asked to absorb the entire shortfall).
  *   - Pool isolation respected — a tier-2 socialized loss event
  *     is emitted with the correct cap.

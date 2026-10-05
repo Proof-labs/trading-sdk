@@ -13,19 +13,19 @@ End-to-end behaviour tests for the exchange. Each file corresponds to a single s
 
 ## How they run
 
-- **CI (default, no node):** scenarios auto-skip because `RPC_URL` is unset. `make test-sdk` stays green.
+- **CI (default, no node):** scenarios auto-skip because `RPC_URL` is unset. `npm test` stays green.
 - **Local, against a running node:** set `RPC_URL`, `RELAYER_PRIVATE_KEY`, and (for liquidation tests) `ORACLE_PRIVATE_KEY`, and they execute for real against live CometBFT + `exchange-node`.
 
+The local stack lives in [proof-integration](https://github.com/Proof-labs/proof-integration), checked out next to this repository with its sibling repositories built (see its README, "Setup from cold").
+
 ```bash
-# One-time: boot a clean local stack WITHOUT market-makers (see below).
-./scripts/dev-stack.sh up --fresh --no-ui --no-mm --no-hlp
+# One-time, in ../proof-integration: a fresh chain with markets, oracle prices
+# and funding seeded. The default stack starts no market maker; do not set WITH_MM=1.
+cd ../proof-integration
+npm run stack:up:fresh
 
-# Seed markets + oracles
-npx tsx scripts/seed.ts setup     # first time only
-npx tsx scripts/seed.ts           # every time the chain is reset
-
-# Run scenarios with the canonical seeded keys
-cd sdk
+# Back in this repository: run the scenarios with the seeded keys
+cd ../trading-sdk
 RELAYER_KEY=$(jq -r .relayer ~/.exchanged/seed-keys.json)
 ORACLE_KEY=$(jq -r .oracle ~/.exchanged/seed-keys.json)
 
@@ -33,18 +33,21 @@ RPC_URL=http://localhost:26657 \
   RELAYER_PRIVATE_KEY=$RELAYER_KEY \
   ORACLE_PRIVATE_KEY=$ORACLE_KEY \
   npx vitest run src/scenarios/
+
+# When done, in ../proof-integration
+npm run stack:down
 ```
 
 ## Requirements for deterministic passes
 
 Each scenario creates fresh random-key users (`alice`, `bob`, `carol`) and funds them via the relayer-signed `Deposit` flow (engine `handle_deposit` gates on the on-chain relayer allowlist — audit B1, 2026-04-23). The test node must therefore have:
 
-- **Markets seeded** (`scripts/seed.ts` — creates BTC-PERP=1, ETH-PERP=2, SOL-PERP=3).
-- **Oracle prices set** (same script).
-- **Relayer + oracle keys exposed** via env vars (the seed script writes both to `~/.exchanged/seed-keys.json`).
-- **No competing traders.** Scenarios depend on positionSymmetry (Σ signed positions = 0 across the seeded users) and on order-book emptiness around the test prices. Concurrent MM activity (`spawn-mms`, `spawn-impact-mms`, `spawn-event-mms`, `hlp.ts`, etc.) breaks both: a market-maker bid at $77k will eat a scenario sell at $50k. **Run scenarios on a dedicated node started without MMs** (`./scripts/dev-stack.sh up --no-mm --no-hlp --no-impact-mms --no-event-mms` or the equivalent flag set).
+- **Markets seeded** (`npm run stack:up:fresh` in proof-integration — creates BTC=1, ETH=2, SOL=3).
+- **Oracle prices set** (same command).
+- **Relayer + oracle keys exposed** via env vars (the fresh stack writes both to `~/.exchanged/seed-keys.json`; set `EXCHANGED_HOME` to move it).
+- **No competing traders.** Scenarios depend on positionSymmetry (Σ signed positions = 0 across the seeded users) and on order-book emptiness around the test prices. Any concurrent market maker (proof-integration's `mm` component, the Proof liquidity provider (PLP) market maker, and so on) breaks both: a market-maker bid at $77k will eat a scenario sell at $50k. **Run scenarios on a stack started without market makers**: proof-integration's default stack, without `WITH_MM=1`, and with no `mm` in `STACK_COMPONENTS`.
 
-If you must run against an MM-active stack, comment out `positionSymmetry` in `invariants.ts` and pick scenario prices that won't cross the live book — but the assertions about exact positions / fill prices won't hold and tests will fail intermittently.
+If you must run against a stack with a market maker running, comment out `positionSymmetry` in `invariants.ts` and pick scenario prices that won't cross the live book — but the assertions about exact positions / fill prices won't hold and tests will fail intermittently.
 
 ## Structure
 
