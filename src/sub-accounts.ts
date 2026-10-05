@@ -107,10 +107,13 @@ const ROW_FIELDS = 5;
 // the five-field prefix are future-optional and skipped generically — their
 // types are not constrained, floats included.
 
-/** Offset past an unsigned-integer field, or null when the bytes are
- *  anything else (the decoder's verdict, not this walk's). A float family
- *  byte in this position is the one thing that throws: the decoder would
- *  silently accept it when the value happens to be integral. */
+/** Offset past an integer field, or null when the bytes are anything else
+ *  (the decoder's verdict, not this walk's). Signed encodings are stepped
+ *  over, not stood down on: the decoder accepts a non-negative value in them
+ *  and rejects a negative one itself, and a stand-down here would end the
+ *  walk for every later row. A float family byte in this position is the one
+ *  thing that throws: the decoder would silently accept it when the value
+ *  happens to be integral. */
 function walkUintOffset(
   bytes: Uint8Array,
   offset: number,
@@ -120,8 +123,17 @@ function walkUintOffset(
   if (lead === undefined) return null;
   if (lead === 0xca || lead === 0xcb)
     return invalid(`${field} (msgpack float where the wire has an integer)`);
-  if (lead <= 0x7f) return offset + 1; // positive fixint
-  const width = { 0xcc: 2, 0xcd: 3, 0xce: 5, 0xcf: 9 }[lead];
+  if (lead <= 0x7f || lead >= 0xe0) return offset + 1; // (negative) fixint
+  const width = {
+    0xcc: 2,
+    0xcd: 3,
+    0xce: 5,
+    0xcf: 9,
+    0xd0: 2,
+    0xd1: 3,
+    0xd2: 5,
+    0xd3: 9,
+  }[lead];
   if (width === undefined) return null;
   return offset + width <= bytes.length ? offset + width : null;
 }
@@ -222,30 +234,25 @@ function walkExtraValueOffset(
     const end = offset + 1 + (lead & 0x1f);
     return end <= bytes.length ? end : null;
   }
-  let size = 0;
-  let header = 0;
-  switch (lead) {
-    case 0xc4:
-    case 0xd9:
-    case 0xc7:
-      header = 2;
-      break;
-    case 0xc5:
-    case 0xda:
-    case 0xc8:
-      header = 3;
-      break;
-    case 0xc6:
-    case 0xdb:
-    case 0xc9:
-      header = 5;
-      break;
-    default:
-      break;
-  }
-  if (header > 0) {
-    for (let i = 1; i < header; i++) size = size * 256 + bytes[offset + i];
-    const end = offset + header + size;
+  // bin, str and ext with an explicit length: lead byte, the big-endian
+  // length, and for ext one more byte carrying the extension type.
+  const lengthWidth = {
+    0xc4: 1,
+    0xd9: 1,
+    0xc7: 1,
+    0xc5: 2,
+    0xda: 2,
+    0xc8: 2,
+    0xc6: 4,
+    0xdb: 4,
+    0xc9: 4,
+  }[lead];
+  if (lengthWidth !== undefined) {
+    let size = 0;
+    for (let i = 1; i <= lengthWidth; i++)
+      size = size * 256 + bytes[offset + i];
+    const isExt = lead === 0xc7 || lead === 0xc8 || lead === 0xc9;
+    const end = offset + 1 + lengthWidth + (isExt ? 1 : 0) + size;
     return end <= bytes.length ? end : null;
   }
   const array = walkArrayHeader(bytes, offset);

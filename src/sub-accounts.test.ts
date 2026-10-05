@@ -46,6 +46,23 @@ function rawList(fields: Array<number | Uint8Array>): Uint8Array {
   return out;
 }
 
+/** Several hand-assembled rows in one list. */
+function rawRows(rows: Array<Array<number | Uint8Array>>): Uint8Array {
+  const parts: Uint8Array[] = [Uint8Array.from([0x90 + rows.length])];
+  for (const fields of rows) {
+    parts.push(Uint8Array.from([0x90 + fields.length]));
+    for (const f of fields)
+      parts.push(typeof f === "number" ? Uint8Array.from([f]) : f);
+  }
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+}
+
 const bin8 = (payload: Uint8Array) =>
   Uint8Array.from([0xc4, payload.length, ...payload]);
 const u32 = (v: number) =>
@@ -342,6 +359,43 @@ describe("decodeSubAccountList", () => {
         ),
       ),
     ).toThrow(/address byte \(msgpack float where the wire has an integer\)/);
+  });
+
+  it("rejects a float id in a row after one with a signed-integer id", () => {
+    // int8 5 is a value the decoder accepts; the walk must step over it and
+    // still check the next row, as the Python decoder does.
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawRows([
+            [
+              bin8(MASTER),
+              Uint8Array.from([0xd0, 0x05]),
+              bin8(CHILD_A),
+              bin8(NAME_A),
+              u32(1),
+            ],
+            [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
+          ]),
+        ),
+      ),
+    ).toThrow(/id \(msgpack float where the wire has an integer\)/);
+  });
+
+  it("steps over an ext8 extra field including its type byte", () => {
+    // ext8: lead, length 1, type 1, one data byte. A walk that misses the
+    // type byte lands inside the data and stops checking the later row.
+    const ext8 = Uint8Array.from([0xc7, 0x01, 0x01, 0x00]);
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawRows([
+            [bin8(MASTER), 0x01, bin8(CHILD_A), bin8(NAME_A), u32(1), ext8],
+            [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
+          ]),
+        ),
+      ),
+    ).toThrow(/id \(msgpack float where the wire has an integer\)/);
   });
 
   it("does not blind-scan: float-family bytes inside a bin are data", () => {
