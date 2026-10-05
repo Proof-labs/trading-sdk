@@ -9,6 +9,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `decodeFinancialAuditArtifact(text, pins, selection)` decodes an offline
+  financial audit artifact (format 2: the format-1 ledger plus per-market
+  instrument, event and open-interest evidence) produced by the engine's
+  `financial-audit` executable. It checks a separately trusted SHA-256 of the
+  artifact, the snapshot and build digests, chain, height, time and selectors
+  before strict decoding, and makes no network request. The result is
+  operator-attested evidence, not a full-state proof. `decodeFinancialAudit`
+  decodes an already-parsed payload without those checks. MINOR: additive,
+  no change to any signed wire format.
 - `ExchangeClient.queryAuthorities()` reads the engine's privileged
   authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
   api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,
