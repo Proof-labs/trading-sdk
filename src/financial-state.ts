@@ -379,18 +379,18 @@ export async function fetchFinancialState(
   gatewayUrl: string,
   selection: FinancialStateSelection,
 ): Promise<FinancialState> {
+  const expected = canonicalFinancialSelection(selection);
   return decodeFinancialState(
-    await fetchFinancialPayload(gatewayUrl, selection),
-    selection,
+    await fetchFinancialPayload(gatewayUrl, expected),
+    expected,
   );
 }
 
 /** Bounded transport for the existing format-1 state route only. */
 async function fetchFinancialPayload(
   gatewayUrl: string,
-  selection: FinancialStateSelection,
+  expected: FinancialStateSelection,
 ): Promise<unknown> {
-  const expected = canonicalFinancialSelection(selection);
   const url = `${gatewayUrl}/v1/financial/state?markets=${expected.markets.join(",")}&owners=${expected.owners.join(",")}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);

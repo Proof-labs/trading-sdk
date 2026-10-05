@@ -401,6 +401,28 @@ describe("atomic finalized financial state", () => {
     expect(() => decodeFinancialState(r, selection)).toThrow("total positions");
   });
 
+  it("validates against the selection captured before the request, not a later mutation", async () => {
+    let respond: (response: Response) => void = () => undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            respond = resolve;
+          }),
+      ),
+    );
+    const reused = { markets: [1], owners: [owner] };
+    const pending = client().queryFinancialState(reused);
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    reused.markets = [2];
+    reused.owners = [plpOwner];
+    respond(new Response(JSON.stringify({ data: encode(raw()) })));
+    const state = await pending;
+    expect(state.markets.map((m) => m.market)).toEqual([1]);
+    expect(state.accounts.map((a) => a.owner)).toEqual([owner]);
+  });
+
   it("uses gateway-only canonical route even when legacy direct reads are opted in", async () => {
     const fetch = vi
       .fn()
