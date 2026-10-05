@@ -217,7 +217,7 @@ describe("financial audit format2", () => {
         pins,
         selection,
       ),
-    ).toThrow();
+    ).toThrow(/decode: invalid/);
   });
   it("rejects unknown fields, noncanonical base64 and inconsistent ledger time", () => {
     expect(() =>

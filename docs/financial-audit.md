@@ -2,8 +2,7 @@
 
 Financial audit format 2 is an offline artifact, not a public gateway endpoint.
 Use the reviewed engine `financial-audit` executable against a trusted local
-snapshot. `ExchangeClient.queryFinancialAudit` is not part of this contract.
-Existing `queryFinancialState` behavior is unchanged.
+snapshot. Existing `queryFinancialState` behavior is unchanged.
 
 ```typescript
 import { decodeFinancialAuditArtifact } from "@proof-labs/trading-sdk";

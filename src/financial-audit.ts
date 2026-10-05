@@ -108,6 +108,9 @@ export function decodeFinancialAudit(
   }
   return { format: 2, ledger, markets };
 }
+/** One megabyte of base64 payload plus room for the JSON wrapper fields. */
+const MAX_ARTIFACT_BYTES = 1024 * 1024 + 8192;
+
 export interface FinancialAuditPins {
   artifactSha256: string;
   snapshotSha256: string;
@@ -128,9 +131,9 @@ export function decodeFinancialAuditArtifact(
   provenance: string;
   trust: "operator-attested-local-snapshot-not-full-state-proof";
 } {
-  if (text.length > 1024 * 1024 + 8192) return invalid("artifact size");
+  if (text.length > MAX_ARTIFACT_BYTES) return invalid("artifact size");
   const bytes = new TextEncoder().encode(text);
-  if (bytes.length > 1024 * 1024 + 8192) return invalid("artifact size");
+  if (bytes.length > MAX_ARTIFACT_BYTES) return invalid("artifact size");
   const digest = Array.from(sha256(bytes), (b) =>
     b.toString(16).padStart(2, "0"),
   ).join("");
