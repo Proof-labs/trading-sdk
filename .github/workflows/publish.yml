@@ -101,8 +101,27 @@ jobs:
     permissions:
       contents: write # cut the GitHub Release
       id-token: write # the OIDC token npm trusts, and provenance
+    env:
+      # The WASM crate's bridge-core git dependency is private: fetch via the
+      # system git CLI (libgit2 ignores the ssh agent config GIT_SSH_COMMAND
+      # carries and can't present the deploy key).
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
+      # The WASM crate pulls the private Proof-labs/bridge crate (bridge-core)
+      # as a git dependency. Cargo's built-in git client can't present a
+      # deploy key, so the fetch goes through the system git CLI with the
+      # read-only deploy key on the agent — the same wiring ci.yml's jobs use
+      # (without it the build fails at the first cargo resolution).
+      - name: Configure bridge-core ssh auth
+        env:
+          BRIDGE_DEPLOY_KEY: ${{ secrets.BRIDGE_DEPLOY_KEY }}
+        run: |
+          set -eu
+          install -m 700 -d "$RUNNER_TEMP/bridge-ssh"
+          printf '%s\n' "$BRIDGE_DEPLOY_KEY" > "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          chmod 600 "$RUNNER_TEMP/bridge-ssh/id_ed25519"
+          echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/bridge-ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
