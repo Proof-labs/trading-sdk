@@ -15,6 +15,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`ExecErrorCode` and `decodeExecError`), in the Rust table, and therefore in
   Python's `get_error_name`. The `errors.ndjson` conformance manifest gains
   `manifest/77`, `manifest/99` and `manifest/100`. Codes 78-81 stay reserved.
+- TypeScript Explorer history reads: `ExchangeClient.reads()` gains
+  `historyStatus()`, `historyBlocks({ limit, cursor })`,
+  `historyBlock(heightOrHash)` and `historyTransaction(hash)`, forwarding
+  `GET /v1/history/status`, `/v1/history/blocks`, `/v1/history/blocks/{id}` and
+  `/v1/history/txs/{hash}` through the configured gateway. Responses stay raw,
+  with HTTP errors and cancellation intact: a block page carries `blocks` and an
+  opaque `next_cursor`, block detail carries its ordered `transactions`, and a
+  transaction carries its block coordinates, execution `code` (zero is success)
+  and base64 `raw_tx`. A missing or unindexed record stays an HTTP 404 and
+  unavailable history stays an error, never a fabricated or empty block.
 - `ExchangeClient.queryAuthorities()` reads the engine's privileged
   authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
   api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,
