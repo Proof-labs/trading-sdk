@@ -190,6 +190,17 @@ fn decode_tx<'py>(py: Python<'py>, tx_bytes: &[u8]) -> PyResult<Bound<'py, PyDic
     Ok(dict)
 }
 
+/// Strict, type-preserving MessagePack preflight for gateway read payloads.
+///
+/// Rejects the float families that Python would otherwise keep distinct from a
+/// wire integer — so `int(...)` coercions cannot truncate one — along with
+/// extensions, non-UTF-8 strings, duplicate map keys, over-deep nesting and
+/// trailing bytes. See `proof_trading_sdk::msgpack`.
+#[pyfunction]
+fn reject_floats(bytes: &[u8]) -> PyResult<()> {
+    core_sdk::msgpack::reject_floats(bytes).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
 /// Derive a 20-byte owner address from a 32-byte Ed25519 public key.
 #[pyfunction]
 fn pubkey_to_owner<'py>(py: Python<'py>, pubkey: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
@@ -401,6 +412,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(encode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_tx, m)?)?;
+    m.add_function(wrap_pyfunction!(reject_floats, m)?)?;
     m.add_function(wrap_pyfunction!(pubkey_to_owner, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;
     m.add_function(wrap_pyfunction!(chain_id_from_string, m)?)?;

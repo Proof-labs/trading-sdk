@@ -7,6 +7,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [7.0.0] — 2026-10-06
+
+### Breaking changes
+
+- Standalone MessagePack decoders, including `decodeSubAccountList` and
+  `decodeTx`, now require `await ready()` before use. `ExchangeClient` read
+  methods initialise WASM automatically. Read-only browser clients therefore
+  load the WASM module on their first MessagePack read. This public API
+  initialisation change requires a MAJOR npm version (#224).
+- The signing and transaction wire format is unchanged from npm 6.4.0;
+  the SDK continues to use `proof-wire` v4.1.0. Rust and Python package
+  versions remain on their independent release lines.
+
+### Included since npm 6.4.0
+
+- Indexed Explorer history status, block pagination and detail, and transaction
+  reads (#222), with HTTP failures and cancellation preserved.
+- Strict shared MessagePack validation for malformed gateway read payloads
+  (#224, superseding the narrower sub-account check in #216).
+- Error codes 77, 99 and 100, and updated local scenario instructions (#205).
+
+The accumulated notes below also describe changes shipped in npm 5.2–6.4;
+those existing behaviours are not new in 7.0.0.
+
 ### Added
 
 - The error tables gain `OracleVerdictUnavailable` (code 77),
@@ -157,17 +181,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- TypeScript `decodeSubAccountList` now rejects integral MessagePack floats
-  in the raw bytes (#189). The float families (`0xca`/`0xcb`) decode into the
-  same JavaScript number as an integer, so a row packed with
-  `forceIntegerToFloat`-style settings decoded as if it were a wire uint —
-  the Python decoder already refused the same bytes, and the two SDKs
-  disagreed on malformed input. A byte-level walk over the payload's known
-  positions (id, created_height, and the array form of each fixed byte
-  field) throws before the value decode; bytes inside a bin stay data, and
-  fields past the five-field prefix remain unconstrained future-optional
-  extensions. Raw-wire tests pin the rejection at both float widths in TS
-  and Python.
+- TypeScript and Python reads reject integral MessagePack floats wherever the
+  wire model has an integer (#189, #221). The float families (`0xca`/`0xcb`)
+  decode into the same JavaScript number as an integer, so a row packed with
+  `forceIntegerToFloat`-style settings decoded as if it were a wire uint; the
+  Python decoder keeps them distinct but its `int(...)` coercions truncated
+  them, so the two SDKs disagreed on the same bytes. Every gateway msgpack read
+  now runs one strict, type-preserving preflight in the Rust core
+  (`proof_trading_sdk::msgpack`, exposed to TypeScript as the WASM
+  `reject_floats` and to Python through the PyO3 native module). It refuses
+  float families, extensions, non-UTF-8 strings, duplicate map keys, over-deep
+  nesting and trailing bytes; bytes inside a bin stay data. The value decode
+  runs first, so a payload the decoder already refuses keeps its own
+  diagnostic. Reads now initialise the WASM core, so a read-only caller that
+  bypasses the client must `await ready()` first (the client does it on the
+  first read).
 
 - **Rust crate 4.1.0 → 4.1.1** — `MarketsSnapshotClient::read_bound_inventory`
   now reads a whole new bracket, up to three attempts in all and 150 ms apart
@@ -1101,7 +1129,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v5.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.0.0...HEAD
+[7.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v6.4.0...npm-v7.0.0
 [5.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v5.0.0...npm-v5.1.0
 [5.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v4.0.0...npm-v5.0.0
 [4.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...npm-v4.0.0

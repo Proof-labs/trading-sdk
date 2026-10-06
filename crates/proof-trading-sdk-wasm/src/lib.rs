@@ -58,6 +58,18 @@ pub fn decode_payload(action_type: u8, payload: &[u8]) -> Result<JsValue, JsErro
     codec::decode_payload_dyn(action_type, payload, &ser).map_err(to_js)
 }
 
+/// Strict, type-preserving MessagePack preflight for gateway read payloads.
+///
+/// Rejects the float families (`0xca` f32 / `0xcb` f64) that the JS decoder
+/// would otherwise fold into a plain number — letting an integral float pass a
+/// `Number.isSafeInteger` check where Python keeps it distinct — along with
+/// extensions, non-UTF-8 strings, duplicate map keys, over-deep nesting and
+/// trailing bytes. See `proof_trading_sdk::msgpack`.
+#[wasm_bindgen]
+pub fn reject_floats(bytes: &[u8]) -> Result<(), JsError> {
+    core_sdk::msgpack::reject_floats(bytes).map_err(|e| JsError::new(&e.to_string()))
+}
+
 /// Build the deterministic signing message
 /// (`DOMAIN_PREFIX || chain_id || action_type || seq_be || payload`).
 #[wasm_bindgen]
