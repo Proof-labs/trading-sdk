@@ -7,6 +7,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking changes
+
+- The gateway's `status` is read as stated; nothing is inferred
+  from message text or field shape (api-gateway 7.0.0, api-gateway #215 and
+  #220). `POST /exchange` now answers `ok`, `error`, `refused` or
+  `pending`. The TypeScript client and the Rust submit methods switch on that
+  value; a `refused` answer is named by its `errorCode` (`Unauthorized`,
+  `RateLimited`, `Maintenance`, `Overloaded`, `Unavailable`, `InvalidRequest`,
+  `EncodingError`). An invalid signature is the engine's code `17` on an
+  `error` answer: `CheckTxRejected` in Rust and an `engine` outcome in
+  TypeScript, where it used to be a refusal and `transport` code 1. Rust
+  `PreAdmissionRefusal::ProposerOnly` and `::InvalidSignature` are removed.
+  The Rust methods no longer accept a pre-7.0.0 gateway's answers. The
+  TypeScript client still reads a pre-7.0.0 gateway's engine verdicts and
+  reconcile answers, but reconciles its refusals by hash instead of returning
+  them as transport errors.
+
 ## [7.0.0] — 2026-10-06
 
 ### Breaking changes
@@ -136,18 +153,6 @@ those existing behaviours are not new in 7.0.0.
 
 ### Changed
 
-- **BREAKING — the gateway's `status` is read as stated; nothing is inferred
-  from message text or field shape** (api-gateway 7.0.0, api-gateway #215 and
-  #220). `POST /exchange` now answers `ok`, `error`, `refused` or
-  `pending`. The TypeScript client and the Rust submit methods switch on that
-  value; a `refused` answer is named by its `errorCode` (`Unauthorized`,
-  `RateLimited`, `Maintenance`, `Overloaded`, `Unavailable`, `InvalidRequest`,
-  `EncodingError`). An invalid signature is the engine's code `17` on a
-  `error` answer: `CheckTxRejected` in Rust and an `engine` outcome in
-  TypeScript, where it used to be a refusal and `transport` code 1. Rust
-  `PreAdmissionRefusal::ProposerOnly` and `::InvalidSignature` are removed.
-  The Rust methods no longer accept a pre-7.0.0 gateway's answers; the
-  TypeScript client still falls back to them.
 - **Rust crate 4.0.0 → 4.1.0** — the market-snapshot witness bracket no longer
   requires all three reads (pre-status, snapshot, post-status) to come from the
   same CometBFT node, so it works behind a load balancer that fans reads across
