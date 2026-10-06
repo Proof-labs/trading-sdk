@@ -96,6 +96,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **BREAKING — gateway refusals are classified by code, never by message
+  text** (api-gateway 6.0.0, api-gateway #215). The TypeScript client and the
+  Rust `submit_signed_bytes_with_evidence` read the gateway's `errorCode`
+  (`Unauthorized`, `RateLimited`, `Maintenance`, `Overloaded`, `Unavailable`,
+  `InvalidRequest`, `EncodingError`); a body without one is unresolved and
+  reconciles by hash. A hashless engine `code` (`17` invalid signature, `1`
+  undecodable) is a refusal in Rust and an `engine` outcome in TypeScript,
+  where an invalid signature used to be `transport` code 1. Rust
+  `PreAdmissionRefusal::ProposerOnly` is removed; the gateway answers it with
+  code `1`, so it is `InvalidEncoding`. Against a gateway older than 6.0.0
+  every refusal is unresolved.
 - **Rust crate 4.0.0 → 4.1.0** — the market-snapshot witness bracket no longer
   requires all three reads (pre-status, snapshot, post-status) to come from the
   same CometBFT node, so it works behind a load balancer that fans reads across

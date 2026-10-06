@@ -2436,22 +2436,24 @@ interface GatewayResponseBody {
   info?: string;
   height?: number;
   events?: TxEvent[];
+  errorCode?: string;
   mode?: string;
   retryAfterMs?: number;
 }
 
-/** Only a fixed, known set of (HTTP status, message) pairs is hashless proof
- * of a pre-admission refusal — mirrors
- * `crates/proof-trading-sdk/src/gateway/mod.rs::pre_admission_refusal`
- * exactly for the statuses reached here (200, 503). ExchangeResponse::err
- * omits admission/verdict and rate-limit fields, but the shape alone is not
- * enough: an unrecognized message in that same shape can come from a generic
- * failure (an intermediary, a proxy) rather than the gateway's own refusal
- * path, and contradictory or unknown evidence must not become a terminal
- * refusal for a transaction that may have executed. */
+/** Only a fixed, known set of (HTTP status, `errorCode`) pairs is hashless
+ * proof of a pre-admission refusal — mirrors
+ * `crates/proof-trading-sdk/src/gateway/refusal.rs::pre_admission_refusal`
+ * for the statuses reached here (200, 503). `error` text is never matched.
+ * A body without a known `errorCode` can come from a generic failure (an
+ * intermediary, a proxy) rather than the gateway's own refusal path, and
+ * contradictory or unknown evidence must not become a terminal refusal for a
+ * transaction that may have executed. A hashless engine `code` is handled as
+ * an engine verdict by the caller. */
 const PRE_ADMISSION_REFUSAL_FIELDS = new Set([
   "status",
   "error",
+  "errorCode",
   "mode",
   "retryAfterMs",
 ]);
@@ -2472,10 +2474,7 @@ function preAdmissionRefusal(
   )
     return undefined;
 
-  if (
-    status === 503 &&
-    body.error === "maintenance: signed writes are not open"
-  ) {
+  if (status === 503 && body.errorCode === "Maintenance") {
     if (body.retryAfterMs !== undefined) return undefined;
     return body.mode === "paused" || body.mode === "cancel-only"
       ? body.error
@@ -2486,19 +2485,12 @@ function preAdmissionRefusal(
 
   if (
     status === 503 &&
-    (body.error === "service overloaded" ||
-      body.error === "service unavailable")
+    (body.errorCode === "Overloaded" || body.errorCode === "Unavailable")
   )
     return body.error;
   if (
     status === 200 &&
-    (body.error === "invalid request body" ||
-      body.error === "invalid action parameters" ||
-      body.error === "invalid base64 in action field" ||
-      body.error === "invalid signature" ||
-      body.error === "internal encoding error" ||
-      body.error ===
-        "action type 0x1d is proposer-only and cannot enter through the gateway")
+    (body.errorCode === "InvalidRequest" || body.errorCode === "EncodingError")
   )
     return body.error;
   return undefined;
