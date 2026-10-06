@@ -7,6 +7,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [7.0.0] — 2026-10-06
+
+### Breaking changes
+
+- Standalone MessagePack decoders, including `decodeSubAccountList` and
+  `decodeTx`, now require `await ready()` before use. `ExchangeClient` read
+  methods initialise WASM automatically. Read-only browser clients therefore
+  load the WASM module on their first MessagePack read. This public API
+  initialisation change requires a MAJOR npm version (#224).
+- The signing and transaction wire format is unchanged from npm 6.4.0;
+  the SDK continues to use `proof-wire` v4.1.0. Rust and Python package
+  versions remain on their independent release lines.
+
+### Included since npm 6.4.0
+
+- Indexed Explorer history status, block pagination and detail, and transaction
+  reads (#222), with HTTP failures and cancellation preserved.
+- Strict shared MessagePack validation for malformed gateway read payloads
+  (#224, superseding the narrower sub-account check in #216).
+- Error codes 77, 99 and 100, and updated local scenario instructions (#205).
+
+The accumulated notes below also describe changes shipped in npm 5.2–6.4;
+those existing behaviours are not new in 7.0.0.
+
 ### Added
 
 - The error tables gain `OracleVerdictUnavailable` (code 77),
@@ -1093,7 +1117,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v5.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.0.0...HEAD
+[7.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v6.4.0...npm-v7.0.0
 [5.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v5.0.0...npm-v5.1.0
 [5.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v4.0.0...npm-v5.0.0
 [4.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...npm-v4.0.0
