@@ -15,6 +15,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`ExecErrorCode` and `decodeExecError`), in the Rust table, and therefore in
   Python's `get_error_name`. The `errors.ndjson` conformance manifest gains
   `manifest/77`, `manifest/99` and `manifest/100`. Codes 78-81 stay reserved.
+- TypeScript Explorer history reads: `ExchangeClient.reads()` gains
+  `historyStatus()`, `historyBlocks({ limit, cursor })`,
+  `historyBlock(heightOrHash)` and `historyTransaction(hash)`, forwarding
+  `GET /v1/history/status`, `/v1/history/blocks`, `/v1/history/blocks/{id}` and
+  `/v1/history/txs/{hash}` through the configured gateway. Responses stay raw,
+  with HTTP errors and cancellation intact: a block page carries `blocks` and an
+  opaque `next_cursor`, block detail carries its ordered `transactions`, and a
+  transaction carries its block coordinates, execution `code` (zero is success)
+  and base64 `raw_tx`. A missing or unindexed record stays an HTTP 404 and
+  unavailable history stays an error, never a fabricated or empty block.
 - `ExchangeClient.queryAuthorities()` reads the engine's privileged
   authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
   api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,
@@ -69,11 +79,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   already emits on proof-wire 4.1.0 (exchange dev `exchange-wire` `Event`), with
   the same stringified-number convention as `AccountLiquidatedEvent`.
   TypeScript types only: no codec, wire or Rust/Python change.
-- `reads().historyStatus()` forwards `GET /v1/history/status` (the gateway's
-  proxy of the indexer's watermarks and ingest liveness) uncached, with the
-  response body, HTTP errors and cancellation intact. Applications use it to
-  tell an empty history from one the indexer has not caught up on; freshness
-  thresholds stay with the caller.
+- `reads().historyStatus()` bypasses HTTP caches (`cache: "no-store"`), so a
+  freshness read is never answered from a stale cached response.
 - TypeScript 6.1.0: `HistoryResolution.convertedSize` and
   `HistoryResolution.fallbackReason` (with the `ConversionFallbackReason` type)
   for conditional-perp resolutions, as the exchange release after 2.14.0

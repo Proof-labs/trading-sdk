@@ -242,17 +242,44 @@ not trading authorization. Like every other gateway interaction, admin calls
 included, it goes through the SDK
 ([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md)).
 
-### History freshness
+### Indexed Explorer history
 
 ```typescript
-const response = await client.reads().historyStatus({ signal });
-const status = await response.json();
+const reads = client.reads();
+const status = await (await reads.historyStatus({ signal })).json();
+const page = await (
+  await reads.historyBlocks({ limit: 20 }, { signal })
+).json();
+if (page.next_cursor) {
+  const nextPage = await (
+    await reads.historyBlocks(
+      { limit: 20, cursor: page.next_cursor },
+      { signal },
+    )
+  ).json();
+}
+const block = await (await reads.historyBlock("2244103", { signal })).json();
+if (block.transactions.length) {
+  const tx = await (
+    await reads.historyTransaction(block.transactions[0].hash, { signal })
+  ).json();
+}
 ```
 
-This forwards `GET /v1/history/status` (the indexer's watermarks and ingest
-liveness) uncached, with the same body, error and cancellation guarantees. Use
-it before presenting an empty history as definitive: an indexer that has not
-caught up returns empty pages too. Thresholds remain in the application.
+These read `/v1/history/status`, `/v1/history/blocks`,
+`/v1/history/blocks/{height-or-hash}` and `/v1/history/txs/{hash}` through the
+configured gateway. They return unmodified `Response` objects and preserve
+HTTP errors and cancellation. Block pages contain `blocks` and opaque
+`next_cursor`; block details include ordered `transactions`. There is no global
+transaction list. Transaction detail preserves `code` (zero is success) and
+`raw_tx` (base64 committed signed bytes).
+
+Indexer backfill and freshness are distinct from chain progress.
+`historyStatus()` bypasses HTTP caches; check it before presenting an empty
+history as definitive, since an indexer that has not caught up returns empty
+pages too. Use the status response and block timestamps to present delay; a missing indexed record remains
+HTTP 404, and unavailable history remains an error. These reads never fabricate
+blocks or replace errors with empty results.
 
 ### Optional native Rust gateway transport
 
