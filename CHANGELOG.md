@@ -9,6 +9,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The error tables gain `OracleVerdictUnavailable` (code 77),
+  `WithdrawalLimitExceeded` (code 99) and `AccountOrderCapReached` (code
+  100, the per-account resting-order cap), matching the engine: in TypeScript
+  (`ExecErrorCode` and `decodeExecError`), in the Rust table, and therefore in
+  Python's `get_error_name`. The `errors.ndjson` conformance manifest gains
+  `manifest/77`, `manifest/99` and `manifest/100`. Codes 78-81 stay reserved.
 - `ExchangeClient.queryAuthorities()` reads the engine's privileged
   authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
   api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,
@@ -141,6 +147,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   compare node ids.
 
 ### Fixed
+
+- TypeScript `decodeSubAccountList` now rejects integral MessagePack floats
+  in the raw bytes (#189). The float families (`0xca`/`0xcb`) decode into the
+  same JavaScript number as an integer, so a row packed with
+  `forceIntegerToFloat`-style settings decoded as if it were a wire uint —
+  the Python decoder already refused the same bytes, and the two SDKs
+  disagreed on malformed input. A byte-level walk over the payload's known
+  positions (id, created_height, and the array form of each fixed byte
+  field) throws before the value decode; bytes inside a bin stay data, and
+  fields past the five-field prefix remain unconstrained future-optional
+  extensions. Raw-wire tests pin the rejection at both float widths in TS
+  and Python.
 
 - **Rust crate 4.1.0 → 4.1.1** — `MarketsSnapshotClient::read_bound_inventory`
   now reads a whole new bracket, up to three attempts in all and 150 ms apart
