@@ -1352,8 +1352,9 @@ export class ExchangeClient {
     return raw.map((m) => decodeMarketConfig(m));
   }
 
-  /** All events: each is two prediction-binary books (EBY/EBN) under one
-   *  `EventInfo`, plus every conditional attached to it. Fail-closed like the
+  /** All events: each is its binary book (plus a No book on an engine that
+   *  still has one) under one `EventInfo`, plus every conditional attached
+   *  to it. Fail-closed like the
    *  governance reads: a missing envelope or malformed row is a refusal.
    *  Decoder pinned to the engine golden vector in governance-query.test.ts. */
   async queryEvents(): Promise<EventInfo[]> {
