@@ -1,7 +1,8 @@
 //! Pre-admission refusal classification for `POST /exchange`: which exact
-//! status and body pairs name a refusal, and which delay a refusal carries.
+//! status and code pairs name a refusal, and which delay a refusal carries.
 
 use super::RetryAfter;
+use proof_wire::types::ExecError;
 use serde::Deserialize;
 
 /// A refusal of this one HTTP attempt, not proof about an earlier attempt of
@@ -16,8 +17,8 @@ pub enum PreAdmissionRefusal {
     VerifierUnavailable,
     InvalidRequest,
     InvalidSignature,
+    /// Bytes the engine cannot admit: undecodable, non-canonical or proposer-only.
     InvalidEncoding,
-    ProposerOnly,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -47,7 +48,12 @@ struct RetryBody {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct RefusalRead {
     status: String,
-    error: String,
+    #[serde(rename = "error")]
+    _error: String,
+    #[serde(default)]
+    error_code: OptionalJsonField,
+    #[serde(default)]
+    code: OptionalJsonField,
     #[serde(default)]
     mode: OptionalJsonField,
     #[serde(default)]
@@ -70,16 +76,33 @@ pub(super) fn retry_after_body(bytes: &[u8]) -> Option<RetryAfter> {
 }
 
 fn pre_admission_refusal(status: u16, bytes: &[u8]) -> Option<PreAdmissionRefusal> {
-    // Contract source: api-gateway 3c711c2a3c29ca8f37d2d986fe817d21a9eeebc3,
-    // src/server.rs (authorization, rate limit, maintenance), src/exchange.rs
-    // (parse and verifier admission), src/types/exchange_response.rs.
-    // Unknown fields (including txHash/code/height/log/events, even null) or
+    // Contract source: api-gateway 6.0.0, src/server.rs (authorization, rate
+    // limit, maintenance), src/exchange.rs (parse and verifier admission),
+    // src/types/exchange_response.rs. `error` text is never read.
+    // Unknown fields (including txHash/height/log/events, even null) or
     // unknown bodies cannot be promoted to pre-broadcast proof.
     let read: RefusalRead = serde_json::from_slice(bytes).ok()?;
     if read.status != "error" {
         return None;
     }
-    if status == 503 && read.error == "maintenance: signed writes are not open" {
+    if let Some(code) = &read.code.0 {
+        // The engine's own code for a tx the gateway refused before broadcast.
+        let plain =
+            read.error_code.0.is_none() && read.mode.0.is_none() && read.retry_after_ms.0.is_none();
+        if status != 200 || !plain {
+            return None;
+        }
+        let code = code.as_u64()?;
+        return if code == u64::from(ExecError::InvalidSignature.code()) {
+            Some(PreAdmissionRefusal::InvalidSignature)
+        } else if code == u64::from(ExecError::DecodeError(String::new()).code()) {
+            Some(PreAdmissionRefusal::InvalidEncoding)
+        } else {
+            None
+        };
+    }
+    let error_code = read.error_code.0.as_ref()?.as_str()?;
+    if status == 503 && error_code == "Maintenance" {
         if read.retry_after_ms.0.is_some() {
             return None;
         }
@@ -98,7 +121,7 @@ fn pre_admission_refusal(status: u16, bytes: &[u8]) -> Option<PreAdmissionRefusa
     if read.mode.0.is_some() {
         return None;
     }
-    if status == 429 && read.error == "rate limited" {
+    if status == 429 && error_code == "RateLimited" {
         return read
             .retry_after_ms
             .0
@@ -109,21 +132,12 @@ fn pre_admission_refusal(status: u16, bytes: &[u8]) -> Option<PreAdmissionRefusa
     if read.retry_after_ms.0.is_some() {
         return None;
     }
-    match (status, read.error.as_str()) {
-        (401, "unauthorized: invalid or missing X-Api-Key") => {
-            Some(PreAdmissionRefusal::Unauthorized)
-        }
-        (503, "service overloaded") => Some(PreAdmissionRefusal::Overloaded),
-        (503, "service unavailable") => Some(PreAdmissionRefusal::VerifierUnavailable),
-        (
-            200,
-            "invalid request body" | "invalid action parameters" | "invalid base64 in action field",
-        ) => Some(PreAdmissionRefusal::InvalidRequest),
-        (200, "invalid signature") => Some(PreAdmissionRefusal::InvalidSignature),
-        (200, "internal encoding error") => Some(PreAdmissionRefusal::InvalidEncoding),
-        (200, "action type 0x1d is proposer-only and cannot enter through the gateway") => {
-            Some(PreAdmissionRefusal::ProposerOnly)
-        }
+    match (status, error_code) {
+        (401, "Unauthorized") => Some(PreAdmissionRefusal::Unauthorized),
+        (503, "Overloaded") => Some(PreAdmissionRefusal::Overloaded),
+        (503, "Unavailable") => Some(PreAdmissionRefusal::VerifierUnavailable),
+        (200, "InvalidRequest") => Some(PreAdmissionRefusal::InvalidRequest),
+        (200, "EncodingError") => Some(PreAdmissionRefusal::InvalidEncoding),
         _ => None,
     }
 }

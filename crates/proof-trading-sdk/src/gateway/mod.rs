@@ -666,7 +666,7 @@ impl GatewayClient {
                 (None, None, Some(_)) | (None, None, None) if read.status == "ok" || has_hash => {
                     SubmissionOutcome::Pending { hash }
                 }
-                (None, None, None) if read.status == "error" => match refusal {
+                (_, None, None) if read.status == "error" => match refusal {
                     Some(refusal) => SubmissionOutcome::RejectedBeforeAdmission { hash, refusal },
                     None => return Err(invalid()),
                 },

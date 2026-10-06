@@ -275,14 +275,15 @@ without changing the original method's behaviour. It returns
 the locally calculated hash, and only `RejectedBeforeAdmission` carries the
 typed `refusal`, so a refusal cannot disagree with its outcome. The original
 method returns `Submission`, whose `RejectedBeforeAdmission` carries
-`refusal: ()`. Only exact source-qualified body/status pairs qualify: authorization,
-rate limiting, maintenance, admission overload/verifier disconnection, and
-specific parse/signature refusals. Generic HTTP errors, unrecognized bodies,
+`refusal: ()`. Only exact status and code pairs qualify: the gateway's
+`errorCode` for authorization, rate limiting, maintenance, admission
+overload/verifier disconnection and unreadable requests, and the engine's
+`code` `17` (invalid signature) or `1` (undecodable) on a hashless answer.
+`error` text is never read. Generic HTTP errors, unrecognized bodies,
 unknown fields or a hash-bearing 503 remain unresolved. Maintenance requires
-the exact error and `paused` or `cancel-only` mode; substring matching is not
-used. These contracts are checked against
-[`api-gateway@3c711c2`](https://github.com/Proof-labs/api-gateway/tree/3c711c2a3c29ca8f37d2d986fe817d21a9eeebc3)
-(`src/server.rs`, `src/exchange.rs`, `src/types/exchange_response.rs`). Qualify
+the `paused` or `cancel-only` mode. These contracts are checked against
+api-gateway 6.0.0 ([api-gateway#215](https://github.com/Proof-labs/api-gateway/pull/215);
+`src/server.rs`, `src/exchange.rs`, `src/types/exchange_response.rs`). Qualify
 the actual deployed gateway image against that contract before using the
 evidence operationally; a loopback fixture is not deployment qualification.
 
