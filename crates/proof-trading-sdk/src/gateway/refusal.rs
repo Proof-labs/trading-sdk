@@ -68,7 +68,7 @@ pub(super) fn retry_after_body(bytes: &[u8]) -> Option<RetryAfter> {
 }
 
 /// Reads a body the gateway already stated is `status: refused` (api-gateway
-/// 6.0.0, `src/types/exchange_response.rs`). `error` text is never read.
+/// 7.0.0, `src/types/exchange_response.rs`). `error` text is never read.
 fn pre_admission_refusal(bytes: &[u8]) -> Option<PreAdmissionRefusal> {
     let read: RefusalRead = serde_json::from_slice(bytes).ok()?;
     match read.error_code.as_str() {

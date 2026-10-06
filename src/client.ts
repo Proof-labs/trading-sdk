@@ -781,7 +781,7 @@ export class ExchangeClient {
     }
 
     // The gateway's `status` states where the submission ended (api-gateway
-    // 6.0.0); nothing is inferred from which fields are present. Any other
+    // 7.0.0); nothing is inferred from which fields are present. Any other
     // body falls through to the HTTP-status handling below.
     const stated = gatewayBody.json as GatewayResponseBody | undefined;
     switch (stated?.status) {

@@ -284,7 +284,7 @@ fields are present. A body that states none of the four, a `refused` answer
 with an `errorCode` this SDK does not know, or one that contradicts itself
 (a `txHash` or `code` on a refusal) remains unresolved. Maintenance requires
 the `paused` or `cancel-only` mode. These contracts are checked against
-api-gateway 6.0.0 ([api-gateway#220](https://github.com/Proof-labs/api-gateway/pull/220);
+api-gateway 7.0.0 ([api-gateway#220](https://github.com/Proof-labs/api-gateway/pull/220);
 `src/server.rs`, `src/exchange.rs`, `src/types/exchange_response.rs`). Qualify
 the actual deployed gateway image against that contract before using the
 evidence operationally; a loopback fixture is not deployment qualification.
@@ -430,7 +430,7 @@ The SDK reads that shape and stops working for it:
 | `status: rejected`, no `height`              | `engine`                                                                                            | **No** — a CheckTx reject, or a tx the gateway refused before broadcast with the engine's code (`17` bad signature, `1` undecodable), never enters a block, so no DeliverTx will run                                       |
 | `status: pending`                            | `timeout`                                                                                           | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection |
 | `status: refused`                            | `transport` (code 1, or the HTTP status), original error reason                                     | **No** — the gateway did not admit it and nothing was broadcast                                                                                                                                                            |
-| Any other body: a pre-6.0.0 gateway, a proxy | as before 6.0.0: read from `code` / `height` / `txHash`; `{status:"ok"}` alone is `ok`, no `height` | **Yes** — a pre-#90 gateway acks CheckTx only, so inclusion is still unknown                                                                                                                                               |
+| Any other body: a pre-7.0.0 gateway, a proxy | as before 7.0.0: read from `code` / `height` / `txHash`; `{status:"ok"}` alone is `ok`, no `height` | **Yes** — a pre-#90 gateway acks CheckTx only, so inclusion is still unknown                                                                                                                                               |
 
 That last row is why upgrading the SDK is safe against a gateway that has not been
 upgraded yet: absence of `code`/`height` still means "execution unknown", and the old
