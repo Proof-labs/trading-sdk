@@ -142,6 +142,12 @@ describe("gateway finality", () => {
     [503, { status: "error", error: "unknown edge failure" }],
     [200, { status: "error", error: "unknown edge failure" }],
     [200, { status: "error", error: "invalid signature", txHash: null }],
+    // A verdict naming another tx's hash says nothing about this one.
+    [
+      200,
+      { status: "ok", error: "x", code: 0, height: 42, txHash: "B".repeat(64) },
+    ],
+    [200, { status: "error", error: "x", code: 12, txHash: "B".repeat(64) }],
     // A status that disagrees with its code contradicts itself.
     [200, { status: "ok", error: "x", code: 12 }],
     [200, { status: "error", error: "x", code: 0, height: 42 }],
@@ -205,7 +211,7 @@ describe("gateway finality", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  it("reconciles a stated pending answer by its hash", async () => {
+  it("reconciles a stated pending answer by the hash of the bytes sent", async () => {
     const hash = "A".repeat(64);
     vi.stubGlobal(
       "fetch",
@@ -218,10 +224,10 @@ describe("gateway finality", () => {
         }),
       ),
     );
-    expect(await external().submitTx(action)).toMatchObject({
-      outcome: "timeout",
-      hash,
-    });
+    const result = await external().submitTx(action);
+    expect(result.outcome).toBe("timeout");
+    expect(result.hash).toMatch(/^[0-9A-F]{64}$/);
+    expect(result.hash, "the answer's hash is not this tx's").not.toBe(hash);
   });
 
   it("keeps an unstructured 503 uncertain", async () => {

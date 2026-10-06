@@ -789,19 +789,23 @@ export class ExchangeClient {
     // 7.0.0); nothing is inferred from which fields are present. Any other
     // body falls through to the HTTP-status handling below.
     const stated = gatewayBody.json as GatewayResponseBody | undefined;
+    // An answer naming another tx's hash says nothing about this one.
+    const foreignHash =
+      stated?.txHash !== undefined &&
+      String(stated.txHash).toUpperCase() !== txHash;
     switch (stated?.status) {
       case "ok":
       case "error":
         // An engine verdict always carries its code and arrives as a 200.
         if (res.status !== 200 || typeof stated.code !== "number") break;
         // `ok` with a non-zero code, or `error` with code 0, contradicts itself.
-        if ((stated.status === "ok") !== (stated.code === 0))
+        if ((stated.status === "ok") !== (stated.code === 0) || foreignHash)
           return txTimeout(
             txHash,
-            "gateway verdict contradicts its status; reconcile by hash",
+            "gateway verdict contradicts itself; reconcile by hash",
           );
         return txFromEngineCode(stated.code, {
-          hash: stated.txHash ?? txHash,
+          hash: txHash,
           height: stated.height,
           log: stated.log ?? stated.error,
           info: stated.info,
@@ -825,8 +829,9 @@ export class ExchangeClient {
           stated.error ?? stated.errorCode ?? "refused by gateway",
         );
       case "pending":
+        // Reconcile the hash of the bytes sent, never one the answer names.
         return txTimeout(
-          stated.txHash ?? txHash,
+          txHash,
           stated.error ??
             "gateway returned no on-chain result; reconcile by hash",
         );
