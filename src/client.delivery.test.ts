@@ -142,6 +142,9 @@ describe("gateway finality", () => {
     [503, { status: "error", error: "unknown edge failure" }],
     [200, { status: "error", error: "unknown edge failure" }],
     [200, { status: "error", error: "invalid signature", txHash: null }],
+    // A status that disagrees with its code contradicts itself.
+    [200, { status: "ok", error: "x", code: 12 }],
+    [200, { status: "error", error: "x", code: 0, height: 42 }],
     // A refusal that names a hash, code or height contradicts itself.
     [
       200,

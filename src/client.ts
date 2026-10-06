@@ -794,6 +794,12 @@ export class ExchangeClient {
       case "error":
         // An engine verdict always carries its code and arrives as a 200.
         if (res.status !== 200 || typeof stated.code !== "number") break;
+        // `ok` with a non-zero code, or `error` with code 0, contradicts itself.
+        if ((stated.status === "ok") !== (stated.code === 0))
+          return txTimeout(
+            txHash,
+            "gateway verdict contradicts its status; reconcile by hash",
+          );
         return txFromEngineCode(stated.code, {
           hash: stated.txHash ?? txHash,
           height: stated.height,
