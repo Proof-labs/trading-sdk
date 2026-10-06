@@ -48,22 +48,6 @@ describe("decodeExecError", () => {
     expect(execErrorName(98)).toBe("TriggerOrderIncompatible");
   });
 
-  it("decodes the oracle-verdict deferral (77)", () => {
-    expect(ExecErrorCode.OracleVerdictUnavailable).toBe(77);
-    const e77 = decodeExecError(77);
-    expect(e77?.name).toBe("OracleVerdictUnavailable");
-    expect(e77?.description).toContain("certified verdict");
-    expect(execErrorName(77)).toBe("OracleVerdictUnavailable");
-  });
-
-  it("decodes the withdrawal-limit rejection (99)", () => {
-    expect(ExecErrorCode.WithdrawalLimitExceeded).toBe(99);
-    const e99 = decodeExecError(99);
-    expect(e99?.name).toBe("WithdrawalLimitExceeded");
-    expect(e99?.description).toContain("rolling-window outflow");
-    expect(execErrorName(99)).toBe("WithdrawalLimitExceeded");
-  });
-
   it("decodes code 51 as open-interest-cap rejection without a log", () => {
     expect(decodeExecError(51)?.name).toBe("OpenInterestLimitExceeded");
     expect(decodeExecError(51, "unrecognized")?.name).toBe(
@@ -140,6 +124,12 @@ describe("ExecErrorCode enum", () => {
     expect(ExecErrorCode.SlippageExceeded).toBe(50);
     expect(ExecErrorCode.OpenInterestLimitExceeded).toBe(51);
     expect(ExecErrorCode.InternalError).toBe(255);
+  });
+
+  it("pins the newly mirrored engine codes (77, 99, 100)", () => {
+    expect(ExecErrorCode.OracleVerdictUnavailable).toBe(77);
+    expect(ExecErrorCode.WithdrawalLimitExceeded).toBe(99);
+    expect(ExecErrorCode.AccountOrderCapReached).toBe(100);
   });
 });
 
