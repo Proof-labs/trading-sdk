@@ -317,14 +317,17 @@ without changing the original method's behaviour. It returns
 the locally calculated hash, and only `RejectedBeforeAdmission` carries the
 typed `refusal`, so a refusal cannot disagree with its outcome. The original
 method returns `Submission`, whose `RejectedBeforeAdmission` carries
-`refusal: ()`. Only exact source-qualified body/status pairs qualify: authorization,
-rate limiting, maintenance, admission overload/verifier disconnection, and
-specific parse/signature refusals. Generic HTTP errors, unrecognized bodies,
-unknown fields or a hash-bearing 503 remain unresolved. Maintenance requires
-the exact error and `paused` or `cancel-only` mode; substring matching is not
-used. These contracts are checked against
-[`api-gateway@3c711c2`](https://github.com/Proof-labs/api-gateway/tree/3c711c2a3c29ca8f37d2d986fe817d21a9eeebc3)
-(`src/server.rs`, `src/exchange.rs`, `src/types/exchange_response.rs`). Qualify
+`refusal: ()`. The gateway's `status` states where the submission ended
+(`ok`, `error`, `refused`, `pending`) and the SDK reads only that: a
+`refused` answer is a refusal, named by its `errorCode` (authorization, rate
+limiting, maintenance, admission overload/verifier disconnection, unreadable
+request). `error` text is never read, and nothing is inferred from which
+fields are present. A body that states none of the four, a `refused` answer
+with an `errorCode` this SDK does not know, or one that contradicts itself
+(a `txHash` or `code` on a refusal) remains unresolved. Maintenance requires
+the `paused` or `cancel-only` mode. These contracts are checked against
+api-gateway 7.0.0 ([api-gateway#220](https://github.com/Proof-labs/api-gateway/pull/220);
+`src/server.rs`, `src/exchange.rs`, `src/types/exchange_response.rs`). Qualify
 the actual deployed gateway image against that contract before using the
 evidence operationally; a loopback fixture is not deployment qualification.
 
@@ -463,13 +466,13 @@ loop at 9 s+ under load.
 
 The SDK reads that shape and stops working for it:
 
-| Gateway answers                                                                   | `TxResult`                                        | Does the SDK poll?                                                                                                                                                                                                         |
-| --------------------------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `code` + `height`                                                                 | `ok` / `engine`, with `height` + `events`         | **No** — the tx executed; there is nothing to wait for                                                                                                                                                                     |
-| `code`, no `height`                                                               | `engine`                                          | **No** — a CheckTx reject never enters a block, so no DeliverTx will run                                                                                                                                                   |
-| `txHash`, no `code`                                                               | `timeout`                                         | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection |
-| Structured HTTP 200/503 refusal, a recognized reason, no admission/verdict fields | `transport` (code 1 / 503), original error reason | **No** — the gateway refused admission; an unrecognized message, unknown 5xx, or contradictory fields still reconcile by hash                                                                                              |
-| `{status:"ok"}` only                                                              | `ok`, no `height`                                 | **Yes** — a pre-#90 gateway acks CheckTx only, so inclusion is still unknown                                                                                                                                               |
+| Gateway answers                              | `TxResult`                                                                                          | Does the SDK poll?                                                                                                                                                                                                         |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status: ok` or `error`, with `height`       | `ok` / `engine`, with `height` + `events`                                                           | **No** — the tx executed; there is nothing to wait for                                                                                                                                                                     |
+| `status: error`, no `height`                 | `engine`                                                                                            | **No** — a CheckTx reject, or a tx the gateway refused before broadcast with the engine's code (`17` bad signature, `1` undecodable), never enters a block, so no DeliverTx will run                                       |
+| `status: pending`                            | `timeout`                                                                                           | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection |
+| `status: refused`                            | `transport` (code 1, or the HTTP status), original error reason                                     | **No** — the gateway did not admit it and nothing was broadcast                                                                                                                                                            |
+| Any other body: a pre-7.0.0 gateway, a proxy | as before 7.0.0: read from `code` / `height` / `txHash`; `{status:"ok"}` alone is `ok`, no `height` | **Yes** — a pre-#90 gateway acks CheckTx only, so inclusion is still unknown                                                                                                                                               |
 
 That last row is why upgrading the SDK is safe against a gateway that has not been
 upgraded yet: absence of `code`/`height` still means "execution unknown", and the old

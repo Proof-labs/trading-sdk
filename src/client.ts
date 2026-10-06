@@ -785,6 +785,58 @@ export class ExchangeClient {
       );
     }
 
+    // The gateway's `status` states where the submission ended (api-gateway
+    // 7.0.0); nothing is inferred from which fields are present. Any other
+    // body falls through to the HTTP-status handling below.
+    const stated = gatewayBody.json as GatewayResponseBody | undefined;
+    // An answer naming another tx's hash says nothing about this one.
+    const foreignHash =
+      stated?.txHash !== undefined &&
+      String(stated.txHash).toUpperCase() !== txHash;
+    switch (stated?.status) {
+      case "ok":
+      case "error":
+        // An engine verdict always carries its code and arrives as a 200.
+        if (res.status !== 200 || typeof stated.code !== "number") break;
+        // `ok` with a non-zero code, or `error` with code 0, contradicts itself.
+        if ((stated.status === "ok") !== (stated.code === 0) || foreignHash)
+          return txTimeout(
+            txHash,
+            "gateway verdict contradicts itself; reconcile by hash",
+          );
+        return txFromEngineCode(stated.code, {
+          hash: txHash,
+          height: stated.height,
+          log: stated.log ?? stated.error,
+          info: stated.info,
+          events: stated.events,
+        });
+      case "refused":
+        // A refusal naming a hash, code or height contradicts itself, so it
+        // proves nothing about whether the tx was broadcast.
+        if (
+          stated.txHash !== undefined ||
+          stated.code !== undefined ||
+          stated.height !== undefined
+        )
+          return txTimeout(
+            txHash,
+            "gateway refusal contradicts itself; reconcile by hash",
+          );
+        // Nothing was broadcast, so there is nothing to reconcile.
+        return txTransportError(
+          res.status === 200 ? 1 : res.status,
+          stated.error ?? stated.errorCode ?? "refused by gateway",
+        );
+      case "pending":
+        // Reconcile the hash of the bytes sent, never one the answer names.
+        return txTimeout(
+          txHash,
+          stated.error ??
+            "gateway returned no on-chain result; reconcile by hash",
+        );
+    }
+
     // Auth/rate-limit transport failures don't have a JSON body the
     // engine produced — synthesize an HTTP-status code and tag the result
     // `outcome: "transport"` so callers don't read it as an ExecError.
@@ -807,12 +859,6 @@ export class ExchangeClient {
           gatewayBody.raw ??
           "request body exceeds max size (default 8192 bytes)",
       );
-    }
-    const refusal = preAdmissionRefusal(res.status, gatewayBody.json);
-    // Gateway ExchangeResponse::err is hashless: a structured 503 proves
-    // the transaction never entered the broadcaster queue.
-    if (res.status === 503 && refusal !== undefined) {
-      return txTransportError(503, refusal);
     }
     if (res.status >= 500) {
       return txTimeout(
@@ -882,13 +928,9 @@ export class ExchangeClient {
     // Fallback: the code embedded in the string as "<engine_code>: <message>".
     // The gateway still emits this format for compatibility, so this path also
     // covers a pre-#90 gateway that sends ONLY the string. Parse the leading code;
-    // Hashless gateway refusals are terminal; unrecognized bodies remain unknown.
     const errMsg = json?.error ?? gatewayBody.raw ?? "unknown gateway error";
     const code = parseLeadingErrorCode(errMsg);
     if (code !== null) return txEngineError(code, { log: errMsg });
-    if (res.status === 200 && refusal !== undefined) {
-      return txTransportError(1, refusal);
-    }
     return txTimeout(txHash, "gateway returned no verdict; reconcile by hash");
   }
 
@@ -2446,9 +2488,7 @@ function computeCometTxHash(txBytes: Uint8Array): string {
   return bytesToHex(sha256(txBytes)).toUpperCase();
 }
 
-/** Shape of a gateway `/exchange` JSON response body — the same envelope
- * both the engine-result decode below and `preAdmissionRefusal` read, kept
- * as one declaration so a new field is visible to both. */
+/** Shape of a gateway `/exchange` JSON response body. */
 interface GatewayResponseBody {
   status?: string;
   error?: string;
@@ -2458,72 +2498,9 @@ interface GatewayResponseBody {
   info?: string;
   height?: number;
   events?: TxEvent[];
+  errorCode?: string;
   mode?: string;
   retryAfterMs?: number;
-}
-
-/** Only a fixed, known set of (HTTP status, message) pairs is hashless proof
- * of a pre-admission refusal — mirrors
- * `crates/proof-trading-sdk/src/gateway/mod.rs::pre_admission_refusal`
- * exactly for the statuses reached here (200, 503). ExchangeResponse::err
- * omits admission/verdict and rate-limit fields, but the shape alone is not
- * enough: an unrecognized message in that same shape can come from a generic
- * failure (an intermediary, a proxy) rather than the gateway's own refusal
- * path, and contradictory or unknown evidence must not become a terminal
- * refusal for a transaction that may have executed. */
-const PRE_ADMISSION_REFUSAL_FIELDS = new Set([
-  "status",
-  "error",
-  "mode",
-  "retryAfterMs",
-]);
-
-function preAdmissionRefusal(
-  status: number,
-  value: unknown,
-): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return;
-  const body = value as GatewayResponseBody;
-  // Mirrors `RefusalRead`'s `#[serde(deny_unknown_fields)]`: any field
-  // outside this exact set — including ones this SDK doesn't know about
-  // yet — makes the body unrecognized, not refusal evidence.
-  if (
-    body.status !== "error" ||
-    typeof body.error !== "string" ||
-    Object.keys(body).some((key) => !PRE_ADMISSION_REFUSAL_FIELDS.has(key))
-  )
-    return undefined;
-
-  if (
-    status === 503 &&
-    body.error === "maintenance: signed writes are not open"
-  ) {
-    if (body.retryAfterMs !== undefined) return undefined;
-    return body.mode === "paused" || body.mode === "cancel-only"
-      ? body.error
-      : undefined;
-  }
-  if (body.mode !== undefined || body.retryAfterMs !== undefined)
-    return undefined;
-
-  if (
-    status === 503 &&
-    (body.error === "service overloaded" ||
-      body.error === "service unavailable")
-  )
-    return body.error;
-  if (
-    status === 200 &&
-    (body.error === "invalid request body" ||
-      body.error === "invalid action parameters" ||
-      body.error === "invalid base64 in action field" ||
-      body.error === "invalid signature" ||
-      body.error === "internal encoding error" ||
-      body.error ===
-        "action type 0x1d is proposer-only and cannot enter through the gateway")
-  )
-    return body.error;
-  return undefined;
 }
 
 async function readGatewayBody(res: Response): Promise<{

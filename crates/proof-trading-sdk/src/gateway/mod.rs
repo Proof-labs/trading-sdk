@@ -205,11 +205,13 @@ pub struct CommittedReceipt {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SubmissionOutcome<R = ()> {
     Committed(CommittedReceipt),
+    /// The engine's reject code; the tx will never enter a block. From
+    /// CheckTx, or from the gateway before broadcast (bad signature, undecodable).
     CheckTxRejected {
         hash: TxHash,
         code: NonZeroU32,
     },
-    /// Includes a legacy CheckTx-only acknowledgement; inclusion is still unknown.
+    /// Broadcast or possibly in flight with no verdict yet; reconcile by hash.
     Pending {
         hash: TxHash,
     },
@@ -626,50 +628,42 @@ impl GatewayClient {
                 retry_after: body.retry_after,
                 ..GatewayError::new(op, ErrorKind::InvalidResponse)
             };
-            if !matches!(read.status.as_str(), "ok" | "error") {
-                return Err(invalid());
-            }
             if let Some(h) = &read.tx_hash {
                 matching_hash(h, hash, op).map_err(|mut e| {
                     e.retry_after = body.retry_after;
                     e
                 })?;
             }
-            let refusal = R::classify(body.status.as_u16(), &body.bytes);
-            if !body.status.is_success() && refusal.is_none() {
-                return Err(GatewayError {
-                    retry_after: body.retry_after,
-                    ..GatewayError::new(op, ErrorKind::HttpStatus(body.status.as_u16()))
-                });
-            }
+            // `status` is the gateway's statement of where the submission
+            // ended; any other body did not come from its exchange handler.
+            let http_error = || GatewayError {
+                retry_after: body.retry_after,
+                ..GatewayError::new(op, ErrorKind::HttpStatus(body.status.as_u16()))
+            };
             let has_hash = read.tx_hash.is_some();
-            let outcome = match (read.code, read.height, read.tx_hash) {
-                (Some(code), Some(height), Some(_)) => {
-                    if (read.status == "ok") != (code == 0) {
-                        return Err(invalid());
-                    }
+            let outcome = match (read.status.as_str(), read.code, read.height) {
+                ("refused", None, None) if !has_hash => match R::classify(&body.bytes) {
+                    Some(refusal) => SubmissionOutcome::RejectedBeforeAdmission { hash, refusal },
+                    None if body.status.is_success() => return Err(invalid()),
+                    None => return Err(http_error()),
+                },
+                _ if !body.status.is_success() => return Err(http_error()),
+                // `height` says the tx reached a block; `ok` is a clean
+                // execution, `error` there is the engine failing it.
+                ("ok" | "error", Some(code), Some(height))
+                    if has_hash && (read.status == "ok") == (code == 0) =>
+                {
                     SubmissionOutcome::Committed(CommittedReceipt {
                         hash,
                         code,
                         height: BlockHeight::new(height).ok_or_else(invalid)?,
                     })
                 }
-                (Some(code), None, Some(_)) if code != 0 && read.status == "error" => {
-                    SubmissionOutcome::CheckTxRejected {
-                        hash,
-                        code: NonZeroU32::new(code).ok_or_else(invalid)?,
-                    }
-                }
-                (Some(0), None, Some(_)) if read.status == "ok" => {
-                    SubmissionOutcome::Pending { hash }
-                }
-                (None, None, Some(_)) | (None, None, None) if read.status == "ok" || has_hash => {
-                    SubmissionOutcome::Pending { hash }
-                }
-                (None, None, None) if read.status == "error" => match refusal {
-                    Some(refusal) => SubmissionOutcome::RejectedBeforeAdmission { hash, refusal },
-                    None => return Err(invalid()),
+                ("error", Some(code), None) => SubmissionOutcome::CheckTxRejected {
+                    hash,
+                    code: NonZeroU32::new(code).ok_or_else(invalid)?,
                 },
+                ("pending", None, None) if has_hash => SubmissionOutcome::Pending { hash },
                 _ => return Err(invalid()),
             };
             Ok(Submission {
