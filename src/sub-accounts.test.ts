@@ -398,6 +398,56 @@ describe("decodeSubAccountList", () => {
     ).toThrow(/id \(msgpack float where the wire has an integer\)/);
   });
 
+  it("steps over str, map and fixext extras before a later float row", () => {
+    const extras = [
+      Uint8Array.from([0xd9, 0x02, 0x68, 0x69]), // str8 "hi"
+      Uint8Array.from([0x81, 0x01, 0x02]), // fixmap {1: 2}
+      Uint8Array.from([0xd4, 0x01, 0x00]), // fixext1, type 1, one data byte
+    ];
+    for (const extra of extras) {
+      expect(() =>
+        decodeSubAccountList(
+          rawEnvelope(
+            rawRows([
+              [bin8(MASTER), 0x01, bin8(CHILD_A), bin8(NAME_A), u32(1), extra],
+              [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
+            ]),
+          ),
+        ),
+      ).toThrow(/id \(msgpack float where the wire has an integer\)/);
+    }
+  });
+
+  it("steps over a nested array extra before a later float row", () => {
+    const nested = Uint8Array.from([0x92, 0x01, 0x91, 0x02]); // [1, [2]]
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawRows([
+            [bin8(MASTER), 0x01, bin8(CHILD_A), bin8(NAME_A), u32(1), nested],
+            [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
+          ]),
+        ),
+      ),
+    ).toThrow(/id \(msgpack float where the wire has an integer\)/);
+  });
+
+  it("stands the walk down past the extra-field depth cap", () => {
+    // The walk abandons a row whose trailing field nests deeper than the cap,
+    // so a float in a later row is not reached. This pins the current
+    // limitation; the gap is tracked in #221.
+    const deep = Uint8Array.from([...Array<number>(34).fill(0x91), 0x01]);
+    const rows = decodeSubAccountList(
+      rawEnvelope(
+        rawRows([
+          [bin8(MASTER), 0x01, bin8(CHILD_A), bin8(NAME_A), u32(1), deep],
+          [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
+        ]),
+      ),
+    );
+    expect(rows[1]?.id).toBe(2);
+  });
+
   it("does not blind-scan: float-family bytes inside a bin are data", () => {
     const master = new Uint8Array(20);
     master[0] = 0xca;

@@ -74,8 +74,7 @@ function createdHeight(value: unknown): bigint {
   return value;
 }
 
-function rowName(value: unknown): string {
-  const bytes = fixedBytes(value, 32, "name");
+function rowName(bytes: Uint8Array): string {
   let end = bytes.length;
   while (end > 0 && bytes[end - 1] === 0) end -= 1;
   try {
@@ -87,9 +86,20 @@ function rowName(value: unknown): string {
   }
 }
 
-/** Wire field count of `SubAccount`. Later fields are appended as optional,
- *  so a longer row still decodes; a shorter one is malformed. */
-const ROW_FIELDS = 5;
+/** `proof-wire SubAccount` is a positional array read by two functions: the
+ *  raw-byte float walk and `decodeRow`. This schema is their single source of
+ *  field order, diagnostic names and fixed byte widths. Later fields are
+ *  appended as optional, so a longer row still decodes; a shorter one is
+ *  malformed. */
+const ROW_SCHEMA = [
+  { kind: "bytes", name: "master", bytes: 20 },
+  { kind: "id", name: "id" },
+  { kind: "bytes", name: "address", bytes: 20 },
+  { kind: "bytes", name: "name", bytes: 32 },
+  { kind: "height", name: "created_height" },
+] as const;
+
+const ROW_FIELDS = ROW_SCHEMA.length;
 
 // ─── raw MessagePack float walk ────────────────────────────────────────────
 // `@msgpack/msgpack` decodes the float families (0xca/0xcb) into the same JS
@@ -107,6 +117,67 @@ const ROW_FIELDS = 5;
 // the five-field prefix are future-optional and skipped generically — their
 // types are not constrained, floats included.
 
+/** Payload width in bytes of the integer leads the walk steps over. */
+const INTEGER_WIDTH: Record<number, number> = {
+  0xcc: 1, // uint8
+  0xcd: 2, // uint16
+  0xce: 4, // uint32
+  0xcf: 8, // uint64
+  0xd0: 1, // int8
+  0xd1: 2, // int16
+  0xd2: 4, // int32
+  0xd3: 8, // int64
+};
+
+/** Payload width in bytes of the float leads rejected in an integer
+ *  position. */
+const FLOAT_WIDTH: Record<number, number> = {
+  0xca: 4, // float32
+  0xcb: 8, // float64
+};
+
+/** Width in bytes of the length field of bin, str and ext leads. */
+const LENGTH_WIDTH: Record<number, number> = {
+  0xc4: 1, // bin8
+  0xc5: 2, // bin16
+  0xc6: 4, // bin32
+  0xd9: 1, // str8
+  0xda: 2, // str16
+  0xdb: 4, // str32
+  0xc7: 1, // ext8
+  0xc8: 2, // ext16
+  0xc9: 4, // ext32
+};
+
+/** Ext leads carry one extra type byte between the length and the payload. */
+const EXT_LEADS = new Set([0xc7, 0xc8, 0xc9]);
+
+/** Total width in bytes of a fixext value (lead + type byte + payload). */
+const FIXEXT_WIDTH: Record<number, number> = {
+  0xd4: 3, // fixext1
+  0xd5: 4, // fixext2
+  0xd6: 6, // fixext4
+  0xd7: 10, // fixext8
+  0xd8: 18, // fixext16
+};
+
+/** Read a big-endian unsigned integer of `width` bytes at `offset`, or null
+ *  when it runs past the end of the buffer. MessagePack length fields are at
+ *  most four bytes wide, so a JS number holds them exactly. */
+function readLength(
+  bytes: Uint8Array,
+  offset: number,
+  width: number,
+): number | null {
+  let value = 0;
+  for (let i = 0; i < width; i++) {
+    const byte = bytes[offset + i];
+    if (byte === undefined) return null;
+    value = value * 256 + byte;
+  }
+  return value;
+}
+
 /** Offset past an integer field, or null when the bytes are anything else
  *  (the decoder's verdict, not this walk's). Signed encodings are stepped
  *  over, not stood down on: the decoder accepts a non-negative value in them
@@ -114,28 +185,20 @@ const ROW_FIELDS = 5;
  *  walk for every later row. A float family byte in this position is the one
  *  thing that throws: the decoder would silently accept it when the value
  *  happens to be integral. */
-function walkUintOffset(
+function walkIntegerOffset(
   bytes: Uint8Array,
   offset: number,
   field: string,
 ): number | null {
   const lead = bytes[offset];
   if (lead === undefined) return null;
-  if (lead === 0xca || lead === 0xcb)
+  if (lead in FLOAT_WIDTH)
     return invalid(`${field} (msgpack float where the wire has an integer)`);
   if (lead <= 0x7f || lead >= 0xe0) return offset + 1; // (negative) fixint
-  const width = {
-    0xcc: 2,
-    0xcd: 3,
-    0xce: 5,
-    0xcf: 9,
-    0xd0: 2,
-    0xd1: 3,
-    0xd2: 5,
-    0xd3: 9,
-  }[lead];
+  const width = INTEGER_WIDTH[lead];
   if (width === undefined) return null;
-  return offset + width <= bytes.length ? offset + width : null;
+  const end = offset + 1 + width;
+  return end <= bytes.length ? end : null;
 }
 
 /** Offset past a fixed-length byte field — a bin of exactly `length` bytes,
@@ -149,29 +212,18 @@ function walkFixedBytesOffset(
   const lead = bytes[offset];
   if (lead === undefined) return null;
   if (lead === 0xc4 || lead === 0xc5 || lead === 0xc6) {
-    const header = lead === 0xc4 ? 2 : lead === 0xc5 ? 3 : 5;
-    let size = 0;
-    for (let i = 1; i < header; i++) size = size * 256 + bytes[offset + i];
+    const width = lead === 0xc4 ? 1 : lead === 0xc5 ? 2 : 4; // bin8/16/32
+    const size = readLength(bytes, offset + 1, width);
     if (size !== length) return null; // decoder: `${field} length`
-    const end = offset + header + size;
+    const end = offset + 1 + width + size;
     return end <= bytes.length ? end : null;
   }
-  let count: number;
-  let header: number;
-  if (lead >= 0x90 && lead <= 0x9f) {
-    count = lead & 0x0f;
-    header = 1;
-  } else if (lead === 0xdc || lead === 0xdd) {
-    header = lead === 0xdc ? 3 : 5;
-    count = 0;
-    for (let i = 1; i < header; i++) count = count * 256 + bytes[offset + i];
-  } else {
-    return null; // decoder: `${field} encoding`
-  }
-  if (count !== length) return null; // decoder: `${field} length`
-  let o = offset + header;
-  for (let i = 0; i < count; i++) {
-    const next = walkUintOffset(bytes, o, `${field} byte`);
+  const array = walkArrayHeader(bytes, offset);
+  if (!array) return null; // decoder: `${field} encoding`
+  if (array.count !== length) return null; // decoder: `${field} length`
+  let o = array.next;
+  for (let i = 0; i < length; i++) {
+    const next = walkIntegerOffset(bytes, o, `${field} byte`);
     if (next === null) return null;
     o = next;
   }
@@ -186,12 +238,12 @@ function walkArrayHeader(
   const lead = bytes[offset];
   if (lead === undefined) return null;
   if (lead >= 0x90 && lead <= 0x9f)
-    return { count: lead & 0x0f, next: offset + 1 };
+    return { count: lead & 0x0f, next: offset + 1 }; // fixarray
   if (lead === 0xdc || lead === 0xdd) {
-    const header = lead === 0xdc ? 3 : 5;
-    let count = 0;
-    for (let i = 1; i < header; i++) count = count * 256 + bytes[offset + i];
-    return { count, next: offset + header };
+    const width = lead === 0xdc ? 2 : 4; // array16 / array32
+    const count = readLength(bytes, offset + 1, width);
+    if (count === null) return null;
+    return { count, next: offset + 1 + width };
   }
   return null;
 }
@@ -207,52 +259,30 @@ function walkExtraValueOffset(
   if (depth > 32) return null;
   const lead = bytes[offset];
   if (lead === undefined) return null;
-  const fixed = {
-    0xcc: 2,
-    0xcd: 3,
-    0xce: 5,
-    0xcf: 9,
-    0xd0: 2,
-    0xd1: 3,
-    0xd2: 5,
-    0xd3: 9,
-    0xca: 5,
-    0xcb: 9,
-    0xc0: 1,
-    0xc2: 1,
-    0xc3: 1,
-    0xd4: 3,
-    0xd5: 4,
-    0xd6: 6,
-    0xd7: 10,
-    0xd8: 18,
-  }[lead];
-  if (fixed !== undefined)
-    return offset + fixed <= bytes.length ? offset + fixed : null;
   if (lead <= 0x7f || lead >= 0xe0) return offset + 1; // (negative) fixint
   if (lead >= 0xa0 && lead <= 0xbf) {
-    const end = offset + 1 + (lead & 0x1f);
+    const end = offset + 1 + (lead & 0x1f); // fixstr
+    return end <= bytes.length ? end : null;
+  }
+  if (lead === 0xc0 || lead === 0xc2 || lead === 0xc3) return offset + 1; // nil, false, true
+  const scalar = INTEGER_WIDTH[lead] ?? FLOAT_WIDTH[lead];
+  if (scalar !== undefined) {
+    const end = offset + 1 + scalar;
+    return end <= bytes.length ? end : null;
+  }
+  const fixext = FIXEXT_WIDTH[lead];
+  if (fixext !== undefined) {
+    const end = offset + fixext;
     return end <= bytes.length ? end : null;
   }
   // bin, str and ext with an explicit length: lead byte, the big-endian
   // length, and for ext one more byte carrying the extension type.
-  const lengthWidth = {
-    0xc4: 1,
-    0xd9: 1,
-    0xc7: 1,
-    0xc5: 2,
-    0xda: 2,
-    0xc8: 2,
-    0xc6: 4,
-    0xdb: 4,
-    0xc9: 4,
-  }[lead];
+  const lengthWidth = LENGTH_WIDTH[lead];
   if (lengthWidth !== undefined) {
-    let size = 0;
-    for (let i = 1; i <= lengthWidth; i++)
-      size = size * 256 + bytes[offset + i];
-    const isExt = lead === 0xc7 || lead === 0xc8 || lead === 0xc9;
-    const end = offset + 1 + lengthWidth + (isExt ? 1 : 0) + size;
+    const size = readLength(bytes, offset + 1, lengthWidth);
+    if (size === null) return null;
+    const typeByte = EXT_LEADS.has(lead) ? 1 : 0;
+    const end = offset + 1 + lengthWidth + typeByte + size;
     return end <= bytes.length ? end : null;
   }
   const array = walkArrayHeader(bytes, offset);
@@ -295,15 +325,11 @@ function rejectFloatsInSubAccountWire(bytes: Uint8Array): void {
     const row = walkArrayHeader(bytes, o);
     if (!row || row.count < ROW_FIELDS) return;
     o = row.next;
-    const steps = [
-      () => walkFixedBytesOffset(bytes, o, 20, "master"),
-      () => walkUintOffset(bytes, o, "id"),
-      () => walkFixedBytesOffset(bytes, o, 20, "address"),
-      () => walkFixedBytesOffset(bytes, o, 32, "name"),
-      () => walkUintOffset(bytes, o, "created_height"),
-    ];
-    for (const step of steps) {
-      const next = step();
+    for (const field of ROW_SCHEMA) {
+      const next =
+        field.kind === "bytes"
+          ? walkFixedBytesOffset(bytes, o, field.bytes, field.name)
+          : walkIntegerOffset(bytes, o, field.name);
       if (next === null) return;
       o = next;
     }
@@ -321,10 +347,10 @@ function decodeRow(raw: unknown): SubAccountListRow {
     return invalid(`row (expected ${ROW_FIELDS} fields, got ${raw.length})`);
   const [master, id, address, name, height] = raw;
   return {
-    address: hex(fixedBytes(address, 20, "address")),
-    master: hex(fixedBytes(master, 20, "master")),
+    master: hex(fixedBytes(master, ROW_SCHEMA[0].bytes, ROW_SCHEMA[0].name)),
     id: rowId(id),
-    name: rowName(name),
+    address: hex(fixedBytes(address, ROW_SCHEMA[2].bytes, ROW_SCHEMA[2].name)),
+    name: rowName(fixedBytes(name, ROW_SCHEMA[3].bytes, ROW_SCHEMA[3].name)),
     createdHeight: createdHeight(height),
   };
 }
