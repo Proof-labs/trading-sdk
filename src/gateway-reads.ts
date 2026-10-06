@@ -29,6 +29,12 @@ export interface CandleHistoryParams {
   limit?: number;
   cursor?: string;
 }
+/** Newest-first indexed blocks. Treat next_cursor as opaque. */
+export interface ExplorerBlocksParams {
+  /** Gateway accepts 1–100; defaults to 20. */
+  limit?: number;
+  cursor?: string;
+}
 export interface AccountEventsParams {
   owner: string;
   order: "asc" | "desc";
@@ -225,6 +231,32 @@ export class GatewayReads {
    */
   oracleHealth(opts: GatewayReadOptions = {}) {
     return this.get("/v1/oracle/health", {}, opts);
+  }
+  /** Indexer progress/freshness, unchanged. Display thresholds belong to callers. */
+  historyStatus(opts: GatewayReadOptions = {}) {
+    return this.get("/v1/history/status", {}, opts);
+  }
+  /** Indexed blocks, newest first: { blocks, next_cursor }. No synthetic fallback. */
+  historyBlocks(
+    params: ExplorerBlocksParams = {},
+    opts: GatewayReadOptions = {},
+  ) {
+    return this.get("/v1/history/blocks", params, opts);
+  }
+  /** Indexed block by height or hash, including its ordered transactions.
+   * A missing/unindexed block remains an HTTP 404, not an empty block. */
+  historyBlock(id: string | number, opts: GatewayReadOptions = {}) {
+    return this.get(
+      `/v1/history/blocks/${encodeURIComponent(String(id))}`,
+      {},
+      opts,
+    );
+  }
+  /** Indexed committed transaction and its containing block. raw_tx is base64
+   * signed wire bytes. There is no global transaction-list endpoint; use the
+   * block detail's transactions array. Missing transactions remain HTTP 404. */
+  historyTransaction(hash: string, opts: GatewayReadOptions = {}) {
+    return this.get(`/v1/history/txs/${encodeURIComponent(hash)}`, {}, opts);
   }
   candles(params: CandleHistoryParams, opts: GatewayReadOptions = {}) {
     return this.get("/v1/history/candles", params, opts);
