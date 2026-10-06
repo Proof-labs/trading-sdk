@@ -96,17 +96,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **BREAKING — gateway refusals are classified by code, never by message
-  text** (api-gateway 6.0.0, api-gateway #215). The TypeScript client and the
-  Rust `submit_signed_bytes_with_evidence` read the gateway's `errorCode`
-  (`Unauthorized`, `RateLimited`, `Maintenance`, `Overloaded`, `Unavailable`,
-  `InvalidRequest`, `EncodingError`); a body without one is unresolved and
-  reconciles by hash. A hashless engine `code` (`17` invalid signature, `1`
-  undecodable) is a refusal in Rust and an `engine` outcome in TypeScript,
-  where an invalid signature used to be `transport` code 1. Rust
-  `PreAdmissionRefusal::ProposerOnly` is removed; the gateway answers it with
-  code `1`, so it is `InvalidEncoding`. Against a gateway older than 6.0.0
-  every refusal is unresolved.
+- **BREAKING — the gateway's `status` is read as stated; nothing is inferred
+  from message text or field shape** (api-gateway 6.0.0, api-gateway #215 and
+  #220). `POST /exchange` now answers `ok`, `rejected`, `refused` or
+  `pending`. The TypeScript client and the Rust submit methods switch on that
+  value; a `refused` answer is named by its `errorCode` (`Unauthorized`,
+  `RateLimited`, `Maintenance`, `Overloaded`, `Unavailable`, `InvalidRequest`,
+  `EncodingError`). An invalid signature is the engine's code `17` on a
+  `rejected` answer: `CheckTxRejected` in Rust and an `engine` outcome in
+  TypeScript, where it used to be a refusal and `transport` code 1. Rust
+  `PreAdmissionRefusal::ProposerOnly` and `::InvalidSignature` are removed.
+  The Rust methods no longer accept a pre-6.0.0 gateway's answers; the
+  TypeScript client still falls back to them.
 - **Rust crate 4.0.0 → 4.1.0** — the market-snapshot witness bracket no longer
   requires all three reads (pre-status, snapshot, post-status) to come from the
   same CometBFT node, so it works behind a load balancer that fans reads across

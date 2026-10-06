@@ -49,7 +49,7 @@ describe("gateway finality", () => {
     "keeps hashless HTTP %i refusal terminal (%s)",
     async (status, reason, errorCode, code) => {
       const fetch = vi.fn(async (_url: string) =>
-        json({ status: "error", error: reason, errorCode }, Number(status)),
+        json({ status: "refused", error: reason, errorCode }, Number(status)),
       );
       vi.stubGlobal("fetch", fetch);
       const client = external();
@@ -84,7 +84,7 @@ describe("gateway finality", () => {
         vi.fn(async () =>
           json(
             {
-              status: "error",
+              status: "refused",
               error: "maintenance: signed writes are not open",
               errorCode: "Maintenance",
               mode,
@@ -123,20 +123,12 @@ describe("gateway finality", () => {
     [503, { status: "error", error: "unknown", code: 12 }],
     [503, { status: "error", error: "unknown", height: 42 }],
     [200, { status: "error", error: "unknown", log: "nonce too old" }],
-    [
-      503,
-      {
-        status: "error",
-        error: "service overloaded",
-        errorCode: "Overloaded",
-        retryAfterMs: 500,
-      },
-    ],
-    // Message text alone names nothing.
+    // Message text and codes alone name nothing: only `status` does.
     [503, { status: "error", error: "service overloaded" }],
     [200, { status: "error", error: "invalid action parameters" }],
-    [200, { status: "error", error: "timed out", errorCode: "TimedOut" }],
     [200, { status: "error", error: "x", errorCode: "Overloaded" }],
+    // A stated verdict without its code is not a verdict.
+    [200, { status: "rejected", error: "invalid signature" }],
     [200, { status: "error", error: "unknown", events: [] }],
     [200, { status: "error", error: "unknown", code: "12" }],
     [503, { status: "error", error: "invalid signature" }],
@@ -149,15 +141,6 @@ describe("gateway finality", () => {
     ],
     [503, { status: "error", error: "unknown edge failure" }],
     [200, { status: "error", error: "unknown edge failure" }],
-    [
-      503,
-      {
-        status: "error",
-        error: "service overloaded",
-        errorCode: "Overloaded",
-        info: "outcome unknown",
-      },
-    ],
     [200, { status: "error", error: "invalid signature", txHash: null }],
   ])("reconciles HTTP %i ambiguous envelope %j", async (status, body) => {
     const fetch = vi
@@ -183,7 +166,7 @@ describe("gateway finality", () => {
 
   it("reads a hashless engine code as the engine's verdict", async () => {
     const fetch = vi.fn(async () =>
-      json({ status: "error", error: "invalid signature", code: 17 }),
+      json({ status: "rejected", error: "invalid signature", code: 17 }),
     );
     vi.stubGlobal("fetch", fetch);
     const client = external();
@@ -197,6 +180,25 @@ describe("gateway finality", () => {
     });
     expect(await client.waitForDelivery(result)).toBe(result);
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles a stated pending answer by its hash", async () => {
+    const hash = "A".repeat(64);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        json({
+          status: "pending",
+          error: "timed out waiting for on-chain result; reconcile via txHash",
+          errorCode: "TimedOut",
+          txHash: hash,
+        }),
+      ),
+    );
+    expect(await external().submitTx(action)).toMatchObject({
+      outcome: "timeout",
+      hash,
+    });
   });
 
   it("keeps an unstructured 503 uncertain", async () => {

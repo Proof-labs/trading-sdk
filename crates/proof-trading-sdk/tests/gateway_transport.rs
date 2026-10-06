@@ -122,7 +122,8 @@ async fn exact_signed_request_and_committed_execution_are_distinct_from_permissi
     let (url, task) = server(
         response(
             200,
-            &json!({"status":"error","txHash":hash.to_string(),"code":21,"height":17}).to_string(),
+            &json!({"status":"rejected","txHash":hash.to_string(),"code":21,"height":17})
+                .to_string(),
             "",
         ),
         Duration::ZERO,
@@ -160,23 +161,18 @@ async fn submit_classifies_checktx_ambiguous_and_pre_admission_without_retry() {
     let hash = TxHash::of_signed_bytes(bytes);
     for (body, expected) in [
         (
-            json!({"status":"error","txHash":hash.to_string(),"code":21}),
+            json!({"status":"rejected","txHash":hash.to_string(),"code":21}),
             SubmissionOutcome::CheckTxRejected {
                 hash,
                 code: 21.try_into().unwrap(),
             },
         ),
         (
-            json!({"status":"error","txHash":hash.to_string()}),
-            SubmissionOutcome::Pending { hash },
-        ),
-        (json!({"status":"ok"}), SubmissionOutcome::Pending { hash }),
-        (
-            json!({"status":"ok","txHash":hash.to_string(),"code":0}),
+            json!({"status":"pending","txHash":hash.to_string()}),
             SubmissionOutcome::Pending { hash },
         ),
         (
-            json!({"status":"error","error":"validation rejected"}),
+            json!({"status":"refused","error":"validation rejected","errorCode":"InvalidRequest"}),
             SubmissionOutcome::RejectedBeforeAdmission { hash, refusal: () },
         ),
     ] {
@@ -204,10 +200,6 @@ async fn post_mismatch_or_malformed_result_retains_local_hash_and_hides_payload(
         ),
         (
             json!({"status":"ok","code":0,"height":1}),
-            ErrorKind::InvalidResponse,
-        ),
-        (
-            json!({"status":"ok","txHash":own.to_string(),"code":21,"height":1}),
             ErrorKind::InvalidResponse,
         ),
         (

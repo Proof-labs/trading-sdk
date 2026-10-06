@@ -129,72 +129,52 @@ async fn exact_pre_broadcast_contracts_have_typed_per_attempt_evidence() {
     for (status, body, reason) in [
         (
             401,
-            json!({"status":"error","error":"unauthorized: invalid or missing X-Api-Key","errorCode":"Unauthorized"}),
+            json!({"status":"refused","error":"unauthorized: invalid or missing X-Api-Key","errorCode":"Unauthorized"}),
             PreAdmissionRefusal::Unauthorized,
         ),
         (
             429,
-            json!({"status":"error","error":"rate limited","errorCode":"RateLimited","retryAfterMs":1501}),
+            json!({"status":"refused","error":"rate limited","errorCode":"RateLimited","retryAfterMs":1501}),
             PreAdmissionRefusal::RateLimited,
         ),
         (
             503,
-            json!({"status":"error","error":"maintenance: signed writes are not open","errorCode":"Maintenance","mode":"paused"}),
+            json!({"status":"refused","error":"maintenance: signed writes are not open","errorCode":"Maintenance","mode":"paused"}),
             PreAdmissionRefusal::Maintenance(MaintenanceMode::Paused),
         ),
         (
             503,
-            json!({"status":"error","error":"maintenance: signed writes are not open","errorCode":"Maintenance","mode":"cancel-only"}),
+            json!({"status":"refused","error":"maintenance: signed writes are not open","errorCode":"Maintenance","mode":"cancel-only"}),
             PreAdmissionRefusal::Maintenance(MaintenanceMode::CancelOnly),
         ),
         (
             503,
-            json!({"status":"error","error":"service overloaded","errorCode":"Overloaded"}),
+            json!({"status":"refused","error":"service overloaded","errorCode":"Overloaded"}),
             PreAdmissionRefusal::Overloaded,
         ),
         (
             503,
-            json!({"status":"error","error":"service unavailable","errorCode":"Unavailable"}),
+            json!({"status":"refused","error":"service unavailable","errorCode":"Unavailable"}),
             PreAdmissionRefusal::VerifierUnavailable,
         ),
         (
             200,
-            json!({"status":"error","error":"invalid request body","errorCode":"InvalidRequest"}),
+            json!({"status":"refused","error":"invalid request body","errorCode":"InvalidRequest"}),
             PreAdmissionRefusal::InvalidRequest,
         ),
         (
             200,
-            json!({"status":"error","error":"invalid action parameters","errorCode":"InvalidRequest"}),
+            json!({"status":"refused","error":"invalid action parameters","errorCode":"InvalidRequest"}),
             PreAdmissionRefusal::InvalidRequest,
         ),
         (
             200,
-            json!({"status":"error","error":"invalid base64 in action field","errorCode":"InvalidRequest"}),
+            json!({"status":"refused","error":"invalid base64 in action field","errorCode":"InvalidRequest"}),
             PreAdmissionRefusal::InvalidRequest,
         ),
         (
             200,
-            json!({"status":"error","error":"invalid signature","code":17}),
-            PreAdmissionRefusal::InvalidSignature,
-        ),
-        (
-            200,
-            json!({"status":"error","error":"internal encoding error","code":1}),
-            PreAdmissionRefusal::InvalidEncoding,
-        ),
-        (
-            200,
-            json!({"status":"error","error":"action type 0x1d is proposer-only and cannot enter through the gateway","code":1}),
-            PreAdmissionRefusal::InvalidEncoding,
-        ),
-        (
-            200,
-            json!({"status":"error","error":"non-canonical encoding","code":1}),
-            PreAdmissionRefusal::InvalidEncoding,
-        ),
-        (
-            200,
-            json!({"status":"error","error":"internal encoding error","errorCode":"EncodingError"}),
+            json!({"status":"refused","error":"internal encoding error","errorCode":"EncodingError"}),
             PreAdmissionRefusal::InvalidEncoding,
         ),
     ] {
@@ -236,76 +216,61 @@ async fn generic_http_failures_never_prove_refusal() {
 }
 
 #[tokio::test]
-async fn hashless_unknown_or_wrong_status_and_maintenance_bodies_remain_unresolved() {
+async fn bodies_without_a_stated_refusal_remain_unresolved() {
     for (status, body) in [
+        // Not one of the four statuses: not the gateway's exchange handler.
         (200, json!({"status":"error"})),
-        // Message text alone names nothing.
         (200, json!({"status":"error","error":"invalid signature"})),
         (503, json!({"status":"error","error":"service overloaded"})),
-        // Only the two codes the gateway itself answers with qualify.
-        (
-            200,
-            json!({"status":"error","error":"invalid nonce","code":21}),
-        ),
-        (
-            200,
-            json!({"status":"error","error":"invalid signature","code":17,"errorCode":"InvalidRequest"}),
-        ),
-        // A reconcile reason without its hash is not a refusal.
-        (
-            200,
-            json!({"status":"error","error":"timed out","errorCode":"TimedOut"}),
-        ),
-        (200, json!({"status":"error","error":"validation rejected"})),
-        (
-            200,
-            json!({"status":"error","error":"service unavailable","errorCode":"Unavailable"}),
-        ),
         (
             503,
-            json!({"status":"error","error":"invalid signature","code":17}),
+            json!({"status":"error","error":"service overloaded","errorCode":"Overloaded"}),
         ),
-        (
-            503,
-            json!({"status":"error","error":"service unavailable later"}),
-        ),
-        (
-            503,
-            json!({"status":"error","error":"maintenance: signed writes are not open","errorCode":"Maintenance"}),
-        ),
-        (
-            503,
-            json!({"status":"error","error":"maintenance: signed writes are not open","errorCode":"Maintenance","mode":"open"}),
-        ),
-        (
-            503,
-            json!({"status":"error","error":"maintenance: signed writes are not open","errorCode":"Maintenance","mode":null}),
-        ),
-        // A container that names a mode is not the mode: only the two exact
-        // strings qualify.
-        (
-            503,
-            json!({"status":"error","error":"maintenance: signed writes are not open","errorCode":"Maintenance","mode":{"paused":null}}),
-        ),
-        (
-            503,
-            json!({"status":"error","error":"maintenance: signed writes are not open","errorCode":"Maintenance","mode":["cancel-only"]}),
-        ),
-        (
-            503,
-            json!({"status":"error","error":"maintenance: signed writes are not open","errorCode":"Maintenance","mode":"paused","retryAfterMs":1}),
-        ),
-        (
-            503,
-            json!({"status":"error","error":"service unavailable","errorCode":"Unavailable","unknown":true}),
-        ),
-        (
-            503,
-            json!({"status":"error","error":"service unavailable","errorCode":"Unavailable","mode":null}),
-        ),
+        (200, json!({"status":"refunded"})),
+        // A stated refusal needs a reason this SDK knows.
+        (503, json!({"status":"refused"})),
         (
             429,
-            json!({"status":"error","error":"rate limited","errorCode":"RateLimited"}),
+            json!({"status":"refused","error":"rate limited","errorCode":"RateLimited"}),
+        ),
+        (503, json!({"status":"refused","errorCode":"SomethingNew"})),
+        (200, json!({"status":"refused","errorCode":"TimedOut"})),
+        // Maintenance names one of its two modes; a container is not a mode.
+        (
+            503,
+            json!({"status":"refused","error":"maintenance: signed writes are not open","errorCode":"Maintenance"}),
+        ),
+        (
+            503,
+            json!({"status":"refused","error":"maintenance: signed writes are not open","errorCode":"Maintenance","mode":"open"}),
+        ),
+        (
+            503,
+            json!({"status":"refused","error":"maintenance: signed writes are not open","errorCode":"Maintenance","mode":null}),
+        ),
+        (
+            503,
+            json!({"status":"refused","error":"maintenance: signed writes are not open","errorCode":"Maintenance","mode":{"paused":null}}),
+        ),
+        (
+            503,
+            json!({"status":"refused","error":"maintenance: signed writes are not open","errorCode":"Maintenance","mode":["cancel-only"]}),
+        ),
+        // The stated outcome and the fields must agree.
+        (
+            200,
+            json!({"status":"refused","errorCode":"InvalidRequest","code":17}),
+        ),
+        (
+            200,
+            json!({"status":"rejected","errorCode":"InvalidRequest"}),
+        ),
+        (200, json!({"status":"rejected","code":0})),
+        (200, json!({"status":"pending","errorCode":"TimedOut"})),
+        (200, json!({"status":"ok","code":0})),
+        (
+            503,
+            json!({"status":"rejected","error":"invalid signature","code":17}),
         ),
     ] {
         let (client, task) = json_fixture(status, body, "").await;
@@ -319,23 +284,16 @@ async fn hashless_unknown_or_wrong_status_and_maintenance_bodies_remain_unresolv
 }
 
 #[tokio::test]
-async fn hash_or_execution_fields_never_become_hashless_refusal_even_when_null() {
+async fn a_refusal_contradicted_by_execution_fields_is_not_a_refusal() {
     let hash = TxHash::of_signed_bytes(BYTES);
     for (field, value) in [
         ("txHash", json!(hash.to_string())),
-        ("txHash", Value::Null),
         ("txHash", json!(TxHash::from_bytes([7; 32]).to_string())),
         ("code", json!(21)),
-        ("code", Value::Null),
         ("height", json!(10)),
-        ("height", Value::Null),
-        ("log", json!("not trusted")),
-        ("log", Value::Null),
-        ("events", json!([])),
-        ("events", Value::Null),
     ] {
         let mut body =
-            json!({"status":"error","error":"service unavailable","errorCode":"Unavailable"});
+            json!({"status":"refused","error":"service unavailable","errorCode":"Unavailable"});
         body[field] = value;
         let (client, task) = json_fixture(503, body, "").await;
         let error = client
@@ -360,7 +318,7 @@ async fn exact_hash_execution_outcomes_keep_the_existing_contract() {
             }),
         ),
         (
-            json!({"status":"error","txHash":hash.to_string(),"code":21,"height":12}),
+            json!({"status":"rejected","txHash":hash.to_string(),"code":21,"height":12}),
             SubmissionOutcome::Committed(CommittedReceipt {
                 hash,
                 height: BlockHeight::new(12).expect("a positive fixture height"),
@@ -368,19 +326,23 @@ async fn exact_hash_execution_outcomes_keep_the_existing_contract() {
             }),
         ),
         (
-            json!({"status":"error","txHash":hash.to_string(),"code":21}),
+            json!({"status":"rejected","txHash":hash.to_string(),"code":21}),
             SubmissionOutcome::CheckTxRejected {
                 hash,
                 code: 21.try_into().unwrap(),
             },
         ),
         (
-            json!({"status":"error","txHash":hash.to_string()}),
+            json!({"status":"pending","txHash":hash.to_string()}),
             SubmissionOutcome::Pending { hash },
         ),
+        // Refused before broadcast with the engine's own code: no txHash.
         (
-            json!({"status":"ok","txHash":hash.to_string(),"code":0}),
-            SubmissionOutcome::Pending { hash },
+            json!({"status":"rejected","error":"invalid signature","code":17}),
+            SubmissionOutcome::CheckTxRejected {
+                hash,
+                code: 17.try_into().unwrap(),
+            },
         ),
     ] {
         let (client, task) = json_fixture(200, body, "").await;
@@ -427,7 +389,7 @@ async fn retry_after_headers_win_and_body_milliseconds_round_up_without_overflow
     ] {
         let (client, task) = json_fixture(
             429,
-            json!({"status":"error","error":"rate limited","errorCode":"RateLimited","retryAfterMs":ms}),
+            json!({"status":"refused","error":"rate limited","errorCode":"RateLimited","retryAfterMs":ms}),
             header,
         )
         .await;
@@ -461,7 +423,7 @@ async fn invalid_or_duplicate_json_delays_are_not_absent_and_never_prove_refusal
         "1e100",
     ] {
         let body =
-            format!("{{\"status\":\"error\",\"error\":\"rate limited\",\"retryAfterMs\":{delay}}}");
+            format!("{{\"status\":\"refused\",\"error\":\"rate limited\",\"errorCode\":\"RateLimited\",\"retryAfterMs\":{delay}}}");
         for (header, expected) in [
             ("", RetryAfter::Invalid),
             ("Retry-After: 4\r\n", RetryAfter::DelaySeconds(4)),
@@ -485,7 +447,7 @@ async fn invalid_or_duplicate_json_delays_are_not_absent_and_never_prove_refusal
     let (client, task) = fixture(
         response(
             429,
-            r#"{"status":"error","error":"rate limited","errorCode":"RateLimited","retryAfterMs":1,"retryAfterMs":2}"#,
+            r#"{"status":"refused","error":"rate limited","errorCode":"RateLimited","retryAfterMs":1,"retryAfterMs":2}"#,
             "",
         ),
         Duration::from_secs(1),
@@ -507,19 +469,21 @@ async fn malformed_foreign_hash_and_redirect_responses_keep_local_hash_and_redac
         (
             503,
             format!(
-                r#"{{"status":"error","error":"service unavailable","errorCode":"Unavailable","txHash":"{}"}}"#,
+                r#"{{"status":"refused","error":"service unavailable","errorCode":"Unavailable","txHash":"{}"}}"#,
                 TxHash::from_bytes([4; 32])
             ),
             "",
         ),
         (
             200,
-            r#"{"status":"error","error":"invalid signature","code":17,"txHash":"broken"}"#.into(),
+            r#"{"status":"rejected","error":"invalid signature","code":17,"txHash":"broken"}"#
+                .into(),
             "",
         ),
         (
             200,
-            r#"{"status":"error","status":"error","error":"invalid signature","code":17}"#.into(),
+            r#"{"status":"rejected","status":"rejected","error":"invalid signature","code":17}"#
+                .into(),
             "",
         ),
         (503, format!("malformed response containing {KEY}"), ""),
@@ -572,7 +536,7 @@ async fn refusal_bodies_share_size_and_total_deadline_bounds_without_retry() {
     let (client, task) = fixture(
         response(
             503,
-            r#"{"status":"error","error":"service unavailable","errorCode":"Unavailable"}"#,
+            r#"{"status":"refused","error":"service unavailable","errorCode":"Unavailable"}"#,
             "Retry-After: 7\r\n",
         ),
         Duration::from_millis(25),
