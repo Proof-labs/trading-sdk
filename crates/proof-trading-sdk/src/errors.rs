@@ -141,7 +141,7 @@ define_error_kinds! {
     96  => TooManyActiveEvents              ~ "Account would touch more events than the scenario margin engine can enumerate (the per-account event cap). Close a leg on another event before opening this one.",
     97  => MarkUnavailable                   ~ "No mark price is available for the market: an impact-family book has no recent-trade EWMA and no oracle fallback value.",
     98  => TriggerOrderIncompatible         ~ "Order cannot carry attached SL/TP (reduce-only order, ineligible market, or inactive feature).",
-    99  => WithdrawalLimitExceeded          ~ "The withdrawal would push the account's rolling-window outflow past the configured per-account cap. The attempted debit, the cap, and the moment the oldest in-window outflow expires are on the error's Display and log; capacity returns gradually as in-window outflows age out.",
+    99  => WithdrawalLimitExceeded          ~ "The withdrawal would push the account's rolling-window outflow past the configured per-account cap. The attempted debit, the cap, and when the oldest in-window outflow expires are in the log; capacity returns as in-window outflows age out.",
     100 => AccountOrderCapReached           ~ "The account already holds the maximum number of resting orders; cancel one before placing another.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
