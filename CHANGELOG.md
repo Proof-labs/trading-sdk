@@ -145,17 +145,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- TypeScript `decodeSubAccountList` now rejects integral MessagePack floats
-  in the raw bytes (#189). The float families (`0xca`/`0xcb`) decode into the
-  same JavaScript number as an integer, so a row packed with
-  `forceIntegerToFloat`-style settings decoded as if it were a wire uint —
-  the Python decoder already refused the same bytes, and the two SDKs
-  disagreed on malformed input. A byte-level walk over the payload's known
-  positions (id, created_height, and the array form of each fixed byte
-  field) throws before the value decode; bytes inside a bin stay data, and
-  fields past the five-field prefix remain unconstrained future-optional
-  extensions. Raw-wire tests pin the rejection at both float widths in TS
-  and Python.
+- TypeScript and Python reads reject integral MessagePack floats wherever the
+  wire model has an integer (#189, #221). The float families (`0xca`/`0xcb`)
+  decode into the same JavaScript number as an integer, so a row packed with
+  `forceIntegerToFloat`-style settings decoded as if it were a wire uint; the
+  Python decoder keeps them distinct but its `int(...)` coercions truncated
+  them, so the two SDKs disagreed on the same bytes. Every gateway msgpack read
+  now runs one strict, type-preserving preflight in the Rust core
+  (`proof_trading_sdk::msgpack`, exposed to TypeScript as the WASM
+  `reject_floats` and to Python through the PyO3 native module). It refuses
+  float families, extensions, non-UTF-8 strings, duplicate map keys, over-deep
+  nesting and trailing bytes; bytes inside a bin stay data. The value decode
+  runs first, so a payload the decoder already refuses keeps its own
+  diagnostic. Reads now initialise the WASM core, so a read-only caller that
+  bypasses the client must `await ready()` first (the client does it on the
+  first read).
 
 - **Rust crate 4.1.0 → 4.1.1** — `MarketsSnapshotClient::read_bound_inventory`
   now reads a whole new bracket, up to three attempts in all and 150 ms apart
