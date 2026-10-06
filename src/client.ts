@@ -24,7 +24,12 @@ import {
   historySearchParams,
 } from "./history.js";
 import { toWasmFields } from "./codec-adapter.js";
-import { signAndEncode, encodePayloadBytes, encodeSignedTx } from "./codec.js";
+import {
+  signAndEncode,
+  encodePayloadBytes,
+  encodeSignedTx,
+  rejectFloats,
+} from "./codec.js";
 import { decodeAccountState, type AccountState } from "./account-state.js";
 import {
   fetchFinancialState,
@@ -1257,12 +1262,26 @@ export class ExchangeClient {
       : fetchApiJson(`${this.apiUrl}${nodePath}`);
   }
 
+  /** Decode gateway MessagePack bytes after the authoritative strict preflight
+   *  (`rejectFloats`). Reads now route through the WASM core, so this
+   *  initialises it on first use. Unlike `ready()` it does not resolve the
+   *  chain-id binding, which a read never needs. */
+  private async strictDecode(bytes: Uint8Array): Promise<unknown> {
+    await initWasm();
+    // Decode first, then preflight: a payload the decoder already refuses
+    // keeps its own message; the preflight only adds rejections for bytes that
+    // decode cleanly.
+    const value = msgpackDecoder.decode(bytes);
+    rejectFloats(bytes);
+    return value;
+  }
+
   async queryOrderbook(market: number): Promise<Orderbook> {
     const json = await fetchApiJson(
       `${this.readBaseUrl}/v1/orderbook/${market}`,
     );
     const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes) as [unknown[], unknown[]];
+    const raw = (await this.strictDecode(bytes)) as [unknown[], unknown[]];
     const parseLevel = (arr: unknown[]): OrderbookLevel => ({
       price: BigInt(arr[0] as number | bigint),
       totalQty: BigInt(arr[1] as number | bigint),
@@ -1287,7 +1306,7 @@ export class ExchangeClient {
   async queryMarkets(): Promise<MarketConfig[]> {
     const json = await fetchApiJson(`${this.readBaseUrl}/v1/markets`);
     const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes) as unknown[][];
+    const raw = (await this.strictDecode(bytes)) as unknown[][];
     return raw.map((m) => decodeMarketConfig(m));
   }
 
@@ -1303,7 +1322,7 @@ export class ExchangeClient {
         "governance decode: events response has no encoded-data envelope",
       );
     }
-    const raw = msgpackDecoder.decode(fromBase64(json.data));
+    const raw = await this.strictDecode(fromBase64(json.data));
     if (!Array.isArray(raw)) {
       throw new Error("governance decode: events is not an array");
     }
@@ -1327,7 +1346,7 @@ export class ExchangeClient {
         "governance decode: event response has no encoded-data envelope",
       );
     }
-    const raw = msgpackDecoder.decode(fromBase64(json.data));
+    const raw = await this.strictDecode(fromBase64(json.data));
     if (raw == null) return null;
     return decodeEventInfo(raw);
   }
@@ -1345,7 +1364,7 @@ export class ExchangeClient {
     const path = `/v1/triggers/${hex.toLowerCase()}`;
     const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
     const bytes = fromBase64(requireEncodedData(json, path));
-    return decodePositionTriggerInfos(msgpackDecoder.decode(bytes));
+    return decodePositionTriggerInfos(await this.strictDecode(bytes));
   }
 
   /** Read the complete governed trigger-market policy registry. Missing
@@ -1354,7 +1373,7 @@ export class ExchangeClient {
     const path = "/v1/triggers/markets";
     const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
     const bytes = fromBase64(requireEncodedData(json, path));
-    return decodeTriggerMarketConfigInfos(msgpackDecoder.decode(bytes));
+    return decodeTriggerMarketConfigInfos(await this.strictDecode(bytes));
   }
 
   /** Read the fail-closed next-height trigger admission predicate. Heights
@@ -1389,7 +1408,7 @@ export class ExchangeClient {
     const path = `/v1/oracle/permissions/${market}`;
     const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
     const bytes = fromBase64(requireEncodedData(json, path));
-    return decodeOraclePermissions(msgpackDecoder.decode(bytes), market);
+    return decodeOraclePermissions(await this.strictDecode(bytes), market);
   }
 
   /** Immutable owner-bearing trigger lifecycle history. This always uses the
@@ -1450,7 +1469,7 @@ export class ExchangeClient {
     const bytes = fromBase64(
       requireEncodedData(json, "/v1/admin/signer-registry"),
     );
-    return decodeAdminSignerRegistryInfo(msgpackDecoder.decode(bytes));
+    return decodeAdminSignerRegistryInfo(await this.strictDecode(bytes));
   }
 
   /**
@@ -1463,7 +1482,7 @@ export class ExchangeClient {
   async queryAuthorities(): Promise<AuthoritiesSnapshot> {
     const json = await fetchApiJson(`${this.readBaseUrl}/v1/admin/authorities`);
     const bytes = fromBase64(requireEncodedData(json, "/v1/admin/authorities"));
-    return decodeAuthoritiesSnapshot(msgpackDecoder.decode(bytes));
+    return decodeAuthoritiesSnapshot(await this.strictDecode(bytes));
   }
 
   /**
@@ -1492,7 +1511,7 @@ export class ExchangeClient {
       `${this.readBaseUrl}/v1/proposals${qs ? `?${qs}` : ""}`,
     );
     const bytes = fromBase64(requireEncodedData(json, "/v1/proposals"));
-    return decodeProposalPage(msgpackDecoder.decode(bytes));
+    return decodeProposalPage(await this.strictDecode(bytes));
   }
 
   /** Fetch open orders for an address. Returns an empty array if the
@@ -1508,12 +1527,14 @@ export class ExchangeClient {
     );
     if (!json.data) return [];
     const bytes = fromBase64(json.data as string);
+    await initWasm();
     let decoded: unknown;
     try {
       decoded = msgpackDecoder.decode(bytes);
     } catch {
       return [];
     }
+    rejectFloats(bytes);
     if (!Array.isArray(decoded)) return [];
     return (decoded as unknown[][]).map((order) => ({
       id: BigInt(order[0] as number | bigint),
@@ -1533,7 +1554,7 @@ export class ExchangeClient {
       `/v1/withdrawal/${id}`,
     );
     const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes) as unknown[] | null;
+    const raw = (await this.strictDecode(bytes)) as unknown[] | null;
     if (raw === null) return null;
     return {
       id: BigInt(raw[0] as number | bigint),
@@ -1562,7 +1583,7 @@ export class ExchangeClient {
     const path = `/v1/account/${owner}/state`;
     const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
     return decodeAccountState(
-      msgpackDecoder.decode(fromBase64(requireEncodedData(json, path))),
+      await this.strictDecode(fromBase64(requireEncodedData(json, path))),
       owner,
     );
   }
@@ -1575,7 +1596,7 @@ export class ExchangeClient {
       `/v1/account/${hex}`,
     );
     const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes) as unknown[];
+    const raw = (await this.strictDecode(bytes)) as unknown[];
     const balance = BigInt(raw[0] as number | bigint);
     const positions: PositionInfo[] = ((raw[1] ?? []) as unknown[][]).map(
       (p) => {
@@ -1678,7 +1699,7 @@ export class ExchangeClient {
     const json = await res.json();
     if (json.error) return [];
     const bytes = fromBase64(json.data);
-    const raw = msgpackDecoder.decode(bytes);
+    const raw = await this.strictDecode(bytes);
     if (!Array.isArray(raw)) return [];
     return (raw as unknown[][]).map((row) => ({
       owner: toBytes(row[0]),
