@@ -142,6 +142,26 @@ describe("gateway finality", () => {
     [503, { status: "error", error: "unknown edge failure" }],
     [200, { status: "error", error: "unknown edge failure" }],
     [200, { status: "error", error: "invalid signature", txHash: null }],
+    // A refusal that names a hash, code or height contradicts itself.
+    [
+      200,
+      {
+        status: "refused",
+        error: "x",
+        errorCode: "InvalidRequest",
+        txHash: "A".repeat(64),
+      },
+    ],
+    [503, { status: "refused", error: "x", errorCode: "Overloaded", code: 12 }],
+    [
+      200,
+      {
+        status: "refused",
+        error: "x",
+        errorCode: "InvalidRequest",
+        height: 42,
+      },
+    ],
   ])("reconciles HTTP %i ambiguous envelope %j", async (status, body) => {
     const fetch = vi
       .fn()

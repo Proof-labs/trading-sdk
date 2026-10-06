@@ -797,6 +797,17 @@ export class ExchangeClient {
           events: stated.events,
         });
       case "refused":
+        // A refusal naming a hash, code or height contradicts itself, so it
+        // proves nothing about whether the tx was broadcast.
+        if (
+          stated.txHash !== undefined ||
+          stated.code !== undefined ||
+          stated.height !== undefined
+        )
+          return txTimeout(
+            txHash,
+            "gateway refusal contradicts itself; reconcile by hash",
+          );
         // Nothing was broadcast, so there is nothing to reconcile.
         return txTransportError(
           res.status === 200 ? 1 : res.status,
