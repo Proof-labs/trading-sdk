@@ -127,6 +127,11 @@ const result = await client.submitTx({
 console.log(result); // { code: 0, hash: "…" } on success
 ```
 
+> Reads decode MessagePack through the same WASM core as signing (a strict,
+> type-preserving preflight runs before the value decode), so even a read-only
+> client loads the WASM module on its first read. `await client.ready()`
+> remains optional and additionally pre-resolves the chain-id binding.
+
 ## Unit Conventions
 
 | Field               | Unit                 | Example                       |
