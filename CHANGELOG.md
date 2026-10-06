@@ -7,6 +7,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Event reads decode both engine shapes of the stored event record: the
+  two-book record and the one-book record of an engine with one binary book
+  per event (exchange #974), told apart by the field after the Yes book (a
+  number is the No book, a string is the question). So a client follows a
+  chain across the upgrade that retires the No book. In TypeScript,
+  `EventInfo.ebnMarket` is optional and `undefined` on a one-book chain
+  (`decodeEventInfo`, `queryEvents`, `queryEvent` and the markets snapshot).
+  **Breaking in Rust:** `MarketsSnapshot.events` is a list of the new
+  `SnapshotEvent`, whose `ebn_market` is an `Option`. A two-book record with
+  no No book is refused, in both languages. The tolerance is temporary: a
+  later release decodes the one-book shape only.
+
 ### Added
 
 - The error tables gain `OracleVerdictUnavailable` (code 77),
