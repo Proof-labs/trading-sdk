@@ -128,7 +128,7 @@ describe("gateway finality", () => {
     [200, { status: "error", error: "invalid action parameters" }],
     [200, { status: "error", error: "x", errorCode: "Overloaded" }],
     // A stated verdict without its code is not a verdict.
-    [200, { status: "rejected", error: "invalid signature" }],
+    [200, { status: "error", error: "invalid signature" }],
     [200, { status: "error", error: "unknown", events: [] }],
     [200, { status: "error", error: "unknown", code: "12" }],
     [503, { status: "error", error: "invalid signature" }],
@@ -166,7 +166,7 @@ describe("gateway finality", () => {
 
   it("reads a hashless engine code as the engine's verdict", async () => {
     const fetch = vi.fn(async () =>
-      json({ status: "rejected", error: "invalid signature", code: 17 }),
+      json({ status: "error", error: "invalid signature", code: 17 }),
     );
     vi.stubGlobal("fetch", fetch);
     const client = external();

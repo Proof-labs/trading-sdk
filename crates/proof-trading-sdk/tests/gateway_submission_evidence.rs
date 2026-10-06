@@ -261,16 +261,13 @@ async fn bodies_without_a_stated_refusal_remain_unresolved() {
             200,
             json!({"status":"refused","errorCode":"InvalidRequest","code":17}),
         ),
-        (
-            200,
-            json!({"status":"rejected","errorCode":"InvalidRequest"}),
-        ),
-        (200, json!({"status":"rejected","code":0})),
+        (200, json!({"status":"error","errorCode":"InvalidRequest"})),
+        (200, json!({"status":"error","code":0})),
         (200, json!({"status":"pending","errorCode":"TimedOut"})),
         (200, json!({"status":"ok","code":0})),
         (
             503,
-            json!({"status":"rejected","error":"invalid signature","code":17}),
+            json!({"status":"error","error":"invalid signature","code":17}),
         ),
     ] {
         let (client, task) = json_fixture(status, body, "").await;
@@ -318,7 +315,7 @@ async fn exact_hash_execution_outcomes_keep_the_existing_contract() {
             }),
         ),
         (
-            json!({"status":"rejected","txHash":hash.to_string(),"code":21,"height":12}),
+            json!({"status":"error","txHash":hash.to_string(),"code":21,"height":12}),
             SubmissionOutcome::Committed(CommittedReceipt {
                 hash,
                 height: BlockHeight::new(12).expect("a positive fixture height"),
@@ -326,7 +323,7 @@ async fn exact_hash_execution_outcomes_keep_the_existing_contract() {
             }),
         ),
         (
-            json!({"status":"rejected","txHash":hash.to_string(),"code":21}),
+            json!({"status":"error","txHash":hash.to_string(),"code":21}),
             SubmissionOutcome::CheckTxRejected {
                 hash,
                 code: 21.try_into().unwrap(),
@@ -338,7 +335,7 @@ async fn exact_hash_execution_outcomes_keep_the_existing_contract() {
         ),
         // Refused before broadcast with the engine's own code: no txHash.
         (
-            json!({"status":"rejected","error":"invalid signature","code":17}),
+            json!({"status":"error","error":"invalid signature","code":17}),
             SubmissionOutcome::CheckTxRejected {
                 hash,
                 code: 17.try_into().unwrap(),
@@ -476,14 +473,12 @@ async fn malformed_foreign_hash_and_redirect_responses_keep_local_hash_and_redac
         ),
         (
             200,
-            r#"{"status":"rejected","error":"invalid signature","code":17,"txHash":"broken"}"#
-                .into(),
+            r#"{"status":"error","error":"invalid signature","code":17,"txHash":"broken"}"#.into(),
             "",
         ),
         (
             200,
-            r#"{"status":"rejected","status":"rejected","error":"invalid signature","code":17}"#
-                .into(),
+            r#"{"status":"error","status":"error","error":"invalid signature","code":17}"#.into(),
             "",
         ),
         (503, format!("malformed response containing {KEY}"), ""),

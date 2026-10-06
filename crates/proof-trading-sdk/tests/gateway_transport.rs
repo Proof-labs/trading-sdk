@@ -122,8 +122,7 @@ async fn exact_signed_request_and_committed_execution_are_distinct_from_permissi
     let (url, task) = server(
         response(
             200,
-            &json!({"status":"rejected","txHash":hash.to_string(),"code":21,"height":17})
-                .to_string(),
+            &json!({"status":"error","txHash":hash.to_string(),"code":21,"height":17}).to_string(),
             "",
         ),
         Duration::ZERO,
@@ -161,7 +160,7 @@ async fn submit_classifies_checktx_ambiguous_and_pre_admission_without_retry() {
     let hash = TxHash::of_signed_bytes(bytes);
     for (body, expected) in [
         (
-            json!({"status":"rejected","txHash":hash.to_string(),"code":21}),
+            json!({"status":"error","txHash":hash.to_string(),"code":21}),
             SubmissionOutcome::CheckTxRejected {
                 hash,
                 code: 21.try_into().unwrap(),

@@ -649,8 +649,8 @@ impl GatewayClient {
                 },
                 _ if !body.status.is_success() => return Err(http_error()),
                 // `height` says the tx reached a block; `ok` is a clean
-                // execution, `rejected` there is the engine failing it.
-                ("ok" | "rejected", Some(code), Some(height))
+                // execution, `error` there is the engine failing it.
+                ("ok" | "error", Some(code), Some(height))
                     if has_hash && (read.status == "ok") == (code == 0) =>
                 {
                     SubmissionOutcome::Committed(CommittedReceipt {
@@ -659,7 +659,7 @@ impl GatewayClient {
                         height: BlockHeight::new(height).ok_or_else(invalid)?,
                     })
                 }
-                ("rejected", Some(code), None) => SubmissionOutcome::CheckTxRejected {
+                ("error", Some(code), None) => SubmissionOutcome::CheckTxRejected {
                     hash,
                     code: NonZeroU32::new(code).ok_or_else(invalid)?,
                 },

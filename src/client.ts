@@ -786,8 +786,9 @@ export class ExchangeClient {
     const stated = gatewayBody.json as GatewayResponseBody | undefined;
     switch (stated?.status) {
       case "ok":
-      case "rejected":
-        if (typeof stated.code !== "number") break;
+      case "error":
+        // An engine verdict always carries its code and arrives as a 200.
+        if (res.status !== 200 || typeof stated.code !== "number") break;
         return txFromEngineCode(stated.code, {
           hash: stated.txHash ?? txHash,
           height: stated.height,
