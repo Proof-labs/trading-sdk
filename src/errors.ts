@@ -119,8 +119,11 @@ export enum ExecErrorCode {
   BridgeReceiptMismatch = 74,
   WithdrawalBelowMinimum = 75,
   WithdrawalTerminalGated = 76,
+  /** The block has no certified oracle-policy verdict for the market, so a
+   *  mark-dependent action is refused until a later block certifies a price
+   *  — the market is stale or unpriceable this block, not misconfigured. */
   OracleVerdictUnavailable = 77,
-  // 78-81 are reserved on the wire for oracle-observation and oracle-policy errors.
+  // 78-81 remain reserved on the wire for oracle-policy errors.
   OracleGuardUnset = 82,
   SubAccountNotFound = 83,
   SubAccountAlreadyExists = 84,
@@ -140,6 +143,12 @@ export enum ExecErrorCode {
   MarkUnavailable = 97,
   /** F2 trigger expansion: the order cannot carry attached SL/TP limbs. */
   TriggerOrderIncompatible = 98,
+  /** The withdrawal would push the account's rolling-window outflow past
+   *  the configured per-account cap; capacity returns gradually as in-window
+   *  outflows age out. */
+  WithdrawalLimitExceeded = 99,
+  /** The account already holds the maximum number of resting orders. */
+  AccountOrderCapReached = 100,
   InternalError = 255,
 }
 
@@ -445,7 +454,7 @@ const TABLE: Record<number, ExecErrorInfo> = {
   77: {
     name: "OracleVerdictUnavailable",
     description:
-      "oracle policy has no certified verdict for this market in this block (stale, unpriceable or not yet committed); retry in a later block",
+      "the oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed) — mark-dependent actions are refused until a later block certifies a price",
   },
   82: {
     name: "OracleGuardUnset",
@@ -514,6 +523,16 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "TriggerOrderIncompatible",
     description:
       "order cannot carry attached SL/TP (reduce-only order, ineligible market, or inactive feature)",
+  },
+  99: {
+    name: "WithdrawalLimitExceeded",
+    description:
+      "the withdrawal would push the account's rolling-window outflow past the configured per-account cap — the attempted debit, the cap, and when the oldest in-window outflow expires are in the log; capacity returns as in-window outflows age out",
+  },
+  100: {
+    name: "AccountOrderCapReached",
+    description:
+      "the account already holds the maximum number of resting orders — cancel one before placing another",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

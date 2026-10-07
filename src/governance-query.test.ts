@@ -778,6 +778,31 @@ describe("decodeEventInfo (E1 golden vector)", () => {
     ]);
   });
 
+  // The one-book shape: the same event as the engine pins it in query.rs
+  // (EVENT_INFO_GOLDEN_VECTOR), with no No book. DO NOT edit by hand.
+  const ONE_BOOK =
+    "9acd02bcce00011170b757696c6c2074686520466564206375742072617465733fcf0000019df90ef400cd03e8a754726164696e67cf0000019dc95fec0000c090";
+
+  it("decodes the one-book record with no No book", () => {
+    const info = decodeEventInfo(decodeVector(ONE_BOOK));
+    expect(info.eventId).toBe(700);
+    expect(info.ebyMarket).toBe(70000);
+    expect(info.ebnMarket).toBeUndefined();
+    expect(info.question).toBe("Will the Fed cut rates?");
+    expect(info.settlementMs).toBe(1778000000000n);
+    expect(info.status).toEqual({ kind: "Trading" });
+    expect(info.resolvedMs).toBe(0n);
+    expect(info.oracleSource).toBeUndefined();
+    expect(info.attachedConditionals).toEqual([]);
+  });
+
+  it("refuses a two-book record whose No book is missing", () => {
+    // A nil where the two-book shape keeps the No book is neither shape.
+    expect(() =>
+      decodeEventInfo(decodeVector(GOLDEN.replace("ce00011171", "c0"))),
+    ).toThrow(/ebnMarket/);
+  });
+
   it("tolerates the pre-attachment ten-field record", () => {
     const info = decodeEventInfo(
       decodeVector(GOLDEN.slice(0, -2).replace(/^9b/, "9a")),

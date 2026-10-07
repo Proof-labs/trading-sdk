@@ -9,7 +9,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rmpv::Value;
 use serde::{Deserialize, Serialize};
 
-use crate::types::{EventInfo, MarketConfig};
+use crate::types::{AttachedConditional, EventId, EventOracleSource, EventStatus, MarketConfig};
 
 /// Whole HTTP response limit, before decoding its base64 envelope.
 pub const MAX_SNAPSHOT_BYTES: usize = 1024 * 1024;
@@ -26,8 +26,35 @@ pub struct MarketsSnapshot {
     pub markets: Vec<MarketConfig>,
     /// Every event with its binaries and its attached conditionals; the
     /// stored `EventInfo` record, no display view.
-    pub events: Vec<EventInfo>,
+    pub events: Vec<SnapshotEvent>,
 }
+
+/// The stored event record in either engine shape. An engine with one
+/// binary book per event stores no No book (`ebn_market` is `None`); an
+/// earlier engine stores both books. Decoding both lets a client follow a
+/// chain across the upgrade that retires the No book.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SnapshotEvent {
+    pub event_id: EventId,
+    /// The event's binary book, priced in Yes.
+    pub eby_market: crate::types::MarketId,
+    /// The No book, on an engine that still has one.
+    pub ebn_market: Option<crate::types::MarketId>,
+    pub question: String,
+    pub settlement_ms: u64,
+    pub resolution_window_ms: u64,
+    pub status: EventStatus,
+    pub created_ms: u64,
+    pub resolved_ms: u64,
+    pub oracle_source: Option<EventOracleSource>,
+    pub attached_conditionals: Vec<AttachedConditional>,
+}
+
+/// Event-row width in the two-book shape; the one-book shape is one less.
+const TWO_BOOK_EVENT_WIDTH: usize = 11;
+/// Position of the No book in a two-book row, and of the question in a
+/// one-book row.
+const NO_BOOK_FIELD: usize = 2;
 
 /// Deliberately excludes request URLs, response bodies and provider credentials.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,7 +122,7 @@ pub fn decode_snapshot(
     validate_value(&value)?;
     let top = tuple(&mut value, 4)?;
     top.truncate(4);
-    for (slot, width) in [(2, 25), (3, 11)] {
+    for (slot, width) in [(2, 25), (3, TWO_BOOK_EVENT_WIDTH)] {
         let rows = match top.get_mut(slot) {
             Some(Value::Array(rows)) => rows,
             _ => return Err(SnapshotError::Malformed),
@@ -104,6 +131,9 @@ pub fn decode_snapshot(
             return Err(SnapshotError::TooLarge);
         }
         for row in rows {
+            if slot == 3 {
+                normalize_one_book_event(row)?;
+            }
             let fields = tuple(row, width)?;
             fields.truncate(width);
             if slot == 3 {
@@ -142,6 +172,19 @@ pub fn decode_snapshot(
         }
     }
     Ok(snapshot)
+}
+
+/// A one-book event row has the question where a two-book row has its No
+/// book: insert an absent No book there so both shapes decode as one.
+fn normalize_one_book_event(row: &mut Value) -> Result<(), SnapshotError> {
+    let fields = tuple(row, TWO_BOOK_EVENT_WIDTH - 1)?;
+    if matches!(fields[NO_BOOK_FIELD], Value::String(_)) {
+        fields.insert(NO_BOOK_FIELD, Value::Nil);
+    } else if fields[NO_BOOK_FIELD].is_nil() {
+        // A two-book row never carries an absent No book.
+        return Err(SnapshotError::Malformed);
+    }
+    Ok(())
 }
 
 fn tuple(value: &mut Value, minimum: usize) -> Result<&mut Vec<Value>, SnapshotError> {
