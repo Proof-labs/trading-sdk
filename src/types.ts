@@ -1431,6 +1431,12 @@ export interface OrderCancelledEvent {
 export type CancelReason =
   "user_requested" | "expired" | "admin_force" | "liquidation" | "upgrade";
 
+// ── Engine-upgrade journal events ──────────────────────────────────────────
+// An upgrade's migration reports its effects as one group of events in the
+// first block after activation. The group may also carry marker events that
+// frame it; add them here beside OrderMigrated and PositionMigrated, and to
+// the ExchangeEvent union. Readers must ignore event types they do not know.
+
 /**
  * Emitted in the first block after an engine upgrade that moved a resting
  * order to another book, keeping its id, owner, unfilled quantity and queue

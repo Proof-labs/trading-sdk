@@ -29,6 +29,17 @@ def hex_to_owner(hex_str: str) -> bytes:
     return bytes.fromhex(hex_str.removeprefix("0x"))
 
 from proof_trading_sdk import actions
+from proof_trading_sdk.binary import (  # noqa: F401
+    BINARY_PRICE_MAX,
+    BinaryPositionView,
+    BinaryPriceError,
+    binary_position_view,
+    buy_no,
+    no_order,
+    sell_no,
+    yes_limb,
+    yes_side,
+)
 from proof_trading_sdk.actions import (  # noqa: F401
     Action,
     ActionType,
@@ -137,6 +148,15 @@ __all__ = [
     "AmendOrder",
     "ClosePosition",
     "TriggerLimb",
+    "BINARY_PRICE_MAX",
+    "BinaryPositionView",
+    "BinaryPriceError",
+    "binary_position_view",
+    "buy_no",
+    "no_order",
+    "sell_no",
+    "yes_limb",
+    "yes_side",
     "SetPositionTriggers",
     "CancelPositionTriggers",
     "SetTriggerMarketConfig",
