@@ -47,6 +47,46 @@ describe("convenience action builders", () => {
     expect(action.data.owner).toEqual(owner);
   });
 
+  it("buyNo places the Yes sell at $1 - price on the event's book", async () => {
+    const { client, owner } = clientWithKey();
+    const spy = captureSubmit(client);
+    await client.buyNo({ market: 70_000, price: 400_000n, quantity: 3n });
+    const action = spy.mock.calls[0][0];
+    expect(action.type).toBe("PlaceOrder");
+    expect(action.data).toMatchObject({
+      market: 70_000,
+      side: Side.Sell,
+      price: 600_000n,
+      quantity: 3n,
+    });
+    expect(action.data.owner).toEqual(owner);
+  });
+
+  it("sellNo with reduceOnly places a reduce-only Yes buy", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+    await client.sellNo({
+      market: 70_000,
+      price: 300_000n,
+      quantity: 3n,
+      reduceOnly: true,
+    });
+    expect(spy.mock.calls[0][0].data).toMatchObject({
+      side: Side.Buy,
+      price: 700_000n,
+      reduceOnly: true,
+    });
+  });
+
+  it("buyNo at $1 is refused before anything is sent", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+    await expect(
+      client.buyNo({ market: 70_000, price: 1_000_000n, quantity: 1n }),
+    ).rejects.toThrow(/Yes price of 0/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("marketOrder maps to MarketOrder with owner", async () => {
     const { client, owner } = clientWithKey();
     const spy = captureSubmit(client);

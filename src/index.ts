@@ -78,6 +78,10 @@ export {
   type ExchangeEvent,
   type OrderPlacedEvent,
   type OrderCancelledEvent,
+  type CancelReason,
+  type OrderMigratedEvent,
+  type PositionMigratedEvent,
+  type UpgradeMigrationReportedEvent,
   type TradeExecutedEvent,
   type PositionUpdatedEvent,
   type PositionClosedEvent,
@@ -164,6 +168,18 @@ export {
 } from "./triggers.js";
 
 export { validateSetOracleGuards } from "./oracle-guards.js";
+
+export {
+  BINARY_PRICE_MAX,
+  BinaryPriceError,
+  type BinaryErrorName,
+  type BinaryPositionView,
+  type NoOrder,
+  binaryPositionView,
+  yesLimb,
+  yesOrder,
+  yesSide,
+} from "./binary.js";
 
 export {
   decodePositionTriggerHistoryPage,

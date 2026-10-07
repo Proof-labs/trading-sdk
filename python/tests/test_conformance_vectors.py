@@ -118,3 +118,72 @@ class TestNonceVectors:
             assert out == c["expect"], f"nonce.ndjson:{n} case {c['case']!r}"
             seen += 1
         assert seen > 0, "no nonce vectors loaded"
+
+
+def _limb_from(value):
+    return None if value is None else pts.TriggerLimb(**value)
+
+
+class TestBinaryVectors:
+    def test_no_orders_and_views_match_core(self):
+        seen = 0
+        for n, c in _cases("binary.ndjson"):
+            where = f"binary.ndjson:{n} case {c['case']!r}"
+            if c["kind"] == "no_order":
+                i = c["input"]
+                args = dict(
+                    side=i["side"],
+                    market=i["market"],
+                    owner=bytes(i["owner"]),
+                    price=i["price"],
+                    quantity=i["quantity"],
+                    client_order_id=i["client_order_id"],
+                    post_only=i["post_only"],
+                    reduce_only=i["reduce_only"],
+                    time_in_force=i["time_in_force"],
+                )
+                expect = c["expect"]
+                if "error" in expect:
+                    try:
+                        pts.no_order(
+                            **args,
+                            stop_loss=_limb_from(i["stop_loss"]),
+                            take_profit=_limb_from(i["take_profit"]),
+                        )
+                    except pts.BinaryPriceError as error:
+                        assert error.reason == expect["error"]["name"], where
+                    except ValueError:
+                        # A limb at 0 is refused by TriggerLimb itself, before
+                        # the mirror is reached.
+                        assert expect["error"]["name"] == "TriggerPriceOutOfRange", where
+                    else:
+                        raise AssertionError(f"{where}: expected a refusal")
+                else:
+                    order = pts.no_order(
+                        **args,
+                        stop_loss=_limb_from(i["stop_loss"]),
+                        take_profit=_limb_from(i["take_profit"]),
+                    )
+                    fields = order.fields()
+                    fields["owner"] = list(fields["owner"])
+                    assert fields == expect["yes_order"]["fields"], where
+                    payload = _native.encode_action(order.action_type, order.fields())
+                    assert payload.hex() == expect["yes_order"]["payload_hex"], where
+            else:
+                expect = c["expect"]
+                if "error" in expect:
+                    try:
+                        pts.binary_position_view(c["side"], c["entry_price"], c["size"])
+                    except pts.BinaryPriceError as error:
+                        assert error.reason == expect["error"]["name"], where
+                    else:
+                        raise AssertionError(f"{where}: expected a refusal")
+                else:
+                    view = pts.binary_position_view(c["side"], c["entry_price"], c["size"])
+                    assert (view.outcome, view.entry_price, view.size) == (
+                        expect["view"]["outcome"],
+                        expect["view"]["entry_price"],
+                        expect["view"]["size"],
+                    ), where
+            seen += 1
+        assert seen > 0

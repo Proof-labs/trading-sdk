@@ -7,6 +7,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Trading No on an event's one binary book.** An event has one book priced
+  in Yes; a long No at `q` is a short Yes at `$1 − q`. TypeScript:
+  `ExchangeClient.buyNo` and `sellNo` place the Yes order at `$1 − price`,
+  carrying reduce-only, post-only, client order id and time in force, with
+  No-priced `stopLoss`/`takeProfit` mirrored in the same role; `yesOrder`,
+  `yesLimb`, `yesSide`, `binaryPositionView`, `BINARY_PRICE_MAX` and
+  `BinaryPriceError` are exported. Python: `buy_no`, `sell_no`, `no_order`,
+  `yes_limb`, `yes_side`, `binary_position_view`. Rust: the `binary` module
+  (`yes_order`, `yes_limb`, `binary_position_view`). A No price of 0 or `$1`
+  is refused client-side. A new conformance family, `binary.ndjson`, pins the
+  translation in all three languages.
+- **The one-book upgrade's events.** `ExchangeEvent` gains
+  `UpgradeMigrationReported` (opens the migration group and counts the events
+  after it), `OrderMigrated` and `PositionMigrated`, and the new `CancelReason`
+  type names the engine's cancel reasons, including `upgrade`. Event readers
+  pass unknown event types through, so further upgrade-journal events do not
+  break a read.
+
 ### Breaking changes
 
 - The gateway's `status` is read as stated; nothing is inferred

@@ -9,6 +9,7 @@
 
 pub use proof_wire::{abci_event, codec, crypto, triggers, types};
 
+pub mod binary;
 pub mod errors;
 #[cfg(feature = "gateway")]
 pub mod gateway;
