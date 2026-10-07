@@ -1413,7 +1413,9 @@ export interface OrderCancelledEvent {
   market: string;
   /** Hex-encoded owner address. */
   owner: string;
-  /** Cancellation reason (e.g., "user_requested", "liquidation"). */
+  /** Cancellation reason; one of {@link CancelReason}. `"upgrade"` means an
+   *  engine upgrade moved the order to another book and its converted
+   *  order would have crossed it. */
   reason: string;
   /** Client-assigned order ID, or "0" when absent. */
   clientOrderId: string;
@@ -1423,6 +1425,57 @@ export interface OrderCancelledEvent {
   remainingQuantity: string;
   /** Cumulative maker quantity filled before cancellation. */
   filledQuantity: string;
+}
+
+/** Why the engine cancelled an order (`OrderCancelledEvent.reason`). */
+export type CancelReason =
+  "user_requested" | "expired" | "admin_force" | "liquidation" | "upgrade";
+
+/**
+ * Emitted in the first block after an engine upgrade that moved a resting
+ * order to another book, keeping its id, owner, unfilled quantity and queue
+ * place. On the move to one binary book per event, a No order at `q` becomes
+ * the opposite Yes order at `$1 − q` on the event's book.
+ */
+export interface OrderMigratedEvent {
+  type: "OrderMigrated";
+  /** Engine-assigned order ID, unchanged by the move. */
+  orderId: string;
+  /** Hex-encoded owner address. */
+  owner: string;
+  /** The book the order left. */
+  fromMarket: string;
+  /** The book the order now rests on. */
+  toMarket: string;
+  /** Side on the new book ("Buy" or "Sell"). */
+  side: string;
+  /** Limit price on the new book in micro-USDC. */
+  price: string;
+}
+
+/**
+ * Emitted in the first block after an engine upgrade that moved a position
+ * to another book. A No position at entry `e` is the opposite Yes position at
+ * `$1 − e` (`side`, `entryPrice`, `size`); when it nets against the account's
+ * Yes position, that position reports its own `PositionUpdated` or
+ * `PositionClosed`.
+ */
+export interface PositionMigratedEvent {
+  type: "PositionMigrated";
+  /** Hex-encoded owner address. */
+  owner: string;
+  /** The book the position left. */
+  fromMarket: string;
+  /** The book the position moved to. */
+  toMarket: string;
+  /** Side of the moved position on the new book ("Buy" or "Sell"). */
+  side: string;
+  /** Entry price of the moved position in micro-USDC. */
+  entryPrice: string;
+  /** Size of the moved position in contracts. */
+  size: string;
+  /** Cash the netting credited (positive) or debited (negative), in micro-USDC. */
+  cashDelta: string;
 }
 
 /** Emitted when a trade (fill) is executed between a maker and taker. */
@@ -1670,7 +1723,9 @@ export type ExchangeEvent =
   | AgentApprovedEvent
   | AgentRevokedEvent
   | MarketOrderProcessedEvent
-  | OrderbookLevelUpdatedEvent;
+  | OrderbookLevelUpdatedEvent
+  | OrderMigratedEvent
+  | PositionMigratedEvent;
 
 // ---------------------------------------------------------------------------
 // Result types

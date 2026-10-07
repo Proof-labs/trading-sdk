@@ -105,6 +105,8 @@ import {
 } from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
 import { readMarketsSnapshot } from "./market-snapshot.js";
+import { yesOrder, type NoOrder } from "./binary.js";
+import { Side } from "./types.js";
 import type { MarketsSnapshot } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import {
@@ -1176,6 +1178,27 @@ export class ExchangeClient {
       type: "MarketOrder",
       data: { ...params, owner: this.requireOwner() },
     });
+  }
+
+  /**
+   * Buy No on an event's binary book: places the Yes sell at `$1 − price`.
+   * `market` is the event's book (`EventInfo.ebyMarket`); `price` and any
+   * `stopLoss`/`takeProfit` trigger prices are No prices. Reduce-only,
+   * post-only, client order id and time in force carry over unchanged.
+   * Throws {@link BinaryPriceError} for a No price with no Yes mirror (0 or
+   * `$1`).
+   */
+  async buyNo(params: Omit<NoOrder, "side">): Promise<TxResult> {
+    return this.placeOrder(yesOrder({ ...params, side: Side.Buy }));
+  }
+
+  /**
+   * Sell No on an event's binary book: places the Yes buy at `$1 − price`.
+   * Selling No that an account holds is a reduce-only Yes buy: pass
+   * `reduceOnly: true` to close without flipping. See {@link ExchangeClient.buyNo}.
+   */
+  async sellNo(params: Omit<NoOrder, "side">): Promise<TxResult> {
+    return this.placeOrder(yesOrder({ ...params, side: Side.Sell }));
   }
 
   /** Cancel a resting order by its engine-assigned order ID. */

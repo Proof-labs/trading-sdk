@@ -144,3 +144,49 @@ it("keeps response reads on ExchangeClient and excludes redundant or obsolete AP
   expect("impactMarkets" in client.reads()).toBe(false);
   expect("impactMarket" in client.reads()).toBe(false);
 });
+
+import {
+  BinaryPriceError as BarrelBinaryPriceError,
+  yesOrder as barrelYesOrder,
+  type CancelReason,
+  type ExchangeEvent,
+  type OrderMigratedEvent,
+  type PositionMigratedEvent,
+} from "./index.js";
+
+describe("public barrel: one-book events and No helpers", () => {
+  it("surfaces the upgrade's migration events in the event union", () => {
+    const moved: OrderMigratedEvent = {
+      type: "OrderMigrated",
+      orderId: "8",
+      owner: "aa",
+      fromMarket: "70001",
+      toMarket: "70000",
+      side: "Sell",
+      price: "550000",
+    };
+    const position: PositionMigratedEvent = {
+      type: "PositionMigrated",
+      owner: "aa",
+      fromMarket: "70001",
+      toMarket: "70000",
+      side: "Sell",
+      entryPrice: "600000",
+      size: "40",
+      cashDelta: "-12",
+    };
+    const events: ExchangeEvent[] = [moved, position];
+    const reason: CancelReason = "upgrade";
+    expect(events.map((e) => e.type)).toEqual([
+      "OrderMigrated",
+      "PositionMigrated",
+    ]);
+    expect(reason).toBe("upgrade");
+  });
+
+  it("re-exports the No helpers", () => {
+    expect(() =>
+      barrelYesOrder({ market: 1, side: 1, price: 0n, quantity: 1n }),
+    ).toThrow(BarrelBinaryPriceError);
+  });
+});
