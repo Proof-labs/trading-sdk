@@ -24,6 +24,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reconcile answers, but reconciles its refusals by hash instead of returning
   them as transport errors.
 
+### Added
+
+- Oracle permission reads decode the committed verdict of exchange#831
+  (primary with fallback, DEC-219) in both layouts. The fourteen-field
+  format-3 read appends `selected` (`"Primary"` / `"Fallback"`, or null) and a
+  `diagnostics` u8 bitset: `OnFallback` (bit 0), `PrimaryRefusedDivergence`
+  (1), `DivergenceUnchecked` (2), `FallbackUnusable` (3). The twelve-field
+  format-2 read of earlier nodes still decodes, with `selected` null. The
+  TypeScript `CommittedOracleVerdict` gains `format`, `selected`,
+  `diagnostics`, `diagnosticFlags` and `faultReasons`, and exports
+  `ORACLE_FAULT_BITS` and `ORACLE_DIAGNOSTIC_BITS`. The Rust
+  `CommittedVerdict` gains `format`, `selected` and `diagnostics`, with
+  `fault_reasons()` and `diagnostic_flags()`. Both layouts share one
+  fault-bit layout; `Disagreement` (bit 7) and `PairTimeMismatch` (bit 13)
+  keep their bits but are no longer produced. A format-3 verdict is refused
+  when its selected slot, source mask, diagnostics and fault word contradict
+  the engine's selection rules. Vectors captured from the exchange encoding
+  are in `conformance/oracle-permissions-committed.ndjson`. Additive: every
+  read an earlier SDK accepted still decodes the same way, and the
+  proof-wire pin (v4.1.0), codec and signing bytes are unchanged.
+
 ### Changed
 
 - Event reads decode both engine shapes of the stored event record: the
@@ -37,6 +58,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SnapshotEvent`, whose `ebn_market` is an `Option`. A two-book record with
   no No book is refused, in both languages. The tolerance is temporary: a
   later release decodes the one-book shape only.
+
+### Fixed
+
+- `ReferenceUnavailable`, the current exchange name of the old
+  `AnchorUnavailable` reason, is an accepted committed-verdict reason; a
+  verdict carrying it used to be refused. `AnchorUnavailable` is still
+  accepted from older nodes.
 
 ## [7.0.0] — 2026-10-06
 

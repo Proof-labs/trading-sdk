@@ -18,7 +18,15 @@ export interface OraclePolicySource {
 }
 
 export type OracleVerdictStatus = "Fresh" | "Stale" | "Unpriceable";
-const reasons = [
+
+/**
+ * Fault bits of the committed verdict, in exchange `ReasonFlags::FAULTS`
+ * order: bit `i` is `ORACLE_FAULT_BITS[i]`. The layout is shared by both
+ * verdict formats. `Disagreement` (bit 7) and `PairTimeMismatch` (bit 13) are
+ * no longer produced once the primary-with-fallback policy (exchange#831) is
+ * in force; they keep their positions only so the encoding stays stable.
+ */
+export const ORACLE_FAULT_BITS = [
   "InvalidPolicy",
   "UpdateLimitExceeded",
   "ClockRegression",
@@ -27,30 +35,69 @@ const reasons = [
   "SessionClosed",
   "BadQuality",
   "Disagreement",
-  "AnchorUnavailable",
+  "ReferenceUnavailable",
   "MovementBound",
   "MissingSource",
   "ExpiredSource",
   "OutsideSession",
   "PairTimeMismatch",
   "RecoveryPending",
-  "Fresh",
 ] as const;
+
+/**
+ * Every reason string a verdict can carry. `AnchorUnavailable` is the name
+ * `ReferenceUnavailable` had before the exchange rename and is still accepted
+ * from nodes that predate it.
+ */
+const reasons = [...ORACLE_FAULT_BITS, "AnchorUnavailable", "Fresh"] as const;
 export type OracleVerdictReason = (typeof reasons)[number];
 
+/** The policy slot that priced: slot 0 is the primary, slot 1 the fallback. */
+export type OracleSelectedSource = "Primary" | "Fallback";
+
+/**
+ * Source-selection diagnostics of a format-3 verdict, in bit order. They are
+ * monitoring signals, not faults: none of them withholds a certificate.
+ */
+export const ORACLE_DIAGNOSTIC_BITS = [
+  "OnFallback",
+  "PrimaryRefusedDivergence",
+  "DivergenceUnchecked",
+  "FallbackUnusable",
+] as const;
+export type OracleVerdictDiagnostic = (typeof ORACLE_DIAGNOSTIC_BITS)[number];
+
 export interface CommittedOracleVerdict {
+  /**
+   * 3 for the fourteen-field primary-with-fallback read (exchange#831), 2 for
+   * the twelve-field read of earlier nodes. Both share one `faults` layout.
+   */
+  format: 2 | 3;
   height: bigint;
   blockTime: bigint;
   status: OracleVerdictStatus;
   reason: OracleVerdictReason;
+  /** Format 3: the selected slot's own price and publish time. */
   certified: { price: bigint; providerTime: bigint } | null;
   eligibleSince: bigint | null;
+  /** Raw u32 fault bitset over `ORACLE_FAULT_BITS`. */
   faults: number;
+  /** `faults` named in bit order. */
+  faultReasons: OracleVerdictReason[];
   validSources: number;
   currentTimes: [bigint | null, bigint | null];
   evidence: [Uint8Array | null, Uint8Array | null];
   lastGood: { price: bigint; providerTime: bigint } | null;
   anchor: { price: bigint | null; coveredMs: bigint; requiredMs: bigint };
+  /**
+   * Format 3: the usable slot chosen by priority, present even when a later
+   * fault withholds the certificate. Always null in format 2.
+   */
+  selected: OracleSelectedSource | null;
+  /** Format 3: raw u8 diagnostic bitset. Null in format 2. */
+  diagnostics: number | null;
+  /** `diagnostics` named in bit order; empty in format 2. */
+  diagnosticFlags: OracleVerdictDiagnostic[];
 }
 
 export interface OraclePermissions {
@@ -160,8 +207,14 @@ function policy(raw: unknown): OraclePolicyEpoch {
     return invalid("calendar bounds");
   return value;
 }
+function bitNames<T extends string>(bits: number, table: readonly T[]): T[] {
+  return table.filter((_, index) => (bits & (1 << index)) !== 0);
+}
 function verdict(raw: unknown): CommittedOracleVerdict {
-  const v = tuple(raw, 12, "verdict");
+  if (!Array.isArray(raw) || (raw.length !== 12 && raw.length !== 14))
+    return invalid("verdict");
+  const v = raw as unknown[];
+  const format = v.length === 14 ? 3 : 2;
   const status = v[2];
   const reason = v[3];
   if (status !== "Fresh" && status !== "Stale" && status !== "Unpriceable")
@@ -181,14 +234,22 @@ function verdict(raw: unknown): CommittedOracleVerdict {
   const currentTimesRaw = tuple(v[8], 2, "verdict.currentTimes");
   const evidenceRaw = tuple(v[9], 2, "verdict.evidence");
   const anchorRaw = tuple(v[11], 3, "verdict.anchor");
+  const faults = Number(uint(v[6], "verdict.faults", 0xffff_ffffn));
+  const selected = format === 3 ? v[12] : null;
+  if (selected !== null && selected !== "Primary" && selected !== "Fallback")
+    return invalid("verdict.selected");
+  const diagnostics =
+    format === 3 ? Number(uint(v[13], "verdict.diagnostics", 0xffn)) : null;
   const value: CommittedOracleVerdict = {
+    format,
     height: uint(v[0], "verdict.height"),
     blockTime: uint(v[1], "verdict.blockTime"),
     status,
     reason: reason as OracleVerdictReason,
     certified,
     eligibleSince: optional(v[5], (raw) => uint(raw, "eligibleSince")),
-    faults: Number(uint(v[6], "verdict.faults", 0xffff_ffffn)),
+    faults,
+    faultReasons: bitNames<OracleVerdictReason>(faults, ORACLE_FAULT_BITS),
     validSources: Number(uint(v[7], "verdict.validSources", 0xffn)),
     currentTimes: [
       optional(currentTimesRaw[0], (raw) => uint(raw, "currentTimes[0]")),
@@ -210,6 +271,10 @@ function verdict(raw: unknown): CommittedOracleVerdict {
       coveredMs: uint(anchorRaw[1], "anchor.coveredMs"),
       requiredMs: uint(anchorRaw[2], "anchor.requiredMs"),
     },
+    selected,
+    diagnostics,
+    diagnosticFlags:
+      diagnostics === null ? [] : bitNames(diagnostics, ORACLE_DIAGNOSTIC_BITS),
   };
   if (
     (status === "Fresh") !== (reason === "Fresh") ||
@@ -220,7 +285,40 @@ function verdict(raw: unknown): CommittedOracleVerdict {
     (value.eligibleSince !== null && value.eligibleSince > value.blockTime)
   )
     return invalid("verdict consistency");
+  if (format === 3 && !primaryFallbackConsistent(value))
+    return invalid("verdict selection");
   return value;
+}
+
+/**
+ * Invariants of exchange#831's `State::select` / `classify` as exposed by the
+ * read: the fault word is exactly the named faults (and names the primary
+ * reason), the usable-slot mask agrees with the selected slot, and each
+ * diagnostic implies the slot state that raises it.
+ */
+function primaryFallbackConsistent(v: CommittedOracleVerdict): boolean {
+  const fresh = v.status === "Fresh";
+  const valid = v.validSources;
+  const diagnostics = v.diagnostics ?? 0;
+  const has = (flag: OracleVerdictDiagnostic) =>
+    v.diagnosticFlags.includes(flag);
+  return (
+    v.faults >>> ORACLE_FAULT_BITS.length === 0 &&
+    fresh === (v.faults === 0) &&
+    (fresh ||
+      v.faultReasons.includes(
+        v.reason as (typeof ORACLE_FAULT_BITS)[number],
+      )) &&
+    diagnostics >>> ORACLE_DIAGNOSTIC_BITS.length === 0 &&
+    valid <= 0b11 &&
+    (!fresh || v.selected !== null) &&
+    (v.selected === "Primary") === ((valid & 0b01) !== 0) &&
+    (v.selected === "Fallback") === (valid === 0b10) &&
+    has("OnFallback") === (v.selected === "Fallback") &&
+    (!has("PrimaryRefusedDivergence") || v.selected === "Fallback") &&
+    (!has("DivergenceUnchecked") || valid === 0b11) &&
+    (!has("FallbackUnusable") || (valid & 0b10) === 0)
+  );
 }
 
 export function validateOraclePermissionMarket(market: number): void {
@@ -228,7 +326,12 @@ export function validateOraclePermissionMarket(market: number): void {
     throw new Error("oracle permission market must be a positive uint32");
 }
 
-/** Decode the engine's frozen 9-slot MessagePack read without lossy integers. */
+/**
+ * Decode the engine's frozen 9-slot MessagePack read without lossy integers.
+ * The committed verdict is accepted in both layouts: the fourteen-field
+ * format-3 primary-with-fallback read (exchange#831) and the twelve-field
+ * format-2 read of earlier nodes.
+ */
 export function decodeOraclePermissions(
   raw: unknown,
   expectedMarket?: number,
