@@ -60,7 +60,11 @@ describe("indexed Explorer gateway reads", () => {
       const response = await call();
       expect(response).toBe(responses[i]);
       expect(await response.json()).toEqual(bodies[i]);
-      expect(fetch.mock.calls[i][1]).toEqual({ method: "GET", signal });
+      expect(fetch.mock.calls[i][1]).toEqual(
+        i === 0
+          ? { method: "GET", cache: "no-store", signal }
+          : { method: "GET", signal },
+      );
     }
     expect(fetch.mock.calls.map(([url]) => url)).toEqual([
       "https://gateway.example/v1/history/status",

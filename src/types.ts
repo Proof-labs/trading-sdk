@@ -1562,6 +1562,59 @@ export interface AccountLiquidatedEvent {
   realizedPnl: string;
 }
 
+/**
+ * Emitted when an insurance fund pool's balance changes (liquidation surplus
+ * or deficit, Tier 1 of the bad-debt waterfall).
+ */
+export interface InsuranceFundUpdatedEvent {
+  type: "InsuranceFundUpdated";
+  /** Insurance pool id: "0" for the legacy/majors pool, "1"+ for newer pools. */
+  poolId: string;
+  /** Pool balance after the change in microUSDC (signed; negative when depleted). */
+  balance: string;
+  /** Change in microUSDC (signed; positive = inflow, negative = outflow). */
+  delta: string;
+}
+
+/**
+ * Emitted when a position is auto-deleveraged (Tier 3 of the bad-debt
+ * waterfall): a profitable counterparty is force-closed at the liquidated
+ * trader's bankruptcy price. One event per ADL'd position leg.
+ */
+export interface PositionAutoDeleveragedEvent {
+  type: "PositionAutoDeleveraged";
+  /** Hex-encoded address of the owner whose position was force-closed. */
+  owner: string;
+  /** Market identifier. */
+  market: string;
+  /** Side of the force-closed position ("Buy" or "Sell"). */
+  side: string;
+  /** Contracts force-closed in this leg; may be less than the full position. */
+  size: string;
+  /** Price the leg was closed at in micro-USDC (6 dp). */
+  closePrice: string;
+  /** Bankruptcy price the spec prescribes in micro-USDC (6 dp); currently equal to `closePrice`. */
+  closePriceSpec: string;
+  /** Realized PnL credited to the deleveraged owner in microUSDC (signed). */
+  realizedPnl: string;
+}
+
+/**
+ * Emitted when the Proof liquidity provider (PLP) absorbs liquidation deficit
+ * (Tier 0 of the bad-debt waterfall). Emitted only while PLP is enabled and
+ * above its floor; once PLP reaches the floor, deficits route to Tier 1 and
+ * this event stops firing.
+ */
+export interface PlpAbsorbedEvent {
+  type: "PlpAbsorbed";
+  /** Insurance pool the liquidation came from (informational). */
+  poolId: string;
+  /** Deficit absorbed by PLP in this draw, in microUSDC. */
+  amount: string;
+  /** PLP balance after the draw in microUSDC (signed). */
+  plpBalanceAfter: string;
+}
+
 /** Emitted when periodic funding is applied to a market. */
 export interface FundingAppliedEvent {
   type: "FundingApplied";
@@ -1665,6 +1718,9 @@ export type ExchangeEvent =
   | PriceUpdatedEvent
   | MarketCreatedEvent
   | AccountLiquidatedEvent
+  | InsuranceFundUpdatedEvent
+  | PositionAutoDeleveragedEvent
+  | PlpAbsorbedEvent
   | FundingAppliedEvent
   | FundingSettledEvent
   | AgentApprovedEvent
