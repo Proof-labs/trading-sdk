@@ -1,13 +1,14 @@
 import { Decoder, Encoder } from "@msgpack/msgpack";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
-import {
-  decodeFinancialAudit,
-  decodeFinancialAuditArtifact as decodePinnedArtifact,
-} from "./index.js";
+import * as sdk from "./index.js";
+import { decodeFinancialAuditArtifact as decodePinnedArtifact } from "./index.js";
+import { decodeFinancialAudit } from "./financial-audit.js";
 
 // Generated and asserted by exchange query::financial::tests::
 // audit_preserves_v1_bytes_absence_and_exact_open_interest_without_writes.
+// Merged #859: ad05b2fc4e8693cfee31b9e3a25944b64ff06a5e,
+// exchange-core/src/query/financial/tests.rs (the literal must match exactly).
 const golden =
   "9302980100cd04d29196dc00140404040404040404040404040404040404040404c0c0c0c090929c010000020390cdea6064c0c0c0c09c020700020390cdea6064c0c0c0c0c0929200c09207c0c0929701a450657270c0c0c0c092cfffffffffffffffff119702a450657270c0c0c0c0c0";
 const selection = { markets: [1, 2], owners: ["04".repeat(20)] };
@@ -27,8 +28,9 @@ const pins = {
   height: 0n,
   timeMs: 1234n,
 };
-const digest = (text: string) =>
-  createHash("sha256").update(text).digest("hex");
+const utf8 = (text: string) => new TextEncoder().encode(text);
+const digest = (bytes: string | Uint8Array) =>
+  createHash("sha256").update(bytes).digest("hex");
 // Deliberately malformed synthetic fixtures are re-pinned to exercise structural checks.
 const decodeFinancialAuditArtifact = (
   text: string,
@@ -36,7 +38,7 @@ const decodeFinancialAuditArtifact = (
   selected: typeof selection,
 ) =>
   decodePinnedArtifact(
-    text,
+    utf8(text),
     { ...expected, artifactSha256: digest(text) },
     selected,
   );
@@ -60,13 +62,75 @@ describe("financial audit format2", () => {
     const original = JSON.stringify(artifact());
     expect(() =>
       decodePinnedArtifact(
-        original.replace("operator export record", "altered export record"),
+        utf8(
+          original.replace("operator export record", "altered export record"),
+        ),
         { ...pins, artifactSha256: digest(original) },
         selection,
       ),
     ).toThrow("artifact digest");
   });
   afterEach(() => vi.unstubAllGlobals());
+  it("does not expose the provenance-free raw decoder from the package", () => {
+    expect(sdk).not.toHaveProperty("decodeFinancialAudit");
+    expect(sdk).not.toHaveProperty("decodeFinancialPayload");
+  });
+  it("hashes the exact selected bytes, including Unicode and trailing whitespace", () => {
+    const text = `${JSON.stringify({ ...artifact(), provenance: "operator café 東京" })}\r\n`;
+    const bytes = utf8(text);
+    const padded = new Uint8Array(bytes.length + 4);
+    padded.set(bytes, 2);
+    const view = padded.subarray(2, bytes.length + 2);
+    const expected = { ...pins, artifactSha256: digest(bytes) };
+    expect(decodePinnedArtifact(view, expected, selection).provenance).toBe(
+      "operator café 東京",
+    );
+    expect(() =>
+      decodePinnedArtifact(utf8(text.trim()), expected, selection),
+    ).toThrow("artifact digest");
+  });
+  it("rejects invalid UTF-8 even when its exact digest is independently pinned", () => {
+    const prefix = utf8('{"provenance":"');
+    const bytes = new Uint8Array(prefix.length + 2);
+    bytes.set(prefix);
+    bytes.set([0xc3, 0x28], prefix.length);
+    expect(() =>
+      decodePinnedArtifact(
+        bytes,
+        { ...pins, artifactSha256: digest(bytes) },
+        selection,
+      ),
+    ).toThrow("artifact UTF-8");
+  });
+  it("hashes and parses one private snapshot even if caller memory changes", () => {
+    const bytes = Buffer.from(JSON.stringify(artifact()));
+    const expected = { ...pins, artifactSha256: digest(bytes) };
+    const Decoder = TextDecoder;
+    vi.stubGlobal(
+      "TextDecoder",
+      class extends Decoder {
+        constructor(...args: ConstructorParameters<typeof Decoder>) {
+          super(...args);
+          // Simulate mutation after hashing but before parsing. Buffer.slice()
+          // would retain this mutable backing memory instead of taking a copy.
+          bytes[0] = 0;
+        }
+      },
+    );
+    expect(decodePinnedArtifact(bytes, expected, selection).audit.format).toBe(
+      2,
+    );
+    expect(bytes[0]).toBe(0);
+  });
+  it("refuses text rather than silently re-encoding a caller's input", () => {
+    expect(() =>
+      decodePinnedArtifact(
+        JSON.stringify(artifact()) as unknown as Uint8Array,
+        { ...pins, artifactSha256: digest(JSON.stringify(artifact())) },
+        selection,
+      ),
+    ).toThrow("artifact bytes");
+  });
   it("decodes the independent Rust vector offline without any network access", () => {
     const fetcher = vi.fn(() => {
       throw new Error("network forbidden");
@@ -101,6 +165,14 @@ describe("financial audit format2", () => {
       kind: "Conditional",
     });
     expect(result.markets[1].branch).toBe("No");
+    // The audit budget admits the longer enum names, unlike the state-only budget.
+    expect(
+      decodeFinancialAuditArtifact(
+        JSON.stringify({ ...artifact(), data: encode(r) }),
+        pins,
+        selection,
+      ).audit,
+    ).toEqual(result);
   });
   const corruptions: [string, (r: unknown[]) => void][] = [
     [

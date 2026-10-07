@@ -3,6 +3,7 @@ import {
   canonicalFinancialSelection,
   decodeFinancialState,
   decodeFinancialPayload,
+  FINANCIAL_AUDIT_LIMITS,
   type FinancialState,
   type FinancialStateSelection,
 } from "./financial-state.js";
@@ -123,7 +124,7 @@ export interface FinancialAuditPins {
 /** Decode an operator-attested local artifact, not a cryptographic state proof.
  * Pins must come from the separately trusted export/build record, not this artifact. */
 export function decodeFinancialAuditArtifact(
-  text: string,
+  bytes: Uint8Array,
   pins: FinancialAuditPins,
   selection: FinancialStateSelection,
 ): {
@@ -131,10 +132,11 @@ export function decodeFinancialAuditArtifact(
   provenance: string;
   trust: "operator-attested-local-snapshot-not-full-state-proof";
 } {
-  if (text.length > MAX_ARTIFACT_BYTES) return invalid("artifact size");
-  const bytes = new TextEncoder().encode(text);
+  if (!(bytes instanceof Uint8Array)) return invalid("artifact bytes");
   if (bytes.length > MAX_ARTIFACT_BYTES) return invalid("artifact size");
-  const digest = Array.from(sha256(bytes), (b) =>
+  // Hash and parse the same private snapshot, even for caller-owned shared memory.
+  const artifactBytes = Uint8Array.from(bytes);
+  const digest = Array.from(sha256(artifactBytes), (b) =>
     b.toString(16).padStart(2, "0"),
   ).join("");
   if (
@@ -142,6 +144,12 @@ export function decodeFinancialAuditArtifact(
     digest !== pins.artifactSha256
   )
     return invalid("artifact digest");
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(artifactBytes);
+  } catch {
+    return invalid("artifact UTF-8");
+  }
   const r: unknown = JSON.parse(text);
   const keys = [
     "protocol",
@@ -202,7 +210,7 @@ export function decodeFinancialAuditArtifact(
   if (!provenance.trim() || provenance.length > 512)
     return invalid("artifact provenance");
   const audit = decodeFinancialAudit(
-    decodeFinancialPayload(record.data as string, true),
+    decodeFinancialPayload(record.data as string, FINANCIAL_AUDIT_LIMITS),
     expected,
   );
   if (

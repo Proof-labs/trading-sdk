@@ -7,6 +7,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `decodeFinancialAuditArtifact(bytes, pins, selection)` decodes an offline
+  financial audit artifact (format 2: the format-1 ledger plus per-market
+  instrument, event and open-interest evidence) produced by the engine's
+  `financial-audit` executable. Its `Uint8Array` input is hashed exactly as
+  supplied, before strict UTF-8 and bounded payload decoding. It checks a
+  separately trusted SHA-256 of the artifact, the snapshot and build digests,
+  chain, height, time and selectors, and makes no network request. The result
+  is operator-attested evidence, not a full-state proof. The provenance-free
+  raw decoder is not part of the package API. MINOR: additive, no change to
+  any signed wire format or the existing `queryFinancialState` contract.
+
 ### Breaking changes
 
 - The gateway's `status` is read as stated; nothing is inferred
@@ -64,15 +77,6 @@ those existing behaviours are not new in 7.0.0.
 
 ### Added
 
-- `decodeFinancialAuditArtifact(text, pins, selection)` decodes an offline
-  financial audit artifact (format 2: the format-1 ledger plus per-market
-  instrument, event and open-interest evidence) produced by the engine's
-  `financial-audit` executable. It checks a separately trusted SHA-256 of the
-  artifact, the snapshot and build digests, chain, height, time and selectors
-  before strict decoding, and makes no network request. The result is
-  operator-attested evidence, not a full-state proof. `decodeFinancialAudit`
-  decodes an already-parsed payload without those checks. MINOR: additive,
-  no change to any signed wire format.
 - The error tables gain `OracleVerdictUnavailable` (code 77),
   `WithdrawalLimitExceeded` (code 99) and `AccountOrderCapReached` (code
   100, the per-account resting-order cap), matching the engine: in TypeScript

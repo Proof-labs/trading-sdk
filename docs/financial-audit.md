@@ -6,9 +6,12 @@ snapshot. Existing `queryFinancialState` behavior is unchanged.
 
 ```typescript
 import { decodeFinancialAuditArtifact } from "@proof-labs/trading-sdk";
+import { readFile } from "node:fs/promises";
 
+// Read the file as bytes. Do not decode/re-encode or normalize its whitespace.
+const artifactBytes = await readFile("financial-audit.json");
 const evidence = decodeFinancialAuditArtifact(
-  artifactText,
+  artifactBytes,
   {
     artifactSha256: trustedArtifactDigest,
     snapshotSha256: trustedExportDigest,
@@ -29,7 +32,8 @@ a successful export in that separate trusted record; the decoder verifies it
 before parsing, detecting output tampering but not proving the export's origin.
 This decoder performs no network request,
 signature operation or state mutation. It bounds JSON/binary decoding, rejects
-unknown fields, mismatched pins/selectors and inconsistent ledger height/time.
+invalid UTF-8, unknown fields, mismatched pins/selectors and inconsistent ledger
+height/time. `Uint8Array` views are checked over exactly their selected byte range.
 
 The decoder checks the artifact's claims against expected pins; it cannot verify
 the snapshot digest without the source snapshot, or prove the operator's claims.
@@ -38,6 +42,6 @@ attested separately from a trusted same-height header. Preserve that provenance;
 the result is not a cryptographic state proof, live health verdict, complete
 account inventory, funding authorization or liquidation acceptance result.
 
-Raw `decodeFinancialAudit` remains available for already-decoded synthetic test
-fixtures. It does not provide provenance checks and must not be substituted for
-artifact ingestion.
+The provenance-free raw payload decoder is internal to the module and its tests;
+it is not exported by the SDK package. Artifact consumers use only
+`decodeFinancialAuditArtifact`.
