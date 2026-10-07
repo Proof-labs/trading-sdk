@@ -41,9 +41,19 @@ function mirror(price: bigint, reason: BinaryErrorName): bigint {
   return BINARY_PRICE_MAX - price;
 }
 
+/** `side` checked at runtime, so a JavaScript caller's mistyped side is
+ *  refused instead of becoming the opposite trade. */
+function checkedSide(side: unknown): Side {
+  if (side === Side.Buy || side === "Buy") return Side.Buy;
+  if (side === Side.Sell || side === "Sell") return Side.Sell;
+  throw new TypeError(
+    `side must be Side.Buy or Side.Sell, got ${String(side)}`,
+  );
+}
+
 /** The Yes order side that trades `noSide` of No. */
 export function yesSide(noSide: Side): Side {
-  return noSide === Side.Buy ? Side.Sell : Side.Buy;
+  return checkedSide(noSide) === Side.Buy ? Side.Sell : Side.Buy;
 }
 
 /**
@@ -99,7 +109,7 @@ export function binaryPositionView(position: {
   if (entryPrice > BINARY_PRICE_MAX) {
     throw new BinaryPriceError("EntryAboveOneDollar", entryPrice);
   }
-  const long = side === Side.Buy || side === "Buy";
+  const long = checkedSide(side) === Side.Buy;
   return long
     ? { outcome: "Yes", entryPrice, size }
     : { outcome: "No", entryPrice: BINARY_PRICE_MAX - entryPrice, size };

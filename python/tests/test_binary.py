@@ -98,3 +98,14 @@ def test_a_short_yes_reads_as_no_and_a_long_yes_as_yes():
     assert pts.binary_position_view("Sell", pts.BINARY_PRICE_MAX, 5).entry_price == 0
     with pytest.raises(pts.BinaryPriceError):
         pts.binary_position_view("Sell", pts.BINARY_PRICE_MAX + 1, 5)
+
+
+@pytest.mark.parametrize("side", ["buy", "sell", "", "Long", "BUY"])
+def test_a_side_that_is_not_buy_or_sell_is_refused(side):
+    # A mistyped side must never become the opposite trade.
+    with pytest.raises(ValueError, match="side must be 'Buy' or 'Sell'"):
+        pts.no_order(side=side, market=101, owner=OWNER, price=400_000, quantity=5)
+    with pytest.raises(ValueError, match="side must be 'Buy' or 'Sell'"):
+        pts.yes_side(side)
+    with pytest.raises(ValueError, match="side must be 'Buy' or 'Sell'"):
+        pts.binary_position_view(side, 600_000, 40)

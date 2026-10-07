@@ -54,9 +54,18 @@ def _mirror(price: int, reason: BinaryErrorName) -> int:
     return BINARY_PRICE_MAX - price
 
 
+def _side(side: str) -> Side:
+    """``side`` as a wire side; anything but ``"Buy"`` or ``"Sell"`` is refused,
+    so a mistyped side can never turn into the opposite trade."""
+    try:
+        return Side(side)
+    except ValueError:
+        raise ValueError(f"side must be 'Buy' or 'Sell', got {side!r}") from None
+
+
 def yes_side(no_side: str) -> Side:
     """The Yes order side that trades ``no_side`` of No."""
-    return Side.Sell if no_side == Side.Buy else Side.Buy
+    return Side.Sell if _side(no_side) == Side.Buy else Side.Buy
 
 
 def yes_limb(no_limb: TriggerLimb) -> TriggerLimb:
@@ -180,6 +189,6 @@ def binary_position_view(side: str, entry_price: int, size: int) -> BinaryPositi
     conditional close is issued there) reads as No at 0."""
     if entry_price > BINARY_PRICE_MAX:
         raise BinaryPriceError("EntryAboveOneDollar", entry_price)
-    if side == Side.Buy:
+    if _side(side) == Side.Buy:
         return BinaryPositionView("Yes", entry_price, size)
     return BinaryPositionView("No", BINARY_PRICE_MAX - entry_price, size)

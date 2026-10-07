@@ -5,6 +5,7 @@ import {
   BinaryPriceError,
   binaryPositionView,
   yesOrder,
+  yesSide,
   type NoOrder,
 } from "./binary.js";
 import { Side, TimeInForce, type TriggerLimb } from "./types.js";
@@ -113,4 +114,21 @@ describe("positions read as No (S2, S4)", () => {
       }),
     ).toThrow(BinaryPriceError);
   });
+});
+
+describe("a side that is neither Buy nor Sell", () => {
+  // A mistyped side from a JavaScript caller must never become the opposite trade.
+  it.each(["buy", "sell", "", "Long", 0, 3, undefined])(
+    "refuses %s",
+    (side) => {
+      expect(() => yesSide(side as unknown as Side)).toThrow(TypeError);
+      expect(() =>
+        binaryPositionView({
+          side: side as unknown as Side,
+          entryPrice: 600_000n,
+          size: 40n,
+        }),
+      ).toThrow(TypeError);
+    },
+  );
 });
