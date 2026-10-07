@@ -152,6 +152,7 @@ import {
   type ExchangeEvent,
   type OrderMigratedEvent,
   type PositionMigratedEvent,
+  type UpgradeMigrationReportedEvent,
 } from "./index.js";
 
 describe("public barrel: one-book events and No helpers", () => {
@@ -175,9 +176,14 @@ describe("public barrel: one-book events and No helpers", () => {
       size: "40",
       cashDelta: "-12",
     };
-    const events: ExchangeEvent[] = [moved, position];
+    const marker: UpgradeMigrationReportedEvent = {
+      type: "UpgradeMigrationReported",
+      eventCount: "2",
+    };
+    const events: ExchangeEvent[] = [marker, moved, position];
     const reason: CancelReason = "upgrade";
     expect(events.map((e) => e.type)).toEqual([
+      "UpgradeMigrationReported",
       "OrderMigrated",
       "PositionMigrated",
     ]);

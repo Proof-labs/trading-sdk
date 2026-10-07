@@ -20,10 +20,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`yes_order`, `yes_limb`, `binary_position_view`). A No price of 0 or `$1`
   is refused client-side. A new conformance family, `binary.ndjson`, pins the
   translation in all three languages.
-- **The one-book upgrade's events.** `ExchangeEvent` gains `OrderMigrated`
-  and `PositionMigrated`, and the new `CancelReason` type names the engine's
-  cancel reasons, including `upgrade`. Event readers pass unknown event types
-  through, so further upgrade-journal events do not break a read.
+- **The one-book upgrade's events.** `ExchangeEvent` gains
+  `UpgradeMigrationReported` (opens the migration group and counts the events
+  after it), `OrderMigrated` and `PositionMigrated`, and the new `CancelReason`
+  type names the engine's cancel reasons, including `upgrade`. Event readers
+  pass unknown event types through, so further upgrade-journal events do not
+  break a read.
 
 ### Breaking changes
 
