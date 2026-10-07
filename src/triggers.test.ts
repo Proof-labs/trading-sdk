@@ -230,6 +230,58 @@ describe("W32-10 trigger read models", () => {
     });
   });
 
+  it("passes a TriggerOutcomeReason through and keeps the other enums strict", () => {
+    const row = (
+      reason: unknown,
+      kind = "StopLoss",
+      state = "Armed",
+      availability: unknown = { Deferred: reason },
+    ) => [
+      [
+        1n,
+        Array(20).fill(0xa5),
+        7,
+        3n,
+        "Buy",
+        100n,
+        101n,
+        null,
+        [
+          11n,
+          kind,
+          95_000n,
+          75,
+          null,
+          state,
+          [102n, 94_000n, null, 4n, 0n, 4n, reason],
+        ],
+        null,
+      ],
+      [4n, true, 250, 5_000n, 1_000n, 32n],
+      availability,
+    ];
+    for (const reason of ["NoTwoSidedQuote", "ReasonFromANewerEngine"]) {
+      const [info] = decodePositionTriggerInfos([row(reason)]);
+      expect(info.bracket.stopLoss?.lastEvaluation?.reason).toBe(reason);
+      expect(info.availability).toEqual({ kind: "Deferred", reason });
+    }
+    // rmp-serde names a unit variant by string; anything else is malformed.
+    for (const bad of ["", 17, ["NoTwoSidedQuote"]]) {
+      expect(() => decodePositionTriggerInfos([row(bad)])).toThrow(
+        /TriggerOutcomeReason must be a non-empty string/,
+      );
+    }
+    expect(() =>
+      decodePositionTriggerInfos([row("X", "TrailingStop")]),
+    ).toThrow(/unknown TriggerKind TrailingStop/);
+    expect(() =>
+      decodePositionTriggerInfos([row("X", "StopLoss", "Snoozed")]),
+    ).toThrow(/unknown TriggerLimbState Snoozed/);
+    expect(() =>
+      decodePositionTriggerInfos([row("X", "StopLoss", "Armed", "Snoozed")]),
+    ).toThrow(/unknown TriggerEffectiveAvailability/);
+  });
+
   it("parses JSON heights above 2^53 losslessly and fails closed", () => {
     expect(
       decodeTriggerStatusJson(

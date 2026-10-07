@@ -23,6 +23,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   TypeScript client still reads a pre-7.0.0 gateway's engine verdicts and
   reconcile answers, but reconciles its refusals by hash instead of returning
   them as transport errors.
+- **Breaking in TypeScript types:** `TriggerOutcomeReason` and
+  `PendingTriggerDiscardReason` are now aliases of `string`; the unions of
+  named reasons are gone. A reason is an engine-defined label that the SDK
+  passes through, so it carries no list of names. Code that relied on the
+  union, such as a `Record` keyed by it or an assignment to a narrower
+  literal type, no longer type-checks. MAJOR for npm on the type surface
+  only; decoded values and the wire are unchanged. In Python the
+  `PendingTriggerDiscardReason` alias becomes `str`.
 
 ### Added
 
@@ -65,6 +73,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `AnchorUnavailable` reason, is an accepted committed-verdict reason; a
   verdict carrying it used to be refused. `AnchorUnavailable` is still
   accepted from older nodes.
+- Trigger reads no longer fail on a reason this SDK version does not know. The
+  engine deploys before clients upgrade, and a reason is a diagnostic label,
+  so every trigger reason now decodes as any non-empty string and is returned
+  verbatim, in TypeScript and Python. A stop-loss or take-profit deferred on a
+  binary market with a one-sided book (`no_two_sided_quote`) failed the
+  owner-history decoder with `unknown payload.reason`, and the same value as
+  `NoTwoSidedQuote` failed the owner trigger read. The fields are `reason` on
+  `position_trigger_deferred`, `position_trigger_executed` (which may also be
+  empty), `trigger_market_deferred` and `pending_triggers_discarded`,
+  `previous_reason` on `trigger_market_resumed`, and the MessagePack
+  `TriggerOutcomeReason` on a limb's last evaluation and on a `Deferred`
+  availability. The decoders no longer check which row may carry which
+  reason; an executed row is still checked for its result against its
+  quantities. A missing, empty or non-string reason is still refused, and so
+  is an unknown limb kind, limb state, executed result, event type or
+  availability kind. No wire change.
 
 ## [7.0.0] — 2026-10-06
 

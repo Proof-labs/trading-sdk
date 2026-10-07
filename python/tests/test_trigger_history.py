@@ -216,16 +216,16 @@ def test_history_decoders_fail_closed_on_envelope_numbers_and_drift():
     impossible_terminal = copy.deepcopy(_executed_event())
     impossible_terminal["payload"]["result"] = "filled"
     impossible_terminal["payload"]["reason"] = ""
-    with pytest.raises(ProofTradingSdkError, match="result, quantities, and reason disagree"):
+    with pytest.raises(ProofTradingSdkError, match="result and quantities disagree"):
         decode_position_trigger_history_page(
             {"trigger_events": [impossible_terminal], "next_cursor": ""}, OWNER
         )
 
-    wrong_market_reason = _market_event("trigger_market_deferred")
-    wrong_market_reason["payload"]["reason"] = "below_maintenance"
-    with pytest.raises(ProofTradingSdkError, match="unknown payload.reason"):
+    empty_market_reason = _market_event("trigger_market_deferred")
+    empty_market_reason["payload"]["reason"] = ""
+    with pytest.raises(ProofTradingSdkError, match="payload.reason must be"):
         decode_trigger_market_history_page(
-            {"trigger_market_events": [wrong_market_reason], "next_cursor": ""}, 7
+            {"trigger_market_events": [empty_market_reason], "next_cursor": ""}, 7
         )
 
 
@@ -371,10 +371,10 @@ def test_history_pending_payloads_fail_closed():
             {"trigger_events": [zero_order], "next_cursor": ""}, OWNER, 7
         )
 
-    unknown_reason = _pending_discard_event("because")
-    with pytest.raises(ProofTradingSdkError, match="unknown payload.reason"):
+    empty_reason = _pending_discard_event("")
+    with pytest.raises(ProofTradingSdkError, match="payload.reason must be"):
         decode_position_trigger_history_page(
-            {"trigger_events": [unknown_reason], "next_cursor": ""}, OWNER, 7
+            {"trigger_events": [empty_reason], "next_cursor": ""}, OWNER, 7
         )
 
     # A pending bracket has no position identity yet: epoch/group are not
@@ -386,6 +386,116 @@ def test_history_pending_payloads_fail_closed():
         decode_position_trigger_history_page(
             {"trigger_events": [wrong_owner], "next_cursor": ""}, OWNER, 7
         )
+
+
+# The regression case, and a label no SDK version has seen.
+_REASONS = ["no_two_sided_quote", "reason_from_a_newer_engine"]
+
+
+def _deferred_event(reason: str) -> dict:
+    return {
+        "event_key": "103:2:0",
+        "block_height": "103",
+        "execution_ordinal": "2",
+        "event_ordinal": "0",
+        "block_time": "2026-04-19T20:30:00Z",
+        "event_type": "position_trigger_deferred",
+        "owner": OWNER,
+        "market": "7",
+        "payload": {
+            "event_key": "103:2:0",
+            "block_height": "103",
+            "execution_ordinal": "2",
+            "event_ordinal": "0",
+            "owner": OWNER,
+            "market": "7",
+            "position_epoch": "3",
+            "group_id": "9",
+            "limb_id": "10",
+            "client_group_id": "0",
+            "client_trigger_id": "0",
+            "limb_kind": "stop_loss",
+            "trigger_price": "450000",
+            "frozen_mark": "440000",
+            "requested_quantity": "4",
+            "reason": reason,
+        },
+    }
+
+
+def _executed_with(result: str, reason: str) -> dict:
+    event = _executed_event()
+    event["payload"]["result"] = result
+    event["payload"]["reason"] = reason
+    if result != "partial":
+        event["payload"]["filled_quantity"] = "0"
+        event["payload"]["residual_quantity"] = "4"
+    return event
+
+
+def _owner_page(event: dict):
+    return decode_position_trigger_history_page(
+        {"trigger_events": [event], "next_cursor": ""}, OWNER, 7
+    )
+
+
+def _market_page(event: dict):
+    return decode_trigger_market_history_page(
+        {"trigger_market_events": [event], "next_cursor": ""}, 7
+    )
+
+
+@pytest.mark.parametrize("reason", _REASONS)
+def test_history_returns_the_reason_verbatim_on_every_reason_field(reason):
+    deferred = _market_event("trigger_market_deferred")
+    deferred["payload"]["reason"] = reason
+    resumed = _market_event("trigger_market_resumed")
+    resumed["payload"]["previous_reason"] = reason
+
+    for event in (
+        _deferred_event(reason),
+        _executed_with("no_fill", reason),
+        _pending_discard_event(reason),
+    ):
+        assert _owner_page(event).trigger_events[0].payload["reason"] == reason
+    page = _market_page(deferred)
+    assert page.trigger_market_events[0].payload["reason"] == reason
+    page = _market_page(resumed)
+    assert page.trigger_market_events[0].payload["previous_reason"] == reason
+
+
+@pytest.mark.parametrize("bad", ["", None, 7])
+def test_history_refuses_a_missing_empty_or_non_string_reason(bad):
+    deferred = _deferred_event("x")
+    deferred["payload"]["reason"] = bad
+    with pytest.raises(ProofTradingSdkError):
+        _owner_page(deferred)
+    resumed = _market_event("trigger_market_resumed")
+    resumed["payload"]["previous_reason"] = bad
+    with pytest.raises(ProofTradingSdkError):
+        _market_page(resumed)
+    missing = _deferred_event("x")
+    del missing["payload"]["reason"]
+    with pytest.raises(ProofTradingSdkError, match="payload.reason must be"):
+        _owner_page(missing)
+
+
+def test_history_keeps_result_limb_kind_event_type_and_quantities_strict():
+    with pytest.raises(ProofTradingSdkError, match="unknown payload.result"):
+        _owner_page(_executed_with("deferred", "x"))
+    kind = _deferred_event("x")
+    kind["payload"]["limb_kind"] = "trailing_stop"
+    with pytest.raises(ProofTradingSdkError, match="unknown payload.limb_kind"):
+        _owner_page(kind)
+    event_type = _deferred_event("x")
+    event_type["event_type"] = "position_trigger_snoozed"
+    with pytest.raises(ProofTradingSdkError):
+        _owner_page(event_type)
+    quantities = _executed_with("no_fill", "x")
+    quantities["payload"]["filled_quantity"] = "1"
+    quantities["payload"]["residual_quantity"] = "3"
+    with pytest.raises(ProofTradingSdkError, match="result and quantities disagree"):
+        _owner_page(quantities)
 
 
 def test_history_surfaces_and_bounds_the_additive_schema39_attributes():
