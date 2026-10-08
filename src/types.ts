@@ -1,4 +1,8 @@
 import type { ExecErrorInfo } from "./errors.js";
+import type {
+  PublishLiquidationPolicy,
+  RevokeLiquidationPolicy,
+} from "./partial-liquidation-policy.js";
 
 /** 20-byte account address (derived from Ed25519 public key). */
 export type Address = Uint8Array;
@@ -1165,6 +1169,8 @@ export interface SetOperatorReceiptRegistry {
  * refuses every tag below its activation height.
  */
 export type AdminAction =
+  | { kind: "PublishLiquidationPolicy"; value: PublishLiquidationPolicy }
+  | { kind: "RevokeLiquidationPolicy"; value: RevokeLiquidationPolicy }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }

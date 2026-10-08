@@ -26,6 +26,10 @@ import type {
   AuthoritiesSnapshot,
 } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
+import {
+  decodePublishLiquidationPolicy,
+  decodeRevokeLiquidationPolicy,
+} from "./partial-liquidation-policy.js";
 import { Outcome } from "./types.js";
 
 /**
@@ -604,6 +608,8 @@ function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
  *  inherited neighbour's tag. Mirrors `AdminActionType` in the engine and
  *  `action_type()` in the Rust core — 1/2 are v1, 3/4 are admin-actions v2. */
 export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
+  PublishLiquidationPolicy: 22,
+  RevokeLiquidationPolicy: 23,
   CreateMarket: 1,
   UpdateAdminSignerRegistry: 2,
   CreateEvent: 9,
@@ -632,6 +638,16 @@ export function decodeAdminAction(
   if (value === "UnpauseBridge") return { kind: "UnpauseBridge" };
   const { name, payload } = variantOf(value, field);
   switch (name) {
+    case "PublishLiquidationPolicy":
+      return {
+        kind: "PublishLiquidationPolicy",
+        value: decodePublishLiquidationPolicy(payload),
+      };
+    case "RevokeLiquidationPolicy":
+      return {
+        kind: "RevokeLiquidationPolicy",
+        value: decodeRevokeLiquidationPolicy(payload),
+      };
     case "CancelAllOrdersForAccount":
       return {
         kind: "CancelAllOrdersForAccount",

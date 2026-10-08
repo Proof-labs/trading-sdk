@@ -1,0 +1,41 @@
+name: Prepare exact review dependencies
+description: Fetch private dependencies without retaining credentials during builds
+inputs:
+  wire-key:
+    description: Existing read-only exchange deploy key
+    required: true
+  bridge-key:
+    description: Existing read-only bridge deploy key
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        repository: Proof-labs/exchange
+        ref: 18045fbac1e24e7fafbbcd7072d5dce400efd232
+        ssh-key: ${{ inputs.wire-key }}
+        persist-credentials: false
+        path: .ci-wire-review
+    - uses: actions/checkout@v4
+      with:
+        repository: Proof-labs/bridge
+        ref: v1.0.0
+        fetch-depth: 0
+        ssh-key: ${{ inputs.bridge-key }}
+        persist-credentials: false
+        path: .ci-bridge-review
+    - name: Create credential-free Cargo mirrors
+      shell: bash
+      run: |
+        set -euo pipefail
+        expected=18045fbac1e24e7fafbbcd7072d5dce400efd232
+        test "$(git -C .ci-wire-review rev-parse HEAD)" = "$expected"
+        grep -F "rev = \"$expected\"" crates/proof-trading-sdk/Cargo.toml
+        git clone --bare --no-hardlinks .ci-wire-review "$RUNNER_TEMP/wire-review.git"
+        git clone --bare --no-hardlinks .ci-bridge-review "$RUNNER_TEMP/bridge-review.git"
+        git --git-dir="$RUNNER_TEMP/bridge-review.git" rev-parse refs/tags/v1.0.0
+        git config --global url."file://$RUNNER_TEMP/wire-review.git".insteadOf https://github.com/Proof-labs/exchange.git
+        git config --global url."file://$RUNNER_TEMP/bridge-review.git".insteadOf ssh://git@github.com/Proof-labs/bridge.git
+        rm -rf .ci-wire-review .ci-bridge-review
+        echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"

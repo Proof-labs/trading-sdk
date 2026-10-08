@@ -27,6 +27,12 @@ import {
 } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import {
+  validatePublishLiquidationPolicy,
+  validateRevokeLiquidationPolicy,
+  type PublishLiquidationPolicy,
+  type RevokeLiquidationPolicy,
+} from "./partial-liquidation-policy.js";
+import {
   validateCancelPositionTriggers,
   validateOrderTriggers,
   validateSetPositionTriggers,
@@ -134,6 +140,19 @@ function governanceActionToWasm(value: unknown): unknown {
   }
   if (v.kind === "SetOracleGuards") {
     validateSetOracleGuards(v.value as SetOracleGuards);
+  }
+  if (v.kind === "PublishLiquidationPolicy") {
+    const command = v.value as PublishLiquidationPolicy;
+    validatePublishLiquidationPolicy(command);
+    return {
+      PublishLiquidationPolicy: {
+        ...convertObject(command as unknown as Record<string, unknown>),
+        expected_current_revision: command.expectedCurrentRevision,
+      },
+    };
+  }
+  if (v.kind === "RevokeLiquidationPolicy") {
+    validateRevokeLiquidationPolicy(v.value as RevokeLiquidationPolicy);
   }
   // `Batch` is the one variant whose payload is a LIST of nested enum items
   // (`AdminBatchItem[]`) rather than a struct — each item is itself
