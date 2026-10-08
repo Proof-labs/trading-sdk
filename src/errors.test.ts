@@ -22,6 +22,19 @@ describe("decodeExecError", () => {
     expect(decodeExecError(255)?.name).toBe("InternalError");
   });
 
+  it("names candidate insurance refusals without reusing reserved code 101", () => {
+    for (const [code, name] of [
+      [102, "InsuranceFundingReplayed"],
+      [103, "InsuranceWithdrawalReplayed"],
+      [104, "MarketlessInsurancePool"],
+      [105, "InsufficientInsuranceBalance"],
+    ] as const) {
+      expect(decodeExecError(code)?.name).toBe(name);
+      expect(execErrorName(code)).toBe(name);
+    }
+    expect(decodeExecError(101)).toBeNull();
+  });
+
   it("decodes the event cap and the settle-price mismatch (96, 32)", () => {
     const e96 = decodeExecError(96);
     expect(e96?.name).toBe("TooManyActiveEvents");
@@ -124,6 +137,12 @@ describe("ExecErrorCode enum", () => {
     expect(ExecErrorCode.SlippageExceeded).toBe(50);
     expect(ExecErrorCode.OpenInterestLimitExceeded).toBe(51);
     expect(ExecErrorCode.InternalError).toBe(255);
+  });
+
+  it("pins the newly mirrored engine codes (77, 99, 100)", () => {
+    expect(ExecErrorCode.OracleVerdictUnavailable).toBe(77);
+    expect(ExecErrorCode.WithdrawalLimitExceeded).toBe(99);
+    expect(ExecErrorCode.AccountOrderCapReached).toBe(100);
   });
 });
 

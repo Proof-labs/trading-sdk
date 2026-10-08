@@ -22,6 +22,70 @@ function envelope(payload: unknown): Record<string, string> {
   };
 }
 
+// ─── hand-assembled wire bytes ─────────────────────────────────────────────
+// The library's encoder never emits the float families for whole numbers, so
+// the float-rejection tests plant the type bytes by hand.
+
+function rawEnvelope(bytes: Uint8Array): Record<string, string> {
+  return { data: btoa(String.fromCharCode(...bytes)) };
+}
+
+function rawList(fields: Array<number | Uint8Array>): Uint8Array {
+  const parts: Uint8Array[] = [
+    Uint8Array.from([0x91]), // one row
+    Uint8Array.from([0x90 + fields.length]), // fixarray row
+    ...fields.map((f) => (typeof f === "number" ? Uint8Array.from([f]) : f)),
+  ];
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(total);
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+}
+
+/** Several hand-assembled rows in one list. */
+function rawRows(rows: Array<Array<number | Uint8Array>>): Uint8Array {
+  const parts: Uint8Array[] = [Uint8Array.from([0x90 + rows.length])];
+  for (const fields of rows) {
+    parts.push(Uint8Array.from([0x90 + fields.length]));
+    for (const f of fields)
+      parts.push(typeof f === "number" ? Uint8Array.from([f]) : f);
+  }
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let o = 0;
+  for (const p of parts) {
+    out.set(p, o);
+    o += p.length;
+  }
+  return out;
+}
+
+const bin8 = (payload: Uint8Array) =>
+  Uint8Array.from([0xc4, payload.length, ...payload]);
+const u32 = (v: number) =>
+  Uint8Array.from([
+    0xce,
+    (v >>> 24) & 0xff,
+    (v >>> 16) & 0xff,
+    (v >>> 8) & 0xff,
+    v & 0xff,
+  ]);
+const f32 = (v: number) => {
+  const b = new Uint8Array(5);
+  new DataView(b.buffer).setFloat32(1, v);
+  b[0] = 0xca;
+  return b;
+};
+const f64 = (v: number) => {
+  const b = new Uint8Array(9);
+  new DataView(b.buffer).setFloat64(1, v);
+  b[0] = 0xcb;
+  return b;
+};
+
 interface WireRow {
   master: unknown;
   subAccountId: unknown;
@@ -196,11 +260,12 @@ describe("decodeSubAccountList", () => {
     expect(() =>
       decodeSubAccountList(envelope([wireRow({ subAccountId: 0 })])),
     ).toThrow(/not a valid child id/);
+    // A fractional id is refused by the row decoder itself.
     expect(() =>
       decodeSubAccountList(envelope([wireRow({ subAccountId: 1.5 })])),
     ).toThrow(/id/);
     expect(() =>
-      decodeSubAccountList(envelope([wireRow({ subAccountId: 0x100000000 })])),
+      decodeSubAccountList(envelope([wireRow({ subAccountId: 2n ** 32n })])),
     ).toThrow(/id range/);
     // Short address:
     expect(() =>
@@ -215,6 +280,8 @@ describe("decodeSubAccountList", () => {
   });
 
   it("rejects non-integer bytes instead of coercing them", () => {
+    // A fractional byte is refused by the row decoder; only an *integral*
+    // float slips past `Number.isInteger`, and the preflight catches that.
     for (const bad of [1.9, Number.NaN]) {
       const address = Array<number>(20).fill(0x11);
       address[0] = bad;
@@ -241,5 +308,174 @@ describe("decodeSubAccountList", () => {
         envelope([wireRow(), wireRow({ subAccountId: 2, address: CHILD_A })]),
       ),
     ).toThrow(/duplicate address/);
+  });
+
+  it("rejects an integral float in the id at both float widths", () => {
+    // `forceIntegerToFloat`-style rows: float32/float64 holding a whole
+    // number decode to the same JS number as the integer, so only the raw
+    // type byte can tell them apart.
+    for (const enc of [f32(1), f64(1)]) {
+      expect(() =>
+        decodeSubAccountList(
+          rawEnvelope(
+            rawList([
+              bin8(MASTER),
+              enc,
+              bin8(CHILD_A),
+              bin8(NAME_A),
+              u32(947727),
+            ]),
+          ),
+        ),
+      ).toThrow(/msgpack float where the wire model has an integer/);
+    }
+  });
+
+  it("rejects an integral float in created_height", () => {
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawList([
+            bin8(MASTER),
+            0x01,
+            bin8(CHILD_A),
+            bin8(NAME_A),
+            f64(947727),
+          ]),
+        ),
+      ),
+    ).toThrow(/msgpack float where the wire model has an integer/);
+  });
+
+  it("rejects an integral float inside the array form of a byte field", () => {
+    const address = Uint8Array.from([
+      0xdc,
+      0x00,
+      0x14, // array16 of 20
+      ...f64(0x11),
+      ...Array<number>(19).fill(0x11),
+    ]);
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawList([bin8(MASTER), 0x01, address, bin8(NAME_A), u32(1)]),
+        ),
+      ),
+    ).toThrow(/msgpack float where the wire model has an integer/);
+  });
+
+  it("rejects a float id in a row after one with a signed-integer id", () => {
+    // int8 5 is a value the decoder accepts; the walk must step over it and
+    // still check the next row, as the Python decoder does.
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawRows([
+            [
+              bin8(MASTER),
+              Uint8Array.from([0xd0, 0x05]),
+              bin8(CHILD_A),
+              bin8(NAME_A),
+              u32(1),
+            ],
+            [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
+          ]),
+        ),
+      ),
+    ).toThrow(/msgpack float where the wire model has an integer/);
+  });
+
+  it("rejects an extension extra field", () => {
+    // ext8: lead, length 1, type 1, one data byte. No read DTO carries an
+    // extension, so the shared preflight refuses it rather than stepping over.
+    const ext8 = Uint8Array.from([0xc7, 0x01, 0x01, 0x00]);
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawRows([
+            [bin8(MASTER), 0x01, bin8(CHILD_A), bin8(NAME_A), u32(1), ext8],
+            [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
+          ]),
+        ),
+      ),
+    ).toThrow(/msgpack extension where the wire model has none/);
+  });
+
+  it("walks str and map extras to a float in a later row", () => {
+    const extras = [
+      Uint8Array.from([0xd9, 0x02, 0x68, 0x69]), // str8 "hi"
+      Uint8Array.from([0x81, 0xa1, 0x6b, 0x02]), // fixmap {"k": 2}
+    ];
+    for (const extra of extras) {
+      expect(() =>
+        decodeSubAccountList(
+          rawEnvelope(
+            rawRows([
+              [bin8(MASTER), 0x01, bin8(CHILD_A), bin8(NAME_A), u32(1), extra],
+              [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
+            ]),
+          ),
+        ),
+      ).toThrow(/msgpack float where the wire model has an integer/);
+    }
+  });
+
+  it("rejects a fixext extra field", () => {
+    const fixext1 = Uint8Array.from([0xd4, 0x01, 0x00]); // fixext1, type 1
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawRows([
+            [bin8(MASTER), 0x01, bin8(CHILD_A), bin8(NAME_A), u32(1), fixext1],
+            [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
+          ]),
+        ),
+      ),
+    ).toThrow(/msgpack extension where the wire model has none/);
+  });
+
+  it("steps over a nested array extra before a later float row", () => {
+    const nested = Uint8Array.from([0x92, 0x01, 0x91, 0x02]); // [1, [2]]
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawRows([
+            [bin8(MASTER), 0x01, bin8(CHILD_A), bin8(NAME_A), u32(1), nested],
+            [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
+          ]),
+        ),
+      ),
+    ).toThrow(/msgpack float where the wire model has an integer/);
+  });
+
+  it("rejects nesting deeper than the depth bound", () => {
+    // The shared preflight fails closed on over-deep nesting instead of
+    // standing the walk down, so a float cannot hide behind a deep extra.
+    const deep = Uint8Array.from([...Array<number>(34).fill(0x91), 0x01]);
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawRows([
+            [bin8(MASTER), 0x01, bin8(CHILD_A), bin8(NAME_A), u32(1), deep],
+            [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
+          ]),
+        ),
+      ),
+    ).toThrow(/nesting exceeds the depth bound/);
+  });
+
+  it("does not blind-scan: float-family bytes inside a bin are data", () => {
+    const master = new Uint8Array(20);
+    master[0] = 0xca;
+    master[1] = 0xcb;
+    const rows = decodeSubAccountList(envelope([wireRow({ master })]));
+    expect(rows[0]?.master.startsWith("cacb")).toBe(true);
+  });
+
+  it("rejects a float in a future optional field", () => {
+    // Trailing fields may be any shape except a float: no read DTO carries one.
+    expect(() => decodeSubAccountList(envelope([[...wireRow(), 1.5]]))).toThrow(
+      /msgpack float where the wire model has an integer/,
+    );
   });
 });

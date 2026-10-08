@@ -745,8 +745,8 @@ export interface ResolveEvent {
 }
 
 /**
- * Create a standalone event (admin-actions v2 inner tag `0x09`): two
- * prediction-binary books (EBY at `childMarketBase`, EBN at +1) under one
+ * Create a standalone event (admin-actions v2 inner tag `0x09`): one
+ * prediction-binary book (EBY at `childMarketBase`) under one
  * `EventInfo`, no underlying perp and no conditional legs. The embedded
  * `signer` must be zero — governance supplies the authorization.
  */
@@ -766,7 +766,7 @@ export interface CreateEvent {
   description?: string;
   /** Optional resolution criteria; encodes as "" when absent. */
   rules?: string;
-  /** Open-interest cap for each of the event's two binary books, in
+  /** Open-interest cap for the event's binary book, in
    *  contracts; `undefined` or `0n` = uncapped (encodes as 0). */
   maxOpenInterest?: bigint;
 }
@@ -779,12 +779,15 @@ export interface AttachedConditional {
   cpnMarket: number;
 }
 
-/** Stored record for an event — the `get_event` read model: its two binary
- *  books and every conditional attached to it. */
+/** Stored record for an event — the `get_event` read model: its binary book
+ *  and every conditional attached to it. */
 export interface EventInfo {
   eventId: number;
+  /** The event's binary book, priced in Yes. */
   ebyMarket: number;
-  ebnMarket: number;
+  /** The No book, only on an engine that still has one; `undefined` once
+   *  the engine runs one binary book per event. */
+  ebnMarket?: number;
   question: string;
   settlementMs: bigint;
   resolutionWindowMs: bigint;

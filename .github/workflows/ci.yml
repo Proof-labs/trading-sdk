@@ -131,7 +131,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Proof-labs/exchange
-          ref: 1f460e8f3b79ce18c57359742487d5c254fcec40
+          ref: 742c631233dca90083d5079c73010cc1f8f3e485
           ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
           persist-credentials: false
           path: .ci-wire-review
@@ -251,7 +251,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Proof-labs/exchange
-          ref: 1f460e8f3b79ce18c57359742487d5c254fcec40
+          ref: 742c631233dca90083d5079c73010cc1f8f3e485
           ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
           persist-credentials: false
           path: .ci-wire-review
@@ -326,7 +326,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Proof-labs/exchange
-          ref: 1f460e8f3b79ce18c57359742487d5c254fcec40
+          ref: 742c631233dca90083d5079c73010cc1f8f3e485
           ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
           persist-credentials: false
           path: .ci-wire-review

@@ -268,7 +268,11 @@ export {
   type ExchangeClientOptions,
   type WsStreamOptions,
 } from "./client.js";
-export { decodeOraclePermissions } from "./oracle-permissions.js";
+export {
+  decodeOraclePermissions,
+  ORACLE_DIAGNOSTIC_BITS,
+  ORACLE_FAULT_BITS,
+} from "./oracle-permissions.js";
 export {
   decodeFinancialState,
   type FinancialStateSelection,
@@ -293,6 +297,8 @@ export type {
   CommittedOracleVerdict,
   OracleVerdictStatus,
   OracleVerdictReason,
+  OracleSelectedSource,
+  OracleVerdictDiagnostic,
 } from "./oracle-permissions.js";
 
 export {
@@ -325,6 +331,7 @@ export {
   type OwnerHistoryParams,
   type CandleHistoryParams,
   type AccountEventsParams,
+  type ExplorerBlocksParams,
   type GatewayTriggerLimbJson,
   type GatewayPendingTriggerRow,
   type GatewayTriggerPositionRow,

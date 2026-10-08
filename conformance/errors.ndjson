@@ -71,6 +71,7 @@
 {"case":"manifest/74","code":74,"log":null,"expect":{"name":"BridgeReceiptMismatch"}}
 {"case":"manifest/75","code":75,"log":null,"expect":{"name":"WithdrawalBelowMinimum"}}
 {"case":"manifest/76","code":76,"log":null,"expect":{"name":"WithdrawalTerminalGated"}}
+{"case":"manifest/77","code":77,"log":null,"expect":{"name":"OracleVerdictUnavailable"}}
 {"case":"manifest/82","code":82,"log":null,"expect":{"name":"OracleGuardUnset"}}
 {"case":"manifest/83","code":83,"log":null,"expect":{"name":"SubAccountNotFound"}}
 {"case":"manifest/84","code":84,"log":null,"expect":{"name":"SubAccountAlreadyExists"}}
@@ -88,6 +89,12 @@
 {"case":"manifest/96","code":96,"log":null,"expect":{"name":"TooManyActiveEvents"}}
 {"case":"manifest/97","code":97,"log":null,"expect":{"name":"MarkUnavailable"}}
 {"case":"manifest/98","code":98,"log":null,"expect":{"name":"TriggerOrderIncompatible"}}
+{"case":"manifest/99","code":99,"log":null,"expect":{"name":"WithdrawalLimitExceeded"}}
+{"case":"manifest/100","code":100,"log":null,"expect":{"name":"AccountOrderCapReached"}}
+{"case":"manifest/102","code":102,"log":null,"expect":{"name":"InsuranceFundingReplayed"}}
+{"case":"manifest/103","code":103,"log":null,"expect":{"name":"InsuranceWithdrawalReplayed"}}
+{"case":"manifest/104","code":104,"log":null,"expect":{"name":"MarketlessInsurancePool"}}
+{"case":"manifest/105","code":105,"log":null,"expect":{"name":"InsufficientInsuranceBalance"}}
 {"case":"manifest/255","code":255,"log":null,"expect":{"name":"InternalError"}}
 {"case":"code50/oi_log","code":50,"log":"open interest limit exceeded on market 7: would be 4, cap 3","expect":{"name":"OpenInterestLimitExceeded"}}
 {"case":"code50/slippage_log","code":50,"log":"atomic basket aggregate slippage 51 bps exceeds budget 50 bps","expect":{"name":"SlippageExceeded"}}

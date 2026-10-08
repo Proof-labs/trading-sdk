@@ -167,16 +167,11 @@ async fn submit_classifies_checktx_ambiguous_and_pre_admission_without_retry() {
             },
         ),
         (
-            json!({"status":"error","txHash":hash.to_string()}),
-            SubmissionOutcome::Pending { hash },
-        ),
-        (json!({"status":"ok"}), SubmissionOutcome::Pending { hash }),
-        (
-            json!({"status":"ok","txHash":hash.to_string(),"code":0}),
+            json!({"status":"pending","txHash":hash.to_string()}),
             SubmissionOutcome::Pending { hash },
         ),
         (
-            json!({"status":"error","error":"validation rejected"}),
+            json!({"status":"refused","error":"validation rejected","errorCode":"InvalidRequest"}),
             SubmissionOutcome::RejectedBeforeAdmission { hash, refusal: () },
         ),
     ] {
@@ -204,10 +199,6 @@ async fn post_mismatch_or_malformed_result_retains_local_hash_and_hides_payload(
         ),
         (
             json!({"status":"ok","code":0,"height":1}),
-            ErrorKind::InvalidResponse,
-        ),
-        (
-            json!({"status":"ok","txHash":own.to_string(),"code":21,"height":1}),
             ErrorKind::InvalidResponse,
         ),
         (
