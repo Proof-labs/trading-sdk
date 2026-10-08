@@ -26,6 +26,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Typed minimum partial-liquidation policy publication/revocation payloads,
+  exact governance-read decoders and explicit calibration validation. These
+  operator methods grant no authority and do not activate liquidation.
+
 - Oracle permission reads decode the committed verdict of exchange#831
   (primary with fallback, DEC-219) in both layouts. The fourteen-field
   format-3 read appends `selected` (`"Primary"` / `"Fallback"`, or null) and a
