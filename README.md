@@ -127,6 +127,11 @@ const result = await client.submitTx({
 console.log(result); // { code: 0, hash: "…" } on success
 ```
 
+> Reads decode MessagePack through the same WASM core as signing (a strict,
+> type-preserving preflight runs before the value decode), so even a read-only
+> client loads the WASM module on its first read. `await client.ready()`
+> remains optional and additionally pre-resolves the chain-id binding.
+
 ## Unit Conventions
 
 | Field               | Unit                 | Example                       |
@@ -226,6 +231,15 @@ new policy is inactive. `Satisfied` covers only this oracle dependency, not all
 portfolio dependencies or other trading checks. It never reads provider/observer
 health; feeder freshness is a separate operational read, described below.
 
+Nodes running the primary-with-fallback policy (exchange#831) serve a
+fourteen-field verdict: `format: 3`, the `selected` slot (`"Primary"` or
+`"Fallback"`) and a `diagnostics` bitset (`diagnosticFlags`: `OnFallback`,
+`PrimaryRefusedDivergence`, `DivergenceUnchecked`, `FallbackUnusable`), which
+are monitoring signals rather than faults. Older nodes serve the twelve-field
+`format: 2` verdict, with `selected` null. Both formats share one `faults` bit
+layout (`ORACLE_FAULT_BITS`, named in `faultReasons`); `Disagreement` and
+`PairTimeMismatch` keep their bits but are no longer produced.
+
 ### Oracle freshness for trading UIs
 
 ```typescript
@@ -241,6 +255,43 @@ remain in the application; `status: "ok"` alone does not mean fresh data, and
 not trading authorization. Like every other gateway interaction, admin calls
 included, it goes through the SDK
 ([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md)).
+
+### Indexed Explorer history
+
+```typescript
+const reads = client.reads();
+const status = await (await reads.historyStatus({ signal })).json();
+const page = await (
+  await reads.historyBlocks({ limit: 20 }, { signal })
+).json();
+if (page.next_cursor) {
+  const nextPage = await (
+    await reads.historyBlocks(
+      { limit: 20, cursor: page.next_cursor },
+      { signal },
+    )
+  ).json();
+}
+const block = await (await reads.historyBlock("2244103", { signal })).json();
+if (block.transactions.length) {
+  const tx = await (
+    await reads.historyTransaction(block.transactions[0].hash, { signal })
+  ).json();
+}
+```
+
+These read `/v1/history/status`, `/v1/history/blocks`,
+`/v1/history/blocks/{height-or-hash}` and `/v1/history/txs/{hash}` through the
+configured gateway. They return unmodified `Response` objects and preserve
+HTTP errors and cancellation. Block pages contain `blocks` and opaque
+`next_cursor`; block details include ordered `transactions`. There is no global
+transaction list. Transaction detail preserves `code` (zero is success) and
+`raw_tx` (base64 committed signed bytes).
+
+Indexer backfill and freshness are distinct from chain progress. Use the status
+response and block timestamps to present delay; a missing indexed record remains
+HTTP 404, and unavailable history remains an error. These reads never fabricate
+blocks or replace errors with empty results.
 
 ### Optional native Rust gateway transport
 
@@ -275,14 +326,17 @@ without changing the original method's behaviour. It returns
 the locally calculated hash, and only `RejectedBeforeAdmission` carries the
 typed `refusal`, so a refusal cannot disagree with its outcome. The original
 method returns `Submission`, whose `RejectedBeforeAdmission` carries
-`refusal: ()`. Only exact source-qualified body/status pairs qualify: authorization,
-rate limiting, maintenance, admission overload/verifier disconnection, and
-specific parse/signature refusals. Generic HTTP errors, unrecognized bodies,
-unknown fields or a hash-bearing 503 remain unresolved. Maintenance requires
-the exact error and `paused` or `cancel-only` mode; substring matching is not
-used. These contracts are checked against
-[`api-gateway@3c711c2`](https://github.com/Proof-labs/api-gateway/tree/3c711c2a3c29ca8f37d2d986fe817d21a9eeebc3)
-(`src/server.rs`, `src/exchange.rs`, `src/types/exchange_response.rs`). Qualify
+`refusal: ()`. The gateway's `status` states where the submission ended
+(`ok`, `error`, `refused`, `pending`) and the SDK reads only that: a
+`refused` answer is a refusal, named by its `errorCode` (authorization, rate
+limiting, maintenance, admission overload/verifier disconnection, unreadable
+request). `error` text is never read, and nothing is inferred from which
+fields are present. A body that states none of the four, a `refused` answer
+with an `errorCode` this SDK does not know, or one that contradicts itself
+(a `txHash` or `code` on a refusal) remains unresolved. Maintenance requires
+the `paused` or `cancel-only` mode. These contracts are checked against
+api-gateway 7.0.0 ([api-gateway#220](https://github.com/Proof-labs/api-gateway/pull/220);
+`src/server.rs`, `src/exchange.rs`, `src/types/exchange_response.rs`). Qualify
 the actual deployed gateway image against that contract before using the
 evidence operationally; a loopback fixture is not deployment qualification.
 
@@ -421,13 +475,13 @@ loop at 9 s+ under load.
 
 The SDK reads that shape and stops working for it:
 
-| Gateway answers                                                                   | `TxResult`                                        | Does the SDK poll?                                                                                                                                                                                                         |
-| --------------------------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `code` + `height`                                                                 | `ok` / `engine`, with `height` + `events`         | **No** — the tx executed; there is nothing to wait for                                                                                                                                                                     |
-| `code`, no `height`                                                               | `engine`                                          | **No** — a CheckTx reject never enters a block, so no DeliverTx will run                                                                                                                                                   |
-| `txHash`, no `code`                                                               | `timeout`                                         | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection |
-| Structured HTTP 200/503 refusal, a recognized reason, no admission/verdict fields | `transport` (code 1 / 503), original error reason | **No** — the gateway refused admission; an unrecognized message, unknown 5xx, or contradictory fields still reconcile by hash                                                                                              |
-| `{status:"ok"}` only                                                              | `ok`, no `height`                                 | **Yes** — a pre-#90 gateway acks CheckTx only, so inclusion is still unknown                                                                                                                                               |
+| Gateway answers                              | `TxResult`                                                                                          | Does the SDK poll?                                                                                                                                                                                                         |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `status: ok` or `error`, with `height`       | `ok` / `engine`, with `height` + `events`                                                           | **No** — the tx executed; there is nothing to wait for                                                                                                                                                                     |
+| `status: error`, no `height`                 | `engine`                                                                                            | **No** — a CheckTx reject, or a tx the gateway refused before broadcast with the engine's code (`17` bad signature, `1` undecodable), never enters a block, so no DeliverTx will run                                       |
+| `status: pending`                            | `timeout`                                                                                           | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection |
+| `status: refused`                            | `transport` (code 1, or the HTTP status), original error reason                                     | **No** — the gateway did not admit it and nothing was broadcast                                                                                                                                                            |
+| Any other body: a pre-7.0.0 gateway, a proxy | as before 7.0.0: read from `code` / `height` / `txHash`; `{status:"ok"}` alone is `ok`, no `height` | **Yes** — a pre-#90 gateway acks CheckTx only, so inclusion is still unknown                                                                                                                                               |
 
 That last row is why upgrading the SDK is safe against a gateway that has not been
 upgraded yet: absence of `code`/`height` still means "execution unknown", and the old

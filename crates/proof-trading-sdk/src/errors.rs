@@ -120,7 +120,8 @@ define_error_kinds! {
     74  => BridgeReceiptMismatch            ~ "The signed receipt does not bind to this withdrawal or deployment (id, owner, amount, destination, epoch or terminal state differs); the log names the field.",
     75  => WithdrawalBelowMinimum           ~ "The net withdrawal amount is below the effective minimum (the configured minimum, floored at the flat fee): the payout would be worth less than it costs to settle.",
     76  => WithdrawalTerminalGated          ~ "A retired legacy relayer terminal (ConfirmWithdrawal / FailWithdrawal) was submitted at or above the receipt cutover; rejected as a normal failed action.",
-    // 77-81 are reserved on the wire for oracle-observation and oracle-policy errors.
+    77  => OracleVerdictUnavailable         ~ "The oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed); mark-dependent actions are refused until a later block certifies a price.",
+    // 78-81 are reserved on the wire for oracle-policy errors.
     82  => OracleGuardUnset                 ~ "A mark-dependent read was refused because the oracle-guard gate is active and the market's mark_price_max_oracle_age_ms is still unset; governance sets the guard first.",
     // Sub-accounts (dormant behind their activation).
     83  => SubAccountNotFound               ~ "No sub-account exists for the given master and id.",
@@ -140,6 +141,8 @@ define_error_kinds! {
     96  => TooManyActiveEvents              ~ "Account would touch more events than the scenario margin engine can enumerate (the per-account event cap). Close a leg on another event before opening this one.",
     97  => MarkUnavailable                   ~ "No mark price is available for the market: an impact-family book has no recent-trade EWMA and no oracle fallback value.",
     98  => TriggerOrderIncompatible         ~ "Order cannot carry attached SL/TP (reduce-only order, ineligible market, or inactive feature).",
+    99  => WithdrawalLimitExceeded          ~ "The withdrawal would push the account's rolling-window outflow past the configured per-account cap. The attempted debit, the cap, and when the oldest in-window outflow expires are in the log; capacity returns as in-window outflows age out.",
+    100 => AccountOrderCapReached           ~ "The account already holds the maximum number of resting orders; cancel one before placing another.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -457,7 +460,7 @@ mod exec_error_meaning_tests {
 
     /// Every engine code must be covered by the public error manifest, with
     /// the holes the wire itself carries: 24, 25 and 31 (the retired
-    /// impact-market family) and 77-81 (reserved for oracle errors). Catches
+    /// impact-market family) and 78-81 (reserved for oracle errors). Catches
     /// the case where a code is reserved by the mirrored engine error enum
     /// but no SDK classification maps to it.
     #[test]
@@ -465,8 +468,8 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=98)
-            .filter(|c| !matches!(c, 24 | 25 | 31 | 77..=81))
+        let expected: Vec<u32> = (1u32..=100)
+            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(

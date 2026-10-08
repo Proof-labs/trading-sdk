@@ -24,7 +24,12 @@ import {
   historySearchParams,
 } from "./history.js";
 import { toWasmFields } from "./codec-adapter.js";
-import { signAndEncode, encodePayloadBytes, encodeSignedTx } from "./codec.js";
+import {
+  signAndEncode,
+  encodePayloadBytes,
+  encodeSignedTx,
+  rejectFloats,
+} from "./codec.js";
 import { decodeAccountState, type AccountState } from "./account-state.js";
 import {
   fetchFinancialState,
@@ -784,6 +789,58 @@ export class ExchangeClient {
       );
     }
 
+    // The gateway's `status` states where the submission ended (api-gateway
+    // 7.0.0); nothing is inferred from which fields are present. Any other
+    // body falls through to the HTTP-status handling below.
+    const stated = gatewayBody.json as GatewayResponseBody | undefined;
+    // An answer naming another tx's hash says nothing about this one.
+    const foreignHash =
+      stated?.txHash !== undefined &&
+      String(stated.txHash).toUpperCase() !== txHash;
+    switch (stated?.status) {
+      case "ok":
+      case "error":
+        // An engine verdict always carries its code and arrives as a 200.
+        if (res.status !== 200 || typeof stated.code !== "number") break;
+        // `ok` with a non-zero code, or `error` with code 0, contradicts itself.
+        if ((stated.status === "ok") !== (stated.code === 0) || foreignHash)
+          return txTimeout(
+            txHash,
+            "gateway verdict contradicts itself; reconcile by hash",
+          );
+        return txFromEngineCode(stated.code, {
+          hash: txHash,
+          height: stated.height,
+          log: stated.log ?? stated.error,
+          info: stated.info,
+          events: stated.events,
+        });
+      case "refused":
+        // A refusal naming a hash, code or height contradicts itself, so it
+        // proves nothing about whether the tx was broadcast.
+        if (
+          stated.txHash !== undefined ||
+          stated.code !== undefined ||
+          stated.height !== undefined
+        )
+          return txTimeout(
+            txHash,
+            "gateway refusal contradicts itself; reconcile by hash",
+          );
+        // Nothing was broadcast, so there is nothing to reconcile.
+        return txTransportError(
+          res.status === 200 ? 1 : res.status,
+          stated.error ?? stated.errorCode ?? "refused by gateway",
+        );
+      case "pending":
+        // Reconcile the hash of the bytes sent, never one the answer names.
+        return txTimeout(
+          txHash,
+          stated.error ??
+            "gateway returned no on-chain result; reconcile by hash",
+        );
+    }
+
     // Auth/rate-limit transport failures don't have a JSON body the
     // engine produced — synthesize an HTTP-status code and tag the result
     // `outcome: "transport"` so callers don't read it as an ExecError.
@@ -806,12 +863,6 @@ export class ExchangeClient {
           gatewayBody.raw ??
           "request body exceeds max size (default 8192 bytes)",
       );
-    }
-    const refusal = preAdmissionRefusal(res.status, gatewayBody.json);
-    // Gateway ExchangeResponse::err is hashless: a structured 503 proves
-    // the transaction never entered the broadcaster queue.
-    if (res.status === 503 && refusal !== undefined) {
-      return txTransportError(503, refusal);
     }
     if (res.status >= 500) {
       return txTimeout(
@@ -881,13 +932,9 @@ export class ExchangeClient {
     // Fallback: the code embedded in the string as "<engine_code>: <message>".
     // The gateway still emits this format for compatibility, so this path also
     // covers a pre-#90 gateway that sends ONLY the string. Parse the leading code;
-    // Hashless gateway refusals are terminal; unrecognized bodies remain unknown.
     const errMsg = json?.error ?? gatewayBody.raw ?? "unknown gateway error";
     const code = parseLeadingErrorCode(errMsg);
     if (code !== null) return txEngineError(code, { log: errMsg });
-    if (res.status === 200 && refusal !== undefined) {
-      return txTransportError(1, refusal);
-    }
     return txTimeout(txHash, "gateway returned no verdict; reconcile by hash");
   }
 
@@ -1261,12 +1308,26 @@ export class ExchangeClient {
       : fetchApiJson(`${this.apiUrl}${nodePath}`);
   }
 
+  /** Decode gateway MessagePack bytes after the authoritative strict preflight
+   *  (`rejectFloats`). Reads now route through the WASM core, so this
+   *  initialises it on first use. Unlike `ready()` it does not resolve the
+   *  chain-id binding, which a read never needs. */
+  private async strictDecode(bytes: Uint8Array): Promise<unknown> {
+    await initWasm();
+    // Decode first, then preflight: a payload the decoder already refuses
+    // keeps its own message; the preflight only adds rejections for bytes that
+    // decode cleanly.
+    const value = msgpackDecoder.decode(bytes);
+    rejectFloats(bytes);
+    return value;
+  }
+
   async queryOrderbook(market: number): Promise<Orderbook> {
     const json = await fetchApiJson(
       `${this.readBaseUrl}/v1/orderbook/${market}`,
     );
     const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes) as [unknown[], unknown[]];
+    const raw = (await this.strictDecode(bytes)) as [unknown[], unknown[]];
     const parseLevel = (arr: unknown[]): OrderbookLevel => ({
       price: BigInt(arr[0] as number | bigint),
       totalQty: BigInt(arr[1] as number | bigint),
@@ -1291,12 +1352,13 @@ export class ExchangeClient {
   async queryMarkets(): Promise<MarketConfig[]> {
     const json = await fetchApiJson(`${this.readBaseUrl}/v1/markets`);
     const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes) as unknown[][];
+    const raw = (await this.strictDecode(bytes)) as unknown[][];
     return raw.map((m) => decodeMarketConfig(m));
   }
 
-  /** All events: each is two prediction-binary books (EBY/EBN) under one
-   *  `EventInfo`, plus every conditional attached to it. Fail-closed like the
+  /** All events: each is its binary book (plus a No book on an engine that
+   *  still has one) under one `EventInfo`, plus every conditional attached
+   *  to it. Fail-closed like the
    *  governance reads: a missing envelope or malformed row is a refusal.
    *  Decoder pinned to the engine golden vector in governance-query.test.ts. */
   async queryEvents(): Promise<EventInfo[]> {
@@ -1306,7 +1368,7 @@ export class ExchangeClient {
         "governance decode: events response has no encoded-data envelope",
       );
     }
-    const raw = msgpackDecoder.decode(fromBase64(json.data));
+    const raw = await this.strictDecode(fromBase64(json.data));
     if (!Array.isArray(raw)) {
       throw new Error("governance decode: events is not an array");
     }
@@ -1330,7 +1392,7 @@ export class ExchangeClient {
         "governance decode: event response has no encoded-data envelope",
       );
     }
-    const raw = msgpackDecoder.decode(fromBase64(json.data));
+    const raw = await this.strictDecode(fromBase64(json.data));
     if (raw == null) return null;
     return decodeEventInfo(raw);
   }
@@ -1348,7 +1410,7 @@ export class ExchangeClient {
     const path = `/v1/triggers/${hex.toLowerCase()}`;
     const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
     const bytes = fromBase64(requireEncodedData(json, path));
-    return decodePositionTriggerInfos(msgpackDecoder.decode(bytes));
+    return decodePositionTriggerInfos(await this.strictDecode(bytes));
   }
 
   /** Read the complete governed trigger-market policy registry. Missing
@@ -1357,7 +1419,7 @@ export class ExchangeClient {
     const path = "/v1/triggers/markets";
     const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
     const bytes = fromBase64(requireEncodedData(json, path));
-    return decodeTriggerMarketConfigInfos(msgpackDecoder.decode(bytes));
+    return decodeTriggerMarketConfigInfos(await this.strictDecode(bytes));
   }
 
   /** Read the fail-closed next-height trigger admission predicate. Heights
@@ -1392,7 +1454,7 @@ export class ExchangeClient {
     const path = `/v1/oracle/permissions/${market}`;
     const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
     const bytes = fromBase64(requireEncodedData(json, path));
-    return decodeOraclePermissions(msgpackDecoder.decode(bytes), market);
+    return decodeOraclePermissions(await this.strictDecode(bytes), market);
   }
 
   /** Immutable owner-bearing trigger lifecycle history. This always uses the
@@ -1453,7 +1515,7 @@ export class ExchangeClient {
     const bytes = fromBase64(
       requireEncodedData(json, "/v1/admin/signer-registry"),
     );
-    return decodeAdminSignerRegistryInfo(msgpackDecoder.decode(bytes));
+    return decodeAdminSignerRegistryInfo(await this.strictDecode(bytes));
   }
 
   /**
@@ -1466,7 +1528,7 @@ export class ExchangeClient {
   async queryAuthorities(): Promise<AuthoritiesSnapshot> {
     const json = await fetchApiJson(`${this.readBaseUrl}/v1/admin/authorities`);
     const bytes = fromBase64(requireEncodedData(json, "/v1/admin/authorities"));
-    return decodeAuthoritiesSnapshot(msgpackDecoder.decode(bytes));
+    return decodeAuthoritiesSnapshot(await this.strictDecode(bytes));
   }
 
   /**
@@ -1515,7 +1577,7 @@ export class ExchangeClient {
       `${this.readBaseUrl}/v1/proposals${qs ? `?${qs}` : ""}`,
     );
     const bytes = fromBase64(requireEncodedData(json, "/v1/proposals"));
-    return decodeProposalPage(msgpackDecoder.decode(bytes));
+    return decodeProposalPage(await this.strictDecode(bytes));
   }
 
   /** Fetch open orders for an address. Returns an empty array if the
@@ -1531,12 +1593,14 @@ export class ExchangeClient {
     );
     if (!json.data) return [];
     const bytes = fromBase64(json.data as string);
+    await initWasm();
     let decoded: unknown;
     try {
       decoded = msgpackDecoder.decode(bytes);
     } catch {
       return [];
     }
+    rejectFloats(bytes);
     if (!Array.isArray(decoded)) return [];
     return (decoded as unknown[][]).map((order) => ({
       id: BigInt(order[0] as number | bigint),
@@ -1556,7 +1620,7 @@ export class ExchangeClient {
       `/v1/withdrawal/${id}`,
     );
     const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes) as unknown[] | null;
+    const raw = (await this.strictDecode(bytes)) as unknown[] | null;
     if (raw === null) return null;
     return {
       id: BigInt(raw[0] as number | bigint),
@@ -1585,7 +1649,7 @@ export class ExchangeClient {
     const path = `/v1/account/${owner}/state`;
     const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
     return decodeAccountState(
-      msgpackDecoder.decode(fromBase64(requireEncodedData(json, path))),
+      await this.strictDecode(fromBase64(requireEncodedData(json, path))),
       owner,
     );
   }
@@ -1598,7 +1662,7 @@ export class ExchangeClient {
       `/v1/account/${hex}`,
     );
     const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes) as unknown[];
+    const raw = (await this.strictDecode(bytes)) as unknown[];
     const balance = BigInt(raw[0] as number | bigint);
     const positions: PositionInfo[] = ((raw[1] ?? []) as unknown[][]).map(
       (p) => {
@@ -1701,7 +1765,7 @@ export class ExchangeClient {
     const json = await res.json();
     if (json.error) return [];
     const bytes = fromBase64(json.data);
-    const raw = msgpackDecoder.decode(bytes);
+    const raw = await this.strictDecode(bytes);
     if (!Array.isArray(raw)) return [];
     return (raw as unknown[][]).map((row) => ({
       owner: toBytes(row[0]),
@@ -2448,9 +2512,7 @@ function computeCometTxHash(txBytes: Uint8Array): string {
   return bytesToHex(sha256(txBytes)).toUpperCase();
 }
 
-/** Shape of a gateway `/exchange` JSON response body — the same envelope
- * both the engine-result decode below and `preAdmissionRefusal` read, kept
- * as one declaration so a new field is visible to both. */
+/** Shape of a gateway `/exchange` JSON response body. */
 interface GatewayResponseBody {
   status?: string;
   error?: string;
@@ -2460,72 +2522,9 @@ interface GatewayResponseBody {
   info?: string;
   height?: number;
   events?: TxEvent[];
+  errorCode?: string;
   mode?: string;
   retryAfterMs?: number;
-}
-
-/** Only a fixed, known set of (HTTP status, message) pairs is hashless proof
- * of a pre-admission refusal — mirrors
- * `crates/proof-trading-sdk/src/gateway/mod.rs::pre_admission_refusal`
- * exactly for the statuses reached here (200, 503). ExchangeResponse::err
- * omits admission/verdict and rate-limit fields, but the shape alone is not
- * enough: an unrecognized message in that same shape can come from a generic
- * failure (an intermediary, a proxy) rather than the gateway's own refusal
- * path, and contradictory or unknown evidence must not become a terminal
- * refusal for a transaction that may have executed. */
-const PRE_ADMISSION_REFUSAL_FIELDS = new Set([
-  "status",
-  "error",
-  "mode",
-  "retryAfterMs",
-]);
-
-function preAdmissionRefusal(
-  status: number,
-  value: unknown,
-): string | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return;
-  const body = value as GatewayResponseBody;
-  // Mirrors `RefusalRead`'s `#[serde(deny_unknown_fields)]`: any field
-  // outside this exact set — including ones this SDK doesn't know about
-  // yet — makes the body unrecognized, not refusal evidence.
-  if (
-    body.status !== "error" ||
-    typeof body.error !== "string" ||
-    Object.keys(body).some((key) => !PRE_ADMISSION_REFUSAL_FIELDS.has(key))
-  )
-    return undefined;
-
-  if (
-    status === 503 &&
-    body.error === "maintenance: signed writes are not open"
-  ) {
-    if (body.retryAfterMs !== undefined) return undefined;
-    return body.mode === "paused" || body.mode === "cancel-only"
-      ? body.error
-      : undefined;
-  }
-  if (body.mode !== undefined || body.retryAfterMs !== undefined)
-    return undefined;
-
-  if (
-    status === 503 &&
-    (body.error === "service overloaded" ||
-      body.error === "service unavailable")
-  )
-    return body.error;
-  if (
-    status === 200 &&
-    (body.error === "invalid request body" ||
-      body.error === "invalid action parameters" ||
-      body.error === "invalid base64 in action field" ||
-      body.error === "invalid signature" ||
-      body.error === "internal encoding error" ||
-      body.error ===
-        "action type 0x1d is proposer-only and cannot enter through the gateway")
-  )
-    return body.error;
-  return undefined;
 }
 
 async function readGatewayBody(res: Response): Promise<{
