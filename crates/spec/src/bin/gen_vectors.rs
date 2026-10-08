@@ -557,6 +557,29 @@ fn main() -> Result<(), Box<dyn Error>> {
                        "mark_price_max_oracle_age_ms": u64::MAX,
                        "max_oracle_deviation_bps": 10_000u32}}}),
         ),
+        // Tags 14/15: the on-chain upgrade plan. The release is (major, minor).
+        codec_case(
+            "propose_admin_action/schedule_upgrade",
+            PROPOSE_ADMIN_ACTION,
+            json!({"proposer": vec![0xA1u8;20], "registry_version": 1u64,
+                   "action": {"ScheduleUpgrade": {"target_height": 50_780_000u64,
+                       "major": 2u32, "minor": 1u32,
+                       "successor_sha256": vec![0xABu8; 32]}}}),
+        ),
+        codec_case(
+            "propose_admin_action/schedule_upgrade_u64_max",
+            PROPOSE_ADMIN_ACTION,
+            json!({"proposer": vec![0xA1u8;20], "registry_version": 1u64,
+                   "action": {"ScheduleUpgrade": {"target_height": u64::MAX,
+                       "major": u32::MAX, "minor": u32::MAX,
+                       "successor_sha256": vec![0x01u8; 32]}}}),
+        ),
+        codec_case(
+            "propose_admin_action/cancel_upgrade",
+            PROPOSE_ADMIN_ACTION,
+            json!({"proposer": vec![0xA1u8;20], "registry_version": 1u64,
+                   "action": {"CancelUpgrade": {"target_height": 50_780_000u64}}}),
+        ),
         // Synthetic opaque bytes test the outer wire only, not a valid live policy.
         codec_case(
             "propose_admin_action/configure_oracle_policy",

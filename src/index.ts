@@ -37,6 +37,8 @@ export {
   type CancelPositionTriggers,
   type SetTriggerMarketConfig,
   type SetOracleGuards,
+  type ScheduleUpgrade,
+  type CancelUpgrade,
   type BridgeWithdrawalReceipt,
   type OperatorReceiptProof,
   type ApproveAgent,
@@ -66,6 +68,10 @@ export {
   type EmergencyAdminAction,
   type AdminSignerRegistry,
   type AuthoritiesSnapshot,
+  type PendingUpgradePlan,
+  type ExecutedUpgrade,
+  type UpgradesInfo,
+  type NodeVersion,
   type ExpiryReason,
   type ProposalStatus,
   type ProposalDisplayInfo,
@@ -164,6 +170,7 @@ export {
 } from "./triggers.js";
 
 export { validateSetOracleGuards } from "./oracle-guards.js";
+export { validateScheduleUpgrade } from "./upgrade-plan.js";
 
 export {
   decodePositionTriggerHistoryPage,
@@ -199,6 +206,8 @@ export {
   decodeAdminSignerRegistry,
   decodeAdminSignerRegistryInfo,
   decodeAuthoritiesSnapshot,
+  decodeUpgradesInfo,
+  decodeNodeVersion,
   decodeProposalPage,
   decodeProposalDisplayInfo,
   decodeProposalStatus,

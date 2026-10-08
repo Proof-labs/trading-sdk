@@ -1121,6 +1121,23 @@ export interface SetOracleGuards {
   maxOracleDeviationBps?: number | null;
 }
 
+/** Schedule a coordinated engine upgrade through multisig governance (inner
+ * tag 14). `major`/`minor` is the successor's engine release, which must
+ * exceed the running one; `successorSha256` pins the library bytes. */
+export interface ScheduleUpgrade {
+  /** First height the successor engine runs. */
+  targetHeight: bigint;
+  major: number;
+  minor: number;
+  /** SHA-256 of the successor engine library (32 bytes). */
+  successorSha256: Uint8Array;
+}
+
+/** Cancel the pending upgrade plan, named by its target height (inner tag 15). */
+export interface CancelUpgrade {
+  targetHeight: bigint;
+}
+
 /**
  * Per-account fixed withdrawal window (CU-06, inner tag 19). A cap of 0 is
  * the deliberate off-switch; `window_secs >= 1` (production 86_400). The
@@ -1179,7 +1196,9 @@ export type AdminAction =
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
-  | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet };
+  | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet }
+  | { kind: "ScheduleUpgrade"; value: ScheduleUpgrade }
+  | { kind: "CancelUpgrade"; value: CancelUpgrade };
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */
@@ -1288,6 +1307,39 @@ export type Action = TraderAction | OperatorAction | GovernanceAction;
 // engine's own serializer — see that module for the encoding facts these
 // shapes depend on.
 // ---------------------------------------------------------------------------
+
+/** The pending protocol-upgrade plan (`GET /v1/upgrades`). */
+export interface PendingUpgradePlan {
+  targetHeight: bigint;
+  major: number;
+  minor: number;
+  successorSha256: Uint8Array;
+  scheduledHeight: bigint;
+}
+
+/** One executed activation from the append-only ledger. */
+export interface ExecutedUpgrade {
+  activatedHeight: bigint;
+  major: number;
+  minor: number;
+}
+
+/** `GET /v1/upgrades`: the one pending plan, if any, and every activation. */
+export interface UpgradesInfo {
+  plan: PendingUpgradePlan | null;
+  executed: ExecutedUpgrade[];
+}
+
+/** `GET /v1/version`: the answering node's binary and loaded engine. Node-local,
+ *  not consensus. */
+export interface NodeVersion {
+  node: string;
+  engine: string;
+  engineAbiVersion: number;
+  engineMajor: number;
+  engineMinor: number;
+  engineLibSha256: string;
+}
 
 /** The installed admin signer roster. Absent (a `null` read) means multisig
  *  administration is INACTIVE — never an empty roster. */

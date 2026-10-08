@@ -35,9 +35,11 @@ import {
   decodeAdminSignerRegistry,
   decodeAdminSignerRegistryInfo,
   decodeEventInfo,
+  decodeNodeVersion,
   decodeProposalPage,
   decodeProposalDisplayInfo,
   decodeProposalStatus,
+  decodeUpgradesInfo,
 } from "./governance-query.js";
 import { Outcome } from "./types.js";
 
@@ -552,6 +554,34 @@ describe("byte-field validation", () => {
     );
   });
 
+  it("reads ScheduleUpgrade and CancelUpgrade proposals under tags 14 and 15", () => {
+    const raw = validProposalRaw();
+    raw[11] = 14;
+    raw[12] = { ScheduleUpgrade: [50_780_000, 2, 1, new Array(32).fill(0xab)] };
+    expect(decodeProposalDisplayInfo(raw).action).toEqual({
+      kind: "ScheduleUpgrade",
+      value: {
+        targetHeight: 50_780_000n,
+        major: 2,
+        minor: 1,
+        successorSha256: new Uint8Array(32).fill(0xab),
+      },
+    });
+    raw[11] = 15;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(
+      /does not match ScheduleUpgrade tag 14/,
+    );
+    raw[12] = { ScheduleUpgrade: [50_780_000, 2, 1, new Array(32).fill(0)] };
+    raw[11] = 14;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(/all-zero/);
+    raw[11] = 15;
+    raw[12] = { CancelUpgrade: [50_780_000] };
+    expect(decodeProposalDisplayInfo(raw).action).toEqual({
+      kind: "CancelUpgrade",
+      value: { targetHeight: 50_780_000n },
+    });
+  });
+
   it("reads a CancelAllOrdersForAccount proposal under its tag 8", () => {
     // The kind→tag table row is only exercised through a proposal read: a
     // wrong tag here would refuse every real tag-8 proposal as a mismatch.
@@ -808,5 +838,72 @@ describe("decodeEventInfo (E1 golden vector)", () => {
       decodeVector(GOLDEN.slice(0, -2).replace(/^9b/, "9a")),
     );
     expect(info.attachedConditionals).toEqual([]);
+  });
+});
+
+describe("decodeUpgradesInfo (engine golden vector)", () => {
+  // rmp_serde of UpgradesInfo from exchange-core/src/query.rs.
+  it("decodes a pending plan and an executed activation", () => {
+    const info = decodeUpgradesInfo(
+      decodeVector(
+        "9295ce0306d7600201dc0020" +
+          "ccab".repeat(32) +
+          "cf000000012a05f2009193210200",
+      ),
+    );
+    expect(info.plan).toEqual({
+      targetHeight: 50_780_000n,
+      major: 2,
+      minor: 1,
+      successorSha256: new Uint8Array(32).fill(0xab),
+      scheduledHeight: 5_000_000_000n,
+    });
+    expect(info.executed).toEqual([
+      { activatedHeight: 33n, major: 2, minor: 0 },
+    ]);
+  });
+
+  it("decodes absence as a null plan and an empty ledger", () => {
+    expect(decodeUpgradesInfo(decodeVector("92c090"))).toEqual({
+      plan: null,
+      executed: [],
+    });
+  });
+
+  it("refuses a short sha256", () => {
+    expect(() => decodeUpgradesInfo([[1, 2, 1, [0xab], 1], []])).toThrow(
+      /successorSha256/,
+    );
+  });
+});
+
+describe("decodeNodeVersion", () => {
+  const body = {
+    node: "2.13.0",
+    engine: "2.1-1",
+    engine_abi_version: 1,
+    engine_major: 2,
+    engine_minor: 1,
+    engine_lib_path: "/data/engines/libexchange_ffi.2.1.so",
+    engine_lib_sha256: "ab".repeat(32),
+  };
+
+  it("reads the loaded release", () => {
+    expect(decodeNodeVersion(body)).toEqual({
+      node: "2.13.0",
+      engine: "2.1-1",
+      engineAbiVersion: 1,
+      engineMajor: 2,
+      engineMinor: 1,
+      engineLibSha256: "ab".repeat(32),
+    });
+  });
+
+  it("refuses a malformed body", () => {
+    expect(() => decodeNodeVersion({ ...body, engine_major: -1 })).toThrow();
+    expect(() =>
+      decodeNodeVersion({ ...body, engine_lib_sha256: "x" }),
+    ).toThrow();
+    expect(() => decodeNodeVersion(null)).toThrow();
   });
 });

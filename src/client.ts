@@ -93,6 +93,8 @@ import type {
   TriggerMarketHistoryFilters,
   TriggerMarketHistoryPage,
   TriggerMarketConfigInfo,
+  NodeVersion,
+  UpgradesInfo,
   AuthorizeWithdrawal,
   ConfirmWithdrawalReceipt,
   FailWithdrawalReceipt,
@@ -100,6 +102,8 @@ import type {
 import {
   decodeAdminSignerRegistryInfo,
   decodeAuthoritiesSnapshot,
+  decodeNodeVersion,
+  decodeUpgradesInfo,
   decodeEventInfo,
   decodeProposalPage,
 } from "./governance-query.js";
@@ -1525,6 +1529,26 @@ export class ExchangeClient {
     const json = await fetchApiJson(`${this.readBaseUrl}/v1/admin/authorities`);
     const bytes = fromBase64(requireEncodedData(json, "/v1/admin/authorities"));
     return decodeAuthoritiesSnapshot(await this.strictDecode(bytes));
+  }
+
+  /**
+   * Read the pending protocol-upgrade plan and the executed activation
+   * ledger via the gateway proxy (`GET /v1/upgrades`).
+   */
+  async queryUpgrades(): Promise<UpgradesInfo> {
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/upgrades`);
+    const bytes = fromBase64(requireEncodedData(json, "/v1/upgrades"));
+    return decodeUpgradesInfo(msgpackDecoder.decode(bytes));
+  }
+
+  /**
+   * The answering node's binary and loaded engine release
+   * (`GET /v1/version`). Node-local: behind a load balancer it describes
+   * whichever node served the request.
+   */
+  async queryNodeVersion(): Promise<NodeVersion> {
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/version`);
+    return decodeNodeVersion(json);
   }
 
   /**
