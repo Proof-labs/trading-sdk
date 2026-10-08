@@ -29,6 +29,7 @@ import { validateSetOracleGuards } from "./oracle-guards.js";
 import {
   decodePublishLiquidationPolicy,
   decodeRevokeLiquidationPolicy,
+  decodeSetPartialLiquidationActivation,
 } from "./partial-liquidation-policy.js";
 import { Outcome } from "./types.js";
 
@@ -610,6 +611,7 @@ function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
 export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   PublishLiquidationPolicy: 22,
   RevokeLiquidationPolicy: 23,
+  SetPartialLiquidationActivation: 24,
   CreateMarket: 1,
   UpdateAdminSignerRegistry: 2,
   CreateEvent: 9,
@@ -647,6 +649,11 @@ export function decodeAdminAction(
       return {
         kind: "RevokeLiquidationPolicy",
         value: decodeRevokeLiquidationPolicy(payload),
+      };
+    case "SetPartialLiquidationActivation":
+      return {
+        kind: "SetPartialLiquidationActivation",
+        value: decodeSetPartialLiquidationActivation(payload),
       };
     case "CancelAllOrdersForAccount":
       return {

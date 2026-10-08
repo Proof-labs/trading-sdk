@@ -13,6 +13,7 @@ pub use proof_wire::codec::{
 };
 pub use proof_wire::liquidation_policy::{
     PartialLiquidationPolicy, PublishLiquidationPolicy, RevokeLiquidationPolicy,
+    SetPartialLiquidationActivation,
 };
 pub use proof_wire::types::{
     AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, ConfigureOraclePolicy,

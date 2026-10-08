@@ -11,6 +11,8 @@ import { decodeAdminAction } from "./governance-query.js";
 import {
   decodePublishLiquidationPolicy,
   decodeRevokeLiquidationPolicy,
+  decodeSetPartialLiquidationActivation,
+  validateSetPartialLiquidationActivation,
   validatePublishLiquidationPolicy,
   type PublishLiquidationPolicy,
 } from "./partial-liquidation-policy.js";
@@ -25,6 +27,56 @@ const command = (): PublishLiquidationPolicy =>
 
 describe("minimum partial liquidation policy", () => {
   beforeAll(ready);
+
+  it("freezes the separate activation command and rejects malformed generations", () => {
+    const value = decodeSetPartialLiquidationActivation([null, 1n, 1n, true]);
+    const action = {
+      type: "ProposeAdminAction" as const,
+      data: {
+        proposer: new Uint8Array(20).fill(0xa1),
+        registryVersion: 1n,
+        action: { kind: "SetPartialLiquidationActivation" as const, value },
+      },
+    };
+    expect(
+      bytesToHex(encodePayloadBytes(action)).endsWith(
+        "81bf5365745061727469616c4c69717569646174696f6e41637469766174696f6e94c00101c3",
+      ),
+    ).toBe(true);
+    expect(
+      decodeTx(
+        encodeSignedTx(action, 1n, new Uint8Array(32), new Uint8Array(64)),
+      ).action,
+    ).toEqual(action);
+    expect(
+      decodeAdminAction({
+        SetPartialLiquidationActivation: [null, 1n, 1n, true],
+      }),
+    ).toEqual(action.data.action);
+    expect(adminActionToWasm(action.data.action)).toEqual({
+      SetPartialLiquidationActivation: {
+        expected_generation: null,
+        generation: 1n,
+        revision: 1n,
+        enabled: true,
+      },
+    });
+    for (const malformed of [
+      [null, 2n, 1n, false],
+      [0n, 1n, 1n, false],
+      [null, 1n, 1n, 1],
+      [null, 1n, 0n, false],
+      [null, 1n, 1n, false, 0],
+    ]) {
+      expect(() => decodeSetPartialLiquidationActivation(malformed)).toThrow();
+    }
+    expect(() =>
+      validateSetPartialLiquidationActivation({
+        ...value,
+        expectedGeneration: 0xffff_ffff_ffff_ffffn,
+      }),
+    ).toThrow();
+  });
 
   it("matches frozen engine wire bytes and round-trips through the real WASM codec", () => {
     const actions = [

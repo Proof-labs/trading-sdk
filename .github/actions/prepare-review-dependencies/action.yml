@@ -13,7 +13,7 @@ runs:
     - uses: actions/checkout@v4
       with:
         repository: Proof-labs/exchange
-        ref: 88e43d2c1ee9fe71dc7ea48bbda29aef9c3de627
+        ref: 6274deeda06b3eb913eb2979ac1c6039acd429b6
         ssh-key: ${{ inputs.wire-key }}
         persist-credentials: false
         path: .ci-wire-review
@@ -29,7 +29,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        expected=88e43d2c1ee9fe71dc7ea48bbda29aef9c3de627
+        expected=6274deeda06b3eb913eb2979ac1c6039acd429b6
         test "$(git -C .ci-wire-review rev-parse HEAD)" = "$expected"
         grep -F "rev = \"$expected\"" crates/proof-trading-sdk/Cargo.toml
         git clone --bare --no-hardlinks .ci-wire-review "$RUNNER_TEMP/wire-review.git"

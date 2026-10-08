@@ -24,6 +24,41 @@ export interface RevokeLiquidationPolicy {
   revision: bigint;
 }
 
+export interface SetPartialLiquidationActivation {
+  expectedGeneration: bigint | null;
+  generation: bigint;
+  revision: bigint;
+  enabled: boolean;
+}
+
+export function validateSetPartialLiquidationActivation(
+  command: SetPartialLiquidationActivation,
+): void {
+  u64(command.generation, "generation");
+  u64(command.revision, "revision");
+  if (command.expectedGeneration !== null)
+    u64(command.expectedGeneration, "expectedGeneration");
+  if (command.generation !== (command.expectedGeneration ?? 0n) + 1n)
+    throw new PartialPolicyValidationError("generation");
+  if (typeof command.enabled !== "boolean")
+    throw new PartialPolicyValidationError("enabled");
+}
+
+export function decodeSetPartialLiquidationActivation(
+  value: unknown,
+): SetPartialLiquidationActivation {
+  const row = tuple(value, 4, "activation");
+  const command = {
+    expectedGeneration:
+      row[0] === null ? null : u64(row[0], "expectedGeneration"),
+    generation: u64(row[1], "generation"),
+    revision: u64(row[2], "revision"),
+    enabled: row[3] as boolean,
+  };
+  validateSetPartialLiquidationActivation(command);
+  return command;
+}
+
 export class PartialPolicyValidationError extends Error {
   constructor(readonly field: string) {
     super(`Invalid partial-liquidation policy field: ${field}`);
