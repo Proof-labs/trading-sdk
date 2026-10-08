@@ -1,5 +1,6 @@
 // Types
 export * from "./partial-liquidation-policy.js";
+export * from "./partial-liquidation-fee.js";
 
 export {
   type Address,

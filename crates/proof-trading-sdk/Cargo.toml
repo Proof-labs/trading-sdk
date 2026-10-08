@@ -30,7 +30,7 @@ rmpv = { version = "1.3.1", features = ["with-serde"] }
 # OracleRejectReason, FundingSkipReason, and ExecError code 82.
 # Exact review contract from exchange #1024; a released public wire tag is
 # required before releasing this companion to users.
-proof-wire = { git = "https://github.com/Proof-labs/exchange.git", rev = "18045fbac1e24e7fafbbcd7072d5dce400efd232" }
+proof-wire = { git = "https://github.com/Proof-labs/exchange.git", rev = "88e43d2c1ee9fe71dc7ea48bbda29aef9c3de627" }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.
