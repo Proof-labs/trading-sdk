@@ -224,21 +224,6 @@ const STATES = new Set<TriggerLimbState>([
   "Cancelled",
   "Invalidated",
 ]);
-const REASONS = new Set<TriggerOutcomeReason>([
-  "PositionClosed",
-  "PositionEpochChanged",
-  "PositionSideChanged",
-  "BelowMaintenance",
-  "IndeterminateAccount",
-  "MarketDisabled",
-  "MarkUnavailable",
-  "MarkStale",
-  "MarkFutureDated",
-  "NoEligibleLiquidity",
-  "SelfTradePrevention",
-  "WorkLimitReached",
-  "ExecutionRejected",
-]);
 
 function exactEnum<T extends string>(
   value: unknown,
@@ -249,6 +234,15 @@ function exactEnum<T extends string>(
     throw new Error(`trigger decode: unknown ${name} ${String(value)}`);
   }
   return value as T;
+}
+
+function outcomeReason(value: unknown): TriggerOutcomeReason {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(
+      "trigger decode: TriggerOutcomeReason must be a non-empty string",
+    );
+  }
+  return value;
 }
 
 function decodeEvaluation(value: unknown): TriggerEvaluation | null {
@@ -267,10 +261,7 @@ function decodeEvaluation(value: unknown): TriggerEvaluation | null {
     requestedQuantity,
     filledQuantity,
     residualQuantity,
-    reason:
-      row[6] == null
-        ? null
-        : exactEnum(row[6], REASONS, "TriggerOutcomeReason"),
+    reason: row[6] == null ? null : outcomeReason(row[6]),
   };
 }
 
@@ -401,7 +392,7 @@ function decodeAvailability(value: unknown): TriggerEffectiveAvailability {
     if (reason !== undefined) {
       return {
         kind: "Deferred",
-        reason: exactEnum(reason, REASONS, "TriggerOutcomeReason"),
+        reason: outcomeReason(reason),
       };
     }
   }

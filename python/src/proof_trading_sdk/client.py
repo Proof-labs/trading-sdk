@@ -129,12 +129,6 @@ _TRIGGER_KINDS = {"StopLoss", "TakeProfit"}
 _TRIGGER_LIMB_STATES = {
     "Armed", "Filled", "Partial", "NoFill", "Rejected", "Cancelled", "Invalidated"
 }
-_TRIGGER_REASONS = {
-    "PositionClosed", "PositionEpochChanged", "PositionSideChanged", "BelowMaintenance",
-    "IndeterminateAccount", "MarketDisabled", "MarkUnavailable", "MarkStale",
-    "MarkFutureDated", "NoEligibleLiquidity", "SelfTradePrevention",
-    "WorkLimitReached", "ExecutionRejected",
-}
 _TRIGGER_SIMPLE_AVAILABILITY = {
     "Available", "TriggerActionsInactive", "PendingActivation", "MigrationIncomplete",
     "ConfigurationMissing", "MarketDisabled",
@@ -813,16 +807,20 @@ class ExchangeClient:
             )
         return value
 
+    @staticmethod
+    def _trigger_outcome_reason(value: t.Any) -> str:
+        if not isinstance(value, str) or value == "":
+            raise ProofTradingSdkError(
+                "trigger decode: TriggerOutcomeReason must be a non-empty string"
+            )
+        return value
+
     @classmethod
     def _decode_trigger_evaluation(cls, value: t.Any) -> dict[str, t.Any] | None:
         if value is None:
             return None
         row = cls._trigger_tuple(value, "TriggerEvaluation", 7)
-        reason = row[6]
-        if reason is not None and reason not in _TRIGGER_REASONS:
-            raise ProofTradingSdkError(
-                f"trigger decode: unknown TriggerOutcomeReason {reason!r}"
-            )
+        reason = None if row[6] is None else cls._trigger_outcome_reason(row[6])
         requested = cls._trigger_uint(row[3], "evaluation.requested_quantity")
         filled = cls._trigger_uint(row[4], "evaluation.filled_quantity")
         residual = cls._trigger_uint(row[5], "evaluation.residual_quantity")
@@ -933,11 +931,10 @@ class ExchangeClient:
         if isinstance(row[2], str) and row[2] in _TRIGGER_SIMPLE_AVAILABILITY:
             availability = {"kind": row[2]}
         elif isinstance(row[2], dict) and set(row[2]) == {"Deferred"}:
-            if row[2]["Deferred"] not in _TRIGGER_REASONS:
-                raise ProofTradingSdkError(
-                    "trigger decode: unknown deferred TriggerOutcomeReason"
-                )
-            availability = {"kind": "Deferred", "reason": row[2]["Deferred"]}
+            availability = {
+                "kind": "Deferred",
+                "reason": cls._trigger_outcome_reason(row[2]["Deferred"]),
+            }
         else:
             raise ProofTradingSdkError(
                 "trigger decode: unknown TriggerEffectiveAvailability"

@@ -1787,20 +1787,8 @@ export type TriggerLimbState =
   | "Rejected"
   | "Cancelled"
   | "Invalidated";
-export type TriggerOutcomeReason =
-  | "PositionClosed"
-  | "PositionEpochChanged"
-  | "PositionSideChanged"
-  | "BelowMaintenance"
-  | "IndeterminateAccount"
-  | "MarketDisabled"
-  | "MarkUnavailable"
-  | "MarkStale"
-  | "MarkFutureDated"
-  | "NoEligibleLiquidity"
-  | "SelfTradePrevention"
-  | "WorkLimitReached"
-  | "ExecutionRejected";
+/** Engine-defined label, passed through. */
+export type TriggerOutcomeReason = string;
 
 /** Last deterministic evaluation of one stored trigger limb. */
 export interface TriggerEvaluation {
@@ -1929,18 +1917,11 @@ export type PositionTriggerHistoryEventType =
   | "pending_triggers_discarded";
 
 /**
- * Why a pending (pre-fill) bracket left the live set without installing.
- * `install_rejected` is the silent protection-loss path: the order's fill
- * stands but the bracket could not install, so the position is live and
- * unprotected — surfaces it.
+ * Why a pending (pre-fill) bracket left the live set without installing:
+ * an engine-defined label, passed through. `install_rejected` is the silent
+ * protection-loss path: the fill stands but the bracket could not install.
  */
-export type PendingTriggerDiscardReason =
-  | "order_cancelled"
-  | "order_expired"
-  | "order_replaced"
-  | "unfilled_terminal"
-  | "install_rejected"
-  | "position_closed";
+export type PendingTriggerDiscardReason = string;
 
 export type TriggerMarketHistoryEventType =
   "trigger_market_deferred" | "trigger_market_resumed";
@@ -2053,14 +2034,17 @@ export interface PositionTriggerDeferredHistoryPayload extends OwnerTriggerHisto
   trigger_price: string;
   frozen_mark: string;
   requested_quantity: string;
+  /** Engine-defined label, passed through. */
   reason: string;
 }
 
 export interface TriggerMarketDeferredHistoryPayload extends TriggerHistoryPayloadBase {
+  /** Engine-defined label, passed through. */
   reason: string;
 }
 
 export interface TriggerMarketResumedHistoryPayload extends TriggerHistoryPayloadBase {
+  /** Engine-defined label, passed through. */
   previous_reason: string;
 }
 
