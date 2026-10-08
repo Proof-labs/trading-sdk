@@ -26,7 +26,16 @@ import type {
   AuthoritiesSnapshot,
 } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
+import {
+  validateFundInsuranceFund,
+  validateWithdrawInsuranceFund,
+} from "./insurance-funding.js";
 import { Outcome } from "./types.js";
+import {
+  decodeLiquidationPolicy,
+  decodeLiquidationRestart,
+  decodeLiquidationRelease,
+} from "./liquidation-policy.js";
 
 /**
  * Typed decoders for the engine's governance READ model — the responses
@@ -615,6 +624,12 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CancelAllOrdersForAccount: 8,
   ConfigureOraclePolicy: 12,
   SetOracleGuards: 13,
+  FundInsuranceFund: 18,
+  WithdrawInsuranceFund: 21,
+  PublishLiquidationPolicy: 22,
+  RevokeLiquidationPolicy: 23,
+  RestartLiquidationPlan: 24,
+  ReleaseLiquidationPlan: 25,
   SetWithdrawalLimit: 19,
   SetOperatorReceiptRegistry: 20,
 };
@@ -632,6 +647,56 @@ export function decodeAdminAction(
   if (value === "UnpauseBridge") return { kind: "UnpauseBridge" };
   const { name, payload } = variantOf(value, field);
   switch (name) {
+    case "PublishLiquidationPolicy":
+      return { kind: name, value: decodeLiquidationPolicy(payload) };
+    case "RestartLiquidationPlan":
+      return { kind: name, value: decodeLiquidationRestart(payload) };
+    case "ReleaseLiquidationPlan":
+      return { kind: name, value: decodeLiquidationRelease(payload) };
+    case "RevokeLiquidationPolicy":
+      return {
+        kind: name,
+        value: {
+          revision: toU64(toTuple(payload, field, 1)[0], `${field}.revision`),
+        },
+      };
+    case "FundInsuranceFund": {
+      const raw = toTuple(payload, field, 3);
+      const decoded: AdminAction & { kind: "FundInsuranceFund" } = {
+        kind: "FundInsuranceFund",
+        value: {
+          fundingId: toU64(raw[0], `${field}.fundingId`),
+          source: toBytes(raw[1], `${field}.source`, ADDRESS_LEN),
+          allocations: toArray(raw[2], `${field}.allocations`).map(
+            (value, i) => {
+              const row = toTuple(value, `${field}.allocations[${i}]`, 2);
+              return {
+                poolId: toU8(row[0], `${field}.poolId`),
+                amount: toU64(row[1], `${field}.amount`),
+              };
+            },
+          ),
+        },
+      };
+      validateFundInsuranceFund(decoded.value);
+      return decoded;
+    }
+    case "WithdrawInsuranceFund": {
+      const raw = toTuple(payload, field, 3);
+      const decoded = {
+        withdrawalId: toU64(raw[0], `${field}.withdrawalId`),
+        recipient: toBytes(raw[1], `${field}.recipient`, ADDRESS_LEN),
+        allocations: toArray(raw[2], `${field}.allocations`).map((value, i) => {
+          const row = toTuple(value, `${field}.allocations[${i}]`, 2);
+          return {
+            poolId: toU8(row[0], `${field}.poolId`),
+            amount: toU64(row[1], `${field}.amount`),
+          };
+        }),
+      };
+      validateWithdrawInsuranceFund(decoded);
+      return { kind: "WithdrawInsuranceFund", value: decoded };
+    }
     case "CancelAllOrdersForAccount":
       return {
         kind: "CancelAllOrdersForAccount",

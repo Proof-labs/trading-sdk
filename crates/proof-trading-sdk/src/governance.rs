@@ -11,9 +11,27 @@
 pub use proof_wire::codec::{
     admin_proposal_content_hash, canonical_admin_action_bytes, ADMIN_PROPOSAL_HASH_DOMAIN,
 };
+pub use proof_wire::liquidation_policy::{
+    LiquidationFundingSnapshot, LiquidationInsuranceRatios, LiquidationReferenceSettings,
+    LiquidationWorkSettings, PublishLiquidationPolicy, ReleaseLiquidationPlan,
+    RestartLiquidationPlan, RevokeLiquidationPolicy,
+};
 pub use proof_wire::types::{
     AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, ConfigureOraclePolicy,
-    EmergencyAction, EmergencyActionType, EmergencyAdminAction, ProposalId, ProposeAdminAction,
-    RegistryVersion, RejectAdminAction, SetOracleGuards, SignatureThreshold, SignerAddress,
-    UpdateAdminSignerRegistry,
+    EmergencyAction, EmergencyActionType, EmergencyAdminAction, FundInsuranceFund, FundingId,
+    InsuranceFundAllocation, InsurancePoolId, InsuranceWithdrawalId, ProposalId,
+    ProposeAdminAction, RegistryVersion, RejectAdminAction, SetOracleGuards, SignatureThreshold,
+    SignerAddress, UpdateAdminSignerRegistry, WithdrawInsuranceFund,
 };
+
+#[cfg(test)]
+mod insurance_tag_tests {
+    use super::AdminActionType;
+
+    #[test]
+    fn insurance_withdrawal_does_not_alias_the_merged_receipt_registry() {
+        assert_eq!(AdminActionType::FundInsuranceFund as u8, 18);
+        assert_eq!(AdminActionType::SetOperatorReceiptRegistry as u8, 20);
+        assert_eq!(AdminActionType::WithdrawInsuranceFund as u8, 21);
+    }
+}

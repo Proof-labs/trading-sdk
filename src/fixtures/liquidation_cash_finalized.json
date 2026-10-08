@@ -1,0 +1,23 @@
+{
+  "owner": "0101010101010101010101010101010101010101",
+  "counterparty_owner": "0202020202020202020202020202020202020202",
+  "market": "4294967295",
+  "pool_id": "255",
+  "plan_id": "18446744073709551615",
+  "policy_revision": "2",
+  "fill_id": "3",
+  "committed_height": "4",
+  "reservation_id": "5",
+  "funding_snapshot_id": "0606060606060606060606060606060606060606060606060606060606060606",
+  "quantity": "7",
+  "reference_price": "8",
+  "owner_realized_pnl": "-9223372036854775808",
+  "counterparty_realized_pnl": "9223372036854775807",
+  "allocated_final_loss": "19",
+  "insurance_paid": "10",
+  "penalty_collected": "11",
+  "penalty_waived": "12",
+  "owner_cash_after": "18446744073709551615",
+  "counterparty_cash_after": "13",
+  "applied_state_digest": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e"
+}

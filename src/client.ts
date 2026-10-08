@@ -36,6 +36,10 @@ import {
   type FinancialState,
   type FinancialStateSelection,
 } from "./financial-state.js";
+import {
+  fetchLiquidationPlan,
+  type LiquidationPlanState,
+} from "./liquidation-plan.js";
 import { ready as initWasm } from "./wasm-loader.js";
 import {
   txEngineError,
@@ -1613,6 +1617,11 @@ export class ExchangeClient {
     selection: FinancialStateSelection,
   ): Promise<FinancialState> {
     return fetchFinancialState(this.gatewayUrl, selection);
+  }
+
+  /** Current plan evidence only; restarting still requires normal admin quorum. */
+  async queryLiquidationPlan(owner: string): Promise<LiquidationPlanState> {
+    return fetchLiquidationPlan(this.gatewayUrl, owner);
   }
 
   /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */

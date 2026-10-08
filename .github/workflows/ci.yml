@@ -125,20 +125,41 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
-      # The WASM crate pulls the private Proof-labs/bridge crate (bridge-core)
-      # as a git dependency. Cargo's built-in git client can't present a
-      # deploy key, so the fetch goes through the system git CLI with the
-      # read-only deploy key on the agent — the same BRIDGE_DEPLOY_KEY
-      # pattern the exchange repo's image build uses for this dependency.
-      - name: Configure bridge-core ssh auth
-        env:
-          BRIDGE_DEPLOY_KEY: ${{ secrets.BRIDGE_DEPLOY_KEY }}
+      # Fetch only the exact reviewed wire. Checkout removes its SSH credential
+      # before any PR-controlled build/test code runs; Cargo uses a local mirror.
+      - name: Checkout review wire without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Proof-labs/exchange
+          ref: 742c631233dca90083d5079c73010cc1f8f3e485
+          ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .ci-wire-review
+      - name: Prepare credential-free Cargo wire mirror
+        shell: bash
         run: |
-          set -eu
-          install -m 700 -d "$RUNNER_TEMP/bridge-ssh"
-          printf '%s\n' "$BRIDGE_DEPLOY_KEY" > "$RUNNER_TEMP/bridge-ssh/id_ed25519"
-          chmod 600 "$RUNNER_TEMP/bridge-ssh/id_ed25519"
-          echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/bridge-ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
+          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-wire-review" "$RUNNER_TEMP/wire-review.git"
+          git config --global url."file://$RUNNER_TEMP/wire-review.git".insteadOf https://github.com/Proof-labs/exchange.git
+          rm -rf "$GITHUB_WORKSPACE/.ci-wire-review"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+      # Preserve upstream bridge support without leaving a deploy key available
+      # to PR-controlled compilation or tests. Mirror the pinned bridge tag.
+      - name: Checkout bridge dependency without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Proof-labs/bridge
+          ref: v1.0.0
+          fetch-depth: 0
+          ssh-key: ${{ secrets.BRIDGE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .ci-bridge-review
+      - name: Prepare credential-free Cargo bridge mirror
+        shell: bash
+        run: |
+          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-bridge-review" "$RUNNER_TEMP/bridge-review.git"
+          git --git-dir="$RUNNER_TEMP/bridge-review.git" rev-parse refs/tags/v1.0.0
+          git config --global url."file://$RUNNER_TEMP/bridge-review.git".insteadOf ssh://git@github.com/Proof-labs/bridge.git
+          rm -rf "$GITHUB_WORKSPACE/.ci-bridge-review"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -224,15 +245,41 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
-      - name: Configure bridge-core ssh auth
-        env:
-          BRIDGE_DEPLOY_KEY: ${{ secrets.BRIDGE_DEPLOY_KEY }}
+      # Fetch only the exact reviewed wire. Checkout removes its SSH credential
+      # before any PR-controlled build/test code runs; Cargo uses a local mirror.
+      - name: Checkout review wire without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Proof-labs/exchange
+          ref: 742c631233dca90083d5079c73010cc1f8f3e485
+          ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .ci-wire-review
+      - name: Prepare credential-free Cargo wire mirror
+        shell: bash
         run: |
-          set -eu
-          install -m 700 -d "$RUNNER_TEMP/bridge-ssh"
-          printf '%s\n' "$BRIDGE_DEPLOY_KEY" > "$RUNNER_TEMP/bridge-ssh/id_ed25519"
-          chmod 600 "$RUNNER_TEMP/bridge-ssh/id_ed25519"
-          echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/bridge-ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
+          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-wire-review" "$RUNNER_TEMP/wire-review.git"
+          git config --global url."file://$RUNNER_TEMP/wire-review.git".insteadOf https://github.com/Proof-labs/exchange.git
+          rm -rf "$GITHUB_WORKSPACE/.ci-wire-review"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+      # Preserve upstream bridge support without leaving a deploy key available
+      # to PR-controlled compilation or tests. Mirror the pinned bridge tag.
+      - name: Checkout bridge dependency without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Proof-labs/bridge
+          ref: v1.0.0
+          fetch-depth: 0
+          ssh-key: ${{ secrets.BRIDGE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .ci-bridge-review
+      - name: Prepare credential-free Cargo bridge mirror
+        shell: bash
+        run: |
+          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-bridge-review" "$RUNNER_TEMP/bridge-review.git"
+          git --git-dir="$RUNNER_TEMP/bridge-review.git" rev-parse refs/tags/v1.0.0
+          git config --global url."file://$RUNNER_TEMP/bridge-review.git".insteadOf ssh://git@github.com/Proof-labs/bridge.git
+          rm -rf "$GITHUB_WORKSPACE/.ci-bridge-review"
       - uses: dtolnay/rust-toolchain@stable
       # One shared Rust cache namespace across the `rust` and `python` jobs:
       # maturin builds the PyO3 crate into the same `./target`, so Python reuses
@@ -273,15 +320,41 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
-      - name: Configure bridge-core ssh auth
-        env:
-          BRIDGE_DEPLOY_KEY: ${{ secrets.BRIDGE_DEPLOY_KEY }}
+      # Fetch only the exact reviewed wire. Checkout removes its SSH credential
+      # before any PR-controlled build/test code runs; Cargo uses a local mirror.
+      - name: Checkout review wire without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Proof-labs/exchange
+          ref: 742c631233dca90083d5079c73010cc1f8f3e485
+          ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .ci-wire-review
+      - name: Prepare credential-free Cargo wire mirror
+        shell: bash
         run: |
-          set -eu
-          install -m 700 -d "$RUNNER_TEMP/bridge-ssh"
-          printf '%s\n' "$BRIDGE_DEPLOY_KEY" > "$RUNNER_TEMP/bridge-ssh/id_ed25519"
-          chmod 600 "$RUNNER_TEMP/bridge-ssh/id_ed25519"
-          echo "GIT_SSH_COMMAND=ssh -i $RUNNER_TEMP/bridge-ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
+          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-wire-review" "$RUNNER_TEMP/wire-review.git"
+          git config --global url."file://$RUNNER_TEMP/wire-review.git".insteadOf https://github.com/Proof-labs/exchange.git
+          rm -rf "$GITHUB_WORKSPACE/.ci-wire-review"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+      # Preserve upstream bridge support without leaving a deploy key available
+      # to PR-controlled compilation or tests. Mirror the pinned bridge tag.
+      - name: Checkout bridge dependency without retaining credentials
+        uses: actions/checkout@v4
+        with:
+          repository: Proof-labs/bridge
+          ref: v1.0.0
+          fetch-depth: 0
+          ssh-key: ${{ secrets.BRIDGE_DEPLOY_KEY }}
+          persist-credentials: false
+          path: .ci-bridge-review
+      - name: Prepare credential-free Cargo bridge mirror
+        shell: bash
+        run: |
+          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-bridge-review" "$RUNNER_TEMP/bridge-review.git"
+          git --git-dir="$RUNNER_TEMP/bridge-review.git" rev-parse refs/tags/v1.0.0
+          git config --global url."file://$RUNNER_TEMP/bridge-review.git".insteadOf ssh://git@github.com/Proof-labs/bridge.git
+          rm -rf "$GITHUB_WORKSPACE/.ci-bridge-review"
       - uses: dtolnay/rust-toolchain@stable
       # Same shared-key as the `rust` job so the maturin build restores its
       # compiled dependency graph (the expensive part) instead of rebuilding it.
