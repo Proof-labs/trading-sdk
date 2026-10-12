@@ -49,7 +49,7 @@ fn write_ndjson<T: Serialize>(path: &std::path::Path, rows: &[T]) -> Result<(), 
 }
 
 /// The shared `CreateEvent` fixture (the engine's golden event 700 with its
-/// binaries from 70000). Only `oracle_source` varies across the cases, so a
+/// binary book at 70000). Only `oracle_source` varies across the cases, so a
 /// byte difference between them isolates the enum encoding.
 fn event_fields(oracle_source: serde_json::Value) -> serde_json::Value {
     json!({

@@ -149,6 +149,11 @@ export enum ExecErrorCode {
   WithdrawalLimitExceeded = 99,
   /** The account already holds the maximum number of resting orders. */
   AccountOrderCapReached = 100,
+  // 101 is reserved by the engine; do not reuse it.
+  InsuranceFundingReplayed = 102,
+  InsuranceWithdrawalReplayed = 103,
+  MarketlessInsurancePool = 104,
+  InsufficientInsuranceBalance = 105,
   InternalError = 255,
 }
 
@@ -533,6 +538,23 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "AccountOrderCapReached",
     description:
       "the account already holds the maximum number of resting orders — cancel one before placing another",
+  },
+  102: {
+    name: "InsuranceFundingReplayed",
+    description:
+      "Insurance-fund funding id has already executed; each funding id executes at most once.",
+  },
+  103: {
+    name: "InsuranceWithdrawalReplayed",
+    description: "Insurance withdrawal id has already executed.",
+  },
+  104: {
+    name: "MarketlessInsurancePool",
+    description: "Insurance transfer pool has no registered market.",
+  },
+  105: {
+    name: "InsufficientInsuranceBalance",
+    description: "Insurance withdrawal would make the pool balance negative.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
