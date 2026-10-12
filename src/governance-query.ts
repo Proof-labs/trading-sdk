@@ -377,32 +377,44 @@ function decodeAttachedConditional(
   };
 }
 
-/** `EventInfo` (the `get_event` read model) as a positional tuple: 9
- *  required fields plus the `serde(default)` trailers `oracleSource` and
+/** Whether an `EventInfo` tuple is in the one-book shape: the engine with
+ *  one binary book per event stores no No book, so the question sits where
+ *  the two-book shape keeps the No book's id. */
+export function isOneBookEventRow(raw: readonly unknown[]): boolean {
+  return typeof raw[2] === "string";
+}
+
+/** `EventInfo` (the `get_event` read model) as a positional tuple, in either
+ *  engine shape: one book (8 required fields) or two books (9, the No book
+ *  third), each plus the `serde(default)` trailers `oracleSource` and
  *  `attachedConditionals`. The read model IS the stored record — no appended
  *  presentation copy. */
 export function decodeEventInfo(value: unknown, index?: number): EventInfo {
   const f = index == null ? "event" : `event[${index}]`;
-  const raw = toTupleBetween(value, f, 9, 11);
+  const oneBook = isOneBookEventRow(toArray(value, f));
+  const required = oneBook ? 8 : 9;
+  const raw = toTupleBetween(value, f, required, required + 2);
+  // Fields after the books sit one place earlier in the one-book shape.
+  const at = (i: number) => raw[oneBook ? i - 1 : i];
   const info: EventInfo = {
     eventId: toU32(raw[0], `${f}.eventId`),
     ebyMarket: toU32(raw[1], `${f}.ebyMarket`),
-    ebnMarket: toU32(raw[2], `${f}.ebnMarket`),
-    question: toString(raw[3], `${f}.question`),
-    settlementMs: toU64(raw[4], `${f}.settlementMs`),
-    resolutionWindowMs: toU64(raw[5], `${f}.resolutionWindowMs`),
-    status: decodeEventStatus(raw[6], `${f}.status`),
-    createdMs: toU64(raw[7], `${f}.createdMs`),
-    resolvedMs: toU64(raw[8], `${f}.resolvedMs`),
+    question: toString(at(3), `${f}.question`),
+    settlementMs: toU64(at(4), `${f}.settlementMs`),
+    resolutionWindowMs: toU64(at(5), `${f}.resolutionWindowMs`),
+    status: decodeEventStatus(at(6), `${f}.status`),
+    createdMs: toU64(at(7), `${f}.createdMs`),
+    resolvedMs: toU64(at(8), `${f}.resolvedMs`),
     attachedConditionals: [],
   };
-  if (raw.length > 9) {
-    const oracleSource = decodeOracleSource(raw[9], `${f}.oracleSource`);
+  if (!oneBook) info.ebnMarket = toU32(raw[2], `${f}.ebnMarket`);
+  if (raw.length > required) {
+    const oracleSource = decodeOracleSource(at(9), `${f}.oracleSource`);
     if (oracleSource) info.oracleSource = oracleSource;
   }
-  if (raw.length > 10) {
+  if (raw.length > required + 1) {
     info.attachedConditionals = toArray(
-      raw[10],
+      at(10),
       `${f}.attachedConditionals`,
     ).map((entry, i) =>
       decodeAttachedConditional(entry, `${f}.attachedConditionals[${i}]`),

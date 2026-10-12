@@ -779,12 +779,15 @@ export interface AttachedConditional {
   cpnMarket: number;
 }
 
-/** Stored record for an event — the `get_event` read model: its two binary
- *  books and every conditional attached to it. */
+/** Stored record for an event — the `get_event` read model: its binary book
+ *  and every conditional attached to it. */
 export interface EventInfo {
   eventId: number;
+  /** The event's binary book, priced in Yes. */
   ebyMarket: number;
-  ebnMarket: number;
+  /** The No book, only on an engine that still has one; `undefined` once
+   *  the engine runs one binary book per event. */
+  ebnMarket?: number;
   question: string;
   settlementMs: bigint;
   resolutionWindowMs: bigint;

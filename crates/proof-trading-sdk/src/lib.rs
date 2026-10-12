@@ -14,6 +14,7 @@ pub mod errors;
 pub mod gateway;
 pub mod governance;
 pub mod market_snapshot;
+pub mod msgpack;
 pub mod query;
 pub mod signer;
 pub mod wire;

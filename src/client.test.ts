@@ -546,29 +546,30 @@ describe("ExchangeClient submitTx gateway path", () => {
   // ---------------------------------------------------------------------
 
   it("submitTxCommit returns the gateway's on-chain result without polling /tx", async () => {
+    let sent = "";
     const client = makeGatewayClient();
     primeNextNonce(client);
 
-    nextResponses.push(
-      () =>
-        new Response(
-          JSON.stringify({
-            status: "ok",
-            txHash: "ABCD",
-            code: 0,
-            height: 4821903,
-            events: [{ type: "order_placed", attributes: [] }],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-    );
+    nextResponses.push((req) => {
+      sent = expectedGatewayHash(req);
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          txHash: sent,
+          code: 0,
+          height: 4821903,
+          events: [{ type: "order_placed", attributes: [] }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
 
     const r = await client.submitTxCommit(placeOrder(client));
 
     expect(r.ok).toBe(true);
     expect(r.code).toBe(0);
     expect(r.height).toBe(4821903);
-    expect(r.hash).toBe("ABCD");
+    expect(r.hash).toBe(sent);
     expect(r.events?.length).toBe(1);
     // The point of the change: exactly one round-trip. Previously this cost a
     // /tx?hash= poll loop of up to 9 seconds (the H14 complaint).
@@ -578,23 +579,24 @@ describe("ExchangeClient submitTx gateway path", () => {
   });
 
   it("a committed engine rejection is returned as an engine error, with its height", async () => {
+    let sent = "";
     const client = makeGatewayClient();
     primeNextNonce(client);
 
-    nextResponses.push(
-      () =>
-        new Response(
-          JSON.stringify({
-            status: "error",
-            error: "insufficient margin",
-            txHash: "ABCD",
-            code: 12,
-            log: "insufficient margin",
-            height: 4821903,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-    );
+    nextResponses.push((req) => {
+      sent = expectedGatewayHash(req);
+      return new Response(
+        JSON.stringify({
+          status: "error",
+          error: "insufficient margin",
+          txHash: sent,
+          code: 12,
+          log: "insufficient margin",
+          height: 4821903,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
 
     const r = await client.submitTxCommit(placeOrder(client));
 
@@ -606,25 +608,26 @@ describe("ExchangeClient submitTx gateway path", () => {
   });
 
   it("reads the structured code, not the leading integer of the error string", async () => {
+    let sent = "";
     // The gateway keeps the legacy "<code>: <message>" error string for old
     // clients, but the structured `code` is authoritative. Deliberately make
     // the compatibility string disagree to prove this path does not parse it.
     const client = makeGatewayClient();
     primeNextNonce(client);
 
-    nextResponses.push(
-      () =>
-        new Response(
-          JSON.stringify({
-            status: "error",
-            error: "12: stale compatibility text",
-            log: "nonce too old: minimum accepted 1783771798253, got 0",
-            txHash: "ABCD",
-            code: 21,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-    );
+    nextResponses.push((req) => {
+      sent = expectedGatewayHash(req);
+      return new Response(
+        JSON.stringify({
+          status: "error",
+          error: "12: stale compatibility text",
+          log: "nonce too old: minimum accepted 1783771798253, got 0",
+          txHash: sent,
+          code: 21,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
 
     const r = await client.submitTx(placeOrder(client));
 
@@ -783,29 +786,30 @@ describe("ExchangeClient submitTx gateway path", () => {
   }
 
   it("submitSignedTx submits pre-signed bytes byte-exactly, with no key loaded", async () => {
+    let sent = "";
     const client = makeKeylessGatewayClient();
     const txBytes = externallySignedBytes();
 
-    nextResponses.push(
-      () =>
-        new Response(
-          JSON.stringify({
-            status: "ok",
-            txHash: "ABCD",
-            code: 0,
-            height: 4821903,
-            events: [],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-    );
+    nextResponses.push((req) => {
+      sent = expectedGatewayHash(req);
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          txHash: sent,
+          code: 0,
+          height: 4821903,
+          events: [],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
 
     const r = await client.submitSignedTx(txBytes);
 
     expect(r.ok).toBe(true);
     expect(r.code).toBe(0);
     expect(r.height).toBe(4821903);
-    expect(r.hash).toBe("ABCD");
+    expect(r.hash).toBe(sent);
 
     // Exactly one round-trip to POST /exchange, and the forwarded bytes are
     // the caller's bytes, bit for bit — the property co-signing relies on.
@@ -870,21 +874,22 @@ describe("ExchangeClient submitTx gateway path", () => {
   });
 
   it("submitSignedTxCommit returns a synchronous verdict without polling", async () => {
+    let sent = "";
     const client = makeKeylessGatewayClient();
 
-    nextResponses.push(
-      () =>
-        new Response(
-          JSON.stringify({
-            status: "ok",
-            txHash: "ABCD",
-            code: 0,
-            height: 4821903,
-            events: [],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-    );
+    nextResponses.push((req) => {
+      sent = expectedGatewayHash(req);
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          txHash: sent,
+          code: 0,
+          height: 4821903,
+          events: [],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
 
     const r = await client.submitSignedTxCommit(externallySignedBytes());
 

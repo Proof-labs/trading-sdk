@@ -1,5 +1,5 @@
 import { Decoder } from "@msgpack/msgpack";
-import { decodeEventInfo } from "./governance-query.js";
+import { decodeEventInfo, isOneBookEventRow } from "./governance-query.js";
 import type { MarketConfig, MarketKind, MarketsSnapshot } from "./types.js";
 
 export const MAX_SNAPSHOT_BYTES = 1024 * 1024;
@@ -230,9 +230,12 @@ export function decodeMarketsSnapshot(
   const height = uint(top[1]);
   if (height === 0n) throw new Error("market snapshot: uncommitted height");
   const markets = tuple(top[2], 0).map(market);
-  const events = tuple(top[3], 0).map((value, index) =>
-    decodeEventInfo(tuple(value, 11).slice(0, 11), index),
-  );
+  const events = tuple(top[3], 0).map((value, index) => {
+    // Both engine shapes carry every trailer here: 10 fields with one book,
+    // 11 with two.
+    const width = isOneBookEventRow(tuple(value, 3)) ? 10 : 11;
+    return decodeEventInfo(tuple(value, width).slice(0, width), index);
+  });
   if (
     new Set(markets.map((m) => m.market)).size !== markets.length ||
     new Set(events.map((e) => e.eventId)).size !== events.length

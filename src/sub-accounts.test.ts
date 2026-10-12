@@ -260,6 +260,7 @@ describe("decodeSubAccountList", () => {
     expect(() =>
       decodeSubAccountList(envelope([wireRow({ subAccountId: 0 })])),
     ).toThrow(/not a valid child id/);
+    // A fractional id is refused by the row decoder itself.
     expect(() =>
       decodeSubAccountList(envelope([wireRow({ subAccountId: 1.5 })])),
     ).toThrow(/id/);
@@ -279,6 +280,8 @@ describe("decodeSubAccountList", () => {
   });
 
   it("rejects non-integer bytes instead of coercing them", () => {
+    // A fractional byte is refused by the row decoder; only an *integral*
+    // float slips past `Number.isInteger`, and the preflight catches that.
     for (const bad of [1.9, Number.NaN]) {
       const address = Array<number>(20).fill(0x11);
       address[0] = bad;
@@ -324,7 +327,7 @@ describe("decodeSubAccountList", () => {
             ]),
           ),
         ),
-      ).toThrow(/id \(msgpack float where the wire has an integer\)/);
+      ).toThrow(/msgpack float where the wire model has an integer/);
     }
   });
 
@@ -341,7 +344,7 @@ describe("decodeSubAccountList", () => {
           ]),
         ),
       ),
-    ).toThrow(/created_height \(msgpack float where the wire has an integer\)/);
+    ).toThrow(/msgpack float where the wire model has an integer/);
   });
 
   it("rejects an integral float inside the array form of a byte field", () => {
@@ -358,7 +361,7 @@ describe("decodeSubAccountList", () => {
           rawList([bin8(MASTER), 0x01, address, bin8(NAME_A), u32(1)]),
         ),
       ),
-    ).toThrow(/address byte \(msgpack float where the wire has an integer\)/);
+    ).toThrow(/msgpack float where the wire model has an integer/);
   });
 
   it("rejects a float id in a row after one with a signed-integer id", () => {
@@ -379,12 +382,12 @@ describe("decodeSubAccountList", () => {
           ]),
         ),
       ),
-    ).toThrow(/id \(msgpack float where the wire has an integer\)/);
+    ).toThrow(/msgpack float where the wire model has an integer/);
   });
 
-  it("steps over an ext8 extra field including its type byte", () => {
-    // ext8: lead, length 1, type 1, one data byte. A walk that misses the
-    // type byte lands inside the data and stops checking the later row.
+  it("rejects an extension extra field", () => {
+    // ext8: lead, length 1, type 1, one data byte. No read DTO carries an
+    // extension, so the shared preflight refuses it rather than stepping over.
     const ext8 = Uint8Array.from([0xc7, 0x01, 0x01, 0x00]);
     expect(() =>
       decodeSubAccountList(
@@ -395,14 +398,13 @@ describe("decodeSubAccountList", () => {
           ]),
         ),
       ),
-    ).toThrow(/id \(msgpack float where the wire has an integer\)/);
+    ).toThrow(/msgpack extension where the wire model has none/);
   });
 
-  it("steps over str, map and fixext extras before a later float row", () => {
+  it("walks str and map extras to a float in a later row", () => {
     const extras = [
       Uint8Array.from([0xd9, 0x02, 0x68, 0x69]), // str8 "hi"
-      Uint8Array.from([0x81, 0x01, 0x02]), // fixmap {1: 2}
-      Uint8Array.from([0xd4, 0x01, 0x00]), // fixext1, type 1, one data byte
+      Uint8Array.from([0x81, 0xa1, 0x6b, 0x02]), // fixmap {"k": 2}
     ];
     for (const extra of extras) {
       expect(() =>
@@ -414,8 +416,22 @@ describe("decodeSubAccountList", () => {
             ]),
           ),
         ),
-      ).toThrow(/id \(msgpack float where the wire has an integer\)/);
+      ).toThrow(/msgpack float where the wire model has an integer/);
     }
+  });
+
+  it("rejects a fixext extra field", () => {
+    const fixext1 = Uint8Array.from([0xd4, 0x01, 0x00]); // fixext1, type 1
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawRows([
+            [bin8(MASTER), 0x01, bin8(CHILD_A), bin8(NAME_A), u32(1), fixext1],
+            [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
+          ]),
+        ),
+      ),
+    ).toThrow(/msgpack extension where the wire model has none/);
   });
 
   it("steps over a nested array extra before a later float row", () => {
@@ -429,23 +445,23 @@ describe("decodeSubAccountList", () => {
           ]),
         ),
       ),
-    ).toThrow(/id \(msgpack float where the wire has an integer\)/);
+    ).toThrow(/msgpack float where the wire model has an integer/);
   });
 
-  it("stands the walk down past the extra-field depth cap", () => {
-    // The walk abandons a row whose trailing field nests deeper than the cap,
-    // so a float in a later row is not reached. This pins the current
-    // limitation; the gap is tracked in #221.
+  it("rejects nesting deeper than the depth bound", () => {
+    // The shared preflight fails closed on over-deep nesting instead of
+    // standing the walk down, so a float cannot hide behind a deep extra.
     const deep = Uint8Array.from([...Array<number>(34).fill(0x91), 0x01]);
-    const rows = decodeSubAccountList(
-      rawEnvelope(
-        rawRows([
-          [bin8(MASTER), 0x01, bin8(CHILD_A), bin8(NAME_A), u32(1), deep],
-          [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
-        ]),
+    expect(() =>
+      decodeSubAccountList(
+        rawEnvelope(
+          rawRows([
+            [bin8(MASTER), 0x01, bin8(CHILD_A), bin8(NAME_A), u32(1), deep],
+            [bin8(MASTER), f64(2), bin8(CHILD_B), bin8(NAME_B), u32(1)],
+          ]),
+        ),
       ),
-    );
-    expect(rows[1]?.id).toBe(2);
+    ).toThrow(/nesting exceeds the depth bound/);
   });
 
   it("does not blind-scan: float-family bytes inside a bin are data", () => {
@@ -456,8 +472,10 @@ describe("decodeSubAccountList", () => {
     expect(rows[0]?.master.startsWith("cacb")).toBe(true);
   });
 
-  it("keeps future optional fields unconstrained, floats included", () => {
-    const rows = decodeSubAccountList(envelope([[...wireRow(), 1.5]]));
-    expect(rows[0]?.id).toBe(1);
+  it("rejects a float in a future optional field", () => {
+    // Trailing fields may be any shape except a float: no read DTO carries one.
+    expect(() => decodeSubAccountList(envelope([[...wireRow(), 1.5]]))).toThrow(
+      /msgpack float where the wire model has an integer/,
+    );
   });
 });

@@ -44,6 +44,41 @@ export const ENVELOPE_VERSION = 2;
 // action codec, so it needs no WASM. `useBigInt64` keeps large seq values exact.
 const decoder = new Decoder({ useBigInt64: true });
 
+/**
+ * Strict, type-preserving MessagePack preflight for gateway read payloads,
+ * backed by the authoritative Rust core (`proof_trading_sdk::msgpack`). It
+ * refuses the float families (`0xca`/`0xcb`) — which `@msgpack/msgpack` folds
+ * into a plain number, so an integral float passes a `Number.isSafeInteger`
+ * check the Python SDK would never accept — along with extensions, non-UTF-8
+ * strings, duplicate map keys, over-deep nesting and trailing bytes.
+ *
+ * Requires `await ready()`, like every codec entry point (see ADR 0001).
+ */
+export function rejectFloats(bytes: Uint8Array): void {
+  try {
+    getWasm().reject_floats(bytes);
+  } catch (error) {
+    throw new Error(
+      `strict msgpack preflight: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+/** Decode gateway MessagePack bytes, then run the strict preflight above.
+ *
+ *  The value decode runs first on purpose: a payload the decoder already
+ *  refuses (truncated bytes, an unreadable marker) keeps its own diagnostic,
+ *  and the preflight only adds rejections for bytes that decode cleanly — a
+ *  float, an extension, a duplicate map key, over-deep nesting or trailing
+ *  bytes (see #221). */
+export function decodeStrict(bytes: Uint8Array): unknown {
+  const value = decoder.decode(bytes);
+  rejectFloats(bytes);
+  return value;
+}
+
 // ---------------------------------------------------------------------------
 // Encoding + signing (via WASM)
 // ---------------------------------------------------------------------------
@@ -210,6 +245,7 @@ export function decodeTx(bytes: Uint8Array): {
   pubkey: Uint8Array;
   signature: Uint8Array;
 } {
+  rejectFloats(bytes);
   const envelope = decoder.decode(bytes) as unknown[];
   const version = envelope[0] as number;
   if (version !== ENVELOPE_VERSION) {

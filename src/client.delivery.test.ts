@@ -41,15 +41,15 @@ afterEach(() => {
 
 describe("gateway finality", () => {
   it.each([
-    [200, "invalid signature", 1],
-    [200, "invalid action parameters", 1],
-    [503, "service overloaded", 503],
-    [503, "service unavailable", 503],
+    [200, "invalid action parameters", "InvalidRequest", 1],
+    [200, "internal encoding error", "EncodingError", 1],
+    [503, "service overloaded", "Overloaded", 503],
+    [503, "service unavailable", "Unavailable", 503],
   ])(
     "keeps hashless HTTP %i refusal terminal (%s)",
-    async (status, reason, code) => {
+    async (status, reason, errorCode, code) => {
       const fetch = vi.fn(async (_url: string) =>
-        json({ status: "error", error: reason }, Number(status)),
+        json({ status: "refused", error: reason, errorCode }, Number(status)),
       );
       vi.stubGlobal("fetch", fetch);
       const client = external();
@@ -84,8 +84,9 @@ describe("gateway finality", () => {
         vi.fn(async () =>
           json(
             {
-              status: "error",
+              status: "refused",
               error: "maintenance: signed writes are not open",
+              errorCode: "Maintenance",
               mode,
             },
             503,
@@ -122,7 +123,12 @@ describe("gateway finality", () => {
     [503, { status: "error", error: "unknown", code: 12 }],
     [503, { status: "error", error: "unknown", height: 42 }],
     [200, { status: "error", error: "unknown", log: "nonce too old" }],
-    [503, { status: "error", error: "service overloaded", retryAfterMs: 500 }],
+    // Message text and codes alone name nothing: only `status` does.
+    [503, { status: "error", error: "service overloaded" }],
+    [200, { status: "error", error: "invalid action parameters" }],
+    [200, { status: "error", error: "x", errorCode: "Overloaded" }],
+    // A stated verdict without its code is not a verdict.
+    [200, { status: "error", error: "invalid signature" }],
     [200, { status: "error", error: "unknown", events: [] }],
     [200, { status: "error", error: "unknown", code: "12" }],
     [503, { status: "error", error: "invalid signature" }],
@@ -135,11 +141,36 @@ describe("gateway finality", () => {
     ],
     [503, { status: "error", error: "unknown edge failure" }],
     [200, { status: "error", error: "unknown edge failure" }],
-    [
-      503,
-      { status: "error", error: "service overloaded", info: "outcome unknown" },
-    ],
     [200, { status: "error", error: "invalid signature", txHash: null }],
+    // A verdict naming another tx's hash says nothing about this one.
+    [
+      200,
+      { status: "ok", error: "x", code: 0, height: 42, txHash: "B".repeat(64) },
+    ],
+    [200, { status: "error", error: "x", code: 12, txHash: "B".repeat(64) }],
+    // A status that disagrees with its code contradicts itself.
+    [200, { status: "ok", error: "x", code: 12 }],
+    [200, { status: "error", error: "x", code: 0, height: 42 }],
+    // A refusal that names a hash, code or height contradicts itself.
+    [
+      200,
+      {
+        status: "refused",
+        error: "x",
+        errorCode: "InvalidRequest",
+        txHash: "A".repeat(64),
+      },
+    ],
+    [503, { status: "refused", error: "x", errorCode: "Overloaded", code: 12 }],
+    [
+      200,
+      {
+        status: "refused",
+        error: "x",
+        errorCode: "InvalidRequest",
+        height: 42,
+      },
+    ],
   ])("reconciles HTTP %i ambiguous envelope %j", async (status, body) => {
     const fetch = vi
       .fn()
@@ -160,6 +191,43 @@ describe("gateway finality", () => {
       fetch.mock.calls.filter(([, init]) => init?.method === "POST"),
     ).toHaveLength(1);
     expect(fetch.mock.calls[1][0]).toBe(`/v1/tx/${result.hash}`);
+  });
+
+  it("reads a hashless engine code as the engine's verdict", async () => {
+    const fetch = vi.fn(async () =>
+      json({ status: "error", error: "invalid signature", code: 17 }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const client = external();
+    client.setUnsafeFastSubmit(false);
+    const result = await client.submitTx(action);
+    expect(result).toMatchObject({
+      ok: false,
+      outcome: "engine",
+      code: 17,
+      log: "invalid signature",
+    });
+    expect(await client.waitForDelivery(result)).toBe(result);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("reconciles a stated pending answer by the hash of the bytes sent", async () => {
+    const hash = "A".repeat(64);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        json({
+          status: "pending",
+          error: "timed out waiting for on-chain result; reconcile via txHash",
+          errorCode: "TimedOut",
+          txHash: hash,
+        }),
+      ),
+    );
+    const result = await external().submitTx(action);
+    expect(result.outcome).toBe("timeout");
+    expect(result.hash).toMatch(/^[0-9A-F]{64}$/);
+    expect(result.hash, "the answer's hash is not this tx's").not.toBe(hash);
   });
 
   it("keeps an unstructured 503 uncertain", async () => {
