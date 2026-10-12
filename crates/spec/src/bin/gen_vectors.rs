@@ -1192,12 +1192,108 @@ fn main() -> Result<(), Box<dyn Error>> {
     errors.push(error_case("code51/ignored_log", 51, Some("unrecognized")));
     write_ndjson(&dir.join(cv::ERRORS_FILE), &errors)?;
 
+    // ── binary family ────────────────────────────────────────────────────
+    // An event's one binary book traded and read in No terms: buy No at q is
+    // sell Yes at $1 − q, limbs keep their role at the mirrored trigger, and
+    // a short Yes reads as No. Refusals pin the prices with no mirror.
+    let owner = vec![1u8; 20];
+    let no_order = |price: u64, side: &str, extra: serde_json::Value| {
+        let mut input = json!({
+            "market": 70000, "owner": owner.clone(), "side": side, "price": price,
+            "quantity": 10u64, "client_order_id": null, "post_only": false,
+            "reduce_only": false, "time_in_force": "Gtc",
+            "stop_loss": null, "take_profit": null,
+        });
+        if let (Some(base), Some(extra)) = (input.as_object_mut(), extra.as_object()) {
+            for (k, v) in extra {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+        input
+    };
+    let limb = |price: u64, bps: u32, id: u64| json!({"trigger_price": price, "max_slippage_bps": bps, "client_trigger_id": id});
+    let order_inputs: Vec<(&str, serde_json::Value)> = vec![
+        ("buy_no/basic", no_order(400_000, "Buy", json!({}))),
+        (
+            "sell_no/reduce_only_ioc_cloid",
+            no_order(
+                300_000,
+                "Sell",
+                json!({"quantity": 25u64, "client_order_id": 99u64,
+                       "reduce_only": true, "time_in_force": "Ioc"}),
+            ),
+        ),
+        (
+            "buy_no/brackets_post_only",
+            no_order(
+                500_000,
+                "Buy",
+                json!({"post_only": true,
+                       "stop_loss": limb(300_000, 150, 11),
+                       "take_profit": limb(800_000, 75, 12)}),
+            ),
+        ),
+        ("buy_no/lowest_price", no_order(1, "Buy", json!({}))),
+        (
+            "sell_no/highest_price",
+            no_order(999_999, "Sell", json!({"time_in_force": "Fok"})),
+        ),
+        (
+            "refused/no_price_one_dollar",
+            no_order(1_000_000, "Buy", json!({})),
+        ),
+        ("refused/no_price_zero", no_order(0, "Sell", json!({}))),
+        (
+            "refused/stop_at_one_dollar",
+            no_order(
+                500_000,
+                "Buy",
+                json!({"stop_loss": limb(1_000_000, 150, 11)}),
+            ),
+        ),
+        (
+            "refused/take_profit_at_zero",
+            no_order(500_000, "Buy", json!({"take_profit": limb(0, 150, 12)})),
+        ),
+    ];
+    let mut binary = Vec::new();
+    for (case, input) in order_inputs {
+        binary.push(cv::BinaryCase::NoOrder {
+            case: case.to_string(),
+            expect: cv::no_order_expect(&input)?,
+            input,
+        });
+    }
+    let view_inputs: Vec<(&str, &str, u64, u64)> = vec![
+        ("view/short_yes_is_no", "Sell", 600_000, 40),
+        ("view/long_yes_is_yes", "Buy", 600_000, 40),
+        (
+            "view/short_yes_at_one_dollar_is_no_at_zero",
+            "Sell",
+            1_000_000,
+            5,
+        ),
+        ("view/long_yes_at_zero", "Buy", 0, 5),
+        ("view/entry_above_one_dollar", "Sell", 1_000_001, 5),
+    ];
+    for (case, side, entry_price, size) in view_inputs {
+        binary.push(cv::BinaryCase::PositionView {
+            case: case.to_string(),
+            expect: cv::position_view_expect(side, entry_price, size)?,
+            side: side.to_string(),
+            entry_price,
+            size,
+        });
+    }
+    write_ndjson(&dir.join(cv::BINARY_FILE), &binary)?;
+
     eprintln!(
-        "wrote {} codec, {} signing, {} nonce, {} errors cases to {}",
+        "wrote {} codec, {} signing, {} nonce, {} errors, {} binary cases to {}",
         codec.len(),
         signing.len(),
         nonce.len(),
         errors.len(),
+        binary.len(),
         dir.display()
     );
     Ok(())

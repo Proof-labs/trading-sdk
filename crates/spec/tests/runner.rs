@@ -109,3 +109,34 @@ fn nonce_vectors() {
         );
     }
 }
+
+#[test]
+fn binary_vectors() {
+    let cases = lines(cv::BINARY_FILE);
+    assert!(!cases.is_empty(), "binary.ndjson is empty");
+    for line in &cases {
+        let case: cv::BinaryCase = serde_json::from_str(line).expect("binary line parses");
+        match case {
+            cv::BinaryCase::NoOrder {
+                case,
+                input,
+                expect,
+            } => assert_eq!(
+                cv::no_order_expect(&input).expect("no order translates"),
+                expect,
+                "binary case {case}"
+            ),
+            cv::BinaryCase::PositionView {
+                case,
+                side,
+                entry_price,
+                size,
+                expect,
+            } => assert_eq!(
+                cv::position_view_expect(&side, entry_price, size).expect("view reads"),
+                expect,
+                "binary case {case}"
+            ),
+        }
+    }
+}
