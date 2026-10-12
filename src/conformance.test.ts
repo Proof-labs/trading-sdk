@@ -27,6 +27,7 @@ import {
 } from "./codec.js";
 import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
+import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
 import {
   ActionType,
   Outcome,
@@ -1081,5 +1082,81 @@ describe("conformance vectors (TypeScript)", () => {
       if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
       expect(decoded.data.maxOpenInterest).toBe(0n);
     }
+  });
+});
+
+describe("binary vectors (TypeScript)", () => {
+  const binary = cases("binary.ndjson");
+
+  it("loads the binary family", () => {
+    expect(binary.length).toBeGreaterThan(0);
+  });
+
+  it("translates every No order to the core's Yes order, byte for byte", () => {
+    let seen = 0;
+    for (const c of binary.filter((c) => c.kind === "no_order")) {
+      const input = c.input as Record<string, unknown>;
+      const no = toAction(ActionType.PlaceOrder, input);
+      if (no.type !== "PlaceOrder") throw new Error("type narrowing");
+      const { owner, ...noOrder } = no.data;
+      const expected = c.expect as {
+        yes_order?: { fields: Record<string, unknown>; payload_hex: string };
+        error?: { name: string };
+      };
+      if (expected.error) {
+        let caught: unknown;
+        try {
+          yesOrder(noOrder);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught, c.case).toBeInstanceOf(BinaryPriceError);
+        expect((caught as BinaryPriceError).reason, c.case).toBe(
+          expected.error.name,
+        );
+      } else {
+        const yes = expected.yes_order!;
+        const action: Action = {
+          type: "PlaceOrder",
+          data: { ...yesOrder(noOrder), owner },
+        };
+        expect(action, c.case).toEqual(
+          toAction(ActionType.PlaceOrder, yes.fields),
+        );
+        expect(bytesToHex(encodePayloadBytes(action)), c.case).toBe(
+          yes.payload_hex,
+        );
+      }
+      seen++;
+    }
+    expect(seen).toBeGreaterThan(0);
+  });
+
+  it("reads every position as the core does", () => {
+    let seen = 0;
+    for (const c of binary.filter((c) => c.kind === "position_view")) {
+      const position = {
+        side: c.side as "Buy" | "Sell",
+        entryPrice: big(c.entry_price),
+        size: big(c.size),
+      };
+      const expected = c.expect as {
+        view?: { outcome: "Yes" | "No"; entry_price: number; size: number };
+        error?: { name: string };
+      };
+      if (expected.error) {
+        expect(() => binaryPositionView(position), c.case).toThrow(
+          BinaryPriceError,
+        );
+      } else {
+        expect(binaryPositionView(position), c.case).toEqual({
+          outcome: expected.view!.outcome,
+          entryPrice: big(expected.view!.entry_price),
+          size: big(expected.view!.size),
+        });
+      }
+      seen++;
+    }
+    expect(seen).toBeGreaterThan(0);
   });
 });

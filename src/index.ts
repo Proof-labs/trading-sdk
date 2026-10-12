@@ -78,6 +78,9 @@ export {
   type ExchangeEvent,
   type OrderPlacedEvent,
   type OrderCancelledEvent,
+  type CancelReason,
+  type OrderMigratedEvent,
+  type PositionMigratedEvent,
   type TradeExecutedEvent,
   type PositionUpdatedEvent,
   type PositionClosedEvent,
@@ -164,6 +167,18 @@ export {
 } from "./triggers.js";
 
 export { validateSetOracleGuards } from "./oracle-guards.js";
+
+export {
+  BINARY_PRICE_MAX,
+  BinaryPriceError,
+  type BinaryErrorName,
+  type BinaryPositionView,
+  type NoOrder,
+  binaryPositionView,
+  yesLimb,
+  yesOrder,
+  yesSide,
+} from "./binary.js";
 
 export {
   decodePositionTriggerHistoryPage,
@@ -257,7 +272,11 @@ export {
   type ExchangeClientOptions,
   type WsStreamOptions,
 } from "./client.js";
-export { decodeOraclePermissions } from "./oracle-permissions.js";
+export {
+  decodeOraclePermissions,
+  ORACLE_DIAGNOSTIC_BITS,
+  ORACLE_FAULT_BITS,
+} from "./oracle-permissions.js";
 export {
   decodeFinancialState,
   type FinancialStateSelection,
@@ -283,6 +302,8 @@ export type {
   CommittedOracleVerdict,
   OracleVerdictStatus,
   OracleVerdictReason,
+  OracleSelectedSource,
+  OracleVerdictDiagnostic,
 } from "./oracle-permissions.js";
 
 export {
