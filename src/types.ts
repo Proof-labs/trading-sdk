@@ -1433,20 +1433,9 @@ export type CancelReason =
 
 // ── Engine-upgrade journal events ──────────────────────────────────────────
 // An upgrade's migration reports its effects as one group of events in the
-// first block after activation, opened by an `UpgradeMigrationReported`
-// marker that counts the events after it. Readers must ignore event types they
-// do not know.
-
-/**
- * Opens an engine upgrade's migration group: exactly `eventCount` events that
- * the migration reported follow it. The node flattens every block-level group
- * into one list, so this count is the only boundary of the group.
- */
-export interface UpgradeMigrationReportedEvent {
-  type: "UpgradeMigrationReported";
-  /** Number of migration events that follow this one. */
-  eventCount: string;
-}
+// first block after activation; each carries the ABCI attribute
+// `phase=upgrade`, which tells it apart from the block's own events
+// (`phase=system`). Readers must ignore event types they do not know.
 
 /**
  * Emitted in the first block after an engine upgrade that moved a resting
@@ -1742,8 +1731,7 @@ export type ExchangeEvent =
   | MarketOrderProcessedEvent
   | OrderbookLevelUpdatedEvent
   | OrderMigratedEvent
-  | PositionMigratedEvent
-  | UpgradeMigrationReportedEvent;
+  | PositionMigratedEvent;
 
 // ---------------------------------------------------------------------------
 // Result types

@@ -81,7 +81,6 @@ export {
   type CancelReason,
   type OrderMigratedEvent,
   type PositionMigratedEvent,
-  type UpgradeMigrationReportedEvent,
   type TradeExecutedEvent,
   type PositionUpdatedEvent,
   type PositionClosedEvent,
