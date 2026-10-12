@@ -1561,7 +1561,7 @@ export class ExchangeClient {
   async queryUpgrades(): Promise<UpgradesInfo> {
     const json = await fetchApiJson(`${this.readBaseUrl}/v1/upgrades`);
     const bytes = fromBase64(requireEncodedData(json, "/v1/upgrades"));
-    return decodeUpgradesInfo(msgpackDecoder.decode(bytes));
+    return decodeUpgradesInfo(await this.strictDecode(bytes));
   }
 
   /**

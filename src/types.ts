@@ -1418,8 +1418,9 @@ export interface ProposalDisplayInfo {
   expiryMs: bigint;
   /** Engine-owned discriminant of `action`, committed by the content hash. */
   actionTag: number;
-  /** Typed decode of the proposed operation. */
-  action: AdminAction;
+  /** Typed decode of the proposed operation. `null` when the stored bytes
+   *  predate a breaking change to that action's shape. */
+  action: AdminAction | null;
   /** The EXACT stored engine-canonical bytes the content hash covers. */
   actionCanonicalBytes: Uint8Array;
   /** Domain-separated commitment to the immutable proposal context. */

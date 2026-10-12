@@ -809,12 +809,15 @@ export function decodeProposalDisplayInfo(
   }
   const fields = toTuple(raw, at, 15);
   const actionTag = toU8(fields[11], `${at}.actionTag`);
-  const action = decodeAdminAction(fields[12], `${at}.action`);
-  const expectedActionTag = ACTION_TAG_BY_KIND[action.kind];
-  if (actionTag !== expectedActionTag) {
-    throw new Error(
-      `governance decode: ${at}.actionTag ${actionTag} does not match ${action.kind} tag ${expectedActionTag}`,
-    );
+  const action =
+    fields[12] == null ? null : decodeAdminAction(fields[12], `${at}.action`);
+  if (action !== null) {
+    const expectedActionTag = ACTION_TAG_BY_KIND[action.kind];
+    if (actionTag !== expectedActionTag) {
+      throw new Error(
+        `governance decode: ${at}.actionTag ${actionTag} does not match ${action.kind} tag ${expectedActionTag}`,
+      );
+    }
   }
   return {
     proposalId: toU64(fields[0], `${at}.proposalId`),

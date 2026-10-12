@@ -582,6 +582,17 @@ describe("byte-field validation", () => {
     });
   });
 
+  it("keeps the tag, bytes and hash of a proposal whose action is nil", () => {
+    const raw = validProposalRaw();
+    raw[11] = 14;
+    raw[12] = null;
+    const info = decodeProposalDisplayInfo(raw);
+    expect(info.action).toBeNull();
+    expect(info.actionTag).toBe(14);
+    expect(info.actionCanonicalBytes).toEqual(new Uint8Array([0xde, 0xad]));
+    expect(info.contentHash).toEqual(new Uint8Array(32).fill(0x5a));
+  });
+
   it("reads a CancelAllOrdersForAccount proposal under its tag 8", () => {
     // The kind→tag table row is only exercised through a proposal read: a
     // wrong tag here would refuse every real tag-8 proposal as a mismatch.
