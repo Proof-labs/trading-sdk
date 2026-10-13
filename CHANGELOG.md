@@ -7,6 +7,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [7.1.0] — 2026-10-13
+
+### Release notes
+
+A minor npm release: the TypeScript additions below are backward compatible,
+and the three TypeScript type or behaviour changes are fixes that each need at
+most a small migration. The signing and transaction wire format is unchanged
+from npm 7.0.0. Rust and Python package versions remain on their independent
+release lines; the Rust-only breaking changes below do not affect the npm
+version.
+
+### Included since npm 7.0.0
+
+- On-chain engine upgrades: `ScheduleUpgrade` and `CancelUpgrade` admin
+  actions, `validateScheduleUpgrade`, `queryUpgrades()` and
+  `queryNodeVersion()` (#204).
+- Trading No on an event's one binary book, and the one-book upgrade's
+  events (#230).
+- The F16 primary-with-fallback oracle verdict read and error code 77 (#196).
+- The gateway's stated `status` is read as stated (#223).
+- Event reads decode the one-book event record (#226).
+
+### TypeScript migration notes
+
+- `ProposalDisplayInfo.action` can be `null`. Under npm 7.0.0 a proposal whose
+  action the engine returns as nil failed the whole read; it now decodes with
+  `action: null`. Check for null before reading `action.kind`.
+- `EventInfo.ebnMarket` is optional and `undefined` on a one-book chain.
+- An invalid signature is an `engine` outcome with code `17`, where it used to
+  be a `transport` outcome with code 1.
+
 ### Added
 
 - `decodeFinancialAuditArtifact(bytes, pins, selection)` decodes an offline
@@ -34,9 +65,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `PositionMigrated`, and the new `CancelReason` type names the engine's
   cancel reasons, including `upgrade`. Event readers pass unknown event types
   through, so further upgrade-journal events do not break a read.
+- `ScheduleUpgrade` (inner tag 14) and `CancelUpgrade` (inner tag 15) in the
+  `AdminAction` union, so a client can propose and approve an on-chain engine
+  upgrade (#185). `ScheduleUpgrade` carries the target height, the
+  successor's engine release `major`/`minor`, and the `successorSha256` pin;
+  `validateScheduleUpgrade` mirrors the engine's refusals (zero major,
+  all-zero pin) on encode and on proposal decode. Conformance vectors cover
+  both inside `ProposeAdminAction`. The Rust crate re-exports both types.
+- `queryUpgrades()` reads the pending upgrade plan and executed activation
+  ledger (`GET /v1/upgrades`), and `queryNodeVersion()` the answering node's
+  loaded engine release (`GET /v1/version`).
 
-### Breaking changes
+### Breaking changes (Rust; TypeScript changes are covered by the migration notes above)
 
+- The Rust crate moves to proof-wire 6.0.0 (pinned to mirror commit
+  `ce8dd8bd` until the `v6.0.0` tag is cut), where `ScheduleUpgrade` names
+  the successor release as `major`/`minor` in place of `protocol_version`.
+  The re-exported `AdminAction::ScheduleUpgrade` changes shape, and a
+  `ScheduleUpgrade` that carries `protocol_version` no longer encodes.
+- `ProposalDisplayInfo.action` is `AdminAction | null`. The engine returns nil
+  for a proposal stored in a shape it no longer decodes; `actionTag`,
+  `actionCanonicalBytes` and `contentHash` are still returned.
 - The gateway's `status` is read as stated; nothing is inferred
   from message text or field shape (api-gateway 7.0.0, api-gateway #215 and
   #220). `POST /exchange` now answers `ok`, `error`, `refused` or
@@ -182,6 +231,16 @@ those existing behaviours are not new in 7.0.0.
   Requests bypass HTTP caches. MINOR: this additive TypeScript read API keeps
   the released npm 5.1.0 codec and proof-wire 2.1.0 contract (exchange v2.12.0 /
   api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
+- `InsuranceFundUpdatedEvent` (`poolId`, `balance`, `delta`),
+  `PositionAutoDeleveragedEvent` (`owner`, `market`, `side`, `size`,
+  `closePrice`, `closePriceSpec`, `realizedPnl`) and `PlpAbsorbedEvent`
+  (`poolId`, `amount`, `plpBalanceAfter`) join the `ExchangeEvent` union and
+  the package barrel. They type the bad-debt waterfall events the engine
+  already emits on proof-wire 4.1.0 (exchange dev `exchange-wire` `Event`), with
+  the same stringified-number convention as `AccountLiquidatedEvent`.
+  TypeScript types only: no codec, wire or Rust/Python change.
+- `reads().historyStatus()` bypasses HTTP caches (`cache: "no-store"`), so a
+  freshness read is never answered from a stale cached response.
 - TypeScript 6.1.0: `HistoryResolution.convertedSize` and
   `HistoryResolution.fallbackReason` (with the `ConversionFallbackReason` type)
   for conditional-perp resolutions, as the exchange release after 2.14.0
@@ -1204,7 +1263,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.1.0...HEAD
+[7.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.0.0...npm-v7.1.0
 [7.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v6.4.0...npm-v7.0.0
 [5.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v5.0.0...npm-v5.1.0
 [5.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v4.0.0...npm-v5.0.0

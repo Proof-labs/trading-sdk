@@ -116,6 +116,17 @@ fn classify(
             }
         }
     }
+    // api-gateway 6.0 and later state where the submission ended. `refused`
+    // was never broadcast, whatever the HTTP status; `pending` was and may
+    // still execute.
+    let bare = response.code.is_none() && response.height.is_none();
+    match (response.status.as_str(), &response.tx_hash) {
+        ("refused", None) if bare => {
+            return Ok(SubmissionVerdict::RejectedBeforeAdmission { hash });
+        }
+        ("pending", Some(_)) if bare => return Ok(SubmissionVerdict::Pending { hash }),
+        _ => {}
+    }
     if matches!(status, StatusCode::OK | StatusCode::SERVICE_UNAVAILABLE)
         && response.status == "error"
         && response.error.is_some()
@@ -419,6 +430,61 @@ mod tests {
             );
             task.await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn gateway_stated_refusal_and_pending_are_read() {
+        let bytes = b"fixture";
+        let pending = format!(
+            r#"{{"status":"pending","error":"no verdict in time","errorCode":"Timeout","txHash":"{}"}}"#,
+            hash_hex(bytes).to_ascii_uppercase()
+        );
+        for (status, body, expected) in [
+            (
+                503,
+                r#"{"status":"refused","error":"service overloaded","errorCode":"Overloaded"}"#
+                    .to_string(),
+                SubmissionVerdict::RejectedBeforeAdmission { hash: hash(bytes) },
+            ),
+            (
+                200,
+                r#"{"status":"refused","error":"bad action","errorCode":"InvalidRequest"}"#
+                    .to_string(),
+                SubmissionVerdict::RejectedBeforeAdmission { hash: hash(bytes) },
+            ),
+            (
+                200,
+                pending,
+                SubmissionVerdict::Pending { hash: hash(bytes) },
+            ),
+        ] {
+            let (client, task) = server(response(status, &body), Duration::ZERO).await;
+            assert_eq!(
+                client
+                    .submit_signed_bytes(bytes)
+                    .await
+                    .expect("a gateway-stated status is a verdict"),
+                expected,
+                "HTTP {status} {body}"
+            );
+            task.await.expect("server task completes");
+        }
+    }
+
+    #[tokio::test]
+    async fn pending_carrying_another_hash_is_refused() {
+        let bytes = b"fixture";
+        let body = format!(
+            r#"{{"status":"pending","errorCode":"Timeout","txHash":"{}"}}"#,
+            "AB".repeat(32)
+        );
+        let (client, task) = server(response(200, &body), Duration::ZERO).await;
+        let error = client
+            .submit_signed_bytes(bytes)
+            .await
+            .expect_err("a pending answer for another transaction is no verdict on this one");
+        assert_eq!(error.kind, SubmissionErrorKind::HashMismatch);
+        task.await.expect("server task completes");
     }
 
     #[tokio::test]

@@ -232,9 +232,16 @@ export class GatewayReads {
   oracleHealth(opts: GatewayReadOptions = {}) {
     return this.get("/v1/oracle/health", {}, opts);
   }
-  /** Indexer progress/freshness, unchanged. Display thresholds belong to callers. */
+  /** History pipeline freshness (`GET /v1/history/status`, the indexer's
+   * watermarks and ingest liveness). Lets a caller tell an empty history from
+   * one that has not caught up; thresholds belong to the caller.
+   */
   historyStatus(opts: GatewayReadOptions = {}) {
-    return this.get("/v1/history/status", {}, opts);
+    return this.request(
+      "/v1/history/status",
+      { method: "GET", cache: "no-store" },
+      opts,
+    );
   }
   /** Indexed blocks, newest first: { blocks, next_cursor }. No synthetic fallback. */
   historyBlocks(
