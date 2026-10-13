@@ -7,6 +7,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **An injectable HTTP transport for `ExchangeClient`** (part of #220).
+  `new ExchangeClient({ httpTransport })` sends every HTTP request the client
+  makes through one function: typed reads, owner-scoped `/info` reads,
+  `reads()` when no `fetch` is given, submission, confirmation polls and the
+  chain-id lookup. Each call receives an `ExchangeHttpRequestContext`
+  (`purpose`, `priority`, `surface`, and the originating `action` for a
+  submission and its confirmations), so an embedding process can apply its own
+  admission, pacing, deadlines and retries. Owner-scoped reads are `urgent`,
+  other reads `critical`; a submission takes its action's priority, with
+  cancels `urgent` (`exchangeHttpPriorityForAction`). `fetchChainId` takes an
+  optional transport as its second argument. The WebSocket feed is not
+  affected. Exported: `ExchangeHttpTransport`, `ExchangeHttpRequestContext`,
+  `ExchangeHttpPurpose`, `ExchangeHttpPriority`,
+  `defaultExchangeHttpTransport`, `exchangeHttpPriorityForAction`. MINOR:
+  without the option the client calls `globalThis.fetch` with the same
+  arguments as before; no wire change.
+
 ## [7.1.0] — 2026-10-13
 
 ### Release notes

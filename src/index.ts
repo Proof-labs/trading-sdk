@@ -285,6 +285,14 @@ export {
   type WsStreamOptions,
 } from "./client.js";
 export {
+  defaultExchangeHttpTransport,
+  exchangeHttpPriorityForAction,
+  type ExchangeHttpPriority,
+  type ExchangeHttpPurpose,
+  type ExchangeHttpRequestContext,
+  type ExchangeHttpTransport,
+} from "./http-transport.js";
+export {
   decodeOraclePermissions,
   ORACLE_DIAGNOSTIC_BITS,
   ORACLE_FAULT_BITS,

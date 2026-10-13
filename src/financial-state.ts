@@ -3,6 +3,11 @@ import {
   decodeAccountState,
   type RawAccountPosition,
 } from "./account-state.js";
+import {
+  defaultExchangeHttpTransport,
+  readContext,
+  type ExchangeHttpTransport,
+} from "./http-transport.js";
 
 /** Bounded selection for one finalized-store read; not historical or risk authorization. */
 export interface FinancialStateSelection {
@@ -376,6 +381,7 @@ function validateMessagePackBudget(bytes: Uint8Array): void {
 export async function fetchFinancialState(
   gatewayUrl: string,
   selection: FinancialStateSelection,
+  httpTransport: ExchangeHttpTransport = defaultExchangeHttpTransport,
 ): Promise<FinancialState> {
   const expected = canonicalFinancialSelection(selection);
   const url = `${gatewayUrl}/v1/financial/state?markets=${expected.markets.join(",")}&owners=${expected.owners.join(",")}`;
@@ -383,10 +389,11 @@ export async function fetchFinancialState(
   const timeout = setTimeout(() => controller.abort(), 5000);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      redirect: "error",
-    });
+    const response = await httpTransport(
+      url,
+      { signal: controller.signal, redirect: "error" },
+      readContext(url, "account"),
+    );
     if (!response.ok)
       throw new Error(`financial state HTTP ${response.status}`);
     const contentLength = response.headers.get("content-length");
