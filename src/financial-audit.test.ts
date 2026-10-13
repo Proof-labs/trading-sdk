@@ -270,26 +270,46 @@ describe("financial audit format2", () => {
     ).toThrow("artifact size");
   });
   it.each([
-    "protocol",
-    "trust",
-    "provenance",
-    "snapshotSha256",
-    "executableSha256",
-    "chainId",
-    "height",
-    "timeMs",
-    "timeSource",
-    "markets",
-    "owners",
-    "data",
-  ])("rejects mismatched artifact %s", (field) => {
+    ["protocol", "artifact trust contract"],
+    ["trust", "artifact trust contract"],
+    ["provenance", "artifact provenance"],
+    ["snapshotSha256", "artifact pins"],
+    ["executableSha256", "artifact pins"],
+    ["chainId", "artifact pins"],
+    ["height", "artifact height/time"],
+    ["timeMs", "artifact height/time"],
+    ["timeSource", "artifact trust contract"],
+    ["markets", "artifact selectors"],
+    ["owners", "artifact selectors"],
+    ["data", "response size"],
+  ])("rejects mismatched artifact %s", (field, check) => {
     expect(() =>
       decodeFinancialAuditArtifact(
         JSON.stringify({ ...artifact(), [field]: "" }),
         pins,
         selection,
       ),
-    ).toThrow(/decode: invalid/);
+    ).toThrow(`decode: invalid ${check}`);
+  });
+  it("rejects malformed JSON with the decoder's own error", () => {
+    expect(() => decodeFinancialAuditArtifact("{", pins, selection)).toThrow(
+      "financial audit decode: invalid artifact JSON",
+    );
+  });
+  it("rejects malformed UTF-8 inside the payload, even an overlong form of a valid enum", () => {
+    // `a4 50 65 72 70` is "Perp"; `a5 c1 90 65 72 70` spells it with an overlong "P".
+    const overlong = golden.replace("a450657270", "a5c190657270");
+    expect(overlong).not.toBe(golden);
+    expect(() =>
+      decodeFinancialAuditArtifact(
+        JSON.stringify({
+          ...artifact(),
+          data: Buffer.from(overlong, "hex").toString("base64"),
+        }),
+        pins,
+        selection,
+      ),
+    ).toThrow("MessagePack UTF-8");
   });
   it("rejects unknown fields, noncanonical base64 and inconsistent ledger time", () => {
     expect(() =>

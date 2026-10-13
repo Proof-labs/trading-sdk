@@ -150,7 +150,12 @@ export function decodeFinancialAuditArtifact(
   } catch {
     return invalid("artifact UTF-8");
   }
-  const r: unknown = JSON.parse(text);
+  let r: unknown;
+  try {
+    r = JSON.parse(text);
+  } catch {
+    return invalid("artifact JSON");
+  }
   const keys = [
     "protocol",
     "trust",

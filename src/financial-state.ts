@@ -313,9 +313,19 @@ function validateMessagePackBudget(
         ? view.getUint16(at)
         : view.getUint32(at);
   };
-  const payload = (length: number, maximum: number): void => {
+  const payload = (length: number, maximum: number): number => {
     if (length > maximum) invalid("MessagePack resource limit");
-    take(length);
+    return take(length);
+  };
+  const utf8 = new TextDecoder("utf-8", { fatal: true });
+  // The msgpack decoder normalises malformed UTF-8 (overlong forms included).
+  const text = (length: number): void => {
+    const start = payload(length, limits.maxString);
+    try {
+      utf8.decode(bytes.subarray(start, start + length));
+    } catch {
+      invalid("MessagePack UTF-8");
+    }
   };
   while (remaining.length) {
     const top = remaining.length - 1;
@@ -337,7 +347,7 @@ function validateMessagePackBudget(
     } else if (tag >= 0x90 && tag <= 0x9f) {
       arrayLength = tag & 15;
     } else if (tag >= 0xa0 && tag <= 0xbf) {
-      payload(tag & 31, limits.maxString);
+      text(tag & 31);
     } else {
       switch (tag) {
         case 0xcc:
@@ -357,13 +367,13 @@ function validateMessagePackBudget(
           take(8);
           break;
         case 0xd9:
-          payload(size(1), limits.maxString);
+          text(size(1));
           break;
         case 0xda:
-          payload(size(2), limits.maxString);
+          text(size(2));
           break;
         case 0xdb:
-          payload(size(4), limits.maxString);
+          text(size(4));
           break;
         case 0xc4:
           payload(size(1), limits.maxBinary);
