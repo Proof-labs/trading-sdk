@@ -195,7 +195,6 @@ import {
   BinaryPriceError as BarrelBinaryPriceError,
   yesOrder as barrelYesOrder,
   type CancelReason,
-  type ExchangeEvent,
   type OrderMigratedEvent,
   type PositionMigratedEvent,
 } from "./index.js";
