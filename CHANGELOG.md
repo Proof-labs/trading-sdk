@@ -17,8 +17,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`purpose`, `priority`, `surface`, and the originating `action` for a
   submission and its confirmations), so an embedding process can apply its own
   admission, pacing, deadlines and retries. Owner-scoped reads are `urgent`,
-  other reads `critical`; a submission takes its action's priority, with
-  cancels `urgent` (`exchangeHttpPriorityForAction`). `fetchChainId` takes an
+  other reads `critical`, including through `reads()`, where a read whose
+  `/info` body names a `user` or whose query names a `user` or `owner` is
+  owner-scoped; a submission takes its action's priority, with cancels
+  `urgent` (`exchangeHttpPriorityForAction`). `fetchChainId` takes an
   optional transport as its second argument. The WebSocket feed is not
   affected. Exported: `ExchangeHttpTransport`, `ExchangeHttpRequestContext`,
   `ExchangeHttpPurpose`, `ExchangeHttpPriority`,

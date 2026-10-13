@@ -73,6 +73,41 @@ export function readContext(
   };
 }
 
+/**
+ * Context for a `reads()` request, which carries no method-level context of
+ * its own. A read is owner-scoped, and so `urgent`, when its `/info` body
+ * names a `user` or its query string names a `user` or `owner`. An `/info`
+ * read is labelled by its type (`api_info_openOrders`), as the typed reads
+ * are.
+ */
+export function gatewayReadContext(
+  url: string,
+  init: RequestInit | undefined,
+): ExchangeHttpRequestContext {
+  let infoType: string | undefined;
+  let owned = false;
+  if (typeof init?.body === "string") {
+    try {
+      const body: unknown = JSON.parse(init.body);
+      if (body !== null && typeof body === "object") {
+        const fields = body as Record<string, unknown>;
+        if (typeof fields.type === "string") infoType = fields.type;
+        owned = typeof fields.user === "string";
+      }
+    } catch {
+      /* not a JSON body: classified by its URL alone */
+    }
+  }
+  const query = url.includes("?")
+    ? new URLSearchParams(url.slice(url.indexOf("?") + 1))
+    : undefined;
+  if (query?.has("user") || query?.has("owner")) owned = true;
+  const context = readContext(url, owned ? "account" : "query");
+  return infoType === undefined
+    ? context
+    : { ...context, surface: `api_info_${infoType}` };
+}
+
 const ID_SEGMENT = /^(0x)?[0-9a-fA-F]{40}$|^(0x)?[0-9a-fA-F]{64}$|^\d+$/;
 
 /**

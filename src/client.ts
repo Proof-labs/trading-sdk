@@ -112,6 +112,7 @@ import { readMarketsSnapshot } from "./market-snapshot.js";
 import {
   defaultExchangeHttpTransport,
   exchangeHttpPriorityForAction,
+  gatewayReadContext,
   readContext,
   surfaceFor,
   type ExchangeHttpRequestContext,
@@ -2061,7 +2062,7 @@ export class ExchangeClient {
       this.gatewayUrl,
       opts.fetch ??
         ((url, init) =>
-          this.httpTransport(url, init, readContext(url, "query"))),
+          this.httpTransport(url, init, gatewayReadContext(url, init))),
     );
   }
 

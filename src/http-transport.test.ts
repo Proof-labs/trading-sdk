@@ -180,18 +180,46 @@ describe("ExchangeClient httpTransport", () => {
     expect(global).not.toHaveBeenCalled();
   });
 
-  it("uses the client's transport for reads() when no fetch is given", async () => {
+  it("uses the client's transport for reads(), keeping owner-scoped reads urgent", async () => {
     const global = forbidGlobalFetch();
     const { calls, transport } = recording(() => json({ ok: true }));
     const client = new ExchangeClient({
       gatewayUrl: "http://gateway",
       httpTransport: transport,
     });
+    const reads = client.reads();
 
-    await client.reads().meta();
+    await reads.meta();
+    await reads.openOrders(ownerHex);
+    await reads.clearinghouseState(ownerHex);
+    await reads.historyFills({ user: ownerHex });
+    await reads.accountEvents({ owner: ownerHex, order: "desc" });
+    await reads.health();
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0].context.purpose).toBe("query");
+    expect(calls.map((c) => c.context)).toEqual([
+      { purpose: "query", priority: "critical", surface: "api_info_meta" },
+      {
+        purpose: "account",
+        priority: "urgent",
+        surface: "api_info_openOrders",
+      },
+      {
+        purpose: "account",
+        priority: "urgent",
+        surface: "api_info_clearinghouseState",
+      },
+      {
+        purpose: "account",
+        priority: "urgent",
+        surface: "api_info_historyFills",
+      },
+      {
+        purpose: "account",
+        priority: "urgent",
+        surface: "api_history_account_events",
+      },
+      { purpose: "query", priority: "critical", surface: "api_health" },
+    ]);
     expect(global).not.toHaveBeenCalled();
   });
 
