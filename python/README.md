@@ -94,6 +94,22 @@ history routes. Their dataclass pages preserve chain coordinates, market ids,
 and every numeric payload value as strings. `next_cursor` is opaque and bound
 to the owner/market/time filters that issued it.
 
+## Trading No on an event's binary book
+
+Each event has one binary book, priced in Yes (the event's `eby_market`).
+Buying No at `q` is selling Yes at `$1 - q`; the helpers return that Yes
+`PlaceOrder`, ready to sign and submit like any other action:
+
+```python
+order = pts.buy_no(market=event_book, owner=owner, price=400_000, quantity=10)  # Yes sell at 0.60
+order = pts.sell_no(market=event_book, owner=owner, price=300_000, quantity=10, reduce_only=True)
+view = pts.binary_position_view("Sell", 600_000, 40)  # No at 0.40, size 40
+```
+
+No-priced `stop_loss`/`take_profit` limbs keep their role at the mirrored
+trigger. A No price of 0 or `$1` raises `BinaryPriceError`. The translation is
+pinned against the Rust core by `conformance/binary.ndjson`.
+
 ## Timestamp Nonces
 
 Every signed transaction carries a **timestamp nonce** (`seq`) — a millisecond

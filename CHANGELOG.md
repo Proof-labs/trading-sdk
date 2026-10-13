@@ -7,8 +7,75 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Breaking changes
+## [7.1.0] — 2026-10-13
 
+### Release notes
+
+A minor npm release: the TypeScript additions below are backward compatible,
+and the three TypeScript type or behaviour changes are fixes that each need at
+most a small migration. The signing and transaction wire format is unchanged
+from npm 7.0.0. Rust and Python package versions remain on their independent
+release lines; the Rust-only breaking changes below do not affect the npm
+version.
+
+### Included since npm 7.0.0
+
+- On-chain engine upgrades: `ScheduleUpgrade` and `CancelUpgrade` admin
+  actions, `validateScheduleUpgrade`, `queryUpgrades()` and
+  `queryNodeVersion()` (#204).
+- Trading No on an event's one binary book, and the one-book upgrade's
+  events (#230).
+- The F16 primary-with-fallback oracle verdict read and error code 77 (#196).
+- The gateway's stated `status` is read as stated (#223).
+- Event reads decode the one-book event record (#226).
+
+### TypeScript migration notes
+
+- `ProposalDisplayInfo.action` can be `null`. Under npm 7.0.0 a proposal whose
+  action the engine returns as nil failed the whole read; it now decodes with
+  `action: null`. Check for null before reading `action.kind`.
+- `EventInfo.ebnMarket` is optional and `undefined` on a one-book chain.
+- An invalid signature is an `engine` outcome with code `17`, where it used to
+  be a `transport` outcome with code 1.
+
+### Added
+
+- **Trading No on an event's one binary book.** An event has one book priced
+  in Yes; a long No at `q` is a short Yes at `$1 − q`. TypeScript:
+  `ExchangeClient.buyNo` and `sellNo` place the Yes order at `$1 − price`,
+  carrying reduce-only, post-only, client order id and time in force, with
+  No-priced `stopLoss`/`takeProfit` mirrored in the same role; `yesOrder`,
+  `yesLimb`, `yesSide`, `binaryPositionView`, `BINARY_PRICE_MAX` and
+  `BinaryPriceError` are exported. Python: `buy_no`, `sell_no`, `no_order`,
+  `yes_limb`, `yes_side`, `binary_position_view`. Rust: the `binary` module
+  (`yes_order`, `yes_limb`, `binary_position_view`). A No price of 0 or `$1`
+  is refused client-side. A new conformance family, `binary.ndjson`, pins the
+  translation in all three languages.
+- **The one-book upgrade's events.** `ExchangeEvent` gains `OrderMigrated`
+  and `PositionMigrated`, and the new `CancelReason` type names the engine's
+  cancel reasons, including `upgrade`. Event readers pass unknown event types
+  through, so further upgrade-journal events do not break a read.
+- `ScheduleUpgrade` (inner tag 14) and `CancelUpgrade` (inner tag 15) in the
+  `AdminAction` union, so a client can propose and approve an on-chain engine
+  upgrade (#185). `ScheduleUpgrade` carries the target height, the
+  successor's engine release `major`/`minor`, and the `successorSha256` pin;
+  `validateScheduleUpgrade` mirrors the engine's refusals (zero major,
+  all-zero pin) on encode and on proposal decode. Conformance vectors cover
+  both inside `ProposeAdminAction`. The Rust crate re-exports both types.
+- `queryUpgrades()` reads the pending upgrade plan and executed activation
+  ledger (`GET /v1/upgrades`), and `queryNodeVersion()` the answering node's
+  loaded engine release (`GET /v1/version`).
+
+### Breaking changes (Rust; TypeScript changes are covered by the migration notes above)
+
+- The Rust crate moves to proof-wire 6.0.0 (pinned to mirror commit
+  `ce8dd8bd` until the `v6.0.0` tag is cut), where `ScheduleUpgrade` names
+  the successor release as `major`/`minor` in place of `protocol_version`.
+  The re-exported `AdminAction::ScheduleUpgrade` changes shape, and a
+  `ScheduleUpgrade` that carries `protocol_version` no longer encodes.
+- `ProposalDisplayInfo.action` is `AdminAction | null`. The engine returns nil
+  for a proposal stored in a shape it no longer decodes; `actionTag`,
+  `actionCanonicalBytes` and `contentHash` are still returned.
 - The gateway's `status` is read as stated; nothing is inferred
   from message text or field shape (api-gateway 7.0.0, api-gateway #215 and
   #220). `POST /exchange` now answers `ok`, `error`, `refused` or
@@ -1186,7 +1253,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.1.0...HEAD
+[7.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.0.0...npm-v7.1.0
 [7.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v6.4.0...npm-v7.0.0
 [5.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v5.0.0...npm-v5.1.0
 [5.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v4.0.0...npm-v5.0.0

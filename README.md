@@ -240,6 +240,30 @@ are monitoring signals rather than faults. Older nodes serve the twelve-field
 layout (`ORACLE_FAULT_BITS`, named in `faultReasons`); `Disagreement` and
 `PairTimeMismatch` keep their bits but are no longer produced.
 
+### Trading No on an event's binary book
+
+Each event has one binary book, priced in Yes (`EventInfo.ebyMarket`). Buying
+No at `q` is selling Yes at `$1 − q`, so the SDK places No orders as their Yes
+mirror:
+
+```typescript
+await client.buyNo({ market: event.ebyMarket, price: 400_000n, quantity: 10n }); // Yes sell at 0.60
+await client.sellNo({
+  market: event.ebyMarket,
+  price: 300_000n,
+  quantity: 10n,
+  reduceOnly: true,
+}); // reduce-only Yes buy at 0.70
+```
+
+`stopLoss`/`takeProfit` take No trigger prices and keep their role on the
+mirrored Yes position (a stop at No 0.30 becomes a stop at Yes 0.70); their
+`maxSlippageBps` applies to the Yes price. A No price of 0 or `$1` has no Yes
+mirror and throws `BinaryPriceError` before anything is sent. `yesOrder`,
+`yesLimb` and `binaryPositionView` expose the same translation, and the view
+reads a short Yes position as No at `$1 − entry`. All of it is pinned against
+the Rust core by `conformance/binary.ndjson`.
+
 ### Oracle freshness for trading UIs
 
 ```typescript
