@@ -88,14 +88,6 @@ _POSITION_TYPES = {
     "position_trigger_deferred",
 }
 _MARKET_TYPES = {"trigger_market_deferred", "trigger_market_resumed"}
-_RESULTS = {
-    "filled",
-    "partial",
-    "no_fill",
-    "rejected",
-    "invalidated",
-}
-_LIMB_KINDS = {"stop_loss", "take_profit"}
 _EVENT_KEYS = {
     "event_key",
     "block_height",
@@ -276,13 +268,6 @@ def _rfc3339(value: t.Any, name: str) -> str:
     return text
 
 
-def _enum(value: t.Any, allowed: set[str], name: str, *, empty: bool = False) -> str:
-    text = _string(value, name, nonempty=not empty)
-    if text not in allowed and not (empty and text == ""):
-        raise _error(f"unknown {name} {text}")
-    return text
-
-
 def _payload(value: t.Any) -> dict[str, str]:
     row = _object(value, "payload")
     if not all(isinstance(item, str) for item in row.values()):
@@ -406,7 +391,7 @@ def _validate_payload(
                 "execution_order_id",
             ),
         )
-        _enum(payload.get("limb_kind"), _LIMB_KINDS, "payload.limb_kind")
+        _string(payload.get("limb_kind"), "payload.limb_kind")
     elif event_type == "position_trigger_executed":
         _require_unsigned(
             payload,
@@ -423,26 +408,14 @@ def _validate_payload(
                 "execution_order_id",
             ),
         )
-        _enum(payload.get("limb_kind"), _LIMB_KINDS, "payload.limb_kind")
-        _enum(payload.get("result"), _RESULTS, "payload.result")
+        _string(payload.get("limb_kind"), "payload.limb_kind")
+        _string(payload.get("result"), "payload.result")
         _signed_i64(payload.get("total_fee"), "payload.total_fee")
         _string(payload.get("reason"), "payload.reason", nonempty=False)
         if int(payload["filled_quantity"]) + int(payload["residual_quantity"]) != int(
             payload["requested_quantity"]
         ):
             raise _error("executed quantities do not conserve")
-        requested = int(payload["requested_quantity"])
-        filled = int(payload["filled_quantity"])
-        residual = int(payload["residual_quantity"])
-        result = payload["result"]
-        if result == "filled":
-            valid = filled == requested and residual == 0
-        elif result == "partial":
-            valid = filled > 0 and residual > 0
-        else:
-            valid = filled == 0 and residual > 0
-        if not valid:
-            raise _error("result and quantities disagree")
     elif event_type == "position_trigger_deferred":
         _require_unsigned(
             payload,
@@ -455,7 +428,7 @@ def _validate_payload(
                 "requested_quantity",
             ),
         )
-        _enum(payload.get("limb_kind"), _LIMB_KINDS, "payload.limb_kind")
+        _string(payload.get("limb_kind"), "payload.limb_kind")
         _string(payload.get("reason"), "payload.reason")
     elif event_type == "trigger_market_deferred":
         _string(payload.get("reason"), "payload.reason")

@@ -125,14 +125,6 @@ def _sub_account_name(value: t.Any) -> str:
 ENVELOPE_VERSION = 2
 DOMAIN_PREFIX = b"ProofExchange-v3"
 UNBOUND_CHAIN_ID = b"\x00" * 32
-_TRIGGER_KINDS = {"StopLoss", "TakeProfit"}
-_TRIGGER_LIMB_STATES = {
-    "Armed", "Filled", "Partial", "NoFill", "Rejected", "Cancelled", "Invalidated"
-}
-_TRIGGER_SIMPLE_AVAILABILITY = {
-    "Available", "TriggerActionsInactive", "PendingActivation", "MigrationIncomplete",
-    "ConfigurationMissing", "MarketDisabled",
-}
 
 # ── Enums ────────────────────────────────────────────────────────────────────
 
@@ -808,10 +800,10 @@ class ExchangeClient:
         return value
 
     @staticmethod
-    def _trigger_outcome_reason(value: t.Any) -> str:
+    def _trigger_label(value: t.Any, name: str) -> str:
         if not isinstance(value, str) or value == "":
             raise ProofTradingSdkError(
-                "trigger decode: TriggerOutcomeReason must be a non-empty string"
+                f"trigger decode: {name} must be a non-empty string"
             )
         return value
 
@@ -820,7 +812,7 @@ class ExchangeClient:
         if value is None:
             return None
         row = cls._trigger_tuple(value, "TriggerEvaluation", 7)
-        reason = None if row[6] is None else cls._trigger_outcome_reason(row[6])
+        reason = None if row[6] is None else cls._trigger_label(row[6], "TriggerOutcomeReason")
         requested = cls._trigger_uint(row[3], "evaluation.requested_quantity")
         filled = cls._trigger_uint(row[4], "evaluation.filled_quantity")
         residual = cls._trigger_uint(row[5], "evaluation.residual_quantity")
@@ -845,14 +837,11 @@ class ExchangeClient:
         if value is None:
             return None
         row = cls._trigger_tuple(value, "StoredTriggerLimb", 7)
-        if row[1] not in _TRIGGER_KINDS:
+        if row[1] not in ("StopLoss", "TakeProfit"):
             raise ProofTradingSdkError(
                 f"trigger decode: unknown TriggerKind {row[1]!r}"
             )
-        if row[5] not in _TRIGGER_LIMB_STATES:
-            raise ProofTradingSdkError(
-                f"trigger decode: unknown TriggerLimbState {row[5]!r}"
-            )
+        cls._trigger_label(row[5], "TriggerLimbState")
         limb_id = cls._trigger_uint(row[0], "limb_id")
         trigger_price = cls._trigger_uint(row[2], "trigger_price")
         max_slippage_bps = cls._trigger_uint(
@@ -928,16 +917,19 @@ class ExchangeClient:
                     "trigger decode: enabled config has a zero bound"
                 )
         availability: dict[str, t.Any]
-        if isinstance(row[2], str) and row[2] in _TRIGGER_SIMPLE_AVAILABILITY:
-            availability = {"kind": row[2]}
-        elif isinstance(row[2], dict) and set(row[2]) == {"Deferred"}:
+        if isinstance(row[2], str):
             availability = {
-                "kind": "Deferred",
-                "reason": cls._trigger_outcome_reason(row[2]["Deferred"]),
+                "kind": cls._trigger_label(row[2], "TriggerEffectiveAvailability")
+            }
+        elif isinstance(row[2], dict) and len(row[2]) == 1:
+            ((kind, reason),) = row[2].items()
+            availability = {
+                "kind": cls._trigger_label(kind, "TriggerEffectiveAvailability"),
+                "reason": cls._trigger_label(reason, "TriggerOutcomeReason"),
             }
         else:
             raise ProofTradingSdkError(
-                "trigger decode: unknown TriggerEffectiveAvailability"
+                "trigger decode: malformed TriggerEffectiveAvailability"
             )
         if bracket[4] not in ("Buy", "Sell"):
             raise ProofTradingSdkError(

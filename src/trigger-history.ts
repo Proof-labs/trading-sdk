@@ -44,14 +44,6 @@ const MARKET_EVENT_TYPES = new Set<TriggerMarketHistoryEventType>([
   "trigger_market_resumed",
 ]);
 
-const EXECUTION_RESULTS = new Set([
-  "filled",
-  "partial",
-  "no_fill",
-  "rejected",
-  "invalidated",
-]);
-
 const EVENT_KEYS = [
   "event_key",
   "block_height",
@@ -147,18 +139,6 @@ function rfc3339(value: unknown, name: string): string {
     throw new Error(`trigger history decode: ${name} is not RFC3339`);
   }
   return text;
-}
-
-function enumString<T extends string>(
-  value: unknown,
-  allowed: Set<T>,
-  name: string,
-): T {
-  const text = string(value, name);
-  if (!allowed.has(text as T)) {
-    throw new Error(`trigger history decode: unknown ${name} ${text}`);
-  }
-  return text as T;
 }
 
 function payloadRecord(value: unknown): Record<string, string> {
@@ -324,11 +304,7 @@ function validatePayload(
         "requested_quantity",
         "execution_order_id",
       ]);
-      enumString(
-        payload.limb_kind,
-        new Set(["stop_loss", "take_profit"] as const),
-        "payload.limb_kind",
-      );
+      requireNonemptyPayload(payload, "limb_kind");
       break;
     case "position_trigger_executed":
       requireUnsignedPayload(payload, [
@@ -343,12 +319,8 @@ function validatePayload(
         "residual_quantity",
         "execution_order_id",
       ]);
-      enumString(
-        payload.limb_kind,
-        new Set(["stop_loss", "take_profit"] as const),
-        "payload.limb_kind",
-      );
-      enumString(payload.result, EXECUTION_RESULTS, "payload.result");
+      requireNonemptyPayload(payload, "limb_kind");
+      requireNonemptyPayload(payload, "result");
       signedI64(payload.total_fee, "payload.total_fee");
       string(payload.reason, "payload.reason", false);
       if (
@@ -358,22 +330,6 @@ function validatePayload(
         throw new Error(
           "trigger history decode: executed quantities do not conserve",
         );
-      }
-      {
-        const requested = BigInt(payload.requested_quantity);
-        const filled = BigInt(payload.filled_quantity);
-        const residual = BigInt(payload.residual_quantity);
-        const valid =
-          payload.result === "filled"
-            ? filled === requested && residual === 0n
-            : payload.result === "partial"
-              ? filled > 0n && residual > 0n
-              : filled === 0n && residual > 0n;
-        if (!valid) {
-          throw new Error(
-            "trigger history decode: result and quantities disagree",
-          );
-        }
       }
       break;
     case "position_trigger_deferred":
@@ -385,11 +341,7 @@ function validatePayload(
         "frozen_mark",
         "requested_quantity",
       ]);
-      enumString(
-        payload.limb_kind,
-        new Set(["stop_loss", "take_profit"] as const),
-        "payload.limb_kind",
-      );
+      requireNonemptyPayload(payload, "limb_kind");
       requireNonemptyPayload(payload, "reason");
       break;
     case "trigger_market_deferred":

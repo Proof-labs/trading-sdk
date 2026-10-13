@@ -213,14 +213,6 @@ def test_history_decoders_fail_closed_on_envelope_numbers_and_drift():
             {"trigger_events": [nonconserving], "next_cursor": ""}, OWNER
         )
 
-    impossible_terminal = copy.deepcopy(_executed_event())
-    impossible_terminal["payload"]["result"] = "filled"
-    impossible_terminal["payload"]["reason"] = ""
-    with pytest.raises(ProofTradingSdkError, match="result and quantities disagree"):
-        decode_position_trigger_history_page(
-            {"trigger_events": [impossible_terminal], "next_cursor": ""}, OWNER
-        )
-
     empty_market_reason = _market_event("trigger_market_deferred")
     empty_market_reason["payload"]["reason"] = ""
     with pytest.raises(ProofTradingSdkError, match="payload.reason must be"):
@@ -480,21 +472,28 @@ def test_history_refuses_a_missing_empty_or_non_string_reason(bad):
         _owner_page(missing)
 
 
-def test_history_keeps_result_limb_kind_event_type_and_quantities_strict():
-    with pytest.raises(ProofTradingSdkError, match="unknown payload.result"):
-        _owner_page(_executed_with("deferred", "x"))
-    kind = _deferred_event("x")
-    kind["payload"]["limb_kind"] = "trailing_stop"
-    with pytest.raises(ProofTradingSdkError, match="unknown payload.limb_kind"):
-        _owner_page(kind)
+def test_history_returns_result_and_limb_kind_verbatim():
+    later = _executed_with("snoozed", "x")
+    later["payload"]["limb_kind"] = "trailing_stop"
+    payload = _owner_page(later).trigger_events[0].payload
+    assert payload["result"] == "snoozed"
+    assert payload["limb_kind"] == "trailing_stop"
+    for key in ("result", "limb_kind"):
+        empty = _executed_with("no_fill", "x")
+        empty["payload"][key] = ""
+        with pytest.raises(ProofTradingSdkError, match="must be a string"):
+            _owner_page(empty)
+
+
+def test_history_keeps_event_type_and_quantities_strict():
     event_type = _deferred_event("x")
     event_type["event_type"] = "position_trigger_snoozed"
     with pytest.raises(ProofTradingSdkError):
         _owner_page(event_type)
     quantities = _executed_with("no_fill", "x")
     quantities["payload"]["filled_quantity"] = "1"
-    quantities["payload"]["residual_quantity"] = "3"
-    with pytest.raises(ProofTradingSdkError, match="result and quantities disagree"):
+    quantities["payload"]["residual_quantity"] = "4"
+    with pytest.raises(ProofTradingSdkError, match="do not conserve"):
         _owner_page(quantities)
 
 

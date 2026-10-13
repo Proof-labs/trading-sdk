@@ -452,6 +452,25 @@ def test_position_triggers_refuse_a_malformed_outcome_reason(bad):
         ).position_triggers(owner)
 
 
+def test_position_triggers_return_state_and_availability_verbatim():
+    row = _trigger_row_with_reason("X")
+    row[0][8][5] = "Snoozed"
+    row[2] = "Snoozed"
+    rows = _client(lambda _request: _info_response([row])).position_triggers(
+        "ab" * 20
+    )
+    assert rows[0]["bracket"]["stop_loss"]["state"] == "Snoozed"
+    assert rows[0]["availability"] == {"kind": "Snoozed"}
+
+
+@pytest.mark.parametrize("bad", ["", 17, {"A": "x", "B": "y"}, {"A": 17}])
+def test_position_triggers_refuse_a_malformed_availability(bad):
+    row = _trigger_row_with_reason("X")
+    row[2] = bad
+    with pytest.raises(ProofTradingSdkError, match="trigger decode"):
+        _client(lambda _request: _info_response([row])).position_triggers("ab" * 20)
+
+
 def test_trigger_status_preserves_large_json_heights_and_503_fails_closed():
     large = 9_007_199_254_740_993
 

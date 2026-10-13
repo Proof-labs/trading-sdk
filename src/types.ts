@@ -1840,14 +1840,8 @@ export interface OpenOrder {
 }
 
 export type TriggerKind = "StopLoss" | "TakeProfit";
-export type TriggerLimbState =
-  | "Armed"
-  | "Filled"
-  | "Partial"
-  | "NoFill"
-  | "Rejected"
-  | "Cancelled"
-  | "Invalidated";
+/** Engine-defined label, passed through. */
+export type TriggerLimbState = string;
 /** Engine-defined label, passed through. */
 export type TriggerOutcomeReason = string;
 
@@ -1903,14 +1897,12 @@ export interface TriggerMarketConfigInfo {
 }
 
 /** Why a stored bracket is or is not eligible at the finalized height. */
-export type TriggerEffectiveAvailability =
-  | { kind: "Available" }
-  | { kind: "TriggerActionsInactive" }
-  | { kind: "PendingActivation" }
-  | { kind: "MigrationIncomplete" }
-  | { kind: "ConfigurationMissing" }
-  | { kind: "MarketDisabled" }
-  | { kind: "Deferred"; reason: TriggerOutcomeReason };
+/** Engine-defined labels, passed through. `reason` is set when the engine
+ * attaches one to the kind. */
+export interface TriggerEffectiveAvailability {
+  kind: string;
+  reason?: TriggerOutcomeReason;
+}
 
 /** Current protected position generation and both optional limbs. */
 export interface PositionTriggerBracket {
@@ -2069,7 +2061,8 @@ export interface PositionTriggerActivatedHistoryPayload extends OwnerTriggerHist
   limb_id: string;
   client_group_id: string;
   client_trigger_id: string;
-  limb_kind: "stop_loss" | "take_profit";
+  /** Engine-defined label, passed through. */
+  limb_kind: string;
   trigger_price: string;
   frozen_mark: string;
   limit_price: string;
@@ -2082,7 +2075,8 @@ export interface PositionTriggerExecutedHistoryPayload extends PositionTriggerAc
   residual_quantity: string;
   /** Signed aggregate fee; kept as a decimal string. */
   total_fee: string;
-  result: "filled" | "partial" | "no_fill" | "rejected" | "invalidated";
+  /** Engine-defined label, passed through. */
+  result: string;
   /** Empty when the terminal outcome has no additional reason. */
   reason: string;
 }
@@ -2091,7 +2085,8 @@ export interface PositionTriggerDeferredHistoryPayload extends OwnerTriggerHisto
   limb_id: string;
   client_group_id: string;
   client_trigger_id: string;
-  limb_kind: "stop_loss" | "take_profit";
+  /** Engine-defined label, passed through. */
+  limb_kind: string;
   trigger_price: string;
   frozen_mark: string;
   requested_quantity: string;

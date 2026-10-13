@@ -215,15 +215,6 @@ function bytes20(value: unknown, name: string): Uint8Array {
 }
 
 const KINDS = new Set<TriggerKind>(["StopLoss", "TakeProfit"]);
-const STATES = new Set<TriggerLimbState>([
-  "Armed",
-  "Filled",
-  "Partial",
-  "NoFill",
-  "Rejected",
-  "Cancelled",
-  "Invalidated",
-]);
 
 function exactEnum<T extends string>(
   value: unknown,
@@ -236,11 +227,9 @@ function exactEnum<T extends string>(
   return value as T;
 }
 
-function outcomeReason(value: unknown): TriggerOutcomeReason {
+function label(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
-    throw new Error(
-      "trigger decode: TriggerOutcomeReason must be a non-empty string",
-    );
+    throw new Error(`trigger decode: ${name} must be a non-empty string`);
   }
   return value;
 }
@@ -261,7 +250,7 @@ function decodeEvaluation(value: unknown): TriggerEvaluation | null {
     requestedQuantity,
     filledQuantity,
     residualQuantity,
-    reason: row[6] == null ? null : outcomeReason(row[6]),
+    reason: row[6] == null ? null : label(row[6], "TriggerOutcomeReason"),
   };
 }
 
@@ -290,7 +279,7 @@ function decodeStoredLimb(value: unknown): StoredTriggerLimb | null {
     triggerPrice,
     maxSlippageBps,
     clientTriggerId,
-    state: exactEnum(row[5], STATES, "TriggerLimbState"),
+    state: label(row[5], "TriggerLimbState"),
     lastEvaluation: decodeEvaluation(row[6]),
   };
 }
@@ -376,27 +365,20 @@ export function decodeTriggerMarketConfigInfos(
 }
 
 function decodeAvailability(value: unknown): TriggerEffectiveAvailability {
-  const simple = new Set([
-    "Available",
-    "TriggerActionsInactive",
-    "PendingActivation",
-    "MigrationIncomplete",
-    "ConfigurationMissing",
-    "MarketDisabled",
-  ] as const);
-  if (typeof value === "string" && simple.has(value as never)) {
-    return { kind: value } as TriggerEffectiveAvailability;
+  if (typeof value === "string") {
+    return { kind: label(value, "TriggerEffectiveAvailability") };
   }
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    const reason = (value as Record<string, unknown>).Deferred;
-    if (reason !== undefined) {
+    const entries = Object.entries(value);
+    if (entries.length === 1) {
+      const [kind, reason] = entries[0];
       return {
-        kind: "Deferred",
-        reason: outcomeReason(reason),
+        kind: label(kind, "TriggerEffectiveAvailability"),
+        reason: label(reason, "TriggerOutcomeReason"),
       };
     }
   }
-  throw new Error("trigger decode: unknown TriggerEffectiveAvailability");
+  throw new Error("trigger decode: malformed TriggerEffectiveAvailability");
 }
 
 function decodeBracket(value: unknown): PositionTriggerBracket {

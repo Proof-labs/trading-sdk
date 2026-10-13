@@ -230,7 +230,7 @@ describe("W32-10 trigger read models", () => {
     });
   });
 
-  it("passes a TriggerOutcomeReason through and keeps the other enums strict", () => {
+  it("passes engine labels through and keeps the limb kind strict", () => {
     const row = (
       reason: unknown,
       kind = "StopLoss",
@@ -274,12 +274,16 @@ describe("W32-10 trigger read models", () => {
     expect(() =>
       decodePositionTriggerInfos([row("X", "TrailingStop")]),
     ).toThrow(/unknown TriggerKind TrailingStop/);
-    expect(() =>
-      decodePositionTriggerInfos([row("X", "StopLoss", "Snoozed")]),
-    ).toThrow(/unknown TriggerLimbState Snoozed/);
-    expect(() =>
-      decodePositionTriggerInfos([row("X", "StopLoss", "Armed", "Snoozed")]),
-    ).toThrow(/unknown TriggerEffectiveAvailability/);
+    const [later] = decodePositionTriggerInfos([
+      row("X", "StopLoss", "Snoozed", "Snoozed"),
+    ]);
+    expect(later.bracket.stopLoss?.state).toBe("Snoozed");
+    expect(later.availability).toEqual({ kind: "Snoozed" });
+    for (const bad of ["", 17, { A: "x", B: "y" }, { A: 17 }]) {
+      expect(() =>
+        decodePositionTriggerInfos([row("X", "StopLoss", "Armed", bad)]),
+      ).toThrow(/trigger decode/);
+    }
   });
 
   it("parses JSON heights above 2^53 losslessly and fails closed", () => {

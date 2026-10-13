@@ -252,22 +252,30 @@ describe("trigger history reasons pass through", () => {
     }
   });
 
-  it("keeps result, limb kind, event type and quantities strict", () => {
-    expect(() => ownerPage(executedWith("deferred", "x"))).toThrow(
-      /unknown payload.result deferred/,
-    );
-    const kind = deferredEvent("x");
-    kind.payload.limb_kind = "trailing_stop";
-    expect(() => ownerPage(kind)).toThrow(/unknown payload.limb_kind/);
+  it("returns result and limb kind verbatim", () => {
+    const later = executedWith("snoozed", "x");
+    later.payload.limb_kind = "trailing_stop";
+    const payload = ownerPage(later).triggerEvents[0].payload as {
+      result: string;
+      limb_kind: string;
+    };
+    expect(payload.result).toBe("snoozed");
+    expect(payload.limb_kind).toBe("trailing_stop");
+    for (const key of ["result", "limb_kind"]) {
+      const empty = executedWith("no_fill", "x") as { payload: object };
+      empty.payload = { ...empty.payload, [key]: "" };
+      expect(() => ownerPage(empty)).toThrow(/must be a string/);
+    }
+  });
+
+  it("keeps event type and quantities strict", () => {
     const type = deferredEvent("x");
     type.event_type = "position_trigger_snoozed";
     expect(() => ownerPage(type)).toThrow(/invalid for owner history/);
     const quantities = executedWith("no_fill", "x");
     quantities.payload.filled_quantity = "1";
-    quantities.payload.residual_quantity = "3";
-    expect(() => ownerPage(quantities)).toThrow(
-      /result and quantities disagree/,
-    );
+    quantities.payload.residual_quantity = "4";
+    expect(() => ownerPage(quantities)).toThrow(/do not conserve/);
   });
 });
 
@@ -354,16 +362,6 @@ describe("TR-6 trigger history decoder", () => {
         7,
       ),
     ).toThrow(/owner does not match/);
-
-    const impossibleTerminal = executedEvent();
-    impossibleTerminal.payload.result = "filled";
-    impossibleTerminal.payload.reason = "";
-    expect(() =>
-      decodePositionTriggerHistoryPage(
-        { trigger_events: [impossibleTerminal], next_cursor: "" },
-        OWNER,
-      ),
-    ).toThrow(/result and quantities disagree/);
 
     const emptyMarketReason = marketEvent("trigger_market_deferred");
     emptyMarketReason.payload.reason = "";
