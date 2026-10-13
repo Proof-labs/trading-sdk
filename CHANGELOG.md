@@ -37,7 +37,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking changes
 
-- The Rust crate moves to proof-wire v6.0.0, where `ScheduleUpgrade` names
+- The Rust crate moves to proof-wire 6.0.0 (pinned to mirror commit
+  `ce8dd8bd` until the `v6.0.0` tag is cut), where `ScheduleUpgrade` names
   the successor release as `major`/`minor` in place of `protocol_version`.
   The re-exported `AdminAction::ScheduleUpgrade` changes shape, and a
   `ScheduleUpgrade` that carries `protocol_version` no longer encodes.
