@@ -121,17 +121,22 @@ export interface FinancialAuditPins {
   timeMs: bigint;
 }
 
+const FINANCIAL_AUDIT_TRUST =
+  "operator-attested-local-snapshot-not-full-state-proof" as const;
+
+export interface FinancialAuditEvidence {
+  audit: FinancialAudit;
+  provenance: string;
+  trust: typeof FINANCIAL_AUDIT_TRUST;
+}
+
 /** Decode an operator-attested local artifact, not a cryptographic state proof.
  * Pins must come from the separately trusted export/build record, not this artifact. */
 export function decodeFinancialAuditArtifact(
   bytes: Uint8Array,
   pins: FinancialAuditPins,
   selection: FinancialStateSelection,
-): {
-  audit: FinancialAudit;
-  provenance: string;
-  trust: "operator-attested-local-snapshot-not-full-state-proof";
-} {
+): FinancialAuditEvidence {
   if (!(bytes instanceof Uint8Array)) return invalid("artifact bytes");
   if (bytes.length > MAX_ARTIFACT_BYTES) return invalid("artifact size");
   // Hash and parse the same private snapshot, even for caller-owned shared memory.
@@ -180,7 +185,7 @@ export function decodeFinancialAuditArtifact(
   const record = r as Record<string, unknown>;
   if (keys.some((k) => typeof record[k] !== "string"))
     return invalid("artifact fields");
-  const trust = "operator-attested-local-snapshot-not-full-state-proof";
+  const trust = FINANCIAL_AUDIT_TRUST;
   if (
     record.protocol !== "proof-financial-audit/offline-v1" ||
     record.trust !== trust ||

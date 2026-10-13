@@ -299,6 +299,7 @@ export {
 export {
   decodeFinancialAuditArtifact,
   type FinancialAuditPins,
+  type FinancialAuditEvidence,
   type FinancialAudit,
   type FinancialMarketEvidence,
 } from "./financial-audit.js";

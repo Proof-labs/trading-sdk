@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import * as sdk from "./index.js";
 import { decodeFinancialAuditArtifact as decodePinnedArtifact } from "./index.js";
+import type { FinancialAuditEvidence } from "./index.js";
 import { decodeFinancialAudit } from "./financial-audit.js";
 
 // Generated and asserted by exchange query::financial::tests::
@@ -136,11 +137,12 @@ describe("financial audit format2", () => {
       throw new Error("network forbidden");
     });
     vi.stubGlobal("fetch", fetcher);
-    const { audit: result, trust } = decodeFinancialAuditArtifact(
+    const evidence: FinancialAuditEvidence = decodeFinancialAuditArtifact(
       JSON.stringify(artifact()),
       pins,
       selection,
     );
+    const { audit: result, trust } = evidence;
     expect(trust).toBe("operator-attested-local-snapshot-not-full-state-proof");
     expect(result.format).toBe(2);
     expect(result.ledger.finalizedTimeMs).toBe(1234n);
