@@ -1311,6 +1311,8 @@ export type Action = TraderAction | OperatorAction | GovernanceAction;
 /** The pending protocol-upgrade plan (`GET /v1/upgrades`). */
 export interface PendingUpgradePlan {
   targetHeight: bigint;
+  /** `major` and `minor` are both 0 for a plan an earlier engine stored,
+   *  which named no release. A plan scheduled now always has `major > 0`. */
   major: number;
   minor: number;
   successorSha256: Uint8Array;

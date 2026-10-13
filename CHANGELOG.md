@@ -30,15 +30,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   successor's engine release `major`/`minor`, and the `successorSha256` pin;
   `validateScheduleUpgrade` mirrors the engine's refusals (zero major,
   all-zero pin) on encode and on proposal decode. Conformance vectors cover
-  both inside `ProposeAdminAction`. The Rust crate re-exports both types and
-  moves to proof-wire v6.0.0, where `ScheduleUpgrade` names the release as
-  `major`/`minor` in place of `protocol_version`.
+  both inside `ProposeAdminAction`. The Rust crate re-exports both types.
 - `queryUpgrades()` reads the pending upgrade plan and executed activation
   ledger (`GET /v1/upgrades`), and `queryNodeVersion()` the answering node's
   loaded engine release (`GET /v1/version`).
 
 ### Breaking changes
 
+- The Rust crate moves to proof-wire v6.0.0, where `ScheduleUpgrade` names
+  the successor release as `major`/`minor` in place of `protocol_version`.
+  The re-exported `AdminAction::ScheduleUpgrade` changes shape, and a
+  `ScheduleUpgrade` that carries `protocol_version` no longer encodes.
 - `ProposalDisplayInfo.action` is `AdminAction | null`. The engine returns nil
   for a proposal stored in a shape it no longer decodes; `actionTag`,
   `actionCanonicalBytes` and `contentHash` are still returned.
