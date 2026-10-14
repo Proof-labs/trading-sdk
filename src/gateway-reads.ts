@@ -226,8 +226,9 @@ export class GatewayReads {
   health(opts: GatewayReadOptions = {}) {
     return this.get("/v1/health", {}, opts);
   }
-  /** Node-local loaded engine identity, not validator-wide qualification.
-   * Do not cache an artifact identity across a rollout. Errors remain errors.
+  /** Raw node-local loaded engine identity, not validator-wide qualification;
+   * use queryNodeVersion for strict decoding. Do not cache an artifact
+   * identity across a rollout. Errors remain errors.
    */
   version(opts: GatewayReadOptions = {}) {
     return this.request(
