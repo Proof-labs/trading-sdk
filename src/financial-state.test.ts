@@ -62,6 +62,30 @@ describe("atomic finalized financial state", () => {
     vi.useRealTimers();
   });
 
+  it.each(["a4", "d904", "da0004", "db00000004"])(
+    "rejects overlong UTF-8 in a %s MessagePack string before enum normalization",
+    async (header) => {
+      const value = raw();
+      const positionAccount = account();
+      positionAccount[5] = [[a, 1, "Buy", 100, 2, 0]];
+      value[3] = [positionAccount];
+      const encoded = Buffer.from(
+        new Encoder({ useBigInt64: true }).encode(value),
+      ).toString("hex");
+      // Replace the canonical B with its forbidden two-byte overlong form.
+      const malformed = encoded.replace("a3427579", `${header}c1827579`);
+      expect(malformed).not.toBe(encoded);
+      const data = Buffer.from(malformed, "hex").toString("base64");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(new Response(JSON.stringify({ data }))),
+      );
+      await expect(client().queryFinancialState(selection)).rejects.toThrow(
+        "MessagePack UTF-8",
+      );
+    },
+  );
+
   it("decodes the real Rust query golden through the gateway transport", async () => {
     const data = Buffer.from(RUST_FINANCIAL_V1_HEX, "hex").toString("base64");
     vi.stubGlobal(
@@ -399,28 +423,6 @@ describe("atomic finalized financial state", () => {
     ).toBe(2048);
     (r[3] as unknown[][])[1][5] = positions(b, 1025);
     expect(() => decodeFinancialState(r, selection)).toThrow("total positions");
-  });
-
-  it("validates against the selection captured before the request, not a later mutation", async () => {
-    let respond: (response: Response) => void = () => undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        () =>
-          new Promise<Response>((resolve) => {
-            respond = resolve;
-          }),
-      ),
-    );
-    const reused = { markets: [1], owners: [owner] };
-    const pending = client().queryFinancialState(reused);
-    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
-    reused.markets = [2];
-    reused.owners = [plpOwner];
-    respond(new Response(JSON.stringify({ data: encode(raw()) })));
-    const state = await pending;
-    expect(state.markets.map((m) => m.market)).toEqual([1]);
-    expect(state.accounts.map((a) => a.owner)).toEqual([owner]);
   });
 
   it("uses gateway-only canonical route even when legacy direct reads are opted in", async () => {

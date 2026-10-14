@@ -297,13 +297,6 @@ export {
   type FinancialMarketState,
 } from "./financial-state.js";
 export {
-  decodeFinancialAuditArtifact,
-  type FinancialAuditPins,
-  type FinancialAuditEvidence,
-  type FinancialAudit,
-  type FinancialMarketEvidence,
-} from "./financial-audit.js";
-export {
   decodeAccountState,
   type AccountState,
   type RawAccountPosition,

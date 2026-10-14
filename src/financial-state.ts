@@ -263,37 +263,11 @@ export function decodeFinancialState(
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 
-interface FinancialPayloadLimits {
-  readonly maxString: number;
-  readonly maxDepth: number;
-  readonly maxArray: number;
-  readonly maxBinary: number;
-  readonly maxSlots: number;
-}
-
-const FINANCIAL_STATE_LIMITS: FinancialPayloadLimits = Object.freeze({
-  maxString: 4,
-  maxDepth: 8,
-  maxArray: 2048,
-  maxBinary: 20,
-  maxSlots: 65536,
-});
-
-/** Internal format-2 budget: one wrapper level and longer market enum names. */
-export const FINANCIAL_AUDIT_LIMITS: FinancialPayloadLimits = Object.freeze({
-  ...FINANCIAL_STATE_LIMITS,
-  maxString: 16,
-  maxDepth: 9,
-});
-
 /** Framing/resource preflight only. Values are decoded solely by msgpack below.
- * The named format budget bounds the stack; declared lengths never allocate.
+ * The stack is at most eight counters; declared container lengths never allocate.
  * An admitted 2048-position snapshot uses fewer than 60k aggregate value slots.
  */
-function validateMessagePackBudget(
-  bytes: Uint8Array,
-  limits: FinancialPayloadLimits,
-): void {
+function validateMessagePackBudget(bytes: Uint8Array): void {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const remaining = [1];
   let offset = 0;
@@ -313,14 +287,14 @@ function validateMessagePackBudget(
         ? view.getUint16(at)
         : view.getUint32(at);
   };
-  const payload = (length: number, maximum: number): number => {
+  const payload = (length: number, maximum: number): void => {
     if (length > maximum) invalid("MessagePack resource limit");
-    return take(length);
+    take(length);
   };
   const utf8 = new TextDecoder("utf-8", { fatal: true });
-  // The msgpack decoder normalises malformed UTF-8 (overlong forms included).
   const text = (length: number): void => {
-    const start = payload(length, limits.maxString);
+    if (length > 4) invalid("MessagePack resource limit");
+    const start = take(length);
     try {
       utf8.decode(bytes.subarray(start, start + length));
     } catch {
@@ -376,13 +350,13 @@ function validateMessagePackBudget(
           text(size(4));
           break;
         case 0xc4:
-          payload(size(1), limits.maxBinary);
+          payload(size(1), 20);
           break;
         case 0xc5:
-          payload(size(2), limits.maxBinary);
+          payload(size(2), 20);
           break;
         case 0xc6:
-          payload(size(4), limits.maxBinary);
+          payload(size(4), 20);
           break;
         case 0xdc:
           arrayLength = size(2);
@@ -397,11 +371,10 @@ function validateMessagePackBudget(
     }
     if (arrayLength !== undefined) {
       slots += arrayLength;
-      if (arrayLength > limits.maxArray || slots > limits.maxSlots)
+      if (arrayLength > 2048 || slots > 65536)
         invalid("MessagePack resource limit");
       if (arrayLength > 0) {
-        if (remaining.length >= limits.maxDepth)
-          invalid("MessagePack depth limit");
+        if (remaining.length >= 8) invalid("MessagePack depth limit");
         remaining.push(arrayLength);
       }
     }
@@ -415,17 +388,6 @@ export async function fetchFinancialState(
   selection: FinancialStateSelection,
 ): Promise<FinancialState> {
   const expected = canonicalFinancialSelection(selection);
-  return decodeFinancialState(
-    await fetchFinancialPayload(gatewayUrl, expected),
-    expected,
-  );
-}
-
-/** Bounded transport for the existing format-1 state route only. */
-async function fetchFinancialPayload(
-  gatewayUrl: string,
-  expected: FinancialStateSelection,
-): Promise<unknown> {
   const url = `${gatewayUrl}/v1/financial/state?markets=${expected.markets.join(",")}&owners=${expected.owners.join(",")}`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5000);
@@ -468,33 +430,27 @@ async function fetchFinancialPayload(
       !json.data.length
     )
       return invalid("response wrapper");
-    return decodeFinancialPayload(json.data, FINANCIAL_STATE_LIMITS);
+    const data = json.data;
+    if (data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data))
+      return invalid("base64");
+    const binary = atob(data);
+    if (btoa(binary) !== data) return invalid("canonical base64");
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    validateMessagePackBudget(bytes);
+    return decodeFinancialState(
+      new Decoder({
+        useBigInt64: true,
+        maxArrayLength: 2048,
+        maxMapLength: 0,
+        maxStrLength: 4,
+        maxBinLength: 20,
+        maxExtLength: 0,
+      }).decode(bytes),
+      expected,
+    );
   } finally {
     clearTimeout(timeout);
     controller.abort();
     await reader?.cancel().catch(() => undefined);
   }
-}
-
-/** Internal bounded binary decoder shared by live state and offline audit artifacts. */
-export function decodeFinancialPayload(
-  data: string,
-  limits: FinancialPayloadLimits,
-): unknown {
-  if (!data.length || data.length > MAX_RESPONSE_BYTES)
-    return invalid("response size");
-  if (data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data))
-    return invalid("base64");
-  const binary = atob(data);
-  if (btoa(binary) !== data) return invalid("canonical base64");
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-  validateMessagePackBudget(bytes, limits);
-  return new Decoder({
-    useBigInt64: true,
-    maxArrayLength: limits.maxArray,
-    maxMapLength: 0,
-    maxStrLength: limits.maxString,
-    maxBinLength: limits.maxBinary,
-    maxExtLength: 0,
-  }).decode(bytes);
 }
