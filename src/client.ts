@@ -93,6 +93,8 @@ import type {
   TriggerMarketHistoryFilters,
   TriggerMarketHistoryPage,
   TriggerMarketConfigInfo,
+  NodeVersion,
+  UpgradesInfo,
   AuthorizeWithdrawal,
   ConfirmWithdrawalReceipt,
   FailWithdrawalReceipt,
@@ -100,11 +102,15 @@ import type {
 import {
   decodeAdminSignerRegistryInfo,
   decodeAuthoritiesSnapshot,
+  decodeNodeVersion,
+  decodeUpgradesInfo,
   decodeEventInfo,
   decodeProposalPage,
 } from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
 import { readMarketsSnapshot } from "./market-snapshot.js";
+import { yesOrder, type NoOrder } from "./binary.js";
+import { Side } from "./types.js";
 import type { MarketsSnapshot } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import {
@@ -1178,6 +1184,27 @@ export class ExchangeClient {
     });
   }
 
+  /**
+   * Buy No on an event's binary book: places the Yes sell at `$1 − price`.
+   * `market` is the event's book (`EventInfo.ebyMarket`); `price` and any
+   * `stopLoss`/`takeProfit` trigger prices are No prices. Reduce-only,
+   * post-only, client order id and time in force carry over unchanged.
+   * Throws {@link BinaryPriceError} for a No price with no Yes mirror (0 or
+   * `$1`).
+   */
+  async buyNo(params: Omit<NoOrder, "side">): Promise<TxResult> {
+    return this.placeOrder(yesOrder({ ...params, side: Side.Buy }));
+  }
+
+  /**
+   * Sell No on an event's binary book: places the Yes buy at `$1 − price`.
+   * Selling No that an account holds is a reduce-only Yes buy: pass
+   * `reduceOnly: true` to close without flipping. See {@link ExchangeClient.buyNo}.
+   */
+  async sellNo(params: Omit<NoOrder, "side">): Promise<TxResult> {
+    return this.placeOrder(yesOrder({ ...params, side: Side.Sell }));
+  }
+
   /** Cancel a resting order by its engine-assigned order ID. */
   async cancelOrder(orderId: bigint): Promise<TxResult> {
     return this.submitTx({
@@ -1525,6 +1552,26 @@ export class ExchangeClient {
     const json = await fetchApiJson(`${this.readBaseUrl}/v1/admin/authorities`);
     const bytes = fromBase64(requireEncodedData(json, "/v1/admin/authorities"));
     return decodeAuthoritiesSnapshot(await this.strictDecode(bytes));
+  }
+
+  /**
+   * Read the pending protocol-upgrade plan and the executed activation
+   * ledger via the gateway proxy (`GET /v1/upgrades`).
+   */
+  async queryUpgrades(): Promise<UpgradesInfo> {
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/upgrades`);
+    const bytes = fromBase64(requireEncodedData(json, "/v1/upgrades"));
+    return decodeUpgradesInfo(await this.strictDecode(bytes));
+  }
+
+  /**
+   * The answering node's binary and loaded engine release
+   * (`GET /v1/version`). Node-local: behind a load balancer it describes
+   * whichever node served the request.
+   */
+  async queryNodeVersion(): Promise<NodeVersion> {
+    const json = await fetchApiJson(`${this.readBaseUrl}/v1/version`);
+    return decodeNodeVersion(json);
   }
 
   /**

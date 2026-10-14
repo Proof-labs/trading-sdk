@@ -16,8 +16,8 @@ pub use proof_wire::liquidation_policy::{
     SetPartialLiquidationActivation,
 };
 pub use proof_wire::types::{
-    AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, ConfigureOraclePolicy,
-    EmergencyAction, EmergencyActionType, EmergencyAdminAction, ProposalId, ProposeAdminAction,
-    RegistryVersion, RejectAdminAction, SetOracleGuards, SignatureThreshold, SignerAddress,
-    UpdateAdminSignerRegistry,
+    AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, CancelUpgrade,
+    ConfigureOraclePolicy, EmergencyAction, EmergencyActionType, EmergencyAdminAction, ProposalId,
+    ProposeAdminAction, RegistryVersion, RejectAdminAction, ScheduleUpgrade, SetOracleGuards,
+    SignatureThreshold, SignerAddress, UpdateAdminSignerRegistry,
 };

@@ -27,6 +27,7 @@ import {
 } from "./codec.js";
 import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
+import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
 import {
   ActionType,
   Outcome,
@@ -695,6 +696,25 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       },
     };
   }
+  if (v.ScheduleUpgrade) {
+    const plan = v.ScheduleUpgrade as Record<string, unknown>;
+    return {
+      kind: "ScheduleUpgrade",
+      value: {
+        targetHeight: big(plan.target_height),
+        major: plan.major as number,
+        minor: plan.minor as number,
+        successorSha256: bytes(plan.successor_sha256),
+      },
+    };
+  }
+  if (v.CancelUpgrade) {
+    const cancel = v.CancelUpgrade as Record<string, unknown>;
+    return {
+      kind: "CancelUpgrade",
+      value: { targetHeight: big(cancel.target_height) },
+    };
+  }
   if (v.ConfigureOraclePolicy) {
     const policy = v.ConfigureOraclePolicy as Record<string, unknown>;
     return {
@@ -1025,9 +1045,10 @@ describe("conformance vectors (TypeScript)", () => {
     // singleton, six create-event oracle-source shapes, trigger config,
     // unpause-bridge, update-authority-set add and remove, cancel-all-for
     // -account scoped and unscoped, four set-oracle-guards shapes, and
-    // oracle policy), approve, reject, and all three emergency arms
-    // (PauseMarket, HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(25);
+    // oracle policy, two schedule-upgrade shapes and cancel-upgrade),
+    // approve, reject, and all three emergency arms (PauseMarket,
+    // HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(28);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
@@ -1081,5 +1102,81 @@ describe("conformance vectors (TypeScript)", () => {
       if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
       expect(decoded.data.maxOpenInterest).toBe(0n);
     }
+  });
+});
+
+describe("binary vectors (TypeScript)", () => {
+  const binary = cases("binary.ndjson");
+
+  it("loads the binary family", () => {
+    expect(binary.length).toBeGreaterThan(0);
+  });
+
+  it("translates every No order to the core's Yes order, byte for byte", () => {
+    let seen = 0;
+    for (const c of binary.filter((c) => c.kind === "no_order")) {
+      const input = c.input as Record<string, unknown>;
+      const no = toAction(ActionType.PlaceOrder, input);
+      if (no.type !== "PlaceOrder") throw new Error("type narrowing");
+      const { owner, ...noOrder } = no.data;
+      const expected = c.expect as {
+        yes_order?: { fields: Record<string, unknown>; payload_hex: string };
+        error?: { name: string };
+      };
+      if (expected.error) {
+        let caught: unknown;
+        try {
+          yesOrder(noOrder);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught, c.case).toBeInstanceOf(BinaryPriceError);
+        expect((caught as BinaryPriceError).reason, c.case).toBe(
+          expected.error.name,
+        );
+      } else {
+        const yes = expected.yes_order!;
+        const action: Action = {
+          type: "PlaceOrder",
+          data: { ...yesOrder(noOrder), owner },
+        };
+        expect(action, c.case).toEqual(
+          toAction(ActionType.PlaceOrder, yes.fields),
+        );
+        expect(bytesToHex(encodePayloadBytes(action)), c.case).toBe(
+          yes.payload_hex,
+        );
+      }
+      seen++;
+    }
+    expect(seen).toBeGreaterThan(0);
+  });
+
+  it("reads every position as the core does", () => {
+    let seen = 0;
+    for (const c of binary.filter((c) => c.kind === "position_view")) {
+      const position = {
+        side: c.side as "Buy" | "Sell",
+        entryPrice: big(c.entry_price),
+        size: big(c.size),
+      };
+      const expected = c.expect as {
+        view?: { outcome: "Yes" | "No"; entry_price: number; size: number };
+        error?: { name: string };
+      };
+      if (expected.error) {
+        expect(() => binaryPositionView(position), c.case).toThrow(
+          BinaryPriceError,
+        );
+      } else {
+        expect(binaryPositionView(position), c.case).toEqual({
+          outcome: expected.view!.outcome,
+          entryPrice: big(expected.view!.entry_price),
+          size: big(expected.view!.size),
+        });
+      }
+      seen++;
+    }
+    expect(seen).toBeGreaterThan(0);
   });
 });

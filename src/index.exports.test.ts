@@ -28,6 +28,10 @@ import {
   type PositionTriggerHistoryPage,
   type TriggerMarketHistoryPage,
   type TriggerMarketConfigInfo,
+  type ExchangeEvent,
+  type InsuranceFundUpdatedEvent,
+  type PositionAutoDeleveragedEvent,
+  type PlpAbsorbedEvent,
   decodeTriggerMarketConfigInfos,
   decodePositionTriggerHistoryPage,
   decodeTriggerMarketHistoryPage,
@@ -131,6 +135,48 @@ describe("public barrel: governance surface", () => {
   });
 });
 
+describe("public barrel: bad-debt waterfall events", () => {
+  it("re-exports the waterfall event types as ExchangeEvent members", () => {
+    const insurance: InsuranceFundUpdatedEvent = {
+      type: "InsuranceFundUpdated",
+      poolId: "1",
+      balance: "-2500000",
+      delta: "-7500000",
+    };
+    const adl: PositionAutoDeleveragedEvent = {
+      type: "PositionAutoDeleveraged",
+      owner: "11".repeat(20),
+      market: "1",
+      side: "Buy",
+      size: "3",
+      closePrice: "65000000000",
+      closePriceSpec: "65000000000",
+      realizedPnl: "1200000",
+    };
+    const plp: PlpAbsorbedEvent = {
+      type: "PlpAbsorbed",
+      poolId: "0",
+      amount: "4000000",
+      plpBalanceAfter: "996000000",
+    };
+    const events: ExchangeEvent[] = [insurance, adl, plp];
+
+    const fields = events.map((event) => {
+      switch (event.type) {
+        case "InsuranceFundUpdated":
+          return event.delta;
+        case "PositionAutoDeleveraged":
+          return event.closePriceSpec;
+        case "PlpAbsorbed":
+          return event.plpBalanceAfter;
+        default:
+          return null;
+      }
+    });
+    expect(fields).toEqual(["-7500000", "65000000000", "996000000"]);
+  });
+});
+
 it("keeps response reads on ExchangeClient and excludes redundant or obsolete APIs", async () => {
   const sdk = await import("./index.js");
   expect("GatewayReads" in sdk).toBe(false);
@@ -143,4 +189,49 @@ it("keeps response reads on ExchangeClient and excludes redundant or obsolete AP
   expect(client.reads().event).toBeTypeOf("function");
   expect("impactMarkets" in client.reads()).toBe(false);
   expect("impactMarket" in client.reads()).toBe(false);
+});
+
+import {
+  BinaryPriceError as BarrelBinaryPriceError,
+  yesOrder as barrelYesOrder,
+  type CancelReason,
+  type OrderMigratedEvent,
+  type PositionMigratedEvent,
+} from "./index.js";
+
+describe("public barrel: one-book events and No helpers", () => {
+  it("surfaces the upgrade's migration events in the event union", () => {
+    const moved: OrderMigratedEvent = {
+      type: "OrderMigrated",
+      orderId: "8",
+      owner: "aa",
+      fromMarket: "70001",
+      toMarket: "70000",
+      side: "Sell",
+      price: "550000",
+    };
+    const position: PositionMigratedEvent = {
+      type: "PositionMigrated",
+      owner: "aa",
+      fromMarket: "70001",
+      toMarket: "70000",
+      side: "Sell",
+      entryPrice: "600000",
+      size: "40",
+      cashDelta: "-12",
+    };
+    const events: ExchangeEvent[] = [moved, position];
+    const reason: CancelReason = "upgrade";
+    expect(events.map((e) => e.type)).toEqual([
+      "OrderMigrated",
+      "PositionMigrated",
+    ]);
+    expect(reason).toBe("upgrade");
+  });
+
+  it("re-exports the No helpers", () => {
+    expect(() =>
+      barrelYesOrder({ market: 1, side: 1, price: 0n, quantity: 1n }),
+    ).toThrow(BarrelBinaryPriceError);
+  });
 });

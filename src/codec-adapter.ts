@@ -24,8 +24,10 @@ import {
   type PriceComparison,
   type SetTriggerMarketConfig,
   type SetOracleGuards,
+  type ScheduleUpgrade,
 } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
+import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import {
   validatePublishLiquidationPolicy,
   validateRevokeLiquidationPolicy,
@@ -142,6 +144,9 @@ function governanceActionToWasm(value: unknown): unknown {
   }
   if (v.kind === "SetOracleGuards") {
     validateSetOracleGuards(v.value as SetOracleGuards);
+  }
+  if (v.kind === "ScheduleUpgrade") {
+    validateScheduleUpgrade(v.value as ScheduleUpgrade);
   }
   if (v.kind === "PublishLiquidationPolicy") {
     const command = v.value as PublishLiquidationPolicy;
