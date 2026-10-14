@@ -9,11 +9,13 @@
 
 pub use proof_wire::{abci_event, codec, crypto, triggers, types};
 
+pub mod binary;
 pub mod errors;
 #[cfg(feature = "gateway")]
 pub mod gateway;
 pub mod governance;
 pub mod market_snapshot;
+pub mod msgpack;
 pub mod query;
 pub mod signer;
 pub mod wire;

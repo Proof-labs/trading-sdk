@@ -82,7 +82,7 @@ fn current_engine_snapshot_with_an_attached_event_decodes() {
     assert_eq!(snapshot.markets[0].max_open_interest, u64::MAX);
     let event = &snapshot.events[0];
     assert_eq!(event.event_id, EventId(91));
-    assert_eq!((event.eby_market, event.ebn_market), (9102, 9103));
+    assert_eq!((event.eby_market, event.ebn_market), (9102, Some(9103)));
     assert_eq!(
         event.attached_conditionals,
         vec![AttachedConditional {
@@ -90,6 +90,60 @@ fn current_engine_snapshot_with_an_attached_event_decodes() {
             cpy_market: 9100,
             cpn_market: 9101,
         }]
+    );
+}
+
+#[test]
+fn one_book_engine_snapshot_decodes_with_no_no_book() {
+    // Bytes produced by exchange-core::query::query_markets_snapshot on the
+    // one-book wire (one binary book per event): two perps, event 700 with
+    // its book 70_000 and one conditional attached on perp 2. The chain id
+    // is set to the test chain.
+    let bytes = hex::decode(include_str!("engine-c3253d0c.hex").trim()).unwrap();
+    let snapshot = decode_snapshot(&envelope(&bytes), [7; 32]).unwrap();
+    assert_eq!(snapshot.height, 9_007_199_254_740_993);
+    assert_eq!(
+        snapshot
+            .markets
+            .iter()
+            .map(|m| m.market)
+            .collect::<Vec<_>>(),
+        vec![1, 2, 70_000, 70_100, 70_101]
+    );
+    let event = &snapshot.events[0];
+    assert_eq!(event.event_id, EventId(700));
+    assert_eq!((event.eby_market, event.ebn_market), (70_000, None));
+    assert_eq!(
+        event.attached_conditionals,
+        vec![AttachedConditional {
+            underlying_market: 2,
+            cpy_market: 70_100,
+            cpn_market: 70_101,
+        }]
+    );
+}
+
+#[test]
+fn a_two_book_event_row_without_its_no_book_is_refused() {
+    let mut value = rmpv::decode::read_value(&mut Cursor::new(
+        hex::decode(include_str!("engine-349fa9b.hex").trim()).unwrap(),
+    ))
+    .unwrap();
+    let Value::Array(top) = &mut value else {
+        panic!("snapshot must be a tuple")
+    };
+    let Value::Array(events) = &mut top[3] else {
+        panic!("events must be a list")
+    };
+    let Value::Array(row) = &mut events[0] else {
+        panic!("event must be a tuple")
+    };
+    row[2] = Value::Nil;
+    let mut bytes = Vec::new();
+    rmpv::encode::write_value(&mut bytes, &value).unwrap();
+    assert_eq!(
+        decode_snapshot(&envelope(&bytes), [7; 32]).unwrap_err(),
+        SnapshotError::Malformed
     );
 }
 

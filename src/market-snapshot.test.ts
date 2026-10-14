@@ -97,6 +97,29 @@ describe("atomic market snapshot", () => {
     ]);
   });
 
+  it("reads a one-book engine snapshot, where the event has no No book", () => {
+    const hex = readFileSync(
+      new URL(
+        "../crates/proof-trading-sdk/src/market_snapshot/engine-c3253d0c.hex",
+        import.meta.url,
+      ),
+      "utf8",
+    ).trim();
+    const decoded = decodeMarketsSnapshot(
+      { data: Buffer.from(hex, "hex").toString("base64") },
+      chain,
+    );
+    expect(decoded.markets.map((m) => m.market)).toEqual([
+      1, 2, 70000, 70100, 70101,
+    ]);
+    expect(decoded.events[0].eventId).toBe(700);
+    expect(decoded.events[0].ebyMarket).toBe(70000);
+    expect(decoded.events[0].ebnMarket).toBeUndefined();
+    expect(decoded.events[0].attachedConditionals).toEqual([
+      { underlyingMarket: 2, cpyMarket: 70100, cpnMarket: 70101 },
+    ]);
+  });
+
   it("decodes a Rust-produced shared-wire vector losslessly", () => {
     const hex =
       "94dc00200707070707070707070707070707070707070707070707070707070707070707cfffffffffffffffff91dc001901cd03e8cd01f40502ce0036ee8064a4506572700000c200cd7530906401c000aa4f7261636c654f6e6c790000c205a3425443cfffffffffffffffff90";

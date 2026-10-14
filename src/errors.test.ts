@@ -125,6 +125,12 @@ describe("ExecErrorCode enum", () => {
     expect(ExecErrorCode.OpenInterestLimitExceeded).toBe(51);
     expect(ExecErrorCode.InternalError).toBe(255);
   });
+
+  it("pins the newly mirrored engine codes (77, 99, 100)", () => {
+    expect(ExecErrorCode.OracleVerdictUnavailable).toBe(77);
+    expect(ExecErrorCode.WithdrawalLimitExceeded).toBe(99);
+    expect(ExecErrorCode.AccountOrderCapReached).toBe(100);
+  });
 });
 
 describe("GatewayHttpError", () => {

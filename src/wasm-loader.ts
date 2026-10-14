@@ -23,6 +23,10 @@ export interface WasmCore {
   }) => Promise<unknown>;
   encode_payload(actionType: number, fields: unknown): Uint8Array;
   decode_payload(actionType: number, payload: Uint8Array): unknown;
+  /** Strict, type-preserving MessagePack preflight for gateway read payloads.
+   *  Throws when the bytes carry a float family or another shape no read DTO
+   *  may contain. */
+  reject_floats(bytes: Uint8Array): void;
   signing_message(
     chainId: Uint8Array,
     actionType: number,

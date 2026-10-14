@@ -779,12 +779,15 @@ export interface AttachedConditional {
   cpnMarket: number;
 }
 
-/** Stored record for an event — the `get_event` read model: its two binary
- *  books and every conditional attached to it. */
+/** Stored record for an event — the `get_event` read model: its binary book
+ *  and every conditional attached to it. */
 export interface EventInfo {
   eventId: number;
+  /** The event's binary book, priced in Yes. */
   ebyMarket: number;
-  ebnMarket: number;
+  /** The No book, only on an engine that still has one; `undefined` once
+   *  the engine runs one binary book per event. */
+  ebnMarket?: number;
   question: string;
   settlementMs: bigint;
   resolutionWindowMs: bigint;
@@ -1118,6 +1121,23 @@ export interface SetOracleGuards {
   maxOracleDeviationBps?: number | null;
 }
 
+/** Schedule a coordinated engine upgrade through multisig governance (inner
+ * tag 14). `major`/`minor` is the successor's engine release, which must
+ * exceed the running one; `successorSha256` pins the library bytes. */
+export interface ScheduleUpgrade {
+  /** First height the successor engine runs. */
+  targetHeight: bigint;
+  major: number;
+  minor: number;
+  /** SHA-256 of the successor engine library (32 bytes). */
+  successorSha256: Uint8Array;
+}
+
+/** Cancel the pending upgrade plan, named by its target height (inner tag 15). */
+export interface CancelUpgrade {
+  targetHeight: bigint;
+}
+
 /**
  * Per-account fixed withdrawal window (CU-06, inner tag 19). A cap of 0 is
  * the deliberate off-switch; `window_secs >= 1` (production 86_400). The
@@ -1176,7 +1196,9 @@ export type AdminAction =
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
-  | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet };
+  | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet }
+  | { kind: "ScheduleUpgrade"; value: ScheduleUpgrade }
+  | { kind: "CancelUpgrade"; value: CancelUpgrade };
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */
@@ -1286,6 +1308,41 @@ export type Action = TraderAction | OperatorAction | GovernanceAction;
 // shapes depend on.
 // ---------------------------------------------------------------------------
 
+/** The pending protocol-upgrade plan (`GET /v1/upgrades`). */
+export interface PendingUpgradePlan {
+  targetHeight: bigint;
+  /** `major` and `minor` are both 0 for a plan an earlier engine stored,
+   *  which named no release. A plan scheduled now always has `major > 0`. */
+  major: number;
+  minor: number;
+  successorSha256: Uint8Array;
+  scheduledHeight: bigint;
+}
+
+/** One executed activation from the append-only ledger. */
+export interface ExecutedUpgrade {
+  activatedHeight: bigint;
+  major: number;
+  minor: number;
+}
+
+/** `GET /v1/upgrades`: the one pending plan, if any, and every activation. */
+export interface UpgradesInfo {
+  plan: PendingUpgradePlan | null;
+  executed: ExecutedUpgrade[];
+}
+
+/** `GET /v1/version`: the answering node's binary and loaded engine. Node-local,
+ *  not consensus. */
+export interface NodeVersion {
+  node: string;
+  engine: string;
+  engineAbiVersion: number;
+  engineMajor: number;
+  engineMinor: number;
+  engineLibSha256: string;
+}
+
 /** The installed admin signer roster. Absent (a `null` read) means multisig
  *  administration is INACTIVE — never an empty roster. */
 export interface AdminSignerRegistry {
@@ -1363,8 +1420,9 @@ export interface ProposalDisplayInfo {
   expiryMs: bigint;
   /** Engine-owned discriminant of `action`, committed by the content hash. */
   actionTag: number;
-  /** Typed decode of the proposed operation. */
-  action: AdminAction;
+  /** Typed decode of the proposed operation. `null` when the stored bytes
+   *  predate a breaking change to that action's shape. */
+  action: AdminAction | null;
   /** The EXACT stored engine-canonical bytes the content hash covers. */
   actionCanonicalBytes: Uint8Array;
   /** Domain-separated commitment to the immutable proposal context. */
@@ -1410,7 +1468,9 @@ export interface OrderCancelledEvent {
   market: string;
   /** Hex-encoded owner address. */
   owner: string;
-  /** Cancellation reason (e.g., "user_requested", "liquidation"). */
+  /** Cancellation reason; one of {@link CancelReason}. `"upgrade"` means an
+   *  engine upgrade moved the order to another book and its converted
+   *  order would have crossed it. */
   reason: string;
   /** Client-assigned order ID, or "0" when absent. */
   clientOrderId: string;
@@ -1420,6 +1480,63 @@ export interface OrderCancelledEvent {
   remainingQuantity: string;
   /** Cumulative maker quantity filled before cancellation. */
   filledQuantity: string;
+}
+
+/** Why the engine cancelled an order (`OrderCancelledEvent.reason`). */
+export type CancelReason =
+  "user_requested" | "expired" | "admin_force" | "liquidation" | "upgrade";
+
+// ── Engine-upgrade journal events ──────────────────────────────────────────
+// An upgrade's migration reports its effects as one group of events in the
+// first block after activation; each carries the ABCI attribute
+// `phase=upgrade`, which tells it apart from the block's own events
+// (`phase=system`). Readers must ignore event types they do not know.
+
+/**
+ * Emitted in the first block after an engine upgrade that moved a resting
+ * order to another book, keeping its id, owner, unfilled quantity and queue
+ * place. On the move to one binary book per event, a No order at `q` becomes
+ * the opposite Yes order at `$1 − q` on the event's book.
+ */
+export interface OrderMigratedEvent {
+  type: "OrderMigrated";
+  /** Engine-assigned order ID, unchanged by the move. */
+  orderId: string;
+  /** Hex-encoded owner address. */
+  owner: string;
+  /** The book the order left. */
+  fromMarket: string;
+  /** The book the order now rests on. */
+  toMarket: string;
+  /** Side on the new book ("Buy" or "Sell"). */
+  side: string;
+  /** Limit price on the new book in micro-USDC. */
+  price: string;
+}
+
+/**
+ * Emitted in the first block after an engine upgrade that moved a position
+ * to another book. A No position at entry `e` is the opposite Yes position at
+ * `$1 − e` (`side`, `entryPrice`, `size`); when it nets against the account's
+ * Yes position, that position reports its own `PositionUpdated` or
+ * `PositionClosed`.
+ */
+export interface PositionMigratedEvent {
+  type: "PositionMigrated";
+  /** Hex-encoded owner address. */
+  owner: string;
+  /** The book the position left. */
+  fromMarket: string;
+  /** The book the position moved to. */
+  toMarket: string;
+  /** Side of the moved position on the new book ("Buy" or "Sell"). */
+  side: string;
+  /** Entry price of the moved position in micro-USDC. */
+  entryPrice: string;
+  /** Size of the moved position in contracts. */
+  size: string;
+  /** Cash the netting credited (positive) or debited (negative), in micro-USDC. */
+  cashDelta: string;
 }
 
 /** Emitted when a trade (fill) is executed between a maker and taker. */
@@ -1559,6 +1676,59 @@ export interface AccountLiquidatedEvent {
   realizedPnl: string;
 }
 
+/**
+ * Emitted when an insurance fund pool's balance changes (liquidation surplus
+ * or deficit, Tier 1 of the bad-debt waterfall).
+ */
+export interface InsuranceFundUpdatedEvent {
+  type: "InsuranceFundUpdated";
+  /** Insurance pool id: "0" for the legacy/majors pool, "1"+ for newer pools. */
+  poolId: string;
+  /** Pool balance after the change in microUSDC (signed; negative when depleted). */
+  balance: string;
+  /** Change in microUSDC (signed; positive = inflow, negative = outflow). */
+  delta: string;
+}
+
+/**
+ * Emitted when a position is auto-deleveraged (Tier 3 of the bad-debt
+ * waterfall): a profitable counterparty is force-closed at the liquidated
+ * trader's bankruptcy price. One event per ADL'd position leg.
+ */
+export interface PositionAutoDeleveragedEvent {
+  type: "PositionAutoDeleveraged";
+  /** Hex-encoded address of the owner whose position was force-closed. */
+  owner: string;
+  /** Market identifier. */
+  market: string;
+  /** Side of the force-closed position ("Buy" or "Sell"). */
+  side: string;
+  /** Contracts force-closed in this leg; may be less than the full position. */
+  size: string;
+  /** Price the leg was closed at in micro-USDC (6 dp). */
+  closePrice: string;
+  /** Bankruptcy price the spec prescribes in micro-USDC (6 dp); currently equal to `closePrice`. */
+  closePriceSpec: string;
+  /** Realized PnL credited to the deleveraged owner in microUSDC (signed). */
+  realizedPnl: string;
+}
+
+/**
+ * Emitted when the Proof liquidity provider (PLP) absorbs liquidation deficit
+ * (Tier 0 of the bad-debt waterfall). Emitted only while PLP is enabled and
+ * above its floor; once PLP reaches the floor, deficits route to Tier 1 and
+ * this event stops firing.
+ */
+export interface PlpAbsorbedEvent {
+  type: "PlpAbsorbed";
+  /** Insurance pool the liquidation came from (informational). */
+  poolId: string;
+  /** Deficit absorbed by PLP in this draw, in microUSDC. */
+  amount: string;
+  /** PLP balance after the draw in microUSDC (signed). */
+  plpBalanceAfter: string;
+}
+
 /** Emitted when periodic funding is applied to a market. */
 export interface FundingAppliedEvent {
   type: "FundingApplied";
@@ -1662,12 +1832,17 @@ export type ExchangeEvent =
   | PriceUpdatedEvent
   | MarketCreatedEvent
   | AccountLiquidatedEvent
+  | InsuranceFundUpdatedEvent
+  | PositionAutoDeleveragedEvent
+  | PlpAbsorbedEvent
   | FundingAppliedEvent
   | FundingSettledEvent
   | AgentApprovedEvent
   | AgentRevokedEvent
   | MarketOrderProcessedEvent
-  | OrderbookLevelUpdatedEvent;
+  | OrderbookLevelUpdatedEvent
+  | OrderMigratedEvent
+  | PositionMigratedEvent;
 
 // ---------------------------------------------------------------------------
 // Result types

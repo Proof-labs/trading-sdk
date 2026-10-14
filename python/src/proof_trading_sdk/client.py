@@ -12,7 +12,14 @@ from urllib.parse import urljoin
 import httpx
 import msgpack
 
-from proof_trading_sdk._native import SigningHandle, chain_id_from_string, generate_keypair, pubkey_to_owner, sign_and_encode
+from proof_trading_sdk._native import (
+    SigningHandle,
+    chain_id_from_string,
+    generate_keypair,
+    pubkey_to_owner,
+    reject_floats,
+    sign_and_encode,
+)
 from proof_trading_sdk.actions import (
     Action,
     CancelPositionTriggers,
@@ -577,9 +584,18 @@ class ExchangeClient:
         data_b64 = payload["data"]
         if not data_b64:
             return None
-        return msgpack.unpackb(
-            base64.b64decode(data_b64), raw=False, strict_map_key=False
-        )
+        raw = base64.b64decode(data_b64)
+        # Decode first, then run the strict, type-preserving preflight from the
+        # shared Rust core: a payload the decoder already refuses keeps its own
+        # message, and the preflight only adds rejections for bytes that decode
+        # cleanly — refusing the float families so an `int(...)` coercion below
+        # can never truncate an integral float into a wire integer (see #221).
+        value = msgpack.unpackb(raw, raw=False, strict_map_key=False)
+        try:
+            reject_floats(raw)
+        except ValueError as e:
+            raise CodecError(f"gateway {source} preflight: {e}") from e
+        return value
 
     def _post_info(self, info: dict[str, t.Any]) -> t.Any:
         """POST a structured ``/info`` query and return the decoded msgpack

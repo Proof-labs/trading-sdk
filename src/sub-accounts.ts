@@ -11,6 +11,7 @@
  *  An HTTP 501 from the route means the registry query is not available,
  *  never an empty registry. */
 import { Decoder } from "@msgpack/msgpack";
+import { rejectFloats } from "./codec.js";
 
 export interface SubAccountListRow {
   /** Derived child address, 40-char lowercase hex, no `0x` prefix. */
@@ -134,7 +135,7 @@ export function decodeSubAccountList(body: unknown): SubAccountListRow[] {
     return invalid(`payload length (exceeds ${MAX_ROWS} rows)`);
   const seenIds = new Set<number>();
   const seenAddresses = new Set<string>();
-  return payload.map((raw): SubAccountListRow => {
+  const rows = payload.map((raw): SubAccountListRow => {
     const row = decodeRow(raw);
     if (seenIds.has(row.id)) return invalid(`duplicate id ${row.id}`);
     if (seenAddresses.has(row.address)) return invalid("duplicate address");
@@ -142,4 +143,10 @@ export function decodeSubAccountList(body: unknown): SubAccountListRow[] {
     seenAddresses.add(row.address);
     return row;
   });
+  // `proof-wire SubAccount` has no float field. The shared Rust preflight
+  // rejects an integral float in any position, so `Number.isSafeInteger` above
+  // could not launder one into a wire integer. It runs LAST so a payload this
+  // decoder already rejects keeps its own diagnostic (see #221).
+  rejectFloats(bytes);
+  return rows;
 }

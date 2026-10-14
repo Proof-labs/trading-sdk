@@ -168,13 +168,19 @@ def test_sub_account_list_accepts_empty_registry_and_trailing_fields():
         ([{"not": "a row"}], "positional array"),
         ([_sub_account_row()[:4]], "expected 5 fields"),
         ([_sub_account_row(sub_account_id=0)], "id"),
-        ([_sub_account_row(sub_account_id=1.9)], "id"),
+        ([_sub_account_row(sub_account_id=1.9)], "msgpack float"),
         ([_sub_account_row(sub_account_id=True)], "id"),
         ([_sub_account_row(sub_account_id=2**32)], "id"),
         ([_sub_account_row(created_height=-1)], "created_height"),
         ([_sub_account_row(address="bad")], "address encoding"),
         ([_sub_account_row(master=[])], "master length"),
-        ([_sub_account_row(address=[1.5] * 20)], "address byte"),
+        ([_sub_account_row(address=[1.5] * 20)], "msgpack float"),
+        # Integral floats in integer positions: the wire has no float field,
+        # so 1.0 packed as msgpack float64 (0xcb) is malformed bytes, not an id.
+        # The shared Rust preflight refuses the float before any coercion.
+        ([_sub_account_row(sub_account_id=1.0)], "msgpack float"),
+        ([_sub_account_row(created_height=947727.0)], "msgpack float"),
+        ([_sub_account_row(address=[17.0] * 20)], "msgpack float"),
         ([_sub_account_row(name=b"\xff" + b"\x00" * 31)], "invalid UTF-8"),
         ([_sub_account_row(), _sub_account_row(address=b"\x22" * 20)], "duplicate id 1"),
         ([_sub_account_row(), _sub_account_row(sub_account_id=2)], "duplicate address"),
@@ -185,6 +191,33 @@ def test_sub_account_list_accepts_empty_registry_and_trailing_fields():
 def test_sub_account_list_raises_on_malformed_payload(payload, match):
     with pytest.raises(CodecError, match=match):
         _client(lambda r: _info_response(payload)).sub_account_list("aa" * 20)
+
+
+def test_sub_account_list_rejects_single_precision_floats():
+    """The same defect at the other width: float32 (0xca) integral values in
+    integer fields. use_single_float makes the bytes genuinely msgpack
+    float32, matching what a hostile encoder can produce."""
+    payload = msgpack.packb(
+        [_sub_account_row(sub_account_id=1.0)], use_single_float=True
+    )
+    data = base64.b64encode(payload).decode()
+    with pytest.raises(CodecError, match="msgpack float"):
+        _client(
+            lambda r: httpx.Response(200, json={"data": data})
+        ).sub_account_list("aa" * 20)
+
+
+def test_gateway_reads_reject_integral_floats_outside_sub_accounts():
+    """#221: the preflight is not sub-account-specific. An integral float in a
+    balance or an orderbook level is malformed bytes, not a value to truncate
+    with ``int(...)``."""
+    account = [1.0, [], 0, 0, 0, 0]  # balance: float64 1.0
+    with pytest.raises(CodecError, match="msgpack float"):
+        _client(lambda r: _info_response(account)).account("aa" * 20)
+
+    orderbook = [[[100.0, 10, 1]], []]  # a bid price: float64 100.0
+    with pytest.raises(CodecError, match="msgpack float"):
+        _client(lambda r: _info_response(orderbook)).orderbook(1)
 
 
 def test_withdrawal_status_none_when_nil():

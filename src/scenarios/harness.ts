@@ -8,6 +8,8 @@
  * scenarios don't collide on nonces or CometBFT's tx cache.
  */
 import { Decoder } from "@msgpack/msgpack";
+import { rejectFloats } from "../codec.js";
+import { ready } from "../wasm-loader.js";
 import { ExchangeClient } from "../client.js";
 import {
   generateKeypair,
@@ -409,12 +411,14 @@ async function fetchOpenOrderIds(
   if (!json.data) return [];
 
   const raw = Uint8Array.from(atob(json.data), (c) => c.charCodeAt(0));
+  await ready();
   let decoded: unknown;
   try {
     decoded = msgpackDecoder.decode(raw);
   } catch {
     return [];
   }
+  rejectFloats(raw);
   if (!Array.isArray(decoded)) return [];
 
   // Each order is encoded as a positional array: [id, market, owner, side,

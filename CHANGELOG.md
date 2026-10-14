@@ -12,6 +12,175 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `GatewayReads.version()` forwards `GET /v1/version` without caching, preserving
   the raw loaded-engine identity, HTTP errors and caller cancellation. It reports
   one upstream node, not validator-wide compatibility or rollout qualification.
+
+## [7.1.0] — 2026-10-13
+
+### Release notes
+
+A minor npm release: the TypeScript additions below are backward compatible,
+and the three TypeScript type or behaviour changes are fixes that each need at
+most a small migration. The signing and transaction wire format is unchanged
+from npm 7.0.0. Rust and Python package versions remain on their independent
+release lines; the Rust-only breaking changes below do not affect the npm
+version.
+
+### Included since npm 7.0.0
+
+- On-chain engine upgrades: `ScheduleUpgrade` and `CancelUpgrade` admin
+  actions, `validateScheduleUpgrade`, `queryUpgrades()` and
+  `queryNodeVersion()` (#204).
+- Trading No on an event's one binary book, and the one-book upgrade's
+  events (#230).
+- The F16 primary-with-fallback oracle verdict read and error code 77 (#196).
+- The gateway's stated `status` is read as stated (#223).
+- Event reads decode the one-book event record (#226).
+
+### TypeScript migration notes
+
+- `ProposalDisplayInfo.action` can be `null`. Under npm 7.0.0 a proposal whose
+  action the engine returns as nil failed the whole read; it now decodes with
+  `action: null`. Check for null before reading `action.kind`.
+- `EventInfo.ebnMarket` is optional and `undefined` on a one-book chain.
+- An invalid signature is an `engine` outcome with code `17`, where it used to
+  be a `transport` outcome with code 1.
+
+### Added
+
+- **Trading No on an event's one binary book.** An event has one book priced
+  in Yes; a long No at `q` is a short Yes at `$1 − q`. TypeScript:
+  `ExchangeClient.buyNo` and `sellNo` place the Yes order at `$1 − price`,
+  carrying reduce-only, post-only, client order id and time in force, with
+  No-priced `stopLoss`/`takeProfit` mirrored in the same role; `yesOrder`,
+  `yesLimb`, `yesSide`, `binaryPositionView`, `BINARY_PRICE_MAX` and
+  `BinaryPriceError` are exported. Python: `buy_no`, `sell_no`, `no_order`,
+  `yes_limb`, `yes_side`, `binary_position_view`. Rust: the `binary` module
+  (`yes_order`, `yes_limb`, `binary_position_view`). A No price of 0 or `$1`
+  is refused client-side. A new conformance family, `binary.ndjson`, pins the
+  translation in all three languages.
+- **The one-book upgrade's events.** `ExchangeEvent` gains `OrderMigrated`
+  and `PositionMigrated`, and the new `CancelReason` type names the engine's
+  cancel reasons, including `upgrade`. Event readers pass unknown event types
+  through, so further upgrade-journal events do not break a read.
+- `ScheduleUpgrade` (inner tag 14) and `CancelUpgrade` (inner tag 15) in the
+  `AdminAction` union, so a client can propose and approve an on-chain engine
+  upgrade (#185). `ScheduleUpgrade` carries the target height, the
+  successor's engine release `major`/`minor`, and the `successorSha256` pin;
+  `validateScheduleUpgrade` mirrors the engine's refusals (zero major,
+  all-zero pin) on encode and on proposal decode. Conformance vectors cover
+  both inside `ProposeAdminAction`. The Rust crate re-exports both types.
+- `queryUpgrades()` reads the pending upgrade plan and executed activation
+  ledger (`GET /v1/upgrades`), and `queryNodeVersion()` the answering node's
+  loaded engine release (`GET /v1/version`).
+
+### Breaking changes (Rust; TypeScript changes are covered by the migration notes above)
+
+- The Rust crate moves to proof-wire 6.0.0 (pinned to mirror commit
+  `ce8dd8bd` until the `v6.0.0` tag is cut), where `ScheduleUpgrade` names
+  the successor release as `major`/`minor` in place of `protocol_version`.
+  The re-exported `AdminAction::ScheduleUpgrade` changes shape, and a
+  `ScheduleUpgrade` that carries `protocol_version` no longer encodes.
+- `ProposalDisplayInfo.action` is `AdminAction | null`. The engine returns nil
+  for a proposal stored in a shape it no longer decodes; `actionTag`,
+  `actionCanonicalBytes` and `contentHash` are still returned.
+- The gateway's `status` is read as stated; nothing is inferred
+  from message text or field shape (api-gateway 7.0.0, api-gateway #215 and
+  #220). `POST /exchange` now answers `ok`, `error`, `refused` or
+  `pending`. The TypeScript client and the Rust submit methods switch on that
+  value; a `refused` answer is named by its `errorCode` (`Unauthorized`,
+  `RateLimited`, `Maintenance`, `Overloaded`, `Unavailable`, `InvalidRequest`,
+  `EncodingError`). An invalid signature is the engine's code `17` on an
+  `error` answer: `CheckTxRejected` in Rust and an `engine` outcome in
+  TypeScript, where it used to be a refusal and `transport` code 1. Rust
+  `PreAdmissionRefusal::ProposerOnly` and `::InvalidSignature` are removed.
+  The Rust methods no longer accept a pre-7.0.0 gateway's answers. The
+  TypeScript client still reads a pre-7.0.0 gateway's engine verdicts and
+  reconcile answers, but reconciles its refusals by hash instead of returning
+  them as transport errors.
+
+### Added
+
+- Oracle permission reads decode the committed verdict of exchange#831
+  (primary with fallback, DEC-219) in both layouts. The fourteen-field
+  format-3 read appends `selected` (`"Primary"` / `"Fallback"`, or null) and a
+  `diagnostics` u8 bitset: `OnFallback` (bit 0), `PrimaryRefusedDivergence`
+  (1), `DivergenceUnchecked` (2), `FallbackUnusable` (3). The twelve-field
+  format-2 read of earlier nodes still decodes, with `selected` null. The
+  TypeScript `CommittedOracleVerdict` gains `format`, `selected`,
+  `diagnostics`, `diagnosticFlags` and `faultReasons`, and exports
+  `ORACLE_FAULT_BITS` and `ORACLE_DIAGNOSTIC_BITS`. The Rust
+  `CommittedVerdict` gains `format`, `selected` and `diagnostics`, with
+  `fault_reasons()` and `diagnostic_flags()`. Both layouts share one
+  fault-bit layout; `Disagreement` (bit 7) and `PairTimeMismatch` (bit 13)
+  keep their bits but are no longer produced. A format-3 verdict is refused
+  when its selected slot, source mask, diagnostics and fault word contradict
+  the engine's selection rules. Vectors captured from the exchange encoding
+  are in `conformance/oracle-permissions-committed.ndjson`. Additive: every
+  read an earlier SDK accepted still decodes the same way, and the
+  proof-wire pin (v4.1.0), codec and signing bytes are unchanged.
+
+### Changed
+
+- Event reads decode both engine shapes of the stored event record: the
+  two-book record and the one-book record of an engine with one binary book
+  per event (exchange #974), told apart by the field after the Yes book (a
+  number is the No book, a string is the question). So a client follows a
+  chain across the upgrade that retires the No book. In TypeScript,
+  `EventInfo.ebnMarket` is optional and `undefined` on a one-book chain
+  (`decodeEventInfo`, `queryEvents`, `queryEvent` and the markets snapshot).
+  **Breaking in Rust:** `MarketsSnapshot.events` is a list of the new
+  `SnapshotEvent`, whose `ebn_market` is an `Option`. A two-book record with
+  no No book is refused, in both languages. The tolerance is temporary: a
+  later release decodes the one-book shape only.
+
+### Fixed
+
+- `ReferenceUnavailable`, the current exchange name of the old
+  `AnchorUnavailable` reason, is an accepted committed-verdict reason; a
+  verdict carrying it used to be refused. `AnchorUnavailable` is still
+  accepted from older nodes.
+
+## [7.0.0] — 2026-10-06
+
+### Breaking changes
+
+- Standalone MessagePack decoders, including `decodeSubAccountList` and
+  `decodeTx`, now require `await ready()` before use. `ExchangeClient` read
+  methods initialise WASM automatically. Read-only browser clients therefore
+  load the WASM module on their first MessagePack read. This public API
+  initialisation change requires a MAJOR npm version (#224).
+- The signing and transaction wire format is unchanged from npm 6.4.0;
+  the SDK continues to use `proof-wire` v4.1.0. Rust and Python package
+  versions remain on their independent release lines.
+
+### Included since npm 6.4.0
+
+- Indexed Explorer history status, block pagination and detail, and transaction
+  reads (#222), with HTTP failures and cancellation preserved.
+- Strict shared MessagePack validation for malformed gateway read payloads
+  (#224, superseding the narrower sub-account check in #216).
+- Error codes 77, 99 and 100, and updated local scenario instructions (#205).
+
+The accumulated notes below also describe changes shipped in npm 5.2–6.4;
+those existing behaviours are not new in 7.0.0.
+
+### Added
+
+- The error tables gain `OracleVerdictUnavailable` (code 77),
+  `WithdrawalLimitExceeded` (code 99) and `AccountOrderCapReached` (code
+  100, the per-account resting-order cap), matching the engine: in TypeScript
+  (`ExecErrorCode` and `decodeExecError`), in the Rust table, and therefore in
+  Python's `get_error_name`. The `errors.ndjson` conformance manifest gains
+  `manifest/77`, `manifest/99` and `manifest/100`. Codes 78-81 stay reserved.
+- TypeScript Explorer history reads: `ExchangeClient.reads()` gains
+  `historyStatus()`, `historyBlocks({ limit, cursor })`,
+  `historyBlock(heightOrHash)` and `historyTransaction(hash)`, forwarding
+  `GET /v1/history/status`, `/v1/history/blocks`, `/v1/history/blocks/{id}` and
+  `/v1/history/txs/{hash}` through the configured gateway. Responses stay raw,
+  with HTTP errors and cancellation intact: a block page carries `blocks` and an
+  opaque `next_cursor`, block detail carries its ordered `transactions`, and a
+  transaction carries its block coordinates, execution `code` (zero is success)
+  and base64 `raw_tx`. A missing or unindexed record stays an HTTP 404 and
+  unavailable history stays an error, never a fabricated or empty block.
 - `ExchangeClient.queryAuthorities()` reads the engine's privileged
   authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
   api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,
@@ -58,6 +227,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Requests bypass HTTP caches. MINOR: this additive TypeScript read API keeps
   the released npm 5.1.0 codec and proof-wire 2.1.0 contract (exchange v2.12.0 /
   api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
+- `InsuranceFundUpdatedEvent` (`poolId`, `balance`, `delta`),
+  `PositionAutoDeleveragedEvent` (`owner`, `market`, `side`, `size`,
+  `closePrice`, `closePriceSpec`, `realizedPnl`) and `PlpAbsorbedEvent`
+  (`poolId`, `amount`, `plpBalanceAfter`) join the `ExchangeEvent` union and
+  the package barrel. They type the bad-debt waterfall events the engine
+  already emits on proof-wire 4.1.0 (exchange dev `exchange-wire` `Event`), with
+  the same stringified-number convention as `AccountLiquidatedEvent`.
+  TypeScript types only: no codec, wire or Rust/Python change.
+- `reads().historyStatus()` bypasses HTTP caches (`cache: "no-store"`), so a
+  freshness read is never answered from a stale cached response.
 - TypeScript 6.1.0: `HistoryResolution.convertedSize` and
   `HistoryResolution.fallbackReason` (with the `ConversionFallbackReason` type)
   for conditional-perp resolutions, as the exchange release after 2.14.0
@@ -131,6 +310,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   compare node ids.
 
 ### Fixed
+
+- TypeScript and Python reads reject integral MessagePack floats wherever the
+  wire model has an integer (#189, #221). The float families (`0xca`/`0xcb`)
+  decode into the same JavaScript number as an integer, so a row packed with
+  `forceIntegerToFloat`-style settings decoded as if it were a wire uint; the
+  Python decoder keeps them distinct but its `int(...)` coercions truncated
+  them, so the two SDKs disagreed on the same bytes. Every gateway msgpack read
+  now runs one strict, type-preserving preflight in the Rust core
+  (`proof_trading_sdk::msgpack`, exposed to TypeScript as the WASM
+  `reject_floats` and to Python through the PyO3 native module). It refuses
+  float families, extensions, non-UTF-8 strings, duplicate map keys, over-deep
+  nesting and trailing bytes; bytes inside a bin stay data. The value decode
+  runs first, so a payload the decoder already refuses keeps its own
+  diagnostic. Reads now initialise the WASM core, so a read-only caller that
+  bypasses the client must `await ready()` first (the client does it on the
+  first read).
 
 - **Rust crate 4.1.0 → 4.1.1** — `MarketsSnapshotClient::read_bound_inventory`
   now reads a whole new bracket, up to three attempts in all and 150 ms apart
@@ -1064,7 +1259,9 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v5.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.1.0...HEAD
+[7.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.0.0...npm-v7.1.0
+[7.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v6.4.0...npm-v7.0.0
 [5.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v5.0.0...npm-v5.1.0
 [5.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v4.0.0...npm-v5.0.0
 [4.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...npm-v4.0.0
