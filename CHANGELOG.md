@@ -7,6 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Decode the proposed engine PLP shape-error code 101 as `InvalidPlpConfig`,
+  preserving code 100 for `AccountOrderCapReached` and 99 for withdrawal limits.
+  Requires the reviewed engine validation change before relying on this code.
+
 ## [7.1.0] — 2026-10-13
 
 ### Release notes
