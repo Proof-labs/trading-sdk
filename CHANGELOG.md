@@ -7,6 +7,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- The bridge payload encoders (`encodeWithdrawalAuthorization`,
+  `withdrawalAuthorizationDigest`, `encodeBridgeReceipt`) now come from
+  proof-wire's `bridge` module instead of the private `bridge-core`, so
+  building the SDK from source no longer needs access to Proof-labs/bridge.
+  The bytes are unchanged; the frozen vectors still pass.
+
 ## [7.1.0] — 2026-10-13
 
 ### Release notes

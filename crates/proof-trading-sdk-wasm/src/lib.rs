@@ -167,21 +167,20 @@ pub fn chain_id_from_string(chain_id: &str) -> Vec<u8> {
     crypto::chain_id_from_string(chain_id).to_vec()
 }
 
-// --- bridge-core v1 canonical custody payloads (W39-07) ---------------------
+// --- bridge canonical custody payloads (W39-07) ----------------------------
 //
-// The deposit/withdrawal custody path signs fixed-layout payloads from
-// `bridge-core` (frozen v1 contract): a 221-byte `WithdrawalAuthorizationV1`
-// whose SHA-256 the engine binds to the withdrawal, and a 327-byte
-// `BridgeReceiptV1` the operator quorum signs and the engine re-encodes
-// before verifying that quorum. Exposing the core's own `encode()` here —
-// instead of mirroring the layout in TypeScript — makes the bytes identical
-// to the engine's by construction; `src/bridge.test.ts` pins the marshalling
-// with vectors printed from the pinned tag.
+// The deposit/withdrawal custody path signs fixed-layout payloads from the
+// wire contract's `bridge` module (proof-wire-bridge): a 221-byte
+// `WithdrawalAuthorizationV1` whose SHA-256 the engine binds to the
+// withdrawal, and a 327-byte `BridgeReceiptV1` the operator quorum signs and
+// the engine re-encodes before verifying that quorum. Calling its `encode()`
+// makes the bytes the engine's by construction; `src/bridge.test.ts` pins
+// the marshalling with frozen vectors.
 
-use bridge_core::{
+use proof_trading_sdk::bridge::{
     BridgeReceiptV1, DeploymentId, MicroUsdc, ProofOwner, ReceiptQuorumKind, RegistryEpoch,
     RustCrypto, Slot, SolanaPubkey, TerminalState, TxSignature, UnixSeconds, VaultTier,
-    WithdrawalId,
+    WithdrawalAuthorizationV1, WithdrawalId,
 };
 use serde::Deserialize;
 
@@ -227,7 +226,7 @@ struct WithdrawalAuthorizationInput {
     expires_at_unix_seconds: i64,
 }
 
-impl TryFrom<WithdrawalAuthorizationInput> for bridge_core::WithdrawalAuthorizationV1 {
+impl TryFrom<WithdrawalAuthorizationInput> for WithdrawalAuthorizationV1 {
     type Error = JsError;
 
     fn try_from(i: WithdrawalAuthorizationInput) -> Result<Self, Self::Error> {
@@ -259,7 +258,7 @@ impl TryFrom<WithdrawalAuthorizationInput> for bridge_core::WithdrawalAuthorizat
 #[wasm_bindgen]
 pub fn encode_withdrawal_authorization(fields: JsValue) -> Result<Vec<u8>, JsError> {
     let input: WithdrawalAuthorizationInput = serde_wasm_bindgen::from_value(fields)?;
-    let auth = bridge_core::WithdrawalAuthorizationV1::try_from(input)?;
+    let auth = WithdrawalAuthorizationV1::try_from(input)?;
     Ok(auth.encode().to_vec())
 }
 
@@ -269,7 +268,7 @@ pub fn encode_withdrawal_authorization(fields: JsValue) -> Result<Vec<u8>, JsErr
 #[wasm_bindgen]
 pub fn withdrawal_authorization_digest(fields: JsValue) -> Result<Vec<u8>, JsError> {
     let input: WithdrawalAuthorizationInput = serde_wasm_bindgen::from_value(fields)?;
-    let auth = bridge_core::WithdrawalAuthorizationV1::try_from(input)?;
+    let auth = WithdrawalAuthorizationV1::try_from(input)?;
     Ok(auth.digest::<RustCrypto>().to_vec())
 }
 
