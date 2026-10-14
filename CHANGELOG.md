@@ -7,6 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `GatewayReads.version()` forwards `GET /v1/version` without caching, preserving
+  the raw loaded-engine identity, HTTP errors and caller cancellation. It reports
+  one upstream node, not validator-wide compatibility or rollout qualification.
+
 ## [7.1.0] — 2026-10-13
 
 ### Release notes
