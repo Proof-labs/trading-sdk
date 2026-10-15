@@ -26,14 +26,8 @@ TriggerMarketHistoryEventType: t.TypeAlias = t.Literal[
 TriggerHistoryEventType: t.TypeAlias = (
     PositionTriggerHistoryEventType | TriggerMarketHistoryEventType
 )
-PendingTriggerDiscardReason: t.TypeAlias = t.Literal[
-    "order_cancelled",
-    "order_expired",
-    "order_replaced",
-    "unfilled_terminal",
-    "install_rejected",
-    "position_closed",
-]
+# Engine-defined label, passed through.
+PendingTriggerDiscardReason: t.TypeAlias = str
 TriggerHistoryTime: t.TypeAlias = str | int
 
 _EventTypeT = t.TypeVar("_EventTypeT", bound=str)
@@ -93,55 +87,7 @@ _POSITION_TYPES = {
     "position_trigger_executed",
     "position_trigger_deferred",
 }
-_PENDING_DISCARD_REASONS = {
-    "order_cancelled",
-    "order_expired",
-    "order_replaced",
-    "unfilled_terminal",
-    "install_rejected",
-    "position_closed",
-}
 _MARKET_TYPES = {"trigger_market_deferred", "trigger_market_resumed"}
-_REASONS = {
-    "position_closed",
-    "position_epoch_changed",
-    "position_side_changed",
-    "below_maintenance",
-    "indeterminate_account",
-    "market_disabled",
-    "mark_unavailable",
-    "mark_stale",
-    "mark_future_dated",
-    "no_eligible_liquidity",
-    "self_trade_prevention",
-    "work_limit_reached",
-    "execution_rejected",
-}
-_RESULTS = {
-    "filled",
-    "partial",
-    "no_fill",
-    "rejected",
-    "invalidated",
-}
-_EXECUTION_STOP_REASONS = {
-    "no_eligible_liquidity",
-    "self_trade_prevention",
-    "work_limit_reached",
-}
-_POSITION_INVALIDATION_REASONS = {
-    "position_closed",
-    "position_epoch_changed",
-    "position_side_changed",
-}
-_ACCOUNT_DEFERRED_REASONS = {"below_maintenance", "indeterminate_account"}
-_MARKET_DEFERRED_REASONS = {
-    "market_disabled",
-    "mark_unavailable",
-    "mark_stale",
-    "mark_future_dated",
-}
-_LIMB_KINDS = {"stop_loss", "take_profit"}
 _EVENT_KEYS = {
     "event_key",
     "block_height",
@@ -322,13 +268,6 @@ def _rfc3339(value: t.Any, name: str) -> str:
     return text
 
 
-def _enum(value: t.Any, allowed: set[str], name: str, *, empty: bool = False) -> str:
-    text = _string(value, name, nonempty=not empty)
-    if text not in allowed and not (empty and text == ""):
-        raise _error(f"unknown {name} {text}")
-    return text
-
-
 def _payload(value: t.Any) -> dict[str, str]:
     row = _object(value, "payload")
     if not all(isinstance(item, str) for item in row.values()):
@@ -437,11 +376,7 @@ def _validate_payload(
         _unsigned(payload.get("client_order_id"), "payload.client_order_id")
     elif event_type == "pending_triggers_discarded":
         _unsigned(payload.get("order_id"), "payload.order_id", nonzero=True)
-        _enum(
-            payload.get("reason"),
-            _PENDING_DISCARD_REASONS,
-            "payload.reason",
-        )
+        _string(payload.get("reason"), "payload.reason")
     elif event_type == "position_trigger_activated":
         _require_unsigned(
             payload,
@@ -456,7 +391,7 @@ def _validate_payload(
                 "execution_order_id",
             ),
         )
-        _enum(payload.get("limb_kind"), _LIMB_KINDS, "payload.limb_kind")
+        _string(payload.get("limb_kind"), "payload.limb_kind")
     elif event_type == "position_trigger_executed":
         _require_unsigned(
             payload,
@@ -473,47 +408,14 @@ def _validate_payload(
                 "execution_order_id",
             ),
         )
-        _enum(payload.get("limb_kind"), _LIMB_KINDS, "payload.limb_kind")
-        _enum(payload.get("result"), _RESULTS, "payload.result")
+        _string(payload.get("limb_kind"), "payload.limb_kind")
+        _string(payload.get("result"), "payload.result")
         _signed_i64(payload.get("total_fee"), "payload.total_fee")
-        _enum(payload.get("reason"), _REASONS, "payload.reason", empty=True)
+        _string(payload.get("reason"), "payload.reason", nonempty=False)
         if int(payload["filled_quantity"]) + int(payload["residual_quantity"]) != int(
             payload["requested_quantity"]
         ):
             raise _error("executed quantities do not conserve")
-        requested = int(payload["requested_quantity"])
-        filled = int(payload["filled_quantity"])
-        residual = int(payload["residual_quantity"])
-        result = payload["result"]
-        reason = payload["reason"]
-        valid = (
-            result == "filled"
-            and filled == requested
-            and residual == 0
-            and reason == ""
-        ) or (
-            result == "partial"
-            and filled > 0
-            and residual > 0
-            and reason in _EXECUTION_STOP_REASONS
-        ) or (
-            result == "no_fill"
-            and filled == 0
-            and residual > 0
-            and reason in _EXECUTION_STOP_REASONS
-        ) or (
-            result == "rejected"
-            and filled == 0
-            and residual > 0
-            and reason == "execution_rejected"
-        ) or (
-            result == "invalidated"
-            and filled == 0
-            and residual > 0
-            and reason in _POSITION_INVALIDATION_REASONS
-        )
-        if not valid:
-            raise _error("result, quantities, and reason disagree")
     elif event_type == "position_trigger_deferred":
         _require_unsigned(
             payload,
@@ -526,16 +428,12 @@ def _validate_payload(
                 "requested_quantity",
             ),
         )
-        _enum(payload.get("limb_kind"), _LIMB_KINDS, "payload.limb_kind")
-        _enum(payload.get("reason"), _ACCOUNT_DEFERRED_REASONS, "payload.reason")
+        _string(payload.get("limb_kind"), "payload.limb_kind")
+        _string(payload.get("reason"), "payload.reason")
     elif event_type == "trigger_market_deferred":
-        _enum(payload.get("reason"), _MARKET_DEFERRED_REASONS, "payload.reason")
+        _string(payload.get("reason"), "payload.reason")
     elif event_type == "trigger_market_resumed":
-        _enum(
-            payload.get("previous_reason"),
-            _MARKET_DEFERRED_REASONS,
-            "payload.previous_reason",
-        )
+        _string(payload.get("previous_reason"), "payload.previous_reason")
 
 
 def _decode_event(

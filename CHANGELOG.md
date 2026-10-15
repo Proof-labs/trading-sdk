@@ -186,6 +186,14 @@ version.
   TypeScript client still reads a pre-7.0.0 gateway's engine verdicts and
   reconcile answers, but reconciles its refusals by hash instead of returning
   them as transport errors.
+- **Breaking in TypeScript types:** the trigger label types are now `string`:
+  `TriggerOutcomeReason`, `PendingTriggerDiscardReason`, `TriggerLimbState`,
+  and `result` and `limb_kind` on trigger history payloads.
+  `TriggerEffectiveAvailability` is `{ kind: string; reason?: string }`. Code
+  that relied on the unions, such as a `Record` keyed by one or an exhaustive
+  `switch`, no longer type-checks. MAJOR for npm on the type surface only;
+  decoded values and the wire are unchanged. In Python the
+  `PendingTriggerDiscardReason` alias becomes `str`.
 
 ### Added
 
@@ -228,6 +236,17 @@ version.
   `AnchorUnavailable` reason, is an accepted committed-verdict reason; a
   verdict carrying it used to be refused. `AnchorUnavailable` is still
   accepted from older nodes.
+- Trigger reads no longer fail on an engine label this SDK version does not
+  know. A reason, limb state, availability kind, executed result and history
+  limb kind are engine-defined labels: each decodes as any non-empty string
+  and is returned verbatim, in TypeScript and Python. The SDK carries no list
+  of their names and no longer checks which row may carry which reason or
+  which result goes with which quantities. A stop-loss deferred on a binary
+  market with a one-sided book (`no_two_sided_quote`) used to fail the
+  owner-history decoder, which made the account's trigger history
+  unreadable; rows like it stay in history. Still refused: a missing, empty
+  or non-string label, an unknown event type, an unknown stored limb kind,
+  and executed quantities that do not add up. No wire change.
 
 ## [7.0.0] — 2026-10-06
 
