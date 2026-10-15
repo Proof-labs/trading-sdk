@@ -31,13 +31,16 @@
 import { describe, it, expect } from "vitest";
 import { Decoder } from "@msgpack/msgpack";
 import {
+  ACTION_TAG_BY_KIND,
   decodeAdminAction,
   decodeAdminSignerRegistry,
   decodeAdminSignerRegistryInfo,
   decodeEventInfo,
+  decodeNodeVersion,
   decodeProposalPage,
   decodeProposalDisplayInfo,
   decodeProposalStatus,
+  decodeUpgradesInfo,
 } from "./governance-query.js";
 import { Outcome } from "./types.js";
 
@@ -300,6 +303,13 @@ describe("decodeAdminAction", () => {
     });
   });
 
+  it("decodes the EnableSubAccounts unit variant carried as a bare string", () => {
+    expect(decodeAdminAction("EnableSubAccounts")).toEqual({
+      kind: "EnableSubAccounts",
+    });
+    expect(ACTION_TAG_BY_KIND.EnableSubAccounts).toBe(21);
+  });
+
   it("decodes the engine's frozen CancelAllOrdersForAccount bytes, scoped and unscoped", () => {
     // exchange-wire `cancel_all_orders_for_account_wire_vectors_frozen`: the
     // `AccountAddress` newtype is transparent, so the payload is a flat
@@ -550,6 +560,45 @@ describe("byte-field validation", () => {
     expect(() => decodeProposalDisplayInfo(raw)).toThrow(
       /does not match SetOracleGuards tag 13/,
     );
+  });
+
+  it("reads ScheduleUpgrade and CancelUpgrade proposals under tags 14 and 15", () => {
+    const raw = validProposalRaw();
+    raw[11] = 14;
+    raw[12] = { ScheduleUpgrade: [50_780_000, 2, 1, new Array(32).fill(0xab)] };
+    expect(decodeProposalDisplayInfo(raw).action).toEqual({
+      kind: "ScheduleUpgrade",
+      value: {
+        targetHeight: 50_780_000n,
+        major: 2,
+        minor: 1,
+        successorSha256: new Uint8Array(32).fill(0xab),
+      },
+    });
+    raw[11] = 15;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(
+      /does not match ScheduleUpgrade tag 14/,
+    );
+    raw[12] = { ScheduleUpgrade: [50_780_000, 2, 1, new Array(32).fill(0)] };
+    raw[11] = 14;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(/all-zero/);
+    raw[11] = 15;
+    raw[12] = { CancelUpgrade: [50_780_000] };
+    expect(decodeProposalDisplayInfo(raw).action).toEqual({
+      kind: "CancelUpgrade",
+      value: { targetHeight: 50_780_000n },
+    });
+  });
+
+  it("keeps the tag, bytes and hash of a proposal whose action is nil", () => {
+    const raw = validProposalRaw();
+    raw[11] = 14;
+    raw[12] = null;
+    const info = decodeProposalDisplayInfo(raw);
+    expect(info.action).toBeNull();
+    expect(info.actionTag).toBe(14);
+    expect(info.actionCanonicalBytes).toEqual(new Uint8Array([0xde, 0xad]));
+    expect(info.contentHash).toEqual(new Uint8Array(32).fill(0x5a));
   });
 
   it("reads a CancelAllOrdersForAccount proposal under its tag 8", () => {
@@ -808,5 +857,72 @@ describe("decodeEventInfo (E1 golden vector)", () => {
       decodeVector(GOLDEN.slice(0, -2).replace(/^9b/, "9a")),
     );
     expect(info.attachedConditionals).toEqual([]);
+  });
+});
+
+describe("decodeUpgradesInfo (engine golden vector)", () => {
+  // rmp_serde of UpgradesInfo from exchange-core/src/query.rs.
+  it("decodes a pending plan and an executed activation", () => {
+    const info = decodeUpgradesInfo(
+      decodeVector(
+        "9295ce0306d7600201dc0020" +
+          "ccab".repeat(32) +
+          "cf000000012a05f2009193210200",
+      ),
+    );
+    expect(info.plan).toEqual({
+      targetHeight: 50_780_000n,
+      major: 2,
+      minor: 1,
+      successorSha256: new Uint8Array(32).fill(0xab),
+      scheduledHeight: 5_000_000_000n,
+    });
+    expect(info.executed).toEqual([
+      { activatedHeight: 33n, major: 2, minor: 0 },
+    ]);
+  });
+
+  it("decodes absence as a null plan and an empty ledger", () => {
+    expect(decodeUpgradesInfo(decodeVector("92c090"))).toEqual({
+      plan: null,
+      executed: [],
+    });
+  });
+
+  it("refuses a short sha256", () => {
+    expect(() => decodeUpgradesInfo([[1, 2, 1, [0xab], 1], []])).toThrow(
+      /successorSha256/,
+    );
+  });
+});
+
+describe("decodeNodeVersion", () => {
+  const body = {
+    node: "2.13.0",
+    engine: "2.1-1",
+    engine_abi_version: 1,
+    engine_major: 2,
+    engine_minor: 1,
+    engine_lib_path: "/data/engines/libexchange_ffi.2.1.so",
+    engine_lib_sha256: "ab".repeat(32),
+  };
+
+  it("reads the loaded release", () => {
+    expect(decodeNodeVersion(body)).toEqual({
+      node: "2.13.0",
+      engine: "2.1-1",
+      engineAbiVersion: 1,
+      engineMajor: 2,
+      engineMinor: 1,
+      engineLibSha256: "ab".repeat(32),
+    });
+  });
+
+  it("refuses a malformed body", () => {
+    expect(() => decodeNodeVersion({ ...body, engine_major: -1 })).toThrow();
+    expect(() =>
+      decodeNodeVersion({ ...body, engine_lib_sha256: "x" }),
+    ).toThrow();
+    expect(() => decodeNodeVersion(null)).toThrow();
   });
 });

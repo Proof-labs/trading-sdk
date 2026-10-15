@@ -9,6 +9,57 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("named gateway reads", () => {
+  it("reads loaded engine identity without caching or transforming the response", async () => {
+    const first = json({ engine_lib_sha256: "ab".repeat(32), engine_major: 3 });
+    const second = json({
+      engine_lib_sha256: "cd".repeat(32),
+      engine_major: 3,
+    });
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(second);
+    const reads = new ExchangeClient({
+      gatewayUrl: "https://gateway.example",
+    }).reads({ fetch });
+    const signal = new AbortController().signal;
+    expect(await reads.version({ signal })).toBe(first);
+    expect(await reads.version({ signal })).toBe(second);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenLastCalledWith(
+      "https://gateway.example/v1/version",
+      {
+        method: "GET",
+        cache: "no-store",
+        signal,
+      },
+    );
+  });
+  it.each([401, 404, 503])(
+    "preserves version HTTP %i without a fallback",
+    async (status) => {
+      const fetch = vi.fn(async () =>
+        json({ errorCode: "unavailable" }, status),
+      );
+      const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+      await expect(reads.version()).rejects.toMatchObject({
+        name: "GatewayHttpError",
+        status,
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("preserves version cancellation and transport failures without retry", async () => {
+    const error = new Error("transport unavailable");
+    const fetch = vi.fn().mockRejectedValue(error);
+    const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+    await expect(
+      reads.version({ signal: AbortSignal.abort() }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(reads.version()).rejects.toBe(error);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
   it("preserves exact info bodies, same-origin, envelopes, caller transport and cancellation", async () => {
     const fetch = vi.fn(async () => json({ data: "raw-tuple-envelope" }));
     const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
@@ -219,6 +270,44 @@ describe("named gateway reads", () => {
     const abort = new DOMException("cancelled", "AbortError");
     fetch.mockRejectedValueOnce(abort);
     await expect(reads.oracleHealth()).rejects.toBe(abort);
+  });
+});
+
+describe("history status read", () => {
+  it("forwards the indexer status uncached with its body unread", async () => {
+    const payload = {
+      ok: true,
+      reconciliation: { ok: true, watermarks: { block_progress: 87371 } },
+      ingest: { block_lag_seconds: 43, stale: false },
+    };
+    const response = json(payload);
+    const fetch = vi.fn(async () => response);
+    const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+    const signal = new AbortController().signal;
+    const result = await reads.historyStatus({ signal });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith("/v1/history/status", {
+      method: "GET",
+      cache: "no-store",
+      signal,
+    });
+    expect(result).toBe(response);
+    expect(result.bodyUsed).toBe(false);
+    expect(await result.json()).toEqual(payload);
+  });
+
+  it("surfaces an unavailable history service instead of a status", async () => {
+    const response = json({ error: "history_status_timeout" }, 502);
+    const fetch = vi.fn(async () => response);
+    const reads = new ExchangeClient().reads({ fetch });
+    await expect(reads.historyStatus()).rejects.toMatchObject({
+      name: "GatewayHttpError",
+      status: 502,
+      response,
+    });
+    await expect(
+      reads.historyStatus({ signal: AbortSignal.abort() }),
+    ).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });
 

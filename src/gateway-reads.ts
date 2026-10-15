@@ -226,15 +226,33 @@ export class GatewayReads {
   health(opts: GatewayReadOptions = {}) {
     return this.get("/v1/health", {}, opts);
   }
+  /** Raw node-local loaded engine identity, not validator-wide qualification;
+   * use queryNodeVersion for strict decoding. Do not cache an artifact
+   * identity across a rollout. Errors remain errors.
+   */
+  version(opts: GatewayReadOptions = {}) {
+    return this.request(
+      "/v1/version",
+      { method: "GET", cache: "no-store" },
+      opts,
+    );
+  }
   /** Operational freshness for trading UI guards; not trading authorization.
    * Preserve unavailable-feeder responses; thresholds belong to the caller.
    */
   oracleHealth(opts: GatewayReadOptions = {}) {
     return this.get("/v1/oracle/health", {}, opts);
   }
-  /** Indexer progress/freshness, unchanged. Display thresholds belong to callers. */
+  /** History pipeline freshness (`GET /v1/history/status`, the indexer's
+   * watermarks and ingest liveness). Lets a caller tell an empty history from
+   * one that has not caught up; thresholds belong to the caller.
+   */
   historyStatus(opts: GatewayReadOptions = {}) {
-    return this.get("/v1/history/status", {}, opts);
+    return this.request(
+      "/v1/history/status",
+      { method: "GET", cache: "no-store" },
+      opts,
+    );
   }
   /** Indexed blocks, newest first: { blocks, next_cursor }. No synthetic fallback. */
   historyBlocks(

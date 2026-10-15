@@ -452,6 +452,15 @@ WebSocket listener is on a separate port.
    change.
 3. Title each PR with a Conventional Commits prefix.
 
+## Dependencies: public sources only
+
+This SDK is public, so everything it builds from must be public too. Never add
+a dependency on a private repo or crate (an `ssh://` git source, a private
+registry), directly or through another crate: anyone outside Proof-labs could
+no longer build or verify the SDK, and every downstream build would need the
+key. When a type you need lives in a private crate, move the public part into
+proof-wire first (the `bridge` feature is the precedent) and depend on that.
+
 ## Security
 
 Never log private keys, seeds, or signatures. Report vulnerabilities privately

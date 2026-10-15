@@ -37,6 +37,8 @@ export {
   type CancelPositionTriggers,
   type SetTriggerMarketConfig,
   type SetOracleGuards,
+  type ScheduleUpgrade,
+  type CancelUpgrade,
   type BridgeWithdrawalReceipt,
   type OperatorReceiptProof,
   type ApproveAgent,
@@ -66,6 +68,10 @@ export {
   type EmergencyAdminAction,
   type AdminSignerRegistry,
   type AuthoritiesSnapshot,
+  type PendingUpgradePlan,
+  type ExecutedUpgrade,
+  type UpgradesInfo,
+  type NodeVersion,
   type ExpiryReason,
   type ProposalStatus,
   type ProposalDisplayInfo,
@@ -88,6 +94,9 @@ export {
   type FundingAppliedEvent,
   type FundingSettledEvent,
   type AccountLiquidatedEvent,
+  type InsuranceFundUpdatedEvent,
+  type PositionAutoDeleveragedEvent,
+  type PlpAbsorbedEvent,
   type MarketCreatedEvent,
   type AdlQueueEntry,
   type Ticker,
@@ -167,6 +176,7 @@ export {
 } from "./triggers.js";
 
 export { validateSetOracleGuards } from "./oracle-guards.js";
+export { validateScheduleUpgrade } from "./upgrade-plan.js";
 
 export {
   BINARY_PRICE_MAX,
@@ -214,6 +224,8 @@ export {
   decodeAdminSignerRegistry,
   decodeAdminSignerRegistryInfo,
   decodeAuthoritiesSnapshot,
+  decodeUpgradesInfo,
+  decodeNodeVersion,
   decodeProposalPage,
   decodeProposalDisplayInfo,
   decodeProposalStatus,
@@ -272,6 +284,14 @@ export {
   type ExchangeClientOptions,
   type WsStreamOptions,
 } from "./client.js";
+export {
+  defaultExchangeHttpTransport,
+  exchangeHttpPriorityForAction,
+  type ExchangeHttpPriority,
+  type ExchangeHttpPurpose,
+  type ExchangeHttpRequestContext,
+  type ExchangeHttpTransport,
+} from "./http-transport.js";
 export {
   decodeOraclePermissions,
   ORACLE_DIAGNOSTIC_BITS,

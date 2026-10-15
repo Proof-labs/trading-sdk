@@ -612,6 +612,19 @@ describe("codec v1 all action types", () => {
     expect(decoded).toEqual(action);
   });
 
+  it("round-trips ProposeAdminAction with the EnableSubAccounts unit variant", () => {
+    const action: Action = {
+      type: "ProposeAdminAction",
+      data: {
+        proposer: new Uint8Array(20).fill(0xa1),
+        registryVersion: 1n,
+        action: { kind: "EnableSubAccounts" },
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 12n));
+    expect(decoded).toEqual(action);
+  });
+
   it("encodes an omitted, undefined, or null market identically (serde None)", () => {
     // The Rust side reads a missing Option field as None without a serde
     // default, so the adapter needs no special case: all three spellings

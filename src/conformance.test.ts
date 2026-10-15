@@ -682,6 +682,7 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
   // A unit variant (no fields) is serde's bare variant-name string, not a map.
   if (typeof input === "string") {
     if (input === "UnpauseBridge") return { kind: "UnpauseBridge" };
+    if (input === "EnableSubAccounts") return { kind: "EnableSubAccounts" };
     throw new Error(`toAdminAction: unknown unit variant ${input}`);
   }
   const v = input as Record<string, unknown>;
@@ -694,6 +695,25 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
         markPriceMaxOracleAgeMs: bigOrNull(guards.mark_price_max_oracle_age_ms),
         maxOracleDeviationBps: guards.max_oracle_deviation_bps as number | null,
       },
+    };
+  }
+  if (v.ScheduleUpgrade) {
+    const plan = v.ScheduleUpgrade as Record<string, unknown>;
+    return {
+      kind: "ScheduleUpgrade",
+      value: {
+        targetHeight: big(plan.target_height),
+        major: plan.major as number,
+        minor: plan.minor as number,
+        successorSha256: bytes(plan.successor_sha256),
+      },
+    };
+  }
+  if (v.CancelUpgrade) {
+    const cancel = v.CancelUpgrade as Record<string, unknown>;
+    return {
+      kind: "CancelUpgrade",
+      value: { targetHeight: big(cancel.target_height) },
     };
   }
   if (v.ConfigureOraclePolicy) {
@@ -1024,11 +1044,13 @@ describe("conformance vectors (TypeScript)", () => {
     // Guard against the vector file drifting out from under this assertion:
     // propose (create-market, the perp-plus-attach batch, the attach
     // singleton, six create-event oracle-source shapes, trigger config,
-    // unpause-bridge, update-authority-set add and remove, cancel-all-for
+    // unpause-bridge, enable-sub-accounts, update-authority-set add and
+    // remove, cancel-all-for
     // -account scoped and unscoped, four set-oracle-guards shapes, and
-    // oracle policy), approve, reject, and all three emergency arms
-    // (PauseMarket, HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(25);
+    // oracle policy, two schedule-upgrade shapes and cancel-upgrade),
+    // approve, reject, and all three emergency arms (PauseMarket,
+    // HaltTrading, SetReduceOnly).
+    expect(govCases.length).toBe(29);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

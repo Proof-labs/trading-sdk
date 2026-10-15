@@ -24,8 +24,10 @@ import {
   type PriceComparison,
   type SetTriggerMarketConfig,
   type SetOracleGuards,
+  type ScheduleUpgrade,
 } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
+import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import {
   validateCancelPositionTriggers,
   validateOrderTriggers,
@@ -111,7 +113,10 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
  * explicitly because a fieldless struct variant (`HaltTrading {}`) is NOT one
  * of these — it keeps the map form.
  */
-const GOVERNANCE_UNIT_VARIANTS = new Set<string>(["UnpauseBridge"]);
+const GOVERNANCE_UNIT_VARIANTS = new Set<string>([
+  "UnpauseBridge",
+  "EnableSubAccounts",
+]);
 
 /**
  * Encode a governance `AdminAction` / `EmergencyAction` for
@@ -134,6 +139,9 @@ function governanceActionToWasm(value: unknown): unknown {
   }
   if (v.kind === "SetOracleGuards") {
     validateSetOracleGuards(v.value as SetOracleGuards);
+  }
+  if (v.kind === "ScheduleUpgrade") {
+    validateScheduleUpgrade(v.value as ScheduleUpgrade);
   }
   // `Batch` is the one variant whose payload is a LIST of nested enum items
   // (`AdminBatchItem[]`) rather than a struct — each item is itself

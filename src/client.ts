@@ -93,6 +93,8 @@ import type {
   TriggerMarketHistoryFilters,
   TriggerMarketHistoryPage,
   TriggerMarketConfigInfo,
+  NodeVersion,
+  UpgradesInfo,
   AuthorizeWithdrawal,
   ConfirmWithdrawalReceipt,
   FailWithdrawalReceipt,
@@ -100,11 +102,22 @@ import type {
 import {
   decodeAdminSignerRegistryInfo,
   decodeAuthoritiesSnapshot,
+  decodeNodeVersion,
+  decodeUpgradesInfo,
   decodeEventInfo,
   decodeProposalPage,
 } from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
 import { readMarketsSnapshot } from "./market-snapshot.js";
+import {
+  defaultExchangeHttpTransport,
+  exchangeHttpPriorityForAction,
+  gatewayReadContext,
+  readContext,
+  surfaceFor,
+  type ExchangeHttpRequestContext,
+  type ExchangeHttpTransport,
+} from "./http-transport.js";
 import { yesOrder, type NoOrder } from "./binary.js";
 import { Side } from "./types.js";
 import type { MarketsSnapshot } from "./types.js";
@@ -141,8 +154,15 @@ import {
  * (raw `signAndEncode` callers, gateway-side helpers) that build wire
  * bytes without going through a client instance.
  */
-export async function fetchChainId(rpcUrl: string): Promise<Uint8Array> {
-  const res = await fetch(`${rpcUrl}/status`);
+export async function fetchChainId(
+  rpcUrl: string,
+  httpTransport: ExchangeHttpTransport = defaultExchangeHttpTransport,
+): Promise<Uint8Array> {
+  const res = await httpTransport(`${rpcUrl}/status`, undefined, {
+    purpose: "chain_id",
+    priority: "critical",
+    surface: "status_chain_id",
+  });
   if (!res.ok) throw new Error(`/status returned HTTP ${res.status}`);
   const json = (await res.json()) as {
     result?: { node_info?: { network?: string } };
@@ -264,6 +284,14 @@ export interface ExchangeClientOptions {
    * concurrency-safe, so the SDK ignores this flag.
    */
   concurrentNonces?: boolean;
+  /**
+   * Transport for every HTTP request the client makes: reads, submission,
+   * confirmation polls and the chain-id lookup. Each call carries a context
+   * naming its purpose, priority and endpoint, so an embedding process can
+   * apply its own admission, pacing, deadlines and retries. Defaults to
+   * `globalThis.fetch`. Not used by the WebSocket feed.
+   */
+  httpTransport?: ExchangeHttpTransport;
 }
 
 export class ExchangeClient {
@@ -272,6 +300,7 @@ export class ExchangeClient {
   private gatewayUrl: string;
   private useGateway: boolean;
   private apiKey: string | null;
+  private httpTransport: ExchangeHttpTransport;
   private wsUrl: string;
   /**
    * 32-byte chain_id binding for v3 signatures (audit B4). `null` until
@@ -336,6 +365,7 @@ export class ExchangeClient {
       opts.apiUrl ?? deriveNodeUrl(this.gatewayUrl, "8080"),
     );
     this.apiKey = opts.apiKey ?? null;
+    this.httpTransport = opts.httpTransport ?? defaultExchangeHttpTransport;
     // WebSocket base URL (no path). Per-stream methods append the channel
     // path (`/account-events`, `/orderbook-deltas`). Mirrors the Python SDK,
     // which derives the WS base by swapping the gateway URL's scheme. Local
@@ -413,7 +443,7 @@ export class ExchangeClient {
       try {
         // `fetchChainId` appends `/status`, so the gateway path resolves from
         // `${gatewayUrl}/v1/status` and the direct path from `${rpcUrl}/status`.
-        const bound = await fetchChainId(this.chainBase);
+        const bound = await fetchChainId(this.chainBase, this.httpTransport);
         this.chainId = bound;
         return bound;
       } catch (err) {
@@ -610,8 +640,11 @@ export class ExchangeClient {
   async getRecentNonces(addressHex?: string): Promise<bigint[]> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) throw new Error("No address available");
-    const res = await fetch(
-      `${this.readBaseUrl}/v1/account/${hex}/recent-nonces`,
+    const url = `${this.readBaseUrl}/v1/account/${hex}/recent-nonces`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "account"),
     );
     const json = await res.json();
     if (json.error) throw new Error(json.error);
@@ -680,7 +713,7 @@ export class ExchangeClient {
     // the tx but could not report the outcome in time, so the SDK reconciles by
     // hash on the caller's behalf, exactly as before.
     if (this.autoVerifyDelivery && r.hash && !this.isFinalResult(r)) {
-      this.spawnDeliveryVerifier(r.hash);
+      this.spawnDeliveryVerifier(r.hash, action);
     }
     return r;
   }
@@ -720,10 +753,13 @@ export class ExchangeClient {
    * the internal `useGateway: false` opt-out. Both submit identical bytes.
    * Shared by `submitSignedTx` and `submitSignedTxCommit`.
    */
-  private async broadcastSignedBytes(txBytes: Uint8Array): Promise<TxResult> {
+  private async broadcastSignedBytes(
+    txBytes: Uint8Array,
+    action?: Action,
+  ): Promise<TxResult> {
     return this.useGateway
-      ? this.submitViaGateway(txBytes)
-      : this.submitViaCometBFT(txBytes);
+      ? this.submitViaGateway(txBytes, action)
+      : this.submitViaCometBFT(txBytes, action);
   }
 
   /**
@@ -739,7 +775,7 @@ export class ExchangeClient {
    * Both paths submit identical signed wire bytes.
    */
   private async broadcastSigned(action: Action): Promise<TxResult> {
-    return this.broadcastSignedBytes(await this.signTx(action));
+    return this.broadcastSignedBytes(await this.signTx(action), action);
   }
 
   /**
@@ -762,7 +798,10 @@ export class ExchangeClient {
    * For transport-level failures (rate limit, auth, etc.) we synthesize a code
    * from the HTTP status.
    */
-  private async submitViaGateway(txBytes: Uint8Array): Promise<TxResult> {
+  private async submitViaGateway(
+    txBytes: Uint8Array,
+    action?: Action,
+  ): Promise<TxResult> {
     const txHash = computeCometTxHash(txBytes);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -773,11 +812,16 @@ export class ExchangeClient {
     let res: Response;
     let gatewayBody: Awaited<ReturnType<typeof readGatewayBody>>;
     try {
-      res = await fetch(`${this.gatewayUrl}/exchange`, {
-        method: "POST",
-        headers,
-        body,
-      });
+      res = await this.httpTransport(
+        `${this.gatewayUrl}/exchange`,
+        { method: "POST", headers, body },
+        {
+          purpose: "submit",
+          priority: action ? exchangeHttpPriorityForAction(action) : "critical",
+          surface: "gateway_exchange",
+          action,
+        },
+      );
       gatewayBody = await readGatewayBody(res);
     } catch {
       // A dropped response does not prove the signed transaction was rejected.
@@ -958,18 +1002,30 @@ export class ExchangeClient {
    * when `useGateway` is false (internal-tools opt-out). Bypasses
    * gateway auth/rate-limit and goes directly to CometBFT.
    */
-  private async submitViaCometBFT(txBytes: Uint8Array): Promise<TxResult> {
+  private async submitViaCometBFT(
+    txBytes: Uint8Array,
+    action?: Action,
+  ): Promise<TxResult> {
     const b64 = toBase64(txBytes);
-    const res = await fetch(this.rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "broadcast_tx_sync",
-        params: { tx: b64 },
-      }),
-    });
+    const res = await this.httpTransport(
+      this.rpcUrl,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "broadcast_tx_sync",
+          params: { tx: b64 },
+        }),
+      },
+      {
+        purpose: "submit",
+        priority: action ? exchangeHttpPriorityForAction(action) : "critical",
+        surface: "rpc_broadcast_tx_sync",
+        action,
+      },
+    );
 
     const json = await res.json();
     if (json.error) {
@@ -991,13 +1047,14 @@ export class ExchangeClient {
    * block rather than via a chained .finally() so there's no microtask race
    * between p settling and the awaitPendingVerifies() loop seeing size==0.
    */
-  private spawnDeliveryVerifier(txHash: string): void {
+  private spawnDeliveryVerifier(txHash: string, action?: Action): void {
     let self: Promise<void>;
     const verify = async (): Promise<void> => {
       try {
-        const result = await this.waitForDelivery(
+        const result = await this.pollDelivery(
           txTimeout(txHash, "awaiting delivery"),
           { timeoutMs: 5_000 },
+          action,
         );
         if (result.outcome !== "timeout") this.deliveryResults.push(result);
       } finally {
@@ -1054,7 +1111,7 @@ export class ExchangeClient {
     // path so we don't double-spawn a background verifier — we're going to
     // do our own synchronous verification below.
     const sync = await this.broadcastSigned(action);
-    return this.awaitCommit(sync);
+    return this.awaitCommit(sync, action);
   }
 
   /**
@@ -1080,8 +1137,11 @@ export class ExchangeClient {
    * final chain verdict, polling `/tx?hash=` only when the outcome is still
    * unknown.
    */
-  private async awaitCommit(sync: TxResult): Promise<TxResult> {
-    return this.waitForDelivery(sync);
+  private async awaitCommit(
+    sync: TxResult,
+    action?: Action,
+  ): Promise<TxResult> {
+    return this.pollDelivery(sync, {}, action);
   }
 
   /** Per-submission finality. Timeout/cancellation retains the hash as unknown.
@@ -1090,6 +1150,17 @@ export class ExchangeClient {
   async waitForDelivery(
     sync: TxResult,
     opts: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<TxResult> {
+    return this.pollDelivery(sync, opts);
+  }
+
+  /** `waitForDelivery`, with the originating action (when the client signed
+   *  it) passed to the transport so its confirmation keeps the action's
+   *  priority. */
+  private async pollDelivery(
+    sync: TxResult,
+    opts: { timeoutMs?: number; signal?: AbortSignal },
+    action?: Action,
   ): Promise<TxResult> {
     if (this.isFinalResult(sync)) return sync;
     if (!sync.hash) throw new Error("submitTx returned no tx hash");
@@ -1108,9 +1179,19 @@ export class ExchangeClient {
       if (remaining <= 0 || opts.signal?.aborted) break;
       const request = readDeadline(Math.ceil(remaining), opts.signal);
       try {
-        const res = await fetch(this.txStatusUrl(sync.hash), {
-          signal: request.signal,
-        });
+        const url = this.txStatusUrl(sync.hash);
+        const res = await this.httpTransport(
+          url,
+          { signal: request.signal },
+          {
+            purpose: "confirmation",
+            priority: action
+              ? exchangeHttpPriorityForAction(action)
+              : "critical",
+            surface: surfaceFor(url),
+            action,
+          },
+        );
         if (!res.ok) continue;
         const result = txFromQueryResponse(await res.json(), sync.hash);
         if (!opts.signal?.aborted && result) return result;
@@ -1323,8 +1404,20 @@ export class ExchangeClient {
     nodePath: string,
   ): Promise<Record<string, unknown>> {
     return this.useGateway
-      ? postInfoJson(this.gatewayUrl, info)
-      : fetchApiJson(`${this.apiUrl}${nodePath}`);
+      ? postInfoJson(this.httpTransport, this.gatewayUrl, info, {
+          purpose: "account",
+          priority: "urgent",
+          surface: `api_info_${String(info.type)}`,
+        })
+      : this.apiJson(`${this.apiUrl}${nodePath}`, "account");
+  }
+
+  /** `fetchApiJson` through this client's transport. */
+  private apiJson(
+    url: string,
+    purpose: "account" | "query" = "query",
+  ): Promise<Record<string, unknown>> {
+    return fetchApiJson(this.httpTransport, url, readContext(url, purpose));
   }
 
   /** Decode gateway MessagePack bytes after the authoritative strict preflight
@@ -1342,7 +1435,7 @@ export class ExchangeClient {
   }
 
   async queryOrderbook(market: number): Promise<Orderbook> {
-    const json = await fetchApiJson(
+    const json = await this.apiJson(
       `${this.readBaseUrl}/v1/orderbook/${market}`,
     );
     const bytes = fromBase64(json.data as string);
@@ -1364,12 +1457,16 @@ export class ExchangeClient {
     if (!this.inventoryChainId) {
       throw new Error("market snapshot requires an explicit pinned chainId");
     }
-    return readMarketsSnapshot(this.gatewayUrl, this.inventoryChainId);
+    return readMarketsSnapshot(
+      this.gatewayUrl,
+      this.inventoryChainId,
+      this.httpTransport,
+    );
   }
 
   /** List all registered market configs. */
   async queryMarkets(): Promise<MarketConfig[]> {
-    const json = await fetchApiJson(`${this.readBaseUrl}/v1/markets`);
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/markets`);
     const bytes = fromBase64(json.data as string);
     const raw = (await this.strictDecode(bytes)) as unknown[][];
     return raw.map((m) => decodeMarketConfig(m));
@@ -1381,7 +1478,7 @@ export class ExchangeClient {
    *  governance reads: a missing envelope or malformed row is a refusal.
    *  Decoder pinned to the engine golden vector in governance-query.test.ts. */
   async queryEvents(): Promise<EventInfo[]> {
-    const json = await fetchApiJson(`${this.readBaseUrl}/v1/events`);
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/events`);
     if (typeof json.data !== "string") {
       throw new Error(
         "governance decode: events response has no encoded-data envelope",
@@ -1399,7 +1496,12 @@ export class ExchangeClient {
    *  here to map 404 -> null while still throwing on real transport / decode
    *  failures. */
   async queryEvent(eventId: number): Promise<EventInfo | null> {
-    const res = await fetch(`${this.readBaseUrl}/v1/event/${eventId}`);
+    const url = `${this.readBaseUrl}/v1/event/${eventId}`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     if (res.status === 404) return null;
     const json = (await res.json()) as Record<string, unknown>;
     if (!res.ok || json.error) {
@@ -1427,7 +1529,7 @@ export class ExchangeClient {
       throw new Error("trigger owner must be a 40-character hex address");
     }
     const path = `/v1/triggers/${hex.toLowerCase()}`;
-    const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`, "account");
     const bytes = fromBase64(requireEncodedData(json, path));
     return decodePositionTriggerInfos(await this.strictDecode(bytes));
   }
@@ -1436,7 +1538,7 @@ export class ExchangeClient {
    * markets are disabled; callers must never synthesize a default policy. */
   async queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]> {
     const path = "/v1/triggers/markets";
-    const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
     const bytes = fromBase64(requireEncodedData(json, path));
     return decodeTriggerMarketConfigInfos(await this.strictDecode(bytes));
   }
@@ -1452,7 +1554,12 @@ export class ExchangeClient {
    * for the 404 response. It will be removed in the next major version. */
   async queryTriggerStatus(): Promise<TriggerStatus> {
     const path = "/v1/triggers/status";
-    const res = await fetch(`${this.readBaseUrl}${path}`);
+    const url = `${this.readBaseUrl}${path}`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     const text = await res.text();
     if (!res.ok) {
       let message = `HTTP ${res.status}`;
@@ -1471,7 +1578,7 @@ export class ExchangeClient {
   async queryOraclePermissions(market: number): Promise<OraclePermissions> {
     validateOraclePermissionMarket(market);
     const path = `/v1/oracle/permissions/${market}`;
-    const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
     const bytes = fromBase64(requireEncodedData(json, path));
     return decodeOraclePermissions(await this.strictDecode(bytes), market);
   }
@@ -1493,8 +1600,9 @@ export class ExchangeClient {
     const canonicalOwner = hex.toLowerCase();
     const params = positionTriggerHistorySearchParams(filters);
     const qs = params.toString();
-    const json = await fetchApiJson(
+    const json = await this.apiJson(
       `${this.gatewayUrl}/v1/history/triggers/${canonicalOwner}${qs ? `?${qs}` : ""}`,
+      "account",
     );
     return decodePositionTriggerHistoryPage(
       json,
@@ -1512,7 +1620,7 @@ export class ExchangeClient {
     validateTriggerHistoryMarket(market);
     const params = triggerMarketHistorySearchParams(filters);
     const qs = params.toString();
-    const json = await fetchApiJson(
+    const json = await this.apiJson(
       `${this.gatewayUrl}/v1/history/trigger-markets/${market}${qs ? `?${qs}` : ""}`,
     );
     return decodeTriggerMarketHistoryPage(json, market);
@@ -1528,7 +1636,7 @@ export class ExchangeClient {
    * differently.
    */
   async queryAdminSignerRegistry(): Promise<AdminSignerRegistry | null> {
-    const json = await fetchApiJson(
+    const json = await this.apiJson(
       `${this.readBaseUrl}/v1/admin/signer-registry`,
     );
     const bytes = fromBase64(
@@ -1545,9 +1653,29 @@ export class ExchangeClient {
    * empty set.
    */
   async queryAuthorities(): Promise<AuthoritiesSnapshot> {
-    const json = await fetchApiJson(`${this.readBaseUrl}/v1/admin/authorities`);
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/admin/authorities`);
     const bytes = fromBase64(requireEncodedData(json, "/v1/admin/authorities"));
     return decodeAuthoritiesSnapshot(await this.strictDecode(bytes));
+  }
+
+  /**
+   * Read the pending protocol-upgrade plan and the executed activation
+   * ledger via the gateway proxy (`GET /v1/upgrades`).
+   */
+  async queryUpgrades(): Promise<UpgradesInfo> {
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/upgrades`);
+    const bytes = fromBase64(requireEncodedData(json, "/v1/upgrades"));
+    return decodeUpgradesInfo(await this.strictDecode(bytes));
+  }
+
+  /**
+   * The answering node's binary and loaded engine release
+   * (`GET /v1/version`). Node-local: behind a load balancer it describes
+   * whichever node served the request.
+   */
+  async queryNodeVersion(): Promise<NodeVersion> {
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/version`);
+    return decodeNodeVersion(json);
   }
 
   /**
@@ -1572,7 +1700,7 @@ export class ExchangeClient {
     if (opts?.cursor != null) params.set("cursor", String(opts.cursor));
     if (opts?.limit != null) params.set("limit", String(opts.limit));
     const qs = params.toString();
-    const json = await fetchApiJson(
+    const json = await this.apiJson(
       `${this.readBaseUrl}/v1/proposals${qs ? `?${qs}` : ""}`,
     );
     const bytes = fromBase64(requireEncodedData(json, "/v1/proposals"));
@@ -1635,7 +1763,7 @@ export class ExchangeClient {
   async queryFinancialState(
     selection: FinancialStateSelection,
   ): Promise<FinancialState> {
-    return fetchFinancialState(this.gatewayUrl, selection);
+    return fetchFinancialState(this.gatewayUrl, selection, this.httpTransport);
   }
 
   /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */
@@ -1646,7 +1774,7 @@ export class ExchangeClient {
     }
     const owner = hex.toLowerCase();
     const path = `/v1/account/${owner}/state`;
-    const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`, "account");
     return decodeAccountState(
       await this.strictDecode(fromBase64(requireEncodedData(json, path))),
       owner,
@@ -1752,7 +1880,12 @@ export class ExchangeClient {
   }
 
   async queryHealth(): Promise<{ status: string; height: number }> {
-    const res = await fetch(`${this.readBaseUrl}/v1/health`);
+    const url = `${this.readBaseUrl}/v1/health`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     return res.json();
   }
 
@@ -1760,7 +1893,12 @@ export class ExchangeClient {
    *  ranked by `adlScore` desc (highest first). Empty array if the market has
    *  no profitable positions. Routes through the gateway's `/v1/adl/queue`. */
   async queryAdlQueue(market: number): Promise<AdlQueueEntry[]> {
-    const res = await fetch(`${this.readBaseUrl}/v1/adl/queue/${market}`);
+    const url = `${this.readBaseUrl}/v1/adl/queue/${market}`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     const json = await res.json();
     if (json.error) return [];
     const bytes = fromBase64(json.data);
@@ -1780,7 +1918,12 @@ export class ExchangeClient {
    *  and top-of-book blobs). Returns `null` if the market is unknown. Routes
    *  through the gateway's `/v1/ticker`. */
   async queryTicker(market: number): Promise<Ticker | null> {
-    const res = await fetch(`${this.readBaseUrl}/v1/ticker/${market}`);
+    const url = `${this.readBaseUrl}/v1/ticker/${market}`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     if (!res.ok) return null;
     const row = (await res.json()) as Record<string, unknown>;
     return {
@@ -1844,8 +1987,9 @@ export class ExchangeClient {
       kinds.map(async (kind) => {
         const query = new URLSearchParams(params);
         query.set("event_type", kind);
-        const json = await fetchApiJson(
+        const json = await this.apiJson(
           `${this.gatewayUrl}/v1/history/account-events?${query}`,
+          "account",
         );
         return decodeCashFlowEvents(json, owner, kind);
       }),
@@ -1885,7 +2029,11 @@ export class ExchangeClient {
     if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
     const qs = params.toString();
     const url = `${this.readBaseUrl}/v1/history/resolutions/${hex}${qs ? `?${qs}` : ""}`;
-    const json = await fetchApiArray(url);
+    const json = await fetchApiArray(
+      this.httpTransport,
+      url,
+      readContext(url, "account"),
+    );
     return (json as Array<Record<string, unknown>>).map((row) => ({
       kind: row.kind as HistoryResolution["kind"],
       eventId: String(row.event_id ?? ""),
@@ -1912,7 +2060,9 @@ export class ExchangeClient {
   reads(opts: { fetch?: GatewayFetch } = {}): GatewayReads {
     return new GatewayReads(
       this.gatewayUrl,
-      opts.fetch ?? ((url, init) => fetch(url, init)),
+      opts.fetch ??
+        ((url, init) =>
+          this.httpTransport(url, init, gatewayReadContext(url, init))),
     );
   }
 
@@ -1927,9 +2077,11 @@ export class ExchangeClient {
       throw new Error("Invalid portfolio owner");
     const params = portfolioHistorySearchParams(opts);
     opts.signal?.throwIfAborted();
-    const res = await fetch(
-      `${this.gatewayUrl}/v1/history/portfolio/${canonicalOwner}?${params}`,
+    const url = `${this.gatewayUrl}/v1/history/portfolio/${canonicalOwner}?${params}`;
+    const res = await this.httpTransport(
+      url,
       { signal: opts.signal },
+      readContext(url, "account"),
     );
     if (!res.ok) throw new GatewayHttpError(res.status, res);
     const page: unknown = await res.json();
@@ -1943,7 +2095,15 @@ export class ExchangeClient {
     market: number,
     options: OraclePriceHistoryOptions,
   ): Promise<OraclePriceHistoryPage> {
-    return queryOraclePriceHistoryPage(this.gatewayUrl, market, options);
+    return queryOraclePriceHistoryPage(this.gatewayUrl, market, {
+      ...options,
+      fetch:
+        options.fetch ??
+        ((input, init) => {
+          const url = String(input instanceof Request ? input.url : input);
+          return this.httpTransport(url, init, readContext(url, "query"));
+        }),
+    });
   }
 
   /** Compatibility array of position snapshots. Absent close fields are empty
@@ -1996,8 +2156,9 @@ export class ExchangeClient {
       params.set("market", String(opts.market));
     }
     const query = params.toString();
-    const json = await fetchApiJson(
+    const json = await this.apiJson(
       `${this.gatewayUrl}/v1/history/positions/${owner}${query ? `?${query}` : ""}`,
+      "account",
     );
     return decodeHistoryPositionsPage(json, owner, opts.market);
   }
@@ -2032,7 +2193,11 @@ export class ExchangeClient {
     }
     const qs = params.toString();
     const url = `${this.readBaseUrl}/v1/history/fills/${hex}${qs ? `?${qs}` : ""}`;
-    const res = await fetch(url);
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "account"),
+    );
     const json = (await res.json()) as unknown;
     const body = (json ?? {}) as Record<string, unknown>;
     if (!res.ok || "error" in body) {
@@ -2065,7 +2230,12 @@ export class ExchangeClient {
   // -----------------------------------------------------------------------
 
   async status(): Promise<{ latestHeight: number; latestAppHash: string }> {
-    const res = await fetch(`${this.chainBase}/status`);
+    const url = `${this.chainBase}/status`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     const json = await res.json();
     const info = json.result.sync_info;
     return {
@@ -2076,7 +2246,12 @@ export class ExchangeClient {
 
   async getBlock(height?: number): Promise<Record<string, unknown>> {
     const params = height != null ? `?height=${height}` : "";
-    const res = await fetch(`${this.chainBase}/block${params}`);
+    const url = `${this.chainBase}/block${params}`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     const json = await res.json();
     if (json.error)
       throw new Error(json.error.message ?? JSON.stringify(json.error));
@@ -2084,7 +2259,12 @@ export class ExchangeClient {
   }
 
   async getBlockResults(height: number): Promise<Record<string, unknown>> {
-    const res = await fetch(`${this.chainBase}/block_results?height=${height}`);
+    const url = `${this.chainBase}/block_results?height=${height}`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     const json = await res.json();
     if (json.error)
       throw new Error(json.error.message ?? JSON.stringify(json.error));
@@ -2369,8 +2549,12 @@ function accountWsAuthMessage(
  * Fetch JSON from the API server and throw on non-2xx or `json.error`.
  * Returns the parsed JSON body on success.
  */
-async function fetchApiJson(url: string): Promise<Record<string, unknown>> {
-  const res = await fetch(url);
+async function fetchApiJson(
+  transport: ExchangeHttpTransport,
+  url: string,
+  context: ExchangeHttpRequestContext,
+): Promise<Record<string, unknown>> {
+  const res = await transport(url, undefined, context);
   const json = (await res.json()) as Record<string, unknown>;
   if (!res.ok || json.error) {
     const msg = (json.error as string) ?? `HTTP ${res.status}`;
@@ -2402,14 +2586,20 @@ function requireEncodedData(
  * does not expose as GETs (account, open orders, withdrawal).
  */
 async function postInfoJson(
+  transport: ExchangeHttpTransport,
   gatewayUrl: string,
   info: Record<string, unknown>,
+  context: ExchangeHttpRequestContext,
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(`${gatewayUrl}/info`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(info),
-  });
+  const res = await transport(
+    `${gatewayUrl}/info`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(info),
+    },
+    context,
+  );
   // The error keeps an unread copy, so callers can still read the body.
   const unread = res.clone();
   let parsed: unknown;
@@ -2437,8 +2627,12 @@ async function postInfoJson(
  * Fetch a JSON array from the API server and throw on non-2xx or
  * `json.error`. Returns the parsed array on success.
  */
-async function fetchApiArray(url: string): Promise<unknown[]> {
-  const res = await fetch(url);
+async function fetchApiArray(
+  transport: ExchangeHttpTransport,
+  url: string,
+  context: ExchangeHttpRequestContext,
+): Promise<unknown[]> {
+  const res = await transport(url, undefined, context);
   const json = (await res.json()) as unknown;
   if (
     !res.ok ||
