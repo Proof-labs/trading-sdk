@@ -319,6 +319,16 @@ pages too. Use the status response and block timestamps to present delay; a miss
 HTTP 404, and unavailable history remains an error. These reads never fabricate
 blocks or replace errors with empty results.
 
+### Loaded engine identity
+
+For operational artifact evidence, `await client.reads().version({ signal })`
+forwards `GET /v1/version` with `cache: "no-store"`. The raw response includes
+the upstream node's reported loaded engine version and library hash. A missing
+route, authentication failure or transport failure stays an error; there is no
+direct-node fallback. This identifies only the responding upstream, not every
+validator, and does not prove consensus compatibility or authorize a rollout. Use
+`queryNodeVersion()` for a decoded `NodeVersion`.
+
 ### Optional native Rust gateway transport
 
 Rust `proof-trading-sdk` 3.2.0 exposes `gateway::GatewayClient` with the optional
