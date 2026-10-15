@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- The Rust crate re-exports `proof_wire::bridge` as `proof_trading_sdk::bridge`
+  (the withdrawal-authorization and bridge-receipt payload types).
+
 ### Changed
 
 - The bridge payload encoders (`encodeWithdrawalAuthorization`,

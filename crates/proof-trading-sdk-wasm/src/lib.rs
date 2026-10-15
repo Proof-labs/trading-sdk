@@ -167,10 +167,10 @@ pub fn chain_id_from_string(chain_id: &str) -> Vec<u8> {
     crypto::chain_id_from_string(chain_id).to_vec()
 }
 
-// --- bridge canonical custody payloads (W39-07) ----------------------------
+// --- bridge canonical custody payloads --------------------------------------
 //
 // The deposit/withdrawal custody path signs fixed-layout payloads from the
-// wire contract's `bridge` module (proof-wire-bridge): a 221-byte
+// wire contract's `bridge` module (`proof_wire::bridge`): a 221-byte
 // `WithdrawalAuthorizationV1` whose SHA-256 the engine binds to the
 // withdrawal, and a 327-byte `BridgeReceiptV1` the operator quorum signs and
 // the engine re-encodes before verifying that quorum. Calling its `encode()`

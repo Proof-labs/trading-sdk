@@ -3,7 +3,7 @@
  * signs and verifies, exposed through the WASM core.
  *
  * The byte layout is owned by the wire contract's `bridge` module
- * (proof-wire-bridge), the same definition the engine and the bridge program
+ * (`proof_wire::bridge`), the same definition the engine and the bridge program
  * compile, so the SDK signs exactly the bytes the engine verifies. The
  * frozen vectors in `bridge.test.ts` pin the marshalling.
  *
