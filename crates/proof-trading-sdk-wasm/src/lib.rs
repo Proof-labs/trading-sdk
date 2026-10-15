@@ -253,7 +253,7 @@ impl TryFrom<WithdrawalAuthorizationInput> for WithdrawalAuthorizationV1 {
 }
 
 /// The canonical 221-byte `WithdrawalAuthorizationV1` — byte-for-byte
-/// bridge-core's `encode()`. `fields` is a JS object with the camelCase
+/// the wire contract's `encode()`. `fields` is a JS object with the camelCase
 /// field names of the TS `WithdrawalAuthorizationV1` interface.
 #[wasm_bindgen]
 pub fn encode_withdrawal_authorization(fields: JsValue) -> Result<Vec<u8>, JsError> {
