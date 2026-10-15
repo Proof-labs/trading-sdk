@@ -12,6 +12,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `GatewayReads.version()` forwards `GET /v1/version` without caching, preserving
   the raw loaded-engine identity, HTTP errors and caller cancellation. It reports
   one upstream node, not validator-wide compatibility or rollout qualification.
+- `AdminAction` gains the `EnableSubAccounts` unit variant (inner tag 21), the
+  governed one-way switch that admits `CreateSubAccount` and
+  `SubAccountTransfer`. Proposals carrying it encode, decode and content-hash
+  like the engine's. `proof-wire` moves to v6.1.0 (`37960d74`).
 
 ## [7.1.0] — 2026-10-13
 

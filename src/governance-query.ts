@@ -642,6 +642,7 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CancelUpgrade: 15,
   SetWithdrawalLimit: 19,
   SetOperatorReceiptRegistry: 20,
+  EnableSubAccounts: 21,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
@@ -652,9 +653,10 @@ export function decodeAdminAction(
   field = "action",
 ): AdminAction {
   // Unit variants (no fields) arrive as a bare string, not a single-entry map.
-  // Only the known unit variant is accepted here; any other bare string falls
+  // Only the known unit variants are accepted here; any other bare string falls
   // through to `variantOf`, which rejects it as "not an enum variant".
   if (value === "UnpauseBridge") return { kind: "UnpauseBridge" };
+  if (value === "EnableSubAccounts") return { kind: "EnableSubAccounts" };
   const { name, payload } = variantOf(value, field);
   switch (name) {
     case "CancelAllOrdersForAccount":

@@ -156,6 +156,18 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     );
   });
 
+  it("reproduces the EnableSubAccounts unit-variant hash bit-for-bit", () => {
+    // Bare fixstr `b1 456e61626c655375624163636f756e7473`; expected value from
+    // exchange-wire's `codec::admin_proposal_content_hash` at the pinned rev.
+    const hash = adminProposalContentHash({
+      ...goldenContext(),
+      action: { kind: "EnableSubAccounts" },
+    });
+    expect(bytesToHex(hash)).toBe(
+      "abd23dad614e0ac4a3afc5503bfeb7c89079ff223f401bda2c09cc30a76c4076",
+    );
+  });
+
   it("reproduces the CancelAllOrdersForAccount hash bit-for-bit", () => {
     // Struct variant with a 20-byte newtype address and an Option market.
     // The expected value comes from exchange-wire's own
