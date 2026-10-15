@@ -602,6 +602,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": "UnpauseBridge"
             }),
         ),
+        // EnableSubAccounts (inner tag 0x15) is the second unit variant: the
+        // bare string `"EnableSubAccounts"`, no payload.
+        codec_case(
+            "propose_admin_action/enable_sub_accounts",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": "EnableSubAccounts"
+            }),
+        ),
         // UpdateAuthoritySet (inner tag 0x07, exchange#422 / DEC-87,
         // exchange#472): addition/removal of members in one privileged
         // authority allowlist. `domain` is externally tagged as its bare
