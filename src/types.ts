@@ -85,7 +85,7 @@ export const ActionType = {
    *  executes. */
   CreateSubAccount: 0x28,
   /** Move balance between a master and one of its sub-accounts (0x29);
-   *  dormant like `CreateSubAccount`. */
+   *  refused like `CreateSubAccount`. */
   SubAccountTransfer: 0x29,
   /** Acquire the single-holder Solana payout lease on a pending withdrawal
    *  (0x2e). Custody-authorized watchers only. */

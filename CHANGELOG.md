@@ -27,8 +27,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   read the bytes with `as_bytes`), and `derive_sub_account` takes and returns
   `OwnerAddress`. `AdminAction` and `AdminActionType` gain
   `EnableSubAccounts`, and `Event` gains `SubAccountsEnabled`, so an
-  exhaustive `match` on any of the three needs a new arm. The Rust crate takes a MAJOR bump at its next release; npm and
-  Python are unaffected.
+  exhaustive `match` on any of the three needs a new arm. The Rust crate
+  takes a MAJOR bump at its next release; npm and Python are unaffected.
 
 ## [7.1.0] — 2026-10-13
 
