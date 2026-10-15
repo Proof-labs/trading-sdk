@@ -9,6 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- The Rust crate re-exports `proof_wire::bridge` as `proof_trading_sdk::bridge`
+  (the withdrawal-authorization and bridge-receipt payload types).
+
 - **An injectable HTTP transport for `ExchangeClient`** (part of #220).
   `new ExchangeClient({ httpTransport })` sends every HTTP request the client
   makes through one function: typed reads, owner-scoped `/info` reads,
@@ -27,6 +30,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `defaultExchangeHttpTransport`, `exchangeHttpPriorityForAction`. MINOR:
   without the option the client calls `globalThis.fetch` with the same
   arguments as before; no wire change.
+
+### Changed
+
+- The bridge payload encoders (`encodeWithdrawalAuthorization`,
+  `withdrawalAuthorizationDigest`, `encodeBridgeReceipt`) now come from
+  proof-wire's `bridge` module instead of the private `bridge-core`, so
+  building the SDK from source no longer needs access to Proof-labs/bridge.
+  The bytes are unchanged; the frozen vectors still pass.
 
 ## [7.2.0] — 2026-10-15
 
