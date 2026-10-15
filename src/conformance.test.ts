@@ -682,6 +682,7 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
   // A unit variant (no fields) is serde's bare variant-name string, not a map.
   if (typeof input === "string") {
     if (input === "UnpauseBridge") return { kind: "UnpauseBridge" };
+    if (input === "EnableSubAccounts") return { kind: "EnableSubAccounts" };
     throw new Error(`toAdminAction: unknown unit variant ${input}`);
   }
   const v = input as Record<string, unknown>;
@@ -1043,12 +1044,13 @@ describe("conformance vectors (TypeScript)", () => {
     // Guard against the vector file drifting out from under this assertion:
     // propose (create-market, the perp-plus-attach batch, the attach
     // singleton, six create-event oracle-source shapes, trigger config,
-    // unpause-bridge, update-authority-set add and remove, cancel-all-for
+    // unpause-bridge, enable-sub-accounts, update-authority-set add and
+    // remove, cancel-all-for
     // -account scoped and unscoped, four set-oracle-guards shapes, and
     // oracle policy, two schedule-upgrade shapes and cancel-upgrade),
     // approve, reject, and all three emergency arms (PauseMarket,
     // HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(28);
+    expect(govCases.length).toBe(29);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

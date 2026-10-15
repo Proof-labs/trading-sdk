@@ -31,6 +31,7 @@
 import { describe, it, expect } from "vitest";
 import { Decoder } from "@msgpack/msgpack";
 import {
+  ACTION_TAG_BY_KIND,
   decodeAdminAction,
   decodeAdminSignerRegistry,
   decodeAdminSignerRegistryInfo,
@@ -300,6 +301,13 @@ describe("decodeAdminAction", () => {
     expect(decodeAdminAction("UnpauseBridge")).toEqual({
       kind: "UnpauseBridge",
     });
+  });
+
+  it("decodes the EnableSubAccounts unit variant carried as a bare string", () => {
+    expect(decodeAdminAction("EnableSubAccounts")).toEqual({
+      kind: "EnableSubAccounts",
+    });
+    expect(ACTION_TAG_BY_KIND.EnableSubAccounts).toBe(21);
   });
 
   it("decodes the engine's frozen CancelAllOrdersForAccount bytes, scoped and unscoped", () => {

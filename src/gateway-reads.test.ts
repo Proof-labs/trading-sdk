@@ -9,6 +9,57 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("named gateway reads", () => {
+  it("reads loaded engine identity without caching or transforming the response", async () => {
+    const first = json({ engine_lib_sha256: "ab".repeat(32), engine_major: 3 });
+    const second = json({
+      engine_lib_sha256: "cd".repeat(32),
+      engine_major: 3,
+    });
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(second);
+    const reads = new ExchangeClient({
+      gatewayUrl: "https://gateway.example",
+    }).reads({ fetch });
+    const signal = new AbortController().signal;
+    expect(await reads.version({ signal })).toBe(first);
+    expect(await reads.version({ signal })).toBe(second);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenLastCalledWith(
+      "https://gateway.example/v1/version",
+      {
+        method: "GET",
+        cache: "no-store",
+        signal,
+      },
+    );
+  });
+  it.each([401, 404, 503])(
+    "preserves version HTTP %i without a fallback",
+    async (status) => {
+      const fetch = vi.fn(async () =>
+        json({ errorCode: "unavailable" }, status),
+      );
+      const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+      await expect(reads.version()).rejects.toMatchObject({
+        name: "GatewayHttpError",
+        status,
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("preserves version cancellation and transport failures without retry", async () => {
+    const error = new Error("transport unavailable");
+    const fetch = vi.fn().mockRejectedValue(error);
+    const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+    await expect(
+      reads.version({ signal: AbortSignal.abort() }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(reads.version()).rejects.toBe(error);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
   it("preserves exact info bodies, same-origin, envelopes, caller transport and cancellation", async () => {
     const fetch = vi.fn(async () => json({ data: "raw-tuple-envelope" }));
     const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
