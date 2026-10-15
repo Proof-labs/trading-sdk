@@ -7,11 +7,63 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [7.2.0] — 2026-10-15
+
+### Release notes
+
+A minor npm release: every TypeScript change below is an addition. The signing
+and transaction wire format is unchanged from npm 7.1.0; the new
+`EnableSubAccounts` admin action adds one inner tag (21) and changes no
+existing bytes. Rust and Python package versions remain on their independent
+release lines; the Rust-only breaking change below does not affect the npm
+version.
+
+### Included since npm 7.1.0
+
+- The `EnableSubAccounts` governance action (#244) and its conformance
+  vector (#246).
+- `GatewayReads.version()`, the uncached loaded-engine identity read (#219).
+- The bad-debt waterfall event types and the uncached history-status read
+  (#197).
+
+### TypeScript migration notes
+
+- `AdminAction` gains the `EnableSubAccounts` variant. An exhaustive `switch`
+  on `action.kind` (one that assigns the remainder to `never`) needs a new
+  case; nothing else changes.
+
 ### Added
 
 - `GatewayReads.version()` forwards `GET /v1/version` without caching, preserving
   the raw loaded-engine identity, HTTP errors and caller cancellation. It reports
   one upstream node, not validator-wide compatibility or rollout qualification.
+- `AdminAction` gains the `EnableSubAccounts` unit variant (inner tag 21), the
+  governed one-way switch that admits `CreateSubAccount` and
+  `SubAccountTransfer`. Proposals carrying it encode, decode and content-hash
+  like the engine's. `proof-wire` moves to v6.1.0 (`37960d74`).
+- `InsuranceFundUpdatedEvent` (`poolId`, `balance`, `delta`),
+  `PositionAutoDeleveragedEvent` (`owner`, `market`, `side`, `size`,
+  `closePrice`, `closePriceSpec`, `realizedPnl`) and `PlpAbsorbedEvent`
+  (`poolId`, `amount`, `plpBalanceAfter`) join the `ExchangeEvent` union and
+  the package barrel. They type the bad-debt waterfall events the engine
+  already emits on proof-wire 4.1.0 (exchange dev `exchange-wire` `Event`), with
+  the same stringified-number convention as `AccountLiquidatedEvent`.
+  TypeScript types only: no codec, wire or Rust/Python change.
+- `reads().historyStatus()` bypasses HTTP caches (`cache: "no-store"`), so a
+  freshness read is never answered from a stale cached response.
+
+### Breaking changes (Rust)
+
+- proof-wire 6.1.0 keeps every wire byte but changes the Rust types the crate
+  re-exports from `proof_wire::types` and `proof_wire::crypto`: the address
+  fields of `CreateSubAccount`, `SubAccountTransfer`, the `SubAccount`
+  registry row (`master`, `address`) and the sub-account events are
+  `OwnerAddress` in place of `[u8; 20]` (build one with `OwnerAddress::new`,
+  read the bytes with `as_bytes`), and `derive_sub_account` takes and returns
+  `OwnerAddress`. `AdminAction` and `AdminActionType` gain
+  `EnableSubAccounts`, and `Event` gains `SubAccountsEnabled`, so an
+  exhaustive `match` on any of the three needs a new arm. The Rust crate
+  takes a MAJOR bump at its next release; npm and Python are unaffected.
 
 ### Fixed
 
@@ -233,16 +285,6 @@ those existing behaviours are not new in 7.0.0.
   Requests bypass HTTP caches. MINOR: this additive TypeScript read API keeps
   the released npm 5.1.0 codec and proof-wire 2.1.0 contract (exchange v2.12.0 /
   api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
-- `InsuranceFundUpdatedEvent` (`poolId`, `balance`, `delta`),
-  `PositionAutoDeleveragedEvent` (`owner`, `market`, `side`, `size`,
-  `closePrice`, `closePriceSpec`, `realizedPnl`) and `PlpAbsorbedEvent`
-  (`poolId`, `amount`, `plpBalanceAfter`) join the `ExchangeEvent` union and
-  the package barrel. They type the bad-debt waterfall events the engine
-  already emits on proof-wire 4.1.0 (exchange dev `exchange-wire` `Event`), with
-  the same stringified-number convention as `AccountLiquidatedEvent`.
-  TypeScript types only: no codec, wire or Rust/Python change.
-- `reads().historyStatus()` bypasses HTTP caches (`cache: "no-store"`), so a
-  freshness read is never answered from a stale cached response.
 - TypeScript 6.1.0: `HistoryResolution.convertedSize` and
   `HistoryResolution.fallbackReason` (with the `ConversionFallbackReason` type)
   for conditional-perp resolutions, as the exchange release after 2.14.0
@@ -1265,7 +1307,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.2.0...HEAD
+[7.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.1.0...npm-v7.2.0
 [7.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.0.0...npm-v7.1.0
 [7.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v6.4.0...npm-v7.0.0
 [5.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v5.0.0...npm-v5.1.0
