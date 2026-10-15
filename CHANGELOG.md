@@ -17,6 +17,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `SubAccountTransfer`. Proposals carrying it encode, decode and content-hash
   like the engine's. `proof-wire` moves to v6.1.0 (`37960d74`).
 
+### Breaking changes (Rust)
+
+- proof-wire 6.1.0 keeps every wire byte but changes the Rust types the crate
+  re-exports from `proof_wire::types` and `proof_wire::crypto`: the address
+  fields of `CreateSubAccount`, `SubAccountTransfer` and the sub-account
+  events are `OwnerAddress` in place of `[u8; 20]` (build one with
+  `OwnerAddress::new`), and `derive_sub_account` takes and returns
+  `OwnerAddress`. `AdminAction` and `Event` gain the `EnableSubAccounts` and
+  `SubAccountsEnabled` variants, so an exhaustive `match` on either needs a
+  new arm. The Rust crate takes a MAJOR bump at its next release; npm and
+  Python are unaffected.
+
 ## [7.1.0] — 2026-10-13
 
 ### Release notes
