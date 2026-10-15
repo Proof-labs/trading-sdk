@@ -21,12 +21,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - proof-wire 6.1.0 keeps every wire byte but changes the Rust types the crate
   re-exports from `proof_wire::types` and `proof_wire::crypto`: the address
-  fields of `CreateSubAccount`, `SubAccountTransfer` and the sub-account
-  events are `OwnerAddress` in place of `[u8; 20]` (build one with
-  `OwnerAddress::new`), and `derive_sub_account` takes and returns
-  `OwnerAddress`. `AdminAction` and `Event` gain the `EnableSubAccounts` and
-  `SubAccountsEnabled` variants, so an exhaustive `match` on either needs a
-  new arm. The Rust crate takes a MAJOR bump at its next release; npm and
+  fields of `CreateSubAccount`, `SubAccountTransfer`, the `SubAccount`
+  registry row (`master`, `address`) and the sub-account events are
+  `OwnerAddress` in place of `[u8; 20]` (build one with `OwnerAddress::new`,
+  read the bytes with `as_bytes`), and `derive_sub_account` takes and returns
+  `OwnerAddress`. `AdminAction` and `AdminActionType` gain
+  `EnableSubAccounts`, and `Event` gains `SubAccountsEnabled`, so an
+  exhaustive `match` on any of the three needs a new arm. The Rust crate takes a MAJOR bump at its next release; npm and
   Python are unaffected.
 
 ## [7.1.0] — 2026-10-13
