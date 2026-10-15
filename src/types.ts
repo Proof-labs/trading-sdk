@@ -80,11 +80,12 @@ export const ActionType = {
   RevokeAgent: 0x0d,
   /** Resolve an event with a YES/NO outcome (0x27). */
   ResolveEvent: 0x27,
-  /** Create a derived sub-account under the signing master (0x28). Dormant
-   *  behind the sub-account activation: refused as `SubAccountsInactive`. */
+  /** Create a derived sub-account under the signing master (0x28). Refused
+   *  as `SubAccountsInactive` until a governed `EnableSubAccounts` proposal
+   *  executes. */
   CreateSubAccount: 0x28,
   /** Move balance between a master and one of its sub-accounts (0x29);
-   *  dormant like `CreateSubAccount`. */
+   *  refused like `CreateSubAccount`. */
   SubAccountTransfer: 0x29,
   /** Acquire the single-holder Solana payout lease on a pending withdrawal
    *  (0x2e). Custody-authorized watchers only. */
