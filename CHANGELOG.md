@@ -78,6 +78,12 @@ version.
   exhaustive `match` on any of the three needs a new arm. The Rust crate
   takes a MAJOR bump at its next release; npm and Python are unaffected.
 
+### Fixed
+
+- Decode the proposed engine PLP shape-error code 101 as `InvalidPlpConfig`,
+  preserving code 100 for `AccountOrderCapReached` and 99 for withdrawal limits.
+  Requires the reviewed engine validation change before relying on this code.
+
 ## [7.1.0] — 2026-10-13
 
 ### Release notes

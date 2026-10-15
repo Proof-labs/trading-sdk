@@ -131,6 +131,13 @@ describe("ExecErrorCode enum", () => {
     expect(ExecErrorCode.WithdrawalLimitExceeded).toBe(99);
     expect(ExecErrorCode.AccountOrderCapReached).toBe(100);
   });
+
+  it("decodes PLP shape faults without reassigning the resting-order cap code", () => {
+    expect(ExecErrorCode.InvalidPlpConfig).toBe(101);
+    expect(decodeExecError(101)?.name).toBe("InvalidPlpConfig");
+    expect(decodeExecError(100)?.name).toBe("AccountOrderCapReached");
+    expect(decodeExecError(99)?.name).toBe("WithdrawalLimitExceeded");
+  });
 });
 
 describe("GatewayHttpError", () => {
