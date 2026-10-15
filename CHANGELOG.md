@@ -7,6 +7,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [7.3.0] — 2026-10-15
+
+### Release notes
+
+A minor npm release: every TypeScript change below is an addition, and the
+signing and transaction wire format is unchanged from npm 7.2.0. Building the
+SDK from source no longer needs access to the private Proof-labs/bridge repo.
+
+### Included since npm 7.2.0
+
+- Bridge payload encoders from proof-wire's `bridge` module, dropping
+  `bridge-core` (#241).
+- An injectable HTTP transport for `ExchangeClient` (#239).
+- `InvalidPlpConfig` error code 101 (#242).
+
 ### Added
 
 - The Rust crate re-exports `proof_wire::bridge` as `proof_trading_sdk::bridge`
@@ -38,6 +53,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   proof-wire's `bridge` module instead of the private `bridge-core`, so
   building the SDK from source no longer needs access to Proof-labs/bridge.
   The bytes are unchanged; the frozen vectors still pass.
+
+### Fixed
+
+- Decode the proposed engine PLP shape-error code 101 as `InvalidPlpConfig`,
+  preserving code 100 for `AccountOrderCapReached` and 99 for withdrawal limits.
+  Requires the reviewed engine validation change before relying on this code.
 
 ## [7.2.0] — 2026-10-15
 
@@ -96,12 +117,6 @@ version.
   `EnableSubAccounts`, and `Event` gains `SubAccountsEnabled`, so an
   exhaustive `match` on any of the three needs a new arm. The Rust crate
   takes a MAJOR bump at its next release; npm and Python are unaffected.
-
-### Fixed
-
-- Decode the proposed engine PLP shape-error code 101 as `InvalidPlpConfig`,
-  preserving code 100 for `AccountOrderCapReached` and 99 for withdrawal limits.
-  Requires the reviewed engine validation change before relying on this code.
 
 ## [7.1.0] — 2026-10-13
 
