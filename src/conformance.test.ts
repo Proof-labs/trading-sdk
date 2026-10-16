@@ -709,6 +709,29 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       },
     };
   }
+  if (v.SetLiquidationConfig) {
+    const update = v.SetLiquidationConfig as Record<string, unknown>;
+    const c = update.config as Record<string, number> & {
+      full_close_threshold: { numerator: number; denominator: number };
+    };
+    return {
+      kind: "SetLiquidationConfig",
+      value: {
+        predecessor: big(update.predecessor),
+        sequence: big(update.sequence),
+        config: {
+          targetRatioBps: c.target_ratio_bps,
+          fullCloseThreshold: { ...c.full_close_threshold },
+          partialPenaltyBps: c.partial_penalty_bps,
+          maxBookOrders: c.max_book_orders,
+          maxCandidatePrefixes: c.max_candidate_prefixes,
+          maxCommittedFills: c.max_committed_fills,
+          maxStateReads: c.max_state_reads,
+          maxStateReadBytes: c.max_state_read_bytes,
+        },
+      },
+    };
+  }
   if (v.CancelUpgrade) {
     const cancel = v.CancelUpgrade as Record<string, unknown>;
     return {
@@ -1044,13 +1067,14 @@ describe("conformance vectors (TypeScript)", () => {
     // Guard against the vector file drifting out from under this assertion:
     // propose (create-market, the perp-plus-attach batch, the attach
     // singleton, six create-event oracle-source shapes, trigger config,
-    // unpause-bridge, enable-sub-accounts, update-authority-set add and
+    // unpause-bridge, enable-sub-accounts, set-liquidation-config,
+    // update-authority-set add and
     // remove, cancel-all-for
     // -account scoped and unscoped, four set-oracle-guards shapes, and
     // oracle policy, two schedule-upgrade shapes and cancel-upgrade),
     // approve, reject, and all three emergency arms (PauseMarket,
     // HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(29);
+    expect(govCases.length).toBe(30);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
