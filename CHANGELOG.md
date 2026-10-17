@@ -118,6 +118,12 @@ version.
   exhaustive `match` on any of the three needs a new arm. The Rust crate
   takes a MAJOR bump at its next release; npm and Python are unaffected.
 
+### Fixed
+
+- Reject malformed UTF-8 inside `queryFinancialState` MessagePack strings before
+  the dependency decoder can normalize an overlong encoding into a valid enum.
+  Existing response size, depth and container limits are unchanged.
+
 ## [7.1.0] — 2026-10-13
 
 ### Release notes
