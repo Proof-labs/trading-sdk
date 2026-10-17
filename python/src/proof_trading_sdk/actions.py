@@ -13,8 +13,8 @@ core's `wire` newtypes accept them directly and length-check on decode.
 
 Every action byte is pulled from the core via `get_action_types()`, so
 the `ActionType` map can never drift from the Rust `impl_action_encoding!`
-list. Actions without a dedicated builder (admin / relayer actions) are
-still fully reachable through :class:`RawAction`.
+list. Every action has a dedicated builder; :class:`RawAction` stays as the
+escape hatch for an action newer than this module.
 """
 
 from __future__ import annotations
@@ -727,6 +727,158 @@ class FailWithdrawal(Action):
 
 
 @dataclass
+class OperatorReceiptProof:
+    """Operator ed25519 quorum proof over a bridge record: one 64-byte
+    signature per set bit of ``signer_bitmap``, in bit order. Not an action by
+    itself — carried by :class:`AuthorizeWithdrawal`,
+    :class:`ConfirmWithdrawalReceipt` and :class:`FailWithdrawalReceipt`."""
+
+    signatures: list[bytes]
+    signer_bitmap: bytes
+
+    def as_wire(self) -> dict[str, Any]:
+        return {"signatures": list(self.signatures), "signer_bitmap": self.signer_bitmap}
+
+
+@dataclass
+class BridgeWithdrawalReceipt:
+    """A finalized terminal bridge receipt (``Paid`` or ``Cancelled``) for one
+    withdrawal, as the bridge program wrote it on Solana."""
+
+    withdrawal_id: int
+    proof_owner: bytes
+    destination_owner: bytes
+    destination_token_acct: bytes
+    amount_micro_usdc: int
+    fee_micro_usdc: int
+    terminal_state: int
+    solana_tx_signature: bytes
+    finalized_slot: int
+    finalized_blockhash: bytes
+    deployment_id: bytes
+    vault_tier: int
+    authorization_digest: bytes
+    authorization_signer_epoch: int
+    receipt_authority_epoch: int
+    receipt_quorum_kind: int
+
+    def as_wire(self) -> dict[str, Any]:
+        return {
+            "withdrawal_id": self.withdrawal_id,
+            "proof_owner": self.proof_owner,
+            "destination_owner": self.destination_owner,
+            "destination_token_acct": self.destination_token_acct,
+            "amount_micro_usdc": self.amount_micro_usdc,
+            "fee_micro_usdc": self.fee_micro_usdc,
+            "terminal_state": self.terminal_state,
+            "solana_tx_signature": self.solana_tx_signature,
+            "finalized_slot": self.finalized_slot,
+            "finalized_blockhash": self.finalized_blockhash,
+            "deployment_id": self.deployment_id,
+            "vault_tier": self.vault_tier,
+            "authorization_digest": self.authorization_digest,
+            "authorization_signer_epoch": self.authorization_signer_epoch,
+            "receipt_authority_epoch": self.receipt_authority_epoch,
+            "receipt_quorum_kind": self.receipt_quorum_kind,
+        }
+
+
+@dataclass
+class AuthorizeWithdrawal(Action):
+    """Record the operator-quorum-signed ``WithdrawalAuthorizationV1`` that a
+    terminal receipt must settle against. Permissionless to submit."""
+
+    ACTION_NAME = "AuthorizeWithdrawal"
+    authorization: bytes
+    proof: OperatorReceiptProof
+
+    def fields(self) -> dict[str, Any]:
+        return {"authorization": self.authorization, "proof": self.proof.as_wire()}
+
+
+@dataclass
+class ConfirmWithdrawalReceipt(Action):
+    """Receipt-gated confirmation: a finalized ``Paid`` receipt plus the
+    operator quorum proof."""
+
+    ACTION_NAME = "ConfirmWithdrawalReceipt"
+    receipt: BridgeWithdrawalReceipt
+    proof: OperatorReceiptProof
+
+    def fields(self) -> dict[str, Any]:
+        return {"receipt": self.receipt.as_wire(), "proof": self.proof.as_wire()}
+
+
+@dataclass
+class FailWithdrawalReceipt(Action):
+    """Receipt-gated failure: a finalized ``Cancelled`` receipt plus the
+    operator quorum proof; refunds only against a positive cancellation."""
+
+    ACTION_NAME = "FailWithdrawalReceipt"
+    receipt: BridgeWithdrawalReceipt
+    proof: OperatorReceiptProof
+
+    def fields(self) -> dict[str, Any]:
+        return {"receipt": self.receipt.as_wire(), "proof": self.proof.as_wire()}
+
+
+@dataclass
+class OracleUpdate(Action):
+    """Submit an oracle price for one market (relayer only).
+    ``publish_time_ms`` 0 means the relayer supplies no publish time."""
+
+    ACTION_NAME = "OracleUpdate"
+    market: int
+    price: int
+    signer: bytes
+    publish_time_ms: int = 0
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "price": self.price,
+            "signer": self.signer,
+            "publish_time_ms": self.publish_time_ms,
+        }
+
+
+@dataclass
+class CreateMarket(Action):
+    """Register a perpetual market with its risk parameters (admin).
+    ``max_open_interest`` 0 means uncapped."""
+
+    ACTION_NAME = "CreateMarket"
+    market: int
+    im_bps: int
+    mm_bps: int
+    taker_fee_bps: int
+    maker_fee_bps: int
+    signer: bytes
+    funding_interval_ms: int
+    max_funding_rate_bps: int
+    pool_id: int
+    sz_decimals: int
+    ticker: str
+    max_open_interest: int = 0
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "im_bps": self.im_bps,
+            "mm_bps": self.mm_bps,
+            "taker_fee_bps": self.taker_fee_bps,
+            "maker_fee_bps": self.maker_fee_bps,
+            "signer": self.signer,
+            "funding_interval_ms": self.funding_interval_ms,
+            "max_funding_rate_bps": self.max_funding_rate_bps,
+            "pool_id": self.pool_id,
+            "sz_decimals": self.sz_decimals,
+            "ticker": self.ticker,
+            "max_open_interest": self.max_open_interest,
+        }
+
+
+@dataclass
 class SetUserMarketLeverage(Action):
     ACTION_NAME = "SetUserMarketLeverage"
     owner: bytes
@@ -905,6 +1057,96 @@ class ConfigureOraclePolicy:
         return {"effective_height": self.effective_height, "bundle": self.bundle}
 
 
+# ── Admin-multisig governance ────────────────────────────────────────────────
+#
+# ``action`` is the inner admin action in its externally tagged wire form:
+# ``{"SetTriggerMarketConfig": config.as_wire()}``, ``{"PauseMarket":
+# {"market_id": 7}}``, or the bare string ``"UnpauseBridge"`` for the one
+# fieldless arm. The core validates it against the wire enum on encode.
+
+AdminActionWire = dict[str, Any] | str
+
+
+@dataclass
+class ProposeAdminAction(Action):
+    """Open a multisig proposal for one admin action."""
+
+    ACTION_NAME = "ProposeAdminAction"
+    proposer: bytes
+    registry_version: int
+    action: AdminActionWire
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "proposer": self.proposer,
+            "registry_version": self.registry_version,
+            "action": self.action,
+        }
+
+
+@dataclass
+class ApproveAdminAction(Action):
+    """Approve a proposal. Carries the proposal's full context, so the
+    approval is bound to exactly the content the approver reviewed
+    (``content_hash``)."""
+
+    ACTION_NAME = "ApproveAdminAction"
+    approver: bytes
+    proposal_id: int
+    registry_version: int
+    threshold: int
+    proposer: bytes
+    created_height: int
+    created_ms: int
+    expiry_ms: int
+    action: AdminActionWire
+    content_hash: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "approver": self.approver,
+            "proposal_id": self.proposal_id,
+            "registry_version": self.registry_version,
+            "threshold": self.threshold,
+            "proposer": self.proposer,
+            "created_height": self.created_height,
+            "created_ms": self.created_ms,
+            "expiry_ms": self.expiry_ms,
+            "action": self.action,
+            "content_hash": self.content_hash,
+        }
+
+
+@dataclass
+class RejectAdminAction(Action):
+    """Reject a proposal, bound to its ``content_hash``."""
+
+    ACTION_NAME = "RejectAdminAction"
+    rejecter: bytes
+    proposal_id: int
+    content_hash: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "rejecter": self.rejecter,
+            "proposal_id": self.proposal_id,
+            "content_hash": self.content_hash,
+        }
+
+
+@dataclass
+class EmergencyAdminAction(Action):
+    """Single-signer emergency action (pause, halt, reduce-only), in the
+    same externally tagged form as an admin action."""
+
+    ACTION_NAME = "EmergencyAdminAction"
+    signer: bytes
+    action: AdminActionWire
+
+    def fields(self) -> dict[str, Any]:
+        return {"signer": self.signer, "action": self.action}
+
+
 def encode_action(action: Action) -> tuple[int, bytes]:
     """Encode *action* to ``(action_type, payload_bytes)`` via the core.
 
@@ -949,6 +1191,13 @@ __all__ = [
     "ConfirmDeposit",
     "ConfirmWithdrawal",
     "FailWithdrawal",
+    "OperatorReceiptProof",
+    "BridgeWithdrawalReceipt",
+    "AuthorizeWithdrawal",
+    "ConfirmWithdrawalReceipt",
+    "FailWithdrawalReceipt",
+    "OracleUpdate",
+    "CreateMarket",
     "SetUserMarketLeverage",
     "CreateSubAccount",
     "SubAccountTransfer",
@@ -957,6 +1206,11 @@ __all__ = [
     "OracleUpdateComposite",
     "SubmitOracleObservation",
     "ConfigureOraclePolicy",
+    "AdminActionWire",
+    "ProposeAdminAction",
+    "ApproveAdminAction",
+    "RejectAdminAction",
+    "EmergencyAdminAction",
     "encode_action",
     "decode_action",
 ]

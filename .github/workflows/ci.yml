@@ -46,6 +46,10 @@ jobs:
               - 'crates/**'
               - 'conformance/**'
               - 'Cargo.toml'
+              # `tests/action_type_map.rs` holds the hand-written TypeScript
+              # action maps to the core, so editing them runs the check.
+              - 'src/types.ts'
+              - 'src/testing.ts'
               # A workflow or gate-contract change exercises every suite. This
               # proves the wiring itself instead of letting CI changes take a
               # path that skips the jobs they govern.
@@ -72,6 +76,8 @@ jobs:
               - '.github/scripts/**'
             python:
               - 'python/**'
+              # `test_typed_actions.py` reads the TypeScript action map.
+              - 'src/types.ts'
               - 'crates/proof-trading-sdk/**'
               - 'crates/proof-trading-sdk-derive/**'
               - 'crates/proof-trading-sdk-pyo3/**'
