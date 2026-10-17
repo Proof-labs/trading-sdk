@@ -50,6 +50,41 @@ result = client.submit_action({
 
 See the full API at `help(proof_trading_sdk)`.
 
+## Typed actions
+
+Every action has a typed builder in `proof_trading_sdk.actions`;
+`encode_action` turns it into the action byte and canonical payload through the
+Rust core, ready for `sign_and_encode`. `RawAction` remains only for an action
+newer than this package.
+
+- **Trading:** `PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder`,
+  `CancelAllOrders`, `CancelReplaceOrder`, `AmendOrder`, `ClosePosition`,
+  `AtomicBasketOrder`, `SetPositionTriggers`, `CancelPositionTriggers`,
+  `SetUserMarketLeverage`, `ApproveAgent`, `RevokeAgent`, `CreateSubAccount`,
+  `SubAccountTransfer`, `Deposit`, `Withdraw`, `WithdrawRequest`.
+- **Operator (privileged):** `OracleUpdate`, `OracleUpdateComposite`,
+  `SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,
+  `ConfirmDeposit`, `ConfirmWithdrawal`, `FailWithdrawal`,
+  `AuthorizeWithdrawal`, `ConfirmWithdrawalReceipt`, `FailWithdrawalReceipt`,
+  `ClaimWithdrawalPayout`, `ResolveEvent`.
+- **Governance (admin multisig):** `ProposeAdminAction`, `ApproveAdminAction`,
+  `RejectAdminAction`, `EmergencyAdminAction`. Their `action` is the inner
+  admin action in its externally tagged wire form:
+
+```python
+from proof_trading_sdk import actions
+
+policy = actions.SetTriggerMarketConfig(
+    market=7, enabled=True, max_trigger_slippage_bps=500,
+    max_mark_age_ms=5_000, max_future_publish_skew_ms=1_000, max_active_brackets=4,
+)
+propose = actions.ProposeAdminAction(
+    proposer=owner, registry_version=3,
+    action={"SetTriggerMarketConfig": policy.as_wire()},
+)
+action_type, payload = actions.encode_action(propose)
+```
+
 ## Position stop-loss / take-profit
 
 ```python

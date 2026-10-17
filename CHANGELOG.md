@@ -7,6 +7,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Python: typed builders for every published action.** `OracleUpdate`,
+  `CreateMarket`, `AuthorizeWithdrawal`, `ConfirmWithdrawalReceipt` and
+  `FailWithdrawalReceipt` (with `OperatorReceiptProof` and
+  `BridgeWithdrawalReceipt`), and the four governance actions
+  `ProposeAdminAction`, `ApproveAdminAction`, `RejectAdminAction` and
+  `EmergencyAdminAction`. Each encodes to its shared vector in
+  `conformance/codec.ndjson`, byte for byte. Previously these were reachable
+  only through `RawAction`. Additive (MINOR).
+- A Rust test, `action_type_map`, holds the hand-written TypeScript
+  `ActionType` and `TestActionType` maps to the core's
+  `codec::get_action_types()` in both directions. CI runs it when either map
+  changes.
+
+### Documentation
+
+- Both READMEs describe the governance actions; the TypeScript one shows
+  `GovernanceAction` as the third member of `Action`.
+
 ## [7.3.0] — 2026-10-15
 
 ### Release notes
