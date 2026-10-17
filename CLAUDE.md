@@ -329,7 +329,7 @@ and may be firewalled off in a public deployment.
   status/blocks and the chain-id bootstrap (`chainBase` → `/v1/status`,
   `/v1/block`, `/v1/block_results`), the WebSocket feed, and submission.
   `useGateway: false` is the internal-only direct-node path for in-cluster
-  tools (MMs, HLP, oracle feeder) and the scenario harness. Never document or
+  tools (market makers, the PLP, oracle feeder) and the scenario harness. Never document or
   default it for the public SDK, and never add a fresh hard-coded `rpcUrl` /
   `apiUrl` call that bypasses the base getters.
 
