@@ -25,11 +25,13 @@ import type {
   PendingUpgradePlan,
   SetWithdrawalLimit,
   SetOperatorReceiptRegistry,
+  SetLiquidationConfig,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
   AuthoritiesSnapshot,
   UpgradesInfo,
 } from "./types.js";
+import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import { Outcome } from "./types.js";
@@ -172,6 +174,44 @@ function decodeSetWithdrawalLimit(value: unknown): SetWithdrawalLimit {
     windowSecs: toU32(raw[1], "setWithdrawalLimit.windowSecs"),
   };
   return limit;
+}
+
+/// Inner tag 17: `[predecessor, sequence, config]`, where `config` is
+/// `[targetRatioBps, [numerator, denominator], partialPenaltyBps,
+/// maxBookOrders, maxCandidatePrefixes, maxCommittedFills, maxStateReads,
+/// maxStateReadBytes]`. Every newtype is its bare integer. A proposal the
+/// engine would refuse fails closed here too.
+function decodeSetLiquidationConfig(value: unknown): SetLiquidationConfig {
+  const raw = toTuple(value, "setLiquidationConfig", 3);
+  const c = toTuple(raw[2], "setLiquidationConfig.config", 8);
+  const threshold = toTuple(
+    c[1],
+    "setLiquidationConfig.config.fullCloseThreshold",
+    2,
+  );
+  const field = (name: string) => `setLiquidationConfig.config.${name}`;
+  const action: SetLiquidationConfig = {
+    predecessor: toU64(raw[0], "setLiquidationConfig.predecessor"),
+    sequence: toU64(raw[1], "setLiquidationConfig.sequence"),
+    config: {
+      targetRatioBps: toU32(c[0], field("targetRatioBps")),
+      fullCloseThreshold: {
+        numerator: toU32(threshold[0], field("fullCloseThreshold.numerator")),
+        denominator: toU32(
+          threshold[1],
+          field("fullCloseThreshold.denominator"),
+        ),
+      },
+      partialPenaltyBps: toU32(c[2], field("partialPenaltyBps")),
+      maxBookOrders: toU32(c[3], field("maxBookOrders")),
+      maxCandidatePrefixes: toU32(c[4], field("maxCandidatePrefixes")),
+      maxCommittedFills: toU32(c[5], field("maxCommittedFills")),
+      maxStateReads: toU32(c[6], field("maxStateReads")),
+      maxStateReadBytes: toU32(c[7], field("maxStateReadBytes")),
+    },
+  };
+  validateSetLiquidationConfig(action);
+  return action;
 }
 
 /// DEC-112 (inner tag 20): the operator receipt registry rotation. Tuple
@@ -641,6 +681,7 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   ScheduleUpgrade: 14,
   CancelUpgrade: 15,
   SetWithdrawalLimit: 19,
+  SetLiquidationConfig: 17,
   SetOperatorReceiptRegistry: 20,
   EnableSubAccounts: 21,
 };
@@ -673,6 +714,11 @@ export function decodeAdminAction(
       return {
         kind: "SetWithdrawalLimit",
         value: decodeSetWithdrawalLimit(payload),
+      };
+    case "SetLiquidationConfig":
+      return {
+        kind: "SetLiquidationConfig",
+        value: decodeSetLiquidationConfig(payload),
       };
     case "SetOperatorReceiptRegistry":
       return {

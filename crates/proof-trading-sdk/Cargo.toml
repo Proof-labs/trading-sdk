@@ -22,7 +22,7 @@ serde_bytes = "0.11"
 rmp-serde = "1"
 rmpv = { version = "1.3.1", features = ["with-serde"] }
 # The wire contract, one definition shared with the engine.
-proof-wire = { git = "https://github.com/Proof-labs/wire.git", rev = "0b36786916320470aea4734e67f135bea08fccd6", features = ["bridge"] }
+proof-wire = { git = "https://github.com/Proof-labs/wire.git", rev = "937adebc7a3d0e35fef7d0243ab12052a6cad99b", features = ["bridge"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.

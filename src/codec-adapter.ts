@@ -25,7 +25,9 @@ import {
   type SetTriggerMarketConfig,
   type SetOracleGuards,
   type ScheduleUpgrade,
+  type SetLiquidationConfig,
 } from "./types.js";
+import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import {
@@ -142,6 +144,9 @@ function governanceActionToWasm(value: unknown): unknown {
   }
   if (v.kind === "ScheduleUpgrade") {
     validateScheduleUpgrade(v.value as ScheduleUpgrade);
+  }
+  if (v.kind === "SetLiquidationConfig") {
+    validateSetLiquidationConfig(v.value as SetLiquidationConfig);
   }
   // `Batch` is the one variant whose payload is a LIST of nested enum items
   // (`AdminBatchItem[]`) rather than a struct — each item is itself

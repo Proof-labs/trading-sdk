@@ -9,6 +9,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The `SetLiquidationConfig` governance action** (inner tag 17). An
+  `AdminAction` of kind `SetLiquidationConfig` carries `predecessor`,
+  `sequence` and the global `LiquidationConfig` (target ratio, exact
+  full-close threshold, partial penalty, work limits). Proposals carrying it
+  encode, decode, content-hash and render like the engine's;
+  `validateSetLiquidationConfig` and `validateLiquidationConfig` mirror
+  proof-wire's bounds and run before encoding and after decoding. A
+  conformance vector pins the bytes in TypeScript, Rust and Python. MINOR:
+  one new inner tag, no existing bytes change.
+- **`decodeLiquidationEvent`** decodes the engine's liquidation events from
+  their ABCI attributes (a `TxEvent`, or the same attributes as a plain
+  object): `LiquidationConfigSet`, `PartialLiquidationFee` (one per partial
+  fill), `FullLiquidationFee` (one per completed full close) and
+  `LiquidationProgressReported` with its fourteen `LiquidationProgress`
+  outcomes. Amounts and identifiers decode to `bigint`; a malformed event
+  throws, and any other event type returns `null`.
+- The Rust crate re-exports `proof_wire::liquidation_config` and
+  `proof_wire::liquidation_progress`, and `governance` re-exports
+  `LiquidationConfig` and `SetLiquidationConfig`.
 - **Python: typed builders for every published action.** `OracleUpdate`,
   `CreateMarket`, `AuthorizeWithdrawal`, `ConfirmWithdrawalReceipt` and
   `FailWithdrawalReceipt` (with `OperatorReceiptProof` and
@@ -21,6 +40,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ActionType` and `TestActionType` maps to the core's
   `codec::get_action_types()` in both directions. CI runs it when either map
   changes.
+
+### Changed
+
+- `proof-wire` moves to v6.4.0 (`937adebc`), the wire exchange 2.17.0
+  (protocol 5.0) ships with. Every existing conformance vector is unchanged.
+
+### Breaking changes (Rust)
+
+- proof-wire 6.4.0 keeps every existing wire byte but changes Rust types the
+  crate re-exports from `proof_wire::types`: `AdminActionType::ReservedRt01D`
+  becomes `SetLiquidationConfig`; `AdminAction` gains `SetLiquidationConfig`;
+  `Event` gains `OrderRejected`, `LiquidationConfigSet`,
+  `PartialLiquidationFee`, `FullLiquidationFee` and
+  `LiquidationProgressReported`; and `Event::TradeExecuted`
+  (`mark_price`, `oracle_price`) and `Event::MarketOrderProcessed`
+  (`time_in_force`, `limit_price`, `unfilled_reason`) gain fields. An
+  exhaustive `match`, or a struct pattern or literal without `..`, needs
+  updating. The Rust crate takes a MAJOR bump at its next release; npm and
+  Python are unaffected.
 
 ### Documentation
 

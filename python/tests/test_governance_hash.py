@@ -45,6 +45,13 @@ GOLDEN_UPDATE_AUTHORITY_SET_ADD = (
 GOLDEN_UPDATE_AUTHORITY_SET_REMOVE = (
     "a4f4828d828c4e3e5f50ea883568e63b21d49c620f4848542dec498a292b847d"
 )
+# SetLiquidationConfig (inner tag 0x11): a struct variant whose newtypes are
+# bare integers and whose full-close threshold is a nested struct, carrying
+# the configuration exchange-wire freezes in its own vector. Same authority
+# as above; the TypeScript suite pins the identical constant.
+GOLDEN_SET_LIQUIDATION_CONFIG = (
+    "9a9a8ac80d7d9b3c5a6acf17c23197ec7a0a52d4142bb317d7b9afb8ce82ceb6"
+)
 
 
 
@@ -181,6 +188,27 @@ class TestAdminProposalContentHash:
         }
         h = pts.admin_proposal_content_hash(**kwargs)
         assert h.hex() == GOLDEN_UPDATE_AUTHORITY_SET_REMOVE
+
+    def test_set_liquidation_config_hash(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = {
+            "SetLiquidationConfig": {
+                "predecessor": 1,
+                "sequence": 2,
+                "config": {
+                    "target_ratio_bps": 10_500,
+                    "full_close_threshold": {"numerator": 2, "denominator": 3},
+                    "partial_penalty_bps": 100,
+                    "max_book_orders": 20,
+                    "max_candidate_prefixes": 20,
+                    "max_committed_fills": 10,
+                    "max_state_reads": 10_000,
+                    "max_state_read_bytes": 1_000_000,
+                },
+            }
+        }
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_SET_LIQUIDATION_CONFIG
 
     def test_rejects_unknown_unit_variant(self):
         kwargs = golden_kwargs()
