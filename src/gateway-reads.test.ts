@@ -167,6 +167,36 @@ describe("named gateway reads", () => {
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(transport).toHaveBeenCalledTimes(1);
   });
+  it("reads order-book mid candles with the candles param encoding", async () => {
+    const fetch = vi.fn(async () => json({ candles: [], next_cursor: null }));
+    const reads = new ExchangeClient({
+      gatewayUrl: "https://gateway.example/",
+    }).reads({ fetch });
+    const signal = new AbortController().signal;
+    const res = await reads.bbo(
+      {
+        market: 7400,
+        resolution: "5m",
+        from: "2026-01-01T00:00:00Z",
+        to: "2026-01-02T00:00:00Z",
+        limit: 1500,
+      },
+      { signal },
+    );
+    expect(res.status).toBe(200);
+    const [rawUrl, init] = fetch.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    const url = new URL(rawUrl);
+    expect(url.pathname).toBe("/v1/history/bbo");
+    expect(url.searchParams.get("market")).toBe("7400");
+    expect(url.searchParams.get("resolution")).toBe("5m");
+    expect(url.searchParams.get("from")).toBe("2026-01-01T00:00:00Z");
+    expect(url.searchParams.get("to")).toBe("2026-01-02T00:00:00Z");
+    expect(url.searchParams.get("limit")).toBe("1500");
+    expect(init).toMatchObject({ method: "GET", signal });
+  });
   it("preserves REST query strings, opaque cursors and ISO candle windows", async () => {
     const fetch = vi.fn(async () => json({ next_cursor: "opaque" }));
     const reads = new ExchangeClient({
