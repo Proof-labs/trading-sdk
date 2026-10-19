@@ -28,6 +28,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The Rust crate re-exports `proof_wire::liquidation_config` and
   `proof_wire::liquidation_progress`, and `governance` re-exports
   `LiquidationConfig` and `SetLiquidationConfig`.
+- **Python: typed builders for every published action.** `OracleUpdate`,
+  `CreateMarket`, `AuthorizeWithdrawal`, `ConfirmWithdrawalReceipt` and
+  `FailWithdrawalReceipt` (with `OperatorReceiptProof` and
+  `BridgeWithdrawalReceipt`), and the four governance actions
+  `ProposeAdminAction`, `ApproveAdminAction`, `RejectAdminAction` and
+  `EmergencyAdminAction`. Each encodes to its shared vector in
+  `conformance/codec.ndjson`, byte for byte. Previously these were reachable
+  only through `RawAction`. Additive (MINOR).
+- A Rust test, `action_type_map`, holds the hand-written TypeScript
+  `ActionType` and `TestActionType` maps to the core's
+  `codec::get_action_types()` in both directions. CI runs it when either map
+  changes.
 
 ### Changed
 
@@ -47,6 +59,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exhaustive `match`, or a struct pattern or literal without `..`, needs
   updating. The Rust crate takes a MAJOR bump at its next release; npm and
   Python are unaffected.
+
+### Documentation
+
+- Both READMEs describe the governance actions; the TypeScript one shows
+  `GovernanceAction` as the third member of `Action`.
 
 ## [7.3.0] — 2026-10-15
 
