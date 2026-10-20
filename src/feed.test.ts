@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { OrderbookFrame } from "./feed-types.js";
 import { GatewayFeed, type WebSocketLike } from "./feed.js";
 
 /** In-memory WebSocket double: records sent frames, exposes hooks to drive
@@ -91,6 +92,54 @@ function makeFeed(over: Record<string, unknown> = {}) {
 beforeEach(() => {
   FakeWS.instances = [];
 });
+
+const snapshot = (
+  bids: Array<[number, number, number]>,
+  asks: Array<[number, number, number]>,
+) => ({ channel: "orderbook", type: "snapshot", market: 1, bids, asks });
+const update = (
+  side: "buy" | "sell",
+  price: number,
+  totalQuantity: number,
+  orderCount = totalQuantity === 0 ? 0 : 1,
+) => ({
+  channel: "orderbook",
+  type: "update",
+  market: 1,
+  side,
+  price,
+  totalQuantity,
+  orderCount,
+});
+
+/** The book a listener reconstructs from the frames it received, best first. */
+function rebuild(frames: OrderbookFrame[]) {
+  const first = frames[0];
+  expect(first?.type, "a listener's first frame is a snapshot").toBe(
+    "snapshot",
+  );
+  const bids = new Map<number, [number, number]>();
+  const asks = new Map<number, [number, number]>();
+  for (const frame of frames) {
+    if (frame.type === "snapshot") {
+      bids.clear();
+      asks.clear();
+      for (const [p, q, n] of frame.bids) bids.set(p, [q, n]);
+      for (const [p, q, n] of frame.asks) asks.set(p, [q, n]);
+    } else {
+      const side = frame.side === "buy" ? bids : asks;
+      if (frame.totalQuantity === 0) side.delete(frame.price);
+      else side.set(frame.price, [frame.totalQuantity, frame.orderCount]);
+    }
+  }
+  return {
+    bids: [...bids].sort(([a], [b]) => b - a),
+    asks: [...asks].sort(([a], [b]) => a - b),
+  };
+}
+
+const microtasks = () =>
+  new Promise<void>((resolve) => queueMicrotask(resolve));
 
 describe("GatewayFeed", () => {
   it("connects lazily and sends a well-formed subscribe", () => {
@@ -361,6 +410,128 @@ describe("feed ownership and cleanup", () => {
     };
     ws.emit(delta);
     expect(frames).toEqual([delta]);
+    feed.close();
+  });
+
+  it("gives a late orderbook listener a snapshot of the current book", async () => {
+    const { feed } = makeFeed();
+    const early: OrderbookFrame[] = [];
+    const late: OrderbookFrame[] = [];
+    feed.subscribeOrderbook(1, (f) => early.push(f));
+    const ws = FakeWS.last();
+    ws.open();
+    ws.emit(
+      snapshot(
+        [
+          [100, 5, 1],
+          [99, 3, 2],
+        ],
+        [
+          [101, 4, 1],
+          [103, 2, 1],
+        ],
+      ),
+    );
+    ws.emit(update("buy", 98, 7));
+    ws.emit(update("sell", 101, 0));
+    ws.emit(update("buy", 100, 6, 2));
+
+    feed.subscribeOrderbook(1, (f) => late.push(f));
+    expect(late, "nothing is delivered inside subscribe").toEqual([]);
+    await microtasks();
+    expect(late).toEqual([
+      snapshot(
+        [
+          [100, 6, 2],
+          [99, 3, 2],
+          [98, 7, 1],
+        ],
+        [[103, 2, 1]],
+      ),
+    ]);
+
+    ws.emit(update("sell", 102, 9));
+    ws.emit(update("buy", 99, 0));
+    expect(rebuild(late)).toEqual(rebuild(early));
+    expect(
+      early.map((f) => f.type),
+      "the early listener gets no extra snapshot",
+    ).toEqual(["snapshot", "update", "update", "update", "update", "update"]);
+    expect(
+      ws.sentMsgs().filter((m) => m.method === "subscribe"),
+      "one wire subscription serves both listeners",
+    ).toHaveLength(1);
+    feed.close();
+  });
+
+  it("primes a late listener before the update that arrives first", () => {
+    const { feed } = makeFeed();
+    const early: OrderbookFrame[] = [];
+    const late: OrderbookFrame[] = [];
+    feed.subscribeOrderbook(1, (f) => early.push(f));
+    const ws = FakeWS.last();
+    ws.open();
+    ws.emit(snapshot([[100, 5, 1]], []));
+    feed.subscribeOrderbook(1, (f) => late.push(f));
+    // A frame lands before the microtask runs: the late listener's snapshot
+    // already includes it, and it never sees the bare update.
+    ws.emit(update("sell", 105, 2));
+    expect(late).toEqual([snapshot([[100, 5, 1]], [[105, 2, 1]])]);
+    expect(rebuild(late)).toEqual(rebuild(early));
+    feed.close();
+  });
+
+  it("a listener that joins before the first snapshot waits for the gateway's", async () => {
+    const { feed } = makeFeed();
+    const early: OrderbookFrame[] = [];
+    const late: OrderbookFrame[] = [];
+    feed.subscribeOrderbook(1, (f) => early.push(f));
+    feed.subscribeOrderbook(1, (f) => late.push(f));
+    const ws = FakeWS.last();
+    ws.open();
+    await microtasks();
+    expect(late, "no book yet, so no built snapshot").toEqual([]);
+    const opening = snapshot([[100, 5, 1]], [[101, 4, 1]]);
+    ws.emit(opening);
+    ws.emit(update("buy", 100, 0));
+    expect(late).toEqual([opening, update("buy", 100, 0)]);
+    expect(early).toEqual(late);
+    feed.close();
+  });
+
+  it("never builds a late listener's snapshot from a dropped socket's book", async () => {
+    const { feed, clock } = makeFeed();
+    const late: OrderbookFrame[] = [];
+    feed.subscribeOrderbook(1, () => {});
+    FakeWS.last().open();
+    FakeWS.last().emit(snapshot([[100, 5, 1]], []));
+    FakeWS.last().drop();
+
+    feed.subscribeOrderbook(1, (f) => late.push(f));
+    await microtasks();
+    expect(late, "the old book is gone while reconnecting").toEqual([]);
+
+    clock.runNext();
+    const ws = FakeWS.last();
+    ws.open();
+    const fresh = snapshot([[99, 1, 1]], []);
+    ws.emit(fresh);
+    expect(late).toEqual([fresh]);
+    feed.close();
+  });
+
+  it("a late listener disposed before its snapshot receives nothing", async () => {
+    const { feed } = makeFeed();
+    const late: OrderbookFrame[] = [];
+    feed.subscribeOrderbook(1, () => {});
+    const ws = FakeWS.last();
+    ws.open();
+    ws.emit(snapshot([[100, 5, 1]], []));
+    const dispose = feed.subscribeOrderbook(1, (f) => late.push(f));
+    dispose();
+    await microtasks();
+    ws.emit(update("buy", 100, 0));
+    expect(late).toEqual([]);
     feed.close();
   });
 });

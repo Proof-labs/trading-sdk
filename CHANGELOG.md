@@ -46,6 +46,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `proof-wire` moves to v6.4.0 (`937adebc`), the wire exchange 2.17.0
   (protocol 5.0) ships with. Every existing conformance vector is unchanged.
 
+### Fixed
+
+- **A second `subscribeOrderbook` listener on an active market now starts
+  from a snapshot.** The gateway sends one snapshot per socket subscription,
+  so a listener that joined after it received only updates and built an
+  incomplete book. `GatewayFeed` now keeps each subscribed market's book and
+  gives a late listener a snapshot of it, best price first, with no update
+  before it. Before the first snapshot, or while reconnecting, the late
+  listener waits for the gateway's own snapshot. Existing listeners and the
+  wire traffic are unchanged.
+
 ### Breaking changes (Rust)
 
 - proof-wire 6.4.0 keeps every existing wire byte but changes Rust types the

@@ -3,8 +3,10 @@ import type {
   FeedChannel,
   FeedErrorFrame,
   FeedFrame,
+  FeedOrderbookLevel,
   FeedState,
   OrderbookFrame,
+  OrderbookSnapshotFrame,
   TradeFrame,
 } from "./feed-types.js";
 
@@ -85,6 +87,19 @@ interface SubRecord {
   lastId: number;
   auth?: AccountAuthProvider;
   generation: number;
+  /** Orderbook only: the book this socket's snapshot and updates have built,
+   *  or null until the first snapshot after (re)connecting. */
+  book: LocalBook | null;
+  /** Listeners that joined an active orderbook channel and have not had a
+   *  snapshot yet. They receive no update before one. */
+  awaitingSnapshot: Set<FrameHandler>;
+}
+
+/** Price → `[totalQuantity, orderCount]`, per side. */
+interface LocalBook {
+  market: number;
+  bids: Map<number, [number, number]>;
+  asks: Map<number, [number, number]>;
 }
 
 const CONTROL_TYPES = new Set(["subscribed", "unsubscribed", "pong", "error"]);
@@ -100,6 +115,10 @@ const CONTROL_TYPES = new Set(["subscribed", "unsubscribed", "pong", "error"]);
  *   - **auto-reconnect** — on an unexpected close it reconnects with
  *     exponential backoff and **replays every active subscription**, so a
  *     fresh snapshot arrives. Missed live events are not replayed.
+ *   - **late orderbook listeners** — the gateway sends one snapshot per
+ *     socket subscription, so a listener that joins an active `orderbook`
+ *     channel receives a snapshot of the book the feed has built, and no
+ *     update before it.
  *   - **heartbeat** — an app-level `ping` runs on an interval; a missing
  *     `pong` forces a reconnect, catching half-open sockets the OS hasn't
  *     torn down.
@@ -243,6 +262,14 @@ export class GatewayFeed {
     let record = this.subs.get(key);
     if (record) {
       record.listeners.add(listener);
+      // The gateway sends a snapshot once per socket subscription, so a late
+      // orderbook listener is given one built from the local book. Delivered
+      // after `subscribe` returns, never inside it.
+      if (record.channel === "orderbook") {
+        const joined = record;
+        joined.awaitingSnapshot.add(listener);
+        queueMicrotask(() => this.primeLateListener(key, joined, listener));
+      }
     } else {
       record = {
         channel,
@@ -251,6 +278,8 @@ export class GatewayFeed {
         lastId: 0,
         auth,
         generation: 0,
+        book: null,
+        awaitingSnapshot: new Set(),
       };
       this.subs.set(key, record);
       this.ensureConnected();
@@ -261,6 +290,7 @@ export class GatewayFeed {
       const r = this.subs.get(key);
       if (!r || r !== record) return;
       r.listeners.delete(listener);
+      r.awaitingSnapshot.delete(listener);
       if (r.listeners.size === 0) this.dropRecord(key, r);
     };
   }
@@ -337,6 +367,7 @@ export class GatewayFeed {
       this.stopHeartbeat();
       ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
       this.ws = null;
+      this.forgetBooks();
       if (this.closedByUser || this.subs.size === 0) {
         this.setState("closed");
         return;
@@ -350,6 +381,7 @@ export class GatewayFeed {
     if (!ws) return;
     ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
     this.ws = null;
+    this.forgetBooks();
     try {
       ws.close();
     } catch {
@@ -518,13 +550,52 @@ export class GatewayFeed {
     const key = subKey(channel, msg);
     const record = this.subs.get(key);
     if (!record) return;
+    if (record.channel === "orderbook") applyToBook(record, msg);
     for (const listener of record.listeners) {
-      try {
-        listener(msg as unknown as FeedFrame);
-      } catch (err) {
-        this.onError?.(err instanceof Error ? err : new Error(String(err)));
+      if (record.awaitingSnapshot.has(listener)) {
+        if (msg.type === "snapshot") {
+          record.awaitingSnapshot.delete(listener);
+        } else {
+          // This update is already in the local book, so the snapshot built
+          // from it replaces the update for this listener.
+          this.primeFromBook(record, listener);
+          continue;
+        }
       }
+      this.deliver(listener, msg as unknown as FeedFrame);
     }
+  }
+
+  private deliver(listener: FrameHandler, frame: FeedFrame): void {
+    try {
+      listener(frame);
+    } catch (err) {
+      this.onError?.(err instanceof Error ? err : new Error(String(err)));
+    }
+  }
+
+  private primeLateListener(
+    key: string,
+    record: SubRecord,
+    listener: FrameHandler,
+  ): void {
+    if (this.subs.get(key) !== record) return;
+    if (!record.awaitingSnapshot.has(listener)) return;
+    this.primeFromBook(record, listener);
+  }
+
+  /** Give an awaiting listener a snapshot of the local book. With no book yet
+   *  it keeps waiting for the gateway's own snapshot. */
+  private primeFromBook(record: SubRecord, listener: FrameHandler): void {
+    if (!record.book) return;
+    record.awaitingSnapshot.delete(listener);
+    this.deliver(listener, bookSnapshot(record.book));
+  }
+
+  /** A new socket starts from the gateway's next snapshot, never from a book
+   *  the old socket built. */
+  private forgetBooks(): void {
+    for (const record of this.subs.values()) record.book = null;
   }
 
   private dispatchError(frame: FeedErrorFrame): void {
@@ -572,6 +643,73 @@ function subKey(channel: FeedChannel, src: Record<string, unknown>): string {
       .toLowerCase()}`;
   }
   return `${channel}:${src.market ?? ""}`;
+}
+
+/** Fold an orderbook data frame into the record's local book. A snapshot
+ *  replaces it; an update sets one level, and a zero quantity removes it. */
+function applyToBook(record: SubRecord, msg: Record<string, unknown>): void {
+  if (msg.type === "snapshot") {
+    record.book = {
+      market: Number(msg.market),
+      bids: levelMap(msg.bids),
+      asks: levelMap(msg.asks),
+    };
+    return;
+  }
+  const book = record.book;
+  if (msg.type !== "update" || !book) return;
+  const side =
+    msg.side === "buy" ? book.bids : msg.side === "sell" ? book.asks : null;
+  const { price, totalQuantity, orderCount } = msg;
+  if (
+    !side ||
+    typeof price !== "number" ||
+    typeof totalQuantity !== "number" ||
+    typeof orderCount !== "number"
+  ) {
+    return;
+  }
+  if (totalQuantity === 0) side.delete(price);
+  else side.set(price, [totalQuantity, orderCount]);
+}
+
+function levelMap(levels: unknown): Map<number, [number, number]> {
+  const map = new Map<number, [number, number]>();
+  if (!Array.isArray(levels)) return map;
+  for (const level of levels) {
+    if (!Array.isArray(level)) continue;
+    const [price, totalQuantity, orderCount] = level as unknown[];
+    if (
+      typeof price === "number" &&
+      typeof totalQuantity === "number" &&
+      typeof orderCount === "number"
+    ) {
+      map.set(price, [totalQuantity, orderCount]);
+    }
+  }
+  return map;
+}
+
+/** The local book as the gateway orders a snapshot: best price first. */
+function bookSnapshot(book: LocalBook): OrderbookSnapshotFrame {
+  const levels = (
+    side: Map<number, [number, number]>,
+    bestFirst: (a: number, b: number) => number,
+  ): FeedOrderbookLevel[] =>
+    [...side.entries()]
+      .sort(([a], [b]) => bestFirst(a, b))
+      .map(([price, [totalQuantity, orderCount]]) => [
+        price,
+        totalQuantity,
+        orderCount,
+      ]);
+  return {
+    channel: "orderbook",
+    type: "snapshot",
+    market: book.market,
+    bids: levels(book.bids, (a, b) => b - a),
+    asks: levels(book.asks, (a, b) => a - b),
+  };
 }
 
 function defaultFactory(
