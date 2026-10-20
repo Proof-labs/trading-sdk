@@ -89,6 +89,17 @@ jobs:
             exit 1
           fi
           echo "ci.yml is green for $GITHUB_SHA — proceeding."
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # A crate that resolves proof-wire from the private engine repository
+      # cannot be built by consumers; only a public wire release may ship.
+      - name: Refuse a release that depends on the private engine repository
+        run: |
+          if git grep -n 'github.com/Proof-labs/exchange' -- '*Cargo.toml'; then
+            echo "::error::a crate manifest resolves from Proof-labs/exchange — re-pin proof-wire to a public wire release before publishing"
+            exit 1
+          fi
 
   npm:
     name: npm publish
