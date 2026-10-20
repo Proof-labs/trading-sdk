@@ -50,7 +50,7 @@ fn positive_plaintext_event_preserves_effect_metadata_not_primary_action_identit
             },
             market: market(15),
             price: MicroUsdc::new(120),
-            signer: [0xcd; 20],
+            signer: Address::new([0xcd; 20]),
         })
     );
     assert_eq!(
@@ -530,7 +530,7 @@ async fn positive_event_observation_uses_the_same_bounded_gateway_route() {
         client.receipt_observation(hash()).await.unwrap(),
         ReceiptObservation::CommittedPriceUpdate(update)
             if (update.market(), update.price(), update.signer())
-                == (market(15), MicroUsdc::new(120), [0xcd; 20])
+                == (market(15), MicroUsdc::new(120), Address::new([0xcd; 20]))
     ));
     task.await.unwrap();
 }

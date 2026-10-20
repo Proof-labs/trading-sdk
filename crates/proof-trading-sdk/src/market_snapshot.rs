@@ -101,7 +101,7 @@ struct Envelope {
 /// tuple fields are permitted, but existing fields are never defaulted away.
 pub fn decode_snapshot(
     body: &[u8],
-    expected_chain: [u8; 32],
+    expected_chain: ChainBinding,
 ) -> Result<MarketsSnapshot, SnapshotError> {
     if body.len() > MAX_SNAPSHOT_BYTES {
         return Err(SnapshotError::TooLarge);
@@ -155,7 +155,7 @@ pub fn decode_snapshot(
     rmpv::encode::write_value(&mut canonical, &value).map_err(|_| SnapshotError::Malformed)?;
     let snapshot: MarketsSnapshot =
         rmp_serde::from_slice(&canonical).map_err(|_| SnapshotError::Malformed)?;
-    if expected_chain == [0; 32] || snapshot.chain_id != expected_chain {
+    if snapshot.chain_id != expected_chain.bytes() {
         return Err(SnapshotError::WrongChain);
     }
     if snapshot.height == 0 {
@@ -368,7 +368,10 @@ impl MarketsSnapshotClient {
         Ok(self)
     }
 
-    pub async fn read(&self, expected_chain: [u8; 32]) -> Result<MarketsSnapshot, SnapshotError> {
+    pub async fn read(
+        &self,
+        expected_chain: ChainBinding,
+    ) -> Result<MarketsSnapshot, SnapshotError> {
         decode_snapshot(&self.get("/v1/markets-snapshot").await?, expected_chain)
     }
 
@@ -438,7 +441,7 @@ impl MarketsSnapshotClient {
 }
 
 mod values;
-pub use values::{AppHash, BlockHeight, MarketId, MicroUsdc, NodeId};
+pub use values::{Address, AppHash, BlockHeight, ChainBinding, MarketId, MicroUsdc, NodeId};
 
 #[cfg(feature = "gateway")]
 mod chain;

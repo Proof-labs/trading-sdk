@@ -103,6 +103,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Python are unaffected.
 - `SnapshotError` gains `InvalidBracketRetry`; an exhaustive `match` on it
   needs a new arm.
+- The market-snapshot chain binding and the oracle signer are their own
+  types (#143). Every `expected_chain` parameter (`read`, `read_bound`,
+  `chain_identity`, `chain_identity_bound`, `read_bound_inventory`,
+  `read_bound_inventory_reporting`, `decode_snapshot`, `decode_bound_snapshot`,
+  `decode_bound_identity`) takes a `ChainBinding` instead of `[u8; 32]`, and
+  `ChainIdentity::chain_binding` is one; build it with
+  `ChainBinding::of_network(name)` or `ChainBinding::new(bytes)`, both of which
+  refuse the all-zero binding the decoders already refused.
+  `CommittedPriceUpdate::signer()` returns an `Address`; `.bytes()` reads the
+  20 bytes out. No wire change.
 
 ### Documentation
 

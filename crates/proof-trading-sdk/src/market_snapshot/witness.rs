@@ -8,7 +8,7 @@
 //! backend that can answer the snapshot read must run a qualified image.
 
 use super::MarketsSnapshot;
-use super::{chain, decode_snapshot, values, AppHash, BlockHeight, ChainIdentity};
+use super::{chain, decode_snapshot, values, AppHash, BlockHeight, ChainBinding, ChainIdentity};
 use super::{MarketsSnapshotClient, NodeId};
 use super::{SnapshotError, MAX_SNAPSHOT_BYTES};
 use serde::Deserialize;
@@ -308,7 +308,7 @@ fn block_height(text: &str) -> Result<BlockHeight, WitnessError> {
 /// [`decode_snapshot`] reads the same body without one.
 pub fn decode_bound_snapshot(
     body: &[u8],
-    expected_chain: [u8; 32],
+    expected_chain: ChainBinding,
 ) -> Result<BoundMarketsSnapshot, WitnessError> {
     let snapshot = decode_snapshot(body, expected_chain)?;
     let raw: WireEnvelope =
@@ -333,7 +333,7 @@ pub fn decode_bound_snapshot(
 
 pub fn decode_bound_identity(
     body: &[u8],
-    expected_chain: [u8; 32],
+    expected_chain: ChainBinding,
 ) -> Result<BoundChainIdentity, WitnessError> {
     if body.len() > MAX_SNAPSHOT_BYTES {
         return Err(SnapshotError::TooLarge.into());
@@ -361,8 +361,8 @@ fn validate_bracket(
     validate_anchor_progress(before, after)?;
     let snapshot = &bound.snapshot;
     let witness = &bound.witness;
-    if before.identity.chain_binding != snapshot.chain_id
-        || after.identity.chain_binding != snapshot.chain_id
+    if before.identity.chain_binding.bytes() != snapshot.chain_id
+        || after.identity.chain_binding.bytes() != snapshot.chain_id
     {
         return Err(SnapshotError::WrongChain.into());
     }
@@ -484,14 +484,14 @@ pub struct BoundInventoryRead {
 impl MarketsSnapshotClient {
     pub async fn read_bound(
         &self,
-        expected_chain: [u8; 32],
+        expected_chain: ChainBinding,
     ) -> Result<BoundMarketsSnapshot, WitnessError> {
         decode_bound_snapshot(&self.get("/v1/markets-snapshot").await?, expected_chain)
     }
 
     pub async fn chain_identity_bound(
         &self,
-        expected_chain: [u8; 32],
+        expected_chain: ChainBinding,
     ) -> Result<BoundChainIdentity, WitnessError> {
         decode_bound_identity(&self.get("/v1/status").await?, expected_chain)
     }
@@ -531,7 +531,7 @@ impl MarketsSnapshotClient {
     /// [`with_bracket_retry`](Self::with_bracket_retry).
     pub async fn read_bound_inventory(
         &self,
-        expected_chain: [u8; 32],
+        expected_chain: ChainBinding,
     ) -> Result<BoundInventorySnapshot, WitnessError> {
         self.read_bound_inventory_reporting(expected_chain)
             .await
@@ -543,7 +543,7 @@ impl MarketsSnapshotClient {
     /// caller that logs or counts them.
     pub async fn read_bound_inventory_reporting(
         &self,
-        expected_chain: [u8; 32],
+        expected_chain: ChainBinding,
     ) -> BoundInventoryRead {
         let mut retried = Vec::new();
         let attempts = self.read_bound_inventory_attempts(expected_chain, &mut retried);
@@ -570,7 +570,7 @@ impl MarketsSnapshotClient {
 
     async fn read_bound_inventory_attempts(
         &self,
-        expected_chain: [u8; 32],
+        expected_chain: ChainBinding,
         retried: &mut Vec<WitnessError>,
     ) -> Result<BoundInventorySnapshot, WitnessError> {
         for _ in 1..self.bracket_retry.attempts {
@@ -593,7 +593,7 @@ impl MarketsSnapshotClient {
     /// [`WitnessError::HeaderBehind`].
     async fn read_bound_inventory_once(
         &self,
-        expected_chain: [u8; 32],
+        expected_chain: ChainBinding,
     ) -> Result<BoundInventorySnapshot, WitnessError> {
         let before = self.chain_identity_bound(expected_chain).await?;
         let bound = self.read_bound(expected_chain).await?;
