@@ -11,17 +11,14 @@
 pub use proof_wire::codec::{
     admin_proposal_content_hash, canonical_admin_action_bytes, ADMIN_PROPOSAL_HASH_DOMAIN,
 };
-pub use proof_wire::liquidation_policy::{
-    LiquidationFundingSnapshot, LiquidationInsuranceRatios, LiquidationReferenceSettings,
-    LiquidationWorkSettings, PublishLiquidationPolicy, ReleaseLiquidationPlan,
-    RestartLiquidationPlan, RevokeLiquidationPolicy,
-};
+pub use proof_wire::liquidation_config::{LiquidationConfig, SetLiquidationConfig};
 pub use proof_wire::types::{
-    AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, ConfigureOraclePolicy,
-    EmergencyAction, EmergencyActionType, EmergencyAdminAction, FundInsuranceFund, FundingId,
-    InsuranceFundAllocation, InsurancePoolId, InsuranceWithdrawalId, ProposalId,
-    ProposeAdminAction, RegistryVersion, RejectAdminAction, SetOracleGuards, SignatureThreshold,
-    SignerAddress, UpdateAdminSignerRegistry, WithdrawInsuranceFund,
+    AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, CancelUpgrade,
+    ConfigureOraclePolicy, EmergencyAction, EmergencyActionType, EmergencyAdminAction,
+    FundInsuranceFund, InsuranceFundAllocation, InsuranceFundingId, InsurancePoolId,
+    InsuranceWithdrawalId, ProposalId, ProposeAdminAction, RegistryVersion, RejectAdminAction,
+    ScheduleUpgrade, SetOracleGuards, SignatureThreshold, SignerAddress, UpdateAdminSignerRegistry,
+    WithdrawInsuranceFund,
 };
 
 #[cfg(test)]
@@ -29,9 +26,11 @@ mod insurance_tag_tests {
     use super::AdminActionType;
 
     #[test]
-    fn insurance_withdrawal_does_not_alias_the_merged_receipt_registry() {
+    fn insurance_tags_preserve_existing_governance_allocations() {
+        assert_eq!(AdminActionType::SetLiquidationConfig as u8, 17);
         assert_eq!(AdminActionType::FundInsuranceFund as u8, 18);
         assert_eq!(AdminActionType::SetOperatorReceiptRegistry as u8, 20);
-        assert_eq!(AdminActionType::WithdrawInsuranceFund as u8, 21);
+        assert_eq!(AdminActionType::EnableSubAccounts as u8, 21);
+        assert_eq!(AdminActionType::WithdrawInsuranceFund as u8, 25);
     }
 }

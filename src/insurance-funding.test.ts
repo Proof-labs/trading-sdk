@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { adminActionToWasm } from "./codec-adapter.js";
-import { decodeTx, encodeSignedTx } from "./codec.js";
+import { adminProposalContentHash, decodeTx, encodeSignedTx } from "./codec.js";
 import {
+  ACTION_TAG_BY_KIND,
   decodeAdminAction,
   decodeProposalDisplayInfo,
 } from "./governance-query.js";
@@ -19,7 +20,7 @@ const funding = (): FundInsuranceFund => ({
 });
 
 describe("governed insurance funding", () => {
-  it("uses the revised withdrawal tag and refuses the receipt-registry tag", () => {
+  it("uses withdrawal tag 25 without aliasing existing governance actions", () => {
     const proposal = [
       1,
       "Pending",
@@ -32,17 +33,36 @@ describe("governed insurance funding", () => {
       100,
       1000,
       2000,
-      21,
+      25,
       { WithdrawInsuranceFund: [7, Array.from(address(3)), [[0, 12]]] },
       [],
       Array(32).fill(0),
     ];
-    expect(decodeProposalDisplayInfo(proposal).actionTag).toBe(21);
-    expect(() =>
-      decodeProposalDisplayInfo(
-        proposal.map((value, index) => (index === 11 ? 20 : value)),
-      ),
-    ).toThrow(/does not match/);
+    expect(decodeProposalDisplayInfo(proposal).actionTag).toBe(25);
+    for (const tag of [17, 18, 20, 21, 22, 23, 24]) {
+      expect(() =>
+        decodeProposalDisplayInfo(
+          proposal.map((value, index) => (index === 11 ? tag : value)),
+        ),
+      ).toThrow(/does not match/);
+    }
+    expect(ACTION_TAG_BY_KIND.FundInsuranceFund).toBe(18);
+    expect(ACTION_TAG_BY_KIND.WithdrawInsuranceFund).toBe(25);
+    expect(ACTION_TAG_BY_KIND.SetLiquidationConfig).toBe(17);
+    expect(ACTION_TAG_BY_KIND.EnableSubAccounts).toBe(21);
+    const tags = Object.values(ACTION_TAG_BY_KIND);
+    expect(new Set(tags).size).toBe(tags.length);
+  });
+  it("keeps superseded executor actions unavailable to proposal decoders", () => {
+    for (const name of [
+      "PublishLiquidationPolicy",
+      "RevokeLiquidationPolicy",
+      "RestartLiquidationPlan",
+      "ReleaseLiquidationPlan",
+    ]) {
+      expect(name in ACTION_TAG_BY_KIND).toBe(false);
+      expect(() => decodeAdminAction({ [name]: [] })).toThrow();
+    }
   });
   it("round trips both proposals through the authoritative Rust/WASM codec", () => {
     const actions: AdminAction[] = [
@@ -80,6 +100,71 @@ describe("governed insurance funding", () => {
         allocations: [{ pool_id: 0, amount: 25_000_000_000n }],
       },
     });
+  });
+  it("binds insurance transfers and approval envelopes to their exact content", () => {
+    const actions = [
+      { kind: "FundInsuranceFund", value: funding() },
+      {
+        kind: "WithdrawInsuranceFund",
+        value: {
+          withdrawalId: 0n,
+          recipient: address(1),
+          allocations: [{ poolId: 0, amount: 25_000_000_000n }],
+        },
+      },
+    ] satisfies AdminAction[];
+    const context = {
+      chainId: new Uint8Array(32).fill(1),
+      proposalId: 7n,
+      registryVersion: 2n,
+      threshold: 2,
+      proposer: address(2),
+      createdHeight: 3n,
+      createdMs: 4n,
+      expiryMs: 5n,
+    };
+    const hashes = actions.map((action) =>
+      adminProposalContentHash({ ...context, action }),
+    );
+    expect(hashes[0]).not.toEqual(hashes[1]);
+    for (const action of actions) {
+      const contentHash = adminProposalContentHash({ ...context, action });
+      const changed = {
+        ...action,
+        value: {
+          ...action.value,
+          allocations: [{ poolId: 0, amount: 24_999_999_999n }],
+        },
+      } as AdminAction;
+      expect(
+        adminProposalContentHash({ ...context, action: changed }),
+      ).not.toEqual(contentHash);
+      const approval: Action = {
+        type: "ApproveAdminAction",
+        data: {
+          proposalId: context.proposalId,
+          registryVersion: context.registryVersion,
+          threshold: context.threshold,
+          proposer: context.proposer,
+          createdHeight: context.createdHeight,
+          createdMs: context.createdMs,
+          expiryMs: context.expiryMs,
+          approver: address(3),
+          contentHash,
+          action,
+        },
+      };
+      expect(
+        decodeTx(
+          encodeSignedTx(
+            approval,
+            123n,
+            new Uint8Array(32),
+            new Uint8Array(64),
+          ),
+        ).action,
+      ).toEqual(approval);
+    }
   });
   it("decodes compact proposal fields with byte-sized pools", () => {
     expect(

@@ -26,20 +26,16 @@ import {
   type SetOracleGuards,
   type FundInsuranceFund,
   type WithdrawInsuranceFund,
-  type PublishLiquidationPolicy,
-  type RestartLiquidationPlan,
-  type ReleaseLiquidationPlan,
+  type ScheduleUpgrade,
+  type SetLiquidationConfig,
 } from "./types.js";
-import {
-  validateLiquidationPolicy,
-  validateLiquidationRestart,
-  validateLiquidationRelease,
-} from "./liquidation-policy.js";
 import {
   validateFundInsuranceFund,
   validateWithdrawInsuranceFund,
 } from "./insurance-funding.js";
+import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
+import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import {
   validateCancelPositionTriggers,
   validateOrderTriggers,
@@ -125,7 +121,10 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
  * explicitly because a fieldless struct variant (`HaltTrading {}`) is NOT one
  * of these — it keeps the map form.
  */
-const GOVERNANCE_UNIT_VARIANTS = new Set<string>(["UnpauseBridge"]);
+const GOVERNANCE_UNIT_VARIANTS = new Set<string>([
+  "UnpauseBridge",
+  "EnableSubAccounts",
+]);
 
 /**
  * Encode a governance `AdminAction` / `EmergencyAction` for
@@ -155,14 +154,11 @@ function governanceActionToWasm(value: unknown): unknown {
   if (v.kind === "WithdrawInsuranceFund") {
     validateWithdrawInsuranceFund(v.value as WithdrawInsuranceFund);
   }
-  if (v.kind === "PublishLiquidationPolicy") {
-    validateLiquidationPolicy(v.value as PublishLiquidationPolicy);
+  if (v.kind === "ScheduleUpgrade") {
+    validateScheduleUpgrade(v.value as ScheduleUpgrade);
   }
-  if (v.kind === "RestartLiquidationPlan") {
-    validateLiquidationRestart(v.value as RestartLiquidationPlan);
-  }
-  if (v.kind === "ReleaseLiquidationPlan") {
-    validateLiquidationRelease(v.value as ReleaseLiquidationPlan);
+  if (v.kind === "SetLiquidationConfig") {
+    validateSetLiquidationConfig(v.value as SetLiquidationConfig);
   }
   // `Batch` is the one variant whose payload is a LIST of nested enum items
   // (`AdminBatchItem[]`) rather than a struct — each item is itself
@@ -355,7 +351,6 @@ const BYTE_FIELDS = new Set([
   "approver",
   "rejecter",
   "contentHash",
-  "expectedCheckpointHash",
   // Receipt-proof bitmap (raw `Vec<u8>` on the wire → number[] on decode).
   // The receipt's own byte fields decode as `Uint8Array` (newtype
   // serialize_bytes) and hit the early `instanceof Uint8Array` return, so only
@@ -386,15 +381,6 @@ function governanceActionFromWasm(value: unknown): unknown {
   const obj = value as Record<string, unknown>;
   const kind = Object.keys(obj)[0];
   const inner = obj[kind];
-  if (kind === "PublishLiquidationPolicy") {
-    const policy = fromWasmObject(
-      inner as Record<string, unknown>,
-    ) as unknown as PublishLiquidationPolicy;
-    // Snapshot identity is bytes only in this context, never every field named id.
-    validateLiquidationPolicy(policy);
-    policy.funding.id = Uint8Array.from(policy.funding.id);
-    return { kind, value: policy };
-  }
   // `Batch` carries a list of nested enum items; mirror the encoder's branch.
   if (Array.isArray(inner)) {
     return { kind, value: inner.map(governanceActionFromWasm) };

@@ -18,12 +18,8 @@
 #                            | --draft]
 #
 # Queue discipline (CLAUDE.md → Decision Routing & Review-Queue Discipline):
-#   - decision-bearing PRs stay DRAFT until their DEC rows are Decided —
-#     citing or creating rows here always opens the PR as draft;
-#   - the org-wide work-in-progress cap (WIP_CAP ready-for-review PRs per author:
-#     open + non-draft + authored by you + any Proof-labs repo) is counted
-#     before a ready PR is created; at or over the cap — or when the count
-#     cannot be determined — the PR opens as DRAFT instead (fail closed).
+#   - pending decisions allow review but block merge until Decided;
+#   - only an explicit --draft selects draft status.
 #
 # One-time convenience alias:
 #   gh alias set prc '!bash .github/open-pr.sh'   # then just: gh prc
@@ -109,8 +105,8 @@ a ready PR with an implicit "No decision required" (fail closed).
 
 Non-interactive runs must state the decision scan's outcome explicitly:
   --no-decision                       the work needs no decision
-  --decision "DEC-1 DEC-2"            cites existing register rows (opens draft)
-  --new-decision "<description>"      creates a stub row (opens draft)
+  --decision "DEC-1 DEC-2"            cites existing register rows (review allowed; merge waits)
+  --new-decision "<description>"      creates a stub row (review allowed; merge waits)
       [--type p|e|o|r|d] [--priority c|h|m|l]
   --draft                             park as draft, declare later
 EOF
@@ -203,31 +199,27 @@ if [ -n "$newdec" ]; then
   fi
   repo_slug="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "this repository")"
   if [ "$mkrow" = "n" ] || [ "$mkrow" = "N" ]; then
-    decision_line="- [x] **Needs authority** — register rows: TBD (\"$newdec\" — add before review) — stays **draft**"
-    draft_flag="--draft"
-    echo "✓ Skipped row creation — remember to add it. Opening as DRAFT."
+    decision_line="- [x] **Needs authority** — register rows: TBD (\"$newdec\" — add before merge) — **merge blocked**"
+    echo "✓ Skipped row creation — add it before merge. Review is allowed."
   elif out="$(DEC_DESC="$newdec" DEC_SRC="$repo_slug \`$branch\`" DEC_TYPE="$dec_type" DEC_PRIORITY="$dec_prio" python3 "$(dirname "$0")/new-decision-row.py" 2>&1)"; then
     dec_id="$(printf '%s' "$out" | tail -1 | cut -f1)"
     dec_url="$(printf '%s' "$out" | tail -1 | cut -f2)"
-    decision_line="- [x] **Needs authority** — register row: $dec_id (stub: $dec_url) — stays **draft** until it is Decided"
-    draft_flag="--draft"
+    decision_line="- [x] **Needs authority** — register row: $dec_id (stub: $dec_url) — **merge blocked** until it is Decided"
     echo "✓ Created $dec_id → $dec_url"
-    echo "✓ Opening this pull request as DRAFT per the queue discipline."
+    echo "✓ Review is allowed; merge waits for the decision."
   else
     echo "⚠ Could not create the register row automatically:" >&2
     printf '%s\n' "$out" >&2
-    decision_line="- [x] **Needs authority** — register rows: TBD (\"$newdec\" — add before review) — stays **draft**"
-    draft_flag="--draft"
-    echo "✓ Opening as DRAFT anyway — add the row manually."
+    decision_line="- [x] **Needs authority** — register rows: TBD (\"$newdec\" — add before merge) — **merge blocked**"
+    echo "✓ Add the row manually before merge. Review is allowed."
   fi
 elif [ -n "$decrows" ]; then
   if ! printf '%s' "$decrows" | grep -Eq '^DEC-[0-9]+([ ,]+DEC-[0-9]+)*$'; then
     echo "Error: --decision expects register row ids like \"DEC-7 DEC-10\" (got: $decrows)." >&2
     exit 1
   fi
-  decision_line="- [x] **Needs authority** — register rows: $decrows — stays **draft** until they are Decided"
-  draft_flag="--draft"
-  echo "✓ Needs authority ($decrows) — opening as DRAFT per the queue discipline."
+  decision_line="- [x] **Needs authority** — register rows: $decrows — **merge blocked** until they are Decided"
+  echo "✓ Needs authority ($decrows) — review is allowed; merge waits for decisions."
 elif [ "$no_decision" -eq 1 ]; then
   decision_line="- [x] **No decision required** — routine work, reviewable on its merits"
   echo "✓ No decision required."
@@ -237,29 +229,10 @@ else
   echo "✓ Parking as DRAFT — declare the decision scan before marking ready."
 fi
 
-# ── org-wide work-in-progress cap: WIP_CAP ready-for-review PRs per author ──
-# Raised 5 → 15 on 2026-07-26 (Ramon): 5 throttled authors who legitimately had
-# several small changes in flight, which pushed real work into drafts and made
-# the draft state meaningless. Change it here.
-WIP_CAP=15
-# Semantics: open + non-draft + authored by you + any Proof-labs repository.
-# At/over the cap, or when the count can't be determined: open as DRAFT.
-if [ -z "$draft_flag" ]; then
-  count="$(gh search prs --owner Proof-labs --author "@me" --state open --draft=false \
-            --limit 100 --json id --jq 'length' 2>/dev/null || true)"
-  if ! printf '%s' "$count" | grep -Eq '^[0-9]+$'; then
-    draft_flag="--draft"
-    echo "⚠ Could not verify the ${WIP_CAP}-ready work-in-progress cap — opening as DRAFT (fail closed)."
-  elif [ "$count" -ge "$WIP_CAP" ]; then
-    draft_flag="--draft"
-    echo "⚠ Work-in-progress cap reached ($count ready PRs across Proof-labs; cap $WIP_CAP) — opening as DRAFT until a slot frees."
-  fi
-fi
-
 body="$(printf '## Why\n\n%s\n\n## Task link\n\n%s\n\n## Decisions\n\n%s\n\n<!-- Opened via .github/open-pr.sh — edit to add a summary / test plan. -->\n' "$why" "$task_line" "$decision_line")"
 
 # Push first so `gh pr create` never falls into its own interactive push prompt.
-echo "Pushing $branch…"
+echo "Pushing ${branch}…"
 git push -u origin "$branch"
 
 echo "Creating pull request…"

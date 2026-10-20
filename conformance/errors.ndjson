@@ -91,6 +91,7 @@
 {"case":"manifest/98","code":98,"log":null,"expect":{"name":"TriggerOrderIncompatible"}}
 {"case":"manifest/99","code":99,"log":null,"expect":{"name":"WithdrawalLimitExceeded"}}
 {"case":"manifest/100","code":100,"log":null,"expect":{"name":"AccountOrderCapReached"}}
+{"case":"manifest/101","code":101,"log":null,"expect":{"name":"InvalidPlpConfig"}}
 {"case":"manifest/102","code":102,"log":null,"expect":{"name":"InsuranceFundingReplayed"}}
 {"case":"manifest/103","code":103,"log":null,"expect":{"name":"InsuranceWithdrawalReplayed"}}
 {"case":"manifest/104","code":104,"log":null,"expect":{"name":"MarketlessInsurancePool"}}

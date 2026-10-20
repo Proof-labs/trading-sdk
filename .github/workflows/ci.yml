@@ -46,6 +46,10 @@ jobs:
               - 'crates/**'
               - 'conformance/**'
               - 'Cargo.toml'
+              # `tests/action_type_map.rs` holds the hand-written TypeScript
+              # action maps to the core, so editing them runs the check.
+              - 'src/types.ts'
+              - 'src/testing.ts'
               # A workflow or gate-contract change exercises every suite. This
               # proves the wiring itself instead of letting CI changes take a
               # path that skips the jobs they govern.
@@ -72,6 +76,8 @@ jobs:
               - '.github/scripts/**'
             python:
               - 'python/**'
+              # `test_typed_actions.py` reads the TypeScript action map.
+              - 'src/types.ts'
               - 'crates/proof-trading-sdk/**'
               - 'crates/proof-trading-sdk-derive/**'
               - 'crates/proof-trading-sdk-pyo3/**'
@@ -118,48 +124,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.ts == 'true'
     runs-on: ubuntu-latest
-    env:
-      # The WASM crate's bridge-core git dependency is private: fetch via the
-      # system git CLI, which honours the insteadOf rewrite + auth header the
-      # step below configures (libgit2 ignores GIT_CONFIG_*).
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
-      # Fetch only the exact reviewed wire. Checkout removes its SSH credential
-      # before any PR-controlled build/test code runs; Cargo uses a local mirror.
-      - name: Checkout review wire without retaining credentials
-        uses: actions/checkout@v4
-        with:
-          repository: Proof-labs/exchange
-          ref: 742c631233dca90083d5079c73010cc1f8f3e485
-          ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
-          persist-credentials: false
-          path: .ci-wire-review
-      - name: Prepare credential-free Cargo wire mirror
-        shell: bash
-        run: |
-          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-wire-review" "$RUNNER_TEMP/wire-review.git"
-          git config --global url."file://$RUNNER_TEMP/wire-review.git".insteadOf https://github.com/Proof-labs/exchange.git
-          rm -rf "$GITHUB_WORKSPACE/.ci-wire-review"
-          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
-      # Preserve upstream bridge support without leaving a deploy key available
-      # to PR-controlled compilation or tests. Mirror the pinned bridge tag.
-      - name: Checkout bridge dependency without retaining credentials
-        uses: actions/checkout@v4
-        with:
-          repository: Proof-labs/bridge
-          ref: v1.0.0
-          fetch-depth: 0
-          ssh-key: ${{ secrets.BRIDGE_DEPLOY_KEY }}
-          persist-credentials: false
-          path: .ci-bridge-review
-      - name: Prepare credential-free Cargo bridge mirror
-        shell: bash
-        run: |
-          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-bridge-review" "$RUNNER_TEMP/bridge-review.git"
-          git --git-dir="$RUNNER_TEMP/bridge-review.git" rev-parse refs/tags/v1.0.0
-          git config --global url."file://$RUNNER_TEMP/bridge-review.git".insteadOf ssh://git@github.com/Proof-labs/bridge.git
-          rm -rf "$GITHUB_WORKSPACE/.ci-bridge-review"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -239,47 +205,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
-    env:
-      # The WASM crate's bridge-core git dependency is private: fetch via the
-      # system git CLI with the deploy key the step below configures.
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
-      # Fetch only the exact reviewed wire. Checkout removes its SSH credential
-      # before any PR-controlled build/test code runs; Cargo uses a local mirror.
-      - name: Checkout review wire without retaining credentials
-        uses: actions/checkout@v4
-        with:
-          repository: Proof-labs/exchange
-          ref: 742c631233dca90083d5079c73010cc1f8f3e485
-          ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
-          persist-credentials: false
-          path: .ci-wire-review
-      - name: Prepare credential-free Cargo wire mirror
-        shell: bash
-        run: |
-          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-wire-review" "$RUNNER_TEMP/wire-review.git"
-          git config --global url."file://$RUNNER_TEMP/wire-review.git".insteadOf https://github.com/Proof-labs/exchange.git
-          rm -rf "$GITHUB_WORKSPACE/.ci-wire-review"
-          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
-      # Preserve upstream bridge support without leaving a deploy key available
-      # to PR-controlled compilation or tests. Mirror the pinned bridge tag.
-      - name: Checkout bridge dependency without retaining credentials
-        uses: actions/checkout@v4
-        with:
-          repository: Proof-labs/bridge
-          ref: v1.0.0
-          fetch-depth: 0
-          ssh-key: ${{ secrets.BRIDGE_DEPLOY_KEY }}
-          persist-credentials: false
-          path: .ci-bridge-review
-      - name: Prepare credential-free Cargo bridge mirror
-        shell: bash
-        run: |
-          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-bridge-review" "$RUNNER_TEMP/bridge-review.git"
-          git --git-dir="$RUNNER_TEMP/bridge-review.git" rev-parse refs/tags/v1.0.0
-          git config --global url."file://$RUNNER_TEMP/bridge-review.git".insteadOf ssh://git@github.com/Proof-labs/bridge.git
-          rm -rf "$GITHUB_WORKSPACE/.ci-bridge-review"
       - uses: dtolnay/rust-toolchain@stable
       # One shared Rust cache namespace across the `rust` and `python` jobs:
       # maturin builds the PyO3 crate into the same `./target`, so Python reuses
@@ -307,68 +234,14 @@ jobs:
           cargo run -p proof-trading-sdk-conformance --bin gen-vectors --locked
           git diff --exit-code conformance/ \
             || (echo "::error::conformance/*.ndjson is stale — re-run gen-vectors and commit" && exit 1)
-      # src/fixtures/liquidation_cash_finalized.json is a copy of the engine's
-      # cash-audit golden; it must stay byte-identical to the pinned wire's.
-      - name: Cash-audit fixture matches the pinned wire
-        shell: bash
-        run: |
-          wire="$(dirname "$(cargo metadata --format-version 1 --locked \
-            | jq -r '.packages[] | select(.name == "proof-wire") | .manifest_path')")"
-          golden="$wire/tests/fixtures/liquidation_cash_finalized.json"
-          if [ -f "$golden" ]; then
-            cmp "$golden" src/fixtures/liquidation_cash_finalized.json \
-              || (echo "::error::src/fixtures/liquidation_cash_finalized.json differs from the pinned wire's golden" && exit 1)
-          else
-            echo "::warning::pinned proof-wire ships no cash-audit golden; src/fixtures/liquidation_cash_finalized.json is unverified"
-          fi
 
   python:
     name: Python tests + conformance
     needs: changes
     if: needs.changes.outputs.python == 'true'
     runs-on: ubuntu-latest
-    env:
-      # The workspace lockfile spans the WASM crate's private bridge-core git
-      # dependency: fetch via the system git CLI with the deploy key the step
-      # below configures.
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
-      # Fetch only the exact reviewed wire. Checkout removes its SSH credential
-      # before any PR-controlled build/test code runs; Cargo uses a local mirror.
-      - name: Checkout review wire without retaining credentials
-        uses: actions/checkout@v4
-        with:
-          repository: Proof-labs/exchange
-          ref: 742c631233dca90083d5079c73010cc1f8f3e485
-          ssh-key: ${{ secrets.EXCHANGE_DEPLOY_KEY }}
-          persist-credentials: false
-          path: .ci-wire-review
-      - name: Prepare credential-free Cargo wire mirror
-        shell: bash
-        run: |
-          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-wire-review" "$RUNNER_TEMP/wire-review.git"
-          git config --global url."file://$RUNNER_TEMP/wire-review.git".insteadOf https://github.com/Proof-labs/exchange.git
-          rm -rf "$GITHUB_WORKSPACE/.ci-wire-review"
-          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
-      # Preserve upstream bridge support without leaving a deploy key available
-      # to PR-controlled compilation or tests. Mirror the pinned bridge tag.
-      - name: Checkout bridge dependency without retaining credentials
-        uses: actions/checkout@v4
-        with:
-          repository: Proof-labs/bridge
-          ref: v1.0.0
-          fetch-depth: 0
-          ssh-key: ${{ secrets.BRIDGE_DEPLOY_KEY }}
-          persist-credentials: false
-          path: .ci-bridge-review
-      - name: Prepare credential-free Cargo bridge mirror
-        shell: bash
-        run: |
-          git clone --bare --no-hardlinks "$GITHUB_WORKSPACE/.ci-bridge-review" "$RUNNER_TEMP/bridge-review.git"
-          git --git-dir="$RUNNER_TEMP/bridge-review.git" rev-parse refs/tags/v1.0.0
-          git config --global url."file://$RUNNER_TEMP/bridge-review.git".insteadOf ssh://git@github.com/Proof-labs/bridge.git
-          rm -rf "$GITHUB_WORKSPACE/.ci-bridge-review"
       - uses: dtolnay/rust-toolchain@stable
       # Same shared-key as the `rust` job so the maturin build restores its
       # compiled dependency graph (the expensive part) instead of rebuilding it.

@@ -1,6 +1,11 @@
 import { Decoder } from "@msgpack/msgpack";
 import { decodeEventInfo, isOneBookEventRow } from "./governance-query.js";
 import type { MarketConfig, MarketKind, MarketsSnapshot } from "./types.js";
+import {
+  defaultExchangeHttpTransport,
+  readContext,
+  type ExchangeHttpTransport,
+} from "./http-transport.js";
 
 export const MAX_SNAPSHOT_BYTES = 1024 * 1024;
 const MAX_ROWS = 16_384;
@@ -248,13 +253,16 @@ export function decodeMarketsSnapshot(
 export async function readMarketsSnapshot(
   gatewayUrl: string,
   expectedChain: Uint8Array,
+  httpTransport: ExchangeHttpTransport = defaultExchangeHttpTransport,
 ): Promise<MarketsSnapshot> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
   try {
-    const response = await fetch(
-      `${gatewayUrl.replace(/\/$/, "")}/v1/markets-snapshot`,
+    const url = `${gatewayUrl.replace(/\/$/, "")}/v1/markets-snapshot`;
+    const response = await httpTransport(
+      url,
       { signal: controller.signal, redirect: "error" },
+      readContext(url, "query"),
     );
     if (response.status !== 200)
       throw new Error(`market snapshot returned HTTP ${response.status}`);

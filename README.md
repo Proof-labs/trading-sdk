@@ -240,6 +240,30 @@ are monitoring signals rather than faults. Older nodes serve the twelve-field
 layout (`ORACLE_FAULT_BITS`, named in `faultReasons`); `Disagreement` and
 `PairTimeMismatch` keep their bits but are no longer produced.
 
+### Trading No on an event's binary book
+
+Each event has one binary book, priced in Yes (`EventInfo.ebyMarket`). Buying
+No at `q` is selling Yes at `$1 − q`, so the SDK places No orders as their Yes
+mirror:
+
+```typescript
+await client.buyNo({ market: event.ebyMarket, price: 400_000n, quantity: 10n }); // Yes sell at 0.60
+await client.sellNo({
+  market: event.ebyMarket,
+  price: 300_000n,
+  quantity: 10n,
+  reduceOnly: true,
+}); // reduce-only Yes buy at 0.70
+```
+
+`stopLoss`/`takeProfit` take No trigger prices and keep their role on the
+mirrored Yes position (a stop at No 0.30 becomes a stop at Yes 0.70); their
+`maxSlippageBps` applies to the Yes price. A No price of 0 or `$1` has no Yes
+mirror and throws `BinaryPriceError` before anything is sent. `yesOrder`,
+`yesLimb` and `binaryPositionView` expose the same translation, and the view
+reads a short Yes position as No at `$1 − entry`. All of it is pinned against
+the Rust core by `conformance/binary.ndjson`.
+
 ### Oracle freshness for trading UIs
 
 ```typescript
@@ -288,10 +312,22 @@ HTTP errors and cancellation. Block pages contain `blocks` and opaque
 transaction list. Transaction detail preserves `code` (zero is success) and
 `raw_tx` (base64 committed signed bytes).
 
-Indexer backfill and freshness are distinct from chain progress. Use the status
-response and block timestamps to present delay; a missing indexed record remains
+Indexer backfill and freshness are distinct from chain progress.
+`historyStatus()` bypasses HTTP caches; check it before presenting an empty
+history as definitive, since an indexer that has not caught up returns empty
+pages too. Use the status response and block timestamps to present delay; a missing indexed record remains
 HTTP 404, and unavailable history remains an error. These reads never fabricate
 blocks or replace errors with empty results.
+
+### Loaded engine identity
+
+For operational artifact evidence, `await client.reads().version({ signal })`
+forwards `GET /v1/version` with `cache: "no-store"`. The raw response includes
+the upstream node's reported loaded engine version and library hash. A missing
+route, authentication failure or transport failure stays an error; there is no
+direct-node fallback. This identifies only the responding upstream, not every
+validator, and does not prove consensus compatibility or authorize a rollout. Use
+`queryNodeVersion()` for a decoded `NodeVersion`.
 
 ### Optional native Rust gateway transport
 
@@ -398,7 +434,7 @@ string—pass those strings and the cursor through unchanged.
 The `Action` type is a discriminated union. Every action is:
 
 ```typescript
-type Action = TraderAction | OperatorAction;
+type Action = TraderAction | OperatorAction | GovernanceAction;
 
 type TraderAction =
   | { type: "PlaceOrder"; data: PlaceOrder }
@@ -423,6 +459,23 @@ dedicated engine allowlist, so codec availability grants nothing without an
 operator-provisioned key. See [AGENTS.md](AGENTS.md) → "Operator actions" for
 usage (e.g. driving the BE-31 multi-source mark via `OracleUpdateComposite` +
 `UpdateMarketFees` `markSourceMode`).
+
+#### Governance actions (admin multisig)
+
+`GovernanceAction` covers the signer-registry multisig:
+
+```typescript
+type GovernanceAction =
+  | { type: "ProposeAdminAction"; data: ProposeAdminAction }
+  | { type: "ApproveAdminAction"; data: ApproveAdminAction }
+  | { type: "RejectAdminAction"; data: RejectAdminAction }
+  | { type: "EmergencyAdminAction"; data: EmergencyAdminAction };
+```
+
+`ProposeAdminAction` and `ApproveAdminAction` carry one `AdminAction` (create a
+market, attach a conditional, schedule an upgrade, and the rest);
+`EmergencyAdminAction` carries one single-signer `EmergencyAction`. Each is
+refused unless the signer is in the current admin signer registry.
 
 ### Options
 

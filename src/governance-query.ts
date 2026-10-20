@@ -19,24 +19,27 @@ import type {
   ProposalStatus,
   SetTriggerMarketConfig,
   SetOracleGuards,
+  ScheduleUpgrade,
+  CancelUpgrade,
+  NodeVersion,
+  PendingUpgradePlan,
   SetWithdrawalLimit,
   SetOperatorReceiptRegistry,
+  SetLiquidationConfig,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
   AuthoritiesSnapshot,
   InsuranceFundAllocation,
+  UpgradesInfo,
 } from "./types.js";
+import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import {
   validateFundInsuranceFund,
   validateWithdrawInsuranceFund,
 } from "./insurance-funding.js";
+import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import { Outcome } from "./types.js";
-import {
-  decodeLiquidationPolicy,
-  decodeLiquidationRestart,
-  decodeLiquidationRelease,
-} from "./liquidation-policy.js";
 
 /**
  * Typed decoders for the engine's governance READ model — the responses
@@ -176,6 +179,44 @@ function decodeSetWithdrawalLimit(value: unknown): SetWithdrawalLimit {
     windowSecs: toU32(raw[1], "setWithdrawalLimit.windowSecs"),
   };
   return limit;
+}
+
+/// Inner tag 17: `[predecessor, sequence, config]`, where `config` is
+/// `[targetRatioBps, [numerator, denominator], partialPenaltyBps,
+/// maxBookOrders, maxCandidatePrefixes, maxCommittedFills, maxStateReads,
+/// maxStateReadBytes]`. Every newtype is its bare integer. A proposal the
+/// engine would refuse fails closed here too.
+function decodeSetLiquidationConfig(value: unknown): SetLiquidationConfig {
+  const raw = toTuple(value, "setLiquidationConfig", 3);
+  const c = toTuple(raw[2], "setLiquidationConfig.config", 8);
+  const threshold = toTuple(
+    c[1],
+    "setLiquidationConfig.config.fullCloseThreshold",
+    2,
+  );
+  const field = (name: string) => `setLiquidationConfig.config.${name}`;
+  const action: SetLiquidationConfig = {
+    predecessor: toU64(raw[0], "setLiquidationConfig.predecessor"),
+    sequence: toU64(raw[1], "setLiquidationConfig.sequence"),
+    config: {
+      targetRatioBps: toU32(c[0], field("targetRatioBps")),
+      fullCloseThreshold: {
+        numerator: toU32(threshold[0], field("fullCloseThreshold.numerator")),
+        denominator: toU32(
+          threshold[1],
+          field("fullCloseThreshold.denominator"),
+        ),
+      },
+      partialPenaltyBps: toU32(c[2], field("partialPenaltyBps")),
+      maxBookOrders: toU32(c[3], field("maxBookOrders")),
+      maxCandidatePrefixes: toU32(c[4], field("maxCandidatePrefixes")),
+      maxCommittedFills: toU32(c[5], field("maxCommittedFills")),
+      maxStateReads: toU32(c[6], field("maxStateReads")),
+      maxStateReadBytes: toU32(c[7], field("maxStateReadBytes")),
+    },
+  };
+  validateSetLiquidationConfig(action);
+  return action;
 }
 
 /// DEC-112 (inner tag 20): the operator receipt registry rotation. Tuple
@@ -578,6 +619,23 @@ function decodeSetOracleGuards(value: unknown): SetOracleGuards {
   return guards;
 }
 
+function decodeScheduleUpgrade(value: unknown): ScheduleUpgrade {
+  const raw = toTuple(value, "scheduleUpgrade", 4);
+  const plan: ScheduleUpgrade = {
+    targetHeight: toU64(raw[0], "scheduleUpgrade.targetHeight"),
+    major: toU32(raw[1], "scheduleUpgrade.major"),
+    minor: toU32(raw[2], "scheduleUpgrade.minor"),
+    successorSha256: toBytes(raw[3], "scheduleUpgrade.successorSha256", 32),
+  };
+  validateScheduleUpgrade(plan);
+  return plan;
+}
+
+function decodeCancelUpgrade(value: unknown): CancelUpgrade {
+  const raw = toTuple(value, "cancelUpgrade", 1);
+  return { targetHeight: toU64(raw[0], "cancelUpgrade.targetHeight") };
+}
+
 function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
   const raw = toTuple(value, "setTriggerMarketConfig", 7);
   if (typeof raw[2] !== "boolean") {
@@ -640,13 +698,13 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   ConfigureOraclePolicy: 12,
   SetOracleGuards: 13,
   FundInsuranceFund: 18,
-  WithdrawInsuranceFund: 21,
-  PublishLiquidationPolicy: 22,
-  RevokeLiquidationPolicy: 23,
-  RestartLiquidationPlan: 24,
-  ReleaseLiquidationPlan: 25,
+  WithdrawInsuranceFund: 25,
+  ScheduleUpgrade: 14,
+  CancelUpgrade: 15,
   SetWithdrawalLimit: 19,
+  SetLiquidationConfig: 17,
   SetOperatorReceiptRegistry: 20,
+  EnableSubAccounts: 21,
 };
 
 /** The typed inner operation a proposal carries. Fails closed on an unknown
@@ -657,24 +715,12 @@ export function decodeAdminAction(
   field = "action",
 ): AdminAction {
   // Unit variants (no fields) arrive as a bare string, not a single-entry map.
-  // Only the known unit variant is accepted here; any other bare string falls
+  // Only the known unit variants are accepted here; any other bare string falls
   // through to `variantOf`, which rejects it as "not an enum variant".
   if (value === "UnpauseBridge") return { kind: "UnpauseBridge" };
+  if (value === "EnableSubAccounts") return { kind: "EnableSubAccounts" };
   const { name, payload } = variantOf(value, field);
   switch (name) {
-    case "PublishLiquidationPolicy":
-      return { kind: name, value: decodeLiquidationPolicy(payload) };
-    case "RestartLiquidationPlan":
-      return { kind: name, value: decodeLiquidationRestart(payload) };
-    case "ReleaseLiquidationPlan":
-      return { kind: name, value: decodeLiquidationRelease(payload) };
-    case "RevokeLiquidationPolicy":
-      return {
-        kind: name,
-        value: {
-          revision: toU64(toTuple(payload, field, 1)[0], `${field}.revision`),
-        },
-      };
     case "FundInsuranceFund": {
       const raw = toTuple(payload, field, 3);
       const decoded: AdminAction & { kind: "FundInsuranceFund" } = {
@@ -712,6 +758,11 @@ export function decodeAdminAction(
       return {
         kind: "SetWithdrawalLimit",
         value: decodeSetWithdrawalLimit(payload),
+      };
+    case "SetLiquidationConfig":
+      return {
+        kind: "SetLiquidationConfig",
+        value: decodeSetLiquidationConfig(payload),
       };
     case "SetOperatorReceiptRegistry":
       return {
@@ -767,6 +818,16 @@ export function decodeAdminAction(
       return {
         kind: "UpdateAuthoritySet",
         value: decodeUpdateAuthoritySet(payload),
+      };
+    case "ScheduleUpgrade":
+      return {
+        kind: "ScheduleUpgrade",
+        value: decodeScheduleUpgrade(payload),
+      };
+    case "CancelUpgrade":
+      return {
+        kind: "CancelUpgrade",
+        value: decodeCancelUpgrade(payload),
       };
     default:
       throw new Error(
@@ -840,12 +901,15 @@ export function decodeProposalDisplayInfo(
   }
   const fields = toTuple(raw, at, 15);
   const actionTag = toU8(fields[11], `${at}.actionTag`);
-  const action = decodeAdminAction(fields[12], `${at}.action`);
-  const expectedActionTag = ACTION_TAG_BY_KIND[action.kind];
-  if (actionTag !== expectedActionTag) {
-    throw new Error(
-      `governance decode: ${at}.actionTag ${actionTag} does not match ${action.kind} tag ${expectedActionTag}`,
-    );
+  const action =
+    fields[12] == null ? null : decodeAdminAction(fields[12], `${at}.action`);
+  if (action !== null) {
+    const expectedActionTag = ACTION_TAG_BY_KIND[action.kind];
+    if (actionTag !== expectedActionTag) {
+      throw new Error(
+        `governance decode: ${at}.actionTag ${actionTag} does not match ${action.kind} tag ${expectedActionTag}`,
+      );
+    }
   }
   return {
     proposalId: toU64(fields[0], `${at}.proposalId`),
@@ -940,5 +1004,56 @@ export function decodeProposalPage(raw: unknown): ProposalPage {
     proposals,
     nextCursor:
       fields[1] == null ? null : toU64(fields[1], "proposalPage.nextCursor"),
+  };
+}
+
+/** Decode the engine's `UpgradesInfo` (`GET /v1/upgrades`). */
+export function decodeUpgradesInfo(raw: unknown): UpgradesInfo {
+  const fields = toTuple(raw, "upgrades", 2);
+  let plan: PendingUpgradePlan | null = null;
+  if (fields[0] != null) {
+    const p = toTuple(fields[0], "upgrades.plan", 5);
+    plan = {
+      targetHeight: toU64(p[0], "upgrades.plan.targetHeight"),
+      major: toU32(p[1], "upgrades.plan.major"),
+      minor: toU32(p[2], "upgrades.plan.minor"),
+      successorSha256: toBytes(p[3], "upgrades.plan.successorSha256", HASH_LEN),
+      scheduledHeight: toU64(p[4], "upgrades.plan.scheduledHeight"),
+    };
+  }
+  const executed = toArray(fields[1], "upgrades.executed").map((e, i) => {
+    const x = toTuple(e, `upgrades.executed[${i}]`, 3);
+    return {
+      activatedHeight: toU64(x[0], `upgrades.executed[${i}].activatedHeight`),
+      major: toU32(x[1], `upgrades.executed[${i}].major`),
+      minor: toU32(x[2], `upgrades.executed[${i}].minor`),
+    };
+  });
+  return { plan, executed };
+}
+
+/** Validate the node's JSON `GET /v1/version` body. */
+export function decodeNodeVersion(raw: unknown): NodeVersion {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("version decode: body is not an object");
+  }
+  const o = raw as Record<string, unknown>;
+  const str = (k: string): string => {
+    if (typeof o[k] !== "string") {
+      throw new Error(`version decode: ${k} is not a string`);
+    }
+    return o[k] as string;
+  };
+  const sha = str("engine_lib_sha256");
+  if (!/^[0-9a-f]{64}$/.test(sha)) {
+    throw new Error("version decode: engine_lib_sha256 is not 64 hex chars");
+  }
+  return {
+    node: str("node"),
+    engine: str("engine"),
+    engineAbiVersion: toU32(o.engine_abi_version, "version.engine_abi_version"),
+    engineMajor: toU32(o.engine_major, "version.engine_major"),
+    engineMinor: toU32(o.engine_minor, "version.engine_minor"),
+    engineLibSha256: sha,
   };
 }

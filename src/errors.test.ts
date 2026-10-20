@@ -22,7 +22,7 @@ describe("decodeExecError", () => {
     expect(decodeExecError(255)?.name).toBe("InternalError");
   });
 
-  it("names candidate insurance refusals without reusing reserved code 101", () => {
+  it("names candidate insurance refusals without reusing PLP code 101", () => {
     for (const [code, name] of [
       [102, "InsuranceFundingReplayed"],
       [103, "InsuranceWithdrawalReplayed"],
@@ -32,7 +32,7 @@ describe("decodeExecError", () => {
       expect(decodeExecError(code)?.name).toBe(name);
       expect(execErrorName(code)).toBe(name);
     }
-    expect(decodeExecError(101)).toBeNull();
+    expect(decodeExecError(101)?.name).toBe("InvalidPlpConfig");
   });
 
   it("decodes the event cap and the settle-price mismatch (96, 32)", () => {
@@ -143,6 +143,13 @@ describe("ExecErrorCode enum", () => {
     expect(ExecErrorCode.OracleVerdictUnavailable).toBe(77);
     expect(ExecErrorCode.WithdrawalLimitExceeded).toBe(99);
     expect(ExecErrorCode.AccountOrderCapReached).toBe(100);
+  });
+
+  it("decodes PLP shape faults without reassigning the resting-order cap code", () => {
+    expect(ExecErrorCode.InvalidPlpConfig).toBe(101);
+    expect(decodeExecError(101)?.name).toBe("InvalidPlpConfig");
+    expect(decodeExecError(100)?.name).toBe("AccountOrderCapReached");
+    expect(decodeExecError(99)?.name).toBe("WithdrawalLimitExceeded");
   });
 });
 

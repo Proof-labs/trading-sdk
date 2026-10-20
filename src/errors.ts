@@ -149,7 +149,8 @@ export enum ExecErrorCode {
   WithdrawalLimitExceeded = 99,
   /** The account already holds the maximum number of resting orders. */
   AccountOrderCapReached = 100,
-  // 101 is reserved by the engine; do not reuse it.
+  /** A PLP configuration violates one of the payload shape rules. */
+  InvalidPlpConfig = 101,
   InsuranceFundingReplayed = 102,
   InsuranceWithdrawalReplayed = 103,
   MarketlessInsurancePool = 104,
@@ -538,6 +539,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "AccountOrderCapReached",
     description:
       "the account already holds the maximum number of resting orders — cancel one before placing another",
+  },
+  101: {
+    name: "InvalidPlpConfig",
+    description:
+      "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance",
   },
   102: {
     name: "InsuranceFundingReplayed",

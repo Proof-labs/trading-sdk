@@ -557,6 +557,29 @@ fn main() -> Result<(), Box<dyn Error>> {
                        "mark_price_max_oracle_age_ms": u64::MAX,
                        "max_oracle_deviation_bps": 10_000u32}}}),
         ),
+        // Tags 14/15: the on-chain upgrade plan. The release is (major, minor).
+        codec_case(
+            "propose_admin_action/schedule_upgrade",
+            PROPOSE_ADMIN_ACTION,
+            json!({"proposer": vec![0xA1u8;20], "registry_version": 1u64,
+                   "action": {"ScheduleUpgrade": {"target_height": 50_780_000u64,
+                       "major": 2u32, "minor": 1u32,
+                       "successor_sha256": vec![0xABu8; 32]}}}),
+        ),
+        codec_case(
+            "propose_admin_action/schedule_upgrade_u64_max",
+            PROPOSE_ADMIN_ACTION,
+            json!({"proposer": vec![0xA1u8;20], "registry_version": 1u64,
+                   "action": {"ScheduleUpgrade": {"target_height": u64::MAX,
+                       "major": u32::MAX, "minor": u32::MAX,
+                       "successor_sha256": vec![0x01u8; 32]}}}),
+        ),
+        codec_case(
+            "propose_admin_action/cancel_upgrade",
+            PROPOSE_ADMIN_ACTION,
+            json!({"proposer": vec![0xA1u8;20], "registry_version": 1u64,
+                   "action": {"CancelUpgrade": {"target_height": 50_780_000u64}}}),
+        ),
         // Synthetic opaque bytes test the outer wire only, not a valid live policy.
         codec_case(
             "propose_admin_action/configure_oracle_policy",
@@ -577,6 +600,42 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "proposer": vec![0xA1u8; 20],
                 "registry_version": 1u64,
                 "action": "UnpauseBridge"
+            }),
+        ),
+        // EnableSubAccounts (inner tag 0x15) is the second unit variant: the
+        // bare string `"EnableSubAccounts"`, no payload.
+        codec_case(
+            "propose_admin_action/enable_sub_accounts",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": "EnableSubAccounts"
+            }),
+        ),
+        // SetLiquidationConfig (inner tag 0x11): the configuration exchange-wire
+        // freezes in its own vector. Every newtype is its bare integer and the
+        // full-close threshold is a nested positional pair.
+        codec_case(
+            "propose_admin_action/set_liquidation_config",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetLiquidationConfig": {
+                    "predecessor": 1u64,
+                    "sequence": 2u64,
+                    "config": {
+                        "target_ratio_bps": 10_500u32,
+                        "full_close_threshold": { "numerator": 2u32, "denominator": 3u32 },
+                        "partial_penalty_bps": 100u32,
+                        "max_book_orders": 20u32,
+                        "max_candidate_prefixes": 20u32,
+                        "max_committed_fills": 10u32,
+                        "max_state_reads": 10_000u32,
+                        "max_state_read_bytes": 1_000_000u32
+                    }
+                }}
             }),
         ),
         // UpdateAuthoritySet (inner tag 0x07, exchange#422 / DEC-87,
@@ -640,7 +699,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }}
             }),
         ),
-        // Insurance transfers (inner tags 18 and 21): two ascending pool
+        // Insurance transfers (inner tags 18 and 25): two ascending pool
         // allocations so the nested `[pool_id, amount]` rows are pinned,
         // summing to exactly `i64::MAX`, the widest admitted transfer total.
         codec_case(
@@ -669,148 +728,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "withdrawal_id": u64::MAX,
                     "recipient": vec![0xD2u8; 20],
                     "allocations": [{ "pool_id": 255u8, "amount": 1u64 }]
-                }}
-            }),
-        ),
-        // Liquidation governance (inner tags 22-25). Every scalar is distinct
-        // so a swapped field changes the bytes; `expected_revision` is pinned
-        // both present and absent.
-        codec_case(
-            "propose_admin_action/publish_liquidation_policy",
-            PROPOSE_ADMIN_ACTION,
-            json!({
-                "proposer": vec![0xA1u8; 20],
-                "registry_version": 1u64,
-                "action": { "PublishLiquidationPolicy": {
-                    "expected_revision": 4u64,
-                    "revision": 5u64,
-                    "funding": {
-                        "id": vec![0xE1u8; 32],
-                        "committed_height": 1_000u64,
-                        "eligible_micro_usdc": 2_000_000u64
-                    },
-                    "reference": {
-                        "maximum_age_ms": 3_000u64,
-                        "maximum_book_spread_bps": 40u32,
-                        "minimum_side_notional_micro_usdc": 5_000_000u64,
-                        "execution_collar_bps": 60u32,
-                        "reference_orders_per_side": 7u32
-                    },
-                    "lifetime_blocks": 80u64,
-                    "no_progress_blocks": 9u64,
-                    "work": {
-                        "maximum_plan_legs": 10u32,
-                        "maximum_owner_orders": 11u32,
-                        "owners": 12u32,
-                        "legs": 13u32,
-                        "levels": 14u32,
-                        "orders": 15u32,
-                        "fills": 16u32,
-                        "candidates": 17u32,
-                        "point_reads": 18u32,
-                        "index_rows": 19u32,
-                        "read_bytes": 20u32,
-                        "checkpoint_bytes": 21u32
-                    },
-                    "insurance": {
-                        "plan_bps": 22u32,
-                        "owner_bps": 23u32,
-                        "market_bps": 24u32,
-                        "pool_bps": 25u32,
-                        "global_bps": 26u32,
-                        "protected_floor_bps": 27u32
-                    }
-                }}
-            }),
-        ),
-        codec_case(
-            "propose_admin_action/publish_liquidation_policy_first",
-            PROPOSE_ADMIN_ACTION,
-            json!({
-                "proposer": vec![0xA1u8; 20],
-                "registry_version": 1u64,
-                "action": { "PublishLiquidationPolicy": {
-                    "expected_revision": null,
-                    "revision": 1u64,
-                    "funding": {
-                        "id": vec![0xE2u8; 32],
-                        "committed_height": 1u64,
-                        "eligible_micro_usdc": 0u64
-                    },
-                    "reference": {
-                        "maximum_age_ms": 1u64,
-                        "maximum_book_spread_bps": 1u32,
-                        "minimum_side_notional_micro_usdc": 1u64,
-                        "execution_collar_bps": 1u32,
-                        "reference_orders_per_side": 1u32
-                    },
-                    "lifetime_blocks": 2u64,
-                    "no_progress_blocks": 1u64,
-                    "work": {
-                        "maximum_plan_legs": 1u32,
-                        "maximum_owner_orders": 1u32,
-                        "owners": 1u32,
-                        "legs": 1u32,
-                        "levels": 1u32,
-                        "orders": 1u32,
-                        "fills": 1u32,
-                        "candidates": 1u32,
-                        "point_reads": 1u32,
-                        "index_rows": 1u32,
-                        "read_bytes": 1u32,
-                        "checkpoint_bytes": u32::MAX
-                    },
-                    "insurance": {
-                        "plan_bps": 0u32,
-                        "owner_bps": 0u32,
-                        "market_bps": 0u32,
-                        "pool_bps": 0u32,
-                        "global_bps": 0u32,
-                        "protected_floor_bps": 10_000u32
-                    }
-                }}
-            }),
-        ),
-        codec_case(
-            "propose_admin_action/revoke_liquidation_policy",
-            PROPOSE_ADMIN_ACTION,
-            json!({
-                "proposer": vec![0xA1u8; 20],
-                "registry_version": 1u64,
-                "action": { "RevokeLiquidationPolicy": { "revision": 5u64 } }
-            }),
-        ),
-        codec_case(
-            "propose_admin_action/restart_liquidation_plan",
-            PROPOSE_ADMIN_ACTION,
-            json!({
-                "proposer": vec![0xA1u8; 20],
-                "registry_version": 1u64,
-                "action": { "RestartLiquidationPlan": {
-                    "owner": vec![0xC4u8; 20],
-                    "plan_id": 31u64,
-                    "expected_revision": 32u64,
-                    "expected_checkpoint_hash": vec![0xE3u8; 32],
-                    "expected_window_generation": 33u64,
-                    "target_revision": 34u64,
-                    "lifetime_blocks": 35u64,
-                    "no_progress_blocks": 36u64
-                }}
-            }),
-        ),
-        codec_case(
-            "propose_admin_action/release_liquidation_plan",
-            PROPOSE_ADMIN_ACTION,
-            json!({
-                "proposer": vec![0xA1u8; 20],
-                "registry_version": 1u64,
-                "action": { "ReleaseLiquidationPlan": {
-                    "owner": vec![0xC5u8; 20],
-                    "plan_id": 41u64,
-                    "expected_revision": 42u64,
-                    "safety_revision": 43u64,
-                    "expected_checkpoint_hash": vec![0xE4u8; 32],
-                    "expected_window_generation": 44u64
                 }}
             }),
         ),
@@ -1366,12 +1283,108 @@ fn main() -> Result<(), Box<dyn Error>> {
     errors.push(error_case("code51/ignored_log", 51, Some("unrecognized")));
     write_ndjson(&dir.join(cv::ERRORS_FILE), &errors)?;
 
+    // ── binary family ────────────────────────────────────────────────────
+    // An event's one binary book traded and read in No terms: buy No at q is
+    // sell Yes at $1 − q, limbs keep their role at the mirrored trigger, and
+    // a short Yes reads as No. Refusals pin the prices with no mirror.
+    let owner = vec![1u8; 20];
+    let no_order = |price: u64, side: &str, extra: serde_json::Value| {
+        let mut input = json!({
+            "market": 70000, "owner": owner.clone(), "side": side, "price": price,
+            "quantity": 10u64, "client_order_id": null, "post_only": false,
+            "reduce_only": false, "time_in_force": "Gtc",
+            "stop_loss": null, "take_profit": null,
+        });
+        if let (Some(base), Some(extra)) = (input.as_object_mut(), extra.as_object()) {
+            for (k, v) in extra {
+                base.insert(k.clone(), v.clone());
+            }
+        }
+        input
+    };
+    let limb = |price: u64, bps: u32, id: u64| json!({"trigger_price": price, "max_slippage_bps": bps, "client_trigger_id": id});
+    let order_inputs: Vec<(&str, serde_json::Value)> = vec![
+        ("buy_no/basic", no_order(400_000, "Buy", json!({}))),
+        (
+            "sell_no/reduce_only_ioc_cloid",
+            no_order(
+                300_000,
+                "Sell",
+                json!({"quantity": 25u64, "client_order_id": 99u64,
+                       "reduce_only": true, "time_in_force": "Ioc"}),
+            ),
+        ),
+        (
+            "buy_no/brackets_post_only",
+            no_order(
+                500_000,
+                "Buy",
+                json!({"post_only": true,
+                       "stop_loss": limb(300_000, 150, 11),
+                       "take_profit": limb(800_000, 75, 12)}),
+            ),
+        ),
+        ("buy_no/lowest_price", no_order(1, "Buy", json!({}))),
+        (
+            "sell_no/highest_price",
+            no_order(999_999, "Sell", json!({"time_in_force": "Fok"})),
+        ),
+        (
+            "refused/no_price_one_dollar",
+            no_order(1_000_000, "Buy", json!({})),
+        ),
+        ("refused/no_price_zero", no_order(0, "Sell", json!({}))),
+        (
+            "refused/stop_at_one_dollar",
+            no_order(
+                500_000,
+                "Buy",
+                json!({"stop_loss": limb(1_000_000, 150, 11)}),
+            ),
+        ),
+        (
+            "refused/take_profit_at_zero",
+            no_order(500_000, "Buy", json!({"take_profit": limb(0, 150, 12)})),
+        ),
+    ];
+    let mut binary = Vec::new();
+    for (case, input) in order_inputs {
+        binary.push(cv::BinaryCase::NoOrder {
+            case: case.to_string(),
+            expect: cv::no_order_expect(&input)?,
+            input,
+        });
+    }
+    let view_inputs: Vec<(&str, &str, u64, u64)> = vec![
+        ("view/short_yes_is_no", "Sell", 600_000, 40),
+        ("view/long_yes_is_yes", "Buy", 600_000, 40),
+        (
+            "view/short_yes_at_one_dollar_is_no_at_zero",
+            "Sell",
+            1_000_000,
+            5,
+        ),
+        ("view/long_yes_at_zero", "Buy", 0, 5),
+        ("view/entry_above_one_dollar", "Sell", 1_000_001, 5),
+    ];
+    for (case, side, entry_price, size) in view_inputs {
+        binary.push(cv::BinaryCase::PositionView {
+            case: case.to_string(),
+            expect: cv::position_view_expect(side, entry_price, size)?,
+            side: side.to_string(),
+            entry_price,
+            size,
+        });
+    }
+    write_ndjson(&dir.join(cv::BINARY_FILE), &binary)?;
+
     eprintln!(
-        "wrote {} codec, {} signing, {} nonce, {} errors cases to {}",
+        "wrote {} codec, {} signing, {} nonce, {} errors, {} binary cases to {}",
         codec.len(),
         signing.len(),
         nonce.len(),
         errors.len(),
+        binary.len(),
         dir.display()
     );
     Ok(())

@@ -143,7 +143,7 @@ define_error_kinds! {
     98  => TriggerOrderIncompatible         ~ "Order cannot carry attached SL/TP (reduce-only order, ineligible market, or inactive feature).",
     99  => WithdrawalLimitExceeded          ~ "The withdrawal would push the account's rolling-window outflow past the configured per-account cap. The attempted debit, the cap, and when the oldest in-window outflow expires are in the log; capacity returns as in-window outflows age out.",
     100 => AccountOrderCapReached           ~ "The account already holds the maximum number of resting orders; cancel one before placing another.",
-    // 101 remains reserved by the engine.
+    101 => InvalidPlpConfig                 ~ "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance.",
     102 => InsuranceFundingReplayed ~ "Insurance-fund funding id has already executed; each funding id executes at most once.",
     103 => InsuranceWithdrawalReplayed ~ "Insurance withdrawal id has already executed.",
     104 => MarketlessInsurancePool ~ "Insurance transfer pool has no registered market.",
@@ -434,7 +434,7 @@ mod exec_error_meaning_tests {
             },
             ExecError::TooManyActiveEvents { current: 0, max: 0 },
             ExecError::InsuranceFundingReplayed {
-                funding_id: crate::types::FundingId(1),
+                funding_id: crate::types::InsuranceFundingId(1),
             },
             ExecError::InsuranceWithdrawalReplayed {
                 withdrawal_id: crate::types::InsuranceWithdrawalId(1),
@@ -488,7 +488,7 @@ mod exec_error_meaning_tests {
         codes.sort();
         codes.dedup();
         let expected: Vec<u32> = (1u32..=105)
-            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81 | 101))
+            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(

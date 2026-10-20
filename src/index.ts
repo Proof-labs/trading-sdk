@@ -1,10 +1,5 @@
 // Types
 export {
-  decodeLiquidationCashAudit,
-  type LiquidationCashAudit,
-} from "./liquidation-cash-audit.js";
-
-export {
   type Address,
   Side,
   TimeInForce,
@@ -45,10 +40,10 @@ export {
   type FundInsuranceFund,
   type InsuranceFundAllocation,
   type WithdrawInsuranceFund,
-  type PublishLiquidationPolicy,
-  type RevokeLiquidationPolicy,
-  type RestartLiquidationPlan,
-  type ReleaseLiquidationPlan,
+  type LiquidationConfig,
+  type SetLiquidationConfig,
+  type ScheduleUpgrade,
+  type CancelUpgrade,
   type BridgeWithdrawalReceipt,
   type OperatorReceiptProof,
   type ApproveAgent,
@@ -78,6 +73,10 @@ export {
   type EmergencyAdminAction,
   type AdminSignerRegistry,
   type AuthoritiesSnapshot,
+  type PendingUpgradePlan,
+  type ExecutedUpgrade,
+  type UpgradesInfo,
+  type NodeVersion,
   type ExpiryReason,
   type ProposalStatus,
   type ProposalDisplayInfo,
@@ -90,6 +89,9 @@ export {
   type ExchangeEvent,
   type OrderPlacedEvent,
   type OrderCancelledEvent,
+  type CancelReason,
+  type OrderMigratedEvent,
+  type PositionMigratedEvent,
   type TradeExecutedEvent,
   type PositionUpdatedEvent,
   type PositionClosedEvent,
@@ -97,6 +99,9 @@ export {
   type FundingAppliedEvent,
   type FundingSettledEvent,
   type AccountLiquidatedEvent,
+  type InsuranceFundUpdatedEvent,
+  type PositionAutoDeleveragedEvent,
+  type PlpAbsorbedEvent,
   type MarketCreatedEvent,
   type AdlQueueEntry,
   type Ticker,
@@ -176,6 +181,36 @@ export {
 } from "./triggers.js";
 
 export { validateSetOracleGuards } from "./oracle-guards.js";
+export { validateScheduleUpgrade } from "./upgrade-plan.js";
+export {
+  MAX_PARTIAL_PENALTY_BPS,
+  RATIO_ONE_BPS,
+  validateLiquidationConfig,
+  validateSetLiquidationConfig,
+} from "./liquidation-config.js";
+export {
+  LIQUIDATION_PROGRESS_OUTCOMES,
+  decodeLiquidationEvent,
+  type FullLiquidationFeeEvent,
+  type LiquidationConfigSetEvent,
+  type LiquidationEvent,
+  type LiquidationEventInput,
+  type LiquidationProgress,
+  type LiquidationProgressReportedEvent,
+  type PartialLiquidationFeeEvent,
+} from "./liquidation-events.js";
+
+export {
+  BINARY_PRICE_MAX,
+  BinaryPriceError,
+  type BinaryErrorName,
+  type BinaryPositionView,
+  type NoOrder,
+  binaryPositionView,
+  yesLimb,
+  yesOrder,
+  yesSide,
+} from "./binary.js";
 
 export {
   decodePositionTriggerHistoryPage,
@@ -211,6 +246,8 @@ export {
   decodeAdminSignerRegistry,
   decodeAdminSignerRegistryInfo,
   decodeAuthoritiesSnapshot,
+  decodeUpgradesInfo,
+  decodeNodeVersion,
   decodeProposalPage,
   decodeProposalDisplayInfo,
   decodeProposalStatus,
@@ -270,6 +307,14 @@ export {
   type WsStreamOptions,
 } from "./client.js";
 export {
+  defaultExchangeHttpTransport,
+  exchangeHttpPriorityForAction,
+  type ExchangeHttpPriority,
+  type ExchangeHttpPurpose,
+  type ExchangeHttpRequestContext,
+  type ExchangeHttpTransport,
+} from "./http-transport.js";
+export {
   decodeOraclePermissions,
   ORACLE_DIAGNOSTIC_BITS,
   ORACLE_FAULT_BITS,
@@ -281,11 +326,6 @@ export {
   type FinancialAccountState,
   type FinancialMarketState,
 } from "./financial-state.js";
-export {
-  decodeLiquidationPlan,
-  type LiquidationPlanState,
-  type LiquidationDisposition,
-} from "./liquidation-plan.js";
 export {
   decodeAccountState,
   type AccountState,

@@ -27,6 +27,7 @@ import {
 } from "./codec.js";
 import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
+import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
 import {
   ActionType,
   Outcome,
@@ -691,6 +692,7 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
   // A unit variant (no fields) is serde's bare variant-name string, not a map.
   if (typeof input === "string") {
     if (input === "UnpauseBridge") return { kind: "UnpauseBridge" };
+    if (input === "EnableSubAccounts") return { kind: "EnableSubAccounts" };
     throw new Error(`toAdminAction: unknown unit variant ${input}`);
   }
   const v = input as Record<string, unknown>;
@@ -703,6 +705,48 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
         markPriceMaxOracleAgeMs: bigOrNull(guards.mark_price_max_oracle_age_ms),
         maxOracleDeviationBps: guards.max_oracle_deviation_bps as number | null,
       },
+    };
+  }
+  if (v.ScheduleUpgrade) {
+    const plan = v.ScheduleUpgrade as Record<string, unknown>;
+    return {
+      kind: "ScheduleUpgrade",
+      value: {
+        targetHeight: big(plan.target_height),
+        major: plan.major as number,
+        minor: plan.minor as number,
+        successorSha256: bytes(plan.successor_sha256),
+      },
+    };
+  }
+  if (v.SetLiquidationConfig) {
+    const update = v.SetLiquidationConfig as Record<string, unknown>;
+    const c = update.config as Record<string, number> & {
+      full_close_threshold: { numerator: number; denominator: number };
+    };
+    return {
+      kind: "SetLiquidationConfig",
+      value: {
+        predecessor: big(update.predecessor),
+        sequence: big(update.sequence),
+        config: {
+          targetRatioBps: c.target_ratio_bps,
+          fullCloseThreshold: { ...c.full_close_threshold },
+          partialPenaltyBps: c.partial_penalty_bps,
+          maxBookOrders: c.max_book_orders,
+          maxCandidatePrefixes: c.max_candidate_prefixes,
+          maxCommittedFills: c.max_committed_fills,
+          maxStateReads: c.max_state_reads,
+          maxStateReadBytes: c.max_state_read_bytes,
+        },
+      },
+    };
+  }
+  if (v.CancelUpgrade) {
+    const cancel = v.CancelUpgrade as Record<string, unknown>;
+    return {
+      kind: "CancelUpgrade",
+      value: { targetHeight: big(cancel.target_height) },
     };
   }
   if (v.ConfigureOraclePolicy) {
@@ -806,95 +850,6 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
         withdrawalId: big(w.withdrawal_id),
         recipient: bytes(w.recipient),
         allocations: toInsuranceAllocations(w.allocations),
-      },
-    };
-  }
-  if (v.PublishLiquidationPolicy) {
-    const p = v.PublishLiquidationPolicy as Record<string, unknown>;
-    const funding = p.funding as Record<string, unknown>;
-    const reference = p.reference as Record<string, unknown>;
-    const work = p.work as Record<string, unknown>;
-    const insurance = p.insurance as Record<string, unknown>;
-    return {
-      kind: "PublishLiquidationPolicy",
-      value: {
-        expectedRevision: bigOrNull(p.expected_revision),
-        revision: big(p.revision),
-        funding: {
-          id: bytes(funding.id),
-          committedHeight: big(funding.committed_height),
-          eligibleMicroUsdc: big(funding.eligible_micro_usdc),
-        },
-        reference: {
-          maximumAgeMs: big(reference.maximum_age_ms),
-          maximumBookSpreadBps: reference.maximum_book_spread_bps as number,
-          minimumSideNotionalMicroUsdc: big(
-            reference.minimum_side_notional_micro_usdc,
-          ),
-          executionCollarBps: reference.execution_collar_bps as number,
-          referenceOrdersPerSide: reference.reference_orders_per_side as number,
-        },
-        lifetimeBlocks: big(p.lifetime_blocks),
-        noProgressBlocks: big(p.no_progress_blocks),
-        work: {
-          maximumPlanLegs: work.maximum_plan_legs as number,
-          maximumOwnerOrders: work.maximum_owner_orders as number,
-          owners: work.owners as number,
-          legs: work.legs as number,
-          levels: work.levels as number,
-          orders: work.orders as number,
-          fills: work.fills as number,
-          candidates: work.candidates as number,
-          pointReads: work.point_reads as number,
-          indexRows: work.index_rows as number,
-          readBytes: work.read_bytes as number,
-          checkpointBytes: work.checkpoint_bytes as number,
-        },
-        insurance: {
-          planBps: insurance.plan_bps as number,
-          ownerBps: insurance.owner_bps as number,
-          marketBps: insurance.market_bps as number,
-          poolBps: insurance.pool_bps as number,
-          globalBps: insurance.global_bps as number,
-          protectedFloorBps: insurance.protected_floor_bps as number,
-        },
-      },
-    };
-  }
-  if (v.RevokeLiquidationPolicy) {
-    const r = v.RevokeLiquidationPolicy as Record<string, unknown>;
-    return {
-      kind: "RevokeLiquidationPolicy",
-      value: { revision: big(r.revision) },
-    };
-  }
-  if (v.RestartLiquidationPlan) {
-    const r = v.RestartLiquidationPlan as Record<string, unknown>;
-    return {
-      kind: "RestartLiquidationPlan",
-      value: {
-        owner: bytes(r.owner),
-        planId: big(r.plan_id),
-        expectedRevision: big(r.expected_revision),
-        expectedCheckpointHash: bytes(r.expected_checkpoint_hash),
-        expectedWindowGeneration: big(r.expected_window_generation),
-        targetRevision: big(r.target_revision),
-        lifetimeBlocks: big(r.lifetime_blocks),
-        noProgressBlocks: big(r.no_progress_blocks),
-      },
-    };
-  }
-  if (v.ReleaseLiquidationPlan) {
-    const r = v.ReleaseLiquidationPlan as Record<string, unknown>;
-    return {
-      kind: "ReleaseLiquidationPlan",
-      value: {
-        owner: bytes(r.owner),
-        planId: big(r.plan_id),
-        expectedRevision: big(r.expected_revision),
-        safetyRevision: big(r.safety_revision),
-        expectedCheckpointHash: bytes(r.expected_checkpoint_hash),
-        expectedWindowGeneration: big(r.expected_window_generation),
       },
     };
   }
@@ -1144,12 +1099,14 @@ describe("conformance vectors (TypeScript)", () => {
     // Guard against the vector file drifting out from under this assertion:
     // propose (create-market, the perp-plus-attach batch, the attach
     // singleton, six create-event oracle-source shapes, trigger config,
-    // unpause-bridge, update-authority-set add and remove, cancel-all-for
+    // unpause-bridge, enable-sub-accounts, set-liquidation-config,
+    // update-authority-set add and
+    // remove, cancel-all-for
     // -account scoped and unscoped, four set-oracle-guards shapes, and
-    // oracle policy, insurance fund and withdraw, liquidation policy publish
-    // (with and without an expected revision) and revoke, liquidation plan
-    // restart and release), approve, reject, and all three emergency arms
-    // (PauseMarket, HaltTrading, SetReduceOnly).
+    // oracle policy, two schedule-upgrade shapes, cancel-upgrade, and
+    // insurance fund and withdraw),
+    // approve, reject, and all three emergency arms (PauseMarket,
+    // HaltTrading, SetReduceOnly).
     expect(govCases.length).toBe(32);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
@@ -1204,5 +1161,81 @@ describe("conformance vectors (TypeScript)", () => {
       if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
       expect(decoded.data.maxOpenInterest).toBe(0n);
     }
+  });
+});
+
+describe("binary vectors (TypeScript)", () => {
+  const binary = cases("binary.ndjson");
+
+  it("loads the binary family", () => {
+    expect(binary.length).toBeGreaterThan(0);
+  });
+
+  it("translates every No order to the core's Yes order, byte for byte", () => {
+    let seen = 0;
+    for (const c of binary.filter((c) => c.kind === "no_order")) {
+      const input = c.input as Record<string, unknown>;
+      const no = toAction(ActionType.PlaceOrder, input);
+      if (no.type !== "PlaceOrder") throw new Error("type narrowing");
+      const { owner, ...noOrder } = no.data;
+      const expected = c.expect as {
+        yes_order?: { fields: Record<string, unknown>; payload_hex: string };
+        error?: { name: string };
+      };
+      if (expected.error) {
+        let caught: unknown;
+        try {
+          yesOrder(noOrder);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught, c.case).toBeInstanceOf(BinaryPriceError);
+        expect((caught as BinaryPriceError).reason, c.case).toBe(
+          expected.error.name,
+        );
+      } else {
+        const yes = expected.yes_order!;
+        const action: Action = {
+          type: "PlaceOrder",
+          data: { ...yesOrder(noOrder), owner },
+        };
+        expect(action, c.case).toEqual(
+          toAction(ActionType.PlaceOrder, yes.fields),
+        );
+        expect(bytesToHex(encodePayloadBytes(action)), c.case).toBe(
+          yes.payload_hex,
+        );
+      }
+      seen++;
+    }
+    expect(seen).toBeGreaterThan(0);
+  });
+
+  it("reads every position as the core does", () => {
+    let seen = 0;
+    for (const c of binary.filter((c) => c.kind === "position_view")) {
+      const position = {
+        side: c.side as "Buy" | "Sell",
+        entryPrice: big(c.entry_price),
+        size: big(c.size),
+      };
+      const expected = c.expect as {
+        view?: { outcome: "Yes" | "No"; entry_price: number; size: number };
+        error?: { name: string };
+      };
+      if (expected.error) {
+        expect(() => binaryPositionView(position), c.case).toThrow(
+          BinaryPriceError,
+        );
+      } else {
+        expect(binaryPositionView(position), c.case).toEqual({
+          outcome: expected.view!.outcome,
+          entryPrice: big(expected.view!.entry_price),
+          size: big(expected.view!.size),
+        });
+      }
+      seen++;
+    }
+    expect(seen).toBeGreaterThan(0);
   });
 });

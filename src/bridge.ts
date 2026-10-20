@@ -1,13 +1,10 @@
 /**
- * Bridge custody: the canonical bridge-core v1 payload bytes the engine's
- * receipt path signs and verifies, exposed through the WASM core.
+ * Bridge custody: the canonical payload bytes the engine's receipt path
+ * signs and verifies, exposed through the WASM core.
  *
- * The byte layout is owned by Rust (`bridge-core` v1.0.0, the tag the
- * exchange engine's Cargo.lock resolves — the same dependency line
- * exchange-core carries). The exchange wire crate refuses a bridge-core
- * dependency by its hygiene gate, so the canonical bytes are reachable only
- * from the WASM core; calling it means the SDK signs exactly the bytes the
- * engine verifies, by construction — no parallel layout to drift. The
+ * The byte layout is owned by the wire contract's `bridge` module
+ * (`proof_wire::bridge`), the same definition the engine and the bridge program
+ * compile, so the SDK signs exactly the bytes the engine verifies. The
  * frozen vectors in `bridge.test.ts` pin the marshalling.
  *
  * The ed25519 quorum proof stays TypeScript-side (`signOperatorReceipt`):
