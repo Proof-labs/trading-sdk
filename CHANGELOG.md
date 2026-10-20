@@ -48,10 +48,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Reject malformed UTF-8 inside `queryFinancialState` MessagePack strings before
-  the dependency decoder can normalize an overlong encoding into a valid enum.
-  Existing response size, depth and container limits are unchanged.
-
+- **`queryFinancialState` rejects malformed UTF-8 in MessagePack strings.**
+  The dependency decoder normalized an overlong encoding into a valid enum
+  (`c1 82 75 79` decoded as `Buy`); the response is now rejected before
+  decoding. Existing response size, depth and container limits are unchanged.
 - **A second `subscribeOrderbook` listener on an active market now starts
   from a snapshot.** The gateway sends one snapshot per socket subscription,
   so a listener that joined after it received only updates and built an
