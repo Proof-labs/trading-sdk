@@ -93,6 +93,10 @@ interface SubRecord {
   /** Listeners that joined an active orderbook or accountEvents channel and
    *  have not had a snapshot yet. They receive no update or event before one. */
   awaitingSnapshot: Set<FrameHandler>;
+  /** Events that arrived for an awaiting accountEvents listener before its
+   *  snapshot: delivered if its release brings no snapshot, dropped if it
+   *  does (the snapshot covers them). */
+  pendingEvents: Map<FrameHandler, FeedFrame[]>;
 }
 
 /** Price → `[totalQuantity, orderCount]`, per side. */
@@ -289,6 +293,7 @@ export class GatewayFeed {
         generation: 0,
         book: null,
         awaitingSnapshot: new Set(),
+        pendingEvents: new Map(),
       };
       this.subs.set(key, record);
       this.ensureConnected();
@@ -300,6 +305,7 @@ export class GatewayFeed {
       if (!r || r !== record) return;
       r.listeners.delete(listener);
       r.awaitingSnapshot.delete(listener);
+      r.pendingEvents.delete(listener);
       if (r.listeners.size === 0) this.dropRecord(key, r);
     };
   }
@@ -575,12 +581,22 @@ export class GatewayFeed {
       if (record.awaitingSnapshot.has(listener)) {
         if (msg.type === "snapshot") {
           record.awaitingSnapshot.delete(listener);
+          // The snapshot covers them, so the events a waiting listener held
+          // are dropped with it.
+          record.pendingEvents.delete(listener);
         } else {
           // An orderbook update is already in the local book, so the snapshot
-          // built from it replaces the update. An account event is already in
-          // the snapshot the gateway is resending.
-          if (record.channel === "orderbook")
+          // built from it replaces the update. An account event is held until
+          // the snapshot arrives; if none does, release delivers the held
+          // events so the fallback loses nothing.
+          if (record.channel === "orderbook") {
             this.primeFromBook(record, listener);
+          } else {
+            const frame = msg as unknown as FeedFrame;
+            const held = record.pendingEvents.get(listener);
+            if (held) held.push(frame);
+            else record.pendingEvents.set(listener, [frame]);
+          }
           continue;
         }
       }
@@ -598,10 +614,17 @@ export class GatewayFeed {
   }
 
   /** Account listeners waiting on a snapshot that will not come take the
-   *  live events instead, as before the gateway could resend one. Orderbook
+   *  live events instead, as before the gateway could resend one: the events
+   *  held while they waited are delivered first, in order. Orderbook
    *  listeners never wait on the gateway once a local book exists. */
   private releaseAwaiting(record: SubRecord): void {
-    if (record.channel === "accountEvents") record.awaitingSnapshot.clear();
+    if (record.channel !== "accountEvents") return;
+    for (const listener of record.awaitingSnapshot) {
+      const held = record.pendingEvents.get(listener);
+      if (held) for (const frame of held) this.deliver(listener, frame);
+    }
+    record.awaitingSnapshot.clear();
+    record.pendingEvents.clear();
   }
 
   private recordForId(id: unknown): SubRecord | undefined {

@@ -611,6 +611,23 @@ describe("feed ownership and cleanup", () => {
       feed.close();
     });
 
+    it("delivers events that landed before an older gateway's ack", () => {
+      const { feed, ws, late } = joined();
+      // An older gateway answers a repeat subscribe with queued events still
+      // ahead of the ack, and no snapshot follows. Nothing is lost to the
+      // window between the resend and the ack.
+      ws.emit(fill(2));
+      ws.emit({
+        type: "subscribed",
+        id: 2,
+        channel: "accountEvents",
+        note: "already subscribed",
+      });
+      ws.emit(fill(3));
+      expect(late).toEqual([fill(2), fill(3)]);
+      feed.close();
+    });
+
     it("falls back to live events when the resent snapshot is unavailable", () => {
       const { feed, ws, late } = joined();
       const refusal = {
