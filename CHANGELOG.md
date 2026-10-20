@@ -56,6 +56,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before it. Before the first snapshot, or while reconnecting, the late
   listener waits for the gateway's own snapshot. Existing listeners and the
   wire traffic are unchanged.
+- **A second `subscribeAccount` listener for the same owner now starts from
+  the account snapshot** (#259). Account events cannot be rebuilt locally, so
+  `GatewayFeed` re-subscribes and the gateway (7.5.0 and later) resends the
+  snapshot, which every listener of that owner receives. The late listener
+  gets no event before it. Against an older gateway, or when the gateway
+  reports the snapshot unavailable, the late listener takes the live events
+  as before.
 
 ### Breaking changes (Rust)
 

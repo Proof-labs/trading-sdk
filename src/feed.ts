@@ -90,8 +90,8 @@ interface SubRecord {
   /** Orderbook only: the book this socket's snapshot and updates have built,
    *  or null until the first snapshot after (re)connecting. */
   book: LocalBook | null;
-  /** Listeners that joined an active orderbook channel and have not had a
-   *  snapshot yet. They receive no update before one. */
+  /** Listeners that joined an active orderbook or accountEvents channel and
+   *  have not had a snapshot yet. They receive no update or event before one. */
   awaitingSnapshot: Set<FrameHandler>;
 }
 
@@ -115,10 +115,13 @@ const CONTROL_TYPES = new Set(["subscribed", "unsubscribed", "pong", "error"]);
  *   - **auto-reconnect** — on an unexpected close it reconnects with
  *     exponential backoff and **replays every active subscription**, so a
  *     fresh snapshot arrives. Missed live events are not replayed.
- *   - **late orderbook listeners** — the gateway sends one snapshot per
- *     socket subscription, so a listener that joins an active `orderbook`
- *     channel receives a snapshot of the book the feed has built, and no
- *     update before it.
+ *   - **late listeners** — the gateway sends one snapshot per socket
+ *     subscription. A listener that joins an active `orderbook` channel
+ *     receives a snapshot of the book the feed has built; one that joins an
+ *     active `accountEvents` channel re-subscribes, and the gateway resends
+ *     the account snapshot. Neither sees an update or event before its
+ *     snapshot. A gateway too old to resend leaves the account listener on
+ *     the live events, as before.
  *   - **heartbeat** — an app-level `ping` runs on an interval; a missing
  *     `pong` forces a reconnect, catching half-open sockets the OS hasn't
  *     torn down.
@@ -269,6 +272,12 @@ export class GatewayFeed {
         const joined = record;
         joined.awaitingSnapshot.add(listener);
         queueMicrotask(() => this.primeLateListener(key, joined, listener));
+      } else if (record.channel === "accountEvents") {
+        // Account events cannot be rebuilt locally, so a repeat subscribe
+        // asks the gateway to resend the account snapshot. Closed or
+        // reconnecting, the replay on open brings a snapshot anyway.
+        record.awaitingSnapshot.add(listener);
+        if (this.state === "open") this.sendSubscribe(record);
       }
     } else {
       record = {
@@ -539,8 +548,13 @@ export class GatewayFeed {
       return;
     }
 
+    if (type === "subscribed") {
+      this.handleSubscribed(msg);
+      return;
+    }
+
     if (type && CONTROL_TYPES.has(type)) {
-      // "subscribed" / "unsubscribed" acks — no listener action needed.
+      // "unsubscribed" acks — no listener action needed.
       return;
     }
 
@@ -556,14 +570,33 @@ export class GatewayFeed {
         if (msg.type === "snapshot") {
           record.awaitingSnapshot.delete(listener);
         } else {
-          // This update is already in the local book, so the snapshot built
-          // from it replaces the update for this listener.
-          this.primeFromBook(record, listener);
+          // An orderbook update is already in the local book, so the snapshot
+          // built from it replaces the update. An account event is already in
+          // the snapshot the gateway is resending.
+          if (record.channel === "orderbook")
+            this.primeFromBook(record, listener);
           continue;
         }
       }
       this.deliver(listener, msg as unknown as FeedFrame);
     }
+  }
+
+  /** A gateway that predates resending (its repeat ack has no
+   *  `snapshot: "resent"`) sends no snapshot, so waiting account listeners
+   *  are released to the live events instead of waiting for ever. */
+  private handleSubscribed(msg: Record<string, unknown>): void {
+    if (msg.note !== "already subscribed" || msg.snapshot === "resent") return;
+    const record = this.recordForId(msg.id);
+    if (record?.channel === "accountEvents") record.awaitingSnapshot.clear();
+  }
+
+  private recordForId(id: unknown): SubRecord | undefined {
+    if (typeof id !== "number") return undefined;
+    for (const record of this.subs.values()) {
+      if (record.lastId === id) return record;
+    }
+    return undefined;
   }
 
   private deliver(listener: FrameHandler, frame: FeedFrame): void {
@@ -601,23 +634,15 @@ export class GatewayFeed {
   private dispatchError(frame: FeedErrorFrame): void {
     // Route to the subscription whose last subscribe carried this id, so a
     // rejected channel surfaces against the right caller.
-    if (typeof frame.id === "number") {
-      for (const record of this.subs.values()) {
-        if (record.lastId === frame.id) {
-          // Deliver as a frame the subscriber can pattern-match on `type`.
-          for (const listener of record.listeners) {
-            try {
-              listener(frame as unknown as FeedFrame);
-            } catch (err) {
-              this.onError?.(
-                err instanceof Error ? err : new Error(String(err)),
-              );
-            }
-          }
-          this.onError?.(frame);
-          return;
-        }
+    const record = this.recordForId(frame.id);
+    if (record) {
+      // Deliver as a frame the subscriber can pattern-match on `type`.
+      for (const listener of record.listeners) {
+        this.deliver(listener, frame as unknown as FeedFrame);
       }
+      // A refused repeat subscribe (the resent account snapshot could not be
+      // read) brings no snapshot: the waiting listeners take the live events.
+      if (record.channel === "accountEvents") record.awaitingSnapshot.clear();
     }
     this.onError?.(frame);
   }

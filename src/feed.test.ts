@@ -534,4 +534,143 @@ describe("feed ownership and cleanup", () => {
     expect(late).toEqual([]);
     feed.close();
   });
+
+  describe("late account listeners", () => {
+    const owner = "ab".repeat(20);
+    const accountSnapshot = (n: number) => ({
+      channel: "accountEvents",
+      type: "snapshot",
+      owner,
+      account: { n },
+    });
+    const fill = (n: number) => ({
+      channel: "accountEvents",
+      type: "fill",
+      owner,
+      payload: { n: String(n) },
+    });
+    const subscribes = (ws: FakeWS) =>
+      ws.sentMsgs().filter((m) => m.method === "subscribe");
+
+    function joined() {
+      const { feed, clock } = makeFeed();
+      const early: unknown[] = [];
+      const late: unknown[] = [];
+      feed.subscribeAccount(owner, (f) => early.push(f));
+      const ws = FakeWS.last();
+      ws.open();
+      ws.emit({ type: "subscribed", id: 1, channel: "accountEvents" });
+      ws.emit(accountSnapshot(1));
+      ws.emit(fill(1));
+      feed.subscribeAccount(owner, (f) => late.push(f));
+      return { feed, clock, ws, early, late };
+    }
+
+    it("re-subscribes and starts the late listener from the resent snapshot", () => {
+      const { feed, ws, early, late } = joined();
+      const repeat = subscribes(ws)[1];
+      expect(repeat, "a late listener asks for a snapshot").toEqual({
+        method: "subscribe",
+        id: 2,
+        params: { channel: "accountEvents", owner },
+      });
+      ws.emit(fill(2)); // already in the snapshot being resent
+      expect(late, "no event before the snapshot").toEqual([]);
+      ws.emit({
+        type: "subscribed",
+        id: 2,
+        channel: "accountEvents",
+        note: "already subscribed",
+        snapshot: "resent",
+      });
+      ws.emit(accountSnapshot(2));
+      ws.emit(fill(3));
+      expect(late).toEqual([accountSnapshot(2), fill(3)]);
+      expect(early).toEqual([
+        accountSnapshot(1),
+        fill(1),
+        fill(2),
+        accountSnapshot(2),
+        fill(3),
+      ]);
+      feed.close();
+    });
+
+    it("falls back to live events when the gateway does not resend", () => {
+      const { feed, ws, late } = joined();
+      ws.emit({
+        type: "subscribed",
+        id: 2,
+        channel: "accountEvents",
+        note: "already subscribed",
+      });
+      ws.emit(fill(2));
+      expect(late, "an older gateway's listener is not left waiting").toEqual([
+        fill(2),
+      ]);
+      feed.close();
+    });
+
+    it("falls back to live events when the resent snapshot is unavailable", () => {
+      const { feed, ws, late } = joined();
+      const refusal = {
+        type: "error",
+        id: 2,
+        channel: "accountEvents",
+        code: 503,
+        error: "snapshot unavailable",
+      };
+      ws.emit(refusal);
+      ws.emit(fill(2));
+      expect(late).toEqual([refusal, fill(2)]);
+      feed.close();
+    });
+
+    it("waits for the replayed snapshot when it joins while reconnecting", () => {
+      const { feed, clock } = makeFeed();
+      const late: unknown[] = [];
+      feed.subscribeAccount(owner, () => {});
+      FakeWS.last().open();
+      FakeWS.last().emit(accountSnapshot(1));
+      FakeWS.last().drop();
+      feed.subscribeAccount(owner, (f) => late.push(f));
+      clock.runNext();
+      const ws = FakeWS.last();
+      ws.open();
+      expect(subscribes(ws), "the replay is the only subscribe").toHaveLength(
+        1,
+      );
+      ws.emit(fill(2));
+      ws.emit(accountSnapshot(2));
+      expect(late).toEqual([accountSnapshot(2)]);
+      feed.close();
+    });
+
+    it("signs the repeat subscribe like the first", async () => {
+      const { feed } = makeFeed();
+      let signed = 0;
+      const auth = async () => {
+        signed += 1;
+        return {
+          public_key: "pk",
+          signature: `sig${signed}`,
+          timestamp_ms: signed,
+        };
+      };
+      feed.subscribeAccount(owner, () => {}, auth);
+      const ws = FakeWS.last();
+      ws.open();
+      await microtasks();
+      await microtasks();
+      feed.subscribeAccount(owner, () => {}, auth);
+      await microtasks();
+      await microtasks();
+      expect(
+        subscribes(ws).map(
+          (m) => (m.params as { signature?: string }).signature,
+        ),
+      ).toEqual(["sig1", "sig2"]);
+      feed.close();
+    });
+  });
 });
