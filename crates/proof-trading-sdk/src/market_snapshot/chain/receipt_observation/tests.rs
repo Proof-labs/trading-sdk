@@ -442,14 +442,29 @@ fn wrong_missing_foreign_hashes_and_noncanonical_failures_never_count() {
             format!("backend not found while looking up tx {}", "AB".repeat(32)),
             format!("tx ({}) not found; retry later", "AB".repeat(32)),
             format!("prefix tx ({}) not found", "AB".repeat(32)),
+            format!("tx (0{}) not found", "AB".repeat(32)),
         ] {
-            assert!(classify(
-                status,
-                &serde_json::to_vec(&json!({"error":text})).unwrap(),
-                hash()
-            )
-            .is_err());
+            assert_eq!(
+                classify(
+                    status,
+                    &serde_json::to_vec(&json!({"error":text})).unwrap(),
+                    hash()
+                ),
+                Err(SnapshotError::UnrecognizedNotFound),
+                "an answer outside the not-found grammar is not an unavailable backend"
+            );
         }
+        let mut other_rpc_error: serde_json::Value = serde_json::from_slice(&not_found()).unwrap();
+        other_rpc_error["error"]["code"] = json!(-32000);
+        assert_eq!(
+            classify(
+                status,
+                &serde_json::to_vec(&other_rpc_error).unwrap(),
+                hash()
+            ),
+            Err(SnapshotError::UnrecognizedNotFound),
+            "another JSON-RPC error is not the not-found shape"
+        );
         assert!(classify(
             status,
             &serde_json::to_vec(&json!({"status":"ok",
