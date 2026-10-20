@@ -640,6 +640,180 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }}
             }),
         ),
+        // Insurance transfers (inner tags 18 and 21): two ascending pool
+        // allocations so the nested `[pool_id, amount]` rows are pinned,
+        // summing to exactly `i64::MAX`, the widest admitted transfer total.
+        codec_case(
+            "propose_admin_action/fund_insurance_fund",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "FundInsuranceFund": {
+                    "funding_id": 41u64,
+                    "source": vec![0xD1u8; 20],
+                    "allocations": [
+                        { "pool_id": 0u8, "amount": 250_000_000u64 },
+                        { "pool_id": 3u8, "amount": i64::MAX as u64 - 250_000_000 }
+                    ]
+                }}
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/withdraw_insurance_fund",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "WithdrawInsuranceFund": {
+                    "withdrawal_id": u64::MAX,
+                    "recipient": vec![0xD2u8; 20],
+                    "allocations": [{ "pool_id": 255u8, "amount": 1u64 }]
+                }}
+            }),
+        ),
+        // Liquidation governance (inner tags 22-25). Every scalar is distinct
+        // so a swapped field changes the bytes; `expected_revision` is pinned
+        // both present and absent.
+        codec_case(
+            "propose_admin_action/publish_liquidation_policy",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "PublishLiquidationPolicy": {
+                    "expected_revision": 4u64,
+                    "revision": 5u64,
+                    "funding": {
+                        "id": vec![0xE1u8; 32],
+                        "committed_height": 1_000u64,
+                        "eligible_micro_usdc": 2_000_000u64
+                    },
+                    "reference": {
+                        "maximum_age_ms": 3_000u64,
+                        "maximum_book_spread_bps": 40u32,
+                        "minimum_side_notional_micro_usdc": 5_000_000u64,
+                        "execution_collar_bps": 60u32,
+                        "reference_orders_per_side": 7u32
+                    },
+                    "lifetime_blocks": 80u64,
+                    "no_progress_blocks": 9u64,
+                    "work": {
+                        "maximum_plan_legs": 10u32,
+                        "maximum_owner_orders": 11u32,
+                        "owners": 12u32,
+                        "legs": 13u32,
+                        "levels": 14u32,
+                        "orders": 15u32,
+                        "fills": 16u32,
+                        "candidates": 17u32,
+                        "point_reads": 18u32,
+                        "index_rows": 19u32,
+                        "read_bytes": 20u32,
+                        "checkpoint_bytes": 21u32
+                    },
+                    "insurance": {
+                        "plan_bps": 22u32,
+                        "owner_bps": 23u32,
+                        "market_bps": 24u32,
+                        "pool_bps": 25u32,
+                        "global_bps": 26u32,
+                        "protected_floor_bps": 27u32
+                    }
+                }}
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/publish_liquidation_policy_first",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "PublishLiquidationPolicy": {
+                    "expected_revision": null,
+                    "revision": 1u64,
+                    "funding": {
+                        "id": vec![0xE2u8; 32],
+                        "committed_height": 1u64,
+                        "eligible_micro_usdc": 0u64
+                    },
+                    "reference": {
+                        "maximum_age_ms": 1u64,
+                        "maximum_book_spread_bps": 1u32,
+                        "minimum_side_notional_micro_usdc": 1u64,
+                        "execution_collar_bps": 1u32,
+                        "reference_orders_per_side": 1u32
+                    },
+                    "lifetime_blocks": 2u64,
+                    "no_progress_blocks": 1u64,
+                    "work": {
+                        "maximum_plan_legs": 1u32,
+                        "maximum_owner_orders": 1u32,
+                        "owners": 1u32,
+                        "legs": 1u32,
+                        "levels": 1u32,
+                        "orders": 1u32,
+                        "fills": 1u32,
+                        "candidates": 1u32,
+                        "point_reads": 1u32,
+                        "index_rows": 1u32,
+                        "read_bytes": 1u32,
+                        "checkpoint_bytes": u32::MAX
+                    },
+                    "insurance": {
+                        "plan_bps": 0u32,
+                        "owner_bps": 0u32,
+                        "market_bps": 0u32,
+                        "pool_bps": 0u32,
+                        "global_bps": 0u32,
+                        "protected_floor_bps": 10_000u32
+                    }
+                }}
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/revoke_liquidation_policy",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "RevokeLiquidationPolicy": { "revision": 5u64 } }
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/restart_liquidation_plan",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "RestartLiquidationPlan": {
+                    "owner": vec![0xC4u8; 20],
+                    "plan_id": 31u64,
+                    "expected_revision": 32u64,
+                    "expected_checkpoint_hash": vec![0xE3u8; 32],
+                    "expected_window_generation": 33u64,
+                    "target_revision": 34u64,
+                    "lifetime_blocks": 35u64,
+                    "no_progress_blocks": 36u64
+                }}
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/release_liquidation_plan",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "ReleaseLiquidationPlan": {
+                    "owner": vec![0xC5u8; 20],
+                    "plan_id": 41u64,
+                    "expected_revision": 42u64,
+                    "safety_revision": 43u64,
+                    "expected_checkpoint_hash": vec![0xE4u8; 32],
+                    "expected_window_generation": 44u64
+                }}
+            }),
+        ),
         codec_case(
             "approve_admin_action/rotate_registry",
             APPROVE_ADMIN_ACTION,

@@ -674,6 +674,16 @@ function toAdminBatchItem(
   );
 }
 
+/** Insurance transfer rows from the vector's serde map form. */
+function toInsuranceAllocations(
+  raw: unknown,
+): import("./types.js").InsuranceFundAllocation[] {
+  return (raw as Record<string, unknown>[]).map((a) => ({
+    poolId: a.pool_id as number,
+    amount: big(a.amount),
+  }));
+}
+
 /** Reconstruct a TS `AdminAction` from the vector's serde map form. Throws
  *  on an unknown variant rather than falling through — a vector this suite
  *  cannot name must fail the run, not mis-parse as a registry update. */
@@ -774,6 +784,117 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
         domain: u.domain as import("./types.js").AuthorityDomain,
         add: (u.add as unknown[]).map((a) => bytes(a)),
         remove: (u.remove as unknown[]).map((a) => bytes(a)),
+      },
+    };
+  }
+  if (v.FundInsuranceFund) {
+    const f = v.FundInsuranceFund as Record<string, unknown>;
+    return {
+      kind: "FundInsuranceFund",
+      value: {
+        fundingId: big(f.funding_id),
+        source: bytes(f.source),
+        allocations: toInsuranceAllocations(f.allocations),
+      },
+    };
+  }
+  if (v.WithdrawInsuranceFund) {
+    const w = v.WithdrawInsuranceFund as Record<string, unknown>;
+    return {
+      kind: "WithdrawInsuranceFund",
+      value: {
+        withdrawalId: big(w.withdrawal_id),
+        recipient: bytes(w.recipient),
+        allocations: toInsuranceAllocations(w.allocations),
+      },
+    };
+  }
+  if (v.PublishLiquidationPolicy) {
+    const p = v.PublishLiquidationPolicy as Record<string, unknown>;
+    const funding = p.funding as Record<string, unknown>;
+    const reference = p.reference as Record<string, unknown>;
+    const work = p.work as Record<string, unknown>;
+    const insurance = p.insurance as Record<string, unknown>;
+    return {
+      kind: "PublishLiquidationPolicy",
+      value: {
+        expectedRevision: bigOrNull(p.expected_revision),
+        revision: big(p.revision),
+        funding: {
+          id: bytes(funding.id),
+          committedHeight: big(funding.committed_height),
+          eligibleMicroUsdc: big(funding.eligible_micro_usdc),
+        },
+        reference: {
+          maximumAgeMs: big(reference.maximum_age_ms),
+          maximumBookSpreadBps: reference.maximum_book_spread_bps as number,
+          minimumSideNotionalMicroUsdc: big(
+            reference.minimum_side_notional_micro_usdc,
+          ),
+          executionCollarBps: reference.execution_collar_bps as number,
+          referenceOrdersPerSide: reference.reference_orders_per_side as number,
+        },
+        lifetimeBlocks: big(p.lifetime_blocks),
+        noProgressBlocks: big(p.no_progress_blocks),
+        work: {
+          maximumPlanLegs: work.maximum_plan_legs as number,
+          maximumOwnerOrders: work.maximum_owner_orders as number,
+          owners: work.owners as number,
+          legs: work.legs as number,
+          levels: work.levels as number,
+          orders: work.orders as number,
+          fills: work.fills as number,
+          candidates: work.candidates as number,
+          pointReads: work.point_reads as number,
+          indexRows: work.index_rows as number,
+          readBytes: work.read_bytes as number,
+          checkpointBytes: work.checkpoint_bytes as number,
+        },
+        insurance: {
+          planBps: insurance.plan_bps as number,
+          ownerBps: insurance.owner_bps as number,
+          marketBps: insurance.market_bps as number,
+          poolBps: insurance.pool_bps as number,
+          globalBps: insurance.global_bps as number,
+          protectedFloorBps: insurance.protected_floor_bps as number,
+        },
+      },
+    };
+  }
+  if (v.RevokeLiquidationPolicy) {
+    const r = v.RevokeLiquidationPolicy as Record<string, unknown>;
+    return {
+      kind: "RevokeLiquidationPolicy",
+      value: { revision: big(r.revision) },
+    };
+  }
+  if (v.RestartLiquidationPlan) {
+    const r = v.RestartLiquidationPlan as Record<string, unknown>;
+    return {
+      kind: "RestartLiquidationPlan",
+      value: {
+        owner: bytes(r.owner),
+        planId: big(r.plan_id),
+        expectedRevision: big(r.expected_revision),
+        expectedCheckpointHash: bytes(r.expected_checkpoint_hash),
+        expectedWindowGeneration: big(r.expected_window_generation),
+        targetRevision: big(r.target_revision),
+        lifetimeBlocks: big(r.lifetime_blocks),
+        noProgressBlocks: big(r.no_progress_blocks),
+      },
+    };
+  }
+  if (v.ReleaseLiquidationPlan) {
+    const r = v.ReleaseLiquidationPlan as Record<string, unknown>;
+    return {
+      kind: "ReleaseLiquidationPlan",
+      value: {
+        owner: bytes(r.owner),
+        planId: big(r.plan_id),
+        expectedRevision: big(r.expected_revision),
+        safetyRevision: big(r.safety_revision),
+        expectedCheckpointHash: bytes(r.expected_checkpoint_hash),
+        expectedWindowGeneration: big(r.expected_window_generation),
       },
     };
   }
@@ -1025,9 +1146,11 @@ describe("conformance vectors (TypeScript)", () => {
     // singleton, six create-event oracle-source shapes, trigger config,
     // unpause-bridge, update-authority-set add and remove, cancel-all-for
     // -account scoped and unscoped, four set-oracle-guards shapes, and
-    // oracle policy), approve, reject, and all three emergency arms
+    // oracle policy, insurance fund and withdraw, liquidation policy publish
+    // (with and without an expected revision) and revoke, liquidation plan
+    // restart and release), approve, reject, and all three emergency arms
     // (PauseMarket, HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(25);
+    expect(govCases.length).toBe(32);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
