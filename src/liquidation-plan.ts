@@ -1,4 +1,5 @@
 import { Decoder } from "@msgpack/msgpack";
+import { GatewayHttpError } from "./errors.js";
 
 export type LiquidationDisposition =
   "Retry" | "NoProgressExpired" | "AbsoluteExpired";
@@ -22,6 +23,10 @@ export interface LiquidationPlanState {
     lastFillId: bigint | null;
   };
 }
+
+const TIMEOUT_MS = 5000;
+const MAX_RESPONSE_BYTES = 4096;
+const MAX_BASE64_CHARS = 2048;
 
 function invalid(field: string): never {
   throw new Error(`liquidation plan: invalid ${field}`);
@@ -113,17 +118,19 @@ export async function fetchLiquidationPlan(
 ): Promise<LiquidationPlanState> {
   const expected = canonicalLiquidationOwner(owner);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
+  const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   try {
     const response = await fetch(
       `${gatewayUrl}/v1/liquidation/plan?owner=${expected}`,
       { signal: controller.signal, redirect: "error" },
     );
-    if (!response.ok)
-      throw new Error(`liquidation plan HTTP ${response.status}`);
+    if (!response.ok) throw new GatewayHttpError(response.status, response);
     const length = response.headers.get("content-length");
-    if (length !== null && (!/^\d+$/.test(length) || Number(length) > 4096))
+    if (
+      length !== null &&
+      (!/^\d+$/.test(length) || Number(length) > MAX_RESPONSE_BYTES)
+    )
       return invalid("response size");
     reader = response.body?.getReader();
     if (!reader) return invalid("response body");
@@ -134,7 +141,7 @@ export async function fetchLiquidationPlan(
       const part = await reader.read();
       if (part.done) break;
       size += part.value.length;
-      if (size > 4096) return invalid("response size");
+      if (size > MAX_RESPONSE_BYTES) return invalid("response size");
       text += utf8.decode(part.value, { stream: true });
     }
     text += utf8.decode();
@@ -151,7 +158,7 @@ export async function fetchLiquidationPlan(
     const data = json.data;
     if (
       data.length === 0 ||
-      data.length > 2048 ||
+      data.length > MAX_BASE64_CHARS ||
       data.length % 4 !== 0 ||
       !/^[A-Za-z0-9+/]*={0,2}$/.test(data)
     )
@@ -170,6 +177,7 @@ export async function fetchLiquidationPlan(
     return decodeLiquidationPlan(raw, expected);
   } finally {
     clearTimeout(timeout);
+    controller.abort();
     await reader?.cancel().catch(() => undefined);
     reader?.releaseLock();
   }

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encode } from "@msgpack/msgpack";
 import { ExchangeClient } from "./client.js";
+import { GatewayHttpError } from "./errors.js";
 import {
   decodeLiquidationPlan,
   fetchLiquidationPlan,
@@ -153,10 +154,27 @@ describe("bounded liquidation plan evidence", () => {
       async () => new Response("unavailable", { status: 503 }),
     );
     vi.stubGlobal("fetch", fetch);
+    const error = await fetchLiquidationPlan(
+      "https://gateway.example",
+      owner,
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(GatewayHttpError);
+    expect((error as GatewayHttpError).status).toBe(503);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("aborts the request once the read settles", async () => {
+    let signal: AbortSignal | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: RequestInit) => {
+        signal = init?.signal ?? undefined;
+        return new Response("x", { headers: { "content-length": "4097" } });
+      }),
+    );
     await expect(
       fetchLiquidationPlan("https://gateway.example", owner),
-    ).rejects.toThrow("HTTP 503");
-    expect(fetch).toHaveBeenCalledTimes(1);
+    ).rejects.toThrow("response size");
+    expect(signal?.aborted).toBe(true);
   });
   it("bounds streamed bytes, advertised size and MessagePack collections", async () => {
     for (const make of [
