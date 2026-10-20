@@ -11,6 +11,7 @@
 pub use proof_wire::codec::{
     admin_proposal_content_hash, canonical_admin_action_bytes, ADMIN_PROPOSAL_HASH_DOMAIN,
 };
+pub use proof_wire::liquidation_config::{LiquidationConfig, SetLiquidationConfig};
 pub use proof_wire::types::{
     AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, CancelUpgrade,
     ConfigureOraclePolicy, EmergencyAction, EmergencyActionType, EmergencyAdminAction, ProposalId,

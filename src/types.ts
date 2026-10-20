@@ -80,11 +80,12 @@ export const ActionType = {
   RevokeAgent: 0x0d,
   /** Resolve an event with a YES/NO outcome (0x27). */
   ResolveEvent: 0x27,
-  /** Create a derived sub-account under the signing master (0x28). Dormant
-   *  behind the sub-account activation: refused as `SubAccountsInactive`. */
+  /** Create a derived sub-account under the signing master (0x28). Refused
+   *  as `SubAccountsInactive` until a governed `EnableSubAccounts` proposal
+   *  executes. */
   CreateSubAccount: 0x28,
   /** Move balance between a master and one of its sub-accounts (0x29);
-   *  dormant like `CreateSubAccount`. */
+   *  refused like `CreateSubAccount`. */
   SubAccountTransfer: 0x29,
   /** Acquire the single-holder Solana payout lease on a pending withdrawal
    *  (0x2e). Custody-authorized watchers only. */
@@ -1171,6 +1172,45 @@ export interface SetOperatorReceiptRegistry {
 }
 
 /**
+ * The liquidation settings shared by every market. Collar width is not a
+ * field: it is each market's maintenance margin fraction.
+ */
+export interface LiquidationConfig {
+  /** Equity-to-maintenance ratio a partial liquidation sizes toward, in
+   *  basis points of maintenance margin; above 10_000. */
+  targetRatioBps: number;
+  /** Exact equity-to-maintenance ratio `numerator / denominator` below
+   *  which an account is closed in full; strictly between 0 and 1. */
+  fullCloseThreshold: { numerator: number; denominator: number };
+  /** Penalty on each partial-liquidation fill, in basis points of the
+   *  fill's notional; at most 100. */
+  partialPenaltyBps: number;
+  /** Book orders one liquidation attempt may visit; non-zero. */
+  maxBookOrders: number;
+  /** Candidate prefixes one attempt may inspect; non-zero. */
+  maxCandidatePrefixes: number;
+  /** Fills one attempt may commit; non-zero, at most `maxCandidatePrefixes`. */
+  maxCommittedFills: number;
+  /** State reads one attempt may make; non-zero. */
+  maxStateReads: number;
+  /** Bytes of state one attempt may read; non-zero. */
+  maxStateReadBytes: number;
+}
+
+/**
+ * Replaces the global liquidation configuration (inner tag 17). Executes
+ * only when `predecessor` is the stored configuration's sequence, and
+ * `sequence` must exceed it.
+ */
+export interface SetLiquidationConfig {
+  /** Sequence of the configuration this update replaces. */
+  predecessor: bigint;
+  /** Sequence of the new configuration. */
+  sequence: bigint;
+  config: LiquidationConfig;
+}
+
+/**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
  * zero — governance supplies the authorization, not the embedded address.
@@ -1193,9 +1233,12 @@ export type AdminAction =
   | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig }
   | { kind: "SetWithdrawalLimit"; value: SetWithdrawalLimit }
   | { kind: "SetOperatorReceiptRegistry"; value: SetOperatorReceiptRegistry }
+  | { kind: "SetLiquidationConfig"; value: SetLiquidationConfig }
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
+  // Unit variant; one-way switch that admits the sub-account actions.
+  | { kind: "EnableSubAccounts" }
   | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet }
   | { kind: "ScheduleUpgrade"; value: ScheduleUpgrade }
   | { kind: "CancelUpgrade"; value: CancelUpgrade };

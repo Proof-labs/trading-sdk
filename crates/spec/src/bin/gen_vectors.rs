@@ -602,6 +602,42 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": "UnpauseBridge"
             }),
         ),
+        // EnableSubAccounts (inner tag 0x15) is the second unit variant: the
+        // bare string `"EnableSubAccounts"`, no payload.
+        codec_case(
+            "propose_admin_action/enable_sub_accounts",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": "EnableSubAccounts"
+            }),
+        ),
+        // SetLiquidationConfig (inner tag 0x11): the configuration exchange-wire
+        // freezes in its own vector. Every newtype is its bare integer and the
+        // full-close threshold is a nested positional pair.
+        codec_case(
+            "propose_admin_action/set_liquidation_config",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetLiquidationConfig": {
+                    "predecessor": 1u64,
+                    "sequence": 2u64,
+                    "config": {
+                        "target_ratio_bps": 10_500u32,
+                        "full_close_threshold": { "numerator": 2u32, "denominator": 3u32 },
+                        "partial_penalty_bps": 100u32,
+                        "max_book_orders": 20u32,
+                        "max_candidate_prefixes": 20u32,
+                        "max_committed_fills": 10u32,
+                        "max_state_reads": 10_000u32,
+                        "max_state_read_bytes": 1_000_000u32
+                    }
+                }}
+            }),
+        ),
         // UpdateAuthoritySet (inner tag 0x07, exchange#422 / DEC-87,
         // exchange#472): addition/removal of members in one privileged
         // authority allowlist. `domain` is externally tagged as its bare

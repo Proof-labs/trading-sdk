@@ -7,7 +7,9 @@
 //! the `signer` seam and the `errors` result-code decode, plus the `wire`
 //! byte newtypes and `governance` re-exports.
 
-pub use proof_wire::{abci_event, codec, crypto, triggers, types};
+pub use proof_wire::{
+    abci_event, bridge, codec, crypto, liquidation_config, liquidation_progress, triggers, types,
+};
 
 pub mod binary;
 pub mod errors;
