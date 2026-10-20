@@ -628,7 +628,7 @@ describe("feed ownership and cleanup", () => {
       feed.close();
     });
 
-    it("falls back to live events when the resent snapshot is unavailable", () => {
+    it("falls back when the ack promises nothing and the resend is refused", () => {
       const { feed, ws, late } = joined();
       const refusal = {
         type: "error",
@@ -637,6 +637,38 @@ describe("feed ownership and cleanup", () => {
         code: 503,
         error: "snapshot unavailable",
       };
+      // The gateway promises a snapshot only when one follows: a refused
+      // resend is a plain ack, then the 503.
+      ws.emit({
+        type: "subscribed",
+        id: 2,
+        channel: "accountEvents",
+        note: "already subscribed",
+      });
+      ws.emit(refusal);
+      ws.emit(fill(2));
+      expect(late).toEqual([refusal, fill(2)]);
+      feed.close();
+    });
+
+    it("falls back when an ack promises the snapshot and the 503 retracts it", () => {
+      const { feed, ws, late } = joined();
+      const refusal = {
+        type: "error",
+        id: 2,
+        channel: "accountEvents",
+        code: 503,
+        error: "snapshot unavailable",
+      };
+      // An earlier gateway announced the snapshot in the ack and reported
+      // the failure only afterwards; the error itself releases the listener.
+      ws.emit({
+        type: "subscribed",
+        id: 2,
+        channel: "accountEvents",
+        note: "already subscribed",
+        snapshot: "resent",
+      });
       ws.emit(refusal);
       ws.emit(fill(2));
       expect(late).toEqual([refusal, fill(2)]);
