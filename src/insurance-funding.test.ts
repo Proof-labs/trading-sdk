@@ -207,9 +207,18 @@ describe("governed insurance funding", () => {
       ).toThrow();
     expect(() =>
       validateWithdrawInsuranceFund({ ...value, recipient: address(0) }),
-    ).toThrow();
+    ).toThrow(/insurance withdrawal recipient/);
     expect(() =>
       validateWithdrawInsuranceFund({ ...value, allocations: [] }),
-    ).toThrow();
+    ).toThrow(/insurance withdrawal requires 1\.\.8 allocations/);
+    expect(() =>
+      validateWithdrawInsuranceFund({
+        ...value,
+        allocations: [
+          { poolId: 1, amount: 1n },
+          { poolId: 1, amount: 1n },
+        ],
+      }),
+    ).toThrow(/insurance withdrawal allocations\[1\]\.poolId/);
   });
 });

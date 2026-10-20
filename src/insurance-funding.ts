@@ -1,46 +1,51 @@
-import type { FundInsuranceFund, WithdrawInsuranceFund } from "./types.js";
+import type {
+  FundInsuranceFund,
+  InsuranceFundAllocation,
+  WithdrawInsuranceFund,
+} from "./types.js";
 
 const U64_MAX = (1n << 64n) - 1n;
 const I64_MAX = (1n << 63n) - 1n;
-const MAX_ENTRIES = 8;
+/** Allocation bound enforced by the engine's insurance `validate_transfer`. */
+const MAX_ALLOCATIONS = 8;
 
-function address(value: Uint8Array): void {
+function validateAccount(value: Uint8Array, field: string): void {
   if (
     !(value instanceof Uint8Array) ||
     value.length !== 20 ||
     !value.some(Boolean)
   ) {
-    throw new Error("account address must be 20 bytes and non-zero");
+    throw new Error(`${field} must be a 20-byte non-zero account address`);
   }
 }
 
-/** Mirrors proposal shape checks, not authority, balance or live-state checks. */
-export function validateFundInsuranceFund(value: FundInsuranceFund): void {
-  address(value.source);
-  if (
-    typeof value.fundingId !== "bigint" ||
-    value.fundingId < 0n ||
-    value.fundingId > U64_MAX
-  ) {
-    throw new Error("fundingId must be an unsigned 64-bit bigint");
+function validateId(value: bigint, field: string): void {
+  if (typeof value !== "bigint" || value < 0n || value > U64_MAX) {
+    throw new Error(`${field} must be an unsigned 64-bit bigint`);
   }
+}
+
+function validateAllocations(
+  allocations: InsuranceFundAllocation[],
+  label: string,
+): void {
   if (
-    !Array.isArray(value.allocations) ||
-    value.allocations.length < 1 ||
-    value.allocations.length > MAX_ENTRIES
+    !Array.isArray(allocations) ||
+    allocations.length < 1 ||
+    allocations.length > MAX_ALLOCATIONS
   ) {
-    throw new Error("insurance funding requires 1..8 allocations");
+    throw new Error(`${label} requires 1..${MAX_ALLOCATIONS} allocations`);
   }
   let previous = -1;
   let total = 0n;
-  for (const allocation of value.allocations) {
+  for (const [i, allocation] of allocations.entries()) {
     if (
       !Number.isInteger(allocation.poolId) ||
       allocation.poolId <= previous ||
       allocation.poolId > 255
     ) {
       throw new Error(
-        "pool IDs must be unsigned bytes in strictly ascending order",
+        `${label} allocations[${i}].poolId must be an unsigned byte in strictly ascending order`,
       );
     }
     previous = allocation.poolId;
@@ -50,28 +55,26 @@ export function validateFundInsuranceFund(value: FundInsuranceFund): void {
       allocation.amount > I64_MAX
     ) {
       throw new Error(
-        "funding amounts must be positive signed-64-bit-compatible bigints",
+        `${label} allocations[${i}].amount must be a positive bigint within i64::MAX`,
       );
     }
     total += allocation.amount;
-    if (total > I64_MAX) throw new Error("funding total exceeds i64::MAX");
+    if (total > I64_MAX) throw new Error(`${label} total exceeds i64::MAX`);
   }
+}
+
+/** Mirrors proposal shape checks, not authority, balance or live-state checks. */
+export function validateFundInsuranceFund(value: FundInsuranceFund): void {
+  validateAccount(value.source, "insurance funding source");
+  validateId(value.fundingId, "fundingId");
+  validateAllocations(value.allocations, "insurance funding");
 }
 
 /** Shape checks only: quorum and pool balances remain engine checks. */
 export function validateWithdrawInsuranceFund(
   value: WithdrawInsuranceFund,
 ): void {
-  if (
-    typeof value.withdrawalId !== "bigint" ||
-    value.withdrawalId < 0n ||
-    value.withdrawalId > U64_MAX
-  ) {
-    throw new Error("withdrawalId must be an unsigned 64-bit bigint");
-  }
-  validateFundInsuranceFund({
-    fundingId: value.withdrawalId,
-    source: value.recipient,
-    allocations: value.allocations,
-  });
+  validateId(value.withdrawalId, "withdrawalId");
+  validateAccount(value.recipient, "insurance withdrawal recipient");
+  validateAllocations(value.allocations, "insurance withdrawal");
 }

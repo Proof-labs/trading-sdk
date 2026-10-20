@@ -43,6 +43,7 @@ export {
   type SetTriggerMarketConfig,
   type SetOracleGuards,
   type FundInsuranceFund,
+  type InsuranceFundAllocation,
   type WithdrawInsuranceFund,
   type PublishLiquidationPolicy,
   type RevokeLiquidationPolicy,

@@ -1153,6 +1153,34 @@ export interface SetOperatorReceiptRegistry {
   operatorKeys: Uint8Array[];
 }
 
+/** One insurance pool's share of a funding or withdrawal transfer. */
+export interface InsuranceFundAllocation {
+  /** Insurance pool id (`u8`). */
+  poolId: number;
+  /** Micro-USDC moved for this pool; positive, and the transfer total stays within `i64::MAX`. */
+  amount: bigint;
+}
+
+/** Moves cash from an account into insurance pools. */
+export interface FundInsuranceFund {
+  /** Engine replay key: a funding id executes at most once. */
+  fundingId: bigint;
+  /** Account debited; non-zero. */
+  source: Address;
+  /** 1..=8 pool allocations in strictly ascending `poolId` order. */
+  allocations: InsuranceFundAllocation[];
+}
+
+/** Moves cash out of insurance pools to a recipient account. */
+export interface WithdrawInsuranceFund {
+  /** Engine replay key: a withdrawal id executes at most once. */
+  withdrawalId: bigint;
+  /** Account credited; non-zero. */
+  recipient: Address;
+  /** 1..=8 pool allocations in strictly ascending `poolId` order. */
+  allocations: InsuranceFundAllocation[];
+}
+
 /**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
@@ -1164,18 +1192,6 @@ export interface SetOperatorReceiptRegistry {
  * `AttachConditional` ride the standalone-events activation. The engine
  * refuses every tag below its activation height.
  */
-export interface FundInsuranceFund {
-  fundingId: bigint;
-  source: Address;
-  allocations: { poolId: number; amount: bigint }[];
-}
-
-export interface WithdrawInsuranceFund {
-  withdrawalId: bigint;
-  recipient: Address;
-  allocations: { poolId: number; amount: bigint }[];
-}
-
 export type AdminAction =
   | { kind: "PublishLiquidationPolicy"; value: PublishLiquidationPolicy }
   | { kind: "RevokeLiquidationPolicy"; value: RevokeLiquidationPolicy }

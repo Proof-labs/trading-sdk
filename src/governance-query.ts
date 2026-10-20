@@ -24,6 +24,7 @@ import type {
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
   AuthoritiesSnapshot,
+  InsuranceFundAllocation,
 } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import {
@@ -607,6 +608,20 @@ function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
   };
 }
 
+function decodeInsuranceAllocations(
+  raw: unknown,
+  field: string,
+): InsuranceFundAllocation[] {
+  return toArray(raw, `${field}.allocations`).map((value, i) => {
+    const at = `${field}.allocations[${i}]`;
+    const row = toTuple(value, at, 2);
+    return {
+      poolId: toU8(row[0], `${at}.poolId`),
+      amount: toU64(row[1], `${at}.amount`),
+    };
+  });
+}
+
 /** `kind` → the engine's `AdminActionType` tag, as a TABLE rather than
  *  arithmetic: a new arm added to `decodeAdminAction` without a row here is
  *  a compile error (`Record` over the closed union), never a silently
@@ -667,15 +682,7 @@ export function decodeAdminAction(
         value: {
           fundingId: toU64(raw[0], `${field}.fundingId`),
           source: toBytes(raw[1], `${field}.source`, ADDRESS_LEN),
-          allocations: toArray(raw[2], `${field}.allocations`).map(
-            (value, i) => {
-              const row = toTuple(value, `${field}.allocations[${i}]`, 2);
-              return {
-                poolId: toU8(row[0], `${field}.poolId`),
-                amount: toU64(row[1], `${field}.amount`),
-              };
-            },
-          ),
+          allocations: decodeInsuranceAllocations(raw[2], field),
         },
       };
       validateFundInsuranceFund(decoded.value);
@@ -686,13 +693,7 @@ export function decodeAdminAction(
       const decoded = {
         withdrawalId: toU64(raw[0], `${field}.withdrawalId`),
         recipient: toBytes(raw[1], `${field}.recipient`, ADDRESS_LEN),
-        allocations: toArray(raw[2], `${field}.allocations`).map((value, i) => {
-          const row = toTuple(value, `${field}.allocations[${i}]`, 2);
-          return {
-            poolId: toU8(row[0], `${field}.poolId`),
-            amount: toU64(row[1], `${field}.amount`),
-          };
-        }),
+        allocations: decodeInsuranceAllocations(raw[2], field),
       };
       validateWithdrawInsuranceFund(decoded);
       return { kind: "WithdrawInsuranceFund", value: decoded };

@@ -36,14 +36,18 @@ function id(value: unknown): Uint8Array {
   return Uint8Array.from(bytes as number[]);
 }
 
+function liquidationOwner(raw: unknown): Uint8Array {
+  const owner = raw instanceof Uint8Array ? Array.from(raw) : tuple(raw, 20);
+  if (owner.length !== 20 || owner.some((v) => u32(v) > 255))
+    throw new Error("liquidation owner must be 20 bytes");
+  return Uint8Array.from(owner as number[]);
+}
+
 /** Shape-only codec; quorum, checkpoint equality and current policy are on-chain checks. */
 export function decodeLiquidationRestart(raw: unknown): RestartLiquidationPlan {
   const p = tuple(raw, 8);
-  const owner = p[0] instanceof Uint8Array ? Array.from(p[0]) : tuple(p[0], 20);
-  if (owner.length !== 20 || owner.some((v) => u32(v) > 255))
-    throw new Error("liquidation owner must be 20 bytes");
   return {
-    owner: Uint8Array.from(owner as number[]),
+    owner: liquidationOwner(p[0]),
     planId: u64(p[1]),
     expectedRevision: u64(p[2]),
     expectedCheckpointHash: id(p[3]),
@@ -70,11 +74,8 @@ export function validateLiquidationRestart(p: RestartLiquidationPlan): void {
 /** Shape only: immutable incident revision and current safety revision are distinct. */
 export function decodeLiquidationRelease(raw: unknown): ReleaseLiquidationPlan {
   const p = tuple(raw, 6);
-  const owner = p[0] instanceof Uint8Array ? Array.from(p[0]) : tuple(p[0], 20);
-  if (owner.length !== 20 || owner.some((v) => u32(v) > 255))
-    throw new Error("liquidation owner must be 20 bytes");
   return {
-    owner: Uint8Array.from(owner as number[]),
+    owner: liquidationOwner(p[0]),
     planId: u64(p[1]),
     expectedRevision: u64(p[2]),
     safetyRevision: u64(p[3]),
