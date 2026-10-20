@@ -307,6 +307,20 @@ jobs:
           cargo run -p proof-trading-sdk-conformance --bin gen-vectors --locked
           git diff --exit-code conformance/ \
             || (echo "::error::conformance/*.ndjson is stale — re-run gen-vectors and commit" && exit 1)
+      # src/fixtures/liquidation_cash_finalized.json is a copy of the engine's
+      # cash-audit golden; it must stay byte-identical to the pinned wire's.
+      - name: Cash-audit fixture matches the pinned wire
+        shell: bash
+        run: |
+          wire="$(dirname "$(cargo metadata --format-version 1 --locked \
+            | jq -r '.packages[] | select(.name == "proof-wire") | .manifest_path')")"
+          golden="$wire/tests/fixtures/liquidation_cash_finalized.json"
+          if [ -f "$golden" ]; then
+            cmp "$golden" src/fixtures/liquidation_cash_finalized.json \
+              || (echo "::error::src/fixtures/liquidation_cash_finalized.json differs from the pinned wire's golden" && exit 1)
+          else
+            echo "::warning::pinned proof-wire ships no cash-audit golden; src/fixtures/liquidation_cash_finalized.json is unverified"
+          fi
 
   python:
     name: Python tests + conformance
