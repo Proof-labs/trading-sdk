@@ -97,6 +97,9 @@ interface SubRecord {
    *  snapshot: delivered if its release brings no snapshot, dropped if it
    *  does (the snapshot covers them). */
   pendingEvents: Map<FrameHandler, FeedFrame[]>;
+  /** accountEvents only: a subscribe that brings a snapshot is in flight, so
+   *  further late listeners wait for it instead of sending another. */
+  resendPending: boolean;
 }
 
 /** Price → `[totalQuantity, orderCount]`, per side. */
@@ -279,9 +282,12 @@ export class GatewayFeed {
       } else if (record.channel === "accountEvents") {
         // Account events cannot be rebuilt locally, so a repeat subscribe
         // asks the gateway to resend the account snapshot. Closed or
-        // reconnecting, the replay on open brings a snapshot anyway.
+        // reconnecting, the replay on open brings a snapshot anyway. One
+        // resend in flight serves every listener that joins while it is
+        // pending: its snapshot releases them all.
         record.awaitingSnapshot.add(listener);
-        if (this.state === "open") this.sendSubscribe(record);
+        if (this.state === "open" && !record.resendPending)
+          this.sendSubscribe(record);
       }
     } else {
       record = {
@@ -294,6 +300,7 @@ export class GatewayFeed {
         book: null,
         awaitingSnapshot: new Set(),
         pendingEvents: new Map(),
+        resendPending: false,
       };
       this.subs.set(key, record);
       this.ensureConnected();
@@ -464,6 +471,7 @@ export class GatewayFeed {
   private sendSubscribe(record: SubRecord): void {
     const socket = this.ws;
     const generation = ++record.generation;
+    if (record.channel === "accountEvents") record.resendPending = true;
     const key = subKey(record.channel, record.params);
     const active = () =>
       this.ws === socket &&
@@ -577,6 +585,10 @@ export class GatewayFeed {
     const record = this.subs.get(key);
     if (!record) return;
     if (record.channel === "orderbook") applyToBook(record, msg);
+    // A snapshot means the subscribe that brings it has landed, so a further
+    // late listener sends a fresh resend.
+    if (record.channel === "accountEvents" && msg.type === "snapshot")
+      record.resendPending = false;
     for (const listener of record.listeners) {
       if (record.awaitingSnapshot.has(listener)) {
         if (msg.type === "snapshot") {
@@ -619,6 +631,9 @@ export class GatewayFeed {
    *  listeners never wait on the gateway once a local book exists. */
   private releaseAwaiting(record: SubRecord): void {
     if (record.channel !== "accountEvents") return;
+    // No snapshot is coming for these listeners; the next one to join sends
+    // a fresh subscribe.
+    record.resendPending = false;
     for (const listener of record.awaitingSnapshot) {
       const held = record.pendingEvents.get(listener);
       if (held) for (const frame of held) this.deliver(listener, frame);
@@ -662,9 +677,13 @@ export class GatewayFeed {
   }
 
   /** A new socket starts from the gateway's next snapshot, never from a book
-   *  the old socket built. */
+   *  the old socket built. The subscribe in flight died with the socket; the
+   *  replay on open sends a fresh one. */
   private forgetBooks(): void {
-    for (const record of this.subs.values()) record.book = null;
+    for (const record of this.subs.values()) {
+      record.book = null;
+      record.resendPending = false;
+    }
   }
 
   private dispatchError(frame: FeedErrorFrame): void {

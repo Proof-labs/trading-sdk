@@ -643,6 +643,42 @@ describe("feed ownership and cleanup", () => {
       feed.close();
     });
 
+    it("one in-flight resend serves listeners that join before its snapshot", () => {
+      const { feed } = makeFeed();
+      const a: unknown[] = [];
+      const b: unknown[] = [];
+      feed.subscribeAccount(owner, () => {});
+      const ws = FakeWS.last();
+      ws.open();
+      ws.emit({ type: "subscribed", id: 1, channel: "accountEvents" });
+      ws.emit(accountSnapshot(1));
+      feed.subscribeAccount(owner, (f) => a.push(f));
+      // B joins while A's resend is still on the wire.
+      feed.subscribeAccount(owner, (f) => b.push(f));
+      expect(
+        subscribes(ws),
+        "the resend in flight serves both listeners",
+      ).toHaveLength(2);
+      ws.emit(fill(2)); // already in the snapshot being resent
+      ws.emit({
+        type: "subscribed",
+        id: 2,
+        channel: "accountEvents",
+        note: "already subscribed",
+        snapshot: "resent",
+      });
+      ws.emit(accountSnapshot(2));
+      expect(a).toEqual([accountSnapshot(2)]);
+      expect(b).toEqual([accountSnapshot(2)]);
+      // The snapshot released everyone, so a further listener resends again.
+      feed.subscribeAccount(owner, () => {});
+      expect(
+        subscribes(ws),
+        "a listener after the snapshot resends",
+      ).toHaveLength(3);
+      feed.close();
+    });
+
     it("waits for the replayed snapshot when it joins while reconnecting", () => {
       const { feed, clock } = makeFeed();
       const late: unknown[] = [];
@@ -728,6 +764,9 @@ describe("feed ownership and cleanup", () => {
       ws.open();
       await microtasks();
       await microtasks();
+      // The first snapshot lands, so the late listener sends a fresh resend
+      // rather than waiting on the one that already arrived.
+      ws.emit(accountSnapshot(1));
       feed.subscribeAccount(owner, () => {}, auth);
       await microtasks();
       await microtasks();
