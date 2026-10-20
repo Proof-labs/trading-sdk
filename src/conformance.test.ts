@@ -675,6 +675,16 @@ function toAdminBatchItem(
   );
 }
 
+/** Insurance transfer rows from the vector's serde map form. */
+function toInsuranceAllocations(
+  raw: unknown,
+): import("./types.js").InsuranceFundAllocation[] {
+  return (raw as Record<string, unknown>[]).map((a) => ({
+    poolId: a.pool_id as number,
+    amount: big(a.amount),
+  }));
+}
+
 /** Reconstruct a TS `AdminAction` from the vector's serde map form. Throws
  *  on an unknown variant rather than falling through — a vector this suite
  *  cannot name must fail the run, not mis-parse as a registry update. */
@@ -818,6 +828,28 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
         domain: u.domain as import("./types.js").AuthorityDomain,
         add: (u.add as unknown[]).map((a) => bytes(a)),
         remove: (u.remove as unknown[]).map((a) => bytes(a)),
+      },
+    };
+  }
+  if (v.FundInsuranceFund) {
+    const f = v.FundInsuranceFund as Record<string, unknown>;
+    return {
+      kind: "FundInsuranceFund",
+      value: {
+        fundingId: big(f.funding_id),
+        source: bytes(f.source),
+        allocations: toInsuranceAllocations(f.allocations),
+      },
+    };
+  }
+  if (v.WithdrawInsuranceFund) {
+    const w = v.WithdrawInsuranceFund as Record<string, unknown>;
+    return {
+      kind: "WithdrawInsuranceFund",
+      value: {
+        withdrawalId: big(w.withdrawal_id),
+        recipient: bytes(w.recipient),
+        allocations: toInsuranceAllocations(w.allocations),
       },
     };
   }
@@ -1071,10 +1103,11 @@ describe("conformance vectors (TypeScript)", () => {
     // update-authority-set add and
     // remove, cancel-all-for
     // -account scoped and unscoped, four set-oracle-guards shapes, and
-    // oracle policy, two schedule-upgrade shapes and cancel-upgrade),
+    // oracle policy, two schedule-upgrade shapes, cancel-upgrade, and
+    // insurance fund and withdraw),
     // approve, reject, and all three emergency arms (PauseMarket,
     // HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(30);
+    expect(govCases.length).toBe(32);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

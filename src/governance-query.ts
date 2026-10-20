@@ -29,10 +29,15 @@ import type {
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
   AuthoritiesSnapshot,
+  InsuranceFundAllocation,
   UpgradesInfo,
 } from "./types.js";
 import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
+import {
+  validateFundInsuranceFund,
+  validateWithdrawInsuranceFund,
+} from "./insurance-funding.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import { Outcome } from "./types.js";
 
@@ -661,6 +666,20 @@ function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
   };
 }
 
+function decodeInsuranceAllocations(
+  raw: unknown,
+  field: string,
+): InsuranceFundAllocation[] {
+  return toArray(raw, `${field}.allocations`).map((value, i) => {
+    const at = `${field}.allocations[${i}]`;
+    const row = toTuple(value, at, 2);
+    return {
+      poolId: toU8(row[0], `${at}.poolId`),
+      amount: toU64(row[1], `${at}.amount`),
+    };
+  });
+}
+
 /** `kind` → the engine's `AdminActionType` tag, as a TABLE rather than
  *  arithmetic: a new arm added to `decodeAdminAction` without a row here is
  *  a compile error (`Record` over the closed union), never a silently
@@ -678,6 +697,8 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CancelAllOrdersForAccount: 8,
   ConfigureOraclePolicy: 12,
   SetOracleGuards: 13,
+  FundInsuranceFund: 18,
+  WithdrawInsuranceFund: 25,
   ScheduleUpgrade: 14,
   CancelUpgrade: 15,
   SetWithdrawalLimit: 19,
@@ -700,6 +721,29 @@ export function decodeAdminAction(
   if (value === "EnableSubAccounts") return { kind: "EnableSubAccounts" };
   const { name, payload } = variantOf(value, field);
   switch (name) {
+    case "FundInsuranceFund": {
+      const raw = toTuple(payload, field, 3);
+      const decoded: AdminAction & { kind: "FundInsuranceFund" } = {
+        kind: "FundInsuranceFund",
+        value: {
+          fundingId: toU64(raw[0], `${field}.fundingId`),
+          source: toBytes(raw[1], `${field}.source`, ADDRESS_LEN),
+          allocations: decodeInsuranceAllocations(raw[2], field),
+        },
+      };
+      validateFundInsuranceFund(decoded.value);
+      return decoded;
+    }
+    case "WithdrawInsuranceFund": {
+      const raw = toTuple(payload, field, 3);
+      const decoded = {
+        withdrawalId: toU64(raw[0], `${field}.withdrawalId`),
+        recipient: toBytes(raw[1], `${field}.recipient`, ADDRESS_LEN),
+        allocations: decodeInsuranceAllocations(raw[2], field),
+      };
+      validateWithdrawInsuranceFund(decoded);
+      return { kind: "WithdrawInsuranceFund", value: decoded };
+    }
     case "CancelAllOrdersForAccount":
       return {
         kind: "CancelAllOrdersForAccount",

@@ -9,6 +9,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `FundInsuranceFund` (admin tag 18) and `WithdrawInsuranceFund` (admin
+  tag 25) proposals: TypeScript types, pre-signing shape validation,
+  proposal decoding and Rust governance re-exports. The shared Rust/WASM
+  codec is the only encoder. Transfer IDs keep the full `u64` range;
+  allocations require a non-zero account, 1–8 distinct ascending pools,
+  positive amounts and a total no greater than `i64::MAX`.
+  Insurance refusals 102–105 have named TypeScript, Rust and Python error
+  classifications; existing `InvalidPlpConfig` code 101 is unchanged.
+  Additive npm/Python API; no existing signed bytes change. Availability
+  requires the reviewed engine and gateway insurance actions and the
+  corresponding public proof-wire release. The SDK does not authorize a
+  source account, choose allocations or execute a transfer by itself.
+- Rust governance re-exports the canonical insurance action and identifier
+  types, including `InsuranceFundingId` and `InsuranceFundAllocation`.
+  The added `AdminAction`/`AdminActionType` variants affect exhaustive Rust
+  matches and belong to the next Rust MAJOR release.
+
 - **The `SetLiquidationConfig` governance action** (inner tag 17). An
   `AdminAction` of kind `SetLiquidationConfig` carries `predecessor`,
   `sequence` and the global `LiquidationConfig` (target ratio, exact

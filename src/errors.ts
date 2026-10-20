@@ -151,6 +151,10 @@ export enum ExecErrorCode {
   AccountOrderCapReached = 100,
   /** A PLP configuration violates one of the payload shape rules. */
   InvalidPlpConfig = 101,
+  InsuranceFundingReplayed = 102,
+  InsuranceWithdrawalReplayed = 103,
+  MarketlessInsurancePool = 104,
+  InsufficientInsuranceBalance = 105,
   InternalError = 255,
 }
 
@@ -540,6 +544,23 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "InvalidPlpConfig",
     description:
       "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance",
+  },
+  102: {
+    name: "InsuranceFundingReplayed",
+    description:
+      "Insurance-fund funding id has already executed; each funding id executes at most once.",
+  },
+  103: {
+    name: "InsuranceWithdrawalReplayed",
+    description: "Insurance withdrawal id has already executed.",
+  },
+  104: {
+    name: "MarketlessInsurancePool",
+    description: "Insurance transfer pool has no registered market.",
+  },
+  105: {
+    name: "InsufficientInsuranceBalance",
+    description: "Insurance withdrawal would make the pool balance negative.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
