@@ -646,6 +646,55 @@ describe("feed ownership and cleanup", () => {
       feed.close();
     });
 
+    it("falls back to live events when signing the repeat subscribe fails", async () => {
+      const errors: unknown[] = [];
+      const { feed } = makeFeed({ onError: (e: unknown) => errors.push(e) });
+      let calls = 0;
+      const auth = async () => {
+        calls += 1;
+        if (calls > 1) throw new Error("signer unavailable");
+        return { public_key: "pk", signature: "sig", timestamp_ms: 1 };
+      };
+      const early: unknown[] = [];
+      const late: unknown[] = [];
+      feed.subscribeAccount(owner, (f) => early.push(f), auth);
+      const ws = FakeWS.last();
+      ws.open();
+      await microtasks();
+      await microtasks();
+      ws.emit(accountSnapshot(1));
+      feed.subscribeAccount(owner, (f) => late.push(f), auth);
+      // Let the rejected signing settle through its promise chain.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(subscribes(ws), "the rejected repeat sends nothing").toHaveLength(
+        1,
+      );
+      ws.emit(fill(2));
+      expect(late, "the late listener is not left waiting").toEqual([fill(2)]);
+      expect(early).toEqual([accountSnapshot(1), fill(2)]);
+      expect(errors).toEqual([new Error("signer unavailable")]);
+      expect(feed.connectionState).toBe("open");
+      feed.close();
+    });
+
+    it("falls back to live events when sending the repeat subscribe fails", () => {
+      const errors: unknown[] = [];
+      const { feed } = makeFeed({ onError: (e: unknown) => errors.push(e) });
+      const late: unknown[] = [];
+      feed.subscribeAccount(owner, () => {});
+      const ws = FakeWS.last();
+      ws.open();
+      ws.emit(accountSnapshot(1));
+      ws.send = () => {
+        throw new Error("socket write failed");
+      };
+      feed.subscribeAccount(owner, (f) => late.push(f));
+      ws.emit(fill(2));
+      expect(late).toEqual([fill(2)]);
+      expect(errors).toEqual([new Error("socket write failed")]);
+      feed.close();
+    });
+
     it("signs the repeat subscribe like the first", async () => {
       const { feed } = makeFeed();
       let signed = 0;

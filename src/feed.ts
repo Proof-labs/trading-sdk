@@ -467,7 +467,7 @@ export class GatewayFeed {
     const send = (auth: object = {}) => {
       if (!active()) return;
       record.lastId = this.nextId++;
-      this.send({
+      const sent = this.send({
         method: "subscribe",
         id: record.lastId,
         params: {
@@ -479,6 +479,7 @@ export class GatewayFeed {
             : {}),
         },
       });
+      if (!sent) this.releaseAwaiting(record);
     };
     const provider =
       record.channel === "accountEvents"
@@ -494,6 +495,8 @@ export class GatewayFeed {
       .then(send)
       .catch((err) => {
         if (!active()) return;
+        // No subscribe goes out, so no snapshot comes back on this socket.
+        this.releaseAwaiting(record);
         this.onError?.(err instanceof Error ? err : new Error(String(err)));
       });
   }
@@ -506,12 +509,15 @@ export class GatewayFeed {
     });
   }
 
-  private send(msg: unknown): void {
-    if (!this.ws) return;
+  /** False when there is no socket or the send threw. */
+  private send(msg: unknown): boolean {
+    if (!this.ws) return false;
     try {
       this.ws.send(JSON.stringify(msg));
+      return true;
     } catch (err) {
       this.onError?.(err instanceof Error ? err : new Error(String(err)));
+      return false;
     }
   }
 
@@ -588,7 +594,14 @@ export class GatewayFeed {
   private handleSubscribed(msg: Record<string, unknown>): void {
     if (msg.note !== "already subscribed" || msg.snapshot === "resent") return;
     const record = this.recordForId(msg.id);
-    if (record?.channel === "accountEvents") record.awaitingSnapshot.clear();
+    if (record) this.releaseAwaiting(record);
+  }
+
+  /** Account listeners waiting on a snapshot that will not come take the
+   *  live events instead, as before the gateway could resend one. Orderbook
+   *  listeners never wait on the gateway once a local book exists. */
+  private releaseAwaiting(record: SubRecord): void {
+    if (record.channel === "accountEvents") record.awaitingSnapshot.clear();
   }
 
   private recordForId(id: unknown): SubRecord | undefined {
@@ -642,7 +655,7 @@ export class GatewayFeed {
       }
       // A refused repeat subscribe (the resent account snapshot could not be
       // read) brings no snapshot: the waiting listeners take the live events.
-      if (record.channel === "accountEvents") record.awaitingSnapshot.clear();
+      this.releaseAwaiting(record);
     }
     this.onError?.(frame);
   }
