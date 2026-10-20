@@ -388,3 +388,64 @@ it("uses the configured gateway for response reads even in internal node mode", 
     "https://gateway.example/v1/oracle/health",
   );
 });
+
+describe("order outcome history contract", () => {
+  it("preserves partial, zero-fill and rejected receipts without synthesizing order ids", async () => {
+    const orders = [
+      {
+        event_type: "market_order_processed",
+        payload: {
+          order_id: "1196776",
+          requested_quantity: "500",
+          filled_quantity: "317",
+          time_in_force: "Ioc",
+          limit_price: "110000000",
+        },
+      },
+      {
+        event_type: "market_order_processed",
+        payload: {
+          order_id: "1196777",
+          requested_quantity: "1",
+          filled_quantity: "0",
+          time_in_force: "Ioc",
+          unfilled_reason: "no_liquidity",
+        },
+      },
+      {
+        event_type: "order_rejected",
+        tx_hash: "ABC",
+        payload: {
+          owner,
+          market: "3",
+          client_order_id: "18446744073709551615",
+          code: "47",
+        },
+      },
+      {
+        event_type: "order_rejected",
+        tx_hash: "DEF",
+        payload: {
+          owner,
+          market: "3",
+          code: "34",
+        },
+      },
+    ];
+    const payload = { orders, next_cursor: "opaque-cursor" };
+    const fetch = vi.fn(async () => json(payload));
+    const reads = new ExchangeClient({
+      gatewayUrl: "https://gateway.example",
+    }).reads({ fetch });
+    expect(await (await reads.historyOrders({ user: owner })).json()).toEqual(
+      payload,
+    );
+    expect(fetch).toHaveBeenCalledWith(
+      "https://gateway.example/info",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ user: owner, type: "historyOrders" }),
+      }),
+    );
+  });
+});
