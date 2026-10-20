@@ -9,6 +9,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking changes
 
+- **Rust: `proof-wire` 4.1.0 → 6.0.0.** `proof-trading-sdk` re-exports
+  `proof_wire::{abci_event, codec, crypto, triggers, types}`, so both wire
+  majors reach its public API: `ScheduleUpgrade` carries the successor's
+  engine release `(major, minor)` instead of `protocol_version` (5.0.0), and
+  `EventInfo`, `EventCreated` and `CreateEvent` lose the No book while
+  `Event::OrderMigrated`, `Event::PositionMigrated` and
+  `CancelReason::Upgrade` are appended (6.0.0). Old-shape `ScheduleUpgrade`
+  and event bytes no longer decode. Compatible engine: exchange 2.15.0 at
+  `742c6312`, which resolves from the private engine repository; the publish
+  workflow refuses a release until `proof-wire` is re-pinned to a public wire
+  release.
+
 - The gateway's `status` is read as stated; nothing is inferred
   from message text or field shape (api-gateway 7.0.0, api-gateway #215 and
   #220). `POST /exchange` now answers `ok`, `error`, `refused` or
@@ -26,43 +38,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- The liquidation candidate tracks the current single-book engine wire and
-  preserves the SDK's reads across the two-book to one-book upgrade. Insurance
-  refusals 102–105 have named TypeScript, Rust and Python error classifications;
-  101 remains reserved. The candidate wire revision is review-only and must be
-  replaced by its reviewed public release before package publication.
+- `FundInsuranceFund` (admin tag 18) and `WithdrawInsuranceFund` (admin
+  tag 21) proposals: TypeScript types, pre-signing shape validation mirroring
+  the engine's transfer checks (non-zero account, 1..=8 allocations in
+  strictly ascending pool order, positive amounts totalling at most
+  `i64::MAX`), proposal decoding and Rust governance re-exports. Encoding is
+  the shared Rust/WASM codec. Insurance refusals 102–105 have named
+  TypeScript, Rust and Python error classifications; 101 stays reserved. The
+  SDK creates no treasury source, allocation or signed transfer.
 
-- Incident-bound `ReleaseLiquidationPlan` proposals carry distinct original
-  incident and current safety revisions through the shared codec. Existing
-  admin quorum and mandatory current safety checks remain on-chain; transport
-  support cannot override them, erase debt or activate the dormant executor.
+- `PublishLiquidationPolicy` (admin tag 22) and `RevokeLiquidationPolicy`
+  (admin tag 23) proposals: typed display, shape validation and codec
+  support. Policy metadata is neither funded cash nor activation authority.
 
-- Plan-bound `RestartLiquidationPlan` governance transport and the bounded
-  gateway-only `queryLiquidationPlan(owner)` read. Checkpoint hashes and window
-  generations bind operator proposals without granting authority, resetting
-  financial limits or releasing containment. Unavailable or corrupt plan
-  evidence fails closed rather than appearing absent.
+- `RestartLiquidationPlan` (admin tag 24) and `ReleaseLiquidationPlan` (admin
+  tag 25) proposals. Checkpoint hashes and window generations bind a proposal
+  to one plan; a release carries the incident's original revision and the
+  current safety revision separately. Admin quorum and the on-chain safety
+  checks stay authoritative.
 
-- `decodeLiquidationCashAudit` decodes the draft terminal insured-close audit
-  without narrowing u64/i64 cash, PnL or IDs. It returns reported final
-  balances, not another cash movement; malformed widths, addresses, identity
-  and unsupported representations refuse. Decoding does not authenticate
-  provenance, provide replay protection or authorize runtime activation.
+- `queryLiquidationPlan(owner)`: a bounded, gateway-only read of one
+  account's finalized liquidation plan. Unavailable or corrupt evidence
+  rejects (HTTP failures as `GatewayHttpError`) rather than reading as no
+  plan.
 
-- Prepared dormant liquidation-policy publish/revoke governance transport:
-  typed proposal display, shape validation and exact Rust/WASM codec support.
-  Metadata is not funded cash or activation authority. Calibrated values,
-  shared decisions and a reviewed public wire release remain prerequisites.
-- Prepared governed insurance funding (exchange #886): TypeScript
-  `FundInsuranceFund` and `WithdrawInsuranceFund` proposal types, strict
-  pre-signing shape validation, compact proposal decoding and Rust governance
-  re-exports. Encoding remains in the shared Rust/WASM wire implementation;
-  existing codec fixtures still pass. This client work is not release-ready
-  until the public wire artifact containing #886 is pinned and the affected
-  package versions are advanced under the compatibility policy. No treasury
-  source, live allocation or signed funding transaction is created by the SDK.
-  The prototype withdrawal now uses inner tag `0x15`; merged receipt-registry
-  rotation retains `0x14` and the withdrawal-limit reservation retains `0x13`.
+- `decodeLiquidationCashAudit` decodes the terminal liquidation cash audit
+  without narrowing u64/i64 cash, PnL or ids. It reports final balances, not
+  another cash movement, and refuses malformed widths, addresses, identity or
+  unsupported representations. Decoding does not authenticate provenance or
+  provide replay protection.
 
 - Oracle permission reads decode the committed verdict of exchange#831
   (primary with fallback, DEC-219) in both layouts. The fourteen-field
