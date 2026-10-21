@@ -1233,6 +1233,24 @@ export interface SetLiquidationConfig {
   config: LiquidationConfig;
 }
 
+/** Treatment of offset credit when the event resolves. */
+export type OffsetResolutionTreatment = "RemoveOnResolution";
+
+/** Explicit perpetual/conditional eligibility and its partial-credit rate. */
+export interface MarginOffsetPair {
+  perpetual: number;
+  conditional: number;
+  settlementReference: number;
+  rate: number;
+  resolution: OffsetResolutionTreatment;
+}
+
+/** Complete policy replacement; an empty list revokes all offsets. */
+export interface SetMarginOffsetPolicy {
+  predecessor: bigint | null;
+  pairs: MarginOffsetPair[];
+}
+
 /**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
@@ -1259,6 +1277,7 @@ export type AdminAction =
   | { kind: "SetWithdrawalLimit"; value: SetWithdrawalLimit }
   | { kind: "SetOperatorReceiptRegistry"; value: SetOperatorReceiptRegistry }
   | { kind: "SetLiquidationConfig"; value: SetLiquidationConfig }
+  | { kind: "SetMarginOffsetPolicy"; value: SetMarginOffsetPolicy }
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }

@@ -635,6 +635,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }}
             }),
         ),
+        // SetMarginOffsetPolicy (inner tag 0x1B): a complete policy replacement.
+        // The predecessor is `Option`, so the first write carries nil; pairs are
+        // positional with a bare-string resolution treatment.
+        codec_case(
+            "propose_admin_action/set_margin_offset_policy",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetMarginOffsetPolicy": {
+                    "predecessor": null,
+                    "pairs": [{
+                        "perpetual": 1u32,
+                        "conditional": 2u32,
+                        "settlement_reference": 1u32,
+                        "rate": 5_000u16,
+                        "resolution": "RemoveOnResolution"
+                    }]
+                }}
+            }),
+        ),
         // UpdateAuthoritySet (inner tag 0x07, exchange#422 / DEC-87,
         // exchange#472): addition/removal of members in one privileged
         // authority allowlist. `domain` is externally tagged as its bare
