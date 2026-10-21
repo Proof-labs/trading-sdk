@@ -61,7 +61,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - `proof-wire` moves to v6.4.0 (`937adebc`), the wire exchange 2.17.0
-  (protocol 5.0) ships with. Every existing conformance vector is unchanged.
+  (protocol 5.0) ships with, and then to the Proof-labs/wire `dev` commit
+  `3214376b` that adds the insurance transfer contract ahead of the v6.5.0
+  tag. The manifest now also pins the proof-wire major (`version = "6"`).
+  Every existing conformance vector is unchanged.
 
 ### Fixed
 
