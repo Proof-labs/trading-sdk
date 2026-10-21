@@ -260,6 +260,14 @@ export {
 } from "./ticker.js";
 export { validateScheduleUpgrade } from "./upgrade-plan.js";
 export {
+  MAX_MARGIN_OFFSET_PAIRS,
+  decodeMarginOffsetEvent,
+  validateSetMarginOffsetPolicy,
+  type MarginOffsetEvent,
+  type MarginOffsetPairConfiguredEvent,
+  type MarginOffsetPolicySetEvent,
+} from "./margin-offsets.js";
+export {
   INITIAL_TAKEOVER_DISCOUNT_BPS,
   MAX_PARTIAL_PENALTY_BPS,
   MAX_TAKEOVER_DISCOUNT_BPS,
