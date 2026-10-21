@@ -16,7 +16,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   allocations require a non-zero account, 1–8 distinct ascending pools,
   positive amounts and a total no greater than `i64::MAX`.
   Insurance refusals 102–105 have named TypeScript, Rust and Python error
-  classifications; existing `InvalidPlpConfig` code 101 is unchanged.
+  classifications; the PLP shape-fault correction is recorded below.
   Additive npm/Python API; no existing signed bytes change. Availability
   requires the reviewed engine and gateway insurance actions and the
   corresponding public proof-wire release. The SDK does not authorize a
@@ -64,6 +64,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (protocol 5.0) ships with. Every existing conformance vector is unchanged.
 
 ### Fixed
+
+- Classify `InvalidPlpConfig` as code 112 in TypeScript, Rust and Python,
+  matching the reviewed allocation in exchange #913. The earlier proposed
+  code 101 is reserved for a margin-method refusal and now remains unknown
+  rather than being mislabeled as a PLP fault. Codes 99/100 and insurance
+  codes 102–105 keep their meanings. No signed transaction bytes or wire
+  dependency change; the engine validation release is still required.
 
 - **A second `subscribeOrderbook` listener on an active market now starts
   from a snapshot.** The gateway sends one snapshot per socket subscription,

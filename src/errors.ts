@@ -149,12 +149,12 @@ export enum ExecErrorCode {
   WithdrawalLimitExceeded = 99,
   /** The account already holds the maximum number of resting orders. */
   AccountOrderCapReached = 100,
-  /** A PLP configuration violates one of the payload shape rules. */
-  InvalidPlpConfig = 101,
   InsuranceFundingReplayed = 102,
   InsuranceWithdrawalReplayed = 103,
   MarketlessInsurancePool = 104,
   InsufficientInsuranceBalance = 105,
+  /** A PLP configuration violates one of the payload shape rules. */
+  InvalidPlpConfig = 112,
   InternalError = 255,
 }
 
@@ -540,11 +540,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "the account already holds the maximum number of resting orders — cancel one before placing another",
   },
-  101: {
-    name: "InvalidPlpConfig",
-    description:
-      "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance",
-  },
   102: {
     name: "InsuranceFundingReplayed",
     description:
@@ -561,6 +556,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
   105: {
     name: "InsufficientInsuranceBalance",
     description: "Insurance withdrawal would make the pool balance negative.",
+  },
+  112: {
+    name: "InvalidPlpConfig",
+    description:
+      "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

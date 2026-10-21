@@ -143,11 +143,11 @@ define_error_kinds! {
     98  => TriggerOrderIncompatible         ~ "Order cannot carry attached SL/TP (reduce-only order, ineligible market, or inactive feature).",
     99  => WithdrawalLimitExceeded          ~ "The withdrawal would push the account's rolling-window outflow past the configured per-account cap. The attempted debit, the cap, and when the oldest in-window outflow expires are in the log; capacity returns as in-window outflows age out.",
     100 => AccountOrderCapReached           ~ "The account already holds the maximum number of resting orders; cancel one before placing another.",
-    101 => InvalidPlpConfig                 ~ "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance.",
     102 => InsuranceFundingReplayed ~ "Insurance-fund funding id has already executed; each funding id executes at most once.",
     103 => InsuranceWithdrawalReplayed ~ "Insurance withdrawal id has already executed.",
     104 => MarketlessInsurancePool ~ "Insurance transfer pool has no registered market.",
     105 => InsufficientInsuranceBalance ~ "Insurance withdrawal would make the pool balance negative.",
+    112 => InvalidPlpConfig                 ~ "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -232,6 +232,21 @@ pub fn error_code_manifest() -> &'static [ErrorKind] {
 mod exec_error_meaning_tests {
     use super::*;
     use proof_wire::types::ExecError;
+
+    #[test]
+    fn plp_shape_faults_use_112_not_the_reserved_margin_method_code() {
+        assert_eq!(ErrorKind::InvalidPlpConfig.code(), 112);
+        assert_eq!(
+            decode_exec_error_kind(112, None),
+            Some(DecodedExecErrorKind::Known(ErrorKind::InvalidPlpConfig))
+        );
+        for log in [
+            None,
+            Some("invalid PLP config: PLP address must be non-zero"),
+        ] {
+            assert_eq!(decode_exec_error_kind(101, log), None);
+        }
+    }
 
     #[test]
     #[allow(clippy::unwrap_used)]
@@ -477,19 +492,18 @@ mod exec_error_meaning_tests {
         }
     }
 
-    /// Every engine code must be covered by the public error manifest, with
-    /// the holes the wire itself carries: 24, 25 and 31 (the retired
-    /// impact-market family) and 78-81 (reserved for oracle errors). Catches
-    /// the case where a code is reserved by the mirrored engine error enum
-    /// but no SDK classification maps to it.
+    /// Pin the named codes supported by this SDK's wire revision, plus the
+    /// reviewed PLP shape-fault allocation. Code 101 remains reserved for
+    /// the margin-method refusal; newer engine codes 106-111 are not yet
+    /// classified by this SDK and must not be mislabeled as PLP faults.
     #[test]
     fn no_code_holes_in_documented_range() {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
         let expected: Vec<u32> = (1u32..=105)
-            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81))
-            .chain(std::iter::once(255))
+            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81 | 101))
+            .chain([112, 255])
             .collect();
         assert_eq!(
             codes, expected,
