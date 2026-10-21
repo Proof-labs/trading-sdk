@@ -434,7 +434,7 @@ string—pass those strings and the cursor through unchanged.
 The `Action` type is a discriminated union. Every action is:
 
 ```typescript
-type Action = TraderAction | OperatorAction;
+type Action = TraderAction | OperatorAction | GovernanceAction;
 
 type TraderAction =
   | { type: "PlaceOrder"; data: PlaceOrder }
@@ -459,6 +459,23 @@ dedicated engine allowlist, so codec availability grants nothing without an
 operator-provisioned key. See [AGENTS.md](AGENTS.md) → "Operator actions" for
 usage (e.g. driving the BE-31 multi-source mark via `OracleUpdateComposite` +
 `UpdateMarketFees` `markSourceMode`).
+
+#### Governance actions (admin multisig)
+
+`GovernanceAction` covers the signer-registry multisig:
+
+```typescript
+type GovernanceAction =
+  | { type: "ProposeAdminAction"; data: ProposeAdminAction }
+  | { type: "ApproveAdminAction"; data: ApproveAdminAction }
+  | { type: "RejectAdminAction"; data: RejectAdminAction }
+  | { type: "EmergencyAdminAction"; data: EmergencyAdminAction };
+```
+
+`ProposeAdminAction` and `ApproveAdminAction` carry one `AdminAction` (create a
+market, attach a conditional, schedule an upgrade, and the rest);
+`EmergencyAdminAction` carries one single-signer `EmergencyAction`. Each is
+refused unless the signer is in the current admin signer registry.
 
 ### Options
 

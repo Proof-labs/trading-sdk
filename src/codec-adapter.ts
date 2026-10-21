@@ -24,8 +24,16 @@ import {
   type PriceComparison,
   type SetTriggerMarketConfig,
   type SetOracleGuards,
+  type FundInsuranceFund,
+  type WithdrawInsuranceFund,
   type ScheduleUpgrade,
+  type SetLiquidationConfig,
 } from "./types.js";
+import {
+  validateFundInsuranceFund,
+  validateWithdrawInsuranceFund,
+} from "./insurance-funding.js";
+import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import {
@@ -140,8 +148,17 @@ function governanceActionToWasm(value: unknown): unknown {
   if (v.kind === "SetOracleGuards") {
     validateSetOracleGuards(v.value as SetOracleGuards);
   }
+  if (v.kind === "FundInsuranceFund") {
+    validateFundInsuranceFund(v.value as FundInsuranceFund);
+  }
+  if (v.kind === "WithdrawInsuranceFund") {
+    validateWithdrawInsuranceFund(v.value as WithdrawInsuranceFund);
+  }
   if (v.kind === "ScheduleUpgrade") {
     validateScheduleUpgrade(v.value as ScheduleUpgrade);
+  }
+  if (v.kind === "SetLiquidationConfig") {
+    validateSetLiquidationConfig(v.value as SetLiquidationConfig);
   }
   // `Batch` is the one variant whose payload is a LIST of nested enum items
   // (`AdminBatchItem[]`) rather than a struct — each item is itself
@@ -322,6 +339,8 @@ const MARK_SOURCE_MODE_VALUES: Record<string, number> = {
  */
 const BYTE_FIELDS = new Set([
   "agentPubkey",
+  "source",
+  "recipient",
   "owner",
   "primaryOracleSigner",
   "signer",

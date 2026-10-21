@@ -1,0 +1,47 @@
+name: Vocabulary lint
+
+# Public-repository variant — synced as `vocabulary-lint.yml` into public
+# Proof-labs repositories by Proof-labs/.github → scripts/sync-agent-config.sh.
+#
+# Enforces DEC-149 like the private stub, but self-contained: a public
+# repository cannot call the reusable workflow in the private Proof-labs/.github
+# and holds no App key to read the exchange manifest, so the lint runs the
+# synced script on its built-in lists (VOCABULARY_BUILTIN_ONLY=1).
+# Warn-only until this repository's own cleanup has merged; then set
+# VOCABULARY_LINT_STRICT to "1".
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  vocabulary-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Lint changed files for retired and renamed names
+        env:
+          VOCABULARY_BUILTIN_ONLY: "1"
+          VOCABULARY_LINT_STRICT: "0"
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          # NUL-separated so a filename with spaces or quotes survives intact.
+          if [ -z "$(git diff --name-only -z --diff-filter=d "$BASE_SHA" HEAD | tr -d '\0')" ]; then
+            echo "No changed files to lint."
+            exit 0
+          fi
+          echo "Linting changed files:"
+          git diff --name-only --diff-filter=d "$BASE_SHA" HEAD | sed 's/^/  - /'
+          git diff --name-only -z --diff-filter=d "$BASE_SHA" HEAD | xargs -0 python3 .github/vocabulary_lint.py

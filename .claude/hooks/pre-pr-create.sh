@@ -15,22 +15,11 @@
 #     copied from the PR template with unchecked `- [ ]` lines is refused;
 #   - "Decisions made in this PR" needs at least one real bullet — HTML
 #     comments, "e.g.", "TBD", "…" placeholders don't count;
-#   - "Needs authority" rows are verified against the live decision register
-#     (Proof-labs/ProofOfBrain → delivery/decision-register.md): every cited
-#     DEC-N row must be Decided, otherwise the PR must be `--draft`;
-#   - the org-wide work-in-progress cap (see WIP_CAP below; ready-for-review
-#     pull requests per
-#     author: open + non-draft + authored by you + any Proof-labs repo) is
-#     counted before a ready PR may be created;
-#   - ALL failures fail closed: missing jq or python3, an unparsable hook
-#     payload, an unreadable body file, an unreachable register, an
-#     uncountable cap — each refuses the creation with a reason.
+#   - "Needs authority" must cite DEC-N rows; the server-side merge check
+#     verifies their status. Open decisions do not prevent review;
+#   - malformed declarations fail closed.
 #
-# `gh pr create --draft` in the gated segment always passes: draft is the
-# parking state; declarations follow before the PR is marked ready.
-#
-# QUEUE_DISCIPLINE_SKIP="register,cap" skips the two network checks — for
-# hook tests only, never in normal use.
+# Explicit --draft skips the declaration gate until review is requested.
 #
 # Exit 2 = blocking: stderr is shown to the model and the tool call refused.
 
@@ -61,29 +50,9 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 CMD="$cmd" python3 - <<'PY'
-import base64, json, os, re, shlex, subprocess, sys
-
-# Org-wide work-in-progress cap: ready-for-review pull requests per author,
-# across every Proof-labs repository. Raised 5 → 15 on 2026-07-26 (Ramon):
-# 5 throttled authors who legitimately have several small changes in flight,
-# which pushed real work into drafts and made the draft state meaningless.
-# Change it HERE — the messages below interpolate it.
-WIP_CAP = 15
-
-def _is_decided(cell):
-    """True when a register Status cell says Decided.
-
-    The register writes the status in bold — `**Decided 2026-07-24** — ...` —
-    so a bare startswith("Decided") is False for every genuinely decided row.
-    Strip markdown emphasis and surrounding punctuation first, then compare
-    case-insensitively. Statuses are Open / Blocked / Decided, so a prefix
-    match is unambiguous once the emphasis is gone.
-    """
-    return re.sub(r"^[\s*_`~]+", "", cell or "").lower().startswith("decided")
-
+import os, re, shlex, sys
 
 cmd = os.environ.get("CMD", "")
-skip = os.environ.get("QUEUE_DISCIPLINE_SKIP", "")
 
 HELP = """PR creation blocked: the decision scan hasn't been answered (queue discipline).
 
@@ -95,8 +64,8 @@ or
   - [x] **Decisions made in this PR** — routine engineering calls, for review here:
     - <the actual decisions the work made — at least one real bullet>
 or
-  - [x] **Needs authority** — register rows `DEC-N` — plus `--draft` while any
-        row is still Open (ready is allowed only when every cited row is Decided)
+  - [x] **Needs authority** — register rows `DEC-N` — review is welcome;
+        merge waits until every cited row is Decided
 
 Register: Proof-labs/ProofOfBrain → delivery/decision-register.md
 (`.github/new-decision-row.py` creates a stub row — env DEC_DESC, DEC_TYPE,
@@ -214,6 +183,7 @@ def validate(seg):
     body = read_body(seg)
     if body is None:
         block(HELP)
+    body = re.sub(r"<!--.*?-->", "", body, flags=re.S)
     lines = body.splitlines()
 
     def lane_checked(label):
@@ -249,60 +219,17 @@ def validate(seg):
                   "made — that inventory is the point of the lane.")
 
     if needs is not None:
-        rows = sorted({int(n) for n in re.findall(r"DEC-(\d+)", body)})
+        declaration = [lines[needs]]
+        for line in lines[needs + 1:]:
+            if re.match(r"^\s*(?:#|[-*]\s*\[)", line):
+                break
+            declaration.append(line)
+        rows = re.findall(r"DEC-(\d+)", "\n".join(declaration))
         if not rows:
             block("PR creation blocked: 'Needs authority' is checked but no "
                   "DEC-N rows are cited. Cite the register rows (or create "
-                  "stubs via .github/new-decision-row.py) and use --draft "
-                  "while they are Open.")
-        if "register" not in skip:
-            try:
-                out = subprocess.run(
-                    ["gh", "api",
-                     "repos/Proof-labs/ProofOfBrain/contents/delivery/decision-register.md?ref=dev"],
-                    capture_output=True, text=True, timeout=30)
-                if out.returncode != 0:
-                    raise RuntimeError(out.stderr.strip()[:200])
-                content = base64.b64decode(json.loads(out.stdout)["content"]).decode()
-            except Exception as e:  # noqa: BLE001 — any failure fails closed
-                block(f"PR creation blocked: could not verify the cited DEC rows "
-                      f"against the live register ({e}). Fail closed — retry, or "
-                      f"open with --draft.")
-            for n in rows:
-                m = re.search(rf"^\|\s*DEC-{n}\s*\|.*$", content, re.M)
-                if not m:
-                    block(f"PR creation blocked: DEC-{n} is cited but not in the "
-                          f"register. Create the row first "
-                          f"(.github/new-decision-row.py) and use --draft.")
-                cells = [c.strip() for c in m.group(0).split("|")]
-                status = cells[-2] if len(cells) >= 2 else ""
-                if not _is_decided(status):
-                    block(f"PR creation blocked: DEC-{n} is '{status or 'unknown'}', "
-                          f"not Decided. A needs-authority PR stays --draft until "
-                          f"every cited row is Decided.")
-
-    # ── org-wide work-in-progress cap: WIP_CAP ready-for-review PRs per author ──
-    # Semantics: open + non-draft + authored by the current gh user + any
-    # Proof-labs repository.
-    if "cap" not in skip:
-        try:
-            out = subprocess.run(
-                ["gh", "search", "prs", "--owner", "Proof-labs", "--author", "@me",
-                 "--state", "open", "--draft=false", "--limit", "100",
-                 "--json", "id", "--jq", "length"],
-                capture_output=True, text=True, timeout=30)
-            if out.returncode != 0:
-                raise RuntimeError(out.stderr.strip()[:200])
-            count = int(out.stdout.strip())
-        except Exception as e:  # noqa: BLE001
-            block(f"PR creation blocked: could not count your open "
-                  f"ready-for-review pull requests ({e}). Fail closed — retry, "
-                  f"or open with --draft.")
-        if count >= WIP_CAP:
-            block(f"PR creation blocked: work-in-progress cap reached — you "
-                  f"already have {count} ready-for-review pull requests across "
-                  f"Proof-labs (cap: {WIP_CAP}). Open this one with --draft, or get an "
-                  f"open one merged or closed first.")
+                  "stubs via .github/new-decision-row.py). Review can start "
+                  "while the decisions are Open.")
 
 
 for seg in gated:

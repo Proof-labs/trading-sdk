@@ -1,0 +1,41 @@
+name: label PR
+
+# Labels a pull request from the org templates: a PR that closes a same-repo
+# issue inherits that issue's `critical` label, plus any path categories the
+# repo defines in `.github/label-rules.json`.
+#
+# Runs on pull_request_target, so the workflow definition, the checkout and
+# every piece of executed code come from the base branch — a pull request
+# cannot rewrite its own labeller. The PR contributes only data: its body
+# (read through the API). `edited` is included so adding or changing a closing
+# keyword in the body re-runs the rule.
+#
+# Concurrency keys on the pull request number: superseded runs cancel without
+# touching the workflow-level ci-* groups that push runs use.
+
+on:
+  pull_request_target:
+    types: [opened, edited, synchronize, reopened]
+
+concurrency:
+  group: label-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+jobs:
+  label:
+    name: label PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: self-test (base script)
+        run: bash .github/scripts/label_rules_test.sh
+      - name: apply
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/label_rules.sh "${{ github.event.pull_request.number }}"

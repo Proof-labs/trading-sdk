@@ -9,6 +9,115 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `FundInsuranceFund` (admin tag 18) and `WithdrawInsuranceFund` (admin
+  tag 25) proposals: TypeScript types, pre-signing shape validation,
+  proposal decoding and Rust governance re-exports. The shared Rust/WASM
+  codec is the only encoder. Transfer IDs keep the full `u64` range;
+  allocations require a non-zero account, 1–8 distinct ascending pools,
+  positive amounts and a total no greater than `i64::MAX`.
+  Insurance refusals 102–105 have named TypeScript, Rust and Python error
+  classifications; existing `InvalidPlpConfig` code 101 is unchanged.
+  Additive npm/Python API; no existing signed bytes change. Availability
+  requires the reviewed engine and gateway insurance actions and the
+  corresponding public proof-wire release. The SDK does not authorize a
+  source account, choose allocations or execute a transfer by itself.
+- Rust governance re-exports the canonical insurance action and identifier
+  types, including `InsuranceFundingId` and `InsuranceFundAllocation`.
+  The added `AdminAction`/`AdminActionType` variants affect exhaustive Rust
+  matches and belong to the next Rust MAJOR release.
+
+- **The `SetLiquidationConfig` governance action** (inner tag 17). An
+  `AdminAction` of kind `SetLiquidationConfig` carries `predecessor`,
+  `sequence` and the global `LiquidationConfig` (target ratio, exact
+  full-close threshold, partial penalty, work limits). Proposals carrying it
+  encode, decode, content-hash and render like the engine's;
+  `validateSetLiquidationConfig` and `validateLiquidationConfig` mirror
+  proof-wire's bounds and run before encoding and after decoding. A
+  conformance vector pins the bytes in TypeScript, Rust and Python. MINOR:
+  one new inner tag, no existing bytes change.
+- **`decodeLiquidationEvent`** decodes the engine's liquidation events from
+  their ABCI attributes (a `TxEvent`, or the same attributes as a plain
+  object): `LiquidationConfigSet`, `PartialLiquidationFee` (one per partial
+  fill), `FullLiquidationFee` (one per completed full close) and
+  `LiquidationProgressReported` with its fourteen `LiquidationProgress`
+  outcomes. Amounts and identifiers decode to `bigint`; a malformed event
+  throws, and any other event type returns `null`.
+- The Rust crate re-exports `proof_wire::liquidation_config` and
+  `proof_wire::liquidation_progress`, and `governance` re-exports
+  `LiquidationConfig` and `SetLiquidationConfig`.
+- **Python: typed builders for every published action.** `OracleUpdate`,
+  `CreateMarket`, `AuthorizeWithdrawal`, `ConfirmWithdrawalReceipt` and
+  `FailWithdrawalReceipt` (with `OperatorReceiptProof` and
+  `BridgeWithdrawalReceipt`), and the four governance actions
+  `ProposeAdminAction`, `ApproveAdminAction`, `RejectAdminAction` and
+  `EmergencyAdminAction`. Each encodes to its shared vector in
+  `conformance/codec.ndjson`, byte for byte. Previously these were reachable
+  only through `RawAction`. Additive (MINOR).
+- A Rust test, `action_type_map`, holds the hand-written TypeScript
+  `ActionType` and `TestActionType` maps to the core's
+  `codec::get_action_types()` in both directions. CI runs it when either map
+  changes.
+
+### Changed
+
+- `proof-wire` moves to v6.4.0 (`937adebc`), the wire exchange 2.17.0
+  (protocol 5.0) ships with. Every existing conformance vector is unchanged.
+
+### Fixed
+
+- **A second `subscribeOrderbook` listener on an active market now starts
+  from a snapshot.** The gateway sends one snapshot per socket subscription,
+  so a listener that joined after it received only updates and built an
+  incomplete book. `GatewayFeed` now keeps each subscribed market's book and
+  gives a late listener a snapshot of it, best price first, with no update
+  before it. Before the first snapshot, or while reconnecting, the late
+  listener waits for the gateway's own snapshot. Existing listeners and the
+  wire traffic are unchanged.
+- **A second `subscribeAccount` listener for the same owner now starts from
+  the account snapshot** (#259). Account events cannot be rebuilt locally, so
+  `GatewayFeed` re-subscribes and the gateway (7.5.0 and later) resends the
+  snapshot, which every listener of that owner receives. The late listener
+  gets no event before it. Listeners that join while a resend is in flight
+  share it, so mounting several at once costs one resend, not one per
+  listener. Against an older gateway, or when the gateway reports the
+  snapshot unavailable, the late listener takes the live events as before.
+
+### Breaking changes (Rust)
+
+- proof-wire 6.4.0 keeps every existing wire byte but changes Rust types the
+  crate re-exports from `proof_wire::types`: `AdminActionType::ReservedRt01D`
+  becomes `SetLiquidationConfig`; `AdminAction` gains `SetLiquidationConfig`;
+  `Event` gains `OrderRejected`, `LiquidationConfigSet`,
+  `PartialLiquidationFee`, `FullLiquidationFee` and
+  `LiquidationProgressReported`; and `Event::TradeExecuted`
+  (`mark_price`, `oracle_price`) and `Event::MarketOrderProcessed`
+  (`time_in_force`, `limit_price`, `unfilled_reason`) gain fields. An
+  exhaustive `match`, or a struct pattern or literal without `..`, needs
+  updating. The Rust crate takes a MAJOR bump at its next release; npm and
+  Python are unaffected.
+
+### Documentation
+
+- Both READMEs describe the governance actions; the TypeScript one shows
+  `GovernanceAction` as the third member of `Action`.
+
+## [7.3.0] — 2026-10-15
+
+### Release notes
+
+A minor npm release: every TypeScript change below is an addition, and the
+signing and transaction wire format is unchanged from npm 7.2.0. Building the
+SDK from source no longer needs access to the private Proof-labs/bridge repo.
+
+### Included since npm 7.2.0
+
+- Bridge payload encoders from proof-wire's `bridge` module, dropping
+  `bridge-core` (#241).
+- An injectable HTTP transport for `ExchangeClient` (#239).
+- `InvalidPlpConfig` error code 101 (#242).
+
+### Added
+
 - The Rust crate re-exports `proof_wire::bridge` as `proof_trading_sdk::bridge`
   (the withdrawal-authorization and bridge-receipt payload types).
 
@@ -38,6 +147,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   proof-wire's `bridge` module instead of the private `bridge-core`, so
   building the SDK from source no longer needs access to Proof-labs/bridge.
   The bytes are unchanged; the frozen vectors still pass.
+
+### Fixed
+
+- Decode the proposed engine PLP shape-error code 101 as `InvalidPlpConfig`,
+  preserving code 100 for `AccountOrderCapReached` and 99 for withdrawal limits.
+  Requires the reviewed engine validation change before relying on this code.
 
 ## [7.2.0] — 2026-10-15
 
@@ -96,12 +211,6 @@ version.
   `EnableSubAccounts`, and `Event` gains `SubAccountsEnabled`, so an
   exhaustive `match` on any of the three needs a new arm. The Rust crate
   takes a MAJOR bump at its next release; npm and Python are unaffected.
-
-### Fixed
-
-- Decode the proposed engine PLP shape-error code 101 as `InvalidPlpConfig`,
-  preserving code 100 for `AccountOrderCapReached` and 99 for withdrawal limits.
-  Requires the reviewed engine validation change before relying on this code.
 
 ## [7.1.0] — 2026-10-13
 

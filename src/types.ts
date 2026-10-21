@@ -746,8 +746,8 @@ export interface ResolveEvent {
 }
 
 /**
- * Create a standalone event (admin-actions v2 inner tag `0x09`): two
- * prediction-binary books (EBY at `childMarketBase`, EBN at +1) under one
+ * Create a standalone event (admin-actions v2 inner tag `0x09`): one
+ * prediction-binary book (EBY at `childMarketBase`) under one
  * `EventInfo`, no underlying perp and no conditional legs. The embedded
  * `signer` must be zero — governance supplies the authorization.
  */
@@ -767,7 +767,7 @@ export interface CreateEvent {
   description?: string;
   /** Optional resolution criteria; encodes as "" when absent. */
   rules?: string;
-  /** Open-interest cap for each of the event's two binary books, in
+  /** Open-interest cap for the event's binary book, in
    *  contracts; `undefined` or `0n` = uncapped (encodes as 0). */
   maxOpenInterest?: bigint;
 }
@@ -1171,6 +1171,73 @@ export interface SetOperatorReceiptRegistry {
   operatorKeys: Uint8Array[];
 }
 
+/** One insurance pool's share of a funding or withdrawal transfer. */
+export interface InsuranceFundAllocation {
+  /** Insurance pool id (`u8`). */
+  poolId: number;
+  /** Micro-USDC moved for this pool; positive, and the transfer total stays within `i64::MAX`. */
+  amount: bigint;
+}
+
+/** Moves cash from an account into insurance pools. */
+export interface FundInsuranceFund {
+  /** Engine replay key: a funding id executes at most once. */
+  fundingId: bigint;
+  /** Account debited; non-zero. */
+  source: Address;
+  /** 1..=8 pool allocations in strictly ascending `poolId` order. */
+  allocations: InsuranceFundAllocation[];
+}
+
+/** Moves cash out of insurance pools to a recipient account. */
+export interface WithdrawInsuranceFund {
+  /** Engine replay key: a withdrawal id executes at most once. */
+  withdrawalId: bigint;
+  /** Account credited; non-zero. */
+  recipient: Address;
+  /** 1..=8 pool allocations in strictly ascending `poolId` order. */
+  allocations: InsuranceFundAllocation[];
+}
+
+/**
+ * The liquidation settings shared by every market. Collar width is not a
+ * field: it is each market's maintenance margin fraction.
+ */
+export interface LiquidationConfig {
+  /** Equity-to-maintenance ratio a partial liquidation sizes toward, in
+   *  basis points of maintenance margin; above 10_000. */
+  targetRatioBps: number;
+  /** Exact equity-to-maintenance ratio `numerator / denominator` below
+   *  which an account is closed in full; strictly between 0 and 1. */
+  fullCloseThreshold: { numerator: number; denominator: number };
+  /** Penalty on each partial-liquidation fill, in basis points of the
+   *  fill's notional; at most 100. */
+  partialPenaltyBps: number;
+  /** Book orders one liquidation attempt may visit; non-zero. */
+  maxBookOrders: number;
+  /** Candidate prefixes one attempt may inspect; non-zero. */
+  maxCandidatePrefixes: number;
+  /** Fills one attempt may commit; non-zero, at most `maxCandidatePrefixes`. */
+  maxCommittedFills: number;
+  /** State reads one attempt may make; non-zero. */
+  maxStateReads: number;
+  /** Bytes of state one attempt may read; non-zero. */
+  maxStateReadBytes: number;
+}
+
+/**
+ * Replaces the global liquidation configuration (inner tag 17). Executes
+ * only when `predecessor` is the stored configuration's sequence, and
+ * `sequence` must exceed it.
+ */
+export interface SetLiquidationConfig {
+  /** Sequence of the configuration this update replaces. */
+  predecessor: bigint;
+  /** Sequence of the new configuration. */
+  sequence: bigint;
+  config: LiquidationConfig;
+}
+
 /**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
@@ -1183,6 +1250,8 @@ export interface SetOperatorReceiptRegistry {
  * refuses every tag below its activation height.
  */
 export type AdminAction =
+  | { kind: "FundInsuranceFund"; value: FundInsuranceFund }
+  | { kind: "WithdrawInsuranceFund"; value: WithdrawInsuranceFund }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
@@ -1194,6 +1263,7 @@ export type AdminAction =
   | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig }
   | { kind: "SetWithdrawalLimit"; value: SetWithdrawalLimit }
   | { kind: "SetOperatorReceiptRegistry"; value: SetOperatorReceiptRegistry }
+  | { kind: "SetLiquidationConfig"; value: SetLiquidationConfig }
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }

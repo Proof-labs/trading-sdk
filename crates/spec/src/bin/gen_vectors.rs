@@ -49,7 +49,7 @@ fn write_ndjson<T: Serialize>(path: &std::path::Path, rows: &[T]) -> Result<(), 
 }
 
 /// The shared `CreateEvent` fixture (the engine's golden event 700 with its
-/// binaries from 70000). Only `oracle_source` varies across the cases, so a
+/// binary book at 70000). Only `oracle_source` varies across the cases, so a
 /// byte difference between them isolates the enum encoding.
 fn event_fields(oracle_source: serde_json::Value) -> serde_json::Value {
     json!({
@@ -613,6 +613,31 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": "EnableSubAccounts"
             }),
         ),
+        // SetLiquidationConfig (inner tag 0x11): the configuration exchange-wire
+        // freezes in its own vector. Every newtype is its bare integer and the
+        // full-close threshold is a nested positional pair.
+        codec_case(
+            "propose_admin_action/set_liquidation_config",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetLiquidationConfig": {
+                    "predecessor": 1u64,
+                    "sequence": 2u64,
+                    "config": {
+                        "target_ratio_bps": 10_500u32,
+                        "full_close_threshold": { "numerator": 2u32, "denominator": 3u32 },
+                        "partial_penalty_bps": 100u32,
+                        "max_book_orders": 20u32,
+                        "max_candidate_prefixes": 20u32,
+                        "max_committed_fills": 10u32,
+                        "max_state_reads": 10_000u32,
+                        "max_state_read_bytes": 1_000_000u32
+                    }
+                }}
+            }),
+        ),
         // UpdateAuthoritySet (inner tag 0x07, exchange#422 / DEC-87,
         // exchange#472): addition/removal of members in one privileged
         // authority allowlist. `domain` is externally tagged as its bare
@@ -671,6 +696,38 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": { "CancelAllOrdersForAccount": {
                     "owner": vec![0xC1u8; 20],
                     "market": null
+                }}
+            }),
+        ),
+        // Insurance transfers (inner tags 18 and 25): two ascending pool
+        // allocations so the nested `[pool_id, amount]` rows are pinned,
+        // summing to exactly `i64::MAX`, the widest admitted transfer total.
+        codec_case(
+            "propose_admin_action/fund_insurance_fund",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "FundInsuranceFund": {
+                    "funding_id": 41u64,
+                    "source": vec![0xD1u8; 20],
+                    "allocations": [
+                        { "pool_id": 0u8, "amount": 250_000_000u64 },
+                        { "pool_id": 3u8, "amount": i64::MAX as u64 - 250_000_000 }
+                    ]
+                }}
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/withdraw_insurance_fund",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "WithdrawInsuranceFund": {
+                    "withdrawal_id": u64::MAX,
+                    "recipient": vec![0xD2u8; 20],
+                    "allocations": [{ "pool_id": 255u8, "amount": 1u64 }]
                 }}
             }),
         ),

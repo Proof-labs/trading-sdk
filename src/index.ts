@@ -37,6 +37,11 @@ export {
   type CancelPositionTriggers,
   type SetTriggerMarketConfig,
   type SetOracleGuards,
+  type FundInsuranceFund,
+  type InsuranceFundAllocation,
+  type WithdrawInsuranceFund,
+  type LiquidationConfig,
+  type SetLiquidationConfig,
   type ScheduleUpgrade,
   type CancelUpgrade,
   type BridgeWithdrawalReceipt,
@@ -177,6 +182,23 @@ export {
 
 export { validateSetOracleGuards } from "./oracle-guards.js";
 export { validateScheduleUpgrade } from "./upgrade-plan.js";
+export {
+  MAX_PARTIAL_PENALTY_BPS,
+  RATIO_ONE_BPS,
+  validateLiquidationConfig,
+  validateSetLiquidationConfig,
+} from "./liquidation-config.js";
+export {
+  LIQUIDATION_PROGRESS_OUTCOMES,
+  decodeLiquidationEvent,
+  type FullLiquidationFeeEvent,
+  type LiquidationConfigSetEvent,
+  type LiquidationEvent,
+  type LiquidationEventInput,
+  type LiquidationProgress,
+  type LiquidationProgressReportedEvent,
+  type PartialLiquidationFeeEvent,
+} from "./liquidation-events.js";
 
 export {
   BINARY_PRICE_MAX,
