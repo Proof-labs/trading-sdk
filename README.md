@@ -210,8 +210,8 @@ class ExchangeClient {
   getBlock(height?: number): Promise<Record<string, unknown>>;
   getBlockResults(height: number): Promise<Record<string, unknown>>;
 
-  // Streams (gateway-native; mirror the Python SDK)
-  subscribeAccountEvents(owner: Uint8Array | string, onEvent: (e: Record<string, unknown>) => void, opts?: WsStreamOptions): () => void;
+  // Streams (gateway-native)
+  subscribeAccount(onFrame: (f: AccountFrame) => void, opts?: { owner?: string; auth?: false }): () => void;
   subscribeOrderbookDeltas(market: number, onMessage: (m: Record<string, unknown>) => void, opts?: WsStreamOptions): () => void;
   orderbookSnapshot(market: number): Promise<Record<string, unknown>>;
   disconnect(): void;
@@ -547,20 +547,24 @@ code should read the structured `code` field: it is authoritative and needs no p
 
 ## WebSocket streams
 
-The SDK exposes the gateway's native multiplexed feed — the same two streams
-as the Python SDK. Each subscription opens its own connection, auto-reconnects
-with exponential backoff (500ms → 30s, ±25% jitter), and returns an
-unsubscribe function. `disconnect()` tears down every open stream.
+The SDK exposes the gateway's native multiplexed feed on `/ws`. Account
+events, trades and the orderbook are channels on that one shared connection
+(`subscribeAccount`, `subscribeTrades`, `subscribeOrderbook`); the L2
+orderbook delta stream (`subscribeOrderbookDeltas`) opens its own connection.
+Every subscription auto-reconnects and returns an unsubscribe function.
+`disconnect()` tears down every open stream.
 
 The WS base URL defaults to `gatewayUrl` with its scheme swapped to `ws`/`wss`.
 If your local stack serves WebSockets on a separate port, set `wsUrl`
 explicitly (e.g. `ws://localhost:9091`).
 
 ```typescript
-// Account events: snapshot frame, then incremental events. The SDK tracks
-// the highest event_id and replays via after_id on reconnect (no gaps).
-const unsub = client.subscribeAccountEvents(address, (event) => {
-  console.log(event.event_type, event);
+// Account events: a snapshot frame, then live event frames
+// (`order_update`, `fill`, `position_update`, liquidation events, ...).
+// Defaults to the connected signer's address; pass `owner` to watch another.
+const unsub = client.subscribeAccount((frame) => {
+  if (frame.type === "snapshot") return;
+  console.log(frame.type, frame.eventType, frame.payload);
 });
 
 // L2 orderbook: first frame is a full `l2Book` snapshot, then deltas.
@@ -577,14 +581,19 @@ unsubBook();
 client.disconnect(); // closes everything
 ```
 
-`WsStreamOptions` (third arg) takes `onError?: (err) => void` and
-`reconnectBackoffMaxMs?: number`.
+A reconnect restores the account snapshot, not the events missed while
+disconnected; read `/v1/history/account-events` to fill that gap.
 
-**Auth.** Account streams require auth only when the gateway runs with
+`WsStreamOptions` (third argument of `subscribeOrderbookDeltas`) takes
+`onError?: (err) => void` and `reconnectBackoffMaxMs?: number`.
+
+**Auth.** Account subscriptions require auth only when the gateway runs with
 `--api-key`. Because a browser `WebSocket` cannot send the `X-Api-Key` header,
-the SDK uses the gateway's signed-query auth: with a private key loaded
-(`setPrivateKey`) it signs the stream-auth message and appends `public_key` /
-`signature` / `timestamp_ms` to the URL automatically. Against an
+the SDK uses the gateway's signed subscription auth: with a private key or
+external signer connected it signs the stream-auth message and adds
+`public_key` / `signature` / `timestamp_ms` to the `accountEvents` subscribe
+message automatically, re-signing on every reconnect. Pass `auth: false` for an
+unsigned watch-only subscription. Against an
 unauthenticated gateway (e.g. devnet) the owner alone suffices.
 
 ## Wire Format

@@ -189,7 +189,7 @@ if (FAUCET_TOKEN && account && account.balance > 0n) {
 // Step 9 — WebSocket streams (conceptual)
 info("--- 9. Real-time streams ---");
 info("  Subscribe to the gateway's native feed via the SDK:");
-info(`    client.subscribeAccountEvents(address, (event) => { ... })`);
+info(`    client.subscribeAccount((frame) => { ... })`);
 info(`    client.subscribeOrderbookDeltas(1, (msg) => { ... })`);
 info("  One-shot snapshot:  await client.orderbookSnapshot(1)");
 info("");

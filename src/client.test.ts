@@ -2141,10 +2141,10 @@ describe("gateway owner-read failures", () => {
 });
 
 /**
- * Gateway-native WebSocket streams (mirror the Python SDK): per-stream
- * connections to `/account-events` and `/orderbook-deltas`, with the WS base
- * derived from the gateway URL (scheme swapped). The account stream signs its
- * auth params with the loaded key so it works against an authed gateway.
+ * Gateway WebSocket streams: the multiplexed `/ws` feed (account events ride
+ * its `accountEvents` channel) and `/orderbook-deltas`, with the WS base
+ * derived from the gateway URL (scheme swapped). An account subscription signs
+ * its auth params with the loaded key so it works against an authed gateway.
  */
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -2154,11 +2154,14 @@ class FakeWebSocket {
   onclose: (() => void) | null = null;
   onerror: ((err: unknown) => void) | null = null;
   closed = false;
+  sent: string[] = [];
   constructor(url: string) {
     this.url = url;
     FakeWebSocket.instances.push(this);
   }
-  send(): void {}
+  send(data: string): void {
+    this.sent.push(data);
+  }
   close(): void {
     this.closed = true;
   }
@@ -2218,7 +2221,7 @@ describe("ExchangeClient WebSocket streams", () => {
     expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
 
-  it("account-events signs auth params that verify against the gateway message", async () => {
+  it("subscribeAccount subscribes on /ws with auth params that verify against the gateway message", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const client = new ExchangeClient({
       gatewayUrl: "https://api.dev.proof.trade",
@@ -2228,21 +2231,18 @@ describe("ExchangeClient WebSocket streams", () => {
     client.setPrivateKey(kp.privateKey);
     const ownerHex = ownerToHex(pubkeyToOwner(kp.publicKey));
 
-    const unsub = client.subscribeAccountEvents(
-      pubkeyToOwner(kp.publicKey),
-      () => {},
-    );
+    const unsub = client.subscribeAccount(() => {});
+    const socket = FakeWebSocket.instances[0];
+    expect(socket.url).toBe("wss://api.dev.proof.trade/ws");
+    socket.onopen?.();
     await flush();
 
-    const url = new URL(FakeWebSocket.instances[0].url);
-    expect(url.protocol).toBe("wss:");
-    expect(url.host).toBe("api.dev.proof.trade");
-    expect(url.pathname).toBe("/account-events");
-    expect(url.searchParams.get("owner")).toBe(ownerHex);
-
-    const pub = hexToBytes(url.searchParams.get("public_key")!);
-    const sig = hexToBytes(url.searchParams.get("signature")!);
-    const ts = BigInt(url.searchParams.get("timestamp_ms")!);
+    const params = JSON.parse(socket.sent[0]).params;
+    expect(params.channel).toBe("accountEvents");
+    expect(params.owner).toBe(ownerHex);
+    const pub = hexToBytes(params.public_key);
+    const sig = hexToBytes(params.signature);
+    const ts = BigInt(params.timestamp_ms);
     expect(ts).toBe(1_700_000_000_000n);
     const msg = expectedAccountWsAuthMessage(
       chainIdFromString("test-chain"),
@@ -2252,6 +2252,7 @@ describe("ExchangeClient WebSocket streams", () => {
     );
     expect(verify(pub, sig, msg)).toBe(true);
     unsub();
+    client.disconnect();
   });
 
   it("disconnect() closes all open streams", async () => {

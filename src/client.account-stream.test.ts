@@ -244,20 +244,5 @@ it("allows explicit unsigned watch-only subscriptions with a signer connected", 
     channel: "accountEvents",
     owner,
   });
-  const urls: string[] = [];
-  vi.stubGlobal(
-    "WebSocket",
-    class extends Socket {
-      constructor(url: string) {
-        super();
-        urls.push(url);
-      }
-    },
-  );
-  c.subscribeAccountEvents(owner, () => {}, { auth: false });
-  await vi.advanceTimersByTimeAsync(0);
-  expect(urls).toHaveLength(1);
-  expect(urls[0]).toContain("owner=" + owner);
-  expect(urls[0]).not.toContain("signature");
   c.disconnect();
 });

@@ -34,6 +34,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   returns `null`, like any other event type) and `FullLiquidationFeeEvent`
   is no longer exported.
 
+- **`subscribeAccountEvents` is removed from the TypeScript client.** It
+  connected to the gateway's legacy `/account-events` WebSocket path, which
+  DevNet's gateway now answers with 404. Use `subscribeAccount`: it carries the
+  same account events on the `accountEvents` channel of the multiplexed `/ws`
+  feed, with typed frames and auth re-signed on every reconnect. `/ws` does not
+  replay missed events after a reconnect (the old `after_id` cursor); read
+  `/v1/history/account-events` to fill that gap. The Python
+  `AccountEventStream` keeps its name and arguments but now subscribes on `/ws`
+  too: it yields the channel-tagged `accountEvents` frames (a snapshot, then
+  live events) instead of raw history rows, and no longer replays from
+  `after_id`.
+
 ### Added
 
 - **`decodeLiquidationEvent` decodes three more engine events** from

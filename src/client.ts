@@ -200,8 +200,8 @@ export interface ExchangeClientOptions {
    */
   apiUrl?: string;
   /**
-   * WebSocket base URL for the gateway streams (`/account-events`,
-   * `/orderbook-deltas`). Defaults to `gatewayUrl` (or `rpcUrl` on the
+   * WebSocket base URL for the gateway streams (the multiplexed `/ws` feed
+   * and `/orderbook-deltas`). Defaults to `gatewayUrl` (or `rpcUrl` on the
    * direct-node path) with the scheme swapped to `ws`/`wss`. The gateway
    * serves its feed on a dedicated listener; for a local stack whose WS
    * port differs from the HTTP port, set this explicitly
@@ -366,8 +366,8 @@ export class ExchangeClient {
     );
     this.apiKey = opts.apiKey ?? null;
     this.httpTransport = opts.httpTransport ?? defaultExchangeHttpTransport;
-    // WebSocket base URL (no path). Per-stream methods append the channel
-    // path (`/account-events`, `/orderbook-deltas`). Mirrors the Python SDK,
+    // WebSocket base URL (no path). Stream methods append their path
+    // (`/ws`, `/orderbook-deltas`). Mirrors the Python SDK,
     // which derives the WS base by swapping the gateway URL's scheme. Local
     // stacks whose WS listener is on a different port must pass `wsUrl`.
     this.wsUrl = stripTrailingSlash(
@@ -564,7 +564,8 @@ export class ExchangeClient {
     return encodeSignedTx(snapshot, seq, signer.publicKey, signature);
   }
 
-  /** Sign existing gateway account-events auth bytes; call again per reconnect.
+  /** Sign the gateway's account-stream auth bytes for an `accountEvents`
+   * subscription on `/ws`; call again per reconnect.
    * Direct owner keys only; no delegated-owner authorization is inferred.
    */
   async accountAuth(
@@ -2274,59 +2275,6 @@ export class ExchangeClient {
   // -----------------------------------------------------------------------
   // WebSocket streams (gateway-native; mirror the Python SDK)
   // -----------------------------------------------------------------------
-
-  /**
-   * Subscribe to the account-events stream (`/account-events`). Mirrors the
-   * Python SDK's `AccountEventStream`: the gateway sends an initial snapshot
-   * frame followed by incremental event frames. The SDK tracks the highest
-   * `event_id` seen and replays from it via `after_id` on reconnect, so no
-   * events are dropped across a disconnect.
-   *
-   * Auth: account streams require auth only when the gateway runs with
-   * `--api-key`. A browser `WebSocket` cannot send the `X-Api-Key` header, so
-   * the SDK uses the gateway's signed-query auth instead — when a private key or external signer
-   * is connected it signs the `ProofExchange-account-events-v1`
-   * message and appends `public_key` / `signature` / `timestamp_ms`. Against
-   * an unauthenticated gateway (e.g. devnet) the owner alone is enough.
-   *
-   * Returns an unsubscribe function; `disconnect()` closes all streams.
-   */
-  subscribeAccountEvents(
-    owner: Uint8Array | string,
-    onEvent: (event: Record<string, unknown>) => void,
-    opts: WsStreamOptions & { auth?: false } = {},
-  ): () => void {
-    const ownerHex = (
-      owner instanceof Uint8Array ? bytesToHex(owner) : owner.replace(/^0x/, "")
-    ).toLowerCase();
-    // Tracked across reconnects for gap recovery. Signed into the auth
-    // message too, so the value we send and the value we sign always match.
-    let afterId = 0n;
-
-    const buildUrl = async (): Promise<string> => {
-      const params = new URLSearchParams({ owner: ownerHex });
-      if (afterId > 0n) params.set("after_id", afterId.toString());
-      if (opts.auth !== false && (this.privateKey || this.externalSigner)) {
-        const auth = await this.accountAuth(ownerHex, afterId);
-        for (const [key, value] of Object.entries(auth))
-          params.set(key, String(value));
-      }
-      return `${this.wsUrl}/account-events?${params.toString()}`;
-    };
-
-    return this.openStream(
-      buildUrl,
-      (frame) => {
-        const id = frame.event_id;
-        if (typeof id === "number" || typeof id === "bigint") {
-          const big = BigInt(id);
-          if (big > afterId) afterId = big;
-        }
-        onEvent(frame);
-      },
-      opts,
-    );
-  }
 
   /**
    * Subscribe to the L2 orderbook delta stream for a market
