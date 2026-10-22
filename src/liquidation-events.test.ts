@@ -401,6 +401,16 @@ describe("decodeLiquidationEvent", () => {
       /code is not 111 for a refusal/,
     ],
     [
+      "code 111 without a refusal",
+      liquidationFailed("111", ""),
+      /refusal is empty under code 111/,
+    ],
+    [
+      "code 0",
+      liquidationFailed("0", ""),
+      /code is 0, which is not an engine error/,
+    ],
+    [
       "a missing refusal",
       txEvent("liquidation_failed", [
         ["owner", OWNER_CD],

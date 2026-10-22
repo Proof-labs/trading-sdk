@@ -135,9 +135,9 @@ export interface PositionLiquidatedEvent {
 
 /**
  * An owner's liquidation attempt failed and kept none of its writes.
- * `code` is the engine error code. `refusal` names why when the attempt was
- * refused (`code` is then `LIQUIDATION_REFUSED_CODE`), and is `null` when
- * it failed on another engine error.
+ * `code` is the engine error code, never 0. `refusal` names why exactly
+ * when the attempt was refused (`code` is `LIQUIDATION_REFUSED_CODE`), and
+ * is `null` when it failed on another engine error.
  */
 export interface LiquidationFailedEvent {
   type: "LiquidationFailed";
@@ -365,10 +365,14 @@ function positionLiquidated(a: Attributes): PositionLiquidatedEvent {
 
 function liquidationFailed(a: Attributes): LiquidationFailedEvent {
   const code = a.u32("code");
+  if (code === 0) a.fail("code", "is 0, which is not an engine error");
   const refusal =
     a.text("refusal") === "" ? null : a.oneOf("refusal", LIQUIDATION_REFUSALS);
   if (refusal !== null && code !== LIQUIDATION_REFUSED_CODE) {
     a.fail("code", `is not ${LIQUIDATION_REFUSED_CODE} for a refusal`);
+  }
+  if (refusal === null && code === LIQUIDATION_REFUSED_CODE) {
+    a.fail("refusal", `is empty under code ${LIQUIDATION_REFUSED_CODE}`);
   }
   return { type: "LiquidationFailed", owner: a.owner("owner"), code, refusal };
 }
