@@ -18,7 +18,8 @@ import type {
 import { validateLiquidationConfig } from "./liquidation-config.js";
 
 /** How one liquidation attempt on an owner ended in a block, as the
- *  engine writes it into the `outcome` attribute. */
+ *  engine writes it into the `outcome` attribute today. A later engine may
+ *  add a value; the decoder passes it through. */
 export const LIQUIDATION_PROGRESS_OUTCOMES = [
   "not_eligible",
   "indeterminate",
@@ -37,26 +38,30 @@ export const LIQUIDATION_PROGRESS_OUTCOMES = [
 ] as const;
 
 export type LiquidationProgress =
-  (typeof LIQUIDATION_PROGRESS_OUTCOMES)[number];
+  (typeof LIQUIDATION_PROGRESS_OUTCOMES)[number] | (string & {});
 
 /** Which path liquidated a position, as the `mode` attribute names it:
  *  `partial` is a step through the book toward the target ratio, `full` a
  *  close through the book below the full-close threshold, and `insolvent` a
- *  close at mark because equity is negative in some outcome. */
+ *  close at mark because equity is negative in some outcome. A later engine
+ *  may add a mode; the decoder passes it through. */
 export const LIQUIDATION_MODES = ["partial", "full", "insolvent"] as const;
 
-export type LiquidationMode = (typeof LIQUIDATION_MODES)[number];
+export type LiquidationMode =
+  (typeof LIQUIDATION_MODES)[number] | (string & {});
 
 /** Why a liquidation attempt was refused rather than failing on an engine
  *  error: a position changed under the step reducing it, a resting order
- *  did not match its book, or a reference price was unavailable. */
+ *  did not match its book, or a reference price was unavailable. A later
+ *  engine may add a reason; the decoder passes it through. */
 export const LIQUIDATION_REFUSALS = [
   "position_mismatch",
   "invalid_maker",
   "reference_unavailable",
 ] as const;
 
-export type LiquidationRefusal = (typeof LIQUIDATION_REFUSALS)[number];
+export type LiquidationRefusal =
+  (typeof LIQUIDATION_REFUSALS)[number] | (string & {});
 
 /** The engine error code of a refused liquidation attempt
  *  (`ExecErrorCode.LiquidationRefused`). */
@@ -65,10 +70,11 @@ export const LIQUIDATION_REFUSED_CODE = 111;
 /** Why auto-deleveraging left a profitable position out of a deficit's
  *  candidate set: `stale_oracle_dependency` means a market the
  *  counterparty's portfolio depends on (a position or a resting order) had
- *  no fresh oracle verdict, so its solvency was indeterminate. */
+ *  no fresh oracle verdict, so its solvency was indeterminate. A later engine
+ *  may add a reason; the decoder passes it through. */
 export const ADL_SKIP_REASONS = ["stale_oracle_dependency"] as const;
 
-export type AdlSkipReason = (typeof ADL_SKIP_REASONS)[number];
+export type AdlSkipReason = (typeof ADL_SKIP_REASONS)[number] | (string & {});
 
 /** The admin quorum replaced the global liquidation configuration. */
 export interface LiquidationConfigSetEvent {
@@ -112,9 +118,8 @@ export interface LiquidationProgressReportedEvent {
  * `penaltyWaived` is never owed later; a close at mark charges none.
  * `equity` (signed), `maintenance` and `bindingOutcome` are the owner's
  * binding outcome, with pending funding, when the attempt was decided.
- * `bindingOutcome` has one entry per event of the account's domain in
- * ascending event order, and is empty when the account holds no event
- * exposure.
+ * `bindingOutcome` has one entry per event of the account's domain, and is
+ * empty when the account holds no event exposure.
  */
 export interface PositionLiquidatedEvent {
   type: "PositionLiquidated";
@@ -135,9 +140,9 @@ export interface PositionLiquidatedEvent {
 
 /**
  * An owner's liquidation attempt failed and kept none of its writes.
- * `code` is the engine error code, never 0. `refusal` names why exactly
- * when the attempt was refused (`code` is `LIQUIDATION_REFUSED_CODE`), and
- * is `null` when it failed on another engine error.
+ * `code` is the engine error code. `refusal` names why when the attempt was
+ * refused (the engine writes `LIQUIDATION_REFUSED_CODE` then), and is
+ * `null` when it failed on another engine error.
  */
 export interface LiquidationFailedEvent {
   type: "LiquidationFailed";
@@ -247,6 +252,14 @@ class Attributes {
     return text;
   }
 
+  /** A non-empty value passed through as written, so a value a later engine
+   *  adds still decodes. */
+  label(key: string): string {
+    const text = this.text(key);
+    if (text === "") this.fail(key, "is empty");
+    return text;
+  }
+
   owner(key: string): string {
     const text = this.text(key);
     if (!/^[0-9a-f]{40}$/.test(text)) {
@@ -309,27 +322,27 @@ function liquidationProgressReported(
   return {
     type: "LiquidationProgressReported",
     owner: a.owner("owner"),
-    outcome: a.oneOf("outcome", LIQUIDATION_PROGRESS_OUTCOMES),
+    outcome: a.label("outcome"),
     configSequence: a.u64("config_sequence"),
   };
 }
 
-/** `event_id:branch` pairs joined by commas in strictly ascending event
- *  order, branch `yes` or `no`; the empty string for no event exposure. */
+/** `event_id:branch` pairs joined by commas, one per event, branch `yes` or
+ *  `no`; the empty string for no event exposure. */
 function bindingOutcome(a: Attributes): BindingScenarioEntry[] {
   const text = a.text("binding_outcome");
   if (text === "") return [];
-  let previous = -1n;
+  const seen = new Set<bigint>();
   return text.split(",").map((pair) => {
     const match = /^(0|[1-9][0-9]*):(yes|no)$/.exec(pair);
     if (!match) a.fail("binding_outcome", `has malformed entry "${pair}"`);
     const eventId = BigInt(match[1]);
     if (eventId > U32_MAX)
       a.fail("binding_outcome", `event id exceeds ${U32_MAX}`);
-    if (eventId <= previous) {
-      a.fail("binding_outcome", `event id ${eventId} is not ascending`);
+    if (seen.has(eventId)) {
+      a.fail("binding_outcome", `event id ${eventId} is repeated`);
     }
-    previous = eventId;
+    seen.add(eventId);
     return {
       eventId: Number(eventId),
       branch: match[2] === "yes" ? "Yes" : "No",
@@ -338,22 +351,15 @@ function bindingOutcome(a: Attributes): BindingScenarioEntry[] {
 }
 
 function positionLiquidated(a: Attributes): PositionLiquidatedEvent {
-  const sizeBefore = a.u64("size_before");
-  const sizeClosed = a.u64("size_closed");
-  const sizeAfter = a.u64("size_after");
-  const left = sizeClosed >= sizeBefore ? 0n : sizeBefore - sizeClosed;
-  if (sizeAfter !== left) {
-    a.fail("size_after", "is not size_before - size_closed, floored at 0");
-  }
   return {
     type: "PositionLiquidated",
     owner: a.owner("owner"),
     market: a.u32("market"),
     side: a.oneOf("side", ["buy", "sell"] as const),
-    mode: a.oneOf("mode", LIQUIDATION_MODES),
-    sizeBefore,
-    sizeClosed,
-    sizeAfter,
+    mode: a.label("mode"),
+    sizeBefore: a.u64("size_before"),
+    sizeClosed: a.u64("size_closed"),
+    sizeAfter: a.u64("size_after"),
     penaltyCollected: a.u64("penalty_collected"),
     penaltyWaived: a.u64("penalty_waived"),
     equity: a.i64("equity"),
@@ -364,17 +370,13 @@ function positionLiquidated(a: Attributes): PositionLiquidatedEvent {
 }
 
 function liquidationFailed(a: Attributes): LiquidationFailedEvent {
-  const code = a.u32("code");
-  if (code === 0) a.fail("code", "is 0, which is not an engine error");
-  const refusal =
-    a.text("refusal") === "" ? null : a.oneOf("refusal", LIQUIDATION_REFUSALS);
-  if (refusal !== null && code !== LIQUIDATION_REFUSED_CODE) {
-    a.fail("code", `is not ${LIQUIDATION_REFUSED_CODE} for a refusal`);
-  }
-  if (refusal === null && code === LIQUIDATION_REFUSED_CODE) {
-    a.fail("refusal", `is empty under code ${LIQUIDATION_REFUSED_CODE}`);
-  }
-  return { type: "LiquidationFailed", owner: a.owner("owner"), code, refusal };
+  const refusal = a.text("refusal");
+  return {
+    type: "LiquidationFailed",
+    owner: a.owner("owner"),
+    code: a.u32("code"),
+    refusal: refusal === "" ? null : refusal,
+  };
 }
 
 function adlCounterpartySkipped(a: Attributes): AdlCounterpartySkippedEvent {
@@ -384,7 +386,7 @@ function adlCounterpartySkipped(a: Attributes): AdlCounterpartySkippedEvent {
     market: a.u32("market"),
     poolId: a.u8("pool_id"),
     size: a.u64("size"),
-    reason: a.oneOf("reason", ADL_SKIP_REASONS),
+    reason: a.label("reason"),
   };
 }
 
