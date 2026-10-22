@@ -591,7 +591,10 @@ in history order (marked `backfilled: true`), then the live frames that
 arrived meanwhile, skipping any that history already delivered. It retries
 while `/v1/history/status` shows history has not indexed up to the new
 snapshot's `height`. Events are matched on `height` + `txHash` +
-`eventIndex` + `eventType`, with the settlement names `conditional_settled` /
+`eventIndex` + `eventType` + `txIndex`, a missing position matching any,
+since history serves `tx_position` only when one block carries the same
+transaction hash more than once. The settlement names
+`conditional_settled` /
 `conditional_voided` read as their canonical history names `condition_met` /
 `condition_not_met`. A snapshot marked `snapshot: "resent"` (sent because
 another listener joined) is not a reconnect. `onRecovery` reports each

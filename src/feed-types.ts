@@ -74,8 +74,11 @@ export interface AccountEventFrame {
    *  later): the row's `tx_hash` (the uppercase transaction hash, or
    *  `height-{h}-kind-block-event-{i}` for a block-level event). */
   txHash?: string | null;
-  /** The transaction's position in its block; `null` for a block-level event
-   *  and for a backfilled event (history rows do not carry it). */
+  /** The transaction's position in its block. Live frames carry it (gateway
+   *  7.9.0 and later; read as 0 when the block omits it, `null` for a
+   *  block-level event). A backfilled event carries the history row's
+   *  `tx_position`, which history serves only when one block carries the
+   *  same transaction hash more than once, and `null` otherwise. */
   txIndex?: number | null;
   /** The row's `event_index`: the event's index among its transaction's (or
    *  block's) events. */

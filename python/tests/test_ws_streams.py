@@ -151,7 +151,7 @@ def at(height: int) -> tuple:
     return ev(height, f"T{height}", 0)
 
 
-def live_frame(e: tuple, keyed: bool = True) -> dict:
+def live_frame(e: tuple, keyed: bool = True, tx_index: int | None = 0) -> dict:
     frame = {
         "channel": "accountEvents",
         "type": "account_event",
@@ -161,12 +161,12 @@ def live_frame(e: tuple, keyed: bool = True) -> dict:
         "payload": {"tag": f"{e[0]}-{e[2]}"},
     }
     if keyed:
-        frame |= {"txHash": e[1], "txIndex": 0, "eventIndex": e[2]}
+        frame |= {"txHash": e[1], "txIndex": tx_index, "eventIndex": e[2]}
     return frame
 
 
-def history_row(e: tuple, event_id: int) -> dict:
-    return {
+def history_row(e: tuple, event_id: int, tx_position: int | None = None) -> dict:
+    row = {
         "event_id": event_id,
         "owner": OWNER,
         "block_height": e[0],
@@ -175,11 +175,19 @@ def history_row(e: tuple, event_id: int) -> dict:
         "event_type": e[3],
         "payload": {"tag": f"{e[0]}-{e[2]}"},
     }
+    if tx_position is not None:
+        row["tx_position"] = tx_position
+    return row
 
 
 def page(*events: tuple) -> dict:
     """Newest-first history page of ``events`` (given oldest first)."""
     rows = [history_row(e, i + 1) for i, e in enumerate(events)]
+    return {"account_events": list(reversed(rows)), "next_cursor": ""}
+
+
+def page_rows(*rows: dict) -> dict:
+    """Newest-first history page of ready-made rows (given oldest first)."""
     return {"account_events": list(reversed(rows)), "next_cursor": ""}
 
 
@@ -345,6 +353,43 @@ def test_a_live_frame_already_backfilled_is_dropped_after_the_backfill(monkeypat
     reads = [indexed(12), page(A, C, D)]
     frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99)
     assert tags(frames) == ["snapshot", "10-0", "snapshot", "11-0*", "12-3*", "13-0", "12-3"]
+
+
+def test_history_rows_without_position_match_live_frames_with_one(monkeypatch) -> None:
+    # A normal block: history omits tx_position, the live frame carries 0.
+    first = RecoverySocket([snap(10), live_frame(A)])
+    second = RecoverySocket([snap(12)], waiting=[live_frame(D)])
+    reads = [indexed(12), page(A, C, D)]
+    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99)
+    # The unpositioned boundary row A still stops the scan, and the live D is
+    # dropped against its unpositioned row.
+    assert tags(frames) == ["snapshot", "10-0", "snapshot", "11-0*", "12-3*"]
+    assert statuses == [RecoveryStatus("backfilled", 2)]
+
+
+def test_two_copies_of_one_hash_in_a_block_are_separated_by_position(monkeypatch) -> None:
+    # The gateway serves tx_position only when a block repeats the hash.
+    f, g = ev(12, "FF", 0), ev(12, "FF", 1, "position_updated")
+    first = RecoverySocket([snap(10), live_frame(A)])
+    second = RecoverySocket(
+        [snap(12)], waiting=[live_frame(f, tx_index=0), live_frame(g, tx_index=1)]
+    )
+    reads = [
+        indexed(12),
+        page_rows(history_row(A, 1), history_row(f, 2, 0), history_row(g, 3, 1)),
+    ]
+    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99)
+    # Each live copy matches its own row: no double delivery, no skip.
+    assert tags(frames) == ["snapshot", "10-0", "snapshot", "12-0*", "12-1*"]
+    assert statuses == [RecoveryStatus("backfilled", 2)]
+
+
+def test_a_late_live_duplicate_of_a_positionless_backfilled_row_is_dropped(monkeypatch) -> None:
+    first = RecoverySocket([snap(10), live_frame(A)])
+    second = RecoverySocket([snap(12), live_frame(D), live_frame(E)])
+    reads = [indexed(12), page(A, C, D)]
+    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99)
+    assert tags(frames) == ["snapshot", "10-0", "snapshot", "11-0*", "12-3*", "13-0"]
 
 
 def test_close_stops_a_backfill_waiting_to_retry(monkeypatch) -> None:

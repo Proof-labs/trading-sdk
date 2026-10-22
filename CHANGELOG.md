@@ -71,7 +71,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `backfilled: true`), then the live frames that arrived meanwhile, each
   event exactly once, also when the socket reconnects again during a
   backfill. Events are matched on `height` + `txHash` + `eventIndex` +
-  `eventType`; the settlement names `conditional_settled` /
+  `eventType` + `txIndex`, a missing position matching any, since history
+  serves `tx_position` only when one block carries the same transaction hash
+  more than once; the settlement names `conditional_settled` /
   `conditional_voided` match their canonical history names `condition_met` /
   `condition_not_met`. A `snapshot: "resent"` frame is not a reconnect.
   `onRecovery` / `on_recovery` reports each reconnect's outcome once

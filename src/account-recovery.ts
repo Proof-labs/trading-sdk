@@ -7,14 +7,49 @@ import type {
 /**
  * The position of one account event, shared by live `/ws` frames (gateway
  * 7.9.0 and later) and `/v1/history/account-events` rows. A transaction hash
- * can recur at different heights, so all four fields together identify an
- * event.
+ * can recur at different heights, and twice in one block, so all the fields
+ * together identify an event. A `txIndex` of `null` is a wildcard: history
+ * rows omit `tx_position` for normal blocks, where live frames still carry
+ * the real index.
  */
 export interface AccountEventKey {
   height: number;
   txHash: string;
   eventIndex: number;
   eventType: string;
+  txIndex: number | null;
+}
+
+/** Whether two keys denote the same event: the four identifying fields are
+ *  equal and the positions agree, where `null` agrees with anything. */
+function sameEvent(a: AccountEventKey, b: AccountEventKey): boolean {
+  return (
+    a.height === b.height &&
+    a.txHash === b.txHash &&
+    a.eventIndex === b.eventIndex &&
+    a.eventType === b.eventType &&
+    (a.txIndex === null || b.txIndex === null || a.txIndex === b.txIndex)
+  );
+}
+
+/** Bucket `key` into the map keyed by its four identifying fields, so
+ *  `sameEvent` only has to be tried against keys they already match. */
+function addEvent(
+  keys: Map<string, AccountEventKey[]>,
+  key: AccountEventKey,
+): void {
+  const id = keyId(key);
+  const bucket = keys.get(id);
+  if (bucket) bucket.push(key);
+  else keys.set(id, [key]);
+}
+
+/** Whether `keys` holds an event `sameEvent` to `key`. */
+function hasEvent(
+  keys: Map<string, AccountEventKey[]>,
+  key: AccountEventKey,
+): boolean {
+  return keys.get(keyId(key))?.some((k) => sameEvent(k, key)) ?? false;
 }
 
 /**
@@ -56,6 +91,10 @@ export interface AccountHistoryRow {
   tx_hash: string;
   event_index: number;
   event_type: string;
+  /** The transaction's position in its block. History serves it only when
+   *  one block carries the same transaction hash more than once; it is
+   *  absent otherwise. */
+  tx_position?: number;
   payload: Record<string, unknown>;
 }
 
@@ -139,6 +178,7 @@ export function liveKey(frame: AccountEventFrame): AccountEventKey | null {
     txHash: frame.txHash,
     eventIndex: frame.eventIndex,
     eventType: canonicalEventType(frame.eventType),
+    txIndex: typeof frame.txIndex === "number" ? frame.txIndex : null,
   };
 }
 
@@ -148,6 +188,7 @@ function rowKey(row: AccountHistoryRow): AccountEventKey {
     txHash: row.tx_hash,
     eventIndex: Number(row.event_index),
     eventType: canonicalEventType(row.event_type),
+    txIndex: typeof row.tx_position === "number" ? row.tx_position : null,
   };
 }
 
@@ -163,7 +204,7 @@ function rowFrame(row: AccountHistoryRow): AccountEventFrame {
     eventType: row.event_type,
     height: Number(row.block_height),
     txHash: row.tx_hash,
-    txIndex: null,
+    txIndex: typeof row.tx_position === "number" ? row.tx_position : null,
     eventIndex: Number(row.event_index),
     payload: row.payload,
     backfilled: true,
@@ -232,10 +273,14 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
   let recovering = false;
   let closed = false;
   let buffer: Buffered[] = [];
-  // Keys a backfill delivered, kept until a live frame passes the newest of
-  // them: a slow socket can still deliver one the indexer already served.
-  let recent: { keys: Set<string>; height: number; floor: number } | null =
-    null;
+  // Events a backfill delivered, kept until a live frame passes the newest
+  // of their heights: a slow socket can still deliver one the indexer
+  // already served.
+  let recent: {
+    keys: Map<string, AccountEventKey[]>;
+    height: number;
+    floor: number;
+  } | null = null;
 
   const deliver = (frame: AccountEventFrame, key: AccountEventKey | null) => {
     if (closed) return;
@@ -247,7 +292,7 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
   const deliverLive = (frame: AccountEventFrame) => {
     const key = liveKey(frame);
     if (key && recent) {
-      if (recent.keys.has(keyId(key)) || key.height < recent.floor) return;
+      if (hasEvent(recent.keys, key) || key.height < recent.floor) return;
       if (key.height > recent.height) recent = null;
     }
     deliver(frame, key);
@@ -263,7 +308,7 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
       const { rows, nextCursor } = await opts.fetchPage(cursor, abort.signal);
       for (const row of rows) {
         const key = rowKey(row);
-        if (boundary.key && keyId(key) === keyId(boundary.key)) {
+        if (boundary.key && sameEvent(key, boundary.key)) {
           found = reached = true;
           break;
         }
@@ -302,7 +347,7 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
     const target = heightOf(snapshot);
     const boundary = boundaryNow();
     let status: AccountRecoveryStatus;
-    let delivered = new Set<string>();
+    let delivered = new Map<string, AccountEventKey[]>();
     let floor = -1;
     if ("kind" in boundary) {
       status = boundary;
@@ -324,12 +369,12 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
           result = await scan(boundary);
         }
         if (closed) return undefined;
-        delivered = new Set(boundary.key ? [keyId(boundary.key)] : []);
+        if (boundary.key) addEvent(delivered, boundary.key);
         floor = boundary.key ? boundary.height : boundary.height + 1;
         let newest = -1;
         for (const row of result.rows) {
           const key = rowKey(row);
-          delivered.add(keyId(key));
+          addEvent(delivered, key);
           newest = Math.max(newest, key.height);
           deliver(rowFrame(row), key);
         }

@@ -55,9 +55,20 @@ def _canonical_event_type(event_type: t.Any) -> str:
     return _LEGACY_EVENT_TYPES.get(name, name)
 
 
-# (height, txHash, eventIndex, eventType): one account event's history key.
-# A transaction hash can recur at different heights, so all four count.
-EventKey = tuple[int, str, int, str]
+# (height, txHash, eventIndex, eventType, txIndex): one account event's
+# history key. A transaction hash can recur at different heights, and twice
+# in one block, so all the fields together identify an event. A ``txIndex``
+# of ``None`` is a wildcard: history rows omit ``tx_position`` for normal
+# blocks, where live frames still carry the real index.
+EventKey = tuple[int, str, int, str, int | None]
+
+
+def same_event(a: EventKey, b: EventKey) -> bool:
+    """Whether two keys denote the same event: the four identifying fields
+    are equal and the positions agree, where ``None`` agrees with anything."""
+    return (
+        a[:4] == b[:4] and (a[4] is None or b[4] is None or a[4] == b[4])
+    )
 
 
 @dataclass(frozen=True)
@@ -95,19 +106,29 @@ def _live_key(frame: dict[str, t.Any]) -> EventKey | None:
     tx_hash, index, height = frame.get("txHash"), frame.get("eventIndex"), frame.get("height")
     if not isinstance(tx_hash, str) or not isinstance(index, int) or not isinstance(height, int):
         return None
-    return (height, tx_hash, index, _canonical_event_type(frame.get("eventType")))
+    tx_index = frame.get("txIndex")
+    return (
+        height,
+        tx_hash,
+        index,
+        _canonical_event_type(frame.get("eventType")),
+        tx_index if isinstance(tx_index, int) else None,
+    )
 
 
 def _row_key(row: dict[str, t.Any]) -> EventKey:
+    tx_position = row.get("tx_position")
     return (
         int(row["block_height"]),
         str(row["tx_hash"]),
         int(row["event_index"]),
         _canonical_event_type(row["event_type"]),
+        tx_position if isinstance(tx_position, int) else None,
     )
 
 
 def _row_frame(row: dict[str, t.Any]) -> dict[str, t.Any]:
+    tx_position = row.get("tx_position")
     return {
         "channel": "accountEvents",
         "type": _FAMILIES.get(row["event_type"], "account_event"),
@@ -115,7 +136,7 @@ def _row_frame(row: dict[str, t.Any]) -> dict[str, t.Any]:
         "eventType": row["event_type"],
         "height": int(row["block_height"]),
         "txHash": row["tx_hash"],
-        "txIndex": None,
+        "txIndex": tx_position if isinstance(tx_position, int) else None,
         "eventIndex": int(row["event_index"]),
         "payload": row.get("payload", {}),
         "backfilled": True,
@@ -142,7 +163,9 @@ class AccountEventStream:
     snapshot's ``height``. It yields the newer rows in history order (marked
     ``"backfilled": True``), then the live frames received meanwhile,
     skipping any whose key (``height``, ``txHash``, ``eventIndex``,
-    ``eventType``) a backfilled row already had. ``on_recovery`` receives one
+    ``eventType``, ``txIndex`` — a ``txIndex`` of ``None`` matches any
+    position, since history rows omit ``tx_position`` for normal blocks) a
+    backfilled row already had. ``on_recovery`` receives one
     :class:`RecoveryStatus` per reconnect. A snapshot marked
     ``"snapshot": "resent"`` is not a reconnect. ``recover=False`` turns
     recovery off.
@@ -196,9 +219,13 @@ class AccountEventStream:
         self._last: t.Any = None
         # Height of the latest snapshot recovery has caught up to.
         self._snapshot_height: int | None = None
-        # Keys a backfill yielded, kept until a live frame passes the newest of
-        # them: a slow socket can still deliver one the indexer already served.
-        self._recent: tuple[set[EventKey], int, int] | None = None
+        # Events a backfill yielded, kept until a live frame passes the newest
+        # of their heights: a slow socket can still deliver one the indexer
+        # already served. Bucketed by the four identifying fields, so
+        # :func:`same_event` only has to be tried against keys they match.
+        self._recent: tuple[
+            dict[tuple[int, str, int, str], list[EventKey]], int, int
+        ] | None = None
         self._stop = threading.Event()
         self._ws: t.Any = None
         self._closed = False
@@ -281,7 +308,7 @@ class AccountEventStream:
             rows, cursor = self._history_page(cursor)
             for row in rows:
                 row_key = _row_key(row)
-                if key is not None and row_key == key:
+                if key is not None and same_event(row_key, key):
                     found = reached = True
                     break
                 if row_key[0] < height if key is not None else row_key[0] <= height:
@@ -357,11 +384,13 @@ class AccountEventStream:
         else:
             status = RecoveryStatus("history_behind", len(rows))
         self._report(status)
-        delivered: set[EventKey] = {key} if key is not None else set()
+        delivered: dict[tuple[int, str, int, str], list[EventKey]] = (
+            {key[:4]: [key]} if key is not None else {}
+        )
         newest = -1
         for row in rows:
             row_key = _row_key(row)
-            delivered.add(row_key)
+            delivered.setdefault(row_key[:4], []).append(row_key)
             newest = max(newest, row_key[0])
             self._last = row_key
             yield _row_frame(row)
@@ -375,8 +404,11 @@ class AccountEventStream:
             return
         key = _live_key(frame)
         if key is not None and self._recent is not None:
-            keys, newest, floor = self._recent
-            if key in keys or key[0] < floor:
+            buckets, newest, floor = self._recent
+            if (
+                any(same_event(k, key) for k in buckets.get(key[:4], ()))
+                or key[0] < floor
+            ):
                 return
             if key[0] > newest:
                 self._recent = None

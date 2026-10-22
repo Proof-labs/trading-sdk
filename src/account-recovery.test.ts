@@ -40,17 +40,17 @@ interface Ev {
   type: string;
 }
 
-const live = (e: Ev, keyed = true) => ({
+const live = (e: Ev, keyed = true, txIndex: number | null = 0) => ({
   channel: "accountEvents",
   type: "account_event",
   owner: OWNER,
   eventType: e.type,
   height: e.height,
-  ...(keyed ? { txHash: e.tx, txIndex: 0, eventIndex: e.index } : {}),
+  ...(keyed ? { txHash: e.tx, txIndex, eventIndex: e.index } : {}),
   payload: { tag: `${e.height}-${e.index}` },
 });
 
-const row = (e: Ev, id: number) => ({
+const row = (e: Ev, id: number, txPosition?: number) => ({
   event_id: id,
   owner: OWNER,
   block_height: e.height,
@@ -58,12 +58,19 @@ const row = (e: Ev, id: number) => ({
   tx_hash: e.tx,
   event_index: e.index,
   event_type: e.type,
+  ...(txPosition === undefined ? {} : { tx_position: txPosition }),
   payload: { tag: `${e.height}-${e.index}` },
 });
 
 /** Newest-first history page of `events` (given oldest first). */
 const page = (...events: Ev[]) => ({
   account_events: events.map((e, i) => row(e, i + 1)).reverse(),
+  next_cursor: "",
+});
+
+/** Newest-first history page of ready-made rows (given oldest first). */
+const pageRows = (...rows: object[]) => ({
+  account_events: [...rows].reverse(),
   next_cursor: "",
 });
 const indexed = (height: number) => ({ ingest: { newest_height: height } });
@@ -341,6 +348,70 @@ it("drops a live frame a backfill already delivered, even after the backfill end
     "12-3*",
     "13-0",
     "12-3",
+  ]);
+  t.c.disconnect();
+});
+
+it("matches history rows without a position to live frames that carry one", async () => {
+  // A normal block: history omits tx_position, the live frame carries 0.
+  const t = setup();
+  await t.start(snap(10));
+  t.sockets[0].push(live(A));
+  await t.reconnect(1, snap(12));
+  t.sockets[1].push(live(D));
+  await t.answer(STATUS, indexed(12));
+  await t.answer(EVENTS, page(A, C, D));
+  // The unpositioned boundary row A still stops the scan, and the live D is
+  // dropped against its unpositioned row.
+  expect(tags(t.frames)).toEqual([
+    "snapshot",
+    "10-0",
+    "snapshot",
+    "11-0*",
+    "12-3*",
+  ]);
+  expect(t.statuses).toEqual([{ kind: "backfilled", delivered: 2 }]);
+  t.c.disconnect();
+});
+
+it("separates two copies of one transaction hash in a block by position", async () => {
+  // The gateway serves tx_position only when a block repeats the hash.
+  const F: Ev = { height: 12, tx: "FF", index: 0, type: "trade_executed" };
+  const G: Ev = { height: 12, tx: "FF", index: 1, type: "position_updated" };
+  const t = setup();
+  await t.start(snap(10));
+  t.sockets[0].push(live(A));
+  await t.reconnect(1, snap(12));
+  t.sockets[1].push(live(F, true, 0));
+  t.sockets[1].push(live(G, true, 1));
+  await t.answer(STATUS, indexed(12));
+  await t.answer(EVENTS, pageRows(row(A, 1), row(F, 2, 0), row(G, 3, 1)));
+  // Each live copy matches its own row: no double delivery, no skip.
+  expect(tags(t.frames)).toEqual([
+    "snapshot",
+    "10-0",
+    "snapshot",
+    "12-0*",
+    "12-1*",
+  ]);
+  expect(t.statuses).toEqual([{ kind: "backfilled", delivered: 2 }]);
+  t.c.disconnect();
+});
+
+it("dedupes a late live duplicate of a backfilled row that carried no position", async () => {
+  const t = setup();
+  await t.start(snap(10));
+  t.sockets[0].push(live(A));
+  await t.reconnect(1, snap(12));
+  await t.answer(STATUS, indexed(12));
+  await t.answer(EVENTS, page(A, C, D));
+  t.sockets[1].push(live(D));
+  expect(tags(t.frames)).toEqual([
+    "snapshot",
+    "10-0",
+    "snapshot",
+    "11-0*",
+    "12-3*",
   ]);
   t.c.disconnect();
 });
