@@ -68,9 +68,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   previous snapshot's `height` when none was delivered) after a reconnect,
   retrying while `/v1/history/status` shows history behind the new
   snapshot's `height`. They deliver the newer rows in history order (marked
-  `backfilled: true`), then the live frames that arrived meanwhile, each
-  event exactly once, also when the socket reconnects again during a
-  backfill. Events are matched on `height` + `txHash` + `eventIndex` +
+  `backfilled: true`), then the live frames that arrived meanwhile — every
+  event once across reconnects, also when the socket reconnects again during
+  a backfill (a live frame racing a backfill can admit one duplicate).
+  Events are matched on `height` + `txHash` + `eventIndex` +
   `eventType` + `txIndex`, a missing position matching any, since history
   serves `tx_position` only when one block carries the same transaction hash
   more than once; the settlement names `conditional_settled` /
