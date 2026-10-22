@@ -801,6 +801,42 @@ describe("feed ownership and cleanup", () => {
       feed.close();
     });
 
+    it("stops retrying a first subscribe whose signing keeps failing, with one final error frame", async () => {
+      const errors: unknown[] = [];
+      const { feed, clock } = makeFeed({
+        onError: (e: unknown) => errors.push(e),
+        minBackoffMs: 100,
+      });
+      const auth = async () => {
+        throw new Error("signer unavailable");
+      };
+      const got: Array<Record<string, unknown>> = [];
+      feed.subscribeAccount(
+        owner,
+        (f) => got.push(f as unknown as Record<string, unknown>),
+        auth,
+      );
+      const ws = FakeWS.last();
+      ws.open();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(subscribes(ws), "nothing ever gets on the wire").toHaveLength(0);
+      // Drain retries while the feed still schedules them; the safety bound
+      // only guards against a regression that retries for ever.
+      for (let i = 0; i < 10 && clock.pending > 0; i++) {
+        clock.runNext();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      expect(clock.pending, "no retry is left scheduled").toBe(0);
+      const final = got.filter((f) => /not retrying after/.test(f.error));
+      expect(final, "exactly one final error frame").toHaveLength(1);
+      expect(
+        got.slice(0, -1).every((f) => /retrying in/.test(f.error)),
+        "every earlier frame announced its retry",
+      ).toBe(true);
+      expect(feed.connectionState).toBe("open");
+      feed.close();
+    });
+
     it("retries a first account subscribe the gateway refused with 401", () => {
       const { feed, clock } = makeFeed({ minBackoffMs: 50 });
       const got: Array<Record<string, unknown>> = [];

@@ -108,7 +108,8 @@ interface SubRecord {
   snapshotOnSocket: boolean;
   /** Pending retry of a first subscribe whose authentication failed. */
   retryTimer: unknown;
-  /** Consecutive failed authentications, for the retry backoff. */
+  /** Consecutive failed authentications, for the retry backoff and its
+   *  `MAX_AUTH_RETRIES` cap. Reset on confirmation and on socket replacement. */
   retryAttempts: number;
 }
 
@@ -123,6 +124,11 @@ const CONTROL_TYPES = new Set(["subscribed", "unsubscribed", "pong", "error"]);
 
 /** Gateway refusal codes of an account subscribe that a retry can pass. */
 const RETRYABLE_REFUSALS = new Set([401, 429, 503]);
+
+/** Consecutive failed authentications after which a first subscribe stops
+ *  being retried: a deterministic failure (the signer's key is not the
+ *  account's key) would otherwise retry for ever. */
+const MAX_AUTH_RETRIES = 5;
 
 /**
  * Lifecycle manager for the gateway's multiplexed `/ws` feed.
@@ -145,7 +151,9 @@ const RETRYABLE_REFUSALS = new Set([401, 429, 503]);
  *   - **subscribe retry** — when signing an account subscribe fails, or the
  *     gateway refuses it with 401, 429 or 503, and the channel has no
  *     subscription on the socket, listeners get an `error` frame and the
- *     subscribe is retried with the reconnect backoff.
+ *     subscribe is retried with the reconnect backoff. After
+ *     `MAX_AUTH_RETRIES` consecutive failures it gives up with one final
+ *     `error` frame; a replaced socket starts a fresh retry budget.
  *   - **heartbeat** — an app-level `ping` runs on an interval; a missing
  *     `pong` forces a reconnect, catching half-open sockets the OS hasn't
  *     torn down.
@@ -732,7 +740,10 @@ export class GatewayFeed {
       record.resendPending = false;
       record.confirmed = false;
       record.snapshotOnSocket = false;
-      // The next socket's replay subscribes afresh.
+      // The next socket's replay subscribes afresh, with a fresh retry
+      // budget: the failures on the dead socket were not consecutive with
+      // whatever the new socket brings.
+      record.retryAttempts = 0;
       this.cancelRetry(record);
     }
   }
@@ -750,17 +761,38 @@ export class GatewayFeed {
    * goes on. Otherwise nothing is subscribed while the socket stays healthy,
    * so the failure goes to the listeners as an `error` frame and the
    * subscribe is retried with the reconnect backoff until it succeeds, the
-   * subscription is dropped, or the socket is replaced.
+   * subscription is dropped, the retry budget runs out, or the socket is
+   * replaced.
    */
   private authFailed(record: SubRecord, err: Error): void {
     this.releaseAwaiting(record);
     this.onError?.(err);
     if (record.confirmed) return;
+    if (record.retryAttempts >= MAX_AUTH_RETRIES) {
+      this.giveUpRetrying(
+        record,
+        `${record.channel} subscription authentication failed: ${err.message}; not retrying after ${MAX_AUTH_RETRIES} failed attempts`,
+      );
+      return;
+    }
     const delay = this.scheduleRetry(record);
     const frame: FeedErrorFrame = {
       type: "error",
       channel: record.channel,
       error: `${record.channel} subscription authentication failed: ${err.message}; retrying in ${delay}ms`,
+    };
+    for (const listener of record.listeners)
+      this.deliver(listener, frame as unknown as FeedFrame);
+  }
+
+  /** The subscribe retry budget is spent: tell the listeners once and leave
+   *  the subscription unconfirmed but quiet. A replaced socket replays it
+   *  with a fresh budget. */
+  private giveUpRetrying(record: SubRecord, reason: string): void {
+    const frame: FeedErrorFrame = {
+      type: "error",
+      channel: record.channel,
+      error: reason,
     };
     for (const listener of record.listeners)
       this.deliver(listener, frame as unknown as FeedFrame);
@@ -805,13 +837,21 @@ export class GatewayFeed {
       // A refused first account subscribe leaves nothing subscribed on a
       // healthy socket. An expired signature (401), a rate limit (429) or an
       // unreadable snapshot (503) can pass, so it is retried; the listeners
-      // already have the gateway's error frame.
+      // already have the gateway's error frame. Once the retry budget has
+      // run out the refusals repeat for ever, so it stops with one final
+      // error frame.
       if (
         record.channel === "accountEvents" &&
         !record.confirmed &&
         RETRYABLE_REFUSALS.has(frame.code ?? 0)
-      )
-        this.scheduleRetry(record);
+      ) {
+        if (record.retryAttempts >= MAX_AUTH_RETRIES)
+          this.giveUpRetrying(
+            record,
+            `${record.channel} subscription refused (${frame.code}): ${frame.error}; not retrying after ${MAX_AUTH_RETRIES} failed attempts`,
+          );
+        else this.scheduleRetry(record);
+      }
     }
     this.onError?.(frame);
   }
