@@ -71,6 +71,10 @@ pub enum SnapshotError {
     DuplicateMarket,
     CatchingUp,
     RpcUnavailable,
+    /// A receipt lookup answered 404 or 500 with an error that is not the
+    /// exact not-found shape for the requested hash. The backend did answer,
+    /// and the answer is never evidence that the transaction is absent.
+    UnrecognizedNotFound,
     HashMismatch,
     /// A confirmation-poll schedule outside the safety ceiling.
     InvalidConfirmationPolling,

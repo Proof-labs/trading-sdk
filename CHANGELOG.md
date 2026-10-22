@@ -113,6 +113,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   refuse the all-zero binding the decoders already refused.
   `CommittedPriceUpdate::signer()` returns an `Address`; `.bytes()` reads the
   20 bytes out. No wire change.
+- `receipt_observation` answers a 404 or 500 error that is not the exact
+  not-found shape for the requested hash with the new
+  `SnapshotError::UnrecognizedNotFound`, not `RpcUnavailable` (#143): the
+  backend answered, so it is not unavailable. It is still never not-found
+  evidence. A caller that retried on `RpcUnavailable` should decide whether it
+  retries on this too; an exhaustive `match` needs a new arm.
 
 ### Documentation
 

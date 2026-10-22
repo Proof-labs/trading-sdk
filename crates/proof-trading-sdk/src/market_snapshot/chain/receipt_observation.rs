@@ -301,7 +301,7 @@ fn classify(status: u16, body: &[u8], hash: TxHash) -> Result<ReceiptObservation
             data,
         } if message == "Internal error" => data,
         NotFoundError::Gateway(data) => data,
-        _ => return Err(SnapshotError::RpcUnavailable),
+        _ => return Err(SnapshotError::UnrecognizedNotFound),
     };
     let text = text.to_ascii_lowercase();
     // Exact Comet/gateway grammar, not just a hash somewhere beside "not found".
@@ -310,11 +310,11 @@ fn classify(status: u16, body: &[u8], hash: TxHash) -> Result<ReceiptObservation
     let token = text
         .strip_prefix("tx (")
         .and_then(|text| text.strip_suffix(") not found"))
-        .ok_or(SnapshotError::RpcUnavailable)?;
+        .ok_or(SnapshotError::UnrecognizedNotFound)?;
     // A message that is not this grammar, hash included, is some other
     // backend failure and never progress evidence.
-    let named: [u8; 32] =
-        crate::market_snapshot::values::hex_array(token).ok_or(SnapshotError::RpcUnavailable)?;
+    let named: [u8; 32] = crate::market_snapshot::values::hex_array(token)
+        .ok_or(SnapshotError::UnrecognizedNotFound)?;
     if named != hash.bytes() {
         return Err(SnapshotError::HashMismatch);
     }
