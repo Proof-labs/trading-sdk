@@ -36,6 +36,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`decodeLiquidationEvent` decodes three more engine events** from
+  exchange 2.18.0 (proof-wire 7.0.0):
+  - `position_liquidated` → `PositionLiquidatedEvent`: one per position an
+    owner's liquidation attempt reduced, with its `side`, `mode`
+    (`LIQUIDATION_MODES`: `partial`, `full`, `insolvent`), sizes before,
+    closed and after, the penalty collected and waived, the owner's signed
+    `equity`, `maintenance` and `bindingOutcome` (the `BindingScenarioEntry`
+    list, empty without event exposure) when the attempt was decided, and
+    the configuration sequence.
+  - `liquidation_failed` → `LiquidationFailedEvent`: the engine error `code`
+    and, when the attempt was refused (code 111, `LIQUIDATION_REFUSED_CODE`),
+    the `refusal` (`LIQUIDATION_REFUSALS`: `position_mismatch`,
+    `invalid_maker`, `reference_unavailable`); `null` for any other error.
+  - `adl_counterparty_skipped` → `AdlCounterpartySkippedEvent`: a profitable
+    position auto-deleveraging left out of a deficit's candidate set, with
+    its market, pool, size and `reason` (`ADL_SKIP_REASONS`:
+    `stale_oracle_dependency`).
+
+  Signed 64-bit values decode to `bigint`; an unknown enumeration value, a
+  `size_after` that is not `size_before - size_closed` floored at zero, or a
+  refusal under a code other than 111 throws. A new `events.ndjson`
+  conformance family, generated from proof-wire's own encoder, pins the
+  attributes for all three events; the Rust runner re-encodes it and the
+  TypeScript runner decodes it. Additive TypeScript API.
+
 - `FundInsuranceFund` (admin tag 18) and `WithdrawInsuranceFund` (admin
   tag 25) proposals: TypeScript types, pre-signing shape validation,
   proposal decoding and Rust governance re-exports. The shared Rust/WASM
