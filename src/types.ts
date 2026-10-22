@@ -1213,16 +1213,11 @@ export interface LiquidationConfig {
   /** Penalty on each partial-liquidation fill, in basis points of the
    *  fill's notional; at most 100. */
   partialPenaltyBps: number;
-  /** Book orders one liquidation attempt may visit; non-zero. */
+  /** Book orders one owner's liquidation may walk per leg in a block;
+   *  non-zero. */
   maxBookOrders: number;
-  /** Candidate prefixes one attempt may inspect; non-zero. */
-  maxCandidatePrefixes: number;
-  /** Fills one attempt may commit; non-zero, at most `maxCandidatePrefixes`. */
+  /** Fills one owner's liquidation may commit in a block; non-zero. */
   maxCommittedFills: number;
-  /** State reads one attempt may make; non-zero. */
-  maxStateReads: number;
-  /** Bytes of state one attempt may read; non-zero. */
-  maxStateReadBytes: number;
 }
 
 /**
@@ -1555,9 +1550,22 @@ export interface OrderCancelledEvent {
   filledQuantity: string;
 }
 
-/** Why the engine cancelled an order (`OrderCancelledEvent.reason`). */
+/** Why the engine cancelled an order (`OrderCancelledEvent.reason`).
+ *  `"reduce_only"`: a resting reduce-only order had no position left to
+ *  reduce. The last three cancel a resting maker order a fill could not
+ *  use: `"unfunded"`, the maker could not pay its side;
+ *  `"insufficient_margin"`, the fill would leave the maker below
+ *  maintenance; `"maker_refused"`, the maker's own position cap refused it. */
 export type CancelReason =
-  "user_requested" | "expired" | "admin_force" | "liquidation" | "upgrade";
+  | "user_requested"
+  | "expired"
+  | "admin_force"
+  | "liquidation"
+  | "upgrade"
+  | "reduce_only"
+  | "unfunded"
+  | "insufficient_margin"
+  | "maker_refused";
 
 // ── Engine-upgrade journal events ──────────────────────────────────────────
 // An upgrade's migration reports its effects as one group of events in the

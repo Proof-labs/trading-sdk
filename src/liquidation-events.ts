@@ -60,21 +60,6 @@ export interface PartialLiquidationFeeEvent {
   waived: bigint;
 }
 
-/**
- * The full-liquidation penalty, charged once when a full close of `owner`
- * ends. `closedNotional` is everything the close filled through the book,
- * across blocks and pools; `assessed = collected + waived`.
- */
-export interface FullLiquidationFeeEvent {
-  type: "FullLiquidationFee";
-  owner: string;
-  configSequence: bigint;
-  closedNotional: bigint;
-  assessed: bigint;
-  collected: bigint;
-  waived: bigint;
-}
-
 /** How one owner named in a liquidation batch ended this block. */
 export interface LiquidationProgressReportedEvent {
   type: "LiquidationProgressReported";
@@ -86,7 +71,6 @@ export interface LiquidationProgressReportedEvent {
 export type LiquidationEvent =
   | LiquidationConfigSetEvent
   | PartialLiquidationFeeEvent
-  | FullLiquidationFeeEvent
   | LiquidationProgressReportedEvent;
 
 /** One ABCI event: a `TxEvent`'s attribute list, or the same attributes as
@@ -179,10 +163,7 @@ function liquidationConfigSet(a: Attributes): LiquidationConfigSetEvent {
     },
     partialPenaltyBps: a.u32("partial_penalty_bps"),
     maxBookOrders: a.u32("max_book_orders"),
-    maxCandidatePrefixes: a.u32("max_candidate_prefixes"),
     maxCommittedFills: a.u32("max_committed_fills"),
-    maxStateReads: a.u32("max_state_reads"),
-    maxStateReadBytes: a.u32("max_state_read_bytes"),
   };
   try {
     validateLiquidationConfig(config);
@@ -209,16 +190,6 @@ function partialLiquidationFee(a: Attributes): PartialLiquidationFeeEvent {
   };
 }
 
-function fullLiquidationFee(a: Attributes): FullLiquidationFeeEvent {
-  return {
-    type: "FullLiquidationFee",
-    owner: a.owner("owner"),
-    configSequence: a.u64("config_sequence"),
-    closedNotional: a.u64("closed_notional"),
-    ...a.penalty(),
-  };
-}
-
 function liquidationProgressReported(
   a: Attributes,
 ): LiquidationProgressReportedEvent {
@@ -237,12 +208,11 @@ function liquidationProgressReported(
 const DECODERS: Record<string, (a: Attributes) => LiquidationEvent> = {
   liquidation_config_set: liquidationConfigSet,
   partial_liquidation_fee: partialLiquidationFee,
-  full_liquidation_fee: fullLiquidationFee,
   liquidation_progress_reported: liquidationProgressReported,
 };
 
 /**
- * Decode one of the four liquidation events from its ABCI type (the
+ * Decode one of the three liquidation events from its ABCI type (the
  * engine's snake_case name, e.g. `"partial_liquidation_fee"`) and string
  * attributes. Returns `null` for any other event type, so a caller can run
  * it over every event of a transaction or block.

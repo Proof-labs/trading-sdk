@@ -19,10 +19,7 @@ function config(): LiquidationConfig {
     fullCloseThreshold: { numerator: 2, denominator: 3 },
     partialPenaltyBps: 100,
     maxBookOrders: 20,
-    maxCandidatePrefixes: 20,
     maxCommittedFills: 10,
-    maxStateReads: 10_000,
-    maxStateReadBytes: 1_000_000,
   };
 }
 
@@ -56,8 +53,8 @@ function propose(action: AdminAction): Action {
 const FROZEN_ACTION_HEX =
   "81b45365744c69717569646174696f6e436f6e666967" +
   "930102" +
-  "98cd2904920203641414" +
-  "0acd2710ce000f4240";
+  "95cd29049202036414" +
+  "0a";
 
 describe("SetLiquidationConfig governance action", () => {
   it("carries inner tag 17", () => {
@@ -74,10 +71,7 @@ describe("SetLiquidationConfig governance action", () => {
           full_close_threshold: { numerator: 2, denominator: 3 },
           partial_penalty_bps: 100,
           max_book_orders: 20,
-          max_candidate_prefixes: 20,
           max_committed_fills: 10,
-          max_state_reads: 10_000,
-          max_state_read_bytes: 1_000_000,
         },
       },
     });
@@ -112,20 +106,28 @@ describe("SetLiquidationConfig governance action", () => {
       action: update(),
     });
     expect(bytesToHex(hash)).toBe(
-      "9a9a8ac80d7d9b3c5a6acf17c23197ec7a0a52d4142bb317d7b9afb8ce82ceb6",
+      "c56e3d275fb3a86545944cebf74b28fca40766448f1a97e3cbdef5cf1f345c32",
     );
   });
 
   it("decodes a proposal from its wire tuple", () => {
     expect(
       decodeAdminAction({
+        SetLiquidationConfig: [1, 2n, [10_500, [2, 3], 100, 20, 10]],
+      }),
+    ).toEqual(update());
+  });
+
+  it("refuses the proof-wire 6.x eight-field configuration", () => {
+    expect(() =>
+      decodeAdminAction({
         SetLiquidationConfig: [
           1,
-          2n,
+          2,
           [10_500, [2, 3], 100, 20, 20, 10, 10_000, 1_000_000],
         ],
       }),
-    ).toEqual(update());
+    ).toThrow(/config/);
   });
 
   it("fails closed on a malformed or invalid wire tuple", () => {
@@ -134,11 +136,7 @@ describe("SetLiquidationConfig governance action", () => {
     ).toThrow(/config/);
     expect(() =>
       decodeAdminAction({
-        SetLiquidationConfig: [
-          2,
-          2,
-          [10_500, [2, 3], 100, 20, 20, 10, 10_000, 1_000_000],
-        ],
+        SetLiquidationConfig: [2, 2, [10_500, [2, 3], 100, 20, 10]],
       }),
     ).toThrow(/sequence must exceed predecessor/);
   });
@@ -179,14 +177,14 @@ describe("validateSetLiquidationConfig mirrors the wire bounds", () => {
       /partialPenaltyBps/,
     ],
     [
-      "a zero work limit",
-      update({}, { maxStateReadBytes: 0 }),
-      /maxStateReadBytes must be non-zero/,
+      "a zero book-order cap",
+      update({}, { maxBookOrders: 0 }),
+      /maxBookOrders must be non-zero/,
     ],
     [
-      "more fills than candidate prefixes",
-      update({}, { maxCommittedFills: 21 }),
-      /maxCommittedFills/,
+      "a zero committed-fill cap",
+      update({}, { maxCommittedFills: 0 }),
+      /maxCommittedFills must be non-zero/,
     ],
     [
       "a sequence equal to its predecessor",

@@ -42,10 +42,7 @@ describe("decodeLiquidationEvent", () => {
       ["full_close_denominator", "3"],
       ["partial_penalty_bps", "100"],
       ["max_book_orders", "20"],
-      ["max_candidate_prefixes", "20"],
       ["max_committed_fills", "10"],
-      ["max_state_reads", "10000"],
-      ["max_state_read_bytes", "1000000"],
       ["proposal_id", "7"],
     ]);
     expect(decodeLiquidationEvent(event)).toEqual({
@@ -56,10 +53,7 @@ describe("decodeLiquidationEvent", () => {
         fullCloseThreshold: { numerator: 2, denominator: 3 },
         partialPenaltyBps: 100,
         maxBookOrders: 20,
-        maxCandidatePrefixes: 20,
         maxCommittedFills: 10,
-        maxStateReads: 10_000,
-        maxStateReadBytes: 1_000_000,
       },
       proposalId: 7n,
     });
@@ -76,26 +70,6 @@ describe("decodeLiquidationEvent", () => {
       assessed: 5n,
       collected: 3n,
       waived: 2n,
-    });
-  });
-
-  it("decodes FullLiquidationFee, one per completed full close", () => {
-    const event = txEvent("full_liquidation_fee", [
-      ["owner", OWNER_CD],
-      ["config_sequence", "2"],
-      ["closed_notional", "700"],
-      ["assessed", "7"],
-      ["collected", "4"],
-      ["waived", "3"],
-    ]);
-    expect(decodeLiquidationEvent(event)).toEqual({
-      type: "FullLiquidationFee",
-      owner: OWNER_CD,
-      configSequence: 2n,
-      closedNotional: 700n,
-      assessed: 7n,
-      collected: 4n,
-      waived: 3n,
     });
   });
 
@@ -146,6 +120,10 @@ describe("decodeLiquidationEvent", () => {
   it("returns null for any other event type", () => {
     expect(decodeLiquidationEvent(txEvent("trade_executed", []))).toBeNull();
     expect(decodeLiquidationEvent(txEvent("toString", []))).toBeNull();
+    // proof-wire 7.0.0 removed the full-close penalty receipt.
+    expect(
+      decodeLiquidationEvent(txEvent("full_liquidation_fee", [])),
+    ).toBeNull();
   });
 
   it.each<[string, TxEvent, RegExp]>([
@@ -156,8 +134,8 @@ describe("decodeLiquidationEvent", () => {
     ],
     [
       "a missing attribute",
-      txEvent("full_liquidation_fee", [["owner", OWNER_CD]]),
-      /config_sequence is missing/,
+      txEvent("liquidation_progress_reported", [["owner", OWNER_CD]]),
+      /outcome is missing/,
     ],
     [
       "a negative amount",
@@ -208,10 +186,7 @@ describe("decodeLiquidationEvent", () => {
         ["full_close_denominator", "3"],
         ["partial_penalty_bps", "100"],
         ["max_book_orders", "20"],
-        ["max_candidate_prefixes", "20"],
         ["max_committed_fills", "10"],
-        ["max_state_reads", "10000"],
-        ["max_state_read_bytes", "1000000"],
         ["proposal_id", "7"],
       ]),
       /config is invalid: targetRatioBps/,

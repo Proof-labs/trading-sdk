@@ -734,10 +734,7 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
           fullCloseThreshold: { ...c.full_close_threshold },
           partialPenaltyBps: c.partial_penalty_bps,
           maxBookOrders: c.max_book_orders,
-          maxCandidatePrefixes: c.max_candidate_prefixes,
           maxCommittedFills: c.max_committed_fills,
-          maxStateReads: c.max_state_reads,
-          maxStateReadBytes: c.max_state_read_bytes,
         },
       },
     };

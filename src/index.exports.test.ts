@@ -253,6 +253,13 @@ describe("public barrel: one-book events and No helpers", () => {
       "PositionMigrated",
     ]);
     expect(reason).toBe("upgrade");
+    const walked: CancelReason[] = [
+      "reduce_only",
+      "unfunded",
+      "insufficient_margin",
+      "maker_refused",
+    ];
+    expect(walked).toHaveLength(4);
   });
 
   it("re-exports the No helpers", () => {
