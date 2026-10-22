@@ -123,6 +123,7 @@ pub struct EventCase {
     pub expect: EventExpect,
 }
 
+/// The ABCI event type and its attributes, in write order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventExpect {
     pub event_type: String,
@@ -188,7 +189,6 @@ pub fn codec_payload(action_type: u8, fields: &serde_json::Value) -> Result<Vec<
         .map_err(|e| format!("{e:?}"))
 }
 
-/// The refusal's stable name, shared by every binding.
 /// The ABCI event type and attributes the engine's encoder writes for
 /// `event` (its serde JSON form), read back from the length-prefixed bytes.
 pub fn event_expect(event: &serde_json::Value) -> Result<EventExpect, String> {
@@ -244,6 +244,7 @@ impl AbciReader<'_> {
     }
 }
 
+/// The refusal's stable name, shared by every binding.
 pub fn binary_error_name(error: &proof_trading_sdk::binary::BinaryError) -> &'static str {
     use proof_trading_sdk::binary::BinaryError;
     match error {
