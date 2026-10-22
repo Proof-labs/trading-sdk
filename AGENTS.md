@@ -468,7 +468,8 @@ unsubscribe function; `disconnect()` closes the feed.
 // subscription auth is added automatically when a signer is connected
 // (browsers can't set the X-Api-Key header). A reconnect restores the
 // snapshot and backfills missed events from /v1/history/account-events
-// (gateway 7.9.0+; `onRecovery` reports the outcome, `recover: false` opts out).
+// (gateway 7.9.0+; `onRecovery` reports the outcome once per reconnect,
+// `unverified` when the snapshot has no `height`; `recover: false` opts out).
 const unsub = client.subscribeAccount((frame) => {
   if (frame.type === "fill") {
     /* ... */

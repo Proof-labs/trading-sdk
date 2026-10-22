@@ -332,6 +332,8 @@ export class ExchangeClient {
   /** Dedicated feeds behind pending `orderbookSnapshot` calls, so
    *  `disconnect()` closes them too. */
   private readonly snapshotFeeds = new Set<GatewayFeed>();
+  /** Reconnect recoveries of live `subscribeAccount` calls, closed with the feed. */
+  private readonly accountRecoveries = new Set<() => void>();
   private publicKey: Uint8Array | null = null;
   private address: Uint8Array | null = null;
   private addressHex: string | null = null;
@@ -2361,11 +2363,14 @@ export class ExchangeClient {
    *
    * By default a reconnect recovers the events missed while disconnected:
    * the SDK reads `/v1/history/account-events` back to the last delivered
-   * event, delivers the newer rows in order (marked `backfilled`), buffers
-   * live frames meanwhile and drops those a backfilled row already delivered,
-   * then resumes live delivery. `onRecovery` reports the outcome of each
-   * reconnect, including `unsupported` when the gateway predates 7.9.0 and
-   * sends no history key. `recover: false` turns recovery off.
+   * event (or the previous snapshot's `height`), retrying while
+   * `/v1/history/status` shows history behind the new snapshot's `height`,
+   * delivers the newer rows in order (marked `backfilled`), buffers live
+   * frames meanwhile and drops those a backfilled row already delivered,
+   * then resumes live delivery. `onRecovery` reports each reconnect's
+   * outcome once: `unverified` when the snapshot has no `height`,
+   * `unsupported` when the gateway predates 7.9.0 and sends no history key.
+   * `recover: false` turns recovery off.
    */
   subscribeAccount(
     onFrame: (frame: AccountFrame) => void,
@@ -2390,14 +2395,18 @@ export class ExchangeClient {
       owner,
       onFrame,
       onRecovery: opts.onRecovery,
-      fetchPage: (cursor) => this.accountHistoryPage(owner, cursor),
+      fetchPage: (cursor, signal) =>
+        this.accountHistoryPage(owner, cursor, signal),
+      fetchIndexedHeight: (signal) => this.historyIndexedHeight(signal),
     });
     const unsubscribe = this.feed().subscribeAccount(
       owner,
       recovery.handle,
       auth,
     );
+    this.accountRecoveries.add(recovery.close);
     return () => {
+      this.accountRecoveries.delete(recovery.close);
       recovery.close();
       unsubscribe();
     };
@@ -2407,13 +2416,17 @@ export class ExchangeClient {
   private async accountHistoryPage(
     owner: string,
     cursor: string | null,
+    signal?: AbortSignal,
   ): Promise<AccountHistoryPage> {
-    const res = await this.reads().accountEvents({
-      owner,
-      order: "desc",
-      limit: 500,
-      ...(cursor ? { cursor } : {}),
-    });
+    const res = await this.reads().accountEvents(
+      {
+        owner,
+        order: "desc",
+        limit: 500,
+        ...(cursor ? { cursor } : {}),
+      },
+      { signal },
+    );
     const body = (await res.json()) as {
       account_events?: AccountHistoryRow[];
       next_cursor?: string | null;
@@ -2424,6 +2437,19 @@ export class ExchangeClient {
         `account history read failed: ${body.error ?? `HTTP ${res.status}`}`,
       );
     return { rows: body.account_events, nextCursor: body.next_cursor ?? null };
+  }
+
+  /** The newest height history has indexed in full
+   *  (`/v1/history/status` → `ingest.newest_height`). */
+  private async historyIndexedHeight(signal?: AbortSignal): Promise<number> {
+    const res = await this.reads().historyStatus({ signal });
+    const body = (await res.json()) as {
+      ingest?: { newest_height?: unknown };
+    };
+    const height = body.ingest?.newest_height;
+    if (!res.ok || typeof height !== "number")
+      throw new Error(`history status read failed: HTTP ${res.status}`);
+    return height;
   }
 
   subscribeOrderbook(
@@ -2440,9 +2466,11 @@ export class ExchangeClient {
     return this.feed().subscribeTrades(market, onFrame);
   }
 
-  /** Close the shared `/ws` feed, any pending `orderbookSnapshot` feed, and
-   *  stop their reconnect loops. */
+  /** Close the shared `/ws` feed, any pending `orderbookSnapshot` feed, any
+   *  account backfill in progress, and stop their reconnect loops. */
   disconnect() {
+    for (const close of this.accountRecoveries) close();
+    this.accountRecoveries.clear();
     for (const feed of this.snapshotFeeds) feed.close();
     this.snapshotFeeds.clear();
     this.gatewayFeed?.close();

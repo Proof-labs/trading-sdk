@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 import typing as t
 from dataclasses import dataclass, field
@@ -65,17 +66,24 @@ class RecoveryStatus:
 
     ``kind`` is one of:
 
-    - ``backfilled``: the last delivered event was found in history and every
-      later row was yielded, in history order, before live frames resumed.
+    - ``backfilled``: every history row after the last yielded event (or,
+      when none was yielded, after the previous snapshot's height) was
+      yielded in history order before live frames resumed, and history had
+      indexed up to the reconnect snapshot's ``height``.
+    - ``unverified``: rows were backfilled as for ``backfilled``, but the
+      snapshot carries no ``height`` (an older gateway or node), so whether
+      history had caught up cannot be checked. Events may be missing. With
+      nothing yielded before the outage and no previous snapshot height
+      either, there is no boundary and nothing is backfilled.
     - ``unsupported``: the live frames carry no history key (``txHash`` /
       ``eventIndex``), which means a gateway older than 7.9.0. Nothing was
       backfilled; events during the outage are not recovered.
-    - ``boundary_not_found``: the last delivered event is not in the history
+    - ``boundary_not_found``: the last yielded event is not in the history
       window that was read. Only rows at a later height were yielded; events
-      at the same height as the last delivered one may be missing.
-    - ``history_behind``: history had not reached the first live event after
-      the reconnect, even after retrying. Events in between may be missing.
-    - ``failed``: the history read failed (``error``). Nothing was backfilled.
+      at the same height as the last yielded one may be missing.
+    - ``history_behind``: history had not indexed up to the snapshot's height,
+      even after retrying. Events in between may be missing.
+    - ``failed``: a history read failed (``error``). Nothing was backfilled.
     """
 
     kind: str
@@ -128,13 +136,16 @@ class AccountEventStream:
 
     Each reconnect subscribes again and receives a fresh snapshot. By default
     it then recovers the events missed while disconnected: it reads
-    ``/v1/history/account-events`` back to the last yielded event, yields the
-    newer rows in history order (marked ``"backfilled": True``), then yields
-    the live frames received meanwhile, skipping any whose key
-    (``height``, ``txHash``, ``eventIndex``, ``eventType``) a backfilled row
-    already had. ``on_recovery`` receives a :class:`RecoveryStatus` per
-    reconnect, including ``unsupported`` when the gateway predates 7.9.0 and
-    sends no history key. ``recover=False`` turns recovery off.
+    ``/v1/history/account-events`` back to the last yielded event (or the
+    previous snapshot's ``height`` when none was yielded), retrying while
+    ``/v1/history/status`` shows history has not indexed up to the new
+    snapshot's ``height``. It yields the newer rows in history order (marked
+    ``"backfilled": True``), then the live frames received meanwhile,
+    skipping any whose key (``height``, ``txHash``, ``eventIndex``,
+    ``eventType``) a backfilled row already had. ``on_recovery`` receives one
+    :class:`RecoveryStatus` per reconnect. A snapshot marked
+    ``"snapshot": "resent"`` is not a reconnect. ``recover=False`` turns
+    recovery off.
 
     Args:
         ws_url: WebSocket base URL (the gateway URL with a ``ws`` scheme).
@@ -144,15 +155,21 @@ class AccountEventStream:
         reconnect_attempts: Maximum reconnect attempts (``None`` = infinite).
         recover: Backfill missed events from history on reconnect.
         on_recovery: Called with the outcome of each reconnect's recovery.
-        history_url: Gateway HTTP base URL for the history read; defaults to
-            ``ws_url`` with its scheme swapped back to ``http``/``https``.
+        history_url: Gateway HTTP base URL for the history reads. Defaults to
+            ``ws_url`` with its scheme swapped back to ``http``/``https``,
+            which is wrong when ``/ws`` is served on its own port: pass it
+            then, or use :meth:`ExchangeClient.account_event_stream`, which
+            sets it from the client's gateway URL.
     """
 
     #: Newest-first history pages read per attempt.
     max_history_pages = 10
-    #: History reads per reconnect while history lags the live feed.
+    #: History reads per reconnect while history lags the snapshot.
     max_history_attempts = 5
     history_retry_delay = 1.0
+    #: Seconds a single history read may take; ``close()`` cannot interrupt
+    #: one in flight, but nothing it returns is yielded after ``close()``.
+    history_timeout = 10.0
 
     def __init__(
         self,
@@ -177,6 +194,12 @@ class AccountEventStream:
         self._history_url = (history_url or self._ws_url.replace("ws", "http", 1)).rstrip("/")
         # None: nothing yielded yet. _UNKEYED: the last event had no key.
         self._last: t.Any = None
+        # Height of the latest snapshot recovery has caught up to.
+        self._snapshot_height: int | None = None
+        # Keys a backfill yielded, kept until a live frame passes the newest of
+        # them: a slow socket can still deliver one the indexer already served.
+        self._recent: tuple[set[EventKey], int, int] | None = None
+        self._stop = threading.Event()
         self._ws: t.Any = None
         self._closed = False
 
@@ -204,55 +227,72 @@ class AccountEventStream:
 
     def close(self) -> None:
         self._closed = True
+        self._stop.set()
         if self._ws is not None:
             self._ws.close()
             self._ws = None
 
     def _report(self, status: RecoveryStatus) -> None:
-        if self._on_recovery is not None:
+        if self._on_recovery is not None and not self._closed:
             self._on_recovery(status)
 
-    def _history_page(self, cursor: str | None) -> tuple[list[dict[str, t.Any]], str | None]:
+    def _get(self, path: str, params: dict[str, str] | None = None) -> dict[str, t.Any]:
         import httpx
 
+        headers = {"X-API-Key": self._api_key} if self._api_key else {}
+        resp = httpx.get(
+            f"{self._history_url}{path}",
+            params=params or {},
+            headers=headers,
+            timeout=self.history_timeout,
+        )
+        body = resp.json()
+        if resp.status_code != 200 or not isinstance(body, dict):
+            error = body.get("error") if isinstance(body, dict) else None
+            raise RuntimeError(f"{path} read failed: {error or resp.status_code}")
+        return body
+
+    def _history_page(self, cursor: str | None) -> tuple[list[dict[str, t.Any]], str | None]:
         params = {"owner": self._owner, "order": "desc", "limit": "500"}
         if cursor:
             params["cursor"] = cursor
-        headers = {"X-API-Key": self._api_key} if self._api_key else {}
-        resp = httpx.get(
-            f"{self._history_url}/v1/history/account-events",
-            params=params,
-            headers=headers,
-            timeout=10.0,
-        )
-        body = resp.json()
-        if resp.status_code != 200 or not isinstance(body.get("account_events"), list):
-            raise RuntimeError(
-                f"account history read failed: {body.get('error', resp.status_code)}"
-            )
+        body = self._get("/v1/history/account-events", params)
+        if not isinstance(body.get("account_events"), list):
+            raise RuntimeError("account history read failed: no account_events")
         return body["account_events"], body.get("next_cursor") or None
 
-    def _scan(self, boundary: EventKey) -> tuple[bool, list[dict[str, t.Any]]]:
+    def _indexed_height(self) -> int:
+        """The newest height history has indexed in full."""
+        height = self._get("/v1/history/status").get("ingest", {}).get("newest_height")
+        if not isinstance(height, int):
+            raise RuntimeError("history status read failed: no ingest.newest_height")
+        return height
+
+    def _scan(
+        self, key: EventKey | None, height: int
+    ) -> tuple[bool, list[dict[str, t.Any]]]:
+        """Rows after the boundary (an event, or a height), oldest first."""
         newer_first: list[dict[str, t.Any]] = []
-        found = False
+        # A height boundary is exact: the snapshot holds everything up to it.
+        found = key is None
+        reached = False
         cursor: str | None = None
         for _ in range(self.max_history_pages):
             rows, cursor = self._history_page(cursor)
-            passed = False
             for row in rows:
-                key = _row_key(row)
-                if key == boundary:
-                    found = True
+                row_key = _row_key(row)
+                if key is not None and row_key == key:
+                    found = reached = True
                     break
-                if key[0] < boundary[0]:
-                    passed = True
+                if row_key[0] < height if key is not None else row_key[0] <= height:
+                    reached = True
                     break
                 newer_first.append(row)
-            if found or passed or not cursor:
+            if reached or not cursor:
                 break
         rows = list(reversed(newer_first))
         if not found:
-            rows = [r for r in rows if int(r["block_height"]) > boundary[0]]
+            rows = [r for r in rows if int(r["block_height"]) > height]
         return found, rows
 
     def _drain(self, buffer: list[dict[str, t.Any]]) -> None:
@@ -266,73 +306,80 @@ class AccountEventStream:
             if frame.get("type") not in _ACK_TYPES:
                 buffer.append(frame)
 
-    @staticmethod
-    def _covers(rows: list[dict[str, t.Any]], buffer: list[dict[str, t.Any]]) -> bool:
-        events = [f for f in buffer if f.get("type") not in ("snapshot", "error")]
-        first = _live_key(events[0]) if events else None
-        if first is None:
-            return True
-        if any(_row_key(r) == first for r in rows):
-            return True
-        newest = int(rows[-1]["block_height"]) if rows else -1
-        return newest >= first[0]
-
-    def _recover(self, boundary: EventKey) -> t.Iterator[dict[str, t.Any]]:
+    def _recover(self, snapshot: dict[str, t.Any]) -> t.Iterator[dict[str, t.Any]]:
+        target = snapshot.get("height") if isinstance(snapshot.get("height"), int) else None
+        previous, self._snapshot_height = self._snapshot_height, target
+        if self._last is _UNKEYED:
+            self._report(RecoveryStatus("unsupported"))
+            return
+        if self._last is not None:
+            key: EventKey | None = self._last
+            height = self._last[0]
+        elif previous is not None:
+            key, height = None, previous
+        else:
+            self._recent = None
+            self._report(RecoveryStatus("unverified"))
+            return
         buffer: list[dict[str, t.Any]] = []
         try:
-            found, rows = self._scan(boundary)
+            indexed = self._indexed_height() if target is not None else -1
+            found, rows = self._scan(key, height)
             self._drain(buffer)
             attempt = 1
-            while not self._covers(rows, buffer) and attempt < self.max_history_attempts:
-                time.sleep(self.history_retry_delay)
-                found, rows = self._scan(boundary)
+            while target is not None and indexed < target and attempt < self.max_history_attempts:
+                if self._stop.wait(self.history_retry_delay):
+                    return
+                indexed = self._indexed_height()
+                found, rows = self._scan(key, height)
                 self._drain(buffer)
                 attempt += 1
         except Exception as err:  # noqa: BLE001 — reported, then live resumes
+            if self._closed:
+                return
+            self._recent = None
             self._report(RecoveryStatus("failed", error=err))
             # Frames that arrived during the failed read go out first, in order.
             self._drain(buffer)
-            yield from self._deliver_buffer(buffer, set(), -1)
+            for frame in buffer:
+                yield from self._live(frame)
+            return
+        if self._closed:
             return
         # Reported before the backfilled rows are yielded, so a consumer that
         # stops iterating part-way still learns the outcome.
         if not found:
             status = RecoveryStatus("boundary_not_found", len(rows))
-        elif self._covers(rows, buffer):
+        elif target is None:
+            status = RecoveryStatus("unverified", len(rows))
+        elif indexed >= target:
             status = RecoveryStatus("backfilled", len(rows))
         else:
             status = RecoveryStatus("history_behind", len(rows))
         self._report(status)
-        delivered = {boundary}
+        delivered: set[EventKey] = {key} if key is not None else set()
+        newest = -1
         for row in rows:
-            key = _row_key(row)
-            delivered.add(key)
-            self._last = key
+            row_key = _row_key(row)
+            delivered.add(row_key)
+            newest = max(newest, row_key[0])
+            self._last = row_key
             yield _row_frame(row)
-        yield from self._deliver_buffer(buffer, delivered, boundary[0])
-
-    def _deliver_buffer(
-        self,
-        buffer: list[dict[str, t.Any]],
-        delivered: set[EventKey],
-        boundary_height: int,
-    ) -> t.Iterator[dict[str, t.Any]]:
+        self._recent = (delivered, newest, height if key is not None else height + 1)
         for frame in buffer:
-            yield from self._live(frame, delivered, boundary_height)
+            yield from self._live(frame)
 
-    def _live(
-        self,
-        frame: dict[str, t.Any],
-        delivered: set[EventKey] | None = None,
-        boundary_height: int = -1,
-    ) -> t.Iterator[dict[str, t.Any]]:
+    def _live(self, frame: dict[str, t.Any]) -> t.Iterator[dict[str, t.Any]]:
         if frame.get("type") in ("snapshot", "error"):
             yield frame
             return
         key = _live_key(frame)
-        if key is not None and delivered is not None:
-            if key in delivered or key[0] < boundary_height:
+        if key is not None and self._recent is not None:
+            keys, newest, floor = self._recent
+            if key in keys or key[0] < floor:
                 return
+            if key[0] > newest:
+                self._recent = None
         self._last = key if key is not None else _UNKEYED
         yield frame
 
@@ -357,12 +404,15 @@ class AccountEventStream:
                         yield from self._live(frame)
                         continue
                     yield frame
+                    # A resend for another listener is not a reconnect.
+                    if frame.get("snapshot") == "resent":
+                        continue
                     if not seen_snapshot:
                         seen_snapshot = True
-                    elif self._recover_enabled and self._last is _UNKEYED:
-                        self._report(RecoveryStatus("unsupported"))
-                    elif self._recover_enabled and self._last is not None:
-                        yield from self._recover(self._last)
+                        height = frame.get("height")
+                        self._snapshot_height = height if isinstance(height, int) else None
+                    elif self._recover_enabled:
+                        yield from self._recover(frame)
 
             except Exception:
                 if self._closed:

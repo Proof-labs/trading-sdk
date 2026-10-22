@@ -64,16 +64,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Account streams recover the events missed during a reconnect.**
   `subscribeAccount` (and Python's `AccountEventStream`) now, by default,
-  read `/v1/history/account-events` back to the last delivered event after a
-  reconnect, deliver the newer rows in history order (marked
+  read `/v1/history/account-events` back to the last delivered event (or the
+  previous snapshot's `height` when none was delivered) after a reconnect,
+  retrying while `/v1/history/status` shows history behind the new
+  snapshot's `height`. They deliver the newer rows in history order (marked
   `backfilled: true`), then the live frames that arrived meanwhile, each
-  event exactly once. Events are matched on `height` + `txHash` +
-  `eventIndex` + `eventType`; the settlement names `conditional_settled` /
+  event exactly once, also when the socket reconnects again during a
+  backfill. Events are matched on `height` + `txHash` + `eventIndex` +
+  `eventType`; the settlement names `conditional_settled` /
   `conditional_voided` match their canonical history names `condition_met` /
-  `condition_not_met`. `onRecovery` / `on_recovery` reports each reconnect's
-  outcome (`AccountRecoveryStatus` / `RecoveryStatus`); `recover: false` /
-  `recover=False` turns it off. `AccountEventFrame` gains `txHash`, `txIndex`,
-  `eventIndex` and `backfilled`. Needs api-gateway 7.9.0, which puts the
+  `condition_not_met`. A `snapshot: "resent"` frame is not a reconnect.
+  `onRecovery` / `on_recovery` reports each reconnect's outcome once
+  (`AccountRecoveryStatus` / `RecoveryStatus`), with `unverified` when the
+  snapshot carries no `height`; `recover: false` / `recover=False` turns it
+  off. `AccountEventFrame` gains `txHash`, `txIndex`, `eventIndex` and
+  `backfilled`; `AccountSnapshotFrame` gains the optional `snapshot` and
+  `height`. Python adds `ExchangeClient.account_event_stream`, which reads
+  history from the gateway URL. Needs api-gateway 7.9.0, which puts the
   history key on live frames; against an older gateway recovery reports
   `unsupported` and live delivery carries on as before.
 

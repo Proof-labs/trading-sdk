@@ -53,6 +53,12 @@ export interface AccountSnapshotFrame {
   type: "snapshot";
   owner: string;
   account: unknown;
+  /** `"initial"` for a subscription's first snapshot, `"resent"` for one
+   *  resent to a listener that joined later. Absent before gateway 7.9.0. */
+  snapshot?: "initial" | "resent";
+  /** The block height the snapshot was read at. Absent from gateways and
+   *  nodes that do not report it. */
+  height?: number;
 }
 
 /** A live engine event for a subscribed owner. `type` is the gateway's

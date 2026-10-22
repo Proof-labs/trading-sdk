@@ -1409,6 +1409,28 @@ class ExchangeClient:
         resp = self._get("/maintenance/status")
         return resp.json()
 
+    # ── Account event stream ─────────────────────────────────────────────
+
+    def account_event_stream(
+        self, owner: bytes | str, *, ws_url: str | None = None, **kwargs: t.Any
+    ) -> t.Any:
+        """An :class:`~proof_trading_sdk.streams.AccountEventStream` for ``owner``.
+
+        Uses this client's API key, and its gateway URL for the history reads
+        that reconnect recovery makes, so recovery works when ``/ws`` is
+        served on its own port (pass that as ``ws_url``). Other keyword
+        arguments go to the stream.
+        """
+        from proof_trading_sdk.streams import AccountEventStream
+
+        kwargs.setdefault("history_url", self._gateway_url)
+        return AccountEventStream(
+            ws_url or self._gateway_url.replace("http", "ws", 1),
+            owner,
+            self._api_key,
+            **kwargs,
+        )
+
     # ── Orderbook snapshot (WS convenience) ──────────────────────────────
 
     def orderbook_snapshot(self, market: int, timeout: float = 10.0) -> dict[str, t.Any]:

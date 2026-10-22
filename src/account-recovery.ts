@@ -1,4 +1,8 @@
-import type { AccountEventFrame, AccountFrame } from "./feed-types.js";
+import type {
+  AccountEventFrame,
+  AccountFrame,
+  AccountSnapshotFrame,
+} from "./feed-types.js";
 
 /**
  * The position of one account event, shared by live `/ws` frames (gateway
@@ -16,22 +20,29 @@ export interface AccountEventKey {
 /**
  * What reconnect recovery did, reported once per reconnect.
  *
- * - `backfilled`: the last delivered event was found in history and every
- *   later history row was delivered, in history order, before live delivery
- *   resumed.
+ * - `backfilled`: every history row after the last delivered event (or, when
+ *   none was delivered, after the previous snapshot's height) was delivered,
+ *   in history order, before live delivery resumed, and history had indexed
+ *   up to the reconnect snapshot's height, so nothing in between is missing.
+ * - `unverified`: rows were backfilled as for `backfilled`, but the snapshot
+ *   carries no `height` (an older gateway or node), so whether history had
+ *   caught up cannot be checked. Events may be missing. When nothing was
+ *   delivered before the outage and the previous snapshot had no height
+ *   either, there is no boundary and nothing is backfilled.
  * - `unsupported`: the live frames carry no history key (`txHash` /
  *   `eventIndex`), which means a gateway older than 7.9.0. Nothing was
  *   backfilled; events during the outage are not recovered.
  * - `boundaryNotFound`: the last delivered event is not in the history
  *   window that was read. Only rows at a later height were delivered; events
  *   at the same height as the last delivered one may be missing.
- * - `historyBehind`: history had not reached the first live event after the
- *   reconnect, even after retrying. Events between the newest history row and
- *   that live event may be missing.
- * - `failed`: the history read failed. Nothing was backfilled.
+ * - `historyBehind`: history had not indexed up to the snapshot's height,
+ *   even after retrying. Events between the newest history row and the
+ *   snapshot may be missing.
+ * - `failed`: a history read failed. Nothing was backfilled.
  */
 export type AccountRecoveryStatus =
   | { kind: "backfilled"; delivered: number }
+  | { kind: "unverified"; delivered: number }
   | { kind: "unsupported" }
   | { kind: "boundaryNotFound"; delivered: number }
   | { kind: "historyBehind"; delivered: number }
@@ -59,13 +70,18 @@ export interface AccountRecoveryOptions {
   onFrame: (frame: AccountFrame) => void;
   onRecovery?: (status: AccountRecoveryStatus) => void;
   /** Read one newest-first page; `cursor` is the previous page's. */
-  fetchPage: (cursor: string | null) => Promise<AccountHistoryPage>;
+  fetchPage: (
+    cursor: string | null,
+    signal: AbortSignal,
+  ) => Promise<AccountHistoryPage>;
+  /** The newest height history has fully indexed
+   *  (`/v1/history/status` → `ingest.newest_height`). */
+  fetchIndexedHeight: (signal: AbortSignal) => Promise<number>;
   /** Newest-first pages read per attempt before giving up on the boundary. */
   maxPages?: number;
-  /** History reads per reconnect while history lags the live feed. */
+  /** History reads per reconnect while history lags the snapshot. */
   maxAttempts?: number;
   retryDelayMs?: number;
-  sleep?: (ms: number) => Promise<void>;
 }
 
 /** Live event family for a history row; mirrors api-gateway
@@ -154,16 +170,50 @@ function rowFrame(row: AccountHistoryRow): AccountEventFrame {
   };
 }
 
+/** Where a backfill starts: after this event, or after this height. */
+interface Boundary {
+  key: AccountEventKey | null;
+  height: number;
+}
+
+type Buffered =
+  | { kind: "event"; frame: AccountEventFrame }
+  | { kind: "snapshot"; frame: AccountSnapshotFrame };
+
+/** A pause that ends early, rejecting, when `signal` aborts. */
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new Error("closed"));
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("closed"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+const heightOf = (frame: AccountSnapshotFrame): number | undefined =>
+  typeof frame.height === "number" ? frame.height : undefined;
+
 /**
  * Wrap an account listener so a reconnect backfills the events missed while
  * disconnected.
  *
- * Every snapshot after the first marks a re-subscription. From then until
- * the backfill finishes, live events are buffered. The backfill reads history
- * newest-first down to the last delivered event, delivers the newer rows in
- * history order, then flushes the buffer, dropping any live frame whose key a
- * delivered row already had. Live delivery then resumes. The snapshot itself
- * is passed through at once: it is current state, not part of the event log.
+ * A snapshot after the first, other than one marked `snapshot: "resent"`
+ * (sent because another listener joined), marks a re-subscription. The
+ * snapshot is passed through at once: it is current state, not part of the
+ * event log. Until the backfill finishes, live events are buffered. The
+ * backfill reads history newest-first down to the last delivered event (or
+ * the previous snapshot's height when none was delivered), retrying while
+ * history has not indexed up to the new snapshot's height, delivers the
+ * newer rows in history order, then flushes the buffer, dropping any live
+ * frame history already delivered. If the socket reconnects again during a
+ * backfill, only the frames before that snapshot are flushed; the next
+ * backfill starts from the last of them and the later frames stay buffered.
  */
 export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
   handle: (frame: AccountFrame) => void;
@@ -172,16 +222,20 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
   const maxPages = opts.maxPages ?? 10;
   const maxAttempts = opts.maxAttempts ?? 5;
   const retryDelayMs = opts.retryDelayMs ?? 1000;
-  const sleep =
-    opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const abort = new AbortController();
   // `undefined`: nothing delivered yet. `null`: the last delivered frame had
-  // no history key, so there is no boundary to recover from.
+  // no history key, so there is no event boundary to recover from.
   let last: AccountEventKey | null | undefined;
+  // Height of the latest snapshot that recovery has caught up to.
+  let snapshotHeight: number | undefined;
   let seenSnapshot = false;
   let recovering = false;
-  let rerun = false;
   let closed = false;
-  let buffer: AccountEventFrame[] = [];
+  let buffer: Buffered[] = [];
+  // Keys a backfill delivered, kept until a live frame passes the newest of
+  // them: a slow socket can still deliver one the indexer already served.
+  let recent: { keys: Set<string>; height: number; floor: number } | null =
+    null;
 
   const deliver = (frame: AccountEventFrame, key: AccountEventKey | null) => {
     if (closed) return;
@@ -189,115 +243,148 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
     opts.onFrame(frame);
   };
 
-  const scan = async (boundary: AccountEventKey) => {
+  /** Deliver a live frame unless a backfill already delivered it. */
+  const deliverLive = (frame: AccountEventFrame) => {
+    const key = liveKey(frame);
+    if (key && recent) {
+      if (recent.keys.has(keyId(key)) || key.height < recent.floor) return;
+      if (key.height > recent.height) recent = null;
+    }
+    deliver(frame, key);
+  };
+
+  const scan = async (boundary: Boundary) => {
     const newerFirst: AccountHistoryRow[] = [];
-    let found = false;
+    // A height boundary is exact: the snapshot holds everything up to it.
+    let found = boundary.key === null;
+    let reached = false;
     let cursor: string | null = null;
-    for (let page = 0; page < maxPages && !found; page++) {
-      const { rows, nextCursor } = await opts.fetchPage(cursor);
+    for (let page = 0; page < maxPages && !reached; page++) {
+      const { rows, nextCursor } = await opts.fetchPage(cursor, abort.signal);
       for (const row of rows) {
         const key = rowKey(row);
-        if (keyId(key) === keyId(boundary)) {
-          found = true;
+        if (boundary.key && keyId(key) === keyId(boundary.key)) {
+          found = reached = true;
           break;
         }
-        if (key.height < boundary.height) break;
+        if (
+          boundary.key
+            ? key.height < boundary.height
+            : key.height <= boundary.height
+        ) {
+          reached = true;
+          break;
+        }
         newerFirst.push(row);
       }
-      if (
-        !found &&
-        rows.length > 0 &&
-        rowKey(rows[rows.length - 1]).height < boundary.height
-      )
-        break;
       if (!nextCursor) break;
       cursor = nextCursor;
     }
     const rows = newerFirst.reverse();
     return {
       found,
-      rows: found ? rows : rows.filter((r) => r.block_height > boundary.height),
+      rows:
+        found || !boundary.key
+          ? rows
+          : rows.filter((r) => Number(r.block_height) > boundary.height),
     };
   };
 
-  /** True when history has reached the first live event buffered so far. */
-  const covers = (rows: AccountHistoryRow[]) => {
-    const first = buffer.length > 0 ? liveKey(buffer[0]) : null;
-    if (!first) return true;
-    if (rows.some((r) => keyId(rowKey(r)) === keyId(first))) return true;
-    const newest = rows.length > 0 ? rowKey(rows[rows.length - 1]).height : -1;
-    return newest >= first.height;
+  const boundaryNow = (): Boundary | AccountRecoveryStatus => {
+    if (last === null) return { kind: "unsupported" };
+    if (last) return { key: last, height: last.height };
+    if (snapshotHeight !== undefined)
+      return { key: null, height: snapshotHeight };
+    return { kind: "unverified", delivered: 0 };
   };
 
-  const recover = async (boundary: AccountEventKey) => {
-    recovering = true;
+  const recover = async (snapshot: AccountSnapshotFrame) => {
+    const target = heightOf(snapshot);
+    const boundary = boundaryNow();
     let status: AccountRecoveryStatus;
-    try {
-      let result = await scan(boundary);
-      let attempt = 1;
-      while (!covers(result.rows) && attempt < maxAttempts && !closed) {
-        await sleep(retryDelayMs);
-        result = await scan(boundary);
-        attempt++;
+    let delivered = new Set<string>();
+    let floor = -1;
+    if ("kind" in boundary) {
+      status = boundary;
+      recent = null;
+    } else {
+      try {
+        let indexed =
+          target === undefined
+            ? -1
+            : await opts.fetchIndexedHeight(abort.signal);
+        let result = await scan(boundary);
+        for (
+          let attempt = 1;
+          target !== undefined && indexed < target && attempt < maxAttempts;
+          attempt++
+        ) {
+          await abortableSleep(retryDelayMs, abort.signal);
+          indexed = await opts.fetchIndexedHeight(abort.signal);
+          result = await scan(boundary);
+        }
+        if (closed) return undefined;
+        delivered = new Set(boundary.key ? [keyId(boundary.key)] : []);
+        floor = boundary.key ? boundary.height : boundary.height + 1;
+        let newest = -1;
+        for (const row of result.rows) {
+          const key = rowKey(row);
+          delivered.add(keyId(key));
+          newest = Math.max(newest, key.height);
+          deliver(rowFrame(row), key);
+        }
+        const count = result.rows.length;
+        status = !result.found
+          ? { kind: "boundaryNotFound", delivered: count }
+          : target === undefined
+            ? { kind: "unverified", delivered: count }
+            : indexed >= target
+              ? { kind: "backfilled", delivered: count }
+              : { kind: "historyBehind", delivered: count };
+        recent = { keys: delivered, height: newest, floor };
+      } catch (err) {
+        if (closed) return undefined;
+        status = {
+          kind: "failed",
+          error: err instanceof Error ? err : new Error(String(err)),
+        };
+        recent = null;
       }
-      const delivered = new Set<string>([keyId(boundary)]);
-      for (const row of result.rows) {
-        const key = rowKey(row);
-        delivered.add(keyId(key));
-        deliver(rowFrame(row), key);
-      }
-      const count = result.rows.length;
-      status = !result.found
-        ? { kind: "boundaryNotFound", delivered: count }
-        : covers(result.rows)
-          ? { kind: "backfilled", delivered: count }
-          : { kind: "historyBehind", delivered: count };
-      flush(delivered, boundary.height);
-    } catch (err) {
-      status = {
-        kind: "failed",
-        error: err instanceof Error ? err : new Error(String(err)),
-      };
-      flush(new Set(), -1);
     }
-    recovering = false;
+    snapshotHeight = target;
+    // Flush up to the next reconnect snapshot; it starts the next backfill,
+    // from the last frame flushed here, and the frames after it stay buffered.
+    const cut = buffer.findIndex((b) => b.kind === "snapshot");
+    const now = cut < 0 ? buffer : buffer.slice(0, cut);
+    const next =
+      cut < 0 ? undefined : (buffer[cut].frame as AccountSnapshotFrame);
+    buffer = cut < 0 ? [] : buffer.slice(cut + 1);
+    for (const b of now) if (b.kind === "event") deliverLive(b.frame);
     if (!closed) opts.onRecovery?.(status);
-    if (rerun && !closed) {
-      rerun = false;
-      start();
-    }
+    return next;
   };
 
-  const flush = (delivered: Set<string>, boundaryHeight: number) => {
-    const pending = buffer;
-    buffer = [];
-    for (const frame of pending) {
-      const key = liveKey(frame);
-      if (key && (delivered.has(keyId(key)) || key.height < boundaryHeight))
-        continue;
-      deliver(frame, key);
-    }
-  };
-
-  const start = () => {
-    if (last === undefined) return;
-    if (last === null) {
-      opts.onRecovery?.({ kind: "unsupported" });
-      return;
-    }
-    void recover(last);
+  const run = async (snapshot: AccountSnapshotFrame) => {
+    recovering = true;
+    let current: AccountSnapshotFrame | undefined = snapshot;
+    while (current && !closed) current = await recover(current);
+    recovering = false;
   };
 
   const handle = (frame: AccountFrame) => {
     if (closed) return;
     if (frame.type === "snapshot") {
       opts.onFrame(frame);
+      const snap = frame as AccountSnapshotFrame;
       if (!seenSnapshot) {
         seenSnapshot = true;
+        snapshotHeight = heightOf(snap);
         return;
       }
-      if (recovering) rerun = true;
-      else start();
+      // A resend for another listener is not a reconnect.
+      if (snap.snapshot === "resent") return;
+      if (recovering) buffer.push({ kind: "snapshot", frame: snap });
+      else void run(snap);
       return;
     }
     // An error frame (a refused subscribe, a failed authentication) is no
@@ -307,8 +394,8 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
       return;
     }
     const event = frame as AccountEventFrame;
-    if (recovering) buffer.push(event);
-    else deliver(event, liveKey(event));
+    if (recovering) buffer.push({ kind: "event", frame: event });
+    else deliverLive(event);
   };
 
   return {
@@ -316,6 +403,7 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
     close: () => {
       closed = true;
       buffer = [];
+      abort.abort();
     },
   };
 }
