@@ -189,16 +189,34 @@ export {
   validateSetLiquidationConfig,
 } from "./liquidation-config.js";
 export {
+  LIQUIDATION_MODES,
   LIQUIDATION_PROGRESS_OUTCOMES,
+  LIQUIDATION_REFUSALS,
   decodeLiquidationEvent,
   type FullLiquidationFeeEvent,
   type LiquidationConfigSetEvent,
   type LiquidationEvent,
   type LiquidationEventInput,
+  type LiquidationFailedEvent,
+  type LiquidationMode,
   type LiquidationProgress,
   type LiquidationProgressReportedEvent,
+  type LiquidationRefusal,
   type PartialLiquidationFeeEvent,
+  type PositionLiquidatedEvent,
 } from "./liquidation-events.js";
+export {
+  TIMES_IN_FORCE,
+  UNFILLED_REASONS,
+  decodeOrderEvent,
+  type DecodedMarketOrderProcessedEvent,
+  type DecodedTradeExecutedEvent,
+  type EventTimeInForce,
+  type OrderEvent,
+  type OrderRejectedEvent,
+  type UnfilledReason,
+} from "./order-events.js";
+export type { AbciEventInput, EventSide } from "./event-attributes.js";
 
 export {
   BINARY_PRICE_MAX,

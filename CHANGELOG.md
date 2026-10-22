@@ -9,6 +9,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `decodeOrderEvent` decodes `trade_executed` (with the mark and oracle
+  price at the fill), `market_order_processed` (time in force, limit price
+  and `unfilledReason`: `reduce_only_cap`, `self_trade` or `no_liquidity`)
+  and `order_rejected` from ABCI attributes. Events emitted before those
+  fields existed decode with them `null`.
+- `decodeLiquidationEvent` also decodes `position_liquidated` (one per
+  position a liquidation step reduced) and `liquidation_failed`.
 - `FundInsuranceFund` (admin tag 18) and `WithdrawInsuranceFund` (admin
   tag 25) proposals: TypeScript types, pre-signing shape validation,
   proposal decoding and Rust governance re-exports. The shared Rust/WASM
