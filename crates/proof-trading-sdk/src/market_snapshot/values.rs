@@ -34,6 +34,43 @@ impl AppHash {
     }
 }
 
+/// The 32-byte binding a chain's network name derives
+/// ([`chain_id_from_string`](crate::crypto::chain_id_from_string)), which a
+/// snapshot and a status read must both carry. All-zero binds no chain, so it
+/// is refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ChainBinding([u8; 32]);
+
+impl ChainBinding {
+    pub fn new(bytes: [u8; 32]) -> Option<Self> {
+        (bytes != [0; 32]).then_some(Self(bytes))
+    }
+
+    /// The binding `network` derives.
+    pub fn of_network(network: &str) -> Option<Self> {
+        Self::new(crate::crypto::chain_id_from_string(network))
+    }
+
+    pub fn bytes(self) -> [u8; 32] {
+        self.0
+    }
+}
+
+/// A 20-byte account address, as an oracle update's `signer` attribute names
+/// it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Address([u8; 20]);
+
+impl Address {
+    pub fn new(bytes: [u8; 20]) -> Self {
+        Self(bytes)
+    }
+
+    pub fn bytes(self) -> [u8; 20] {
+        self.0
+    }
+}
+
 /// A committed block height. Heights start at 1, so zero is not a height:
 /// it is the state before the first block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -128,6 +165,7 @@ mod tests {
         assert_eq!(AppHash::new([0; 32]), None);
         assert_eq!(BlockHeight::new(0), None);
         assert_eq!(MarketId::new(0), None);
+        assert_eq!(ChainBinding::new([0; 32]), None);
         assert_eq!(NodeId::new([1; 20]).expect("non-zero id").bytes(), [1; 20]);
         assert_eq!(
             AppHash::new([2; 32]).expect("non-zero hash").bytes(),
@@ -136,6 +174,13 @@ mod tests {
         assert_eq!(BlockHeight::new(7).expect("positive height").get(), 7);
         assert_eq!(MarketId::new(15).expect("positive market").get(), 15);
         assert_eq!(MicroUsdc::new(0).micro(), 0);
+        assert_eq!(
+            ChainBinding::of_network("proof-test")
+                .expect("a network name binds a chain")
+                .bytes(),
+            crate::crypto::chain_id_from_string("proof-test")
+        );
+        assert_eq!(Address::new([3; 20]).bytes(), [3; 20]);
     }
 
     #[test]

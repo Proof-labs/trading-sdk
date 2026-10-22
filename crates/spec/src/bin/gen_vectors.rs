@@ -49,7 +49,7 @@ fn write_ndjson<T: Serialize>(path: &std::path::Path, rows: &[T]) -> Result<(), 
 }
 
 /// The shared `CreateEvent` fixture (the engine's golden event 700 with its
-/// binaries from 70000). Only `oracle_source` varies across the cases, so a
+/// binary book at 70000). Only `oracle_source` varies across the cases, so a
 /// byte difference between them isolates the enum encoding.
 fn event_fields(oracle_source: serde_json::Value) -> serde_json::Value {
     json!({
@@ -630,10 +630,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         "full_close_threshold": { "numerator": 2u32, "denominator": 3u32 },
                         "partial_penalty_bps": 100u32,
                         "max_book_orders": 20u32,
-                        "max_candidate_prefixes": 20u32,
-                        "max_committed_fills": 10u32,
-                        "max_state_reads": 10_000u32,
-                        "max_state_read_bytes": 1_000_000u32
+                        "max_committed_fills": 10u32
                     }
                 }}
             }),
@@ -696,6 +693,38 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": { "CancelAllOrdersForAccount": {
                     "owner": vec![0xC1u8; 20],
                     "market": null
+                }}
+            }),
+        ),
+        // Insurance transfers (inner tags 18 and 25): two ascending pool
+        // allocations so the nested `[pool_id, amount]` rows are pinned,
+        // summing to exactly `i64::MAX`, the widest admitted transfer total.
+        codec_case(
+            "propose_admin_action/fund_insurance_fund",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "FundInsuranceFund": {
+                    "funding_id": 41u64,
+                    "source": vec![0xD1u8; 20],
+                    "allocations": [
+                        { "pool_id": 0u8, "amount": 250_000_000u64 },
+                        { "pool_id": 3u8, "amount": i64::MAX as u64 - 250_000_000 }
+                    ]
+                }}
+            }),
+        ),
+        codec_case(
+            "propose_admin_action/withdraw_insurance_fund",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "WithdrawInsuranceFund": {
+                    "withdrawal_id": u64::MAX,
+                    "recipient": vec![0xD2u8; 20],
+                    "allocations": [{ "pool_id": 255u8, "amount": 1u64 }]
                 }}
             }),
         ),
@@ -1346,13 +1375,106 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     write_ndjson(&dir.join(cv::BINARY_FILE), &binary)?;
 
+    // ── events family ────────────────────────────────────────────────────
+    // Engine events in their serde JSON form → the ABCI type and attributes
+    // the engine's encoder writes. The liquidation report and the
+    // auto-deleveraging skip; values mirror exchange-wire's own attribute
+    // tests.
+    let position_liquidated = |mode: &str, side: &str, closed: u64, binding: serde_json::Value| {
+        json!({"PositionLiquidated": {
+            "owner": vec![0xABu8; 20],
+            "market": 7,
+            "side": side,
+            "mode": mode,
+            "size_before": 100u64,
+            "size_closed": closed,
+            "size_after": 100u64.saturating_sub(closed),
+            "penalty_collected": 9u64,
+            "penalty_waived": 3u64,
+            "equity": -5i64,
+            "maintenance": 500u64,
+            "binding_outcome": binding,
+            "config_sequence": 2u64,
+        }})
+    };
+    let liquidation_failed = |code: u32, refusal: serde_json::Value| {
+        json!({"LiquidationFailed": {
+            "owner": vec![0xCDu8; 20],
+            "code": code,
+            "refusal": refusal,
+        }})
+    };
+    let event_inputs = vec![
+        (
+            "position_liquidated/partial",
+            position_liquidated(
+                "Partial",
+                "Sell",
+                12,
+                json!([{"event_id": 4, "branch": "Yes"}, {"event_id": 9, "branch": "No"}]),
+            ),
+        ),
+        (
+            "position_liquidated/full",
+            position_liquidated("Full", "Buy", 100, json!([])),
+        ),
+        (
+            "position_liquidated/insolvent",
+            position_liquidated(
+                "Insolvent",
+                "Buy",
+                100,
+                json!([{"event_id": 1, "branch": "No"}]),
+            ),
+        ),
+        (
+            "liquidation_failed/position_mismatch",
+            liquidation_failed(111, json!("PositionMismatch")),
+        ),
+        (
+            "liquidation_failed/invalid_maker",
+            liquidation_failed(111, json!("InvalidMaker")),
+        ),
+        (
+            "liquidation_failed/reference_unavailable",
+            liquidation_failed(111, json!("ReferenceUnavailable")),
+        ),
+        (
+            "liquidation_failed/engine_error",
+            liquidation_failed(22, json!(null)),
+        ),
+        (
+            "adl_counterparty_skipped/stale_oracle_dependency",
+            json!({"AdlCounterpartySkipped": {
+                "owner": vec![0xA5u8; 20],
+                "market": 7,
+                "pool_id": 1,
+                "size": 3u64,
+                "reason": "StaleOracleDependency",
+            }}),
+        ),
+    ];
+    let events = event_inputs
+        .into_iter()
+        .map(|(case, event)| {
+            let expect = cv::event_expect(&event).unwrap_or_else(|e| panic!("{case}: {e}"));
+            cv::EventCase {
+                case: case.to_string(),
+                event,
+                expect,
+            }
+        })
+        .collect::<Vec<_>>();
+    write_ndjson(&dir.join(cv::EVENTS_FILE), &events)?;
+
     eprintln!(
-        "wrote {} codec, {} signing, {} nonce, {} errors, {} binary cases to {}",
+        "wrote {} codec, {} signing, {} nonce, {} errors, {} binary, {} events cases to {}",
         codec.len(),
         signing.len(),
         nonce.len(),
         errors.len(),
         binary.len(),
+        events.len(),
         dir.display()
     );
     Ok(())

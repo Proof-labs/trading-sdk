@@ -20,6 +20,9 @@ import {
   type ApproveAdminAction,
   type RejectAdminAction,
   type EmergencyAdminAction,
+  type FundInsuranceFund,
+  type WithdrawInsuranceFund,
+  type InsuranceFundAllocation,
   type SetPositionTriggers,
   type CancelPositionTriggers,
   type TriggerStatus,
@@ -38,6 +41,29 @@ import {
 } from "./index.js";
 
 describe("public barrel: governance surface", () => {
+  it("exports the insurance types without exposing superseded executor APIs", async () => {
+    const allocations: InsuranceFundAllocation[] = [{ poolId: 0, amount: 1n }];
+    const fund: FundInsuranceFund = {
+      fundingId: 0n,
+      source: new Uint8Array(20).fill(1),
+      allocations,
+    };
+    const withdraw: WithdrawInsuranceFund = {
+      withdrawalId: 0n,
+      recipient: new Uint8Array(20).fill(2),
+      allocations,
+    };
+    const actions: AdminAction[] = [
+      { kind: "FundInsuranceFund", value: fund },
+      { kind: "WithdrawInsuranceFund", value: withdraw },
+    ];
+    expect(actions).toHaveLength(2);
+    const sdk = await import("./index.js");
+    expect("decodeLiquidationCashAudit" in sdk).toBe(false);
+    expect("decodeLiquidationPlan" in sdk).toBe(false);
+    expect("queryLiquidationPlan" in new sdk.ExchangeClient()).toBe(false);
+  });
+
   it("re-exports the governance action-type byte values", () => {
     expect(ActionType.ProposeAdminAction).toBe(0x1e);
     expect(ActionType.ApproveAdminAction).toBe(0x1f);
@@ -227,6 +253,13 @@ describe("public barrel: one-book events and No helpers", () => {
       "PositionMigrated",
     ]);
     expect(reason).toBe("upgrade");
+    const walked: CancelReason[] = [
+      "reduce_only",
+      "unfunded",
+      "insufficient_margin",
+      "maker_refused",
+    ];
+    expect(walked).toHaveLength(4);
   });
 
   it("re-exports the No helpers", () => {

@@ -143,7 +143,18 @@ define_error_kinds! {
     98  => TriggerOrderIncompatible         ~ "Order cannot carry attached SL/TP (reduce-only order, ineligible market, or inactive feature).",
     99  => WithdrawalLimitExceeded          ~ "The withdrawal would push the account's rolling-window outflow past the configured per-account cap. The attempted debit, the cap, and when the oldest in-window outflow expires are in the log; capacity returns as in-window outflows age out.",
     100 => AccountOrderCapReached           ~ "The account already holds the maximum number of resting orders; cancel one before placing another.",
-    101 => InvalidPlpConfig                 ~ "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance.",
+    102 => InsuranceFundingReplayed ~ "Insurance-fund funding id has already executed; each funding id executes at most once.",
+    103 => InsuranceWithdrawalReplayed ~ "Insurance withdrawal id has already executed.",
+    104 => MarketlessInsurancePool ~ "Insurance transfer pool has no registered market.",
+    105 => InsufficientInsuranceBalance ~ "Insurance withdrawal would make the pool balance negative.",
+    106 => InsuranceTransferZeroAccount ~ "Insurance transfer names the zero account; a funding source or withdrawal recipient must be a real 20-byte address.",
+    107 => InsuranceAllocationCount ~ "Insurance transfer must carry between 1 and the per-transfer allocation cap (8) allocations.",
+    108 => InsuranceAllocationOrder ~ "Insurance transfer allocations must list each pool once, in strictly ascending pool order.",
+    109 => InsuranceAllocationZeroAmount ~ "An insurance transfer allocation is zero; every allocation moves a positive amount.",
+    110 => InsuranceAmountExceedsI64 ~ "An insurance transfer amount, or their sum, exceeds the ledger's signed 64-bit bound.",
+    111 => LiquidationRefused ~ "A liquidation attempt was refused (a changed position, a malformed book or an unavailable reference) and kept no writes; the liquidation_failed event's refusal names why.",
+    // Code 101 is unassigned on the wire.
+    112 => InvalidPlpConfig                 ~ "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -429,6 +440,34 @@ mod exec_error_meaning_tests {
                 max: 0,
             },
             ExecError::TooManyActiveEvents { current: 0, max: 0 },
+            ExecError::InsuranceFundingReplayed {
+                funding_id: crate::types::InsuranceFundingId(1),
+            },
+            ExecError::InsuranceWithdrawalReplayed {
+                withdrawal_id: crate::types::InsuranceWithdrawalId(1),
+            },
+            ExecError::MarketlessInsurancePool {
+                pool_id: crate::types::InsurancePoolId(1),
+            },
+            ExecError::InsufficientInsuranceBalance {
+                pool_id: crate::types::InsurancePoolId(1),
+                balance: 1,
+                requested: 2,
+            },
+            ExecError::InsuranceTransferZeroAccount,
+            ExecError::InsuranceAllocationCount { got: 0 },
+            ExecError::InsuranceAllocationOrder {
+                previous: crate::types::InsurancePoolId(2),
+                next: crate::types::InsurancePoolId(1),
+            },
+            ExecError::InsuranceAllocationZeroAmount {
+                pool_id: crate::types::InsurancePoolId(1),
+            },
+            ExecError::InsuranceAmountExceedsI64 { amount: u64::MAX },
+            ExecError::LiquidationRefused(
+                crate::liquidation_report::LiquidationRefusal::PositionMismatch,
+            ),
+            ExecError::InvalidPlpConfig(crate::types::PlpConfigError::ZeroAddress),
         ]
     }
 
@@ -461,7 +500,8 @@ mod exec_error_meaning_tests {
 
     /// Every engine code must be covered by the public error manifest, with
     /// the holes the wire itself carries: 24, 25 and 31 (the retired
-    /// impact-market family) and 78-81 (reserved for oracle errors). Catches
+    /// impact-market family), 78-81 (reserved for oracle errors) and 101
+    /// (unassigned). Catches
     /// the case where a code is reserved by the mirrored engine error enum
     /// but no SDK classification maps to it.
     #[test]
@@ -469,8 +509,8 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=101)
-            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81))
+        let expected: Vec<u32> = (1u32..=112)
+            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81 | 101))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(

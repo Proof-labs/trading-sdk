@@ -5,7 +5,7 @@
 )]
 
 use super::*;
-use crate::market_snapshot::ConfirmationPolling;
+use crate::market_snapshot::{BracketRetry, ChainBinding, ConfirmationPolling};
 
 fn node(id: u8) -> NodeId {
     NodeId::new([id; 20]).expect("fixture node ids are non-zero")
@@ -20,11 +20,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const NOW: u64 = 1_789_128_000_000;
 
-fn chain_id() -> [u8; 32] {
-    crate::crypto::chain_id_from_string("proof-test")
+fn chain_id() -> ChainBinding {
+    ChainBinding::of_network("proof-test").expect("the fixture network binds a chain")
 }
 fn snapshot_body(height: u64, time: u64, node: u8, hash: u8) -> Value {
-    let data = rmp_serde::to_vec(&json!([chain_id(), height, [], []])).unwrap();
+    let data = rmp_serde::to_vec(&json!([chain_id().bytes(), height, [], []])).unwrap();
     json!({"data":STANDARD.encode(data),"witness":{
         "version":1,"nodeId":hex::encode([node;20]),"height":height.to_string(),
         "finalizedBlockTimeMs":time.to_string(),"appHash":hex::encode([hash;32])}})
@@ -712,7 +712,7 @@ async fn out_of_order_bracket_is_read_again_and_accepted_when_in_order() {
         .read_bound_inventory(chain_id())
         .await
         .expect("a fresh in-order bracket is accepted after an out-of-order one");
-    assert!(start.elapsed() >= BRACKET_RETRY_DELAY);
+    assert!(start.elapsed() >= BracketRetry::DEFAULT_DELAY);
     // Every part comes from the second attempt; nothing is carried over.
     assert_eq!(verified.snapshot().height, 101);
     assert_eq!(verified.witness().app_hash, hash(3));
@@ -724,10 +724,10 @@ async fn out_of_order_bracket_is_read_again_and_accepted_when_in_order() {
 #[tokio::test]
 async fn out_of_order_on_every_attempt_refuses_after_the_attempt_limit() {
     let mut responses = Vec::new();
-    for _ in 0..BRACKET_ATTEMPTS {
+    for _ in 0..BracketRetry::DEFAULT_ATTEMPTS {
         responses.extend(out_of_order_bracket());
     }
-    assert_eq!(responses.len(), 3 * BRACKET_ATTEMPTS);
+    assert_eq!(responses.len(), 3 * BracketRetry::DEFAULT_ATTEMPTS);
     let (url, task) = server(responses).await;
     let client =
         MarketsSnapshotClient::new(&url, Duration::from_secs(5)).expect("valid loopback client");
@@ -740,9 +740,85 @@ async fn out_of_order_on_every_attempt_refuses_after_the_attempt_limit() {
         WitnessError::BracketOutOfOrder
     );
     // One pause between each pair of attempts.
-    let pauses = u32::try_from(BRACKET_ATTEMPTS - 1).expect("the attempt limit fits a u32");
-    assert!(start.elapsed() >= BRACKET_RETRY_DELAY * pauses);
+    let pauses =
+        u32::try_from(BracketRetry::DEFAULT_ATTEMPTS - 1).expect("the attempt limit fits a u32");
+    assert!(start.elapsed() >= BracketRetry::DEFAULT_DELAY * pauses);
     served_every_scripted_read(task).await;
+}
+
+#[tokio::test]
+async fn the_client_bracket_retry_sets_the_attempts_and_the_pause() {
+    let retry = BracketRetry {
+        attempts: 2,
+        delay: Duration::from_millis(400),
+    };
+    let mut responses = Vec::new();
+    for _ in 0..retry.attempts {
+        responses.extend(out_of_order_bracket());
+    }
+    let (url, task) = server(responses).await;
+    let client = MarketsSnapshotClient::new(&url, Duration::from_secs(5))
+        .and_then(|client| client.with_bracket_retry(retry))
+        .expect("two attempts are inside the ceiling");
+    let start = Instant::now();
+    let read = client.read_bound_inventory_reporting(chain_id()).await;
+    assert_eq!(read.result.unwrap_err(), WitnessError::BracketOutOfOrder);
+    assert_eq!(read.retried, vec![WitnessError::BracketOutOfOrder]);
+    // The configured pause, not the default 150 ms, separates the attempts.
+    assert!(start.elapsed() >= retry.delay);
+    served_every_scripted_read(task).await;
+}
+
+#[tokio::test]
+async fn one_bracket_attempt_never_retries() {
+    let (url, task) = server(out_of_order_bracket()).await;
+    let client = MarketsSnapshotClient::new(&url, Duration::from_secs(2))
+        .and_then(|client| {
+            client.with_bracket_retry(BracketRetry {
+                attempts: 1,
+                delay: BracketRetry::DEFAULT_DELAY,
+            })
+        })
+        .expect("one attempt is inside the ceiling");
+    let read = client.read_bound_inventory_reporting(chain_id()).await;
+    assert_eq!(read.result.unwrap_err(), WitnessError::BracketOutOfOrder);
+    assert!(read.retried.is_empty(), "a single attempt discards nothing");
+    served_every_scripted_read(task).await;
+}
+
+#[test]
+fn a_bracket_retry_outside_the_safety_ceiling_is_refused() {
+    for retry in [
+        BracketRetry {
+            attempts: 0,
+            delay: BracketRetry::DEFAULT_DELAY,
+        },
+        BracketRetry {
+            attempts: BracketRetry::MAX_ATTEMPTS + 1,
+            delay: BracketRetry::DEFAULT_DELAY,
+        },
+        BracketRetry {
+            attempts: 2,
+            delay: BracketRetry::MAX_DELAY + Duration::from_millis(1),
+        },
+    ] {
+        assert!(matches!(
+            MarketsSnapshotClient::new("http://127.0.0.1:9080", Duration::from_secs(5))
+                .expect("valid loopback client")
+                .with_bracket_retry(retry),
+            Err(SnapshotError::InvalidBracketRetry)
+        ));
+    }
+    assert!(
+        MarketsSnapshotClient::new("http://127.0.0.1:9080", Duration::from_secs(5))
+            .expect("valid loopback client")
+            .with_bracket_retry(BracketRetry {
+                attempts: BracketRetry::MAX_ATTEMPTS,
+                delay: BracketRetry::MAX_DELAY,
+            })
+            .is_ok(),
+        "the ceiling itself is allowed"
+    );
 }
 
 #[tokio::test]
@@ -923,7 +999,7 @@ async fn lagging_header_lookup_is_read_again_and_accepted() {
         MarketsSnapshotClient::new(&url, Duration::from_secs(2)).expect("valid loopback client");
     let start = Instant::now();
     let read = client.read_bound_inventory_reporting(chain_id()).await;
-    assert!(start.elapsed() >= BRACKET_RETRY_DELAY);
+    assert!(start.elapsed() >= BracketRetry::DEFAULT_DELAY);
     let verified = read
         .result
         .expect("a fresh bracket whose header lookup finds H + 1 is accepted");
@@ -940,7 +1016,7 @@ async fn lagging_header_lookup_is_read_again_and_accepted() {
 #[tokio::test]
 async fn lagging_header_on_every_attempt_refuses_with_the_lagging_header_after_the_limit() {
     let mut responses = Vec::new();
-    for _ in 0..BRACKET_ATTEMPTS {
+    for _ in 0..BracketRetry::DEFAULT_ATTEMPTS {
         responses.extend(lagging_header_bracket());
     }
     let (url, task) = server_with_status(responses).await;
@@ -954,7 +1030,7 @@ async fn lagging_header_on_every_attempt_refuses_with_the_lagging_header_after_t
     );
     assert_eq!(
         read.retried,
-        vec![WitnessError::HeaderBehind { node_height: 100 }; BRACKET_ATTEMPTS - 1]
+        vec![WitnessError::HeaderBehind { node_height: 100 }; BracketRetry::DEFAULT_ATTEMPTS - 1]
     );
     assert!(!read.deadline_expired);
     served_every_scripted_read(task).await;
@@ -992,7 +1068,7 @@ async fn deadline_during_a_retry_reports_the_discarded_attempts_refusal() {
     // The deadline cuts the pause after a lagging header lookup: the lagging
     // header is reported, through the plain call too. Any deadline shorter
     // than the pause ends inside it once the first attempt has finished.
-    assert!(Duration::from_millis(140) < BRACKET_RETRY_DELAY);
+    assert!(Duration::from_millis(140) < BracketRetry::DEFAULT_DELAY);
     let (url, task) = server_with_status(lagging_header_bracket()).await;
     let client = MarketsSnapshotClient::new(&url, Duration::from_millis(140))
         .expect("valid loopback client");

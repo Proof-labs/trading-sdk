@@ -50,7 +50,7 @@ GOLDEN_UPDATE_AUTHORITY_SET_REMOVE = (
 # the configuration exchange-wire freezes in its own vector. Same authority
 # as above; the TypeScript suite pins the identical constant.
 GOLDEN_SET_LIQUIDATION_CONFIG = (
-    "9a9a8ac80d7d9b3c5a6acf17c23197ec7a0a52d4142bb317d7b9afb8ce82ceb6"
+    "c56e3d275fb3a86545944cebf74b28fca40766448f1a97e3cbdef5cf1f345c32"
 )
 
 
@@ -200,10 +200,7 @@ class TestAdminProposalContentHash:
                     "full_close_threshold": {"numerator": 2, "denominator": 3},
                     "partial_penalty_bps": 100,
                     "max_book_orders": 20,
-                    "max_candidate_prefixes": 20,
                     "max_committed_fills": 10,
-                    "max_state_reads": 10_000,
-                    "max_state_read_bytes": 1_000_000,
                 },
             }
         }

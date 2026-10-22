@@ -8,7 +8,8 @@
 //! byte newtypes and `governance` re-exports.
 
 pub use proof_wire::{
-    abci_event, bridge, codec, crypto, liquidation_config, liquidation_progress, triggers, types,
+    abci_event, bridge, codec, crypto, liquidation_config, liquidation_progress,
+    liquidation_report, triggers, types,
 };
 
 pub mod binary;

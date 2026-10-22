@@ -149,8 +149,21 @@ export enum ExecErrorCode {
   WithdrawalLimitExceeded = 99,
   /** The account already holds the maximum number of resting orders. */
   AccountOrderCapReached = 100,
+  // 101 is unassigned on the wire.
+  InsuranceFundingReplayed = 102,
+  InsuranceWithdrawalReplayed = 103,
+  MarketlessInsurancePool = 104,
+  InsufficientInsuranceBalance = 105,
+  InsuranceTransferZeroAccount = 106,
+  InsuranceAllocationCount = 107,
+  InsuranceAllocationOrder = 108,
+  InsuranceAllocationZeroAmount = 109,
+  InsuranceAmountExceedsI64 = 110,
+  /** A liquidation attempt was refused and kept no writes; the
+   *  `liquidation_failed` event's `refusal` names why. */
+  LiquidationRefused = 111,
   /** A PLP configuration violates one of the payload shape rules. */
-  InvalidPlpConfig = 101,
+  InvalidPlpConfig = 112,
   InternalError = 255,
 }
 
@@ -536,7 +549,54 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "the account already holds the maximum number of resting orders — cancel one before placing another",
   },
-  101: {
+  102: {
+    name: "InsuranceFundingReplayed",
+    description:
+      "Insurance-fund funding id has already executed; each funding id executes at most once.",
+  },
+  103: {
+    name: "InsuranceWithdrawalReplayed",
+    description: "Insurance withdrawal id has already executed.",
+  },
+  104: {
+    name: "MarketlessInsurancePool",
+    description: "Insurance transfer pool has no registered market.",
+  },
+  105: {
+    name: "InsufficientInsuranceBalance",
+    description: "Insurance withdrawal would make the pool balance negative.",
+  },
+  106: {
+    name: "InsuranceTransferZeroAccount",
+    description:
+      "Insurance transfer names the zero account; a funding source or withdrawal recipient must be a real 20-byte address.",
+  },
+  107: {
+    name: "InsuranceAllocationCount",
+    description:
+      "Insurance transfer must carry between 1 and the per-transfer allocation cap (8) allocations.",
+  },
+  108: {
+    name: "InsuranceAllocationOrder",
+    description:
+      "Insurance transfer allocations must list each pool once, in strictly ascending pool order.",
+  },
+  109: {
+    name: "InsuranceAllocationZeroAmount",
+    description:
+      "An insurance transfer allocation is zero; every allocation moves a positive amount.",
+  },
+  110: {
+    name: "InsuranceAmountExceedsI64",
+    description:
+      "An insurance transfer amount, or their sum, exceeds the ledger's signed 64-bit bound.",
+  },
+  111: {
+    name: "LiquidationRefused",
+    description:
+      "A liquidation attempt was refused (a changed position, a malformed book or an unavailable reference) and kept no writes; the liquidation_failed event's refusal names why.",
+  },
+  112: {
     name: "InvalidPlpConfig",
     description:
       "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance",

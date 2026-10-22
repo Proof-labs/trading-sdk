@@ -8,6 +8,7 @@
 //   - codec vectors: PASS
 //   - signing vectors: PASS (signEnvelopeFromPayload + pubkeyToOwner/ownerToHex)
 //   - errors vectors:  PASS (ExecErrorCode manifest + execErrorName log decoder)
+//   - events vectors:  PASS (decodeLiquidationEvent over the engine's attributes)
 //   - nonce vectors:   SKIPPED — nonces are derived from timestamps, not a step function
 //
 // `OracleUpdateComposite` (0x14) is now wired (operator action — composite-CEX
@@ -28,6 +29,7 @@ import {
 import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
 import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
+import { decodeLiquidationEvent } from "./liquidation-events.js";
 import {
   ActionType,
   Outcome,
@@ -675,6 +677,16 @@ function toAdminBatchItem(
   );
 }
 
+/** Insurance transfer rows from the vector's serde map form. */
+function toInsuranceAllocations(
+  raw: unknown,
+): import("./types.js").InsuranceFundAllocation[] {
+  return (raw as Record<string, unknown>[]).map((a) => ({
+    poolId: a.pool_id as number,
+    amount: big(a.amount),
+  }));
+}
+
 /** Reconstruct a TS `AdminAction` from the vector's serde map form. Throws
  *  on an unknown variant rather than falling through — a vector this suite
  *  cannot name must fail the run, not mis-parse as a registry update. */
@@ -724,10 +736,7 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
           fullCloseThreshold: { ...c.full_close_threshold },
           partialPenaltyBps: c.partial_penalty_bps,
           maxBookOrders: c.max_book_orders,
-          maxCandidatePrefixes: c.max_candidate_prefixes,
           maxCommittedFills: c.max_committed_fills,
-          maxStateReads: c.max_state_reads,
-          maxStateReadBytes: c.max_state_read_bytes,
         },
       },
     };
@@ -818,6 +827,28 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
         domain: u.domain as import("./types.js").AuthorityDomain,
         add: (u.add as unknown[]).map((a) => bytes(a)),
         remove: (u.remove as unknown[]).map((a) => bytes(a)),
+      },
+    };
+  }
+  if (v.FundInsuranceFund) {
+    const f = v.FundInsuranceFund as Record<string, unknown>;
+    return {
+      kind: "FundInsuranceFund",
+      value: {
+        fundingId: big(f.funding_id),
+        source: bytes(f.source),
+        allocations: toInsuranceAllocations(f.allocations),
+      },
+    };
+  }
+  if (v.WithdrawInsuranceFund) {
+    const w = v.WithdrawInsuranceFund as Record<string, unknown>;
+    return {
+      kind: "WithdrawInsuranceFund",
+      value: {
+        withdrawalId: big(w.withdrawal_id),
+        recipient: bytes(w.recipient),
+        allocations: toInsuranceAllocations(w.allocations),
       },
     };
   }
@@ -950,6 +981,50 @@ describe("conformance vectors (TypeScript)", () => {
       expect(got).toBe(expected);
     }
   });
+  it("events: engine attributes decode back to the engine's event", () => {
+    // Both sides are normalised to one form: snake_case field names, integers
+    // as decimal strings, a 20-byte array as lowercase hex, and an enum
+    // variant name (`ReferenceUnavailable`) or attribute value
+    // (`reference_unavailable`, `Yes`) as lowercase snake_case.
+    const snake = (text: string) =>
+      text.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+    const normalise = (value: unknown): unknown => {
+      if (value === null) return null;
+      if (typeof value === "bigint" || typeof value === "number") {
+        return value.toString();
+      }
+      if (typeof value === "string") return snake(value);
+      if (Array.isArray(value)) {
+        if (value.length === 20 && value.every((b) => typeof b === "number")) {
+          return bytesToHex(Uint8Array.from(value as number[]));
+        }
+        return value.map(normalise);
+      }
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .filter(([key]) => key !== "type")
+          .map(([key, v]) => [snake(key), normalise(v)]),
+      );
+    };
+    const events = cases("events.ndjson");
+    expect(events.length).toBeGreaterThan(0);
+    for (const c of events) {
+      const want = c.expect as {
+        event_type: string;
+        attributes: [string, string][];
+      };
+      const decoded = decodeLiquidationEvent({
+        type: want.event_type,
+        attributes: want.attributes.map(([key, value]) => ({ key, value })),
+      });
+      const [[variant, fields]] = Object.entries(
+        c.event as Record<string, unknown>,
+      );
+      expect(decoded?.type, c.case).toBe(variant);
+      expect(normalise(decoded), c.case).toEqual(normalise(fields));
+    }
+  });
+
   it("codec: action fields → payload bytes", () => {
     // No try/catch: every vector must build through toAction and encode
     // byte-exact. A vector whose action type is not wired here fails loudly —
@@ -1071,10 +1146,11 @@ describe("conformance vectors (TypeScript)", () => {
     // update-authority-set add and
     // remove, cancel-all-for
     // -account scoped and unscoped, four set-oracle-guards shapes, and
-    // oracle policy, two schedule-upgrade shapes and cancel-upgrade),
+    // oracle policy, two schedule-upgrade shapes, cancel-upgrade, and
+    // insurance fund and withdraw),
     // approve, reject, and all three emergency arms (PauseMarket,
     // HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(30);
+    expect(govCases.length).toBe(32);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

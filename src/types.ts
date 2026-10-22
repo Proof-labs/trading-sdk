@@ -746,8 +746,8 @@ export interface ResolveEvent {
 }
 
 /**
- * Create a standalone event (admin-actions v2 inner tag `0x09`): two
- * prediction-binary books (EBY at `childMarketBase`, EBN at +1) under one
+ * Create a standalone event (admin-actions v2 inner tag `0x09`): one
+ * prediction-binary book (EBY at `childMarketBase`) under one
  * `EventInfo`, no underlying perp and no conditional legs. The embedded
  * `signer` must be zero — governance supplies the authorization.
  */
@@ -767,7 +767,7 @@ export interface CreateEvent {
   description?: string;
   /** Optional resolution criteria; encodes as "" when absent. */
   rules?: string;
-  /** Open-interest cap for each of the event's two binary books, in
+  /** Open-interest cap for the event's binary book, in
    *  contracts; `undefined` or `0n` = uncapped (encodes as 0). */
   maxOpenInterest?: bigint;
 }
@@ -1171,6 +1171,34 @@ export interface SetOperatorReceiptRegistry {
   operatorKeys: Uint8Array[];
 }
 
+/** One insurance pool's share of a funding or withdrawal transfer. */
+export interface InsuranceFundAllocation {
+  /** Insurance pool id (`u8`). */
+  poolId: number;
+  /** Micro-USDC moved for this pool; positive, and the transfer total stays within `i64::MAX`. */
+  amount: bigint;
+}
+
+/** Moves cash from an account into insurance pools. */
+export interface FundInsuranceFund {
+  /** Engine replay key: a funding id executes at most once. */
+  fundingId: bigint;
+  /** Account debited; non-zero. */
+  source: Address;
+  /** 1..=8 pool allocations in strictly ascending `poolId` order. */
+  allocations: InsuranceFundAllocation[];
+}
+
+/** Moves cash out of insurance pools to a recipient account. */
+export interface WithdrawInsuranceFund {
+  /** Engine replay key: a withdrawal id executes at most once. */
+  withdrawalId: bigint;
+  /** Account credited; non-zero. */
+  recipient: Address;
+  /** 1..=8 pool allocations in strictly ascending `poolId` order. */
+  allocations: InsuranceFundAllocation[];
+}
+
 /**
  * The liquidation settings shared by every market. Collar width is not a
  * field: it is each market's maintenance margin fraction.
@@ -1185,16 +1213,11 @@ export interface LiquidationConfig {
   /** Penalty on each partial-liquidation fill, in basis points of the
    *  fill's notional; at most 100. */
   partialPenaltyBps: number;
-  /** Book orders one liquidation attempt may visit; non-zero. */
+  /** Book orders one owner's liquidation may walk per leg in a block;
+   *  non-zero. */
   maxBookOrders: number;
-  /** Candidate prefixes one attempt may inspect; non-zero. */
-  maxCandidatePrefixes: number;
-  /** Fills one attempt may commit; non-zero, at most `maxCandidatePrefixes`. */
+  /** Fills one owner's liquidation may commit in a block; non-zero. */
   maxCommittedFills: number;
-  /** State reads one attempt may make; non-zero. */
-  maxStateReads: number;
-  /** Bytes of state one attempt may read; non-zero. */
-  maxStateReadBytes: number;
 }
 
 /**
@@ -1222,6 +1245,8 @@ export interface SetLiquidationConfig {
  * refuses every tag below its activation height.
  */
 export type AdminAction =
+  | { kind: "FundInsuranceFund"; value: FundInsuranceFund }
+  | { kind: "WithdrawInsuranceFund"; value: WithdrawInsuranceFund }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
@@ -1525,9 +1550,22 @@ export interface OrderCancelledEvent {
   filledQuantity: string;
 }
 
-/** Why the engine cancelled an order (`OrderCancelledEvent.reason`). */
+/** Why the engine cancelled an order (`OrderCancelledEvent.reason`).
+ *  `"reduce_only"`: a resting reduce-only order had no position left to
+ *  reduce. The last three cancel a resting maker order a fill could not
+ *  use: `"unfunded"`, the maker could not pay its side;
+ *  `"insufficient_margin"`, the fill would leave the maker below
+ *  maintenance; `"maker_refused"`, the maker's own position cap refused it. */
 export type CancelReason =
-  "user_requested" | "expired" | "admin_force" | "liquidation" | "upgrade";
+  | "user_requested"
+  | "expired"
+  | "admin_force"
+  | "liquidation"
+  | "upgrade"
+  | "reduce_only"
+  | "unfunded"
+  | "insufficient_margin"
+  | "maker_refused";
 
 // ── Engine-upgrade journal events ──────────────────────────────────────────
 // An upgrade's migration reports its effects as one group of events in the
