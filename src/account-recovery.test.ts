@@ -416,6 +416,54 @@ it("dedupes a late live duplicate of a backfilled row that carried no position",
   t.c.disconnect();
 });
 
+it("reports boundaryNotFound when history no longer holds the boundary event", async () => {
+  const t = setup();
+  await t.start(snap(10));
+  t.sockets[0].push(live(A));
+  await t.reconnect(1, snap(13));
+  // History was pruned past the boundary: every row is newer than A.
+  await t.answer(STATUS, indexed(13));
+  await t.answer(EVENTS, page(E, at(14)));
+  expect(tags(t.frames)).toEqual([
+    "snapshot",
+    "10-0",
+    "snapshot",
+    "13-0*",
+    "14-0*",
+  ]);
+  expect(t.statuses).toEqual([{ kind: "boundaryNotFound", delivered: 2 }]);
+  t.c.disconnect();
+});
+
+it("re-delivers the rows a failed backfill skipped on the next reconnect", async () => {
+  const t = setup();
+  await t.start(snap(10));
+  t.sockets[0].push(live(A));
+  await t.reconnect(1, snap(13));
+  await t.answer(STATUS, indexed(13));
+  await t.answer(EVENTS, { error: "order_required" }, 400);
+  expect(t.statuses[0].kind).toBe("failed");
+  // The reconnect after the transient failure starts over from the same
+  // boundary: the scan reads newest-first down to it, so the gap rows are
+  // delivered then.
+  await t.reconnect(2, snap(13));
+  await t.answer(STATUS, indexed(13));
+  await t.answer(EVENTS, page(A, C, E));
+  expect(tags(t.frames)).toEqual([
+    "snapshot",
+    "10-0",
+    "snapshot",
+    "snapshot",
+    "11-0*",
+    "13-0*",
+  ]);
+  expect(t.statuses).toEqual([
+    { kind: "failed", error: expect.any(Error) },
+    { kind: "backfilled", delivered: 2 },
+  ]);
+  t.c.disconnect();
+});
+
 it("stops a pending backfill when the subscription closes", async () => {
   const t = setup();
   await t.start(snap(10));

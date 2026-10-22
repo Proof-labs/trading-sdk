@@ -392,6 +392,16 @@ def test_a_late_live_duplicate_of_a_positionless_backfilled_row_is_dropped(monke
     assert tags(frames) == ["snapshot", "10-0", "snapshot", "11-0*", "12-3*", "13-0"]
 
 
+def test_boundary_not_found_when_history_no_longer_holds_the_boundary(monkeypatch) -> None:
+    first = RecoverySocket([snap(10), live_frame(A)])
+    second = RecoverySocket([snap(13)])
+    # History was pruned past the boundary: every row is newer than A.
+    reads = [indexed(13), page(E, at(14))]
+    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99)
+    assert tags(frames) == ["snapshot", "10-0", "snapshot", "13-0*", "14-0*"]
+    assert statuses == [RecoveryStatus("boundary_not_found", 2)]
+
+
 def test_close_stops_a_backfill_waiting_to_retry(monkeypatch) -> None:
     first = RecoverySocket([snap(10), live_frame(A)])
     second = RecoverySocket([snap(13)])
