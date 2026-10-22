@@ -5,7 +5,7 @@
 )]
 
 use super::*;
-use crate::market_snapshot::{BracketRetry, ConfirmationPolling};
+use crate::market_snapshot::{BracketRetry, ChainBinding, ConfirmationPolling};
 
 fn node(id: u8) -> NodeId {
     NodeId::new([id; 20]).expect("fixture node ids are non-zero")
@@ -20,11 +20,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const NOW: u64 = 1_789_128_000_000;
 
-fn chain_id() -> [u8; 32] {
-    crate::crypto::chain_id_from_string("proof-test")
+fn chain_id() -> ChainBinding {
+    ChainBinding::of_network("proof-test").expect("the fixture network binds a chain")
 }
 fn snapshot_body(height: u64, time: u64, node: u8, hash: u8) -> Value {
-    let data = rmp_serde::to_vec(&json!([chain_id(), height, [], []])).unwrap();
+    let data = rmp_serde::to_vec(&json!([chain_id().bytes(), height, [], []])).unwrap();
     json!({"data":STANDARD.encode(data),"witness":{
         "version":1,"nodeId":hex::encode([node;20]),"height":height.to_string(),
         "finalizedBlockTimeMs":time.to_string(),"appHash":hex::encode([hash;32])}})
