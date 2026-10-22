@@ -49,8 +49,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `/orderbook-deltas` WebSocket path, which DevNet's gateway also answers with 404. Use `subscribeOrderbook`, the `orderbook` channel of `/ws`: a `snapshot`
   frame, then one `update` frame per changed level. `orderbookSnapshot` now
   reads that channel too and resolves the `snapshot` frame (`bids` / `asks`)
-  instead of an `l2Book` frame; it takes an optional timeout (default
-  10 seconds) and rejects when no snapshot arrives. `disconnect()` now closes
+  instead of an `l2Book` frame, over a connection of its own so it never
+  answers from a book an existing subscription cached. It takes an optional
+  timeout (default 10 seconds), rejects when no snapshot arrives, and rejects
+  at once with the new `FeedSubscriptionError` (the gateway's `code` and
+  message) when the gateway refuses the subscription. `disconnect()` now closes
   only the shared `/ws` feed. In Python, `OrderbookDeltaStream` keeps its name
   and arguments but subscribes on `/ws` and yields the same `orderbook`
   frames, and `orderbook_snapshot` returns the `snapshot` frame and raises

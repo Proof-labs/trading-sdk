@@ -283,6 +283,7 @@ export {
 
 // Errors
 export {
+  FeedSubscriptionError,
   GatewayHttpError,
   isMissingMark,
   type ExecErrorInfo,

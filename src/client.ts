@@ -5,6 +5,7 @@ import {
 } from "./feed.js";
 import type {
   AccountFrame,
+  FeedErrorFrame,
   OrderbookFrame,
   OrderbookSnapshotFrame,
   TradeFrame,
@@ -21,7 +22,7 @@ import {
   type OraclePriceHistoryPage,
 } from "./oracle-price-history.js";
 import { GatewayReads, type GatewayFetch } from "./gateway-reads.js";
-import { GatewayHttpError } from "./errors.js";
+import { FeedSubscriptionError, GatewayHttpError } from "./errors.js";
 import {
   decodeCashFlowEvents,
   decodeHistoryPositionsPage,
@@ -2280,34 +2281,58 @@ export class ExchangeClient {
   // -----------------------------------------------------------------------
 
   /**
-   * One-shot orderbook snapshot from the `orderbook` channel of the shared
-   * `/ws` feed: subscribes, resolves the first `snapshot` frame, and drops the
-   * subscription. Rejects if no snapshot arrives within `timeoutMs`.
+   * One-shot orderbook snapshot from the gateway's `/ws` feed, read over a
+   * connection of its own: it never answers from a book an existing
+   * `subscribeOrderbook` built, so a stalled shared socket cannot serve stale
+   * prices. Resolves the first `snapshot` frame and closes the connection.
+   * Rejects with {@link FeedSubscriptionError} when the gateway refuses the
+   * subscription, or when no snapshot arrives within `timeoutMs`.
    */
   orderbookSnapshot(
     market: number,
     timeoutMs = 10_000,
   ): Promise<OrderbookSnapshotFrame> {
+    const feed = this.createFeed({ pingIntervalMs: 0 });
     return new Promise((resolve, reject) => {
       let settled = false;
-      const timer = setTimeout(() => {
+      const finish = () => {
         settled = true;
-        unsub();
+        clearTimeout(timer);
+        feed.close();
+      };
+      const timer = setTimeout(() => {
+        finish();
         reject(
           new Error(
             `orderbook snapshot for market ${market} timed out after ${timeoutMs}ms`,
           ),
         );
       }, timeoutMs);
-      // The feed delivers frames after `subscribeOrderbook` returns, so
-      // `unsub` is assigned before the handler can run.
-      const unsub = this.subscribeOrderbook(market, (frame) => {
-        if (settled || frame.type !== "snapshot") return;
-        settled = true;
-        clearTimeout(timer);
-        unsub();
-        resolve(frame);
+      feed.subscribeOrderbook(market, (frame) => {
+        if (settled) return;
+        const raw = frame as OrderbookFrame | FeedErrorFrame;
+        if (raw.type === "error") {
+          finish();
+          reject(new FeedSubscriptionError("orderbook", raw.error, raw.code));
+        } else if (raw.type === "snapshot") {
+          finish();
+          resolve(raw);
+        }
       });
+    });
+  }
+
+  /** A new `/ws` connection with this client's URL, auth and headers. */
+  private createFeed(opts: Partial<GatewayFeedOptions> = {}): GatewayFeed {
+    let base = this.wsUrl;
+    if (!base && typeof globalThis.location !== "undefined")
+      base = globalThis.location.origin.replace(/^http/, "ws");
+    return new GatewayFeed({
+      url: `${base}/ws`,
+      accountAuth: async (owner) =>
+        this.privateKey || this.externalSigner ? this.accountAuth(owner) : {},
+      headers: this.apiKey ? { "X-Api-Key": this.apiKey } : undefined,
+      ...opts,
     });
   }
 
@@ -2315,18 +2340,7 @@ export class ExchangeClient {
    * Reconnect restores snapshots, not missed events. Default auth reads the current signer.
    */
   feed(opts: Partial<GatewayFeedOptions> = {}): GatewayFeed {
-    if (!this.gatewayFeed) {
-      let base = this.wsUrl;
-      if (!base && typeof globalThis.location !== "undefined")
-        base = globalThis.location.origin.replace(/^http/, "ws");
-      this.gatewayFeed = new GatewayFeed({
-        url: `${base}/ws`,
-        accountAuth: async (owner) =>
-          this.privateKey || this.externalSigner ? this.accountAuth(owner) : {},
-        headers: this.apiKey ? { "X-Api-Key": this.apiKey } : undefined,
-        ...opts,
-      });
-    }
+    if (!this.gatewayFeed) this.gatewayFeed = this.createFeed(opts);
     return this.gatewayFeed;
   }
 
