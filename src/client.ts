@@ -2427,12 +2427,25 @@ export class ExchangeClient {
       },
       { signal },
     );
+    // Status before parse: a gateway error body need not be JSON, and a
+    // SyntaxError from `res.json()` would bury the intended message.
+    if (!res.ok) {
+      let error: unknown;
+      try {
+        error = ((await res.json()) as { error?: string }).error;
+      } catch {
+        error = undefined;
+      }
+      throw new Error(
+        `account history read failed: ${error ?? `HTTP ${res.status}`}`,
+      );
+    }
     const body = (await res.json()) as {
       account_events?: AccountHistoryRow[];
       next_cursor?: string | null;
       error?: string;
     };
-    if (!res.ok || !Array.isArray(body.account_events))
+    if (!Array.isArray(body.account_events))
       throw new Error(
         `account history read failed: ${body.error ?? `HTTP ${res.status}`}`,
       );
@@ -2443,11 +2456,13 @@ export class ExchangeClient {
    *  (`/v1/history/status` → `ingest.newest_height`). */
   private async historyIndexedHeight(signal?: AbortSignal): Promise<number> {
     const res = await this.reads().historyStatus({ signal });
+    if (!res.ok)
+      throw new Error(`history status read failed: HTTP ${res.status}`);
     const body = (await res.json()) as {
       ingest?: { newest_height?: unknown };
     };
     const height = body.ingest?.newest_height;
-    if (!res.ok || typeof height !== "number")
+    if (typeof height !== "number")
       throw new Error(`history status read failed: HTTP ${res.status}`);
     return height;
   }

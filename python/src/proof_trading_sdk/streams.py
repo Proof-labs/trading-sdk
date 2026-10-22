@@ -273,10 +273,18 @@ class AccountEventStream:
             headers=headers,
             timeout=self.history_timeout,
         )
-        body = resp.json()
-        if resp.status_code != 200 or not isinstance(body, dict):
-            error = body.get("error") if isinstance(body, dict) else None
+        # Status before parse: a gateway error body need not be JSON, and a
+        # JSONDecodeError from ``resp.json()`` would bury the intended
+        # message.
+        if resp.status_code != 200:
+            try:
+                error = resp.json().get("error")
+            except ValueError:
+                error = None
             raise RuntimeError(f"{path} read failed: {error or resp.status_code}")
+        body = resp.json()
+        if not isinstance(body, dict):
+            raise RuntimeError(f"{path} read failed: {resp.status_code}")
         return body
 
     def _history_page(self, cursor: str | None) -> tuple[list[dict[str, t.Any]], str | None]:
