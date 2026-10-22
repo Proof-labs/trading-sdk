@@ -188,7 +188,7 @@ describe("decodeLiquidationEvent", () => {
     }
   });
 
-  it("floors size_after at zero like the engine", () => {
+  it("decodes a position closed past its size", () => {
     expect(
       decodeLiquidationEvent(
         positionLiquidated({ size_closed: "120", size_after: "0" }),
@@ -227,6 +227,50 @@ describe("decodeLiquidationEvent", () => {
       size: 3n,
       reason: "stale_oracle_dependency",
     });
+  });
+
+  it("passes through values a later engine may add", () => {
+    expect(
+      decodeLiquidationEvent(
+        txEvent("liquidation_progress_reported", [
+          ["owner", OWNER_AB],
+          ["outcome", "partly_done"],
+          ["config_sequence", "4"],
+        ]),
+      ),
+    ).toMatchObject({ outcome: "partly_done" });
+    expect(
+      decodeLiquidationEvent(
+        positionLiquidated({
+          mode: "partly",
+          size_after: "87",
+          binding_outcome: "9:no,4:yes",
+        }),
+      ),
+    ).toMatchObject({
+      mode: "partly",
+      sizeAfter: 87n,
+      bindingOutcome: [
+        { eventId: 9, branch: "No" },
+        { eventId: 4, branch: "Yes" },
+      ],
+    });
+    for (const [code, refusal] of [
+      ["111", "busy"],
+      ["22", "invalid_maker"],
+      ["111", ""],
+      ["0", ""],
+    ] as const) {
+      expect(
+        decodeLiquidationEvent(liquidationFailed(code, refusal)),
+      ).toMatchObject({
+        code: Number(code),
+        refusal: refusal === "" ? null : refusal,
+      });
+    }
+    expect(
+      decodeLiquidationEvent(adlSkipped({ reason: "stale" })),
+    ).toMatchObject({ reason: "stale" });
   });
 
   it("keeps u64 amounts above 2^53 exact", () => {
@@ -298,15 +342,6 @@ describe("decodeLiquidationEvent", () => {
       /owner is not a 20-byte lowercase hex address/,
     ],
     [
-      "an unknown outcome",
-      txEvent("liquidation_progress_reported", [
-        ["owner", OWNER_AB],
-        ["outcome", "partly_done"],
-        ["config_sequence", "4"],
-      ]),
-      /outcome has unknown value "partly_done"/,
-    ],
-    [
       "a duplicated attribute",
       txEvent("liquidation_progress_reported", [
         ["owner", OWNER_AB],
@@ -331,19 +366,9 @@ describe("decodeLiquidationEvent", () => {
       /config is invalid: targetRatioBps/,
     ],
     [
-      "an unknown liquidation mode",
-      positionLiquidated({ mode: "partly" }),
-      /mode has unknown value "partly"/,
-    ],
-    [
       "a capitalised side",
       positionLiquidated({ side: "Sell" }),
       /side has unknown value "Sell"/,
-    ],
-    [
-      "a size_after that is not size_before - size_closed",
-      positionLiquidated({ size_after: "87" }),
-      /size_after is not size_before - size_closed/,
     ],
     [
       "an equity with a leading zero",
@@ -378,38 +403,19 @@ describe("decodeLiquidationEvent", () => {
     [
       "conflicting branches for one event",
       positionLiquidated({ binding_outcome: "4:yes,4:no" }),
-      /binding_outcome event id 4 is not ascending/,
+      /binding_outcome event id 4 is repeated/,
     ],
     [
       "a repeated event",
       positionLiquidated({ binding_outcome: "4:yes,4:yes" }),
-      /binding_outcome event id 4 is not ascending/,
+      /binding_outcome event id 4 is repeated/,
     ],
     [
-      "descending events",
-      positionLiquidated({ binding_outcome: "9:no,4:yes" }),
-      /binding_outcome event id 4 is not ascending/,
+      "an empty liquidation mode",
+      positionLiquidated({ mode: "" }),
+      /mode is empty/,
     ],
-    [
-      "an unknown refusal",
-      liquidationFailed("111", "busy"),
-      /refusal has unknown value "busy"/,
-    ],
-    [
-      "a refusal under another code",
-      liquidationFailed("22", "invalid_maker"),
-      /code is not 111 for a refusal/,
-    ],
-    [
-      "code 111 without a refusal",
-      liquidationFailed("111", ""),
-      /refusal is empty under code 111/,
-    ],
-    [
-      "code 0",
-      liquidationFailed("0", ""),
-      /code is 0, which is not an engine error/,
-    ],
+    ["an empty skip reason", adlSkipped({ reason: "" }), /reason is empty/],
     [
       "a missing refusal",
       txEvent("liquidation_failed", [
@@ -417,11 +423,6 @@ describe("decodeLiquidationEvent", () => {
         ["code", "111"],
       ]),
       /refusal is missing/,
-    ],
-    [
-      "an unknown skip reason",
-      adlSkipped({ reason: "stale" }),
-      /reason has unknown value "stale"/,
     ],
     [
       "a skipped pool id above u8",

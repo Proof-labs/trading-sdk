@@ -54,10 +54,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     its market, pool, size and `reason` (`ADL_SKIP_REASONS`:
     `stale_oracle_dependency`).
 
-  Signed 64-bit values decode to `bigint`; an unknown enumeration value, a
-  `size_after` that is not `size_before - size_closed` floored at zero, a
-  binding outcome whose event ids are not strictly ascending, a refusal
-  under a code other than 111, code 111 without a refusal, or code 0 throws. A new `events.ndjson`
+  Signed 64-bit values decode to `bigint`. The `mode`, `outcome`,
+  `refusal` and ADL `reason` values are passed through as non-empty strings
+  (the exported constants list the values the engine writes today), and the
+  decoder does not re-check the engine's arithmetic or its code-to-refusal
+  pairing, so an event a later engine writes differently still decodes; a
+  binding outcome that names one event twice throws. A new `events.ndjson`
   conformance family, generated from proof-wire's own encoder, pins the
   attributes for all three events; the Rust runner re-encodes it and the
   TypeScript runner decodes it. Additive TypeScript API.
