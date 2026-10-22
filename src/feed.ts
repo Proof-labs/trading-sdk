@@ -100,8 +100,12 @@ interface SubRecord {
   /** accountEvents only: a subscribe that brings a snapshot is in flight, so
    *  further late listeners wait for it instead of sending another. */
   resendPending: boolean;
-  /** A subscribe has gone out for this record on the current socket. */
-  sentOnSocket: boolean;
+  /** The gateway acknowledged or served this subscription on the current
+   *  socket, so it exists there. */
+  confirmed: boolean;
+  /** accountEvents only: a snapshot has arrived on the current socket, so a
+   *  later one is a resend for the listeners waiting on it. */
+  snapshotOnSocket: boolean;
   /** Pending retry of a first subscribe whose authentication failed. */
   retryTimer: unknown;
   /** Consecutive failed authentications, for the retry backoff. */
@@ -116,6 +120,9 @@ interface LocalBook {
 }
 
 const CONTROL_TYPES = new Set(["subscribed", "unsubscribed", "pong", "error"]);
+
+/** Gateway refusal codes of an account subscribe that a retry can pass. */
+const RETRYABLE_REFUSALS = new Set([401, 429, 503]);
 
 /**
  * Lifecycle manager for the gateway's multiplexed `/ws` feed.
@@ -135,9 +142,10 @@ const CONTROL_TYPES = new Set(["subscribed", "unsubscribed", "pong", "error"]);
  *     the account snapshot. Neither sees an update or event before its
  *     snapshot. A gateway too old to resend leaves the account listener on
  *     the live events, as before.
- *   - **auth retry** — when signing an account subscribe fails and the
- *     channel has no subscription on the socket, listeners get an `error`
- *     frame and the subscribe is retried with the reconnect backoff.
+ *   - **subscribe retry** — when signing an account subscribe fails, or the
+ *     gateway refuses it with 401, 429 or 503, and the channel has no
+ *     subscription on the socket, listeners get an `error` frame and the
+ *     subscribe is retried with the reconnect backoff.
  *   - **heartbeat** — an app-level `ping` runs on an interval; a missing
  *     `pong` forces a reconnect, catching half-open sockets the OS hasn't
  *     torn down.
@@ -295,7 +303,12 @@ export class GatewayFeed {
         // resend in flight serves every listener that joins while it is
         // pending: its snapshot releases them all.
         record.awaitingSnapshot.add(listener);
-        if (this.state === "open" && !record.resendPending)
+        // A pending retry brings the first snapshot, which releases it.
+        if (
+          this.state === "open" &&
+          !record.resendPending &&
+          record.retryTimer == null
+        )
           this.sendSubscribe(record);
       }
     } else {
@@ -310,7 +323,8 @@ export class GatewayFeed {
         awaitingSnapshot: new Set(),
         pendingEvents: new Map(),
         resendPending: false,
-        sentOnSocket: false,
+        confirmed: false,
+        snapshotOnSocket: false,
         retryTimer: null,
         retryAttempts: 0,
       };
@@ -507,12 +521,7 @@ export class GatewayFeed {
             : {}),
         },
       });
-      if (!sent) {
-        this.releaseAwaiting(record);
-        return;
-      }
-      record.sentOnSocket = true;
-      record.retryAttempts = 0;
+      if (!sent) this.releaseAwaiting(record);
     };
     const provider =
       record.channel === "accountEvents"
@@ -605,12 +614,22 @@ export class GatewayFeed {
     const key = subKey(channel, msg);
     const record = this.subs.get(key);
     if (!record) return;
+    this.confirm(record);
     if (record.channel === "orderbook") applyToBook(record, msg);
+    // A second account snapshot on one socket is a resend a late listener
+    // asked for: only the listeners waiting on a snapshot take it.
+    const resent =
+      record.channel === "accountEvents" &&
+      msg.type === "snapshot" &&
+      record.snapshotOnSocket;
+    if (record.channel === "accountEvents" && msg.type === "snapshot")
+      record.snapshotOnSocket = true;
     // A snapshot means the subscribe that brings it has landed, so a further
     // late listener sends a fresh resend.
     if (record.channel === "accountEvents" && msg.type === "snapshot")
       record.resendPending = false;
     for (const listener of record.listeners) {
+      if (resent && !record.awaitingSnapshot.has(listener)) continue;
       if (record.awaitingSnapshot.has(listener)) {
         if (msg.type === "snapshot") {
           record.awaitingSnapshot.delete(listener);
@@ -641,9 +660,16 @@ export class GatewayFeed {
    *  `snapshot: "resent"`) sends no snapshot, so waiting account listeners
    *  are released to the live events instead of waiting for ever. */
   private handleSubscribed(msg: Record<string, unknown>): void {
-    if (msg.note !== "already subscribed" || msg.snapshot === "resent") return;
     const record = this.recordForId(msg.id);
+    if (record) this.confirm(record);
+    if (msg.note !== "already subscribed" || msg.snapshot === "resent") return;
     if (record) this.releaseAwaiting(record);
+  }
+
+  private confirm(record: SubRecord): void {
+    record.confirmed = true;
+    record.retryAttempts = 0;
+    this.cancelRetry(record);
   }
 
   /** Account listeners waiting on a snapshot that will not come take the
@@ -704,7 +730,8 @@ export class GatewayFeed {
     for (const record of this.subs.values()) {
       record.book = null;
       record.resendPending = false;
-      record.sentOnSocket = false;
+      record.confirmed = false;
+      record.snapshotOnSocket = false;
       // The next socket's replay subscribes afresh.
       this.cancelRetry(record);
     }
@@ -728,12 +755,8 @@ export class GatewayFeed {
   private authFailed(record: SubRecord, err: Error): void {
     this.releaseAwaiting(record);
     this.onError?.(err);
-    if (record.sentOnSocket) return;
-    const delay = Math.min(
-      this.maxBackoffMs,
-      this.minBackoffMs * 2 ** record.retryAttempts,
-    );
-    record.retryAttempts += 1;
+    if (record.confirmed) return;
+    const delay = this.scheduleRetry(record);
     const frame: FeedErrorFrame = {
       type: "error",
       channel: record.channel,
@@ -741,6 +764,16 @@ export class GatewayFeed {
     };
     for (const listener of record.listeners)
       this.deliver(listener, frame as unknown as FeedFrame);
+  }
+
+  /** Subscribe again after the reconnect backoff, on this socket only, while
+   *  the subscription is still unconfirmed. Returns the delay. */
+  private scheduleRetry(record: SubRecord): number {
+    const delay = Math.min(
+      this.maxBackoffMs,
+      this.minBackoffMs * 2 ** record.retryAttempts,
+    );
+    record.retryAttempts += 1;
     const socket = this.ws;
     const key = subKey(record.channel, record.params);
     this.cancelRetry(record);
@@ -749,10 +782,12 @@ export class GatewayFeed {
       if (
         this.ws === socket &&
         this.state === "open" &&
-        this.subs.get(key) === record
+        this.subs.get(key) === record &&
+        !record.confirmed
       )
         this.sendSubscribe(record);
     }, delay);
+    return delay;
   }
 
   private dispatchError(frame: FeedErrorFrame): void {
@@ -767,6 +802,16 @@ export class GatewayFeed {
       // A refused repeat subscribe (the resent account snapshot could not be
       // read) brings no snapshot: the waiting listeners take the live events.
       this.releaseAwaiting(record);
+      // A refused first account subscribe leaves nothing subscribed on a
+      // healthy socket. An expired signature (401), a rate limit (429) or an
+      // unreadable snapshot (503) can pass, so it is retried; the listeners
+      // already have the gateway's error frame.
+      if (
+        record.channel === "accountEvents" &&
+        !record.confirmed &&
+        RETRYABLE_REFUSALS.has(frame.code ?? 0)
+      )
+        this.scheduleRetry(record);
     }
     this.onError?.(frame);
   }

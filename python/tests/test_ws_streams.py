@@ -26,6 +26,11 @@ class FakeSocket:
     def __iter__(self):
         return iter(self._frames)
 
+    def recv(self, timeout: float | None = None) -> str:
+        if not self._frames:
+            raise TimeoutError
+        return self._frames.pop(0)
+
     def close(self) -> None:
         self.closed = True
 
@@ -101,6 +106,15 @@ def test_orderbook_snapshot_returns_the_ws_snapshot_frame(monkeypatch) -> None:
     client = ExchangeClient(gateway_url="https://gateway.example", chain_id=b"\x00" * 32)
     assert client.orderbook_snapshot(7) == SNAPSHOT
     assert urls == ["wss://gateway.example/ws"]
+    assert socket.closed
+
+
+def test_orderbook_snapshot_times_out_instead_of_waiting_for_ever(monkeypatch) -> None:
+    socket = FakeSocket([{"type": "subscribed", "id": 1}])
+    fake_connect(monkeypatch, socket)
+    client = ExchangeClient(gateway_url="https://gateway.example", chain_id=b"\x00" * 32)
+    with pytest.raises(TransportError, match="timed out after 0.5s"):
+        client.orderbook_snapshot(7, timeout=0.5)
     assert socket.closed
 
 

@@ -57,7 +57,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only the shared `/ws` feed. In Python, `OrderbookDeltaStream` keeps its name
   and arguments but subscribes on `/ws` and yields the same `orderbook`
   frames, and `orderbook_snapshot` returns the `snapshot` frame and raises
-  `TransportError` when the gateway refuses the subscription.
+  `TransportError` when the gateway refuses the subscription or no snapshot
+  arrives within its `timeout` (default 10 seconds).
 
 ### Added
 
@@ -161,7 +162,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   silently unsubscribed.** When the stream-auth signature (or the chain id it
   needs) fails, `subscribeAccount` listeners receive an `error` frame and the
   subscribe is retried with the reconnect backoff on the same connection,
-  until it succeeds or the subscription is dropped.
+  until it succeeds or the subscription is dropped. A gateway refusal with
+  401 (for example an expired signature), 429 or 503 is retried the same way.
+- **A snapshot resent for a late `subscribeAccount` listener reaches only
+  that listener**, so existing listeners no longer see a second snapshot
+  without a reconnect.
 - **`queryFinancialState` rejects malformed UTF-8 in MessagePack strings.**
   The dependency decoder normalized an overlong encoding into a valid enum
   (`c1 82 75 79` decoded as `Buy`); the response is now rejected before
