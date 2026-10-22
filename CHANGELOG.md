@@ -33,7 +33,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `decodeLiquidationEvent` no longer decodes `full_liquidation_fee` (it
   returns `null`, like any other event type) and `FullLiquidationFeeEvent`
   is no longer exported.
-
 - **`subscribeAccountEvents` is removed from the TypeScript client.** It
   connected to the gateway's legacy `/account-events` WebSocket path, which
   DevNet's gateway now answers with 404. Use `subscribeAccount`: it carries the
