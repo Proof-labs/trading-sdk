@@ -190,7 +190,7 @@ if (FAUCET_TOKEN && account && account.balance > 0n) {
 info("--- 9. Real-time streams ---");
 info("  Subscribe to the gateway's native feed via the SDK:");
 info(`    client.subscribeAccount((frame) => { ... })`);
-info(`    client.subscribeOrderbookDeltas(1, (msg) => { ... })`);
+info(`    client.subscribeOrderbook(1, (frame) => { ... })`);
 info("  One-shot snapshot:  await client.orderbookSnapshot(1)");
 info("");
 

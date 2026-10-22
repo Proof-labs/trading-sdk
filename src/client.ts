@@ -3,7 +3,12 @@ import {
   type GatewayFeedOptions,
   type AccountFeedAuth,
 } from "./feed.js";
-import type { AccountFrame, OrderbookFrame, TradeFrame } from "./feed-types.js";
+import type {
+  AccountFrame,
+  OrderbookFrame,
+  OrderbookSnapshotFrame,
+  TradeFrame,
+} from "./feed-types.js";
 import {
   portfolioHistorySearchParams,
   decodePortfolioHistoryPage,
@@ -200,8 +205,7 @@ export interface ExchangeClientOptions {
    */
   apiUrl?: string;
   /**
-   * WebSocket base URL for the gateway streams (the multiplexed `/ws` feed
-   * and `/orderbook-deltas`). Defaults to `gatewayUrl` (or `rpcUrl` on the
+   * WebSocket base URL for the gateway's multiplexed `/ws` feed. Defaults to `gatewayUrl` (or `rpcUrl` on the
    * direct-node path) with the scheme swapped to `ws`/`wss`. The gateway
    * serves its feed on a dedicated listener; for a local stack whose WS
    * port differs from the HTTP port, set this explicitly
@@ -324,7 +328,6 @@ export class ExchangeClient {
   private lastTimestampNonce = 0n;
   /** Unsubscribe handles for every open WebSocket stream, so `disconnect()`
    *  can tear them all down at once. */
-  private activeStreams = new Set<() => void>();
   /**
    * In-flight DeliverTx verification promises spawned by submitTx. Awaiting
    * this set lets callers serialize against block inclusion when they need to;
@@ -366,10 +369,10 @@ export class ExchangeClient {
     );
     this.apiKey = opts.apiKey ?? null;
     this.httpTransport = opts.httpTransport ?? defaultExchangeHttpTransport;
-    // WebSocket base URL (no path). Stream methods append their path
-    // (`/ws`, `/orderbook-deltas`). Mirrors the Python SDK,
-    // which derives the WS base by swapping the gateway URL's scheme. Local
-    // stacks whose WS listener is on a different port must pass `wsUrl`.
+    // WebSocket base URL (no path); the feed appends `/ws`. Mirrors the
+    // Python SDK, which derives the WS base by swapping the gateway URL's
+    // scheme. Local stacks whose WS listener is on a different port must pass
+    // `wsUrl`.
     this.wsUrl = stripTrailingSlash(
       opts.wsUrl ??
         (this.useGateway ? this.gatewayUrl : this.rpcUrl).replace(
@@ -2273,123 +2276,39 @@ export class ExchangeClient {
   }
 
   // -----------------------------------------------------------------------
-  // WebSocket streams (gateway-native; mirror the Python SDK)
+  // WebSocket streams (the gateway's multiplexed /ws feed)
   // -----------------------------------------------------------------------
 
   /**
-   * Subscribe to the L2 orderbook delta stream for a market
-   * (`/orderbook-deltas`). Mirrors the Python SDK's `OrderbookDeltaStream`:
-   * the first frame is a full `l2Book` snapshot, then incremental deltas.
-   * Returns an unsubscribe function.
+   * One-shot orderbook snapshot from the `orderbook` channel of the shared
+   * `/ws` feed: subscribes, resolves the first `snapshot` frame, and drops the
+   * subscription. Rejects if no snapshot arrives within `timeoutMs`.
    */
-  subscribeOrderbookDeltas(
+  orderbookSnapshot(
     market: number,
-    onMessage: (msg: Record<string, unknown>) => void,
-    opts: WsStreamOptions = {},
-  ): () => void {
-    return this.openStream(
-      async () => `${this.wsUrl}/orderbook-deltas?market=${market}`,
-      onMessage,
-      opts,
-    );
-  }
-
-  /**
-   * One-shot L2 orderbook snapshot via a temporary delta-stream connection:
-   * opens the stream, resolves the first `l2Book` snapshot frame, and closes.
-   * Mirrors the Python SDK's `orderbook_snapshot`.
-   */
-  orderbookSnapshot(market: number): Promise<Record<string, unknown>> {
+    timeoutMs = 10_000,
+  ): Promise<OrderbookSnapshotFrame> {
     return new Promise((resolve, reject) => {
-      const unsub = this.subscribeOrderbookDeltas(
-        market,
-        (msg) => {
-          if (msg.type === "l2Book") {
-            unsub();
-            resolve(msg);
-          }
-        },
-        {
-          onError: (err) => {
-            unsub();
-            reject(err instanceof Error ? err : new Error(String(err)));
-          },
-        },
-      );
-    });
-  }
-
-  /**
-   * Internal: open one self-reconnecting WebSocket. `buildUrl` is re-invoked
-   * on every (re)connect so per-connect state (fresh auth timestamp, current
-   * `after_id`) is rebuilt each time. Reconnects with exponential backoff and
-   * jitter. Returns an unsubscribe that stops reconnecting and closes the
-   * socket.
-   */
-  private openStream(
-    buildUrl: () => Promise<string>,
-    onMessage: (msg: Record<string, unknown>) => void,
-    opts: WsStreamOptions,
-  ): () => void {
-    const backoffCapMs = opts.reconnectBackoffMaxMs ?? 30_000;
-    let closed = false;
-    let ws: WebSocket | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let backoff = 500;
-
-    const scheduleReconnect = () => {
-      if (closed) return;
-      const jitter = backoff * (0.75 + Math.random() * 0.5);
-      timer = setTimeout(() => void connect(), jitter);
-      backoff = Math.min(backoff * 2, backoffCapMs);
-    };
-
-    const connect = async (): Promise<void> => {
-      if (closed) return;
-      let url: string;
-      try {
-        url = await buildUrl();
-      } catch (err) {
-        opts.onError?.(err);
-        scheduleReconnect();
-        return;
-      }
-      if (closed) return;
-      ws = new WebSocket(url);
-      ws.onopen = () => {
-        backoff = 500;
-      };
-      ws.onmessage = (ev) => {
-        try {
-          onMessage(JSON.parse(ev.data as string) as Record<string, unknown>);
-        } catch (err) {
-          opts.onError?.(err);
-        }
-      };
-      ws.onerror = (err) => {
-        opts.onError?.(err);
-      };
-      ws.onclose = () => {
-        ws = null;
-        if (!closed) scheduleReconnect();
-      };
-    };
-
-    const unsubscribe = () => {
-      closed = true;
-      if (timer) {
+      let settled = false;
+      const timer = setTimeout(() => {
+        settled = true;
+        unsub();
+        reject(
+          new Error(
+            `orderbook snapshot for market ${market} timed out after ${timeoutMs}ms`,
+          ),
+        );
+      }, timeoutMs);
+      // The feed delivers frames after `subscribeOrderbook` returns, so
+      // `unsub` is assigned before the handler can run.
+      const unsub = this.subscribeOrderbook(market, (frame) => {
+        if (settled || frame.type !== "snapshot") return;
+        settled = true;
         clearTimeout(timer);
-        timer = null;
-      }
-      if (ws) {
-        ws.close();
-        ws = null;
-      }
-      this.activeStreams.delete(unsubscribe);
-    };
-    this.activeStreams.add(unsubscribe);
-    void connect();
-    return unsubscribe;
+        unsub();
+        resolve(frame);
+      });
+    });
   }
 
   /** Shared multiplexed /ws feed. Options apply on first creation only.
@@ -2439,21 +2358,10 @@ export class ExchangeClient {
     return this.feed().subscribeTrades(market, onFrame);
   }
 
-  /** Close every open WebSocket stream and stop their reconnect loops. */
+  /** Close the shared `/ws` feed and stop its reconnect loop. */
   disconnect() {
     this.gatewayFeed?.close();
-    for (const unsub of [...this.activeStreams]) unsub();
   }
-}
-
-/** Options common to the WebSocket stream subscriptions. */
-export interface WsStreamOptions {
-  /** Called on connect/parse errors. The stream keeps reconnecting; use
-   *  this for logging or to surface terminal failures. */
-  onError?: (err: unknown) => void;
-  /** Max reconnect backoff in milliseconds (default 30000). Backoff starts
-   *  at 500ms and doubles with ±25% jitter up to this cap. */
-  reconnectBackoffMaxMs?: number;
 }
 
 // ---------------------------------------------------------------------------

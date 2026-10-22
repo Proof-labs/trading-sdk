@@ -460,9 +460,8 @@ npx tsx examples/connect-and-trade.ts
 ## WebSocket streams
 
 The gateway serves a native multiplexed feed on `/ws`. Account events, trades
-and the orderbook are channels on one shared connection; the L2 orderbook delta
-stream opens its own. Each call returns an unsubscribe function;
-`disconnect()` closes them all.
+and the orderbook are channels on one shared connection. Each call returns an
+unsubscribe function; `disconnect()` closes the feed.
 
 ```typescript
 // Account events — a snapshot frame, then live event frames. Signed
@@ -475,8 +474,8 @@ const unsub = client.subscribeAccount((frame) => {
   }
 });
 
-// L2 orderbook — first frame is a full `l2Book` snapshot, then deltas.
-const unsubBook = client.subscribeOrderbookDeltas(1, (msg) => {
+// Orderbook — a `snapshot` frame, then one `update` frame per changed level.
+const unsubBook = client.subscribeOrderbook(1, (frame) => {
   /* ... */
 });
 

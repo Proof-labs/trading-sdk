@@ -116,13 +116,18 @@ class AccountEventStream:
 
 
 class OrderbookDeltaStream:
-    """WebSocket stream for L2 orderbook deltas.
+    """WebSocket stream for one market's orderbook.
 
-    The first frame is a full ``l2Book`` snapshot. Subsequent frames
-    are incremental deltas. See the spec for gap recovery details.
+    Subscribes to the ``orderbook`` channel of the gateway's multiplexed
+    ``/ws`` feed and yields its channel-tagged frames: a ``snapshot`` frame
+    (``bids`` / ``asks`` levels), then one ``update`` frame per changed level
+    (``side``, ``price``, ``totalQuantity``, ``orderCount``; a zero quantity
+    empties the level). A refused subscription arrives as a
+    ``{"type": "error", ...}`` frame. Each reconnect subscribes again and
+    starts from a fresh snapshot.
 
     Args:
-        ws_url: WebSocket base URL.
+        ws_url: WebSocket base URL (the gateway URL with a ``ws`` scheme).
         market: Numeric market ID.
         reconnect_backoff_max: Maximum backoff in seconds (default 30).
     """
@@ -152,8 +157,16 @@ class OrderbookDeltaStream:
     def _connect(self) -> None:
         import websockets.sync.client as ws_client
 
-        url = f"{self._ws_url}/orderbook-deltas?market={self._market}"
-        self._ws = ws_client.connect(url)
+        self._ws = ws_client.connect(f"{self._ws_url}/ws")
+        self._ws.send(
+            json.dumps(
+                {
+                    "method": "subscribe",
+                    "id": 1,
+                    "params": {"channel": "orderbook", "market": self._market},
+                }
+            )
+        )
 
     def _run(self) -> t.Iterator[dict[str, t.Any]]:
         attempt = 0
@@ -168,7 +181,10 @@ class OrderbookDeltaStream:
                 for raw in self._ws:
                     if self._closed:
                         return
-                    yield json.loads(raw)
+                    frame = json.loads(raw)
+                    if frame.get("type") in _ACK_TYPES:
+                        continue
+                    yield frame
 
             except Exception:
                 if self._closed:

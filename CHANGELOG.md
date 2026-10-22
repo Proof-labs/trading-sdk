@@ -44,6 +44,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   too: it yields the channel-tagged `accountEvents` frames (a snapshot, then
   live events) instead of raw history rows, and no longer replays from
   `after_id`.
+- **`subscribeOrderbookDeltas` and the `WsStreamOptions` type are removed
+  from the TypeScript client.** The method connected to the legacy
+  `/orderbook-deltas` WebSocket path, which DevNet's gateway also answers with 404. Use `subscribeOrderbook`, the `orderbook` channel of `/ws`: a `snapshot`
+  frame, then one `update` frame per changed level. `orderbookSnapshot` now
+  reads that channel too and resolves the `snapshot` frame (`bids` / `asks`)
+  instead of an `l2Book` frame; it takes an optional timeout (default
+  10 seconds) and rejects when no snapshot arrives. `disconnect()` now closes
+  only the shared `/ws` feed. In Python, `OrderbookDeltaStream` keeps its name
+  and arguments but subscribes on `/ws` and yields the same `orderbook`
+  frames, and `orderbook_snapshot` returns the `snapshot` frame and raises
+  `TransportError` when the gateway refuses the subscription.
 
 ### Added
 

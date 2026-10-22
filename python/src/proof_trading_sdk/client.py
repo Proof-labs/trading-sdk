@@ -1412,10 +1412,11 @@ class ExchangeClient:
     # ── Orderbook snapshot (WS convenience) ──────────────────────────────
 
     def orderbook_snapshot(self, market: int) -> dict[str, t.Any]:
-        """Fetch a one-shot L2 orderbook snapshot via a temporary WS connection.
+        """Fetch a one-shot orderbook snapshot via a temporary WS connection.
 
-        Opens a WebSocket to the orderbook delta stream, reads the first
-        (snapshot) frame, closes the connection, and returns the L2 book.
+        Subscribes to the ``orderbook`` channel of the gateway's ``/ws`` feed,
+        reads the first ``snapshot`` frame (``bids`` / ``asks`` levels),
+        closes the connection, and returns that frame.
         """
         from proof_trading_sdk.streams import OrderbookDeltaStream
 
@@ -1425,8 +1426,13 @@ class ExchangeClient:
         )
         try:
             for event in stream:
-                if event.get("type") == "l2Book":
+                if event.get("type") == "snapshot":
                     return event
+                if event.get("type") == "error":
+                    raise TransportError(
+                        f"orderbook subscription refused: {event.get('error')}",
+                        status_code=event.get("code"),
+                    )
         finally:
             stream.close()
 

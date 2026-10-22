@@ -212,8 +212,9 @@ class ExchangeClient {
 
   // Streams (gateway-native)
   subscribeAccount(onFrame: (f: AccountFrame) => void, opts?: { owner?: string; auth?: false }): () => void;
-  subscribeOrderbookDeltas(market: number, onMessage: (m: Record<string, unknown>) => void, opts?: WsStreamOptions): () => void;
-  orderbookSnapshot(market: number): Promise<Record<string, unknown>>;
+  subscribeOrderbook(market: number, onFrame: (f: OrderbookFrame) => void): () => void;
+  subscribeTrades(market: number, onFrame: (f: TradeFrame) => void): () => void;
+  orderbookSnapshot(market: number, timeoutMs?: number): Promise<OrderbookSnapshotFrame>;
   disconnect(): void;
 }
 ```
@@ -549,10 +550,9 @@ code should read the structured `code` field: it is authoritative and needs no p
 
 The SDK exposes the gateway's native multiplexed feed on `/ws`. Account
 events, trades and the orderbook are channels on that one shared connection
-(`subscribeAccount`, `subscribeTrades`, `subscribeOrderbook`); the L2
-orderbook delta stream (`subscribeOrderbookDeltas`) opens its own connection.
-Every subscription auto-reconnects and returns an unsubscribe function.
-`disconnect()` tears down every open stream.
+(`subscribeAccount`, `subscribeTrades`, `subscribeOrderbook`). The connection
+auto-reconnects and re-subscribes; every subscription returns an unsubscribe
+function, and `disconnect()` closes the feed.
 
 The WS base URL defaults to `gatewayUrl` with its scheme swapped to `ws`/`wss`.
 If your local stack serves WebSockets on a separate port, set `wsUrl`
@@ -567,12 +567,13 @@ const unsub = client.subscribeAccount((frame) => {
   console.log(frame.type, frame.eventType, frame.payload);
 });
 
-// L2 orderbook: first frame is a full `l2Book` snapshot, then deltas.
-const unsubBook = client.subscribeOrderbookDeltas(1, (msg) => {
-  console.log(msg);
+// Orderbook: a `snapshot` frame (`bids` / `asks` levels), then one `update`
+// frame per changed level (a zero `totalQuantity` empties the level).
+const unsubBook = client.subscribeOrderbook(1, (frame) => {
+  console.log(frame);
 });
 
-// One-shot snapshot (opens, reads the first l2Book frame, closes):
+// One-shot snapshot (subscribes, takes the first snapshot frame, unsubscribes):
 const book = await client.orderbookSnapshot(1);
 
 // later:
@@ -583,9 +584,6 @@ client.disconnect(); // closes everything
 
 A reconnect restores the account snapshot, not the events missed while
 disconnected; read `/v1/history/account-events` to fill that gap.
-
-`WsStreamOptions` (third argument of `subscribeOrderbookDeltas`) takes
-`onError?: (err) => void` and `reconnectBackoffMaxMs?: number`.
 
 **Auth.** Account subscriptions require auth only when the gateway runs with
 `--api-key`. Because a browser `WebSocket` cannot send the `X-Api-Key` header,
