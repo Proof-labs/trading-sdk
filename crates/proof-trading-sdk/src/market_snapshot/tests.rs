@@ -8,6 +8,10 @@
 use super::*;
 use crate::types::{AttachedConditional, Branch, EventId, MarkSourceMode, MarketKind};
 
+fn chain(byte: u8) -> ChainBinding {
+    ChainBinding::new([byte; 32]).expect("fixture chain bindings are non-zero")
+}
+
 fn market() -> MarketConfig {
     MarketConfig {
         market: 1,
@@ -54,7 +58,7 @@ fn current_engine_snapshot_with_an_attached_event_decodes() {
     // event-keyed wire: two perps, one event with its binaries and one
     // conditional attached on the second perp.
     let bytes = hex::decode(include_str!("engine-349fa9b.hex").trim()).unwrap();
-    let snapshot = decode_snapshot(&envelope(&bytes), [7; 32]).unwrap();
+    let snapshot = decode_snapshot(&envelope(&bytes), chain(7)).unwrap();
     assert_eq!(snapshot.height, 9_007_199_254_740_993);
     assert_eq!(
         snapshot
@@ -100,7 +104,7 @@ fn one_book_engine_snapshot_decodes_with_no_no_book() {
     // its book 70_000 and one conditional attached on perp 2. The chain id
     // is set to the test chain.
     let bytes = hex::decode(include_str!("engine-c3253d0c.hex").trim()).unwrap();
-    let snapshot = decode_snapshot(&envelope(&bytes), [7; 32]).unwrap();
+    let snapshot = decode_snapshot(&envelope(&bytes), chain(7)).unwrap();
     assert_eq!(snapshot.height, 9_007_199_254_740_993);
     assert_eq!(
         snapshot
@@ -142,7 +146,7 @@ fn a_two_book_event_row_without_its_no_book_is_refused() {
     let mut bytes = Vec::new();
     rmpv::encode::write_value(&mut bytes, &value).unwrap();
     assert_eq!(
-        decode_snapshot(&envelope(&bytes), [7; 32]).unwrap_err(),
+        decode_snapshot(&envelope(&bytes), chain(7)).unwrap_err(),
         SnapshotError::Malformed
     );
 }
@@ -164,7 +168,7 @@ fn changed(change: impl FnOnce(&mut Vec<Value>)) -> Vec<u8> {
 
 #[test]
 fn actual_shared_wire_snapshot_round_trips_without_numeric_loss() {
-    let snapshot = decode_snapshot(&envelope(&fixture()), [7; 32]).unwrap();
+    let snapshot = decode_snapshot(&envelope(&fixture()), chain(7)).unwrap();
     assert_eq!(snapshot.height, u64::MAX);
     assert_eq!(snapshot.markets[0].max_open_interest, u64::MAX);
     assert_eq!(snapshot.markets[0].kind, MarketKind::Perp);
@@ -185,20 +189,23 @@ fn additive_fields_are_ignored_without_weakening_existing_fields() {
         row.push(Value::from("future market field"));
         top.push(Value::from("future snapshot field"));
     });
-    assert!(decode_snapshot(&bytes, [7; 32]).is_ok());
+    assert!(decode_snapshot(&bytes, chain(7)).is_ok());
 }
 
 #[test]
 fn complete_empty_inventory_is_distinct_from_unavailable_or_uncommitted() {
     let bytes = changed(|top| top[2] = Value::Array(vec![]));
-    assert!(decode_snapshot(&bytes, [7; 32]).unwrap().markets.is_empty());
+    assert!(decode_snapshot(&bytes, chain(7))
+        .unwrap()
+        .markets
+        .is_empty());
     assert_eq!(
-        decode_snapshot(&bytes, [8; 32]).unwrap_err(),
+        decode_snapshot(&bytes, chain(8)).unwrap_err(),
         SnapshotError::WrongChain
     );
     let bytes = changed(|top| top[1] = Value::from(0));
     assert_eq!(
-        decode_snapshot(&bytes, [7; 32]).unwrap_err(),
+        decode_snapshot(&bytes, chain(7)).unwrap_err(),
         SnapshotError::Uncommitted
     );
     for bytes in [
@@ -208,7 +215,7 @@ fn complete_empty_inventory_is_distinct_from_unavailable_or_uncommitted() {
         br#"{"data":"kA==","data":"kA=="}"#,
     ] {
         assert_eq!(
-            decode_snapshot(bytes, [7; 32]).unwrap_err(),
+            decode_snapshot(bytes, chain(7)).unwrap_err(),
             SnapshotError::Malformed
         );
     }
@@ -223,7 +230,7 @@ fn malformed_rows_and_duplicates_refuse_the_whole_snapshot() {
         rows.push(rows[0].clone());
     });
     assert_eq!(
-        decode_snapshot(&duplicate, [7; 32]).unwrap_err(),
+        decode_snapshot(&duplicate, chain(7)).unwrap_err(),
         SnapshotError::DuplicateMarket
     );
     for (slot, replacement) in [
@@ -243,7 +250,7 @@ fn malformed_rows_and_duplicates_refuse_the_whole_snapshot() {
             row[slot] = replacement;
         });
         assert_eq!(
-            decode_snapshot(&bytes, [7; 32]).unwrap_err(),
+            decode_snapshot(&bytes, chain(7)).unwrap_err(),
             SnapshotError::Malformed
         );
     }
@@ -257,7 +264,7 @@ fn malformed_rows_and_duplicates_refuse_the_whole_snapshot() {
         row.truncate(7);
     });
     assert_eq!(
-        decode_snapshot(&short, [7; 32]).unwrap_err(),
+        decode_snapshot(&short, chain(7)).unwrap_err(),
         SnapshotError::Malformed
     );
 }
@@ -265,23 +272,23 @@ fn malformed_rows_and_duplicates_refuse_the_whole_snapshot() {
 #[test]
 fn oversized_truncated_deep_and_trailing_inputs_are_refused() {
     assert_eq!(
-        decode_snapshot(&vec![b' '; MAX_SNAPSHOT_BYTES + 1], [7; 32]).unwrap_err(),
+        decode_snapshot(&vec![b' '; MAX_SNAPSHOT_BYTES + 1], chain(7)).unwrap_err(),
         SnapshotError::TooLarge
     );
     let mut trailing = fixture();
     trailing.push(0);
     assert_eq!(
-        decode_snapshot(&envelope(&trailing), [7; 32]).unwrap_err(),
+        decode_snapshot(&envelope(&trailing), chain(7)).unwrap_err(),
         SnapshotError::Malformed
     );
     assert_eq!(
-        decode_snapshot(&envelope(&[0xdd, 0xff, 0xff, 0xff, 0xff]), [7; 32]).unwrap_err(),
+        decode_snapshot(&envelope(&[0xdd, 0xff, 0xff, 0xff, 0xff]), chain(7)).unwrap_err(),
         SnapshotError::Malformed
     );
     let mut deep = vec![0x91; 64];
     deep.push(0);
     assert_eq!(
-        decode_snapshot(&envelope(&deep), [7; 32]).unwrap_err(),
+        decode_snapshot(&envelope(&deep), chain(7)).unwrap_err(),
         SnapshotError::Malformed
     );
 }
@@ -323,7 +330,7 @@ mod transport {
         let (url, task) = serve(200, envelope(&fixture()), Duration::ZERO).await;
         let snapshot = MarketsSnapshotClient::new(&url, Duration::from_secs(1))
             .unwrap()
-            .read([7; 32])
+            .read(chain(7))
             .await
             .unwrap();
         assert_eq!(snapshot.height, u64::MAX);
@@ -337,7 +344,7 @@ mod transport {
                 serve(code, b"secret URL must not appear".to_vec(), Duration::ZERO).await;
             let error = MarketsSnapshotClient::new(&url, Duration::from_secs(1))
                 .unwrap()
-                .read([7; 32])
+                .read(chain(7))
                 .await
                 .unwrap_err();
             assert_eq!(error, SnapshotError::Http(code));
@@ -348,7 +355,7 @@ mod transport {
         assert_eq!(
             MarketsSnapshotClient::new(&url, Duration::from_millis(25))
                 .unwrap()
-                .read([7; 32])
+                .read(chain(7))
                 .await
                 .unwrap_err(),
             SnapshotError::Timeout

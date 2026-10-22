@@ -1,7 +1,7 @@
 //! Established gateway chain/receipt read semantics, scoped to the inventory
 //! lifecycle. Errors are never evidence that an in-flight action was rejected.
 
-use super::{BlockHeight, MarketsSnapshotClient, SnapshotError};
+use super::{BlockHeight, ChainBinding, MarketsSnapshotClient, SnapshotError};
 use crate::gateway::TxHash;
 use serde::{de::DeserializeOwned, Deserialize};
 
@@ -85,7 +85,7 @@ impl MarketsSnapshotClient {
     /// oracle freshness, and it must not be spliced into a market snapshot.
     pub async fn chain_identity(
         &self,
-        expected_chain: [u8; 32],
+        expected_chain: ChainBinding,
     ) -> Result<ChainIdentity, SnapshotError> {
         decode_identity(&self.get("/v1/status").await?, expected_chain)
     }
@@ -100,15 +100,14 @@ impl MarketsSnapshotClient {
 
 pub(super) fn decode_identity(
     body: &[u8],
-    expected: [u8; 32],
+    expected: ChainBinding,
 ) -> Result<ChainIdentity, SnapshotError> {
     let status: Status = rpc(body)?;
     let network = status.node_info.network;
     if network.is_empty() || network.len() > 128 || network.chars().any(char::is_control) {
         return Err(SnapshotError::Malformed);
     }
-    let chain_binding = crate::crypto::chain_id_from_string(&network);
-    if expected == [0; 32] || chain_binding != expected {
+    if ChainBinding::of_network(&network) != Some(expected) {
         return Err(SnapshotError::WrongChain);
     }
     if status.sync_info.catching_up {
@@ -123,7 +122,7 @@ pub(super) fn decode_identity(
     }
     Ok(ChainIdentity {
         network,
-        chain_binding,
+        chain_binding: expected,
         latest_height: positive_height(&status.sync_info.latest_block_height)?,
         latest_block_time_ms,
         // A catching-up node was refused above, so this read never reports one.
@@ -153,7 +152,8 @@ mod tests {
     }
     #[test]
     fn committed_time_requires_exact_chain_height_and_caught_up_state() {
-        let expected = crate::crypto::chain_id_from_string("proof-test");
+        let expected =
+            ChainBinding::of_network("proof-test").expect("the fixture network binds a chain");
         let decoded = decode_identity(&serde_json::to_vec(&status()).unwrap(), expected).unwrap();
         assert_eq!(decoded.latest_height.get(), 9_007_199_254_740_993);
         assert_eq!(decoded.latest_block_time_ms, 1_789_128_000_123);
@@ -169,7 +169,11 @@ mod tests {
             assert!(decode_identity(&serde_json::to_vec(&body).unwrap(), expected).is_err());
         }
         assert_eq!(
-            decode_identity(&serde_json::to_vec(&status()).unwrap(), [9; 32]).unwrap_err(),
+            decode_identity(
+                &serde_json::to_vec(&status()).unwrap(),
+                ChainBinding::new([9; 32]).expect("a non-zero binding"),
+            )
+            .unwrap_err(),
             SnapshotError::WrongChain
         );
     }
@@ -228,7 +232,9 @@ mod tests {
         });
         let client = MarketsSnapshotClient::new(&url, std::time::Duration::from_secs(1)).unwrap();
         let identity = client
-            .chain_identity(crate::crypto::chain_id_from_string("proof-test"))
+            .chain_identity(
+                ChainBinding::of_network("proof-test").expect("the fixture network binds a chain"),
+            )
             .await
             .unwrap();
         assert_eq!(identity.latest_height.get(), 9_007_199_254_740_993);

@@ -96,6 +96,17 @@ fn errors_vectors() {
 }
 
 #[test]
+fn events_vectors() {
+    let cases = lines(cv::EVENTS_FILE);
+    assert!(!cases.is_empty(), "no events vectors");
+    for line in cases {
+        let c: cv::EventCase = serde_json::from_str(&line).expect("parse events case");
+        let got = cv::event_expect(&c.event).unwrap_or_else(|e| panic!("[{}] {e}", c.case));
+        assert_eq!(got, c.expect, "events mismatch for case {}", c.case);
+    }
+}
+
+#[test]
 fn nonce_vectors() {
     let cases = lines(cv::NONCE_FILE);
     assert!(!cases.is_empty(), "no nonce vectors");

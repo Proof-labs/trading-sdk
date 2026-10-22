@@ -3,7 +3,7 @@
 
 use super::{decode_receipt, CommittedReceipt, MarketsSnapshotClient, SnapshotError};
 use crate::gateway::TxHash;
-use crate::market_snapshot::{MarketId, MicroUsdc, MAX_SNAPSHOT_BYTES};
+use crate::market_snapshot::{Address, MarketId, MicroUsdc, MAX_SNAPSHOT_BYTES};
 use serde::Deserialize;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,7 +80,7 @@ pub struct CommittedPriceUpdate {
     receipt: CommittedReceipt,
     market: MarketId,
     price: MicroUsdc,
-    signer: [u8; 20],
+    signer: Address,
 }
 
 impl CommittedPriceUpdate {
@@ -96,7 +96,7 @@ impl CommittedPriceUpdate {
         self.price
     }
 
-    pub fn signer(&self) -> [u8; 20] {
+    pub fn signer(&self) -> Address {
         self.signer
     }
 }
@@ -179,8 +179,8 @@ fn price_event_decode_failure(body: &[u8]) -> PriceEvidence {
 /// ABCI attributes are strings, not base64 byte slices. An address is 40
 /// lowercase hexadecimal digits; anything else cannot bind this evidence to a
 /// retained signing authority.
-fn signer_address(text: &str) -> Option<[u8; 20]> {
-    crate::market_snapshot::values::lowercase_hex_array(text)
+fn signer_address(text: &str) -> Option<Address> {
+    crate::market_snapshot::values::lowercase_hex_array(text).map(Address::new)
 }
 
 /// An accepted oracle update emits exactly one event. Extra, unknown, duplicate or
@@ -301,7 +301,7 @@ fn classify(status: u16, body: &[u8], hash: TxHash) -> Result<ReceiptObservation
             data,
         } if message == "Internal error" => data,
         NotFoundError::Gateway(data) => data,
-        _ => return Err(SnapshotError::RpcUnavailable),
+        _ => return Err(SnapshotError::UnrecognizedNotFound),
     };
     let text = text.to_ascii_lowercase();
     // Exact Comet/gateway grammar, not just a hash somewhere beside "not found".
@@ -310,11 +310,11 @@ fn classify(status: u16, body: &[u8], hash: TxHash) -> Result<ReceiptObservation
     let token = text
         .strip_prefix("tx (")
         .and_then(|text| text.strip_suffix(") not found"))
-        .ok_or(SnapshotError::RpcUnavailable)?;
+        .ok_or(SnapshotError::UnrecognizedNotFound)?;
     // A message that is not this grammar, hash included, is some other
     // backend failure and never progress evidence.
-    let named: [u8; 32] =
-        crate::market_snapshot::values::hex_array(token).ok_or(SnapshotError::RpcUnavailable)?;
+    let named: [u8; 32] = crate::market_snapshot::values::hex_array(token)
+        .ok_or(SnapshotError::UnrecognizedNotFound)?;
     if named != hash.bytes() {
         return Err(SnapshotError::HashMismatch);
     }

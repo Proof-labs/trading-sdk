@@ -7,7 +7,60 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking changes
+
+- **`proof-wire` moves to v7.0.0** (`25f8972e`, tag `v7.0.0`), and the
+  manifest pins the proof-wire major (`version = "7"`). The wire drops three
+  liquidation work limits, so `LiquidationConfig` is now `targetRatioBps`,
+  `fullCloseThreshold`, `partialPenaltyBps`, `maxBookOrders` and
+  `maxCommittedFills`: `maxCandidatePrefixes`, `maxStateReads` and
+  `maxStateReadBytes` are gone from the TypeScript type, its validation, the
+  `SetLiquidationConfig` proposal decoder and the `LiquidationConfigSet`
+  event decoder, and `maxCommittedFills` no longer has an upper bound tied to
+  another field. A proposal or event in the proof-wire 6.x eight-field shape
+  is refused. The `propose_admin_action/set_liquidation_config` conformance
+  vector and its content hash are regenerated; every other codec vector is
+  unchanged. The liquidation configuration shapes have not shipped in a
+  release yet; the next release is still MAJOR for npm and Python (the
+  error-code move below changes a released value) and for the Rust core (it
+  re-exports the proof-wire 7 types).
+- **`ExecErrorCode.InvalidPlpConfig` moves from 101 to 112**, the code
+  proof-wire 7.0.0 assigns to a PLP shape fault, in TypeScript, Rust and
+  Python. Code 101 is unassigned on the wire and now decodes as unknown.
+  This supersedes the separate code-112 correction in
+  [#265](https://github.com/Proof-labs/trading-sdk/pull/265).
+- The `FullLiquidationFee` event is gone from proof-wire 7.0.0, so
+  `decodeLiquidationEvent` no longer decodes `full_liquidation_fee` (it
+  returns `null`, like any other event type) and `FullLiquidationFeeEvent`
+  is no longer exported.
+
 ### Added
+
+- **`decodeLiquidationEvent` decodes three more engine events** from
+  exchange 2.18.0 (proof-wire 7.0.0):
+  - `position_liquidated` → `PositionLiquidatedEvent`: one per position an
+    owner's liquidation attempt reduced, with its `side`, `mode`
+    (`LIQUIDATION_MODES`: `partial`, `full`, `insolvent`), sizes before,
+    closed and after, the penalty collected and waived, the owner's signed
+    `equity`, `maintenance` and `bindingOutcome` (the `BindingScenarioEntry`
+    list, empty without event exposure) when the attempt was decided, and
+    the configuration sequence.
+  - `liquidation_failed` → `LiquidationFailedEvent`: the engine error `code`
+    and, when the attempt was refused (code 111, `LIQUIDATION_REFUSED_CODE`),
+    the `refusal` (`LIQUIDATION_REFUSALS`: `position_mismatch`,
+    `invalid_maker`, `reference_unavailable`); `null` for any other error.
+  - `adl_counterparty_skipped` → `AdlCounterpartySkippedEvent`: a profitable
+    position auto-deleveraging left out of a deficit's candidate set, with
+    its market, pool, size and `reason` (`ADL_SKIP_REASONS`:
+    `stale_oracle_dependency`).
+
+  Signed 64-bit values decode to `bigint`; an unknown enumeration value, a
+  `size_after` that is not `size_before - size_closed` floored at zero, a
+  binding outcome whose event ids are not strictly ascending, a refusal
+  under a code other than 111, code 111 without a refusal, or code 0 throws. A new `events.ndjson`
+  conformance family, generated from proof-wire's own encoder, pins the
+  attributes for all three events; the Rust runner re-encodes it and the
+  TypeScript runner decodes it. Additive TypeScript API.
 
 - `FundInsuranceFund` (admin tag 18) and `WithdrawInsuranceFund` (admin
   tag 25) proposals: TypeScript types, pre-signing shape validation,
@@ -15,8 +68,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   codec is the only encoder. Transfer IDs keep the full `u64` range;
   allocations require a non-zero account, 1–8 distinct ascending pools,
   positive amounts and a total no greater than `i64::MAX`.
-  Insurance refusals 102–105 have named TypeScript, Rust and Python error
-  classifications; existing `InvalidPlpConfig` code 101 is unchanged.
+  Insurance refusals 102–110 have named TypeScript, Rust and Python error
+  classifications.
   Additive npm/Python API; no existing signed bytes change. Availability
   requires the reviewed engine and gateway insurance actions and the
   corresponding public proof-wire release. The SDK does not authorize a
@@ -29,7 +82,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The `SetLiquidationConfig` governance action** (inner tag 17). An
   `AdminAction` of kind `SetLiquidationConfig` carries `predecessor`,
   `sequence` and the global `LiquidationConfig` (target ratio, exact
-  full-close threshold, partial penalty, work limits). Proposals carrying it
+  full-close threshold, partial penalty, book-order and committed-fill
+  caps). Proposals carrying it
   encode, decode, content-hash and render like the engine's;
   `validateSetLiquidationConfig` and `validateLiquidationConfig` mirror
   proof-wire's bounds and run before encoding and after decoding. A
@@ -38,12 +92,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`decodeLiquidationEvent`** decodes the engine's liquidation events from
   their ABCI attributes (a `TxEvent`, or the same attributes as a plain
   object): `LiquidationConfigSet`, `PartialLiquidationFee` (one per partial
-  fill), `FullLiquidationFee` (one per completed full close) and
-  `LiquidationProgressReported` with its fourteen `LiquidationProgress`
+  fill) and `LiquidationProgressReported` with its fourteen `LiquidationProgress`
   outcomes. Amounts and identifiers decode to `bigint`; a malformed event
   throws, and any other event type returns `null`.
-- The Rust crate re-exports `proof_wire::liquidation_config` and
-  `proof_wire::liquidation_progress`, and `governance` re-exports
+- The Rust crate re-exports `proof_wire::liquidation_config`,
+  `proof_wire::liquidation_progress` and `proof_wire::liquidation_report`
+  (the `LiquidationRefusal` that `ExecError::LiquidationRefused` carries), and `governance` re-exports
   `LiquidationConfig` and `SetLiquidationConfig`.
 - **Python: typed builders for every published action.** `OracleUpdate`,
   `CreateMarket`, `AuthorizeWithdrawal`, `ConfirmWithdrawalReceipt` and
@@ -57,11 +111,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ActionType` and `TestActionType` maps to the core's
   `codec::get_action_types()` in both directions. CI runs it when either map
   changes.
+- **Rust: the bound-inventory bracket retry is client configuration.**
+  `MarketsSnapshotClient::with_bracket_retry(BracketRetry { attempts, delay })`
+  sets how many whole brackets `read_bound_inventory` reads after a lagging
+  read and how long it pauses between them. The defaults are the previous
+  fixed 3 attempts, 150 ms apart; zero attempts, more than 8, or a pause over
+  5 s is refused with `SnapshotError::InvalidBracketRetry` (#143).
 
-### Changed
-
-- `proof-wire` moves to v6.4.0 (`937adebc`), the wire exchange 2.17.0
-  (protocol 5.0) ships with. Every existing conformance vector is unchanged.
+- Error codes from proof-wire 7.0.0, in TypeScript (`ExecErrorCode`,
+  `decodeExecError`), Rust and Python, with `manifest/106` to `manifest/112`
+  conformance cases: `InsuranceTransferZeroAccount` (106),
+  `InsuranceAllocationCount` (107), `InsuranceAllocationOrder` (108),
+  `InsuranceAllocationZeroAmount` (109), `InsuranceAmountExceedsI64` (110),
+  `LiquidationRefused` (111, a refused liquidation attempt that kept no
+  writes) and `InvalidPlpConfig` (112).
+- `CancelReason` gains `reduce_only`, `unfunded`, `insufficient_margin` and
+  `maker_refused`, the full proof-wire 7.0.0 list.
 
 ### Fixed
 
@@ -95,6 +160,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exhaustive `match`, or a struct pattern or literal without `..`, needs
   updating. The Rust crate takes a MAJOR bump at its next release; npm and
   Python are unaffected.
+- `SnapshotError` gains `InvalidBracketRetry`; an exhaustive `match` on it
+  needs a new arm.
+- The market-snapshot chain binding and the oracle signer are their own
+  types (#143). Every `expected_chain` parameter (`read`, `read_bound`,
+  `chain_identity`, `chain_identity_bound`, `read_bound_inventory`,
+  `read_bound_inventory_reporting`, `decode_snapshot`, `decode_bound_snapshot`,
+  `decode_bound_identity`) takes a `ChainBinding` instead of `[u8; 32]`, and
+  `ChainIdentity::chain_binding` is one; build it with
+  `ChainBinding::of_network(name)` or `ChainBinding::new(bytes)`, both of which
+  refuse the all-zero binding the decoders already refused.
+  `CommittedPriceUpdate::signer()` returns an `Address`; `.bytes()` reads the
+  20 bytes out. No wire change.
+- `receipt_observation` answers a 404 or 500 error that is not the exact
+  not-found shape for the requested hash with the new
+  `SnapshotError::UnrecognizedNotFound`, not `RpcUnavailable` (#143): the
+  backend answered, so it is not unavailable. It is still never not-found
+  evidence. A caller that retried on `RpcUnavailable` should decide whether it
+  retries on this too; an exhaustive `match` needs a new arm.
 
 ### Documentation
 

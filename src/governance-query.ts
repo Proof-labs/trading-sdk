@@ -183,12 +183,11 @@ function decodeSetWithdrawalLimit(value: unknown): SetWithdrawalLimit {
 
 /// Inner tag 17: `[predecessor, sequence, config]`, where `config` is
 /// `[targetRatioBps, [numerator, denominator], partialPenaltyBps,
-/// maxBookOrders, maxCandidatePrefixes, maxCommittedFills, maxStateReads,
-/// maxStateReadBytes]`. Every newtype is its bare integer. A proposal the
+/// maxBookOrders, maxCommittedFills]`. Every newtype is its bare integer. A proposal the
 /// engine would refuse fails closed here too.
 function decodeSetLiquidationConfig(value: unknown): SetLiquidationConfig {
   const raw = toTuple(value, "setLiquidationConfig", 3);
-  const c = toTuple(raw[2], "setLiquidationConfig.config", 8);
+  const c = toTuple(raw[2], "setLiquidationConfig.config", 5);
   const threshold = toTuple(
     c[1],
     "setLiquidationConfig.config.fullCloseThreshold",
@@ -209,10 +208,7 @@ function decodeSetLiquidationConfig(value: unknown): SetLiquidationConfig {
       },
       partialPenaltyBps: toU32(c[2], field("partialPenaltyBps")),
       maxBookOrders: toU32(c[3], field("maxBookOrders")),
-      maxCandidatePrefixes: toU32(c[4], field("maxCandidatePrefixes")),
-      maxCommittedFills: toU32(c[5], field("maxCommittedFills")),
-      maxStateReads: toU32(c[6], field("maxStateReads")),
-      maxStateReadBytes: toU32(c[7], field("maxStateReadBytes")),
+      maxCommittedFills: toU32(c[4], field("maxCommittedFills")),
     },
   };
   validateSetLiquidationConfig(action);
