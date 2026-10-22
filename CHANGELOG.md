@@ -55,8 +55,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `stale_oracle_dependency`).
 
   Signed 64-bit values decode to `bigint`; an unknown enumeration value, a
-  `size_after` that is not `size_before - size_closed` floored at zero, or a
-  refusal under a code other than 111 throws. A new `events.ndjson`
+  `size_after` that is not `size_before - size_closed` floored at zero, a
+  binding outcome whose event ids are not strictly ascending, or a refusal
+  under a code other than 111 throws. A new `events.ndjson`
   conformance family, generated from proof-wire's own encoder, pins the
   attributes for all three events; the Rust runner re-encodes it and the
   TypeScript runner decodes it. Additive TypeScript API.
