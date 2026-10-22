@@ -36,6 +36,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `decodeLiquidationEvent` decodes the proof-wire 7.0.0 liquidation reports:
+  `position_liquidated` (`PositionLiquidatedEvent`), `liquidation_failed`
+  (`LiquidationFailedEvent`, `refusal` `null` unless refused) and
+  `adl_counterparty_skipped` (`AdlCounterpartySkippedEvent`).
+- `queryLiquidationHistoryPage(owner, { order, fromMs, toMs, limit, cursor })`
+  reads `/v1/history/liquidations/{owner}`, each row decoded as its event.
+
 - `FundInsuranceFund` (admin tag 18) and `WithdrawInsuranceFund` (admin
   tag 25) proposals: TypeScript types, pre-signing shape validation,
   proposal decoding and Rust governance re-exports. The shared Rust/WASM

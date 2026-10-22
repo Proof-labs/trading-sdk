@@ -534,3 +534,100 @@ describe("resolution history", () => {
     expect(row.fallbackReason).toBe("");
   });
 });
+
+const liquidated = {
+  event_id: 9,
+  owner,
+  block_height: 42,
+  block_time: "2026-10-22T08:00:00.123456789Z",
+  tx_hash: "AB".repeat(32),
+  event_index: 3,
+  event_type: "position_liquidated",
+  payload: {
+    owner,
+    market: "7",
+    side: "buy",
+    mode: "full",
+    size_before: "200",
+    size_closed: "200",
+    size_after: "0",
+    penalty_collected: "3",
+    penalty_waived: "2",
+    equity: "-15",
+    maintenance: "40",
+    binding_outcome: "",
+    config_sequence: "8",
+  },
+};
+const failed = {
+  ...liquidated,
+  event_id: 8,
+  event_type: "liquidation_failed",
+  payload: { owner, code: "111", refusal: "invalid_maker" },
+};
+
+describe("liquidation history pages", () => {
+  it("decodes each report and passes the window, order and cursor", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        json({ liquidations: [liquidated, failed], next_cursor: "next" }),
+      );
+    vi.stubGlobal("fetch", fetch);
+    const page = await client().queryLiquidationHistoryPage(owner, {
+      order: "asc",
+      fromMs: 1789540000000,
+      limit: 2,
+      cursor: "prev",
+    });
+    expect(page.nextCursor).toBe("next");
+    expect(page.liquidations[0]).toEqual({
+      eventId: 9,
+      blockHeight: 42,
+      blockTime: liquidated.block_time,
+      txHash: liquidated.tx_hash,
+      eventIndex: 3,
+      event: expect.objectContaining({
+        type: "PositionLiquidated",
+        mode: "full",
+        equity: -15n,
+        bindingOutcome: [],
+      }),
+    });
+    expect(page.liquidations[1].event).toEqual({
+      type: "LiquidationFailed",
+      owner,
+      code: 111,
+      refusal: "invalid_maker",
+    });
+    const url = new URL(fetch.mock.calls[0][0]);
+    expect(url.pathname).toBe(`/v1/history/liquidations/${owner}`);
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      from: "1789540000000",
+      limit: "2",
+      cursor: "prev",
+      order: "asc",
+    });
+  });
+
+  it.each([
+    { liquidations: null, next_cursor: "" },
+    {
+      liquidations: [{ ...liquidated, owner: "cd".repeat(20) }],
+      next_cursor: "",
+    },
+    {
+      liquidations: [{ ...liquidated, event_type: "position_closed" }],
+      next_cursor: "",
+    },
+    {
+      liquidations: [
+        { ...failed, payload: { ...failed.payload, owner: "cd".repeat(20) } },
+      ],
+      next_cursor: "",
+    },
+  ])("refuses a malformed or out-of-scope page %#", async (body) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(body)));
+    await expect(client().queryLiquidationHistoryPage(owner)).rejects.toThrow();
+  });
+});

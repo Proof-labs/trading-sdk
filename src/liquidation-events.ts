@@ -3,14 +3,18 @@
  * attributes of one ABCI event: a transaction's `TxEvent`, or a payload the
  * indexer or the account feed carries verbatim.
  *
- * Every integer attribute is a decimal string; a u64 decodes to `bigint`,
- * since identifiers and amounts can exceed 2^53. An address is 40 lowercase
+ * Every integer attribute is a decimal string; a u64 or i64 decodes to
+ * `bigint`, since identifiers and amounts can exceed 2^53. An address is 40 lowercase
  * hex characters. Attributes these decoders do not name, such as the chain
  * coordinates (`block_height`, `event_key`, …), are ignored. A malformed
  * event throws; an event of another type decodes to `null`.
  */
 
-import type { LiquidationConfig, TxEvent } from "./types.js";
+import type {
+  BindingScenarioEntry,
+  LiquidationConfig,
+  TxEvent,
+} from "./types.js";
 import { validateLiquidationConfig } from "./liquidation-config.js";
 
 /** How one liquidation attempt on an owner ended in a block, as the
@@ -34,6 +38,25 @@ export const LIQUIDATION_PROGRESS_OUTCOMES = [
 
 export type LiquidationProgress =
   (typeof LIQUIDATION_PROGRESS_OUTCOMES)[number];
+
+/** Which path liquidated a position. */
+export const LIQUIDATION_MODES = ["partial", "full", "insolvent"] as const;
+
+export type LiquidationMode = (typeof LIQUIDATION_MODES)[number];
+
+/** Why a liquidation attempt was refused rather than erroring. */
+export const LIQUIDATION_REFUSALS = [
+  "position_mismatch",
+  "invalid_maker",
+  "reference_unavailable",
+] as const;
+
+export type LiquidationRefusal = (typeof LIQUIDATION_REFUSALS)[number];
+
+/** Why a profitable position was left out of an ADL candidate set. */
+export const ADL_SKIP_REASONS = ["stale_oracle_dependency"] as const;
+
+export type AdlSkipReason = (typeof ADL_SKIP_REASONS)[number];
 
 /** The admin quorum replaced the global liquidation configuration. */
 export interface LiquidationConfigSetEvent {
@@ -68,10 +91,55 @@ export interface LiquidationProgressReportedEvent {
   configSequence: bigint;
 }
 
+/**
+ * One position an owner's liquidation reduced, once per position per
+ * attempt. The penalty sums the per-fill penalties on this position.
+ * `equity`, `maintenance` and `bindingOutcome` are the owner's binding
+ * outcome; `bindingOutcome` is empty without event exposure.
+ */
+export interface PositionLiquidatedEvent {
+  type: "PositionLiquidated";
+  owner: string;
+  market: number;
+  side: "buy" | "sell";
+  mode: LiquidationMode;
+  sizeBefore: bigint;
+  sizeClosed: bigint;
+  sizeAfter: bigint;
+  penaltyCollected: bigint;
+  penaltyWaived: bigint;
+  equity: bigint;
+  maintenance: bigint;
+  bindingOutcome: BindingScenarioEntry[];
+  configSequence: bigint;
+}
+
+/** An owner's liquidation attempt that kept none of its writes: the engine
+ *  error `code`, and the `refusal` when it was refused rather than erroring. */
+export interface LiquidationFailedEvent {
+  type: "LiquidationFailed";
+  owner: string;
+  code: number;
+  refusal: LiquidationRefusal | null;
+}
+
+/** A profitable position left out of `poolId`'s ADL candidate set. */
+export interface AdlCounterpartySkippedEvent {
+  type: "AdlCounterpartySkipped";
+  owner: string;
+  market: number;
+  poolId: number;
+  size: bigint;
+  reason: AdlSkipReason;
+}
+
 export type LiquidationEvent =
   | LiquidationConfigSetEvent
   | PartialLiquidationFeeEvent
-  | LiquidationProgressReportedEvent;
+  | LiquidationProgressReportedEvent
+  | PositionLiquidatedEvent
+  | LiquidationFailedEvent
+  | AdlCounterpartySkippedEvent;
 
 /** One ABCI event: a `TxEvent`'s attribute list, or the same attributes as
  *  a plain object. */
@@ -82,6 +150,8 @@ export interface LiquidationEventInput {
 
 const U32_MAX = 0xffff_ffffn;
 const U64_MAX = (1n << 64n) - 1n;
+const I64_MIN = -(1n << 63n);
+const I64_MAX = (1n << 63n) - 1n;
 
 class Attributes {
   private readonly values = new Map<string, unknown>();
@@ -120,6 +190,38 @@ class Attributes {
     const value = BigInt(text);
     if (value > max) this.fail(key, `exceeds ${max}`);
     return value;
+  }
+
+  i64(key: string): bigint {
+    const text = this.text(key);
+    if (!/^(0|-?[1-9][0-9]*)$/.test(text)) {
+      this.fail(key, "is not a decimal signed integer");
+    }
+    const value = BigInt(text);
+    if (value < I64_MIN || value > I64_MAX) this.fail(key, "exceeds i64");
+    return value;
+  }
+
+  oneOf<T extends string>(key: string, values: readonly T[]): T {
+    const text = this.text(key);
+    if (!(values as readonly string[]).includes(text)) {
+      this.fail(key, `has unknown value "${text}"`);
+    }
+    return text as T;
+  }
+
+  /** `event_id:branch` pairs joined by commas; empty for none. */
+  bindingOutcome(key: string): BindingScenarioEntry[] {
+    const text = this.text(key);
+    if (text === "") return [];
+    return text.split(",").map((pair) => {
+      const match = /^(0|[1-9][0-9]*):(yes|no)$/.exec(pair);
+      const eventId = match ? Number(match[1]) : NaN;
+      if (!match || !Number.isSafeInteger(eventId)) {
+        this.fail(key, `has malformed entry "${pair}"`);
+      }
+      return { eventId, branch: match[2] === "yes" ? "Yes" : "No" };
+    });
   }
 
   u64(key: string): bigint {
@@ -205,14 +307,59 @@ function liquidationProgressReported(
   };
 }
 
+function positionLiquidated(a: Attributes): PositionLiquidatedEvent {
+  return {
+    type: "PositionLiquidated",
+    owner: a.owner("owner"),
+    market: a.u32("market"),
+    side: a.oneOf("side", ["buy", "sell"] as const),
+    mode: a.oneOf("mode", LIQUIDATION_MODES),
+    sizeBefore: a.u64("size_before"),
+    sizeClosed: a.u64("size_closed"),
+    sizeAfter: a.u64("size_after"),
+    penaltyCollected: a.u64("penalty_collected"),
+    penaltyWaived: a.u64("penalty_waived"),
+    equity: a.i64("equity"),
+    maintenance: a.u64("maintenance"),
+    bindingOutcome: a.bindingOutcome("binding_outcome"),
+    configSequence: a.u64("config_sequence"),
+  };
+}
+
+function liquidationFailed(a: Attributes): LiquidationFailedEvent {
+  return {
+    type: "LiquidationFailed",
+    owner: a.owner("owner"),
+    code: a.u32("code"),
+    refusal:
+      a.text("refusal") === ""
+        ? null
+        : a.oneOf("refusal", LIQUIDATION_REFUSALS),
+  };
+}
+
+function adlCounterpartySkipped(a: Attributes): AdlCounterpartySkippedEvent {
+  return {
+    type: "AdlCounterpartySkipped",
+    owner: a.owner("owner"),
+    market: a.u32("market"),
+    poolId: a.u8("pool_id"),
+    size: a.u64("size"),
+    reason: a.oneOf("reason", ADL_SKIP_REASONS),
+  };
+}
+
 const DECODERS: Record<string, (a: Attributes) => LiquidationEvent> = {
   liquidation_config_set: liquidationConfigSet,
   partial_liquidation_fee: partialLiquidationFee,
   liquidation_progress_reported: liquidationProgressReported,
+  position_liquidated: positionLiquidated,
+  liquidation_failed: liquidationFailed,
+  adl_counterparty_skipped: adlCounterpartySkipped,
 };
 
 /**
- * Decode one of the three liquidation events from its ABCI type (the
+ * Decode one of the liquidation events from its ABCI type (the
  * engine's snake_case name, e.g. `"partial_liquidation_fee"`) and string
  * attributes. Returns `null` for any other event type, so a caller can run
  * it over every event of a transaction or block.

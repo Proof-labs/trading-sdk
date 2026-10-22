@@ -19,6 +19,7 @@ import { GatewayReads, type GatewayFetch } from "./gateway-reads.js";
 import { GatewayHttpError } from "./errors.js";
 import {
   decodeCashFlowEvents,
+  decodeHistoryLiquidationsPage,
   decodeHistoryPositionsPage,
   historyOwner,
   historySearchParams,
@@ -68,6 +69,7 @@ import type {
   HistoryCashFlow,
   HistoryFillsPage,
   HistoryPositionSnapshot,
+  HistoryLiquidationsPage,
   HistoryPositionsPage,
   HistoryResolution,
   MarketConfig,
@@ -2132,6 +2134,34 @@ export class ExchangeClient {
 
   /** Gateway/indexer snapshots, newest first. Preserve filters when passing an
    * opaque nextCursor back in opts.cursor. Null close fields stay null. */
+  /** One owner's liquidation reports, newest first unless `order: "asc"`. */
+  async queryLiquidationHistoryPage(
+    addressHex?: string,
+    opts: {
+      order?: "asc" | "desc";
+      fromMs?: number;
+      toMs?: number;
+      limit?: number;
+      cursor?: string;
+    } = {},
+  ): Promise<HistoryLiquidationsPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) throw new Error("No address available");
+    const owner = historyOwner(hex);
+    const params = historySearchParams(opts);
+    if (opts.order !== undefined) {
+      if (opts.order !== "asc" && opts.order !== "desc")
+        throw new Error("Invalid history order");
+      params.set("order", opts.order);
+    }
+    const query = params.toString();
+    const json = await this.apiJson(
+      `${this.gatewayUrl}/v1/history/liquidations/${owner}${query ? `?${query}` : ""}`,
+      "account",
+    );
+    return decodeHistoryLiquidationsPage(json, owner);
+  }
+
   async queryHistoryPositionsPage(
     addressHex?: string,
     opts: {

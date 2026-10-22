@@ -1,4 +1,8 @@
 import type { ExecErrorInfo } from "./errors.js";
+import type {
+  LiquidationFailedEvent,
+  PositionLiquidatedEvent,
+} from "./liquidation-events.js";
 
 /** 20-byte account address (derived from Ed25519 public key). */
 export type Address = Uint8Array;
@@ -2655,6 +2659,25 @@ export interface HistoryPosition {
 /** One newest-first page. An empty nextCursor means there are no further rows. */
 export interface HistoryPositionsPage {
   positions: HistoryPosition[];
+  nextCursor: string;
+}
+
+/** One `position_liquidated` or `liquidation_failed` report from
+ * `/v1/history/liquidations/{owner}`. */
+export interface HistoryLiquidation {
+  eventId: number;
+  blockHeight: number;
+  /** RFC 3339 with nanoseconds, exactly as the indexer renders it. */
+  blockTime: string;
+  txHash: string;
+  eventIndex: number;
+  event: PositionLiquidatedEvent | LiquidationFailedEvent;
+}
+
+/** One page, newest first unless `order: "asc"`. An empty nextCursor means
+ * there are no further rows. */
+export interface HistoryLiquidationsPage {
+  liquidations: HistoryLiquidation[];
   nextCursor: string;
 }
 

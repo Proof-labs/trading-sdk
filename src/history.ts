@@ -1,4 +1,13 @@
-import type { HistoryCashFlow, HistoryPositionsPage } from "./types.js";
+import type {
+  HistoryCashFlow,
+  HistoryLiquidationsPage,
+  HistoryPositionsPage,
+} from "./types.js";
+import {
+  type LiquidationFailedEvent,
+  type PositionLiquidatedEvent,
+  decodeLiquidationEvent,
+} from "./liquidation-events.js";
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -112,6 +121,46 @@ export function decodeHistoryPositionsPage(
         size,
         blockHeight: integer(row.block_height, "block_height"),
         blockTime,
+      };
+    }),
+    nextCursor: page.next_cursor,
+  };
+}
+
+const LIQUIDATION_HISTORY_TYPES = new Set([
+  "position_liquidated",
+  "liquidation_failed",
+]);
+
+/** One `/v1/history/liquidations/{owner}` page; each payload decodes as its event. */
+export function decodeHistoryLiquidationsPage(
+  value: unknown,
+  owner: string,
+): HistoryLiquidationsPage {
+  const page = object(value);
+  if (!Array.isArray(page.liquidations) || typeof page.next_cursor !== "string")
+    throw new Error("Invalid liquidation history page");
+  return {
+    liquidations: page.liquidations.map((value) => {
+      const row = object(value);
+      const eventType = text(row.event_type, "event_type");
+      if (row.owner !== owner || !LIQUIDATION_HISTORY_TYPES.has(eventType))
+        throw new Error("Liquidation history scope mismatch");
+      const event = decodeLiquidationEvent({
+        type: eventType,
+        attributes: object(row.payload),
+      }) as PositionLiquidatedEvent | LiquidationFailedEvent;
+      if (event.owner !== owner)
+        throw new Error("Liquidation history scope mismatch");
+      const blockTime = text(row.block_time, "block_time");
+      time(blockTime);
+      return {
+        eventId: integer(row.event_id, "event_id"),
+        blockHeight: integer(row.block_height, "block_height"),
+        blockTime,
+        txHash: text(row.tx_hash, "tx_hash"),
+        eventIndex: integer(row.event_index, "event_index"),
+        event,
       };
     }),
     nextCursor: page.next_cursor,

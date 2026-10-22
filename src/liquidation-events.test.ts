@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  LIQUIDATION_MODES,
   LIQUIDATION_PROGRESS_OUTCOMES,
+  LIQUIDATION_REFUSALS,
   decodeLiquidationEvent,
 } from "./liquidation-events.js";
 import type { TxEvent } from "./types.js";
@@ -29,6 +31,27 @@ const partialFee = (overrides: Record<string, string> = {}) =>
       assessed: "5",
       collected: "3",
       waived: "2",
+      ...overrides,
+    }),
+  );
+
+const positionLiquidated = (overrides: Record<string, string> = {}) =>
+  txEvent(
+    "position_liquidated",
+    Object.entries({
+      owner: OWNER_AB,
+      market: "7",
+      side: "sell",
+      mode: "partial",
+      size_before: "100",
+      size_closed: "12",
+      size_after: "88",
+      penalty_collected: "9",
+      penalty_waived: "3",
+      equity: "-5",
+      maintenance: "500",
+      binding_outcome: "4:yes,9:no",
+      config_sequence: "2",
       ...overrides,
     }),
   );
@@ -88,6 +111,84 @@ describe("decodeLiquidationEvent", () => {
         configSequence: 4n,
       });
     }
+  });
+
+  it("decodes PositionLiquidated", () => {
+    expect(decodeLiquidationEvent(positionLiquidated())).toEqual({
+      type: "PositionLiquidated",
+      owner: OWNER_AB,
+      market: 7,
+      side: "sell",
+      mode: "partial",
+      sizeBefore: 100n,
+      sizeClosed: 12n,
+      sizeAfter: 88n,
+      penaltyCollected: 9n,
+      penaltyWaived: 3n,
+      equity: -5n,
+      maintenance: 500n,
+      bindingOutcome: [
+        { eventId: 4, branch: "Yes" },
+        { eventId: 9, branch: "No" },
+      ],
+      configSequence: 2n,
+    });
+    for (const mode of LIQUIDATION_MODES) {
+      expect(
+        decodeLiquidationEvent(
+          positionLiquidated({ mode, binding_outcome: "" }),
+        ),
+      ).toMatchObject({ mode, bindingOutcome: [] });
+    }
+  });
+
+  it("decodes LiquidationFailed with and without a refusal", () => {
+    for (const refusal of LIQUIDATION_REFUSALS) {
+      expect(
+        decodeLiquidationEvent(
+          txEvent("liquidation_failed", [
+            ["owner", OWNER_CD],
+            ["code", "111"],
+            ["refusal", refusal],
+          ]),
+        ),
+      ).toEqual({
+        type: "LiquidationFailed",
+        owner: OWNER_CD,
+        code: 111,
+        refusal,
+      });
+    }
+    expect(
+      decodeLiquidationEvent(
+        txEvent("liquidation_failed", [
+          ["owner", OWNER_CD],
+          ["code", "37"],
+          ["refusal", ""],
+        ]),
+      ),
+    ).toMatchObject({ code: 37, refusal: null });
+  });
+
+  it("decodes AdlCounterpartySkipped", () => {
+    expect(
+      decodeLiquidationEvent(
+        txEvent("adl_counterparty_skipped", [
+          ["owner", OWNER_AB],
+          ["market", "7"],
+          ["pool_id", "1"],
+          ["size", "3"],
+          ["reason", "stale_oracle_dependency"],
+        ]),
+      ),
+    ).toEqual({
+      type: "AdlCounterpartySkipped",
+      owner: OWNER_AB,
+      market: 7,
+      poolId: 1,
+      size: 3n,
+      reason: "stale_oracle_dependency",
+    });
   });
 
   it("keeps u64 amounts above 2^53 exact", () => {
@@ -190,6 +291,30 @@ describe("decodeLiquidationEvent", () => {
         ["proposal_id", "7"],
       ]),
       /config is invalid: targetRatioBps/,
+    ],
+    [
+      "an unknown mode",
+      positionLiquidated({ mode: "gentle" }),
+      /mode has unknown value "gentle"/,
+    ],
+    [
+      "an i64 overflow",
+      positionLiquidated({ equity: "-9223372036854775809" }),
+      /equity exceeds i64/,
+    ],
+    [
+      "a malformed binding outcome",
+      positionLiquidated({ binding_outcome: "4:Yes" }),
+      /binding_outcome has malformed entry "4:Yes"/,
+    ],
+    [
+      "an unknown refusal",
+      txEvent("liquidation_failed", [
+        ["owner", OWNER_AB],
+        ["code", "111"],
+        ["refusal", "busy"],
+      ]),
+      /refusal has unknown value "busy"/,
     ],
   ])("refuses %s", (_name, event, message) => {
     expect(() => decodeLiquidationEvent(event)).toThrow(message);

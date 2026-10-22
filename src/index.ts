@@ -158,6 +158,8 @@ export {
   type ConversionFallbackReason,
   type HistoryPositionSnapshot,
   type HistoryPosition,
+  type HistoryLiquidation,
+  type HistoryLiquidationsPage,
   type HistoryPositionsPage,
   type WithdrawalStatus,
   type WithdrawalRecord,
@@ -189,14 +191,23 @@ export {
   validateSetLiquidationConfig,
 } from "./liquidation-config.js";
 export {
+  ADL_SKIP_REASONS,
+  LIQUIDATION_MODES,
   LIQUIDATION_PROGRESS_OUTCOMES,
+  LIQUIDATION_REFUSALS,
   decodeLiquidationEvent,
+  type AdlCounterpartySkippedEvent,
+  type AdlSkipReason,
   type LiquidationConfigSetEvent,
   type LiquidationEvent,
   type LiquidationEventInput,
+  type LiquidationFailedEvent,
+  type LiquidationMode,
   type LiquidationProgress,
   type LiquidationProgressReportedEvent,
+  type LiquidationRefusal,
   type PartialLiquidationFeeEvent,
+  type PositionLiquidatedEvent,
 } from "./liquidation-events.js";
 
 export {
