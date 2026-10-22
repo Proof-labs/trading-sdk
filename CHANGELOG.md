@@ -7,6 +7,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking changes
+
+- **`proof-wire` moves to v7.0.0** (`25f8972e`, tag `v7.0.0`), and the
+  manifest pins the proof-wire major (`version = "7"`). The wire drops three
+  liquidation work limits, so `LiquidationConfig` is now `targetRatioBps`,
+  `fullCloseThreshold`, `partialPenaltyBps`, `maxBookOrders` and
+  `maxCommittedFills`: `maxCandidatePrefixes`, `maxStateReads` and
+  `maxStateReadBytes` are gone from the TypeScript type, its validation, the
+  `SetLiquidationConfig` proposal decoder and the `LiquidationConfigSet`
+  event decoder, and `maxCommittedFills` no longer has an upper bound tied to
+  another field. A proposal or event in the proof-wire 6.x eight-field shape
+  is refused. The `propose_admin_action/set_liquidation_config` conformance
+  vector and its content hash are regenerated; every other codec vector is
+  unchanged. The liquidation configuration shapes have not shipped in a
+  release yet; the next release is still MAJOR for npm and Python (the
+  error-code move below changes a released value) and for the Rust core (it
+  re-exports the proof-wire 7 types).
+- **`ExecErrorCode.InvalidPlpConfig` moves from 101 to 112**, the code
+  proof-wire 7.0.0 assigns to a PLP shape fault, in TypeScript, Rust and
+  Python. Code 101 is unassigned on the wire and now decodes as unknown.
+  This supersedes the separate code-112 correction in
+  [#265](https://github.com/Proof-labs/trading-sdk/pull/265).
+- The `FullLiquidationFee` event is gone from proof-wire 7.0.0, so
+  `decodeLiquidationEvent` no longer decodes `full_liquidation_fee` (it
+  returns `null`, like any other event type) and `FullLiquidationFeeEvent`
+  is no longer exported.
+
 ### Added
 
 - `FundInsuranceFund` (admin tag 18) and `WithdrawInsuranceFund` (admin
@@ -15,8 +42,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   codec is the only encoder. Transfer IDs keep the full `u64` range;
   allocations require a non-zero account, 1–8 distinct ascending pools,
   positive amounts and a total no greater than `i64::MAX`.
-  Insurance refusals 102–105 have named TypeScript, Rust and Python error
-  classifications; existing `InvalidPlpConfig` code 101 is unchanged.
+  Insurance refusals 102–110 have named TypeScript, Rust and Python error
+  classifications.
   Additive npm/Python API; no existing signed bytes change. Availability
   requires the reviewed engine and gateway insurance actions and the
   corresponding public proof-wire release. The SDK does not authorize a
@@ -29,7 +56,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The `SetLiquidationConfig` governance action** (inner tag 17). An
   `AdminAction` of kind `SetLiquidationConfig` carries `predecessor`,
   `sequence` and the global `LiquidationConfig` (target ratio, exact
-  full-close threshold, partial penalty, work limits). Proposals carrying it
+  full-close threshold, partial penalty, book-order and committed-fill
+  caps). Proposals carrying it
   encode, decode, content-hash and render like the engine's;
   `validateSetLiquidationConfig` and `validateLiquidationConfig` mirror
   proof-wire's bounds and run before encoding and after decoding. A
@@ -38,12 +66,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`decodeLiquidationEvent`** decodes the engine's liquidation events from
   their ABCI attributes (a `TxEvent`, or the same attributes as a plain
   object): `LiquidationConfigSet`, `PartialLiquidationFee` (one per partial
-  fill), `FullLiquidationFee` (one per completed full close) and
-  `LiquidationProgressReported` with its fourteen `LiquidationProgress`
+  fill) and `LiquidationProgressReported` with its fourteen `LiquidationProgress`
   outcomes. Amounts and identifiers decode to `bigint`; a malformed event
   throws, and any other event type returns `null`.
-- The Rust crate re-exports `proof_wire::liquidation_config` and
-  `proof_wire::liquidation_progress`, and `governance` re-exports
+- The Rust crate re-exports `proof_wire::liquidation_config`,
+  `proof_wire::liquidation_progress` and `proof_wire::liquidation_report`
+  (the `LiquidationRefusal` that `ExecError::LiquidationRefused` carries), and `governance` re-exports
   `LiquidationConfig` and `SetLiquidationConfig`.
 - **Python: typed builders for every published action.** `OracleUpdate`,
   `CreateMarket`, `AuthorizeWithdrawal`, `ConfirmWithdrawalReceipt` and
@@ -64,10 +92,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fixed 3 attempts, 150 ms apart; zero attempts, more than 8, or a pause over
   5 s is refused with `SnapshotError::InvalidBracketRetry` (#143).
 
-### Changed
-
-- `proof-wire` moves to v6.4.0 (`937adebc`), the wire exchange 2.17.0
-  (protocol 5.0) ships with. Every existing conformance vector is unchanged.
+- Error codes from proof-wire 7.0.0, in TypeScript (`ExecErrorCode`,
+  `decodeExecError`), Rust and Python, with `manifest/106` to `manifest/112`
+  conformance cases: `InsuranceTransferZeroAccount` (106),
+  `InsuranceAllocationCount` (107), `InsuranceAllocationOrder` (108),
+  `InsuranceAllocationZeroAmount` (109), `InsuranceAmountExceedsI64` (110),
+  `LiquidationRefused` (111, a refused liquidation attempt that kept no
+  writes) and `InvalidPlpConfig` (112).
+- `CancelReason` gains `reduce_only`, `unfunded`, `insufficient_margin` and
+  `maker_refused`, the full proof-wire 7.0.0 list.
 
 ### Fixed
 

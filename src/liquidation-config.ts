@@ -27,10 +27,7 @@ export function validateLiquidationConfig(config: LiquidationConfig): void {
     "targetRatioBps",
     "partialPenaltyBps",
     "maxBookOrders",
-    "maxCandidatePrefixes",
     "maxCommittedFills",
-    "maxStateReads",
-    "maxStateReadBytes",
   ] as const;
   for (const field of fields) u32(config[field], field);
   const { numerator, denominator } = config.fullCloseThreshold;
@@ -52,9 +49,6 @@ export function validateLiquidationConfig(config: LiquidationConfig): void {
   }
   for (const field of fields.slice(2)) {
     if (config[field] === 0) throw new Error(`${field} must be non-zero`);
-  }
-  if (config.maxCommittedFills > config.maxCandidatePrefixes) {
-    throw new Error("maxCommittedFills must not exceed maxCandidatePrefixes");
   }
 }
 

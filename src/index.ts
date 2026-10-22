@@ -191,7 +191,6 @@ export {
 export {
   LIQUIDATION_PROGRESS_OUTCOMES,
   decodeLiquidationEvent,
-  type FullLiquidationFeeEvent,
   type LiquidationConfigSetEvent,
   type LiquidationEvent,
   type LiquidationEventInput,
