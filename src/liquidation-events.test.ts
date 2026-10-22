@@ -376,6 +376,21 @@ describe("decodeLiquidationEvent", () => {
       /binding_outcome event id exceeds/,
     ],
     [
+      "conflicting branches for one event",
+      positionLiquidated({ binding_outcome: "4:yes,4:no" }),
+      /binding_outcome event id 4 is not ascending/,
+    ],
+    [
+      "a repeated event",
+      positionLiquidated({ binding_outcome: "4:yes,4:yes" }),
+      /binding_outcome event id 4 is not ascending/,
+    ],
+    [
+      "descending events",
+      positionLiquidated({ binding_outcome: "9:no,4:yes" }),
+      /binding_outcome event id 4 is not ascending/,
+    ],
+    [
       "an unknown refusal",
       liquidationFailed("111", "busy"),
       /refusal has unknown value "busy"/,

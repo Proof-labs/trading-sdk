@@ -314,17 +314,22 @@ function liquidationProgressReported(
   };
 }
 
-/** `event_id:branch` pairs joined by commas, branch `yes` or `no`; the
- *  empty string for no event exposure. */
+/** `event_id:branch` pairs joined by commas in strictly ascending event
+ *  order, branch `yes` or `no`; the empty string for no event exposure. */
 function bindingOutcome(a: Attributes): BindingScenarioEntry[] {
   const text = a.text("binding_outcome");
   if (text === "") return [];
+  let previous = -1n;
   return text.split(",").map((pair) => {
     const match = /^(0|[1-9][0-9]*):(yes|no)$/.exec(pair);
     if (!match) a.fail("binding_outcome", `has malformed entry "${pair}"`);
     const eventId = BigInt(match[1]);
     if (eventId > U32_MAX)
       a.fail("binding_outcome", `event id exceeds ${U32_MAX}`);
+    if (eventId <= previous) {
+      a.fail("binding_outcome", `event id ${eventId} is not ascending`);
+    }
+    previous = eventId;
     return {
       eventId: Number(eventId),
       branch: match[2] === "yes" ? "Yes" : "No",
