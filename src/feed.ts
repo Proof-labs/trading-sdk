@@ -100,6 +100,12 @@ interface SubRecord {
   /** accountEvents only: a subscribe that brings a snapshot is in flight, so
    *  further late listeners wait for it instead of sending another. */
   resendPending: boolean;
+  /** A subscribe has gone out for this record on the current socket. */
+  sentOnSocket: boolean;
+  /** Pending retry of a first subscribe whose authentication failed. */
+  retryTimer: unknown;
+  /** Consecutive failed authentications, for the retry backoff. */
+  retryAttempts: number;
 }
 
 /** Price → `[totalQuantity, orderCount]`, per side. */
@@ -129,6 +135,9 @@ const CONTROL_TYPES = new Set(["subscribed", "unsubscribed", "pong", "error"]);
  *     the account snapshot. Neither sees an update or event before its
  *     snapshot. A gateway too old to resend leaves the account listener on
  *     the live events, as before.
+ *   - **auth retry** — when signing an account subscribe fails and the
+ *     channel has no subscription on the socket, listeners get an `error`
+ *     frame and the subscribe is retried with the reconnect backoff.
  *   - **heartbeat** — an app-level `ping` runs on an interval; a missing
  *     `pong` forces a reconnect, catching half-open sockets the OS hasn't
  *     torn down.
@@ -301,6 +310,9 @@ export class GatewayFeed {
         awaitingSnapshot: new Set(),
         pendingEvents: new Map(),
         resendPending: false,
+        sentOnSocket: false,
+        retryTimer: null,
+        retryAttempts: 0,
       };
       this.subs.set(key, record);
       this.ensureConnected();
@@ -321,6 +333,7 @@ export class GatewayFeed {
    *  close the socket once the last subscription is gone. Shared by the
    *  per-listener disposer and the by-key `unsubscribe*` methods. */
   private dropRecord(key: string, record: SubRecord): void {
+    this.cancelRetry(record);
     this.subs.delete(key);
     if (this.state === "open") this.sendUnsubscribe(record);
     if (this.subs.size === 0) this.close();
@@ -330,6 +343,7 @@ export class GatewayFeed {
    *  the next `subscribe`. Idempotent. */
   close(): void {
     this.closedByUser = true;
+    for (const record of this.subs.values()) this.cancelRetry(record);
     this.subs.clear();
     this.clearReconnect();
     this.stopHeartbeat();
@@ -493,7 +507,12 @@ export class GatewayFeed {
             : {}),
         },
       });
-      if (!sent) this.releaseAwaiting(record);
+      if (!sent) {
+        this.releaseAwaiting(record);
+        return;
+      }
+      record.sentOnSocket = true;
+      record.retryAttempts = 0;
     };
     const provider =
       record.channel === "accountEvents"
@@ -510,8 +529,10 @@ export class GatewayFeed {
       .catch((err) => {
         if (!active()) return;
         // No subscribe goes out, so no snapshot comes back on this socket.
-        this.releaseAwaiting(record);
-        this.onError?.(err instanceof Error ? err : new Error(String(err)));
+        this.authFailed(
+          record,
+          err instanceof Error ? err : new Error(String(err)),
+        );
       });
   }
 
@@ -683,7 +704,55 @@ export class GatewayFeed {
     for (const record of this.subs.values()) {
       record.book = null;
       record.resendPending = false;
+      record.sentOnSocket = false;
+      // The next socket's replay subscribes afresh.
+      this.cancelRetry(record);
     }
+  }
+
+  private cancelRetry(record: SubRecord): void {
+    if (record.retryTimer != null) {
+      this.clearTimer(record.retryTimer);
+      record.retryTimer = null;
+    }
+  }
+
+  /**
+   * The authentication for a subscribe failed. When the channel already has a
+   * subscription on this socket (a repeat for a late listener), live delivery
+   * goes on. Otherwise nothing is subscribed while the socket stays healthy,
+   * so the failure goes to the listeners as an `error` frame and the
+   * subscribe is retried with the reconnect backoff until it succeeds, the
+   * subscription is dropped, or the socket is replaced.
+   */
+  private authFailed(record: SubRecord, err: Error): void {
+    this.releaseAwaiting(record);
+    this.onError?.(err);
+    if (record.sentOnSocket) return;
+    const delay = Math.min(
+      this.maxBackoffMs,
+      this.minBackoffMs * 2 ** record.retryAttempts,
+    );
+    record.retryAttempts += 1;
+    const frame: FeedErrorFrame = {
+      type: "error",
+      channel: record.channel,
+      error: `${record.channel} subscription authentication failed: ${err.message}; retrying in ${delay}ms`,
+    };
+    for (const listener of record.listeners)
+      this.deliver(listener, frame as unknown as FeedFrame);
+    const socket = this.ws;
+    const key = subKey(record.channel, record.params);
+    this.cancelRetry(record);
+    record.retryTimer = this.setTimer(() => {
+      record.retryTimer = null;
+      if (
+        this.ws === socket &&
+        this.state === "open" &&
+        this.subs.get(key) === record
+      )
+        this.sendSubscribe(record);
+    }, delay);
   }
 
   private dispatchError(frame: FeedErrorFrame): void {

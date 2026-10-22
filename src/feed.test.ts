@@ -762,6 +762,71 @@ describe("feed ownership and cleanup", () => {
       feed.close();
     });
 
+    it("retries a first subscribe whose signing failed, on the same socket", async () => {
+      const errors: unknown[] = [];
+      const { feed, clock } = makeFeed({
+        onError: (e: unknown) => errors.push(e),
+        minBackoffMs: 100,
+      });
+      let calls = 0;
+      const auth = async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("signer unavailable");
+        return { public_key: "pk", signature: "sig", timestamp_ms: 1 };
+      };
+      const got: Array<Record<string, unknown>> = [];
+      feed.subscribeAccount(
+        owner,
+        (f) => got.push(f as unknown as Record<string, unknown>),
+        auth,
+      );
+      const ws = FakeWS.last();
+      ws.open();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(subscribes(ws), "nothing subscribed yet").toHaveLength(0);
+      expect(errors).toEqual([new Error("signer unavailable")]);
+      expect(got).toEqual([
+        {
+          type: "error",
+          channel: "accountEvents",
+          error:
+            "accountEvents subscription authentication failed: signer unavailable; retrying in 100ms",
+        },
+      ]);
+      expect(clock.pending, "a retry is scheduled").toBe(1);
+      clock.runNext();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(subscribes(ws), "the retry subscribes").toHaveLength(1);
+      ws.emit(accountSnapshot(1));
+      ws.emit(fill(2));
+      expect(got.slice(1)).toEqual([accountSnapshot(1), fill(2)]);
+      expect(FakeWS.instances, "no reconnect was needed").toHaveLength(1);
+      expect(feed.connectionState).toBe("open");
+      feed.close();
+    });
+
+    it("cancels a pending subscribe retry on unsubscribe", async () => {
+      const { feed, clock } = makeFeed({ onError: () => {} });
+      const auth = async () => {
+        throw new Error("chain id unavailable");
+      };
+      const keep = feed.subscribeOrderbook(1, () => {});
+      const unsub = feed.subscribeAccount(owner, () => {}, auth);
+      const ws = FakeWS.last();
+      ws.open();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(clock.pending).toBe(1);
+      unsub();
+      expect(clock.pending, "the retry is cancelled").toBe(0);
+      expect(
+        subscribes(ws).filter(
+          (m) => (m.params as { channel?: string }).channel === "accountEvents",
+        ),
+      ).toHaveLength(0);
+      keep();
+      feed.close();
+    });
+
     it("falls back to live events when sending the repeat subscribe fails", () => {
       const errors: unknown[] = [];
       const { feed } = makeFeed({ onError: (e: unknown) => errors.push(e) });

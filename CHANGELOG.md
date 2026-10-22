@@ -157,6 +157,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A failed account-subscription signature no longer leaves the stream
+  silently unsubscribed.** When the stream-auth signature (or the chain id it
+  needs) fails, `subscribeAccount` listeners receive an `error` frame and the
+  subscribe is retried with the reconnect backoff on the same connection,
+  until it succeeds or the subscription is dropped.
 - **A second `subscribeOrderbook` listener on an active market now starts
   from a snapshot.** The gateway sends one snapshot per socket subscription,
   so a listener that joined after it received only updates and built an
