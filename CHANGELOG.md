@@ -62,8 +62,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `proof-wire` moves to the Proof-labs/wire `dev` commit `3214376b`: crate
   6.4.0 plus the insurance transfer contract, two commits past the v6.4.0 tag
-  that exchange 2.17.0 (protocol 5.0) ships with. The commit is untagged
-  because no v6.5.0 tag exists yet. The manifest also pins the proof-wire
+  that exchange 2.17.0 (protocol 5.0) ships with. The commit is untagged:
+  the next wire release, v7.0.0, changes the `SetLiquidationConfig` encoding,
+  so the SDK moves to it separately. The manifest also pins the proof-wire
   major (`version = "6"`). Every existing conformance vector is unchanged.
 
 ### Fixed
