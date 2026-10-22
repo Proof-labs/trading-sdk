@@ -74,6 +74,8 @@ pub enum SnapshotError {
     HashMismatch,
     /// A confirmation-poll schedule outside the safety ceiling.
     InvalidConfirmationPolling,
+    /// A bracket-retry setting with no attempt or outside the safety ceiling.
+    InvalidBracketRetry,
 }
 
 impl fmt::Display for SnapshotError {
@@ -246,6 +248,45 @@ impl Default for ConfirmationPolling {
     }
 }
 
+/// How many whole brackets `read_bound_inventory` reads, counting the first,
+/// and how long it pauses before each fresh one, inside the one whole-call
+/// deadline. Only a lagging read earns another attempt:
+/// [`WitnessError::BracketOutOfOrder`] and [`WitnessError::HeaderBehind`].
+/// Behind a load balancer the status, snapshot and header reads can land on
+/// full nodes a block apart, so an honest, committed set of reads can arrive
+/// out of height order. Every other refusal is final at once.
+///
+/// The defaults are [`BracketRetry::DEFAULT_ATTEMPTS`] attempts,
+/// [`BracketRetry::DEFAULT_DELAY`] apart: long enough for a lagging full node
+/// to catch up by a block, short enough to leave most of the deadline. One
+/// attempt reads a single bracket and never retries.
+#[cfg(feature = "gateway")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BracketRetry {
+    pub attempts: usize,
+    pub delay: std::time::Duration,
+}
+
+#[cfg(feature = "gateway")]
+impl BracketRetry {
+    pub const DEFAULT_ATTEMPTS: usize = 3;
+    pub const DEFAULT_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+    /// A node that stays out of order through this many brackets is reported,
+    /// not waited out.
+    pub const MAX_ATTEMPTS: usize = 8;
+    pub const MAX_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
+}
+
+#[cfg(feature = "gateway")]
+impl Default for BracketRetry {
+    fn default() -> Self {
+        Self {
+            attempts: Self::DEFAULT_ATTEMPTS,
+            delay: Self::DEFAULT_DELAY,
+        }
+    }
+}
+
 /// Canonical gateway transport. Every HTTP read is one-shot: no signing, nonce
 /// allocation, request retry, node fallback, caching or partial inventory
 /// reconciliation lives here. The one bounded retry is `read_bound_inventory`
@@ -258,13 +299,14 @@ pub struct MarketsSnapshotClient {
     endpoint: reqwest::Url,
     timeout: std::time::Duration,
     confirmation: ConfirmationPolling,
+    bracket_retry: BracketRetry,
 }
 
 #[cfg(feature = "gateway")]
 impl MarketsSnapshotClient {
-    /// The default confirmation-poll schedule. Use
-    /// [`with_confirmation_polling`](Self::with_confirmation_polling) to choose
-    /// another.
+    /// The default confirmation-poll schedule and bracket retry. Use
+    /// [`with_confirmation_polling`](Self::with_confirmation_polling) and
+    /// [`with_bracket_retry`](Self::with_bracket_retry) to choose others.
     pub fn new(gateway_url: &str, timeout: std::time::Duration) -> Result<Self, SnapshotError> {
         Self::with_confirmation_polling(gateway_url, timeout, ConfirmationPolling::default())
     }
@@ -310,7 +352,20 @@ impl MarketsSnapshotClient {
             endpoint: base,
             timeout,
             confirmation,
+            bracket_retry: BracketRetry::default(),
         })
+    }
+
+    /// The same client with another [`BracketRetry`].
+    pub fn with_bracket_retry(mut self, retry: BracketRetry) -> Result<Self, SnapshotError> {
+        if retry.attempts == 0
+            || retry.attempts > BracketRetry::MAX_ATTEMPTS
+            || retry.delay > BracketRetry::MAX_DELAY
+        {
+            return Err(SnapshotError::InvalidBracketRetry);
+        }
+        self.bracket_retry = retry;
+        Ok(self)
     }
 
     pub async fn read(&self, expected_chain: [u8; 32]) -> Result<MarketsSnapshot, SnapshotError> {

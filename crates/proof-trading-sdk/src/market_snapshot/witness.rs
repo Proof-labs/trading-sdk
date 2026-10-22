@@ -464,17 +464,6 @@ pub fn validate_bound_inventory(
     })
 }
 
-/// Whole-bracket attempts [`MarketsSnapshotClient::read_bound_inventory`]
-/// makes, counting the first. Only a lagging read earns another attempt:
-/// [`WitnessError::BracketOutOfOrder`] and [`WitnessError::HeaderBehind`].
-/// Behind a load balancer the status, snapshot and header reads can land on
-/// full nodes a block apart, so an honest, committed set of reads can arrive
-/// out of height order. Every other refusal is final at once.
-const BRACKET_ATTEMPTS: usize = 3;
-/// Pause before a fresh bracket, long enough for a lagging full node to catch
-/// up by a block and short enough to leave most of the whole-call deadline.
-const BRACKET_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
-
 /// One [`MarketsSnapshotClient::read_bound_inventory_reporting`] call: its
 /// result and the attempts it discarded on the way.
 #[derive(Debug)]
@@ -515,8 +504,8 @@ impl MarketsSnapshotClient {
     /// the reads landed on full nodes at different heights, or
     /// [`WitnessError::HeaderBehind`]: the exact `H + 1` header lookup landed
     /// on a node without that block yet) is discarded and read again from
-    /// scratch, up to three attempts in all, a short pause apart and inside
-    /// the same deadline; the last attempt's result is returned. No other
+    /// scratch, up to the client's [`BracketRetry`](super::BracketRetry) attempts in all (three by
+    /// default), its delay apart and inside the same deadline; the last attempt's result is returned. No other
     /// refusal is retried, no read is carried from one attempt into the next,
     /// and every attempt passes the same validation. Within an attempt the
     /// snapshot is never re-read and its own clock is never renewed.
@@ -535,9 +524,11 @@ impl MarketsSnapshotClient {
     /// default schedule (8 × 250 ms) an attempt that waits for `H + 1` can take
     /// about 2 s on its own, so a 2 s deadline often leaves no room for a
     /// retry at all. To give every attempt its full schedule, set
-    /// the timeout to at least `3 × (polls × interval + 4 reads) + 2 × 150 ms`,
+    /// the timeout to at least
+    /// `attempts × (polls × interval + 4 reads) + (attempts − 1) × delay`,
     /// about 7 to 8 s with the defaults, or shorten the schedule with
-    /// [`with_confirmation_polling`](Self::with_confirmation_polling).
+    /// [`with_confirmation_polling`](Self::with_confirmation_polling) and
+    /// [`with_bracket_retry`](Self::with_bracket_retry).
     pub async fn read_bound_inventory(
         &self,
         expected_chain: [u8; 32],
@@ -582,11 +573,11 @@ impl MarketsSnapshotClient {
         expected_chain: [u8; 32],
         retried: &mut Vec<WitnessError>,
     ) -> Result<BoundInventorySnapshot, WitnessError> {
-        for _ in 1..BRACKET_ATTEMPTS {
+        for _ in 1..self.bracket_retry.attempts {
             match self.read_bound_inventory_once(expected_chain).await {
                 Err(error) if error.is_lagging_read() => {
                     retried.push(error);
-                    tokio::time::sleep(BRACKET_RETRY_DELAY).await;
+                    tokio::time::sleep(self.bracket_retry.delay).await;
                 }
                 result => return result,
             }

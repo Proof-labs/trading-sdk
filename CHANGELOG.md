@@ -57,6 +57,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ActionType` and `TestActionType` maps to the core's
   `codec::get_action_types()` in both directions. CI runs it when either map
   changes.
+- **Rust: the bound-inventory bracket retry is client configuration.**
+  `MarketsSnapshotClient::with_bracket_retry(BracketRetry { attempts, delay })`
+  sets how many whole brackets `read_bound_inventory` reads after a lagging
+  read and how long it pauses between them. The defaults are the previous
+  fixed 3 attempts, 150 ms apart; zero attempts, more than 8, or a pause over
+  5 s is refused with `SnapshotError::InvalidBracketRetry` (#143).
 
 ### Changed
 
@@ -95,6 +101,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exhaustive `match`, or a struct pattern or literal without `..`, needs
   updating. The Rust crate takes a MAJOR bump at its next release; npm and
   Python are unaffected.
+- `SnapshotError` gains `InvalidBracketRetry`; an exhaustive `match` on it
+  needs a new arm.
 
 ### Documentation
 
