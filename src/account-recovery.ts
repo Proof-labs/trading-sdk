@@ -300,6 +300,12 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
       else start();
       return;
     }
+    // An error frame (a refused subscribe, a failed authentication) is no
+    // account event: it passes straight through and moves no boundary.
+    if ((frame as { type: string }).type === "error") {
+      opts.onFrame(frame);
+      return;
+    }
     const event = frame as AccountEventFrame;
     if (recovering) buffer.push(event);
     else deliver(event, liveKey(event));

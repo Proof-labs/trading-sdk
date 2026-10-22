@@ -268,3 +268,33 @@ it("matches a legacy live settlement name to the canonical history name", async 
   expect(statuses).toEqual([{ kind: "backfilled", delivered: 2 }]);
   c.disconnect();
 });
+
+it("passes an error frame through without losing the recovery boundary", async () => {
+  const { c, sockets, frames, statuses, history } = setup();
+  sockets[0].open();
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[0].push(snapshot);
+  sockets[0].push(live(A));
+  const id = JSON.parse(sockets[0].sent[0]).id;
+  sockets[0].push({ type: "error", id, channel: "accountEvents", error: "x" });
+  sockets[0].drop();
+  await vi.advanceTimersByTimeAsync(10);
+  sockets[1].open();
+  await vi.advanceTimersByTimeAsync(0);
+  sockets[1].push(snapshot);
+  await vi.advanceTimersByTimeAsync(0);
+  history()!.resolve({
+    account_events: [row(C, 2), row(A, 1)],
+    next_cursor: "",
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(frames.map((f) => f.type)).toEqual([
+    "snapshot",
+    "account_event",
+    "error",
+    "snapshot",
+    "fill",
+  ]);
+  expect(statuses).toEqual([{ kind: "backfilled", delivered: 1 }]);
+  c.disconnect();
+});
