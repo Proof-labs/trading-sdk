@@ -55,6 +55,9 @@ from proof_trading_sdk.trigger_config import (
     decode_trigger_market_config_infos,
 )
 
+if t.TYPE_CHECKING:
+    from proof_trading_sdk.streams import AccountEventStream
+
 log = logging.getLogger("proof_trading_sdk")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1413,7 +1416,7 @@ class ExchangeClient:
 
     def account_event_stream(
         self, owner: bytes | str, *, ws_url: str | None = None, **kwargs: t.Any
-    ) -> t.Any:
+    ) -> AccountEventStream:
         """An :class:`~proof_trading_sdk.streams.AccountEventStream` for ``owner``.
 
         Uses this client's API key, and its gateway URL for the history reads
