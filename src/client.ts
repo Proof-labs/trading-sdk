@@ -22,6 +22,12 @@ import {
   type OraclePriceHistoryPage,
 } from "./oracle-price-history.js";
 import { GatewayReads, type GatewayFetch } from "./gateway-reads.js";
+import {
+  recoveringAccountHandler,
+  type AccountHistoryPage,
+  type AccountHistoryRow,
+  type AccountRecoveryStatus,
+} from "./account-recovery.js";
 import { FeedSubscriptionError, GatewayHttpError } from "./errors.js";
 import {
   decodeCashFlowEvents,
@@ -2350,18 +2356,74 @@ export class ExchangeClient {
     return this.gatewayFeed;
   }
 
-  /** Account snapshot plus live stream, with auth renewed per reconnect. */
+  /**
+   * Account snapshot plus live stream, with auth renewed per reconnect.
+   *
+   * By default a reconnect recovers the events missed while disconnected:
+   * the SDK reads `/v1/history/account-events` back to the last delivered
+   * event, delivers the newer rows in order (marked `backfilled`), buffers
+   * live frames meanwhile and drops those a backfilled row already delivered,
+   * then resumes live delivery. `onRecovery` reports the outcome of each
+   * reconnect, including `unsupported` when the gateway predates 7.9.0 and
+   * sends no history key. `recover: false` turns recovery off.
+   */
   subscribeAccount(
     onFrame: (frame: AccountFrame) => void,
-    opts: { owner?: string; auth?: false } = {},
+    opts: {
+      owner?: string;
+      auth?: false;
+      recover?: boolean;
+      onRecovery?: (status: AccountRecoveryStatus) => void;
+    } = {},
   ): () => void {
-    const owner = opts.owner ?? this.addressHex;
+    const owner = (opts.owner ?? this.addressHex)
+      ?.replace(/^0x/i, "")
+      .toLowerCase();
     if (!owner) throw new Error("No account owner available");
-    return this.feed().subscribeAccount(owner, onFrame, async (address) =>
+    const auth = async (address: string) =>
       opts.auth !== false && (this.privateKey || this.externalSigner)
         ? this.accountAuth(address)
-        : {},
+        : {};
+    if (opts.recover === false)
+      return this.feed().subscribeAccount(owner, onFrame, auth);
+    const recovery = recoveringAccountHandler({
+      owner,
+      onFrame,
+      onRecovery: opts.onRecovery,
+      fetchPage: (cursor) => this.accountHistoryPage(owner, cursor),
+    });
+    const unsubscribe = this.feed().subscribeAccount(
+      owner,
+      recovery.handle,
+      auth,
     );
+    return () => {
+      recovery.close();
+      unsubscribe();
+    };
+  }
+
+  /** One newest-first `/v1/history/account-events` page for recovery. */
+  private async accountHistoryPage(
+    owner: string,
+    cursor: string | null,
+  ): Promise<AccountHistoryPage> {
+    const res = await this.reads().accountEvents({
+      owner,
+      order: "desc",
+      limit: 500,
+      ...(cursor ? { cursor } : {}),
+    });
+    const body = (await res.json()) as {
+      account_events?: AccountHistoryRow[];
+      next_cursor?: string | null;
+      error?: string;
+    };
+    if (!res.ok || !Array.isArray(body.account_events))
+      throw new Error(
+        `account history read failed: ${body.error ?? `HTTP ${res.status}`}`,
+      );
+    return { rows: body.account_events, nextCursor: body.next_cursor ?? null };
   }
 
   subscribeOrderbook(

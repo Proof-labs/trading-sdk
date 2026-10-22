@@ -62,6 +62,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Account streams recover the events missed during a reconnect.**
+  `subscribeAccount` (and Python's `AccountEventStream`) now, by default,
+  read `/v1/history/account-events` back to the last delivered event after a
+  reconnect, deliver the newer rows in history order (marked
+  `backfilled: true`), then the live frames that arrived meanwhile, each
+  event exactly once. Events are matched on `height` + `txHash` +
+  `eventIndex` + `eventType`; the settlement names `conditional_settled` /
+  `conditional_voided` match their canonical history names `condition_met` /
+  `condition_not_met`. `onRecovery` / `on_recovery` reports each reconnect's
+  outcome (`AccountRecoveryStatus` / `RecoveryStatus`); `recover: false` /
+  `recover=False` turns it off. `AccountEventFrame` gains `txHash`, `txIndex`,
+  `eventIndex` and `backfilled`. Needs api-gateway 7.9.0, which puts the
+  history key on live frames; against an older gateway recovery reports
+  `unsupported` and live delivery carries on as before.
+
 - **`decodeLiquidationEvent` decodes three more engine events** from
   exchange 2.18.0 (proof-wire 7.0.0):
   - `position_liquidated` → `PositionLiquidatedEvent`: one per position an

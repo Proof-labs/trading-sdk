@@ -211,7 +211,7 @@ class ExchangeClient {
   getBlockResults(height: number): Promise<Record<string, unknown>>;
 
   // Streams (gateway-native)
-  subscribeAccount(onFrame: (f: AccountFrame) => void, opts?: { owner?: string; auth?: false }): () => void;
+  subscribeAccount(onFrame: (f: AccountFrame) => void, opts?: { owner?: string; auth?: false; recover?: boolean; onRecovery?: (s: AccountRecoveryStatus) => void }): () => void;
   subscribeOrderbook(market: number, onFrame: (f: OrderbookFrame) => void): () => void;
   subscribeTrades(market: number, onFrame: (f: TradeFrame) => void): () => void;
   orderbookSnapshot(market: number, timeoutMs?: number): Promise<OrderbookSnapshotFrame>;
@@ -573,7 +573,8 @@ const unsubBook = client.subscribeOrderbook(1, (frame) => {
   console.log(frame);
 });
 
-// One-shot snapshot (subscribes, takes the first snapshot frame, unsubscribes):
+// One-shot snapshot over a connection of its own (never a cached book);
+// rejects with FeedSubscriptionError when the gateway refuses the market:
 const book = await client.orderbookSnapshot(1);
 
 // later:
@@ -582,8 +583,20 @@ unsubBook();
 client.disconnect(); // closes everything
 ```
 
-A reconnect restores the account snapshot, not the events missed while
-disconnected; read `/v1/history/account-events` to fill that gap.
+**Reconnect recovery.** A reconnect restores the account snapshot and, by
+default, the account events missed while disconnected: the SDK reads
+`/v1/history/account-events` back to the last event it delivered, delivers the
+newer rows in history order (marked `backfilled: true`), then the live frames
+that arrived meanwhile, skipping any that history already delivered. Events
+are matched on `height` + `txHash` + `eventIndex` + `eventType`, with the
+settlement names `conditional_settled` / `conditional_voided` read as their
+canonical history names `condition_met` / `condition_not_met`. `onRecovery`
+reports each reconnect's outcome (`backfilled`, `unsupported`,
+`boundaryNotFound`, `historyBehind` or `failed`); a gateway older than 7.9.0
+sends no `txHash` / `eventIndex`, so recovery reports `unsupported` and live
+delivery carries on. Pass `recover: false` to turn it off. Python's
+`AccountEventStream` does the same (`recover`, `on_recovery`,
+`RecoveryStatus`).
 
 **Auth.** Account subscriptions require auth only when the gateway runs with
 `--api-key`. Because a browser `WebSocket` cannot send the `X-Api-Key` header,

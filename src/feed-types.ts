@@ -64,6 +64,19 @@ export interface AccountEventFrame {
   eventType: string;
   owner: string;
   height: number;
+  /** The event's `/v1/history/account-events` row key (gateway 7.9.0 and
+   *  later): the row's `tx_hash` (the uppercase transaction hash, or
+   *  `height-{h}-kind-block-event-{i}` for a block-level event). */
+  txHash?: string | null;
+  /** The transaction's position in its block; `null` for a block-level event
+   *  and for a backfilled event (history rows do not carry it). */
+  txIndex?: number | null;
+  /** The row's `event_index`: the event's index among its transaction's (or
+   *  block's) events. */
+  eventIndex?: number;
+  /** True when the SDK delivered this event from history after a reconnect
+   *  rather than from the live feed. */
+  backfilled?: boolean;
   payload: Record<string, unknown>;
 }
 
