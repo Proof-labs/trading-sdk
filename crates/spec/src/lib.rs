@@ -11,6 +11,7 @@
 //! | `nonce.ndjson`    | nonce    | (last, now_ms…) → allocated nonce sequence|
 //! | `errors.ndjson`   | errors   | (code, log) → ExecError classification name|
 //! | `binary.ndjson`   | binary   | No order → Yes order; position → No view  |
+//! | `events.ndjson`   | events   | engine event → its ABCI type + attributes |
 //!
 //! NDJSON (not a single JSON array) is deliberate: it is the indexer's
 //! archive format (`indexer/pkg/envelope` — `<height>.ndjson`), so the same
@@ -38,6 +39,7 @@ pub const SIGNING_FILE: &str = "signing.ndjson";
 pub const NONCE_FILE: &str = "nonce.ndjson";
 pub const ERRORS_FILE: &str = "errors.ndjson";
 pub const BINARY_FILE: &str = "binary.ndjson";
+pub const EVENTS_FILE: &str = "events.ndjson";
 
 // ---------------------------------------------------------------------------
 // Vector schemas (the NDJSON line shapes)
@@ -110,6 +112,23 @@ pub struct ErrorExpect {
     pub name: String,
 }
 
+/// One event case: an engine `Event` (its serde JSON form, byte fields as
+/// arrays of u8) → the ABCI event type and the attributes, in write order,
+/// that the engine's encoder renders for it. Chain coordinates are not
+/// part of the case.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventCase {
+    pub case: String,
+    pub event: serde_json::Value,
+    pub expect: EventExpect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventExpect {
+    pub event_type: String,
+    pub attributes: Vec<(String, String)>,
+}
+
 /// One binary-book case: a No order and the Yes order it becomes, or a
 /// position and how it reads. `kind` discriminates the two.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,6 +189,61 @@ pub fn codec_payload(action_type: u8, fields: &serde_json::Value) -> Result<Vec<
 }
 
 /// The refusal's stable name, shared by every binding.
+/// The ABCI event type and attributes the engine's encoder writes for
+/// `event` (its serde JSON form), read back from the length-prefixed bytes.
+pub fn event_expect(event: &serde_json::Value) -> Result<EventExpect, String> {
+    let event: proof_trading_sdk::types::Event =
+        serde_json::from_value(event.clone()).map_err(|e| format!("event: {e}"))?;
+    let mut writer = proof_trading_sdk::abci_event::AbciEventWriter::new();
+    event.encode_abci(&mut writer);
+    let mut reader = AbciReader {
+        bytes: &writer.into_vec(),
+        at: 0,
+    };
+    let event_type = reader.text()?;
+    let count = reader.length()?;
+    let attributes = (0..count)
+        .map(|_| Ok((reader.text()?, reader.text()?)))
+        .collect::<Result<Vec<_>, String>>()?;
+    if reader.at != reader.bytes.len() {
+        return Err(format!(
+            "{} bytes after the event",
+            reader.bytes.len() - reader.at
+        ));
+    }
+    Ok(EventExpect {
+        event_type,
+        attributes,
+    })
+}
+
+/// Reads the ABCI writer's `[len: u16 LE][bytes]` strings in order.
+struct AbciReader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl AbciReader<'_> {
+    fn take(&mut self, len: usize) -> Result<&[u8], String> {
+        let slice = self
+            .bytes
+            .get(self.at..self.at + len)
+            .ok_or_else(|| format!("encoded event ends at byte {}", self.at))?;
+        self.at += len;
+        Ok(slice)
+    }
+
+    fn length(&mut self) -> Result<usize, String> {
+        let raw = self.take(2)?;
+        Ok(usize::from(u16::from_le_bytes([raw[0], raw[1]])))
+    }
+
+    fn text(&mut self) -> Result<String, String> {
+        let len = self.length()?;
+        String::from_utf8(self.take(len)?.to_vec()).map_err(|e| e.to_string())
+    }
+}
+
 pub fn binary_error_name(error: &proof_trading_sdk::binary::BinaryError) -> &'static str {
     use proof_trading_sdk::binary::BinaryError;
     match error {

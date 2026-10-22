@@ -22,6 +22,7 @@ conformance/
   codec.ndjson      ← action fields → exact MessagePack payload bytes
   signing.ndjson    ← (payload, key) → wire envelope; pubkey → owner address
   nonce.ndjson      ← (last, now_ms…) → allocated nonce sequence
+  events.ndjson     ← engine event → its ABCI type and attributes
 
 crates/spec/        ← the vector machinery (Rust)
   src/lib.rs            schemas + reference impls (the single source of truth)
@@ -96,6 +97,17 @@ fourteen-field primary-with-fallback verdict (exchange#831), `format` 2 the
 twelve-field verdict of earlier nodes. The TS and Rust decoders must reproduce
 every `expect`. `oracle-permissions-legacy.hex` is the matching engine vector
 for the pre-activation `Legacy` read.
+
+**`events.ndjson`** — `EventCase`:
+```json
+{"case":"liquidation_failed/engine_error","event":{"LiquidationFailed":{"code":22,"owner":[…20],"refusal":null}},"expect":{"event_type":"liquidation_failed","attributes":[["owner","cdcd…"],["code","22"],["refusal",""]]}}
+```
+`event` is proof-wire's `Event` in its serde JSON form; `expect` is the ABCI
+event type and attributes, in write order, that the engine's encoder renders
+for it (chain coordinates excluded). The Rust runner re-encodes `event`; the
+TypeScript runner decodes `expect` with `decodeLiquidationEvent` and checks it
+yields `event`'s fields. Python ships no event decoders, so its runner does not
+read this family.
 
 **`nonce.ndjson`** — `NonceCase`:
 ```json
