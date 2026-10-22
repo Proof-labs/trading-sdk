@@ -2379,6 +2379,22 @@ describe("ExchangeClient WebSocket streams", () => {
     client.disconnect();
     expect(FakeWebSocket.instances[0].closed).toBe(true);
   });
+
+  it("disconnect() also closes a pending orderbookSnapshot connection", async () => {
+    const client = new ExchangeClient({
+      gatewayUrl: "http://test-gateway",
+      chainId: "test-chain",
+    });
+    const pending = client.orderbookSnapshot(1, 50);
+    const socket = FakeWebSocket.instances[0];
+    socket.onopen?.();
+    await flush();
+    // The gateway never answers; disconnect() must not leave the snapshot's
+    // own connection open until the timeout runs out.
+    client.disconnect();
+    expect(socket.closed, "the pending snapshot socket is closed").toBe(true);
+    await expect(pending).rejects.toThrow(/timed out/);
+  });
 });
 
 /**

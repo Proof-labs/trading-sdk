@@ -323,6 +323,9 @@ export class ExchangeClient {
   private externalSigner: ExternalSigner | null = null;
   private signerRevision = 0;
   private gatewayFeed: GatewayFeed | null = null;
+  /** Dedicated feeds behind pending `orderbookSnapshot` calls, so
+   *  `disconnect()` closes them too. */
+  private readonly snapshotFeeds = new Set<GatewayFeed>();
   private publicKey: Uint8Array | null = null;
   private address: Uint8Array | null = null;
   private addressHex: string | null = null;
@@ -2293,11 +2296,13 @@ export class ExchangeClient {
     timeoutMs = 10_000,
   ): Promise<OrderbookSnapshotFrame> {
     const feed = this.createFeed({ pingIntervalMs: 0 });
+    this.snapshotFeeds.add(feed);
     return new Promise((resolve, reject) => {
       let settled = false;
       const finish = () => {
         settled = true;
         clearTimeout(timer);
+        this.snapshotFeeds.delete(feed);
         feed.close();
       };
       const timer = setTimeout(() => {
@@ -2372,8 +2377,11 @@ export class ExchangeClient {
     return this.feed().subscribeTrades(market, onFrame);
   }
 
-  /** Close the shared `/ws` feed and stop its reconnect loop. */
+  /** Close the shared `/ws` feed, any pending `orderbookSnapshot` feed, and
+   *  stop their reconnect loops. */
   disconnect() {
+    for (const feed of this.snapshotFeeds) feed.close();
+    this.snapshotFeeds.clear();
     this.gatewayFeed?.close();
   }
 }
