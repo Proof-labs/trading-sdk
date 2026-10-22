@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [8.0.0] — 2026-10-22
+
 ### Breaking changes
 
 - **`proof-wire` moves to v7.0.0** (`25f8972e`, tag `v7.0.0`), and the
@@ -1533,7 +1535,9 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.2.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.0.0...HEAD
+[8.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.3.0...npm-v8.0.0
+[7.3.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.2.0...npm-v7.3.0
 [7.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.1.0...npm-v7.2.0
 [7.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.0.0...npm-v7.1.0
 [7.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v6.4.0...npm-v7.0.0
