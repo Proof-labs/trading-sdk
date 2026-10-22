@@ -162,6 +162,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   needs) fails, `subscribeAccount` listeners receive an `error` frame and the
   subscribe is retried with the reconnect backoff on the same connection,
   until it succeeds or the subscription is dropped.
+- **`queryFinancialState` rejects malformed UTF-8 in MessagePack strings.**
+  The dependency decoder normalized an overlong encoding into a valid enum
+  (`c1 82 75 79` decoded as `Buy`); the response is now rejected before
+  decoding. Existing response size, depth and container limits are unchanged.
 - **A second `subscribeOrderbook` listener on an active market now starts
   from a snapshot.** The gateway sends one snapshot per socket subscription,
   so a listener that joined after it received only updates and built an
