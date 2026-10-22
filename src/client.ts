@@ -2308,7 +2308,8 @@ export class ExchangeClient {
       const timer = setTimeout(() => {
         finish();
         reject(
-          new Error(
+          new FeedSubscriptionError(
+            "orderbook",
             `orderbook snapshot for market ${market} timed out after ${timeoutMs}ms`,
           ),
         );

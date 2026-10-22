@@ -2246,7 +2246,9 @@ describe("ExchangeClient WebSocket streams", () => {
       gatewayUrl: "http://test-gateway",
       chainId: "test-chain",
     });
-    await expect(client.orderbookSnapshot(1, 5)).rejects.toThrow(/timed out/);
+    const pending = client.orderbookSnapshot(1, 5);
+    await expect(pending).rejects.toThrow(FeedSubscriptionError);
+    await expect(pending).rejects.toThrow(/timed out/);
     client.disconnect();
   });
 
