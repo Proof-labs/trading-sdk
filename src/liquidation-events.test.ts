@@ -376,6 +376,21 @@ describe("decodeLiquidationEvent", () => {
       /binding_outcome event id exceeds/,
     ],
     [
+      "conflicting branches for one event",
+      positionLiquidated({ binding_outcome: "4:yes,4:no" }),
+      /binding_outcome event id 4 is not ascending/,
+    ],
+    [
+      "a repeated event",
+      positionLiquidated({ binding_outcome: "4:yes,4:yes" }),
+      /binding_outcome event id 4 is not ascending/,
+    ],
+    [
+      "descending events",
+      positionLiquidated({ binding_outcome: "9:no,4:yes" }),
+      /binding_outcome event id 4 is not ascending/,
+    ],
+    [
       "an unknown refusal",
       liquidationFailed("111", "busy"),
       /refusal has unknown value "busy"/,
@@ -384,6 +399,16 @@ describe("decodeLiquidationEvent", () => {
       "a refusal under another code",
       liquidationFailed("22", "invalid_maker"),
       /code is not 111 for a refusal/,
+    ],
+    [
+      "code 111 without a refusal",
+      liquidationFailed("111", ""),
+      /refusal is empty under code 111/,
+    ],
+    [
+      "code 0",
+      liquidationFailed("0", ""),
+      /code is 0, which is not an engine error/,
     ],
     [
       "a missing refusal",
