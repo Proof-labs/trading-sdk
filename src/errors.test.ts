@@ -22,17 +22,24 @@ describe("decodeExecError", () => {
     expect(decodeExecError(255)?.name).toBe("InternalError");
   });
 
-  it("names candidate insurance refusals without reusing PLP code 101", () => {
+  it("names the proof-wire 7.0.0 codes 102-112", () => {
     for (const [code, name] of [
       [102, "InsuranceFundingReplayed"],
       [103, "InsuranceWithdrawalReplayed"],
       [104, "MarketlessInsurancePool"],
       [105, "InsufficientInsuranceBalance"],
+      [106, "InsuranceTransferZeroAccount"],
+      [107, "InsuranceAllocationCount"],
+      [108, "InsuranceAllocationOrder"],
+      [109, "InsuranceAllocationZeroAmount"],
+      [110, "InsuranceAmountExceedsI64"],
+      [111, "LiquidationRefused"],
+      [112, "InvalidPlpConfig"],
     ] as const) {
       expect(decodeExecError(code)?.name).toBe(name);
       expect(execErrorName(code)).toBe(name);
+      expect(ExecErrorCode[name]).toBe(code);
     }
-    expect(decodeExecError(101)?.name).toBe("InvalidPlpConfig");
   });
 
   it("decodes the event cap and the settle-price mismatch (96, 32)", () => {
@@ -146,8 +153,11 @@ describe("ExecErrorCode enum", () => {
   });
 
   it("decodes PLP shape faults without reassigning the resting-order cap code", () => {
-    expect(ExecErrorCode.InvalidPlpConfig).toBe(101);
-    expect(decodeExecError(101)?.name).toBe("InvalidPlpConfig");
+    expect(ExecErrorCode.InvalidPlpConfig).toBe(112);
+    expect(decodeExecError(112)?.name).toBe("InvalidPlpConfig");
+    // 101 is unassigned on the wire: unknown, never a PLP fault.
+    expect(decodeExecError(101)).toBeNull();
+    expect(execErrorName(101)).toBe("UnknownError");
     expect(decodeExecError(100)?.name).toBe("AccountOrderCapReached");
     expect(decodeExecError(99)?.name).toBe("WithdrawalLimitExceeded");
   });

@@ -210,10 +210,11 @@ class ExchangeClient {
   getBlock(height?: number): Promise<Record<string, unknown>>;
   getBlockResults(height: number): Promise<Record<string, unknown>>;
 
-  // Streams (gateway-native; mirror the Python SDK)
-  subscribeAccountEvents(owner: Uint8Array | string, onEvent: (e: Record<string, unknown>) => void, opts?: WsStreamOptions): () => void;
-  subscribeOrderbookDeltas(market: number, onMessage: (m: Record<string, unknown>) => void, opts?: WsStreamOptions): () => void;
-  orderbookSnapshot(market: number): Promise<Record<string, unknown>>;
+  // Streams (gateway-native)
+  subscribeAccount(onFrame: (f: AccountFrame) => void, opts?: { owner?: string; auth?: false; recover?: boolean; onRecovery?: (s: AccountRecoveryStatus) => void }): () => void;
+  subscribeOrderbook(market: number, onFrame: (f: OrderbookFrame) => void): () => void;
+  subscribeTrades(market: number, onFrame: (f: TradeFrame) => void): () => void;
+  orderbookSnapshot(market: number, timeoutMs?: number): Promise<OrderbookSnapshotFrame>;
   disconnect(): void;
 }
 ```
@@ -565,28 +566,33 @@ code should read the structured `code` field: it is authoritative and needs no p
 
 ## WebSocket streams
 
-The SDK exposes the gateway's native multiplexed feed — the same two streams
-as the Python SDK. Each subscription opens its own connection, auto-reconnects
-with exponential backoff (500ms → 30s, ±25% jitter), and returns an
-unsubscribe function. `disconnect()` tears down every open stream.
+The SDK exposes the gateway's native multiplexed feed on `/ws`. Account
+events, trades and the orderbook are channels on that one shared connection
+(`subscribeAccount`, `subscribeTrades`, `subscribeOrderbook`). The connection
+auto-reconnects and re-subscribes; every subscription returns an unsubscribe
+function, and `disconnect()` closes the feed.
 
 The WS base URL defaults to `gatewayUrl` with its scheme swapped to `ws`/`wss`.
 If your local stack serves WebSockets on a separate port, set `wsUrl`
 explicitly (e.g. `ws://localhost:9091`).
 
 ```typescript
-// Account events: snapshot frame, then incremental events. The SDK tracks
-// the highest event_id and replays via after_id on reconnect (no gaps).
-const unsub = client.subscribeAccountEvents(address, (event) => {
-  console.log(event.event_type, event);
+// Account events: a snapshot frame, then live event frames
+// (`order_update`, `fill`, `position_update`, liquidation events, ...).
+// Defaults to the connected signer's address; pass `owner` to watch another.
+const unsub = client.subscribeAccount((frame) => {
+  if (frame.type === "snapshot") return;
+  console.log(frame.type, frame.eventType, frame.payload);
 });
 
-// L2 orderbook: first frame is a full `l2Book` snapshot, then deltas.
-const unsubBook = client.subscribeOrderbookDeltas(1, (msg) => {
-  console.log(msg);
+// Orderbook: a `snapshot` frame (`bids` / `asks` levels), then one `update`
+// frame per changed level (a zero `totalQuantity` empties the level).
+const unsubBook = client.subscribeOrderbook(1, (frame) => {
+  console.log(frame);
 });
 
-// One-shot snapshot (opens, reads the first l2Book frame, closes):
+// One-shot snapshot over a connection of its own (never a cached book);
+// rejects with FeedSubscriptionError when the gateway refuses the market:
 const book = await client.orderbookSnapshot(1);
 
 // later:
@@ -595,14 +601,37 @@ unsubBook();
 client.disconnect(); // closes everything
 ```
 
-`WsStreamOptions` (third arg) takes `onError?: (err) => void` and
-`reconnectBackoffMaxMs?: number`.
+**Reconnect recovery.** A reconnect restores the account snapshot and, by
+default, the account events missed while disconnected: the SDK reads
+`/v1/history/account-events` back to the last event it delivered (or to the
+previous snapshot's `height` when none was delivered), delivers the newer rows
+in history order (marked `backfilled: true`), then the live frames that
+arrived meanwhile, skipping any that history already delivered. It retries
+while `/v1/history/status` shows history has not indexed up to the new
+snapshot's `height`. Events are matched on `height` + `txHash` +
+`eventIndex` + `eventType` + `txIndex`, a missing position matching any,
+since history serves `tx_position` only when one block carries the same
+transaction hash more than once. The settlement names
+`conditional_settled` /
+`conditional_voided` read as their canonical history names `condition_met` /
+`condition_not_met`. A snapshot marked `snapshot: "resent"` (sent because
+another listener joined) is not a reconnect. `onRecovery` reports each
+reconnect's outcome once: `backfilled`, `unverified` (the snapshot carries no
+`height`, so history's coverage cannot be checked), `unsupported` (a gateway
+older than 7.9.0 sends no `txHash` / `eventIndex`; live delivery carries on),
+`boundaryNotFound`, `historyBehind` or `failed`. Pass `recover: false` to turn
+it off. Python's `AccountEventStream` does the same (`recover`,
+`on_recovery`, `RecoveryStatus`); build it with
+`client.account_event_stream(owner)` so its history reads use the gateway URL
+even when `/ws` is on its own port.
 
-**Auth.** Account streams require auth only when the gateway runs with
+**Auth.** Account subscriptions require auth only when the gateway runs with
 `--api-key`. Because a browser `WebSocket` cannot send the `X-Api-Key` header,
-the SDK uses the gateway's signed-query auth: with a private key loaded
-(`setPrivateKey`) it signs the stream-auth message and appends `public_key` /
-`signature` / `timestamp_ms` to the URL automatically. Against an
+the SDK uses the gateway's signed subscription auth: with a private key or
+external signer connected it signs the stream-auth message and adds
+`public_key` / `signature` / `timestamp_ms` to the `accountEvents` subscribe
+message automatically, re-signing on every reconnect. Pass `auth: false` for an
+unsigned watch-only subscription. Against an
 unauthenticated gateway (e.g. devnet) the owner alone suffices.
 
 ## Wire Format

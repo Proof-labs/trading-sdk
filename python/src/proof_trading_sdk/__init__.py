@@ -109,7 +109,11 @@ from proof_trading_sdk.errors import (
 from proof_trading_sdk.nonce import NonceAllocator
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.client import ExchangeClient
-from proof_trading_sdk.streams import AccountEventStream, OrderbookDeltaStream
+from proof_trading_sdk.streams import (
+    AccountEventStream,
+    OrderbookDeltaStream,
+    RecoveryStatus,
+)
 from proof_trading_sdk.trigger_history import (
     PendingTriggerDiscardReason,
     PositionTriggerHistoryEventType,
@@ -225,6 +229,7 @@ __all__ = [
     "load_config",
     "AccountEventStream",
     "OrderbookDeltaStream",
+    "RecoveryStatus",
     "AuthenticationError",
     "CodecError",
     "EngineError",

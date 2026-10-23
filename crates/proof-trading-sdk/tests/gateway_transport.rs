@@ -247,7 +247,8 @@ async fn chain_identity_uses_gateway_status_and_real_chain_binding_and_time() {
     let chain = client.chain_identity().await.unwrap();
     assert_eq!(
         chain.chain_binding,
-        proof_trading_sdk::crypto::chain_id_from_string("proof-fixture")
+        proof_trading_sdk::market_snapshot::ChainBinding::of_network("proof-fixture")
+            .expect("the fixture network binds a chain")
     );
     assert_eq!(chain.latest_height.get(), 9_007_199_254_740_993);
     assert_eq!(chain.latest_block_time_ms, 1_789_043_696_123);

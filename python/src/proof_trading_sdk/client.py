@@ -55,6 +55,9 @@ from proof_trading_sdk.trigger_config import (
     decode_trigger_market_config_infos,
 )
 
+if t.TYPE_CHECKING:
+    from proof_trading_sdk.streams import AccountEventStream
+
 log = logging.getLogger("proof_trading_sdk")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -1409,26 +1412,76 @@ class ExchangeClient:
         resp = self._get("/maintenance/status")
         return resp.json()
 
+    # ── Account event stream ─────────────────────────────────────────────
+
+    def account_event_stream(
+        self, owner: bytes | str, *, ws_url: str | None = None, **kwargs: t.Any
+    ) -> AccountEventStream:
+        """An :class:`~proof_trading_sdk.streams.AccountEventStream` for ``owner``.
+
+        Uses this client's API key, and its gateway URL for the history reads
+        that reconnect recovery makes, so recovery works when ``/ws`` is
+        served on its own port (pass that as ``ws_url``). Other keyword
+        arguments go to the stream.
+        """
+        from proof_trading_sdk.streams import AccountEventStream
+
+        kwargs.setdefault("history_url", self._gateway_url)
+        return AccountEventStream(
+            ws_url or self._gateway_url.replace("http", "ws", 1),
+            owner,
+            self._api_key,
+            **kwargs,
+        )
+
     # ── Orderbook snapshot (WS convenience) ──────────────────────────────
 
-    def orderbook_snapshot(self, market: int) -> dict[str, t.Any]:
-        """Fetch a one-shot L2 orderbook snapshot via a temporary WS connection.
+    def orderbook_snapshot(self, market: int, timeout: float = 10.0) -> dict[str, t.Any]:
+        """Fetch a one-shot orderbook snapshot via a temporary WS connection.
 
-        Opens a WebSocket to the orderbook delta stream, reads the first
-        (snapshot) frame, closes the connection, and returns the L2 book.
+        Subscribes to the ``orderbook`` channel of the gateway's ``/ws`` feed,
+        reads the first ``snapshot`` frame (``bids`` / ``asks`` levels),
+        closes the connection, and returns that frame. Raises
+        :class:`TransportError` when the gateway refuses the subscription
+        (``status_code`` is the gateway's code), when the connection fails, or
+        when no snapshot arrives within ``timeout`` seconds (default 10).
         """
-        from proof_trading_sdk.streams import OrderbookDeltaStream
+        import websockets.sync.client as ws_client
 
-        stream = OrderbookDeltaStream(
-            ws_url=self._gateway_url.replace("http", "ws"),
-            market=market,
-        )
+        deadline = time.monotonic() + timeout
+        url = self._gateway_url.replace("http", "ws", 1).rstrip("/") + "/ws"
         try:
-            for event in stream:
-                if event.get("type") == "l2Book":
+            ws = ws_client.connect(url, open_timeout=timeout)
+        except Exception as err:
+            raise TransportError(f"orderbook snapshot: cannot connect to {url}: {err}") from err
+        try:
+            ws.send(
+                json.dumps(
+                    {
+                        "method": "subscribe",
+                        "id": 1,
+                        "params": {"channel": "orderbook", "market": market},
+                    }
+                )
+            )
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError
+                event = json.loads(ws.recv(timeout=remaining))
+                if event.get("type") == "snapshot":
                     return event
+                if event.get("type") == "error":
+                    raise TransportError(
+                        f"orderbook subscription refused: {event.get('error')}",
+                        status_code=event.get("code"),
+                    )
+        except TimeoutError as err:
+            raise TransportError(
+                f"orderbook snapshot for market {market} timed out after {timeout}s"
+            ) from err
         finally:
-            stream.close()
+            ws.close()
 
     # ── Internal helpers ─────────────────────────────────────────────────
 

@@ -9,7 +9,7 @@ mod refusal;
 use refusal::{ErrorBody, RefusalEvidence};
 pub use refusal::{MaintenanceMode, PreAdmissionRefusal};
 
-use crate::market_snapshot::BlockHeight;
+use crate::market_snapshot::{BlockHeight, ChainBinding};
 use crate::query::AccountInfo;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{
@@ -185,7 +185,7 @@ impl fmt::Debug for GatewayClient {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChainIdentity {
     pub network: String,
-    pub chain_binding: [u8; 32],
+    pub chain_binding: ChainBinding,
     pub latest_height: BlockHeight,
     /// Provider capture must be checked against consensus time, never local time alone.
     pub latest_block_time_ms: u64,
@@ -512,7 +512,8 @@ impl GatewayClient {
         let latest_block_time_ms = u64::try_from(timestamp)
             .map_err(|_| GatewayError::new(op, ErrorKind::InvalidResponse))?;
         Ok(ChainIdentity {
-            chain_binding: crate::crypto::chain_id_from_string(&network),
+            chain_binding: ChainBinding::of_network(&network)
+                .ok_or_else(|| GatewayError::new(op, ErrorKind::InvalidResponse))?,
             network,
             latest_height: BlockHeight::new(decimal(&status.sync_info.latest_block_height, op)?)
                 .ok_or_else(|| GatewayError::new(op, ErrorKind::InvalidResponse))?,

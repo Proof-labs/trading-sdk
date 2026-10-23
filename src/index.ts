@@ -189,15 +189,24 @@ export {
   validateSetLiquidationConfig,
 } from "./liquidation-config.js";
 export {
+  ADL_SKIP_REASONS,
+  LIQUIDATION_MODES,
   LIQUIDATION_PROGRESS_OUTCOMES,
+  LIQUIDATION_REFUSALS,
+  LIQUIDATION_REFUSED_CODE,
   decodeLiquidationEvent,
-  type FullLiquidationFeeEvent,
+  type AdlCounterpartySkippedEvent,
+  type AdlSkipReason,
   type LiquidationConfigSetEvent,
   type LiquidationEvent,
   type LiquidationEventInput,
+  type LiquidationFailedEvent,
+  type LiquidationMode,
   type LiquidationProgress,
   type LiquidationProgressReportedEvent,
+  type LiquidationRefusal,
   type PartialLiquidationFeeEvent,
+  type PositionLiquidatedEvent,
 } from "./liquidation-events.js";
 
 export {
@@ -274,6 +283,7 @@ export {
 
 // Errors
 export {
+  FeedSubscriptionError,
   GatewayHttpError,
   isMissingMark,
   type ExecErrorInfo,
@@ -301,11 +311,7 @@ export {
 } from "./crypto.js";
 
 // Client
-export {
-  ExchangeClient,
-  type ExchangeClientOptions,
-  type WsStreamOptions,
-} from "./client.js";
+export { ExchangeClient, type ExchangeClientOptions } from "./client.js";
 export {
   defaultExchangeHttpTransport,
   exchangeHttpPriorityForAction,
@@ -364,6 +370,10 @@ export type {
   FeedErrorFrame,
   FeedState,
 } from "./feed-types.js";
+export type {
+  AccountEventKey,
+  AccountRecoveryStatus,
+} from "./account-recovery.js";
 export {
   type GatewayReads,
   type GatewayReadOptions,
