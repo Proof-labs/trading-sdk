@@ -320,6 +320,24 @@ pages too. Use the status response and block timestamps to present delay; a miss
 HTTP 404, and unavailable history remains an error. These reads never fabricate
 blocks or replace errors with empty results.
 
+### Candle and order-book mid history
+
+```typescript
+const reads = client.reads();
+const window = { market: 7400, resolution: "5m", limit: 1500 };
+const trades = await (await reads.candles(window, { signal })).json();
+const mid = await (await reads.bbo(window, { signal })).json();
+```
+
+`candles()` reads `/v1/history/candles` (trade-price OHLC); `bbo()` reads
+`/v1/history/bbo`, the same candles envelope built from the indexer's stored
+best-bid/offer samples: OHLC of `(bid + ask) / 2`, each bucket also carrying
+its closing `bid` and `ask`. A bucket with no two-sided sample is absent, so a
+mid series can have gaps a trade series does not. Both take
+`CandleHistoryParams` (`market`, `resolution`, optional ISO `from` / `to`,
+`limit`, opaque `cursor`), return unmodified `Response` objects and preserve
+HTTP errors and cancellation.
+
 ### Loaded engine identity
 
 For operational artifact evidence, `await client.reads().version({ signal })`
