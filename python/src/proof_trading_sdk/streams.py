@@ -21,32 +21,32 @@ class AccountEvent:
 _ACK_TYPES = frozenset({"subscribed", "unsubscribed", "pong"})
 
 
-# Live event family for a history row; mirrors api-gateway
+# Live frame type for a history row; mirrors api-gateway
 # `account_ws_message_type`.
 _FAMILIES = {
     "trade_executed": "fill",
-    "order_placed": "order_update",
-    "order_cancelled": "order_update",
-    "order_amended": "order_update",
-    "market_order_processed": "order_update",
-    "position_updated": "position_update",
-    "position_closed": "position_update",
+    "order_placed": "orderUpdate",
+    "order_cancelled": "orderUpdate",
+    "order_amended": "orderUpdate",
+    "market_order_processed": "orderUpdate",
+    "position_updated": "positionUpdate",
+    "position_closed": "positionUpdate",
     "funding_settled": "funding",
-    "position_triggers_set": "trigger_update",
-    "position_triggers_cancelled": "trigger_update",
-    "position_triggers_invalidated": "trigger_update",
-    "position_trigger_activated": "trigger_update",
-    "position_trigger_executed": "trigger_update",
-    "position_trigger_deferred": "trigger_update",
-    "margin_warning": "margin_update",
+    "position_triggers_set": "triggerUpdate",
+    "position_triggers_cancelled": "triggerUpdate",
+    "position_triggers_invalidated": "triggerUpdate",
+    "position_trigger_activated": "triggerUpdate",
+    "position_trigger_executed": "triggerUpdate",
+    "position_trigger_deferred": "triggerUpdate",
+    "margin_warning": "marginUpdate",
 }
 
 # Settlement event names before the canonical vocabulary, mapped to the names
 # history rows carry. A gateway that already sends the canonical names passes
 # through unchanged.
 _LEGACY_EVENT_TYPES = {
-    "conditional_settled": "condition_met",
-    "conditional_voided": "condition_not_met",
+    "conditional_settled": "condition_met",  # vocabulary-lint: allow
+    "conditional_voided": "condition_not_met",  # vocabulary-lint: allow
 }
 
 
@@ -134,7 +134,7 @@ def _row_frame(row: dict[str, t.Any]) -> dict[str, t.Any]:
     tx_position = row.get("tx_position")
     return {
         "channel": "accountEvents",
-        "type": _FAMILIES.get(row["event_type"], "account_event"),
+        "type": _FAMILIES.get(row["event_type"], "accountEvent"),
         "owner": row["owner"],
         "eventType": row["event_type"],
         "height": int(row["block_height"]),
@@ -154,8 +154,8 @@ class AccountEventStream:
 
     Subscribes to the ``accountEvents`` channel of the gateway's multiplexed
     ``/ws`` feed and yields its channel-tagged frames: a ``snapshot`` frame,
-    then one frame per live event (``order_update``, ``fill``,
-    ``position_update``, liquidation events, ...). A refused subscription
+    then one frame per live event (``orderUpdate``, ``fill``,
+    ``positionUpdate``, liquidation events, ...). A refused subscription
     arrives as a ``{"type": "error", ...}`` frame.
 
     Each reconnect subscribes again and receives a fresh snapshot. By default
