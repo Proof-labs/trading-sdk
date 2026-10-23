@@ -167,8 +167,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gateway refusal with 401 (for example an expired signature), 429 or 503 is
   retried the same way. After five consecutive failures the subscription
   stops retrying and its listeners receive one final `error` frame; it stays
-  unconfirmed until the caller subscribes again or the socket is replaced,
-  which starts a fresh budget of five.
+  unconfirmed until the socket is replaced, which starts a fresh budget of
+  five.
 - **A snapshot resent for a late `subscribeAccount` listener reaches only
   that listener**, so existing listeners no longer see a second snapshot
   without a reconnect.
