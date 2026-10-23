@@ -12,7 +12,11 @@ import {
   pubkeyToOwner,
   verify,
 } from "./crypto.js";
-import { GatewayHttpError, isMissingMark } from "./errors.js";
+import {
+  FeedSubscriptionError,
+  GatewayHttpError,
+  isMissingMark,
+} from "./errors.js";
 import { Side, type Action } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 
@@ -2141,10 +2145,10 @@ describe("gateway owner-read failures", () => {
 });
 
 /**
- * Gateway-native WebSocket streams (mirror the Python SDK): per-stream
- * connections to `/account-events` and `/orderbook-deltas`, with the WS base
- * derived from the gateway URL (scheme swapped). The account stream signs its
- * auth params with the loaded key so it works against an authed gateway.
+ * Gateway WebSocket streams: the multiplexed `/ws` feed (account events and
+ * the orderbook ride its channels), with the WS base derived from the gateway
+ * URL (scheme swapped). An account subscription signs
+ * its auth params with the loaded key so it works against an authed gateway.
  */
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -2154,11 +2158,14 @@ class FakeWebSocket {
   onclose: (() => void) | null = null;
   onerror: ((err: unknown) => void) | null = null;
   closed = false;
+  sent: string[] = [];
   constructor(url: string) {
     this.url = url;
     FakeWebSocket.instances.push(this);
   }
-  send(): void {}
+  send(data: string): void {
+    this.sent.push(data);
+  }
   close(): void {
     this.closed = true;
   }
@@ -2203,22 +2210,133 @@ describe("ExchangeClient WebSocket streams", () => {
 
   const flush = () => new Promise((r) => setTimeout(r, 0));
 
-  it("orderbook-deltas connects to the gateway WS base with scheme swapped", async () => {
+  it("orderbookSnapshot subscribes on /ws and resolves the first snapshot", async () => {
     const client = new ExchangeClient({
       gatewayUrl: "http://test-gateway",
       chainId: "test-chain",
     });
-    const unsub = client.subscribeOrderbookDeltas(1, () => {});
+    const pending = client.orderbookSnapshot(1);
+    const socket = FakeWebSocket.instances[0];
+    expect(socket.url).toBe("ws://test-gateway/ws");
+    socket.onopen?.();
     await flush();
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(FakeWebSocket.instances[0].url).toBe(
-      "ws://test-gateway/orderbook-deltas?market=1",
-    );
-    unsub();
-    expect(FakeWebSocket.instances[0].closed).toBe(true);
+    expect(JSON.parse(socket.sent[0])).toMatchObject({
+      method: "subscribe",
+      params: { channel: "orderbook", market: 1 },
+    });
+    const snapshot = {
+      channel: "orderbook",
+      type: "snapshot",
+      market: 1,
+      bids: [{ price: 100, totalQuantity: 2, orderCount: 1 }],
+      asks: [],
+    };
+    socket.onmessage?.({ data: JSON.stringify(snapshot) });
+    await expect(pending).resolves.toMatchObject({
+      type: "snapshot",
+      market: 1,
+    });
+    // The snapshot's connection is its own, so it is closed, not unsubscribed.
+    expect(socket.closed).toBe(true);
+    client.disconnect();
   });
 
-  it("account-events signs auth params that verify against the gateway message", async () => {
+  it("orderbookSnapshot rejects when no snapshot arrives in time", async () => {
+    const client = new ExchangeClient({
+      gatewayUrl: "http://test-gateway",
+      chainId: "test-chain",
+    });
+    const pending = client.orderbookSnapshot(1, 5);
+    await expect(pending).rejects.toThrow(FeedSubscriptionError);
+    await expect(pending).rejects.toThrow(/timed out/);
+    client.disconnect();
+  });
+
+  it("orderbookSnapshot asks the gateway on its own socket instead of reading a stalled subscription's cached book", async () => {
+    const client = new ExchangeClient({
+      gatewayUrl: "http://test-gateway",
+      chainId: "test-chain",
+    });
+    const book = (price: number) =>
+      JSON.stringify({
+        channel: "orderbook",
+        type: "snapshot",
+        market: 1,
+        bids: [{ price, totalQuantity: 2, orderCount: 1 }],
+        asks: [],
+      });
+    // A live subscription has a cached book, then its socket stops receiving.
+    const live = vi.fn();
+    const unsub = client.subscribeOrderbook(1, live);
+    const shared = FakeWebSocket.instances[0];
+    shared.onopen?.();
+    await flush();
+    shared.onmessage?.({ data: book(100) });
+    expect(live).toHaveBeenCalledTimes(1);
+
+    let resolved = false;
+    const pending = client.orderbookSnapshot(1).then((frame) => {
+      resolved = true;
+      return frame;
+    });
+    await flush();
+    expect(resolved).toBe(false);
+    const own = FakeWebSocket.instances[1];
+    expect(own).toBeDefined();
+    own.onopen?.();
+    await flush();
+    expect(JSON.parse(own.sent[0])).toMatchObject({
+      method: "subscribe",
+      params: { channel: "orderbook", market: 1 },
+    });
+    own.onmessage?.({ data: book(105) });
+    const frame = await pending;
+    expect(frame.bids[0]).toMatchObject({ price: 105 });
+    expect(own.closed).toBe(true);
+    expect(shared.closed).toBe(false);
+    expect(live).toHaveBeenCalledTimes(1);
+    unsub();
+    client.disconnect();
+  });
+
+  it("orderbookSnapshot rejects at once with the gateway's code and message when the subscription is refused", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new ExchangeClient({
+        gatewayUrl: "http://test-gateway",
+        chainId: "test-chain",
+      });
+      const pending = client.orderbookSnapshot(99, 10_000);
+      const socket = FakeWebSocket.instances[0];
+      socket.onopen?.();
+      await vi.advanceTimersByTimeAsync(0);
+      const id = JSON.parse(socket.sent[0]).id;
+      socket.onmessage?.({
+        data: JSON.stringify({
+          type: "error",
+          id,
+          channel: "orderbook",
+          code: 404,
+          error: "unknown market 99",
+        }),
+      });
+      const err = await pending.catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FeedSubscriptionError);
+      expect(err).toMatchObject({
+        channel: "orderbook",
+        code: 404,
+        gatewayMessage: "unknown market 99",
+      });
+      expect((err as Error).message).toMatch(/unknown market 99/);
+      expect((err as Error).message).not.toMatch(/timed out/);
+      expect(socket.closed).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("subscribeAccount subscribes on /ws with auth params that verify against the gateway message", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const client = new ExchangeClient({
       gatewayUrl: "https://api.dev.proof.trade",
@@ -2228,21 +2346,18 @@ describe("ExchangeClient WebSocket streams", () => {
     client.setPrivateKey(kp.privateKey);
     const ownerHex = ownerToHex(pubkeyToOwner(kp.publicKey));
 
-    const unsub = client.subscribeAccountEvents(
-      pubkeyToOwner(kp.publicKey),
-      () => {},
-    );
+    const unsub = client.subscribeAccount(() => {});
+    const socket = FakeWebSocket.instances[0];
+    expect(socket.url).toBe("wss://api.dev.proof.trade/ws");
+    socket.onopen?.();
     await flush();
 
-    const url = new URL(FakeWebSocket.instances[0].url);
-    expect(url.protocol).toBe("wss:");
-    expect(url.host).toBe("api.dev.proof.trade");
-    expect(url.pathname).toBe("/account-events");
-    expect(url.searchParams.get("owner")).toBe(ownerHex);
-
-    const pub = hexToBytes(url.searchParams.get("public_key")!);
-    const sig = hexToBytes(url.searchParams.get("signature")!);
-    const ts = BigInt(url.searchParams.get("timestamp_ms")!);
+    const params = JSON.parse(socket.sent[0]).params;
+    expect(params.channel).toBe("accountEvents");
+    expect(params.owner).toBe(ownerHex);
+    const pub = hexToBytes(params.public_key);
+    const sig = hexToBytes(params.signature);
+    const ts = BigInt(params.timestamp_ms);
     expect(ts).toBe(1_700_000_000_000n);
     const msg = expectedAccountWsAuthMessage(
       chainIdFromString("test-chain"),
@@ -2252,19 +2367,35 @@ describe("ExchangeClient WebSocket streams", () => {
     );
     expect(verify(pub, sig, msg)).toBe(true);
     unsub();
+    client.disconnect();
   });
 
-  it("disconnect() closes all open streams", async () => {
+  it("disconnect() closes the shared feed", async () => {
     const client = new ExchangeClient({
       gatewayUrl: "http://test-gateway",
       chainId: "test-chain",
     });
-    client.subscribeOrderbookDeltas(1, () => {});
-    client.subscribeOrderbookDeltas(2, () => {});
-    await flush();
-    expect(FakeWebSocket.instances).toHaveLength(2);
+    client.subscribeOrderbook(1, () => {});
+    client.subscribeOrderbook(2, () => {});
+    expect(FakeWebSocket.instances).toHaveLength(1);
     client.disconnect();
-    expect(FakeWebSocket.instances.every((w) => w.closed)).toBe(true);
+    expect(FakeWebSocket.instances[0].closed).toBe(true);
+  });
+
+  it("disconnect() also closes a pending orderbookSnapshot connection", async () => {
+    const client = new ExchangeClient({
+      gatewayUrl: "http://test-gateway",
+      chainId: "test-chain",
+    });
+    const pending = client.orderbookSnapshot(1, 50);
+    const socket = FakeWebSocket.instances[0];
+    socket.onopen?.();
+    await flush();
+    // The gateway never answers; disconnect() must not leave the snapshot's
+    // own connection open until the timeout runs out.
+    client.disconnect();
+    expect(socket.closed, "the pending snapshot socket is closed").toBe(true);
+    await expect(pending).rejects.toThrow(/timed out/);
   });
 });
 

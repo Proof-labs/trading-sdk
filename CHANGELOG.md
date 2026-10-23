@@ -35,6 +35,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `decodeLiquidationEvent` no longer decodes `full_liquidation_fee` (it
   returns `null`, like any other event type) and `FullLiquidationFeeEvent`
   is no longer exported.
+- **`subscribeAccountEvents` is removed from the TypeScript client.** It
+  connected to the gateway's legacy `/account-events` WebSocket path, which
+  DevNet's gateway now answers with 404. Use `subscribeAccount`: it carries the
+  same account events on the `accountEvents` channel of the multiplexed `/ws`
+  feed, with typed frames and auth re-signed on every reconnect. `/ws` does not
+  replay missed events after a reconnect (the old `after_id` cursor); read
+  `/v1/history/account-events` to fill that gap. The Python
+  `AccountEventStream` keeps its name and arguments but now subscribes on `/ws`
+  too: it yields the channel-tagged `accountEvents` frames (a snapshot, then
+  live events) instead of raw history rows, and no longer replays from
+  `after_id`.
+- **`subscribeOrderbookDeltas` and the `WsStreamOptions` type are removed
+  from the TypeScript client.** The method connected to the legacy
+  `/orderbook-deltas` WebSocket path, which DevNet's gateway also answers with 404. Use `subscribeOrderbook`, the `orderbook` channel of `/ws`: a `snapshot`
+  frame, then one `update` frame per changed level. `orderbookSnapshot` now
+  reads that channel too and resolves the `snapshot` frame (`bids` / `asks`)
+  instead of an `l2Book` frame, over a connection of its own so it never
+  answers from a book an existing subscription cached. It takes an optional
+  timeout (default 10 seconds), rejects when no snapshot arrives, and rejects
+  at once with the new `FeedSubscriptionError` (the gateway's `code` and
+  message) when the gateway refuses the subscription. `disconnect()` now closes
+  only the shared `/ws` feed. In Python, `OrderbookDeltaStream` keeps its name
+  and arguments but subscribes on `/ws` and yields the same `orderbook`
+  frames, and `orderbook_snapshot` returns the `snapshot` frame and raises
+  `TransportError` when the gateway refuses the subscription or no snapshot
+  arrives within its `timeout` (default 10 seconds).
 
 ### Added
 
@@ -134,6 +160,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A failed account-subscription signature no longer leaves the stream
+  silently unsubscribed.** When the stream-auth signature (or the chain id it
+  needs) fails, `subscribeAccount` listeners receive an `error` frame and the
+  subscribe is retried with the reconnect backoff on the same connection,
+  until it succeeds or the subscription is dropped. A gateway refusal with
+  401 (for example an expired signature), 429 or 503 is retried the same way.
+- **A snapshot resent for a late `subscribeAccount` listener reaches only
+  that listener**, so existing listeners no longer see a second snapshot
+  without a reconnect.
 - **`queryFinancialState` rejects malformed UTF-8 in MessagePack strings.**
   The dependency decoder normalized an overlong encoding into a valid enum
   (`c1 82 75 79` decoded as `Buy`); the response is now rejected before

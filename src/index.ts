@@ -283,6 +283,7 @@ export {
 
 // Errors
 export {
+  FeedSubscriptionError,
   GatewayHttpError,
   isMissingMark,
   type ExecErrorInfo,
@@ -310,11 +311,7 @@ export {
 } from "./crypto.js";
 
 // Client
-export {
-  ExchangeClient,
-  type ExchangeClientOptions,
-  type WsStreamOptions,
-} from "./client.js";
+export { ExchangeClient, type ExchangeClientOptions } from "./client.js";
 export {
   defaultExchangeHttpTransport,
   exchangeHttpPriorityForAction,
