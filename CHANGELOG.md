@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [8.0.0] — 2026-10-22
+
 ### Breaking changes
 
 - **`proof-wire` moves to v7.0.0** (`25f8972e`, tag `v7.0.0`), and the
@@ -193,9 +195,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A failed account-subscription signature no longer leaves the stream
   silently unsubscribed.** When the stream-auth signature (or the chain id it
   needs) fails, `subscribeAccount` listeners receive an `error` frame and the
-  subscribe is retried with the reconnect backoff on the same connection,
-  until it succeeds or the subscription is dropped. A gateway refusal with
-  401 (for example an expired signature), 429 or 503 is retried the same way.
+  subscribe is retried with the reconnect backoff on the same connection. A
+  gateway refusal with 401 (for example an expired signature), 429 or 503 is
+  retried the same way. After five consecutive failures the subscription
+  stops retrying and its listeners receive one final `error` frame; it stays
+  unconfirmed until the socket is replaced, which starts a fresh budget of
+  five.
 - **A snapshot resent for a late `subscribeAccount` listener reaches only
   that listener**, so existing listeners no longer see a second snapshot
   without a reconnect.
@@ -1604,7 +1609,9 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.2.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.0.0...HEAD
+[8.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.3.0...npm-v8.0.0
+[7.3.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.2.0...npm-v7.3.0
 [7.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.1.0...npm-v7.2.0
 [7.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.0.0...npm-v7.1.0
 [7.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v6.4.0...npm-v7.0.0
