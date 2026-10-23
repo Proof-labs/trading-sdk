@@ -16,14 +16,23 @@ class AccountEvent:
     data: dict[str, t.Any] = field(default_factory=dict)
 
 
+# Acknowledgements the gateway sends for control messages; not data.
+_ACK_TYPES = frozenset({"subscribed", "unsubscribed", "pong"})
+
+
 class AccountEventStream:
     """WebSocket stream for account events.
 
-    Connects to ``/account-events``, yields typed events with
-    sequence-gap recovery via ``after_id`` replay.
+    Subscribes to the ``accountEvents`` channel of the gateway's multiplexed
+    ``/ws`` feed and yields its channel-tagged frames: a ``snapshot`` frame,
+    then one frame per live event (``order_update``, ``fill``,
+    ``position_update``, liquidation events, ...). A refused subscription
+    arrives as a ``{"type": "error", ...}`` frame. Each reconnect subscribes
+    again and receives a fresh snapshot; events missed while disconnected are
+    not replayed, so read ``/v1/history/account-events`` to fill that gap.
 
     Args:
-        ws_url: WebSocket base URL.
+        ws_url: WebSocket base URL (the gateway URL with a ``ws`` scheme).
         owner: 20-byte owner address (bytes) or hex string.
         api_key: API key for auth.
         reconnect_backoff_max: Maximum backoff in seconds (default 30).
@@ -40,11 +49,11 @@ class AccountEventStream:
         reconnect_attempts: int | None = None,
     ) -> None:
         self._ws_url = ws_url.rstrip("/")
-        self._owner = owner.hex() if isinstance(owner, bytes) else owner
+        owner_hex = owner.hex() if isinstance(owner, bytes) else owner
+        self._owner = owner_hex.removeprefix("0x").lower()
         self._api_key = api_key
         self._backoff_cap = reconnect_backoff_max
         self._max_attempts = reconnect_attempts
-        self._last_event_id: int | None = None
         self._ws: t.Any = None
         self._closed = False
 
@@ -54,14 +63,21 @@ class AccountEventStream:
     def _connect(self) -> None:
         import websockets.sync.client as ws_client
 
-        params = f"owner={self._owner}"
-        if self._last_event_id is not None:
-            params += f"&after_id={self._last_event_id}"
-        url = f"{self._ws_url}/account-events?{params}"
         extra_headers = {}
         if self._api_key:
             extra_headers["X-API-Key"] = self._api_key
-        self._ws = ws_client.connect(url, additional_headers=extra_headers)
+        self._ws = ws_client.connect(
+            f"{self._ws_url}/ws", additional_headers=extra_headers
+        )
+        self._ws.send(
+            json.dumps(
+                {
+                    "method": "subscribe",
+                    "id": 1,
+                    "params": {"channel": "accountEvents", "owner": self._owner},
+                }
+            )
+        )
 
     def close(self) -> None:
         self._closed = True
@@ -82,13 +98,10 @@ class AccountEventStream:
                 for raw in self._ws:
                     if self._closed:
                         return
-                    event = json.loads(raw)
-                    event_id = event.get("event_id")
-                    if event_id is not None:
-                        self._last_event_id = max(
-                            self._last_event_id or 0, event_id
-                        )
-                    yield event
+                    frame = json.loads(raw)
+                    if frame.get("type") in _ACK_TYPES:
+                        continue
+                    yield frame
 
             except Exception:
                 if self._closed:
@@ -103,13 +116,18 @@ class AccountEventStream:
 
 
 class OrderbookDeltaStream:
-    """WebSocket stream for L2 orderbook deltas.
+    """WebSocket stream for one market's orderbook.
 
-    The first frame is a full ``l2Book`` snapshot. Subsequent frames
-    are incremental deltas. See the spec for gap recovery details.
+    Subscribes to the ``orderbook`` channel of the gateway's multiplexed
+    ``/ws`` feed and yields its channel-tagged frames: a ``snapshot`` frame
+    (``bids`` / ``asks`` levels), then one ``update`` frame per changed level
+    (``side``, ``price``, ``totalQuantity``, ``orderCount``; a zero quantity
+    empties the level). A refused subscription arrives as a
+    ``{"type": "error", ...}`` frame. Each reconnect subscribes again and
+    starts from a fresh snapshot.
 
     Args:
-        ws_url: WebSocket base URL.
+        ws_url: WebSocket base URL (the gateway URL with a ``ws`` scheme).
         market: Numeric market ID.
         reconnect_backoff_max: Maximum backoff in seconds (default 30).
     """
@@ -139,8 +157,16 @@ class OrderbookDeltaStream:
     def _connect(self) -> None:
         import websockets.sync.client as ws_client
 
-        url = f"{self._ws_url}/orderbook-deltas?market={self._market}"
-        self._ws = ws_client.connect(url)
+        self._ws = ws_client.connect(f"{self._ws_url}/ws")
+        self._ws.send(
+            json.dumps(
+                {
+                    "method": "subscribe",
+                    "id": 1,
+                    "params": {"channel": "orderbook", "market": self._market},
+                }
+            )
+        )
 
     def _run(self) -> t.Iterator[dict[str, t.Any]]:
         attempt = 0
@@ -155,7 +181,10 @@ class OrderbookDeltaStream:
                 for raw in self._ws:
                     if self._closed:
                         return
-                    yield json.loads(raw)
+                    frame = json.loads(raw)
+                    if frame.get("type") in _ACK_TYPES:
+                        continue
+                    yield frame
 
             except Exception:
                 if self._closed:

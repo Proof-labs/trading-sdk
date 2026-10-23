@@ -677,6 +677,25 @@ export class GatewayHttpError extends Error {
 }
 
 /**
+ * The gateway refused a `/ws` subscription with an `error` frame (for example
+ * an unknown market). `code` and `gatewayMessage` are the frame's own fields.
+ */
+export class FeedSubscriptionError extends Error {
+  constructor(
+    public readonly channel: string,
+    public readonly gatewayMessage: string,
+    public readonly code?: number,
+  ) {
+    super(
+      code === undefined
+        ? `Gateway refused the ${channel} subscription: ${gatewayMessage}`
+        : `Gateway refused the ${channel} subscription (${code}): ${gatewayMessage}`,
+    );
+    this.name = "FeedSubscriptionError";
+  }
+}
+
+/**
  * Type guard: true when the error is a 503 `GatewayHttpError` whose
  * `errorCode` is `"MissingMark"` — a required oracle mark was unavailable
  * for account valuation. Callers should retry after the oracle recovers.
