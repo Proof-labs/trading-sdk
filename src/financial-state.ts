@@ -296,6 +296,16 @@ function validateMessagePackBudget(bytes: Uint8Array): void {
     if (length > maximum) invalid("MessagePack resource limit");
     take(length);
   };
+  const utf8 = new TextDecoder("utf-8", { fatal: true });
+  const text = (length: number): void => {
+    if (length > 4) invalid("MessagePack resource limit");
+    const start = take(length);
+    try {
+      utf8.decode(bytes.subarray(start, start + length));
+    } catch {
+      invalid("MessagePack UTF-8");
+    }
+  };
   while (remaining.length) {
     const top = remaining.length - 1;
     if (remaining[top] === 0) {
@@ -316,7 +326,7 @@ function validateMessagePackBudget(bytes: Uint8Array): void {
     } else if (tag >= 0x90 && tag <= 0x9f) {
       arrayLength = tag & 15;
     } else if (tag >= 0xa0 && tag <= 0xbf) {
-      payload(tag & 31, 4);
+      text(tag & 31);
     } else {
       switch (tag) {
         case 0xcc:
@@ -336,13 +346,13 @@ function validateMessagePackBudget(bytes: Uint8Array): void {
           take(8);
           break;
         case 0xd9:
-          payload(size(1), 4);
+          text(size(1));
           break;
         case 0xda:
-          payload(size(2), 4);
+          text(size(2));
           break;
         case 0xdb:
-          payload(size(4), 4);
+          text(size(4));
           break;
         case 0xc4:
           payload(size(1), 20);
