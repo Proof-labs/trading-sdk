@@ -71,9 +71,11 @@ function hasEvent(
  *   window that was read. Only rows at a later height were delivered; events
  *   at the same height as the last delivered one may be missing.
  * - `historyBehind`: history had not indexed up to the snapshot's height,
- *   even after retrying. Events between the newest history row and the
- *   snapshot may be missing.
- * - `failed`: a history read failed. Nothing was backfilled.
+ *   even after waiting `maxAttempts` status reads. Events between the newest
+ *   history row and the snapshot may be missing.
+ * - `failed`: a history read failed, or the gap held more rows than
+ *   `maxPages` pages, so the boundary was never reached. Nothing was
+ *   backfilled.
  */
 export type AccountRecoveryStatus =
   | { kind: "backfilled"; delivered: number }
@@ -116,9 +118,10 @@ export interface AccountRecoveryOptions {
   /** The newest height history has fully indexed
    *  (`/v1/history/status` → `ingest.newest_height`). */
   fetchIndexedHeight: (signal: AbortSignal) => Promise<number>;
-  /** Newest-first pages read per attempt before giving up on the boundary. */
+  /** Newest-first pages read before giving up on the boundary. */
   maxPages?: number;
-  /** History reads per reconnect while history lags the snapshot. */
+  /** Status reads per reconnect, `retryDelayMs` apart, while history lags
+   *  the snapshot; the default 30 waits out about 30 seconds of indexer lag. */
   maxAttempts?: number;
   retryDelayMs?: number;
 }
@@ -248,9 +251,9 @@ const heightOf = (frame: AccountSnapshotFrame): number | undefined =>
  * (sent because another listener joined), marks a re-subscription. The
  * snapshot is passed through at once: it is current state, not part of the
  * event log. Until the backfill finishes, live events are buffered. The
- * backfill reads history newest-first down to the last delivered event (or
- * the previous snapshot's height when none was delivered), retrying while
- * history has not indexed up to the new snapshot's height, delivers the
+ * backfill waits while history has not indexed up to the new snapshot's
+ * height, reads history newest-first down to the last delivered event (or
+ * the previous snapshot's height when none was delivered), delivers the
  * newer rows in history order, then flushes the buffer, dropping any live
  * frame history already delivered. If the socket reconnects again during a
  * backfill, only the frames before that snapshot are flushed; the next
@@ -261,7 +264,7 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
   close: () => void;
 } {
   const maxPages = opts.maxPages ?? 10;
-  const maxAttempts = opts.maxAttempts ?? 5;
+  const maxAttempts = opts.maxAttempts ?? 30;
   const retryDelayMs = opts.retryDelayMs ?? 1000;
   const abort = new AbortController();
   // `undefined`: nothing delivered yet. `null`: the last delivered frame had
@@ -324,6 +327,10 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
       }
       if (!nextCursor) break;
       cursor = nextCursor;
+      if (page === maxPages - 1 && !reached)
+        throw new Error(
+          `account history holds more than ${maxPages} pages after the recovery boundary`,
+        );
     }
     const rows = newerFirst.reverse();
     return {
@@ -358,7 +365,6 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
           target === undefined
             ? -1
             : await opts.fetchIndexedHeight(abort.signal);
-        let result = await scan(boundary);
         for (
           let attempt = 1;
           target !== undefined && indexed < target && attempt < maxAttempts;
@@ -366,8 +372,8 @@ export function recoveringAccountHandler(opts: AccountRecoveryOptions): {
         ) {
           await abortableSleep(retryDelayMs, abort.signal);
           indexed = await opts.fetchIndexedHeight(abort.signal);
-          result = await scan(boundary);
         }
+        const result = await scan(boundary);
         if (closed) return undefined;
         if (boundary.key) addEvent(delivered, boundary.key);
         floor = boundary.key ? boundary.height : boundary.height + 1;

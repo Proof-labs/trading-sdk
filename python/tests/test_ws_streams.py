@@ -296,20 +296,49 @@ def test_reconnect_retries_until_history_indexes_the_snapshot_height(monkeypatch
     # No live frame arrives to show the lag: only the snapshot height does.
     first = RecoverySocket([snap(10), live_frame(A)])
     second = RecoverySocket([snap(13)])
-    reads = [indexed(10), page(A), indexed(13), page(A, C, E)]
+    reads = [indexed(10), indexed(13), page(A, C, E)]
     frames, statuses, made = run_stream(monkeypatch, [first, second], reads, 5)
     assert tags(frames) == ["snapshot", "10-0", "snapshot", "11-0*", "13-0*"]
     assert statuses == [RecoveryStatus("backfilled", 2)]
-    assert len(made) == 4
+    # History is read once, after it has caught up.
+    assert made == ["/v1/history/status"] * 2 + ["/v1/history/account-events"]
 
 
 def test_reconnect_reports_history_behind_not_backfilled(monkeypatch) -> None:
     first = RecoverySocket([snap(10), live_frame(A)])
     second = RecoverySocket([snap(13)])
-    reads = [indexed(10), page(A)] * 5
+    reads = [indexed(10)] * 30 + [page(A)]
     frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99)
     assert tags(frames) == ["snapshot", "10-0", "snapshot"]
     assert statuses == [RecoveryStatus("history_behind", 0)]
+
+
+def test_reconnect_waits_out_an_indexer_lag_of_several_seconds(monkeypatch) -> None:
+    first = RecoverySocket([snap(10), live_frame(A)])
+    second = RecoverySocket([snap(13)])
+    # History catches up 20 one-second waits after the reconnect.
+    reads = [indexed(10)] * 21 + [indexed(13), page(A, C, E)]
+    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 5)
+    assert tags(frames) == ["snapshot", "10-0", "snapshot", "11-0*", "13-0*"]
+    assert statuses == [RecoveryStatus("backfilled", 2)]
+
+
+def test_a_gap_longer_than_the_page_budget_reports_failed(monkeypatch) -> None:
+    # Nothing is yielded before the outage: the boundary is the snapshot's
+    # height, and 11 full pages of newer rows lie above it.
+    first = RecoverySocket([snap(10)])
+    second = RecoverySocket([snap(5511)])
+    pages = []
+    for p in range(10):
+        top = 5511 - p * 500
+        pages.append(
+            {**page(*(at(top - 499 + i) for i in range(500))), "next_cursor": f"c{p + 1}"}
+        )
+    frames, statuses, _ = run_stream(
+        monkeypatch, [first, second], [indexed(5511), *pages], 99
+    )
+    assert tags(frames) == ["snapshot", "snapshot"]
+    assert [s.kind for s in statuses] == ["failed"]
 
 
 def test_reconnect_without_snapshot_height_reports_unverified(monkeypatch) -> None:
@@ -405,7 +434,7 @@ def test_boundary_not_found_when_history_no_longer_holds_the_boundary(monkeypatc
 def test_close_stops_a_backfill_waiting_to_retry(monkeypatch) -> None:
     first = RecoverySocket([snap(10), live_frame(A)])
     second = RecoverySocket([snap(13)])
-    reads = [indexed(10), page(A)]
+    reads = [indexed(10)]
 
     def closing_wait(stream):
         class Stop:
@@ -423,7 +452,7 @@ def test_close_stops_a_backfill_waiting_to_retry(monkeypatch) -> None:
     )
     assert tags(frames) == ["snapshot", "10-0", "snapshot"]
     assert statuses == []
-    assert len(made) == 2
+    assert len(made) == 1
 
 
 def test_close_sets_the_wait_event(monkeypatch) -> None:

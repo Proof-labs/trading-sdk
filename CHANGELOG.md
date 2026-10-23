@@ -66,8 +66,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `subscribeAccount` (and Python's `AccountEventStream`) now, by default,
   read `/v1/history/account-events` back to the last delivered event (or the
   previous snapshot's `height` when none was delivered) after a reconnect,
-  retrying while `/v1/history/status` shows history behind the new
-  snapshot's `height`. They deliver the newer rows in history order (marked
+  once `/v1/history/status` shows history caught up to the new snapshot's
+  `height` (waiting up to about 30 seconds). A gap longer than the ten
+  500-row pages read reports `failed` and backfills nothing. They deliver the newer rows in history order (marked
   `backfilled: true`), then the live frames that arrived meanwhile — every
   event once across reconnects, also when the socket reconnects again during
   a backfill (a live frame racing a backfill can admit one duplicate).

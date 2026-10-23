@@ -217,7 +217,10 @@ it("retries until history has indexed the snapshot height, even with no live fra
   await t.reconnect(1, snap(13));
   // History is behind the snapshot and no live frame has arrived to show it.
   await t.answer(STATUS, indexed(10));
-  await t.answer(EVENTS, page(A));
+  expect(
+    t.pending.some((p) => p.url.includes(EVENTS)),
+    "no history read while history lags",
+  ).toBe(false);
   expect(t.statuses, "not reported while history lags").toEqual([]);
   await vi.advanceTimersByTimeAsync(1000);
   await t.answer(STATUS, indexed(13));
@@ -238,11 +241,11 @@ it("reports historyBehind, never backfilled, when history never reaches the snap
   await t.start(snap(10));
   t.sockets[0].push(live(A));
   await t.reconnect(1, snap(13));
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 30; i++) {
     await t.answer(STATUS, indexed(10));
-    await t.answer(EVENTS, page(A));
     await vi.advanceTimersByTimeAsync(1000);
   }
+  await t.answer(EVENTS, page(A));
   expect(t.statuses).toEqual([{ kind: "historyBehind", delivered: 0 }]);
   t.c.disconnect();
 });
@@ -416,6 +419,39 @@ it("dedupes a late live duplicate of a backfilled row that carried no position",
   t.c.disconnect();
 });
 
+it("waits out an indexer lag of several seconds before reading history", async () => {
+  const t = setup();
+  await t.start(snap(10));
+  t.sockets[0].push(live(A));
+  await t.reconnect(1, snap(13));
+  // History catches up 20 seconds after the reconnect.
+  for (let i = 0; i < 20; i++) {
+    await t.answer(STATUS, indexed(10));
+    await vi.advanceTimersByTimeAsync(1000);
+  }
+  await t.answer(STATUS, indexed(13));
+  await t.answer(EVENTS, page(A, C, E));
+  expect(t.statuses).toEqual([{ kind: "backfilled", delivered: 2 }]);
+  t.c.disconnect();
+});
+
+it("reports failed, never backfilled, when the gap is longer than the page budget", async () => {
+  const t = setup();
+  // Nothing is delivered before the outage: the boundary is the snapshot's
+  // height, and 11 full pages of newer rows lie above it.
+  await t.start(snap(10));
+  await t.reconnect(1, snap(5511));
+  await t.answer(STATUS, indexed(5511));
+  for (let p = 0; p < 10; p++) {
+    const top = 5511 - p * 500;
+    const events = Array.from({ length: 500 }, (_, i) => at(top - 499 + i));
+    await t.answer(EVENTS, { ...page(...events), next_cursor: `c${p + 1}` });
+  }
+  expect(t.statuses).toEqual([{ kind: "failed", error: expect.any(Error) }]);
+  expect(tags(t.frames)).toEqual(["snapshot", "snapshot"]);
+  t.c.disconnect();
+});
+
 it("reports boundaryNotFound when history no longer holds the boundary event", async () => {
   const t = setup();
   await t.start(snap(10));
@@ -470,7 +506,6 @@ it("stops a pending backfill when the subscription closes", async () => {
   t.sockets[0].push(live(A));
   await t.reconnect(1, snap(13));
   await t.answer(STATUS, indexed(10));
-  await t.answer(EVENTS, page(A));
   // Now waiting before the retry.
   const before = t.requests.length;
   t.c.disconnect();

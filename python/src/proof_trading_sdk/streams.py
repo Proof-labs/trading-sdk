@@ -93,8 +93,11 @@ class RecoveryStatus:
       window that was read. Only rows at a later height were yielded; events
       at the same height as the last yielded one may be missing.
     - ``history_behind``: history had not indexed up to the snapshot's height,
-      even after retrying. Events in between may be missing.
-    - ``failed``: a history read failed (``error``). Nothing was backfilled.
+      even after waiting ``max_history_attempts`` status reads. Events in
+      between may be missing.
+    - ``failed``: a history read failed, or the gap held more rows than
+      ``max_history_pages`` pages, so the boundary was never reached
+      (``error``). Nothing was backfilled.
     """
 
     kind: str
@@ -158,9 +161,9 @@ class AccountEventStream:
     Each reconnect subscribes again and receives a fresh snapshot. By default
     it then recovers the events missed while disconnected: it reads
     ``/v1/history/account-events`` back to the last yielded event (or the
-    previous snapshot's ``height`` when none was yielded), retrying while
-    ``/v1/history/status`` shows history has not indexed up to the new
-    snapshot's ``height``. It yields the newer rows in history order (marked
+    previous snapshot's ``height`` when none was yielded), once
+    ``/v1/history/status`` shows history has indexed up to the new
+    snapshot's ``height`` or the wait runs out. It yields the newer rows in history order (marked
     ``"backfilled": True``), then the live frames received meanwhile,
     skipping any whose key (``height``, ``txHash``, ``eventIndex``,
     ``eventType``, ``txIndex`` — a ``txIndex`` of ``None`` matches any
@@ -185,10 +188,11 @@ class AccountEventStream:
             sets it from the client's gateway URL.
     """
 
-    #: Newest-first history pages read per attempt.
+    #: Newest-first history pages read before giving up on the boundary.
     max_history_pages = 10
-    #: History reads per reconnect while history lags the snapshot.
-    max_history_attempts = 5
+    #: Status reads per reconnect, ``history_retry_delay`` apart, while
+    #: history lags the snapshot: about 30 seconds of indexer lag.
+    max_history_attempts = 30
     history_retry_delay = 1.0
     #: Seconds a single history read may take; ``close()`` cannot interrupt
     #: one in flight, but nothing it returns is yielded after ``close()``.
@@ -312,7 +316,7 @@ class AccountEventStream:
         found = key is None
         reached = False
         cursor: str | None = None
-        for _ in range(self.max_history_pages):
+        for page in range(self.max_history_pages):
             rows, cursor = self._history_page(cursor)
             for row in rows:
                 row_key = _row_key(row)
@@ -325,6 +329,11 @@ class AccountEventStream:
                 newer_first.append(row)
             if reached or not cursor:
                 break
+            if page == self.max_history_pages - 1:
+                raise RuntimeError(
+                    f"account history holds more than {self.max_history_pages}"
+                    " pages after the recovery boundary"
+                )
         rows = list(reversed(newer_first))
         if not found:
             rows = [r for r in rows if int(r["block_height"]) > height]
@@ -359,16 +368,16 @@ class AccountEventStream:
         buffer: list[dict[str, t.Any]] = []
         try:
             indexed = self._indexed_height() if target is not None else -1
-            found, rows = self._scan(key, height)
             self._drain(buffer)
             attempt = 1
             while target is not None and indexed < target and attempt < self.max_history_attempts:
                 if self._stop.wait(self.history_retry_delay):
                     return
                 indexed = self._indexed_height()
-                found, rows = self._scan(key, height)
                 self._drain(buffer)
                 attempt += 1
+            found, rows = self._scan(key, height)
+            self._drain(buffer)
         except Exception as err:  # noqa: BLE001 — reported, then live resumes
             if self._closed:
                 return
