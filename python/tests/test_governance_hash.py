@@ -52,6 +52,12 @@ GOLDEN_UPDATE_AUTHORITY_SET_REMOVE = (
 GOLDEN_SET_LIQUIDATION_CONFIG = (
     "c56e3d275fb3a86545944cebf74b28fca40766448f1a97e3cbdef5cf1f345c32"
 )
+# SetMarginOffsetPolicy (inner tag 0x1A): a struct variant whose predecessor is
+# an absent Option and whose pair list is positional. Same authority as above;
+# the Rust and TypeScript suites pin the identical constant.
+GOLDEN_SET_MARGIN_OFFSET_POLICY = (
+    "40627a24b87270a4cb4e75a5396a5b9508ceac315d64872dac923087972a90b1"
+)
 
 
 
@@ -206,6 +212,25 @@ class TestAdminProposalContentHash:
         }
         h = pts.admin_proposal_content_hash(**kwargs)
         assert h.hex() == GOLDEN_SET_LIQUIDATION_CONFIG
+
+    def test_set_margin_offset_policy_hash(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = {
+            "SetMarginOffsetPolicy": {
+                "predecessor": None,
+                "pairs": [
+                    {
+                        "perpetual": 1,
+                        "conditional": 2,
+                        "settlement_reference": 1,
+                        "rate": 5_000,
+                        "resolution": "RemoveOnResolution",
+                    }
+                ],
+            }
+        }
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_SET_MARGIN_OFFSET_POLICY
 
     def test_rejects_unknown_unit_variant(self):
         kwargs = golden_kwargs()

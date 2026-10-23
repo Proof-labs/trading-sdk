@@ -1,5 +1,13 @@
 // Types
 export {
+  MAX_MARGIN_OFFSET_PAIRS,
+  validateSetMarginOffsetPolicy,
+  decodeMarginOffsetEvent,
+  type MarginOffsetEvent,
+  type MarginOffsetPolicySetEvent,
+  type MarginOffsetPairConfiguredEvent,
+} from "./margin-offsets.js";
+export {
   type Address,
   Side,
   TimeInForce,
@@ -42,6 +50,9 @@ export {
   type WithdrawInsuranceFund,
   type LiquidationConfig,
   type SetLiquidationConfig,
+  type OffsetResolutionTreatment,
+  type MarginOffsetPair,
+  type SetMarginOffsetPolicy,
   type ScheduleUpgrade,
   type CancelUpgrade,
   type BridgeWithdrawalReceipt,

@@ -22,9 +22,12 @@ serde_bytes = "0.11"
 rmp-serde = "1"
 rmpv = { version = "1.3.1", features = ["with-serde"] }
 # The wire contract, one definition shared with the engine. `version` pins
-# the compatible proof-wire major; the rev is the commit of the v7.0.0 tag.
-# The rev stays a commit sha, never a tag name, so the pin cannot move (#123).
-proof-wire = { version = "7", git = "https://github.com/Proof-labs/wire.git", rev = "25f8972e39390ca04aa0a9c70c9da47b89ef0546", features = ["bridge"] }
+# the compatible proof-wire major; the rev is a pre-release branch carrying
+# the margin-offset contract (inner tag 27), vendored from exchange
+# 7e3c0ff8ce22d29d8c3a8a99597ddb7c77709e64. Repin to its approved public
+# release before publishing the SDK; the rev stays a commit sha, never a
+# tag name, so the pin cannot move (#123).
+proof-wire = { version = "7", git = "https://github.com/Proof-labs/wire.git", rev = "b9b1c51ba8fa4bc5cc95f6d49c731fad4ad1c357", features = ["bridge"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.
