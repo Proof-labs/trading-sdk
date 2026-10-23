@@ -484,7 +484,7 @@ describe("cash-flow history through account events", () => {
 
 describe("resolution history", () => {
   const settled = {
-    kind: "conditional_settled",
+    kind: "condition_met",
     event_id: "42",
     market: "100",
     owner,
@@ -525,6 +525,28 @@ describe("resolution history", () => {
     expect(cash.convertedSize).toBe("0");
     expect(cash.fallbackReason).toBe("maintenance_margin");
     expect(cash.realizedPnl).toBe("100000000");
+  });
+
+  it("carries the indexer's resolution names as the kind", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        json([
+          settled,
+          {
+            ...settled,
+            kind: "condition_not_met",
+            settlement_price: "",
+            realized_pnl: "0",
+          },
+        ]),
+      ),
+    );
+    const rows = await client().queryHistoryResolutions(owner);
+    expect(rows.map((row) => row.kind)).toEqual([
+      "condition_met",
+      "condition_not_met",
+    ]);
   });
 
   it("reads a row without the conversion keys as not converted", async () => {
