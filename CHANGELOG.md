@@ -160,6 +160,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`HistoryResolution.kind` names the resolution kinds the indexer
+  serves**: `condition_met` and `condition_not_met`, not `conditional_settled`
+  and `conditional_voided`. The indexer's resolutions route only returns the
+  canonical names (its ingester renames the legacy engine names on the way in),
+  so the old literals never matched a returned row. TypeScript only; the Python
+  client returns resolution rows as plain dictionaries and is unchanged.
 - **A failed account-subscription signature no longer leaves the stream
   silently unsubscribed.** When the stream-auth signature (or the chain id it
   needs) fails, `subscribeAccount` listeners receive an `error` frame and the
