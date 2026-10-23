@@ -126,7 +126,7 @@ export interface AccountRecoveryOptions {
   retryDelayMs?: number;
 }
 
-/** Live event family for a history row; mirrors api-gateway
+/** Live frame type for a history row; mirrors api-gateway
  *  `account_ws_message_type`. */
 function familyOf(eventType: string): string {
   switch (eventType) {
@@ -136,10 +136,10 @@ function familyOf(eventType: string): string {
     case "order_cancelled":
     case "order_amended":
     case "market_order_processed":
-      return "order_update";
+      return "orderUpdate";
     case "position_updated":
     case "position_closed":
-      return "position_update";
+      return "positionUpdate";
     case "funding_settled":
       return "funding";
     case "position_triggers_set":
@@ -148,11 +148,11 @@ function familyOf(eventType: string): string {
     case "position_trigger_activated":
     case "position_trigger_executed":
     case "position_trigger_deferred":
-      return "trigger_update";
+      return "triggerUpdate";
     case "margin_warning":
-      return "margin_update";
+      return "marginUpdate";
     default:
-      return "account_event";
+      return "accountEvent";
   }
 }
 
@@ -160,8 +160,8 @@ function familyOf(eventType: string): string {
  *  names history rows carry. A gateway that already sends the canonical
  *  names passes through unchanged. */
 const LEGACY_EVENT_TYPES: Record<string, string> = {
-  conditional_settled: "condition_met",
-  conditional_voided: "condition_not_met",
+  conditional_settled: "condition_met", // vocabulary-lint: allow
+  conditional_voided: "condition_not_met", // vocabulary-lint: allow
 };
 
 function canonicalEventType(eventType: string): string {

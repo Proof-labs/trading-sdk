@@ -154,7 +154,7 @@ def at(height: int) -> tuple:
 def live_frame(e: tuple, keyed: bool = True, tx_index: int | None = 0) -> dict:
     frame = {
         "channel": "accountEvents",
-        "type": "account_event",
+        "type": "accountEvent",
         "owner": OWNER,
         "eventType": e[3],
         "height": e[0],
@@ -480,8 +480,8 @@ def test_reconnect_reports_a_failed_history_read(monkeypatch) -> None:
 
 
 def test_reconnect_matches_a_legacy_settlement_name_to_history(monkeypatch) -> None:
-    met = ev(10, "AA", 2, "conditional_settled")
-    not_met = ev(12, "DD", 1, "conditional_voided")
+    met = ev(10, "AA", 2, "conditional_settled")  # vocabulary-lint: allow
+    not_met = ev(12, "DD", 1, "conditional_voided")  # vocabulary-lint: allow
     first = RecoverySocket([snap(10), live_frame(met)])
     second = RecoverySocket([snap(12)], waiting=[live_frame(not_met)])
     reads = [
