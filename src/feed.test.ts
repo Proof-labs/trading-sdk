@@ -586,13 +586,9 @@ describe("feed ownership and cleanup", () => {
       ws.emit(accountSnapshot(2));
       ws.emit(fill(3));
       expect(late).toEqual([accountSnapshot(2), fill(3)]);
-      expect(early).toEqual([
-        accountSnapshot(1),
-        fill(1),
-        fill(2),
-        accountSnapshot(2),
-        fill(3),
-      ]);
+      // The resend is the late listener's: the existing one keeps its stream
+      // and never sees a second snapshot it could take for a reconnect.
+      expect(early).toEqual([accountSnapshot(1), fill(1), fill(2), fill(3)]);
       feed.close();
     });
 
@@ -759,6 +755,170 @@ describe("feed ownership and cleanup", () => {
       expect(early).toEqual([accountSnapshot(1), fill(2)]);
       expect(errors).toEqual([new Error("signer unavailable")]);
       expect(feed.connectionState).toBe("open");
+      feed.close();
+    });
+
+    it("retries a first subscribe whose signing failed, on the same socket", async () => {
+      const errors: unknown[] = [];
+      const { feed, clock } = makeFeed({
+        onError: (e: unknown) => errors.push(e),
+        minBackoffMs: 100,
+      });
+      let calls = 0;
+      const auth = async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("signer unavailable");
+        return { public_key: "pk", signature: "sig", timestamp_ms: 1 };
+      };
+      const got: Array<Record<string, unknown>> = [];
+      feed.subscribeAccount(
+        owner,
+        (f) => got.push(f as unknown as Record<string, unknown>),
+        auth,
+      );
+      const ws = FakeWS.last();
+      ws.open();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(subscribes(ws), "nothing subscribed yet").toHaveLength(0);
+      expect(errors).toEqual([new Error("signer unavailable")]);
+      expect(got).toEqual([
+        {
+          type: "error",
+          channel: "accountEvents",
+          error:
+            "accountEvents subscription authentication failed: signer unavailable; retrying in 100ms",
+        },
+      ]);
+      expect(clock.pending, "a retry is scheduled").toBe(1);
+      clock.runNext();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(subscribes(ws), "the retry subscribes").toHaveLength(1);
+      ws.emit(accountSnapshot(1));
+      ws.emit(fill(2));
+      expect(got.slice(1)).toEqual([accountSnapshot(1), fill(2)]);
+      expect(FakeWS.instances, "no reconnect was needed").toHaveLength(1);
+      expect(feed.connectionState).toBe("open");
+      feed.close();
+    });
+
+    it("stops retrying a first subscribe whose signing keeps failing, with one final error frame", async () => {
+      const errors: unknown[] = [];
+      const { feed, clock } = makeFeed({
+        onError: (e: unknown) => errors.push(e),
+        minBackoffMs: 100,
+      });
+      const auth = async () => {
+        throw new Error("signer unavailable");
+      };
+      const got: Array<Record<string, unknown>> = [];
+      feed.subscribeAccount(
+        owner,
+        (f) => got.push(f as unknown as Record<string, unknown>),
+        auth,
+      );
+      const ws = FakeWS.last();
+      ws.open();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(subscribes(ws), "nothing ever gets on the wire").toHaveLength(0);
+      // Drain retries while the feed still schedules them; the safety bound
+      // only guards against a regression that retries for ever.
+      for (let i = 0; i < 10 && clock.pending > 0; i++) {
+        clock.runNext();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      expect(clock.pending, "no retry is left scheduled").toBe(0);
+      const final = got.filter((f) => /not retrying after/.test(f.error));
+      expect(final, "exactly one final error frame").toHaveLength(1);
+      expect(
+        got.slice(0, -1).every((f) => /retrying in/.test(f.error)),
+        "every earlier frame announced its retry",
+      ).toBe(true);
+      expect(feed.connectionState).toBe("open");
+      feed.close();
+    });
+
+    it("retries a first account subscribe the gateway refused with 401", () => {
+      const { feed, clock } = makeFeed({ minBackoffMs: 50 });
+      const got: Array<Record<string, unknown>> = [];
+      feed.subscribeAccount(owner, (f) =>
+        got.push(f as unknown as Record<string, unknown>),
+      );
+      const ws = FakeWS.last();
+      ws.open();
+      const refusal = {
+        type: "error",
+        id: subscribes(ws)[0].id,
+        channel: "accountEvents",
+        code: 401,
+        error: "unauthorized: provide X-Api-Key or signed account auth",
+      };
+      ws.emit(refusal);
+      expect(got).toEqual([refusal]);
+      expect(clock.pending, "a retry is scheduled").toBe(1);
+      clock.runNext();
+      expect(subscribes(ws)).toHaveLength(2);
+      ws.emit(accountSnapshot(1));
+      expect(got.at(-1)).toEqual(accountSnapshot(1));
+      expect(FakeWS.instances).toHaveLength(1);
+      feed.close();
+    });
+
+    it("does not retry a refusal no retry can pass", () => {
+      const { feed, clock } = makeFeed();
+      feed.subscribeAccount(owner, () => {});
+      const ws = FakeWS.last();
+      ws.open();
+      ws.emit({ type: "error", id: subscribes(ws)[0].id, error: "bad owner" });
+      expect(clock.pending).toBe(0);
+      feed.close();
+    });
+
+    it("sends no late-listener resend while a subscribe retry is pending", async () => {
+      const { feed, clock } = makeFeed({ onError: () => {} });
+      let calls = 0;
+      const auth = async () => {
+        calls += 1;
+        if (calls === 1) throw new Error("signer unavailable");
+        return { public_key: "pk", signature: "sig", timestamp_ms: 1 };
+      };
+      feed.subscribeAccount(owner, () => {}, auth);
+      const ws = FakeWS.last();
+      ws.open();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(clock.pending).toBe(1);
+      const late: unknown[] = [];
+      feed.subscribeAccount(owner, (f) => late.push(f), auth);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(subscribes(ws), "the retry will serve the late listener").toEqual(
+        [],
+      );
+      clock.runNext();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(subscribes(ws)).toHaveLength(1);
+      ws.emit(accountSnapshot(1));
+      expect(late).toEqual([accountSnapshot(1)]);
+      feed.close();
+    });
+
+    it("cancels a pending subscribe retry on unsubscribe", async () => {
+      const { feed, clock } = makeFeed({ onError: () => {} });
+      const auth = async () => {
+        throw new Error("chain id unavailable");
+      };
+      const keep = feed.subscribeOrderbook(1, () => {});
+      const unsub = feed.subscribeAccount(owner, () => {}, auth);
+      const ws = FakeWS.last();
+      ws.open();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(clock.pending).toBe(1);
+      unsub();
+      expect(clock.pending, "the retry is cancelled").toBe(0);
+      expect(
+        subscribes(ws).filter(
+          (m) => (m.params as { channel?: string }).channel === "accountEvents",
+        ),
+      ).toHaveLength(0);
+      keep();
       feed.close();
     });
 

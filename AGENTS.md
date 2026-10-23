@@ -459,22 +459,23 @@ npx tsx examples/connect-and-trade.ts
 
 ## WebSocket streams
 
-The gateway serves a native multiplexed feed (mirrored by both the TS and
-Python SDKs). Each subscription opens its own auto-reconnecting connection and
-returns an unsubscribe function; `disconnect()` closes them all.
+The gateway serves a native multiplexed feed on `/ws`. Account events, trades
+and the orderbook are channels on one shared connection. Each call returns an
+unsubscribe function; `disconnect()` closes the feed.
 
 ```typescript
-// Account events — snapshot then incremental frames, with after_id gap
-// recovery on reconnect. Signed-query auth is added automatically when a
-// private key is loaded (browsers can't set the X-Api-Key header).
-const unsub = client.subscribeAccountEvents(address, (event) => {
-  if (event.event_type === "fill") {
+// Account events — a snapshot frame, then live event frames. Signed
+// subscription auth is added automatically when a signer is connected
+// (browsers can't set the X-Api-Key header). A reconnect restores the
+// snapshot, not missed events: read /v1/history/account-events for those.
+const unsub = client.subscribeAccount((frame) => {
+  if (frame.type === "fill") {
     /* ... */
   }
 });
 
-// L2 orderbook — first frame is a full `l2Book` snapshot, then deltas.
-const unsubBook = client.subscribeOrderbookDeltas(1, (msg) => {
+// Orderbook — a `snapshot` frame, then one `update` frame per changed level.
+const unsubBook = client.subscribeOrderbook(1, (frame) => {
   /* ... */
 });
 
