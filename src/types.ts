@@ -2032,28 +2032,10 @@ export interface OpenOrder {
 }
 
 export type TriggerKind = "StopLoss" | "TakeProfit";
-export type TriggerLimbState =
-  | "Armed"
-  | "Filled"
-  | "Partial"
-  | "NoFill"
-  | "Rejected"
-  | "Cancelled"
-  | "Invalidated";
-export type TriggerOutcomeReason =
-  | "PositionClosed"
-  | "PositionEpochChanged"
-  | "PositionSideChanged"
-  | "BelowMaintenance"
-  | "IndeterminateAccount"
-  | "MarketDisabled"
-  | "MarkUnavailable"
-  | "MarkStale"
-  | "MarkFutureDated"
-  | "NoEligibleLiquidity"
-  | "SelfTradePrevention"
-  | "WorkLimitReached"
-  | "ExecutionRejected";
+/** Engine-defined label, passed through. */
+export type TriggerLimbState = string;
+/** Engine-defined label, passed through. */
+export type TriggerOutcomeReason = string;
 
 /** Last deterministic evaluation of one stored trigger limb. */
 export interface TriggerEvaluation {
@@ -2107,14 +2089,12 @@ export interface TriggerMarketConfigInfo {
 }
 
 /** Why a stored bracket is or is not eligible at the finalized height. */
-export type TriggerEffectiveAvailability =
-  | { kind: "Available" }
-  | { kind: "TriggerActionsInactive" }
-  | { kind: "PendingActivation" }
-  | { kind: "MigrationIncomplete" }
-  | { kind: "ConfigurationMissing" }
-  | { kind: "MarketDisabled" }
-  | { kind: "Deferred"; reason: TriggerOutcomeReason };
+/** Engine-defined labels, passed through. `reason` is set when the engine
+ * attaches one to the kind. */
+export interface TriggerEffectiveAvailability {
+  kind: string;
+  reason?: TriggerOutcomeReason;
+}
 
 /** Current protected position generation and both optional limbs. */
 export interface PositionTriggerBracket {
@@ -2182,18 +2162,11 @@ export type PositionTriggerHistoryEventType =
   | "pending_triggers_discarded";
 
 /**
- * Why a pending (pre-fill) bracket left the live set without installing.
- * `install_rejected` is the silent protection-loss path: the order's fill
- * stands but the bracket could not install, so the position is live and
- * unprotected — surfaces it.
+ * Why a pending (pre-fill) bracket left the live set without installing:
+ * an engine-defined label, passed through. `install_rejected` is the silent
+ * protection-loss path: the fill stands but the bracket could not install.
  */
-export type PendingTriggerDiscardReason =
-  | "order_cancelled"
-  | "order_expired"
-  | "order_replaced"
-  | "unfilled_terminal"
-  | "install_rejected"
-  | "position_closed";
+export type PendingTriggerDiscardReason = string;
 
 export type TriggerMarketHistoryEventType =
   "trigger_market_deferred" | "trigger_market_resumed";
@@ -2280,7 +2253,8 @@ export interface PositionTriggerActivatedHistoryPayload extends OwnerTriggerHist
   limb_id: string;
   client_group_id: string;
   client_trigger_id: string;
-  limb_kind: "stop_loss" | "take_profit";
+  /** Engine-defined label, passed through. */
+  limb_kind: string;
   trigger_price: string;
   frozen_mark: string;
   limit_price: string;
@@ -2293,7 +2267,8 @@ export interface PositionTriggerExecutedHistoryPayload extends PositionTriggerAc
   residual_quantity: string;
   /** Signed aggregate fee; kept as a decimal string. */
   total_fee: string;
-  result: "filled" | "partial" | "no_fill" | "rejected" | "invalidated";
+  /** Engine-defined label, passed through. */
+  result: string;
   /** Empty when the terminal outcome has no additional reason. */
   reason: string;
 }
@@ -2302,18 +2277,22 @@ export interface PositionTriggerDeferredHistoryPayload extends OwnerTriggerHisto
   limb_id: string;
   client_group_id: string;
   client_trigger_id: string;
-  limb_kind: "stop_loss" | "take_profit";
+  /** Engine-defined label, passed through. */
+  limb_kind: string;
   trigger_price: string;
   frozen_mark: string;
   requested_quantity: string;
+  /** Engine-defined label, passed through. */
   reason: string;
 }
 
 export interface TriggerMarketDeferredHistoryPayload extends TriggerHistoryPayloadBase {
+  /** Engine-defined label, passed through. */
   reason: string;
 }
 
 export interface TriggerMarketResumedHistoryPayload extends TriggerHistoryPayloadBase {
+  /** Engine-defined label, passed through. */
   previous_reason: string;
 }
 
