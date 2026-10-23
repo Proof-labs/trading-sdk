@@ -7,6 +7,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`GatewayReads.bbo(params, opts)`** reads the indexer's order-book
+  mid-price candles at `GET /v1/history/bbo` with the same
+  `CandleHistoryParams` encoding as `candles()`: the candles envelope over
+  OHLC of `(bid + ask) / 2` per stored BBO sample, each bucket carrying its
+  closing `bid` and `ask`. Additive (MINOR).
+
 ## [8.0.0] — 2026-10-22
 
 ### Breaking changes
@@ -134,11 +142,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   types, including `InsuranceFundingId` and `InsuranceFundAllocation`.
   The added `AdminAction`/`AdminActionType` variants affect exhaustive Rust
   matches and belong to the next Rust MAJOR release.
-- **`GatewayReads.bbo(params, opts)`** reads the indexer's order-book
-  mid-price candles at `GET /v1/history/bbo` with the same
-  `CandleHistoryParams` encoding as `candles()`: the candles envelope over
-  OHLC of `(bid + ask) / 2` per stored BBO sample, each bucket carrying its
-  closing `bid` and `ask`. Additive (MINOR).
+
 - **The `SetLiquidationConfig` governance action** (inner tag 17). An
   `AdminAction` of kind `SetLiquidationConfig` carries `predecessor`,
   `sequence` and the global `LiquidationConfig` (target ratio, exact
