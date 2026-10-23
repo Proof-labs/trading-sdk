@@ -53,6 +53,12 @@ export interface AccountSnapshotFrame {
   type: "snapshot";
   owner: string;
   account: unknown;
+  /** `"initial"` for a subscription's first snapshot, `"resent"` for one
+   *  resent to a listener that joined later. Absent before gateway 7.9.0. */
+  snapshot?: "initial" | "resent";
+  /** The block height the snapshot was read at. Absent from gateways and
+   *  nodes that do not report it. */
+  height?: number;
 }
 
 /** A live engine event for a subscribed owner. `type` is the gateway's
@@ -64,6 +70,22 @@ export interface AccountEventFrame {
   eventType: string;
   owner: string;
   height: number;
+  /** The event's `/v1/history/account-events` row key (gateway 7.9.0 and
+   *  later): the row's `tx_hash` (the uppercase transaction hash, or
+   *  `height-{h}-kind-block-event-{i}` for a block-level event). */
+  txHash?: string | null;
+  /** The transaction's position in its block. Live frames carry it (gateway
+   *  7.9.0 and later; read as 0 when the block omits it, `null` for a
+   *  block-level event). A backfilled event carries the history row's
+   *  `tx_position`, which history serves only when one block carries the
+   *  same transaction hash more than once, and `null` otherwise. */
+  txIndex?: number | null;
+  /** The row's `event_index`: the event's index among its transaction's (or
+   *  block's) events. */
+  eventIndex?: number;
+  /** True when the SDK delivered this event from history after a reconnect
+   *  rather than from the live feed. */
+  backfilled?: boolean;
   payload: Record<string, unknown>;
 }
 
