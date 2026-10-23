@@ -62,6 +62,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Account streams recover the events missed during a reconnect.**
+  `subscribeAccount` (and Python's `AccountEventStream`) now, by default,
+  read `/v1/history/account-events` back to the last delivered event (or the
+  previous snapshot's `height` when none was delivered) after a reconnect,
+  once `/v1/history/status` shows history caught up to the new snapshot's
+  `height` (waiting up to about 30 seconds). A gap longer than the ten
+  500-row pages read reports `failed` and backfills nothing. They deliver the newer rows in history order (marked
+  `backfilled: true`), then the live frames that arrived meanwhile — every
+  event once across reconnects, also when the socket reconnects again during
+  a backfill (a live frame racing a backfill can admit one duplicate).
+  Events are matched on `height` + `txHash` + `eventIndex` +
+  `eventType` + `txIndex`, a missing position matching any, since history
+  serves `tx_position` only when one block carries the same transaction hash
+  more than once; the settlement names `conditional_settled` /
+  `conditional_voided` match their canonical history names `condition_met` /
+  `condition_not_met`. A `snapshot: "resent"` frame is not a reconnect.
+  `onRecovery` / `on_recovery` reports each reconnect's outcome once
+  (`AccountRecoveryStatus` / `RecoveryStatus`), with `unverified` when the
+  snapshot carries no `height`; `recover: false` / `recover=False` turns it
+  off. `AccountEventFrame` gains `txHash`, `txIndex`, `eventIndex` and
+  `backfilled`; `AccountSnapshotFrame` gains the optional `snapshot` and
+  `height`. Python adds `ExchangeClient.account_event_stream`, which reads
+  history from the gateway URL. Needs api-gateway 7.9.0, which puts the
+  history key on live frames; against an older gateway recovery reports
+  `unsupported` and live delivery carries on as before.
+
 - **`decodeLiquidationEvent` decodes three more engine events** from
   exchange 2.18.0 (proof-wire 7.0.0):
   - `position_liquidated` → `PositionLiquidatedEvent`: one per position an

@@ -370,6 +370,10 @@ export type {
   FeedErrorFrame,
   FeedState,
 } from "./feed-types.js";
+export type {
+  AccountEventKey,
+  AccountRecoveryStatus,
+} from "./account-recovery.js";
 export {
   type GatewayReads,
   type GatewayReadOptions,
