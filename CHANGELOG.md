@@ -163,9 +163,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A failed account-subscription signature no longer leaves the stream
   silently unsubscribed.** When the stream-auth signature (or the chain id it
   needs) fails, `subscribeAccount` listeners receive an `error` frame and the
-  subscribe is retried with the reconnect backoff on the same connection,
-  until it succeeds or the subscription is dropped. A gateway refusal with
-  401 (for example an expired signature), 429 or 503 is retried the same way.
+  subscribe is retried with the reconnect backoff on the same connection. A
+  gateway refusal with 401 (for example an expired signature), 429 or 503 is
+  retried the same way. After five consecutive failures the subscription
+  stops retrying and its listeners receive one final `error` frame; it stays
+  unconfirmed until the caller subscribes again or the socket is replaced,
+  which starts a fresh budget of five.
 - **A snapshot resent for a late `subscribeAccount` listener reaches only
   that listener**, so existing listeners no longer see a second snapshot
   without a reconnect.
