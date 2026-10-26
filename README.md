@@ -194,6 +194,7 @@ class ExchangeClient {
   queryTriggerStatus(): Promise<TriggerStatus>;
   queryPositionTriggerHistory(addressHex?: string, filters?: PositionTriggerHistoryFilters): Promise<PositionTriggerHistoryPage>;
   queryTriggerMarketHistory(market: number, filters?: TriggerMarketHistoryFilters): Promise<TriggerMarketHistoryPage>;
+  queryLiquidationConfig(): Promise<LiquidationConfigInfo>;
 
   // Owner defaults to signer; version-active agents pass delegated owner.
   setPositionTriggers(params: Omit<SetPositionTriggers, "owner"> & { owner?: Uint8Array }): Promise<TxResult>;
@@ -205,13 +206,14 @@ class ExchangeClient {
   queryHistoryResolutions(...): Promise<HistoryResolution[]>;
   queryHistoryPositions(...): Promise<HistoryPositionSnapshot[]>;
   queryHistoryPositionsPage(...): Promise<HistoryPositionsPage>;
+  queryLiquidationHistory(addressHex?: string, filters?: LiquidationHistoryFilters): Promise<LiquidationHistoryPage>;
 
   // Blocks
   getBlock(height?: number): Promise<Record<string, unknown>>;
   getBlockResults(height: number): Promise<Record<string, unknown>>;
 
   // Streams (gateway-native)
-  subscribeAccount(onFrame: (f: AccountFrame) => void, opts?: { owner?: string; auth?: false }): () => void;
+  subscribeAccount(onFrame: (f: AccountFrame) => void, opts?: { owner?: string; auth?: false; recover?: boolean; onRecovery?: (s: AccountRecoveryStatus) => void }): () => void;
   subscribeOrderbook(market: number, onFrame: (f: OrderbookFrame) => void): () => void;
   subscribeTrades(market: number, onFrame: (f: TradeFrame) => void): () => void;
   orderbookSnapshot(market: number, timeoutMs?: number): Promise<OrderbookSnapshotFrame>;
@@ -319,6 +321,24 @@ history as definitive, since an indexer that has not caught up returns empty
 pages too. Use the status response and block timestamps to present delay; a missing indexed record remains
 HTTP 404, and unavailable history remains an error. These reads never fabricate
 blocks or replace errors with empty results.
+
+### Candle and order-book mid history
+
+```typescript
+const reads = client.reads();
+const window = { market: 7400, resolution: "5m", limit: 1500 };
+const trades = await (await reads.candles(window, { signal })).json();
+const mid = await (await reads.bbo(window, { signal })).json();
+```
+
+`candles()` reads `/v1/history/candles` (trade-price OHLC); `bbo()` reads
+`/v1/history/bbo`, the same candles envelope built from the indexer's stored
+best-bid/offer samples: OHLC of `(bid + ask) / 2`, each bucket also carrying
+its closing `bid` and `ask`. A bucket with no two-sided sample is absent, so a
+mid series can have gaps a trade series does not. Both take
+`CandleHistoryParams` (`market`, `resolution`, optional ISO `from` / `to`,
+`limit`, opaque `cursor`), return unmodified `Response` objects and preserve
+HTTP errors and cancellation.
 
 ### Loaded engine identity
 
@@ -573,7 +593,8 @@ const unsubBook = client.subscribeOrderbook(1, (frame) => {
   console.log(frame);
 });
 
-// One-shot snapshot (subscribes, takes the first snapshot frame, unsubscribes):
+// One-shot snapshot over a connection of its own (never a cached book);
+// rejects with FeedSubscriptionError when the gateway refuses the market:
 const book = await client.orderbookSnapshot(1);
 
 // later:
@@ -582,8 +603,29 @@ unsubBook();
 client.disconnect(); // closes everything
 ```
 
-A reconnect restores the account snapshot, not the events missed while
-disconnected; read `/v1/history/account-events` to fill that gap.
+**Reconnect recovery.** A reconnect restores the account snapshot and, by
+default, the account events missed while disconnected: the SDK reads
+`/v1/history/account-events` back to the last event it delivered (or to the
+previous snapshot's `height` when none was delivered), delivers the newer rows
+in history order (marked `backfilled: true`), then the live frames that
+arrived meanwhile, skipping any that history already delivered. It retries
+while `/v1/history/status` shows history has not indexed up to the new
+snapshot's `height`. Events are matched on `height` + `txHash` +
+`eventIndex` + `eventType` + `txIndex`, a missing position matching any,
+since history serves `tx_position` only when one block carries the same
+transaction hash more than once. The settlement names
+`conditional_settled` /
+`conditional_voided` read as their canonical history names `condition_met` /
+`condition_not_met`. A snapshot marked `snapshot: "resent"` (sent because
+another listener joined) is not a reconnect. `onRecovery` reports each
+reconnect's outcome once: `backfilled`, `unverified` (the snapshot carries no
+`height`, so history's coverage cannot be checked), `unsupported` (a gateway
+older than 7.9.0 sends no `txHash` / `eventIndex`; live delivery carries on),
+`boundaryNotFound`, `historyBehind` or `failed`. Pass `recover: false` to turn
+it off. Python's `AccountEventStream` does the same (`recover`,
+`on_recovery`, `RecoveryStatus`); build it with
+`client.account_event_stream(owner)` so its history reads use the gateway URL
+even when `/ws` is on its own port.
 
 **Auth.** Account subscriptions require auth only when the gateway runs with
 `--api-key`. Because a browser `WebSocket` cannot send the `X-Api-Key` header,

@@ -22,6 +22,12 @@ import {
   type OraclePriceHistoryPage,
 } from "./oracle-price-history.js";
 import { GatewayReads, type GatewayFetch } from "./gateway-reads.js";
+import {
+  recoveringAccountHandler,
+  type AccountHistoryPage,
+  type AccountHistoryRow,
+  type AccountRecoveryStatus,
+} from "./account-recovery.js";
 import { FeedSubscriptionError, GatewayHttpError } from "./errors.js";
 import {
   decodeCashFlowEvents,
@@ -29,6 +35,12 @@ import {
   historyOwner,
   historySearchParams,
 } from "./history.js";
+import {
+  decodeLiquidationHistoryPage,
+  liquidationHistorySearchParams,
+  type LiquidationHistoryFilters,
+  type LiquidationHistoryPage,
+} from "./liquidation-history.js";
 import { toWasmFields } from "./codec-adapter.js";
 import {
   signAndEncode,
@@ -101,6 +113,7 @@ import type {
   TriggerMarketConfigInfo,
   NodeVersion,
   UpgradesInfo,
+  LiquidationConfigInfo,
   AuthorizeWithdrawal,
   ConfirmWithdrawalReceipt,
   FailWithdrawalReceipt,
@@ -110,6 +123,7 @@ import {
   decodeAuthoritiesSnapshot,
   decodeNodeVersion,
   decodeUpgradesInfo,
+  decodeLiquidationConfigInfo,
   decodeEventInfo,
   decodeProposalPage,
 } from "./governance-query.js";
@@ -326,6 +340,8 @@ export class ExchangeClient {
   /** Dedicated feeds behind pending `orderbookSnapshot` calls, so
    *  `disconnect()` closes them too. */
   private readonly snapshotFeeds = new Set<GatewayFeed>();
+  /** Reconnect recoveries of live `subscribeAccount` calls, closed with the feed. */
+  private readonly accountRecoveries = new Set<() => void>();
   private publicKey: Uint8Array | null = null;
   private address: Uint8Array | null = null;
   private addressHex: string | null = null;
@@ -1619,6 +1635,26 @@ export class ExchangeClient {
     );
   }
 
+  /** One page of an owner's `position_liquidated` and `liquidation_failed`
+   * events (`GET /v1/history/liquidations/{owner}`), newest first unless
+   * `order: "asc"`. Pass a non-empty `nextCursor` back as `filters.cursor`
+   * with the other filters unchanged; an empty one ends the history. Always
+   * uses the gateway: the indexer, not the node, serves history. */
+  async queryLiquidationHistory(
+    addressHex?: string,
+    filters: LiquidationHistoryFilters = {},
+  ): Promise<LiquidationHistoryPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) throw new Error("No address available");
+    const owner = historyOwner(hex);
+    const qs = liquidationHistorySearchParams(filters).toString();
+    const json = await this.apiJson(
+      `${this.gatewayUrl}/v1/history/liquidations/${owner}${qs ? `?${qs}` : ""}`,
+      "account",
+    );
+    return decodeLiquidationHistoryPage(json, owner);
+  }
+
   /** Shared market-level deferred/resumed trigger transitions. These are not
    * duplicated into every owner's history and always route through gateway. */
   async queryTriggerMarketHistory(
@@ -1674,6 +1710,18 @@ export class ExchangeClient {
     const json = await this.apiJson(`${this.readBaseUrl}/v1/upgrades`);
     const bytes = fromBase64(requireEncodedData(json, "/v1/upgrades"));
     return decodeUpgradesInfo(await this.strictDecode(bytes));
+  }
+
+  /**
+   * Read the global liquidation configuration every market shares and its
+   * sequence via the gateway proxy (`GET /v1/liquidation-config`). A chain
+   * always holds one; a failed read throws rather than returning a default.
+   */
+  async queryLiquidationConfig(): Promise<LiquidationConfigInfo> {
+    const path = "/v1/liquidation-config";
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return decodeLiquidationConfigInfo(await this.strictDecode(bytes));
   }
 
   /**
@@ -2350,18 +2398,113 @@ export class ExchangeClient {
     return this.gatewayFeed;
   }
 
-  /** Account snapshot plus live stream, with auth renewed per reconnect. */
+  /**
+   * Account snapshot plus live stream, with auth renewed per reconnect.
+   *
+   * By default a reconnect recovers the events missed while disconnected:
+   * the SDK reads `/v1/history/account-events` back to the last delivered
+   * event (or the previous snapshot's `height`), retrying while
+   * `/v1/history/status` shows history behind the new snapshot's `height`,
+   * delivers the newer rows in order (marked `backfilled`), buffers live
+   * frames meanwhile and drops those a backfilled row already delivered,
+   * then resumes live delivery. `onRecovery` reports each reconnect's
+   * outcome once: `unverified` when the snapshot has no `height`,
+   * `unsupported` when the gateway predates 7.9.0 and sends no history key.
+   * `recover: false` turns recovery off.
+   */
   subscribeAccount(
     onFrame: (frame: AccountFrame) => void,
-    opts: { owner?: string; auth?: false } = {},
+    opts: {
+      owner?: string;
+      auth?: false;
+      recover?: boolean;
+      onRecovery?: (status: AccountRecoveryStatus) => void;
+    } = {},
   ): () => void {
-    const owner = opts.owner ?? this.addressHex;
+    const owner = (opts.owner ?? this.addressHex)
+      ?.replace(/^0x/i, "")
+      .toLowerCase();
     if (!owner) throw new Error("No account owner available");
-    return this.feed().subscribeAccount(owner, onFrame, async (address) =>
+    const auth = async (address: string) =>
       opts.auth !== false && (this.privateKey || this.externalSigner)
         ? this.accountAuth(address)
-        : {},
+        : {};
+    if (opts.recover === false)
+      return this.feed().subscribeAccount(owner, onFrame, auth);
+    const recovery = recoveringAccountHandler({
+      owner,
+      onFrame,
+      onRecovery: opts.onRecovery,
+      fetchPage: (cursor, signal) =>
+        this.accountHistoryPage(owner, cursor, signal),
+      fetchIndexedHeight: (signal) => this.historyIndexedHeight(signal),
+    });
+    const unsubscribe = this.feed().subscribeAccount(
+      owner,
+      recovery.handle,
+      auth,
     );
+    this.accountRecoveries.add(recovery.close);
+    return () => {
+      this.accountRecoveries.delete(recovery.close);
+      recovery.close();
+      unsubscribe();
+    };
+  }
+
+  /** One newest-first `/v1/history/account-events` page for recovery. */
+  private async accountHistoryPage(
+    owner: string,
+    cursor: string | null,
+    signal?: AbortSignal,
+  ): Promise<AccountHistoryPage> {
+    const res = await this.reads().accountEvents(
+      {
+        owner,
+        order: "desc",
+        limit: 500,
+        ...(cursor ? { cursor } : {}),
+      },
+      { signal },
+    );
+    // Status before parse: a gateway error body need not be JSON, and a
+    // SyntaxError from `res.json()` would bury the intended message.
+    if (!res.ok) {
+      let error: unknown;
+      try {
+        error = ((await res.json()) as { error?: string }).error;
+      } catch {
+        error = undefined;
+      }
+      throw new Error(
+        `account history read failed: ${error ?? `HTTP ${res.status}`}`,
+      );
+    }
+    const body = (await res.json()) as {
+      account_events?: AccountHistoryRow[];
+      next_cursor?: string | null;
+      error?: string;
+    };
+    if (!Array.isArray(body.account_events))
+      throw new Error(
+        `account history read failed: ${body.error ?? `HTTP ${res.status}`}`,
+      );
+    return { rows: body.account_events, nextCursor: body.next_cursor ?? null };
+  }
+
+  /** The newest height history has indexed in full
+   *  (`/v1/history/status` → `ingest.newest_height`). */
+  private async historyIndexedHeight(signal?: AbortSignal): Promise<number> {
+    const res = await this.reads().historyStatus({ signal });
+    if (!res.ok)
+      throw new Error(`history status read failed: HTTP ${res.status}`);
+    const body = (await res.json()) as {
+      ingest?: { newest_height?: unknown };
+    };
+    const height = body.ingest?.newest_height;
+    if (typeof height !== "number")
+      throw new Error(`history status read failed: HTTP ${res.status}`);
+    return height;
   }
 
   subscribeOrderbook(
@@ -2378,9 +2521,11 @@ export class ExchangeClient {
     return this.feed().subscribeTrades(market, onFrame);
   }
 
-  /** Close the shared `/ws` feed, any pending `orderbookSnapshot` feed, and
-   *  stop their reconnect loops. */
+  /** Close the shared `/ws` feed, any pending `orderbookSnapshot` feed, any
+   *  account backfill in progress, and stop their reconnect loops. */
   disconnect() {
+    for (const close of this.accountRecoveries) close();
+    this.accountRecoveries.clear();
     for (const feed of this.snapshotFeeds) feed.close();
     this.snapshotFeeds.clear();
     this.gatewayFeed?.close();

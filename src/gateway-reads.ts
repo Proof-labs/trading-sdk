@@ -279,6 +279,13 @@ export class GatewayReads {
   candles(params: CandleHistoryParams, opts: GatewayReadOptions = {}) {
     return this.get("/v1/history/candles", params, opts);
   }
+  /** Order-book mid-price candles (`GET /v1/history/bbo`): the candles
+   * envelope over OHLC of `(bid + ask) / 2` per stored BBO sample, each
+   * bucket also carrying its closing `bid` and `ask`. A bucket with no
+   * two-sided sample is absent. Same params and paging as `candles`. */
+  bbo(params: CandleHistoryParams, opts: GatewayReadOptions = {}) {
+    return this.get("/v1/history/bbo", params, opts);
+  }
   accountEvents(params: AccountEventsParams, opts: GatewayReadOptions = {}) {
     return this.get("/v1/history/account-events", params, opts);
   }

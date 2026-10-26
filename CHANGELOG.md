@@ -7,6 +7,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`queryLiquidationConfig()`** reads the global liquidation configuration
+  every market shares and its sequence at `GET /v1/liquidation-config`
+  (api-gateway 7.12.0, served by the node from exchange's
+  `liquidation_config` engine query). It returns `LiquidationConfigInfo`:
+  `sequence` as a `bigint` (the `predecessor` a `SetLiquidationConfig`
+  names, and the `configSequence` liquidation events carry) and the
+  `LiquidationConfig`. A record of the wrong shape throws.
+  `decodeLiquidationConfigInfo` decodes the raw MessagePack. Additive (MINOR).
+- **`queryLiquidationHistory(addressHex?, filters?)`** reads one owner's
+  `position_liquidated` and `liquidation_failed` rows at
+  `GET /v1/history/liquidations/{owner}`, with `order`, `fromMs`, `toMs`,
+  `limit` and the opaque `cursor`. Each row keeps `eventId` (a `bigint`),
+  `blockHeight`, `blockTime` as served, `txHash`, `eventIndex` and
+  `eventKey`, and its payload decoded by `decodeLiquidationEvent`. A row for
+  another owner or of another event type throws. An empty `nextCursor` ends
+  the history. `decodeLiquidationHistoryPage` and
+  `liquidationHistorySearchParams` are exported. Additive (MINOR).
+
+## [8.1.0] — 2026-10-26
+
+### Added
+
+- **`GatewayReads.bbo(params, opts)`** reads the indexer's order-book
+  mid-price candles at `GET /v1/history/bbo` with the same
+  `CandleHistoryParams` encoding as `candles()`: the candles envelope over
+  OHLC of `(bid + ask) / 2` per stored BBO sample, each bucket carrying its
+  closing `bid` and `ask`. Additive (MINOR).
+
+## [8.0.0] — 2026-10-22
+
 ### Breaking changes
 
 - **`proof-wire` moves to v7.0.0** (`25f8972e`, tag `v7.0.0`), and the
@@ -61,6 +93,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   arrives within its `timeout` (default 10 seconds).
 
 ### Added
+
+- **Account streams recover the events missed during a reconnect.**
+  `subscribeAccount` (and Python's `AccountEventStream`) now, by default,
+  read `/v1/history/account-events` back to the last delivered event (or the
+  previous snapshot's `height` when none was delivered) after a reconnect,
+  once `/v1/history/status` shows history caught up to the new snapshot's
+  `height` (waiting up to about 30 seconds). A gap longer than the ten
+  500-row pages read reports `failed` and backfills nothing. They deliver the newer rows in history order (marked
+  `backfilled: true`), then the live frames that arrived meanwhile — every
+  event once across reconnects, also when the socket reconnects again during
+  a backfill (a live frame racing a backfill can admit one duplicate).
+  Events are matched on `height` + `txHash` + `eventIndex` +
+  `eventType` + `txIndex`, a missing position matching any, since history
+  serves `tx_position` only when one block carries the same transaction hash
+  more than once; the settlement names `conditional_settled` /
+  `conditional_voided` match their canonical history names `condition_met` /
+  `condition_not_met`. A `snapshot: "resent"` frame is not a reconnect.
+  `onRecovery` / `on_recovery` reports each reconnect's outcome once
+  (`AccountRecoveryStatus` / `RecoveryStatus`), with `unverified` when the
+  snapshot carries no `height`; `recover: false` / `recover=False` turns it
+  off. `AccountEventFrame` gains `txHash`, `txIndex`, `eventIndex` and
+  `backfilled`; `AccountSnapshotFrame` gains the optional `snapshot` and
+  `height`. Python adds `ExchangeClient.account_event_stream`, which reads
+  history from the gateway URL. Needs api-gateway 7.9.0, which puts the
+  history key on live frames; against an older gateway recovery reports
+  `unsupported` and live delivery carries on as before.
 
 - **`decodeLiquidationEvent` decodes three more engine events** from
   exchange 2.18.0 (proof-wire 7.0.0):
@@ -158,12 +216,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`HistoryResolution.kind` names the resolution kinds the indexer
+  serves**: `condition_met` and `condition_not_met`, not `conditional_settled`
+  and `conditional_voided`. The indexer's resolutions route only returns the
+  canonical names (its ingester renames the legacy engine names on the way in),
+  so the old literals never matched a returned row. TypeScript only; the Python
+  client returns resolution rows as plain dictionaries and is unchanged.
 - **A failed account-subscription signature no longer leaves the stream
   silently unsubscribed.** When the stream-auth signature (or the chain id it
   needs) fails, `subscribeAccount` listeners receive an `error` frame and the
-  subscribe is retried with the reconnect backoff on the same connection,
-  until it succeeds or the subscription is dropped. A gateway refusal with
-  401 (for example an expired signature), 429 or 503 is retried the same way.
+  subscribe is retried with the reconnect backoff on the same connection. A
+  gateway refusal with 401 (for example an expired signature), 429 or 503 is
+  retried the same way. After five consecutive failures the subscription
+  stops retrying and its listeners receive one final `error` frame; it stays
+  unconfirmed until the socket is replaced, which starts a fresh budget of
+  five.
 - **A snapshot resent for a late `subscribeAccount` listener reaches only
   that listener**, so existing listeners no longer see a second snapshot
   without a reconnect.
@@ -1591,7 +1658,10 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.2.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...HEAD
+[8.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.0.0...npm-v8.1.0
+[8.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.3.0...npm-v8.0.0
+[7.3.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.2.0...npm-v7.3.0
 [7.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.1.0...npm-v7.2.0
 [7.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.0.0...npm-v7.1.0
 [7.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v6.4.0...npm-v7.0.0

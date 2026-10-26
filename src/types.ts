@@ -1233,6 +1233,15 @@ export interface SetLiquidationConfig {
   config: LiquidationConfig;
 }
 
+/** `GET /v1/liquidation-config`: the stored global liquidation configuration. */
+export interface LiquidationConfigInfo {
+  /** Position of the configuration in its update sequence: the
+   *  `predecessor` a `SetLiquidationConfig` names to replace it, and the
+   *  `configSequence` liquidation events carry. */
+  sequence: bigint;
+  config: LiquidationConfig;
+}
+
 /**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
@@ -2539,7 +2548,7 @@ export interface HistoryCashFlow {
 
 /** Why a winning conditional-perp position did not convert into a
  * perpetual position on its underlying, as the engine names it on
- * `conditional_settled`. The result is paid in cash either way. */
+ * `condition_met`. The result is paid in cash either way. */
 export type ConversionFallbackReason =
   | "maintenance_margin"
   | "position_size_cap"
@@ -2555,8 +2564,9 @@ export type ConversionFallbackReason =
  * `historyResolutions` InfoRequest. Shipped 2026-04-24 (see Jesse's
  * P2 #7 in docs/api-scope.md). */
 export interface HistoryResolution {
-  /** One of "conditional_settled" | "conditional_voided" | "prediction_settled". */
-  kind: "conditional_settled" | "conditional_voided" | "prediction_settled";
+  /** One of "condition_met" | "condition_not_met" | "prediction_settled",
+   *  the names the indexer serves resolution history under. */
+  kind: "condition_met" | "condition_not_met" | "prediction_settled";
   /** Event the resolved position belonged to, as a decimal string. */
   eventId: string;
   /** Child market ID (CPY/CPN or EBY/EBN). */
@@ -2569,24 +2579,24 @@ export interface HistoryResolution {
   size: string;
   /** Weighted-average entry price of the resolved position. */
   entryPrice: string;
-  /** Settlement price. conditional_settled → the underlying's oracle price
+  /** Settlement price. condition_met → the underlying's oracle price
    *  at or after the event's settlement time;
    *  prediction_settled → payoff_per_share (BINARY_PRICE_MAX winner, 0 loser);
-   *  conditional_voided → "" (no mark; void path returns margin, no cash movement). */
+   *  condition_not_met → "" (no mark; void path returns margin, no cash movement). */
   settlementPrice: string;
   /** Signed µUSDC paid to the owner's balance at resolution.
-   *  conditional_settled → (settlementPrice − entryPrice) × size signed by
+   *  condition_met → (settlementPrice − entryPrice) × size signed by
    *  side, for a converted winner and a winner that fell back alike: a
    *  converted winner's perpetual opens at the settlement price and its
    *  result is paid in cash, exactly as a fallback's is;
-   *  prediction_settled → the cash paid; conditional_voided → "0". */
+   *  prediction_settled → the cash paid; condition_not_met → "0". */
   realizedPnl: string;
   /** Quantity, in integer lots, that became a perpetual position on the
    *  underlying, opened at the settlement price (`settlementPrice`): the
    *  whole `size` when a winner converted, "0" when it did not, and "0" on
    *  every other kind. Either way the result is paid in cash (`realizedPnl`). */
   convertedSize: string;
-  /** Why a conditional_settled winner did not convert into a perpetual; ""
+  /** Why a condition_met winner did not convert into a perpetual; ""
    *  when it converted and on every other kind. */
   fallbackReason: ConversionFallbackReason | "";
   /** Block height at which the resolution landed. */

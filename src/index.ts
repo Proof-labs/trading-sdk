@@ -41,6 +41,7 @@ export {
   type InsuranceFundAllocation,
   type WithdrawInsuranceFund,
   type LiquidationConfig,
+  type LiquidationConfigInfo,
   type SetLiquidationConfig,
   type ScheduleUpgrade,
   type CancelUpgrade,
@@ -208,6 +209,15 @@ export {
   type PartialLiquidationFeeEvent,
   type PositionLiquidatedEvent,
 } from "./liquidation-events.js";
+export {
+  LIQUIDATION_HISTORY_EVENT_TYPES,
+  decodeLiquidationHistoryPage,
+  liquidationHistorySearchParams,
+  type LiquidationHistoryEventType,
+  type LiquidationHistoryFilters,
+  type LiquidationHistoryPage,
+  type LiquidationHistoryRow,
+} from "./liquidation-history.js";
 
 export {
   BINARY_PRICE_MAX,
@@ -256,6 +266,7 @@ export {
   decodeAdminSignerRegistryInfo,
   decodeAuthoritiesSnapshot,
   decodeUpgradesInfo,
+  decodeLiquidationConfigInfo,
   decodeNodeVersion,
   decodeProposalPage,
   decodeProposalDisplayInfo,
@@ -370,6 +381,10 @@ export type {
   FeedErrorFrame,
   FeedState,
 } from "./feed-types.js";
+export type {
+  AccountEventKey,
+  AccountRecoveryStatus,
+} from "./account-recovery.js";
 export {
   type GatewayReads,
   type GatewayReadOptions,
