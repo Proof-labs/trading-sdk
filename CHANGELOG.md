@@ -7,6 +7,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`queryLiquidationConfig()`** reads the global liquidation configuration
+  every market shares and its sequence at `GET /v1/liquidation-config`
+  (api-gateway 7.12.0, served by the node from exchange's
+  `liquidation_config` engine query). It returns `LiquidationConfigInfo`:
+  `sequence` as a `bigint` (the `predecessor` a `SetLiquidationConfig`
+  names, and the `configSequence` liquidation events carry) and the
+  `LiquidationConfig`. A record of the wrong shape throws.
+  `decodeLiquidationConfigInfo` decodes the raw MessagePack. Additive (MINOR).
+- **`queryLiquidationHistory(addressHex?, filters?)`** reads one owner's
+  `position_liquidated` and `liquidation_failed` rows at
+  `GET /v1/history/liquidations/{owner}`, with `order`, `fromMs`, `toMs`,
+  `limit` and the opaque `cursor`. Each row keeps `eventId` (a `bigint`),
+  `blockHeight`, `blockTime` as served, `txHash`, `eventIndex` and
+  `eventKey`, and its payload decoded by `decodeLiquidationEvent`. A row for
+  another owner or of another event type throws. An empty `nextCursor` ends
+  the history. `decodeLiquidationHistoryPage` and
+  `liquidationHistorySearchParams` are exported. Additive (MINOR).
+
 ## [8.1.0] — 2026-10-26
 
 ### Added
