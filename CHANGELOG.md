@@ -7,6 +7,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking changes
+
+- **Breaking in TypeScript types:** the trigger label types are open unions:
+  the names the engine knows today plus any other string, so a label added
+  later decodes and still type-checks. This covers `TriggerOutcomeReason` (now
+  with all 27 engine reasons, such as `NoTwoSidedQuote` and
+  `InsufficientMargin`), `TriggerLimbState`, `PendingTriggerDiscardReason`
+  (now with `upgrade_discarded`), and the new
+  `TriggerEffectiveAvailabilityKind` (`TriggerEffectiveAvailability.kind`),
+  `TriggerHistoryLimbKind` (history `limb_kind`) and `TriggerExecutionResult`
+  (history `result`). Editors still suggest the known names. Two patterns need
+  a change: a `Record` keyed by one of these types must list every known name
+  (the reason list grew to match the engine), and an exhaustive `switch` that
+  ends in a `never` check needs a default branch. MAJOR for npm on the type
+  surface only; decoded values and the wire are unchanged. In Python the
+  `PendingTriggerDiscardReason` alias becomes `str`.
+
 ### Added
 
 - **`queryLiquidationConfig()`** reads the global liquidation configuration
@@ -26,6 +43,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   another owner or of another event type throws. An empty `nextCursor` ends
   the history. `decodeLiquidationHistoryPage` and
   `liquidationHistorySearchParams` are exported. Additive (MINOR).
+
+### Fixed
+
+- Trigger reads no longer fail on an engine label this SDK version does not
+  know. A reason, limb state, availability kind, executed result and history
+  limb kind are engine-defined labels: each decodes as any non-empty string
+  and is returned verbatim, in TypeScript and Python. The SDK carries no list
+  of their names and no longer checks which row may carry which reason or
+  which result goes with which quantities. A stop-loss deferred on a binary
+  market with a one-sided book (`no_two_sided_quote`) used to fail the
+  owner-history decoder, which made the account's trigger history
+  unreadable; rows like it stay in history. Still refused: a missing, empty
+  or non-string label, an unknown event type, an unknown stored limb kind,
+  and executed quantities that do not add up. No wire change.
 
 ## [8.1.0] — 2026-10-26
 
