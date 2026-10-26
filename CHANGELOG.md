@@ -26,6 +26,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`queryBlockResultsWindow(selection, options?)`** obtains every transaction and
+  system-event list in a fixed time window from existing gateway block/results
+  routes, with chain/height/parent/time, transaction-result count and next-header
+  app-hash binding. The scan fails on gaps, pruning, missing results or work bounds
+  rather than returning partial coverage. This is trusted-gateway evidence, not a
+  cryptographic event proof; no indexer watermark or trading rule is inferred.
+- **`queryTransactionEvidence(selection, options?)`** binds caller-supplied signed
+  bytes and their hash to the existing gateway transaction result and the exact
+  transaction index in its block, on an explicitly pinned chain. Preserves event
+  strings without economic decoding; both reads share a bounded cancellable
+  deadline. This is trusted-gateway evidence, not cryptographic finality proof.
+  It identifies one occurrence only: repeated signed bytes can have an earlier
+  success and a later replay rejection, which cannot rule out earlier fills.
+  Missing/error responses, including 404, never establish non-admission. Additive
+  (MINOR); existing submission and polling methods are unchanged.
 - **`queryInsuranceExitState(selection, options?)`** reads complete bounded fund
   inventory and the selected agent's authorization/recent nonce facts from one
   finalized view. It requires a pinned chain and same-view witness; callers must

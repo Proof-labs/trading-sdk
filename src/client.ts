@@ -34,6 +34,16 @@ import {
 } from "./insurance-exit-state.js";
 import type { BoundedReadOptions } from "./bounded-read.js";
 import {
+  readTransactionEvidence,
+  type TransactionEvidence,
+  type TransactionEvidenceSelection,
+} from "./committed-transaction.js";
+import {
+  readBlockResultsWindow,
+  type BlockResultsWindow,
+  type BlockResultsWindowSelection,
+} from "./block-results-window.js";
+import {
   readTradeHistoryPage,
   type TradeHistoryOptions,
   type TradeHistoryPage,
@@ -1535,6 +1545,51 @@ export class ExchangeClient {
     return readTradeHistoryPage(
       this.gatewayUrl,
       market,
+      options,
+      this.httpTransport,
+    );
+  }
+
+  /** Match exact signed bytes to /tx and its /block entry on the pinned chain.
+   * Trusted-gateway evidence only, not cryptographic finality verification.
+   * This is one occurrence, not unique admission: the same bytes may have an
+   * earlier successful occurrence and a later replay rejection. That later
+   * rejection cannot exclude earlier fills or release unresolved exposure.
+   * Errors (including 404) leave admission unresolved. Never submits or polls. */
+  async queryTransactionEvidence(
+    selection: TransactionEvidenceSelection,
+    options: BoundedReadOptions = {},
+  ): Promise<TransactionEvidence> {
+    if (!this.inventoryChainId) {
+      throw new Error(
+        "transaction evidence requires an explicit pinned chainId",
+      );
+    }
+    return readTransactionEvidence(
+      this.gatewayUrl,
+      this.inventoryChainId,
+      selection,
+      options,
+      this.httpTransport,
+    );
+  }
+
+  /** Complete bounded block/result window through the trusted gateway. Requires
+   * an explicit chain pin. Never substitutes indexer watermarks or partial pages.
+   * Result events are trusted node statements, not cryptographic event proofs. */
+  async queryBlockResultsWindow(
+    selection: BlockResultsWindowSelection,
+    options: BoundedReadOptions = {},
+  ): Promise<BlockResultsWindow> {
+    if (!this.inventoryChainId) {
+      throw new Error(
+        "block-results window requires an explicit pinned chainId",
+      );
+    }
+    return readBlockResultsWindow(
+      this.gatewayUrl,
+      this.inventoryChainId,
+      selection,
       options,
       this.httpTransport,
     );

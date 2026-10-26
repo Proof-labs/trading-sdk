@@ -53,6 +53,13 @@ import {
   type ParticipantTrade,
   type TradeHistoryOptions,
   type TradeHistoryPage,
+  type TransactionEvidence,
+  type TransactionEvidenceSelection,
+  type TransactionEvidenceEvent,
+  type BlockResultsWindow,
+  type BlockResultsWindowSelection,
+  type BlockResultsEvidence,
+  type BlockEvidenceHeader,
   decodeInsuranceExitState,
   decodeFinalizedOrderbook,
   decodeTradeHistoryPage,
@@ -60,6 +67,22 @@ import {
 import type { OpenLabel } from "./types.js";
 
 it("exports read-only finalized inventory and participant history APIs", async () => {
+  const transactionSelection: TransactionEvidenceSelection = {
+    hash: "00".repeat(32),
+    signedBytes: new Uint8Array([1]),
+  };
+  const transaction: TransactionEvidence | null = null;
+  const event: TransactionEvidenceEvent = { type: "trade", attributes: [] };
+  expect([transactionSelection, transaction, event]).toHaveLength(3);
+  const windowSelection: BlockResultsWindowSelection = {
+    fromMs: 1,
+    toMs: 2,
+    throughHeight: 1n,
+  };
+  const window: BlockResultsWindow | null = null;
+  const block: BlockResultsEvidence | null = null;
+  const header: BlockEvidenceHeader | null = null;
+  expect([windowSelection, window, block, header]).toHaveLength(4);
   const selection: InsuranceExitSelection = {
     pool: 0,
     agentPubkey: "00".repeat(32),
@@ -84,6 +107,12 @@ it("exports read-only finalized inventory and participant history APIs", async (
     history,
   ]).toHaveLength(9);
   const sdk = await import("./index.js");
+  expect(typeof new sdk.ExchangeClient().queryBlockResultsWindow).toBe(
+    "function",
+  );
+  expect(typeof new sdk.ExchangeClient().queryTransactionEvidence).toBe(
+    "function",
+  );
   const client = new sdk.ExchangeClient();
   expect(client.queryInsuranceExitState).toBeTypeOf("function");
   expect(client.queryFinalizedOrderbook).toBeTypeOf("function");
