@@ -15,9 +15,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `liquidation_config` engine query). It returns `LiquidationConfigInfo`:
   `sequence` as a `bigint` (the `predecessor` a `SetLiquidationConfig`
   names, and the `configSequence` liquidation events carry) and the
-  `LiquidationConfig`. A record the engine would refuse to store, or of the
-  wrong shape, throws. `decodeLiquidationConfigInfo` decodes the raw
-  MessagePack. Additive (MINOR).
+  `LiquidationConfig`. A record of the wrong shape throws.
+  `decodeLiquidationConfigInfo` decodes the raw MessagePack. Additive (MINOR).
 - **`queryLiquidationHistory(addressHex?, filters?)`** reads one owner's
   `position_liquidated` and `liquidation_failed` rows at
   `GET /v1/history/liquidations/{owner}`, with `order`, `fromMs`, `toMs`,

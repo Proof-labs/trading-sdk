@@ -95,15 +95,6 @@ describe("queryLiquidationConfig", () => {
     ).toThrow(/liquidationConfig\.sequence/);
   });
 
-  it("fails closed on a configuration the engine would refuse to store", () => {
-    expect(() =>
-      decodeLiquidationConfigInfo([1, [10_500, [2, 3], 101, 20, 10]]),
-    ).toThrow(/liquidationConfig\.config is invalid: partialPenaltyBps/);
-    expect(() =>
-      decodeLiquidationConfigInfo([1, [10_500, [3, 3], 100, 20, 10]]),
-    ).toThrow(/fullCloseThreshold/);
-  });
-
   it("throws when the gateway answers no data or an error", async () => {
     stubFetch({});
     await expect(client().queryLiquidationConfig()).rejects.toThrow();

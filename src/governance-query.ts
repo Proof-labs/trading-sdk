@@ -34,10 +34,7 @@ import type {
   InsuranceFundAllocation,
   UpgradesInfo,
 } from "./types.js";
-import {
-  validateLiquidationConfig,
-  validateSetLiquidationConfig,
-} from "./liquidation-config.js";
+import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import {
   validateFundInsuranceFund,
@@ -1034,24 +1031,15 @@ export function decodeUpgradesInfo(raw: unknown): UpgradesInfo {
   return { plan, executed };
 }
 
-/** Decode `GET /v1/liquidation-config`: `[sequence, config]`. A
- *  configuration the engine would refuse to store fails closed. */
+/** Decode `GET /v1/liquidation-config`: `[sequence, config]`. */
 export function decodeLiquidationConfigInfo(
   raw: unknown,
 ): LiquidationConfigInfo {
   const fields = toTuple(raw, "liquidationConfig", 2);
-  const info: LiquidationConfigInfo = {
+  return {
     sequence: toU64(fields[0], "liquidationConfig.sequence"),
     config: decodeLiquidationConfigTuple(fields[1], "liquidationConfig.config"),
   };
-  try {
-    validateLiquidationConfig(info.config);
-  } catch (e) {
-    throw new Error(
-      `governance decode: liquidationConfig.config is invalid: ${(e as Error).message}`,
-    );
-  }
-  return info;
 }
 
 /** Validate the node's JSON `GET /v1/version` body. */
