@@ -62,6 +62,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The `SetMarginOffsetPolicy` governance action** (inner tag 27, `0x1B`).
+  A complete replacement of the explicit perpetual/conditional offset
+  policy: an optional `predecessor` sequence plus canonically ordered pairs,
+  each naming its perpetual, conditional, shared settlement reference,
+  partial rate in basis points and resolution treatment.
+  `validateSetMarginOffsetPolicy` mirrors proof-wire's bounds before encoding
+  and on decode; `decodeAdminAction` fails closed on a non-canonical policy.
+  `decodeMarginOffsetEvent` reads the engine's `margin_offset_policy_set`
+  and `margin_offset_pair_configured` attributes. A conformance vector and a
+  content-hash constant pin the bytes and the approval hash across the
+  TypeScript, Rust and Python suites. Tag 27 leaves 26 (`0x1A`) to the
+  insurance-account action; the policy is governed and no live offsets are
+  implied.
 - **`GatewayReads.bbo(params, opts)`** reads the indexer's order-book
   mid-price candles at `GET /v1/history/bbo` with the same
   `CandleHistoryParams` encoding as `candles()`: the candles envelope over

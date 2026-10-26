@@ -230,6 +230,33 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     );
   });
 
+  it("reproduces the SetMarginOffsetPolicy hash bit-for-bit", () => {
+    // The authority is exchange-wire's `codec::admin_proposal_content_hash`
+    // over the canonical action bytes; the Rust and Python suites pin the
+    // identical constant.
+    const hash = adminProposalContentHash({
+      ...goldenContext(),
+      action: {
+        kind: "SetMarginOffsetPolicy",
+        value: {
+          predecessor: null,
+          pairs: [
+            {
+              perpetual: 1,
+              conditional: 2,
+              settlementReference: 1,
+              rate: 5_000,
+              resolution: "RemoveOnResolution",
+            },
+          ],
+        },
+      },
+    });
+    expect(bytesToHex(hash)).toBe(
+      "40627a24b87270a4cb4e75a5396a5b9508ceac315d64872dac923087972a90b1",
+    );
+  });
+
   it("rejects a malformed proposer length", () => {
     expect(() =>
       adminProposalContentHash({

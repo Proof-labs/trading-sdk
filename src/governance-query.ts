@@ -28,6 +28,7 @@ import type {
   LiquidationConfig,
   LiquidationConfigInfo,
   SetLiquidationConfig,
+  SetMarginOffsetPolicy,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
   AuthoritiesSnapshot,
@@ -35,6 +36,10 @@ import type {
   UpgradesInfo,
 } from "./types.js";
 import { validateSetLiquidationConfig } from "./liquidation-config.js";
+import {
+  MAX_MARGIN_OFFSET_PAIRS,
+  validateSetMarginOffsetPolicy,
+} from "./margin-offsets.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import {
   validateFundInsuranceFund,
@@ -215,6 +220,30 @@ function decodeSetLiquidationConfig(value: unknown): SetLiquidationConfig {
     config: decodeLiquidationConfigTuple(raw[2], "setLiquidationConfig.config"),
   };
   validateSetLiquidationConfig(action);
+  return action;
+}
+
+function decodeSetMarginOffsetPolicy(value: unknown): SetMarginOffsetPolicy {
+  const raw = toTuple(value, "setMarginOffsetPolicy", 2);
+  const pairs = toArray(raw[1], "setMarginOffsetPolicy.pairs");
+  if (pairs.length > MAX_MARGIN_OFFSET_PAIRS)
+    throw new Error("offset pair count exceeds bound");
+  const action: SetMarginOffsetPolicy = {
+    predecessor: raw[0] === null ? null : toU64(raw[0], "offset predecessor"),
+    pairs: pairs.map((entry) => {
+      const pair = toTuple(entry, "offset pair", 5);
+      if (pair[4] !== "RemoveOnResolution")
+        throw new Error("unknown offset resolution treatment");
+      return {
+        perpetual: toU32(pair[0], "offset perpetual"),
+        conditional: toU32(pair[1], "offset conditional"),
+        settlementReference: toU32(pair[2], "offset reference"),
+        rate: toU32(pair[3], "offset rate"),
+        resolution: "RemoveOnResolution",
+      };
+    }),
+  };
+  validateSetMarginOffsetPolicy(action);
   return action;
 }
 
@@ -702,6 +731,7 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CancelUpgrade: 15,
   SetWithdrawalLimit: 19,
   SetLiquidationConfig: 17,
+  SetMarginOffsetPolicy: 27,
   SetOperatorReceiptRegistry: 20,
   EnableSubAccounts: 21,
 };
@@ -762,6 +792,11 @@ export function decodeAdminAction(
       return {
         kind: "SetLiquidationConfig",
         value: decodeSetLiquidationConfig(payload),
+      };
+    case "SetMarginOffsetPolicy":
+      return {
+        kind: "SetMarginOffsetPolicy",
+        value: decodeSetMarginOffsetPolicy(payload),
       };
     case "SetOperatorReceiptRegistry":
       return {

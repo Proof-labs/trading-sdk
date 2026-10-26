@@ -34,6 +34,8 @@ import {
   validateWithdrawInsuranceFund,
 } from "./insurance-funding.js";
 import { validateSetLiquidationConfig } from "./liquidation-config.js";
+import { validateSetMarginOffsetPolicy } from "./margin-offsets.js";
+import type { SetMarginOffsetPolicy } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import {
@@ -159,6 +161,9 @@ function governanceActionToWasm(value: unknown): unknown {
   }
   if (v.kind === "SetLiquidationConfig") {
     validateSetLiquidationConfig(v.value as SetLiquidationConfig);
+  }
+  if (v.kind === "SetMarginOffsetPolicy") {
+    validateSetMarginOffsetPolicy(v.value as SetMarginOffsetPolicy);
   }
   // `Batch` is the one variant whose payload is a LIST of nested enum items
   // (`AdminBatchItem[]`) rather than a struct — each item is itself
