@@ -10,11 +10,9 @@ import type {
   TriggerEvaluation,
   TriggerKind,
   TriggerLimb,
-  TriggerLimbState,
   TriggerMarketConfig,
   TriggerMarketConfigInfo,
   TriggerMarketConfigState,
-  TriggerOutcomeReason,
   TriggerStatus,
 } from "./types.js";
 
