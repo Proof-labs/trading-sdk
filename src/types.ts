@@ -2041,10 +2041,52 @@ export interface OpenOrder {
 }
 
 export type TriggerKind = "StopLoss" | "TakeProfit";
-/** Engine-defined label, passed through. */
-export type TriggerLimbState = string;
-/** Engine-defined label, passed through. */
-export type TriggerOutcomeReason = string;
+
+/**
+ * Any other string decodes too: names the engine adds later pass through
+ * verbatim, so code that switches on these keeps a default branch.
+ */
+export type OpenLabel = string & {};
+
+/** Engine-defined label: the known names, or any later one. */
+export type TriggerLimbState =
+  | "Armed"
+  | "Filled"
+  | "Partial"
+  | "NoFill"
+  | "Rejected"
+  | "Cancelled"
+  | "Invalidated"
+  | OpenLabel;
+
+/** Engine-defined label: the known names, or any later one. */
+export type TriggerOutcomeReason =
+  | "PositionClosed"
+  | "PositionEpochChanged"
+  | "PositionSideChanged"
+  | "BelowMaintenance"
+  | "IndeterminateAccount"
+  | "MarketDisabled"
+  | "MarkUnavailable"
+  | "MarkStale"
+  | "MarkFutureDated"
+  | "NoEligibleLiquidity"
+  | "SelfTradePrevention"
+  | "WorkLimitReached"
+  | "ExecutionRejected"
+  | "OracleSessionClosed"
+  | "OracleDisagreement"
+  | "OracleExpiredSource"
+  | "OraclePolicyMissing"
+  | "NoTwoSidedQuote"
+  | "InsufficientMargin"
+  | "InsufficientBalance"
+  | "ReduceOnlyWouldIncrease"
+  | "PositionLimitExceeded"
+  | "OpenInterestLimitExceeded"
+  | "MarketClosed"
+  | "EngineFault"
+  | OpenLabel;
 
 /** Last deterministic evaluation of one stored trigger limb. */
 export interface TriggerEvaluation {
@@ -2097,11 +2139,23 @@ export interface TriggerMarketConfigInfo {
   state: TriggerMarketConfigState;
 }
 
-/** Why a stored bracket is or is not eligible at the finalized height. */
-/** Engine-defined labels, passed through. `reason` is set when the engine
- * attaches one to the kind. */
+/** Engine-defined label: the known names, or any later one. */
+export type TriggerEffectiveAvailabilityKind =
+  | "Available"
+  | "TriggerActionsInactive"
+  | "PendingActivation"
+  | "MigrationIncomplete"
+  | "ConfigurationMissing"
+  | "MarketDisabled"
+  | "Deferred"
+  | OpenLabel;
+
+/**
+ * Why a stored bracket is or is not eligible at the finalized height.
+ * `reason` is set when the engine attaches one to the kind (`Deferred`).
+ */
 export interface TriggerEffectiveAvailability {
-  kind: string;
+  kind: TriggerEffectiveAvailabilityKind;
   reason?: TriggerOutcomeReason;
 }
 
@@ -2172,10 +2226,26 @@ export type PositionTriggerHistoryEventType =
 
 /**
  * Why a pending (pre-fill) bracket left the live set without installing:
- * an engine-defined label, passed through. `install_rejected` is the silent
- * protection-loss path: the fill stands but the bracket could not install.
+ * an engine-defined label, the known names or any later one.
+ * `install_rejected` is the silent protection-loss path: the fill stands but
+ * the bracket could not install.
  */
-export type PendingTriggerDiscardReason = string;
+export type PendingTriggerDiscardReason =
+  | "order_cancelled"
+  | "order_expired"
+  | "order_replaced"
+  | "unfilled_terminal"
+  | "install_rejected"
+  | "position_closed"
+  | "upgrade_discarded"
+  | OpenLabel;
+
+/** Engine-defined label: the known names, or any later one. */
+export type TriggerHistoryLimbKind = "stop_loss" | "take_profit" | OpenLabel;
+
+/** Engine-defined label: the known names, or any later one. */
+export type TriggerExecutionResult =
+  "filled" | "partial" | "no_fill" | "rejected" | "invalidated" | OpenLabel;
 
 export type TriggerMarketHistoryEventType =
   "trigger_market_deferred" | "trigger_market_resumed";
@@ -2262,8 +2332,7 @@ export interface PositionTriggerActivatedHistoryPayload extends OwnerTriggerHist
   limb_id: string;
   client_group_id: string;
   client_trigger_id: string;
-  /** Engine-defined label, passed through. */
-  limb_kind: string;
+  limb_kind: TriggerHistoryLimbKind;
   trigger_price: string;
   frozen_mark: string;
   limit_price: string;
@@ -2276,8 +2345,7 @@ export interface PositionTriggerExecutedHistoryPayload extends PositionTriggerAc
   residual_quantity: string;
   /** Signed aggregate fee; kept as a decimal string. */
   total_fee: string;
-  /** Engine-defined label, passed through. */
-  result: string;
+  result: TriggerExecutionResult;
   /** Empty when the terminal outcome has no additional reason. */
   reason: string;
 }
@@ -2286,8 +2354,7 @@ export interface PositionTriggerDeferredHistoryPayload extends OwnerTriggerHisto
   limb_id: string;
   client_group_id: string;
   client_trigger_id: string;
-  /** Engine-defined label, passed through. */
-  limb_kind: string;
+  limb_kind: TriggerHistoryLimbKind;
   trigger_price: string;
   frozen_mark: string;
   requested_quantity: string;

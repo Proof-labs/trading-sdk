@@ -9,13 +9,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking changes
 
-- **Breaking in TypeScript types:** the trigger label types are now `string`:
-  `TriggerOutcomeReason`, `PendingTriggerDiscardReason`, `TriggerLimbState`,
-  and `result` and `limb_kind` on trigger history payloads.
-  `TriggerEffectiveAvailability` is `{ kind: string; reason?: string }`. Code
-  that relied on the unions, such as a `Record` keyed by one or an exhaustive
-  `switch`, no longer type-checks. MAJOR for npm on the type surface only;
-  decoded values and the wire are unchanged. In Python the
+- **Breaking in TypeScript types:** the trigger label types are open unions:
+  the names the engine knows today plus any other string, so a label added
+  later decodes and still type-checks. This covers `TriggerOutcomeReason` (now
+  with all 27 engine reasons, such as `NoTwoSidedQuote` and
+  `InsufficientMargin`), `TriggerLimbState`, `PendingTriggerDiscardReason`
+  (now with `upgrade_discarded`), and the new
+  `TriggerEffectiveAvailabilityKind` (`TriggerEffectiveAvailability.kind`),
+  `TriggerHistoryLimbKind` (history `limb_kind`) and `TriggerExecutionResult`
+  (history `result`). Editors still suggest the known names. Two patterns need
+  a change: a `Record` keyed by one of these types must list every known name
+  (the reason list grew to match the engine), and an exhaustive `switch` that
+  ends in a `never` check needs a default branch. MAJOR for npm on the type
+  surface only; decoded values and the wire are unchanged. In Python the
   `PendingTriggerDiscardReason` alias becomes `str`.
 
 ### Added
