@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Removed
+
+- **The per-market `partialLiquidationEnabled` flag** (`partial_liquidation_enabled` in
+  Python and Rust). Every market liquidates the same way, so `MarketConfig` and the
+  `UpdateMarketFees` input no longer carry it
+  ([exchange #1233](https://github.com/Proof-labs/exchange/pull/1233)). `MarketConfig` is a
+  positional array: `szDecimals`, `ticker` and `maxOpenInterest` move from positions
+  22–24 to 21–23. The markets snapshot accepts 24-field rows only. Breaking (MAJOR):
+  deploy together with exchange 2.20.0 (proof-wire 8.0.0); older engines' market rows no
+  longer decode.
+
 ## [8.1.0] — 2026-10-26
 
 ### Added

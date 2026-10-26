@@ -915,7 +915,6 @@ describe("codec v1 all action types", () => {
         markSourceMode: 1,
         maxMarkSpreadBps: 75,
         cexCompositeStalenessMs: 15_000n,
-        partialLiquidationEnabled: true,
         feeTiers: [
           {
             min30dVolumeMicroUsdc: 0n,
@@ -951,7 +950,6 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.markSourceMode).toBe(1);
     expect(decoded.data.maxMarkSpreadBps).toBe(75);
     expect(decoded.data.cexCompositeStalenessMs).toBe(15_000n);
-    expect(decoded.data.partialLiquidationEnabled).toBe(true);
     expect(decoded.data.feeTiers).toEqual(action.data.feeTiers);
     expect(decoded.data.imBps).toBe(3334);
     expect(decoded.data.mmBps).toBe(1667);

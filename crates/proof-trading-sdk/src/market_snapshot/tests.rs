@@ -35,7 +35,6 @@ fn market() -> MarketConfig {
         mark_source_mode: MarkSourceMode::OracleOnly,
         max_mark_spread_bps: 0,
         cex_composite_staleness_ms: 0,
-        partial_liquidation_enabled: false,
         sz_decimals: 5,
         ticker: "BTC".into(),
         max_open_interest: u64::MAX,

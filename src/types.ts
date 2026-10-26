@@ -890,11 +890,6 @@ export interface UpdateMarketFees {
    */
   cexCompositeStalenessMs?: bigint | null;
   /**
-   * BE-26: enable partial liquidation for this market. Omit to leave
-   * unchanged. true closes one position at a time and rechecks MM.
-   */
-  partialLiquidationEnabled?: boolean | null;
-  /**
    * Replace the rolling-volume fee-tier table. Omit to leave unchanged;
    * [] clears volume tiers and falls back to flat taker/maker bps.
    */
@@ -2794,13 +2789,11 @@ export interface MarketConfig {
   maxMarkSpreadBps?: number;
   /** [20] Max age (ms) for composite-CEX price in Median mode. */
   cexCompositeStalenessMs?: bigint;
-  /** [21] Enable partial liquidation (close per-market rather than all-or-nothing). */
-  partialLiquidationEnabled?: boolean;
-  /** [22] Published size scale: quantity is in units of 10^-szDecimals. */
+  /** [21] Published size scale: quantity is in units of 10^-szDecimals. */
   szDecimals?: number;
-  /** [23] Human-readable ticker / short symbol (e.g. "BTC"). */
+  /** [22] Human-readable ticker / short symbol (e.g. "BTC"). */
   ticker?: string;
-  /** [24] Aggregate market open-interest cap in contracts. 0 = no cap. */
+  /** [23] Aggregate market open-interest cap in contracts. 0 = no cap. */
   maxOpenInterest?: bigint;
 }
 

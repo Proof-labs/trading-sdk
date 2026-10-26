@@ -69,7 +69,7 @@ function kind(value: unknown): MarketKind {
 function market(value: unknown): MarketConfig {
   // The atomic endpoint serializes current complete records, not old stored
   // row bytes. Missing known fields cannot silently acquire legacy defaults.
-  const r = tuple(value, 25);
+  const r = tuple(value, 24);
   const tiers = tuple(r[13], 0).map((value) => {
     const row = tuple(value, 3);
     if (
@@ -109,10 +109,9 @@ function market(value: unknown): MarketConfig {
     markSourceMode: r[18],
     maxMarkSpreadBps: u32(r[19]),
     cexCompositeStalenessMs: uint(r[20]),
-    partialLiquidationEnabled: bool(r[21]),
-    szDecimals: u8(r[22]),
-    ticker: text(r[23]),
-    maxOpenInterest: uint(r[24]),
+    szDecimals: u8(r[21]),
+    ticker: text(r[22]),
+    maxOpenInterest: uint(r[23]),
   };
 }
 
