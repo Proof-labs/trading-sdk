@@ -387,6 +387,37 @@ function validateMessagePackBudget(bytes: Uint8Array): void {
   if (offset !== bytes.length) invalid("trailing MessagePack bytes");
 }
 
+/** Internal shared payload decoder; the legacy and opt-in witnessed envelopes
+ * use identical MessagePack framing, selection and resource checks. */
+export function decodeFinancialStateData(
+  data: unknown,
+  selection: FinancialStateSelection,
+): FinancialState {
+  if (
+    typeof data !== "string" ||
+    !data.length ||
+    data.length > MAX_RESPONSE_BYTES ||
+    data.length % 4 !== 0 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(data)
+  )
+    return invalid("base64");
+  const binary = atob(data);
+  if (btoa(binary) !== data) return invalid("canonical base64");
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  validateMessagePackBudget(bytes);
+  return decodeFinancialState(
+    new Decoder({
+      useBigInt64: true,
+      maxArrayLength: 2048,
+      maxMapLength: 0,
+      maxStrLength: 4,
+      maxBinLength: 20,
+      maxExtLength: 0,
+    }).decode(bytes),
+    selection,
+  );
+}
+
 /** Internal public-read transport: no direct-node fallback, retry or valuation defaults. */
 export async function fetchFinancialState(
   gatewayUrl: string,
@@ -437,24 +468,7 @@ export async function fetchFinancialState(
       !json.data.length
     )
       return invalid("response wrapper");
-    const data = json.data;
-    if (data.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(data))
-      return invalid("base64");
-    const binary = atob(data);
-    if (btoa(binary) !== data) return invalid("canonical base64");
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    validateMessagePackBudget(bytes);
-    return decodeFinancialState(
-      new Decoder({
-        useBigInt64: true,
-        maxArrayLength: 2048,
-        maxMapLength: 0,
-        maxStrLength: 4,
-        maxBinLength: 20,
-        maxExtLength: 0,
-      }).decode(bytes),
-      expected,
-    );
+    return decodeFinancialStateData(json.data, expected);
   } finally {
     clearTimeout(timeout);
     controller.abort();

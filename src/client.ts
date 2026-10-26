@@ -36,7 +36,9 @@ import type { BoundedReadOptions } from "./bounded-read.js";
 import {
   readBlockHeader,
   readFinalizedMarketsSnapshot,
+  readFinalizedFinancialState,
   type FinalizedMarketsSnapshot,
+  type FinalizedFinancialState,
 } from "./finalized-state-reads.js";
 import type { BlockEvidenceHeader } from "./block-results-window.js";
 import {
@@ -1978,6 +1980,24 @@ export class ExchangeClient {
     selection: FinancialStateSelection,
   ): Promise<FinancialState> {
     return fetchFinancialState(this.gatewayUrl, selection, this.httpTransport);
+  }
+
+  /** Opt-in same-view financial witness. Does not attest chain or valuation;
+   * bind it to a chain-qualified snapshot and H+1 header before relying on it. */
+  async queryFinalizedFinancialState(
+    selection: FinancialStateSelection,
+    options: BoundedReadOptions = {},
+  ): Promise<FinalizedFinancialState> {
+    if (!this.inventoryChainId)
+      throw new Error(
+        "finalized financial state requires an explicit pinned chainId",
+      );
+    return readFinalizedFinancialState(
+      this.gatewayUrl,
+      selection,
+      options,
+      this.httpTransport,
+    );
   }
 
   /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */

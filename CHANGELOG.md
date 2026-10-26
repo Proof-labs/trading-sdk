@@ -26,6 +26,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`queryFinalizedFinancialState(selection, options?)`** opts into a bounded
+  same-node height/time/app-hash witness for existing financial facts. It requires
+  a pinned chain and caller-side chain/header binding, never falls back to an
+  unwitnessed response, and leaves `queryFinancialState` unchanged.
+
 - **`queryBlockHeader(height, options?)`** adds a bounded exact-height read on the
   pinned chain. **`queryFinalizedMarketsSnapshot(options?)`** preserves the
   existing market snapshot's required node/height/time/app-hash witness. Both use
