@@ -1,4 +1,28 @@
 // Types
+export type {
+  BoundedReadOptions,
+  FinalizedReadWitness,
+} from "./bounded-read.js";
+export {
+  decodeInsuranceExitState,
+  type InsuranceExitSelection,
+  type InsuranceExitState,
+  type InsuranceExitOrder,
+  type InsuranceExitWitness,
+} from "./insurance-exit-state.js";
+export {
+  decodeFinalizedOrderbook,
+  type FinalizedOrderbook,
+  type FinalizedOrderbookDepth,
+  type FinalizedOrderbookOptions,
+} from "./finalized-orderbook.js";
+export {
+  decodeTradeHistoryPage,
+  tradeHistorySearchParams,
+  type ParticipantTrade,
+  type TradeHistoryOptions,
+  type TradeHistoryPage,
+} from "./trade-history.js";
 export {
   type Address,
   Side,

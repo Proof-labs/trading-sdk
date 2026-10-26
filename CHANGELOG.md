@@ -26,6 +26,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`queryInsuranceExitState(selection, options?)`** reads complete bounded fund
+  inventory and the selected agent's authorization/recent nonce facts from one
+  finalized view. It requires a pinned chain and same-view witness; callers must
+  independently verify node provenance and the committed H+1 header. It is not
+  execution authorization, and the retained nonce maximum is not a lifetime floor.
+- **`queryFinalizedOrderbook(market, options?)`** reads an engine-height-bearing
+  book from the gateway's additive `/v1/orderbook-snapshot/{market}` route,
+  preserving the same-view witness and selected depth (1, 20 or 100), rejecting missing witnesses, mismatched heights and unheighted cache
+  responses. **`queryHistoryTradesPage(market, options)`** preserves participants,
+  exact price/quantity text, fee units, block provenance and opaque pagination
+  cursors for a fixed trade-history window. Both keyless reads have cancellable,
+  bounded response-body deadlines, no retries and no direct-node fallback.
+  These are facts, not portfolio safety or indexer-completeness attestations.
+  Existing read methods and wire bytes are unchanged. Additive (MINOR).
 - **`queryLiquidationConfig()`** reads the global liquidation configuration
   every market shares and its sequence at `GET /v1/liquidation-config`
   (api-gateway 7.12.0, served by the node from exchange's

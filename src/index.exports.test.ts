@@ -44,8 +44,54 @@ import {
   type PendingTriggerDiscardReason,
   type TriggerHistoryLimbKind,
   type TriggerExecutionResult,
+  type InsuranceExitSelection,
+  type InsuranceExitState,
+  type InsuranceExitOrder,
+  type InsuranceExitWitness,
+  type FinalizedOrderbook,
+  type FinalizedOrderbookOptions,
+  type ParticipantTrade,
+  type TradeHistoryOptions,
+  type TradeHistoryPage,
+  decodeInsuranceExitState,
+  decodeFinalizedOrderbook,
+  decodeTradeHistoryPage,
 } from "./index.js";
 import type { OpenLabel } from "./types.js";
+
+it("exports read-only finalized inventory and participant history APIs", async () => {
+  const selection: InsuranceExitSelection = {
+    pool: 0,
+    agentPubkey: "00".repeat(32),
+  };
+  const bookOptions: FinalizedOrderbookOptions = { depth: 20, timeoutMs: 1000 };
+  const historyOptions: TradeHistoryOptions = { fromMs: 1, toMs: 2, limit: 1 };
+  const facts: InsuranceExitState | null = null;
+  const order: InsuranceExitOrder | null = null;
+  const witness: InsuranceExitWitness | null = null;
+  const book: FinalizedOrderbook | null = null;
+  const trade: ParticipantTrade | null = null;
+  const history: TradeHistoryPage | null = null;
+  expect([
+    selection,
+    bookOptions,
+    historyOptions,
+    facts,
+    order,
+    witness,
+    book,
+    trade,
+    history,
+  ]).toHaveLength(9);
+  const sdk = await import("./index.js");
+  const client = new sdk.ExchangeClient();
+  expect(client.queryInsuranceExitState).toBeTypeOf("function");
+  expect(client.queryFinalizedOrderbook).toBeTypeOf("function");
+  expect(client.queryHistoryTradesPage).toBeTypeOf("function");
+  expect(decodeInsuranceExitState).toBeTypeOf("function");
+  expect(decodeFinalizedOrderbook).toBeTypeOf("function");
+  expect(decodeTradeHistoryPage).toBeTypeOf("function");
+});
 
 describe("public barrel: governance surface", () => {
   it("exports the insurance types without exposing superseded executor APIs", async () => {

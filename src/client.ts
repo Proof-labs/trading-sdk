@@ -23,6 +23,22 @@ import {
 } from "./oracle-price-history.js";
 import { GatewayReads, type GatewayFetch } from "./gateway-reads.js";
 import {
+  readFinalizedOrderbook,
+  type FinalizedOrderbook,
+  type FinalizedOrderbookOptions,
+} from "./finalized-orderbook.js";
+import {
+  readInsuranceExitState,
+  type InsuranceExitSelection,
+  type InsuranceExitState,
+} from "./insurance-exit-state.js";
+import type { BoundedReadOptions } from "./bounded-read.js";
+import {
+  readTradeHistoryPage,
+  type TradeHistoryOptions,
+  type TradeHistoryPage,
+} from "./trade-history.js";
+import {
   recoveringAccountHandler,
   type AccountHistoryPage,
   type AccountHistoryRow,
@@ -1473,6 +1489,55 @@ export class ExchangeClient {
       bids: (raw[0] as unknown[][]).map(parseLevel),
       asks: (raw[1] as unknown[][]).map(parseLevel),
     };
+  }
+
+  /** One height-bearing engine book and same-view witness through the uncached
+   * gateway route. Caller must independently bind node, chain and committed
+   * H+1 header. Never substitutes an unheighted cache, even in direct-node mode. */
+  async queryFinalizedOrderbook(
+    market: number,
+    options: FinalizedOrderbookOptions = {},
+  ): Promise<FinalizedOrderbook> {
+    return readFinalizedOrderbook(
+      this.gatewayUrl,
+      market,
+      options,
+      this.httpTransport,
+    );
+  }
+
+  /** Same-view insurance inventory and agent facts. Requires pinned chainId.
+   * Witness binding is checked, not Comet finality or hypothetical-fill safety. */
+  async queryInsuranceExitState(
+    selection: InsuranceExitSelection,
+    options: BoundedReadOptions = {},
+  ): Promise<InsuranceExitState> {
+    if (!this.inventoryChainId) {
+      throw new Error(
+        "insurance exit state requires an explicit pinned chainId",
+      );
+    }
+    return readInsuranceExitState(
+      this.gatewayUrl,
+      this.inventoryChainId,
+      selection,
+      options,
+      this.httpTransport,
+    );
+  }
+
+  /** One participant-attributed indexed trade page. Follow nextCursor with
+   * the same window; completeness and freshness remain caller checks. */
+  async queryHistoryTradesPage(
+    market: number,
+    options: TradeHistoryOptions,
+  ): Promise<TradeHistoryPage> {
+    return readTradeHistoryPage(
+      this.gatewayUrl,
+      market,
+      options,
+      this.httpTransport,
+    );
   }
 
   /** One atomic committed inventory. Requires explicit chainId; never falls
