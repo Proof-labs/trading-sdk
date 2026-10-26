@@ -34,6 +34,12 @@ import {
 } from "./insurance-exit-state.js";
 import type { BoundedReadOptions } from "./bounded-read.js";
 import {
+  readBlockHeader,
+  readFinalizedMarketsSnapshot,
+  type FinalizedMarketsSnapshot,
+} from "./finalized-state-reads.js";
+import type { BlockEvidenceHeader } from "./block-results-window.js";
+import {
   readTransactionEvidence,
   type TransactionEvidence,
   type TransactionEvidenceSelection,
@@ -1590,6 +1596,38 @@ export class ExchangeClient {
       this.gatewayUrl,
       this.inventoryChainId,
       selection,
+      options,
+      this.httpTransport,
+    );
+  }
+
+  /** Bounded exact-height header from the pinned chain via the gateway.
+   * Trusted-gateway evidence only, not validator-signature verification. */
+  async queryBlockHeader(
+    height: bigint,
+    options: BoundedReadOptions = {},
+  ): Promise<BlockEvidenceHeader> {
+    if (!this.inventoryChainId)
+      throw new Error("block header requires an explicit pinned chainId");
+    return readBlockHeader(
+      this.gatewayUrl,
+      this.inventoryChainId,
+      height,
+      options,
+      this.httpTransport,
+    );
+  }
+
+  /** Complete market configuration and the existing same-view witness.
+   * Requires a pinned chain; caller must bind node and H+1 header separately. */
+  async queryFinalizedMarketsSnapshot(
+    options: BoundedReadOptions = {},
+  ): Promise<FinalizedMarketsSnapshot> {
+    if (!this.inventoryChainId)
+      throw new Error("finalized markets require an explicit pinned chainId");
+    return readFinalizedMarketsSnapshot(
+      this.gatewayUrl,
+      this.inventoryChainId,
       options,
       this.httpTransport,
     );

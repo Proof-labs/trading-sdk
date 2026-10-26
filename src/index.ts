@@ -1,4 +1,5 @@
 // Types
+export type { FinalizedMarketsSnapshot } from "./finalized-state-reads.js";
 export type {
   BoundedReadOptions,
   FinalizedReadWitness,

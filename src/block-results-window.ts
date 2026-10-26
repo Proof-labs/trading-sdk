@@ -80,7 +80,8 @@ function timeNs(time: string): bigint {
   return BigInt(seconds) * 1_000_000n + BigInt(fraction.padEnd(9, "0"));
 }
 
-function decodeHeader(
+/** Internal common header decoder; does not verify validator signatures. */
+export function decodeBlockEvidenceHeader(
   response: Record<string, unknown>,
   height: bigint,
   chain: Uint8Array,
@@ -183,7 +184,7 @@ export async function readBlockResultsWindow(
       invalid("window event budget");
     return decoded;
   };
-  const anchor = decodeHeader(
+  const anchor = decodeBlockEvidenceHeader(
     await read(`/v1/block?height=${throughHeight + 1n}`),
     throughHeight + 1n,
     chain,
@@ -198,7 +199,7 @@ export async function readBlockResultsWindow(
     height--
   ) {
     const response = await read(`/v1/block?height=${height}`);
-    const header = decodeHeader(response, height, chain);
+    const header = decodeBlockEvidenceHeader(response, height, chain);
     if (next.parentHash !== header.hash) invalid("parent hash continuity");
     if (timeNs(header.time) > timeNs(next.time))
       invalid("block time continuity");

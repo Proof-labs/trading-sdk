@@ -26,6 +26,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`queryBlockHeader(height, options?)`** adds a bounded exact-height read on the
+  pinned chain. **`queryFinalizedMarketsSnapshot(options?)`** preserves the
+  existing market snapshot's required node/height/time/app-hash witness. Both use
+  existing gateway routes and bounded cancellable body reads. Witnesses and
+  headers remain trusted-gateway evidence, not cryptographic finality or execution
+  authorization; old convenience reads and wire bytes are unchanged.
 - **`queryBlockResultsWindow(selection, options?)`** obtains every transaction and
   system-event list in a fixed time window from existing gateway block/results
   routes, with chain/height/parent/time, transaction-result count and next-header
