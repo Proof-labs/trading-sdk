@@ -49,6 +49,7 @@ export {
   type InsuranceFundAllocation,
   type WithdrawInsuranceFund,
   type LiquidationConfig,
+  type LiquidationConfigInfo,
   type SetLiquidationConfig,
   type OffsetResolutionTreatment,
   type MarginOffsetPair,
@@ -129,6 +130,7 @@ export {
   type TriggerMarketConfigState,
   type TriggerMarketConfigInfo,
   type TriggerEffectiveAvailability,
+  type TriggerEffectiveAvailabilityKind,
   type PositionTriggerBracket,
   type PositionTriggerInfo,
   type TriggerStatus,
@@ -144,6 +146,8 @@ export {
   type PendingTriggersAttachedHistoryPayload,
   type PendingTriggersDiscardedHistoryPayload,
   type PendingTriggerDiscardReason,
+  type TriggerHistoryLimbKind,
+  type TriggerExecutionResult,
   type PositionTriggersSetHistoryPayload,
   type PositionTriggersCancelledHistoryPayload,
   type PositionTriggersInvalidatedHistoryPayload,
@@ -219,6 +223,15 @@ export {
   type PartialLiquidationFeeEvent,
   type PositionLiquidatedEvent,
 } from "./liquidation-events.js";
+export {
+  LIQUIDATION_HISTORY_EVENT_TYPES,
+  decodeLiquidationHistoryPage,
+  liquidationHistorySearchParams,
+  type LiquidationHistoryEventType,
+  type LiquidationHistoryFilters,
+  type LiquidationHistoryPage,
+  type LiquidationHistoryRow,
+} from "./liquidation-history.js";
 
 export {
   BINARY_PRICE_MAX,
@@ -267,6 +280,7 @@ export {
   decodeAdminSignerRegistryInfo,
   decodeAuthoritiesSnapshot,
   decodeUpgradesInfo,
+  decodeLiquidationConfigInfo,
   decodeNodeVersion,
   decodeProposalPage,
   decodeProposalDisplayInfo,
