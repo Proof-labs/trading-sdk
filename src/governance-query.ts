@@ -25,6 +25,8 @@ import type {
   PendingUpgradePlan,
   SetWithdrawalLimit,
   SetOperatorReceiptRegistry,
+  LiquidationConfig,
+  LiquidationConfigInfo,
   SetLiquidationConfig,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
@@ -32,7 +34,10 @@ import type {
   InsuranceFundAllocation,
   UpgradesInfo,
 } from "./types.js";
-import { validateSetLiquidationConfig } from "./liquidation-config.js";
+import {
+  validateLiquidationConfig,
+  validateSetLiquidationConfig,
+} from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import {
   validateFundInsuranceFund,
@@ -181,35 +186,36 @@ function decodeSetWithdrawalLimit(value: unknown): SetWithdrawalLimit {
   return limit;
 }
 
-/// Inner tag 17: `[predecessor, sequence, config]`, where `config` is
-/// `[targetRatioBps, [numerator, denominator], partialPenaltyBps,
-/// maxBookOrders, maxCommittedFills]`. Every newtype is its bare integer. A proposal the
-/// engine would refuse fails closed here too.
+/// A `LiquidationConfig` as `[targetRatioBps, [numerator, denominator],
+/// partialPenaltyBps, maxBookOrders, maxCommittedFills]`. Every newtype is
+/// its bare integer.
+function decodeLiquidationConfigTuple(
+  value: unknown,
+  name: string,
+): LiquidationConfig {
+  const c = toTuple(value, name, 5);
+  const threshold = toTuple(c[1], `${name}.fullCloseThreshold`, 2);
+  const field = (part: string) => `${name}.${part}`;
+  return {
+    targetRatioBps: toU32(c[0], field("targetRatioBps")),
+    fullCloseThreshold: {
+      numerator: toU32(threshold[0], field("fullCloseThreshold.numerator")),
+      denominator: toU32(threshold[1], field("fullCloseThreshold.denominator")),
+    },
+    partialPenaltyBps: toU32(c[2], field("partialPenaltyBps")),
+    maxBookOrders: toU32(c[3], field("maxBookOrders")),
+    maxCommittedFills: toU32(c[4], field("maxCommittedFills")),
+  };
+}
+
+/// Inner tag 17: `[predecessor, sequence, config]`. A proposal the engine
+/// would refuse fails closed here too.
 function decodeSetLiquidationConfig(value: unknown): SetLiquidationConfig {
   const raw = toTuple(value, "setLiquidationConfig", 3);
-  const c = toTuple(raw[2], "setLiquidationConfig.config", 5);
-  const threshold = toTuple(
-    c[1],
-    "setLiquidationConfig.config.fullCloseThreshold",
-    2,
-  );
-  const field = (name: string) => `setLiquidationConfig.config.${name}`;
   const action: SetLiquidationConfig = {
     predecessor: toU64(raw[0], "setLiquidationConfig.predecessor"),
     sequence: toU64(raw[1], "setLiquidationConfig.sequence"),
-    config: {
-      targetRatioBps: toU32(c[0], field("targetRatioBps")),
-      fullCloseThreshold: {
-        numerator: toU32(threshold[0], field("fullCloseThreshold.numerator")),
-        denominator: toU32(
-          threshold[1],
-          field("fullCloseThreshold.denominator"),
-        ),
-      },
-      partialPenaltyBps: toU32(c[2], field("partialPenaltyBps")),
-      maxBookOrders: toU32(c[3], field("maxBookOrders")),
-      maxCommittedFills: toU32(c[4], field("maxCommittedFills")),
-    },
+    config: decodeLiquidationConfigTuple(raw[2], "setLiquidationConfig.config"),
   };
   validateSetLiquidationConfig(action);
   return action;
@@ -1026,6 +1032,26 @@ export function decodeUpgradesInfo(raw: unknown): UpgradesInfo {
     };
   });
   return { plan, executed };
+}
+
+/** Decode `GET /v1/liquidation-config`: `[sequence, config]`. A
+ *  configuration the engine would refuse to store fails closed. */
+export function decodeLiquidationConfigInfo(
+  raw: unknown,
+): LiquidationConfigInfo {
+  const fields = toTuple(raw, "liquidationConfig", 2);
+  const info: LiquidationConfigInfo = {
+    sequence: toU64(fields[0], "liquidationConfig.sequence"),
+    config: decodeLiquidationConfigTuple(fields[1], "liquidationConfig.config"),
+  };
+  try {
+    validateLiquidationConfig(info.config);
+  } catch (e) {
+    throw new Error(
+      `governance decode: liquidationConfig.config is invalid: ${(e as Error).message}`,
+    );
+  }
+  return info;
 }
 
 /** Validate the node's JSON `GET /v1/version` body. */

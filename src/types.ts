@@ -1233,6 +1233,15 @@ export interface SetLiquidationConfig {
   config: LiquidationConfig;
 }
 
+/** `GET /v1/liquidation-config`: the stored global liquidation configuration. */
+export interface LiquidationConfigInfo {
+  /** Position of the configuration in its update sequence: the
+   *  `predecessor` a `SetLiquidationConfig` names to replace it, and the
+   *  `configSequence` liquidation events carry. */
+  sequence: bigint;
+  config: LiquidationConfig;
+}
+
 /**
  * Closed, typed set of operations executable through the multisig. The
  * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
