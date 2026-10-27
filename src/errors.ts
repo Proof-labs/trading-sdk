@@ -164,6 +164,10 @@ export enum ExecErrorCode {
   LiquidationRefused = 111,
   /** A PLP configuration violates one of the payload shape rules. */
   InvalidPlpConfig = 112,
+  InsuranceAccountWithdrawal = 113,
+  InsuranceActionRefused = 114,
+  LiquidationBatchTooManyOwners = 115,
+  LiquidationBatchOverBudget = 116,
   InternalError = 255,
 }
 
@@ -600,6 +604,26 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "InvalidPlpConfig",
     description:
       "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance",
+  },
+  113: {
+    name: "InsuranceAccountWithdrawal",
+    description:
+      "Direct withdrawal names an insurance account; insurance cash leaves only through a governed insurance withdrawal.",
+  },
+  114: {
+    name: "InsuranceActionRefused",
+    description:
+      "Governed insurance action is undecodable, not canonical, not permitted for an insurance account, or not owned by the pool's insurance account.",
+  },
+  115: {
+    name: "LiquidationBatchTooManyOwners",
+    description:
+      "LiquidateAccounts names more owners than one batch may; split the owners across batches.",
+  },
+  116: {
+    name: "LiquidationBatchOverBudget",
+    description:
+      "The owners a LiquidateAccounts batch names hold more positions together than its position budget; the batch is refused whole, so name fewer owners.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

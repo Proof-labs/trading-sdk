@@ -12,15 +12,13 @@ const raw = (): unknown[] => [
 ];
 describe("raw finalized account state", () => {
   afterEach(() => vi.unstubAllGlobals());
-  it("preserves exact entry cost without changing legacy position objects", () => {
+  it("preserves exact entry cost and defaults legacy remainders to zero", () => {
     const r = raw();
     (r[3] as unknown[][])[0].push(6n);
     const p = decodeAccountState(r, hex).positions[0];
     expect(p.entryRemainder).toBe(6n);
-    expect(p.entryPrice * p.size + p.entryRemainder!).toBe(300n);
-    expect(decodeAccountState(raw(), hex).positions[0]).not.toHaveProperty(
-      "entryRemainder",
-    );
+    expect(p.entryPrice * p.size + p.entryRemainder).toBe(300n);
+    expect(decodeAccountState(raw(), hex).positions[0].entryRemainder).toBe(0n);
   });
   it.each([-1n, 7n, 1n << 64n, null, undefined, Number.MAX_SAFE_INTEGER + 1])(
     "rejects malformed exact-cost remainders: %s",
@@ -48,10 +46,20 @@ describe("raw finalized account state", () => {
           entryPrice: 42n,
           size: 7n,
           lastFundingIndex: -(1n << 63n),
+          entryRemainder: 0n,
         },
       ],
     });
     expect(decodeAccountState([owner, 1, 0, []]).positions).toEqual([]);
+  });
+  it("reads the entry remainder wire 8 appends when it is non-zero", () => {
+    // buy 1 @ 100 then buy 2 @ 101: cost 302 over size 3 is 100 rem 2.
+    const r = [owner, 1, 0, [[owner, 1, "Buy", 100, 3, 0, 2]]];
+    expect(decodeAccountState(r, hex).positions[0]).toMatchObject({
+      entryPrice: 100n,
+      size: 3n,
+      entryRemainder: 2n,
+    });
   });
   it.each([
     (r: unknown[]) => r.push(0),
@@ -75,6 +83,12 @@ describe("raw finalized account state", () => {
     },
     (r: unknown[]) => {
       (r[3] as unknown[][]).push((r[3] as unknown[][])[0]);
+    },
+    (r: unknown[]) => {
+      (r[3] as unknown[][])[0].push(-1);
+    },
+    (r: unknown[]) => {
+      (r[3] as unknown[][])[0].push(0, 0);
     },
   ])("rejects malformed or mismatched ledger facts", (change) => {
     const r = raw();

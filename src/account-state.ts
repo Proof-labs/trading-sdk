@@ -4,11 +4,11 @@ export interface RawAccountPosition {
   market: number;
   side: "Buy" | "Sell";
   entryPrice: bigint;
-  /** Exact cost is entryPrice * size + (entryRemainder ?? 0n).
-   * Omitted by legacy records and by the engine when zero. */
-  entryRemainder?: bigint;
   size: bigint;
   lastFundingIndex: bigint;
+  /** Cost left over when `entryPrice` is rounded down: the position's cost
+   *  is `entryPrice * size + entryRemainder`. */
+  entryRemainder: bigint;
 }
 export interface AccountState {
   owner: string;
@@ -20,8 +20,18 @@ export interface AccountState {
 function invalid(field: string): never {
   throw new Error(`account state decode: invalid ${field}`);
 }
-function tuple(value: unknown, length: number, field: string): unknown[] {
-  if (!Array.isArray(value) || value.length !== length) return invalid(field);
+function tuple(
+  value: unknown,
+  length: number,
+  field: string,
+  maxLength = length,
+): unknown[] {
+  if (
+    !Array.isArray(value) ||
+    value.length < length ||
+    value.length > maxLength
+  )
+    return invalid(field);
   return value;
 }
 function integer(value: unknown, field: string, signed = false): bigint {
@@ -61,12 +71,8 @@ export function decodeAccountState(
     return invalid("positions");
   let previous = -1n;
   const positions = fields[3].map((rawPosition): RawAccountPosition => {
-    if (
-      !Array.isArray(rawPosition) ||
-      (rawPosition.length !== 6 && rawPosition.length !== 7)
-    )
-      return invalid("position");
-    const p = rawPosition;
+    // Wire 8 appends `entry_remainder`, omitted when zero.
+    const p = tuple(rawPosition, 6, "position", 7);
     const positionOwner = owner(p[0]);
     const market = integer(p[1], "market");
     if (market > 0xffffffffn || market <= previous || positionOwner !== address)
@@ -85,7 +91,7 @@ export function decodeAccountState(
       entryPrice: integer(p[3], "entry price"),
       size,
       lastFundingIndex: integer(p[5], "funding index", true),
-      ...(p.length === 7 ? { entryRemainder: remainder } : {}),
+      entryRemainder: remainder,
     };
   });
   return {

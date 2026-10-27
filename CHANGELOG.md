@@ -27,7 +27,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Raw account, financial and insurance-exit position reads preserve the engine's
-  optional exact entry-cost remainder. Legacy six-field records stay unchanged;
+  optional exact entry-cost remainder. Legacy six-field records decode with zero;
   malformed remainders and unknown extensions are rejected. Read support does not
   qualify an execution strategy against the new engine accounting rules.
 
@@ -88,6 +88,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   another owner or of another event type throws. An empty `nextCursor` ends
   the history. `decodeLiquidationHistoryPage` and
   `liquidationHistorySearchParams` are exported. Additive (MINOR).
+
+- **`LiquidationConfig.takeoverDiscountBps`**, the discount at which the insurance fund
+  takes over an insolvent position, at most 100 bps (`MAX_TAKEOVER_DISCOUNT_BPS`). Optional
+  on input: omitted means the engine's 50 (`INITIAL_TAKEOVER_DISCOUNT_BPS`). Proposals
+  and `liquidation_config_set` events decode it; proposals written before it decode with 50. `SetLiquidationConfig` now encodes six config fields, so its content hash changes.
+  `LIQUIDATION_REFUSALS` gains `net_delta_grows`. proof-wire pins the v8.0.0 commit
+  (`81ed9018`).
+- **`ExecInsuranceFund` (tag 26) and `SetMarginOffsetPolicy` (tag 27)** in the
+  `AdminAction` union, the tag table and the proposal decoder, so a pending proposal of
+  either no longer fails a proposal page.
+- **`RawAccountPosition.entryRemainder`**: account and financial state accept the
+  seven-field position wire 8 writes when the entry price rounds (0 when omitted).
+- **Error codes 113-116** (`InsuranceAccountWithdrawal`, `InsuranceActionRefused`,
+  `LiquidationBatchTooManyOwners`, `LiquidationBatchOverBudget`).
+- **Typed liquidation event fields**: `PositionLiquidated` `fundCharged`, `fundBinaries`,
+  `fundReserve`, `fundRealized`, `fundAbsorbed`; `LiquidationProgressReported`
+  `remainderCode`, `remainderRefusal`.
+
+### Removed
+
+- **The per-market `partialLiquidationEnabled` flag** (`partial_liquidation_enabled` in
+  Python and Rust). Every market liquidates the same way, so `MarketConfig` and the
+  `UpdateMarketFees` input no longer carry it
+  ([exchange #1233](https://github.com/Proof-labs/exchange/pull/1233)). `MarketConfig` is a
+  positional array: `szDecimals`, `ticker` and `maxOpenInterest` move from positions
+  22–24 to 21–23. The markets snapshot accepts 24-field rows only. Breaking (MAJOR):
+  deploy together with exchange 2.20.0 (proof-wire 8.0.0); older engines' market rows no
+  longer decode.
 
 ### Fixed
 

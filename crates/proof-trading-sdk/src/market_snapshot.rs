@@ -128,7 +128,7 @@ pub fn decode_snapshot(
     validate_value(&value)?;
     let top = tuple(&mut value, 4)?;
     top.truncate(4);
-    for (slot, width) in [(2, 25), (3, TWO_BOOK_EVENT_WIDTH)] {
+    for (slot, width) in [(2, 24), (3, TWO_BOOK_EVENT_WIDTH)] {
         let rows = match top.get_mut(slot) {
             Some(Value::Array(rows)) => rows,
             _ => return Err(SnapshotError::Malformed),

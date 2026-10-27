@@ -87,6 +87,7 @@ describe("decodeLiquidationEvent", () => {
       ["partial_penalty_bps", "100"],
       ["max_book_orders", "20"],
       ["max_committed_fills", "10"],
+      ["takeover_discount_bps", "50"],
       ["proposal_id", "7"],
     ]);
     expect(decodeLiquidationEvent(event)).toEqual({
@@ -98,6 +99,7 @@ describe("decodeLiquidationEvent", () => {
         partialPenaltyBps: 100,
         maxBookOrders: 20,
         maxCommittedFills: 10,
+        takeoverDiscountBps: 50,
       },
       proposalId: 7n,
     });
@@ -130,8 +132,38 @@ describe("decodeLiquidationEvent", () => {
         owner: OWNER_AB,
         outcome,
         configSequence: 4n,
+        remainderCode: null,
+        remainderRefusal: null,
       });
     }
+  });
+
+  it("decodes a LiquidationProgressReported refused remainder", () => {
+    const event = txEvent("liquidation_progress_reported", [
+      ["owner", OWNER_AB],
+      ["outcome", "maintenance_restored_below_target"],
+      ["config_sequence", "4"],
+      ["remainder_code", "111"],
+      ["remainder_refusal", "net_delta_grows"],
+    ]);
+    expect(decodeLiquidationEvent(event)).toMatchObject({
+      remainderCode: 111,
+      remainderRefusal: "net_delta_grows",
+    });
+  });
+
+  it("reads empty remainder attributes as no remainder", () => {
+    const event = txEvent("liquidation_progress_reported", [
+      ["owner", OWNER_AB],
+      ["outcome", "maintenance_restored_below_target"],
+      ["config_sequence", "4"],
+      ["remainder_code", ""],
+      ["remainder_refusal", ""],
+    ]);
+    expect(decodeLiquidationEvent(event)).toMatchObject({
+      remainderCode: null,
+      remainderRefusal: null,
+    });
   });
 
   it("decodes PositionLiquidated with its binding outcome", () => {
@@ -153,6 +185,32 @@ describe("decodeLiquidationEvent", () => {
         { eventId: 9, branch: "No" },
       ],
       configSequence: 2n,
+      fundCharged: 0n,
+      fundBinaries: 0n,
+      fundReserve: 0n,
+      fundRealized: 0n,
+      fundAbsorbed: 0n,
+    });
+  });
+
+  it("decodes the fund fields of a PositionLiquidated takeover", () => {
+    expect(
+      decodeLiquidationEvent(
+        positionLiquidated({
+          mode: "insolvent",
+          fund_charged: "4",
+          fund_binaries: "6",
+          fund_reserve: "8",
+          fund_realized: "-2",
+          fund_absorbed: "3",
+        }),
+      ),
+    ).toMatchObject({
+      fundCharged: 4n,
+      fundBinaries: 6n,
+      fundReserve: 8n,
+      fundRealized: -2n,
+      fundAbsorbed: 3n,
     });
   });
 
@@ -197,7 +255,7 @@ describe("decodeLiquidationEvent", () => {
   });
 
   it("decodes LiquidationFailed with every refusal and with none", () => {
-    expect(LIQUIDATION_REFUSALS).toHaveLength(3);
+    expect(LIQUIDATION_REFUSALS).toHaveLength(4);
     for (const refusal of LIQUIDATION_REFUSALS) {
       expect(decodeLiquidationEvent(liquidationFailed("111", refusal))).toEqual(
         {

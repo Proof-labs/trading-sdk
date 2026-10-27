@@ -160,6 +160,7 @@ describe("finalized insurance exit facts", () => {
       market: 1,
       side: "Buy",
       entryPrice: 100n,
+      entryRemainder: 0n,
       size: 2n,
       lastFundingIndex: -9007199254740993n,
     });

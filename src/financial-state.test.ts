@@ -141,6 +141,7 @@ describe("atomic finalized financial state", () => {
         size: 3n,
         entryPrice: 123n,
         lastFundingIndex: -(1n << 63n),
+        entryRemainder: 0n,
       })),
     );
     expect(result.markets[0]).toEqual({

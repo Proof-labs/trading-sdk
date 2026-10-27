@@ -32,7 +32,6 @@ const market = (): unknown[] => [
   "OracleOnly",
   0,
   0,
-  false,
   5,
   "BTC",
   18_446_744_073_709_551_615n,
@@ -122,7 +121,7 @@ describe("atomic market snapshot", () => {
 
   it("decodes a Rust-produced shared-wire vector losslessly", () => {
     const hex =
-      "94dc00200707070707070707070707070707070707070707070707070707070707070707cfffffffffffffffff91dc001901cd03e8cd01f40502ce0036ee8064a4506572700000c200cd7530906401c000aa4f7261636c654f6e6c790000c205a3425443cfffffffffffffffff90";
+      "94dc00200707070707070707070707070707070707070707070707070707070707070707cfffffffffffffffff91dc001801cd03e8cd01f40502ce0036ee8064a4506572700000c200cd7530906401c000aa4f7261636c654f6e6c79000005a3425443cfffffffffffffffff90";
     const result = decodeMarketsSnapshot(
       { data: Buffer.from(hex, "hex").toString("base64") },
       chain,
@@ -162,7 +161,7 @@ describe("atomic market snapshot", () => {
     [10, 0],
     [16, [1, 2]],
     [18, "UnknownMode"],
-    [24, -1n],
+    [23, -1n],
   ])("rejects malformed known field %j", (slot, value) => {
     const input = snapshot();
     (input[2] as unknown[][])[0][slot as number] = value;

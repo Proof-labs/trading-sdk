@@ -630,7 +630,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         "full_close_threshold": { "numerator": 2u32, "denominator": 3u32 },
                         "partial_penalty_bps": 100u32,
                         "max_book_orders": 20u32,
-                        "max_committed_fills": 10u32
+                        "max_committed_fills": 10u32,
+                        "takeover_discount_bps": 50u32
                     }
                 }}
             }),
@@ -1395,6 +1396,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             "maintenance": 500u64,
             "binding_outcome": binding,
             "config_sequence": 2u64,
+            "fund_charged": 0u64,
+            "fund_binaries": 0u64,
+            "fund_reserve": 0u64,
+            "fund_realized": 0i64,
+            "fund_absorbed": 0u64,
         }})
     };
     let liquidation_failed = |code: u32, refusal: serde_json::Value| {

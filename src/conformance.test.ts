@@ -405,7 +405,6 @@ function toAction(
           markSourceMode: msMode === 0 || msMode === 1 ? msMode : null,
           maxMarkSpreadBps: optNum(input.max_mark_spread_bps),
           cexCompositeStalenessMs: optBig(input.cex_composite_staleness_ms),
-          partialLiquidationEnabled: optBool(input.partial_liquidation_enabled),
           feeTiers: input.fee_tiers == null ? null : (input.fee_tiers as any),
           imBps: optNum(input.im_bps),
           mmBps: optNum(input.mm_bps),
