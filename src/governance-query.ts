@@ -25,6 +25,8 @@ import type {
   PendingUpgradePlan,
   SetWithdrawalLimit,
   SetOperatorReceiptRegistry,
+  LiquidationConfig,
+  LiquidationConfigInfo,
   SetLiquidationConfig,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
@@ -184,39 +186,41 @@ function decodeSetWithdrawalLimit(value: unknown): SetWithdrawalLimit {
   return limit;
 }
 
-/// Inner tag 17: `[predecessor, sequence, config]`, where `config` is
-/// `[targetRatioBps, [numerator, denominator], partialPenaltyBps,
-/// maxBookOrders, maxCommittedFills, takeoverDiscountBps?]`. Every newtype is its bare integer. A proposal the
-/// engine would refuse fails closed here too.
+/// A `LiquidationConfig` as `[targetRatioBps, [numerator, denominator],
+/// partialPenaltyBps, maxBookOrders, maxCommittedFills, takeoverDiscountBps?]`.
+/// Every newtype is its bare integer; a record without the takeover discount
+/// decodes with the engine's initial value.
+function decodeLiquidationConfigTuple(
+  value: unknown,
+  name: string,
+): LiquidationConfig {
+  const c = toTupleBetween(value, name, 5, 6);
+  const threshold = toTuple(c[1], `${name}.fullCloseThreshold`, 2);
+  const field = (part: string) => `${name}.${part}`;
+  return {
+    targetRatioBps: toU32(c[0], field("targetRatioBps")),
+    fullCloseThreshold: {
+      numerator: toU32(threshold[0], field("fullCloseThreshold.numerator")),
+      denominator: toU32(threshold[1], field("fullCloseThreshold.denominator")),
+    },
+    partialPenaltyBps: toU32(c[2], field("partialPenaltyBps")),
+    maxBookOrders: toU32(c[3], field("maxBookOrders")),
+    maxCommittedFills: toU32(c[4], field("maxCommittedFills")),
+    takeoverDiscountBps:
+      c.length > 5
+        ? toU32(c[5], field("takeoverDiscountBps"))
+        : INITIAL_TAKEOVER_DISCOUNT_BPS,
+  };
+}
+
+/// Inner tag 17: `[predecessor, sequence, config]`. A proposal the engine
+/// would refuse fails closed here too.
 function decodeSetLiquidationConfig(value: unknown): SetLiquidationConfig {
   const raw = toTuple(value, "setLiquidationConfig", 3);
-  const c = toTupleBetween(raw[2], "setLiquidationConfig.config", 5, 6);
-  const threshold = toTuple(
-    c[1],
-    "setLiquidationConfig.config.fullCloseThreshold",
-    2,
-  );
-  const field = (name: string) => `setLiquidationConfig.config.${name}`;
   const action: SetLiquidationConfig = {
     predecessor: toU64(raw[0], "setLiquidationConfig.predecessor"),
     sequence: toU64(raw[1], "setLiquidationConfig.sequence"),
-    config: {
-      targetRatioBps: toU32(c[0], field("targetRatioBps")),
-      fullCloseThreshold: {
-        numerator: toU32(threshold[0], field("fullCloseThreshold.numerator")),
-        denominator: toU32(
-          threshold[1],
-          field("fullCloseThreshold.denominator"),
-        ),
-      },
-      partialPenaltyBps: toU32(c[2], field("partialPenaltyBps")),
-      maxBookOrders: toU32(c[3], field("maxBookOrders")),
-      maxCommittedFills: toU32(c[4], field("maxCommittedFills")),
-      takeoverDiscountBps:
-        c.length > 5
-          ? toU32(c[5], field("takeoverDiscountBps"))
-          : INITIAL_TAKEOVER_DISCOUNT_BPS,
-    },
+    config: decodeLiquidationConfigTuple(raw[2], "setLiquidationConfig.config"),
   };
   validateSetLiquidationConfig(action);
   return action;
@@ -1033,6 +1037,17 @@ export function decodeUpgradesInfo(raw: unknown): UpgradesInfo {
     };
   });
   return { plan, executed };
+}
+
+/** Decode `GET /v1/liquidation-config`: `[sequence, config]`. */
+export function decodeLiquidationConfigInfo(
+  raw: unknown,
+): LiquidationConfigInfo {
+  const fields = toTuple(raw, "liquidationConfig", 2);
+  return {
+    sequence: toU64(fields[0], "liquidationConfig.sequence"),
+    config: decodeLiquidationConfigTuple(fields[1], "liquidationConfig.config"),
+  };
 }
 
 /** Validate the node's JSON `GET /v1/version` body. */

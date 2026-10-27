@@ -403,6 +403,74 @@ def test_position_triggers_use_public_gateway_route_and_preserve_ids():
     assert rows[0]["availability"] == {"kind": "Deferred", "reason": "MarkStale"}
 
 
+def _trigger_row_with_reason(reason) -> list:
+    return [
+        [
+            1,
+            list(b"\xA5" * 20),
+            7,
+            3,
+            "Buy",
+            100,
+            101,
+            None,
+            [
+                11,
+                "StopLoss",
+                95_000,
+                75,
+                None,
+                "Armed",
+                [102, 94_000, None, 4, 0, 4, reason],
+            ],
+            None,
+        ],
+        [4, True, 250, 5_000, 1_000, 32],
+        {"Deferred": reason},
+    ]
+
+
+@pytest.mark.parametrize("reason", ["NoTwoSidedQuote", "ReasonFromANewerEngine"])
+def test_position_triggers_return_the_outcome_reason_verbatim(reason):
+    owner = "ab" * 20
+    rows = _client(
+        lambda _request: _info_response([_trigger_row_with_reason(reason)])
+    ).position_triggers(owner)
+    assert rows[0]["bracket"]["stop_loss"]["last_evaluation"]["reason"] == reason
+    assert rows[0]["availability"] == {"kind": "Deferred", "reason": reason}
+
+
+# rmp-serde names a unit variant by string; anything else is malformed.
+@pytest.mark.parametrize("bad", ["", 17, ["NoTwoSidedQuote"]])
+def test_position_triggers_refuse_a_malformed_outcome_reason(bad):
+    owner = "ab" * 20
+    with pytest.raises(
+        ProofTradingSdkError, match="TriggerOutcomeReason must be a non-empty string"
+    ):
+        _client(
+            lambda _request: _info_response([_trigger_row_with_reason(bad)])
+        ).position_triggers(owner)
+
+
+def test_position_triggers_return_state_and_availability_verbatim():
+    row = _trigger_row_with_reason("X")
+    row[0][8][5] = "Snoozed"
+    row[2] = "Snoozed"
+    rows = _client(lambda _request: _info_response([row])).position_triggers(
+        "ab" * 20
+    )
+    assert rows[0]["bracket"]["stop_loss"]["state"] == "Snoozed"
+    assert rows[0]["availability"] == {"kind": "Snoozed"}
+
+
+@pytest.mark.parametrize("bad", ["", 17, {"A": "x", "B": "y"}, {"A": 17}])
+def test_position_triggers_refuse_a_malformed_availability(bad):
+    row = _trigger_row_with_reason("X")
+    row[2] = bad
+    with pytest.raises(ProofTradingSdkError, match="trigger decode"):
+        _client(lambda _request: _info_response([row])).position_triggers("ab" * 20)
+
+
 def test_trigger_status_preserves_large_json_heights_and_503_fails_closed():
     large = 9_007_199_254_740_993
 
