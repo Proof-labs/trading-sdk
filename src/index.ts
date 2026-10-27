@@ -1,4 +1,5 @@
 // Types
+export { decodeInsuranceExitPrefix, type InsuranceExitPrefix, type InsuranceExitPrefixSelection } from "./insurance-exit-prefix.js";
 export type {
   FinalizedMarketsSnapshot,
   FinalizedFinancialState,

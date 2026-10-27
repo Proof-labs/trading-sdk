@@ -7,6 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `queryInsuranceExitPrefix` reads a bounded, witness-bound native insurance
+  exit calculation with exact selector, cash-arithmetic and oracle-reference
+  validation. It is a fixed-state read, not permission to sign or submit.
+
 ### Breaking changes
 
 - **Breaking in TypeScript types:** the trigger label types are open unions:
