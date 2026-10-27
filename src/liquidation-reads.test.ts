@@ -41,9 +41,9 @@ const client = () =>
 
 afterEach(() => vi.unstubAllGlobals());
 
-/** The genesis record `[1, [10500, [2, 3], 100, 20, 10]]` as the engine
+/** The genesis record `[1, [10500, [2, 3], 100, 20, 10, 50]]` as the engine
  *  encodes it (exchange `liquidation_config_query_tests.rs`). */
-const GENESIS_RECORD = "kgGVzSkEkgIDZBQK";
+const GENESIS_RECORD = "kgGWzSkEkgIDZBQKMg==";
 
 const GENESIS: LiquidationConfigInfo = {
   sequence: 1n,
@@ -53,13 +53,16 @@ const GENESIS: LiquidationConfigInfo = {
     partialPenaltyBps: 100,
     maxBookOrders: 20,
     maxCommittedFills: 10,
+    takeoverDiscountBps: 50,
   },
 };
 
 describe("queryLiquidationConfig", () => {
   it("reads the gateway route and decodes the engine's genesis record", async () => {
     expect(
-      toB64(encoder.encode([1, [10_500, [2, 3], 100, 20, 10]]) as Uint8Array),
+      toB64(
+        encoder.encode([1, [10_500, [2, 3], 100, 20, 10, 50]]) as Uint8Array,
+      ),
     ).toBe(GENESIS_RECORD);
     const calls = stubFetch({ data: GENESIS_RECORD });
     const got: LiquidationConfigInfo = await client().queryLiquidationConfig();
@@ -70,7 +73,7 @@ describe("queryLiquidationConfig", () => {
   it("keeps a sequence above 2^53 exact", () => {
     const sequence = (1n << 64n) - 1n;
     expect(
-      decodeLiquidationConfigInfo([sequence, [11_000, [1, 2], 50, 30, 12]]),
+      decodeLiquidationConfigInfo([sequence, [11_000, [1, 2], 50, 30, 12, 75]]),
     ).toEqual({
       sequence,
       config: {
@@ -79,14 +82,22 @@ describe("queryLiquidationConfig", () => {
         partialPenaltyBps: 50,
         maxBookOrders: 30,
         maxCommittedFills: 12,
+        takeoverDiscountBps: 75,
       },
     });
+  });
+
+  it("decodes a record written before the takeover discount with the initial value", () => {
+    expect(
+      decodeLiquidationConfigInfo([1, [10_500, [2, 3], 100, 20, 10]]).config
+        .takeoverDiscountBps,
+    ).toBe(50);
   });
 
   it("fails closed on a record of the wrong shape", () => {
     expect(() =>
       decodeLiquidationConfigInfo([1, [10_500, [2, 3], 100, 20]]),
-    ).toThrow(/liquidationConfig\.config has 4 fields, expected exactly 5/);
+    ).toThrow(/liquidationConfig\.config has 4 fields, expected 5-6/);
     expect(() =>
       decodeLiquidationConfigInfo([[10_500, [2, 3], 100, 20, 10]]),
     ).toThrow(/liquidationConfig has 1 fields, expected exactly 2/);
@@ -205,6 +216,11 @@ describe("queryLiquidationHistory", () => {
             { eventId: 9, branch: "No" },
           ],
           configSequence: 8n,
+          fundCharged: 0n,
+          fundBinaries: 0n,
+          fundReserve: 0n,
+          fundRealized: 0n,
+          fundAbsorbed: 0n,
         },
       },
     ]);

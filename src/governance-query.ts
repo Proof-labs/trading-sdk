@@ -27,6 +27,8 @@ import type {
   SetOperatorReceiptRegistry,
   LiquidationConfig,
   LiquidationConfigInfo,
+  MarginOffsetPair,
+  SetMarginOffsetPolicy,
   SetLiquidationConfig,
   UpdateAdminSignerRegistry,
   UpdateAuthoritySet,
@@ -34,7 +36,10 @@ import type {
   InsuranceFundAllocation,
   UpgradesInfo,
 } from "./types.js";
-import { validateSetLiquidationConfig } from "./liquidation-config.js";
+import {
+  INITIAL_TAKEOVER_DISCOUNT_BPS,
+  validateSetLiquidationConfig,
+} from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import {
   validateFundInsuranceFund,
@@ -184,13 +189,14 @@ function decodeSetWithdrawalLimit(value: unknown): SetWithdrawalLimit {
 }
 
 /// A `LiquidationConfig` as `[targetRatioBps, [numerator, denominator],
-/// partialPenaltyBps, maxBookOrders, maxCommittedFills]`. Every newtype is
-/// its bare integer.
+/// partialPenaltyBps, maxBookOrders, maxCommittedFills, takeoverDiscountBps?]`.
+/// Every newtype is its bare integer; a record without the takeover discount
+/// decodes with the engine's initial value.
 function decodeLiquidationConfigTuple(
   value: unknown,
   name: string,
 ): LiquidationConfig {
-  const c = toTuple(value, name, 5);
+  const c = toTupleBetween(value, name, 5, 6);
   const threshold = toTuple(c[1], `${name}.fullCloseThreshold`, 2);
   const field = (part: string) => `${name}.${part}`;
   return {
@@ -202,7 +208,55 @@ function decodeLiquidationConfigTuple(
     partialPenaltyBps: toU32(c[2], field("partialPenaltyBps")),
     maxBookOrders: toU32(c[3], field("maxBookOrders")),
     maxCommittedFills: toU32(c[4], field("maxCommittedFills")),
+    takeoverDiscountBps:
+      c.length > 5
+        ? toU32(c[5], field("takeoverDiscountBps"))
+        : INITIAL_TAKEOVER_DISCOUNT_BPS,
   };
+}
+
+/// Inner tag 27: `[predecessor | nil, [[perpetual, conditional,
+/// settlementReference, rate, "RemoveOnResolution"], ...]]`. Fails closed on
+/// a list the engine would refuse as non-canonical.
+function decodeSetMarginOffsetPolicy(
+  value: unknown,
+  field: string,
+): SetMarginOffsetPolicy {
+  const raw = toTuple(value, field, 2);
+  const predecessor =
+    raw[0] === null ? null : toU64(raw[0], `${field}.predecessor`);
+  if (predecessor === 0n) {
+    throw new Error(`governance decode: ${field}.predecessor is zero`);
+  }
+  let previous = -1;
+  const pairs = toArray(raw[1], `${field}.pairs`).map((item, i) => {
+    const at = `${field}.pairs[${i}]`;
+    const p = toTuple(item, at, 5);
+    const pair: MarginOffsetPair = {
+      perpetual: toU32(p[0], `${at}.perpetual`),
+      conditional: toU32(p[1], `${at}.conditional`),
+      settlementReference: toU32(p[2], `${at}.settlementReference`),
+      rate: toUnsignedNumber(p[3], `${at}.rate`, 0xffff),
+      resolution: "RemoveOnResolution",
+    };
+    if (p[4] !== "RemoveOnResolution") {
+      throw new Error(`governance decode: ${at}.resolution is unknown`);
+    }
+    if (pair.rate < 1 || pair.rate > 9_999) {
+      throw new Error(`governance decode: ${at}.rate is not a partial rate`);
+    }
+    if (pair.settlementReference !== pair.perpetual) {
+      throw new Error(
+        `governance decode: ${at}.settlementReference is not its perpetual`,
+      );
+    }
+    if (pair.conditional <= previous) {
+      throw new Error(`governance decode: ${at}.conditional does not ascend`);
+    }
+    previous = pair.conditional;
+    return pair;
+  });
+  return { predecessor, pairs };
 }
 
 /// Inner tag 17: `[predecessor, sequence, config]`. A proposal the engine
@@ -698,6 +752,8 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   SetOracleGuards: 13,
   FundInsuranceFund: 18,
   WithdrawInsuranceFund: 25,
+  ExecInsuranceFund: 26,
+  SetMarginOffsetPolicy: 27,
   ScheduleUpgrade: 14,
   CancelUpgrade: 15,
   SetWithdrawalLimit: 19,
@@ -743,6 +799,21 @@ export function decodeAdminAction(
       validateWithdrawInsuranceFund(decoded);
       return { kind: "WithdrawInsuranceFund", value: decoded };
     }
+    case "ExecInsuranceFund": {
+      const raw = toTuple(payload, field, 2);
+      return {
+        kind: "ExecInsuranceFund",
+        value: {
+          poolId: toU8(raw[0], `${field}.poolId`),
+          action: toBytes(raw[1], `${field}.action`),
+        },
+      };
+    }
+    case "SetMarginOffsetPolicy":
+      return {
+        kind: "SetMarginOffsetPolicy",
+        value: decodeSetMarginOffsetPolicy(payload, field),
+      };
     case "CancelAllOrdersForAccount":
       return {
         kind: "CancelAllOrdersForAccount",

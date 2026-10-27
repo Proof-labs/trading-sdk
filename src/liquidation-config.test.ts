@@ -20,6 +20,7 @@ function config(): LiquidationConfig {
     partialPenaltyBps: 100,
     maxBookOrders: 20,
     maxCommittedFills: 10,
+    takeoverDiscountBps: 50,
   };
 }
 
@@ -53,8 +54,8 @@ function propose(action: AdminAction): Action {
 const FROZEN_ACTION_HEX =
   "81b45365744c69717569646174696f6e436f6e666967" +
   "930102" +
-  "95cd29049202036414" +
-  "0a";
+  "96cd29049202036414" +
+  "0a32";
 
 describe("SetLiquidationConfig governance action", () => {
   it("carries inner tag 17", () => {
@@ -72,6 +73,7 @@ describe("SetLiquidationConfig governance action", () => {
           partial_penalty_bps: 100,
           max_book_orders: 20,
           max_committed_fills: 10,
+          takeover_discount_bps: 50,
         },
       },
     });
@@ -106,11 +108,19 @@ describe("SetLiquidationConfig governance action", () => {
       action: update(),
     });
     expect(bytesToHex(hash)).toBe(
-      "c56e3d275fb3a86545944cebf74b28fca40766448f1a97e3cbdef5cf1f345c32",
+      "1759bbe56cdd4604699aa7fc464b04fa8e79f055a23b26c9b4f25d386943136c",
     );
   });
 
   it("decodes a proposal from its wire tuple", () => {
+    expect(
+      decodeAdminAction({
+        SetLiquidationConfig: [1, 2n, [10_500, [2, 3], 100, 20, 10, 50]],
+      }),
+    ).toEqual(update());
+  });
+
+  it("decodes a proposal written before the takeover discount", () => {
     expect(
       decodeAdminAction({
         SetLiquidationConfig: [1, 2n, [10_500, [2, 3], 100, 20, 10]],
@@ -175,6 +185,11 @@ describe("validateSetLiquidationConfig mirrors the wire bounds", () => {
       "a penalty above 100 basis points",
       update({}, { partialPenaltyBps: 101 }),
       /partialPenaltyBps/,
+    ],
+    [
+      "a takeover discount above 100 basis points",
+      update({}, { takeoverDiscountBps: 101 }),
+      /takeoverDiscountBps/,
     ],
     [
       "a zero book-order cap",

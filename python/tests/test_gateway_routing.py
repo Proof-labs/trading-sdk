@@ -322,11 +322,11 @@ def test_markets_decodes_msgpack_config():
     assert mkts[0]["max_open_interest"] is None
 
 
-def test_markets_decodes_max_open_interest_slot_24():
+def test_markets_decodes_max_open_interest_slot_23():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/markets"
         cfg = [1, 1_000, 500, 5, 2, 3_600_000, 100, "Perp"]
-        cfg.extend([None] * (23 - len(cfg)))
+        cfg.extend([None] * (22 - len(cfg)))
         cfg.extend(["BTC", 1_000_000])
         return _info_response([cfg])
 

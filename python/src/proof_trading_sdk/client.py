@@ -1140,10 +1140,9 @@ class ExchangeClient:
             ),
             "max_mark_spread_bps": opt(19),
             "cex_composite_staleness_ms": opt(20),
-            "partial_liquidation_enabled": flag(21),
-            "sz_decimals": opt(22),
-            "ticker": None if len(raw) <= 23 or raw[23] is None else str(raw[23]),
-            "max_open_interest": opt(24),
+            "sz_decimals": opt(21),
+            "ticker": None if len(raw) <= 22 or raw[22] is None else str(raw[22]),
+            "max_open_interest": opt(23),
         }
 
     def markets(self) -> list[dict[str, t.Any]]:

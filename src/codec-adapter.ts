@@ -188,7 +188,8 @@ function convertValue(camelKey: string, value: unknown): unknown {
   }
   // The governance `action` field is a nested externally-tagged enum
   // (`AdminAction` on propose/approve, `EmergencyAction` on emergency).
-  if (camelKey === "action") {
+  // ExecInsuranceFund's `action` is already canonical bytes.
+  if (camelKey === "action" && !(value instanceof Uint8Array)) {
     return governanceActionToWasm(value);
   }
   // Unknown enum values throw HERE, by field name — letting `undefined` cross

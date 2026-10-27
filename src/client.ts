@@ -2860,10 +2860,9 @@ function decodeMarketConfig(raw: unknown[]): MarketConfig {
     markSourceMode: raw[18] == null ? undefined : (raw[18] as MarkSourceMode),
     maxMarkSpreadBps: raw[19] == null ? undefined : Number(raw[19]),
     cexCompositeStalenessMs: optBig(raw[20]),
-    partialLiquidationEnabled: raw[21] == null ? undefined : Boolean(raw[21]),
-    szDecimals: raw[22] == null ? undefined : Number(raw[22]),
-    ticker: raw[23] == null ? undefined : String(raw[23]),
-    maxOpenInterest: optBig(raw[24]),
+    szDecimals: raw[21] == null ? undefined : Number(raw[21]),
+    ticker: raw[22] == null ? undefined : String(raw[22]),
+    maxOpenInterest: optBig(raw[23]),
   };
 }
 

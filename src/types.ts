@@ -890,11 +890,6 @@ export interface UpdateMarketFees {
    */
   cexCompositeStalenessMs?: bigint | null;
   /**
-   * BE-26: enable partial liquidation for this market. Omit to leave
-   * unchanged. true closes one position at a time and rechecks MM.
-   */
-  partialLiquidationEnabled?: boolean | null;
-  /**
    * Replace the rolling-volume fee-tier table. Omit to leave unchanged;
    * [] clears volume tiers and falls back to flat taker/maker bps.
    */
@@ -1199,6 +1194,33 @@ export interface WithdrawInsuranceFund {
   allocations: InsuranceFundAllocation[];
 }
 
+/** An action the admin quorum executes as the insurance account of
+ *  `poolId` (inner tag 26). */
+export interface ExecInsuranceFund {
+  poolId: number;
+  /** Canonical MessagePack encoding of one `Action`. */
+  action: Uint8Array;
+}
+
+/** One perpetual/conditional pair a margin offset credits. */
+export interface MarginOffsetPair {
+  perpetual: number;
+  conditional: number;
+  /** The pair's own perpetual. */
+  settlementReference: number;
+  /** Basis points of the legs' combined charge credited; 1..=9_999. */
+  rate: number;
+  resolution: "RemoveOnResolution";
+}
+
+/** Replaces the stored margin-offset policy (inner tag 27). Pairs ascend by
+ *  `conditional`; the engine assigns the new sequence. */
+export interface SetMarginOffsetPolicy {
+  /** Sequence being replaced; `null` when no policy is stored yet. */
+  predecessor: bigint | null;
+  pairs: MarginOffsetPair[];
+}
+
 /**
  * The liquidation settings shared by every market. Collar width is not a
  * field: it is each market's maintenance margin fraction.
@@ -1218,6 +1240,9 @@ export interface LiquidationConfig {
   maxBookOrders: number;
   /** Fills one owner's liquidation may commit in a block; non-zero. */
   maxCommittedFills: number;
+  /** Discount the insurance fund takes over an insolvent position at, in
+   *  basis points; at most 100. Omitted means the engine's 50. */
+  takeoverDiscountBps?: number;
 }
 
 /**
@@ -1256,6 +1281,8 @@ export interface LiquidationConfigInfo {
 export type AdminAction =
   | { kind: "FundInsuranceFund"; value: FundInsuranceFund }
   | { kind: "WithdrawInsuranceFund"; value: WithdrawInsuranceFund }
+  | { kind: "ExecInsuranceFund"; value: ExecInsuranceFund }
+  | { kind: "SetMarginOffsetPolicy"; value: SetMarginOffsetPolicy }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
@@ -2849,13 +2876,11 @@ export interface MarketConfig {
   maxMarkSpreadBps?: number;
   /** [20] Max age (ms) for composite-CEX price in Median mode. */
   cexCompositeStalenessMs?: bigint;
-  /** [21] Enable partial liquidation (close per-market rather than all-or-nothing). */
-  partialLiquidationEnabled?: boolean;
-  /** [22] Published size scale: quantity is in units of 10^-szDecimals. */
+  /** [21] Published size scale: quantity is in units of 10^-szDecimals. */
   szDecimals?: number;
-  /** [23] Human-readable ticker / short symbol (e.g. "BTC"). */
+  /** [22] Human-readable ticker / short symbol (e.g. "BTC"). */
   ticker?: string;
-  /** [24] Aggregate market open-interest cap in contracts. 0 = no cap. */
+  /** [23] Aggregate market open-interest cap in contracts. 0 = no cap. */
   maxOpenInterest?: bigint;
 }
 

@@ -187,7 +187,9 @@ export {
 export { validateSetOracleGuards } from "./oracle-guards.js";
 export { validateScheduleUpgrade } from "./upgrade-plan.js";
 export {
+  INITIAL_TAKEOVER_DISCOUNT_BPS,
   MAX_PARTIAL_PENALTY_BPS,
+  MAX_TAKEOVER_DISCOUNT_BPS,
   RATIO_ONE_BPS,
   validateLiquidationConfig,
   validateSetLiquidationConfig,

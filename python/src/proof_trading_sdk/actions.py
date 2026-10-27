@@ -913,7 +913,6 @@ class UpdateMarketFees(Action):
     mark_source_mode: Optional[int] = None
     max_mark_spread_bps: Optional[int] = None
     cex_composite_staleness_ms: Optional[int] = None
-    partial_liquidation_enabled: Optional[bool] = None
     fee_tiers: Optional[list[dict[str, Any]]] = None
     im_bps: Optional[int] = None
     mm_bps: Optional[int] = None
@@ -937,7 +936,6 @@ class UpdateMarketFees(Action):
             "mark_source_mode": self.mark_source_mode,
             "max_mark_spread_bps": self.max_mark_spread_bps,
             "cex_composite_staleness_ms": self.cex_composite_staleness_ms,
-            "partial_liquidation_enabled": self.partial_liquidation_enabled,
             "fee_tiers": self.fee_tiers,
             "im_bps": self.im_bps,
             "mm_bps": self.mm_bps,
