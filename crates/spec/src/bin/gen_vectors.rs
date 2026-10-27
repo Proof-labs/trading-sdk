@@ -1396,6 +1396,11 @@ fn main() -> Result<(), Box<dyn Error>> {
             "maintenance": 500u64,
             "binding_outcome": binding,
             "config_sequence": 2u64,
+            "fund_charged": 0u64,
+            "fund_binaries": 0u64,
+            "fund_reserve": 0u64,
+            "fund_realized": 0i64,
+            "fund_absorbed": 0u64,
         }})
     };
     let liquidation_failed = |code: u32, refusal: serde_json::Value| {

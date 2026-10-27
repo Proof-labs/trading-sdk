@@ -51,6 +51,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   50. `SetLiquidationConfig` now encodes six config fields, so its content hash changes.
   `LIQUIDATION_REFUSALS` gains `net_delta_grows`. proof-wire pins the v8.0.0 commit
   (`81ed9018`).
+- **`ExecInsuranceFund` (tag 26) and `SetMarginOffsetPolicy` (tag 27)** in the
+  `AdminAction` union, the tag table and the proposal decoder, so a pending proposal of
+  either no longer fails a proposal page.
+- **`RawAccountPosition.entryRemainder`**: account and financial state accept the
+  seven-field position wire 8 writes when the entry price rounds (0 when omitted).
+- **Error codes 113-116** (`InsuranceAccountWithdrawal`, `InsuranceActionRefused`,
+  `LiquidationBatchTooManyOwners`, `LiquidationBatchOverBudget`).
+- **Typed liquidation event fields**: `PositionLiquidated` `fundCharged`, `fundBinaries`,
+  `fundReserve`, `fundRealized`, `fundAbsorbed`; `LiquidationProgressReported`
+  `remainderCode`, `remainderRefusal`.
 
 ### Removed
 

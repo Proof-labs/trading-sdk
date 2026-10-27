@@ -25,10 +25,20 @@ describe("raw finalized account state", () => {
           entryPrice: 42n,
           size: 7n,
           lastFundingIndex: -(1n << 63n),
+          entryRemainder: 0n,
         },
       ],
     });
     expect(decodeAccountState([owner, 1, 0, []]).positions).toEqual([]);
+  });
+  it("reads the entry remainder wire 8 appends when it is non-zero", () => {
+    // buy 1 @ 100 then buy 2 @ 101: cost 302 over size 3 is 100 rem 2.
+    const r = [owner, 1, 0, [[owner, 1, "Buy", 100, 3, 0, 2]]];
+    expect(decodeAccountState(r, hex).positions[0]).toMatchObject({
+      entryPrice: 100n,
+      size: 3n,
+      entryRemainder: 2n,
+    });
   });
   it.each([
     (r: unknown[]) => r.push(0),
@@ -52,6 +62,12 @@ describe("raw finalized account state", () => {
     },
     (r: unknown[]) => {
       (r[3] as unknown[][]).push((r[3] as unknown[][])[0]);
+    },
+    (r: unknown[]) => {
+      (r[3] as unknown[][])[0].push(-1);
+    },
+    (r: unknown[]) => {
+      (r[3] as unknown[][])[0].push(0, 0);
     },
   ])("rejects malformed or mismatched ledger facts", (change) => {
     const r = raw();

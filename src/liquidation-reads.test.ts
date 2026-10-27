@@ -216,6 +216,11 @@ describe("queryLiquidationHistory", () => {
             { eventId: 9, branch: "No" },
           ],
           configSequence: 8n,
+          fundCharged: 0n,
+          fundBinaries: 0n,
+          fundReserve: 0n,
+          fundRealized: 0n,
+          fundAbsorbed: 0n,
         },
       },
     ]);

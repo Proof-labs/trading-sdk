@@ -108,6 +108,11 @@ export interface LiquidationProgressReportedEvent {
   owner: string;
   outcome: LiquidationProgress;
   configSequence: bigint;
+  /** Engine code that refused a full close's remainder after book fills
+   *  that stand; `null` otherwise. */
+  remainderCode: number | null;
+  /** Why that remainder was refused, when refused rather than erroring. */
+  remainderRefusal: LiquidationRefusal | null;
 }
 
 /**
@@ -137,6 +142,15 @@ export interface PositionLiquidatedEvent {
   maintenance: bigint;
   bindingOutcome: BindingScenarioEntry[];
   configSequence: bigint;
+  /** What the insurance fund paid to take the position over; the fund
+   *  fields are 0 unless it did. */
+  fundCharged: bigint;
+  fundBinaries: bigint;
+  fundReserve: bigint;
+  /** Signed. */
+  fundRealized: bigint;
+  /** Part of `fundCharged` the fund took in kind with the position. */
+  fundAbsorbed: bigint;
 }
 
 /**
@@ -332,6 +346,10 @@ function liquidationProgressReported(
     owner: a.owner("owner"),
     outcome: a.label("outcome"),
     configSequence: a.u64("config_sequence"),
+    remainderCode: a.has("remainder_code") ? a.u32("remainder_code") : null,
+    remainderRefusal: a.has("remainder_refusal")
+      ? a.text("remainder_refusal")
+      : null,
   };
 }
 
@@ -374,6 +392,12 @@ function positionLiquidated(a: Attributes): PositionLiquidatedEvent {
     maintenance: a.u64("maintenance"),
     bindingOutcome: bindingOutcome(a),
     configSequence: a.u64("config_sequence"),
+    // Engines before proof-wire 8 omit the fund fields.
+    fundCharged: a.has("fund_charged") ? a.u64("fund_charged") : 0n,
+    fundBinaries: a.has("fund_binaries") ? a.u64("fund_binaries") : 0n,
+    fundReserve: a.has("fund_reserve") ? a.u64("fund_reserve") : 0n,
+    fundRealized: a.has("fund_realized") ? a.i64("fund_realized") : 0n,
+    fundAbsorbed: a.has("fund_absorbed") ? a.u64("fund_absorbed") : 0n,
   };
 }
 

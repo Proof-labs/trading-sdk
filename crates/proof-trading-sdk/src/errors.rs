@@ -155,6 +155,10 @@ define_error_kinds! {
     111 => LiquidationRefused ~ "A liquidation attempt was refused (a changed position, a malformed book or an unavailable reference) and kept no writes; the liquidation_failed event's refusal names why.",
     // Code 101 is unassigned on the wire.
     112 => InvalidPlpConfig                 ~ "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance.",
+    113 => InsuranceAccountWithdrawal ~ "Direct withdrawal names an insurance account; insurance cash leaves only through a governed insurance withdrawal.",
+    114 => InsuranceActionRefused ~ "Governed insurance action is undecodable, not canonical, not permitted for an insurance account, or not owned by the pool's insurance account.",
+    115 => LiquidationBatchTooManyOwners ~ "LiquidateAccounts names more owners than one batch may; split the owners across batches.",
+    116 => LiquidationBatchOverBudget ~ "The owners a LiquidateAccounts batch names hold more positions together than its position budget; the batch is refused whole, so name fewer owners.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -468,6 +472,18 @@ mod exec_error_meaning_tests {
                 crate::liquidation_report::LiquidationRefusal::PositionMismatch,
             ),
             ExecError::InvalidPlpConfig(crate::types::PlpConfigError::ZeroAddress),
+            ExecError::InsuranceAccountWithdrawal {
+                pool_id: crate::types::InsurancePoolId(1),
+            },
+            ExecError::InsuranceActionRefused {
+                pool_id: crate::types::InsurancePoolId(1),
+                reason: crate::types::InsuranceActionRefusal::WrongOwner,
+            },
+            ExecError::LiquidationBatchTooManyOwners { owners: 2, max: 1 },
+            ExecError::LiquidationBatchOverBudget {
+                positions: 2,
+                budget: 1,
+            },
         ]
     }
 
@@ -509,7 +525,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=112)
+        let expected: Vec<u32> = (1u32..=116)
             .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81 | 101))
             .chain(std::iter::once(255))
             .collect();

@@ -1194,6 +1194,33 @@ export interface WithdrawInsuranceFund {
   allocations: InsuranceFundAllocation[];
 }
 
+/** An action the admin quorum executes as the insurance account of
+ *  `poolId` (inner tag 26). */
+export interface ExecInsuranceFund {
+  poolId: number;
+  /** Canonical MessagePack encoding of one `Action`. */
+  action: Uint8Array;
+}
+
+/** One perpetual/conditional pair a margin offset credits. */
+export interface MarginOffsetPair {
+  perpetual: number;
+  conditional: number;
+  /** The pair's own perpetual. */
+  settlementReference: number;
+  /** Basis points of the legs' combined charge credited; 1..=9_999. */
+  rate: number;
+  resolution: "RemoveOnResolution";
+}
+
+/** Replaces the stored margin-offset policy (inner tag 27). Pairs ascend by
+ *  `conditional`; the engine assigns the new sequence. */
+export interface SetMarginOffsetPolicy {
+  /** Sequence being replaced; `null` when no policy is stored yet. */
+  predecessor: bigint | null;
+  pairs: MarginOffsetPair[];
+}
+
 /**
  * The liquidation settings shared by every market. Collar width is not a
  * field: it is each market's maintenance margin fraction.
@@ -1254,6 +1281,8 @@ export interface LiquidationConfigInfo {
 export type AdminAction =
   | { kind: "FundInsuranceFund"; value: FundInsuranceFund }
   | { kind: "WithdrawInsuranceFund"; value: WithdrawInsuranceFund }
+  | { kind: "ExecInsuranceFund"; value: ExecInsuranceFund }
+  | { kind: "SetMarginOffsetPolicy"; value: SetMarginOffsetPolicy }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
