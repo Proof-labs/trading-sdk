@@ -33,7 +33,11 @@ import {
   type InsuranceExitState,
 } from "./insurance-exit-state.js";
 import type { BoundedReadOptions } from "./bounded-read.js";
-import { readInsuranceExitPrefix, type InsuranceExitPrefix, type InsuranceExitPrefixSelection } from "./insurance-exit-prefix.js";
+import {
+  readInsuranceExitPrefix,
+  type InsuranceExitPrefix,
+  type InsuranceExitPrefixSelection,
+} from "./insurance-exit-prefix.js";
 import {
   readBlockHeader,
   readFinalizedMarketsSnapshot,
@@ -1546,9 +1550,21 @@ export class ExchangeClient {
   }
 
   /** Fixed-state portfolio bound; callers must independently verify finality and freshness. */
-  async queryInsuranceExitPrefix(selection: InsuranceExitPrefixSelection, options: BoundedReadOptions = {}): Promise<InsuranceExitPrefix> {
-    if (!this.inventoryChainId) throw new Error("insurance exit prefix requires an explicit pinned chainId");
-    return readInsuranceExitPrefix(this.gatewayUrl, this.inventoryChainId, selection, options, this.httpTransport);
+  async queryInsuranceExitPrefix(
+    selection: InsuranceExitPrefixSelection,
+    options: BoundedReadOptions = {},
+  ): Promise<InsuranceExitPrefix> {
+    if (!this.inventoryChainId)
+      throw new Error(
+        "insurance exit prefix requires an explicit pinned chainId",
+      );
+    return readInsuranceExitPrefix(
+      this.gatewayUrl,
+      this.inventoryChainId,
+      selection,
+      options,
+      this.httpTransport,
+    );
   }
 
   /** One participant-attributed indexed trade page. Follow nextCursor with
