@@ -152,6 +152,20 @@ describe("decodeLiquidationEvent", () => {
     });
   });
 
+  it("reads empty remainder attributes as no remainder", () => {
+    const event = txEvent("liquidation_progress_reported", [
+      ["owner", OWNER_AB],
+      ["outcome", "maintenance_restored_below_target"],
+      ["config_sequence", "4"],
+      ["remainder_code", ""],
+      ["remainder_refusal", ""],
+    ]);
+    expect(decodeLiquidationEvent(event)).toMatchObject({
+      remainderCode: null,
+      remainderRefusal: null,
+    });
+  });
+
   it("decodes PositionLiquidated with its binding outcome", () => {
     expect(decodeLiquidationEvent(positionLiquidated())).toEqual({
       type: "PositionLiquidated",

@@ -341,13 +341,15 @@ function partialLiquidationFee(a: Attributes): PartialLiquidationFeeEvent {
 function liquidationProgressReported(
   a: Attributes,
 ): LiquidationProgressReportedEvent {
+  // The engine writes a `None` remainder as the key with an empty value.
+  const present = (key: string) => a.has(key) && a.text(key) !== "";
   return {
     type: "LiquidationProgressReported",
     owner: a.owner("owner"),
     outcome: a.label("outcome"),
     configSequence: a.u64("config_sequence"),
-    remainderCode: a.has("remainder_code") ? a.u32("remainder_code") : null,
-    remainderRefusal: a.has("remainder_refusal")
+    remainderCode: present("remainder_code") ? a.u32("remainder_code") : null,
+    remainderRefusal: present("remainder_refusal")
       ? a.text("remainder_refusal")
       : null,
   };
