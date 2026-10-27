@@ -47,8 +47,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`LiquidationConfig.takeoverDiscountBps`**, the discount at which the insurance fund
   takes over an insolvent position, at most 100 bps (`MAX_TAKEOVER_DISCOUNT_BPS`). Optional
   on input: omitted means the engine's 50 (`INITIAL_TAKEOVER_DISCOUNT_BPS`). Proposals
-  and `liquidation_config_set` events decode it; proposals written before it decode with
-  50. `SetLiquidationConfig` now encodes six config fields, so its content hash changes.
+  and `liquidation_config_set` events decode it; proposals written before it decode with 50. `SetLiquidationConfig` now encodes six config fields, so its content hash changes.
   `LIQUIDATION_REFUSALS` gains `net_delta_grows`. proof-wire pins the v8.0.0 commit
   (`81ed9018`).
 - **`ExecInsuranceFund` (tag 26) and `SetMarginOffsetPolicy` (tag 27)** in the
