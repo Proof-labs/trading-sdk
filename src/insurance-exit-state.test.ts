@@ -67,6 +67,13 @@ function envelope(value = raw()) {
   };
 }
 describe("finalized insurance exit facts", () => {
+  it("preserves a nonzero exact-cost remainder in the witnessed inventory", () => {
+    const value = raw();
+    (value[12] as unknown[][])[0].push(1n);
+    expect(
+      decodeInsuranceExitState(envelope(value), chain, request).positions[0],
+    ).toMatchObject({ entryPrice: 100n, size: 2n, entryRemainder: 1n });
+  });
   it("decodes the actual Rust query fixture including integer-array owners", () => {
     // Produced by exchange-core query/insurance_exit.rs with rmp_serde::to_vec.
     const rust =

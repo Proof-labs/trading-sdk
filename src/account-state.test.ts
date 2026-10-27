@@ -12,6 +12,29 @@ const raw = (): unknown[] => [
 ];
 describe("raw finalized account state", () => {
   afterEach(() => vi.unstubAllGlobals());
+  it("preserves exact entry cost without changing legacy position objects", () => {
+    const r = raw();
+    (r[3] as unknown[][])[0].push(6n);
+    const p = decodeAccountState(r, hex).positions[0];
+    expect(p.entryRemainder).toBe(6n);
+    expect(p.entryPrice * p.size + p.entryRemainder!).toBe(300n);
+    expect(decodeAccountState(raw(), hex).positions[0]).not.toHaveProperty(
+      "entryRemainder",
+    );
+  });
+  it.each([-1n, 7n, 1n << 64n, null, undefined, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects malformed exact-cost remainders: %s",
+    (remainder) => {
+      const r = raw();
+      (r[3] as unknown[][])[0].push(remainder);
+      expect(() => decodeAccountState(r, hex)).toThrow("entry remainder");
+    },
+  );
+  it("rejects unknown position extensions", () => {
+    const r = raw();
+    (r[3] as unknown[][])[0].push(0n, 1n);
+    expect(() => decodeAccountState(r, hex)).toThrow("position");
+  });
   it("preserves full integer precision and exposes no fabricated valuation", () => {
     expect(decodeAccountState(raw(), hex)).toEqual({
       owner: hex,

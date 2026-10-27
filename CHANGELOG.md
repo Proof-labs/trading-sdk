@@ -26,6 +26,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Raw account, financial and insurance-exit position reads preserve the engine's
+  optional exact entry-cost remainder. Legacy six-field records stay unchanged;
+  malformed remainders and unknown extensions are rejected. Read support does not
+  qualify an execution strategy against the new engine accounting rules.
+
 - **`queryFinalizedFinancialState(selection, options?)`** opts into a bounded
   same-node height/time/app-hash witness for existing financial facts. It requires
   a pinned chain and caller-side chain/header binding, never falls back to an

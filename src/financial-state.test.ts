@@ -57,6 +57,24 @@ const client = (): ExchangeClient =>
   });
 
 describe("atomic finalized financial state", () => {
+  it("preserves exact-cost remainders through the financial transport", async () => {
+    const value = raw();
+    (value[3] as unknown[][])[0][5] = [[a, 1, "Buy", 100, 2, 0, 1]];
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ data: encode(value) })),
+        ),
+    );
+    const result = await client().queryFinancialState(selection);
+    expect(result.accounts[0].positions[0]).toMatchObject({
+      entryPrice: 100n,
+      size: 2n,
+      entryRemainder: 1n,
+    });
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
