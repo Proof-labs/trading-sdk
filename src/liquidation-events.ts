@@ -58,6 +58,7 @@ export const LIQUIDATION_REFUSALS = [
   "position_mismatch",
   "invalid_maker",
   "reference_unavailable",
+  "net_delta_grows",
 ] as const;
 
 export type LiquidationRefusal =
@@ -206,6 +207,10 @@ class Attributes {
     throw new Error(`${this.event} decode: ${key} ${problem}`);
   }
 
+  has(key: string): boolean {
+    return this.values.has(key);
+  }
+
   text(key: string): string {
     const value = this.values.get(key);
     if (typeof value !== "string") this.fail(key, "is missing");
@@ -290,6 +295,9 @@ function liquidationConfigSet(a: Attributes): LiquidationConfigSetEvent {
     partialPenaltyBps: a.u32("partial_penalty_bps"),
     maxBookOrders: a.u32("max_book_orders"),
     maxCommittedFills: a.u32("max_committed_fills"),
+    ...(a.has("takeover_discount_bps") && {
+      takeoverDiscountBps: a.u32("takeover_discount_bps"),
+    }),
   };
   try {
     validateLiquidationConfig(config);

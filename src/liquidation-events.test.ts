@@ -87,6 +87,7 @@ describe("decodeLiquidationEvent", () => {
       ["partial_penalty_bps", "100"],
       ["max_book_orders", "20"],
       ["max_committed_fills", "10"],
+      ["takeover_discount_bps", "50"],
       ["proposal_id", "7"],
     ]);
     expect(decodeLiquidationEvent(event)).toEqual({
@@ -98,6 +99,7 @@ describe("decodeLiquidationEvent", () => {
         partialPenaltyBps: 100,
         maxBookOrders: 20,
         maxCommittedFills: 10,
+        takeoverDiscountBps: 50,
       },
       proposalId: 7n,
     });
@@ -197,7 +199,7 @@ describe("decodeLiquidationEvent", () => {
   });
 
   it("decodes LiquidationFailed with every refusal and with none", () => {
-    expect(LIQUIDATION_REFUSALS).toHaveLength(3);
+    expect(LIQUIDATION_REFUSALS).toHaveLength(4);
     for (const refusal of LIQUIDATION_REFUSALS) {
       expect(decodeLiquidationEvent(liquidationFailed("111", refusal))).toEqual(
         {

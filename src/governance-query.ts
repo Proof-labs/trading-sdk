@@ -32,7 +32,10 @@ import type {
   InsuranceFundAllocation,
   UpgradesInfo,
 } from "./types.js";
-import { validateSetLiquidationConfig } from "./liquidation-config.js";
+import {
+  INITIAL_TAKEOVER_DISCOUNT_BPS,
+  validateSetLiquidationConfig,
+} from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import {
   validateFundInsuranceFund,
@@ -183,11 +186,11 @@ function decodeSetWithdrawalLimit(value: unknown): SetWithdrawalLimit {
 
 /// Inner tag 17: `[predecessor, sequence, config]`, where `config` is
 /// `[targetRatioBps, [numerator, denominator], partialPenaltyBps,
-/// maxBookOrders, maxCommittedFills]`. Every newtype is its bare integer. A proposal the
+/// maxBookOrders, maxCommittedFills, takeoverDiscountBps?]`. Every newtype is its bare integer. A proposal the
 /// engine would refuse fails closed here too.
 function decodeSetLiquidationConfig(value: unknown): SetLiquidationConfig {
   const raw = toTuple(value, "setLiquidationConfig", 3);
-  const c = toTuple(raw[2], "setLiquidationConfig.config", 5);
+  const c = toTupleBetween(raw[2], "setLiquidationConfig.config", 5, 6);
   const threshold = toTuple(
     c[1],
     "setLiquidationConfig.config.fullCloseThreshold",
@@ -209,6 +212,10 @@ function decodeSetLiquidationConfig(value: unknown): SetLiquidationConfig {
       partialPenaltyBps: toU32(c[2], field("partialPenaltyBps")),
       maxBookOrders: toU32(c[3], field("maxBookOrders")),
       maxCommittedFills: toU32(c[4], field("maxCommittedFills")),
+      takeoverDiscountBps:
+        c.length > 5
+          ? toU32(c[5], field("takeoverDiscountBps"))
+          : INITIAL_TAKEOVER_DISCOUNT_BPS,
     },
   };
   validateSetLiquidationConfig(action);

@@ -630,7 +630,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         "full_close_threshold": { "numerator": 2u32, "denominator": 3u32 },
                         "partial_penalty_bps": 100u32,
                         "max_book_orders": 20u32,
-                        "max_committed_fills": 10u32
+                        "max_committed_fills": 10u32,
+                        "takeover_discount_bps": 50u32
                     }
                 }}
             }),

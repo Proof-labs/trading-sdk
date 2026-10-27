@@ -1213,6 +1213,9 @@ export interface LiquidationConfig {
   maxBookOrders: number;
   /** Fills one owner's liquidation may commit in a block; non-zero. */
   maxCommittedFills: number;
+  /** Discount the insurance fund takes over an insolvent position at, in
+   *  basis points; at most 100. Omitted means the engine's 50. */
+  takeoverDiscountBps?: number;
 }
 
 /**
