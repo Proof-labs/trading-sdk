@@ -193,8 +193,10 @@ jobs:
       # Prove the registry artifact, not the source checkout: pack the SDK,
       # install it into a clean Vite consumer, require one emitted WASM asset,
       # then exercise the canonical codec path in a real browser.
+      # Headless launch only needs the shell; the runner image already has
+      # Chrome's system libraries.
       - name: Install Chromium for the packaged-browser smoke
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --only-shell chromium
       - name: Build a clean consumer from the packed SDK
         run: npm run smoke:browser:prepare
       - name: Exercise the packaged WASM codec in Chromium
