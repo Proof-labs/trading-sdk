@@ -58,6 +58,7 @@ export const LIQUIDATION_REFUSALS = [
   "position_mismatch",
   "invalid_maker",
   "reference_unavailable",
+  "net_delta_grows",
 ] as const;
 
 export type LiquidationRefusal =
@@ -107,6 +108,11 @@ export interface LiquidationProgressReportedEvent {
   owner: string;
   outcome: LiquidationProgress;
   configSequence: bigint;
+  /** Engine code that refused a full close's remainder after book fills
+   *  that stand; `null` otherwise. */
+  remainderCode: number | null;
+  /** Why that remainder was refused, when refused rather than erroring. */
+  remainderRefusal: LiquidationRefusal | null;
 }
 
 /**
@@ -136,6 +142,15 @@ export interface PositionLiquidatedEvent {
   maintenance: bigint;
   bindingOutcome: BindingScenarioEntry[];
   configSequence: bigint;
+  /** What the insurance fund paid to take the position over; the fund
+   *  fields are 0 unless it did. */
+  fundCharged: bigint;
+  fundBinaries: bigint;
+  fundReserve: bigint;
+  /** Signed. */
+  fundRealized: bigint;
+  /** Part of `fundCharged` the fund took in kind with the position. */
+  fundAbsorbed: bigint;
 }
 
 /**
@@ -204,6 +219,10 @@ class Attributes {
 
   fail(key: string, problem: string): never {
     throw new Error(`${this.event} decode: ${key} ${problem}`);
+  }
+
+  has(key: string): boolean {
+    return this.values.has(key);
   }
 
   text(key: string): string {
@@ -290,6 +309,9 @@ function liquidationConfigSet(a: Attributes): LiquidationConfigSetEvent {
     partialPenaltyBps: a.u32("partial_penalty_bps"),
     maxBookOrders: a.u32("max_book_orders"),
     maxCommittedFills: a.u32("max_committed_fills"),
+    ...(a.has("takeover_discount_bps") && {
+      takeoverDiscountBps: a.u32("takeover_discount_bps"),
+    }),
   };
   try {
     validateLiquidationConfig(config);
@@ -319,11 +341,17 @@ function partialLiquidationFee(a: Attributes): PartialLiquidationFeeEvent {
 function liquidationProgressReported(
   a: Attributes,
 ): LiquidationProgressReportedEvent {
+  // The engine writes a `None` remainder as the key with an empty value.
+  const present = (key: string) => a.has(key) && a.text(key) !== "";
   return {
     type: "LiquidationProgressReported",
     owner: a.owner("owner"),
     outcome: a.label("outcome"),
     configSequence: a.u64("config_sequence"),
+    remainderCode: present("remainder_code") ? a.u32("remainder_code") : null,
+    remainderRefusal: present("remainder_refusal")
+      ? a.text("remainder_refusal")
+      : null,
   };
 }
 
@@ -366,6 +394,12 @@ function positionLiquidated(a: Attributes): PositionLiquidatedEvent {
     maintenance: a.u64("maintenance"),
     bindingOutcome: bindingOutcome(a),
     configSequence: a.u64("config_sequence"),
+    // Engines before proof-wire 8 omit the fund fields.
+    fundCharged: a.has("fund_charged") ? a.u64("fund_charged") : 0n,
+    fundBinaries: a.has("fund_binaries") ? a.u64("fund_binaries") : 0n,
+    fundReserve: a.has("fund_reserve") ? a.u64("fund_reserve") : 0n,
+    fundRealized: a.has("fund_realized") ? a.i64("fund_realized") : 0n,
+    fundAbsorbed: a.has("fund_absorbed") ? a.u64("fund_absorbed") : 0n,
   };
 }
 

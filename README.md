@@ -194,6 +194,7 @@ class ExchangeClient {
   queryTriggerStatus(): Promise<TriggerStatus>;
   queryPositionTriggerHistory(addressHex?: string, filters?: PositionTriggerHistoryFilters): Promise<PositionTriggerHistoryPage>;
   queryTriggerMarketHistory(market: number, filters?: TriggerMarketHistoryFilters): Promise<TriggerMarketHistoryPage>;
+  queryLiquidationConfig(): Promise<LiquidationConfigInfo>;
 
   // Owner defaults to signer; version-active agents pass delegated owner.
   setPositionTriggers(params: Omit<SetPositionTriggers, "owner"> & { owner?: Uint8Array }): Promise<TxResult>;
@@ -205,6 +206,7 @@ class ExchangeClient {
   queryHistoryResolutions(...): Promise<HistoryResolution[]>;
   queryHistoryPositions(...): Promise<HistoryPositionSnapshot[]>;
   queryHistoryPositionsPage(...): Promise<HistoryPositionsPage>;
+  queryLiquidationHistory(addressHex?: string, filters?: LiquidationHistoryFilters): Promise<LiquidationHistoryPage>;
 
   // Blocks
   getBlock(height?: number): Promise<Record<string, unknown>>;

@@ -890,11 +890,6 @@ export interface UpdateMarketFees {
    */
   cexCompositeStalenessMs?: bigint | null;
   /**
-   * BE-26: enable partial liquidation for this market. Omit to leave
-   * unchanged. true closes one position at a time and rechecks MM.
-   */
-  partialLiquidationEnabled?: boolean | null;
-  /**
    * Replace the rolling-volume fee-tier table. Omit to leave unchanged;
    * [] clears volume tiers and falls back to flat taker/maker bps.
    */
@@ -1199,6 +1194,33 @@ export interface WithdrawInsuranceFund {
   allocations: InsuranceFundAllocation[];
 }
 
+/** An action the admin quorum executes as the insurance account of
+ *  `poolId` (inner tag 26). */
+export interface ExecInsuranceFund {
+  poolId: number;
+  /** Canonical MessagePack encoding of one `Action`. */
+  action: Uint8Array;
+}
+
+/** One perpetual/conditional pair a margin offset credits. */
+export interface MarginOffsetPair {
+  perpetual: number;
+  conditional: number;
+  /** The pair's own perpetual. */
+  settlementReference: number;
+  /** Basis points of the legs' combined charge credited; 1..=9_999. */
+  rate: number;
+  resolution: "RemoveOnResolution";
+}
+
+/** Replaces the stored margin-offset policy (inner tag 27). Pairs ascend by
+ *  `conditional`; the engine assigns the new sequence. */
+export interface SetMarginOffsetPolicy {
+  /** Sequence being replaced; `null` when no policy is stored yet. */
+  predecessor: bigint | null;
+  pairs: MarginOffsetPair[];
+}
+
 /**
  * The liquidation settings shared by every market. Collar width is not a
  * field: it is each market's maintenance margin fraction.
@@ -1218,6 +1240,9 @@ export interface LiquidationConfig {
   maxBookOrders: number;
   /** Fills one owner's liquidation may commit in a block; non-zero. */
   maxCommittedFills: number;
+  /** Discount the insurance fund takes over an insolvent position at, in
+   *  basis points; at most 100. Omitted means the engine's 50. */
+  takeoverDiscountBps?: number;
 }
 
 /**
@@ -1229,6 +1254,15 @@ export interface SetLiquidationConfig {
   /** Sequence of the configuration this update replaces. */
   predecessor: bigint;
   /** Sequence of the new configuration. */
+  sequence: bigint;
+  config: LiquidationConfig;
+}
+
+/** `GET /v1/liquidation-config`: the stored global liquidation configuration. */
+export interface LiquidationConfigInfo {
+  /** Position of the configuration in its update sequence: the
+   *  `predecessor` a `SetLiquidationConfig` names to replace it, and the
+   *  `configSequence` liquidation events carry. */
   sequence: bigint;
   config: LiquidationConfig;
 }
@@ -1247,6 +1281,8 @@ export interface SetLiquidationConfig {
 export type AdminAction =
   | { kind: "FundInsuranceFund"; value: FundInsuranceFund }
   | { kind: "WithdrawInsuranceFund"; value: WithdrawInsuranceFund }
+  | { kind: "ExecInsuranceFund"; value: ExecInsuranceFund }
+  | { kind: "SetMarginOffsetPolicy"; value: SetMarginOffsetPolicy }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
@@ -2032,6 +2068,14 @@ export interface OpenOrder {
 }
 
 export type TriggerKind = "StopLoss" | "TakeProfit";
+
+/**
+ * Any other string decodes too: names the engine adds later pass through
+ * verbatim, so code that switches on these keeps a default branch.
+ */
+export type OpenLabel = string & {};
+
+/** Engine-defined label: the known names, or any later one. */
 export type TriggerLimbState =
   | "Armed"
   | "Filled"
@@ -2039,7 +2083,10 @@ export type TriggerLimbState =
   | "NoFill"
   | "Rejected"
   | "Cancelled"
-  | "Invalidated";
+  | "Invalidated"
+  | OpenLabel;
+
+/** Engine-defined label: the known names, or any later one. */
 export type TriggerOutcomeReason =
   | "PositionClosed"
   | "PositionEpochChanged"
@@ -2053,7 +2100,20 @@ export type TriggerOutcomeReason =
   | "NoEligibleLiquidity"
   | "SelfTradePrevention"
   | "WorkLimitReached"
-  | "ExecutionRejected";
+  | "ExecutionRejected"
+  | "OracleSessionClosed"
+  | "OracleDisagreement"
+  | "OracleExpiredSource"
+  | "OraclePolicyMissing"
+  | "NoTwoSidedQuote"
+  | "InsufficientMargin"
+  | "InsufficientBalance"
+  | "ReduceOnlyWouldIncrease"
+  | "PositionLimitExceeded"
+  | "OpenInterestLimitExceeded"
+  | "MarketClosed"
+  | "EngineFault"
+  | OpenLabel;
 
 /** Last deterministic evaluation of one stored trigger limb. */
 export interface TriggerEvaluation {
@@ -2106,15 +2166,25 @@ export interface TriggerMarketConfigInfo {
   state: TriggerMarketConfigState;
 }
 
-/** Why a stored bracket is or is not eligible at the finalized height. */
-export type TriggerEffectiveAvailability =
-  | { kind: "Available" }
-  | { kind: "TriggerActionsInactive" }
-  | { kind: "PendingActivation" }
-  | { kind: "MigrationIncomplete" }
-  | { kind: "ConfigurationMissing" }
-  | { kind: "MarketDisabled" }
-  | { kind: "Deferred"; reason: TriggerOutcomeReason };
+/** Engine-defined label: the known names, or any later one. */
+export type TriggerEffectiveAvailabilityKind =
+  | "Available"
+  | "TriggerActionsInactive"
+  | "PendingActivation"
+  | "MigrationIncomplete"
+  | "ConfigurationMissing"
+  | "MarketDisabled"
+  | "Deferred"
+  | OpenLabel;
+
+/**
+ * Why a stored bracket is or is not eligible at the finalized height.
+ * `reason` is set when the engine attaches one to the kind (`Deferred`).
+ */
+export interface TriggerEffectiveAvailability {
+  kind: TriggerEffectiveAvailabilityKind;
+  reason?: TriggerOutcomeReason;
+}
 
 /** Current protected position generation and both optional limbs. */
 export interface PositionTriggerBracket {
@@ -2182,10 +2252,10 @@ export type PositionTriggerHistoryEventType =
   | "pending_triggers_discarded";
 
 /**
- * Why a pending (pre-fill) bracket left the live set without installing.
- * `install_rejected` is the silent protection-loss path: the order's fill
- * stands but the bracket could not install, so the position is live and
- * unprotected — surfaces it.
+ * Why a pending (pre-fill) bracket left the live set without installing:
+ * an engine-defined label, the known names or any later one.
+ * `install_rejected` is the silent protection-loss path: the fill stands but
+ * the bracket could not install.
  */
 export type PendingTriggerDiscardReason =
   | "order_cancelled"
@@ -2193,7 +2263,16 @@ export type PendingTriggerDiscardReason =
   | "order_replaced"
   | "unfilled_terminal"
   | "install_rejected"
-  | "position_closed";
+  | "position_closed"
+  | "upgrade_discarded"
+  | OpenLabel;
+
+/** Engine-defined label: the known names, or any later one. */
+export type TriggerHistoryLimbKind = "stop_loss" | "take_profit" | OpenLabel;
+
+/** Engine-defined label: the known names, or any later one. */
+export type TriggerExecutionResult =
+  "filled" | "partial" | "no_fill" | "rejected" | "invalidated" | OpenLabel;
 
 export type TriggerMarketHistoryEventType =
   "trigger_market_deferred" | "trigger_market_resumed";
@@ -2280,7 +2359,7 @@ export interface PositionTriggerActivatedHistoryPayload extends OwnerTriggerHist
   limb_id: string;
   client_group_id: string;
   client_trigger_id: string;
-  limb_kind: "stop_loss" | "take_profit";
+  limb_kind: TriggerHistoryLimbKind;
   trigger_price: string;
   frozen_mark: string;
   limit_price: string;
@@ -2293,7 +2372,7 @@ export interface PositionTriggerExecutedHistoryPayload extends PositionTriggerAc
   residual_quantity: string;
   /** Signed aggregate fee; kept as a decimal string. */
   total_fee: string;
-  result: "filled" | "partial" | "no_fill" | "rejected" | "invalidated";
+  result: TriggerExecutionResult;
   /** Empty when the terminal outcome has no additional reason. */
   reason: string;
 }
@@ -2302,18 +2381,21 @@ export interface PositionTriggerDeferredHistoryPayload extends OwnerTriggerHisto
   limb_id: string;
   client_group_id: string;
   client_trigger_id: string;
-  limb_kind: "stop_loss" | "take_profit";
+  limb_kind: TriggerHistoryLimbKind;
   trigger_price: string;
   frozen_mark: string;
   requested_quantity: string;
+  /** Engine-defined label, passed through. */
   reason: string;
 }
 
 export interface TriggerMarketDeferredHistoryPayload extends TriggerHistoryPayloadBase {
+  /** Engine-defined label, passed through. */
   reason: string;
 }
 
 export interface TriggerMarketResumedHistoryPayload extends TriggerHistoryPayloadBase {
+  /** Engine-defined label, passed through. */
   previous_reason: string;
 }
 
@@ -2794,13 +2876,11 @@ export interface MarketConfig {
   maxMarkSpreadBps?: number;
   /** [20] Max age (ms) for composite-CEX price in Median mode. */
   cexCompositeStalenessMs?: bigint;
-  /** [21] Enable partial liquidation (close per-market rather than all-or-nothing). */
-  partialLiquidationEnabled?: boolean;
-  /** [22] Published size scale: quantity is in units of 10^-szDecimals. */
+  /** [21] Published size scale: quantity is in units of 10^-szDecimals. */
   szDecimals?: number;
-  /** [23] Human-readable ticker / short symbol (e.g. "BTC"). */
+  /** [22] Human-readable ticker / short symbol (e.g. "BTC"). */
   ticker?: string;
-  /** [24] Aggregate market open-interest cap in contracts. 0 = no cap. */
+  /** [23] Aggregate market open-interest cap in contracts. 0 = no cap. */
   maxOpenInterest?: bigint;
 }
 

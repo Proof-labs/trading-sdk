@@ -38,7 +38,14 @@ import {
   decodeTriggerMarketConfigInfos,
   decodePositionTriggerHistoryPage,
   decodeTriggerMarketHistoryPage,
+  type TriggerOutcomeReason,
+  type TriggerLimbState,
+  type TriggerEffectiveAvailabilityKind,
+  type PendingTriggerDiscardReason,
+  type TriggerHistoryLimbKind,
+  type TriggerExecutionResult,
 } from "./index.js";
+import type { OpenLabel } from "./types.js";
 
 describe("public barrel: governance surface", () => {
   it("exports the insurance types without exposing superseded executor APIs", async () => {
@@ -266,5 +273,41 @@ describe("public barrel: one-book events and No helpers", () => {
     expect(() =>
       barrelYesOrder({ market: 1, side: 1, price: 0n, quantity: 1n }),
     ).toThrow(BarrelBinaryPriceError);
+  });
+});
+
+// Trigger labels are open unions: the known names stay listed (so editors
+// suggest them) and any later engine name still type-checks. If a union
+// collapses to plain `string`, `Known<T>` becomes `never` and the first
+// assignment of each pair fails; if it loses the open member, the second does.
+type Known<T> = T extends OpenLabel ? (OpenLabel extends T ? never : T) : T;
+describe("public barrel: trigger labels", () => {
+  it("keeps the known names and accepts later ones", () => {
+    const known: [
+      Known<TriggerOutcomeReason>,
+      Known<TriggerLimbState>,
+      Known<TriggerEffectiveAvailabilityKind>,
+      Known<PendingTriggerDiscardReason>,
+      Known<TriggerHistoryLimbKind>,
+      Known<TriggerExecutionResult>,
+    ] = [
+      "NoTwoSidedQuote",
+      "Armed",
+      "Deferred",
+      "install_rejected",
+      "stop_loss",
+      "no_fill",
+    ];
+    const later: [
+      TriggerOutcomeReason,
+      TriggerLimbState,
+      TriggerEffectiveAvailabilityKind,
+      PendingTriggerDiscardReason,
+      TriggerHistoryLimbKind,
+      TriggerExecutionResult,
+    ] = ["a", "b", "c", "d", "e", "f"];
+    // @ts-expect-error an unknown name is not one of the known names
+    const notKnown: Known<TriggerOutcomeReason> = "ReasonFromANewerEngine";
+    expect([known, later, notKnown]).toHaveLength(3);
   });
 });

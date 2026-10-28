@@ -21,6 +21,85 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the legacy `conditional_settled` / `conditional_voided` from stored history
   are still translated (MAJOR).
 
+- **Breaking in TypeScript types:** the trigger label types are open unions:
+  the names the engine knows today plus any other string, so a label added
+  later decodes and still type-checks. This covers `TriggerOutcomeReason` (now
+  with all 27 engine reasons, such as `NoTwoSidedQuote` and
+  `InsufficientMargin`), `TriggerLimbState`, `PendingTriggerDiscardReason`
+  (now with `upgrade_discarded`), and the new
+  `TriggerEffectiveAvailabilityKind` (`TriggerEffectiveAvailability.kind`),
+  `TriggerHistoryLimbKind` (history `limb_kind`) and `TriggerExecutionResult`
+  (history `result`). Editors still suggest the known names. Two patterns need
+  a change: a `Record` keyed by one of these types must list every known name
+  (the reason list grew to match the engine), and an exhaustive `switch` that
+  ends in a `never` check needs a default branch. MAJOR for npm on the type
+  surface only; decoded values and the wire are unchanged. In Python the
+  `PendingTriggerDiscardReason` alias becomes `str`.
+
+### Added
+
+- **`queryLiquidationConfig()`** reads the global liquidation configuration
+  every market shares and its sequence at `GET /v1/liquidation-config`
+  (api-gateway 7.12.0, served by the node from exchange's
+  `liquidation_config` engine query). It returns `LiquidationConfigInfo`:
+  `sequence` as a `bigint` (the `predecessor` a `SetLiquidationConfig`
+  names, and the `configSequence` liquidation events carry) and the
+  `LiquidationConfig`. A record of the wrong shape throws.
+  `decodeLiquidationConfigInfo` decodes the raw MessagePack. Additive (MINOR).
+- **`queryLiquidationHistory(addressHex?, filters?)`** reads one owner's
+  `position_liquidated` and `liquidation_failed` rows at
+  `GET /v1/history/liquidations/{owner}`, with `order`, `fromMs`, `toMs`,
+  `limit` and the opaque `cursor`. Each row keeps `eventId` (a `bigint`),
+  `blockHeight`, `blockTime` as served, `txHash`, `eventIndex` and
+  `eventKey`, and its payload decoded by `decodeLiquidationEvent`. A row for
+  another owner or of another event type throws. An empty `nextCursor` ends
+  the history. `decodeLiquidationHistoryPage` and
+  `liquidationHistorySearchParams` are exported. Additive (MINOR).
+
+- **`LiquidationConfig.takeoverDiscountBps`**, the discount at which the insurance fund
+  takes over an insolvent position, at most 100 bps (`MAX_TAKEOVER_DISCOUNT_BPS`). Optional
+  on input: omitted means the engine's 50 (`INITIAL_TAKEOVER_DISCOUNT_BPS`). Proposals
+  and `liquidation_config_set` events decode it; proposals written before it decode with 50. `SetLiquidationConfig` now encodes six config fields, so its content hash changes.
+  `LIQUIDATION_REFUSALS` gains `net_delta_grows`. proof-wire pins the v8.0.0 commit
+  (`81ed9018`).
+- **`ExecInsuranceFund` (tag 26) and `SetMarginOffsetPolicy` (tag 27)** in the
+  `AdminAction` union, the tag table and the proposal decoder, so a pending proposal of
+  either no longer fails a proposal page.
+- **`RawAccountPosition.entryRemainder`**: account and financial state accept the
+  seven-field position wire 8 writes when the entry price rounds (0 when omitted).
+- **Error codes 113-116** (`InsuranceAccountWithdrawal`, `InsuranceActionRefused`,
+  `LiquidationBatchTooManyOwners`, `LiquidationBatchOverBudget`).
+- **Typed liquidation event fields**: `PositionLiquidated` `fundCharged`, `fundBinaries`,
+  `fundReserve`, `fundRealized`, `fundAbsorbed`; `LiquidationProgressReported`
+  `remainderCode`, `remainderRefusal`.
+
+### Removed
+
+- **The per-market `partialLiquidationEnabled` flag** (`partial_liquidation_enabled` in
+  Python and Rust). Every market liquidates the same way, so `MarketConfig` and the
+  `UpdateMarketFees` input no longer carry it
+  ([exchange #1233](https://github.com/Proof-labs/exchange/pull/1233)). `MarketConfig` is a
+  positional array: `szDecimals`, `ticker` and `maxOpenInterest` move from positions
+  22–24 to 21–23. The markets snapshot accepts 24-field rows only. Breaking (MAJOR):
+  deploy together with exchange 2.20.0 (proof-wire 8.0.0); older engines' market rows no
+  longer decode.
+
+### Fixed
+
+- Trigger reads no longer fail on an engine label this SDK version does not
+  know. A reason, limb state, availability kind, executed result and history
+  limb kind are engine-defined labels: each decodes as any non-empty string
+  and is returned verbatim, in TypeScript and Python. The SDK carries no list
+  of their names and no longer checks which row may carry which reason or
+  which result goes with which quantities. A stop-loss deferred on a binary
+  market with a one-sided book (`no_two_sided_quote`) used to fail the
+  owner-history decoder, which made the account's trigger history
+  unreadable; rows like it stay in history. Still refused: a missing, empty
+  or non-string label, an unknown event type, an unknown stored limb kind,
+  and executed quantities that do not add up. No wire change.
+
+## [8.1.0] — 2026-10-26
+
 ### Added
 
 - **`GatewayReads.bbo(params, opts)`** reads the indexer's order-book
@@ -1631,7 +1710,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...HEAD
+[8.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.0.0...npm-v8.1.0
 [8.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.3.0...npm-v8.0.0
 [7.3.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.2.0...npm-v7.3.0
 [7.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.1.0...npm-v7.2.0

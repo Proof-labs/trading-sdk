@@ -6,6 +6,9 @@ export interface RawAccountPosition {
   entryPrice: bigint;
   size: bigint;
   lastFundingIndex: bigint;
+  /** Cost left over when `entryPrice` is rounded down: the position's cost
+   *  is `entryPrice * size + entryRemainder`. */
+  entryRemainder: bigint;
 }
 export interface AccountState {
   owner: string;
@@ -17,8 +20,18 @@ export interface AccountState {
 function invalid(field: string): never {
   throw new Error(`account state decode: invalid ${field}`);
 }
-function tuple(value: unknown, length: number, field: string): unknown[] {
-  if (!Array.isArray(value) || value.length !== length) return invalid(field);
+function tuple(
+  value: unknown,
+  length: number,
+  field: string,
+  maxLength = length,
+): unknown[] {
+  if (
+    !Array.isArray(value) ||
+    value.length < length ||
+    value.length > maxLength
+  )
+    return invalid(field);
   return value;
 }
 function integer(value: unknown, field: string, signed = false): bigint {
@@ -58,7 +71,8 @@ export function decodeAccountState(
     return invalid("positions");
   let previous = -1n;
   const positions = fields[3].map((rawPosition): RawAccountPosition => {
-    const p = tuple(rawPosition, 6, "position");
+    // Wire 8 appends `entry_remainder`, omitted when zero.
+    const p = tuple(rawPosition, 6, "position", 7);
     const positionOwner = owner(p[0]);
     const market = integer(p[1], "market");
     if (market > 0xffffffffn || market <= previous || positionOwner !== address)
@@ -73,6 +87,7 @@ export function decodeAccountState(
       entryPrice: integer(p[3], "entry price"),
       size: integer(p[4], "size"),
       lastFundingIndex: integer(p[5], "funding index", true),
+      entryRemainder: p.length > 6 ? integer(p[6], "entry remainder") : 0n,
     };
   });
   return {

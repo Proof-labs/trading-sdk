@@ -9,6 +9,12 @@ export const RATIO_ONE_BPS = 10_000;
 /** Largest partial-liquidation penalty a configuration may carry. */
 export const MAX_PARTIAL_PENALTY_BPS = 100;
 
+/** Largest takeover discount a configuration may carry. */
+export const MAX_TAKEOVER_DISCOUNT_BPS = 100;
+
+/** Takeover discount a configuration without one carries. */
+export const INITIAL_TAKEOVER_DISCOUNT_BPS = 50;
+
 function u32(value: number, field: string): void {
   if (!Number.isInteger(value) || value < 0 || value > U32_MAX) {
     throw new Error(`${field} must be an integer in 0..=${U32_MAX}`);
@@ -49,6 +55,14 @@ export function validateLiquidationConfig(config: LiquidationConfig): void {
   }
   for (const field of fields.slice(2)) {
     if (config[field] === 0) throw new Error(`${field} must be non-zero`);
+  }
+  if (config.takeoverDiscountBps !== undefined) {
+    u32(config.takeoverDiscountBps, "takeoverDiscountBps");
+    if (config.takeoverDiscountBps > MAX_TAKEOVER_DISCOUNT_BPS) {
+      throw new Error(
+        `takeoverDiscountBps must be at most ${MAX_TAKEOVER_DISCOUNT_BPS}`,
+      );
+    }
   }
 }
 

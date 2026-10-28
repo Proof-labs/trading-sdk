@@ -35,6 +35,12 @@ import {
   historyOwner,
   historySearchParams,
 } from "./history.js";
+import {
+  decodeLiquidationHistoryPage,
+  liquidationHistorySearchParams,
+  type LiquidationHistoryFilters,
+  type LiquidationHistoryPage,
+} from "./liquidation-history.js";
 import { toWasmFields } from "./codec-adapter.js";
 import {
   signAndEncode,
@@ -107,6 +113,7 @@ import type {
   TriggerMarketConfigInfo,
   NodeVersion,
   UpgradesInfo,
+  LiquidationConfigInfo,
   AuthorizeWithdrawal,
   ConfirmWithdrawalReceipt,
   FailWithdrawalReceipt,
@@ -116,6 +123,7 @@ import {
   decodeAuthoritiesSnapshot,
   decodeNodeVersion,
   decodeUpgradesInfo,
+  decodeLiquidationConfigInfo,
   decodeEventInfo,
   decodeProposalPage,
 } from "./governance-query.js";
@@ -1627,6 +1635,26 @@ export class ExchangeClient {
     );
   }
 
+  /** One page of an owner's `position_liquidated` and `liquidation_failed`
+   * events (`GET /v1/history/liquidations/{owner}`), newest first unless
+   * `order: "asc"`. Pass a non-empty `nextCursor` back as `filters.cursor`
+   * with the other filters unchanged; an empty one ends the history. Always
+   * uses the gateway: the indexer, not the node, serves history. */
+  async queryLiquidationHistory(
+    addressHex?: string,
+    filters: LiquidationHistoryFilters = {},
+  ): Promise<LiquidationHistoryPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) throw new Error("No address available");
+    const owner = historyOwner(hex);
+    const qs = liquidationHistorySearchParams(filters).toString();
+    const json = await this.apiJson(
+      `${this.gatewayUrl}/v1/history/liquidations/${owner}${qs ? `?${qs}` : ""}`,
+      "account",
+    );
+    return decodeLiquidationHistoryPage(json, owner);
+  }
+
   /** Shared market-level deferred/resumed trigger transitions. These are not
    * duplicated into every owner's history and always route through gateway. */
   async queryTriggerMarketHistory(
@@ -1682,6 +1710,18 @@ export class ExchangeClient {
     const json = await this.apiJson(`${this.readBaseUrl}/v1/upgrades`);
     const bytes = fromBase64(requireEncodedData(json, "/v1/upgrades"));
     return decodeUpgradesInfo(await this.strictDecode(bytes));
+  }
+
+  /**
+   * Read the global liquidation configuration every market shares and its
+   * sequence via the gateway proxy (`GET /v1/liquidation-config`). A chain
+   * always holds one; a failed read throws rather than returning a default.
+   */
+  async queryLiquidationConfig(): Promise<LiquidationConfigInfo> {
+    const path = "/v1/liquidation-config";
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return decodeLiquidationConfigInfo(await this.strictDecode(bytes));
   }
 
   /**
@@ -2820,10 +2860,9 @@ function decodeMarketConfig(raw: unknown[]): MarketConfig {
     markSourceMode: raw[18] == null ? undefined : (raw[18] as MarkSourceMode),
     maxMarkSpreadBps: raw[19] == null ? undefined : Number(raw[19]),
     cexCompositeStalenessMs: optBig(raw[20]),
-    partialLiquidationEnabled: raw[21] == null ? undefined : Boolean(raw[21]),
-    szDecimals: raw[22] == null ? undefined : Number(raw[22]),
-    ticker: raw[23] == null ? undefined : String(raw[23]),
-    maxOpenInterest: optBig(raw[24]),
+    szDecimals: raw[21] == null ? undefined : Number(raw[21]),
+    ticker: raw[22] == null ? undefined : String(raw[22]),
+    maxOpenInterest: optBig(raw[23]),
   };
 }
 
