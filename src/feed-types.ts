@@ -62,7 +62,7 @@ export interface AccountSnapshotFrame {
 }
 
 /** A live engine event for a subscribed owner. `type` is the gateway's
- *  normalised family (`"order_update"`, `"fill"`, …); `eventType` is the
+ *  normalised frame type (`"orderUpdate"`, `"fill"`, …); `eventType` is the
  *  original engine event name (`"order_placed"`, `"trade_executed"`, …). */
 export interface AccountEventFrame {
   channel: "accountEvents";
