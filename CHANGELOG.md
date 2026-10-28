@@ -9,6 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `queryFinalizedOraclePermissions` preserves the existing policy/verdict read
+  with an opt-in same-state witness. Legacy, unavailable and stale states remain
+  explicit data; the method does not select a price or authorize execution.
+
 - Generic opt-in witnessed account reads: `queryFinalizedAccountState`,
   `queryFinalizedOpenOrders`, `queryFinalizedRecentNonces` and
   `queryFinalizedAgentAuthorization`. Each preserves one node view; callers

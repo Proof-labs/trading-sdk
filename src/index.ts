@@ -408,6 +408,10 @@ export type {
   OracleSelectedSource,
   OracleVerdictDiagnostic,
 } from "./oracle-permissions.js";
+export {
+  decodeFinalizedOraclePermissions,
+  type FinalizedOraclePermissions,
+} from "./finalized-oracle-read.js";
 
 export {
   GatewayFeed,

@@ -89,7 +89,7 @@ function limit(value: number): number {
 }
 /** Strict raw envelope; no projections, fallback or evidence synthesized from another read.
  * Requires ready() for the authoritative MessagePack framing/depth preflight. */
-function decodeEnvelope(value: unknown): {
+export function decodeWitnessedRead(value: unknown): {
   raw: unknown;
   witness: FinalizedReadWitness;
 } {
@@ -116,7 +116,7 @@ function decodeEnvelope(value: unknown): {
     useBigInt64: true,
     maxArrayLength: 2048,
     maxMapLength: 0,
-    maxStrLength: 16,
+    maxStrLength: 64,
     maxBinLength: 32,
     maxExtLength: 0,
   }).decode(bytes);
@@ -142,7 +142,7 @@ export function decodeFinalizedAccountState(
   owner: string,
 ): FinalizedAccountState {
   address(owner);
-  const { raw, witness } = decodeEnvelope(value);
+  const { raw, witness } = decodeWitnessedRead(value);
   const state = decodeAccountState(raw, owner);
   if (state.finalizedHeight !== witness.height) fail("account height mismatch");
   return { ...state, witness };
@@ -154,7 +154,7 @@ export function decodeFinalizedAgentAuthorization(
 ): FinalizedAgentAuthorization {
   address(owner);
   address(agent);
-  const { raw, witness } = decodeEnvelope(value);
+  const { raw, witness } = decodeWitnessedRead(value);
   if (typeof raw !== "boolean") fail("authorization");
   return { owner, agent, authorized: raw, witness };
 }
@@ -163,7 +163,7 @@ export function decodeFinalizedRecentNonces(
   signer: string,
 ): FinalizedRecentNonces {
   address(signer);
-  const { raw, witness } = decodeEnvelope(value);
+  const { raw, witness } = decodeWitnessedRead(value);
   if (!Array.isArray(raw) || raw.length > 100) fail("nonce count");
   let previous = -1n;
   const recent = raw.map((v) => {
@@ -181,7 +181,7 @@ export function decodeFinalizedOpenOrders(
 ): FinalizedOpenOrders {
   address(owner);
   limit(requestedLimit);
-  const { raw, witness } = decodeEnvelope(value);
+  const { raw, witness } = decodeWitnessedRead(value);
   if (!Array.isArray(raw) || raw.length > requestedLimit) fail("order count");
   let previous = -1n;
   const orders = raw.map((v): RawOpenOrder => {

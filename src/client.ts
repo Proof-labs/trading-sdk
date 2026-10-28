@@ -29,6 +29,10 @@ import {
 } from "./finalized-orderbook.js";
 import { readAgentAuthorization } from "./agent-authorization.js";
 import {
+  readFinalizedOraclePermissions,
+  type FinalizedOraclePermissions,
+} from "./finalized-oracle-read.js";
+import {
   readFinalizedAccountState,
   readFinalizedAgentAuthorization,
   readFinalizedRecentNonces,
@@ -1832,6 +1836,19 @@ export class ExchangeClient {
     const json = await this.apiJson(`${this.readBaseUrl}${path}`);
     const bytes = fromBase64(requireEncodedData(json, path));
     return decodeOraclePermissions(await this.strictDecode(bytes), market);
+  }
+
+  /** Existing committed oracle facts with the same-query witness; no price selection. */
+  async queryFinalizedOraclePermissions(
+    market: number,
+    options: BoundedReadOptions = {},
+  ): Promise<FinalizedOraclePermissions> {
+    return readFinalizedOraclePermissions(
+      this.gatewayUrl,
+      market,
+      options,
+      this.httpTransport,
+    );
   }
 
   /** Immutable owner-bearing trigger lifecycle history. This always uses the
