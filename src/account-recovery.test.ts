@@ -42,7 +42,7 @@ interface Ev {
 
 const live = (e: Ev, keyed = true, txIndex: number | null = 0) => ({
   channel: "accountEvents",
-  type: "account_event",
+  type: "accountEvent",
   owner: OWNER,
   eventType: e.type,
   height: e.height,
@@ -559,13 +559,13 @@ it("matches a legacy live settlement name to the canonical history name", async 
     height: 10,
     tx: "AA",
     index: 2,
-    type: "conditional_settled",
+    type: "conditional_settled", // vocabulary-lint: allow
   };
   const notMet: Ev = {
     height: 12,
     tx: "DD",
     index: 1,
-    type: "conditional_voided",
+    type: "conditional_voided", // vocabulary-lint: allow
   };
   await t.start(snap(10));
   t.sockets[0].push(live(met));
