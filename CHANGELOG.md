@@ -38,6 +38,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`queryFunding(market)`** reads one market's funding state at
+  `GET /v1/funding/{market}` (the gateway's `fundingRate` read): funding rate,
+  cumulative funding, last funding time, mark price EWMA, oracle price,
+  funding interval and maximum funding rate, as `FundingInfo`. The engine
+  serves the oracle price as the mark until the first trade, and zeroed
+  fields for an unknown market. A record of fewer than eight fields throws;
+  trailing fields are ignored. `decodeFundingInfo` decodes the raw
+  MessagePack. Additive (MINOR).
 - **`queryLiquidationConfig()`** reads the global liquidation configuration
   every market shares and its sequence at `GET /v1/liquidation-config`
   (api-gateway 7.12.0, served by the node from exchange's
