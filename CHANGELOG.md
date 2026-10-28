@@ -9,14 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking changes
 
-- **Account frame types are lowerCamel**, matching api-gateway 8.0.0
+- **Account frame types are lowerCamel**, matching api-gateway 9.0.0
   (canonical vocabulary rule N1, hard cutover). An `AccountEventFrame.type`
   delivered live or backfilled from history after a reconnect is now
   `orderUpdate`, `positionUpdate`, `triggerUpdate`, `marginUpdate` or
   `accountEvent` (was `order_update`, `position_update`, `trigger_update`,
   `margin_update`, `account_event`); `fill` and `funding` are unchanged.
   Same in the Python `account_event_stream`. Code that switches on the old
-  strings must switch on the new ones, and needs gateway 8.0.0. The
+  strings must switch on the new ones, and needs gateway 9.0.0. The
   settlement events keep arriving as `condition_met` / `condition_not_met`;
   the legacy `conditional_settled` / `conditional_voided` from stored history
   are still translated (MAJOR).
