@@ -154,7 +154,8 @@ define_error_kinds! {
     110 => InsuranceAmountExceedsI64 ~ "An insurance transfer amount, or their sum, exceeds the ledger's signed 64-bit bound.",
     111 => LiquidationRefused ~ "A liquidation attempt was refused (a changed position, a malformed book or an unavailable reference) and kept no writes; the liquidation_failed event's refusal names why.",
     // Code 101 is unassigned on the wire.
-    112 => InvalidPlpConfig                 ~ "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance.",
+    // 112 was InvalidPlpConfig, retired with the engine's liquidity-provider
+    // backstop; never reassigned.
     113 => InsuranceAccountWithdrawal ~ "Direct withdrawal names an insurance account; insurance cash leaves only through a governed insurance withdrawal.",
     114 => InsuranceActionRefused ~ "Governed insurance action is undecodable, not canonical, not permitted for an insurance account, or not owned by the pool's insurance account.",
     115 => LiquidationBatchTooManyOwners ~ "LiquidateAccounts names more owners than one batch may; split the owners across batches.",
@@ -471,7 +472,6 @@ mod exec_error_meaning_tests {
             ExecError::LiquidationRefused(
                 crate::liquidation_report::LiquidationRefusal::PositionMismatch,
             ),
-            ExecError::InvalidPlpConfig(crate::types::PlpConfigError::ZeroAddress),
             ExecError::InsuranceAccountWithdrawal {
                 pool_id: crate::types::InsurancePoolId(1),
             },
@@ -516,8 +516,8 @@ mod exec_error_meaning_tests {
 
     /// Every engine code must be covered by the public error manifest, with
     /// the holes the wire itself carries: 24, 25 and 31 (the retired
-    /// impact-market family), 78-81 (reserved for oracle errors) and 101
-    /// (unassigned). Catches
+    /// impact-market family), 78-81 (reserved for oracle errors), 101
+    /// (unassigned) and 112 (the retired PLP configuration). Catches
     /// the case where a code is reserved by the mirrored engine error enum
     /// but no SDK classification maps to it.
     #[test]
@@ -526,7 +526,7 @@ mod exec_error_meaning_tests {
         codes.sort();
         codes.dedup();
         let expected: Vec<u32> = (1u32..=116)
-            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81 | 101))
+            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81 | 101 | 112))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(
