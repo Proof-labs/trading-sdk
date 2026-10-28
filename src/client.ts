@@ -27,17 +27,19 @@ import {
   type FinalizedOrderbook,
   type FinalizedOrderbookOptions,
 } from "./finalized-orderbook.js";
+import { readAgentAuthorization } from "./agent-authorization.js";
 import {
-  readInsuranceExitState,
-  type InsuranceExitSelection,
-  type InsuranceExitState,
-} from "./insurance-exit-state.js";
+  readFinalizedAccountState,
+  readFinalizedAgentAuthorization,
+  readFinalizedRecentNonces,
+  readFinalizedOpenOrders,
+  type FinalizedAccountState,
+  type FinalizedAgentAuthorization,
+  type FinalizedRecentNonces,
+  type FinalizedOpenOrders,
+  type FinalizedOpenOrdersOptions,
+} from "./finalized-account-reads.js";
 import type { BoundedReadOptions } from "./bounded-read.js";
-import {
-  readInsuranceExitPrefix,
-  type InsuranceExitPrefix,
-  type InsuranceExitPrefixSelection,
-} from "./insurance-exit-prefix.js";
 import {
   readBlockHeader,
   readFinalizedMarketsSnapshot,
@@ -1530,39 +1532,70 @@ export class ExchangeClient {
     );
   }
 
-  /** Same-view insurance inventory and agent facts. Requires pinned chainId.
-   * Witness binding is checked, not Comet finality or hypothetical-fill safety. */
-  async queryInsuranceExitState(
-    selection: InsuranceExitSelection,
+  /** Current generic authorization fact. No finalized witness or execution permission. */
+  async queryAgentAuthorization(
+    owner: string,
+    agent: string,
     options: BoundedReadOptions = {},
-  ): Promise<InsuranceExitState> {
-    if (!this.inventoryChainId) {
-      throw new Error(
-        "insurance exit state requires an explicit pinned chainId",
-      );
-    }
-    return readInsuranceExitState(
+  ): Promise<boolean> {
+    return readAgentAuthorization(
       this.gatewayUrl,
-      this.inventoryChainId,
-      selection,
+      owner,
+      agent,
       options,
       this.httpTransport,
     );
   }
 
-  /** Fixed-state portfolio bound; callers must independently verify finality and freshness. */
-  async queryInsuranceExitPrefix(
-    selection: InsuranceExitPrefixSelection,
+  /** Same-view raw facts. Bind witness to the pinned chain's H+1 header separately. */
+  async queryFinalizedAccountState(
+    owner: string,
     options: BoundedReadOptions = {},
-  ): Promise<InsuranceExitPrefix> {
-    if (!this.inventoryChainId)
-      throw new Error(
-        "insurance exit prefix requires an explicit pinned chainId",
-      );
-    return readInsuranceExitPrefix(
+  ): Promise<FinalizedAccountState> {
+    return readFinalizedAccountState(
       this.gatewayUrl,
-      this.inventoryChainId,
-      selection,
+      owner,
+      options,
+      this.httpTransport,
+    );
+  }
+
+  /** Authorization at one finalized view, not permission guaranteed at inclusion. */
+  async queryFinalizedAgentAuthorization(
+    owner: string,
+    agent: string,
+    options: BoundedReadOptions = {},
+  ): Promise<FinalizedAgentAuthorization> {
+    return readFinalizedAgentAuthorization(
+      this.gatewayUrl,
+      owner,
+      agent,
+      options,
+      this.httpTransport,
+    );
+  }
+
+  /** Retained signer replay set; missing nonces never establish non-admission. */
+  async queryFinalizedRecentNonces(
+    signer: string,
+    options: BoundedReadOptions = {},
+  ): Promise<FinalizedRecentNonces> {
+    return readFinalizedRecentNonces(
+      this.gatewayUrl,
+      signer,
+      options,
+      this.httpTransport,
+    );
+  }
+
+  /** All-market bounded order read; a limit-sized result is explicitly incomplete. */
+  async queryFinalizedOpenOrders(
+    owner: string,
+    options: FinalizedOpenOrdersOptions = {},
+  ): Promise<FinalizedOpenOrders> {
+    return readFinalizedOpenOrders(
+      this.gatewayUrl,
+      owner,
       options,
       this.httpTransport,
     );

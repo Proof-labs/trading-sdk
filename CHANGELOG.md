@@ -9,9 +9,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `queryInsuranceExitPrefix` reads a bounded, witness-bound native insurance
-  exit calculation with exact selector, cash-arithmetic and oracle-reference
-  validation. It is a fixed-state read, not permission to sign or submit.
+- Generic opt-in witnessed account reads: `queryFinalizedAccountState`,
+  `queryFinalizedOpenOrders`, `queryFinalizedRecentNonces` and
+  `queryFinalizedAgentAuthorization`. Each preserves one node view; callers
+  must join matching witnesses and bind to their pinned chain's next header.
+  Limit-sized order pages remain explicitly incomplete. No insurance-specific
+  engine calculation, execution permission or nonce non-admission claim.
+
+- `queryAgentAuthorization(owner, agent, options?)` reads the generic account
+  authorization boolean with bounded, cancellable transport. Addresses are
+  20 bytes, not public keys. This unwitnessed read is not trading permission.
+- Financial reads decode the engine's seven-slot format 3 without synthesizing
+  the retired PLP record. Historical format 1 remains explicitly discriminated.
+  Unknown format numbers, tuple extensions and unselected owners are refused.
+- Removed the unreleased insurance-specific state/prefix APIs after exchange
+  #1250 moved portfolio sizing and risk checks to the off-chain application.
 
 ### Breaking changes
 
@@ -44,7 +56,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Raw account, financial and insurance-exit position reads preserve the engine's
+- Raw account and financial position reads preserve the engine's
   optional exact entry-cost remainder. Legacy six-field records decode with zero;
   malformed remainders and unknown extensions are rejected. Read support does not
   qualify an execution strategy against the new engine accounting rules.
@@ -75,11 +87,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   success and a later replay rejection, which cannot rule out earlier fills.
   Missing/error responses, including 404, never establish non-admission. Additive
   (MINOR); existing submission and polling methods are unchanged.
-- **`queryInsuranceExitState(selection, options?)`** reads complete bounded fund
-  inventory and the selected agent's authorization/recent nonce facts from one
-  finalized view. It requires a pinned chain and same-view witness; callers must
-  independently verify node provenance and the committed H+1 header. It is not
-  execution authorization, and the retained nonce maximum is not a lifetime floor.
 - **`queryFinalizedOrderbook(market, options?)`** reads an engine-height-bearing
   book from the gateway's additive `/v1/orderbook-snapshot/{market}` route,
   preserving the same-view witness and selected depth (1, 20 or 100), rejecting missing witnesses, mismatched heights and unheighted cache

@@ -57,12 +57,12 @@ function client(body: unknown, response?: () => Response) {
 }
 const OWNER = "04".repeat(20);
 const FINANCIAL_SELECTION = { markets: [7], owners: [OWNER] };
-function financial() {
+function financial(format: 1 | 3 = 1) {
   return {
     data: Buffer.from(
       encode(
         [
-          1,
+          format,
           H,
           1234,
           [
@@ -78,7 +78,7 @@ function financial() {
           [[7, 0, 2, 1, 2, [], 1000, 100, 9, -1, 1200, null]],
           null,
           [[0, 17]],
-          null,
+          ...(format === 1 ? [null] : []),
         ],
         { useBigInt64: true },
       ),
@@ -87,6 +87,16 @@ function financial() {
   };
 }
 describe("opt-in finalized financial facts", () => {
+  it("binds current format-3 financial facts to the same finalized witness", async () => {
+    const state = await client(
+      financial(3),
+    ).client.queryFinalizedFinancialState(FINANCIAL_SELECTION);
+    expect(state.format).toBe(3);
+    expect(state).not.toHaveProperty("plp");
+    expect(state.witness.height).toBe(state.finalizedHeight);
+    expect(state.witness.finalizedBlockTimeMs).toBe(state.finalizedTimeMs);
+    expect(state.insurancePools).toEqual([{ pool: 0, balance: 17n }]);
+  });
   it("preserves existing financial amounts and binds the exact height and time", async () => {
     const f = client(financial());
     const state =

@@ -44,10 +44,7 @@ import {
   type PendingTriggerDiscardReason,
   type TriggerHistoryLimbKind,
   type TriggerExecutionResult,
-  type InsuranceExitSelection,
-  type InsuranceExitState,
-  type InsuranceExitOrder,
-  type InsuranceExitWitness,
+  type FinalizedReadWitness,
   type FinalizedOrderbook,
   type FinalizedOrderbookOptions,
   type ParticipantTrade,
@@ -60,7 +57,6 @@ import {
   type BlockResultsWindowSelection,
   type BlockResultsEvidence,
   type BlockEvidenceHeader,
-  decodeInsuranceExitState,
   decodeFinalizedOrderbook,
   decodeTradeHistoryPage,
 } from "./index.js";
@@ -83,29 +79,20 @@ it("exports read-only finalized inventory and participant history APIs", async (
   const block: BlockResultsEvidence | null = null;
   const header: BlockEvidenceHeader | null = null;
   expect([windowSelection, window, block, header]).toHaveLength(4);
-  const selection: InsuranceExitSelection = {
-    pool: 0,
-    agentPubkey: "00".repeat(32),
-  };
   const bookOptions: FinalizedOrderbookOptions = { depth: 20, timeoutMs: 1000 };
   const historyOptions: TradeHistoryOptions = { fromMs: 1, toMs: 2, limit: 1 };
-  const facts: InsuranceExitState | null = null;
-  const order: InsuranceExitOrder | null = null;
-  const witness: InsuranceExitWitness | null = null;
+  const witness: FinalizedReadWitness | null = null;
   const book: FinalizedOrderbook | null = null;
   const trade: ParticipantTrade | null = null;
   const history: TradeHistoryPage | null = null;
   expect([
-    selection,
     bookOptions,
     historyOptions,
-    facts,
-    order,
     witness,
     book,
     trade,
     history,
-  ]).toHaveLength(9);
+  ]).toHaveLength(6);
   const sdk = await import("./index.js");
   expect(typeof new sdk.ExchangeClient().queryBlockResultsWindow).toBe(
     "function",
@@ -114,10 +101,13 @@ it("exports read-only finalized inventory and participant history APIs", async (
     "function",
   );
   const client = new sdk.ExchangeClient();
-  expect(client.queryInsuranceExitState).toBeTypeOf("function");
+  expect(client.queryAgentAuthorization).toBeTypeOf("function");
+  expect(client).not.toHaveProperty("queryInsuranceExitState");
+  expect(client).not.toHaveProperty("queryInsuranceExitPrefix");
+  expect(sdk).not.toHaveProperty("decodeInsuranceExitState");
+  expect(sdk).not.toHaveProperty("decodeInsuranceExitPrefix");
   expect(client.queryFinalizedOrderbook).toBeTypeOf("function");
   expect(client.queryHistoryTradesPage).toBeTypeOf("function");
-  expect(decodeInsuranceExitState).toBeTypeOf("function");
   expect(decodeFinalizedOrderbook).toBeTypeOf("function");
   expect(decodeTradeHistoryPage).toBeTypeOf("function");
 });

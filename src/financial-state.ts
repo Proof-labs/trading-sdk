@@ -42,22 +42,30 @@ export interface FinancialMarketState {
   markEwma: bigint | null;
 }
 /** Raw stored amounts, including absence. No equity, solvency or withdrawal verdict. */
-export interface FinancialState {
-  format: 1;
+interface FinancialLedger {
   finalizedHeight: bigint;
   finalizedTimeMs: bigint;
   accounts: FinancialAccountState[];
   markets: FinancialMarketState[];
   feePool: bigint | null;
   insurancePools: { pool: number; balance: bigint | null }[];
-  plp: {
-    owner: string;
-    /** Stored bootstrap baseline, NOT additional cash to add to the PLP account balance. */
-    bootstrapBalance: bigint;
-    minBalanceFloor: bigint;
-    enabled: boolean;
-  } | null;
 }
+/** Historical format 1 includes the retired PLP record; format 3 does not.
+ * Never infer an absent format-3 record to mean a stored zero/null PLP state. */
+export type FinancialState = FinancialLedger &
+  (
+    | {
+        format: 1;
+        plp: {
+          owner: string;
+          /** Stored bootstrap baseline, NOT additional cash to add to the PLP account balance. */
+          bootstrapBalance: bigint;
+          minBalanceFloor: bigint;
+          enabled: boolean;
+        } | null;
+      }
+    | { format: 3; plp?: never }
+  );
 
 function invalid(field: string): never {
   throw new Error(`financial state decode: invalid ${field}`);
@@ -151,22 +159,27 @@ export function decodeFinancialState(
   selection: FinancialStateSelection,
 ): FinancialState {
   const expected = canonicalFinancialSelection(selection);
-  const r = tuple(raw, 8, "response");
-  if (integer(r[0], "format") !== 1n) return invalid("format");
+  if (!Array.isArray(raw) || raw.length === 0) return invalid("response");
+  const format = integer(raw[0], "format");
+  if (format !== 1n && format !== 3n) return invalid("format");
+  const r = tuple(raw, format === 1n ? 8 : 7, "response");
   const finalizedHeight = integer(r[1], "height");
   const finalizedTimeMs = integer(r[2], "time");
   if (finalizedHeight > 0n && finalizedTimeMs === 0n)
     return invalid("finalized time");
-  const plp = optional(r[7], (value) => {
-    const p = tuple(value, 4, "PLP");
-    if (typeof p[3] !== "boolean") return invalid("PLP enabled");
-    return {
-      owner: owner(p[0]),
-      bootstrapBalance: integer(p[1], "PLP balance"),
-      minBalanceFloor: integer(p[2], "PLP floor"),
-      enabled: p[3],
-    };
-  });
+  const plp =
+    format === 3n
+      ? null
+      : optional(r[7], (value) => {
+          const p = tuple(value, 4, "PLP");
+          if (typeof p[3] !== "boolean") return invalid("PLP enabled");
+          return {
+            owner: owner(p[0]),
+            bootstrapBalance: integer(p[1], "PLP balance"),
+            minBalanceFloor: integer(p[2], "PLP floor"),
+            enabled: p[3],
+          };
+        });
   let positionCount = 0;
   const accounts = list(r[3], 1, 9, "accounts").map(
     (value): FinancialAccountState => {
@@ -254,16 +267,17 @@ export function decodeFinancialState(
     [...new Set(markets.map((m) => m.pool))].sort((a, b) => a - b),
     "insurance coverage/order",
   );
-  return {
-    format: 1,
+  const ledger = {
     finalizedHeight,
     finalizedTimeMs,
     accounts,
     markets,
     feePool: optional(r[5], (v) => integer(v, "fee pool", 64, true)),
     insurancePools,
-    plp,
   };
+  return format === 1n
+    ? { ...ledger, format: 1, plp }
+    : { ...ledger, format: 3 };
 }
 
 const MAX_RESPONSE_BYTES = 1024 * 1024;

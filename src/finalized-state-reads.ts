@@ -25,10 +25,10 @@ export interface FinalizedMarketsSnapshot extends MarketsSnapshot {
   witness: FinalizedReadWitness;
 }
 
-export interface FinalizedFinancialState extends FinancialState {
+export type FinalizedFinancialState = FinancialState & {
   /** Same node view only. Bind to a chain-qualified view and H+1 separately. */
   witness: FinalizedReadWitness;
-}
+};
 
 /** Opt-in read: legacy financial responses stay byte-compatible and unwitnessed.
  * No fallback when the selected node has no finalized witness. */

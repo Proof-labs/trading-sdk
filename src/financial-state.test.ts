@@ -12,6 +12,9 @@ const selection = { markets: [1], owners: [owner] };
 // exchange/spec/query-vectors/financial-state-v1.hex, not encoded by this SDK.
 const RUST_FINANCIAL_V1_HEX =
   "980100cd04d29296dc001402020202020202020202020202020202020202027bc0c0c09096dc00140404040404040404040404040404040404040404c0f892ceffffffff009264ccc89296dc0014040404040404040404040404040404040404040401a453656c6c7b03d3800000000000000096dc00140404040404040404040404040404040404040404cd0101a453656c6c7b03d38000000000000000929c010000020390cdea6064d38000000000000000d09ccd03e8c09c020700020390cdea6064c0c0c0c0cf7fffffffffffffff929200ef9207d3800000000000000094dc00140202020202020202020202020202020202020202cd03e7cd01f4c3";
+// Exact engine vector at exchange 2c91c1a0, spec/query-vectors/financial-state-v3.hex.
+const RUST_FINANCIAL_V3_HEX =
+  "970300cd04d29296dc001402020202020202020202020202020202020202027bc0c0c09096dc00140404040404040404040404040404040404040404c0f892ceffffffff009264ccc89296dc0014040404040404040404040404040404040404040401a453656c6c7b03d3800000000000000096dc00140404040404040404040404040404040404040404cd0101a453656c6c7b03d38000000000000000929c010000020390cdea6064d38000000000000000d09ccd03e8c09c020700020390cdea6064c0c0c0c0cf7fffffffffffffff929200ef9207d38000000000000000";
 const account = (address = a): unknown[] => [
   address,
   null,
@@ -57,6 +60,57 @@ const client = (): ExchangeClient =>
   });
 
 describe("atomic finalized financial state", () => {
+  it("decodes the current Rust format 3 without inventing a retired PLP record", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            data: Buffer.from(RUST_FINANCIAL_V3_HEX, "hex").toString("base64"),
+          }),
+        ),
+      ),
+    );
+    const state = await client().queryFinancialState({
+      markets: [1, 2],
+      owners: ["02".repeat(20), owner],
+    });
+    expect(state.format).toBe(3);
+    expect(state).not.toHaveProperty("plp");
+    expect(state.accounts.map((a) => a.owner)).toEqual([
+      "02".repeat(20),
+      owner,
+    ]);
+    expect(state.accounts[0].balance).toBe(123n);
+    expect(state.accounts[1].positions.map((p) => p.lastFundingIndex)).toEqual([
+      -(1n << 63n),
+      -(1n << 63n),
+    ]);
+    expect(state.feePool).toBe((1n << 63n) - 1n);
+    expect(state.insurancePools).toEqual([
+      { pool: 0, balance: -17n },
+      { pool: 7, balance: -(1n << 63n) },
+    ]);
+  });
+
+  it("binds the format number to its exact tuple and selected owners", () => {
+    const current = raw().slice(0, 7);
+    current[0] = 3;
+    expect(decodeFinancialState(current, selection).format).toBe(3);
+    expect(() => decodeFinancialState([...current, null], selection)).toThrow(
+      "response",
+    );
+    expect(() =>
+      decodeFinancialState([1, ...current.slice(1)], selection),
+    ).toThrow("response");
+    expect(() =>
+      decodeFinancialState([4, ...current.slice(1)], selection),
+    ).toThrow("format");
+    current[3] = [account(), account(b)];
+    expect(() => decodeFinancialState(current, selection)).toThrow(
+      "account coverage/order",
+    );
+  });
   it("preserves exact-cost remainders through the financial transport", async () => {
     const value = raw();
     (value[3] as unknown[][])[0][5] = [[a, 1, "Buy", 100, 2, 0, 1]];
