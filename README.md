@@ -181,6 +181,7 @@ class ExchangeClient {
 
   // Reads
   queryOrderbook(market: number): Promise<Orderbook>;
+  queryFunding(market: number): Promise<FundingInfo>;
   queryOpenOrders(addressHex?: string): Promise<OpenOrder[]>;
   queryMarkets(): Promise<MarketConfig[]>;
   queryMarketsSnapshot(): Promise<MarketsSnapshot>;
@@ -580,7 +581,7 @@ explicitly (e.g. `ws://localhost:9091`).
 
 ```typescript
 // Account events: a snapshot frame, then live event frames
-// (`order_update`, `fill`, `position_update`, liquidation events, ...).
+// (`orderUpdate`, `fill`, `positionUpdate`, liquidation events, ...).
 // Defaults to the connected signer's address; pass `owner` to watch another.
 const unsub = client.subscribeAccount((frame) => {
   if (frame.type === "snapshot") return;

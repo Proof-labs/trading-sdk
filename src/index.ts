@@ -397,6 +397,7 @@ export {
   type AccountState,
   type RawAccountPosition,
 } from "./account-state.js";
+export { decodeFundingInfo, type FundingInfo } from "./funding.js";
 export type {
   OraclePermissions,
   OraclePolicyEpoch,

@@ -88,6 +88,7 @@ import {
   rejectFloats,
 } from "./codec.js";
 import { decodeAccountState, type AccountState } from "./account-state.js";
+import { decodeFundingInfo, type FundingInfo } from "./funding.js";
 import {
   fetchFinancialState,
   type FinancialState,
@@ -1656,6 +1657,16 @@ export class ExchangeClient {
       options,
       this.httpTransport,
     );
+  }
+
+  /** One market's funding state: rate, cumulative index, mark EWMA and
+   *  oracle price (`GET /v1/funding/{market}`). The engine answers an unknown
+   *  market with zeroed fields rather than an error. */
+  async queryFunding(market: number): Promise<FundingInfo> {
+    const path = `/v1/funding/${market}`;
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return decodeFundingInfo(await this.strictDecode(bytes));
   }
 
   /** One atomic committed inventory. Requires explicit chainId; never falls

@@ -15,6 +15,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking changes
 
+- **Account frame types are lowerCamel**, matching api-gateway 9.0.0
+  (canonical vocabulary rule N1, hard cutover). An `AccountEventFrame.type`
+  delivered live or backfilled from history after a reconnect is now
+  `orderUpdate`, `positionUpdate`, `triggerUpdate`, `marginUpdate` or
+  `accountEvent` (was `order_update`, `position_update`, `trigger_update`,
+  `margin_update`, `account_event`); `fill` and `funding` are unchanged.
+  Same in the Python `account_event_stream`. Code that switches on the old
+  strings must switch on the new ones, and needs gateway 9.0.0. The
+  settlement events keep arriving as `condition_met` / `condition_not_met`;
+  the legacy `conditional_settled` / `conditional_voided` from stored history
+  are still translated (MAJOR).
+
 - **Breaking in TypeScript types:** the trigger label types are open unions:
   the names the engine knows today plus any other string, so a label added
   later decodes and still type-checks. This covers `TriggerOutcomeReason` (now
@@ -77,6 +89,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bounded response-body deadlines, no retries and no direct-node fallback.
   These are facts, not portfolio safety or indexer-completeness attestations.
   Existing read methods and wire bytes are unchanged. Additive (MINOR).
+- **`queryFunding(market)`** reads one market's funding state at
+  `GET /v1/funding/{market}` (the gateway's `fundingRate` read): funding rate,
+  cumulative funding, last funding time, mark price EWMA, oracle price,
+  funding interval and maximum funding rate, as `FundingInfo`. The engine
+  serves the oracle price as the mark until the first trade, and zeroed
+  fields for an unknown market. A record of fewer than eight fields throws;
+  trailing fields are ignored. `decodeFundingInfo` decodes the raw
+  MessagePack. Additive (MINOR).
 - **`queryLiquidationConfig()`** reads the global liquidation configuration
   every market shares and its sequence at `GET /v1/liquidation-config`
   (api-gateway 7.12.0, served by the node from exchange's
