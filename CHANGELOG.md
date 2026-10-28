@@ -9,6 +9,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking changes
 
+- **proof-wire 9.0.0, for exchange 2.21.0 (protocol 9.0).** The Rust crate
+  pins proof-wire 9 (tag v9.0.0, commit `8857f3d3`). The engine retired its
+  liquidity-provider backstop, so error code 112 (`InvalidPlpConfig`) no
+  longer decodes in TypeScript, Rust or Python and is never reassigned, and
+  the `PlpAbsorbedEvent` type leaves the `ExchangeEvent` union. The Rust
+  crate also loses `SetPlpConfig` with the wire. `PositionUpdatedEvent` gains
+  `realizedPnl`: PnL booked to cash without a fill, to pay a resolution
+  deficit, and "0" otherwise. Older SDKs fail to decode a `PositionUpdated`
+  from a 9.0 engine through the Rust crate (MAJOR).
+
 - **Account frame types are lowerCamel**, matching api-gateway 9.0.0
   (canonical vocabulary rule N1, hard cutover). An `AccountEventFrame.type`
   delivered live or backfilled from history after a reconnect is now

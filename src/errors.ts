@@ -162,8 +162,8 @@ export enum ExecErrorCode {
   /** A liquidation attempt was refused and kept no writes; the
    *  `liquidation_failed` event's `refusal` names why. */
   LiquidationRefused = 111,
-  /** A PLP configuration violates one of the payload shape rules. */
-  InvalidPlpConfig = 112,
+  // 112 was InvalidPlpConfig, retired with the engine's liquidity-provider
+  // backstop; never reassigned.
   InsuranceAccountWithdrawal = 113,
   InsuranceActionRefused = 114,
   LiquidationBatchTooManyOwners = 115,
@@ -599,11 +599,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "LiquidationRefused",
     description:
       "A liquidation attempt was refused (a changed position, a malformed book or an unavailable reference) and kept no writes; the liquidation_failed event's refusal names why.",
-  },
-  112: {
-    name: "InvalidPlpConfig",
-    description:
-      "PLP configuration has a zero address, zero bootstrap balance while enabled, or a floor above the bootstrap balance",
   },
   113: {
     name: "InsuranceAccountWithdrawal",
