@@ -181,6 +181,7 @@ class ExchangeClient {
 
   // Reads
   queryOrderbook(market: number): Promise<Orderbook>;
+  queryFunding(market: number): Promise<FundingInfo>;
   queryOpenOrders(addressHex?: string): Promise<OpenOrder[]>;
   queryMarkets(): Promise<MarketConfig[]>;
   queryMarketsSnapshot(): Promise<MarketsSnapshot>;
