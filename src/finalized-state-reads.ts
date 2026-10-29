@@ -1,4 +1,3 @@
-/** Bounded read evidence, not validator-signature verification or trade permission. */
 import {
   boundedGatewayJson,
   decodeFinalizedReadWitness,
@@ -8,8 +7,9 @@ import {
 import {
   decodeBlockEvidenceHeader,
   type BlockEvidenceHeader,
-} from "./block-results-window.js";
-import { I64_MAX, invalid, object, rpcResult } from "./chain-evidence.js";
+} from "./block-header.js";
+import { I64_MAX, rpcResult } from "./chain-evidence.js";
+import { invalidRead as invalid, readObject as object } from "./read-values.js";
 import { decodeMarketsSnapshot } from "./market-snapshot.js";
 import type { MarketsSnapshot } from "./types.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
@@ -21,12 +21,12 @@ import {
 } from "./financial-state.js";
 
 export interface FinalizedMarketsSnapshot extends MarketsSnapshot {
-  /** Same node view; bind appHash to the pinned chain's H+1 header separately. */
+  /** See FinalizedReadWitness for binding and trust requirements. */
   witness: FinalizedReadWitness;
 }
 
 export type FinalizedFinancialState = FinancialState & {
-  /** Same node view only. Bind to a chain-qualified view and H+1 separately. */
+  /** See FinalizedReadWitness for binding and trust requirements. */
   witness: FinalizedReadWitness;
 };
 
@@ -60,7 +60,7 @@ export async function readFinalizedFinancialState(
     snapshot.finalizedHeight,
   );
   if (witness.finalizedBlockTimeMs !== snapshot.finalizedTimeMs)
-    invalid("financial snapshot time mismatch");
+    invalid("financial snapshot time mismatch", "binding");
   return { ...snapshot, witness };
 }
 

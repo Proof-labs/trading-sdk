@@ -1,15 +1,3 @@
-import { sha256 } from "@noble/hashes/sha2.js";
-import { boundedGatewayJson, type BoundedReadOptions } from "./bounded-read.js";
-import { bytesToHex, chainIdFromString } from "./crypto.js";
-import type { ExchangeHttpTransport } from "./http-transport.js";
-
-export interface TransactionEvidenceSelection {
-  /** SHA-256 of the exact signed wire envelope; 64 hexadecimal characters. */
-  hash: string;
-  /** Previously prepared canonical bytes. This read never re-encodes or submits them. */
-  signedBytes: Uint8Array;
-}
-
 import {
   MAX_TX_BYTES,
   MAX_BLOCK_TXS,
@@ -22,9 +10,25 @@ import {
   same,
   rpcResult,
   events,
-  blockTime,
   type TransactionEvidenceEvent,
 } from "./chain-evidence.js";
+import {
+  decodeBlockEvidenceHeader,
+  type BlockEvidenceHeader,
+} from "./block-header.js";
+import { readDeadline } from "./read-values.js";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { boundedGatewayJson, type BoundedReadOptions } from "./bounded-read.js";
+import { bytesToHex } from "./crypto.js";
+import type { ExchangeHttpTransport } from "./http-transport.js";
+
+export interface TransactionEvidenceSelection {
+  /** SHA-256 of the exact signed wire envelope; 64 hexadecimal characters. */
+  hash: string;
+  /** Previously prepared canonical bytes. This read never re-encodes or submits them. */
+  signedBytes: Uint8Array;
+}
+
 export type { TransactionEvidenceEvent } from "./chain-evidence.js";
 
 /** Matching /tx and /block responses from the configured trusted gateway.
@@ -43,15 +47,7 @@ export interface TransactionEvidence {
   code: number;
   /** An omitted protobuf events field is the empty list, not a missing receipt. */
   events: TransactionEvidenceEvent[];
-  block: {
-    hash: string;
-    chainId: string;
-    height: bigint;
-    /** Original UTC RFC3339 timestamp, including all nanosecond digits. */
-    time: string;
-    /** Header H's previous-state app hash; NOT the state after this transaction. */
-    appHash: string;
-  };
+  block: BlockEvidenceHeader;
 }
 
 /** Internal bounded, non-polling read. Both requests share one deadline. */
@@ -62,11 +58,7 @@ export async function readTransactionEvidence(
   options: BoundedReadOptions,
   transport: ExchangeHttpTransport,
 ): Promise<TransactionEvidence> {
-  const timeoutMs = options.timeoutMs ?? 10_000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000)
-    invalid("timeout");
-  const deadline = performance.now() + timeoutMs;
-  options.signal?.throwIfAborted();
+  const { remaining } = readDeadline(options);
   if (!(expectedChainId instanceof Uint8Array) || expectedChainId.length !== 32)
     invalid("pinned chain");
   if (
@@ -80,14 +72,7 @@ export async function readTransactionEvidence(
   const chain = Uint8Array.from(expectedChainId);
   const requestedHash = hash(selection.hash, "requested hash");
   if (bytesToHex(sha256(signedBytes)).toUpperCase() !== requestedHash)
-    invalid("requested hash/bytes mismatch");
-  const remaining = (): BoundedReadOptions => {
-    options.signal?.throwIfAborted();
-    const timeoutMs = Math.floor(deadline - performance.now());
-    if (timeoutMs < 1)
-      throw new Error("Transaction evidence deadline exceeded");
-    return { signal: options.signal, timeoutMs };
-  };
+    invalid("requested hash/bytes mismatch", "binding");
   const base = gatewayUrl.replace(/\/+$/, "");
   const tx = rpcResult(
     await boundedGatewayJson(
@@ -121,16 +106,7 @@ export async function readTransactionEvidence(
     ),
   );
   const block = object(response.block, "block");
-  const header = object(block.header, "block header");
-  if (uint(header.height, I64_MAX, "block height") !== height)
-    invalid("block height mismatch");
-  if (
-    typeof header.chain_id !== "string" ||
-    header.chain_id.length === 0 ||
-    header.chain_id.length > 128 ||
-    !same(chainIdFromString(header.chain_id), chain)
-  )
-    invalid("block chain mismatch");
+  const header = decodeBlockEvidenceHeader(response, height, chain);
   const transactions = object(block.data, "block data").txs;
   if (
     !Array.isArray(transactions) ||
@@ -140,12 +116,6 @@ export async function readTransactionEvidence(
     invalid("block transaction index");
   if (!same(bytes(transactions[index], "block transaction bytes"), signedBytes))
     invalid("block transaction binding");
-  const blockHash = hash(
-    object(response.block_id, "block ID").hash,
-    "block hash",
-  );
-  const appHash = hash(header.app_hash, "block app hash");
-  const time = blockTime(header.time);
   remaining();
   return {
     source: "trusted-gateway",
@@ -155,12 +125,6 @@ export async function readTransactionEvidence(
     index,
     code,
     events: preservedEvents,
-    block: {
-      hash: blockHash,
-      chainId: header.chain_id as string,
-      height,
-      time,
-      appHash,
-    },
+    block: header,
   };
 }

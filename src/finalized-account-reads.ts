@@ -1,3 +1,12 @@
+import {
+  canonicalBase64,
+  hexAddress,
+  invalidRead,
+  U64_MAX,
+  marketId,
+  type HexAddress,
+  type MarketId,
+} from "./read-values.js";
 import { Decoder } from "@msgpack/msgpack";
 import { decodeAccountState, type AccountState } from "./account-state.js";
 import {
@@ -14,21 +23,21 @@ export interface FinalizedAccountState extends AccountState {
   witness: FinalizedReadWitness;
 }
 export interface FinalizedAgentAuthorization {
-  owner: string;
-  agent: string;
+  owner: HexAddress;
+  agent: HexAddress;
   authorized: boolean;
   witness: FinalizedReadWitness;
 }
 export interface FinalizedRecentNonces {
-  signer: string;
+  signer: HexAddress;
   /** Prunable retained set, never a lifetime nonce floor or absence proof. */
   recent: bigint[];
   witness: FinalizedReadWitness;
 }
 export interface RawOpenOrder {
   id: bigint;
-  market: number;
-  owner: string;
+  market: MarketId;
+  owner: HexAddress;
   side: "Buy" | "Sell";
   price: bigint;
   quantity: bigint;
@@ -42,7 +51,7 @@ export interface RawOpenOrder {
   reduceOnly: boolean;
 }
 export interface FinalizedOpenOrders {
-  owner: string;
+  owner: HexAddress;
   limit: number;
   orders: RawOpenOrder[];
   /** False at the requested row limit, even when that happens to be exact. */
@@ -52,14 +61,15 @@ export interface FinalizedOpenOrders {
 export interface FinalizedOpenOrdersOptions extends BoundedReadOptions {
   limit?: number;
 }
-const U64_MAX = (1n << 64n) - 1n;
-function fail(field: string): never {
-  throw new Error(`Invalid finalized account read: ${field}`);
+
+function fail(
+  field: string,
+  kind: import("./errors.js").GatewayReadError["kind"] = "malformed",
+): never {
+  return invalidRead(`account.${field}`, kind);
 }
-function address(value: string): string {
-  if (typeof value !== "string" || !/^[0-9a-f]{40}$/.test(value))
-    fail("address");
-  return value;
+function address(value: string): HexAddress {
+  return hexAddress(value);
 }
 function uint(v: unknown, field: string, max = U64_MAX): bigint {
   const n =
@@ -98,19 +108,7 @@ export function decodeWitnessedRead(value: unknown): {
   const e = value as Record<string, unknown>;
   if (Object.keys(e).length !== 2 || !("data" in e) || !("witness" in e))
     fail("envelope");
-  if (
-    typeof e.data !== "string" ||
-    !e.data.length ||
-    e.data.length > 699052 ||
-    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-      e.data,
-    )
-  )
-    fail("base64");
-  const binary = atob(e.data);
-  if (binary.length > 512 * 1024 || btoa(binary) !== e.data)
-    fail("canonical base64");
-  const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+  const bytes = canonicalBase64(e.data, "account.base64", 512 * 1024);
   rejectFloats(bytes);
   const raw: unknown = new Decoder({
     useBigInt64: true,
@@ -128,14 +126,7 @@ export function decodeWitnessedRead(value: unknown): {
     Object.keys(w).length !== 5
   )
     fail("witness");
-  const height = (w as Record<string, unknown>).height;
-  if (
-    typeof height !== "string" ||
-    !/^[1-9][0-9]{0,18}$/.test(height) ||
-    BigInt(height) > (1n << 63n) - 1n
-  )
-    fail("height");
-  return { raw, witness: decodeFinalizedReadWitness(w, BigInt(height)) };
+  return { raw, witness: decodeFinalizedReadWitness(w) };
 }
 export function decodeFinalizedAccountState(
   value: unknown,
@@ -144,7 +135,8 @@ export function decodeFinalizedAccountState(
   address(owner);
   const { raw, witness } = decodeWitnessedRead(value);
   const state = decodeAccountState(raw, owner);
-  if (state.finalizedHeight !== witness.height) fail("account height mismatch");
+  if (state.finalizedHeight !== witness.height)
+    fail("account height mismatch", "binding");
   return { ...state, witness };
 }
 export function decodeFinalizedAgentAuthorization(
@@ -152,11 +144,16 @@ export function decodeFinalizedAgentAuthorization(
   owner: string,
   agent: string,
 ): FinalizedAgentAuthorization {
-  address(owner);
-  address(agent);
+  hexAddress(owner, "owner address");
+  hexAddress(agent, "agent address");
   const { raw, witness } = decodeWitnessedRead(value);
   if (typeof raw !== "boolean") fail("authorization");
-  return { owner, agent, authorized: raw, witness };
+  return {
+    owner: hexAddress(owner),
+    agent: hexAddress(agent),
+    authorized: raw,
+    witness,
+  };
 }
 export function decodeFinalizedRecentNonces(
   value: unknown,
@@ -172,7 +169,7 @@ export function decodeFinalizedRecentNonces(
     previous = n;
     return n;
   });
-  return { signer, recent, witness };
+  return { signer: hexAddress(signer), recent, witness };
 }
 export function decodeFinalizedOpenOrders(
   value: unknown,
@@ -185,11 +182,11 @@ export function decodeFinalizedOpenOrders(
   if (!Array.isArray(raw) || raw.length > requestedLimit) fail("order count");
   let previous = -1n;
   const orders = raw.map((v): RawOpenOrder => {
-    const o = row(v, 14, "order tuple"),
-      id = uint(o[0], "order id");
-    const market = Number(uint(o[1], "order market", 0xffff_ffffn));
-    if (id <= previous || market === 0 || orderOwner(o[2]) !== owner)
-      fail("order identity/order");
+    const o = row(v, 14, "order tuple");
+    const id = uint(o[0], "order id");
+    const market = marketId(Number(uint(o[1], "order market", 0xffff_ffffn)));
+    if (id <= previous) fail("order id ordering");
+    if (orderOwner(o[2]) !== owner) fail("order owner mismatch", "binding");
     previous = id;
     if (o[3] !== "Buy" && o[3] !== "Sell") fail("side");
     if (o[11] !== "Gtc" && o[11] !== "Ioc" && o[11] !== "Fok")
@@ -201,7 +198,7 @@ export function decodeFinalizedOpenOrders(
     return {
       id,
       market,
-      owner,
+      owner: hexAddress(owner),
       side: o[3],
       price: uint(o[4], "price"),
       quantity,
@@ -216,7 +213,7 @@ export function decodeFinalizedOpenOrders(
     };
   });
   return {
-    owner,
+    owner: hexAddress(owner),
     limit: requestedLimit,
     orders,
     complete: orders.length < requestedLimit,
@@ -262,8 +259,8 @@ export async function readFinalizedAgentAuthorization(
   options: BoundedReadOptions,
   transport: ExchangeHttpTransport,
 ): Promise<FinalizedAgentAuthorization> {
-  address(owner);
-  address(agent);
+  hexAddress(owner, "owner address");
+  hexAddress(agent, "agent address");
   return decodeFinalizedAgentAuthorization(
     await read(
       gateway,

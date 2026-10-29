@@ -1,29 +1,43 @@
-import { GatewayHttpError } from "./errors.js";
+import { GatewayHttpError, GatewayReadError } from "./errors.js";
+import {
+  hash32,
+  I64_MAX,
+  MAX_READ_BYTES,
+  MAX_READ_CHUNKS,
+  readDeadline,
+  type Hash32Hex,
+} from "./read-values.js";
+import { chainIdFromString } from "./crypto.js";
 import { readContext, type ExchangeHttpTransport } from "./http-transport.js";
-import { parseSnapshotEnvelope } from "./market-snapshot.js";
 
 /** Deadline covers queueing, headers and the entire bounded response body. */
 export interface BoundedReadOptions {
   signal?: AbortSignal;
-  /** Default 10 seconds; caller may shorten it or extend up to 60 seconds. */
+  /** Default 5 seconds, matching existing reads; explicit maximum 60 seconds. */
   timeoutMs?: number;
 }
-/** Same finalized node view, not a cryptographic proof. Bind node identity,
- * chain and appHash to a committed H+1 header independently before acting. */
+/** Same-view facts from a trusted gateway, NOT validator signatures or a
+ * cryptographic event proof. verifyWitness binds the height and app hash to a
+ * chain-qualified H+1 header; authenticate the node/header source separately.
+ * This is not freshness, solvency, or authorization to trade. */
 export interface FinalizedReadWitness {
   version: 1;
   nodeId: string;
   height: bigint;
   finalizedBlockTimeMs: bigint;
-  appHash: string;
+  appHash: Hash32Hex;
 }
 export function decodeFinalizedReadWitness(
   value: unknown,
-  expectedHeight: bigint,
+  expectedHeight?: bigint,
   expectedTimeMs?: bigint,
 ): FinalizedReadWitness {
   const invalid = (): never => {
-    throw new Error("Invalid finalized read witness");
+    throw new GatewayReadError(
+      "malformed",
+      "witness",
+      "Invalid finalized read witness",
+    );
   };
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
   const w = value as Record<string, unknown>;
@@ -35,7 +49,7 @@ export function decodeFinalizedReadWitness(
     )
       invalid();
     const n = BigInt(value as string);
-    if (n > (1n << 64n) - 1n) invalid();
+    if (n > I64_MAX) invalid();
     return n;
   };
   if (
@@ -44,14 +58,14 @@ export function decodeFinalizedReadWitness(
     !/^[a-f0-9]{40}$/.test(w.nodeId) ||
     /^0+$/.test(w.nodeId) ||
     typeof w.appHash !== "string" ||
-    !/^[a-f0-9]{64}$/.test(w.appHash) ||
+    !/^[a-fA-F0-9]{64}$/.test(w.appHash) ||
     /^0+$/.test(w.appHash)
   )
     invalid();
   const height = decimal(w.height);
   const finalizedBlockTimeMs = decimal(w.finalizedBlockTimeMs);
   if (
-    height !== expectedHeight ||
+    (expectedHeight !== undefined && height !== expectedHeight) ||
     (expectedTimeMs !== undefined && finalizedBlockTimeMs !== expectedTimeMs)
   )
     invalid();
@@ -60,14 +74,53 @@ export function decodeFinalizedReadWitness(
     nodeId: w.nodeId as string,
     height,
     finalizedBlockTimeMs,
-    appHash: w.appHash as string,
+    appHash: hash32(w.appHash),
   };
 }
-const MAX_BYTES = 1024 * 1024;
-const MAX_CHUNKS = 4096;
+/** Compare a witness with an independently obtained, trusted H+1 header.
+ * H+1's timestamp is NOT H's timestamp, so it is deliberately not compared. */
+export function verifyWitness(
+  witness: FinalizedReadWitness,
+  nextHeader: { height: bigint; chainId: string; appHash: string | null },
+  chainId: string | Uint8Array,
+): void {
+  if (
+    (typeof chainId === "string" && (!chainId || chainId.length > 128)) ||
+    typeof nextHeader.chainId !== "string" ||
+    !nextHeader.chainId ||
+    nextHeader.chainId.length > 128
+  ) {
+    throw new GatewayReadError(
+      "configuration",
+      "chainId",
+      "Witness verification requires an explicit chain pin",
+    );
+  }
+  const expected =
+    typeof chainId === "string" ? chainIdFromString(chainId) : chainId;
+  const actual = chainIdFromString(nextHeader.chainId);
+  if (
+    !(expected instanceof Uint8Array) ||
+    expected.length !== 32 ||
+    actual.some((byte, i) => byte !== expected[i]) ||
+    witness.height < 1n ||
+    witness.height >= I64_MAX ||
+    nextHeader.height !== witness.height + 1n ||
+    nextHeader.appHash === null ||
+    hash32(witness.appHash) !== hash32(nextHeader.appHash)
+  ) {
+    throw new GatewayReadError(
+      "binding",
+      "witness",
+      "Finalized witness/header/chain mismatch",
+    );
+  }
+}
 
-function strictEnvelope(text: string): unknown {
-  const parsed = parseSnapshotEnvelope(text);
+export function parseBoundedJson(text: string): unknown {
+  const parsed: unknown = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new GatewayReadError("malformed", "envelope");
   // The shared parser checks top-level duplicates. Nested trade rows and
   // witnesses must not acquire a second interpretation through repeated keys.
   const stack: { keys?: Set<string>; keyExpected: boolean }[] = [];
@@ -83,7 +136,11 @@ function strictEnvelope(text: string): unknown {
       if (frame?.keys && frame.keyExpected) {
         const key: string = JSON.parse(text.slice(start, i + 1));
         if (frame.keys.has(key))
-          throw new Error("Duplicate gateway read field");
+          throw new GatewayReadError(
+            "malformed",
+            key,
+            "Duplicate gateway read field",
+          );
         frame.keys.add(key);
         frame.keyExpected = false;
       }
@@ -92,6 +149,7 @@ function strictEnvelope(text: string): unknown {
         keys: char === "{" ? new Set() : undefined,
         keyExpected: char === "{",
       });
+      if (stack.length > 32) throw new GatewayReadError("limit", "JSON depth");
     } else if (char === "}" || char === "]") stack.pop();
     else if (char === "," && frame?.keys) frame.keyExpected = true;
   }
@@ -112,9 +170,7 @@ export async function boundedGatewayJson(
   options: BoundedReadOptions,
   request: BoundedReadRequest = {},
 ): Promise<unknown> {
-  const timeoutMs = options.timeoutMs ?? 10_000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000)
-    throw new Error("Invalid read timeout");
+  const { timeoutMs } = readDeadline(options);
   options.signal?.throwIfAborted();
   const deadline = performance.now() + timeoutMs;
   const controller = new AbortController();
@@ -123,12 +179,23 @@ export async function boundedGatewayJson(
     // A continuously ready stream can starve timers with resolved promises.
     // Check monotonic elapsed time too, independent of wall-clock changes.
     if (performance.now() >= deadline)
-      throw new Error("Gateway read deadline exceeded");
+      throw new GatewayReadError(
+        "deadline",
+        "timeout",
+        "Gateway read deadline exceeded",
+      );
   };
-  const abort = () => controller.abort(new Error("Gateway read cancelled"));
+  const abort = () => controller.abort(options.signal?.reason);
   options.signal?.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(
-    () => controller.abort(new Error("Gateway read deadline exceeded")),
+    () =>
+      controller.abort(
+        new GatewayReadError(
+          "deadline",
+          "timeout",
+          "Gateway read deadline exceeded",
+        ),
+      ),
     timeoutMs,
   );
   let response: Response | undefined;
@@ -162,15 +229,32 @@ export async function boundedGatewayJson(
     );
     response = await Promise.race([pending, cancelled]);
     checkDeadline();
-    if (!response.ok) throw new GatewayHttpError(response.status, response);
     const length = response.headers.get("content-length");
     if (
       length !== null &&
-      (!/^(0|[1-9][0-9]*)$/.test(length) || BigInt(length) > BigInt(MAX_BYTES))
+      (!/^(0|[1-9][0-9]*)$/.test(length) ||
+        BigInt(length) > BigInt(MAX_READ_BYTES))
     )
-      throw new Error("Gateway read response exceeds byte limit");
+      throw new GatewayReadError(
+        "limit",
+        "responseBytes",
+        "Gateway read response exceeds byte limit",
+      );
+    if (!response.body && !response.ok)
+      throw new GatewayHttpError(
+        response.status,
+        new Response(null, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        }),
+      );
     if (!response.body)
-      throw new Error("Gateway read response body is missing");
+      throw new GatewayReadError(
+        "malformed",
+        "body",
+        "Gateway read response body is missing",
+      );
     reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
     let size = 0;
@@ -179,12 +263,24 @@ export async function boundedGatewayJson(
       checkDeadline();
       if (part.done) break;
       if (part.value.length === 0)
-        throw new Error("Gateway read returned an empty body chunk");
-      if (chunks.length >= MAX_CHUNKS)
-        throw new Error("Gateway read exceeds fragmentation limit");
+        throw new GatewayReadError(
+          "malformed",
+          "body",
+          "Gateway read returned an empty body chunk",
+        );
+      if (chunks.length >= MAX_READ_CHUNKS)
+        throw new GatewayReadError(
+          "limit",
+          "chunks",
+          "Gateway read exceeds fragmentation limit",
+        );
       size += part.value.length;
-      if (size > MAX_BYTES)
-        throw new Error("Gateway read response exceeds byte limit");
+      if (size > MAX_READ_BYTES)
+        throw new GatewayReadError(
+          "limit",
+          "responseBytes",
+          "Gateway read response exceeds byte limit",
+        );
       chunks.push(part.value);
     }
     checkDeadline();
@@ -194,10 +290,29 @@ export async function boundedGatewayJson(
       bytes.set(chunk, offset);
       offset += chunk.length;
     }
-    // Read-specific decoders check every required value below.
-    const parsed = strictEnvelope(
-      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-    );
+    if (!response.ok) {
+      // Retain a bounded, readable error body after cancelling the upstream.
+      const copy = new Response(bytes, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+      throw new GatewayHttpError(response.status, copy);
+    }
+    let parsed: unknown;
+    try {
+      parsed = parseBoundedJson(
+        new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+      );
+    } catch (error) {
+      if (error instanceof GatewayReadError) throw error;
+      throw new GatewayReadError(
+        "malformed",
+        "json",
+        "Invalid gateway read JSON",
+        { cause: error },
+      );
+    }
     checkDeadline();
     return parsed;
   } finally {

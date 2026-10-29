@@ -1,3 +1,5 @@
+import { boundedGatewayJson } from "./bounded-read.js";
+import { canonicalBase64 } from "./read-values.js";
 import { Decoder } from "@msgpack/msgpack";
 import {
   decodeAccountState,
@@ -5,7 +7,6 @@ import {
 } from "./account-state.js";
 import {
   defaultExchangeHttpTransport,
-  readContext,
   type ExchangeHttpTransport,
 } from "./http-transport.js";
 
@@ -407,17 +408,7 @@ export function decodeFinancialStateData(
   data: unknown,
   selection: FinancialStateSelection,
 ): FinancialState {
-  if (
-    typeof data !== "string" ||
-    !data.length ||
-    data.length > MAX_RESPONSE_BYTES ||
-    data.length % 4 !== 0 ||
-    !/^[A-Za-z0-9+/]*={0,2}$/.test(data)
-  )
-    return invalid("base64");
-  const binary = atob(data);
-  if (btoa(binary) !== data) return invalid("canonical base64");
-  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  const bytes = canonicalBase64(data, "financial base64", 768 * 1024);
   validateMessagePackBudget(bytes);
   return decodeFinancialState(
     new Decoder({
@@ -440,52 +431,19 @@ export async function fetchFinancialState(
 ): Promise<FinancialState> {
   const expected = canonicalFinancialSelection(selection);
   const url = `${gatewayUrl}/v1/financial/state?markets=${expected.markets.join(",")}&owners=${expected.owners.join(",")}`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  try {
-    const response = await httpTransport(
-      url,
-      { signal: controller.signal, redirect: "error" },
-      readContext(url, "account"),
-    );
-    if (!response.ok)
-      throw new Error(`financial state HTTP ${response.status}`);
-    const contentLength = response.headers.get("content-length");
-    if (
-      contentLength !== null &&
-      (!/^\d+$/.test(contentLength) ||
-        Number(contentLength) > MAX_RESPONSE_BYTES)
-    )
-      return invalid("response size");
-    reader = response.body?.getReader();
-    if (!reader) return invalid("response body");
-    const decoder = new TextDecoder("utf-8", { fatal: true });
-    let text = "";
-    let size = 0;
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      size += chunk.value.length;
-      if (size > MAX_RESPONSE_BYTES) return invalid("response size");
-      text += decoder.decode(chunk.value, { stream: true });
-    }
-    text += decoder.decode();
-    const json: unknown = JSON.parse(text);
-    if (
-      !json ||
-      typeof json !== "object" ||
-      Array.isArray(json) ||
-      Object.keys(json).length !== 1 ||
-      !("data" in json) ||
-      typeof json.data !== "string" ||
-      !json.data.length
-    )
-      return invalid("response wrapper");
-    return decodeFinancialStateData(json.data, expected);
-  } finally {
-    clearTimeout(timeout);
-    controller.abort();
-    await reader?.cancel().catch(() => undefined);
-  }
+  const json = await boundedGatewayJson(
+    url,
+    httpTransport,
+    {},
+    { purpose: "account" },
+  );
+  if (
+    !json ||
+    typeof json !== "object" ||
+    Array.isArray(json) ||
+    Object.keys(json).length !== 1 ||
+    !("data" in json)
+  )
+    return invalid("response wrapper");
+  return decodeFinancialStateData(json.data, expected);
 }

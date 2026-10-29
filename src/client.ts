@@ -21,52 +21,8 @@ import {
   type OraclePriceHistoryOptions,
   type OraclePriceHistoryPage,
 } from "./oracle-price-history.js";
-import { GatewayReads, type GatewayFetch } from "./gateway-reads.js";
-import {
-  readFinalizedOrderbook,
-  type FinalizedOrderbook,
-  type FinalizedOrderbookOptions,
-} from "./finalized-orderbook.js";
-import { readAgentAuthorization } from "./agent-authorization.js";
-import {
-  readFinalizedOraclePermissions,
-  type FinalizedOraclePermissions,
-} from "./finalized-oracle-read.js";
-import {
-  readFinalizedAccountState,
-  readFinalizedAgentAuthorization,
-  readFinalizedRecentNonces,
-  readFinalizedOpenOrders,
-  type FinalizedAccountState,
-  type FinalizedAgentAuthorization,
-  type FinalizedRecentNonces,
-  type FinalizedOpenOrders,
-  type FinalizedOpenOrdersOptions,
-} from "./finalized-account-reads.js";
-import type { BoundedReadOptions } from "./bounded-read.js";
-import {
-  readBlockHeader,
-  readFinalizedMarketsSnapshot,
-  readFinalizedFinancialState,
-  type FinalizedMarketsSnapshot,
-  type FinalizedFinancialState,
-} from "./finalized-state-reads.js";
-import type { BlockEvidenceHeader } from "./block-results-window.js";
-import {
-  readTransactionEvidence,
-  type TransactionEvidence,
-  type TransactionEvidenceSelection,
-} from "./committed-transaction.js";
-import {
-  readBlockResultsWindow,
-  type BlockResultsWindow,
-  type BlockResultsWindowSelection,
-} from "./block-results-window.js";
-import {
-  readTradeHistoryPage,
-  type TradeHistoryOptions,
-  type TradeHistoryPage,
-} from "./trade-history.js";
+import type { GatewayFetch } from "./gateway-reads.js";
+import { TypedGatewayReads } from "./typed-gateway-reads.js";
 import {
   recoveringAccountHandler,
   type AccountHistoryPage,
@@ -1521,181 +1477,6 @@ export class ExchangeClient {
     };
   }
 
-  /** One height-bearing engine book and same-view witness through the uncached
-   * gateway route. Caller must independently bind node, chain and committed
-   * H+1 header. Never substitutes an unheighted cache, even in direct-node mode. */
-  async queryFinalizedOrderbook(
-    market: number,
-    options: FinalizedOrderbookOptions = {},
-  ): Promise<FinalizedOrderbook> {
-    return readFinalizedOrderbook(
-      this.gatewayUrl,
-      market,
-      options,
-      this.httpTransport,
-    );
-  }
-
-  /** Current generic authorization fact. No finalized witness or execution permission. */
-  async queryAgentAuthorization(
-    owner: string,
-    agent: string,
-    options: BoundedReadOptions = {},
-  ): Promise<boolean> {
-    return readAgentAuthorization(
-      this.gatewayUrl,
-      owner,
-      agent,
-      options,
-      this.httpTransport,
-    );
-  }
-
-  /** Same-view raw facts. Bind witness to the pinned chain's H+1 header separately. */
-  async queryFinalizedAccountState(
-    owner: string,
-    options: BoundedReadOptions = {},
-  ): Promise<FinalizedAccountState> {
-    return readFinalizedAccountState(
-      this.gatewayUrl,
-      owner,
-      options,
-      this.httpTransport,
-    );
-  }
-
-  /** Authorization at one finalized view, not permission guaranteed at inclusion. */
-  async queryFinalizedAgentAuthorization(
-    owner: string,
-    agent: string,
-    options: BoundedReadOptions = {},
-  ): Promise<FinalizedAgentAuthorization> {
-    return readFinalizedAgentAuthorization(
-      this.gatewayUrl,
-      owner,
-      agent,
-      options,
-      this.httpTransport,
-    );
-  }
-
-  /** Retained signer replay set; missing nonces never establish non-admission. */
-  async queryFinalizedRecentNonces(
-    signer: string,
-    options: BoundedReadOptions = {},
-  ): Promise<FinalizedRecentNonces> {
-    return readFinalizedRecentNonces(
-      this.gatewayUrl,
-      signer,
-      options,
-      this.httpTransport,
-    );
-  }
-
-  /** All-market bounded order read; a limit-sized result is explicitly incomplete. */
-  async queryFinalizedOpenOrders(
-    owner: string,
-    options: FinalizedOpenOrdersOptions = {},
-  ): Promise<FinalizedOpenOrders> {
-    return readFinalizedOpenOrders(
-      this.gatewayUrl,
-      owner,
-      options,
-      this.httpTransport,
-    );
-  }
-
-  /** One participant-attributed indexed trade page. Follow nextCursor with
-   * the same window; completeness and freshness remain caller checks. */
-  async queryHistoryTradesPage(
-    market: number,
-    options: TradeHistoryOptions,
-  ): Promise<TradeHistoryPage> {
-    return readTradeHistoryPage(
-      this.gatewayUrl,
-      market,
-      options,
-      this.httpTransport,
-    );
-  }
-
-  /** Match exact signed bytes to /tx and its /block entry on the pinned chain.
-   * Trusted-gateway evidence only, not cryptographic finality verification.
-   * This is one occurrence, not unique admission: the same bytes may have an
-   * earlier successful occurrence and a later replay rejection. That later
-   * rejection cannot exclude earlier fills or release unresolved exposure.
-   * Errors (including 404) leave admission unresolved. Never submits or polls. */
-  async queryTransactionEvidence(
-    selection: TransactionEvidenceSelection,
-    options: BoundedReadOptions = {},
-  ): Promise<TransactionEvidence> {
-    if (!this.inventoryChainId) {
-      throw new Error(
-        "transaction evidence requires an explicit pinned chainId",
-      );
-    }
-    return readTransactionEvidence(
-      this.gatewayUrl,
-      this.inventoryChainId,
-      selection,
-      options,
-      this.httpTransport,
-    );
-  }
-
-  /** Complete bounded block/result window through the trusted gateway. Requires
-   * an explicit chain pin. Never substitutes indexer watermarks or partial pages.
-   * Result events are trusted node statements, not cryptographic event proofs. */
-  async queryBlockResultsWindow(
-    selection: BlockResultsWindowSelection,
-    options: BoundedReadOptions = {},
-  ): Promise<BlockResultsWindow> {
-    if (!this.inventoryChainId) {
-      throw new Error(
-        "block-results window requires an explicit pinned chainId",
-      );
-    }
-    return readBlockResultsWindow(
-      this.gatewayUrl,
-      this.inventoryChainId,
-      selection,
-      options,
-      this.httpTransport,
-    );
-  }
-
-  /** Bounded exact-height header from the pinned chain via the gateway.
-   * Trusted-gateway evidence only, not validator-signature verification. */
-  async queryBlockHeader(
-    height: bigint,
-    options: BoundedReadOptions = {},
-  ): Promise<BlockEvidenceHeader> {
-    if (!this.inventoryChainId)
-      throw new Error("block header requires an explicit pinned chainId");
-    return readBlockHeader(
-      this.gatewayUrl,
-      this.inventoryChainId,
-      height,
-      options,
-      this.httpTransport,
-    );
-  }
-
-  /** Complete market configuration and the existing same-view witness.
-   * Requires a pinned chain; caller must bind node and H+1 header separately. */
-  async queryFinalizedMarketsSnapshot(
-    options: BoundedReadOptions = {},
-  ): Promise<FinalizedMarketsSnapshot> {
-    if (!this.inventoryChainId)
-      throw new Error("finalized markets require an explicit pinned chainId");
-    return readFinalizedMarketsSnapshot(
-      this.gatewayUrl,
-      this.inventoryChainId,
-      options,
-      this.httpTransport,
-    );
-  }
-
   /** One market's funding state: rate, cumulative index, mark EWMA and
    *  oracle price (`GET /v1/funding/{market}`). The engine answers an unknown
    *  market with zeroed fields rather than an error. */
@@ -1836,19 +1617,6 @@ export class ExchangeClient {
     const json = await this.apiJson(`${this.readBaseUrl}${path}`);
     const bytes = fromBase64(requireEncodedData(json, path));
     return decodeOraclePermissions(await this.strictDecode(bytes), market);
-  }
-
-  /** Existing committed oracle facts with the same-query witness; no price selection. */
-  async queryFinalizedOraclePermissions(
-    market: number,
-    options: BoundedReadOptions = {},
-  ): Promise<FinalizedOraclePermissions> {
-    return readFinalizedOraclePermissions(
-      this.gatewayUrl,
-      market,
-      options,
-      this.httpTransport,
-    );
   }
 
   /** Immutable owner-bearing trigger lifecycle history. This always uses the
@@ -2064,24 +1832,6 @@ export class ExchangeClient {
     selection: FinancialStateSelection,
   ): Promise<FinancialState> {
     return fetchFinancialState(this.gatewayUrl, selection, this.httpTransport);
-  }
-
-  /** Opt-in same-view financial witness. Does not attest chain or valuation;
-   * bind it to a chain-qualified snapshot and H+1 header before relying on it. */
-  async queryFinalizedFinancialState(
-    selection: FinancialStateSelection,
-    options: BoundedReadOptions = {},
-  ): Promise<FinalizedFinancialState> {
-    if (!this.inventoryChainId)
-      throw new Error(
-        "finalized financial state requires an explicit pinned chainId",
-      );
-    return readFinalizedFinancialState(
-      this.gatewayUrl,
-      selection,
-      options,
-      this.httpTransport,
-    );
   }
 
   /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */
@@ -2375,12 +2125,11 @@ export class ExchangeClient {
    * and scheduling. Prefer typed query methods when raw response metadata is unnecessary.
    * Uses this client's gateway; never targets a node, even in internal node mode.
    */
-  reads(opts: { fetch?: GatewayFetch } = {}): GatewayReads {
-    return new GatewayReads(
+  reads(opts: { fetch?: GatewayFetch } = {}): TypedGatewayReads {
+    return new TypedGatewayReads(
       this.gatewayUrl,
-      opts.fetch ??
-        ((url, init) =>
-          this.httpTransport(url, init, gatewayReadContext(url, init))),
+      opts.fetch ? (url, init) => opts.fetch!(url, init) : this.httpTransport,
+      this.inventoryChainId ?? undefined,
     );
   }
 

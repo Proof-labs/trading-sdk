@@ -1,9 +1,15 @@
+export { verifyWitness } from "./bounded-read.js";
+export { GatewayReadError } from "./errors.js";
+export {
+  hexAddress,
+  hash32,
+  marketId,
+  type HexAddress,
+  type Hash32Hex,
+  type MarketId,
+} from "./read-values.js";
 // Types
 export {
-  decodeFinalizedAccountState,
-  decodeFinalizedAgentAuthorization,
-  decodeFinalizedRecentNonces,
-  decodeFinalizedOpenOrders,
   type FinalizedAccountState,
   type FinalizedAgentAuthorization,
   type FinalizedRecentNonces,
@@ -31,14 +37,12 @@ export type {
   BlockResultsWindowSelection,
 } from "./block-results-window.js";
 export {
-  decodeFinalizedOrderbook,
   type FinalizedOrderbook,
   type FinalizedOrderbookDepth,
   type FinalizedOrderbookOptions,
 } from "./finalized-orderbook.js";
 export {
   decodeTradeHistoryPage,
-  tradeHistorySearchParams,
   type ParticipantTrade,
   type TradeHistoryOptions,
   type TradeHistoryPage,
@@ -407,10 +411,7 @@ export type {
   OracleSelectedSource,
   OracleVerdictDiagnostic,
 } from "./oracle-permissions.js";
-export {
-  decodeFinalizedOraclePermissions,
-  type FinalizedOraclePermissions,
-} from "./finalized-oracle-read.js";
+export { type FinalizedOraclePermissions } from "./finalized-oracle-read.js";
 
 export {
   GatewayFeed,

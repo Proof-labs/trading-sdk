@@ -49,7 +49,7 @@ describe("participant-attributed trade history", () => {
       quantity: "2.000000",
       makerOwner: row().maker_owner,
       takerOwner: row().taker_owner,
-      makerSide: "Buy",
+      makerSide: 1,
       takerFee: 5n,
       makerFee: -2n,
     });
@@ -67,9 +67,8 @@ describe("participant-attributed trade history", () => {
       httpTransport: transport,
     });
     const opts = { ...options, cursor: "opaque/cursor+=" };
-    expect(await client.queryHistoryTradesPage(1, opts)).toMatchObject({
+    expect(await client.reads().tradeHistoryPage(1, opts)).toMatchObject({
       trades: [],
-      nextCursor: "",
       fromMs: opts.fromMs,
     });
     const url = new URL(transport.mock.calls[0][0]);
@@ -182,7 +181,7 @@ describe("participant-attributed trade history", () => {
       { cursor: "a".repeat(4097) },
     ]) {
       await expect(
-        client.queryHistoryTradesPage(1, { ...options, ...change }),
+        client.reads().tradeHistoryPage(1, { ...options, ...change }),
       ).rejects.toThrow();
     }
     expect(() => tradeHistorySearchParams(2147483648, options)).toThrow(

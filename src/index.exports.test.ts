@@ -43,72 +43,17 @@ import {
   type PendingTriggerDiscardReason,
   type TriggerHistoryLimbKind,
   type TriggerExecutionResult,
-  type FinalizedReadWitness,
-  type FinalizedOrderbook,
-  type FinalizedOrderbookOptions,
-  type ParticipantTrade,
-  type TradeHistoryOptions,
-  type TradeHistoryPage,
-  type TransactionEvidence,
-  type TransactionEvidenceSelection,
-  type TransactionEvidenceEvent,
-  type BlockResultsWindow,
-  type BlockResultsWindowSelection,
-  type BlockResultsEvidence,
-  type BlockEvidenceHeader,
-  decodeFinalizedOrderbook,
-  decodeTradeHistoryPage,
 } from "./index.js";
 import type { OpenLabel } from "./types.js";
 
-it("exports read-only finalized inventory and participant history APIs", async () => {
-  const transactionSelection: TransactionEvidenceSelection = {
-    hash: "00".repeat(32),
-    signedBytes: new Uint8Array([1]),
-  };
-  const transaction: TransactionEvidence | null = null;
-  const event: TransactionEvidenceEvent = { type: "trade", attributes: [] };
-  expect([transactionSelection, transaction, event]).toHaveLength(3);
-  const windowSelection: BlockResultsWindowSelection = {
-    fromMs: 1,
-    toMs: 2,
-    throughHeight: 1n,
-  };
-  const window: BlockResultsWindow | null = null;
-  const block: BlockResultsEvidence | null = null;
-  const header: BlockEvidenceHeader | null = null;
-  expect([windowSelection, window, block, header]).toHaveLength(4);
-  const bookOptions: FinalizedOrderbookOptions = { depth: 20, timeoutMs: 1000 };
-  const historyOptions: TradeHistoryOptions = { fromMs: 1, toMs: 2, limit: 1 };
-  const witness: FinalizedReadWitness | null = null;
-  const book: FinalizedOrderbook | null = null;
-  const trade: ParticipantTrade | null = null;
-  const history: TradeHistoryPage | null = null;
-  expect([
-    bookOptions,
-    historyOptions,
-    witness,
-    book,
-    trade,
-    history,
-  ]).toHaveLength(6);
+it("exposes typed reads on the existing read surface", async () => {
   const sdk = await import("./index.js");
-  expect(typeof new sdk.ExchangeClient().queryBlockResultsWindow).toBe(
-    "function",
-  );
-  expect(typeof new sdk.ExchangeClient().queryTransactionEvidence).toBe(
-    "function",
-  );
-  const client = new sdk.ExchangeClient();
-  expect(client.queryAgentAuthorization).toBeTypeOf("function");
-  expect(client).not.toHaveProperty("queryInsuranceExitState");
-  expect(client).not.toHaveProperty("queryInsuranceExitPrefix");
-  expect(sdk).not.toHaveProperty("decodeInsuranceExitState");
-  expect(sdk).not.toHaveProperty("decodeInsuranceExitPrefix");
-  expect(client.queryFinalizedOrderbook).toBeTypeOf("function");
-  expect(client.queryHistoryTradesPage).toBeTypeOf("function");
-  expect(decodeFinalizedOrderbook).toBeTypeOf("function");
-  expect(decodeTradeHistoryPage).toBeTypeOf("function");
+  const reads = new sdk.ExchangeClient().reads();
+  expect(reads.finalized.accountState).toBeTypeOf("function");
+  expect(reads.finalized.agentAuthorization).toBeTypeOf("function");
+  expect(reads.evidence.transaction).toBeTypeOf("function");
+  expect(reads.tradeHistoryPage).toBeTypeOf("function");
+  expect(sdk.verifyWitness).toBeTypeOf("function");
 });
 
 describe("public barrel: governance surface", () => {

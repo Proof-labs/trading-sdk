@@ -1,13 +1,12 @@
 import { encode } from "@msgpack/msgpack";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { ExchangeClient, ready } from "./index.js";
 import {
-  ExchangeClient,
-  ready,
   decodeFinalizedAccountState,
   decodeFinalizedAgentAuthorization,
   decodeFinalizedRecentNonces,
   decodeFinalizedOpenOrders,
-} from "./index.js";
+} from "./finalized-account-reads.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 
 const owner = "04".repeat(20),
@@ -66,7 +65,7 @@ beforeAll(async () => {
 describe("generic finalized raw reads", () => {
   it("retains exact account height, cash and cost remainder", async () => {
     const c = client(envelope(account()));
-    const value = await c.client.queryFinalizedAccountState(owner);
+    const value = await c.client.reads().finalized.accountState(owner);
     expect(value).toMatchObject({
       owner,
       finalizedHeight: H,
@@ -87,7 +86,7 @@ describe("generic finalized raw reads", () => {
     async (authorized) => {
       const c = client(envelope(authorized));
       expect(
-        await c.client.queryFinalizedAgentAuthorization(owner, agent),
+        await c.client.reads().finalized.agentAuthorization(owner, agent),
       ).toMatchObject({ owner, agent, authorized, witness: { height: H } });
       expect(String(c.transport.mock.calls[0][0])).toBe(
         `https://gateway.example/v1/account/${owner}/agents/${agent}?witness=1`,
@@ -96,7 +95,7 @@ describe("generic finalized raw reads", () => {
   );
   it("reads the signer's exact retained nonce set, including the uint64 bound", async () => {
     const c = client(envelope([0n, H, (1n << 64n) - 1n]));
-    expect(await c.client.queryFinalizedRecentNonces(agent)).toMatchObject({
+    expect(await c.client.reads().finalized.recentNonces(agent)).toMatchObject({
       signer: agent,
       recent: [0n, H, (1n << 64n) - 1n],
     });
@@ -107,7 +106,9 @@ describe("generic finalized raw reads", () => {
   });
   it("marks a limit-sized order result incomplete and preserves a full 100-order inventory", async () => {
     const c = client(envelope([order()]));
-    const value = await c.client.queryFinalizedOpenOrders(owner, { limit: 1 });
+    const value = await c.client
+      .reads()
+      .finalized.openOrders(owner, { limit: 1 });
     expect(value.complete).toBe(false);
     expect(value.orders[0]).toMatchObject({
       owner,
@@ -218,29 +219,29 @@ describe("generic finalized raw reads", () => {
   it("rejects invalid requests before I/O and refuses missing evidence without fallback", async () => {
     const c = client(envelope(account()));
     await expect(
-      c.client.queryFinalizedAccountState("0x" + owner),
+      c.client.reads().finalized.accountState("0x" + owner),
     ).rejects.toThrow();
     await expect(
-      c.client.queryFinalizedAgentAuthorization(owner, "05".repeat(32)),
+      c.client.reads().finalized.agentAuthorization(owner, "05".repeat(32)),
     ).rejects.toThrow();
     await expect(
-      c.client.queryFinalizedRecentNonces(
-        agent.toUpperCase().replace("05", "FF"),
-      ),
+      c.client
+        .reads()
+        .finalized.recentNonces(agent.toUpperCase().replace("05", "FF")),
     ).rejects.toThrow();
     for (const limit of [0, 102, 1.5, NaN])
       await expect(
-        c.client.queryFinalizedOpenOrders(owner, { limit }),
+        c.client.reads().finalized.openOrders(owner, { limit }),
       ).rejects.toThrow();
     expect(c.transport).not.toHaveBeenCalled();
     const unavailable = client({ error: "unavailable" }, 503);
     await expect(
-      unavailable.client.queryFinalizedAccountState(owner),
+      unavailable.client.reads().finalized.accountState(owner),
     ).rejects.toThrow();
     expect(unavailable.transport).toHaveBeenCalledTimes(1);
     const missing = client({ data: envelope(account()).data });
     await expect(
-      missing.client.queryFinalizedAccountState(owner),
+      missing.client.reads().finalized.accountState(owner),
     ).rejects.toThrow();
     expect(missing.transport).toHaveBeenCalledTimes(1);
   });
@@ -249,7 +250,7 @@ describe("generic finalized raw reads", () => {
     const abort = new AbortController();
     abort.abort();
     await expect(
-      c.client.queryFinalizedAgentAuthorization(owner, agent, {
+      c.client.reads().finalized.agentAuthorization(owner, agent, {
         signal: abort.signal,
       }),
     ).rejects.toThrow();
@@ -263,7 +264,7 @@ describe("generic finalized raw reads", () => {
         ),
     );
     await expect(
-      c.client.queryFinalizedAgentAuthorization(owner, agent),
+      c.client.reads().finalized.agentAuthorization(owner, agent),
     ).rejects.toThrow();
   });
 });

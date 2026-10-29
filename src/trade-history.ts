@@ -1,3 +1,14 @@
+import {
+  I64_MAX,
+  MAX_DATE_MS,
+  hexAddress,
+  invalidRead,
+  marketId,
+  rfc3339,
+  type MarketId,
+  type HexAddress,
+} from "./read-values.js";
+import { Side } from "./types.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 import { boundedGatewayJson, type BoundedReadOptions } from "./bounded-read.js";
 
@@ -12,31 +23,34 @@ export interface TradeHistoryOptions extends BoundedReadOptions {
 }
 export interface ParticipantTrade {
   fillId: bigint;
-  market: number;
+  market: MarketId;
   blockHeight: bigint;
   /** Original RFC3339 string, retaining fractional-second precision. */
   blockTime: string;
   /** Exact NUMERIC text as indexed, without conversion or rounding. */
   price: string;
   quantity: string;
-  makerOwner: string;
-  takerOwner: string;
-  makerSide: "buy" | "sell" | "Buy" | "Sell";
+  makerOwner: HexAddress;
+  takerOwner: HexAddress;
+  makerSide: Side;
   takerFee: bigint;
   makerFee: bigint;
 }
 export interface TradeHistoryPage {
-  market: number;
+  market: MarketId;
   /** The request's bounds, not an assertion of indexer freshness/completeness. */
   fromMs: number;
   toMs: number;
   trades: ParticipantTrade[];
-  /** Nonempty means more pages; empty only ends this indexed range query. */
-  nextCursor: string;
+  /** Absent ends this indexed range, not proof of ingestion completeness. */
+  nextCursor?: string;
 }
-const I64_MAX = (1n << 63n) - 1n;
-function invalid(field: string): never {
-  throw new Error(`Invalid trade history: ${field}`);
+
+function invalid(
+  field: string,
+  kind: import("./errors.js").GatewayReadError["kind"] = "malformed",
+): never {
+  return invalidRead(`trade history.${field}`, kind);
 }
 function integer(value: unknown, field: string, signed = false): bigint {
   const n =
@@ -50,10 +64,8 @@ function integer(value: unknown, field: string, signed = false): bigint {
   if (n < (signed ? -(1n << 63n) : 0n) || n > I64_MAX) invalid(field);
   return n;
 }
-function address(value: unknown): string {
-  if (typeof value !== "string" || !/^[a-f0-9]{40}$/.test(value))
-    invalid("participant owner");
-  return value;
+function address(value: unknown) {
+  return hexAddress(value, "participant owner");
 }
 function numeric(value: unknown, field: string): string {
   if (
@@ -75,35 +87,22 @@ function cursor(value: unknown): string {
     invalid("cursor");
   return value;
 }
-function time(value: unknown): { raw: string; nanos: bigint } {
-  if (typeof value !== "string") invalid("block time");
-  const match = value.match(
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.(\d{1,9}))?Z$/,
-  );
-  const milliseconds = Date.parse(value);
-  if (!match || !Number.isFinite(milliseconds) || milliseconds < 0)
-    invalid("block time");
-  const fraction = (match[1] ?? "").padEnd(9, "0");
-  // Reject dates Date.parse normalizes, such as February 30.
-  if (new Date(milliseconds).toISOString().slice(0, 19) !== value.slice(0, 19))
-    invalid("block time");
-  return {
-    raw: value,
-    nanos: BigInt(milliseconds) * 1_000_000n + BigInt(fraction.slice(3)),
-  };
+function time(value: unknown) {
+  return rfc3339(value);
 }
 export function tradeHistorySearchParams(
   market: number,
   options: TradeHistoryOptions,
 ): URLSearchParams {
-  if (!Number.isSafeInteger(market) || market < 0 || market > 0x7fff_ffff)
-    invalid("market");
+  marketId(market);
+  // Indexer storage uses signed i32; do not broaden its route contract.
+  if (market > 0x7fffffff) invalid("market outside indexer range");
   if (
     !Number.isSafeInteger(options.fromMs) ||
     !Number.isSafeInteger(options.toMs) ||
     options.fromMs < 0 ||
     options.toMs <= options.fromMs ||
-    options.toMs > 8_640_000_000_000_000
+    options.toMs > MAX_DATE_MS
   )
     invalid("window");
   const limit = options.limit ?? 200;
@@ -119,7 +118,11 @@ export function tradeHistorySearchParams(
   return params;
 }
 
-/** All participants retained. No self-trade filtering, units conversion or aggregation. */
+/** One indexed page only, not proof of completeness. Callers MUST keep filters
+ * fixed, track all seen cursors and fill IDs, and compare (blockTime, fillId)
+ * across boundaries. Cursor cycles, duplicates and skipped rows across pages
+ * are not detectable by a stateless decoder. Use complete chain evidence when
+ * absence/completeness matters. No self-trade filtering or units conversion. */
 export function decodeTradeHistoryPage(
   value: unknown,
   market: number,
@@ -143,7 +146,7 @@ export function decodeTradeHistoryPage(
   const trades = page.fills.map((raw): ParticipantTrade => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) invalid("trade");
     const row = raw as Record<string, unknown>;
-    if (row.market !== market) invalid("market mismatch");
+    if (row.market !== market) invalid("market mismatch", "binding");
     const fillId = integer(row.fill_id, "fill id");
     const blockHeight = integer(row.block_height, "block height");
     const block = time(row.block_time);
@@ -170,24 +173,24 @@ export function decodeTradeHistoryPage(
       invalid("maker side");
     return {
       fillId,
-      market,
+      market: marketId(market),
       blockHeight,
       blockTime: block.raw,
       price: numeric(row.price, "price"),
       quantity: numeric(row.quantity, "quantity"),
       makerOwner: address(row.maker_owner),
       takerOwner: address(row.taker_owner),
-      makerSide: row.maker_side,
+      makerSide: row.maker_side.toLowerCase() === "buy" ? Side.Buy : Side.Sell,
       takerFee: integer(row.taker_fee, "taker fee", true),
       makerFee: integer(row.maker_fee, "maker fee", true),
     };
   });
   return {
-    market,
+    market: marketId(market),
     fromMs: options.fromMs,
     toMs: options.toMs,
     trades,
-    nextCursor,
+    ...(nextCursor ? { nextCursor } : {}),
   };
 }
 

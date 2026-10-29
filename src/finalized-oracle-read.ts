@@ -1,4 +1,5 @@
 /** Same-view transport for the existing oracle policy read, not a price selector. */
+import { marketId, invalidRead } from "./read-values.js";
 import {
   boundedGatewayJson,
   type BoundedReadOptions,
@@ -15,10 +16,6 @@ import { ready } from "./wasm-loader.js";
 export interface FinalizedOraclePermissions extends OraclePermissions {
   witness: FinalizedReadWitness;
 }
-function marketId(market: number): void {
-  if (!Number.isInteger(market) || market < 1 || market > 0xffff_ffff)
-    throw new Error("Invalid finalized oracle market");
-}
 /** Requires ready(). Refusals and Legacy remain data, never a healthy fallback. */
 export function decodeFinalizedOraclePermissions(
   value: unknown,
@@ -32,7 +29,7 @@ export function decodeFinalizedOraclePermissions(
     (result.verdict &&
       result.verdict.blockTime !== witness.finalizedBlockTimeMs)
   ) {
-    throw new Error("Finalized oracle witness mismatch");
+    invalidRead("oracle witness mismatch", "binding");
   }
   return { ...result, witness };
 }

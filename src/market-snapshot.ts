@@ -1,9 +1,10 @@
+import { boundedGatewayJson, parseBoundedJson } from "./bounded-read.js";
+import { GatewayHttpError, GatewayReadError } from "./errors.js";
 import { Decoder } from "@msgpack/msgpack";
 import { decodeEventInfo, isOneBookEventRow } from "./governance-query.js";
 import type { MarketConfig, MarketKind, MarketsSnapshot } from "./types.js";
 import {
   defaultExchangeHttpTransport,
-  readContext,
   type ExchangeHttpTransport,
 } from "./http-transport.js";
 
@@ -254,52 +255,24 @@ export async function readMarketsSnapshot(
   expectedChain: Uint8Array,
   httpTransport: ExchangeHttpTransport = defaultExchangeHttpTransport,
 ): Promise<MarketsSnapshot> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
   try {
-    const url = `${gatewayUrl.replace(/\/$/, "")}/v1/markets-snapshot`;
-    const response = await httpTransport(
-      url,
-      { signal: controller.signal, redirect: "error" },
-      readContext(url, "query"),
+    const response = await boundedGatewayJson(
+      `${gatewayUrl.replace(/\/$/, "")}/v1/markets-snapshot`,
+      httpTransport,
+      { timeoutMs: 10_000 },
     );
-    if (response.status !== 200)
-      throw new Error(`market snapshot returned HTTP ${response.status}`);
-    if (!response.body) invalid();
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        size += value.length;
-        if (size > MAX_SNAPSHOT_BYTES) invalid();
-        chunks.push(value);
-      }
-    } finally {
-      await reader.cancel();
-      reader.releaseLock();
-    }
-    const body = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      body.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return decodeMarketsSnapshot(
-      parseSnapshotEnvelope(
-        new TextDecoder("utf-8", { fatal: true }).decode(body),
-      ),
-      expectedChain,
-    );
+    return decodeMarketsSnapshot(response, expectedChain);
   } catch (error) {
-    // Transport errors can embed credential-bearing URLs; never forward them.
+    if (error instanceof GatewayHttpError)
+      throw new Error(`market snapshot returned HTTP ${error.status}`);
+    if (
+      error instanceof GatewayReadError &&
+      (error.kind === "limit" || error.kind === "malformed")
+    )
+      invalid();
     if (error instanceof Error && error.message.startsWith("market snapshot"))
       throw error;
     throw new Error("market snapshot: transport or response unavailable");
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -307,31 +280,9 @@ export async function readMarketsSnapshot(
  * envelope fields instead of silently taking the last `data` or `error` key.
  * Escaped spellings of the same key compare after normal JSON unescaping. */
 export function parseSnapshotEnvelope(input: string): unknown {
-  const parsed: unknown = JSON.parse(input);
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) invalid();
-  let depth = 0;
-  let expectsKey = false;
-  const keys = new Set<string>();
-  for (let i = 0; i < input.length; i++) {
-    const char = input[i];
-    if (char === '"') {
-      const start = i++;
-      for (; i < input.length; i++) {
-        if (input[i] === "\\") i++;
-        else if (input[i] === '"') break;
-      }
-      if (depth === 1 && expectsKey) {
-        const key: string = JSON.parse(input.slice(start, i + 1));
-        if (keys.has(key)) invalid();
-        keys.add(key);
-      }
-    } else if (char === "{" || char === "[") {
-      depth++;
-      if (depth > 32) invalid();
-      if (depth === 1) expectsKey = true;
-    } else if (char === "}" || char === "]") depth--;
-    else if (depth === 1 && char === ",") expectsKey = true;
-    else if (depth === 1 && char === ":") expectsKey = false;
+  try {
+    return parseBoundedJson(input);
+  } catch {
+    return invalid();
   }
-  return parsed;
 }

@@ -119,9 +119,45 @@ function fixture(first = 100) {
 }
 
 describe("bounded trusted-gateway block/results windows", () => {
+  it("represents the empty genesis app hash as null, not a synthetic hash", async () => {
+    const f = fixture(1);
+    const genesis = f.blocks.get(1)!.result.block.header;
+    genesis.app_hash = "";
+    genesis.last_block_id.hash = "";
+    expect(await f.client.reads().evidence.blockHeader(1n)).toMatchObject({
+      height: 1n,
+      appHash: null,
+      parentHash: null,
+    });
+  });
+  it("allows callers to lower aggregate budgets but not raise their ceilings", async () => {
+    const f = fixture();
+    await expect(
+      f.client
+        .reads()
+        .evidence.blockResultsWindow({ ...f.selection, maxTransactions: 1 }),
+    ).rejects.toMatchObject({ kind: "limit" });
+    for (const limits of [
+      { maxDecodedBytes: 8 * 1024 * 1024 + 1 },
+      { maxTransactions: 10001 },
+      { maxEvents: 16385 },
+      { maxAttributes: 65537 },
+      { maxEvents: 0 },
+    ]) {
+      f.transport.mockClear();
+      await expect(
+        f.client
+          .reads()
+          .evidence.blockResultsWindow({ ...f.selection, ...limits }),
+      ).rejects.toMatchObject({ kind: "configuration" });
+      expect(f.transport).not.toHaveBeenCalled();
+    }
+  });
   it("reads every transaction and system event with exact coordinates and both window boundaries", async () => {
     const f = fixture();
-    const window = await f.client.queryBlockResultsWindow(f.selection);
+    const window = await f.client
+      .reads()
+      .evidence.blockResultsWindow(f.selection);
     expect(window).toMatchObject({
       source: "trusted-gateway",
       fromMs: T + 1500,
@@ -165,7 +201,9 @@ describe("bounded trusted-gateway block/results windows", () => {
     f.blocks.get(100)!.result.block.data.txs = null;
     f.executions.get(100)!.result.txs_results = null;
     f.executions.get(102)!.result.finalize_block_events = null;
-    const window = await f.client.queryBlockResultsWindow(f.selection);
+    const window = await f.client
+      .reads()
+      .evidence.blockResultsWindow(f.selection);
     expect(window.blocks[0].transactions).toEqual([]);
     expect(window.blocks[0].finalizeBlockEvents).toHaveLength(1);
     expect(window.blocks[2].finalizeBlockEvents).toEqual([]);
@@ -262,38 +300,45 @@ describe("bounded trusted-gateway block/results windows", () => {
       const f = fixture();
       mutate(f);
       await expect(
-        f.client.queryBlockResultsWindow(f.selection),
-      ).rejects.toThrow("Invalid transaction evidence");
+        f.client.reads().evidence.blockResultsWindow(f.selection),
+      ).rejects.toMatchObject({ name: "GatewayReadError" });
     },
   );
   it("refuses incomplete catch-up, pruned heights and exhausted height budgets", async () => {
     const f = fixture();
     await expect(
-      f.client.queryBlockResultsWindow({ ...f.selection, toMs: T + 3500 }),
+      f.client
+        .reads()
+        .evidence.blockResultsWindow({ ...f.selection, toMs: T + 3500 }),
     ).rejects.toThrow("source has not reached window end");
     await expect(
-      f.client.queryBlockResultsWindow({ ...f.selection, maxHeights: 2 }),
+      f.client
+        .reads()
+        .evidence.blockResultsWindow({ ...f.selection, maxHeights: 2 }),
     ).rejects.toThrow("height budget");
     f.executions.delete(101);
     await expect(
-      f.client.queryBlockResultsWindow(f.selection),
+      f.client.reads().evidence.blockResultsWindow(f.selection),
     ).rejects.toThrow();
   });
   it("honors nanosecond boundary ordering without rounding into a neighboring window", async () => {
     const f = fixture();
     f.blocks.get(101)!.result.block.header.time =
       "2026-10-26T00:00:01.500000001Z";
-    const window = await f.client.queryBlockResultsWindow(f.selection);
+    const window = await f.client
+      .reads()
+      .evidence.blockResultsWindow(f.selection);
     expect(window.fromHeight).toBe(100n);
     f.blocks.get(101)!.result.block.header.time =
       "2026-10-26T00:00:01.499999999Z";
     expect(
-      (await f.client.queryBlockResultsWindow(f.selection)).fromHeight,
+      (await f.client.reads().evidence.blockResultsWindow(f.selection))
+        .fromHeight,
     ).toBe(101n);
   });
   it("captures request fields before asynchronous reads", async () => {
     const f = fixture();
-    const pending = f.client.queryBlockResultsWindow(f.selection);
+    const pending = f.client.reads().evidence.blockResultsWindow(f.selection);
     f.selection.fromMs = 0;
     f.selection.toMs = 1;
     f.selection.throughHeight = 1n;
@@ -304,7 +349,9 @@ describe("bounded trusted-gateway block/results windows", () => {
     await expect(
       new ExchangeClient({
         httpTransport: f.transport,
-      }).queryBlockResultsWindow(f.selection),
+      })
+        .reads()
+        .evidence.blockResultsWindow(f.selection),
     ).rejects.toThrow("pinned chainId");
     for (const selection of [
       { ...f.selection, maxHeights: 0 },
@@ -315,7 +362,7 @@ describe("bounded trusted-gateway block/results windows", () => {
       { ...f.selection, fromMs: f.selection.toMs },
     ])
       await expect(
-        f.client.queryBlockResultsWindow(selection),
+        f.client.reads().evidence.blockResultsWindow(selection),
       ).rejects.toThrow();
     expect(f.transport).not.toHaveBeenCalled();
   });
@@ -330,7 +377,9 @@ describe("bounded trusted-gateway block/results windows", () => {
     });
     try {
       await expect(
-        f.client.queryBlockResultsWindow(f.selection, { timeoutMs: 12 }),
+        f.client
+          .reads()
+          .evidence.blockResultsWindow(f.selection, { timeoutMs: 12 }),
       ).rejects.toThrow(/deadline/);
       expect(f.transport.mock.calls.length).toBeLessThan(7);
     } finally {
@@ -338,7 +387,7 @@ describe("bounded trusted-gateway block/results windows", () => {
     }
     const before = f.transport.mock.calls.length;
     await expect(
-      f.client.queryBlockResultsWindow(f.selection, {
+      f.client.reads().evidence.blockResultsWindow(f.selection, {
         signal: AbortSignal.abort(new Error("cancelled")),
       }),
     ).rejects.toThrow("cancelled");
@@ -351,7 +400,7 @@ describe("bounded trusted-gateway block/results windows", () => {
     for (const result of f.executions.values())
       Object.assign(result, { padding: "x".repeat(900_000) });
     await expect(
-      f.client.queryBlockResultsWindow({
+      f.client.reads().evidence.blockResultsWindow({
         ...f.selection,
         fromMs: T - 8000,
         maxHeights: 16,
@@ -364,9 +413,9 @@ describe("bounded trusted-gateway block/results windows", () => {
       { length: 10_001 },
       () => "AQ==",
     );
-    await expect(f.client.queryBlockResultsWindow(f.selection)).rejects.toThrow(
-      "window transaction budget",
-    );
+    await expect(
+      f.client.reads().evidence.blockResultsWindow(f.selection),
+    ).rejects.toThrow("window transaction budget");
     expect(f.transport).toHaveBeenCalledTimes(2);
   });
   it("bounds accumulated event lists across otherwise valid responses", async () => {
@@ -381,9 +430,9 @@ describe("bounded trusted-gateway block/results windows", () => {
         finalize_block_events: many,
       });
     }
-    await expect(f.client.queryBlockResultsWindow(f.selection)).rejects.toThrow(
-      "window event budget",
-    );
+    await expect(
+      f.client.reads().evidence.blockResultsWindow(f.selection),
+    ).rejects.toThrow("window event budget");
   });
   it("bounds accumulated attributes independently of event and transaction counts", async () => {
     const f = fixture();
@@ -402,8 +451,8 @@ describe("bounded trusted-gateway block/results windows", () => {
         ],
       })),
     });
-    await expect(f.client.queryBlockResultsWindow(f.selection)).rejects.toThrow(
-      "window event budget",
-    );
+    await expect(
+      f.client.reads().evidence.blockResultsWindow(f.selection),
+    ).rejects.toThrow("window event budget");
   });
 });

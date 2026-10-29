@@ -7,6 +7,64 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe("bounded read transport", () => {
+  it("preserves an empty HTTP failure response", async () => {
+    const failure = await boundedGatewayJson(
+      "https://gateway.example/read",
+      async () => new Response(null, { status: 404 }),
+      {},
+    ).catch((e) => e);
+    expect(failure.status).toBe(404);
+    expect(await failure.response.text()).toBe("");
+  });
+  it("preserves the exact caller cancellation reason during a read", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("operator stopped", "AbortError");
+    const pending = boundedGatewayJson(
+      "https://gateway.example/read",
+      async () => new Promise<Response>(() => {}),
+      { signal: controller.signal },
+    );
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+  });
+  it("keeps bounded HTTP error details readable after upstream cleanup", async () => {
+    const failure = await boundedGatewayJson(
+      "https://gateway.example/read",
+      async () => new Response('{"detail":"not found"}', { status: 404 }),
+      {},
+    ).catch((e) => e);
+    expect(failure.status).toBe(404);
+    expect(await failure.response.json()).toEqual({ detail: "not found" });
+  });
+  it("accepts punctuation, escapes and nested arrays inside JSON strings", async () => {
+    const body = {
+      text: '\", ,, { \\ trailing',
+      list: [{ text: '\\"' }, { text: "}" }],
+    };
+    expect(
+      await boundedGatewayJson(
+        "https://gateway.example/read",
+        async () => new Response(JSON.stringify(body)),
+        {},
+      ),
+    ).toEqual(body);
+  });
+  it.each([
+    '{"data":1,"data":2}',
+    '{"nested":{"x":1,"x":2}}',
+    '{"nested":{"x":1,"\\u0078":2}}',
+  ])("rejects duplicate fields specifically", async (body) => {
+    await expect(
+      boundedGatewayJson(
+        "https://gateway.example/read",
+        async () => new Response(body),
+        {},
+      ),
+    ).rejects.toMatchObject({
+      kind: "malformed",
+      message: "Duplicate gateway read field",
+    });
+  });
   it("rejects an infinite empty-chunk producer without waiting for a starved timer", async () => {
     let pulls = 0;
     const cancel = vi.fn();
@@ -137,7 +195,7 @@ describe("bounded read transport", () => {
       },
       { signal: controller.signal },
     );
-    await expect(pending).rejects.toThrow("cancelled");
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(cancel).toHaveBeenCalledTimes(1);
   });
   it("bounds a stalled prepare step with the read deadline", async () => {
@@ -164,7 +222,7 @@ describe("bounded read transport", () => {
       { prepare: () => new Promise<void>(() => {}) },
     );
     controller.abort();
-    await expect(pending).rejects.toThrow("cancelled");
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(transport).not.toHaveBeenCalled();
   });
   it("sends owner-scoped reads on the account lane and others on the query lane", async () => {

@@ -70,6 +70,7 @@ function fixture() {
           height: tx.result.height,
           time: "2026-10-26T13:14:15.123456789Z",
           app_hash: "cd".repeat(32),
+          last_block_id: { hash: "ef".repeat(32) },
         },
         data: { txs: [base64(new Uint8Array([1])), base64(signedBytes)] },
       },
@@ -94,7 +95,7 @@ function setup(f = fixture()) {
 describe("trusted-gateway transaction evidence", () => {
   it("binds real canonical signed bytes, hash, exact height/index and pinned chain without loading a key", async () => {
     const f = setup();
-    const evidence = await f.client.queryTransactionEvidence(f.selection);
+    const evidence = await f.client.reads().evidence.transaction(f.selection);
     expect(evidence).toEqual({
       source: "trusted-gateway",
       hash: f.selection.hash,
@@ -104,6 +105,7 @@ describe("trusted-gateway transaction evidence", () => {
       code: 0,
       events: f.tx.result.tx_result.events,
       block: {
+        parentHash: "EF".repeat(32),
         hash: "AB".repeat(32),
         height: 9007199254740993n,
         chainId: chainName,
@@ -122,12 +124,14 @@ describe("trusted-gateway transaction evidence", () => {
   it("preserves a committed rejection and documented protobuf omitted defaults", async () => {
     const f = setup();
     f.tx.result.tx_result.code = 12;
-    expect((await f.client.queryTransactionEvidence(f.selection)).code).toBe(
-      12,
-    );
+    expect(
+      (await f.client.reads().evidence.transaction(f.selection)).code,
+    ).toBe(12);
     Reflect.deleteProperty(f.tx.result.tx_result, "code");
     Reflect.deleteProperty(f.tx.result.tx_result, "events");
-    expect(await f.client.queryTransactionEvidence(f.selection)).toMatchObject({
+    expect(
+      await f.client.reads().evidence.transaction(f.selection),
+    ).toMatchObject({
       code: 0,
       events: [],
     });
@@ -135,9 +139,9 @@ describe("trusted-gateway transaction evidence", () => {
   it("refuses missing chain pin and invalid request bytes before any request", async () => {
     const f = setup();
     const keyless = new ExchangeClient({ httpTransport: f.transport });
-    await expect(keyless.queryTransactionEvidence(f.selection)).rejects.toThrow(
-      "pinned chainId",
-    );
+    await expect(
+      keyless.reads().evidence.transaction(f.selection),
+    ).rejects.toThrow("pinned chainId");
     for (const selection of [
       { ...f.selection, hash: "00".repeat(32) },
       { ...f.selection, hash: `0x${f.selection.hash}` },
@@ -145,8 +149,8 @@ describe("trusted-gateway transaction evidence", () => {
       { ...f.selection, signedBytes: new Uint8Array(1024 * 1024 + 1) },
     ])
       await expect(
-        f.client.queryTransactionEvidence(selection),
-      ).rejects.toThrow("Invalid transaction evidence");
+        f.client.reads().evidence.transaction(selection),
+      ).rejects.toMatchObject({ name: "GatewayReadError" });
     expect(f.transport).not.toHaveBeenCalled();
   });
   it.each([
@@ -247,8 +251,8 @@ describe("trusted-gateway transaction evidence", () => {
     const f = setup();
     mutate(f);
     await expect(
-      f.client.queryTransactionEvidence(f.selection),
-    ).rejects.toThrow("Invalid transaction evidence");
+      f.client.reads().evidence.transaction(f.selection),
+    ).rejects.toMatchObject({ name: "GatewayReadError" });
   });
   it.each([9007199254740992, "01", "-1", "9223372036854775808", 1.5, null])(
     "rejects unsafe or noncanonical heights: %s",
@@ -256,7 +260,7 @@ describe("trusted-gateway transaction evidence", () => {
       const f = setup();
       Object.assign(f.tx.result, { height });
       await expect(
-        f.client.queryTransactionEvidence(f.selection),
+        f.client.reads().evidence.transaction(f.selection),
       ).rejects.toThrow("transaction height");
       expect(f.transport).toHaveBeenCalledTimes(1);
     },
@@ -267,7 +271,7 @@ describe("trusted-gateway transaction evidence", () => {
       const f = setup();
       Object.assign(f.tx.result.tx_result, { code });
       await expect(
-        f.client.queryTransactionEvidence(f.selection),
+        f.client.reads().evidence.transaction(f.selection),
       ).rejects.toThrow("execution code");
     },
   );
@@ -275,7 +279,7 @@ describe("trusted-gateway transaction evidence", () => {
     const f = setup();
     f.transport.mockResolvedValueOnce(new Response("missing", { status: 404 }));
     await expect(
-      f.client.queryTransactionEvidence(f.selection),
+      f.client.reads().evidence.transaction(f.selection),
     ).rejects.toBeInstanceOf(GatewayHttpError);
     expect(f.transport).toHaveBeenCalledTimes(1);
     f.transport.mockResolvedValueOnce(
@@ -287,14 +291,14 @@ describe("trusted-gateway transaction evidence", () => {
       ),
     );
     await expect(
-      f.client.queryTransactionEvidence(f.selection),
+      f.client.reads().evidence.transaction(f.selection),
     ).rejects.toThrow("RPC error");
     expect(f.transport).toHaveBeenCalledTimes(2);
   });
   it("copies caller bytes before awaiting and preserves event text without base64 decoding", async () => {
     const f = setup();
     const expected = f.selection.signedBytes.slice();
-    const pending = f.client.queryTransactionEvidence(f.selection);
+    const pending = f.client.reads().evidence.transaction(f.selection);
     f.selection.signedBytes.fill(0);
     f.selection.hash = "00".repeat(32);
     const result = await pending;
@@ -305,7 +309,7 @@ describe("trusted-gateway transaction evidence", () => {
     const f = setup();
     const before = AbortSignal.abort(new Error("cancelled before"));
     await expect(
-      f.client.queryTransactionEvidence(f.selection, { signal: before }),
+      f.client.reads().evidence.transaction(f.selection, { signal: before }),
     ).rejects.toThrow("cancelled before");
     expect(f.transport).not.toHaveBeenCalled();
     const controller = new AbortController();
@@ -314,7 +318,7 @@ describe("trusted-gateway transaction evidence", () => {
       return new Response(JSON.stringify(f.tx));
     });
     await expect(
-      f.client.queryTransactionEvidence(f.selection, {
+      f.client.reads().evidence.transaction(f.selection, {
         signal: controller.signal,
       }),
     ).rejects.toThrow(/cancel/);
@@ -328,7 +332,7 @@ describe("trusted-gateway transaction evidence", () => {
       from(bytes: Uint8Array): Uint8Array;
     };
     f.selection.signedBytes = NodeBuffer.from(expected);
-    const pending = f.client.queryTransactionEvidence(f.selection);
+    const pending = f.client.reads().evidence.transaction(f.selection);
     f.selection.signedBytes.fill(0);
     expect((await pending).signedBytes).toEqual(expected);
   });
@@ -344,7 +348,7 @@ describe("trusted-gateway transaction evidence", () => {
     });
     try {
       await expect(
-        f.client.queryTransactionEvidence(f.selection, { timeoutMs: 10 }),
+        f.client.reads().evidence.transaction(f.selection, { timeoutMs: 10 }),
       ).rejects.toThrow(/deadline/);
       expect(f.transport).toHaveBeenCalledTimes(2);
     } finally {
@@ -360,7 +364,7 @@ describe("trusted-gateway transaction evidence", () => {
     ]) {
       f.transport.mockResolvedValueOnce(new Response(body));
       await expect(
-        f.client.queryTransactionEvidence(f.selection),
+        f.client.reads().evidence.transaction(f.selection),
       ).rejects.toThrow();
     }
   });

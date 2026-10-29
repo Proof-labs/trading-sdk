@@ -1,19 +1,26 @@
+import {
+  decodeBlockEvidenceHeader,
+  type BlockEvidenceHeader,
+} from "./block-header.js";
+export {
+  decodeBlockEvidenceHeader,
+  type BlockEvidenceHeader,
+} from "./block-header.js";
+import { readDeadline, rfc3339, MAX_DATE_MS } from "./read-values.js";
+import { GatewayReadError } from "./errors.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { boundedGatewayJson, type BoundedReadOptions } from "./bounded-read.js";
 import {
   I64_MAX,
-  blockTime,
   bytes,
   events,
-  hash,
   invalid,
   object,
   rpcResult,
-  same,
   uint,
   type TransactionEvidenceEvent,
 } from "./chain-evidence.js";
-import { bytesToHex, chainIdFromString } from "./crypto.js";
+import { bytesToHex } from "./crypto.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 
 export interface BlockResultsWindowSelection {
@@ -24,16 +31,11 @@ export interface BlockResultsWindowSelection {
   throughHeight: bigint;
   /** Maximum backward-scanned heights, 1..128. Default 32. No partial success. */
   maxHeights?: number;
-}
-
-export interface BlockEvidenceHeader {
-  hash: string;
-  chainId: string;
-  height: bigint;
-  parentHash: string | null;
-  time: string;
-  /** Header H contains the app hash after H-1, not after H. */
-  appHash: string;
+  /** Caller may reduce these per-window ceilings, never exceed them. */
+  maxDecodedBytes?: number;
+  maxTransactions?: number;
+  maxEvents?: number;
+  maxAttributes?: number;
 }
 
 export interface BlockResultsEvidence {
@@ -69,50 +71,13 @@ export interface BlockResultsWindow {
   blocks: BlockResultsEvidence[];
 }
 
-const MAX_DECODED_BYTES = 8 * 1024 * 1024;
-const MAX_TRANSACTIONS = 10_000;
-const MAX_EVENTS = 16_384;
-const MAX_ATTRIBUTES = 65_536;
+const WINDOW_MAX_DECODED_BYTES = 8 * 1024 * 1024;
+const WINDOW_MAX_TRANSACTIONS = 10_000;
+const WINDOW_MAX_EVENTS = 16_384;
+const WINDOW_MAX_ATTRIBUTES = 65_536;
 
 function timeNs(time: string): bigint {
-  const seconds = Date.parse(`${time.slice(0, 19)}Z`);
-  const fraction = time.slice(19, -1).replace(/^\./, "");
-  return BigInt(seconds) * 1_000_000n + BigInt(fraction.padEnd(9, "0"));
-}
-
-/** Internal common header decoder; does not verify validator signatures. */
-export function decodeBlockEvidenceHeader(
-  response: Record<string, unknown>,
-  height: bigint,
-  chain: Uint8Array,
-): BlockEvidenceHeader {
-  const block = object(response.block, "block");
-  const header = object(block.header, "block header");
-  if (uint(header.height, I64_MAX, "block height") !== height)
-    invalid("block height mismatch");
-  if (
-    typeof header.chain_id !== "string" ||
-    header.chain_id.length === 0 ||
-    header.chain_id.length > 128 ||
-    !same(chainIdFromString(header.chain_id), chain)
-  )
-    invalid("block chain mismatch");
-  const previous = object(header.last_block_id, "previous block ID").hash;
-  const parentHash =
-    height === 1n && previous === ""
-      ? null
-      : hash(previous, "parent block hash");
-  return {
-    hash: hash(object(response.block_id, "block ID").hash, "block hash"),
-    chainId: header.chain_id as string,
-    height,
-    parentHash,
-    time: blockTime(header.time),
-    appHash:
-      height === 1n && header.app_hash === ""
-        ? ""
-        : hash(header.app_hash, "block app hash"),
-  };
+  return rfc3339(time).nanos;
 }
 
 /** Internal bounded scan. At most 2*maxHeights+1 GETs; each response <=1 MiB,
@@ -126,14 +91,43 @@ export async function readBlockResultsWindow(
 ): Promise<BlockResultsWindow> {
   const { fromMs, toMs, throughHeight } = selection;
   const maxHeights = selection.maxHeights ?? 32;
-  const timeoutMs = options.timeoutMs ?? 10_000;
-  const signal = options.signal;
+  const deadline = readDeadline(options);
+  const budget = (
+    value: number | undefined,
+    ceiling: number,
+    field: string,
+  ) => {
+    const n = value ?? ceiling;
+    if (!Number.isSafeInteger(n) || n < 1 || n > ceiling)
+      throw new GatewayReadError("configuration", field);
+    return n;
+  };
+  const maxBytes = budget(
+    selection.maxDecodedBytes,
+    WINDOW_MAX_DECODED_BYTES,
+    "window bytes",
+  );
+  const maxTransactions = budget(
+    selection.maxTransactions,
+    WINDOW_MAX_TRANSACTIONS,
+    "window transactions",
+  );
+  const maxEvents = budget(
+    selection.maxEvents,
+    WINDOW_MAX_EVENTS,
+    "window events",
+  );
+  const maxAttributes = budget(
+    selection.maxAttributes,
+    WINDOW_MAX_ATTRIBUTES,
+    "window attributes",
+  );
   if (
     !Number.isSafeInteger(fromMs) ||
     fromMs < 0 ||
     !Number.isSafeInteger(toMs) ||
     toMs <= fromMs ||
-    toMs > 8_640_000_000_000_000
+    toMs > MAX_DATE_MS
   )
     invalid("fixed window");
   if (
@@ -144,32 +138,25 @@ export async function readBlockResultsWindow(
     invalid("through height");
   if (!Number.isSafeInteger(maxHeights) || maxHeights < 1 || maxHeights > 128)
     invalid("height budget");
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000)
-    invalid("timeout");
   if (!(expectedChainId instanceof Uint8Array) || expectedChainId.length !== 32)
     invalid("pinned chain");
   const chain = Uint8Array.from(expectedChainId);
-  const deadline = performance.now() + timeoutMs;
   const base = gatewayUrl.replace(/\/+$/, "");
   let decodedBytes = 0;
   let transactionCount = 0;
   let eventCount = 0;
   let attributeCount = 0;
   const check = () => {
-    signal?.throwIfAborted();
-    if (performance.now() >= deadline)
-      throw new Error("Block-results window deadline exceeded");
+    deadline.remaining();
   };
   const read = async (path: string): Promise<Record<string, unknown>> => {
     check();
-    const budget = Math.floor(deadline - performance.now());
-    if (budget < 1) throw new Error("Block-results window deadline exceeded");
+
     const raw = await boundedGatewayJson(`${base}${path}`, transport, {
-      signal,
-      timeoutMs: budget,
+      ...deadline.remaining(),
     });
     decodedBytes += new TextEncoder().encode(JSON.stringify(raw)).length;
-    if (decodedBytes > MAX_DECODED_BYTES) invalid("window byte budget");
+    if (decodedBytes > maxBytes) invalid("window byte budget", "limit");
     check();
     return rpcResult(raw);
   };
@@ -180,8 +167,8 @@ export async function readBlockResultsWindow(
       (total, event) => total + (event.attributes?.length ?? 0),
       0,
     );
-    if (eventCount > MAX_EVENTS || attributeCount > MAX_ATTRIBUTES)
-      invalid("window event budget");
+    if (eventCount > maxEvents || attributeCount > maxAttributes)
+      invalid("window event budget", "limit");
     return decoded;
   };
   const anchor = decodeBlockEvidenceHeader(
@@ -214,11 +201,11 @@ export async function readBlockResultsWindow(
       invalid("block transactions");
     const txs = (rawTransactions ?? []) as unknown[];
     transactionCount += txs.length;
-    if (transactionCount > MAX_TRANSACTIONS)
-      invalid("window transaction budget");
+    if (transactionCount > maxTransactions)
+      invalid("window transaction budget", "limit");
     const result = await read(`/v1/block_results?height=${height}`);
     if (uint(result.height, I64_MAX, "results height") !== height)
-      invalid("results height mismatch");
+      invalid("results height mismatch", "binding");
     if (result.txs_results !== null && !Array.isArray(result.txs_results))
       invalid("transaction results");
     const txResults = (result.txs_results ?? []) as unknown[];
@@ -231,7 +218,8 @@ export async function readBlockResultsWindow(
     const postState = bytes(result.app_hash, "results app hash");
     if (postState.length !== 32) invalid("results app hash length");
     const postAppHash = bytesToHex(postState).toUpperCase();
-    if (postAppHash !== next.appHash) invalid("post-state/header binding");
+    if (next.appHash === null || postAppHash !== next.appHash)
+      invalid("post-state/header binding");
     const transactions = txs.map((value, index) => {
       const signedBytes = bytes(value, "block transaction bytes");
       const execution = object(txResults[index], "transaction result");
@@ -269,7 +257,9 @@ export async function readBlockResultsWindow(
     }
     next = header;
   }
-  throw new Error(
+  throw new GatewayReadError(
+    "limit",
+    "height budget",
     "Block-results window exceeds height budget; no complete window available",
   );
 }

@@ -1,3 +1,11 @@
+import {
+  canonicalBase64,
+  invalidRead,
+  marketId,
+  U64_MAX,
+  I64_MAX,
+  type MarketId,
+} from "./read-values.js";
 import { Decoder } from "@msgpack/msgpack";
 import { rejectFloats } from "./codec.js";
 import { ready } from "./wasm-loader.js";
@@ -16,17 +24,20 @@ export interface FinalizedOrderbookOptions extends BoundedReadOptions {
   depth?: FinalizedOrderbookDepth;
 }
 export interface FinalizedOrderbook {
-  market: number;
+  market: MarketId;
   depth: FinalizedOrderbookDepth;
   height: bigint;
   bids: OrderbookLevel[];
   asks: OrderbookLevel[];
   witness: FinalizedReadWitness;
 }
-const U64_MAX = (1n << 64n) - 1n;
+
 const decoder = new Decoder({ useBigInt64: true, maxArrayLength: 100 });
-function invalid(field: string): never {
-  throw new Error(`Invalid finalized orderbook: ${field}`);
+function invalid(
+  field: string,
+  kind: import("./errors.js").GatewayReadError["kind"] = "malformed",
+): never {
+  return invalidRead(`orderbook.${field}`, kind);
 }
 function uint(value: unknown, field: string, maximum = U64_MAX): bigint {
   const parsed =
@@ -39,14 +50,11 @@ function uint(value: unknown, field: string, maximum = U64_MAX): bigint {
   return parsed;
 }
 function request(market: number, depth: FinalizedOrderbookDepth): void {
-  if (uint(market, "market", 0xffff_ffffn) === 0n) invalid("market");
+  marketId(market);
   if (![1, 20, 100].includes(depth)) invalid("depth");
 }
 
-/** Decode an engine-height-bearing frame, never the unheighted gateway cache.
- * Requires a same-view witness. This is not a CometBFT commitment proof or a
- * freshness verdict; caller must bind node, chain and H+1 header independently.
- * Requires await ready() for the authoritative MessagePack preflight. */
+/** Internal engine-height-bearing frame decoder. Requires await ready(). */
 export function decodeFinalizedOrderbook(
   value: unknown,
   market: number,
@@ -57,30 +65,17 @@ export function decodeFinalizedOrderbook(
     invalid("frame");
   const frame = value as Record<string, unknown>;
   if (frame.market !== String(market) || frame.depth !== String(depth))
-    invalid("market/depth mismatch");
-  const height = uint(frame.height, "height", (1n << 63n) - 1n);
+    invalid("market/depth mismatch", "binding");
+  const height = uint(frame.height, "height", I64_MAX);
   if (height === 0n) invalid("unfinalized height");
   const encoded = frame.bookMsgpackB64;
-  if (
-    typeof encoded !== "string" ||
-    encoded !== frame.data ||
-    encoded.length === 0 ||
-    encoded.length > 1024 * 1024 ||
-    encoded.length % 4 !== 0 ||
-    !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)
-  )
-    invalid("book encoding");
-  const bytes = Uint8Array.from(atob(encoded), (c) => c.charCodeAt(0));
-  if (
-    btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join("")) !==
-    encoded
-  )
-    invalid("base64");
+  if (encoded !== frame.data) invalid("book encoding mismatch", "binding");
+  const bytes = canonicalBase64(encoded, "book encoding", 512 * 1024);
   // Preflight before decoding bounds depth and rejects floats and trailing data.
   rejectFloats(bytes);
   const raw: unknown = decoder.decode(bytes);
   if (!Array.isArray(raw) || raw.length !== 2) invalid("book tuple");
-  const levels = (value: unknown, buy: boolean): OrderbookLevel[] => {
+  const levels = (value: unknown, side: "bids" | "asks"): OrderbookLevel[] => {
     if (!Array.isArray(value) || value.length > depth)
       invalid("depth exceeded");
     let previous: bigint | undefined;
@@ -89,7 +84,7 @@ export function decodeFinalizedOrderbook(
       const price = uint(row[0], "price");
       if (
         previous !== undefined &&
-        (buy ? price >= previous : price <= previous)
+        (side === "bids" ? price >= previous : price <= previous)
       )
         invalid("level ordering");
       previous = price;
@@ -101,11 +96,11 @@ export function decodeFinalizedOrderbook(
     });
   };
   return {
-    market,
+    market: marketId(market),
     depth,
     height,
-    bids: levels(raw[0], true),
-    asks: levels(raw[1], false),
+    bids: levels(raw[0], "bids"),
+    asks: levels(raw[1], "asks"),
     witness: decodeFinalizedReadWitness(frame.witness, height),
   };
 }

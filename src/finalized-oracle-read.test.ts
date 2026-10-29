@@ -1,11 +1,8 @@
+import { decodeFinalizedOraclePermissions } from "./finalized-oracle-read.js";
 import { readFileSync } from "node:fs";
 import { Decoder, encode } from "@msgpack/msgpack";
 import { beforeAll, expect, it, vi } from "vitest";
-import {
-  ExchangeClient,
-  decodeFinalizedOraclePermissions,
-  ready,
-} from "./index.js";
+import { ExchangeClient, ready } from "./index.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 
 beforeAll(ready);
@@ -91,15 +88,15 @@ it("uses the bounded gateway witness route with no fallback", async () => {
     useGateway: false,
     httpTransport: transport,
   });
-  await client.queryFinalizedOraclePermissions(1);
+  await client.reads().finalized.oraclePermissions(1);
   expect(String(transport.mock.calls[0][0])).toBe(
     "https://gateway.example/v1/oracle/permissions/1?witness=1",
   );
   transport.mockImplementation(
     async () => new Response("unavailable", { status: 503 }),
   );
-  await expect(client.queryFinalizedOraclePermissions(1)).rejects.toThrow();
+  await expect(client.reads().finalized.oraclePermissions(1)).rejects.toThrow();
   expect(transport).toHaveBeenCalledTimes(2);
-  await expect(client.queryFinalizedOraclePermissions(0)).rejects.toThrow();
+  await expect(client.reads().finalized.oraclePermissions(0)).rejects.toThrow();
   expect(transport).toHaveBeenCalledTimes(2);
 });

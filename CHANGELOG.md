@@ -9,6 +9,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking changes
 
+- **Financial reads (MAJOR for npm):** `FinancialState` is a format-discriminated
+  union. Format 3 omits the retired PLP record, so callers must narrow
+  `state.format === 1` before using `state.plp`. `queryFinancialState` now accepts
+  format 3, which it previously rejected. Include this in the next major npm
+  release; this PR does not publish a package or tag. Historical format 1 remains
+  supported without fabricating a missing PLP value.
+
 - **proof-wire 9.0.0, for exchange 2.21.0 (protocol 9.0).** The Rust crate
   pins proof-wire 9 (tag v9.0.0, commit `8857f3d3`). The engine retired its
   liquidity-provider backstop, so error code 112 (`InvalidPlpConfig`) no
@@ -48,65 +55,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `queryFinalizedOraclePermissions` preserves the existing policy/verdict read
-  with an opt-in same-state witness. Legacy, unavailable and stale states remain
-  explicit data; the method does not select a price or authorize execution.
+- Generic opt-in state reads under `reads().finalized`, chain evidence under
+  `reads().evidence`, and `reads().tradeHistoryPage`. These use the configured
+  gateway even when `useGateway: false`, matching the existing `reads()` surface.
+  Gateway #267 must merge and its routes be deployed before use; there is no
+  direct-node or unwitnessed fallback.
+- `verifyWitness(witness, nextHeader, chainId)` checks the pinned chain and H+1
+  state hash. Hashes are canonical uppercase; genesis header hashes may be null.
+  See [generic reads design](docs/generic-finalized-reads.md) for trust boundaries,
+  pagination obligations, resource limits, typed errors and timestamp units.
 
-- Generic opt-in witnessed account reads: `queryFinalizedAccountState`,
-  `queryFinalizedOpenOrders`, `queryFinalizedRecentNonces` and
-  `queryFinalizedAgentAuthorization`. Each preserves one node view; callers
-  must join matching witnesses and bind to their pinned chain's next header.
-  Limit-sized order pages remain explicitly incomplete. No insurance-specific
-  engine calculation, execution permission or nonce non-admission claim.
-
-- `queryAgentAuthorization(owner, agent, options?)` reads the generic account
-  authorization boolean with bounded, cancellable transport. Addresses are
-  20 bytes, not public keys. This unwitnessed read is not trading permission.
-- Financial reads decode the engine's seven-slot format 3 without synthesizing
-  the retired PLP record. Historical format 1 remains explicitly discriminated.
-  Unknown format numbers, tuple extensions and unselected owners are refused.
-
-- Raw account and financial position reads preserve the engine's
-  optional exact entry-cost remainder. Legacy six-field records decode with zero;
-  malformed remainders and unknown extensions are rejected. Read support does not
-  qualify an execution strategy against the new engine accounting rules.
-
-- **`queryFinalizedFinancialState(selection, options?)`** opts into a bounded
-  same-node height/time/app-hash witness for existing financial facts. It requires
-  a pinned chain and caller-side chain/header binding, never falls back to an
-  unwitnessed response, and leaves `queryFinancialState` unchanged.
-
-- **`queryBlockHeader(height, options?)`** adds a bounded exact-height read on the
-  pinned chain. **`queryFinalizedMarketsSnapshot(options?)`** preserves the
-  existing market snapshot's required node/height/time/app-hash witness. Both use
-  existing gateway routes and bounded cancellable body reads. Witnesses and
-  headers remain trusted-gateway evidence, not cryptographic finality or execution
-  authorization; old convenience reads and wire bytes are unchanged.
-- **`queryBlockResultsWindow(selection, options?)`** obtains every transaction and
-  system-event list in a fixed time window from existing gateway block/results
-  routes, with chain/height/parent/time, transaction-result count and next-header
-  app-hash binding. The scan fails on gaps, pruning, missing results or work bounds
-  rather than returning partial coverage. This is trusted-gateway evidence, not a
-  cryptographic event proof; no indexer watermark or trading rule is inferred.
-- **`queryTransactionEvidence(selection, options?)`** binds caller-supplied signed
-  bytes and their hash to the existing gateway transaction result and the exact
-  transaction index in its block, on an explicitly pinned chain. Preserves event
-  strings without economic decoding; both reads share a bounded cancellable
-  deadline. This is trusted-gateway evidence, not cryptographic finality proof.
-  It identifies one occurrence only: repeated signed bytes can have an earlier
-  success and a later replay rejection, which cannot rule out earlier fills.
-  Missing/error responses, including 404, never establish non-admission. Additive
-  (MINOR); existing submission and polling methods are unchanged.
-- **`queryFinalizedOrderbook(market, options?)`** reads an engine-height-bearing
-  book from the gateway's additive `/v1/orderbook-snapshot/{market}` route,
-  preserving the same-view witness and selected depth (1, 20 or 100),
-  rejecting missing witnesses, mismatched heights and unheighted cache
-  responses. **`queryHistoryTradesPage(market, options)`** preserves participants,
-  exact price/quantity text, fee units, block provenance and opaque pagination
-  cursors for a fixed trade-history window. Both keyless reads have cancellable,
-  bounded response-body deadlines, no retries and no direct-node fallback.
-  These are facts, not portfolio safety or indexer-completeness attestations.
-  Existing read methods and wire bytes are unchanged. Additive (MINOR).
 - **`queryFunding(market)`** reads one market's funding state at
   `GET /v1/funding/{market}` (the gateway's `fundingRate` read): funding rate,
   cumulative funding, last funding time, mark price EWMA, oracle price,
@@ -162,6 +120,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   longer decode.
 
 ### Fixed
+
+- Account and financial position decoders reject nonzero entry-cost remainders
+  greater than or equal to position size. Legacy six-field positions retain zero.
+  This intentionally tightens existing reads instead of returning invalid costs.
 
 - Trigger reads no longer fail on an engine label this SDK version does not
   know. A reason, limb state, availability kind, executed result and history

@@ -22,7 +22,7 @@ function frame(
       nodeId: "ab".repeat(20),
       height: "50",
       finalizedBlockTimeMs: "1000",
-      appHash: "cd".repeat(32),
+      appHash: "CD".repeat(32),
     },
   };
 }
@@ -39,7 +39,7 @@ describe("finalized orderbook read", () => {
         nodeId: "ab".repeat(20),
         height: 50n,
         finalizedBlockTimeMs: 1000n,
-        appHash: "cd".repeat(32),
+        appHash: "CD".repeat(32),
       },
     });
     expect(
@@ -58,7 +58,7 @@ describe("finalized orderbook read", () => {
       httpTransport: transport,
     });
     expect(
-      (await client.queryFinalizedOrderbook(1, { depth: 100 })).height,
+      (await client.reads().finalized.orderbook(1, { depth: 100 })).height,
     ).toBe(50n);
     expect(transport).toHaveBeenCalledTimes(1);
     expect(transport.mock.calls[0][0]).toBe(
@@ -154,12 +154,14 @@ describe("finalized orderbook read", () => {
       httpTransport: transport,
     });
     for (const market of [0, -1, 1.5, 0x1_0000_0000])
-      await expect(client.queryFinalizedOrderbook(market)).rejects.toThrow();
+      await expect(
+        client.reads().finalized.orderbook(market),
+      ).rejects.toThrow();
     await expect(
-      client.queryFinalizedOrderbook(1, { depth: 10 as 20 }),
+      client.reads().finalized.orderbook(1, { depth: 10 as 20 }),
     ).rejects.toThrow("depth");
     expect(transport).not.toHaveBeenCalled();
-    await expect(client.queryFinalizedOrderbook(1)).rejects.toMatchObject({
+    await expect(client.reads().finalized.orderbook(1)).rejects.toMatchObject({
       status: 404,
     });
     expect(transport).toHaveBeenCalledTimes(1);

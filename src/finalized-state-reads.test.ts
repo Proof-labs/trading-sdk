@@ -37,7 +37,7 @@ function markets() {
       nodeId: "ab".repeat(20),
       height: H.toString(),
       finalizedBlockTimeMs: "1234",
-      appHash: "ef".repeat(32),
+      appHash: "EF".repeat(32),
     },
   };
 }
@@ -88,9 +88,9 @@ function financial(format: 1 | 3 = 1) {
 }
 describe("opt-in finalized financial facts", () => {
   it("binds current format-3 financial facts to the same finalized witness", async () => {
-    const state = await client(
-      financial(3),
-    ).client.queryFinalizedFinancialState(FINANCIAL_SELECTION);
+    const state = await client(financial(3))
+      .client.reads()
+      .finalized.financialState(FINANCIAL_SELECTION);
     expect(state.format).toBe(3);
     expect(state).not.toHaveProperty("plp");
     expect(state.witness.height).toBe(state.finalizedHeight);
@@ -99,8 +99,9 @@ describe("opt-in finalized financial facts", () => {
   });
   it("preserves existing financial amounts and binds the exact height and time", async () => {
     const f = client(financial());
-    const state =
-      await f.client.queryFinalizedFinancialState(FINANCIAL_SELECTION);
+    const state = await f.client
+      .reads()
+      .finalized.financialState(FINANCIAL_SELECTION);
     expect(state.finalizedHeight).toBe(H);
     expect(state.finalizedTimeMs).toBe(1234n);
     expect(state.witness.height).toBe(H);
@@ -145,13 +146,13 @@ describe("opt-in finalized financial facts", () => {
         ? { markets: [8], owners: [OWNER] }
         : FINANCIAL_SELECTION;
     await expect(
-      client(b).client.queryFinalizedFinancialState(selection),
+      client(b).client.reads().finalized.financialState(selection),
     ).rejects.toThrow();
   });
   it("captures the exact selection before awaiting the transport", async () => {
     const selection = { markets: [7], owners: [OWNER] };
     const f = client(financial());
-    const pending = f.client.queryFinalizedFinancialState(selection);
+    const pending = f.client.reads().finalized.financialState(selection);
     selection.markets[0] = 8;
     selection.owners[0] = "05".repeat(20);
     expect((await pending).accounts[0].owner).toBe(OWNER);
@@ -162,48 +163,53 @@ describe("opt-in finalized financial facts", () => {
       '"height":"42","height":',
     );
     await expect(
-      client({}, () => new Response(raw)).client.queryFinalizedFinancialState(
-        FINANCIAL_SELECTION,
-      ),
+      client({}, () => new Response(raw))
+        .client.reads()
+        .finalized.financialState(FINANCIAL_SELECTION),
     ).rejects.toThrow("Duplicate");
     await expect(
-      client(
-        {},
-        () => new Response("x".repeat(1024 * 1024 + 1)),
-      ).client.queryFinalizedFinancialState(FINANCIAL_SELECTION),
+      client({}, () => new Response("x".repeat(1024 * 1024 + 1)))
+        .client.reads()
+        .finalized.financialState(FINANCIAL_SELECTION),
     ).rejects.toThrow("byte limit");
     await expect(
-      client(
-        {},
-        () => new Response(new ReadableStream({ start() {} })),
-      ).client.queryFinalizedFinancialState(FINANCIAL_SELECTION, {
-        timeoutMs: 10,
-      }),
+      client({}, () => new Response(new ReadableStream({ start() {} })))
+        .client.reads()
+        .finalized.financialState(FINANCIAL_SELECTION, {
+          timeoutMs: 10,
+        }),
     ).rejects.toThrow();
     const abort = new AbortController();
     abort.abort();
     const f = client(financial());
     await expect(
-      f.client.queryFinalizedFinancialState(FINANCIAL_SELECTION, {
+      f.client.reads().finalized.financialState(FINANCIAL_SELECTION, {
         signal: abort.signal,
       }),
     ).rejects.toThrow();
     expect(f.transport).not.toHaveBeenCalled();
   });
-  it("has no unpinned or legacy-response fallback", async () => {
+  it("does not imply a chain binding and refuses legacy-response fallback", async () => {
+    const transport = vi.fn(
+      async () => new Response(JSON.stringify(financial())),
+    );
+    const unpinned = new ExchangeClient({
+      gatewayUrl: "https://gateway.example",
+      httpTransport: transport,
+    });
+    expect(
+      (await unpinned.reads().finalized.financialState(FINANCIAL_SELECTION))
+        .witness.height,
+    ).toBe(H);
+    expect(transport).toHaveBeenCalledTimes(1);
     await expect(
-      new ExchangeClient({
-        gatewayUrl: "https://gateway.example",
-      }).queryFinalizedFinancialState(FINANCIAL_SELECTION),
-    ).rejects.toThrow("pinned");
-    await expect(
-      client({ data: financial().data }).client.queryFinalizedFinancialState(
-        FINANCIAL_SELECTION,
-      ),
+      client({ data: financial().data })
+        .client.reads()
+        .finalized.financialState(FINANCIAL_SELECTION),
     ).rejects.toThrow();
     const f = client({}, () => new Response("unavailable", { status: 503 }));
     await expect(
-      f.client.queryFinalizedFinancialState(FINANCIAL_SELECTION),
+      f.client.reads().finalized.financialState(FINANCIAL_SELECTION),
     ).rejects.toThrow();
     expect(f.transport).toHaveBeenCalledTimes(1);
   });
@@ -211,7 +217,7 @@ describe("opt-in finalized financial facts", () => {
 describe("bounded finalized state and header reads", () => {
   it("preserves exact heights and nanosecond header time without direct-node fallback", async () => {
     const f = client(block());
-    expect(await f.client.queryBlockHeader(H)).toEqual({
+    expect(await f.client.reads().evidence.blockHeader(H)).toEqual({
       height: H,
       chainId: CHAIN,
       hash: "AB".repeat(32),
@@ -225,7 +231,7 @@ describe("bounded finalized state and header reads", () => {
   });
   it("decodes actual MessagePack market inventory and preserves mandatory witness", async () => {
     const f = client(markets());
-    expect(await f.client.queryFinalizedMarketsSnapshot()).toMatchObject({
+    expect(await f.client.reads().finalized.marketsSnapshot()).toMatchObject({
       height: H,
       markets: [],
       events: [],
@@ -234,7 +240,7 @@ describe("bounded finalized state and header reads", () => {
         nodeId: "ab".repeat(20),
         height: H,
         finalizedBlockTimeMs: 1234n,
-        appHash: "ef".repeat(32),
+        appHash: "EF".repeat(32),
       },
     });
     expect(String(f.transport.mock.calls[0][0])).toBe(
@@ -245,7 +251,9 @@ describe("bounded finalized state and header reads", () => {
     "refuses invalid requested height %s before transport",
     async (height) => {
       const f = client(block());
-      await expect(f.client.queryBlockHeader(height)).rejects.toThrow();
+      await expect(
+        f.client.reads().evidence.blockHeader(height),
+      ).rejects.toThrow();
       expect(f.transport).not.toHaveBeenCalled();
     },
   );
@@ -259,7 +267,9 @@ describe("bounded finalized state and header reads", () => {
       if (field === "parent") b.result.block.header.last_block_id.hash = "";
       if (field === "appHash") b.result.block.header.app_hash = "bad";
       if (field === "rpc") b.jsonrpc = "1.0";
-      await expect(client(b).client.queryBlockHeader(H)).rejects.toThrow();
+      await expect(
+        client(b).client.reads().evidence.blockHeader(H),
+      ).rejects.toThrow();
     },
   );
   it.each(["missing", "height", "node", "time", "appHash", "chain"])(
@@ -270,7 +280,7 @@ describe("bounded finalized state and header reads", () => {
       if (field === "height") b.witness.height = "42";
       if (field === "node") b.witness.nodeId = "00".repeat(20);
       if (field === "time") b.witness.finalizedBlockTimeMs = "0";
-      if (field === "appHash") b.witness.appHash = "AB".repeat(32);
+      if (field === "appHash") b.witness.appHash = "zz".repeat(32);
       if (field === "chain")
         b.data = Buffer.from(
           encode([Array.from(chainIdFromString("other")), H, [], []], {
@@ -278,7 +288,7 @@ describe("bounded finalized state and header reads", () => {
           }),
         ).toString("base64");
       await expect(
-        client(b).client.queryFinalizedMarketsSnapshot(),
+        client(b).client.reads().finalized.marketsSnapshot(),
       ).rejects.toThrow();
     },
   );
@@ -286,31 +296,34 @@ describe("bounded finalized state and header reads", () => {
     const unpinned = new ExchangeClient({
       gatewayUrl: "https://gateway.example",
     });
-    await expect(unpinned.queryBlockHeader(1n)).rejects.toThrow("pinned");
-    await expect(unpinned.queryFinalizedMarketsSnapshot()).rejects.toThrow(
+    await expect(unpinned.reads().evidence.blockHeader(1n)).rejects.toThrow(
+      "pinned",
+    );
+    await expect(unpinned.reads().finalized.marketsSnapshot()).rejects.toThrow(
       "pinned",
     );
     await expect(
-      client(
-        {},
-        () => new Response("pruned", { status: 404 }),
-      ).client.queryBlockHeader(H),
+      client({}, () => new Response("pruned", { status: 404 }))
+        .client.reads()
+        .evidence.blockHeader(H),
     ).rejects.toThrow();
   });
   it("bounds oversized and stalled bodies and honors cancellation", async () => {
     const f = client({}, () => new Response("x".repeat(1024 * 1024 + 1)));
-    await expect(f.client.queryBlockHeader(H)).rejects.toThrow("byte limit");
+    await expect(f.client.reads().evidence.blockHeader(H)).rejects.toThrow(
+      "byte limit",
+    );
     const stalled = client(
       {},
       () => new Response(new ReadableStream({ start() {} })),
     );
     await expect(
-      stalled.client.queryBlockHeader(H, { timeoutMs: 10 }),
+      stalled.client.reads().evidence.blockHeader(H, { timeoutMs: 10 }),
     ).rejects.toThrow();
     const abort = new AbortController();
     abort.abort();
     await expect(
-      client(markets()).client.queryFinalizedMarketsSnapshot({
+      client(markets()).client.reads().finalized.marketsSnapshot({
         signal: abort.signal,
       }),
     ).rejects.toThrow();
@@ -321,10 +334,9 @@ describe("bounded finalized state and header reads", () => {
       '"height":"42","height":',
     );
     await expect(
-      client(
-        {},
-        () => new Response(raw),
-      ).client.queryFinalizedMarketsSnapshot(),
+      client({}, () => new Response(raw))
+        .client.reads()
+        .finalized.marketsSnapshot(),
     ).rejects.toThrow("Duplicate");
   });
 });
