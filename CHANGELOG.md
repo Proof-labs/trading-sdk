@@ -48,6 +48,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`reads().oracleHealth({ market })`** requests one market's oracle health
+  (`GET /v1/oracle/health?market={id}`, api-gateway 10.1.0+): the same object
+  with only that market's row, instead of the whole feeder state. Without
+  `market` the request is unchanged.
 - **`queryFunding(market)`** reads one market's funding state at
   `GET /v1/funding/{market}` (the gateway's `fundingRate` read): funding rate,
   cumulative funding, last funding time, mark price EWMA, oracle price,

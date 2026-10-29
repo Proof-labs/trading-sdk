@@ -271,9 +271,13 @@ the Rust core by `conformance/binary.ndjson`.
 ### Oracle freshness for trading UIs
 
 ```typescript
-const response = await client.reads().oracleHealth({ signal });
+const response = await client.reads().oracleHealth({ market: 3, signal });
 const health = await response.json();
 ```
+
+With `market`, a 10.1.0+ gateway returns the same object cut to that market's
+row (~1 KB instead of the full feeder state); omit it for every market. Older
+gateways do not accept the query.
 
 This forwards `GET /v1/oracle/health` through the configured gateway, preserving
 the response body, HTTP errors and cancellation. The Web-UI uses feeder freshness
