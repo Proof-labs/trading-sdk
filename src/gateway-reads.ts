@@ -239,9 +239,11 @@ export class GatewayReads {
   }
   /** Operational freshness for trading UI guards; not trading authorization.
    * Preserve unavailable-feeder responses; thresholds belong to the caller.
+   * `market` asks the gateway (10.1.0+) for that market's row only.
    */
-  oracleHealth(opts: GatewayReadOptions = {}) {
-    return this.get("/v1/oracle/health", {}, opts);
+  oracleHealth(opts: GatewayReadOptions & { market?: number } = {}) {
+    const { market, ...rest } = opts;
+    return this.get("/v1/oracle/health", { market }, rest);
   }
   /** History pipeline freshness (`GET /v1/history/status`, the indexer's
    * watermarks and ingest liveness). Lets a caller tell an empty history from
