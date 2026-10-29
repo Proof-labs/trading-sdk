@@ -1,0 +1,79 @@
+name: Close fixed issues on dev
+
+# GitHub closes a `Fixes #N` issue only when the pull request merges into the
+# repository's default branch. Most Proof-labs repositories default to `main`
+# while fixes merge into `dev`, so this closes the named issues on the `dev`
+# merge instead (DEC-278). A closed issue means the fix is merged, not that it
+# is deployed or verified.
+#
+# Reads the closing keywords GitHub recognises (close, closes, closed, fix,
+# fixes, fixed, resolve, resolves, resolved) in the pull request body and its
+# commit messages. Only issues in the calling repository are closed: the
+# workflow runs on the caller's own token, which holds no other repository.
+# `Part of #N` names no keyword and leaves the issue open.
+#
+# A copy of the reusable workflow in Proof-labs/.github: this repository is
+# public and cannot call a private one. Keep the two in step.
+#
+# Triggers on `pull_request_target`, so a merged fork pull request still
+# gets a token that can close issues. That is safe because this job never
+# checks out or runs the pull request's code; it only reads its metadata.
+
+on:
+  pull_request_target:
+    types: [closed]
+    branches: [dev]
+
+jobs:
+  close-fixed-issues:
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      pull-requests: read
+    steps:
+      - name: Close the issues the pull request fixes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: python3 {0}
+        run: |
+          import json, os, re, subprocess
+
+          repo = os.environ["REPO"]
+          pr = os.environ["PR_NUMBER"]
+          owner, name = repo.split("/")
+
+          def gh(*args):
+              return subprocess.run(["gh", *args], check=True, capture_output=True, text=True).stdout
+
+          body = json.loads(gh("api", f"repos/{repo}/pulls/{pr}"))["body"] or ""
+          commits = json.loads(gh("api", "--paginate", "--slurp", f"repos/{repo}/pulls/{pr}/commits"))
+          messages = [c["commit"]["message"] for page in commits for c in page]
+
+          keyword = re.compile(
+              r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?):?\s+"
+              r"(?:(?:([\w.-]+)/([\w.-]+))?#|https://github\.com/([\w.-]+)/([\w.-]+)/issues/)(\d+)\b",
+              re.IGNORECASE,
+          )
+          numbers = set()
+          for text in [body, *messages]:
+              for m in keyword.finditer(text):
+                  ref_owner, ref_name = (m.group(1), m.group(2)) if m.group(3) is None else (m.group(3), m.group(4))
+                  if ref_owner is None or (ref_owner.lower(), ref_name.lower()) == (owner.lower(), name.lower()):
+                      numbers.add(int(m.group(5)))
+                  else:
+                      print(f"Skipping {ref_owner}/{ref_name}#{m.group(5)}: another repository.")
+
+          for number in sorted(numbers):
+              issue = json.loads(gh("api", f"repos/{repo}/issues/{number}"))
+              if "pull_request" in issue:
+                  print(f"Skipping #{number}: a pull request, not an issue.")
+              elif issue["state"] == "closed":
+                  print(f"#{number} is already closed.")
+              else:
+                  gh("issue", "close", str(number), "--repo", repo, "--reason", "completed",
+                     "--comment", f"Closed by #{pr} merging into `dev`. Merged, not yet verified on DevNet.")
+                  print(f"Closed #{number}.")
