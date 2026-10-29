@@ -1,9 +1,13 @@
 import { GatewayHttpError, GatewayReadError } from "./errors.js";
 import {
+  hash32,
+  I64_MAX,
   MAX_READ_BYTES,
   MAX_READ_CHUNKS,
   readDeadline,
+  type Hash32Hex,
 } from "./read-values.js";
+import { chainIdFromString } from "./crypto.js";
 import { readContext, type ExchangeHttpTransport } from "./http-transport.js";
 
 /** Deadline covers queueing, headers and the entire bounded response body. */
@@ -11,6 +15,106 @@ export interface BoundedReadOptions {
   signal?: AbortSignal;
   /** Default 5 seconds, matching existing reads; explicit maximum 60 seconds. */
   timeoutMs?: number;
+}
+/** Same-view facts from a trusted gateway, NOT validator signatures or a
+ * cryptographic event proof. verifyWitness binds the height and app hash to a
+ * chain-qualified H+1 header; authenticate the node/header source separately.
+ * This is not freshness, solvency, or authorization to trade. */
+export interface FinalizedReadWitness {
+  version: 1;
+  nodeId: string;
+  height: bigint;
+  finalizedBlockTimeMs: bigint;
+  appHash: Hash32Hex;
+}
+export function decodeFinalizedReadWitness(
+  value: unknown,
+  expectedHeight?: bigint,
+  expectedTimeMs?: bigint,
+): FinalizedReadWitness {
+  const invalid = (): never => {
+    throw new GatewayReadError(
+      "malformed",
+      "witness",
+      "Invalid finalized read witness",
+    );
+  };
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
+  const w = value as Record<string, unknown>;
+  const decimal = (value: unknown): bigint => {
+    if (
+      typeof value !== "string" ||
+      value.length > 20 ||
+      !/^[1-9][0-9]*$/.test(value)
+    )
+      invalid();
+    const n = BigInt(value as string);
+    if (n > I64_MAX) invalid();
+    return n;
+  };
+  if (
+    w.version !== 1 ||
+    typeof w.nodeId !== "string" ||
+    !/^[a-f0-9]{40}$/.test(w.nodeId) ||
+    /^0+$/.test(w.nodeId) ||
+    typeof w.appHash !== "string" ||
+    !/^[a-fA-F0-9]{64}$/.test(w.appHash) ||
+    /^0+$/.test(w.appHash)
+  )
+    invalid();
+  const height = decimal(w.height);
+  const finalizedBlockTimeMs = decimal(w.finalizedBlockTimeMs);
+  if (
+    (expectedHeight !== undefined && height !== expectedHeight) ||
+    (expectedTimeMs !== undefined && finalizedBlockTimeMs !== expectedTimeMs)
+  )
+    invalid();
+  return {
+    version: 1,
+    nodeId: w.nodeId as string,
+    height,
+    finalizedBlockTimeMs,
+    appHash: hash32(w.appHash),
+  };
+}
+/** Compare a witness with an independently obtained, trusted H+1 header.
+ * H+1's timestamp is NOT H's timestamp, so it is deliberately not compared. */
+export function verifyWitness(
+  witness: FinalizedReadWitness,
+  nextHeader: { height: bigint; chainId: string; appHash: string | null },
+  chainId: string | Uint8Array,
+): void {
+  if (
+    (typeof chainId === "string" && (!chainId || chainId.length > 128)) ||
+    typeof nextHeader.chainId !== "string" ||
+    !nextHeader.chainId ||
+    nextHeader.chainId.length > 128
+  ) {
+    throw new GatewayReadError(
+      "configuration",
+      "chainId",
+      "Witness verification requires an explicit chain pin",
+    );
+  }
+  const expected =
+    typeof chainId === "string" ? chainIdFromString(chainId) : chainId;
+  const actual = chainIdFromString(nextHeader.chainId);
+  if (
+    !(expected instanceof Uint8Array) ||
+    expected.length !== 32 ||
+    actual.some((byte, i) => byte !== expected[i]) ||
+    witness.height < 1n ||
+    witness.height >= I64_MAX ||
+    nextHeader.height !== witness.height + 1n ||
+    nextHeader.appHash === null ||
+    hash32(witness.appHash) !== hash32(nextHeader.appHash)
+  ) {
+    throw new GatewayReadError(
+      "binding",
+      "witness",
+      "Finalized witness/header/chain mismatch",
+    );
+  }
 }
 
 export function parseBoundedJson(text: string): unknown {

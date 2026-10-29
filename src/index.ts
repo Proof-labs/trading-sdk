@@ -1,3 +1,4 @@
+export { verifyWitness } from "./bounded-read.js";
 export { GatewayReadError } from "./errors.js";
 export {
   hexAddress,
@@ -8,6 +9,22 @@ export {
   type MarketId,
 } from "./read-values.js";
 // Types
+export {
+  type FinalizedAccountState,
+  type FinalizedAgentAuthorization,
+  type FinalizedRecentNonces,
+  type FinalizedOpenOrders,
+  type FinalizedOpenOrdersOptions,
+  type RawOpenOrder,
+} from "./finalized-account-reads.js";
+export type {
+  FinalizedMarketsSnapshot,
+  FinalizedFinancialState,
+} from "./finalized-state-reads.js";
+export type {
+  BoundedReadOptions,
+  FinalizedReadWitness,
+} from "./bounded-read.js";
 export {
   type Address,
   Side,
@@ -372,6 +389,7 @@ export type {
   OracleSelectedSource,
   OracleVerdictDiagnostic,
 } from "./oracle-permissions.js";
+export { type FinalizedOraclePermissions } from "./finalized-oracle-read.js";
 
 export {
   GatewayFeed,

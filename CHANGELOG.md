@@ -50,6 +50,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `reads().finalized` preserves witnessed account, authority, nonce, orders, financial, market and oracle facts. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
+
 - **`queryFunding(market)`** reads one market's funding state at
   `GET /v1/funding/{market}` (the gateway's `fundingRate` read): funding rate,
   cumulative funding, last funding time, mark price EWMA, oracle price,
