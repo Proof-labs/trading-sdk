@@ -7,28 +7,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added
-
-- `queryFinalizedOraclePermissions` preserves the existing policy/verdict read
-  with an opt-in same-state witness. Legacy, unavailable and stale states remain
-  explicit data; the method does not select a price or authorize execution.
-
-- Generic opt-in witnessed account reads: `queryFinalizedAccountState`,
-  `queryFinalizedOpenOrders`, `queryFinalizedRecentNonces` and
-  `queryFinalizedAgentAuthorization`. Each preserves one node view; callers
-  must join matching witnesses and bind to their pinned chain's next header.
-  Limit-sized order pages remain explicitly incomplete. No insurance-specific
-  engine calculation, execution permission or nonce non-admission claim.
-
-- `queryAgentAuthorization(owner, agent, options?)` reads the generic account
-  authorization boolean with bounded, cancellable transport. Addresses are
-  20 bytes, not public keys. This unwitnessed read is not trading permission.
-- Financial reads decode the engine's seven-slot format 3 without synthesizing
-  the retired PLP record. Historical format 1 remains explicitly discriminated.
-  Unknown format numbers, tuple extensions and unselected owners are refused.
-- Removed the unreleased insurance-specific state/prefix APIs after exchange
-  #1250 moved portfolio sizing and risk checks to the off-chain application.
-
 ### Breaking changes
 
 - **Account frame types are lowerCamel**, matching api-gateway 9.0.0
@@ -59,6 +37,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `PendingTriggerDiscardReason` alias becomes `str`.
 
 ### Added
+
+- `queryFinalizedOraclePermissions` preserves the existing policy/verdict read
+  with an opt-in same-state witness. Legacy, unavailable and stale states remain
+  explicit data; the method does not select a price or authorize execution.
+
+- Generic opt-in witnessed account reads: `queryFinalizedAccountState`,
+  `queryFinalizedOpenOrders`, `queryFinalizedRecentNonces` and
+  `queryFinalizedAgentAuthorization`. Each preserves one node view; callers
+  must join matching witnesses and bind to their pinned chain's next header.
+  Limit-sized order pages remain explicitly incomplete. No insurance-specific
+  engine calculation, execution permission or nonce non-admission claim.
+
+- `queryAgentAuthorization(owner, agent, options?)` reads the generic account
+  authorization boolean with bounded, cancellable transport. Addresses are
+  20 bytes, not public keys. This unwitnessed read is not trading permission.
+- Financial reads decode the engine's seven-slot format 3 without synthesizing
+  the retired PLP record. Historical format 1 remains explicitly discriminated.
+  Unknown format numbers, tuple extensions and unselected owners are refused.
 
 - Raw account and financial position reads preserve the engine's
   optional exact entry-cost remainder. Legacy six-field records decode with zero;
@@ -93,7 +89,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (MINOR); existing submission and polling methods are unchanged.
 - **`queryFinalizedOrderbook(market, options?)`** reads an engine-height-bearing
   book from the gateway's additive `/v1/orderbook-snapshot/{market}` route,
-  preserving the same-view witness and selected depth (1, 20 or 100), rejecting missing witnesses, mismatched heights and unheighted cache
+  preserving the same-view witness and selected depth (1, 20 or 100),
+  rejecting missing witnesses, mismatched heights and unheighted cache
   responses. **`queryHistoryTradesPage(market, options)`** preserves participants,
   exact price/quantity text, fee units, block provenance and opaque pagination
   cursors for a fixed trade-history window. Both keyless reads have cancellable,
