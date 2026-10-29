@@ -426,6 +426,8 @@ SDK from source no longer needs access to the private Proof-labs/bridge repo.
 
 ### Changed
 
+- Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Market snapshot retains its explicit 10-second setting. HTTP failure bodies remain readable within the same cap; duplicate JSON keys refuse.
+
 - The bridge payload encoders (`encodeWithdrawalAuthorization`,
   `withdrawalAuthorizationDigest`, `encodeBridgeReceipt`) now come from
   proof-wire's `bridge` module instead of the private `bridge-core`, so

@@ -1,3 +1,12 @@
+export { GatewayReadError } from "./errors.js";
+export {
+  hexAddress,
+  hash32,
+  marketId,
+  type HexAddress,
+  type Hash32Hex,
+  type MarketId,
+} from "./read-values.js";
 // Types
 export {
   type Address,
