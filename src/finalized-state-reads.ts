@@ -41,9 +41,10 @@ export async function readFinalizedFinancialState(
   const expected = canonicalFinancialSelection(selection);
   const response = object(
     await boundedGatewayJson(
-      `${gatewayUrl.replace(/\/$/, "")}/v1/financial/state?markets=${expected.markets.join(",")}&owners=${expected.owners.join(",")}&witness=1`,
+      `${gatewayUrl.replace(/\/+$/, "")}/v1/financial/state?markets=${expected.markets.join(",")}&owners=${expected.owners.join(",")}&witness=1`,
       transport,
       options,
+      { purpose: "account" },
     ),
     "financial snapshot envelope",
   );
@@ -74,7 +75,7 @@ export async function readBlockHeader(
     invalid("requested block height");
   const chain = Uint8Array.from(expectedChain);
   const response = await boundedGatewayJson(
-    `${gatewayUrl.replace(/\/$/, "")}/v1/block?height=${height}`,
+    `${gatewayUrl.replace(/\/+$/, "")}/v1/block?height=${height}`,
     transport,
     options,
   );
@@ -92,7 +93,7 @@ export async function readFinalizedMarketsSnapshot(
   const chain = Uint8Array.from(expectedChain);
   const response = object(
     await boundedGatewayJson(
-      `${gatewayUrl.replace(/\/$/, "")}/v1/markets-snapshot`,
+      `${gatewayUrl.replace(/\/+$/, "")}/v1/markets-snapshot`,
       transport,
       options,
     ),

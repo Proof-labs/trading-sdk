@@ -231,11 +231,11 @@ async function read(
 ): Promise<unknown> {
   const captured = { ...options };
   captured.signal?.throwIfAborted();
-  await ready();
   return boundedGatewayJson(
     `${gateway.replace(/\/+$/, "")}${path}`,
     transport,
     captured,
+    { purpose: "account", prepare: ready },
   );
 }
 export async function readFinalizedAccountState(

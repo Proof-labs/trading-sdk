@@ -120,11 +120,11 @@ export async function readFinalizedOrderbook(
   const depth = captured.depth ?? 20;
   request(market, depth);
   captured.signal?.throwIfAborted();
-  await ready();
   const body = await boundedGatewayJson(
     `${gatewayUrl.replace(/\/+$/, "")}/v1/orderbook-snapshot/${market}?depth=${depth}`,
     transport,
     captured,
+    { prepare: ready },
   );
   return decodeFinalizedOrderbook(body, market, depth);
 }

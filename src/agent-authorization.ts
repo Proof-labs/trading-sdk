@@ -18,6 +18,7 @@ export async function readAgentAuthorization(
     `${gatewayUrl.replace(/\/+$/, "")}/v1/account/${owner}/agents/${agent}`,
     transport,
     options,
+    { purpose: "account" },
   );
   if (
     !result ||

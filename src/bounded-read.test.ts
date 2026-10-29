@@ -140,6 +140,51 @@ describe("bounded read transport", () => {
     await expect(pending).rejects.toThrow("cancelled");
     expect(cancel).toHaveBeenCalledTimes(1);
   });
+  it("bounds a stalled prepare step with the read deadline", async () => {
+    vi.useFakeTimers();
+    const transport = vi.fn<ExchangeHttpTransport>();
+    const pending = boundedGatewayJson(
+      "https://gateway.example/read",
+      transport,
+      { timeoutMs: 20 },
+      { prepare: () => new Promise<void>(() => {}) },
+    );
+    const outcome = expect(pending).rejects.toThrow("deadline");
+    await vi.advanceTimersByTimeAsync(20);
+    await outcome;
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it("honors parent abort during a stalled prepare step", async () => {
+    const controller = new AbortController();
+    const transport = vi.fn<ExchangeHttpTransport>();
+    const pending = boundedGatewayJson(
+      "https://gateway.example/read",
+      transport,
+      { signal: controller.signal },
+      { prepare: () => new Promise<void>(() => {}) },
+    );
+    controller.abort();
+    await expect(pending).rejects.toThrow("cancelled");
+    expect(transport).not.toHaveBeenCalled();
+  });
+  it("sends owner-scoped reads on the account lane and others on the query lane", async () => {
+    const transport = vi.fn<ExchangeHttpTransport>(
+      async () => new Response("{}"),
+    );
+    await boundedGatewayJson(
+      "https://gateway.example/read",
+      transport,
+      {},
+      {
+        purpose: "account",
+      },
+    );
+    await boundedGatewayJson("https://gateway.example/read", transport, {});
+    expect(transport.mock.calls.map((call) => call[2]?.priority)).toEqual([
+      "urgent",
+      "critical",
+    ]);
+  });
   it("rejects oversized, malformed, truncated, duplicate and invalid UTF-8 bodies", async () => {
     for (const response of [
       new Response("{}", { headers: { "content-length": "1048577" } }),

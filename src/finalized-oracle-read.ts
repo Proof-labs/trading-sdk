@@ -45,12 +45,12 @@ export async function readFinalizedOraclePermissions(
   marketId(market);
   const captured = { ...options };
   captured.signal?.throwIfAborted();
-  await ready();
   return decodeFinalizedOraclePermissions(
     await boundedGatewayJson(
       `${gateway.replace(/\/+$/, "")}/v1/oracle/permissions/${market}?witness=1`,
       transport,
       captured,
+      { prepare: ready },
     ),
     market,
   );

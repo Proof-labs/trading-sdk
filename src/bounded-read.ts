@@ -98,11 +98,19 @@ function strictEnvelope(text: string): unknown {
   return parsed;
 }
 
+/** Transport lane, plus setup that must finish inside the same deadline. */
+export interface BoundedReadRequest {
+  /** Owner-scoped reads take the account lane, like the unwitnessed reads. */
+  purpose?: "account" | "query";
+  /** Awaited after the deadline and cancellation are armed, e.g. `ready()`. */
+  prepare?: () => Promise<void>;
+}
 /** Internal one-shot SDK read. No retry, alternate endpoint or cached fallback. */
 export async function boundedGatewayJson(
   url: string,
   transport: ExchangeHttpTransport,
   options: BoundedReadOptions,
+  request: BoundedReadRequest = {},
 ): Promise<unknown> {
   const timeoutMs = options.timeoutMs ?? 10_000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000)
@@ -131,6 +139,10 @@ export async function boundedGatewayJson(
     controller.signal.addEventListener("abort", onAbort, { once: true });
   });
   try {
+    if (request.prepare) {
+      await Promise.race([request.prepare(), cancelled]);
+      checkDeadline();
+    }
     const pending = transport(
       url,
       {
@@ -139,7 +151,7 @@ export async function boundedGatewayJson(
         redirect: "error",
         signal: controller.signal,
       },
-      readContext(url, "query"),
+      readContext(url, request.purpose ?? "query"),
     );
     // A custom transport may ignore abort. Do not leak a response arriving late.
     void pending.then(
