@@ -12,9 +12,14 @@ import pytest
 
 from proof_trading_sdk import (
     CodecError,
+    GatewayError,
     MarketOpenInterest,
+    RateLimited,
+    TransportError,
     decode_markets_snapshot,
 )
+from proof_trading_sdk import client as client_module
+from proof_trading_sdk._native import MAX_MARKETS_SNAPSHOT_BYTES
 from proof_trading_sdk.client import ExchangeClient
 
 _VECTORS = Path(__file__).parents[2] / "crates/proof-trading-sdk/src/market_snapshot"
@@ -35,6 +40,60 @@ def _with_open_interest(rows: object) -> bytes:
     return _body(msgpack.packb(top))
 
 
+def _client(handler) -> ExchangeClient:
+    client = ExchangeClient(gateway_url="http://g", chain_id=CHAIN)
+    client._http = httpx.Client(
+        base_url="http://g", transport=httpx.MockTransport(handler)
+    )
+    return client
+
+
+def test_an_endless_body_is_refused_once_it_passes_the_limit():
+    sent: list[int] = []
+
+    def endless():
+        while True:
+            sent.append(1)
+            yield b" " * 65_536
+
+    client = _client(lambda request: httpx.Response(200, content=endless()))
+    with pytest.raises(CodecError, match="exceeds"):
+        client.markets_snapshot()
+    assert len(sent) * 65_536 <= MAX_MARKETS_SNAPSHOT_BYTES + 65_536
+
+
+def test_a_body_that_trickles_in_past_the_deadline_is_refused(monkeypatch):
+    clock = iter(range(0, 1_000, 6))
+    monkeypatch.setattr(client_module.time, "monotonic", lambda: next(clock))
+
+    def trickle():
+        for byte in _body(_engine_bytes("engine-66d50df7")):
+            yield bytes([byte])
+
+    client = _client(lambda request: httpx.Response(200, content=trickle()))
+    with pytest.raises(TransportError, match="not complete within"):
+        client.markets_snapshot(timeout=10.0)
+
+
+@pytest.mark.parametrize(
+    "status,error",
+    [
+        (204, TransportError),
+        (302, TransportError),
+        (429, RateLimited),
+        (500, GatewayError),
+    ],
+)
+def test_only_http_200_supplies_a_snapshot(status, error):
+    body = _body(_engine_bytes("engine-66d50df7"))
+    headers = {"Location": "http://elsewhere/"} if status == 302 else {}
+    client = _client(
+        lambda request: httpx.Response(status, headers=headers, content=body)
+    )
+    with pytest.raises(error):
+        client.markets_snapshot()
+
+
 def test_client_reads_the_open_interest_a_current_engine_serves():
     seen: list[str] = []
 
@@ -42,11 +101,7 @@ def test_client_reads_the_open_interest_a_current_engine_serves():
         seen.append(request.url.path)
         return httpx.Response(200, content=_body(_engine_bytes("engine-66d50df7")))
 
-    client = ExchangeClient(gateway_url="http://g", chain_id=CHAIN)
-    client._http = httpx.Client(
-        base_url="http://g", transport=httpx.MockTransport(handler)
-    )
-    snapshot = client.markets_snapshot()
+    snapshot = _client(handler).markets_snapshot()
     assert seen == ["/v1/markets-snapshot"]
     assert snapshot.chain_id == CHAIN
     assert snapshot.height == 9_007_199_254_740_993

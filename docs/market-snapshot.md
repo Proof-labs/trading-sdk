@@ -108,7 +108,11 @@ if snapshot.open_interest is not None:
 
 `markets_snapshot()` runs the Rust decoder above through the native module, so
 its refusals match Rust exactly and every decode failure raises `CodecError`. The
-client must be bound to a real chain; the zero binding is refused.
+client must be bound to a real chain; the zero binding is refused. The body is
+streamed and refused past 1 MiB before it is buffered whole, and `timeout`
+(10 seconds by default) bounds each network wait and the whole read, so a body
+that trickles in raises `TransportError`. Only HTTP 200 supplies data, and
+redirects are not followed.
 
 ## Bounds and compatibility
 

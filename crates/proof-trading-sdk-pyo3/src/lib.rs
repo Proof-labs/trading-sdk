@@ -452,6 +452,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(decode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_tx, m)?)?;
     m.add_function(wrap_pyfunction!(decode_markets_snapshot, m)?)?;
+    m.add(
+        "MAX_MARKETS_SNAPSHOT_BYTES",
+        market_snapshot::MAX_SNAPSHOT_BYTES,
+    )?;
     m.add_function(wrap_pyfunction!(reject_floats, m)?)?;
     m.add_function(wrap_pyfunction!(pubkey_to_owner, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;

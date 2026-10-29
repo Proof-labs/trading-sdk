@@ -13,6 +13,7 @@ import httpx
 import msgpack
 
 from proof_trading_sdk._native import (
+    MAX_MARKETS_SNAPSHOT_BYTES,
     SigningHandle,
     chain_id_from_string,
     generate_keypair,
@@ -1155,17 +1156,63 @@ class ExchangeClient:
             self._decode_market_config(m) for m in raw if isinstance(m, (list, tuple))
         ]
 
-    def markets_snapshot(self) -> MarketsSnapshot:
+    def markets_snapshot(self, timeout: float = 10.0) -> MarketsSnapshot:
         """Every market, event and per-market open interest from one committed
         state view, bound to this client's chain.
 
         A wrong chain, an uncommitted height or any malformed part refuses the
         whole read with :class:`CodecError`; nothing partial is returned. The
         client must be bound to a real chain, not the zero binding.
+
+        The body is streamed and refused once it passes
+        ``MAX_MARKETS_SNAPSHOT_BYTES``, before it is buffered whole. ``timeout``
+        bounds each network wait and, checked between chunks, the whole read, so
+        a body that trickles in fails with :class:`TransportError`. Only HTTP 200
+        supplies data; redirects are not followed.
         """
-        return decode_markets_snapshot(
-            self._get("/v1/markets-snapshot").content, self._chain_id
-        )
+        url = urljoin(self._gateway_url, "/v1/markets-snapshot")
+        deadline = time.monotonic() + timeout
+        body = bytearray()
+        try:
+            with self._http.stream(
+                "GET", url, timeout=httpx.Timeout(timeout), follow_redirects=False
+            ) as resp:
+                self._parse_rate_limits(resp)
+                if resp.status_code != 200:
+                    # Map the status with a bounded prefix of the error body.
+                    prefix = b""
+                    for chunk in resp.iter_bytes():
+                        prefix += chunk
+                        if len(prefix) >= 200:
+                            break
+                    self._check_response(
+                        httpx.Response(
+                            resp.status_code,
+                            headers=resp.headers,
+                            content=prefix[:200],
+                            request=resp.request,
+                        )
+                    )
+                    raise TransportError(
+                        f"markets snapshot: unexpected HTTP {resp.status_code}",
+                        status_code=resp.status_code,
+                    )
+                for chunk in resp.iter_bytes():
+                    body += chunk
+                    if len(body) > MAX_MARKETS_SNAPSHOT_BYTES:
+                        raise CodecError(
+                            "markets snapshot: response exceeds "
+                            f"{MAX_MARKETS_SNAPSHOT_BYTES} bytes"
+                        )
+                    if time.monotonic() > deadline:
+                        raise TransportError(
+                            f"markets snapshot: not complete within {timeout}s"
+                        )
+        except httpx.TimeoutException as e:
+            raise TransportError(f"markets snapshot: timed out: {e}") from e
+        except httpx.RequestError as e:
+            raise TransportError(f"markets snapshot: request failed: {e}") from e
+        return decode_markets_snapshot(bytes(body), self._chain_id)
 
     def market_status(self, market: int) -> dict[str, t.Any]:
         resp = self._get(f"/v1/market-status/{market}")
