@@ -1179,11 +1179,12 @@ class ExchangeClient:
             ) as resp:
                 self._parse_rate_limits(resp)
                 if resp.status_code != 200:
-                    # Map the status with a bounded prefix of the error body.
+                    # Map the status with whatever prefix of the error body
+                    # arrives within 200 bytes and the deadline.
                     prefix = b""
                     for chunk in resp.iter_bytes():
                         prefix += chunk
-                        if len(prefix) >= 200:
+                        if len(prefix) >= 200 or time.monotonic() > deadline:
                             break
                     self._check_response(
                         httpx.Response(

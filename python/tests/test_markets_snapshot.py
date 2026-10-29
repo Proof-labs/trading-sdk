@@ -75,6 +75,22 @@ def test_a_body_that_trickles_in_past_the_deadline_is_refused(monkeypatch):
         client.markets_snapshot(timeout=10.0)
 
 
+def test_an_error_body_that_trickles_in_still_fails_by_the_deadline(monkeypatch):
+    clock = iter(range(0, 1_000, 6))
+    monkeypatch.setattr(client_module.time, "monotonic", lambda: next(clock))
+    sent: list[int] = []
+
+    def trickle():
+        for byte in b"upstream unavailable" * 20:
+            sent.append(1)
+            yield bytes([byte])
+
+    client = _client(lambda request: httpx.Response(500, content=trickle()))
+    with pytest.raises(GatewayError):
+        client.markets_snapshot(timeout=10.0)
+    assert len(sent) == 2
+
+
 @pytest.mark.parametrize(
     "status,error",
     [
