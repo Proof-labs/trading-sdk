@@ -104,6 +104,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Account and financial position decoders now reject nonzero entry-cost remainders greater than or equal to position size. Legacy positions retain zero; this intentionally tightens existing reads.
+
 - Trigger reads no longer fail on an engine label this SDK version does not
   know. A reason, limb state, availability kind, executed result and history
   limb kind are engine-defined labels: each decodes as any non-empty string
