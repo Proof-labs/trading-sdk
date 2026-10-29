@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking changes
 
+- **Financial reads (MAJOR for npm):** `FinancialState` is a format-discriminated union; format 3 has no retired PLP record. Narrow `state.format === 1` before accessing `state.plp`. `queryFinancialState` now accepts format 3. Include in the next major npm release, not a minor 8.1 release. No package or tag is published here.
+
 - **proof-wire 9.0.0, for exchange 2.21.0 (protocol 9.0).** The Rust crate
   pins proof-wire 9 (tag v9.0.0, commit `8857f3d3`). The engine retired its
   liquidity-provider backstop, so error code 112 (`InvalidPlpConfig`) no
