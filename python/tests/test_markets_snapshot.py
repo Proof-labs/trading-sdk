@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 from pathlib import Path
 
@@ -89,6 +90,35 @@ def test_an_error_body_that_trickles_in_still_fails_by_the_deadline(monkeypatch)
     with pytest.raises(GatewayError):
         client.markets_snapshot(timeout=10.0)
     assert len(sent) == 2
+
+
+def test_the_snapshot_is_requested_uncompressed_and_a_compressed_one_refused():
+    seen: list[str] = []
+    bomb = gzip.compress(b" " * (8 * MAX_MARKETS_SNAPSHOT_BYTES))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers["Accept-Encoding"])
+        return httpx.Response(
+            200, headers={"Content-Encoding": "gzip"}, content=bomb
+        )
+
+    with pytest.raises(CodecError, match="content encoding 'gzip'"):
+        _client(handler).markets_snapshot()
+    assert seen == ["identity"]
+
+
+@pytest.mark.parametrize("status,error", [(429, RateLimited), (500, GatewayError)])
+def test_a_compressed_error_keeps_its_classification(status, error):
+    headers = {"Content-Encoding": "gzip", "Retry-After": "7"}
+    client = _client(
+        lambda request: httpx.Response(
+            status, headers=headers, content=gzip.compress(b"busy")
+        )
+    )
+    with pytest.raises(error) as raised:
+        client.markets_snapshot()
+    if status == 429:
+        assert raised.value.retry_after_secs == 7.0
 
 
 @pytest.mark.parametrize(

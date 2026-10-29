@@ -1164,33 +1164,43 @@ class ExchangeClient:
         whole read with :class:`CodecError`; nothing partial is returned. The
         client must be bound to a real chain, not the zero binding.
 
-        The body is streamed and refused once it passes
-        ``MAX_MARKETS_SNAPSHOT_BYTES``, before it is buffered whole. ``timeout``
-        bounds each network wait and, checked between chunks, the whole read, so
-        a body that trickles in fails with :class:`TransportError`. Only HTTP 200
-        supplies data; redirects are not followed.
+        The body is requested and read uncompressed, and refused once it passes
+        ``MAX_MARKETS_SNAPSHOT_BYTES``, before it is buffered whole; a
+        compressed body is refused unread. ``timeout`` bounds each network wait
+        and, checked between chunks, the whole read, so a body that trickles in
+        fails with :class:`TransportError`. Only HTTP 200 supplies data;
+        redirects are not followed.
         """
         url = urljoin(self._gateway_url, "/v1/markets-snapshot")
         deadline = time.monotonic() + timeout
         body = bytearray()
         try:
             with self._http.stream(
-                "GET", url, timeout=httpx.Timeout(timeout), follow_redirects=False
+                "GET",
+                url,
+                headers={"Accept-Encoding": "identity"},
+                timeout=httpx.Timeout(timeout),
+                follow_redirects=False,
             ) as resp:
                 self._parse_rate_limits(resp)
+                encoding = resp.headers.get("Content-Encoding", "identity").lower()
+                identity = encoding in ("", "identity")
                 if resp.status_code != 200:
-                    # Map the status with whatever prefix of the error body
-                    # arrives within 200 bytes and the deadline.
+                    # Map the status with whatever prefix of an uncompressed
+                    # error body arrives within 200 bytes and the deadline.
                     prefix = b""
-                    for chunk in resp.iter_bytes():
-                        prefix += chunk
+                    for chunk in resp.iter_bytes() if identity else ():
+                        prefix += chunk[: 200 - len(prefix)]
                         if len(prefix) >= 200 or time.monotonic() > deadline:
                             break
+                    headers = resp.headers.copy()
+                    for name in ("Content-Encoding", "Content-Length"):
+                        headers.pop(name, None)
                     self._check_response(
                         httpx.Response(
                             resp.status_code,
-                            headers=resp.headers,
-                            content=prefix[:200],
+                            headers=headers,
+                            content=prefix,
                             request=resp.request,
                         )
                     )
@@ -1198,13 +1208,18 @@ class ExchangeClient:
                         f"markets snapshot: unexpected HTTP {resp.status_code}",
                         status_code=resp.status_code,
                     )
+                if not identity:
+                    raise CodecError(
+                        f"markets snapshot: refused content encoding {encoding!r}"
+                    )
+                # No decoder runs: every encoding but identity is refused above.
                 for chunk in resp.iter_bytes():
-                    body += chunk
-                    if len(body) > MAX_MARKETS_SNAPSHOT_BYTES:
+                    if len(body) + len(chunk) > MAX_MARKETS_SNAPSHOT_BYTES:
                         raise CodecError(
                             "markets snapshot: response exceeds "
                             f"{MAX_MARKETS_SNAPSHOT_BYTES} bytes"
                         )
+                    body += chunk
                     if time.monotonic() > deadline:
                         raise TransportError(
                             f"markets snapshot: not complete within {timeout}s"
