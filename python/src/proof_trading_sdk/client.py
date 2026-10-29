@@ -28,6 +28,7 @@ from proof_trading_sdk.actions import (
     encode_action,
 )
 from proof_trading_sdk.config import SdkConfig, load_config
+from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
 from proof_trading_sdk.errors import (
     AuthenticationError,
     CodecError,
@@ -1153,6 +1154,18 @@ class ExchangeClient:
         return [
             self._decode_market_config(m) for m in raw if isinstance(m, (list, tuple))
         ]
+
+    def markets_snapshot(self) -> MarketsSnapshot:
+        """Every market, event and per-market open interest from one committed
+        state view, bound to this client's chain.
+
+        A wrong chain, an uncommitted height or any malformed part refuses the
+        whole read with :class:`CodecError`; nothing partial is returned. The
+        client must be bound to a real chain, not the zero binding.
+        """
+        return decode_markets_snapshot(
+            self._get("/v1/markets-snapshot").content, self._chain_id
+        )
 
     def market_status(self, market: int) -> dict[str, t.Any]:
         resp = self._get(f"/v1/market-status/{market}")

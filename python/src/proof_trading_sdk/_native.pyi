@@ -70,6 +70,12 @@ def decode_action(action_type: int, payload: bytes) -> dict[str, object]:
 def decode_tx(tx_bytes: bytes) -> dict[str, object]:
     ...
 
+def decode_markets_snapshot(body: bytes, chain_id: bytes) -> dict[str, object]:
+    """Decode a complete ``GET /v1/markets-snapshot`` response body bound to
+    ``chain_id``. Raises ``ValueError`` on any fault; nothing partial is
+    returned."""
+    ...
+
 def verify_signature(
     chain_id: bytes,
     pubkey: bytes,

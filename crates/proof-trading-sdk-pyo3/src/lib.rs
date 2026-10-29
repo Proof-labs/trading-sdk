@@ -3,6 +3,7 @@ extern crate proof_trading_sdk as core_sdk;
 use core_sdk::codec;
 use core_sdk::crypto;
 use core_sdk::governance;
+use core_sdk::market_snapshot;
 use core_sdk::types::ExecError;
 
 use pyo3::exceptions::PyValueError;
@@ -14,6 +15,10 @@ mod pkcs11;
 
 fn map_err(e: ExecError) -> PyErr {
     PyValueError::new_err(format!("{e:?}"))
+}
+
+fn map_pythonize_err(e: pythonize::PythonizeError) -> PyErr {
+    PyValueError::new_err(e.to_string())
 }
 
 /// Map a signing-backend failure to a Python exception, without leaking any
@@ -187,6 +192,40 @@ fn decode_tx<'py>(py: Python<'py>, tx_bytes: &[u8]) -> PyResult<Bound<'py, PyDic
     dict.set_item("payload", PyBytes::new(py, &decoded.payload))?;
     dict.set_item("pubkey", PyBytes::new(py, &decoded.pubkey))?;
     dict.set_item("signature", PyBytes::new(py, &decoded.signature))?;
+    Ok(dict)
+}
+
+/// Decode a complete `GET /v1/markets-snapshot` response body bound to
+/// `chain_id`, with the core decoder's refusal rules: any fault refuses the
+/// whole read, and nothing partial is returned.
+#[pyfunction]
+fn decode_markets_snapshot<'py>(
+    py: Python<'py>,
+    body: &[u8],
+    chain_id: &[u8],
+) -> PyResult<Bound<'py, PyDict>> {
+    let chain_id: [u8; 32] = chain_id
+        .try_into()
+        .map_err(|_| PyValueError::new_err("chain_id must be exactly 32 bytes"))?;
+    let chain = market_snapshot::ChainBinding::new(chain_id)
+        .ok_or_else(|| PyValueError::new_err("chain_id must name a chain, not the zero binding"))?;
+    let snapshot = market_snapshot::decode_snapshot(body, chain)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let dict = PyDict::new(py);
+    dict.set_item("chain_id", PyBytes::new(py, &snapshot.chain_id))?;
+    dict.set_item("height", snapshot.height)?;
+    dict.set_item(
+        "markets",
+        pythonize::pythonize(py, &snapshot.markets).map_err(map_pythonize_err)?,
+    )?;
+    dict.set_item(
+        "events",
+        pythonize::pythonize(py, &snapshot.events).map_err(map_pythonize_err)?,
+    )?;
+    dict.set_item(
+        "open_interest",
+        pythonize::pythonize(py, &snapshot.open_interest).map_err(map_pythonize_err)?,
+    )?;
     Ok(dict)
 }
 
@@ -412,6 +451,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(encode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_tx, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_markets_snapshot, m)?)?;
     m.add_function(wrap_pyfunction!(reject_floats, m)?)?;
     m.add_function(wrap_pyfunction!(pubkey_to_owner, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;
