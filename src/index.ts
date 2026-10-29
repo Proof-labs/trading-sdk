@@ -25,6 +25,17 @@ export type {
   BoundedReadOptions,
   FinalizedReadWitness,
 } from "./bounded-read.js";
+export type {
+  TransactionEvidence,
+  TransactionEvidenceEvent,
+  TransactionEvidenceSelection,
+} from "./committed-transaction.js";
+export type {
+  BlockEvidenceHeader,
+  BlockResultsEvidence,
+  BlockResultsWindow,
+  BlockResultsWindowSelection,
+} from "./block-results-window.js";
 export {
   type Address,
   Side,
