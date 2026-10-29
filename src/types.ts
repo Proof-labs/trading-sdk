@@ -1735,6 +1735,10 @@ export interface PositionUpdatedEvent {
   entryPrice: string;
   /** Absolute position size in contracts (integer lots). */
   size: string;
+  /** PnL this update booked to cash without a fill, in microUSDC (signed):
+   *  a gain realized in place to pay a resolution deficit. "0" for every
+   *  other update. */
+  realizedPnl: string;
 }
 
 /** Emitted when a position is fully closed. */
@@ -1828,22 +1832,6 @@ export interface PositionAutoDeleveragedEvent {
   closePriceSpec: string;
   /** Realized PnL credited to the deleveraged owner in microUSDC (signed). */
   realizedPnl: string;
-}
-
-/**
- * Emitted when the Proof liquidity provider (PLP) absorbs liquidation deficit
- * (Tier 0 of the bad-debt waterfall). Emitted only while PLP is enabled and
- * above its floor; once PLP reaches the floor, deficits route to Tier 1 and
- * this event stops firing.
- */
-export interface PlpAbsorbedEvent {
-  type: "PlpAbsorbed";
-  /** Insurance pool the liquidation came from (informational). */
-  poolId: string;
-  /** Deficit absorbed by PLP in this draw, in microUSDC. */
-  amount: string;
-  /** PLP balance after the draw in microUSDC (signed). */
-  plpBalanceAfter: string;
 }
 
 /** Emitted when periodic funding is applied to a market. */
@@ -1951,7 +1939,6 @@ export type ExchangeEvent =
   | AccountLiquidatedEvent
   | InsuranceFundUpdatedEvent
   | PositionAutoDeleveragedEvent
-  | PlpAbsorbedEvent
   | FundingAppliedEvent
   | FundingSettledEvent
   | AgentApprovedEvent

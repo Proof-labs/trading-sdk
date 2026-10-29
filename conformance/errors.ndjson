@@ -101,7 +101,6 @@
 {"case":"manifest/109","code":109,"log":null,"expect":{"name":"InsuranceAllocationZeroAmount"}}
 {"case":"manifest/110","code":110,"log":null,"expect":{"name":"InsuranceAmountExceedsI64"}}
 {"case":"manifest/111","code":111,"log":null,"expect":{"name":"LiquidationRefused"}}
-{"case":"manifest/112","code":112,"log":null,"expect":{"name":"InvalidPlpConfig"}}
 {"case":"manifest/113","code":113,"log":null,"expect":{"name":"InsuranceAccountWithdrawal"}}
 {"case":"manifest/114","code":114,"log":null,"expect":{"name":"InsuranceActionRefused"}}
 {"case":"manifest/115","code":115,"log":null,"expect":{"name":"LiquidationBatchTooManyOwners"}}

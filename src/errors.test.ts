@@ -34,7 +34,6 @@ describe("decodeExecError", () => {
       [109, "InsuranceAllocationZeroAmount"],
       [110, "InsuranceAmountExceedsI64"],
       [111, "LiquidationRefused"],
-      [112, "InvalidPlpConfig"],
       [113, "InsuranceAccountWithdrawal"],
       [114, "InsuranceActionRefused"],
       [115, "LiquidationBatchTooManyOwners"],
@@ -156,9 +155,10 @@ describe("ExecErrorCode enum", () => {
     expect(ExecErrorCode.AccountOrderCapReached).toBe(100);
   });
 
-  it("decodes PLP shape faults without reassigning the resting-order cap code", () => {
-    expect(ExecErrorCode.InvalidPlpConfig).toBe(112);
-    expect(decodeExecError(112)?.name).toBe("InvalidPlpConfig");
+  it("leaves the retired PLP code and the unassigned code unknown", () => {
+    // 112 was InvalidPlpConfig, retired with the engine's backstop.
+    expect(decodeExecError(112)).toBeNull();
+    expect(execErrorName(112)).toBe("UnknownError");
     // 101 is unassigned on the wire: unknown, never a PLP fault.
     expect(decodeExecError(101)).toBeNull();
     expect(execErrorName(101)).toBe("UnknownError");
