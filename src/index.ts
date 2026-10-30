@@ -400,9 +400,6 @@ export {
   type CandleHistoryParams,
   type AccountEventsParams,
   type ExplorerBlocksParams,
-  type GatewayTriggerLimbJson,
-  type GatewayPendingTriggerRow,
-  type GatewayTriggerPositionRow,
 } from "./gateway-reads.js";
 export {
   decodeSubAccountList,

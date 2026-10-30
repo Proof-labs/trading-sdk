@@ -134,6 +134,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deploy together with exchange 2.20.0 (proof-wire 8.0.0); older engines' market rows no
   longer decode.
 
+- **`GatewayPendingTriggerRow`, `GatewayTriggerPositionRow` and
+  `GatewayTriggerLimbJson`.** They described a `pending` section and a
+  `market_kind` field on `GET /v1/triggers/{owner}` that the node never
+  served: the route returns the bare `PositionTriggerInfo` list, which
+  `positionTriggers()` already decodes (api-gateway 10.6.0 corrects its
+  spec the same way). Breaking (MAJOR) for code that imports the types; no
+  runtime change.
+
 ### Fixed
 
 - Account and financial position decoders now reject nonzero entry-cost remainders greater than or equal to position size. Legacy positions retain zero; this intentionally tightens existing reads.
