@@ -1,6 +1,7 @@
 //! Atomic, chain-bound inventory read. This is registration, not oracle health.
 //! No partial result or transport failure is converted into an empty registry.
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io::Cursor;
@@ -27,7 +28,24 @@ pub struct MarketsSnapshot {
     /// Every event with its binaries and its attached conditionals; the
     /// stored `EventInfo` record, no display view.
     pub events: Vec<SnapshotEvent>,
+    /// Long and short open interest per market that has had positions, in
+    /// ascending market order; a market missing from the list has none.
+    /// `None` when the node does not serve open interest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_interest: Option<Vec<MarketOpenInterest>>,
 }
+
+/// One market's open interest, in base-asset units per side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketOpenInterest {
+    pub market: crate::types::MarketId,
+    pub long: u64,
+    pub short: u64,
+}
+
+/// Position of the open-interest list in the snapshot tuple, the last field
+/// this decoder reads.
+const OPEN_INTEREST_FIELD: usize = 4;
 
 /// The stored event record in either engine shape. An engine with one
 /// binary book per event stores no No book (`ebn_market` is `None`); an
@@ -69,6 +87,8 @@ pub enum SnapshotError {
     WrongChain,
     Uncommitted,
     DuplicateMarket,
+    /// The open-interest list is not in ascending market order.
+    UnorderedOpenInterest,
     CatchingUp,
     RpcUnavailable,
     /// A receipt lookup answered 404 or 500 with an error that is not the
@@ -100,9 +120,10 @@ struct Envelope {
 }
 
 /// Decode a complete JSON/base64/MessagePack response. Duplicate JSON `data`
-/// keys, duplicate registry IDs, non-integer scalars, unknown enums, incomplete
-/// records and trailing MessagePack bytes all refuse the entire read. Appended
-/// tuple fields are permitted, but existing fields are never defaulted away.
+/// keys, duplicate registry IDs, open interest out of market order, non-integer
+/// scalars, unknown enums, incomplete records and trailing MessagePack bytes all
+/// refuse the entire read. Appended tuple fields are permitted, but existing
+/// fields are never defaulted away.
 pub fn decode_snapshot(
     body: &[u8],
     expected_chain: ChainBinding,
@@ -127,10 +148,12 @@ pub fn decode_snapshot(
     }
     validate_value(&value)?;
     let top = tuple(&mut value, 4)?;
-    top.truncate(4);
-    for (slot, width) in [(2, 24), (3, TWO_BOOK_EVENT_WIDTH)] {
+    top.truncate(OPEN_INTEREST_FIELD + 1);
+    for (slot, width) in [(2, 24), (3, TWO_BOOK_EVENT_WIDTH), (OPEN_INTEREST_FIELD, 3)] {
         let rows = match top.get_mut(slot) {
             Some(Value::Array(rows)) => rows,
+            // A node from before open interest ends the tuple at the events.
+            None if slot == OPEN_INTEREST_FIELD => continue,
             _ => return Err(SnapshotError::Malformed),
         };
         if rows.len() > MAX_SNAPSHOT_ROWS {
@@ -175,6 +198,17 @@ pub fn decode_snapshot(
     for event in &snapshot.events {
         if !events.insert(event.event_id) {
             return Err(SnapshotError::DuplicateMarket);
+        }
+    }
+    for pair in snapshot
+        .open_interest
+        .iter()
+        .flat_map(|rows| rows.windows(2))
+    {
+        match pair[0].market.cmp(&pair[1].market) {
+            Ordering::Less => {}
+            Ordering::Equal => return Err(SnapshotError::DuplicateMarket),
+            Ordering::Greater => return Err(SnapshotError::UnorderedOpenInterest),
         }
     }
     Ok(snapshot)
