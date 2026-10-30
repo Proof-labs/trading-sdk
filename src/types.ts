@@ -2817,6 +2817,17 @@ export interface MarketsSnapshot {
   markets: MarketConfig[];
   /** Every event with its binaries and attached conditionals. */
   events: EventInfo[];
+  /** Long and short open interest per market that has had positions, in
+   *  ascending market order; a market missing from the list has none.
+   *  `undefined` when the node does not serve open interest. */
+  openInterest?: MarketOpenInterest[];
+}
+
+/** One market's open interest, in base-asset units per side. */
+export interface MarketOpenInterest {
+  market: number;
+  long: bigint;
+  short: bigint;
 }
 
 export interface MarketConfig {

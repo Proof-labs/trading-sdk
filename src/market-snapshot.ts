@@ -1,6 +1,11 @@
 import { Decoder } from "@msgpack/msgpack";
 import { decodeEventInfo, isOneBookEventRow } from "./governance-query.js";
-import type { MarketConfig, MarketKind, MarketsSnapshot } from "./types.js";
+import type {
+  MarketConfig,
+  MarketKind,
+  MarketOpenInterest,
+  MarketsSnapshot,
+} from "./types.js";
 import {
   defaultExchangeHttpTransport,
   readContext,
@@ -113,6 +118,11 @@ function market(value: unknown): MarketConfig {
     ticker: text(r[22]),
     maxOpenInterest: uint(r[23]),
   };
+}
+
+function openInterest(value: unknown): MarketOpenInterest {
+  const r = tuple(value, 3);
+  return { market: u32(r[0]), long: uint(r[1]), short: uint(r[2]) };
 }
 
 /** Bounded structural preflight before the maintained MessagePack decoder.
@@ -245,7 +255,12 @@ export function decodeMarketsSnapshot(
     new Set(events.map((e) => e.eventId)).size !== events.length
   )
     invalid();
-  return { chainId, height, markets, events };
+  // A node from before open interest ends the tuple at the events.
+  if (top.length === 4) return { chainId, height, markets, events };
+  const rows = tuple(top[4], 0).map(openInterest);
+  if (rows.some((row, i) => i > 0 && rows[i - 1].market >= row.market))
+    invalid();
+  return { chainId, height, markets, events, openInterest: rows };
 }
 
 /** Gateway-only, bounded one-shot read. No retry, node fallback or health inference. */

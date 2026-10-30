@@ -119,6 +119,62 @@ describe("atomic market snapshot", () => {
     ]);
   });
 
+  it("reads the open interest a current engine serves", () => {
+    const hex = readFileSync(
+      new URL(
+        "../crates/proof-trading-sdk/src/market_snapshot/engine-66d50df7.hex",
+        import.meta.url,
+      ),
+      "utf8",
+    ).trim();
+    const decoded = decodeMarketsSnapshot(
+      { data: Buffer.from(hex, "hex").toString("base64") },
+      chain,
+    );
+    expect(decoded.openInterest).toEqual([
+      {
+        market: 1,
+        long: 9_007_199_254_740_993n,
+        short: 9_007_199_254_740_993n,
+      },
+      { market: 2, long: 0n, short: 0n },
+    ]);
+  });
+
+  it("tells no open interest apart from none served", () => {
+    expect(
+      decodeMarketsSnapshot(envelope(snapshot()), chain).openInterest,
+    ).toBeUndefined();
+    expect(
+      decodeMarketsSnapshot(envelope([...snapshot(), []]), chain).openInterest,
+    ).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a repeated market",
+      [
+        [1, 3, 3],
+        [1, 3, 3],
+      ],
+    ],
+    [
+      "descending markets",
+      [
+        [2, 0, 0],
+        [1, 3, 3],
+      ],
+    ],
+    ["a negative side", [[1, -1, 3]]],
+    ["a short row", [[1, 3]]],
+    ["a nil row", [null]],
+    ["a nil list", null],
+  ])("rejects open interest with %s", (_name, rows) => {
+    expect(() =>
+      decodeMarketsSnapshot(envelope([...snapshot(), rows]), chain),
+    ).toThrow();
+  });
+
   it("decodes a Rust-produced shared-wire vector losslessly", () => {
     const hex =
       "94dc00200707070707070707070707070707070707070707070707070707070707070707cfffffffffffffffff91dc001801cd03e8cd01f40502ce0036ee8064a4506572700000c200cd7530906401c000aa4f7261636c654f6e6c79000005a3425443cfffffffffffffffff90";
@@ -134,10 +190,10 @@ describe("atomic market snapshot", () => {
   it("accepts appended fields and explicit empty registries", () => {
     const value = snapshot();
     (value[2] as unknown[][])[0].push("future field");
-    value.push({ future: "metadata" });
-    expect(decodeMarketsSnapshot(envelope(value), chain).markets).toHaveLength(
-      1,
-    );
+    value.push([[1, 3, 3, "future field"]], { future: "metadata" });
+    const decoded = decodeMarketsSnapshot(envelope(value), chain);
+    expect(decoded.markets).toHaveLength(1);
+    expect(decoded.openInterest).toEqual([{ market: 1, long: 3n, short: 3n }]);
     value[2] = [];
     expect(decodeMarketsSnapshot(envelope(value), chain).markets).toEqual([]);
   });
