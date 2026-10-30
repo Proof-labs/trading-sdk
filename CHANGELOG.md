@@ -147,8 +147,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   market with a one-sided book (`no_two_sided_quote`) used to fail the
   owner-history decoder, which made the account's trigger history
   unreadable; rows like it stay in history. Still refused: a missing, empty
-  or non-string label, an unknown event type, an unknown stored limb kind,
-  and executed quantities that do not add up. No wire change.
+  or non-string label and executed quantities that do not add up. No wire
+  change.
+
+- A stored trigger limb kind and a trigger history event type this SDK
+  version does not know no longer fail the whole read. `StoredTriggerLimb.kind`
+  is now `StoredTriggerKind` (the known kinds or any later name, returned
+  verbatim); only a slot holding the other known kind (`TakeProfit` in the
+  stop-loss slot) is refused as corrupt. A history row with an unknown event
+  type is skipped and the rest of the page is returned; a known type on the
+  wrong route (a shared market event in owner history) is still refused.
+  Same in Python. No wire change.
 
 ## [8.1.0] — 2026-10-26
 

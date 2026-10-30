@@ -842,10 +842,7 @@ class ExchangeClient:
         if value is None:
             return None
         row = cls._trigger_tuple(value, "StoredTriggerLimb", 7)
-        if row[1] not in ("StopLoss", "TakeProfit"):
-            raise ProofTradingSdkError(
-                f"trigger decode: unknown TriggerKind {row[1]!r}"
-            )
+        cls._trigger_label(row[1], "TriggerKind")
         cls._trigger_label(row[5], "TriggerLimbState")
         limb_id = cls._trigger_uint(row[0], "limb_id")
         trigger_price = cls._trigger_uint(row[2], "trigger_price")
@@ -944,9 +941,11 @@ class ExchangeClient:
         take_profit = cls._decode_trigger_limb(bracket[9])
         if stop_loss is None and take_profit is None:
             raise ProofTradingSdkError("trigger decode: bracket has no limbs")
-        if stop_loss is not None and stop_loss["kind"] != "StopLoss":
+        # A later kind passes through; a slot holding the other known kind is
+        # a corrupt row.
+        if stop_loss is not None and stop_loss["kind"] == "TakeProfit":
             raise ProofTradingSdkError("trigger decode: stop_loss has wrong kind")
-        if take_profit is not None and take_profit["kind"] != "TakeProfit":
+        if take_profit is not None and take_profit["kind"] == "StopLoss":
             raise ProofTradingSdkError("trigger decode: take_profit has wrong kind")
         if stop_loss is not None and take_profit is not None and (
             stop_loss["limb_id"] == take_profit["limb_id"]

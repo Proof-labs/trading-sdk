@@ -2113,10 +2113,13 @@ export interface TriggerEvaluation {
   reason: TriggerOutcomeReason | null;
 }
 
+/** Engine-defined label: the known kinds, or any later one. */
+export type StoredTriggerKind = TriggerKind | OpenLabel;
+
 /** Engine-owned state for one stop-loss/take-profit limb. */
 export interface StoredTriggerLimb {
   limbId: bigint;
-  kind: TriggerKind;
+  kind: StoredTriggerKind;
   triggerPrice: bigint;
   maxSlippageBps: number;
   clientTriggerId: bigint | null;
