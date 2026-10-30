@@ -156,6 +156,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `SetOperatorReceiptRegistry` decodes in `decodeSigningMessage` and on
   proposal reads: `operatorKeys` comes back as 32-byte `Uint8Array`s (#292).
 
+- Building a `SetOperatorReceiptRegistry` proposal now refuses a threshold outside
+  `1..=operatorKeys.length`, the same check proposal reads apply.
+
 - Account and financial position decoders now reject nonzero entry-cost remainders greater than or equal to position size. Legacy positions retain zero; this intentionally tightens existing reads.
 
 - Trigger reads no longer fail on an engine label this SDK version does not

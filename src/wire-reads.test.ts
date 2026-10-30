@@ -6,7 +6,7 @@ import { ExchangeClient } from "./client.js";
 import { decodeSigningMessage, encodePayloadBytes } from "./codec.js";
 import { signingMessage } from "./crypto.js";
 import { decodeAdminAction } from "./governance-query.js";
-import { ActionType } from "./types.js";
+import { ActionType, Outcome } from "./types.js";
 
 /** One 24-field `MarketConfig` row from the Rust-produced snapshot vector. */
 const MARKET =
@@ -97,6 +97,15 @@ describe("queryEvents / queryEvent", () => {
     expect(one && "ebnMarket" in one).toBe(false);
   });
 
+  it("decodes a resolved event's outcome", async () => {
+    // status "Trading" -> {"Resolved": "Yes"}
+    serve(EVENT.replace("a754726164696e67", "81a85265736f6c766564a3596573"));
+    expect((await client().queryEvent(700))?.status).toEqual({
+      kind: "Resolved",
+      outcome: Outcome.Yes,
+    });
+  });
+
   it("reads nil as no event", async () => {
     serve("c0");
     expect(await client().queryEvent(700)).toBeNull();
@@ -169,6 +178,33 @@ describe("SetOperatorReceiptRegistry operatorKeys", () => {
         ],
       }),
     ).toEqual({ kind: "SetOperatorReceiptRegistry", value });
+  });
+
+  it("refuses an unreachable threshold on read and encode", () => {
+    const keys = Array.from(value.operatorKeys[0]);
+    expect(() =>
+      decodeAdminAction({
+        SetOperatorReceiptRegistry: [
+          Array.from(value.deploymentId),
+          1,
+          0,
+          [keys],
+        ],
+      }),
+    ).toThrow(/threshold 0 is outside 1..=1/);
+    expect(() =>
+      encodePayloadBytes({
+        type: "ProposeAdminAction",
+        data: {
+          proposer: new Uint8Array(20),
+          registryVersion: 2n,
+          action: {
+            kind: "SetOperatorReceiptRegistry",
+            value: { ...value, threshold: 2 },
+          },
+        },
+      }),
+    ).toThrow(/threshold 2 is outside 1..=1/);
   });
 
   it("round-trips through decodeSigningMessage", () => {

@@ -35,6 +35,7 @@ import {
   type WithdrawInsuranceFund,
   type ScheduleUpgrade,
   type SetLiquidationConfig,
+  type SetOperatorReceiptRegistry,
 } from "./types.js";
 import {
   validateFundInsuranceFund,
@@ -180,6 +181,21 @@ function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   }
   if (v.kind === "SetLiquidationConfig") {
     validateSetLiquidationConfig(v.value as SetLiquidationConfig);
+  }
+  if (v.kind === "SetOperatorReceiptRegistry") {
+    validateSetOperatorReceiptRegistry(v.value as SetOperatorReceiptRegistry);
+  }
+}
+
+/** The quorum must be reachable: `1..=operatorKeys.length`. */
+function validateSetOperatorReceiptRegistry(
+  registry: SetOperatorReceiptRegistry,
+): void {
+  const n = registry.operatorKeys.length;
+  if (registry.threshold < 1 || registry.threshold > n) {
+    throw new Error(
+      `setOperatorReceiptRegistry threshold ${registry.threshold} is outside 1..=${n}`,
+    );
   }
 }
 
