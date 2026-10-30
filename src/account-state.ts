@@ -80,14 +80,18 @@ export function decodeAccountState(
     previous = market;
     const side = p[2];
     if (side !== "Buy" && side !== "Sell") return invalid("side");
+    const size = integer(p[4], "size");
+    const remainder = p.length === 7 ? integer(p[6], "entry remainder") : 0n;
+    if (remainder !== 0n && remainder >= size)
+      return invalid("entry remainder");
     return {
       owner: positionOwner,
       market: Number(market),
       side,
       entryPrice: integer(p[3], "entry price"),
-      size: integer(p[4], "size"),
+      size,
       lastFundingIndex: integer(p[5], "funding index", true),
-      entryRemainder: p.length > 6 ? integer(p[6], "entry remainder") : 0n,
+      entryRemainder: remainder,
     };
   });
   return {
