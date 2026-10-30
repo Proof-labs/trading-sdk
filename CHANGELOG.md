@@ -64,7 +64,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   through the Rust core (`decode_markets_snapshot`), so it refuses exactly what
   Rust refuses, as `CodecError`. The body is streamed and refused past
   `MAX_MARKETS_SNAPSHOT_BYTES` (1 MiB) before it is buffered whole, and a
-  `timeout` (10 seconds by default) bounds the whole read. Additive (MINOR).
+  compressed body is refused unread. `timeout` (10 seconds by default) limits
+  each network wait and, between body chunks, the whole read; it is not a
+  whole-call deadline. Additive (MINOR).
 - **`queryFunding(market)`** reads one market's funding state at
   `GET /v1/funding/{market}` (the gateway's `fundingRate` read): funding rate,
   cumulative funding, last funding time, mark price EWMA, oracle price,

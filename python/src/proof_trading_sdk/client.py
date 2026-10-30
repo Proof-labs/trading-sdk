@@ -1166,10 +1166,12 @@ class ExchangeClient:
 
         The body is requested and read uncompressed, and refused once it passes
         ``MAX_MARKETS_SNAPSHOT_BYTES``, before it is buffered whole; a
-        compressed body is refused unread. ``timeout`` bounds each network wait
-        and, checked between chunks, the whole read, so a body that trickles in
-        fails with :class:`TransportError`. Only HTTP 200 supplies data;
-        redirects are not followed.
+        compressed body is refused unread. ``timeout`` limits each network wait
+        and, checked between body chunks, the whole read, so a body that
+        trickles in fails with :class:`TransportError`. It is not a whole-call
+        deadline: httpx has none, so response headers that arrive slowly enough
+        can hold the call longer. Only HTTP 200 supplies data; redirects are
+        not followed.
         """
         url = urljoin(self._gateway_url, "/v1/markets-snapshot")
         deadline = time.monotonic() + timeout

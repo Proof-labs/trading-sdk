@@ -109,10 +109,15 @@ if snapshot.open_interest is not None:
 `markets_snapshot()` runs the Rust decoder above through the native module, so
 its refusals match Rust exactly and every decode failure raises `CodecError`. The
 client must be bound to a real chain; the zero binding is refused. The body is
-streamed and refused past 1 MiB before it is buffered whole, and `timeout`
-(10 seconds by default) bounds each network wait and the whole read, so a body
-that trickles in raises `TransportError`. Only HTTP 200 supplies data, and
+requested uncompressed, a compressed one is refused unread, and it is refused
+past 1 MiB before it is buffered whole. Only HTTP 200 supplies data, and
 redirects are not followed.
+
+`timeout` (10 seconds by default) limits each network wait, and between body
+chunks the whole read, so a body that trickles in raises `TransportError`.
+Unlike the TypeScript read, it is not a whole-call deadline: httpx has none, so
+a gateway that sends its response headers slowly enough can hold the call
+longer than `timeout`. Every Python read shares this limit.
 
 ## Bounds and compatibility
 
