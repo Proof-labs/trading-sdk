@@ -16,6 +16,7 @@ extern crate proof_trading_sdk as core_sdk;
 use core_sdk::codec;
 use core_sdk::crypto;
 use core_sdk::governance;
+use core_sdk::reads::{self, Shape, ACCOUNT_INFO, EVENT_INFO, MARKET_CONFIG};
 use core_sdk::types::ExecError;
 use wasm_bindgen::prelude::*;
 
@@ -100,16 +101,34 @@ fn decode_as<T: serde::de::DeserializeOwned + serde::Serialize>(
     to_bigint_js(&value)
 }
 
+fn decode_records<T: serde::de::DeserializeOwned + serde::Serialize>(
+    bytes: &[u8],
+    shape: &Shape,
+) -> Result<JsValue, JsError> {
+    let value: T = reads::decode(bytes, shape).map_err(|e| JsError::new(&e.to_string()))?;
+    to_bigint_js(&value)
+}
+
 /// Decode a node read response into serde-shaped JS (u64/i64 as BigInt).
 /// Floats, extensions, duplicate keys and trailing bytes are refused first.
+/// Fields an engine appends to a stored record after the pinned wire are
+/// ignored; an `AdminAction` is decoded exactly.
 #[wasm_bindgen]
 pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
     core_sdk::msgpack::reject_floats(bytes).map_err(|e| JsError::new(&e.to_string()))?;
     match kind {
-        ReadKind::Markets => decode_as::<Vec<core_sdk::types::MarketConfig>>(bytes),
-        ReadKind::Events => decode_as::<Vec<core_sdk::types::EventInfo>>(bytes),
-        ReadKind::Event => decode_as::<Option<core_sdk::types::EventInfo>>(bytes),
-        ReadKind::Account => decode_as::<core_sdk::query::AccountInfo>(bytes),
+        ReadKind::Markets => decode_records::<Vec<core_sdk::types::MarketConfig>>(
+            bytes,
+            &Shape::List(&MARKET_CONFIG),
+        ),
+        ReadKind::Events => {
+            decode_records::<Vec<core_sdk::types::EventInfo>>(bytes, &Shape::List(&EVENT_INFO))
+        }
+        ReadKind::Event => decode_records::<Option<core_sdk::types::EventInfo>>(
+            bytes,
+            &Shape::Optional(&EVENT_INFO),
+        ),
+        ReadKind::Account => decode_records::<core_sdk::query::AccountInfo>(bytes, &ACCOUNT_INFO),
         ReadKind::AdminAction => decode_as::<governance::AdminAction>(bytes),
     }
 }

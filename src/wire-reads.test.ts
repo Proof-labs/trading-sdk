@@ -68,6 +68,13 @@ describe("queryMarkets", () => {
     ]);
   });
 
+  it("ignores a field a later engine appends to the row", async () => {
+    serve(`91${MARKET.replace(/^dc0018/, "dc0019")}63`);
+    const [later] = await client().queryMarkets();
+    serve(`91${MARKET}`);
+    expect(later).toEqual((await client().queryMarkets())[0]);
+  });
+
   it("refuses a row with a float where the wire has an integer", async () => {
     // fundingIntervalMs (ce0036ee80) as float64 3600000.0
     serve(`91${MARKET.replace("ce0036ee80", "cb414b774000000000")}`);
@@ -148,6 +155,13 @@ describe("queryAccount", () => {
       feesAccrued: -3n,
       volume30dMicroUsdc: 18_446_744_073_709_551_615n,
     });
+  });
+
+  it("ignores a field a later engine appends to the record", async () => {
+    serve(`${ACCOUNT.replace(/^9a/, "9b")}63`);
+    const later = await client().queryAccount("ab".repeat(20));
+    serve(ACCOUNT);
+    expect(later).toEqual(await client().queryAccount("ab".repeat(20)));
   });
 
   it("refuses trailing bytes", async () => {

@@ -53,9 +53,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `queryMarketsSnapshot` and the proposal's `AdminAction`
   (`decodeAdminAction`, `decodeProposalDisplayInfo`, `decodeProposalPage`)
   decode as their proof-wire 9 types through WASM instead of hand-written
-  positional decoders. The decode is as strict as the wire type: a row with an
-  appended field, or a legacy short `AccountInfo` / position tuple, is refused
-  until the SDK re-pins the wire. `MarketConfig` and `AccountInfo` optional
+  positional decoders. The decode is as strict as the wire type, except that
+  fields a later engine appends to a market, event or account record (and to
+  their fee-tier, attachment, position and binding-scenario rows) are ignored,
+  as the markets snapshot already does. A legacy short `AccountInfo` /
+  position tuple is refused until the SDK re-pins the wire. `MarketConfig` and `AccountInfo` optional
   fields are now always filled. Refusals carry the core's message, prefixed
   `governance decode: <field>:` or `<Read> decode:`. The exported governance
   decoders need `await ready()` first, like the codec (MAJOR).
