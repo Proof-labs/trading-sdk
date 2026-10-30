@@ -5,7 +5,6 @@ import { ExchangeClient } from "./client.js";
 import { chainIdFromString } from "./crypto.js";
 import {
   decodeMarketsSnapshot,
-  parseSnapshotEnvelope,
   MAX_SNAPSHOT_BYTES,
 } from "./market-snapshot.js";
 
@@ -45,90 +44,102 @@ const snapshot = (): unknown[] => [
 const envelope = (value: unknown) => ({
   data: Buffer.from(encode(value, { useBigInt64: true })).toString("base64"),
 });
+const json = (body: unknown) =>
+  new TextEncoder().encode(JSON.stringify(body) ?? "");
+const fixture = (name: string) =>
+  readFileSync(
+    new URL(
+      `../crates/proof-trading-sdk/src/market_snapshot/${name}`,
+      import.meta.url,
+    ),
+    "utf8",
+  ).trim();
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe("atomic market snapshot", () => {
   it("rejects duplicate escaped JSON envelope keys and explicit upstream errors", () => {
+    const data = envelope(snapshot()).data;
     for (const body of [
-      '{"data":"kA==","data":"kA=="}',
-      '{"data":"kA==","d\\u0061ta":"kA=="}',
+      `{"data":"${data}","data":"${data}"}`,
+      `{"data":"${data}","d\\u0061ta":"${data}"}`,
     ]) {
-      expect(() => parseSnapshotEnvelope(body)).toThrow();
+      expect(() =>
+        decodeMarketsSnapshot(new TextEncoder().encode(body), chain),
+      ).toThrow("malformed");
     }
     expect(
-      parseSnapshotEnvelope(
-        '{"data":"kA==","future":{"data":"one","key":"two"}}',
-      ),
-    ).toEqual({ data: "kA==", future: { data: "one", key: "two" } });
+      decodeMarketsSnapshot(
+        json({ data, future: { data: "one", key: "two" } }),
+        chain,
+      ).height,
+    ).toBe(9_007_199_254_740_993n);
     expect(() =>
       decodeMarketsSnapshot(
-        { ...envelope(snapshot()), error: "unavailable" },
+        json({ ...envelope(snapshot()), error: "unavailable" }),
         chain,
       ),
-    ).toThrow();
+    ).toThrow("malformed");
   });
-  it("reads the actual current-engine snapshot with an attached event", () => {
-    const hex = readFileSync(
-      new URL(
-        "../crates/proof-trading-sdk/src/market_snapshot/engine-349fa9b.hex",
-        import.meta.url,
-      ),
-      "utf8",
-    ).trim();
+
+  it("reads the engine snapshot, one binary book per event", () => {
     const decoded = decodeMarketsSnapshot(
-      { data: Buffer.from(hex, "hex").toString("base64") },
+      json({
+        data: Buffer.from(fixture("engine-c3253d0c.hex"), "hex").toString(
+          "base64",
+        ),
+      }),
       chain,
     );
     expect(decoded.height).toBe(9_007_199_254_740_993n);
     expect(decoded.markets.map((m) => m.market)).toEqual([
-      0, 15, 9100, 9101, 9102, 9103,
-    ]);
-    expect(decoded.markets[2].kind).toEqual({ ConditionalPerp: [91, "Yes"] });
-    expect(decoded.markets[5].kind).toEqual({ PredictionBinary: [91, "No"] });
-    expect(decoded.markets[0].feeTiers?.[0].makerFeeTenthBps).toBe(-7);
-    expect(decoded.markets[0].maxOpenInterest).toBe(
-      18_446_744_073_709_551_615n,
-    );
-    expect(decoded.events[0].eventId).toBe(91);
-    expect(decoded.events[0].attachedConditionals).toEqual([
-      { underlyingMarket: 15, cpyMarket: 9100, cpnMarket: 9101 },
-    ]);
-  });
-
-  it("reads a one-book engine snapshot, where the event has no No book", () => {
-    const hex = readFileSync(
-      new URL(
-        "../crates/proof-trading-sdk/src/market_snapshot/engine-c3253d0c.hex",
-        import.meta.url,
-      ),
-      "utf8",
-    ).trim();
-    const decoded = decodeMarketsSnapshot(
-      { data: Buffer.from(hex, "hex").toString("base64") },
-      chain,
-    );
-    expect(decoded.markets.map((m) => m.market)).toEqual([
       1, 2, 70000, 70100, 70101,
     ]);
-    expect(decoded.events[0].eventId).toBe(700);
-    expect(decoded.events[0].ebyMarket).toBe(70000);
-    expect(decoded.events[0].ebnMarket).toBeUndefined();
-    expect(decoded.events[0].attachedConditionals).toEqual([
-      { underlyingMarket: 2, cpyMarket: 70100, cpnMarket: 70101 },
-    ]);
+    expect(decoded.markets[2].kind).toEqual({ PredictionBinary: [700, "Yes"] });
+    expect(decoded.markets[4].kind).toEqual({ ConditionalPerp: [700, "No"] });
+    expect(decoded.events[0]).toEqual({
+      eventId: 700,
+      ebyMarket: 70000,
+      question: "Will the Fed cut rates?",
+      settlementMs: 1_777_201_000_000n,
+      resolutionWindowMs: 1000n,
+      status: { kind: "Trading" },
+      createdMs: 1_777_200_000_000n,
+      resolvedMs: 0n,
+      attachedConditionals: [
+        { underlyingMarket: 2, cpyMarket: 70100, cpnMarket: 70101 },
+      ],
+    });
+  });
+
+  it("refuses a two-book event row", () => {
+    const event = [700, 70000, 70001, "q", 1n, 1n, "Trading", 1n, 0n, null, []];
+    expect(() =>
+      decodeMarketsSnapshot(
+        json(envelope([...snapshot().slice(0, 3), [event]])),
+        chain,
+      ),
+    ).toThrow("malformed");
+    expect(
+      decodeMarketsSnapshot(
+        json(
+          envelope([
+            ...snapshot().slice(0, 3),
+            [event.filter((_, i) => i !== 2)],
+          ]),
+        ),
+        chain,
+      ).events[0].eventId,
+    ).toBe(700);
   });
 
   it("reads the open interest a current engine serves", () => {
-    const hex = readFileSync(
-      new URL(
-        "../crates/proof-trading-sdk/src/market_snapshot/engine-66d50df7.hex",
-        import.meta.url,
-      ),
-      "utf8",
-    ).trim();
     const decoded = decodeMarketsSnapshot(
-      { data: Buffer.from(hex, "hex").toString("base64") },
+      json({
+        data: Buffer.from(fixture("engine-66d50df7.hex"), "hex").toString(
+          "base64",
+        ),
+      }),
       chain,
     );
     expect(decoded.openInterest).toEqual([
@@ -143,10 +154,11 @@ describe("atomic market snapshot", () => {
 
   it("tells no open interest apart from none served", () => {
     expect(
-      decodeMarketsSnapshot(envelope(snapshot()), chain).openInterest,
+      decodeMarketsSnapshot(json(envelope(snapshot())), chain).openInterest,
     ).toBeUndefined();
     expect(
-      decodeMarketsSnapshot(envelope([...snapshot(), []]), chain).openInterest,
+      decodeMarketsSnapshot(json(envelope([...snapshot(), []])), chain)
+        .openInterest,
     ).toEqual([]);
   });
 
@@ -171,7 +183,7 @@ describe("atomic market snapshot", () => {
     ["a nil list", null],
   ])("rejects open interest with %s", (_name, rows) => {
     expect(() =>
-      decodeMarketsSnapshot(envelope([...snapshot(), rows]), chain),
+      decodeMarketsSnapshot(json(envelope([...snapshot(), rows])), chain),
     ).toThrow();
   });
 
@@ -179,7 +191,7 @@ describe("atomic market snapshot", () => {
     const hex =
       "94dc00200707070707070707070707070707070707070707070707070707070707070707cfffffffffffffffff91dc001801cd03e8cd01f40502ce0036ee8064a4506572700000c200cd7530906401c000aa4f7261636c654f6e6c79000005a3425443cfffffffffffffffff90";
     const result = decodeMarketsSnapshot(
-      { data: Buffer.from(hex, "hex").toString("base64") },
+      json({ data: Buffer.from(hex, "hex").toString("base64") }),
       chain,
     );
     expect(result.height).toBe(18_446_744_073_709_551_615n);
@@ -191,11 +203,13 @@ describe("atomic market snapshot", () => {
     const value = snapshot();
     (value[2] as unknown[][])[0].push("future field");
     value.push([[1, 3, 3, "future field"]], { future: "metadata" });
-    const decoded = decodeMarketsSnapshot(envelope(value), chain);
+    const decoded = decodeMarketsSnapshot(json(envelope(value)), chain);
     expect(decoded.markets).toHaveLength(1);
     expect(decoded.openInterest).toEqual([{ market: 1, long: 3n, short: 3n }]);
     value[2] = [];
-    expect(decodeMarketsSnapshot(envelope(value), chain).markets).toEqual([]);
+    expect(decodeMarketsSnapshot(json(envelope(value)), chain).markets).toEqual(
+      [],
+    );
   });
 
   it.each([
@@ -207,7 +221,7 @@ describe("atomic market snapshot", () => {
     { data: "!" },
     { data: "kB==" },
   ])("rejects missing or malformed envelopes: %j", (value) => {
-    expect(() => decodeMarketsSnapshot(value, chain)).toThrow();
+    expect(() => decodeMarketsSnapshot(json(value), chain)).toThrow();
   });
 
   it.each([
@@ -221,24 +235,31 @@ describe("atomic market snapshot", () => {
   ])("rejects malformed known field %j", (slot, value) => {
     const input = snapshot();
     (input[2] as unknown[][])[0][slot as number] = value;
-    expect(() => decodeMarketsSnapshot(envelope(input), chain)).toThrow();
+    expect(() => decodeMarketsSnapshot(json(envelope(input)), chain)).toThrow();
   });
 
   it("rejects wrong chain, zero height, incomplete and duplicate records", () => {
     expect(() =>
-      decodeMarketsSnapshot(envelope(snapshot()), new Uint8Array(32).fill(8)),
+      decodeMarketsSnapshot(
+        json(envelope(snapshot())),
+        new Uint8Array(32).fill(8),
+      ),
     ).toThrow("wrong chain");
     const zero = snapshot();
     zero[1] = 0;
-    expect(() => decodeMarketsSnapshot(envelope(zero), chain)).toThrow(
+    expect(() => decodeMarketsSnapshot(json(envelope(zero)), chain)).toThrow(
       "uncommitted",
     );
     const duplicate = snapshot();
     duplicate[2] = [market(), market()];
-    expect(() => decodeMarketsSnapshot(envelope(duplicate), chain)).toThrow();
+    expect(() =>
+      decodeMarketsSnapshot(json(envelope(duplicate)), chain),
+    ).toThrow();
     const incomplete = snapshot();
     incomplete[2] = [market().slice(0, 7)];
-    expect(() => decodeMarketsSnapshot(envelope(incomplete), chain)).toThrow();
+    expect(() =>
+      decodeMarketsSnapshot(json(envelope(incomplete)), chain),
+    ).toThrow();
   });
 
   it("rejects integral floats, trailing bytes and declared oversized containers", () => {
@@ -250,7 +271,7 @@ describe("atomic market snapshot", () => {
       Buffer.from([0xcb, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0]),
     ]) {
       expect(() =>
-        decodeMarketsSnapshot({ data: bytes.toString("base64") }, chain),
+        decodeMarketsSnapshot(json({ data: bytes.toString("base64") }), chain),
       ).toThrow();
     }
   });

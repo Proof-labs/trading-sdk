@@ -189,7 +189,7 @@ describe("ExchangeClient governance reads (W30-11)", () => {
     ];
     stubFetch(toB64(encoder.encode([[proposal], null]) as Uint8Array));
     await expect(makeClient().queryProposals()).rejects.toThrow(
-      /unknown AdminAction variant "DelistMarket"/,
+      /proposal\[0\]\.action: unknown variant `DelistMarket`/,
     );
   });
 

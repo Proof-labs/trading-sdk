@@ -161,18 +161,19 @@ def test_client_reads_the_open_interest_a_current_engine_serves():
 
 
 def test_markets_take_the_shape_markets_returns():
-    raw = _engine_bytes("engine-349fa9b")
+    raw = _engine_bytes("engine-c3253d0c")
     snapshot = decode_markets_snapshot(_body(raw), CHAIN)
     rows = msgpack.unpackb(raw, raw=False)[2]
     assert snapshot.markets == [ExchangeClient._decode_market_config(r) for r in rows]
-    assert snapshot.markets[2]["kind"] == {"ConditionalPerp": [91, "Yes"]}
+    assert snapshot.markets[3]["kind"] == {"ConditionalPerp": [700, "Yes"]}
+    assert "ebn_market" not in snapshot.events[0]
     assert snapshot.events[0]["attached_conditionals"] == [
-        {"underlying_market": 15, "cpy_market": 9100, "cpn_market": 9101}
+        {"underlying_market": 2, "cpy_market": 70100, "cpn_market": 70101}
     ]
 
 
 def test_a_node_without_open_interest_is_distinct_from_none_served():
-    older = decode_markets_snapshot(_body(_engine_bytes("engine-349fa9b")), CHAIN)
+    older = decode_markets_snapshot(_body(_engine_bytes("engine-c3253d0c")), CHAIN)
     assert older.open_interest is None
     assert decode_markets_snapshot(_with_open_interest([]), CHAIN).open_interest == []
 

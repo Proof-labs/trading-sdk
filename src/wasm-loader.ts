@@ -27,6 +27,18 @@ export interface WasmCore {
    *  Throws when the bytes carry a float family or another shape no read DTO
    *  may contain. */
   reject_floats(bytes: Uint8Array): void;
+  /** Wire-typed node read responses `decode_read` accepts. */
+  ReadKind: {
+    readonly Markets: number;
+    readonly Events: number;
+    readonly Event: number;
+    readonly Account: number;
+    readonly AdminAction: number;
+  };
+  /** Strictly decode a node read response as its wire type (serde-shaped JS). */
+  decode_read(kind: number, bytes: Uint8Array): unknown;
+  /** Decode a complete `/v1/markets-snapshot` HTTP body bound to `chainId`. */
+  decode_markets_snapshot(body: Uint8Array, chainId: Uint8Array): unknown;
   signing_message(
     chainId: Uint8Array,
     actionType: number,

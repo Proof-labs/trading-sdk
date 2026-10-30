@@ -10,7 +10,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rmpv::Value;
 use serde::{Deserialize, Serialize};
 
-use crate::types::{AttachedConditional, EventId, EventOracleSource, EventStatus, MarketConfig};
+use crate::types::{EventInfo, MarketConfig};
 
 /// Whole HTTP response limit, before decoding its base64 envelope.
 pub const MAX_SNAPSHOT_BYTES: usize = 1024 * 1024;
@@ -25,9 +25,8 @@ pub struct MarketsSnapshot {
     pub chain_id: [u8; 32],
     pub height: u64,
     pub markets: Vec<MarketConfig>,
-    /// Every event with its binaries and its attached conditionals; the
-    /// stored `EventInfo` record, no display view.
-    pub events: Vec<SnapshotEvent>,
+    /// Every event with its binary book and its attached conditionals.
+    pub events: Vec<EventInfo>,
     /// Long and short open interest per market that has had positions, in
     /// ascending market order; a market missing from the list has none.
     /// `None` when the node does not serve open interest.
@@ -47,32 +46,8 @@ pub struct MarketOpenInterest {
 /// this decoder reads.
 const OPEN_INTEREST_FIELD: usize = 4;
 
-/// The stored event record in either engine shape. An engine with one
-/// binary book per event stores no No book (`ebn_market` is `None`); an
-/// earlier engine stores both books. Decoding both lets a client follow a
-/// chain across the upgrade that retires the No book.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SnapshotEvent {
-    pub event_id: EventId,
-    /// The event's binary book, priced in Yes.
-    pub eby_market: crate::types::MarketId,
-    /// The No book, on an engine that still has one.
-    pub ebn_market: Option<crate::types::MarketId>,
-    pub question: String,
-    pub settlement_ms: u64,
-    pub resolution_window_ms: u64,
-    pub status: EventStatus,
-    pub created_ms: u64,
-    pub resolved_ms: u64,
-    pub oracle_source: Option<EventOracleSource>,
-    pub attached_conditionals: Vec<AttachedConditional>,
-}
-
-/// Event-row width in the two-book shape; the one-book shape is one less.
-const TWO_BOOK_EVENT_WIDTH: usize = 11;
-/// Position of the No book in a two-book row, and of the question in a
-/// one-book row.
-const NO_BOOK_FIELD: usize = 2;
+/// Event-row width: the stored `EventInfo` record.
+const EVENT_WIDTH: usize = 10;
 
 /// Deliberately excludes request URLs, response bodies and provider credentials.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,7 +124,7 @@ pub fn decode_snapshot(
     validate_value(&value)?;
     let top = tuple(&mut value, 4)?;
     top.truncate(OPEN_INTEREST_FIELD + 1);
-    for (slot, width) in [(2, 24), (3, TWO_BOOK_EVENT_WIDTH), (OPEN_INTEREST_FIELD, 3)] {
+    for (slot, width) in [(2, 24), (3, EVENT_WIDTH), (OPEN_INTEREST_FIELD, 3)] {
         let rows = match top.get_mut(slot) {
             Some(Value::Array(rows)) => rows,
             // A node from before open interest ends the tuple at the events.
@@ -160,15 +135,12 @@ pub fn decode_snapshot(
             return Err(SnapshotError::TooLarge);
         }
         for row in rows {
-            if slot == 3 {
-                normalize_one_book_event(row)?;
-            }
             let fields = tuple(row, width)?;
             fields.truncate(width);
             if slot == 3 {
                 // An event's attachment list: one `[underlying, cpy, cpn]`
                 // tuple per attachment, bounded like the rows themselves.
-                let attachments = tuple(&mut fields[10], 0)?;
+                let attachments = tuple(&mut fields[9], 0)?;
                 if attachments.len() > MAX_SNAPSHOT_ROWS {
                     return Err(SnapshotError::TooLarge);
                 }
@@ -212,19 +184,6 @@ pub fn decode_snapshot(
         }
     }
     Ok(snapshot)
-}
-
-/// A one-book event row has the question where a two-book row has its No
-/// book: insert an absent No book there so both shapes decode as one.
-fn normalize_one_book_event(row: &mut Value) -> Result<(), SnapshotError> {
-    let fields = tuple(row, TWO_BOOK_EVENT_WIDTH - 1)?;
-    if matches!(fields[NO_BOOK_FIELD], Value::String(_)) {
-        fields.insert(NO_BOOK_FIELD, Value::Nil);
-    } else if fields[NO_BOOK_FIELD].is_nil() {
-        // A two-book row never carries an absent No book.
-        return Err(SnapshotError::Malformed);
-    }
-    Ok(())
 }
 
 fn tuple(value: &mut Value, minimum: usize) -> Result<&mut Vec<Value>, SnapshotError> {
