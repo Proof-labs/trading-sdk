@@ -110,6 +110,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `fundReserve`, `fundRealized`, `fundAbsorbed`; `LiquidationProgressReported`
   `remainderCode`, `remainderRefusal`.
 
+### Changed
+
+- An `order_rejected` event backfilled from history after a reconnect is
+  typed `orderUpdate`, not `accountEvent`, in TypeScript and Python. This
+  matches api-gateway 10.2.0, which types live rejections the same way
+  ([api-gateway #246](https://github.com/Proof-labs/api-gateway/pull/246)), so a
+  rejection gets one frame type whether it arrived live or from history.
+  Code that handles rejections under `accountEvent` should switch on
+  `eventType`. A rejection's payload need not carry an `order_id`. No wire
+  change.
+
 ### Removed
 
 - **The per-market `partialLiquidationEnabled` flag** (`partial_liquidation_enabled` in
