@@ -48,6 +48,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Open interest in the markets snapshot** (exchange#1273): long and short
+  open interest per market that has had positions, at the snapshot's height.
+  `MarketsSnapshot.openInterest` in TypeScript and `open_interest` in Rust are
+  absent (`undefined` / `None`) on a node that does not serve it, and an empty
+  list when no market has any. A repeated or out-of-order market refuses the
+  whole read; Rust reports the order fault as the new
+  `SnapshotError::UnorderedOpenInterest`. Additive on the wire (MINOR), but
+  code that builds the Rust `MarketsSnapshot` struct field by field must add
+  `open_interest`, and an exhaustive `match` on `SnapshotError` must handle the
+  new variant (MAJOR for the Rust crate).
+- **Python `ExchangeClient.markets_snapshot()`** reads `GET /v1/markets-snapshot`
+  bound to the client's chain and returns a `MarketsSnapshot` dataclass with
+  markets (in the `markets()` shape), events and open interest. It decodes
+  through the Rust core (`decode_markets_snapshot`), so it refuses exactly what
+  Rust refuses, as `CodecError`. The body is streamed and refused past
+  `MAX_MARKETS_SNAPSHOT_BYTES` (1 MiB) before it is buffered whole, and a
+  compressed body is refused unread. `timeout` (10 seconds by default) limits
+  each network wait and, between body chunks, the whole read; it is not a
+  whole-call deadline. Additive (MINOR).
 - **`queryFunding(market)`** reads one market's funding state at
   `GET /v1/funding/{market}` (the gateway's `fundingRate` read): funding rate,
   cumulative funding, last funding time, mark price EWMA, oracle price,
@@ -90,6 +109,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Typed liquidation event fields**: `PositionLiquidated` `fundCharged`, `fundBinaries`,
   `fundReserve`, `fundRealized`, `fundAbsorbed`; `LiquidationProgressReported`
   `remainderCode`, `remainderRefusal`.
+
+### Changed
+
+- An `order_rejected` event backfilled from history after a reconnect is
+  typed `orderUpdate`, not `accountEvent`, in TypeScript and Python. This
+  matches api-gateway 10.2.0, which types live rejections the same way
+  ([api-gateway #246](https://github.com/Proof-labs/api-gateway/pull/246)), so a
+  rejection gets one frame type whether it arrived live or from history.
+  Code that handles rejections under `accountEvent` should switch on
+  `eventType`. A rejection's payload need not carry an `order_id`. No wire
+  change.
 
 ### Removed
 

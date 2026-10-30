@@ -47,6 +47,7 @@ fn fixture() -> Vec<u8> {
         height: u64::MAX,
         markets: vec![market()],
         events: vec![],
+        open_interest: None,
     })
     .unwrap()
 }
@@ -172,6 +173,7 @@ fn actual_shared_wire_snapshot_round_trips_without_numeric_loss() {
     assert_eq!(snapshot.markets[0].max_open_interest, u64::MAX);
     assert_eq!(snapshot.markets[0].kind, MarketKind::Perp);
     assert!(snapshot.events.is_empty());
+    assert_eq!(snapshot.open_interest, None);
     // Rust-produced golden vector also consumed by the TypeScript decoder.
     println!("snapshot-golden={}", hex::encode(fixture()));
 }
@@ -186,9 +188,107 @@ fn additive_fields_are_ignored_without_weakening_existing_fields() {
             unreachable!()
         };
         row.push(Value::from("future market field"));
+        top.push(Value::Array(vec![Value::Array(vec![
+            Value::from(1),
+            Value::from(3),
+            Value::from(3),
+            Value::from("future open-interest field"),
+        ])]));
         top.push(Value::from("future snapshot field"));
     });
-    assert!(decode_snapshot(&bytes, chain(7)).is_ok());
+    assert_eq!(
+        decode_snapshot(&bytes, chain(7)).unwrap().open_interest,
+        Some(vec![MarketOpenInterest {
+            market: 1,
+            long: 3,
+            short: 3,
+        }])
+    );
+}
+
+#[test]
+fn current_engine_snapshot_serves_open_interest() {
+    // rmp_serde::to_vec of an exchange-core::query::MarketsSnapshot struct
+    // literal at exchange 66d50df7 (docs/market-snapshot.md): two perps, open interest 2^53 + 1 a side on market 1 and zero on
+    // market 2, which has had positions that all closed.
+    let bytes = hex::decode(include_str!("engine-66d50df7.hex").trim()).unwrap();
+    let snapshot = decode_snapshot(&envelope(&bytes), chain(7)).unwrap();
+    assert_eq!(
+        snapshot.open_interest,
+        Some(vec![
+            MarketOpenInterest {
+                market: 1,
+                long: 9_007_199_254_740_993,
+                short: 9_007_199_254_740_993,
+            },
+            MarketOpenInterest {
+                market: 2,
+                long: 0,
+                short: 0,
+            },
+        ])
+    );
+}
+
+fn open_interest_row(market: i64, long: i64, short: i64) -> Value {
+    Value::Array(vec![
+        Value::from(market),
+        Value::from(long),
+        Value::from(short),
+    ])
+}
+
+#[test]
+fn no_open_interest_is_served_distinct_from_none_served() {
+    let bytes = changed(|top| top.push(Value::Array(vec![])));
+    assert_eq!(
+        decode_snapshot(&bytes, chain(7)).unwrap().open_interest,
+        Some(vec![])
+    );
+    assert_eq!(
+        decode_snapshot(&envelope(&fixture()), chain(7))
+            .unwrap()
+            .open_interest,
+        None
+    );
+}
+
+#[test]
+fn malformed_or_unordered_open_interest_refuses_the_whole_snapshot() {
+    let with = |rows: Value| changed(|top| top.push(rows));
+    assert_eq!(
+        decode_snapshot(
+            &with(Value::Array(vec![
+                open_interest_row(1, 3, 3),
+                open_interest_row(1, 3, 3),
+            ])),
+            chain(7)
+        )
+        .unwrap_err(),
+        SnapshotError::DuplicateMarket
+    );
+    assert_eq!(
+        decode_snapshot(
+            &with(Value::Array(vec![
+                open_interest_row(2, 0, 0),
+                open_interest_row(1, 3, 3),
+            ])),
+            chain(7)
+        )
+        .unwrap_err(),
+        SnapshotError::UnorderedOpenInterest
+    );
+    for rows in [
+        Value::Array(vec![open_interest_row(1, -1, 3)]),
+        Value::Array(vec![Value::Array(vec![Value::from(1), Value::from(3)])]),
+        Value::Array(vec![Value::Nil]),
+        Value::Nil,
+    ] {
+        assert_eq!(
+            decode_snapshot(&with(rows), chain(7)).unwrap_err(),
+            SnapshotError::Malformed
+        );
+    }
 }
 
 #[test]
