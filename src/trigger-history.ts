@@ -362,7 +362,7 @@ function decodeEvent(
   expectedOwner: string | null,
   expectedMarket: string | null,
   scope: "owner" | "market",
-): PositionTriggerHistoryEvent | TriggerMarketHistoryEvent {
+): PositionTriggerHistoryEvent | TriggerMarketHistoryEvent | null {
   const row = object(value, "event");
   exactKeys(row, EVENT_KEYS, "event");
   const eventKey = string(row.event_key, "event_key");
@@ -377,6 +377,14 @@ function decodeEvent(
     row.event_type,
     "event_type",
   ) as TriggerHistoryEventType;
+  // An event type added after this SDK version is skipped, not refused, so it
+  // cannot fail the whole page; a known type on the wrong route still fails.
+  if (
+    !OWNER_EVENT_TYPES.has(eventType as PositionTriggerHistoryEventType) &&
+    !MARKET_EVENT_TYPES.has(eventType as TriggerMarketHistoryEventType)
+  ) {
+    return null;
+  }
   if (
     (scope === "owner" &&
       !OWNER_EVENT_TYPES.has(eventType as PositionTriggerHistoryEventType)) ||
@@ -469,9 +477,9 @@ export function decodePositionTriggerHistoryPage(
   if (!Array.isArray(row.trigger_events)) {
     throw new Error("trigger history decode: trigger_events must be an array");
   }
-  const events = row.trigger_events.map((event) =>
-    decodeEvent(event, canonicalOwner, market, "owner"),
-  ) as PositionTriggerHistoryEvent[];
+  const events = row.trigger_events
+    .map((event) => decodeEvent(event, canonicalOwner, market, "owner"))
+    .filter((event) => event !== null) as PositionTriggerHistoryEvent[];
   assertNewestFirst(events);
   return {
     triggerEvents: events,
@@ -492,9 +500,9 @@ export function decodeTriggerMarketHistoryPage(
       "trigger history decode: trigger_market_events must be an array",
     );
   }
-  const events = row.trigger_market_events.map((event) =>
-    decodeEvent(event, null, market, "market"),
-  ) as TriggerMarketHistoryEvent[];
+  const events = row.trigger_market_events
+    .map((event) => decodeEvent(event, null, market, "market"))
+    .filter((event) => event !== null) as TriggerMarketHistoryEvent[];
   assertNewestFirst(events);
   return {
     triggerMarketEvents: events,
