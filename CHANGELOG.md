@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `reads().finalized` preserves witnessed account, authority, nonce, orders, financial, market and oracle facts. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
+- `reads().finalized.account(owner)` decodes the engine-valued account through the canonical Rust codec, preserving pending funding and equity with a same-state witness. It does not recalculate funding or authorize execution.
+
+### Changed
+
+- Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Market snapshot retains its explicit 10-second setting. HTTP failure bodies remain readable within the same cap; duplicate JSON keys refuse.
+
 ## [9.0.0] — 2026-10-31
 
 ### Breaking changes
@@ -70,8 +79,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   removed; `MarketsSnapshot.events` is the wire `EventInfo` (MAJOR).
 
 ### Added
-
-- `reads().finalized` preserves witnessed account, authority, nonce, orders, financial, market and oracle facts. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
 
 - **Open interest in the markets snapshot** (exchange#1273): long and short
   open interest per market that has had positions, at the snapshot's height.
@@ -501,8 +508,6 @@ SDK from source no longer needs access to the private Proof-labs/bridge repo.
   arguments as before; no wire change.
 
 ### Changed
-
-- Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Market snapshot retains its explicit 10-second setting. HTTP failure bodies remain readable within the same cap; duplicate JSON keys refuse.
 
 - The bridge payload encoders (`encodeWithdrawalAuthorization`,
   `withdrawalAuthorizationDigest`, `encodeBridgeReceipt`) now come from

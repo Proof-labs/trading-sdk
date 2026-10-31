@@ -10,6 +10,7 @@ export {
 } from "./read-values.js";
 // Types
 export {
+  type FinalizedAccountInfo,
   type FinalizedAccountState,
   type FinalizedAgentAuthorization,
   type FinalizedRecentNonces,
