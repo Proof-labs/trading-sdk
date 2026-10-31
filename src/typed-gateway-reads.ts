@@ -1,4 +1,9 @@
 import {
+  readFinalizedOrderbook,
+  type FinalizedOrderbook,
+  type FinalizedOrderbookOptions,
+} from "./finalized-orderbook.js";
+import {
   readFinalizedOraclePermissions,
   type FinalizedOraclePermissions,
 } from "./finalized-oracle-read.js";
@@ -23,7 +28,7 @@ import {
   type FinalizedMarketsSnapshot,
   type FinalizedFinancialState,
 } from "./finalized-state-reads.js";
-import type { BlockEvidenceHeader } from "./block-header.js";
+import type { BlockEvidenceHeader } from "./block-results-window.js";
 import {
   readTransactionEvidence,
   type TransactionEvidence,
@@ -34,6 +39,11 @@ import {
   type BlockResultsWindow,
   type BlockResultsWindowSelection,
 } from "./block-results-window.js";
+import {
+  readTradeHistoryPage,
+  type TradeHistoryOptions,
+  type TradeHistoryPage,
+} from "./trade-history.js";
 import { GatewayReads } from "./gateway-reads.js";
 import {
   gatewayReadContext,
@@ -138,6 +148,17 @@ export class FinalizedReads extends ReadClient {
       this.httpTransport,
     );
   }
+  async orderbook(
+    market: number,
+    options: FinalizedOrderbookOptions = {},
+  ): Promise<FinalizedOrderbook> {
+    return readFinalizedOrderbook(
+      this.gatewayUrl,
+      market,
+      options,
+      this.httpTransport,
+    );
+  }
   async oraclePermissions(
     market: number,
     options: BoundedReadOptions = {},
@@ -204,5 +225,16 @@ export class TypedGatewayReads extends GatewayReads {
     const pin = chain ? Uint8Array.from(chain) : undefined;
     this.finalized = new FinalizedReads(gatewayUrl, httpTransport, pin);
     this.evidence = new EvidenceReads(gatewayUrl, httpTransport, pin);
+  }
+  async tradeHistoryPage(
+    market: number,
+    options: TradeHistoryOptions,
+  ): Promise<TradeHistoryPage> {
+    return readTradeHistoryPage(
+      this.gatewayUrl,
+      market,
+      options,
+      this.httpTransport,
+    );
   }
 }

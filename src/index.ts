@@ -38,6 +38,17 @@ export type {
   BlockResultsWindowSelection,
 } from "./block-results-window.js";
 export {
+  type FinalizedOrderbook,
+  type FinalizedOrderbookDepth,
+  type FinalizedOrderbookOptions,
+} from "./finalized-orderbook.js";
+export {
+  decodeTradeHistoryPage,
+  type ParticipantTrade,
+  type TradeHistoryOptions,
+  type TradeHistoryPage,
+} from "./trade-history.js";
+export {
   type Address,
   Side,
   TimeInForce,

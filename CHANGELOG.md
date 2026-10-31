@@ -9,6 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `reads().tradeHistoryPage` preserves trade cursors and pairs with the generic
+  finalized/evidence facade. See [generic reads design](docs/generic-finalized-reads.md)
+  for trust boundaries, pagination, resource limits, typed errors and timestamp units.
 - `reads().evidence.transaction` and `blockResultsWindow` bind exact signed bytes and complete bounded windows to the pinned chain. Caller-reducible resource budgets refuse partial coverage. Trusted-gateway evidence, not cryptographic event proofs or non-admission permission.
 - `reads().finalized` preserves witnessed account, authority, nonce, orders, financial, market and oracle facts. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
 - `reads().finalized.account(owner)` decodes the engine-valued account through the canonical Rust codec, preserving pending funding and equity with a same-state witness. It does not recalculate funding or authorize execution.
