@@ -110,6 +110,7 @@ export {
   type OrderbookLevel,
   type OpenOrder,
   type TriggerKind,
+  type StoredTriggerKind,
   type TriggerLimbState,
   type TriggerOutcomeReason,
   type TriggerEvaluation,
