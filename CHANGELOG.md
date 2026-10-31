@@ -7,9 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [9.0.0] — 2026-10-31
+
 ### Breaking changes
 
-- **Financial reads (MAJOR for npm):** `FinancialState` is a format-discriminated union; format 3 has no retired PLP record. Narrow `state.format === 1` before accessing `state.plp`. `queryFinancialState` now accepts format 3. Include in the next major npm release, not a minor 8.1 release. No package or tag is published here.
+- **Financial reads (MAJOR for npm):** `FinancialState` is a format-discriminated union; format 3 has no retired PLP record. Narrow `state.format === 1` before accessing `state.plp`. `queryFinancialState` now accepts format 3.
 
 - **proof-wire 9.0.0, for exchange 2.21.0 (protocol 9.0).** The Rust crate
   pins proof-wire 9 (tag v9.0.0, commit `8857f3d3`). The engine retired its
@@ -1804,7 +1806,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.0.0...HEAD
+[9.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...npm-v9.0.0
 [8.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.0.0...npm-v8.1.0
 [8.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.3.0...npm-v8.0.0
 [7.3.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.2.0...npm-v7.3.0
