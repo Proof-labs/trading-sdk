@@ -3,6 +3,8 @@ import {
   type FinalizedOraclePermissions,
 } from "./finalized-oracle-read.js";
 import {
+  readFinalizedAccount,
+  type FinalizedAccountInfo,
   readFinalizedAccountState,
   readFinalizedAgentAuthorization,
   readFinalizedRecentNonces,
@@ -58,6 +60,17 @@ class ReadClient {
 }
 /** Same-view facts. See FinalizedReadWitness for the trust and binding boundary. */
 export class FinalizedReads extends ReadClient {
+  async account(
+    owner: string,
+    options: BoundedReadOptions = {},
+  ): Promise<FinalizedAccountInfo> {
+    return readFinalizedAccount(
+      this.gatewayUrl,
+      owner,
+      options,
+      this.httpTransport,
+    );
+  }
   async accountState(
     owner: string,
     options: BoundedReadOptions = {},

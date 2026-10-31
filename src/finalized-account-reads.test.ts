@@ -63,6 +63,91 @@ beforeAll(async () => {
 });
 
 describe("generic finalized raw reads", () => {
+  const valuedPosition = (market = 1, funding = -17n): unknown[] => [
+    Array(20).fill(4),
+    market,
+    "Buy",
+    100n,
+    3n,
+    -7n,
+    11n,
+    2n,
+    3n,
+    5n,
+    -5n,
+    funding,
+    0n,
+    1n,
+  ];
+  const valuedAccount = (positions = [valuedPosition()]): unknown[] => [
+    50n,
+    positions,
+    61n,
+    2n,
+    3n,
+    10000n,
+    [],
+    0n,
+    0n,
+    61n,
+  ];
+  it("reads engine-valued funding and equity through the canonical account decoder", async () => {
+    const c = client(
+      envelope(valuedAccount([valuedPosition(), valuedPosition(2, 19n)])),
+    );
+    const value = await c.client.reads().finalized.account(owner);
+    expect(value).toMatchObject({
+      owner,
+      balance: 50n,
+      equity: 61n,
+      witness: { height: H },
+    });
+    expect(value.positions.map((p) => p.fundingSince)).toEqual([-17n, 19n]);
+    expect(String(c.transport.mock.calls[0][0])).toBe(
+      `https://gateway.example/v1/account/${owner}?witness=1`,
+    );
+    expect(c.transport.mock.calls[0][2]).toMatchObject({
+      purpose: "account",
+    });
+  });
+  it("refuses cross-owner, duplicate and malformed valued positions", async () => {
+    const cross = valuedPosition();
+    cross[0] = Array(20).fill(5);
+    for (const raw of [
+      valuedAccount([cross]),
+      valuedAccount([valuedPosition(), valuedPosition()]),
+      valuedAccount([valuedPosition().slice(0, 6)]),
+      [50, []],
+    ]) {
+      await expect(
+        client(envelope(raw)).client.reads().finalized.account(owner),
+      ).rejects.toThrow();
+    }
+  });
+  it("requires a complete witness for valued accounts and never falls back", async () => {
+    for (const body of [
+      { data: envelope(valuedAccount()).data },
+      {
+        ...envelope(valuedAccount()),
+        witness: { ...witness, appHash: "00".repeat(32) },
+      },
+      { ...envelope(valuedAccount()), data: "!!!" },
+    ]) {
+      const c = client(body);
+      await expect(c.client.reads().finalized.account(owner)).rejects.toThrow();
+      expect(c.transport).toHaveBeenCalledTimes(1);
+    }
+    const c = client(envelope(valuedAccount()));
+    const abort = new AbortController();
+    abort.abort();
+    await expect(
+      c.client.reads().finalized.account(owner, { signal: abort.signal }),
+    ).rejects.toThrow();
+    await expect(
+      c.client.reads().finalized.account("0x" + owner),
+    ).rejects.toThrow();
+    expect(c.transport).not.toHaveBeenCalled();
+  });
   it("retains exact account height, cash and cost remainder", async () => {
     const c = client(envelope(account()));
     const value = await c.client.reads().finalized.accountState(owner);

@@ -42,7 +42,12 @@ import {
   type LiquidationHistoryFilters,
   type LiquidationHistoryPage,
 } from "./liquidation-history.js";
-import { toWasmFields } from "./codec-adapter.js";
+import {
+  accountInfoFromWasm,
+  eventInfoFromWasm,
+  marketConfigFromWasm,
+  toWasmFields,
+} from "./codec-adapter.js";
 import {
   signAndEncode,
   encodePayloadBytes,
@@ -56,7 +61,7 @@ import {
   type FinancialState,
   type FinancialStateSelection,
 } from "./financial-state.js";
-import { ready as initWasm } from "./wasm-loader.js";
+import { getWasm, ready as initWasm, type WasmCore } from "./wasm-loader.js";
 import {
   txEngineError,
   txFromEngineCode,
@@ -83,22 +88,17 @@ import type {
   PlaceOrder,
   MarketOrder,
   AccountInfo,
-  BindingScenarioEntry,
-  FeeTier,
   HistoryCashFlow,
   HistoryFillsPage,
   HistoryPositionSnapshot,
   HistoryPositionsPage,
   HistoryResolution,
   MarketConfig,
-  MarketKind,
-  MarkSourceMode,
   OpenOrder,
   AdlQueueEntry,
   Orderbook,
   OrderbookLevel,
   Ticker,
-  PositionInfo,
   WithdrawalRecord,
   WithdrawalStatus,
   AdminSignerRegistry,
@@ -126,7 +126,6 @@ import {
   decodeNodeVersion,
   decodeUpgradesInfo,
   decodeLiquidationConfigInfo,
-  decodeEventInfo,
   decodeProposalPage,
 } from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
@@ -1460,6 +1459,22 @@ export class ExchangeClient {
     return value;
   }
 
+  /** Strictly decode a wire-typed read response in the Rust core. */
+  private async decodeRead(
+    kind: keyof WasmCore["ReadKind"],
+    bytes: Uint8Array,
+  ): Promise<unknown> {
+    await initWasm();
+    const wasm = getWasm();
+    try {
+      return wasm.decode_read(wasm.ReadKind[kind], bytes);
+    } catch (e) {
+      throw new Error(
+        `${kind} decode: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
   async queryOrderbook(market: number): Promise<Orderbook> {
     const json = await this.apiJson(
       `${this.readBaseUrl}/v1/orderbook/${market}`,
@@ -1504,15 +1519,13 @@ export class ExchangeClient {
   async queryMarkets(): Promise<MarketConfig[]> {
     const json = await this.apiJson(`${this.readBaseUrl}/v1/markets`);
     const bytes = fromBase64(json.data as string);
-    const raw = (await this.strictDecode(bytes)) as unknown[][];
-    return raw.map((m) => decodeMarketConfig(m));
+    const raw = (await this.decodeRead("Markets", bytes)) as unknown[];
+    return raw.map(marketConfigFromWasm);
   }
 
-  /** All events: each is its binary book (plus a No book on an engine that
-   *  still has one) under one `EventInfo`, plus every conditional attached
-   *  to it. Fail-closed like the
-   *  governance reads: a missing envelope or malformed row is a refusal.
-   *  Decoder pinned to the engine golden vector in governance-query.test.ts. */
+  /** All events: each is its binary book under one `EventInfo`, plus every
+   *  conditional attached to it. Fail-closed: a missing envelope or
+   *  malformed row is a refusal. */
   async queryEvents(): Promise<EventInfo[]> {
     const json = await this.apiJson(`${this.readBaseUrl}/v1/events`);
     if (typeof json.data !== "string") {
@@ -1520,11 +1533,8 @@ export class ExchangeClient {
         "governance decode: events response has no encoded-data envelope",
       );
     }
-    const raw = await this.strictDecode(fromBase64(json.data));
-    if (!Array.isArray(raw)) {
-      throw new Error("governance decode: events is not an array");
-    }
-    return raw.map((r, i) => decodeEventInfo(r, i));
+    const raw = await this.decodeRead("Events", fromBase64(json.data));
+    return (raw as unknown[]).map(eventInfoFromWasm);
   }
 
   /** A single event by id, or `null` if it does not exist. The node returns
@@ -1549,9 +1559,8 @@ export class ExchangeClient {
         "governance decode: event response has no encoded-data envelope",
       );
     }
-    const raw = await this.strictDecode(fromBase64(json.data));
-    if (raw == null) return null;
-    return decodeEventInfo(raw);
+    const raw = await this.decodeRead("Event", fromBase64(json.data));
+    return raw == null ? null : eventInfoFromWasm(raw);
   }
 
   /** Current whole-position trigger brackets for one owner. Immutable
@@ -1856,83 +1865,9 @@ export class ExchangeClient {
       { type: "clearinghouseState", user: hex },
       `/v1/account/${hex}`,
     );
-    const bytes = fromBase64(json.data as string);
-    const raw = (await this.strictDecode(bytes)) as unknown[];
-    const balance = BigInt(raw[0] as number | bigint);
-    const positions: PositionInfo[] = ((raw[1] ?? []) as unknown[][]).map(
-      (p) => {
-        // Optional enrichments (indices 6-13) shipped incrementally:
-        //   6-11: scenario-aware brief fields, 2026-04-24 (P1 #2).
-        //   12  : adlScore, 2026-04-25 (item 7 — ADL rank surface).
-        //   13  : persistent position epoch (first-attach trigger input).
-        // Older gateways return shorter tuples; missing fields are
-        // surfaced as `undefined` so the UI can show a "—" placeholder.
-        const optBig = (v: unknown): bigint | undefined =>
-          v === undefined || v === null
-            ? undefined
-            : BigInt(v as number | bigint);
-        return {
-          owner: toBytes(p[0]),
-          market: Number(p[1]),
-          side: p[2] as "Buy" | "Sell",
-          entryPrice: BigInt(p[3] as number | bigint),
-          size: BigInt(p[4] as number | bigint),
-          lastFundingIndex: BigInt((p[5] as number | bigint) ?? 0),
-          upnlNow: optBig(p[6]),
-          mmNow: optBig(p[7]),
-          imNow: optBig(p[8]),
-          pnlIfFires: optBig(p[9]),
-          pnlIfDies: optBig(p[10]),
-          fundingSince: optBig(p[11]),
-          adlScore: optBig(p[12]),
-          positionEpoch: optBig(p[13]),
-        };
-      },
+    return accountInfoFromWasm(
+      await this.decodeRead("Account", fromBase64(json.data as string)),
     );
-    const equity = BigInt((raw[2] as number | bigint) ?? 0);
-    const totalMm = BigInt((raw[3] as number | bigint) ?? 0);
-    const totalIm = BigInt((raw[4] as number | bigint) ?? 0);
-    const marginRatioBps = BigInt((raw[5] as number | bigint) ?? 0);
-    // Index [6] — shipped 2026-04-24 (Sprint 1 Day 2 / P1 #3). Older
-    // gateways omit this field; leave bindingScenario undefined rather
-    // than defaulting to [] so callers can tell "no data available"
-    // from "empty (perp-only account)".
-    let bindingScenario: BindingScenarioEntry[] | undefined;
-    if (raw[6] !== undefined) {
-      bindingScenario = ((raw[6] as unknown[]) ?? []).map((e) => {
-        const t = e as [number | bigint, string];
-        return {
-          eventId: Number(t[0]),
-          branch: t[1] as "Yes" | "No",
-        };
-      });
-    }
-    // Index [7] — added 2026-05-03 (BE-45). Cumulative trading fees
-    // paid (positive) or rebates received (negative). Older gateways
-    // omit this field; leave feesAccrued undefined so callers can
-    // distinguish "no data" from "0 fees".
-    let feesAccrued: bigint | undefined;
-    if (raw[7] !== undefined) {
-      feesAccrued = BigInt((raw[7] as number | bigint) ?? 0);
-    }
-    // Index [8] — added 2026-05-17. Rolling 30-day taker volume in
-    // micro-USDC at the account's last volume update. Used by the
-    // fee-tier program; older gateways omit it.
-    let volume30dMicroUsdc: bigint | undefined;
-    if (raw[8] !== undefined) {
-      volume30dMicroUsdc = BigInt((raw[8] as number | bigint) ?? 0);
-    }
-    return {
-      balance,
-      positions,
-      equity,
-      totalMm,
-      totalIm,
-      marginRatioBps,
-      bindingScenario,
-      feesAccrued,
-      volume30dMicroUsdc,
-    };
   }
 
   /** Convenience: fetch just the USDC balance (microUSDC) for an address. */
@@ -2798,83 +2733,6 @@ function parseLeadingErrorCode(s: string): number | null {
   if (!m) return null;
   const n = Number(m[1]);
   return Number.isFinite(n) ? n : null;
-}
-
-// ---------------------------------------------------------------------------
-// MarketConfig decoder
-// ---------------------------------------------------------------------------
-
-/** Decode a single MarketConfig from its MessagePack positional array.
- *  Field order mirrors the Rust struct in exchange-core/src/types.rs.
- *  Null-safe reads on every optional field. */
-function decodeMarketConfig(raw: unknown[]): MarketConfig {
-  const optBig = (v: unknown): bigint | undefined =>
-    v == null ? undefined : BigInt(v as number | bigint);
-  const addr = (v: unknown): Uint8Array | undefined =>
-    v == null
-      ? undefined
-      : v instanceof Uint8Array
-        ? v
-        : Uint8Array.from(v as number[]);
-
-  let kind: MarketKind | undefined;
-  if (raw[7] != null) {
-    if (typeof raw[7] === "string") {
-      kind = raw[7] as MarketKind;
-    } else if (typeof raw[7] === "object" && raw[7] !== null) {
-      const obj = raw[7] as Record<string, unknown>;
-      if (Array.isArray(obj.ConditionalPerp))
-        kind = {
-          ConditionalPerp: [
-            Number((obj.ConditionalPerp as unknown[])[0]),
-            (obj.ConditionalPerp as unknown[])[1] as "Yes" | "No",
-          ],
-        };
-      else if (Array.isArray(obj.PredictionBinary))
-        kind = {
-          PredictionBinary: [
-            Number((obj.PredictionBinary as unknown[])[0]),
-            (obj.PredictionBinary as unknown[])[1] as "Yes" | "No",
-          ],
-        };
-    }
-  }
-
-  let feeTiers: FeeTier[] | undefined;
-  if (Array.isArray(raw[13])) {
-    feeTiers = (raw[13] as unknown[][]).map((t) => ({
-      min30dVolumeMicroUsdc: BigInt(t[0] as number | bigint),
-      makerFeeTenthBps: Number(t[1]),
-      takerFeeTenthBps: Number(t[2]),
-    }));
-  }
-
-  return {
-    market: Number(raw[0]),
-    imBps: Number(raw[1]),
-    mmBps: Number(raw[2]),
-    takerFeeBps: Number(raw[3]),
-    makerFeeBps: Number(raw[4]),
-    fundingIntervalMs: BigInt(raw[5] as number | bigint),
-    maxFundingRateBps: Number(raw[6]),
-    kind,
-    maxPositionSize: optBig(raw[8]),
-    defaultTtlMs: optBig(raw[9]),
-    netDeltaMargin: raw[10] == null ? undefined : Boolean(raw[10]),
-    poolId: raw[11] == null ? undefined : Number(raw[11]),
-    markPriceMaxOracleAgeMs: optBig(raw[12]),
-    feeTiers,
-    tickSize: optBig(raw[14]),
-    lotSize: optBig(raw[15]),
-    primaryOracleSigner: addr(raw[16]),
-    oracleStalenessMs: optBig(raw[17]),
-    markSourceMode: raw[18] == null ? undefined : (raw[18] as MarkSourceMode),
-    maxMarkSpreadBps: raw[19] == null ? undefined : Number(raw[19]),
-    cexCompositeStalenessMs: optBig(raw[20]),
-    szDecimals: raw[21] == null ? undefined : Number(raw[21]),
-    ticker: raw[22] == null ? undefined : String(raw[22]),
-    maxOpenInterest: optBig(raw[23]),
-  };
 }
 
 /** Copy protocol inputs without structuredClone or cross-realm instanceof checks. */

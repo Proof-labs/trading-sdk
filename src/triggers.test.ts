@@ -230,7 +230,7 @@ describe("W32-10 trigger read models", () => {
     });
   });
 
-  it("passes engine labels through and keeps the limb kind strict", () => {
+  it("passes engine labels and later limb kinds through", () => {
     const row = (
       reason: unknown,
       kind = "StopLoss",
@@ -271,9 +271,17 @@ describe("W32-10 trigger read models", () => {
         /TriggerOutcomeReason must be a non-empty string/,
       );
     }
-    expect(() =>
-      decodePositionTriggerInfos([row("X", "TrailingStop")]),
-    ).toThrow(/unknown TriggerKind TrailingStop/);
+    const [trailing] = decodePositionTriggerInfos([row("X", "TrailingStop")]);
+    expect(trailing.bracket.stopLoss?.kind).toBe("TrailingStop");
+    // The stop-loss slot holding the other known kind is a corrupt row.
+    expect(() => decodePositionTriggerInfos([row("X", "TakeProfit")])).toThrow(
+      /stopLoss has wrong kind/,
+    );
+    for (const bad of ["", 17]) {
+      expect(() => decodePositionTriggerInfos([row("X", bad)])).toThrow(
+        /TriggerKind must be a non-empty string/,
+      );
+    }
     const [later] = decodePositionTriggerInfos([
       row("X", "StopLoss", "Snoozed", "Snoozed"),
     ]);

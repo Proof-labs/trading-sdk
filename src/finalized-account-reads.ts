@@ -16,10 +16,17 @@ import {
   type FinalizedReadWitness,
 } from "./bounded-read.js";
 import { rejectFloats } from "./codec.js";
-import { ready } from "./wasm-loader.js";
+import { getWasm, ready } from "./wasm-loader.js";
+import { accountInfoFromWasm } from "./codec-adapter.js";
+import type { AccountInfo } from "./types.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 
 export interface FinalizedAccountState extends AccountState {
+  witness: FinalizedReadWitness;
+}
+/** Engine-valued account; fundingSince is read, never recomputed here. */
+export interface FinalizedAccountInfo extends AccountInfo {
+  owner: HexAddress;
   witness: FinalizedReadWitness;
 }
 export interface FinalizedAgentAuthorization {
@@ -99,8 +106,8 @@ function limit(value: number): number {
 }
 /** Strict raw envelope; no projections, fallback or evidence synthesized from another read.
  * Requires ready() for the authoritative MessagePack framing/depth preflight. */
-export function decodeWitnessedRead(value: unknown): {
-  raw: unknown;
+function witnessedBytes(value: unknown): {
+  bytes: Uint8Array;
   witness: FinalizedReadWitness;
 } {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -109,6 +116,22 @@ export function decodeWitnessedRead(value: unknown): {
   if (Object.keys(e).length !== 2 || !("data" in e) || !("witness" in e))
     fail("envelope");
   const bytes = canonicalBase64(e.data, "account.base64", 512 * 1024);
+  const w = e.witness;
+  if (
+    !w ||
+    typeof w !== "object" ||
+    Array.isArray(w) ||
+    Object.keys(w).length !== 5
+  )
+    fail("witness");
+  return { bytes, witness: decodeFinalizedReadWitness(w) };
+}
+
+export function decodeWitnessedRead(value: unknown): {
+  raw: unknown;
+  witness: FinalizedReadWitness;
+} {
+  const { bytes, witness } = witnessedBytes(value);
   rejectFloats(bytes);
   const raw: unknown = new Decoder({
     useBigInt64: true,
@@ -118,15 +141,40 @@ export function decodeWitnessedRead(value: unknown): {
     maxBinLength: 32,
     maxExtLength: 0,
   }).decode(bytes);
-  const w = e.witness;
-  if (
-    !w ||
-    typeof w !== "object" ||
-    Array.isArray(w) ||
-    Object.keys(w).length !== 5
-  )
-    fail("witness");
-  return { raw, witness: decodeFinalizedReadWitness(w) };
+  return { raw, witness };
+}
+
+export async function readFinalizedAccount(
+  gateway: string,
+  owner: string,
+  options: BoundedReadOptions,
+  transport: ExchangeHttpTransport,
+): Promise<FinalizedAccountInfo> {
+  const boundOwner = address(owner);
+  const { bytes, witness } = witnessedBytes(
+    await read(
+      gateway,
+      `/v1/account/${boundOwner}?witness=1`,
+      options,
+      transport,
+    ),
+  );
+  const wasm = getWasm();
+  const account = accountInfoFromWasm(
+    wasm.decode_read(wasm.ReadKind.Account, bytes),
+  );
+  const seen = new Set<number>();
+  for (const p of account.positions) {
+    if (
+      p.owner.length !== 20 ||
+      Array.from(p.owner, (b) => b.toString(16).padStart(2, "0")).join("") !==
+        boundOwner ||
+      seen.has(p.market)
+    )
+      fail("valued position binding", "binding");
+    seen.add(p.market);
+  }
+  return { ...account, owner: boundOwner, witness };
 }
 export function decodeFinalizedAccountState(
   value: unknown,
