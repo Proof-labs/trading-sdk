@@ -13,6 +13,21 @@
  * branch on `code === 0` first.
  */
 
+/** Fail-closed bounded read failure. Caller cancellation retains the original
+ * AbortSignal reason; HTTP refusals remain GatewayHttpError. */
+export class GatewayReadError extends Error {
+  readonly name = "GatewayReadError";
+  constructor(
+    readonly kind:
+      "deadline" | "limit" | "malformed" | "binding" | "configuration",
+    readonly field: string,
+    message = `Invalid gateway read: ${field}`,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
+}
+
 export interface ExecErrorInfo {
   /** Rust variant name when the code is one-to-one, or a grouped wire-code name. Stable. */
   name: string;

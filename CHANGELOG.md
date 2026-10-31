@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Market snapshot retains its explicit 10-second setting. HTTP failure bodies remain readable within the same cap; duplicate JSON keys refuse.
+
 ## [9.0.0] — 2026-10-31
 
 ### Breaking changes
