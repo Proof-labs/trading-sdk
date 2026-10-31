@@ -16,11 +16,18 @@ import {
   Outcome,
   Side,
   TimeInForce,
+  type AccountInfo,
   type Action,
   type ActionTypeValue,
   type AdminAction,
   type EmergencyAction,
+  type EventInfo,
   type EventOracleSource,
+  type EventStatus,
+  type MarketConfig,
+  type MarketKind,
+  type MarketsSnapshot,
+  type PositionInfo,
   type PriceComparison,
   type SetTriggerMarketConfig,
   type SetOracleGuards,
@@ -28,6 +35,7 @@ import {
   type WithdrawInsuranceFund,
   type ScheduleUpgrade,
   type SetLiquidationConfig,
+  type SetOperatorReceiptRegistry,
 } from "./types.js";
 import {
   validateFundInsuranceFund,
@@ -142,6 +150,20 @@ function governanceActionToWasm(value: unknown): unknown {
   // stay in the `{ Variant: {} }` map form — so the set is explicit, not
   // inferred from a missing `value`.
   if (GOVERNANCE_UNIT_VARIANTS.has(v.kind)) return v.kind;
+  validateGovernanceAction(v);
+  // `Batch` is the one variant whose payload is a LIST of nested enum items
+  // (`AdminBatchItem[]`) rather than a struct — each item is itself
+  // `{ kind, value }` and converts through this same function.
+  if (Array.isArray(v.value)) {
+    return { [v.kind]: v.value.map(governanceActionToWasm) };
+  }
+  return {
+    [v.kind]: v.value ? convertObject(v.value as Record<string, unknown>) : {},
+  };
+}
+
+/** Client-side parity checks shared by the encode and read directions. */
+function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   if (v.kind === "SetTriggerMarketConfig") {
     validateSetTriggerMarketConfig(v.value as SetTriggerMarketConfig);
   }
@@ -160,15 +182,21 @@ function governanceActionToWasm(value: unknown): unknown {
   if (v.kind === "SetLiquidationConfig") {
     validateSetLiquidationConfig(v.value as SetLiquidationConfig);
   }
-  // `Batch` is the one variant whose payload is a LIST of nested enum items
-  // (`AdminBatchItem[]`) rather than a struct — each item is itself
-  // `{ kind, value }` and converts through this same function.
-  if (Array.isArray(v.value)) {
-    return { [v.kind]: v.value.map(governanceActionToWasm) };
+  if (v.kind === "SetOperatorReceiptRegistry") {
+    validateSetOperatorReceiptRegistry(v.value as SetOperatorReceiptRegistry);
   }
-  return {
-    [v.kind]: v.value ? convertObject(v.value as Record<string, unknown>) : {},
-  };
+}
+
+/** The quorum must be reachable: `1..=operatorKeys.length`. */
+function validateSetOperatorReceiptRegistry(
+  registry: SetOperatorReceiptRegistry,
+): void {
+  const n = registry.operatorKeys.length;
+  if (registry.threshold < 1 || registry.threshold > n) {
+    throw new Error(
+      `setOperatorReceiptRegistry threshold ${registry.threshold} is outside 1..=${n}`,
+    );
+  }
 }
 
 /**
@@ -446,14 +474,15 @@ function fromWasmValue(camelKey: string, value: unknown): unknown {
   ) {
     return governanceActionFromWasm(value);
   }
-  // `newMembers` (UpdateAdminSignerRegistry) and `add`/`remove`
-  // (UpdateAuthoritySet) are each a list of 20-byte addresses
-  // (Vec<[u8;20]>); convert every element to a Uint8Array, unlike the
-  // single-address BYTE_FIELDS above.
+  // `newMembers` (UpdateAdminSignerRegistry), `add`/`remove`
+  // (UpdateAuthoritySet) and `operatorKeys` (SetOperatorReceiptRegistry) are
+  // each a list of fixed-width byte strings; convert every element to a
+  // Uint8Array, unlike the single-value BYTE_FIELDS above.
   if (
     (camelKey === "newMembers" ||
       camelKey === "add" ||
-      camelKey === "remove") &&
+      camelKey === "remove" ||
+      camelKey === "operatorKeys") &&
     Array.isArray(value)
   ) {
     return value.map((m) =>
@@ -541,4 +570,157 @@ export function fromWasmFields(
     type,
     data: fromWasmObject(fields as Record<string, unknown>),
   } as unknown as Action;
+}
+
+// ---------------------------------------------------------------------------
+// Read direction: WASM `decode_read` / `decode_markets_snapshot` output → TS
+// read models. The Rust core has already checked every type and width; this
+// only renames fields and reshapes enums.
+// ---------------------------------------------------------------------------
+
+type WasmRecord = Record<string, unknown>;
+
+const bytesOf = (v: unknown): Uint8Array =>
+  v instanceof Uint8Array ? v : Uint8Array.from(v as number[]);
+
+function marketKindFromWasm(v: unknown): MarketKind {
+  if (v === "Perp") return v;
+  const [name, payload] = Object.entries(v as WasmRecord)[0] as [
+    "ConditionalPerp" | "PredictionBinary",
+    { event_id: number; branch: "Yes" | "No" },
+  ];
+  return { [name]: [payload.event_id, payload.branch] } as MarketKind;
+}
+
+/** A stored `MarketConfig`. */
+export function marketConfigFromWasm(v: unknown): MarketConfig {
+  const m = v as WasmRecord;
+  return {
+    market: m.market as number,
+    imBps: m.im_bps as number,
+    mmBps: m.mm_bps as number,
+    takerFeeBps: m.taker_fee_bps as number,
+    makerFeeBps: m.maker_fee_bps as number,
+    fundingIntervalMs: m.funding_interval_ms as bigint,
+    maxFundingRateBps: m.max_funding_rate_bps as number,
+    kind: marketKindFromWasm(m.kind),
+    maxPositionSize: m.max_position_size as bigint,
+    defaultTtlMs: m.default_ttl_ms as bigint,
+    netDeltaMargin: m.net_delta_margin as boolean,
+    poolId: m.pool_id as number,
+    markPriceMaxOracleAgeMs: m.mark_price_max_oracle_age_ms as bigint,
+    feeTiers: (m.fee_tiers as WasmRecord[]).map((t) => ({
+      min30dVolumeMicroUsdc: t.min_30d_volume_micro_usdc as bigint,
+      makerFeeTenthBps: t.maker_fee_tenth_bps as number,
+      takerFeeTenthBps: t.taker_fee_tenth_bps as number,
+    })),
+    tickSize: m.tick_size as bigint,
+    lotSize: m.lot_size as bigint,
+    primaryOracleSigner:
+      m.primary_oracle_signer == null
+        ? undefined
+        : bytesOf(m.primary_oracle_signer),
+    oracleStalenessMs: m.oracle_staleness_ms as bigint,
+    markSourceMode: m.mark_source_mode as MarketConfig["markSourceMode"],
+    maxMarkSpreadBps: m.max_mark_spread_bps as number,
+    cexCompositeStalenessMs: m.cex_composite_staleness_ms as bigint,
+    szDecimals: m.sz_decimals as number,
+    ticker: m.ticker as string,
+    maxOpenInterest: m.max_open_interest as bigint,
+  };
+}
+
+function eventStatusFromWasm(v: unknown): EventStatus {
+  if (v === "Trading" || v === "PreResolution") return { kind: v };
+  const outcome = (v as { Resolved: keyof typeof Outcome }).Resolved;
+  return { kind: "Resolved", outcome: Outcome[outcome] };
+}
+
+/** A stored `EventInfo`: one binary book plus its attached conditionals. */
+export function eventInfoFromWasm(v: unknown): EventInfo {
+  const e = v as WasmRecord;
+  const info: EventInfo = {
+    eventId: e.event_id as number,
+    ebyMarket: e.eby_market as number,
+    question: e.question as string,
+    settlementMs: e.settlement_ms as bigint,
+    resolutionWindowMs: e.resolution_window_ms as bigint,
+    status: eventStatusFromWasm(e.status),
+    createdMs: e.created_ms as bigint,
+    resolvedMs: e.resolved_ms as bigint,
+    attachedConditionals: (e.attached_conditionals as WasmRecord[]).map(
+      (a) => ({
+        underlyingMarket: a.underlying_market as number,
+        cpyMarket: a.cpy_market as number,
+        cpnMarket: a.cpn_market as number,
+      }),
+    ),
+  };
+  const oracleSource = eventOracleSourceFromWasm(e.oracle_source);
+  if (oracleSource) info.oracleSource = oracleSource;
+  return info;
+}
+
+function positionFromWasm(p: WasmRecord): PositionInfo {
+  return {
+    owner: bytesOf(p.owner),
+    market: p.market as number,
+    side: p.side as PositionInfo["side"],
+    entryPrice: p.entry_price as bigint,
+    size: p.size as bigint,
+    lastFundingIndex: p.last_funding_index as bigint,
+    upnlNow: p.upnl_now as bigint,
+    mmNow: p.mm_now as bigint,
+    imNow: p.im_now as bigint,
+    pnlIfFires: p.pnl_if_fires as bigint,
+    pnlIfDies: p.pnl_if_dies as bigint,
+    fundingSince: p.funding_since as bigint,
+    adlScore: p.adl_score as bigint,
+    positionEpoch: p.position_epoch as bigint | undefined,
+  };
+}
+
+/** The `/v1/account/{owner}` margin view. */
+export function accountInfoFromWasm(v: unknown): AccountInfo {
+  const a = v as WasmRecord;
+  return {
+    balance: a.balance as bigint,
+    positions: (a.positions as WasmRecord[]).map(positionFromWasm),
+    equity: a.equity as bigint,
+    totalMm: a.total_mm as bigint,
+    totalIm: a.total_im as bigint,
+    marginRatioBps: a.margin_ratio_bps as bigint,
+    bindingScenario: (a.binding_scenario as WasmRecord[]).map((s) => ({
+      eventId: s.event_id as number,
+      branch: s.branch as "Yes" | "No",
+    })),
+    feesAccrued: a.fees_accrued as bigint,
+    volume30dMicroUsdc: a.volume_30d_micro_usdc as bigint,
+  };
+}
+
+/** One stored `AdminAction`, with the same client-side checks as encoding. */
+export function adminActionFromWasm(v: unknown): AdminAction {
+  const action = governanceActionFromWasm(v) as AdminAction;
+  validateGovernanceAction(action);
+  return action;
+}
+
+/** The atomic `/v1/markets-snapshot` inventory. */
+export function marketsSnapshotFromWasm(v: unknown): MarketsSnapshot {
+  const s = v as WasmRecord;
+  const snapshot: MarketsSnapshot = {
+    chainId: bytesOf(s.chain_id),
+    height: s.height as bigint,
+    markets: (s.markets as unknown[]).map(marketConfigFromWasm),
+    events: (s.events as unknown[]).map(eventInfoFromWasm),
+  };
+  if (s.open_interest !== undefined) {
+    snapshot.openInterest = (s.open_interest as WasmRecord[]).map((r) => ({
+      market: r.market as number,
+      long: r.long as bigint,
+      short: r.short as bigint,
+    }));
+  }
+  return snapshot;
 }

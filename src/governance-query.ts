@@ -1,57 +1,43 @@
+import { Encoder } from "@msgpack/msgpack";
 import type {
-  Address,
   AdminAction,
-  AuthorityDomain,
-  CancelAllOrdersForAccount,
-  AdminBatchItem,
   AdminSignerRegistry,
-  AttachConditional,
-  AttachedConditional,
-  CreateEvent,
-  CreateMarket,
-  EventInfo,
-  EventOracleSource,
-  EventStatus,
   ExpiryReason,
-  PriceComparison,
   ProposalPage,
   ProposalDisplayInfo,
   ProposalStatus,
-  SetTriggerMarketConfig,
-  SetOracleGuards,
-  ScheduleUpgrade,
-  CancelUpgrade,
   NodeVersion,
   PendingUpgradePlan,
-  SetWithdrawalLimit,
-  SetOperatorReceiptRegistry,
   LiquidationConfig,
   LiquidationConfigInfo,
-  MarginOffsetPair,
-  SetMarginOffsetPolicy,
-  SetLiquidationConfig,
-  UpdateAdminSignerRegistry,
-  UpdateAuthoritySet,
   AuthoritiesSnapshot,
-  InsuranceFundAllocation,
   UpgradesInfo,
 } from "./types.js";
-import {
-  INITIAL_TAKEOVER_DISCOUNT_BPS,
-  validateSetLiquidationConfig,
-} from "./liquidation-config.js";
-import { validateSetOracleGuards } from "./oracle-guards.js";
-import {
-  validateFundInsuranceFund,
-  validateWithdrawInsuranceFund,
-} from "./insurance-funding.js";
-import { validateScheduleUpgrade } from "./upgrade-plan.js";
-import { Outcome } from "./types.js";
+import { adminActionFromWasm } from "./codec-adapter.js";
+import { INITIAL_TAKEOVER_DISCOUNT_BPS } from "./liquidation-config.js";
+import { getWasm } from "./wasm-loader.js";
+
+const actionEncoder = new Encoder({ useBigInt64: true });
+
+/** Integers past 32 bits as bigint: the encoder writes such a number as a
+ *  float, which the wire refuses. */
+function integral(value: unknown): unknown {
+  if (typeof value === "number" && Number.isSafeInteger(value)) {
+    return Math.abs(value) > 0xffff_ffff ? BigInt(value) : value;
+  }
+  if (Array.isArray(value)) return value.map(integral);
+  if (value && typeof value === "object" && !ArrayBuffer.isView(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, integral(v)]),
+    );
+  }
+  return value;
+}
 
 /**
  * Typed decoders for the engine's governance READ model — the responses
- * behind `GET /v1/admin/signer-registry`, `GET /v1/proposals`, and
- * `GET /v1/events`.
+ * behind `GET /v1/admin/signer-registry` and `GET /v1/proposals`. The
+ * proposal's `AdminAction` is decoded as its wire type in the Rust core.
  *
  * These mirror engine structs (`exchange-core/src/query.rs`), they do not
  * define them. The engine serializes with `rmp_serde::to_vec` — the COMPACT
@@ -174,20 +160,6 @@ function toArray(value: unknown, field: string): unknown[] {
   throw new Error(`governance decode: ${field} is not an array`);
 }
 
-/// CU-06 (inner tag 19): the per-account fixed withdrawal window. Tuple
-/// layout matches `SetWithdrawalLimit`'s declaration order: [cap, window].
-function decodeSetWithdrawalLimit(value: unknown): SetWithdrawalLimit {
-  const raw = toTuple(value, "setWithdrawalLimit", 2);
-  const limit: SetWithdrawalLimit = {
-    perAccountCapMicroUsdc: toU64(
-      raw[0],
-      "setWithdrawalLimit.perAccountCapMicroUsdc",
-    ),
-    windowSecs: toU32(raw[1], "setWithdrawalLimit.windowSecs"),
-  };
-  return limit;
-}
-
 /// A `LiquidationConfig` as `[targetRatioBps, [numerator, denominator],
 /// partialPenaltyBps, maxBookOrders, maxCommittedFills, takeoverDiscountBps?]`.
 /// Every newtype is its bare integer; a record without the takeover discount
@@ -215,96 +187,6 @@ function decodeLiquidationConfigTuple(
   };
 }
 
-/// Inner tag 27: `[predecessor | nil, [[perpetual, conditional,
-/// settlementReference, rate, "RemoveOnResolution"], ...]]`. Fails closed on
-/// a list the engine would refuse as non-canonical.
-function decodeSetMarginOffsetPolicy(
-  value: unknown,
-  field: string,
-): SetMarginOffsetPolicy {
-  const raw = toTuple(value, field, 2);
-  const predecessor =
-    raw[0] === null ? null : toU64(raw[0], `${field}.predecessor`);
-  if (predecessor === 0n) {
-    throw new Error(`governance decode: ${field}.predecessor is zero`);
-  }
-  let previous = -1;
-  const pairs = toArray(raw[1], `${field}.pairs`).map((item, i) => {
-    const at = `${field}.pairs[${i}]`;
-    const p = toTuple(item, at, 5);
-    const pair: MarginOffsetPair = {
-      perpetual: toU32(p[0], `${at}.perpetual`),
-      conditional: toU32(p[1], `${at}.conditional`),
-      settlementReference: toU32(p[2], `${at}.settlementReference`),
-      rate: toUnsignedNumber(p[3], `${at}.rate`, 0xffff),
-      resolution: "RemoveOnResolution",
-    };
-    if (p[4] !== "RemoveOnResolution") {
-      throw new Error(`governance decode: ${at}.resolution is unknown`);
-    }
-    if (pair.rate < 1 || pair.rate > 9_999) {
-      throw new Error(`governance decode: ${at}.rate is not a partial rate`);
-    }
-    if (pair.settlementReference !== pair.perpetual) {
-      throw new Error(
-        `governance decode: ${at}.settlementReference is not its perpetual`,
-      );
-    }
-    if (pair.conditional <= previous) {
-      throw new Error(`governance decode: ${at}.conditional does not ascend`);
-    }
-    previous = pair.conditional;
-    return pair;
-  });
-  return { predecessor, pairs };
-}
-
-/// Inner tag 17: `[predecessor, sequence, config]`. A proposal the engine
-/// would refuse fails closed here too.
-function decodeSetLiquidationConfig(value: unknown): SetLiquidationConfig {
-  const raw = toTuple(value, "setLiquidationConfig", 3);
-  const action: SetLiquidationConfig = {
-    predecessor: toU64(raw[0], "setLiquidationConfig.predecessor"),
-    sequence: toU64(raw[1], "setLiquidationConfig.sequence"),
-    config: decodeLiquidationConfigTuple(raw[2], "setLiquidationConfig.config"),
-  };
-  validateSetLiquidationConfig(action);
-  return action;
-}
-
-/// DEC-112 (inner tag 20): the operator receipt registry rotation. Tuple
-/// layout matches `SetOperatorReceiptRegistry`'s declaration order:
-/// [deploymentId, epoch, threshold, operatorKeys]. The keys are 32-byte
-/// ed25519 verification keys — validated as bytes here; point validity is
-/// the store seam's job (validate_operator_registry).
-function decodeSetOperatorReceiptRegistry(
-  value: unknown,
-): SetOperatorReceiptRegistry {
-  const raw = toTuple(value, "setOperatorReceiptRegistry", 4);
-  const keysJson = toArray(raw[3], "setOperatorReceiptRegistry.operatorKeys");
-  const registry: SetOperatorReceiptRegistry = {
-    deploymentId: toBytes(
-      raw[0],
-      "setOperatorReceiptRegistry.deploymentId",
-      32,
-    ),
-    epoch: toU64(raw[1], "setOperatorReceiptRegistry.epoch"),
-    threshold: toU32(raw[2], "setOperatorReceiptRegistry.threshold"),
-    operatorKeys: keysJson.map((k) =>
-      toBytes(k, "setOperatorReceiptRegistry.operatorKeys[i]", 32),
-    ),
-  };
-  if (
-    registry.threshold === 0 ||
-    registry.threshold > registry.operatorKeys.length
-  ) {
-    throw new Error(
-      `governance decode: setOperatorReceiptRegistry threshold ${registry.threshold} is outside 1..=${registry.operatorKeys.length}`,
-    );
-  }
-  return registry;
-}
-
 function toTuple(
   value: unknown,
   field: string,
@@ -317,11 +199,6 @@ function toTuple(
     );
   }
   return fields;
-}
-
-function toString(value: unknown, field: string): string {
-  if (typeof value === "string") return value;
-  throw new Error(`governance decode: ${field} is not a string`);
 }
 
 /** The single entry of an externally-tagged enum map (encoding fact 3). */
@@ -342,27 +219,6 @@ function variantOf(
   return { name, payload };
 }
 
-/** `CreateMarket` as the engine's 12-field positional payload. Distinct from
- *  `decodeMarketConfig` in client.ts: that decodes the STORED market config,
- *  this decodes the proposed action. */
-function decodeCreateMarket(value: unknown): CreateMarket {
-  const raw = toTuple(value, "createMarket", 12);
-  return {
-    market: toU32(raw[0], "createMarket.market"),
-    imBps: toU32(raw[1], "createMarket.imBps"),
-    mmBps: toU32(raw[2], "createMarket.mmBps"),
-    takerFeeBps: toU32(raw[3], "createMarket.takerFeeBps"),
-    makerFeeBps: toU32(raw[4], "createMarket.makerFeeBps"),
-    signer: toBytes(raw[5], "createMarket.signer", ADDRESS_LEN),
-    fundingIntervalMs: toU64(raw[6], "createMarket.fundingIntervalMs"),
-    maxFundingRateBps: toU32(raw[7], "createMarket.maxFundingRateBps"),
-    poolId: toU8(raw[8], "createMarket.poolId"),
-    szDecimals: toU8(raw[9], "createMarket.szDecimals"),
-    ticker: toString(raw[10], "createMarket.ticker"),
-    maxOpenInterest: toU64(raw[11], "createMarket.maxOpenInterest"),
-  };
-}
-
 function toTupleBetween(
   value: unknown,
   field: string,
@@ -377,360 +233,6 @@ function toTupleBetween(
     );
   }
   return fields;
-}
-
-const PRICE_COMPARISONS: readonly PriceComparison[] = [
-  "GreaterThan",
-  "LessThan",
-  "GreaterThanOrEqual",
-  "LessThanOrEqual",
-];
-
-function toPriceComparison(value: unknown, field: string): PriceComparison {
-  if (
-    typeof value === "string" &&
-    (PRICE_COMPARISONS as readonly string[]).includes(value)
-  ) {
-    return value as PriceComparison;
-  }
-  throw new Error(`governance decode: ${field} is not a known PriceComparison`);
-}
-
-/** `Option<EventOracleSource>`: `None` is nil (fact 4), the unit variant is a
- *  bare string (fact 2), the struct variants are single-entry maps with
- *  positional payloads (fact 3). Fails closed on an unknown variant — a
- *  resolution mode this build cannot name must never render as one it can.
- *  Exported for the client's event read, which carries the same
- *  enum in the same compact-rmp form. */
-export function decodeOracleSource(
-  value: unknown,
-  field: string,
-): EventOracleSource | undefined {
-  if (value === null || value === undefined) return undefined;
-  if (value === "RelayerAttested") return { kind: "RelayerAttested" };
-  const { name, payload } = variantOf(value, field);
-  switch (name) {
-    case "UnderlyingPriceVsStrike": {
-      const raw = toTuple(payload, field, 2);
-      return {
-        kind: "UnderlyingPriceVsStrike",
-        strikePrice: toU64(raw[0], `${field}.strikePrice`),
-        comparison: toPriceComparison(raw[1], `${field}.comparison`),
-      };
-    }
-    case "MarketOracle": {
-      const raw = toTuple(payload, field, 3);
-      return {
-        kind: "MarketOracle",
-        market: toU32(raw[0], `${field}.market`),
-        strikePrice: toU64(raw[1], `${field}.strikePrice`),
-        comparison: toPriceComparison(raw[2], `${field}.comparison`),
-      };
-    }
-    default:
-      throw new Error(
-        `governance decode: ${field} has unknown EventOracleSource variant "${name}"`,
-      );
-  }
-}
-
-const OUTCOMES: Record<string, Outcome> = {
-  Yes: Outcome.Yes,
-  No: Outcome.No,
-  Void: Outcome.Void,
-};
-
-/** Event lifecycle status: unit variants are bare strings (fact 2);
- *  `Resolved(Outcome)` is a single-entry map whose newtype payload is the
- *  outcome's variant name — a bare string, no array wrapper (confirmed from
- *  engine bytes, not inferred). Fails closed: a status or outcome this build
- *  cannot name must never render as one it can — these drive settle
- *  displays. */
-function decodeEventStatus(value: unknown, field: string): EventStatus {
-  if (value === "Trading") return { kind: "Trading" };
-  if (value === "PreResolution") return { kind: "PreResolution" };
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    const { name, payload } = variantOf(value, field);
-    if (name !== "Resolved") {
-      throw new Error(
-        `governance decode: ${field} has unknown EventStatus variant "${name}"`,
-      );
-    }
-    const outcome = typeof payload === "string" ? OUTCOMES[payload] : undefined;
-    if (outcome === undefined) {
-      throw new Error(
-        `governance decode: ${field} has unknown Outcome ${JSON.stringify(payload)}`,
-      );
-    }
-    return { kind: "Resolved", outcome };
-  }
-  throw new Error(`governance decode: ${field} is not a known EventStatus`);
-}
-
-/** One `AttachedConditional` entry of an event's attachment list: the
- *  positional `[underlying, cpy, cpn]` triple. */
-function decodeAttachedConditional(
-  value: unknown,
-  field: string,
-): AttachedConditional {
-  const raw = toTuple(value, field, 3);
-  return {
-    underlyingMarket: toU32(raw[0], `${field}.underlyingMarket`),
-    cpyMarket: toU32(raw[1], `${field}.cpyMarket`),
-    cpnMarket: toU32(raw[2], `${field}.cpnMarket`),
-  };
-}
-
-/** Whether an `EventInfo` tuple is in the one-book shape: the engine with
- *  one binary book per event stores no No book, so the question sits where
- *  the two-book shape keeps the No book's id. */
-export function isOneBookEventRow(raw: readonly unknown[]): boolean {
-  return typeof raw[2] === "string";
-}
-
-/** `EventInfo` (the `get_event` read model) as a positional tuple, in either
- *  engine shape: one book (8 required fields) or two books (9, the No book
- *  third), each plus the `serde(default)` trailers `oracleSource` and
- *  `attachedConditionals`. The read model IS the stored record — no appended
- *  presentation copy. */
-export function decodeEventInfo(value: unknown, index?: number): EventInfo {
-  const f = index == null ? "event" : `event[${index}]`;
-  const oneBook = isOneBookEventRow(toArray(value, f));
-  const required = oneBook ? 8 : 9;
-  const raw = toTupleBetween(value, f, required, required + 2);
-  // Fields after the books sit one place earlier in the one-book shape.
-  const at = (i: number) => raw[oneBook ? i - 1 : i];
-  const info: EventInfo = {
-    eventId: toU32(raw[0], `${f}.eventId`),
-    ebyMarket: toU32(raw[1], `${f}.ebyMarket`),
-    question: toString(at(3), `${f}.question`),
-    settlementMs: toU64(at(4), `${f}.settlementMs`),
-    resolutionWindowMs: toU64(at(5), `${f}.resolutionWindowMs`),
-    status: decodeEventStatus(at(6), `${f}.status`),
-    createdMs: toU64(at(7), `${f}.createdMs`),
-    resolvedMs: toU64(at(8), `${f}.resolvedMs`),
-    attachedConditionals: [],
-  };
-  if (!oneBook) info.ebnMarket = toU32(raw[2], `${f}.ebnMarket`);
-  if (raw.length > required) {
-    const oracleSource = decodeOracleSource(at(9), `${f}.oracleSource`);
-    if (oracleSource) info.oracleSource = oracleSource;
-  }
-  if (raw.length > required + 1) {
-    info.attachedConditionals = toArray(
-      at(10),
-      `${f}.attachedConditionals`,
-    ).map((entry, i) =>
-      decodeAttachedConditional(entry, `${f}.attachedConditionals[${i}]`),
-    );
-  }
-  return info;
-}
-
-/** `AttachConditional` as the engine's positional payload (admin inner tag
- *  10): 8 required fields plus the `serde(default)` `maxOpenInterest`
- *  trailer. */
-function decodeAttachConditional(value: unknown): AttachConditional {
-  const f = "attachConditional";
-  const raw = toTupleBetween(value, f, 8, 9);
-  return {
-    eventId: toU32(raw[0], `${f}.eventId`),
-    underlyingMarket: toU32(raw[1], `${f}.underlyingMarket`),
-    childMarketBase: toU32(raw[2], `${f}.childMarketBase`),
-    imBps: toU32(raw[3], `${f}.imBps`),
-    mmBps: toU32(raw[4], `${f}.mmBps`),
-    takerFeeBps: toU32(raw[5], `${f}.takerFeeBps`),
-    makerFeeBps: toU32(raw[6], `${f}.makerFeeBps`),
-    signer: toBytes(raw[7], `${f}.signer`, ADDRESS_LEN),
-    maxOpenInterest:
-      raw.length > 8 ? toU64(raw[8], `${f}.maxOpenInterest`) : 0n,
-  };
-}
-
-/** `CreateEvent` as the engine's positional payload (admin inner tag 9): 9
- *  required fields plus four `serde(default)` trailers (oracleSource,
- *  description, rules, maxOpenInterest). Same tolerance/defaults as the
- *  engine decoder. */
-function decodeCreateEvent(value: unknown): CreateEvent {
-  const f = "createEvent";
-  const raw = toTupleBetween(value, f, 9, 13);
-  const decoded: CreateEvent = {
-    eventId: toU32(raw[0], `${f}.eventId`),
-    childMarketBase: toU32(raw[1], `${f}.childMarketBase`),
-    poolId: toU32(raw[2], `${f}.poolId`),
-    question: toString(raw[3], `${f}.question`),
-    settlementMs: toU64(raw[4], `${f}.settlementMs`),
-    resolutionWindowMs: toU64(raw[5], `${f}.resolutionWindowMs`),
-    takerFeeBps: toU32(raw[6], `${f}.takerFeeBps`),
-    makerFeeBps: toU32(raw[7], `${f}.makerFeeBps`),
-    signer: toBytes(raw[8], `${f}.signer`, ADDRESS_LEN),
-    description: raw.length > 10 ? toString(raw[10], `${f}.description`) : "",
-    rules: raw.length > 11 ? toString(raw[11], `${f}.rules`) : "",
-    maxOpenInterest:
-      raw.length > 12 ? toU64(raw[12], `${f}.maxOpenInterest`) : 0n,
-  };
-  const oracleSource =
-    raw.length > 9
-      ? decodeOracleSource(raw[9], `${f}.oracleSource`)
-      : undefined;
-  if (oracleSource) decoded.oracleSource = oracleSource;
-  return decoded;
-}
-
-/** One item of a governance `Batch` — the CLOSED market-creation subset.
- *  Fails closed on any other variant name: a batch item this build cannot
- *  decode must never let the batch around it render as understood. */
-function decodeBatchItem(value: unknown, field: string): AdminBatchItem {
-  const { name, payload } = variantOf(value, field);
-  switch (name) {
-    case "CreateMarket":
-      return { kind: "CreateMarket", value: decodeCreateMarket(payload) };
-    case "AttachConditional":
-      return {
-        kind: "AttachConditional",
-        value: decodeAttachConditional(payload),
-      };
-    default:
-      throw new Error(
-        `governance decode: ${field} has unknown AdminBatchItem variant "${name}" — this SDK build cannot render it`,
-      );
-  }
-}
-
-function decodeUpdateRegistry(value: unknown): UpdateAdminSignerRegistry {
-  const raw = toTuple(value, "updateRegistry", 2);
-  return {
-    newThreshold: toU32(raw[0], "updateRegistry.newThreshold"),
-    newMembers: toArray(raw[1], "updateRegistry.newMembers").map((m, i) =>
-      toBytes(m, `updateRegistry.newMembers[${i}]`, ADDRESS_LEN),
-    ),
-  };
-}
-
-function decodeCancelAllOrdersForAccount(
-  value: unknown,
-): CancelAllOrdersForAccount {
-  const raw = toTuple(value, "cancelAllOrdersForAccount", 2);
-  const market = raw[1];
-  return {
-    owner: toBytes(raw[0], "cancelAllOrdersForAccount.owner", ADDRESS_LEN),
-    market:
-      market === null || market === undefined
-        ? null
-        : toU32(market, "cancelAllOrdersForAccount.market"),
-  };
-}
-
-const AUTHORITY_DOMAINS: ReadonlySet<AuthorityDomain> = new Set([
-  "Oracle",
-  "CexComposite",
-  "Relayer",
-  "Custody",
-  "MarketParams",
-  "ScheduledOps",
-]);
-
-function decodeAuthorityDomain(value: unknown, field: string): AuthorityDomain {
-  if (
-    typeof value === "string" &&
-    AUTHORITY_DOMAINS.has(value as AuthorityDomain)
-  ) {
-    return value as AuthorityDomain;
-  }
-  throw new Error(
-    `governance decode: ${field} is not a known AuthorityDomain: ${JSON.stringify(value)}`,
-  );
-}
-
-function decodeUpdateAuthoritySet(value: unknown): UpdateAuthoritySet {
-  const raw = toTuple(value, "updateAuthoritySet", 3);
-  return {
-    domain: decodeAuthorityDomain(raw[0], "updateAuthoritySet.domain"),
-    add: toArray(raw[1], "updateAuthoritySet.add").map((a, i) =>
-      toBytes(a, `updateAuthoritySet.add[${i}]`, ADDRESS_LEN),
-    ),
-    remove: toArray(raw[2], "updateAuthoritySet.remove").map((a, i) =>
-      toBytes(a, `updateAuthoritySet.remove[${i}]`, ADDRESS_LEN),
-    ),
-  };
-}
-
-function decodeSetOracleGuards(value: unknown): SetOracleGuards {
-  const raw = toTuple(value, "setOracleGuards", 3);
-  const guards: SetOracleGuards = {
-    market: toU32(raw[0], "setOracleGuards.market"),
-    markPriceMaxOracleAgeMs:
-      raw[1] == null
-        ? null
-        : toU64(raw[1], "setOracleGuards.markPriceMaxOracleAgeMs"),
-    maxOracleDeviationBps:
-      raw[2] == null
-        ? null
-        : toU32(raw[2], "setOracleGuards.maxOracleDeviationBps"),
-  };
-  validateSetOracleGuards(guards);
-  return guards;
-}
-
-function decodeScheduleUpgrade(value: unknown): ScheduleUpgrade {
-  const raw = toTuple(value, "scheduleUpgrade", 4);
-  const plan: ScheduleUpgrade = {
-    targetHeight: toU64(raw[0], "scheduleUpgrade.targetHeight"),
-    major: toU32(raw[1], "scheduleUpgrade.major"),
-    minor: toU32(raw[2], "scheduleUpgrade.minor"),
-    successorSha256: toBytes(raw[3], "scheduleUpgrade.successorSha256", 32),
-  };
-  validateScheduleUpgrade(plan);
-  return plan;
-}
-
-function decodeCancelUpgrade(value: unknown): CancelUpgrade {
-  const raw = toTuple(value, "cancelUpgrade", 1);
-  return { targetHeight: toU64(raw[0], "cancelUpgrade.targetHeight") };
-}
-
-function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
-  const raw = toTuple(value, "setTriggerMarketConfig", 7);
-  if (typeof raw[2] !== "boolean") {
-    throw new Error(
-      "governance decode: setTriggerMarketConfig.enabled is not boolean",
-    );
-  }
-  return {
-    market: toU32(raw[0], "setTriggerMarketConfig.market"),
-    expectedCurrentVersion:
-      raw[1] == null
-        ? null
-        : toU64(raw[1], "setTriggerMarketConfig.expectedCurrentVersion"),
-    enabled: raw[2],
-    maxTriggerSlippageBps: toU32(
-      raw[3],
-      "setTriggerMarketConfig.maxTriggerSlippageBps",
-    ),
-    maxMarkAgeMs: toU64(raw[4], "setTriggerMarketConfig.maxMarkAgeMs"),
-    maxFuturePublishSkewMs: toU64(
-      raw[5],
-      "setTriggerMarketConfig.maxFuturePublishSkewMs",
-    ),
-    maxActiveBrackets: toU64(
-      raw[6],
-      "setTriggerMarketConfig.maxActiveBrackets",
-    ),
-  };
-}
-
-function decodeInsuranceAllocations(
-  raw: unknown,
-  field: string,
-): InsuranceFundAllocation[] {
-  return toArray(raw, `${field}.allocations`).map((value, i) => {
-    const at = `${field}.allocations[${i}]`;
-    const row = toTuple(value, at, 2);
-    return {
-      poolId: toU8(row[0], `${at}.poolId`),
-      amount: toU64(row[1], `${at}.amount`),
-    };
-  });
 }
 
 /** `kind` → the engine's `AdminActionType` tag, as a TABLE rather than
@@ -762,147 +264,26 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   EnableSubAccounts: 21,
 };
 
-/** The typed inner operation a proposal carries. Fails closed on an unknown
- *  variant: an SDK build that does not know an operation must never let a
- *  caller render or approve it as though it did. */
+/** The typed inner operation a proposal carries, decoded as the wire's
+ *  `AdminAction` in the Rust core. Fails closed on an unknown variant: an SDK
+ *  build that does not know an operation must never let a caller render or
+ *  approve it as though it did. */
 export function decodeAdminAction(
   value: unknown,
   field = "action",
 ): AdminAction {
-  // Unit variants (no fields) arrive as a bare string, not a single-entry map.
-  // Only the known unit variants are accepted here; any other bare string falls
-  // through to `variantOf`, which rejects it as "not an enum variant".
-  if (value === "UnpauseBridge") return { kind: "UnpauseBridge" };
-  if (value === "EnableSubAccounts") return { kind: "EnableSubAccounts" };
-  const { name, payload } = variantOf(value, field);
-  switch (name) {
-    case "FundInsuranceFund": {
-      const raw = toTuple(payload, field, 3);
-      const decoded: AdminAction & { kind: "FundInsuranceFund" } = {
-        kind: "FundInsuranceFund",
-        value: {
-          fundingId: toU64(raw[0], `${field}.fundingId`),
-          source: toBytes(raw[1], `${field}.source`, ADDRESS_LEN),
-          allocations: decodeInsuranceAllocations(raw[2], field),
-        },
-      };
-      validateFundInsuranceFund(decoded.value);
-      return decoded;
-    }
-    case "WithdrawInsuranceFund": {
-      const raw = toTuple(payload, field, 3);
-      const decoded = {
-        withdrawalId: toU64(raw[0], `${field}.withdrawalId`),
-        recipient: toBytes(raw[1], `${field}.recipient`, ADDRESS_LEN),
-        allocations: decodeInsuranceAllocations(raw[2], field),
-      };
-      validateWithdrawInsuranceFund(decoded);
-      return { kind: "WithdrawInsuranceFund", value: decoded };
-    }
-    case "ExecInsuranceFund": {
-      const raw = toTuple(payload, field, 2);
-      return {
-        kind: "ExecInsuranceFund",
-        value: {
-          poolId: toU8(raw[0], `${field}.poolId`),
-          action: toBytes(raw[1], `${field}.action`),
-        },
-      };
-    }
-    case "SetMarginOffsetPolicy":
-      return {
-        kind: "SetMarginOffsetPolicy",
-        value: decodeSetMarginOffsetPolicy(payload, field),
-      };
-    case "CancelAllOrdersForAccount":
-      return {
-        kind: "CancelAllOrdersForAccount",
-        value: decodeCancelAllOrdersForAccount(payload),
-      };
-    case "SetOracleGuards":
-      return {
-        kind: "SetOracleGuards",
-        value: decodeSetOracleGuards(payload),
-      };
-    case "SetWithdrawalLimit":
-      return {
-        kind: "SetWithdrawalLimit",
-        value: decodeSetWithdrawalLimit(payload),
-      };
-    case "SetLiquidationConfig":
-      return {
-        kind: "SetLiquidationConfig",
-        value: decodeSetLiquidationConfig(payload),
-      };
-    case "SetOperatorReceiptRegistry":
-      return {
-        kind: "SetOperatorReceiptRegistry",
-        value: decodeSetOperatorReceiptRegistry(payload),
-      };
-    case "ConfigureOraclePolicy": {
-      const raw = toTuple(payload, "configureOraclePolicy", 2);
-      return {
-        kind: "ConfigureOraclePolicy",
-        value: {
-          effectiveHeight: toU64(
-            raw[0],
-            "configureOraclePolicy.effectiveHeight",
-          ),
-          bundle: toBytes(raw[1], "configureOraclePolicy.bundle"),
-        },
-      };
-    }
-    case "CreateMarket":
-      return {
-        kind: "CreateMarket",
-        value: decodeCreateMarket(payload),
-      };
-    case "UpdateAdminSignerRegistry":
-      return {
-        kind: "UpdateAdminSignerRegistry",
-        value: decodeUpdateRegistry(payload),
-      };
-    case "CreateEvent":
-      return {
-        kind: "CreateEvent",
-        value: decodeCreateEvent(payload),
-      };
-    case "AttachConditional":
-      return {
-        kind: "AttachConditional",
-        value: decodeAttachConditional(payload),
-      };
-    case "Batch":
-      return {
-        kind: "Batch",
-        value: toArray(payload, `${field}.batch`).map((item, i) =>
-          decodeBatchItem(item, `${field}.batch[${i}]`),
-        ),
-      };
-    case "SetTriggerMarketConfig":
-      return {
-        kind: "SetTriggerMarketConfig",
-        value: decodeSetTriggerMarketConfig(payload),
-      };
-    case "UpdateAuthoritySet":
-      return {
-        kind: "UpdateAuthoritySet",
-        value: decodeUpdateAuthoritySet(payload),
-      };
-    case "ScheduleUpgrade":
-      return {
-        kind: "ScheduleUpgrade",
-        value: decodeScheduleUpgrade(payload),
-      };
-    case "CancelUpgrade":
-      return {
-        kind: "CancelUpgrade",
-        value: decodeCancelUpgrade(payload),
-      };
-    default:
-      throw new Error(
-        `governance decode: ${field} has unknown AdminAction variant "${name}" — this SDK build cannot render it`,
-      );
+  try {
+    const wasm = getWasm();
+    return adminActionFromWasm(
+      wasm.decode_read(
+        wasm.ReadKind.AdminAction,
+        actionEncoder.encode(integral(value)),
+      ),
+    );
+  } catch (e) {
+    throw new Error(
+      `governance decode: ${field}: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 }
 

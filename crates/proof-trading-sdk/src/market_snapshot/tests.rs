@@ -6,7 +6,7 @@
 )]
 
 use super::*;
-use crate::types::{AttachedConditional, Branch, EventId, MarkSourceMode, MarketKind};
+use crate::types::{AttachedConditional, EventId, MarkSourceMode, MarketKind};
 
 fn chain(byte: u8) -> ChainBinding {
     ChainBinding::new([byte; 32]).expect("fixture chain bindings are non-zero")
@@ -53,52 +53,7 @@ fn fixture() -> Vec<u8> {
 }
 
 #[test]
-fn current_engine_snapshot_with_an_attached_event_decodes() {
-    // Bytes produced by exchange-core::query::query_markets_snapshot on the
-    // event-keyed wire: two perps, one event with its binaries and one
-    // conditional attached on the second perp.
-    let bytes = hex::decode(include_str!("engine-349fa9b.hex").trim()).unwrap();
-    let snapshot = decode_snapshot(&envelope(&bytes), chain(7)).unwrap();
-    assert_eq!(snapshot.height, 9_007_199_254_740_993);
-    assert_eq!(
-        snapshot
-            .markets
-            .iter()
-            .map(|m| m.market)
-            .collect::<Vec<_>>(),
-        vec![0, 15, 9100, 9101, 9102, 9103]
-    );
-    assert_eq!(
-        snapshot.markets[2].kind,
-        MarketKind::ConditionalPerp {
-            event_id: EventId(91),
-            branch: Branch::Yes,
-        }
-    );
-    assert_eq!(
-        snapshot.markets[5].kind,
-        MarketKind::PredictionBinary {
-            event_id: EventId(91),
-            branch: Branch::No,
-        }
-    );
-    assert_eq!(snapshot.markets[0].fee_tiers[0].maker_fee_tenth_bps, -7);
-    assert_eq!(snapshot.markets[0].max_open_interest, u64::MAX);
-    let event = &snapshot.events[0];
-    assert_eq!(event.event_id, EventId(91));
-    assert_eq!((event.eby_market, event.ebn_market), (9102, Some(9103)));
-    assert_eq!(
-        event.attached_conditionals,
-        vec![AttachedConditional {
-            underlying_market: 15,
-            cpy_market: 9100,
-            cpn_market: 9101,
-        }]
-    );
-}
-
-#[test]
-fn one_book_engine_snapshot_decodes_with_no_no_book() {
+fn engine_snapshot_with_an_attached_event_decodes() {
     // Bytes produced by exchange-core::query::query_markets_snapshot on the
     // one-book wire (one binary book per event): two perps, event 700 with
     // its book 70_000 and one conditional attached on perp 2. The chain id
@@ -116,7 +71,7 @@ fn one_book_engine_snapshot_decodes_with_no_no_book() {
     );
     let event = &snapshot.events[0];
     assert_eq!(event.event_id, EventId(700));
-    assert_eq!((event.eby_market, event.ebn_market), (70_000, None));
+    assert_eq!(event.eby_market, 70_000);
     assert_eq!(
         event.attached_conditionals,
         vec![AttachedConditional {
@@ -128,9 +83,9 @@ fn one_book_engine_snapshot_decodes_with_no_no_book() {
 }
 
 #[test]
-fn a_two_book_event_row_without_its_no_book_is_refused() {
+fn a_two_book_event_row_is_refused() {
     let mut value = rmpv::decode::read_value(&mut Cursor::new(
-        hex::decode(include_str!("engine-349fa9b.hex").trim()).unwrap(),
+        hex::decode(include_str!("engine-c3253d0c.hex").trim()).unwrap(),
     ))
     .unwrap();
     let Value::Array(top) = &mut value else {
@@ -142,7 +97,7 @@ fn a_two_book_event_row_without_its_no_book_is_refused() {
     let Value::Array(row) = &mut events[0] else {
         panic!("event must be a tuple")
     };
-    row[2] = Value::Nil;
+    row.insert(2, Value::from(70_001));
     let mut bytes = Vec::new();
     rmpv::encode::write_value(&mut bytes, &value).unwrap();
     assert_eq!(

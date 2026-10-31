@@ -128,20 +128,17 @@ The caller separately enforces non-regressing snapshot heights, staleness,
 complete source mappings and worker-transition/drain policy. A complete snapshot
 does not permit abandoning pending work for a removed market.
 
-The current endpoint serializes full 24-field `MarketConfig` rows and 11-field
-`EventInfo` rows, each event carrying its attachment list as `[underlying, cpy,
-cpn]` triples. Future fields may be appended; existing fields cannot be removed,
+The current endpoint serializes full 24-field `MarketConfig` rows and 10-field
+`EventInfo` rows (one binary book per event), each event carrying its
+attachment list as `[underlying, cpy, cpn]` triples. A two-book event row is
+refused. Future fields may be appended; existing fields cannot be removed,
 reordered or silently defaulted. Unknown market kinds or resolution modes fail
-closed and require an SDK upgrade. The committed `engine-349fa9b.hex` fixture is
-actual `rmp_serde::to_vec` output from `exchange-core::query::MarketsSnapshot`
-on the event-keyed wire (proof-wire 2.0.0), consumed by both Rust and TypeScript
-tests. It covers Perp, both conditional branches and both binary branches of
-`EventId(91)`, one attachment on perp 15, signed maker rebates and uint64
-bounds. Both committed engine fixtures are re-encoded without the per-market
-partial-liquidation flag (element 21 of each market row), which is what the
-8.0 engine writes for the same state. Conditional and binary parents are the event id in the positional
-`[u32, Branch]` payload; the impact-market family and its `impact_market_id`
-no longer exist on the wire.
+closed and require an SDK upgrade. The committed `engine-c3253d0c.hex` fixture
+is actual `rmp_serde::to_vec` output from `exchange-core::query::MarketsSnapshot`
+on the one-book wire, consumed by Rust and TypeScript tests: perps 1 and 2,
+event 700 with its book 70000 and one attachment on perp 2, re-encoded without
+the per-market partial-liquidation flag the 8.0 engine dropped. Conditional and
+binary parents are the event id in the positional `[u32, Branch]` payload.
 
 `engine-66d50df7.hex` is `rmp_serde::to_vec` of an
 `exchange-core::query::MarketsSnapshot` built at exchange `66d50df7`: two perps,
