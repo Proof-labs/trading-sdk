@@ -30,6 +30,7 @@ export {
   type OracleUpdateComposite,
   type MarketOrder,
   type MarketsSnapshot,
+  type MarketOpenInterest,
   type Deposit,
   type Withdraw,
   type CreateMarket,
@@ -118,6 +119,7 @@ export {
   type OrderbookLevel,
   type OpenOrder,
   type TriggerKind,
+  type StoredTriggerKind,
   type TriggerLimbState,
   type TriggerOutcomeReason,
   type TriggerEvaluation,
@@ -408,9 +410,6 @@ export {
   type CandleHistoryParams,
   type AccountEventsParams,
   type ExplorerBlocksParams,
-  type GatewayTriggerLimbJson,
-  type GatewayPendingTriggerRow,
-  type GatewayTriggerPositionRow,
 } from "./gateway-reads.js";
 export {
   decodeSubAccountList,

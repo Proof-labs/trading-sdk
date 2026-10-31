@@ -136,6 +136,7 @@ function familyOf(eventType: string): string {
     case "order_cancelled":
     case "order_amended":
     case "market_order_processed":
+    case "order_rejected":
       return "orderUpdate";
     case "position_updated":
     case "position_closed":

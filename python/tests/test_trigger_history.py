@@ -485,11 +485,30 @@ def test_history_returns_result_and_limb_kind_verbatim():
             _owner_page(empty)
 
 
-def test_history_keeps_event_type_and_quantities_strict():
-    event_type = _deferred_event("x")
-    event_type["event_type"] = "position_trigger_snoozed"
-    with pytest.raises(ProofTradingSdkError):
-        _owner_page(event_type)
+def test_history_skips_a_later_event_type_and_keeps_the_rest_of_the_page():
+    later = _deferred_event("x")
+    later["event_type"] = "position_trigger_snoozed"
+    assert _owner_page(later).trigger_events == []
+    page = decode_position_trigger_history_page(
+        {
+            "trigger_events": [_executed_event(), later, _set_event()],
+            "next_cursor": "",
+        },
+        OWNER,
+        7,
+    )
+    assert [event.event_type for event in page.trigger_events] == [
+        "position_trigger_executed",
+        "position_triggers_set",
+    ]
+    shared = _market_event("trigger_market_deferred")
+    shared["event_type"] = "trigger_market_snoozed"
+    assert _market_page(shared).trigger_market_events == []
+
+
+def test_history_keeps_route_scope_and_quantities_strict():
+    with pytest.raises(ProofTradingSdkError, match="invalid for owner history"):
+        _owner_page(_market_event("trigger_market_deferred"))
     quantities = _executed_with("no_fill", "x")
     quantities["payload"]["filled_quantity"] = "1"
     quantities["payload"]["residual_quantity"] = "4"

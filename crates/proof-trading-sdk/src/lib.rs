@@ -20,6 +20,7 @@ pub mod governance;
 pub mod market_snapshot;
 pub mod msgpack;
 pub mod query;
+pub mod reads;
 pub mod signer;
 pub mod wire;
 

@@ -173,12 +173,11 @@ def decode_position_trigger_history_page(
     events_raw = row["trigger_events"]
     if not isinstance(events_raw, list):
         raise _error("trigger_events must be an array")
+    decoded = (_decode_event(item, owner, market, "owner") for item in events_raw)
     events = [
-        t.cast(
-            TriggerHistoryEvent[PositionTriggerHistoryEventType],
-            _decode_event(item, owner, market, "owner"),
-        )
-        for item in events_raw
+        t.cast(TriggerHistoryEvent[PositionTriggerHistoryEventType], event)
+        for event in decoded
+        if event is not None
     ]
     _newest_first(events)
     return PositionTriggerHistoryPage(
@@ -197,12 +196,11 @@ def decode_trigger_market_history_page(
     events_raw = row["trigger_market_events"]
     if not isinstance(events_raw, list):
         raise _error("trigger_market_events must be an array")
+    decoded = (_decode_event(item, None, market, "market") for item in events_raw)
     events = [
-        t.cast(
-            TriggerHistoryEvent[TriggerMarketHistoryEventType],
-            _decode_event(item, None, market, "market"),
-        )
-        for item in events_raw
+        t.cast(TriggerHistoryEvent[TriggerMarketHistoryEventType], event)
+        for event in decoded
+        if event is not None
     ]
     _newest_first(events)
     return TriggerMarketHistoryPage(
@@ -441,7 +439,7 @@ def _decode_event(
     expected_owner: str | None,
     expected_market: str | None,
     scope: t.Literal["owner", "market"],
-) -> TriggerHistoryEvent[str]:
+) -> TriggerHistoryEvent[str] | None:
     row = _object(value, "event")
     _exact_keys(row, _EVENT_KEYS, "event")
     event_key = _string(row["event_key"], "event_key")
@@ -452,6 +450,10 @@ def _decode_event(
         raise _error("event_key is not canonical")
     block_time = _rfc3339(row["block_time"], "block_time")
     event_type = _string(row["event_type"], "event_type")
+    # An event type added after this SDK version is skipped, not refused, so it
+    # cannot fail the whole page; a known type on the wrong route still fails.
+    if event_type not in _OWNER_TYPES and event_type not in _MARKET_TYPES:
+        return None
     allowed = _OWNER_TYPES if scope == "owner" else _MARKET_TYPES
     if event_type not in allowed:
         raise _error(f"{event_type} is invalid for {scope} history")
