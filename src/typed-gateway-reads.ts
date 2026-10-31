@@ -24,6 +24,16 @@ import {
   type FinalizedFinancialState,
 } from "./finalized-state-reads.js";
 import type { BlockEvidenceHeader } from "./block-header.js";
+import {
+  readTransactionEvidence,
+  type TransactionEvidence,
+  type TransactionEvidenceSelection,
+} from "./committed-transaction.js";
+import {
+  readBlockResultsWindow,
+  type BlockResultsWindow,
+  type BlockResultsWindowSelection,
+} from "./block-results-window.js";
 import { GatewayReads } from "./gateway-reads.js";
 import {
   gatewayReadContext,
@@ -142,6 +152,30 @@ export class FinalizedReads extends ReadClient {
 }
 /** Bounded chain evidence. A replay rejection never proves earlier non-admission. */
 export class EvidenceReads extends ReadClient {
+  async transaction(
+    selection: TransactionEvidenceSelection,
+    options: BoundedReadOptions = {},
+  ): Promise<TransactionEvidence> {
+    return readTransactionEvidence(
+      this.gatewayUrl,
+      this.requirePinnedChain("transaction"),
+      selection,
+      options,
+      this.httpTransport,
+    );
+  }
+  async blockResultsWindow(
+    selection: BlockResultsWindowSelection,
+    options: BoundedReadOptions = {},
+  ): Promise<BlockResultsWindow> {
+    return readBlockResultsWindow(
+      this.gatewayUrl,
+      this.requirePinnedChain("blockResultsWindow"),
+      selection,
+      options,
+      this.httpTransport,
+    );
+  }
   async blockHeader(
     height: bigint,
     options: BoundedReadOptions = {},
