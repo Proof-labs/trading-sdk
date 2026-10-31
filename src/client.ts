@@ -21,7 +21,8 @@ import {
   type OraclePriceHistoryOptions,
   type OraclePriceHistoryPage,
 } from "./oracle-price-history.js";
-import { GatewayReads, type GatewayFetch } from "./gateway-reads.js";
+import type { GatewayFetch } from "./gateway-reads.js";
+import { TypedGatewayReads } from "./typed-gateway-reads.js";
 import {
   recoveringAccountHandler,
   type AccountHistoryPage,
@@ -2059,12 +2060,11 @@ export class ExchangeClient {
    * and scheduling. Prefer typed query methods when raw response metadata is unnecessary.
    * Uses this client's gateway; never targets a node, even in internal node mode.
    */
-  reads(opts: { fetch?: GatewayFetch } = {}): GatewayReads {
-    return new GatewayReads(
+  reads(opts: { fetch?: GatewayFetch } = {}): TypedGatewayReads {
+    return new TypedGatewayReads(
       this.gatewayUrl,
-      opts.fetch ??
-        ((url, init) =>
-          this.httpTransport(url, init, gatewayReadContext(url, init))),
+      opts.fetch ? (url, init) => opts.fetch!(url, init) : this.httpTransport,
+      this.inventoryChainId ?? undefined,
     );
   }
 

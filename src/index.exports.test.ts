@@ -46,6 +46,15 @@ import {
 } from "./index.js";
 import type { OpenLabel } from "./types.js";
 
+it("exposes typed reads on the existing read surface", async () => {
+  const sdk = await import("./index.js");
+  const reads = new sdk.ExchangeClient().reads();
+  expect(reads.finalized.accountState).toBeTypeOf("function");
+  expect(reads.finalized.agentAuthorization).toBeTypeOf("function");
+  expect(reads.evidence.blockHeader).toBeTypeOf("function");
+  expect(sdk.verifyWitness).toBeTypeOf("function");
+});
+
 describe("public barrel: governance surface", () => {
   it("exports the insurance types without exposing superseded executor APIs", async () => {
     const allocations: InsuranceFundAllocation[] = [{ poolId: 0, amount: 1n }];

@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `reads().finalized` preserves witnessed account, authority, nonce, orders, financial, market and oracle facts. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
+- `reads().finalized.account(owner)` decodes the engine-valued account through the canonical Rust codec, preserving pending funding and equity with a same-state witness. It does not recalculate funding or authorize execution.
+
 ### Changed
 
 - Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Market snapshot retains its explicit 10-second setting. HTTP failure bodies remain readable within the same cap; duplicate JSON keys refuse.
