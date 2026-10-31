@@ -137,6 +137,6 @@ describe("SetOracleGuards (GH165)", () => {
     }
     expect(() =>
       decodeAdminAction({ Batch: [{ SetOracleGuards: [10, 30_000, 2_000] }] }),
-    ).toThrow(/unknown AdminBatchItem/);
+    ).toThrow(/expected `CreateMarket` or `AttachConditional`/);
   });
 });

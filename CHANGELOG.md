@@ -7,14 +7,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `reads().tradeHistoryPage` preserves trade cursors and pairs with the generic
+  finalized/evidence facade. See [generic reads design](docs/generic-finalized-reads.md)
+  for trust boundaries, pagination, resource limits, typed errors and timestamp units.
+- `reads().evidence.transaction` and `blockResultsWindow` bind exact signed bytes and complete bounded windows to the pinned chain. Caller-reducible resource budgets refuse partial coverage. Trusted-gateway evidence, not cryptographic event proofs or non-admission permission.
+- `reads().finalized` preserves witnessed account, authority, nonce, orders, financial, market and oracle facts. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
+- `reads().finalized.account(owner)` decodes the engine-valued account through the canonical Rust codec, preserving pending funding and equity with a same-state witness. It does not recalculate funding or authorize execution.
+
+### Changed
+
+- Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Market snapshot retains its explicit 10-second setting. HTTP failure bodies remain readable within the same cap; duplicate JSON keys refuse.
+
+## [9.0.0] — 2026-10-31
+
 ### Breaking changes
 
-- **Financial reads (MAJOR for npm):** `FinancialState` is a format-discriminated
-  union. Format 3 omits the retired PLP record, so callers must narrow
-  `state.format === 1` before using `state.plp`. `queryFinancialState` now accepts
-  format 3, which it previously rejected. Include this in the next major npm
-  release; this PR does not publish a package or tag. Historical format 1 remains
-  supported without fabricating a missing PLP value.
+- **Financial reads (MAJOR for npm):** `FinancialState` is a format-discriminated union; format 3 has no retired PLP record. Narrow `state.format === 1` before accessing `state.plp`. `queryFinancialState` now accepts format 3.
 
 - **proof-wire 9.0.0, for exchange 2.21.0 (protocol 9.0).** The Rust crate
   pins proof-wire 9 (tag v9.0.0, commit `8857f3d3`). The engine retired its
@@ -53,18 +63,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   surface only; decoded values and the wire are unchanged. In Python the
   `PendingTriggerDiscardReason` alias becomes `str`.
 
+- **Wire-typed reads decode in the Rust core** (ADR 0001, now for reads).
+  `queryMarkets`, `queryEvents`, `queryEvent`, `queryAccount`,
+  `queryMarketsSnapshot` and the proposal's `AdminAction`
+  (`decodeAdminAction`, `decodeProposalDisplayInfo`, `decodeProposalPage`)
+  decode as their proof-wire 9 types through WASM instead of hand-written
+  positional decoders. The decode is as strict as the wire type, except that
+  fields a later engine appends to a market, event or account record (and to
+  their fee-tier, attachment, position and binding-scenario rows) are ignored,
+  as the markets snapshot already does. A legacy short `AccountInfo` /
+  position tuple is refused until the SDK re-pins the wire. `MarketConfig` and `AccountInfo` optional
+  fields are now always filled. Refusals carry the core's message, prefixed
+  `governance decode: <field>:` or `<Read> decode:`. The exported governance
+  decoders need `await ready()` first, like the codec (MAJOR).
+
+- **One binary book per event only** (#225). `EventInfo.ebnMarket` is removed
+  and the event reads and markets snapshot refuse a two-book event row, in
+  TypeScript, Rust and Python. Rust `market_snapshot::SnapshotEvent` is
+  removed; `MarketsSnapshot.events` is the wire `EventInfo` (MAJOR).
+
 ### Added
 
-- Generic opt-in state reads under `reads().finalized`, chain evidence under
-  `reads().evidence`, and `reads().tradeHistoryPage`. These use the configured
-  gateway even when `useGateway: false`, matching the existing `reads()` surface.
-  Gateway #267 must merge and its routes be deployed before use; there is no
-  direct-node or unwitnessed fallback.
-- `verifyWitness(witness, nextHeader, chainId)` checks the pinned chain and H+1
-  state hash. Hashes are canonical uppercase; genesis header hashes may be null.
-  See [generic reads design](docs/generic-finalized-reads.md) for trust boundaries,
-  pagination obligations, resource limits, typed errors and timestamp units.
-
+- **Open interest in the markets snapshot** (exchange#1273): long and short
+  open interest per market that has had positions, at the snapshot's height.
+  `MarketsSnapshot.openInterest` in TypeScript and `open_interest` in Rust are
+  absent (`undefined` / `None`) on a node that does not serve it, and an empty
+  list when no market has any. A repeated or out-of-order market refuses the
+  whole read; Rust reports the order fault as the new
+  `SnapshotError::UnorderedOpenInterest`. Additive on the wire (MINOR), but
+  code that builds the Rust `MarketsSnapshot` struct field by field must add
+  `open_interest`, and an exhaustive `match` on `SnapshotError` must handle the
+  new variant (MAJOR for the Rust crate).
+- **Python `ExchangeClient.markets_snapshot()`** reads `GET /v1/markets-snapshot`
+  bound to the client's chain and returns a `MarketsSnapshot` dataclass with
+  markets (in the `markets()` shape), events and open interest. It decodes
+  through the Rust core (`decode_markets_snapshot`), so it refuses exactly what
+  Rust refuses, as `CodecError`. The body is streamed and refused past
+  `MAX_MARKETS_SNAPSHOT_BYTES` (1 MiB) before it is buffered whole, and a
+  compressed body is refused unread. `timeout` (10 seconds by default) limits
+  each network wait and, between body chunks, the whole read; it is not a
+  whole-call deadline. Additive (MINOR).
 - **`queryFunding(market)`** reads one market's funding state at
   `GET /v1/funding/{market}` (the gateway's `fundingRate` read): funding rate,
   cumulative funding, last funding time, mark price EWMA, oracle price,
@@ -108,6 +146,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `fundReserve`, `fundRealized`, `fundAbsorbed`; `LiquidationProgressReported`
   `remainderCode`, `remainderRefusal`.
 
+### Changed
+
+- An `order_rejected` event backfilled from history after a reconnect is
+  typed `orderUpdate`, not `accountEvent`, in TypeScript and Python. This
+  matches api-gateway 10.2.0, which types live rejections the same way
+  ([api-gateway #246](https://github.com/Proof-labs/api-gateway/pull/246)), so a
+  rejection gets one frame type whether it arrived live or from history.
+  Code that handles rejections under `accountEvent` should switch on
+  `eventType`. A rejection's payload need not carry an `order_id`. No wire
+  change.
+
 ### Removed
 
 - **The per-market `partialLiquidationEnabled` flag** (`partial_liquidation_enabled` in
@@ -119,11 +168,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deploy together with exchange 2.20.0 (proof-wire 8.0.0); older engines' market rows no
   longer decode.
 
+- **`GatewayPendingTriggerRow`, `GatewayTriggerPositionRow` and
+  `GatewayTriggerLimbJson`.** They described a `pending` section and a
+  `market_kind` field on `GET /v1/triggers/{owner}` that the node never
+  served: the route returns the bare `PositionTriggerInfo` list, which
+  `positionTriggers()` already decodes (api-gateway 10.6.0 corrects its
+  spec the same way). Breaking (MAJOR) for code that imports the types; no
+  runtime change.
+
 ### Fixed
 
-- Account and financial position decoders reject nonzero entry-cost remainders
-  greater than or equal to position size. Legacy six-field positions retain zero.
-  This intentionally tightens existing reads instead of returning invalid costs.
+- `SetOperatorReceiptRegistry` decodes in `decodeSigningMessage` and on
+  proposal reads: `operatorKeys` comes back as 32-byte `Uint8Array`s (#292).
+
+- Building a `SetOperatorReceiptRegistry` proposal now refuses a threshold outside
+  `1..=operatorKeys.length`, the same check proposal reads apply.
+
+- Account and financial position decoders now reject nonzero entry-cost remainders greater than or equal to position size. Legacy positions retain zero; this intentionally tightens existing reads.
 
 - Trigger reads no longer fail on an engine label this SDK version does not
   know. A reason, limb state, availability kind, executed result and history
@@ -134,8 +195,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   market with a one-sided book (`no_two_sided_quote`) used to fail the
   owner-history decoder, which made the account's trigger history
   unreadable; rows like it stay in history. Still refused: a missing, empty
-  or non-string label, an unknown event type, an unknown stored limb kind,
-  and executed quantities that do not add up. No wire change.
+  or non-string label and executed quantities that do not add up. No wire
+  change.
+
+- A stored trigger limb kind and a trigger history event type this SDK
+  version does not know no longer fail the whole read. `StoredTriggerLimb.kind`
+  is now `StoredTriggerKind` (the known kinds or any later name, returned
+  verbatim); only a slot holding the other known kind (`TakeProfit` in the
+  stop-loss slot) is refused as corrupt. A history row with an unknown event
+  type is skipped and the rest of the page is returned; a known type on the
+  wrong route (a shared market event in owner history) is still refused.
+  Same in Python. No wire change.
 
 ## [8.1.0] — 2026-10-26
 
@@ -1749,7 +1819,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.0.0...HEAD
+[9.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...npm-v9.0.0
 [8.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.0.0...npm-v8.1.0
 [8.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.3.0...npm-v8.0.0
 [7.3.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.2.0...npm-v7.3.0

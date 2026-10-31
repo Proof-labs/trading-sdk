@@ -11,6 +11,7 @@ import {
 import { I64_MAX, rpcResult } from "./chain-evidence.js";
 import { invalidRead as invalid, readObject as object } from "./read-values.js";
 import { decodeMarketsSnapshot } from "./market-snapshot.js";
+import { ready } from "./wasm-loader.js";
 import type { MarketsSnapshot } from "./types.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 import {
@@ -96,10 +97,14 @@ export async function readFinalizedMarketsSnapshot(
       `${gatewayUrl.replace(/\/+$/, "")}/v1/markets-snapshot`,
       transport,
       options,
+      { prepare: ready },
     ),
     "market snapshot envelope",
   );
-  const snapshot = decodeMarketsSnapshot(response, chain);
+  const snapshot = decodeMarketsSnapshot(
+    new TextEncoder().encode(JSON.stringify(response)),
+    chain,
+  );
   return {
     ...snapshot,
     witness: decodeFinalizedReadWitness(response.witness, snapshot.height),

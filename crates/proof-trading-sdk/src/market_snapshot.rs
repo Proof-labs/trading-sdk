@@ -1,6 +1,7 @@
 //! Atomic, chain-bound inventory read. This is registration, not oracle health.
 //! No partial result or transport failure is converted into an empty registry.
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io::Cursor;
@@ -9,7 +10,7 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rmpv::Value;
 use serde::{Deserialize, Serialize};
 
-use crate::types::{AttachedConditional, EventId, EventOracleSource, EventStatus, MarketConfig};
+use crate::types::{EventInfo, MarketConfig};
 
 /// Whole HTTP response limit, before decoding its base64 envelope.
 pub const MAX_SNAPSHOT_BYTES: usize = 1024 * 1024;
@@ -24,37 +25,29 @@ pub struct MarketsSnapshot {
     pub chain_id: [u8; 32],
     pub height: u64,
     pub markets: Vec<MarketConfig>,
-    /// Every event with its binaries and its attached conditionals; the
-    /// stored `EventInfo` record, no display view.
-    pub events: Vec<SnapshotEvent>,
+    /// Every event with its binary book and its attached conditionals.
+    pub events: Vec<EventInfo>,
+    /// Long and short open interest per market that has had positions, in
+    /// ascending market order; a market missing from the list has none.
+    /// `None` when the node does not serve open interest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_interest: Option<Vec<MarketOpenInterest>>,
 }
 
-/// The stored event record in either engine shape. An engine with one
-/// binary book per event stores no No book (`ebn_market` is `None`); an
-/// earlier engine stores both books. Decoding both lets a client follow a
-/// chain across the upgrade that retires the No book.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SnapshotEvent {
-    pub event_id: EventId,
-    /// The event's binary book, priced in Yes.
-    pub eby_market: crate::types::MarketId,
-    /// The No book, on an engine that still has one.
-    pub ebn_market: Option<crate::types::MarketId>,
-    pub question: String,
-    pub settlement_ms: u64,
-    pub resolution_window_ms: u64,
-    pub status: EventStatus,
-    pub created_ms: u64,
-    pub resolved_ms: u64,
-    pub oracle_source: Option<EventOracleSource>,
-    pub attached_conditionals: Vec<AttachedConditional>,
+/// One market's open interest, in base-asset units per side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketOpenInterest {
+    pub market: crate::types::MarketId,
+    pub long: u64,
+    pub short: u64,
 }
 
-/// Event-row width in the two-book shape; the one-book shape is one less.
-const TWO_BOOK_EVENT_WIDTH: usize = 11;
-/// Position of the No book in a two-book row, and of the question in a
-/// one-book row.
-const NO_BOOK_FIELD: usize = 2;
+/// Position of the open-interest list in the snapshot tuple, the last field
+/// this decoder reads.
+const OPEN_INTEREST_FIELD: usize = 4;
+
+/// Event-row width: the stored `EventInfo` record.
+const EVENT_WIDTH: usize = 10;
 
 /// Deliberately excludes request URLs, response bodies and provider credentials.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +62,8 @@ pub enum SnapshotError {
     WrongChain,
     Uncommitted,
     DuplicateMarket,
+    /// The open-interest list is not in ascending market order.
+    UnorderedOpenInterest,
     CatchingUp,
     RpcUnavailable,
     /// A receipt lookup answered 404 or 500 with an error that is not the
@@ -100,9 +95,10 @@ struct Envelope {
 }
 
 /// Decode a complete JSON/base64/MessagePack response. Duplicate JSON `data`
-/// keys, duplicate registry IDs, non-integer scalars, unknown enums, incomplete
-/// records and trailing MessagePack bytes all refuse the entire read. Appended
-/// tuple fields are permitted, but existing fields are never defaulted away.
+/// keys, duplicate registry IDs, open interest out of market order, non-integer
+/// scalars, unknown enums, incomplete records and trailing MessagePack bytes all
+/// refuse the entire read. Appended tuple fields are permitted, but existing
+/// fields are never defaulted away.
 pub fn decode_snapshot(
     body: &[u8],
     expected_chain: ChainBinding,
@@ -127,25 +123,24 @@ pub fn decode_snapshot(
     }
     validate_value(&value)?;
     let top = tuple(&mut value, 4)?;
-    top.truncate(4);
-    for (slot, width) in [(2, 24), (3, TWO_BOOK_EVENT_WIDTH)] {
+    top.truncate(OPEN_INTEREST_FIELD + 1);
+    for (slot, width) in [(2, 24), (3, EVENT_WIDTH), (OPEN_INTEREST_FIELD, 3)] {
         let rows = match top.get_mut(slot) {
             Some(Value::Array(rows)) => rows,
+            // A node from before open interest ends the tuple at the events.
+            None if slot == OPEN_INTEREST_FIELD => continue,
             _ => return Err(SnapshotError::Malformed),
         };
         if rows.len() > MAX_SNAPSHOT_ROWS {
             return Err(SnapshotError::TooLarge);
         }
         for row in rows {
-            if slot == 3 {
-                normalize_one_book_event(row)?;
-            }
             let fields = tuple(row, width)?;
             fields.truncate(width);
             if slot == 3 {
                 // An event's attachment list: one `[underlying, cpy, cpn]`
                 // tuple per attachment, bounded like the rows themselves.
-                let attachments = tuple(&mut fields[10], 0)?;
+                let attachments = tuple(&mut fields[9], 0)?;
                 if attachments.len() > MAX_SNAPSHOT_ROWS {
                     return Err(SnapshotError::TooLarge);
                 }
@@ -177,20 +172,18 @@ pub fn decode_snapshot(
             return Err(SnapshotError::DuplicateMarket);
         }
     }
-    Ok(snapshot)
-}
-
-/// A one-book event row has the question where a two-book row has its No
-/// book: insert an absent No book there so both shapes decode as one.
-fn normalize_one_book_event(row: &mut Value) -> Result<(), SnapshotError> {
-    let fields = tuple(row, TWO_BOOK_EVENT_WIDTH - 1)?;
-    if matches!(fields[NO_BOOK_FIELD], Value::String(_)) {
-        fields.insert(NO_BOOK_FIELD, Value::Nil);
-    } else if fields[NO_BOOK_FIELD].is_nil() {
-        // A two-book row never carries an absent No book.
-        return Err(SnapshotError::Malformed);
+    for pair in snapshot
+        .open_interest
+        .iter()
+        .flat_map(|rows| rows.windows(2))
+    {
+        match pair[0].market.cmp(&pair[1].market) {
+            Ordering::Less => {}
+            Ordering::Equal => return Err(SnapshotError::DuplicateMarket),
+            Ordering::Greater => return Err(SnapshotError::UnorderedOpenInterest),
+        }
     }
-    Ok(())
+    Ok(snapshot)
 }
 
 fn tuple(value: &mut Value, minimum: usize) -> Result<&mut Vec<Value>, SnapshotError> {
