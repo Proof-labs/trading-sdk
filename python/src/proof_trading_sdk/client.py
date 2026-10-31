@@ -1079,7 +1079,7 @@ class ExchangeClient:
 
     @staticmethod
     def _decode_market_config(raw: t.Sequence[t.Any]) -> dict[str, t.Any]:
-        """Decode a market-config tuple (mirrors the TS ``decodeMarketConfig``)."""
+        """Decode a market-config tuple (the wire ``MarketConfig``)."""
 
         def opt(i: int) -> int | None:
             return int(raw[i]) if len(raw) > i and raw[i] is not None else None

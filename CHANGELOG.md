@@ -48,6 +48,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   surface only; decoded values and the wire are unchanged. In Python the
   `PendingTriggerDiscardReason` alias becomes `str`.
 
+- **Wire-typed reads decode in the Rust core** (ADR 0001, now for reads).
+  `queryMarkets`, `queryEvents`, `queryEvent`, `queryAccount`,
+  `queryMarketsSnapshot` and the proposal's `AdminAction`
+  (`decodeAdminAction`, `decodeProposalDisplayInfo`, `decodeProposalPage`)
+  decode as their proof-wire 9 types through WASM instead of hand-written
+  positional decoders. The decode is as strict as the wire type, except that
+  fields a later engine appends to a market, event or account record (and to
+  their fee-tier, attachment, position and binding-scenario rows) are ignored,
+  as the markets snapshot already does. A legacy short `AccountInfo` /
+  position tuple is refused until the SDK re-pins the wire. `MarketConfig` and `AccountInfo` optional
+  fields are now always filled. Refusals carry the core's message, prefixed
+  `governance decode: <field>:` or `<Read> decode:`. The exported governance
+  decoders need `await ready()` first, like the codec (MAJOR).
+
+- **One binary book per event only** (#225). `EventInfo.ebnMarket` is removed
+  and the event reads and markets snapshot refuse a two-book event row, in
+  TypeScript, Rust and Python. Rust `market_snapshot::SnapshotEvent` is
+  removed; `MarketsSnapshot.events` is the wire `EventInfo` (MAJOR).
+
 ### Added
 
 - **Open interest in the markets snapshot** (exchange#1273): long and short
@@ -135,6 +154,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   longer decode.
 
 ### Fixed
+
+- `SetOperatorReceiptRegistry` decodes in `decodeSigningMessage` and on
+  proposal reads: `operatorKeys` comes back as 32-byte `Uint8Array`s (#292).
+
+- Building a `SetOperatorReceiptRegistry` proposal now refuses a threshold outside
+  `1..=operatorKeys.length`, the same check proposal reads apply.
 
 - Account and financial position decoders now reject nonzero entry-cost remainders greater than or equal to position size. Legacy positions retain zero; this intentionally tightens existing reads.
 
