@@ -286,6 +286,101 @@ class TestEngineParityActions:
         assert decoded["pool_id"] == 9
         assert decoded["max_open_interest"] == 1_000_000
 
+    @staticmethod
+    def _market(ticker: str) -> dict:
+        return {
+            "market": 42,
+            "im_bps": 1000,
+            "mm_bps": 500,
+            "taker_fee_bps": 5,
+            "maker_fee_bps": 2,
+            "signer": bytes(20),
+            "funding_interval_ms": 60_000,
+            "max_funding_rate_bps": 100,
+            "sz_decimals": 0,
+            "ticker": ticker,
+            "pool_id": 0,
+            "max_open_interest": 0,
+        }
+
+    def _market_creations(self, ticker: str) -> list[tuple[str, int, dict]]:
+        single = {"CreateMarket": self._market(ticker)}
+        batch = {
+            "Batch": [
+                {"CreateMarket": self._market("BTC")},
+                {"CreateMarket": {**self._market(ticker), "market": 43}},
+            ]
+        }
+
+        def propose(action: dict) -> dict:
+            return {
+                "proposer": b"\x22" * 20,
+                "registry_version": 3,
+                "action": action,
+            }
+
+        def approve(action: dict) -> dict:
+            return {
+                "approver": b"\x23" * 20,
+                "proposal_id": 7,
+                "registry_version": 3,
+                "threshold": 2,
+                "proposer": b"\x22" * 20,
+                "created_height": 1,
+                "created_ms": 1,
+                "expiry_ms": 2,
+                "action": action,
+                "content_hash": bytes(32),
+            }
+
+        return [
+            ("direct", pts.ActionType["CreateMarket"], self._market(ticker)),
+            ("proposed", pts.ActionType["ProposeAdminAction"], propose(single)),
+            ("proposed batch", pts.ActionType["ProposeAdminAction"], propose(batch)),
+            ("approved", pts.ActionType["ApproveAdminAction"], approve(single)),
+            ("approved batch", pts.ActionType["ApproveAdminAction"], approve(batch)),
+        ]
+
+    def test_every_market_creation_refuses_a_bad_ticker(self):
+        """The ticker rule is a copy of proof_wire::ticker::validate_ticker
+        (Proof-labs/exchange#1351), refused with the engine's text."""
+        for name, action_type, fields in self._market_creations("TEST3."):
+            with pytest.raises(ValueError) as e:
+                pts.encode_action(pts.actions.RawAction(action_type, fields))
+            assert str(e.value) == (
+                "ticker may hold only A-Z, 0-9 and '-', found '.' at character 5"
+            ), name
+        for _name, action_type, fields in self._market_creations("TEST3"):
+            pts.encode_action(pts.actions.RawAction(action_type, fields))
+
+    @pytest.mark.parametrize(
+        "ticker,message",
+        [
+            ("", "ticker is empty"),
+            ("X" * 25, "ticker is 25 bytes, over the 24-byte limit"),
+            ("test3", "ticker must start with a capital letter A-Z, not 't'"),
+            ("Btc", "ticker may hold only A-Z, 0-9 and '-', found 't' at character 1"),
+            (
+                "BTCÉ",
+                "ticker may hold only A-Z, 0-9 and '-', found 'É' at character 3",
+            ),
+        ],
+    )
+    def test_create_market_refusal_text_matches_the_engine(self, ticker, message):
+        action = pts.actions.RawAction(pts.ActionType["CreateMarket"], self._market(ticker))
+        with pytest.raises(ValueError) as e:
+            pts.encode_action(action)
+        assert str(e.value) == message
+
+    def test_a_market_created_before_the_rule_still_decodes(self):
+        _, payload = pts.encode_action(
+            pts.actions.RawAction(pts.ActionType["CreateMarket"], self._market("TEST3X"))
+        )
+        at = payload.index(b"TEST3X")
+        patched = payload[: at + 5] + b"." + payload[at + 6 :]
+        decoded = pts.decode_action(pts.ActionType["CreateMarket"], patched)
+        assert decoded["ticker"] == "TEST3."
+
     def test_update_market_fees_max_open_interest_uses_slot_after_margin_ratios(self):
         action = pts.actions.UpdateMarketFees(
             market=42,

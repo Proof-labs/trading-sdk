@@ -18,7 +18,7 @@ describe("codec-adapter enum loudness", () => {
   it("throws for an out-of-range markSourceMode on encode", () => {
     const action = {
       type: "CreateMarket",
-      data: { markSourceMode: 7 },
+      data: { ticker: "BTC", markSourceMode: 7 },
     } as unknown as Action;
     expect(() => toWasmFields(action)).toThrow(
       /unknown markSourceMode value: 7/,

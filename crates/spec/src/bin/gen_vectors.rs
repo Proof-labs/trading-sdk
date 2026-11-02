@@ -401,7 +401,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "market": 0, "im_bps": 3334, "mm_bps": 1667,
                     "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": vec![0u8; 20],
                     "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
-                    "pool_id": 0, "sz_decimals": 0, "ticker": "", "max_open_interest": 0u64
+                    "pool_id": 0, "sz_decimals": 0, "ticker": "BTC", "max_open_interest": 0u64
                 }}
             }),
         ),
@@ -421,7 +421,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         "market": 15, "im_bps": 3334, "mm_bps": 1667,
                         "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": vec![0u8; 20],
                         "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
-                        "pool_id": 0, "sz_decimals": 0, "ticker": "", "max_open_interest": 0u64
+                        "pool_id": 0, "sz_decimals": 0, "ticker": "BTC", "max_open_interest": 0u64
                     }},
                     { "AttachConditional": attach_fields() }
                 ]}
