@@ -71,6 +71,8 @@ export interface BlockResultsWindow {
   blocks: BlockResultsEvidence[];
 }
 
+const WINDOW_DEFAULT_HEIGHTS = 32;
+const WINDOW_MAX_HEIGHTS = 128;
 const WINDOW_MAX_DECODED_BYTES = 8 * 1024 * 1024;
 const WINDOW_MAX_TRANSACTIONS = 10_000;
 const WINDOW_MAX_EVENTS = 16_384;
@@ -90,7 +92,6 @@ export async function readBlockResultsWindow(
   transport: ExchangeHttpTransport,
 ): Promise<BlockResultsWindow> {
   const { fromMs, toMs, throughHeight } = selection;
-  const maxHeights = selection.maxHeights ?? 32;
   const deadline = readDeadline(options);
   const budget = (
     value: number | undefined,
@@ -102,6 +103,11 @@ export async function readBlockResultsWindow(
       throw new GatewayReadError("configuration", field);
     return n;
   };
+  const maxHeights = budget(
+    selection.maxHeights ?? WINDOW_DEFAULT_HEIGHTS,
+    WINDOW_MAX_HEIGHTS,
+    "window heights",
+  );
   const maxBytes = budget(
     selection.maxDecodedBytes,
     WINDOW_MAX_DECODED_BYTES,
@@ -136,8 +142,6 @@ export async function readBlockResultsWindow(
     throughHeight >= I64_MAX
   )
     invalid("through height");
-  if (!Number.isSafeInteger(maxHeights) || maxHeights < 1 || maxHeights > 128)
-    invalid("height budget");
   if (!(expectedChainId instanceof Uint8Array) || expectedChainId.length !== 32)
     invalid("pinned chain");
   const chain = Uint8Array.from(expectedChainId);
