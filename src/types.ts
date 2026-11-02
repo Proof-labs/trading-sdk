@@ -385,8 +385,9 @@ export interface CreateMarket {
   szDecimals: number;
   /**
    * Human-readable ticker / short symbol (e.g. `BTC`). Display/metadata only
-   * — the engine never reads it. MANDATORY on the wire (no serde(default)),
-   * though an empty string is accepted; capped at 24 bytes by the engine.
+   * — the engine never reads it. MANDATORY on the wire (no serde(default)).
+   * 1 to 24 bytes of A-Z, 0-9 and '-', starting with A-Z (see
+   * `validateTicker`); the SDK refuses any other value before signing.
    * Fixed at creation and immutable thereafter.
    */
   ticker: string;

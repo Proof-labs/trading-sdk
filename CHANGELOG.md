@@ -11,10 +11,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `reads().finalized` preserves witnessed account, authority, nonce, orders, financial, market and oracle facts. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
 - `reads().finalized.account(owner)` decodes the engine-valued account through the canonical Rust codec, preserving pending funding and equity with a same-state witness. It does not recalculate funding or authorize execution.
+- **`reads().oracleHealth({ market })`** requests one market's oracle health
+  (`GET /v1/oracle/health?market={id}`, api-gateway 10.3.0+): the same object
+  with only that market's row, instead of the whole feeder state. Without
+  `market` the request is unchanged. The cut drops `failover` and `inventory`,
+  and the row's `status` is the feeder's 60-second rule, not the engine's
+  per-market age gate: it is for a UI freshness poll; monitoring and maker
+  guards read the bare path. Additive (MINOR).
 
 ### Changed
 
 - Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Market snapshot retains its explicit 10-second setting. HTTP failure bodies remain readable within the same cap; duplicate JSON keys refuse.
+
+### Fixed
+
+- **A market ticker is checked before a market creation is signed.** A
+  ticker is 1 to 24 bytes of capital letters A-Z, digits 0-9 and hyphens,
+  starting with a capital letter (`^[A-Z][A-Z0-9-]{0,23}$`); a market cannot
+  be renamed, and DevNet already has a `TEST3.` market from a typo. The
+  TypeScript SDK refuses a bad ticker with `InvalidTickerError` (new export,
+  with `validateTicker`, `checkTicker`, `tickerRefusalMessage`,
+  `TickerRefusal` and `MAX_TICKER_LEN`) on every encode path: a direct
+  `CreateMarket`, and a `CreateMarket` proposed or approved through
+  governance, alone or inside an admin `Batch`. The Python `encode_action`
+  raises `ValueError` for the same payloads, and the Rust crate gains
+  `proof_trading_sdk::ticker`. The refusal text matches the engine's. This is
+  a copy of `proof_wire::ticker::validate_ticker`
+  ([Proof-labs/exchange#1351](https://github.com/Proof-labs/exchange/pull/1351)),
+  to be replaced by it at the next proof-wire upgrade. Decoding never checks
+  the ticker, so markets created before the rule still read back, and
+  `adminProposalContentHash` still hashes a proposal already on chain. No
+  wire change; the new exports make this a MINOR change.
 
 ## [9.0.0] — 2026-10-31
 
