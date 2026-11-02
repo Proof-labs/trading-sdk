@@ -346,6 +346,10 @@ function toAction(
           withdrawalId: big(input.withdrawal_id),
           holder: bytes(input.holder),
           solanaSignature: bytes(input.solana_signature),
+          lastValidBlockHeight:
+            input.last_valid_block_height === null
+              ? null
+              : big(input.last_valid_block_height),
         },
       };
     case ActionType.ResolveEvent:

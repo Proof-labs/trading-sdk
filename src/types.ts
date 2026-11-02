@@ -87,9 +87,9 @@ export const ActionType = {
    *  (0x2e). Custody-authorized watchers only. */
   ClaimWithdrawalPayout: 0x2e,
   /** Report the Solana signature the payout-lease holder broadcast for a
-   *  pending withdrawal (0x30); stored as the withdrawal's payout record
+   *  pending withdrawal (0x31); stored as the withdrawal's payout record
    *  that peer watchers verify against Solana before re-signing. */
-  RecordWithdrawalPayout: 0x30,
+  RecordWithdrawalPayout: 0x31,
   /** Update a subset of `MarketConfig` tunables on a live market (admin).
    *  Fee tiering, funding-rate cap tightening, position-limit updates
    *  without a chain rebase. */
@@ -701,7 +701,7 @@ export interface ClaimWithdrawalPayout {
 }
 
 /** Report the Solana signature the payout-lease holder broadcast for a
- *  pending withdrawal (0x30). Stored as the withdrawal's payout record;
+ *  pending withdrawal (0x31). Stored as the withdrawal's payout record;
  *  peer watchers verify it against Solana before re-signing. */
 export interface RecordWithdrawalPayout {
   withdrawalId: bigint;
@@ -710,6 +710,9 @@ export interface RecordWithdrawalPayout {
   holder: Address;
   /** The reported Solana transaction signature bytes. */
   solanaSignature: Uint8Array;
+  /** The reported transfer's last valid block height; peer watchers bound
+   *  absence checks with it. `null` when the reporter cannot bound it. */
+  lastValidBlockHeight: bigint | null;
 }
 
 /** Resolve a standalone event (0x27). YES/NO only — the engine rejects `Void`. */

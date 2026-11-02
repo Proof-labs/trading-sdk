@@ -407,6 +407,7 @@ describe("codec v1 all action types", () => {
         withdrawalId: 777n,
         holder: new Uint8Array(20).fill(0x05),
         solanaSignature: new Uint8Array(64).fill(0x07),
+        lastValidBlockHeight: 500n,
       },
     },
     {

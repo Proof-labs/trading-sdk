@@ -536,7 +536,7 @@ class ClaimWithdrawalPayout(Action):
 @dataclass
 class RecordWithdrawalPayout(Action):
     """**Operator-only.** Report the Solana signature the payout-lease holder
-    broadcast for a pending withdrawal (0x30); stored as the withdrawal's
+    broadcast for a pending withdrawal (0x31); stored as the withdrawal's
     payout record that peer watchers verify against Solana before
     re-signing."""
 
@@ -544,12 +544,14 @@ class RecordWithdrawalPayout(Action):
     withdrawal_id: int
     holder: bytes
     solana_signature: bytes
+    last_valid_block_height: int | None
 
     def fields(self) -> dict[str, Any]:
         return {
             "withdrawal_id": self.withdrawal_id,
             "holder": self.holder,
             "solana_signature": self.solana_signature,
+            "last_valid_block_height": self.last_valid_block_height,
         }
 
 
