@@ -534,6 +534,26 @@ class ClaimWithdrawalPayout(Action):
 
 
 @dataclass
+class RecordWithdrawalPayout(Action):
+    """**Operator-only.** Report the Solana signature the payout-lease holder
+    broadcast for a pending withdrawal (0x30); stored as the withdrawal's
+    payout record that peer watchers verify against Solana before
+    re-signing."""
+
+    ACTION_NAME = "RecordWithdrawalPayout"
+    withdrawal_id: int
+    holder: bytes
+    solana_signature: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "withdrawal_id": self.withdrawal_id,
+            "holder": self.holder,
+            "solana_signature": self.solana_signature,
+        }
+
+
+@dataclass
 class ResolveEvent(Action):
     """Resolve an event (0x27) to YES or NO; the engine rejects ``Void`` and
     refuses an event that still carries attached conditionals."""
@@ -1138,6 +1158,7 @@ __all__ = [
     "CreateSubAccount",
     "SubAccountTransfer",
     "ClaimWithdrawalPayout",
+    "RecordWithdrawalPayout",
     "UpdateMarketFees",
     "SubmitOracleObservation",
     "ConfigureOraclePolicy",
