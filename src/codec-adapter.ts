@@ -44,6 +44,7 @@ import {
 import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
+import { validateTicker } from "./ticker.js";
 import {
   validateCancelPositionTriggers,
   validateOrderTriggers,
@@ -272,6 +273,30 @@ function convertObject(data: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
+ * Refuse a market creation whose ticker breaks the ticker rule, on every
+ * signable shape that creates a market: the direct `CreateMarket` action, and
+ * a `CreateMarket` proposed or approved through governance, alone or as an
+ * item of an admin `Batch`. Encode direction only: decoding never checks, so
+ * markets created before the rule still read back. `adminProposalContentHash`
+ * does not check either, so the hash of a proposal already on chain can still
+ * be recomputed (for example to reject it).
+ */
+function validateCreateMarketTickers(action: Action): void {
+  if (action.type === "CreateMarket") {
+    validateTicker(action.data.ticker ?? "");
+  } else if (
+    action.type === "ProposeAdminAction" ||
+    action.type === "ApproveAdminAction"
+  ) {
+    const admin = action.data.action;
+    const items = admin.kind === "Batch" ? admin.value : [admin];
+    for (const item of items) {
+      if (item.kind === "CreateMarket") validateTicker(item.value.ticker ?? "");
+    }
+  }
+}
+
+/**
  * Translate a TS `Action` into `(actionType, fields)` for `encode_payload`.
  */
 export function toWasmFields(action: Action): {
@@ -291,6 +316,7 @@ export function toWasmFields(action: Action): {
     // 0x25/0x26 validators above (absent limbs pass — no bracket requested).
     validateOrderTriggers(action.data);
   }
+  validateCreateMarketTickers(action);
   const actionType = (ActionType[action.type] ??
     TEST_ACTION_TYPES[action.type]) as ActionTypeValue;
   const fields = convertObject(
