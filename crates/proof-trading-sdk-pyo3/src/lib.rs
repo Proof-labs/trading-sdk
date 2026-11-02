@@ -155,6 +155,10 @@ fn encode_signed_tx<'py>(
 ///
 /// The returned bytes are the `action_payload` argument for
 /// [`sign_and_encode`].
+///
+/// A market creation (direct, or proposed or approved through governance,
+/// alone or in an admin `Batch`) whose ticker breaks the ticker rule raises
+/// `ValueError` with the engine's refusal text; see `core_sdk::ticker`.
 #[pyfunction]
 fn encode_action<'py>(
     py: Python<'py>,
@@ -163,6 +167,8 @@ fn encode_action<'py>(
 ) -> PyResult<Bound<'py, PyBytes>> {
     let mut de = pythonize::Depythonizer::from_object(fields);
     let payload = codec::encode_payload_dyn(action_type, &mut de).map_err(map_err)?;
+    core_sdk::ticker::check_payload_tickers(action_type, &payload)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(PyBytes::new(py, &payload))
 }
 

@@ -7,6 +7,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A market ticker is checked before a market creation is signed.** A
+  ticker is 1 to 24 bytes of capital letters A-Z, digits 0-9 and hyphens,
+  starting with a capital letter (`^[A-Z][A-Z0-9-]{0,23}$`); a market cannot
+  be renamed, and DevNet already has a `TEST3.` market from a typo. The
+  TypeScript SDK refuses a bad ticker with `InvalidTickerError` (new export,
+  with `validateTicker`, `checkTicker`, `tickerRefusalMessage`,
+  `TickerRefusal` and `MAX_TICKER_LEN`) on every encode path: a direct
+  `CreateMarket`, and a `CreateMarket` proposed or approved through
+  governance, alone or inside an admin `Batch`. The Python `encode_action`
+  raises `ValueError` for the same payloads, and the Rust crate gains
+  `proof_trading_sdk::ticker`. The refusal text matches the engine's. This is
+  a copy of `proof_wire::ticker::validate_ticker`
+  ([Proof-labs/exchange#1351](https://github.com/Proof-labs/exchange/pull/1351)),
+  to be replaced by it at the next proof-wire upgrade. Decoding never checks
+  the ticker, so markets created before the rule still read back, and
+  `adminProposalContentHash` still hashes a proposal already on chain. No
+  wire change; the new exports make this a MINOR change.
+
 ## [9.0.0] — 2026-10-31
 
 ### Breaking changes
