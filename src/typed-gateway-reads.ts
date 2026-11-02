@@ -28,7 +28,7 @@ import {
   type FinalizedMarketsSnapshot,
   type FinalizedFinancialState,
 } from "./finalized-state-reads.js";
-import type { BlockEvidenceHeader } from "./block-results-window.js";
+import type { BlockEvidenceHeader } from "./block-header.js";
 import {
   readTransactionEvidence,
   type TransactionEvidence,

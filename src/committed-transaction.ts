@@ -16,7 +16,7 @@ import {
   decodeBlockEvidenceHeader,
   type BlockEvidenceHeader,
 } from "./block-header.js";
-import { readDeadline } from "./read-values.js";
+import { readDeadline, type Hash32Hex } from "./read-values.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { boundedGatewayJson, type BoundedReadOptions } from "./bounded-read.js";
 import { bytesToHex } from "./crypto.js";
@@ -39,7 +39,7 @@ export type { TransactionEvidenceEvent } from "./chain-evidence.js";
  * An unavailable/malformed response throws and proves no non-admission. */
 export interface TransactionEvidence {
   source: "trusted-gateway";
-  hash: string;
+  hash: Hash32Hex;
   signedBytes: Uint8Array;
   height: bigint;
   index: number;

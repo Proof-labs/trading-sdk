@@ -130,6 +130,22 @@ describe("bounded trusted-gateway block/results windows", () => {
       parentHash: null,
     });
   });
+  it("ends a window that starts before genesis at height 1", async () => {
+    const f = fixture(1);
+    const genesis = f.blocks.get(1)!.result.block.header;
+    genesis.app_hash = "";
+    genesis.last_block_id.hash = "";
+    const window = await f.client.reads().evidence.blockResultsWindow({
+      fromMs: T - 200_000,
+      toMs: T - 97_000,
+      throughHeight: 2n,
+      maxHeights: 3,
+    });
+    expect(window.fromHeight).toBe(1n);
+    expect(window.blocks.map((b) => b.header.height)).toEqual([1n, 2n]);
+    expect(window.blocks[0].header.parentHash).toBeNull();
+    expect(f.transport).toHaveBeenCalledTimes(5);
+  });
   it("allows callers to lower aggregate budgets but not raise their ceilings", async () => {
     const f = fixture();
     await expect(
@@ -143,6 +159,8 @@ describe("bounded trusted-gateway block/results windows", () => {
       { maxEvents: 16385 },
       { maxAttributes: 65537 },
       { maxEvents: 0 },
+      { maxHeights: 129 },
+      { maxHeights: 0 },
     ]) {
       f.transport.mockClear();
       await expect(
