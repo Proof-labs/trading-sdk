@@ -281,8 +281,6 @@ export function decodeFinancialState(
     : { ...ledger, format: 3 };
 }
 
-const MAX_RESPONSE_BYTES = 1024 * 1024;
-
 /** Framing/resource preflight only. Values are decoded solely by msgpack below.
  * The stack is at most eight counters; declared container lengths never allocate.
  * An admitted 2048-position snapshot uses fewer than 60k aggregate value slots.

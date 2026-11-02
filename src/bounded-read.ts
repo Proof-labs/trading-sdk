@@ -59,6 +59,35 @@ export interface BoundedReadRequest {
   /** Awaited after the deadline and cancellation are armed, e.g. `ready()`. */
   prepare?: () => Promise<void>;
 }
+function concat(chunks: Uint8Array[], size: number): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return bytes;
+}
+/** Retain a bounded, readable error body after cancelling the upstream. */
+function httpError(
+  response: Response,
+  bytes: Uint8Array<ArrayBuffer>,
+): GatewayHttpError {
+  const body = bytes.length ? bytes : null;
+  let copy: Response;
+  try {
+    copy = new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } catch {
+    // A custom transport can report a status (e.g. 304 with a body) that the
+    // Response constructor refuses; the real status stays on the error.
+    copy = new Response(body, { headers: response.headers });
+  }
+  return new GatewayHttpError(response.status, copy);
+}
 /** Internal one-shot SDK read. No retry, alternate endpoint or cached fallback. */
 export async function boundedGatewayJson(
   url: string,
@@ -125,6 +154,29 @@ export async function boundedGatewayJson(
     );
     response = await Promise.race([pending, cancelled]);
     checkDeadline();
+    if (!response.ok) {
+      // The status is the diagnosis. An error body that is oversized,
+      // fragmented, empty-chunked or stalled is truncated to what arrived in
+      // bounds; it never replaces the HTTP status. Caller cancellation wins.
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      if (response.body) {
+        reader = response.body.getReader();
+        try {
+          while (chunks.length < MAX_READ_CHUNKS && size < MAX_READ_BYTES) {
+            const part = await Promise.race([reader.read(), cancelled]);
+            if (part.done || part.value.length === 0) break;
+            const kept = part.value.subarray(0, MAX_READ_BYTES - size);
+            chunks.push(kept);
+            size += kept.length;
+            if (performance.now() >= deadline) break;
+          }
+        } catch (error) {
+          if (options.signal?.aborted) throw error;
+        }
+      }
+      throw httpError(response, concat(chunks, size));
+    }
     const length = response.headers.get("content-length");
     if (
       length !== null &&
@@ -135,15 +187,6 @@ export async function boundedGatewayJson(
         "limit",
         "responseBytes",
         "Gateway read response exceeds byte limit",
-      );
-    if (!response.body && !response.ok)
-      throw new GatewayHttpError(
-        response.status,
-        new Response(null, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers,
-        }),
       );
     if (!response.body)
       throw new GatewayReadError(
@@ -180,21 +223,7 @@ export async function boundedGatewayJson(
       chunks.push(part.value);
     }
     checkDeadline();
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.length;
-    }
-    if (!response.ok) {
-      // Retain a bounded, readable error body after cancelling the upstream.
-      const copy = new Response(bytes, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
-      throw new GatewayHttpError(response.status, copy);
-    }
+    const bytes = concat(chunks, size);
     let parsed: unknown;
     try {
       parsed = parseBoundedJson(

@@ -36,6 +36,78 @@ describe("bounded read transport", () => {
     expect(failure.status).toBe(404);
     expect(await failure.response.json()).toEqual({ detail: "not found" });
   });
+  it.each([
+    [
+      "an oversized declared length",
+      () =>
+        new Response("x".repeat(2_000), {
+          status: 502,
+          headers: { "content-length": "2000000" },
+        }),
+    ],
+    [
+      "an oversized streamed body",
+      () => new Response(new Uint8Array(1024 * 1024 + 10), { status: 503 }),
+    ],
+    [
+      "an empty body chunk",
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(new TextEncoder().encode("bad gateway"));
+              c.enqueue(new Uint8Array(0));
+              c.enqueue(new TextEncoder().encode(" more"));
+              c.close();
+            },
+          }),
+          { status: 502 },
+        ),
+    ],
+  ])("keeps the HTTP status when the failure body has %s", async (_, make) => {
+    const failure = await boundedGatewayJson(
+      "https://gateway.example/read",
+      async () => make(),
+      {},
+    ).catch((e) => e);
+    expect(failure).toMatchObject({ name: "GatewayHttpError" });
+    expect([502, 503]).toContain(failure.status);
+    expect(
+      (await failure.response.arrayBuffer()).byteLength,
+    ).toBeLessThanOrEqual(1024 * 1024);
+  });
+  it("keeps the HTTP status when the failure body stalls past the deadline", async () => {
+    const failure = await boundedGatewayJson(
+      "https://gateway.example/read",
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(new TextEncoder().encode("partial"));
+            },
+          }),
+          { status: 504 },
+        ),
+      { timeoutMs: 50 },
+    ).catch((e) => e);
+    expect(failure).toMatchObject({ name: "GatewayHttpError", status: 504 });
+    expect(await failure.response.text()).toBe("partial");
+  });
+  it("lets caller cancellation win over a failure body", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("operator stopped", "AbortError");
+    const pending = boundedGatewayJson(
+      "https://gateway.example/read",
+      async () => {
+        setTimeout(() => controller.abort(reason), 10);
+        return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+          status: 500,
+        });
+      },
+      { signal: controller.signal },
+    );
+    await expect(pending).rejects.toBe(reason);
+  });
   it("accepts punctuation, escapes and nested arrays inside JSON strings", async () => {
     const body = {
       text: '\", ,, { \\ trailing',
