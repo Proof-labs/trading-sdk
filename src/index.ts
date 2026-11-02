@@ -119,6 +119,7 @@ export {
   type CreateSubAccount,
   type SubAccountTransfer,
   type ClaimWithdrawalPayout,
+  type RecordWithdrawalPayout,
   type UpdateMarketFees,
   type SetUserMarketLeverage,
   type GovernanceAction,

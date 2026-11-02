@@ -86,6 +86,10 @@ export const ActionType = {
   /** Acquire the single-holder Solana payout lease on a pending withdrawal
    *  (0x2e). Custody-authorized watchers only. */
   ClaimWithdrawalPayout: 0x2e,
+  /** Report the Solana signature the payout-lease holder broadcast for a
+   *  pending withdrawal (0x30); stored as the withdrawal's payout record
+   *  that peer watchers verify against Solana before re-signing. */
+  RecordWithdrawalPayout: 0x30,
   /** Update a subset of `MarketConfig` tunables on a live market (admin).
    *  Fee tiering, funding-rate cap tightening, position-limit updates
    *  without a chain rebase. */
@@ -696,6 +700,18 @@ export interface ClaimWithdrawalPayout {
   holder: Address;
 }
 
+/** Report the Solana signature the payout-lease holder broadcast for a
+ *  pending withdrawal (0x30). Stored as the withdrawal's payout record;
+ *  peer watchers verify it against Solana before re-signing. */
+export interface RecordWithdrawalPayout {
+  withdrawalId: bigint;
+  /** The reporting watcher's own address; must equal the envelope signer
+   *  and the withdrawal's payout lease holder. */
+  holder: Address;
+  /** The reported Solana transaction signature bytes. */
+  solanaSignature: Uint8Array;
+}
+
 /** Resolve a standalone event (0x27). YES/NO only — the engine rejects `Void`. */
 export interface ResolveEvent {
   eventId: number;
@@ -979,6 +995,7 @@ export type OperatorAction =
   | { type: "AuthorizeWithdrawal"; data: AuthorizeWithdrawal }
   | { type: "ResolveEvent"; data: ResolveEvent }
   | { type: "ClaimWithdrawalPayout"; data: ClaimWithdrawalPayout }
+  | { type: "RecordWithdrawalPayout"; data: RecordWithdrawalPayout }
   | { type: "UpdateMarketFees"; data: UpdateMarketFees };
 
 /**

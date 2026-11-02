@@ -135,6 +135,7 @@ define_error_kinds! {
     // 90 was SubAccountsInactive, retired with the engine's sub-account switch
     // (sub-accounts are always on); never reassigned.
     91  => WithdrawalPayoutLeaseActive      ~ "A live Solana payout lease on this withdrawal is held by a different watcher, so this ClaimWithdrawalPayout is rejected; the rejected claimer must not sign a payout.",
+    124 => WithdrawalPayoutLeaseNotHeld     ~ "The withdrawal's payout lease is not held by the submitter, so the payout-signature report is rejected; acquire the lease with a payout claim first.",
     // Events and attached conditionals.
     92  => EventAlreadyExists               ~ "CreateEvent for an event id already in the registry.",
     93  => EventNotFound                    ~ "No event exists under this id: nothing can attach to it, resolve it or read it.",

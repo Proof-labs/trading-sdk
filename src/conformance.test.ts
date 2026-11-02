@@ -339,6 +339,15 @@ function toAction(
           holder: bytes(input.holder),
         },
       };
+    case ActionType.RecordWithdrawalPayout:
+      return {
+        type: "RecordWithdrawalPayout",
+        data: {
+          withdrawalId: big(input.withdrawal_id),
+          holder: bytes(input.holder),
+          solanaSignature: bytes(input.solana_signature),
+        },
+      };
     case ActionType.ResolveEvent:
       return {
         type: "ResolveEvent",

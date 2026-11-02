@@ -171,6 +171,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     const CREATE_SUB_ACCOUNT: u8 = 0x28;
     const SUB_ACCOUNT_TRANSFER: u8 = 0x29;
     const CLAIM_WITHDRAWAL_PAYOUT: u8 = 0x2e;
+    const RECORD_WITHDRAWAL_PAYOUT: u8 = 0x30;
     const SET_USER_MARKET_LEVERAGE: u8 = 0x16;
     const CANCEL_CLIENT_ORDER: u8 = 0x18;
     const CANCEL_ALL_ORDERS: u8 = 0x19;
@@ -858,6 +859,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             "claim_withdrawal_payout/basic",
             CLAIM_WITHDRAWAL_PAYOUT,
             json!({ "withdrawal_id": 777u64, "holder": vec![0x05u8; 20] }),
+        ),
+        codec_case(
+            "record_withdrawal_payout/basic",
+            RECORD_WITHDRAWAL_PAYOUT,
+            json!({ "withdrawal_id": 777u64, "holder": vec![0x05u8; 20],
+                    "solana_signature": vec![0x07u8; 64] }),
         ),
         // `outcome` is a NUMERIC_ENUM_FIELDS entry in codec-adapter.ts (the
         // integer-vs-name class the markSourceMode regression belonged to);
