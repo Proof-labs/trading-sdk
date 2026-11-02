@@ -9,6 +9,7 @@ import {
   encodePayloadBytes,
   encodeSignedTx,
   signAndEncode,
+  tickerRefusalMessage,
   validateTicker,
   UNBOUND_CHAIN_ID,
   type Action,
@@ -264,3 +265,27 @@ function indexOf(haystack: Uint8Array, needle: Uint8Array): number {
   }
   throw new Error("needle not found");
 }
+
+describe("the refused character is quoted as the engine quotes it", () => {
+  // The engine formats the character with Rust's `{:?}`.
+  it.each([
+    ["'A", "ticker must start with a capital letter A-Z, not '\\''"],
+    [
+      "A\\",
+      "ticker may hold only A-Z, 0-9 and '-', found '\\\\' at character 1",
+    ],
+    [
+      "A\t",
+      "ticker may hold only A-Z, 0-9 and '-', found '\\t' at character 1",
+    ],
+    [
+      "A​",
+      "ticker may hold only A-Z, 0-9 and '-', found '\\u{200b}' at character 1",
+    ],
+    ['A"', "ticker may hold only A-Z, 0-9 and '-', found '\"' at character 1"],
+    ["A😀", "ticker may hold only A-Z, 0-9 and '-', found '😀' at character 1"],
+  ])("%j", (ticker, message) => {
+    expect(() => validateTicker(ticker)).toThrow(message);
+    expect(tickerRefusalMessage(checkTicker(ticker)!)).toBe(message);
+  });
+});

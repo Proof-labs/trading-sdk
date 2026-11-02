@@ -46,11 +46,11 @@ impl fmt::Display for TickerError {
                 )
             }
             Self::BadStart(c) => {
-                write!(f, "ticker must start with a capital letter A-Z, not '{c}'")
+                write!(f, "ticker must start with a capital letter A-Z, not {c:?}")
             }
             Self::BadChar(c, index) => write!(
                 f,
-                "ticker may hold only A-Z, 0-9 and '-', found '{c}' at character {index}"
+                "ticker may hold only A-Z, 0-9 and '-', found {c:?} at character {index}"
             ),
         }
     }
@@ -217,6 +217,33 @@ mod tests {
         assert_eq!(
             validate_ticker(&format!("A{}", "É".repeat(11))),
             Err(TickerError::BadChar('É', 1))
+        );
+    }
+
+    #[test]
+    fn quotes_the_character_as_the_engine_does() {
+        // The engine writes the character with `{:?}`, which escapes quotes,
+        // backslashes and invisible characters.
+        let text = |t: &str| validate_ticker(t).unwrap_err().to_string();
+        assert_eq!(
+            text("'A"),
+            r"ticker must start with a capital letter A-Z, not '\''"
+        );
+        assert_eq!(
+            text("A\\"),
+            r"ticker may hold only A-Z, 0-9 and '-', found '\\' at character 1"
+        );
+        assert_eq!(
+            text("A\t"),
+            r"ticker may hold only A-Z, 0-9 and '-', found '\t' at character 1"
+        );
+        assert_eq!(
+            text("A\u{200b}"),
+            r"ticker may hold only A-Z, 0-9 and '-', found '\u{200b}' at character 1"
+        );
+        assert_eq!(
+            text("A\""),
+            r#"ticker may hold only A-Z, 0-9 and '-', found '"' at character 1"#
         );
     }
 

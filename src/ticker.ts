@@ -44,13 +44,40 @@ export function tickerRefusalMessage(reason: TickerRefusal): string {
     case "TooLong":
       return `ticker is ${reason.len} bytes, over the ${MAX_TICKER_LEN}-byte limit`;
     case "BadStart":
-      return `ticker must start with a capital letter A-Z, not '${reason.char}'`;
+      return `ticker must start with a capital letter A-Z, not ${quoteChar(reason.char)}`;
     case "BadChar":
-      return `ticker may hold only A-Z, 0-9 and '-', found '${reason.char}' at character ${reason.index}`;
+      return `ticker may hold only A-Z, 0-9 and '-', found ${quoteChar(reason.char)} at character ${reason.index}`;
   }
 }
 
 const UTF8 = new TextEncoder();
+
+const RUST_ESCAPES: Record<string, string> = {
+  "\0": "\\0",
+  "\t": "\\t",
+  "\r": "\\r",
+  "\n": "\\n",
+  "'": "\\'",
+  "\\": "\\\\",
+};
+
+// Characters Rust's `char::escape_debug` writes as `\u{...}`: control,
+// format, private-use, unassigned and surrogate code points, line and
+// paragraph separators, spaces other than U+0020, and combining marks.
+const RUST_UNPRINTABLE =
+  /^[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\p{Mn}\p{Me}]$|^(?! )\p{Zs}$/u;
+
+/**
+ * Quote `c` the way the engine does: it formats the character with Rust's
+ * `{:?}`, which is `'c'` for an ordinary character and escapes quotes,
+ * backslashes and invisible characters (`'\''`, `'\t'`, `'\u{200b}'`).
+ */
+function quoteChar(c: string): string {
+  const escaped =
+    RUST_ESCAPES[c] ??
+    (RUST_UNPRINTABLE.test(c) ? `\\u{${c.codePointAt(0)!.toString(16)}}` : c);
+  return `'${escaped}'`;
+}
 
 /**
  * Check `ticker` against the rule without throwing. Returns `null` when it
