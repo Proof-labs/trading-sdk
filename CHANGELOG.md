@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [9.1.0] — 2026-11-02
+
 ### Added
 
 - **`reads().oracleHealth({ market })`** requests one market's oracle health
@@ -1836,7 +1838,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.1.0...HEAD
+[9.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.0.0...npm-v9.1.0
 [9.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...npm-v9.0.0
 [8.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.0.0...npm-v8.1.0
 [8.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.3.0...npm-v8.0.0
