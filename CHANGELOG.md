@@ -7,7 +7,41 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`reads().oracleHealth({ market })`** requests one market's oracle health
+  (`GET /v1/oracle/health?market={id}`, api-gateway 10.3.0+): the same object
+  with only that market's row, instead of the whole feeder state. Without
+  `market` the request is unchanged. The cut drops `failover` and `inventory`,
+  and the row's `status` is the feeder's 60-second rule, not the engine's
+  per-market age gate: it is for a UI freshness poll; monitoring and maker
+  guards read the bare path. Additive (MINOR).
+
+### Fixed
+
+- **A market ticker is checked before a market creation is signed.** A
+  ticker is 1 to 24 bytes of capital letters A-Z, digits 0-9 and hyphens,
+  starting with a capital letter (`^[A-Z][A-Z0-9-]{0,23}$`); a market cannot
+  be renamed, and DevNet already has a `TEST3.` market from a typo. The
+  TypeScript SDK refuses a bad ticker with `InvalidTickerError` (new export,
+  with `validateTicker`, `checkTicker`, `tickerRefusalMessage`,
+  `TickerRefusal` and `MAX_TICKER_LEN`) on every encode path: a direct
+  `CreateMarket`, and a `CreateMarket` proposed or approved through
+  governance, alone or inside an admin `Batch`. The Python `encode_action`
+  raises `ValueError` for the same payloads, and the Rust crate gains
+  `proof_trading_sdk::ticker`. The refusal text matches the engine's. This is
+  a copy of `proof_wire::ticker::validate_ticker`
+  ([Proof-labs/exchange#1351](https://github.com/Proof-labs/exchange/pull/1351)),
+  to be replaced by it at the next proof-wire upgrade. Decoding never checks
+  the ticker, so markets created before the rule still read back, and
+  `adminProposalContentHash` still hashes a proposal already on chain. No
+  wire change; the new exports make this a MINOR change.
+
+## [9.0.0] — 2026-10-31
+
 ### Breaking changes
+
+- **Financial reads (MAJOR for npm):** `FinancialState` is a format-discriminated union; format 3 has no retired PLP record. Narrow `state.format === 1` before accessing `state.plp`. `queryFinancialState` now accepts format 3.
 
 - **proof-wire 9.0.0, for exchange 2.21.0 (protocol 9.0).** The Rust crate
   pins proof-wire 9 (tag v9.0.0, commit `8857f3d3`). The engine retired its
@@ -46,12 +80,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   surface only; decoded values and the wire are unchanged. In Python the
   `PendingTriggerDiscardReason` alias becomes `str`.
 
+- **Wire-typed reads decode in the Rust core** (ADR 0001, now for reads).
+  `queryMarkets`, `queryEvents`, `queryEvent`, `queryAccount`,
+  `queryMarketsSnapshot` and the proposal's `AdminAction`
+  (`decodeAdminAction`, `decodeProposalDisplayInfo`, `decodeProposalPage`)
+  decode as their proof-wire 9 types through WASM instead of hand-written
+  positional decoders. The decode is as strict as the wire type, except that
+  fields a later engine appends to a market, event or account record (and to
+  their fee-tier, attachment, position and binding-scenario rows) are ignored,
+  as the markets snapshot already does. A legacy short `AccountInfo` /
+  position tuple is refused until the SDK re-pins the wire. `MarketConfig` and `AccountInfo` optional
+  fields are now always filled. Refusals carry the core's message, prefixed
+  `governance decode: <field>:` or `<Read> decode:`. The exported governance
+  decoders need `await ready()` first, like the codec (MAJOR).
+
+- **One binary book per event only** (#225). `EventInfo.ebnMarket` is removed
+  and the event reads and markets snapshot refuse a two-book event row, in
+  TypeScript, Rust and Python. Rust `market_snapshot::SnapshotEvent` is
+  removed; `MarketsSnapshot.events` is the wire `EventInfo` (MAJOR).
+
 ### Added
 
-- **`reads().oracleHealth({ market })`** requests one market's oracle health
-  (`GET /v1/oracle/health?market={id}`, api-gateway 10.1.0+): the same object
-  with only that market's row, instead of the whole feeder state. Without
-  `market` the request is unchanged.
+- **Open interest in the markets snapshot** (exchange#1273): long and short
+  open interest per market that has had positions, at the snapshot's height.
+  `MarketsSnapshot.openInterest` in TypeScript and `open_interest` in Rust are
+  absent (`undefined` / `None`) on a node that does not serve it, and an empty
+  list when no market has any. A repeated or out-of-order market refuses the
+  whole read; Rust reports the order fault as the new
+  `SnapshotError::UnorderedOpenInterest`. Additive on the wire (MINOR), but
+  code that builds the Rust `MarketsSnapshot` struct field by field must add
+  `open_interest`, and an exhaustive `match` on `SnapshotError` must handle the
+  new variant (MAJOR for the Rust crate).
+- **Python `ExchangeClient.markets_snapshot()`** reads `GET /v1/markets-snapshot`
+  bound to the client's chain and returns a `MarketsSnapshot` dataclass with
+  markets (in the `markets()` shape), events and open interest. It decodes
+  through the Rust core (`decode_markets_snapshot`), so it refuses exactly what
+  Rust refuses, as `CodecError`. The body is streamed and refused past
+  `MAX_MARKETS_SNAPSHOT_BYTES` (1 MiB) before it is buffered whole, and a
+  compressed body is refused unread. `timeout` (10 seconds by default) limits
+  each network wait and, between body chunks, the whole read; it is not a
+  whole-call deadline. Additive (MINOR).
 - **`queryFunding(market)`** reads one market's funding state at
   `GET /v1/funding/{market}` (the gateway's `fundingRate` read): funding rate,
   cumulative funding, last funding time, mark price EWMA, oracle price,
@@ -95,6 +163,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `fundReserve`, `fundRealized`, `fundAbsorbed`; `LiquidationProgressReported`
   `remainderCode`, `remainderRefusal`.
 
+### Changed
+
+- An `order_rejected` event backfilled from history after a reconnect is
+  typed `orderUpdate`, not `accountEvent`, in TypeScript and Python. This
+  matches api-gateway 10.2.0, which types live rejections the same way
+  ([api-gateway #246](https://github.com/Proof-labs/api-gateway/pull/246)), so a
+  rejection gets one frame type whether it arrived live or from history.
+  Code that handles rejections under `accountEvent` should switch on
+  `eventType`. A rejection's payload need not carry an `order_id`. No wire
+  change.
+
 ### Removed
 
 - **The per-market `partialLiquidationEnabled` flag** (`partial_liquidation_enabled` in
@@ -106,7 +185,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deploy together with exchange 2.20.0 (proof-wire 8.0.0); older engines' market rows no
   longer decode.
 
+- **`GatewayPendingTriggerRow`, `GatewayTriggerPositionRow` and
+  `GatewayTriggerLimbJson`.** They described a `pending` section and a
+  `market_kind` field on `GET /v1/triggers/{owner}` that the node never
+  served: the route returns the bare `PositionTriggerInfo` list, which
+  `positionTriggers()` already decodes (api-gateway 10.6.0 corrects its
+  spec the same way). Breaking (MAJOR) for code that imports the types; no
+  runtime change.
+
 ### Fixed
+
+- `SetOperatorReceiptRegistry` decodes in `decodeSigningMessage` and on
+  proposal reads: `operatorKeys` comes back as 32-byte `Uint8Array`s (#292).
+
+- Building a `SetOperatorReceiptRegistry` proposal now refuses a threshold outside
+  `1..=operatorKeys.length`, the same check proposal reads apply.
+
+- Account and financial position decoders now reject nonzero entry-cost remainders greater than or equal to position size. Legacy positions retain zero; this intentionally tightens existing reads.
 
 - Trigger reads no longer fail on an engine label this SDK version does not
   know. A reason, limb state, availability kind, executed result and history
@@ -117,8 +212,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   market with a one-sided book (`no_two_sided_quote`) used to fail the
   owner-history decoder, which made the account's trigger history
   unreadable; rows like it stay in history. Still refused: a missing, empty
-  or non-string label, an unknown event type, an unknown stored limb kind,
-  and executed quantities that do not add up. No wire change.
+  or non-string label and executed quantities that do not add up. No wire
+  change.
+
+- A stored trigger limb kind and a trigger history event type this SDK
+  version does not know no longer fail the whole read. `StoredTriggerLimb.kind`
+  is now `StoredTriggerKind` (the known kinds or any later name, returned
+  verbatim); only a slot holding the other known kind (`TakeProfit` in the
+  stop-loss slot) is refused as corrupt. A history row with an unknown event
+  type is skipped and the rest of the page is returned; a known type on the
+  wrong route (a shared market event in owner history) is still refused.
+  Same in Python. No wire change.
 
 ## [8.1.0] — 2026-10-26
 
@@ -1732,7 +1836,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.0.0...HEAD
+[9.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...npm-v9.0.0
 [8.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.0.0...npm-v8.1.0
 [8.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.3.0...npm-v8.0.0
 [7.3.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.2.0...npm-v7.3.0

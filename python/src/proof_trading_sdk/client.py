@@ -13,6 +13,7 @@ import httpx
 import msgpack
 
 from proof_trading_sdk._native import (
+    MAX_MARKETS_SNAPSHOT_BYTES,
     SigningHandle,
     chain_id_from_string,
     generate_keypair,
@@ -28,6 +29,7 @@ from proof_trading_sdk.actions import (
     encode_action,
 )
 from proof_trading_sdk.config import SdkConfig, load_config
+from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
 from proof_trading_sdk.errors import (
     AuthenticationError,
     CodecError,
@@ -840,10 +842,7 @@ class ExchangeClient:
         if value is None:
             return None
         row = cls._trigger_tuple(value, "StoredTriggerLimb", 7)
-        if row[1] not in ("StopLoss", "TakeProfit"):
-            raise ProofTradingSdkError(
-                f"trigger decode: unknown TriggerKind {row[1]!r}"
-            )
+        cls._trigger_label(row[1], "TriggerKind")
         cls._trigger_label(row[5], "TriggerLimbState")
         limb_id = cls._trigger_uint(row[0], "limb_id")
         trigger_price = cls._trigger_uint(row[2], "trigger_price")
@@ -942,9 +941,11 @@ class ExchangeClient:
         take_profit = cls._decode_trigger_limb(bracket[9])
         if stop_loss is None and take_profit is None:
             raise ProofTradingSdkError("trigger decode: bracket has no limbs")
-        if stop_loss is not None and stop_loss["kind"] != "StopLoss":
+        # A later kind passes through; a slot holding the other known kind is
+        # a corrupt row.
+        if stop_loss is not None and stop_loss["kind"] == "TakeProfit":
             raise ProofTradingSdkError("trigger decode: stop_loss has wrong kind")
-        if take_profit is not None and take_profit["kind"] != "TakeProfit":
+        if take_profit is not None and take_profit["kind"] == "StopLoss":
             raise ProofTradingSdkError("trigger decode: take_profit has wrong kind")
         if stop_loss is not None and take_profit is not None and (
             stop_loss["limb_id"] == take_profit["limb_id"]
@@ -1078,7 +1079,7 @@ class ExchangeClient:
 
     @staticmethod
     def _decode_market_config(raw: t.Sequence[t.Any]) -> dict[str, t.Any]:
-        """Decode a market-config tuple (mirrors the TS ``decodeMarketConfig``)."""
+        """Decode a market-config tuple (the wire ``MarketConfig``)."""
 
         def opt(i: int) -> int | None:
             return int(raw[i]) if len(raw) > i and raw[i] is not None else None
@@ -1153,6 +1154,82 @@ class ExchangeClient:
         return [
             self._decode_market_config(m) for m in raw if isinstance(m, (list, tuple))
         ]
+
+    def markets_snapshot(self, timeout: float = 10.0) -> MarketsSnapshot:
+        """Every market, event and per-market open interest from one committed
+        state view, bound to this client's chain.
+
+        A wrong chain, an uncommitted height or any malformed part refuses the
+        whole read with :class:`CodecError`; nothing partial is returned. The
+        client must be bound to a real chain, not the zero binding.
+
+        The body is requested and read uncompressed, and refused once it passes
+        ``MAX_MARKETS_SNAPSHOT_BYTES``, before it is buffered whole; a
+        compressed body is refused unread. ``timeout`` limits each network wait
+        and, checked between body chunks, the whole read, so a body that
+        trickles in fails with :class:`TransportError`. It is not a whole-call
+        deadline: httpx has none, so response headers that arrive slowly enough
+        can hold the call longer. Only HTTP 200 supplies data; redirects are
+        not followed.
+        """
+        url = urljoin(self._gateway_url, "/v1/markets-snapshot")
+        deadline = time.monotonic() + timeout
+        body = bytearray()
+        try:
+            with self._http.stream(
+                "GET",
+                url,
+                headers={"Accept-Encoding": "identity"},
+                timeout=httpx.Timeout(timeout),
+                follow_redirects=False,
+            ) as resp:
+                self._parse_rate_limits(resp)
+                encoding = resp.headers.get("Content-Encoding", "identity").lower()
+                identity = encoding in ("", "identity")
+                if resp.status_code != 200:
+                    # Map the status with whatever prefix of an uncompressed
+                    # error body arrives within 200 bytes and the deadline.
+                    prefix = b""
+                    for chunk in resp.iter_bytes() if identity else ():
+                        prefix += chunk[: 200 - len(prefix)]
+                        if len(prefix) >= 200 or time.monotonic() > deadline:
+                            break
+                    headers = resp.headers.copy()
+                    for name in ("Content-Encoding", "Content-Length"):
+                        headers.pop(name, None)
+                    self._check_response(
+                        httpx.Response(
+                            resp.status_code,
+                            headers=headers,
+                            content=prefix,
+                            request=resp.request,
+                        )
+                    )
+                    raise TransportError(
+                        f"markets snapshot: unexpected HTTP {resp.status_code}",
+                        status_code=resp.status_code,
+                    )
+                if not identity:
+                    raise CodecError(
+                        f"markets snapshot: refused content encoding {encoding!r}"
+                    )
+                # No decoder runs: every encoding but identity is refused above.
+                for chunk in resp.iter_bytes():
+                    if len(body) + len(chunk) > MAX_MARKETS_SNAPSHOT_BYTES:
+                        raise CodecError(
+                            "markets snapshot: response exceeds "
+                            f"{MAX_MARKETS_SNAPSHOT_BYTES} bytes"
+                        )
+                    body += chunk
+                    if time.monotonic() > deadline:
+                        raise TransportError(
+                            f"markets snapshot: not complete within {timeout}s"
+                        )
+        except httpx.TimeoutException as e:
+            raise TransportError(f"markets snapshot: timed out: {e}") from e
+        except httpx.RequestError as e:
+            raise TransportError(f"markets snapshot: request failed: {e}") from e
+        return decode_markets_snapshot(bytes(body), self._chain_id)
 
     def market_status(self, market: int) -> dict[str, t.Any]:
         resp = self._get(f"/v1/market-status/{market}")

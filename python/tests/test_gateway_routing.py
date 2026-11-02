@@ -463,6 +463,31 @@ def test_position_triggers_return_state_and_availability_verbatim():
     assert rows[0]["availability"] == {"kind": "Snoozed"}
 
 
+def test_position_triggers_return_a_later_limb_kind_verbatim():
+    row = _trigger_row_with_reason("X")
+    row[0][8][1] = "TrailingStop"
+    rows = _client(lambda _request: _info_response([row])).position_triggers(
+        "ab" * 20
+    )
+    assert rows[0]["bracket"]["stop_loss"]["kind"] == "TrailingStop"
+
+
+# The stop-loss slot holding the other known kind is a corrupt row.
+@pytest.mark.parametrize(
+    ("kind", "match"),
+    [
+        ("TakeProfit", "stop_loss has wrong kind"),
+        ("", "TriggerKind must be a non-empty string"),
+        (17, "TriggerKind must be a non-empty string"),
+    ],
+)
+def test_position_triggers_refuse_a_swapped_or_malformed_limb_kind(kind, match):
+    row = _trigger_row_with_reason("X")
+    row[0][8][1] = kind
+    with pytest.raises(ProofTradingSdkError, match=match):
+        _client(lambda _request: _info_response([row])).position_triggers("ab" * 20)
+
+
 @pytest.mark.parametrize("bad", ["", 17, {"A": "x", "B": "y"}, {"A": 17}])
 def test_position_triggers_refuse_a_malformed_availability(bad):
     row = _trigger_row_with_reason("X")

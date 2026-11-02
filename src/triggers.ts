@@ -8,7 +8,6 @@ import type {
   StoredTriggerLimb,
   TriggerEffectiveAvailability,
   TriggerEvaluation,
-  TriggerKind,
   TriggerLimb,
   TriggerMarketConfig,
   TriggerMarketConfigInfo,
@@ -212,19 +211,6 @@ function bytes20(value: unknown, name: string): Uint8Array {
   return bytes;
 }
 
-const KINDS = new Set<TriggerKind>(["StopLoss", "TakeProfit"]);
-
-function exactEnum<T extends string>(
-  value: unknown,
-  allowed: Set<T>,
-  name: string,
-): T {
-  if (typeof value !== "string" || !allowed.has(value as T)) {
-    throw new Error(`trigger decode: unknown ${name} ${String(value)}`);
-  }
-  return value as T;
-}
-
 function label(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`trigger decode: ${name} must be a non-empty string`);
@@ -273,7 +259,7 @@ function decodeStoredLimb(value: unknown): StoredTriggerLimb | null {
   }
   return {
     limbId,
-    kind: exactEnum(row[1], KINDS, "TriggerKind"),
+    kind: label(row[1], "TriggerKind"),
     triggerPrice,
     maxSlippageBps,
     clientTriggerId,
@@ -400,10 +386,12 @@ function decodeBracket(value: unknown): PositionTriggerBracket {
   if (stopLoss === null && takeProfit === null) {
     throw new Error("trigger decode: bracket has no limbs");
   }
-  if (stopLoss !== null && stopLoss.kind !== "StopLoss") {
+  // A later kind passes through; a slot holding the other known kind is a
+  // corrupt row.
+  if (stopLoss !== null && stopLoss.kind === "TakeProfit") {
     throw new Error("trigger decode: stopLoss has wrong kind");
   }
-  if (takeProfit !== null && takeProfit.kind !== "TakeProfit") {
+  if (takeProfit !== null && takeProfit.kind === "StopLoss") {
     throw new Error("trigger decode: takeProfit has wrong kind");
   }
   if (

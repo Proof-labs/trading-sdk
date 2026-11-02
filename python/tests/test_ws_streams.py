@@ -292,6 +292,19 @@ def test_reconnect_backfills_the_outage_exactly_once_in_order(monkeypatch) -> No
     assert statuses == [RecoveryStatus("backfilled", 2)]
 
 
+def test_a_backfilled_order_rejection_is_typed_as_an_order_update(monkeypatch) -> None:
+    rejected = ev(11, "RR", 0, "order_rejected")
+    first = RecoverySocket([snap(10), live_frame(A)])
+    second = RecoverySocket([snap(12)])
+    frames, _, _ = run_stream(
+        monkeypatch, [first, second], [indexed(12), page(A, rejected, D)], 5
+    )
+    assert [(f["eventType"], f["type"]) for f in frames if f.get("backfilled")] == [
+        ("order_rejected", "orderUpdate"),
+        ("fees_collected", "accountEvent"),
+    ]
+
+
 def test_reconnect_retries_until_history_indexes_the_snapshot_height(monkeypatch) -> None:
     # No live frame arrives to show the lag: only the snapshot height does.
     first = RecoverySocket([snap(10), live_frame(A)])

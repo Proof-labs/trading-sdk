@@ -16,6 +16,7 @@ extern crate proof_trading_sdk as core_sdk;
 use core_sdk::codec;
 use core_sdk::crypto;
 use core_sdk::governance;
+use core_sdk::reads::{self, Shape, ACCOUNT_INFO, EVENT_INFO, MARKET_CONFIG};
 use core_sdk::types::ExecError;
 use wasm_bindgen::prelude::*;
 
@@ -68,6 +69,85 @@ pub fn decode_payload(action_type: u8, payload: &[u8]) -> Result<JsValue, JsErro
 #[wasm_bindgen]
 pub fn reject_floats(bytes: &[u8]) -> Result<(), JsError> {
     core_sdk::msgpack::reject_floats(bytes).map_err(|e| JsError::new(&e.to_string()))
+}
+
+fn to_bigint_js<T: serde::Serialize>(value: &T) -> Result<JsValue, JsError> {
+    let ser = serde_wasm_bindgen::Serializer::new().serialize_large_number_types_as_bigints(true);
+    value
+        .serialize(&ser)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Node read responses whose type is in the wire contract.
+#[wasm_bindgen]
+#[derive(Clone, Copy)]
+pub enum ReadKind {
+    /// `Vec<MarketConfig>` (`GET /v1/markets`).
+    Markets = 0,
+    /// `Vec<EventInfo>` (`GET /v1/events`).
+    Events = 1,
+    /// `Option<EventInfo>` (`GET /v1/event/{id}`).
+    Event = 2,
+    /// `AccountInfo` (`GET /v1/account/{owner}`).
+    Account = 3,
+    /// One `AdminAction`, as stored on a proposal.
+    AdminAction = 4,
+}
+
+fn decode_as<T: serde::de::DeserializeOwned + serde::Serialize>(
+    bytes: &[u8],
+) -> Result<JsValue, JsError> {
+    let value: T = rmp_serde::from_slice(bytes).map_err(|e| JsError::new(&e.to_string()))?;
+    to_bigint_js(&value)
+}
+
+fn decode_records<T: serde::de::DeserializeOwned + serde::Serialize>(
+    bytes: &[u8],
+    shape: &Shape,
+) -> Result<JsValue, JsError> {
+    let value: T = reads::decode(bytes, shape).map_err(|e| JsError::new(&e.to_string()))?;
+    to_bigint_js(&value)
+}
+
+/// Decode a node read response into serde-shaped JS (u64/i64 as BigInt).
+/// Floats, extensions, duplicate keys and trailing bytes are refused first.
+/// Fields an engine appends to a stored record after the pinned wire are
+/// ignored; an `AdminAction` is decoded exactly.
+#[wasm_bindgen]
+pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
+    core_sdk::msgpack::reject_floats(bytes).map_err(|e| JsError::new(&e.to_string()))?;
+    match kind {
+        ReadKind::Markets => decode_records::<Vec<core_sdk::types::MarketConfig>>(
+            bytes,
+            &Shape::List(&MARKET_CONFIG),
+        ),
+        ReadKind::Events => {
+            decode_records::<Vec<core_sdk::types::EventInfo>>(bytes, &Shape::List(&EVENT_INFO))
+        }
+        ReadKind::Event => decode_records::<Option<core_sdk::types::EventInfo>>(
+            bytes,
+            &Shape::Optional(&EVENT_INFO),
+        ),
+        ReadKind::Account => decode_records::<core_sdk::query::AccountInfo>(bytes, &ACCOUNT_INFO),
+        ReadKind::AdminAction => decode_as::<governance::AdminAction>(bytes),
+    }
+}
+
+/// Decode a complete `GET /v1/markets-snapshot` HTTP body bound to
+/// `chain_id`, via the core's `market_snapshot::decode_snapshot`.
+#[wasm_bindgen]
+pub fn decode_markets_snapshot(body: &[u8], chain_id: &[u8]) -> Result<JsValue, JsError> {
+    let chain = core_sdk::market_snapshot::ChainBinding::new(arr32(chain_id, "chain_id")?)
+        .ok_or_else(|| JsError::new("chain_id must name a chain, not the zero binding"))?;
+    let snapshot = core_sdk::market_snapshot::decode_snapshot(body, chain).map_err(|e| {
+        use core_sdk::market_snapshot::SnapshotError;
+        JsError::new(match e {
+            SnapshotError::WrongChain => "market snapshot: wrong chain",
+            SnapshotError::Uncommitted => "market snapshot: uncommitted height",
+            _ => "market snapshot: malformed complete response",
+        })
+    })?;
+    to_bigint_js(&snapshot)
 }
 
 /// Build the deterministic signing message

@@ -102,13 +102,16 @@ describe("proof-wire 8 admin actions", () => {
   });
 
   it.each([
-    [[0, []], /predecessor/],
+    [[0, []], /sequence 0 must be non-zero/],
     [[null, [pair(2, 0)]], /rate/],
     [[null, [pair(2, 10_000)]], /rate/],
-    [[null, [[1, 2, 3, 5_000, "RemoveOnResolution"]]], /settlementReference/],
-    [[null, [pair(3), pair(2)]], /ascend/],
-    [[null, [pair(2), pair(2)]], /ascend/],
-    [[null, [[1, 2, 1, 5_000, "Keep"]]], /resolution/],
+    [
+      [null, [[1, 2, 3, 5_000, "RemoveOnResolution"]]],
+      /settlement reference 3 must be its perpetual/,
+    ],
+    [[null, [pair(3), pair(2)]], /must exceed the previous conditional/],
+    [[null, [pair(2), pair(2)]], /repeats conditional/],
+    [[null, [[1, 2, 1, 5_000, "Keep"]]], /unknown variant `Keep`/],
   ])("refuses a non-canonical margin-offset policy %j", (payload, error) => {
     expect(() => decodeAdminAction({ SetMarginOffsetPolicy: payload })).toThrow(
       error,
@@ -117,7 +120,7 @@ describe("proof-wire 8 admin actions", () => {
 
   it("refuses a malformed ExecInsuranceFund", () => {
     expect(() => decodeAdminAction({ ExecInsuranceFund: [256, [1]] })).toThrow(
-      /poolId/,
+      /integer `256`, expected u8/,
     );
     expect(() => decodeAdminAction({ ExecInsuranceFund: [2] })).toThrow();
   });

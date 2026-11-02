@@ -35,14 +35,12 @@ import {
   decodeAdminAction,
   decodeAdminSignerRegistry,
   decodeAdminSignerRegistryInfo,
-  decodeEventInfo,
   decodeNodeVersion,
   decodeProposalPage,
   decodeProposalDisplayInfo,
   decodeProposalStatus,
   decodeUpgradesInfo,
 } from "./governance-query.js";
-import { Outcome } from "./types.js";
 
 // Matches the client's decoder options: only 64-bit msgpack ints become
 // bigint, so small values arrive as `number` — the case the decoders
@@ -291,7 +289,7 @@ describe("decodeAdminAction", () => {
 
   it("rejects a non-enum value", () => {
     expect(() => decodeAdminAction("CreateMarket")).toThrow(
-      /not an enum variant/,
+      /governance decode: action: invalid type: unit variant/,
     );
   });
 
@@ -327,7 +325,7 @@ describe("decodeAdminAction", () => {
     const short = Array.from({ length: 19 }, () => 0xc1);
     expect(() =>
       decodeAdminAction({ CancelAllOrdersForAccount: [short, 7] }),
-    ).toThrow(/owner is 19 bytes, expected 20/);
+    ).toThrow(/invalid length 19, expected an array of length 20/);
   });
 
   it("decodes the engine's frozen UpdateAuthoritySet bytes, add and remove", () => {
@@ -347,7 +345,7 @@ describe("decodeAdminAction", () => {
     });
     expect(() =>
       decodeAdminAction({ UpdateAuthoritySet: ["NotADomain", [], []] }),
-    ).toThrow(/not a known AuthorityDomain/);
+    ).toThrow(/unknown variant `NotADomain`/);
   });
 
   it("decodes the engine's frozen attach bytes (admin tag 10)", () => {
@@ -446,9 +444,9 @@ describe("decodeAdminAction", () => {
     // proposal the chain would never execute.
     expect(() =>
       decodeAdminAction({ Batch: [{ UpdateAdminSignerRegistry: [2, []] }] }),
-    ).toThrow(/AdminBatchItem/);
+    ).toThrow(/expected `CreateMarket` or `AttachConditional`/);
     expect(() => decodeAdminAction({ Batch: [{ Batch: [] }] })).toThrow(
-      /AdminBatchItem/,
+      /expected `CreateMarket` or `AttachConditional`/,
     );
   });
 });
@@ -675,14 +673,14 @@ describe("byte-field validation", () => {
     const action = raw[12] as { CreateMarket: unknown[] };
     action.CreateMarket.push("trailing");
     expect(() => decodeProposalDisplayInfo(raw)).toThrow(
-      /createMarket has 13 fields, expected exactly 12/,
+      /proposal\.action: array had incorrect length, expected 12/,
     );
 
     const nonString = validProposalRaw();
     const nonStringAction = nonString[12] as { CreateMarket: unknown[] };
     nonStringAction.CreateMarket[10] = null;
     expect(() => decodeProposalDisplayInfo(nonString)).toThrow(
-      /createMarket\.ticker is not a string/,
+      /proposal\.action: invalid type: unit value, expected a string/,
     );
   });
 
@@ -757,7 +755,7 @@ describe("byte-field validation", () => {
       ],
     };
     expect(withField(12, action)).toThrow(
-      /createMarket\.signer is 19 bytes, expected 20/,
+      /proposal\.action: invalid length 19, expected 20 bytes/,
     );
   });
 
@@ -787,76 +785,6 @@ describe("byte-field validation", () => {
     expect(() =>
       decodeProposalStatus({ Rejected: [new Array(21).fill(1)] }),
     ).toThrow(/Rejected\.by is 21 bytes, expected 20/);
-  });
-});
-
-describe("decodeEventInfo (E1 golden vector)", () => {
-  // The exact bytes emitted by exchange-core query.rs `query_event` for event
-  // 700 (books 70000/70001, "Will the Fed cut rates?", Trading). Shared with
-  // the engine test — a read-model field reorder breaks both. DO NOT edit by
-  // hand; regenerate from the engine if the EventInfo layout changes.
-  const GOLDEN =
-    "9bcd02bcce00011170ce00011171b757696c6c2074686520466564206375742072617465733fcf0000019df90ef400cd03e8a754726164696e67cf0000019dc95fec0000c090";
-  // Event 91 as the markets snapshot serves it: one conditional attached on
-  // perp 15 with its books at 9100/9101, binaries at 9102/9103.
-  const ATTACHED =
-    "9b5bcd238ecd238fad646f6573206974206c616e643fce000f4240cd03e8a754726164696e670500c091930fcd238ccd238d";
-
-  it("decodes the stored EventInfo positionally", () => {
-    const info = decodeEventInfo(decodeVector(GOLDEN));
-    expect(info.eventId).toBe(700);
-    expect(info.ebyMarket).toBe(70000);
-    expect(info.ebnMarket).toBe(70001);
-    expect(info.question).toBe("Will the Fed cut rates?");
-    expect(info.settlementMs).toBe(1778000000000n);
-    expect(info.resolutionWindowMs).toBe(1000n);
-    expect(info.status).toEqual({ kind: "Trading" });
-    expect(info.createdMs).toBe(1777200000000n);
-    expect(info.resolvedMs).toBe(0n);
-    expect(info.oracleSource).toBeUndefined();
-    expect(info.attachedConditionals).toEqual([]);
-  });
-
-  it("decodes an event's attachment list", () => {
-    const info = decodeEventInfo(decodeVector(ATTACHED));
-    expect(info.eventId).toBe(91);
-    expect(info.ebyMarket).toBe(9102);
-    expect(info.ebnMarket).toBe(9103);
-    expect(info.attachedConditionals).toEqual([
-      { underlyingMarket: 15, cpyMarket: 9100, cpnMarket: 9101 },
-    ]);
-  });
-
-  // The one-book shape: the same event as the engine pins it in query.rs
-  // (EVENT_INFO_GOLDEN_VECTOR), with no No book. DO NOT edit by hand.
-  const ONE_BOOK =
-    "9acd02bcce00011170b757696c6c2074686520466564206375742072617465733fcf0000019df90ef400cd03e8a754726164696e67cf0000019dc95fec0000c090";
-
-  it("decodes the one-book record with no No book", () => {
-    const info = decodeEventInfo(decodeVector(ONE_BOOK));
-    expect(info.eventId).toBe(700);
-    expect(info.ebyMarket).toBe(70000);
-    expect(info.ebnMarket).toBeUndefined();
-    expect(info.question).toBe("Will the Fed cut rates?");
-    expect(info.settlementMs).toBe(1778000000000n);
-    expect(info.status).toEqual({ kind: "Trading" });
-    expect(info.resolvedMs).toBe(0n);
-    expect(info.oracleSource).toBeUndefined();
-    expect(info.attachedConditionals).toEqual([]);
-  });
-
-  it("refuses a two-book record whose No book is missing", () => {
-    // A nil where the two-book shape keeps the No book is neither shape.
-    expect(() =>
-      decodeEventInfo(decodeVector(GOLDEN.replace("ce00011171", "c0"))),
-    ).toThrow(/ebnMarket/);
-  });
-
-  it("tolerates the pre-attachment ten-field record", () => {
-    const info = decodeEventInfo(
-      decodeVector(GOLDEN.slice(0, -2).replace(/^9b/, "9a")),
-    );
-    expect(info.attachedConditionals).toEqual([]);
   });
 });
 

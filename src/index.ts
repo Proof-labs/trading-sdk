@@ -21,6 +21,7 @@ export {
   type OracleUpdateComposite,
   type MarketOrder,
   type MarketsSnapshot,
+  type MarketOpenInterest,
   type Deposit,
   type Withdraw,
   type CreateMarket,
@@ -109,6 +110,7 @@ export {
   type OrderbookLevel,
   type OpenOrder,
   type TriggerKind,
+  type StoredTriggerKind,
   type TriggerLimbState,
   type TriggerOutcomeReason,
   type TriggerEvaluation,
@@ -184,6 +186,14 @@ export {
 } from "./triggers.js";
 
 export { validateSetOracleGuards } from "./oracle-guards.js";
+export {
+  MAX_TICKER_LEN,
+  InvalidTickerError,
+  checkTicker,
+  tickerRefusalMessage,
+  validateTicker,
+  type TickerRefusal,
+} from "./ticker.js";
 export { validateScheduleUpgrade } from "./upgrade-plan.js";
 export {
   INITIAL_TAKEOVER_DISCOUNT_BPS,
@@ -399,9 +409,6 @@ export {
   type CandleHistoryParams,
   type AccountEventsParams,
   type ExplorerBlocksParams,
-  type GatewayTriggerLimbJson,
-  type GatewayPendingTriggerRow,
-  type GatewayTriggerPositionRow,
 } from "./gateway-reads.js";
 export {
   decodeSubAccountList,

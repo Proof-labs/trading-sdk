@@ -20,7 +20,9 @@ pub mod governance;
 pub mod market_snapshot;
 pub mod msgpack;
 pub mod query;
+pub mod reads;
 pub mod signer;
+pub mod ticker;
 pub mod wire;
 
 pub use errors::{decode_exec_error_kind, error_code_manifest, DecodedExecErrorKind, ErrorKind};

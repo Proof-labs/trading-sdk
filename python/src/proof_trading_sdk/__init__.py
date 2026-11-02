@@ -126,6 +126,11 @@ from proof_trading_sdk.trigger_history import (
     decode_position_trigger_history_page,
     decode_trigger_market_history_page,
 )
+from proof_trading_sdk.markets_snapshot import (
+    MarketOpenInterest,
+    MarketsSnapshot,
+    decode_markets_snapshot,
+)
 from proof_trading_sdk.trigger_config import (
     TriggerMarketConfig,
     PendingTriggerMarketConfig,
@@ -225,6 +230,9 @@ __all__ = [
     "TriggerMarketConfigState",
     "TriggerMarketConfigInfo",
     "decode_trigger_market_config_infos",
+    "MarketOpenInterest",
+    "MarketsSnapshot",
+    "decode_markets_snapshot",
     "SdkConfig",
     "load_config",
     "AccountEventStream",

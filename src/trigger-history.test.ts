@@ -268,10 +268,29 @@ describe("trigger history reasons pass through", () => {
     }
   });
 
-  it("keeps event type and quantities strict", () => {
-    const type = deferredEvent("x");
-    type.event_type = "position_trigger_snoozed";
-    expect(() => ownerPage(type)).toThrow(/invalid for owner history/);
+  it("skips a later event type and keeps the rest of the page", () => {
+    const later = deferredEvent("x");
+    later.event_type = "position_trigger_snoozed";
+    expect(ownerPage(later).triggerEvents).toEqual([]);
+    const page = decodePositionTriggerHistoryPage(
+      { trigger_events: [executedEvent(), later, setEvent()], next_cursor: "" },
+      OWNER,
+      7,
+    );
+    expect(page.triggerEvents.map((event) => event.eventType)).toEqual([
+      "position_trigger_executed",
+      "position_triggers_set",
+    ]);
+    const shared: { event_type: string } = marketEvent(
+      "trigger_market_deferred",
+    );
+    shared.event_type = "trigger_market_snoozed";
+    expect(marketPage(shared).triggerMarketEvents).toEqual([]);
+  });
+
+  it("keeps route scope and quantities strict", () => {
+    const shared = marketEvent("trigger_market_deferred");
+    expect(() => ownerPage(shared)).toThrow(/invalid for owner history/);
     const quantities = executedWith("no_fill", "x");
     quantities.payload.filled_quantity = "1";
     quantities.payload.residual_quantity = "4";

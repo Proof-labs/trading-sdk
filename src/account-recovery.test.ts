@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
   ExchangeClient,
+  type AccountEventFrame,
   type AccountFrame,
   type AccountRecoveryStatus,
   type WebSocketLike,
@@ -587,6 +588,30 @@ it("matches a legacy live settlement name to the canonical history name", async 
     "12-1*",
   ]);
   expect(t.statuses).toEqual([{ kind: "backfilled", delivered: 2 }]);
+  t.c.disconnect();
+});
+
+it("types a backfilled order rejection as an order update, like the live feed", async () => {
+  const t = setup();
+  const rejected: Ev = {
+    height: 11,
+    tx: "RR",
+    index: 0,
+    type: "order_rejected",
+  };
+  await t.start(snap(10));
+  t.sockets[0].push(live(A));
+  await t.reconnect(1, snap(12));
+  await t.answer(STATUS, indexed(12));
+  await t.answer(EVENTS, page(A, rejected, D));
+  const backfilled = t.frames.filter(
+    (f): f is AccountEventFrame =>
+      f.type !== "snapshot" && f.backfilled === true,
+  );
+  expect(backfilled.map((f) => [f.eventType, f.type])).toEqual([
+    ["order_rejected", "orderUpdate"],
+    ["fees_collected", "accountEvent"],
+  ]);
   t.c.disconnect();
 });
 

@@ -128,6 +128,10 @@ to the engine by construction). See
 for the decision and its consequences (notably: codec/signing entry points become
 `await`-initialized).
 
+## Reads decode through the wasm core
+
+A read whose response type is in proof-wire (`proof_wire::query`, `proof_wire::types`) decodes in Rust: a `ReadKind` arm in `crates/proof-trading-sdk-wasm` (`decode_read`), then a `*FromWasm` adapter in `src/codec-adapter.ts` that only renames fields. Never hand-decode such a type in TypeScript or Python. If the type is not in proof-wire yet, add it there first (exchange `exchange-wire/src/query.rs`), then add the arm. The remaining hand decoders are reads whose types still live in exchange-core; move the type, then delete the decoder.
+
 ## Quick start for agents
 
 ```typescript

@@ -137,13 +137,13 @@ describe("SetLiquidationConfig governance action", () => {
           [10_500, [2, 3], 100, 20, 20, 10, 10_000, 1_000_000],
         ],
       }),
-    ).toThrow(/config/);
+    ).toThrow(/incorrect length/);
   });
 
   it("fails closed on a malformed or invalid wire tuple", () => {
     expect(() =>
       decodeAdminAction({ SetLiquidationConfig: [1, 2, [10_500, [2, 3]]] }),
-    ).toThrow(/config/);
+    ).toThrow(/governance decode: action: invalid length 2/);
     expect(() =>
       decodeAdminAction({
         SetLiquidationConfig: [2, 2, [10_500, [2, 3], 100, 20, 10]],

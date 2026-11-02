@@ -385,8 +385,9 @@ export interface CreateMarket {
   szDecimals: number;
   /**
    * Human-readable ticker / short symbol (e.g. `BTC`). Display/metadata only
-   * — the engine never reads it. MANDATORY on the wire (no serde(default)),
-   * though an empty string is accepted; capped at 24 bytes by the engine.
+   * — the engine never reads it. MANDATORY on the wire (no serde(default)).
+   * 1 to 24 bytes of A-Z, 0-9 and '-', starting with A-Z (see
+   * `validateTicker`); the SDK refuses any other value before signing.
    * Fixed at creation and immutable thereafter.
    */
   ticker: string;
@@ -786,9 +787,6 @@ export interface EventInfo {
   eventId: number;
   /** The event's binary book, priced in Yes. */
   ebyMarket: number;
-  /** The No book, only on an engine that still has one; `undefined` once
-   *  the engine runs one binary book per event. */
-  ebnMarket?: number;
   question: string;
   settlementMs: bigint;
   resolutionWindowMs: bigint;
@@ -2113,10 +2111,13 @@ export interface TriggerEvaluation {
   reason: TriggerOutcomeReason | null;
 }
 
+/** Engine-defined label: the known kinds, or any later one. */
+export type StoredTriggerKind = TriggerKind | OpenLabel;
+
 /** Engine-owned state for one stop-loss/take-profit limb. */
 export interface StoredTriggerLimb {
   limbId: bigint;
-  kind: TriggerKind;
+  kind: StoredTriggerKind;
   triggerPrice: bigint;
   maxSlippageBps: number;
   clientTriggerId: bigint | null;
@@ -2817,6 +2818,17 @@ export interface MarketsSnapshot {
   markets: MarketConfig[];
   /** Every event with its binaries and attached conditionals. */
   events: EventInfo[];
+  /** Long and short open interest per market that has had positions, in
+   *  ascending market order; a market missing from the list has none.
+   *  `undefined` when the node does not serve open interest. */
+  openInterest?: MarketOpenInterest[];
+}
+
+/** One market's open interest, in base-asset units per side. */
+export interface MarketOpenInterest {
+  market: number;
+  long: bigint;
+  short: bigint;
 }
 
 export interface MarketConfig {

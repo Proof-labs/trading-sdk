@@ -29,6 +29,7 @@ _FAMILIES = {
     "order_cancelled": "orderUpdate",
     "order_amended": "orderUpdate",
     "market_order_processed": "orderUpdate",
+    "order_rejected": "orderUpdate",
     "position_updated": "positionUpdate",
     "position_closed": "positionUpdate",
     "funding_settled": "funding",

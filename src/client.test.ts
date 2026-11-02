@@ -2026,8 +2026,8 @@ describe("ExchangeClient owner-scoped reads via /info", () => {
           type === "clearinghouseState" ||
           url.toString().includes("/v1/account/");
         const payload = isAccount
-          ? // balance, positions[], equity, totalMm, totalIm, marginRatioBps
-            [1_000n, [], 0n, 0n, 0n, 0n]
+          ? // the wire AccountInfo, no positions
+            [1_000n, [], 0n, 0n, 0n, 0n, [], 0n, 0n, 0n]
           : []; // empty open-orders list
         const blob = b64(accountEncoder.encode(payload) as Uint8Array);
         return new Response(JSON.stringify({ data: blob }), { status: 200 });
@@ -2509,8 +2509,9 @@ describe("ExchangeClient owner byte-coercion (serde array shape)", () => {
 
   it("queryAccount coerces a number[] position owner to Uint8Array", async () => {
     const position = [ownerArr, 1, "Buy", 6_675_000n, 100n, 0n];
+    position.push(0n, 0n, 0n, 0n, 0n, 0n, 0n, null);
     globalThis.fetch = vi.fn(async () =>
-      infoResponse([1_000n, [position], 0n, 0n, 0n, 0n]),
+      infoResponse([1_000n, [position], 0n, 0n, 0n, 0n, [], 0n, 0n, 0n]),
     ) as unknown as typeof fetch;
     const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
     const acct = await client.queryAccount(hex);
@@ -2536,7 +2537,7 @@ describe("ExchangeClient owner byte-coercion (serde array shape)", () => {
       9_007_199_254_740_993n,
     ];
     globalThis.fetch = vi.fn(async () =>
-      infoResponse([1_000n, [position], 0n, 0n, 0n, 0n]),
+      infoResponse([1_000n, [position], 0n, 0n, 0n, 0n, [], 0n, 0n, 0n]),
     ) as unknown as typeof fetch;
     const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
     const acct = await client.queryAccount(hex);
