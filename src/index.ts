@@ -31,8 +31,8 @@ export type {
   TransactionEvidenceEvent,
   TransactionEvidenceSelection,
 } from "./committed-transaction.js";
+export type { BlockEvidenceHeader } from "./block-header.js";
 export type {
-  BlockEvidenceHeader,
   BlockResultsEvidence,
   BlockResultsWindow,
   BlockResultsWindowSelection,
