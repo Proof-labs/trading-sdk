@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`historyFills` takes an optional `market`.** `GatewayReads.historyFills`
+  accepts `OwnerHistoryParams & { market?: number }` and sends `market` in the
+  `/info` body, so a caller gets one market's fills instead of the newest fills
+  across all markets. Needs a gateway with
+  [Proof-labs/api-gateway#266](https://github.com/Proof-labs/api-gateway/pull/266).
+  No wire change; additive API, MINOR.
+
 ### Fixed
 
 - **A market ticker is checked before a market creation is signed.** A
