@@ -9,6 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`reads().oracleHealth({ market })`** requests one market's oracle health
+  (`GET /v1/oracle/health?market={id}`, api-gateway 10.3.0+): the same object
+  with only that market's row, instead of the whole feeder state. Without
+  `market` the request is unchanged. The cut drops `failover` and `inventory`,
+  and the row's `status` is the feeder's 60-second rule, not the engine's
+  per-market age gate: it is for a UI freshness poll; monitoring and maker
+  guards read the bare path. Additive (MINOR).
+
 - **`historyFills` takes an optional `market`.** `GatewayReads.historyFills`
   accepts `OwnerHistoryParams & { market?: number }` and sends `market` in the
   `/info` body, so a caller gets one market's fills instead of the newest fills
