@@ -311,3 +311,23 @@ describe("public barrel: trigger labels", () => {
     expect([known, later, notKnown]).toHaveLength(3);
   });
 });
+
+import * as barrel from "./index.js";
+
+describe("public barrel: ticker rule", () => {
+  it("re-exports the ticker validator and its error", () => {
+    expect(barrel.MAX_TICKER_LEN).toBe(24);
+    expect(barrel.validateTicker).toBeTypeOf("function");
+    expect(barrel.checkTicker("TEST3.")).toEqual({
+      kind: "BadChar",
+      char: ".",
+      index: 5,
+    } satisfies barrel.TickerRefusal);
+    expect(barrel.tickerRefusalMessage({ kind: "Empty" })).toBe(
+      "ticker is empty",
+    );
+    expect(() => barrel.validateTicker("test3")).toThrow(
+      barrel.InvalidTickerError,
+    );
+  });
+});

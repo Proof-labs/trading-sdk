@@ -284,6 +284,19 @@ describe("named gateway reads", () => {
       expect(await result.json()).toEqual(payload);
     },
   );
+  it("asks for one market's oracle health when given a market", async () => {
+    const fetch = vi.fn(async () => json({ markets: {} }));
+    const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+    const signal = new AbortController().signal;
+    await reads.oracleHealth({ market: 3, signal });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "/v1/oracle/health?market=3",
+      {
+        method: "GET",
+        signal,
+      },
+    );
+  });
   it("preserves oracle-health failures and cancellation instead of returning healthy data", async () => {
     const response = json({ status: "error", embedded_feeder: false }, 503);
     const fetch = vi.fn(async () => response);
