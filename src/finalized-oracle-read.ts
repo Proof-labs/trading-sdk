@@ -1,6 +1,7 @@
 /** Same-view transport for the existing oracle policy read, not a price selector. */
 import { marketId, invalidRead } from "./read-values.js";
 import {
+  asReadError,
   boundedGatewayJson,
   type BoundedReadOptions,
   type FinalizedReadWitness,
@@ -23,7 +24,9 @@ export function decodeFinalizedOraclePermissions(
 ): FinalizedOraclePermissions {
   marketId(market);
   const { raw, witness } = decodeWitnessedRead(value);
-  const result = decodeOraclePermissions(raw, market);
+  const result = asReadError("oracle permissions", () =>
+    decodeOraclePermissions(raw, market),
+  );
   if (
     result.finalizedHeight !== witness.height ||
     (result.verdict &&

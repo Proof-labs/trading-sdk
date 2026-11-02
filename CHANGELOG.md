@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `reads().finalized` preserves witnessed account, authority, nonce, orders, financial, market and oracle facts. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
+- `reads().finalized` returns account, authority, nonce, orders, financial, market and oracle facts with the gateway's finalized-state witness. The witness is the gateway's assertion: financial, account-state, market and oracle payloads are checked against its height, while account, authorization, nonce and open-order payloads carry no height (and sometimes no owner) and rely on the gateway's word. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header; a header fetched through the same gateway shows only that the gateway is self-consistent. Decode failures surface as `GatewayReadError`. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
 - `reads().finalized.account(owner)` decodes the engine-valued account through the canonical Rust codec, preserving pending funding and equity with a same-state witness. It does not recalculate funding or authorize execution.
 - **`reads().oracleHealth({ market })`** requests one market's oracle health
   (`GET /v1/oracle/health?market={id}`, api-gateway 10.3.0+): the same object
