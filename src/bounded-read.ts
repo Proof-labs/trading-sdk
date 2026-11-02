@@ -68,7 +68,11 @@ export function decodeFinalizedReadWitness(
     (expectedHeight !== undefined && height !== expectedHeight) ||
     (expectedTimeMs !== undefined && finalizedBlockTimeMs !== expectedTimeMs)
   )
-    invalid();
+    throw new GatewayReadError(
+      "binding",
+      "witness",
+      "Finalized witness height/time mismatch",
+    );
   return {
     version: 1,
     nodeId: w.nodeId as string,
