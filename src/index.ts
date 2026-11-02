@@ -186,6 +186,14 @@ export {
 } from "./triggers.js";
 
 export { validateSetOracleGuards } from "./oracle-guards.js";
+export {
+  MAX_TICKER_LEN,
+  InvalidTickerError,
+  checkTicker,
+  tickerRefusalMessage,
+  validateTicker,
+  type TickerRefusal,
+} from "./ticker.js";
 export { validateScheduleUpgrade } from "./upgrade-plan.js";
 export {
   INITIAL_TAKEOVER_DISCOUNT_BPS,
