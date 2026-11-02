@@ -49,7 +49,11 @@ describe("finalized witness binding", () => {
     expect(() =>
       decodeFinalizedReadWitness({ ...wire, height: String(1n << 63n) }),
     ).toThrow();
-    expect(() => decodeFinalizedReadWitness(wire, 4n)).toThrow();
-    expect(() => decodeFinalizedReadWitness(wire, 5n, 999n)).toThrow();
+    expect(() => decodeFinalizedReadWitness(wire, 4n)).toThrow(
+      expect.objectContaining({ kind: "binding", field: "witness" }),
+    );
+    expect(() => decodeFinalizedReadWitness(wire, 5n, 999n)).toThrow(
+      expect.objectContaining({ kind: "binding", field: "witness" }),
+    );
   });
 });

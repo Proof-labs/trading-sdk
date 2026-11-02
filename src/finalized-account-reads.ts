@@ -10,6 +10,7 @@ import {
 import { Decoder } from "@msgpack/msgpack";
 import { decodeAccountState, type AccountState } from "./account-state.js";
 import {
+  asReadError,
   boundedGatewayJson,
   decodeFinalizedReadWitness,
   type BoundedReadOptions,
@@ -24,17 +25,24 @@ import type { ExchangeHttpTransport } from "./http-transport.js";
 export interface FinalizedAccountState extends AccountState {
   witness: FinalizedReadWitness;
 }
-/** Engine-valued account; fundingSince is read, never recomputed here. */
+/** Engine-valued account; fundingSince is read, never recomputed here.
+ * The payload has no height and names its owner only through positions, so
+ * an account with no positions is bound to `owner` and the witness only by
+ * the gateway's word. */
 export interface FinalizedAccountInfo extends AccountInfo {
   owner: HexAddress;
   witness: FinalizedReadWitness;
 }
+/** The payload is a bare boolean: owner, agent and height are bound only by
+ * the request URL and the gateway's word. */
 export interface FinalizedAgentAuthorization {
   owner: HexAddress;
   agent: HexAddress;
   authorized: boolean;
   witness: FinalizedReadWitness;
 }
+/** The payload is a bare nonce list: signer and height are bound only by the
+ * request URL and the gateway's word. */
 export interface FinalizedRecentNonces {
   signer: HexAddress;
   /** Prunable retained set, never a lifetime nonce floor or absence proof. */
@@ -57,6 +65,8 @@ export interface RawOpenOrder {
   postOnly: boolean;
   reduceOnly: boolean;
 }
+/** Each order row names its owner and is checked against `owner`; the height,
+ * and an empty list's owner, are bound only by the gateway's word. */
 export interface FinalizedOpenOrders {
   owner: HexAddress;
   limit: number;
@@ -132,15 +142,17 @@ export function decodeWitnessedRead(value: unknown): {
   witness: FinalizedReadWitness;
 } {
   const { bytes, witness } = witnessedBytes(value);
-  rejectFloats(bytes);
-  const raw: unknown = new Decoder({
-    useBigInt64: true,
-    maxArrayLength: 2048,
-    maxMapLength: 0,
-    maxStrLength: 64,
-    maxBinLength: 32,
-    maxExtLength: 0,
-  }).decode(bytes);
+  const raw: unknown = asReadError("account.msgpack", () => {
+    rejectFloats(bytes);
+    return new Decoder({
+      useBigInt64: true,
+      maxArrayLength: 2048,
+      maxMapLength: 0,
+      maxStrLength: 64,
+      maxBinLength: 32,
+      maxExtLength: 0,
+    }).decode(bytes);
+  });
   return { raw, witness };
 }
 
@@ -160,8 +172,8 @@ export async function readFinalizedAccount(
     ),
   );
   const wasm = getWasm();
-  const account = accountInfoFromWasm(
-    wasm.decode_read(wasm.ReadKind.Account, bytes),
+  const account = asReadError("account", () =>
+    accountInfoFromWasm(wasm.decode_read(wasm.ReadKind.Account, bytes)),
   );
   const seen = new Set<number>();
   for (const p of account.positions) {
@@ -182,7 +194,9 @@ export function decodeFinalizedAccountState(
 ): FinalizedAccountState {
   address(owner);
   const { raw, witness } = decodeWitnessedRead(value);
-  const state = decodeAccountState(raw, owner);
+  const state = asReadError("account.state", () =>
+    decodeAccountState(raw, owner),
+  );
   if (state.finalizedHeight !== witness.height)
     fail("account height mismatch", "binding");
   return { ...state, witness };

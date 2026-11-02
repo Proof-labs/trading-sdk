@@ -124,6 +124,29 @@ describe("generic finalized raw reads", () => {
       ).rejects.toThrow();
     }
   });
+  it("surfaces account decode failures as typed read errors", async () => {
+    await expect(
+      client(envelope([50, []]))
+        .client.reads()
+        .finalized.account(owner),
+    ).rejects.toThrow(
+      expect.objectContaining({ kind: "malformed", field: "account" }),
+    );
+    const cross = valuedPosition();
+    cross[0] = Array(20).fill(5);
+    await expect(
+      client(envelope(valuedAccount([cross])))
+        .client.reads()
+        .finalized.account(owner),
+    ).rejects.toThrow(expect.objectContaining({ kind: "binding" }));
+    await expect(
+      client(envelope([1, 2]))
+        .client.reads()
+        .finalized.accountState(owner),
+    ).rejects.toThrow(
+      expect.objectContaining({ kind: "malformed", field: "account.state" }),
+    );
+  });
   it("requires a complete witness for valued accounts and never falls back", async () => {
     for (const body of [
       { data: envelope(valuedAccount()).data },

@@ -16,10 +16,13 @@ export interface BoundedReadOptions {
   /** Default 5 seconds, matching existing reads; explicit maximum 60 seconds. */
   timeoutMs?: number;
 }
-/** Same-view facts from a trusted gateway, NOT validator signatures or a
- * cryptographic event proof. verifyWitness binds the height and app hash to a
- * chain-qualified H+1 header; authenticate the node/header source separately.
- * This is not freshness, solvency, or authorization to trade. */
+/** The gateway's assertion of the finalized state a read was served from, NOT
+ * validator signatures or a cryptographic event proof. How far a payload is
+ * checked against it varies per read: some payloads carry no height or owner
+ * to compare, and then the gateway's word is the only binding. verifyWitness
+ * binds the height and app hash to a chain-qualified H+1 header, which proves
+ * nothing beyond the gateway's word when that header came from the same
+ * gateway. This is not freshness, solvency, or authorization to trade. */
 export interface FinalizedReadWitness {
   version: 1;
   nodeId: string;
@@ -68,7 +71,11 @@ export function decodeFinalizedReadWitness(
     (expectedHeight !== undefined && height !== expectedHeight) ||
     (expectedTimeMs !== undefined && finalizedBlockTimeMs !== expectedTimeMs)
   )
-    invalid();
+    throw new GatewayReadError(
+      "binding",
+      "witness",
+      "Finalized witness height/time mismatch",
+    );
   return {
     version: 1,
     nodeId: w.nodeId as string,
@@ -77,7 +84,25 @@ export function decodeFinalizedReadWitness(
     appHash: hash32(w.appHash),
   };
 }
-/** Compare a witness with an independently obtained, trusted H+1 header.
+/** Run a decoder that throws plain `Error`s, re-throwing them as a malformed
+ * `GatewayReadError` with the same message so callers can branch on `kind`. */
+export function asReadError<T>(field: string, decode: () => T): T {
+  try {
+    return decode();
+  } catch (error) {
+    if (error instanceof GatewayReadError) throw error;
+    throw new GatewayReadError(
+      "malformed",
+      field,
+      error instanceof Error ? error.message : String(error),
+      { cause: error },
+    );
+  }
+}
+/** Compare a witness with an H+1 header. The check is only as strong as the
+ * header's source: `reads().evidence.blockHeader` asks the same gateway that
+ * served the witness and does not check validator signatures, so pairing the
+ * two shows the gateway is self-consistent, not that the state is authentic.
  * H+1's timestamp is NOT H's timestamp, so it is deliberately not compared. */
 export function verifyWitness(
   witness: FinalizedReadWitness,
