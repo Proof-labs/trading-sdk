@@ -13,8 +13,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   finalized/evidence facade. See [generic reads design](docs/generic-finalized-reads.md)
   for trust boundaries, pagination, resource limits, typed errors and timestamp units.
 - `reads().evidence.transaction` and `blockResultsWindow` bind exact signed bytes and complete bounded windows to the pinned chain. Caller-reducible resource budgets refuse partial coverage. Trusted-gateway evidence, not cryptographic event proofs or non-admission permission.
-- `reads().finalized` preserves witnessed account, authority, nonce, orders, financial, market and oracle facts. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
+- `reads().finalized` returns account, authority, nonce, orders, financial, market and oracle facts with the gateway's finalized-state witness. The witness is the gateway's assertion: financial, account-state, market and oracle payloads are checked against its height, while account, authorization, nonce and open-order payloads carry no height (and sometimes no owner) and rely on the gateway's word. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header; a header fetched through the same gateway shows only that the gateway is self-consistent. Decode failures surface as `GatewayReadError`. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
 - `reads().finalized.account(owner)` decodes the engine-valued account through the canonical Rust codec, preserving pending funding and equity with a same-state witness. It does not recalculate funding or authorize execution.
+- `GatewayReadError` (typed bounded-read failure with `kind` and `field`) and the `hexAddress`, `hash32` and `marketId` validators with their `HexAddress`, `Hash32Hex` and `MarketId` branded types are exported. Additive (MINOR).
+
+### Changed
+
+- Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Market snapshot retains its explicit 10-second setting. HTTP failure bodies remain readable within the same cap, and an oversized, fragmented or stalled failure body is truncated rather than hiding the status; duplicate JSON keys refuse.
+- `queryFinancialState` errors are typed: an HTTP failure throws `GatewayHttpError` (was `Error("financial state HTTP <status>")`), and size, deadline, JSON and base64 failures throw `GatewayReadError` with `kind` / `field` (were plain `Error`s with message text). Callers matching on the old messages must switch to the types.
+- The bounded reader newly refuses JSON nested deeper than 32 levels, zero-length body chunks, more than 4,096 chunks and a non-decimal `content-length`; the markets snapshot accepts any 2xx status, not only 200.
+
+### Fixed
+
+- Block-results windows apply their remaining event/attribute budgets to each decoded list, accepting busy blocks above 4,096 events without exceeding the aggregate ceilings. Resource exhaustion reports `GatewayReadError` with `kind: "limit"`, not malformed data. Single-transaction evidence retains its 4,096-event/attribute caps and uses the same limit classification.
+
+## [9.1.0] — 2026-11-03
+
+### Added
+
 - **`reads().oracleHealth({ market })`** requests one market's oracle health
   (`GET /v1/oracle/health?market={id}`, api-gateway 10.3.0+): the same object
   with only that market's row, instead of the whole feeder state. Without
@@ -25,7 +41,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Market snapshot retains its explicit 10-second setting. HTTP failure bodies remain readable within the same cap; duplicate JSON keys refuse.
+- **`historyFills` takes an optional `market`.** `GatewayReads.historyFills`
+  accepts `OwnerHistoryParams & { market?: number }` and sends `market` in the
+  `/info` body, so a caller gets one market's fills instead of the newest fills
+  across all markets. Needs api-gateway 10.1.0+ (first tagged in v10.4.0,
+  [Proof-labs/api-gateway#266](https://github.com/Proof-labs/api-gateway/pull/266));
+  an older gateway ignores `market` and returns every market's fills without
+  an error. No wire change; additive API, MINOR.
 
 ### Fixed
 
@@ -1846,7 +1868,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.1.0...HEAD
+[9.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.0.0...npm-v9.1.0
 [9.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...npm-v9.0.0
 [8.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.0.0...npm-v8.1.0
 [8.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.3.0...npm-v8.0.0

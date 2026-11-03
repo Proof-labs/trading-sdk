@@ -16,10 +16,13 @@ export interface BoundedReadOptions {
   /** Default 5 seconds, matching existing reads; explicit maximum 60 seconds. */
   timeoutMs?: number;
 }
-/** Same-view facts from a trusted gateway, NOT validator signatures or a
- * cryptographic event proof. verifyWitness binds the height and app hash to a
- * chain-qualified H+1 header; authenticate the node/header source separately.
- * This is not freshness, solvency, or authorization to trade. */
+/** The gateway's assertion of the finalized state a read was served from, NOT
+ * validator signatures or a cryptographic event proof. How far a payload is
+ * checked against it varies per read: some payloads carry no height or owner
+ * to compare, and then the gateway's word is the only binding. verifyWitness
+ * binds the height and app hash to a chain-qualified H+1 header, which proves
+ * nothing beyond the gateway's word when that header came from the same
+ * gateway. This is not freshness, solvency, or authorization to trade. */
 export interface FinalizedReadWitness {
   version: 1;
   nodeId: string;
@@ -68,7 +71,11 @@ export function decodeFinalizedReadWitness(
     (expectedHeight !== undefined && height !== expectedHeight) ||
     (expectedTimeMs !== undefined && finalizedBlockTimeMs !== expectedTimeMs)
   )
-    invalid();
+    throw new GatewayReadError(
+      "binding",
+      "witness",
+      "Finalized witness height/time mismatch",
+    );
   return {
     version: 1,
     nodeId: w.nodeId as string,
@@ -77,7 +84,25 @@ export function decodeFinalizedReadWitness(
     appHash: hash32(w.appHash),
   };
 }
-/** Compare a witness with an independently obtained, trusted H+1 header.
+/** Run a decoder that throws plain `Error`s, re-throwing them as a malformed
+ * `GatewayReadError` with the same message so callers can branch on `kind`. */
+export function asReadError<T>(field: string, decode: () => T): T {
+  try {
+    return decode();
+  } catch (error) {
+    if (error instanceof GatewayReadError) throw error;
+    throw new GatewayReadError(
+      "malformed",
+      field,
+      error instanceof Error ? error.message : String(error),
+      { cause: error },
+    );
+  }
+}
+/** Compare a witness with an H+1 header. The check is only as strong as the
+ * header's source: `reads().evidence.blockHeader` asks the same gateway that
+ * served the witness and does not check validator signatures, so pairing the
+ * two shows the gateway is self-consistent, not that the state is authentic.
  * H+1's timestamp is NOT H's timestamp, so it is deliberately not compared. */
 export function verifyWitness(
   witness: FinalizedReadWitness,
@@ -163,6 +188,35 @@ export interface BoundedReadRequest {
   /** Awaited after the deadline and cancellation are armed, e.g. `ready()`. */
   prepare?: () => Promise<void>;
 }
+function concat(chunks: Uint8Array[], size: number): Uint8Array<ArrayBuffer> {
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return bytes;
+}
+/** Retain a bounded, readable error body after cancelling the upstream. */
+function httpError(
+  response: Response,
+  bytes: Uint8Array<ArrayBuffer>,
+): GatewayHttpError {
+  const body = bytes.length ? bytes : null;
+  let copy: Response;
+  try {
+    copy = new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } catch {
+    // A custom transport can report a status (e.g. 304 with a body) that the
+    // Response constructor refuses; the real status stays on the error.
+    copy = new Response(body, { headers: response.headers });
+  }
+  return new GatewayHttpError(response.status, copy);
+}
 /** Internal one-shot SDK read. No retry, alternate endpoint or cached fallback. */
 export async function boundedGatewayJson(
   url: string,
@@ -229,6 +283,29 @@ export async function boundedGatewayJson(
     );
     response = await Promise.race([pending, cancelled]);
     checkDeadline();
+    if (!response.ok) {
+      // The status is the diagnosis. An error body that is oversized,
+      // fragmented, empty-chunked or stalled is truncated to what arrived in
+      // bounds; it never replaces the HTTP status. Caller cancellation wins.
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      if (response.body) {
+        reader = response.body.getReader();
+        try {
+          while (chunks.length < MAX_READ_CHUNKS && size < MAX_READ_BYTES) {
+            const part = await Promise.race([reader.read(), cancelled]);
+            if (part.done || part.value.length === 0) break;
+            const kept = part.value.subarray(0, MAX_READ_BYTES - size);
+            chunks.push(kept);
+            size += kept.length;
+            if (performance.now() >= deadline) break;
+          }
+        } catch (error) {
+          if (options.signal?.aborted) throw error;
+        }
+      }
+      throw httpError(response, concat(chunks, size));
+    }
     const length = response.headers.get("content-length");
     if (
       length !== null &&
@@ -239,15 +316,6 @@ export async function boundedGatewayJson(
         "limit",
         "responseBytes",
         "Gateway read response exceeds byte limit",
-      );
-    if (!response.body && !response.ok)
-      throw new GatewayHttpError(
-        response.status,
-        new Response(null, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers,
-        }),
       );
     if (!response.body)
       throw new GatewayReadError(
@@ -284,21 +352,7 @@ export async function boundedGatewayJson(
       chunks.push(part.value);
     }
     checkDeadline();
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.length;
-    }
-    if (!response.ok) {
-      // Retain a bounded, readable error body after cancelling the upstream.
-      const copy = new Response(bytes, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
-      throw new GatewayHttpError(response.status, copy);
-    }
+    const bytes = concat(chunks, size);
     let parsed: unknown;
     try {
       parsed = parseBoundedJson(

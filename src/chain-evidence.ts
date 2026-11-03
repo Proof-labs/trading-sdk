@@ -60,10 +60,14 @@ export function rpcResult(value: unknown): Record<string, unknown> {
   if (response.jsonrpc !== "2.0") invalid("RPC version");
   return object(response.result, "RPC result");
 }
-export function events(value: unknown): TransactionEvidenceEvent[] {
+export function events(
+  value: unknown,
+  limits = { maxEvents: MAX_EVENTS, maxAttributes: MAX_ATTRIBUTES },
+): TransactionEvidenceEvent[] {
   // These defaults are defined by abci/types/types.pb.go, not inferred success.
   if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > MAX_EVENTS) invalid("events");
+  if (!Array.isArray(value)) invalid("events");
+  if (value.length > limits.maxEvents) invalid("event limit", "limit");
   let attributes = 0;
   return value.map((entry) => {
     const event = object(entry, "event");
@@ -77,7 +81,8 @@ export function events(value: unknown): TransactionEvidenceEvent[] {
     if (event.attributes !== undefined) {
       if (!Array.isArray(event.attributes)) invalid("event attributes");
       attributes += (event.attributes as unknown[]).length;
-      if (attributes > MAX_ATTRIBUTES) invalid("attribute limit");
+      if (attributes > limits.maxAttributes)
+        invalid("attribute limit", "limit");
       result.attributes = (event.attributes as unknown[]).map((value) => {
         const a = object(value, "event attribute");
         if (a.key !== undefined && typeof a.key !== "string")

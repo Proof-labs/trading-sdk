@@ -1,4 +1,5 @@
 import {
+  asReadError,
   boundedGatewayJson,
   decodeFinalizedReadWitness,
   type BoundedReadOptions,
@@ -55,7 +56,16 @@ export async function readFinalizedFinancialState(
     !("witness" in response)
   )
     invalid("financial snapshot envelope");
-  const snapshot = decodeFinancialStateData(response.data, expected);
+  const snapshot = asReadError("financial snapshot", () =>
+    decodeFinancialStateData(response.data, expected),
+  );
+  // Same exact five-field witness as the other `?witness=1` routes.
+  if (
+    !response.witness ||
+    typeof response.witness !== "object" ||
+    Object.keys(response.witness).length !== 5
+  )
+    invalid("financial snapshot witness");
   const witness = decodeFinalizedReadWitness(
     response.witness,
     snapshot.finalizedHeight,
@@ -101,9 +111,13 @@ export async function readFinalizedMarketsSnapshot(
     ),
     "market snapshot envelope",
   );
-  const snapshot = decodeMarketsSnapshot(
-    new TextEncoder().encode(JSON.stringify(response)),
-    chain,
+  // The witness here follows the Rust snapshot decoder, which tolerates
+  // extra witness fields, rather than the exact five-field `?witness=1` shape.
+  const snapshot = asReadError("market snapshot", () =>
+    decodeMarketsSnapshot(
+      new TextEncoder().encode(JSON.stringify(response)),
+      chain,
+    ),
   );
   return {
     ...snapshot,

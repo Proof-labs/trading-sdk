@@ -149,6 +149,27 @@ describe("opt-in finalized financial facts", () => {
       client(b).client.reads().finalized.financialState(selection),
     ).rejects.toThrow();
   });
+  it("refuses extra financial witness fields and types decode failures", async () => {
+    const extra = financial();
+    Object.assign(extra.witness, { alternate: "1" });
+    await expect(
+      client(extra)
+        .client.reads()
+        .finalized.financialState(FINANCIAL_SELECTION),
+    ).rejects.toThrow(
+      expect.objectContaining({
+        kind: "malformed",
+        field: "financial snapshot witness",
+      }),
+    );
+    const payload = financial();
+    payload.data = Buffer.from([0x91, 0x01]).toString("base64");
+    await expect(
+      client(payload)
+        .client.reads()
+        .finalized.financialState(FINANCIAL_SELECTION),
+    ).rejects.toThrow(expect.objectContaining({ kind: "malformed" }));
+  });
   it("captures the exact selection before awaiting the transport", async () => {
     const selection = { markets: [7], owners: [OWNER] };
     const f = client(financial());

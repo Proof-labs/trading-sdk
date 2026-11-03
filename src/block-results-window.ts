@@ -160,14 +160,17 @@ export async function readBlockResultsWindow(
     return rpcResult(raw);
   };
   const decodeEvents = (value: unknown): TransactionEvidenceEvent[] => {
-    const decoded = events(value);
+    // Enforce the remaining window budget before allocating decoded lists.
+    // A busy block must not inherit the single-transaction evidence limits.
+    const decoded = events(value, {
+      maxEvents: maxEvents - eventCount,
+      maxAttributes: maxAttributes - attributeCount,
+    });
     eventCount += decoded.length;
     attributeCount += decoded.reduce(
       (total, event) => total + (event.attributes?.length ?? 0),
       0,
     );
-    if (eventCount > maxEvents || attributeCount > maxAttributes)
-      invalid("window event budget", "limit");
     return decoded;
   };
   const anchor = decodeBlockEvidenceHeader(
