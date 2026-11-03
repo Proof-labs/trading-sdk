@@ -93,6 +93,36 @@ function setup(f = fixture()) {
 }
 
 describe("trusted-gateway transaction evidence", () => {
+  it.each(["events", "attributes"])(
+    "keeps the single-transaction %s ceiling and reports overflow as a limit",
+    async (resource) => {
+      for (const count of [4096, 4097]) {
+        const f = setup();
+        Object.assign(f.tx.result.tx_result, {
+          events:
+            resource === "events"
+              ? Array.from({ length: count }, () => ({ type: "event" }))
+              : [
+                  {
+                    type: "event",
+                    attributes: Array.from({ length: count }, () => ({})),
+                  },
+                ],
+        });
+        const read = f.client.reads().evidence.transaction(f.selection);
+        if (count === 4096) {
+          const evidence = await read;
+          expect(
+            resource === "events"
+              ? evidence.events.length
+              : evidence.events[0].attributes?.length,
+          ).toBe(count);
+        } else {
+          await expect(read).rejects.toMatchObject({ kind: "limit" });
+        }
+      }
+    },
+  );
   it("binds real canonical signed bytes, hash, exact height/index and pinned chain without loading a key", async () => {
     const f = setup();
     const evidence = await f.client.reads().evidence.transaction(f.selection);

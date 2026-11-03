@@ -26,6 +26,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Block-results windows apply their remaining event/attribute budgets to each decoded list, accepting busy blocks above 4,096 events without exceeding the aggregate ceilings. Resource exhaustion reports `GatewayReadError` with `kind: "limit"`, not malformed data. Single-transaction evidence retains its 4,096-event/attribute caps and uses the same limit classification.
+
 - **A market ticker is checked before a market creation is signed.** A
   ticker is 1 to 24 bytes of capital letters A-Z, digits 0-9 and hyphens,
   starting with a capital letter (`^[A-Z][A-Z0-9-]{0,23}$`); a market cannot

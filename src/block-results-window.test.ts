@@ -450,7 +450,7 @@ describe("bounded trusted-gateway block/results windows", () => {
     }
     await expect(
       f.client.reads().evidence.blockResultsWindow(f.selection),
-    ).rejects.toThrow("window event budget");
+    ).rejects.toMatchObject({ kind: "limit" });
   });
   it("bounds accumulated attributes independently of event and transaction counts", async () => {
     const f = fixture();
@@ -471,6 +471,116 @@ describe("bounded trusted-gateway block/results windows", () => {
     });
     await expect(
       f.client.reads().evidence.blockResultsWindow(f.selection),
-    ).rejects.toThrow("window event budget");
+    ).rejects.toMatchObject({ kind: "limit" });
+  });
+  it.each(["transaction", "system"])(
+    "accepts more than 4,096 %s events within the window budget",
+    async (location) => {
+      const f = fixture();
+      const many = Array.from({ length: 4097 }, (_, i) => ({
+        type: `event_${i}`,
+        attributes: [],
+      }));
+      const result = f.executions.get(102)!.result;
+      if (location === "transaction") result.txs_results![0].events = many;
+      else result.finalize_block_events = many;
+      const window = await f.client
+        .reads()
+        .evidence.blockResultsWindow(f.selection);
+      expect(window.blocks).toHaveLength(3);
+      const last = window.blocks[2];
+      expect(
+        location === "transaction"
+          ? last.transactions[0].events
+          : last.finalizeBlockEvents,
+      ).toEqual(many);
+    },
+  );
+  it.each(["events", "attributes"])(
+    "accepts the exact aggregate %s ceiling and refuses one extra without partial coverage",
+    async (resource) => {
+      const ceiling = resource === "events" ? 16_384 : 65_536;
+      for (const extra of [0, 1]) {
+        const f = fixture();
+        for (const execution of f.executions.values()) {
+          execution.result.txs_results![0].events = [];
+          execution.result.finalize_block_events = [];
+        }
+        const makeEvents = (count: number) =>
+          resource === "events"
+            ? Array.from({ length: count }, () => ({
+                type: "event",
+                attributes: [],
+              }))
+            : [
+                {
+                  type: "event",
+                  attributes: Array.from({ length: count }, () => ({})),
+                },
+              ];
+        // The budget is shared by transaction/system lists and by heights.
+        Object.assign(f.executions.get(102)!.result.txs_results![0], {
+          events: makeEvents(ceiling - 2),
+        });
+        Object.assign(f.executions.get(102)!.result, {
+          finalize_block_events: makeEvents(1),
+        });
+        Object.assign(f.executions.get(101)!.result.txs_results![0], {
+          events: makeEvents(1 + extra),
+        });
+        const read = f.client.reads().evidence.blockResultsWindow(f.selection);
+        if (extra) {
+          await expect(read).rejects.toMatchObject({ kind: "limit" });
+          expect(f.transport).toHaveBeenCalledTimes(5);
+        } else {
+          const window = await read;
+          const all = window.blocks.flatMap((block) => [
+            ...block.transactions.flatMap((tx) => tx.events),
+            ...block.finalizeBlockEvents,
+          ]);
+          expect(
+            resource === "events"
+              ? all.length
+              : all.reduce(
+                  (n, event) => n + (event.attributes?.length ?? 0),
+                  0,
+                ),
+          ).toBe(ceiling);
+        }
+      }
+    },
+  );
+  it.each([{ maxEvents: 9 }, { maxAttributes: 12 }])(
+    "honors a lower caller budget across the whole window: %j",
+    async (budget) => {
+      const f = fixture();
+      await expect(
+        f.client
+          .reads()
+          .evidence.blockResultsWindow({ ...f.selection, ...budget }),
+      ).resolves.toMatchObject({ fromHeight: 100n });
+      const reduced = Object.fromEntries(
+        Object.entries(budget).map(([key, value]) => [key, value - 1]),
+      );
+      await expect(
+        f.client
+          .reads()
+          .evidence.blockResultsWindow({ ...f.selection, ...reduced }),
+      ).rejects.toMatchObject({ kind: "limit" });
+    },
+  );
+  it("still rejects malformed events and attributes within the resource budgets", async () => {
+    for (const events of [
+      null,
+      [{}],
+      [{ type: "event", attributes: null }],
+      [{ type: "event", attributes: [{ index: "true" }] }],
+    ]) {
+      const f = fixture();
+      Object.assign(f.executions.get(102)!.result.txs_results![0], { events });
+      await expect(
+        f.client.reads().evidence.blockResultsWindow(f.selection),
+      ).rejects.toMatchObject({ kind: "malformed" });
+    }
   });
 });
