@@ -301,13 +301,6 @@ describe("decodeAdminAction", () => {
     });
   });
 
-  it("decodes the EnableSubAccounts unit variant carried as a bare string", () => {
-    expect(decodeAdminAction("EnableSubAccounts")).toEqual({
-      kind: "EnableSubAccounts",
-    });
-    expect(ACTION_TAG_BY_KIND.EnableSubAccounts).toBe(21);
-  });
-
   it("decodes the engine's frozen CancelAllOrdersForAccount bytes, scoped and unscoped", () => {
     // exchange-wire `cancel_all_orders_for_account_wire_vectors_frozen`: the
     // `AccountAddress` newtype is transparent, so the payload is a flat
@@ -325,7 +318,7 @@ describe("decodeAdminAction", () => {
     const short = Array.from({ length: 19 }, () => 0xc1);
     expect(() =>
       decodeAdminAction({ CancelAllOrdersForAccount: [short, 7] }),
-    ).toThrow(/invalid length 19, expected an array of length 20/);
+    ).toThrow(/invalid length 19, expected 20 bytes/);
   });
 
   it("decodes the engine's frozen UpdateAuthoritySet bytes, add and remove", () => {

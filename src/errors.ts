@@ -132,7 +132,8 @@ export enum ExecErrorCode {
   SubAccountTransferInsufficientBalance = 87,
   SubAccountIdZero = 88,
   SubAccountTransferZeroAmount = 89,
-  SubAccountsInactive = 90,
+  // 90 was SubAccountsInactive, retired with the engine's sub-account switch
+  // (sub-accounts are always on); never reassigned.
   WithdrawalPayoutLeaseActive = 91,
   EventAlreadyExists = 92,
   EventNotFound = 93,
@@ -507,11 +508,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
   89: {
     name: "SubAccountTransferZeroAmount",
     description: "sub-account transfer amount must be greater than zero",
-  },
-  90: {
-    name: "SubAccountsInactive",
-    description:
-      "sub-account actions decode but the chain has not enabled them yet",
   },
   91: {
     name: "WithdrawalPayoutLeaseActive",

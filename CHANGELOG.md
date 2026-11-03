@@ -7,6 +7,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking changes
+
+- **Sub-accounts are always on: `EnableSubAccounts` is removed (MAJOR).**
+  The engine dropped the sub-account switch
+  ([Proof-labs/exchange#1358](https://github.com/Proof-labs/exchange/pull/1358)),
+  so `CreateSubAccount` and `SubAccountTransfer` need no governance
+  enablement. The `{ kind: "EnableSubAccounts" }` admin action leaves the
+  `AdminAction` union and `ACTION_TAG_BY_KIND`, its inner tag 21 is retired
+  and never reassigned, and the Rust, Python and conformance mirrors drop it.
+  Error code 90 (`SubAccountsInactive`) no longer decodes in TypeScript,
+  Rust or Python and is never reassigned. The Rust crate pins a proof-wire
+  `dev` commit until the matching release.
+
 ## [9.1.0] — 2026-11-03
 
 ### Added

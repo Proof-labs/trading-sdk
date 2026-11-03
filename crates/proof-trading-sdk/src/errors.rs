@@ -131,7 +131,8 @@ define_error_kinds! {
     87  => SubAccountTransferInsufficientBalance ~ "The source sub-account balance is below the transfer amount.",
     88  => SubAccountIdZero                 ~ "Sub-account id zero is not a valid id.",
     89  => SubAccountTransferZeroAmount     ~ "A sub-account transfer amount must be greater than zero.",
-    90  => SubAccountsInactive              ~ "Sub-account actions decode on this wire version but the chain has not enabled them yet; submissions before the activation fail closed.",
+    // 90 was SubAccountsInactive, retired with the engine's sub-account switch
+    // (sub-accounts are always on); never reassigned.
     91  => WithdrawalPayoutLeaseActive      ~ "A live Solana payout lease on this withdrawal is held by a different watcher, so this ClaimWithdrawalPayout is rejected; the rejected claimer must not sign a payout.",
     // Events and attached conditionals.
     92  => EventAlreadyExists               ~ "CreateEvent for an event id already in the registry.",
@@ -431,7 +432,6 @@ mod exec_error_meaning_tests {
             ExecError::SubAccountTransferInsufficientBalance,
             ExecError::SubAccountIdZero,
             ExecError::SubAccountTransferZeroAmount,
-            ExecError::SubAccountsInactive,
             ExecError::WithdrawalPayoutLeaseActive,
             ExecError::EventAlreadyExists(crate::types::EventId(0)),
             ExecError::EventNotFound(crate::types::EventId(0)),
@@ -516,8 +516,9 @@ mod exec_error_meaning_tests {
 
     /// Every engine code must be covered by the public error manifest, with
     /// the holes the wire itself carries: 24, 25 and 31 (the retired
-    /// impact-market family), 78-81 (reserved for oracle errors), 101
-    /// (unassigned) and 112 (the retired PLP configuration). Catches
+    /// impact-market family), 78-81 (reserved for oracle errors), 90 (the
+    /// retired sub-account switch), 101 (unassigned) and 112 (the retired
+    /// PLP configuration). Catches
     /// the case where a code is reserved by the mirrored engine error enum
     /// but no SDK classification maps to it.
     #[test]
@@ -526,7 +527,7 @@ mod exec_error_meaning_tests {
         codes.sort();
         codes.dedup();
         let expected: Vec<u32> = (1u32..=116)
-            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81 | 101 | 112))
+            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81 | 90 | 101 | 112))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(

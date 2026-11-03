@@ -485,9 +485,7 @@ class SetTriggerMarketConfig:
 
 @dataclass
 class CreateSubAccount(Action):
-    """Create a derived sub-account under the signing master (0x28). The
-    engine refuses it as ``SubAccountsInactive`` until a governed
-    ``EnableSubAccounts`` proposal executes."""
+    """Create a derived sub-account under the signing master (0x28)."""
 
     ACTION_NAME = "CreateSubAccount"
     owner: bytes

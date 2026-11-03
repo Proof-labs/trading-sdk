@@ -49,7 +49,6 @@ describe("governed insurance funding", () => {
     expect(ACTION_TAG_BY_KIND.FundInsuranceFund).toBe(18);
     expect(ACTION_TAG_BY_KIND.WithdrawInsuranceFund).toBe(25);
     expect(ACTION_TAG_BY_KIND.SetLiquidationConfig).toBe(17);
-    expect(ACTION_TAG_BY_KIND.EnableSubAccounts).toBe(21);
     const tags = Object.values(ACTION_TAG_BY_KIND);
     expect(new Set(tags).size).toBe(tags.length);
   });
