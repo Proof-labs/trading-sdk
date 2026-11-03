@@ -319,6 +319,13 @@ describe("atomic market snapshot", () => {
       new Response("secret provider URL", { status: 503 }),
     );
     await expect(client.queryMarketsSnapshot()).rejects.toThrow("HTTP 503");
+    // An oversized proxy error page still reports the outage, not "malformed".
+    fetcher.mockResolvedValueOnce(
+      new Response("x".repeat(MAX_SNAPSHOT_BYTES + 1), { status: 502 }),
+    );
+    await expect(client.queryMarketsSnapshot()).rejects.toThrow(
+      "market snapshot returned HTTP 502",
+    );
     fetcher.mockResolvedValueOnce(
       new Response("x".repeat(MAX_SNAPSHOT_BYTES + 1), { status: 200 }),
     );
