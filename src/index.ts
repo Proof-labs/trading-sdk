@@ -44,7 +44,6 @@ export {
   type FinalizedOrderbookOptions,
 } from "./finalized-orderbook.js";
 export {
-  decodeTradeHistoryPage,
   type ParticipantTrade,
   type TradeHistoryOptions,
   type TradeHistoryPage,

@@ -12,9 +12,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `reads().finalized.orderbook(market, { depth })` returns a height-bearing,
   witnessed book snapshot of 1, 20 (default) or 100 levels per side from
   `GET /v1/orderbook-snapshot/{market}`. It is not a full-book assertion.
-- `reads().tradeHistoryPage(market, { fromMs, toMs, limit, cursor })` and the
-  exported `decodeTradeHistoryPage` return one indexed, participant-attributed
-  page from `GET /v1/history/trades/{market}` with an opaque cursor. A page does
+- `reads().tradeHistoryPage(market, { fromMs, toMs, limit, cursor })` returns
+  one indexed, participant-attributed page from `GET /v1/history/trades/{market}` with an opaque cursor. A page does
   not prove complete ingestion. See [generic reads design](docs/generic-finalized-reads.md)
   for trust boundaries, pagination, resource limits, typed errors and timestamp units.
 - `reads().evidence.transaction` and `blockResultsWindow` bind exact signed bytes and complete bounded windows to the pinned chain. Caller-reducible resource budgets (aggregate across the window, so a busy block may exceed the single-transaction 4,096-event/attribute caps) refuse partial coverage with `GatewayReadError` `kind: "limit"`. Trusted-gateway evidence, not cryptographic event proofs or non-admission permission.
