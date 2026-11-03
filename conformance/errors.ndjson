@@ -78,7 +78,7 @@
 {"case":"manifest/88","code":88,"log":null,"expect":{"name":"SubAccountIdZero"}}
 {"case":"manifest/89","code":89,"log":null,"expect":{"name":"SubAccountTransferZeroAmount"}}
 {"case":"manifest/91","code":91,"log":null,"expect":{"name":"WithdrawalPayoutLeaseActive"}}
-{"case":"manifest/124","code":124,"log":null,"expect":{"name":"WithdrawalPayoutLeaseNotHeld"}}
+{"case":"manifest/126","code":126,"log":null,"expect":{"name":"WithdrawalPayoutLeaseNotHeld"}}
 {"case":"manifest/92","code":92,"log":null,"expect":{"name":"EventAlreadyExists"}}
 {"case":"manifest/93","code":93,"log":null,"expect":{"name":"EventNotFound"}}
 {"case":"manifest/94","code":94,"log":null,"expect":{"name":"UnderlyingAlreadyAttached"}}

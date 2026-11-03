@@ -135,7 +135,7 @@ define_error_kinds! {
     // 90 was SubAccountsInactive, retired with the engine's sub-account switch
     // (sub-accounts are always on); never reassigned.
     91  => WithdrawalPayoutLeaseActive      ~ "A live Solana payout lease on this withdrawal is held by a different watcher, so this ClaimWithdrawalPayout is rejected; the rejected claimer must not sign a payout.",
-    124 => WithdrawalPayoutLeaseNotHeld     ~ "The withdrawal's payout lease is not held by the submitter, so the payout-signature report is rejected; acquire the lease with a payout claim first.",
+    126 => WithdrawalPayoutLeaseNotHeld     ~ "The withdrawal's payout lease is not held by the submitter, so the payout-signature report is rejected; acquire the lease with a payout claim first.",
     // Events and attached conditionals.
     92  => EventAlreadyExists               ~ "CreateEvent for an event id already in the registry.",
     93  => EventNotFound                    ~ "No event exists under this id: nothing can attach to it, resolve it or read it.",
@@ -560,7 +560,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=125)
+        let expected: Vec<u32> = (1u32..=126)
             .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122))
             .chain(std::iter::once(255))
             .collect();
