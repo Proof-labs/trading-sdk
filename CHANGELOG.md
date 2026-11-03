@@ -18,6 +18,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   payload from stored history still decodes, with both fields 0, but an older
   SDK fails to decode a 14-element one (MAJOR). Pending `CreateMarket`
   proposals must be drained or re-proposed before the engine upgrade.
+  In Python, `tick_size` and `lot_size` come before the defaulted
+  `max_open_interest`, so a positional `CreateMarket(...)` call that passed
+  `max_open_interest` by position must now name it.
   The Rust crate pins proof-wire on the review branch
   `GH1327/create-market-tick-lot` until the release is tagged.
 
