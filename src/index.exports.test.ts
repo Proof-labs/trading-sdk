@@ -32,6 +32,8 @@ import {
   type TriggerMarketHistoryPage,
   type TriggerMarketConfigInfo,
   type ExchangeEvent,
+  type BlockResultsRange,
+  type BlockResultsRangeSelection,
   type InsuranceFundUpdatedEvent,
   type PositionAutoDeleveragedEvent,
   decodeTriggerMarketConfigInfos,
@@ -54,6 +56,19 @@ it("exposes typed reads on the existing read surface", async () => {
   expect(reads.evidence.blockHeader).toBeTypeOf("function");
   expect(reads.evidence.transaction).toBeTypeOf("function");
   expect(reads.evidence.blockResultsWindow).toBeTypeOf("function");
+  expect(reads.evidence.blockResultsRange).toBeTypeOf("function");
+  const rangeSelection: BlockResultsRangeSelection = {
+    fromHeight: 1n,
+    throughHeight: 2n,
+    maxHeights: 2,
+  };
+  const rangeRead: (
+    selection: BlockResultsRangeSelection,
+  ) => Promise<BlockResultsRange> = reads.evidence.blockResultsRange.bind(
+    reads.evidence,
+  );
+  expect(rangeRead).toBeTypeOf("function");
+  expect(rangeSelection.fromHeight).toBe(1n);
   expect(reads.finalized.orderbook).toBeTypeOf("function");
   expect(reads.tradeHistoryPage).toBeTypeOf("function");
   expect(sdk.verifyWitness).toBeTypeOf("function");

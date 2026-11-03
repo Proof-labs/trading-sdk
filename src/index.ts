@@ -34,6 +34,8 @@ export type {
 export type { BlockEvidenceHeader } from "./block-header.js";
 export type {
   BlockResultsEvidence,
+  BlockResultsRange,
+  BlockResultsRangeSelection,
   BlockResultsWindow,
   BlockTransactionEvidence,
   BlockResultsWindowSelection,
