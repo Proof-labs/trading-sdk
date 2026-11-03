@@ -144,6 +144,10 @@ export class FinalizedReads extends ReadClient {
 }
 /** Bounded chain evidence. A replay rejection never proves earlier non-admission. */
 export class EvidenceReads extends ReadClient {
+  /** Fetches the whole block from `/v1/block` and keeps only its header, so a
+   * block whose response exceeds the 1 MiB read cap (`MAX_READ_BYTES`) fails
+   * with `GatewayReadError` kind `limit`. Lifting that needs a header-only
+   * gateway route. */
   async blockHeader(
     height: bigint,
     options: BoundedReadOptions = {},
