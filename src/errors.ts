@@ -66,7 +66,8 @@ export enum ExecErrorCode {
   PostOnlyWouldCross = 34,
   ReduceOnlyWouldIncrease = 35,
   TestActionRejected = 36,
-  StaleOracle = 37,
+  // 37, 77, 82 and 97 are the wire's `Unpriced`, one code per reason.
+  UnpricedStale = 37,
   UserLeverageBelowMarketIm = 38,
   TickSizeViolation = 39,
   LotSizeViolation = 40,
@@ -122,9 +123,9 @@ export enum ExecErrorCode {
   /** The block has no certified oracle-policy verdict for the market, so a
    *  mark-dependent action is refused until a later block certifies a price
    *  — the market is stale or unpriceable this block, not misconfigured. */
-  OracleVerdictUnavailable = 77,
+  UnpricedNoVerdict = 77,
   // 78-81 remain reserved on the wire for oracle-policy errors.
-  OracleGuardUnset = 82,
+  UnpricedGuardUnset = 82,
   SubAccountNotFound = 83,
   SubAccountAlreadyExists = 84,
   SubAccountTransferSameAccount = 85,
@@ -139,8 +140,8 @@ export enum ExecErrorCode {
   UnderlyingAlreadyAttached = 94,
   TooManyAttachedConditionals = 95,
   TooManyActiveEvents = 96,
-  /** No mark price exists for the market (impact-family book, no fallback). */
-  MarkUnavailable = 97,
+  /** No mark price exists for the market (no trade EWMA, no fallback). */
+  UnpricedNoMark = 97,
   /** F2 trigger expansion: the order cannot carry attached SL/TP limbs. */
   TriggerOrderIncompatible = 98,
   /** The withdrawal would push the account's rolling-window outflow past
@@ -286,7 +287,7 @@ const TABLE: Record<number, ExecErrorInfo> = {
       "test/admin action rejected (unauthorized signer or engine not configured to accept them)",
   },
   37: {
-    name: "StaleOracle",
+    name: "UnpricedStale",
     description:
       "oracle for this market is older than MarketConfig.mark_price_max_oracle_age_ms; order placement, margin, and liquidation refuse to use a stale oracle (BE-33)",
   },
@@ -471,14 +472,14 @@ const TABLE: Record<number, ExecErrorInfo> = {
       "retired legacy relayer terminal submitted at or above the receipt cutover",
   },
   77: {
-    name: "OracleVerdictUnavailable",
+    name: "UnpricedNoVerdict",
     description:
       "the oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed) — mark-dependent actions are refused until a later block certifies a price",
   },
   82: {
-    name: "OracleGuardUnset",
+    name: "UnpricedGuardUnset",
     description:
-      "mark-dependent read refused: the oracle-guard gate is active and the market's max oracle age is unset",
+      "the oracle-guard gate is active and the market's max oracle age is unset; every mark-dependent action is refused until governance sets one",
   },
   83: {
     name: "SubAccountNotFound",
@@ -534,9 +535,9 @@ const TABLE: Record<number, ExecErrorInfo> = {
       "account would touch more events than the scenario margin engine can enumerate (per-account cap)",
   },
   97: {
-    name: "MarkUnavailable",
+    name: "UnpricedNoMark",
     description:
-      "no mark price is available for the market: an impact-family book has no recent-trade EWMA and no oracle fallback value",
+      "no mark price is available for the market: a conditional or prediction-binary book has no recent-trade EWMA and no oracle fallback value",
   },
   98: {
     name: "TriggerOrderIncompatible",

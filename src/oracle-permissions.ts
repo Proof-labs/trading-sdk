@@ -21,8 +21,8 @@ export type OracleVerdictStatus = "Fresh" | "Stale" | "Unpriceable";
 
 /**
  * Fault bits of the committed verdict, in exchange `ReasonFlags::FAULTS`
- * order: bit `i` is `ORACLE_FAULT_BITS[i]`. The layout is shared by both
- * verdict formats. `Disagreement` (bit 7) and `PairTimeMismatch` (bit 13) are
+ * order: bit `i` is `ORACLE_FAULT_BITS[i]`. `Disagreement` (bit 7) and
+ * `PairTimeMismatch` (bit 13) are
  * no longer produced once the primary-with-fallback policy (exchange#831) is
  * in force; they keep their positions only so the encoding stays stable.
  */
@@ -56,7 +56,7 @@ export type OracleVerdictReason = (typeof reasons)[number];
 export type OracleSelectedSource = "Primary" | "Fallback";
 
 /**
- * Source-selection diagnostics of a format-3 verdict, in bit order. They are
+ * Source-selection diagnostics of a verdict, in bit order. They are
  * monitoring signals, not faults: none of them withholds a certificate.
  */
 export const ORACLE_DIAGNOSTIC_BITS = [
@@ -68,16 +68,11 @@ export const ORACLE_DIAGNOSTIC_BITS = [
 export type OracleVerdictDiagnostic = (typeof ORACLE_DIAGNOSTIC_BITS)[number];
 
 export interface CommittedOracleVerdict {
-  /**
-   * 3 for the fourteen-field primary-with-fallback read (exchange#831), 2 for
-   * the twelve-field read of earlier nodes. Both share one `faults` layout.
-   */
-  format: 2 | 3;
   height: bigint;
   blockTime: bigint;
   status: OracleVerdictStatus;
   reason: OracleVerdictReason;
-  /** Format 3: the selected slot's own price and publish time. */
+  /** The selected slot's own price and publish time. */
   certified: { price: bigint; providerTime: bigint } | null;
   eligibleSince: bigint | null;
   /** Raw u32 fault bitset over `ORACLE_FAULT_BITS`. */
@@ -90,24 +85,22 @@ export interface CommittedOracleVerdict {
   lastGood: { price: bigint; providerTime: bigint } | null;
   anchor: { price: bigint | null; coveredMs: bigint; requiredMs: bigint };
   /**
-   * Format 3: the usable slot chosen by priority, present even when a later
-   * fault withholds the certificate. Always null in format 2.
+   * The usable slot chosen by priority, present even when a later fault
+   * withholds the certificate.
    */
   selected: OracleSelectedSource | null;
-  /** Format 3: raw u8 diagnostic bitset. Null in format 2. */
-  diagnostics: number | null;
-  /** `diagnostics` named in bit order; empty in format 2. */
+  /** Raw u8 diagnostic bitset. */
+  diagnostics: number;
+  /** `diagnostics` named in bit order. */
   diagnosticFlags: OracleVerdictDiagnostic[];
 }
 
 export interface OraclePermissions {
   market: number;
   finalizedHeight: bigint;
-  activationHeight: bigint | null;
-  oracleActive: boolean;
-  state: "Legacy" | "Unavailable" | "Committed";
+  state: "Unavailable" | "Committed";
   /** Satisfied covers this single oracle dependency only, not a whole action. */
-  oraclePermission: "Satisfied" | "Unavailable" | null;
+  oraclePermission: "Satisfied" | "Unavailable";
   policy: OraclePolicyEpoch | null;
   pending: { effectiveHeight: bigint; policy: OraclePolicyEpoch } | null;
   verdict: CommittedOracleVerdict | null;
@@ -211,10 +204,7 @@ function bitNames<T extends string>(bits: number, table: readonly T[]): T[] {
   return table.filter((_, index) => (bits & (1 << index)) !== 0);
 }
 function verdict(raw: unknown): CommittedOracleVerdict {
-  if (!Array.isArray(raw) || (raw.length !== 12 && raw.length !== 14))
-    return invalid("verdict");
-  const v = raw as unknown[];
-  const format = v.length === 14 ? 3 : 2;
+  const v = tuple(raw, 14, "verdict");
   const status = v[2];
   const reason = v[3];
   if (status !== "Fresh" && status !== "Stale" && status !== "Unpriceable")
@@ -235,13 +225,11 @@ function verdict(raw: unknown): CommittedOracleVerdict {
   const evidenceRaw = tuple(v[9], 2, "verdict.evidence");
   const anchorRaw = tuple(v[11], 3, "verdict.anchor");
   const faults = Number(uint(v[6], "verdict.faults", 0xffff_ffffn));
-  const selected = format === 3 ? v[12] : null;
+  const selected = v[12];
   if (selected !== null && selected !== "Primary" && selected !== "Fallback")
     return invalid("verdict.selected");
-  const diagnostics =
-    format === 3 ? Number(uint(v[13], "verdict.diagnostics", 0xffn)) : null;
+  const diagnostics = Number(uint(v[13], "verdict.diagnostics", 0xffn));
   const value: CommittedOracleVerdict = {
-    format,
     height: uint(v[0], "verdict.height"),
     blockTime: uint(v[1], "verdict.blockTime"),
     status,
@@ -273,8 +261,7 @@ function verdict(raw: unknown): CommittedOracleVerdict {
     },
     selected,
     diagnostics,
-    diagnosticFlags:
-      diagnostics === null ? [] : bitNames(diagnostics, ORACLE_DIAGNOSTIC_BITS),
+    diagnosticFlags: bitNames(diagnostics, ORACLE_DIAGNOSTIC_BITS),
   };
   if (
     (status === "Fresh") !== (reason === "Fresh") ||
@@ -285,8 +272,7 @@ function verdict(raw: unknown): CommittedOracleVerdict {
     (value.eligibleSince !== null && value.eligibleSince > value.blockTime)
   )
     return invalid("verdict consistency");
-  if (format === 3 && !primaryFallbackConsistent(value))
-    return invalid("verdict selection");
+  if (!primaryFallbackConsistent(value)) return invalid("verdict selection");
   return value;
 }
 
@@ -299,7 +285,7 @@ function verdict(raw: unknown): CommittedOracleVerdict {
 function primaryFallbackConsistent(v: CommittedOracleVerdict): boolean {
   const fresh = v.status === "Fresh";
   const valid = v.validSources;
-  const diagnostics = v.diagnostics ?? 0;
+  const diagnostics = v.diagnostics;
   const has = (flag: OracleVerdictDiagnostic) =>
     v.diagnosticFlags.includes(flag);
   return (
@@ -326,76 +312,43 @@ export function validateOraclePermissionMarket(market: number): void {
     throw new Error("oracle permission market must be a positive uint32");
 }
 
-/**
- * Decode the engine's frozen 9-slot MessagePack read without lossy integers.
- * The committed verdict is accepted in both layouts: the fourteen-field
- * format-3 primary-with-fallback read (exchange#831) and the twelve-field
- * format-2 read of earlier nodes.
- */
+/** Decode the engine's seven-slot MessagePack read without lossy integers. */
 export function decodeOraclePermissions(
   raw: unknown,
   expectedMarket?: number,
 ): OraclePermissions {
-  const r = tuple(raw, 9, "response");
+  const r = tuple(raw, 7, "response");
   const market = Number(positive(r[0], "market", 0xffff_ffffn));
   if (expectedMarket !== undefined && market !== expectedMarket)
     return invalid("market binding");
   const finalizedHeight = uint(r[1], "finalizedHeight");
-  const activationHeight = optional(r[2], (raw) =>
-    uint(raw, "activationHeight"),
-  );
-  if (typeof r[3] !== "boolean") return invalid("oracleActive");
-  const oracleActive = r[3];
-  if (
-    oracleActive !==
-    (activationHeight !== null && finalizedHeight >= activationHeight)
-  )
-    return invalid("activation binding");
-  const state = r[4];
-  if (state !== "Legacy" && state !== "Unavailable" && state !== "Committed")
-    return invalid("state");
-  const oraclePermission = r[5];
-  if (
-    oraclePermission !== null &&
-    oraclePermission !== "Satisfied" &&
-    oraclePermission !== "Unavailable"
-  )
+  const state = r[2];
+  if (state !== "Unavailable" && state !== "Committed") return invalid("state");
+  const oraclePermission = r[3];
+  if (oraclePermission !== "Satisfied" && oraclePermission !== "Unavailable")
     return invalid("permission");
-  const effectivePolicy = optional(r[6], policy);
-  const pending = optional(r[7], (raw) => {
+  const effectivePolicy = optional(r[4], policy);
+  const pending = optional(r[5], (raw) => {
     const p = tuple(raw, 2, "pending");
     return {
       effectiveHeight: uint(p[0], "pending.effectiveHeight"),
       policy: policy(p[1]),
     };
   });
-  const committed = optional(r[8], verdict);
-  if (state === "Legacy") {
-    if (
-      oracleActive ||
-      oraclePermission !== null ||
-      effectivePolicy ||
-      pending ||
-      committed
-    )
-      return invalid("legacy consistency");
-  } else {
-    if (!oracleActive || oraclePermission === null)
-      return invalid("active consistency");
-    if (
-      state === "Unavailable" &&
-      (effectivePolicy || committed || oraclePermission !== "Unavailable")
-    )
-      return invalid("unavailable consistency");
-    if (
-      state === "Committed" &&
-      (!effectivePolicy ||
-        !committed ||
-        committed.height !== finalizedHeight ||
-        (oraclePermission === "Satisfied") !== (committed.status === "Fresh"))
-    )
-      return invalid("committed consistency");
-  }
+  const committed = optional(r[6], verdict);
+  if (
+    state === "Unavailable" &&
+    (effectivePolicy || committed || oraclePermission !== "Unavailable")
+  )
+    return invalid("unavailable consistency");
+  if (
+    state === "Committed" &&
+    (!effectivePolicy ||
+      !committed ||
+      committed.height !== finalizedHeight ||
+      (oraclePermission === "Satisfied") !== (committed.status === "Fresh"))
+  )
+    return invalid("committed consistency");
   if (
     pending &&
     (pending.effectiveHeight <= finalizedHeight ||
@@ -405,8 +358,6 @@ export function decodeOraclePermissions(
   return {
     market,
     finalizedHeight,
-    activationHeight,
-    oracleActive,
     state,
     oraclePermission,
     policy: effectivePolicy,

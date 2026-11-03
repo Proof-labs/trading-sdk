@@ -228,23 +228,30 @@ describe("codec v1", () => {
     }
   });
 
-  it("round-trips OracleUpdate", () => {
-    const action: Action = {
-      type: "OracleUpdate",
-      data: {
-        market: 1,
-        price: 5000n,
-        signer: SIGNER,
-        publishTimeMs: 1_000_000n,
-      },
-    };
-    const bytes = encodeTx(action, 7n);
-    const { action: decoded } = decodeTx(bytes);
-    expect(decoded.type).toBe("OracleUpdate");
-    if (decoded.type === "OracleUpdate") {
-      expect(decoded.data.market).toBe(1);
-      expect(decoded.data.price).toBe(5000n);
-      expect(decoded.data.publishTimeMs).toBe(1_000_000n);
+  it("refuses retired action bytes in both directions", () => {
+    for (const [name, byte] of [
+      ["OracleUpdate", 0x03],
+      ["RunLiquidationSweep", 0x11],
+      ["RunFundingTick", 0x12],
+      ["OracleUpdateComposite", 0x14],
+    ] as const) {
+      expect(name in ActionType).toBe(false);
+      expect(() =>
+        encodePayloadBytes({
+          type: name,
+          data: { market: 1, price: 1n, signer: SIGNER },
+        } as unknown as Action),
+      ).toThrow();
+      // A well-formed envelope must fail on its retired tag alone.
+      const wire = new Encoder().encode([
+        2,
+        byte,
+        1,
+        new Encoder().encode([1, 1, Array.from(SIGNER), 0]),
+        new Uint8Array(32),
+        new Uint8Array(64),
+      ]);
+      expect(() => decodeTx(wire)).toThrow();
     }
   });
 
@@ -314,15 +321,6 @@ describe("codec v1 all action types", () => {
       },
     },
     { type: "CancelOrder", data: { orderId: 42n, owner: OWNER } },
-    {
-      type: "OracleUpdate",
-      data: {
-        market: 1,
-        price: 50000n,
-        signer: SIGNER,
-        publishTimeMs: 100n,
-      },
-    },
     {
       type: "MarketOrder",
       data: { market: 1, owner: OWNER, side: Side.Sell, quantity: 5n },
@@ -1181,15 +1179,6 @@ describe("codec v2 signing", () => {
         },
       },
       { type: "CancelOrder", data: { orderId: 42n, owner: OWNER } },
-      {
-        type: "OracleUpdate",
-        data: {
-          market: 1,
-          price: 50000n,
-          signer: SIGNER,
-          publishTimeMs: 200n,
-        },
-      },
       {
         type: "MarketOrder",
         data: { market: 1, owner: OWNER, side: Side.Sell, quantity: 5n },

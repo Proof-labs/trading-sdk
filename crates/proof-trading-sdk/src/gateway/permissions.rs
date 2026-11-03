@@ -1,9 +1,7 @@
-//! Typed decoding of the gateway's existing nine-slot consensus read.
+//! Typed decoding of the gateway's seven-slot consensus read.
 //!
-//! The committed verdict arrives in two layouts: the fourteen-field format-3
-//! primary-with-fallback read (exchange#831), which appends `selected` and
-//! `diagnostics`, and the twelve-field format-2 read of earlier nodes. Both
-//! share one fault-bit layout ([`ORACLE_FAULT_BITS`]).
+//! The committed verdict is the fourteen-field primary-with-fallback record
+//! (exchange#831), faults in [`ORACLE_FAULT_BITS`] order.
 
 use super::{ErrorKind, GatewayError, Operation};
 use serde::Deserialize;
@@ -11,7 +9,6 @@ use std::{fmt, io::Cursor};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadState {
-    Legacy,
     Unavailable,
     Committed,
 }
@@ -54,7 +51,7 @@ pub enum VerdictReason {
 }
 
 /// Fault bits of the committed verdict in exchange `ReasonFlags::FAULTS`
-/// order: bit `i` is `ORACLE_FAULT_BITS[i]`, in both verdict formats.
+/// order: bit `i` is `ORACLE_FAULT_BITS[i]`.
 /// `Disagreement` (bit 7) and `PairTimeMismatch` (bit 13) are no longer
 /// produced but keep their positions.
 pub const ORACLE_FAULT_BITS: [VerdictReason; 15] = [
@@ -75,15 +72,6 @@ pub const ORACLE_FAULT_BITS: [VerdictReason; 15] = [
     VerdictReason::RecoveryPending,
 ];
 
-/// Which committed-verdict layout a node served.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum VerdictFormat {
-    /// Twelve fields: two-source agreement, before exchange#831.
-    V2,
-    /// Fourteen fields: primary with fallback (exchange#831).
-    V3,
-}
-
 /// The policy slot that priced: slot 0 is the primary, slot 1 the fallback.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SelectedSource {
@@ -91,7 +79,7 @@ pub enum SelectedSource {
     Fallback,
 }
 
-/// Source-selection diagnostics of a format-3 verdict. Monitoring signals,
+/// Source-selection diagnostics of a verdict. Monitoring signals,
 /// not faults: none of them withholds a certificate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VerdictDiagnostic {
@@ -139,7 +127,6 @@ macro_rules! string_enum {
     };
 }
 string_enum!(ReadState {
-    Legacy,
     Unavailable,
     Committed
 });
@@ -221,13 +208,11 @@ pub struct CommittedVerdict {
     pub evidence: [Option<[u8; 32]>; 2],
     pub last_good: Option<CertifiedPrice>,
     pub anchor: AnchorCoverageInfo,
-    pub format: VerdictFormat,
-    /// Format 3: the usable slot chosen by priority, present even when a
-    /// later fault withholds the certificate. Always `None` in format 2.
+    /// The usable slot chosen by priority, present even when a later fault
+    /// withholds the certificate.
     pub selected: Option<SelectedSource>,
-    /// Format 3: raw diagnostic bitset over [`ORACLE_DIAGNOSTIC_BITS`].
-    /// `None` in format 2.
-    pub diagnostics: Option<u8>,
+    /// Raw diagnostic bitset over [`ORACLE_DIAGNOSTIC_BITS`].
+    pub diagnostics: u8,
 }
 
 impl CommittedVerdict {
@@ -241,9 +226,9 @@ impl CommittedVerdict {
             .collect()
     }
 
-    /// `diagnostics` named in bit order; empty in format 2.
+    /// `diagnostics` named in bit order.
     pub fn diagnostic_flags(&self) -> Vec<VerdictDiagnostic> {
-        let bits = self.diagnostics.unwrap_or(0);
+        let bits = self.diagnostics;
         ORACLE_DIAGNOSTIC_BITS
             .iter()
             .enumerate()
@@ -257,10 +242,8 @@ impl CommittedVerdict {
 pub struct OraclePermissions {
     pub market: u32,
     pub finalized_height: u64,
-    pub activation_height: Option<u64>,
-    pub oracle_active: bool,
     pub state: ReadState,
-    pub oracle_permission: Option<OraclePermission>,
+    pub oracle_permission: OraclePermission,
     pub policy: Option<PolicyEpoch>,
     pub pending: Option<PendingPolicy>,
     pub verdict: Option<CommittedVerdict>,
@@ -279,78 +262,27 @@ type PolicyWire = (
     [SourceWire; 2],
 );
 type CertifiedWire = Option<(u64, u64)>;
-/// The committed verdict in either layout: twelve format-2 fields, or the
-/// same twelve followed by `selected` and `diagnostics` (format 3). Any other
-/// length is refused.
-struct VerdictWire {
-    height: u64,
-    block_time: u64,
-    status: VerdictStatus,
-    reason: VerdictReason,
-    certified: CertifiedWire,
-    eligible_since: Option<u64>,
-    faults: u32,
-    valid_sources: u8,
-    current_times: [Option<u64>; 2],
-    evidence: [Option<[u8; 32]>; 2],
-    last_good: CertifiedWire,
-    anchor: (Option<u64>, u64, u64),
-    /// `None` for format 2.
-    selection: Option<(Option<SelectedSource>, u8)>,
-}
-
-impl<'de> Deserialize<'de> for VerdictWire {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        struct Fields;
-        impl<'de> serde::de::Visitor<'de> for Fields {
-            type Value = VerdictWire;
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("a twelve- or fourteen-field committed verdict")
-            }
-            fn visit_seq<A: serde::de::SeqAccess<'de>>(
-                self,
-                mut seq: A,
-            ) -> Result<Self::Value, A::Error> {
-                fn next<'de, T: Deserialize<'de>, A: serde::de::SeqAccess<'de>>(
-                    seq: &mut A,
-                ) -> Result<T, A::Error> {
-                    seq.next_element()?
-                        .ok_or_else(|| serde::de::Error::custom("short committed verdict"))
-                }
-                let mut value = VerdictWire {
-                    height: next(&mut seq)?,
-                    block_time: next(&mut seq)?,
-                    status: next(&mut seq)?,
-                    reason: next(&mut seq)?,
-                    certified: next(&mut seq)?,
-                    eligible_since: next(&mut seq)?,
-                    faults: next(&mut seq)?,
-                    valid_sources: next(&mut seq)?,
-                    current_times: next(&mut seq)?,
-                    evidence: next(&mut seq)?,
-                    last_good: next(&mut seq)?,
-                    anchor: next(&mut seq)?,
-                    selection: None,
-                };
-                if let Some(selected) = seq.next_element::<Option<SelectedSource>>()? {
-                    value.selection = Some((selected, next(&mut seq)?));
-                    if seq.next_element::<serde::de::IgnoredAny>()?.is_some() {
-                        return Err(serde::de::Error::custom("long committed verdict"));
-                    }
-                }
-                Ok(value)
-            }
-        }
-        d.deserialize_seq(Fields)
-    }
-}
+type VerdictWire = (
+    u64,
+    u64,
+    VerdictStatus,
+    VerdictReason,
+    CertifiedWire,
+    Option<u64>,
+    u32,
+    u8,
+    [Option<u64>; 2],
+    [Option<[u8; 32]>; 2],
+    CertifiedWire,
+    (Option<u64>, u64, u64),
+    Option<SelectedSource>,
+    u8,
+);
 type PermissionWire = (
     u32,
     u64,
-    Option<u64>,
-    bool,
     ReadState,
-    Option<OraclePermission>,
+    OraclePermission,
     Option<PolicyWire>,
     Option<(u64, PolicyWire)>,
     Option<VerdictWire>,
@@ -388,48 +320,49 @@ fn policy(w: PolicyWire) -> Result<PolicyEpoch, GatewayError> {
     })
 }
 fn verdict(w: VerdictWire) -> Result<CommittedVerdict, GatewayError> {
-    let fresh = w.status == VerdictStatus::Fresh;
-    if fresh != (w.reason == VerdictReason::Fresh)
-        || fresh != w.certified.is_some()
-        || fresh != w.eligible_since.is_some()
-        || w.certified.is_some_and(|c| c.0 == 0 || c.1 > w.block_time)
-        || w.eligible_since.is_some_and(|t| t > w.block_time)
-        || w.last_good.is_some_and(|c| c.0 == 0 || c.1 > w.block_time)
+    let certified = w.4.map(|c| CertifiedPrice {
+        price: c.0,
+        provider_time: c.1,
+    });
+    let last_good = w.10.map(|c| CertifiedPrice {
+        price: c.0,
+        provider_time: c.1,
+    });
+    let fresh = w.2 == VerdictStatus::Fresh;
+    if fresh != (w.3 == VerdictReason::Fresh)
+        || fresh != certified.is_some()
+        || fresh != w.5.is_some()
+        || certified
+            .as_ref()
+            .is_some_and(|c| c.price == 0 || c.provider_time > w.1)
+        || w.5.is_some_and(|t| t > w.1)
+        || last_good
+            .as_ref()
+            .is_some_and(|c| c.price == 0 || c.provider_time > w.1)
     {
         return Err(invalid());
     }
-    let (format, selected, diagnostics) = match w.selection {
-        None => (VerdictFormat::V2, None, None),
-        Some((selected, diagnostics)) => (VerdictFormat::V3, selected, Some(diagnostics)),
-    };
     let value = CommittedVerdict {
-        height: w.height,
-        block_time: w.block_time,
-        status: w.status,
-        reason: w.reason,
-        certified: w.certified.map(|c| CertifiedPrice {
-            price: c.0,
-            provider_time: c.1,
-        }),
-        eligible_since: w.eligible_since,
-        faults: w.faults,
-        valid_sources: w.valid_sources,
-        current_times: w.current_times,
-        evidence: w.evidence,
-        last_good: w.last_good.map(|c| CertifiedPrice {
-            price: c.0,
-            provider_time: c.1,
-        }),
+        height: w.0,
+        block_time: w.1,
+        status: w.2,
+        reason: w.3,
+        certified,
+        eligible_since: w.5,
+        faults: w.6,
+        valid_sources: w.7,
+        current_times: w.8,
+        evidence: w.9,
+        last_good,
         anchor: AnchorCoverageInfo {
-            price: w.anchor.0,
-            covered_ms: w.anchor.1,
-            required_ms: w.anchor.2,
+            price: w.11 .0,
+            covered_ms: w.11 .1,
+            required_ms: w.11 .2,
         },
-        format,
-        selected,
-        diagnostics,
+        selected: w.12,
+        diagnostics: w.13,
     };
-    if format == VerdictFormat::V3 && !primary_fallback_consistent(&value) {
+    if !primary_fallback_consistent(&value) {
         return Err(invalid());
     }
     Ok(value)
@@ -447,7 +380,7 @@ fn primary_fallback_consistent(v: &CommittedVerdict) -> bool {
     v.faults >> ORACLE_FAULT_BITS.len() == 0
         && fresh == (v.faults == 0)
         && (fresh || v.fault_reasons().contains(&v.reason))
-        && v.diagnostics.unwrap_or(0) >> ORACLE_DIAGNOSTIC_BITS.len() == 0
+        && v.diagnostics >> ORACLE_DIAGNOSTIC_BITS.len() == 0
         && valid <= 0b11
         && (!fresh || v.selected.is_some())
         && (v.selected == Some(SelectedSource::Primary)) == (valid & 0b01 != 0)
@@ -471,13 +404,11 @@ pub(super) fn decode(
     let value = OraclePermissions {
         market: w.0,
         finalized_height: w.1,
-        activation_height: w.2,
-        oracle_active: w.3,
-        state: w.4,
-        oracle_permission: w.5,
-        policy: w.6.map(policy).transpose()?,
+        state: w.2,
+        oracle_permission: w.3,
+        policy: w.4.map(policy).transpose()?,
         pending: w
-            .7
+            .5
             .map(|p| {
                 Ok(PendingPolicy {
                     effective_height: p.0,
@@ -485,42 +416,22 @@ pub(super) fn decode(
                 })
             })
             .transpose()?,
-        verdict: w.8.map(verdict).transpose()?,
+        verdict: w.6.map(verdict).transpose()?,
     };
-    if value.oracle_active
-        != value
-            .activation_height
-            .is_some_and(|h| value.finalized_height >= h)
-    {
-        return Err(invalid());
-    }
     match value.state {
-        ReadState::Legacy => {
-            if value.oracle_active
-                || value.oracle_permission.is_some()
-                || value.policy.is_some()
-                || value.pending.is_some()
-                || value.verdict.is_some()
-            {
-                return Err(invalid());
-            }
-        }
         ReadState::Unavailable => {
-            if !value.oracle_active
-                || value.policy.is_some()
+            if value.policy.is_some()
                 || value.verdict.is_some()
-                || value.oracle_permission != Some(OraclePermission::Unavailable)
+                || value.oracle_permission != OraclePermission::Unavailable
             {
                 return Err(invalid());
             }
         }
         ReadState::Committed => {
             let v = value.verdict.as_ref().ok_or_else(invalid)?;
-            if !value.oracle_active
-                || value.policy.is_none()
-                || value.oracle_permission.is_none()
+            if value.policy.is_none()
                 || v.height != value.finalized_height
-                || (value.oracle_permission == Some(OraclePermission::Satisfied))
+                || (value.oracle_permission == OraclePermission::Satisfied)
                     != (v.status == VerdictStatus::Fresh)
             {
                 return Err(invalid());
@@ -550,11 +461,12 @@ mod tests {
     use super::*;
     use serde_json::Value;
 
-    /// Captured from exchange-core `query_oracle_permissions` (rmp_serde) at
-    /// the `exchange` commit on each row: format 3 from exchange#831, format
-    /// 2 from exchange dev before it.
+    /// exchange-core `OraclePermissionsInfo` (rmp_serde) at the `exchange`
+    /// commit on each row.
     const COMMITTED: &str =
         include_str!("../../../../conformance/oracle-permissions-committed.ndjson");
+    const UNAVAILABLE: &str =
+        include_str!("../../../../conformance/oracle-permissions-unavailable.hex");
 
     fn cases() -> Vec<Value> {
         COMMITTED
@@ -586,7 +498,7 @@ mod tests {
         let rmpv::Value::Array(fields) = &mut root else {
             panic!("response is an array")
         };
-        let rmpv::Value::Array(verdict) = &mut fields[8] else {
+        let rmpv::Value::Array(verdict) = &mut fields[6] else {
             panic!("committed verdict is an array")
         };
         edit(verdict);
@@ -597,21 +509,12 @@ mod tests {
 
     #[test]
     fn exchange_encoded_committed_reads_decode_exactly() {
-        let all = cases();
-        assert!(all.iter().any(|c| c["format"] == 2));
-        assert!(all.iter().any(|c| c["format"] == 3));
-        for c in all {
+        for c in cases() {
             let name = c["case"].as_str().unwrap();
             let e = &c["expect"];
             let read = decode(&bytes(&c), 1).unwrap_or_else(|_| panic!("{name}"));
             assert_eq!(read.state, ReadState::Committed, "{name}");
             let v = read.verdict.unwrap();
-            let format = if c["format"] == 3 {
-                VerdictFormat::V3
-            } else {
-                VerdictFormat::V2
-            };
-            assert_eq!(v.format, format, "{name}");
             assert_eq!(v.height, e["height"].as_u64().unwrap(), "{name}");
             assert_eq!(format!("{:?}", v.status), e["status"], "{name}");
             assert_eq!(v.reason, reason(e["reason"].as_str().unwrap()), "{name}");
@@ -639,7 +542,7 @@ mod tests {
                 "{name}"
             );
             assert_eq!(
-                v.diagnostics.map(u64::from),
+                Some(u64::from(v.diagnostics)),
                 e["diagnostics"].as_u64(),
                 "{name}"
             );
@@ -654,7 +557,7 @@ mod tests {
     }
 
     #[test]
-    fn one_fault_bit_layout_serves_both_formats() {
+    fn fault_bits_keep_their_positions() {
         let v3 = decode(
             &bytes(&case("v3/unpriceable_warmup_reference_unavailable")),
             1,
@@ -662,17 +565,40 @@ mod tests {
         .unwrap()
         .verdict
         .unwrap();
-        let v2 = decode(
-            &bytes(&case("v2/unpriceable_warmup_reference_unavailable")),
-            1,
-        )
-        .unwrap()
-        .verdict
-        .unwrap();
         assert_eq!(v3.faults, (1 << 8) | (1 << 14));
-        assert_eq!(v3.faults, v2.faults);
         assert_eq!(ORACLE_FAULT_BITS[7], VerdictReason::Disagreement);
         assert_eq!(ORACLE_FAULT_BITS[13], VerdictReason::PairTimeMismatch);
+    }
+
+    #[test]
+    fn unavailable_read_decodes_and_the_nine_slot_layout_does_not() {
+        let unavailable = hex::decode(UNAVAILABLE.trim()).unwrap();
+        let read = decode(&unavailable, 1).unwrap();
+        assert_eq!(read.finalized_height, 9);
+        assert_eq!(read.state, ReadState::Unavailable);
+        assert_eq!(read.oracle_permission, OraclePermission::Unavailable);
+        assert!(read.policy.is_none() && read.verdict.is_none());
+
+        let mut root = rmpv::decode::read_value(&mut unavailable.as_slice()).unwrap();
+        let rmpv::Value::Array(fields) = &mut root else {
+            panic!("response is an array")
+        };
+        fields.splice(2..2, [rmpv::Value::from(10), rmpv::Value::from(false)]);
+        fields[3] = rmpv::Value::Nil;
+        let mut nine = Vec::new();
+        rmpv::encode::write_value(&mut nine, &root).unwrap();
+        assert!(decode(&nine, 1).is_err(), "pre-F16 layout");
+
+        for state in ["Legacy", "Committed"] {
+            let mut root = rmpv::decode::read_value(&mut unavailable.as_slice()).unwrap();
+            let rmpv::Value::Array(fields) = &mut root else {
+                panic!("response is an array")
+            };
+            fields[2] = rmpv::Value::from(state);
+            let mut out = Vec::new();
+            rmpv::encode::write_value(&mut out, &root).unwrap();
+            assert!(decode(&out, 1).is_err(), "{state}");
+        }
     }
 
     #[test]
@@ -701,6 +627,7 @@ mod tests {
                 }),
             ),
             ("fifteen fields", Box::new(|v| v.push(V::from(0)))),
+            ("twelve-field format 2", Box::new(|v| v.truncate(12))),
             ("unknown slot", Box::new(|v| v[12] = V::from("Secondary"))),
             ("slot ordinal", Box::new(|v| v[12] = V::from(0))),
             ("diagnostic bit 4", Box::new(|v| v[13] = V::from(0x10))),
@@ -737,19 +664,5 @@ mod tests {
             decode(&edited(&stale, |v| v[3] = V::from("ManualHalt")), 1).is_err(),
             "a non-fresh reason missing from the fault word"
         );
-    }
-
-    #[test]
-    fn format_two_reasons_from_older_nodes_still_decode() {
-        let stale = case("v2/unpriceable_no_usable_source");
-        for name in [
-            "Disagreement",
-            "PairTimeMismatch",
-            "AnchorUnavailable",
-            "ReferenceUnavailable",
-        ] {
-            let read = decode(&edited(&stale, |v| v[3] = rmpv::Value::from(name)), 1).unwrap();
-            assert_eq!(read.verdict.unwrap().reason, reason(name));
-        }
     }
 }

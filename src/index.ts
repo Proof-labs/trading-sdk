@@ -17,8 +17,6 @@ export {
   type AtomicBasketLeg,
   type AtomicBasketOrder,
   type ClosePosition,
-  type OracleUpdate,
-  type OracleUpdateComposite,
   type MarketOrder,
   type MarketsSnapshot,
   type MarketOpenInterest,

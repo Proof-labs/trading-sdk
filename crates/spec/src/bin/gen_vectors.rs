@@ -145,8 +145,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     // vectors, and Python/TS map names→bytes via the core's get_action_types).
     const PLACE_ORDER: u8 = 0x01;
     const CANCEL_ORDER: u8 = 0x02;
-    const ORACLE_UPDATE: u8 = 0x03;
-    const ORACLE_UPDATE_COMPOSITE: u8 = 0x14;
     const MARKET_ORDER: u8 = 0x04;
     const CLOSE_POSITION: u8 = 0x17;
     const CONFIRM_DEPOSIT: u8 = 0x09;
@@ -230,11 +228,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({ "order_id": 42, "owner": vec![0x02u8; 20] }),
         ),
         codec_case(
-            "oracle_update/no_publish_time",
-            ORACLE_UPDATE,
-            json!({ "market": 1, "price": 5000, "signer": signer, "publish_time_ms": 0 }),
-        ),
-        codec_case(
             "submit_oracle_observation/max_u64_with_confidence",
             SUBMIT_ORACLE_OBSERVATION,
             json!({"market": 7, "policy_version": u64::MAX, "source_id": 2,
@@ -247,22 +240,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({"market": 1, "policy_version": 1, "source_id": 1,
                    "publish_time_ms": 1700000000123u64, "price_micro": 67000000000u64,
                    "confidence_micro": null, "evidence_digest": vec![0x5Au8;32], "signer": signer}),
-        ),
-        // OracleUpdateComposite (0x14) — BE-31 composite-CEX feeder action.
-        // Operator-only; pins the cross-language wire shape now that the TS
-        // and Python SDKs expose it. Field order: market, price, n_sources,
-        // signer, publish_time_ms (n_sources/publish_time are serde-default).
-        codec_case(
-            "oracle_update_composite/four_sources",
-            ORACLE_UPDATE_COMPOSITE,
-            json!({ "market": 1, "price": 6675000u64, "n_sources": 4,
-                    "signer": signer, "publish_time_ms": 1700000000123u64 }),
-        ),
-        codec_case(
-            "oracle_update_composite/no_publish_time",
-            ORACLE_UPDATE_COMPOSITE,
-            json!({ "market": 7, "price": 250000u64, "n_sources": 1,
-                    "signer": signer, "publish_time_ms": 0 }),
         ),
         codec_case(
             "market_order/basic",

@@ -75,7 +75,8 @@ define_error_kinds! {
     34  => PostOnlyWouldCross           ~ "PlaceOrder with post_only=true would have crossed the book. Rejected so makers retain maker-side fills.",
     35  => ReduceOnlyWouldIncrease      ~ "PlaceOrder/MarketOrder with reduce_only=true was same-side as the existing position (would increase exposure) or no position existed.",
     36  => TestActionRejected           ~ "Test/admin action rejected because the engine isn't configured to accept them, or the position the action referenced does not exist.",
-    37  => StaleOracle                  ~ "Oracle price is stale for this market; refresh the oracle before placing orders, reading margin, or liquidating.",
+    // 37, 77, 82 and 97 are `ExecError::Unpriced`, one code per reason.
+    37  => UnpricedStale                ~ "Oracle price is stale for this market; refresh the oracle before placing orders, reading margin, or liquidating.",
     38  => UserLeverageBelowMarketIm    ~ "User-selected initial margin is below the market risk floor; only deleveraging above the market floor is allowed.",
     39  => TickSizeViolation            ~ "Order price is not an exact multiple of the market tick size.",
     40  => LotSizeViolation             ~ "Order quantity is not an exact multiple of the market lot size.",
@@ -120,9 +121,9 @@ define_error_kinds! {
     74  => BridgeReceiptMismatch            ~ "The signed receipt does not bind to this withdrawal or deployment (id, owner, amount, destination, epoch or terminal state differs); the log names the field.",
     75  => WithdrawalBelowMinimum           ~ "The net withdrawal amount is below the effective minimum (the configured minimum, floored at the flat fee): the payout would be worth less than it costs to settle.",
     76  => WithdrawalTerminalGated          ~ "A retired legacy relayer terminal (ConfirmWithdrawal / FailWithdrawal) was submitted at or above the receipt cutover; rejected as a normal failed action.",
-    77  => OracleVerdictUnavailable         ~ "The oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed); mark-dependent actions are refused until a later block certifies a price.",
+    77  => UnpricedNoVerdict                ~ "The oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed); mark-dependent actions are refused until a later block certifies a price.",
     // 78-81 are reserved on the wire for oracle-policy errors.
-    82  => OracleGuardUnset                 ~ "A mark-dependent read was refused because the oracle-guard gate is active and the market's mark_price_max_oracle_age_ms is still unset; governance sets the guard first.",
+    82  => UnpricedGuardUnset               ~ "The oracle-guard gate is active and this market has no mark-price max oracle age set; every mark-dependent action is refused until governance sets one.",
     // Sub-accounts (dormant behind their activation).
     83  => SubAccountNotFound               ~ "No sub-account exists for the given master and id.",
     84  => SubAccountAlreadyExists          ~ "A sub-account with this master and id already exists.",
@@ -139,7 +140,7 @@ define_error_kinds! {
     94  => UnderlyingAlreadyAttached        ~ "AttachConditional for an underlying that is already attached to this event.",
     95  => TooManyAttachedConditionals      ~ "AttachConditional would exceed the event's attachment cap; the log names the count and the cap.",
     96  => TooManyActiveEvents              ~ "Account would touch more events than the scenario margin engine can enumerate (the per-account event cap). Close a leg on another event before opening this one.",
-    97  => MarkUnavailable                   ~ "No mark price is available for the market: an impact-family book has no recent-trade EWMA and no oracle fallback value.",
+    97  => UnpricedNoMark                   ~ "No mark price is available for the market: a conditional or prediction-binary book has no recent-trade EWMA and no oracle fallback value. Fund or trade the market once a mark exists.",
     98  => TriggerOrderIncompatible         ~ "Order cannot carry attached SL/TP (reduce-only order, ineligible market, or inactive feature).",
     99  => WithdrawalLimitExceeded          ~ "The withdrawal would push the account's rolling-window outflow past the configured per-account cap. The attempted debit, the cap, and when the oldest in-window outflow expires are in the log; capacity returns as in-window outflows age out.",
     100 => AccountOrderCapReached           ~ "The account already holds the maximum number of resting orders; cancel one before placing another.",
@@ -243,7 +244,7 @@ pub fn error_code_manifest() -> &'static [ErrorKind] {
 #[cfg(test)]
 mod exec_error_meaning_tests {
     use super::*;
-    use proof_wire::types::ExecError;
+    use proof_wire::types::{ExecError, UnpricedReason};
 
     #[test]
     #[allow(clippy::unwrap_used)]
@@ -385,11 +386,25 @@ mod exec_error_meaning_tests {
                 block_time_ms: 0,
                 staleness_ms: 1,
             },
-            ExecError::StaleOracle {
+            ExecError::Unpriced {
                 market: 0,
-                publish_time_ms: 0,
-                block_time_ms: 0,
-                max_staleness_ms: 1,
+                reason: UnpricedReason::Stale {
+                    publish_time_ms: 0,
+                    block_time_ms: 0,
+                    max_staleness_ms: 1,
+                },
+            },
+            ExecError::Unpriced {
+                market: 0,
+                reason: UnpricedReason::NoVerdict(None),
+            },
+            ExecError::Unpriced {
+                market: 0,
+                reason: UnpricedReason::GuardUnset,
+            },
+            ExecError::Unpriced {
+                market: 0,
+                reason: UnpricedReason::NoMark,
             },
             ExecError::UserLeverageBelowMarketIm {
                 market: 0,
@@ -423,7 +438,6 @@ mod exec_error_meaning_tests {
             ExecError::BridgeReceiptMismatch("e".into()),
             ExecError::WithdrawalBelowMinimum { amount: 0, min: 1 },
             ExecError::WithdrawalTerminalGated("e".into()),
-            ExecError::OracleGuardUnset { market: 0 },
             ExecError::SubAccountNotFound,
             ExecError::SubAccountAlreadyExists,
             ExecError::SubAccountTransferSameAccount,
@@ -485,6 +499,33 @@ mod exec_error_meaning_tests {
                 budget: 1,
             },
         ]
+    }
+
+    /// Each unpriced reason keeps its own code, name and the wire's meaning.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn unpriced_reasons_stay_distinct() {
+        let stale = UnpricedReason::Stale {
+            publish_time_ms: 0,
+            block_time_ms: 0,
+            max_staleness_ms: 1,
+        };
+        for (reason, kind) in [
+            (stale, ErrorKind::UnpricedStale),
+            (
+                UnpricedReason::NoVerdict(None),
+                ErrorKind::UnpricedNoVerdict,
+            ),
+            (UnpricedReason::GuardUnset, ErrorKind::UnpricedGuardUnset),
+            (UnpricedReason::NoMark, ErrorKind::UnpricedNoMark),
+        ] {
+            let e = ExecError::Unpriced { market: 1, reason };
+            assert_eq!(
+                decode_exec_error_kind(e.code(), None).unwrap(),
+                DecodedExecErrorKind::Known(kind)
+            );
+            assert_eq!(kind.meaning(), e.meaning());
+        }
     }
 
     /// Every code returned by `code()` must have a non-empty `meaning()`.
@@ -550,9 +591,9 @@ pub mod prelude {
         CancelReplaceOrder, ClosePosition, ConfirmDeposit, ConfirmWithdrawal, CreateEvent,
         CreateMarket, Deposit, Event, EventId, EventInfo, EventOracleSource, EventStatus,
         ExecError, FailDepositReason, FailWithdrawal, FillId, MarkSourceMode, MarketConfig,
-        MarketId, MarketKind, MarketOrder, OracleUpdate, Order, OrderId, Outcome, PlaceOrder,
-        Position, ResolveEvent, RevokeAgent, SetUserMarketLeverage, Side, TimeInForce,
-        UpdateMarketFees, Withdraw, WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX,
+        MarketId, MarketKind, MarketOrder, Order, OrderId, Outcome, PlaceOrder, Position,
+        ResolveEvent, RevokeAgent, SetUserMarketLeverage, Side, TimeInForce, UpdateMarketFees,
+        Withdraw, WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX,
         DEFAULT_CEX_COMPOSITE_STALENESS_MS, DEFAULT_MAX_MARK_SPREAD_BPS,
     };
 }

@@ -36,12 +36,7 @@ export const ActionType = {
   PlaceOrder: 0x01,
   /** Cancel an existing resting order. */
   CancelOrder: 0x02,
-  /** Submit an oracle price update (relayer only). */
-  OracleUpdate: 0x03,
-  /** Operator-only: submit a composite-CEX price for the multi-source mark
-   *  median (BE-31 Phase B). Feeder infrastructure, not a trading action. */
-  OracleUpdateComposite: 0x14,
-  /** Quorum-policy source relay; dormant until the engine's oracle gate. */
+  /** Oracle-policy source observation relayed by the feeder. */
   SubmitOracleObservation: 0x2d,
   /** Place a market order that crosses immediately. */
   MarketOrder: 0x04,
@@ -240,55 +235,6 @@ export interface AmendOrder {
   newPrice?: bigint | null;
   /** Optional new total order quantity. Omit/null to keep the existing quantity. */
   newQuantity?: bigint | null;
-}
-
-/** Submit an oracle price update for a market (relayer only). */
-export interface OracleUpdate {
-  /** Market identifier to update. */
-  market: number;
-  /** New oracle price in micro-USDC (6 decimal places, e.g., 66752340000 = $66,752.34). */
-  price: bigint;
-  /** Authorized oracle signer address (20 bytes). */
-  signer: Address;
-  /**
-   * Oracle publish timestamp in ms since Unix epoch. Must be strictly
-   * greater than the last accepted update on this market (engine
-   * rejects with code 30 `OracleTimestampNotMonotonic` otherwise).
-   * Added 2026-04-23 per audit B3 as replay protection for the
-   * relayer-signed oracle feed.
-   */
-  publishTimeMs: bigint;
-}
-
-/**
- * **Operator action — not for trading integrations.** Submit a composite-CEX
- * price for a market: BE-31 Phase B's third source for the multi-source
- * mark-price median (oracle + book-mid + composite CEX index).
- *
- * A normal trading integration never submits this — it is feeder
- * infrastructure run by the operator. The engine re-checks the signer against
- * a **separate CEX-composite feeder allowlist** (a distinct trust domain from
- * the {@link OracleUpdate} relay), so a non-feeder signer is rejected
- * regardless. Markets ignore the composite entirely unless an operator has
- * flipped them to `Median` via {@link UpdateMarketFees} (`markSourceMode = 1`).
- *
- * @remarks Operator-only. Requires a signer on the engine's CEX-composite
- * feeder allowlist; not needed for trading integrations.
- */
-export interface OracleUpdateComposite {
-  /** Market identifier to update. */
-  market: number;
-  /** Composite price in micro-USDC (median/VWAP of `nSources` CEX feeds). */
-  price: bigint;
-  /** Number of CEX feeds that went into the composite. Observability only —
-   *  the engine does not gate on it. Encodes as 0 when absent. */
-  nSources: number;
-  /** Authorized feeder signer (20 bytes), on the CEX-composite allowlist. */
-  signer: Address;
-  /** Feeder publish timestamp in ms since Unix epoch. Must be strictly
-   *  greater than the last accepted composite on this market (replay guard,
-   *  same semantics as {@link OracleUpdate.publishTimeMs}). */
-  publishTimeMs: bigint;
 }
 
 /** Place a market order that crosses immediately against resting orders. */
@@ -1007,17 +953,15 @@ export type TraderAction =
 
 /**
  * Operator actions — privileged infrastructure submitted by the operator's
- * relayer / oracle relay / CEX-composite feeder, **not** by a trading
- * integration. Each is gated by a dedicated engine allowlist (relayer, oracle,
- * or composite-feeder); a normal trader's signer is rejected. They are part of
+ * relayer or oracle feeder, **not** by a trading integration. Each is gated
+ * by a dedicated engine allowlist or the market's oracle policy; a normal
+ * trader's signer is rejected. They are part of
  * the public wire contract (so operator tooling has one SDK), but a trading
  * consumer should never need them. See the "Operator actions" section in
  * AGENTS.md / README.md.
  */
 export type OperatorAction =
   | { type: "SubmitOracleObservation"; data: SubmitOracleObservation }
-  | { type: "OracleUpdate"; data: OracleUpdate }
-  | { type: "OracleUpdateComposite"; data: OracleUpdateComposite }
   | { type: "Deposit"; data: Deposit }
   | { type: "Withdraw"; data: Withdraw }
   | { type: "CreateMarket"; data: CreateMarket }

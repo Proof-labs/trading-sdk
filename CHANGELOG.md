@@ -7,6 +7,39 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking changes
+
+- **proof-wire for exchange F16 activation** ([Proof-labs/exchange#1328](https://github.com/Proof-labs/exchange/pull/1328),
+  [Proof-labs/exchange#1345](https://github.com/Proof-labs/exchange/pull/1345)).
+  The Rust crate pins proof-wire 9 from the exchange review branch until a
+  Proof-labs/wire tag carries it. Every perp is priced by its certified
+  oracle verdict, so the single-signer price actions leave the wire:
+  `OracleUpdate` (0x03), `RunFundingTick` (0x12) and `OracleUpdateComposite`
+  (0x14) no longer encode or decode in TypeScript, Rust or Python. Their TS
+  types and Python builders are removed, and so is the
+  `@proof-labs/trading-sdk/testing` subpath, whose only action was
+  `RunFundingTick`. The bytes are never reassigned (MAJOR).
+
+- **The four unpriced error codes are renamed after the wire's one
+  `ExecError::Unpriced { market, reason }`.** Each reason keeps its own code
+  and meaning: 37 `StaleOracle` is `UnpricedStale`, 77
+  `OracleVerdictUnavailable` is `UnpricedNoVerdict`, 82 `OracleGuardUnset` is
+  `UnpricedGuardUnset` and 97 `MarkUnavailable` is `UnpricedNoMark`, in the
+  TS `ExecErrorCode` and decoder, the Rust `ErrorKind` and the Python
+  `get_error_name`. Code that matches on the old names must match on the new
+  ones; code that matches on the numbers is unaffected (MAJOR).
+
+- **The oracle-permissions read is seven slots.** The engine drops
+  `activation_height` and `oracle_active` and the `Legacy` state, and the
+  permission is always present. `OraclePermissions` loses `activationHeight`
+  / `oracleActive` (Rust `activation_height` / `oracle_active`),
+  `oraclePermission` is no longer nullable, and `state` is `Unavailable` or
+  `Committed`. Only the fourteen-field verdict can arrive in that layout, so
+  the twelve-field format 2 is refused: `CommittedOracleVerdict.format` and
+  the Rust `VerdictFormat` are removed and `diagnostics` is no longer
+  nullable. Reads from engines before F16 activation no longer decode
+  (MAJOR).
+
 ## [9.1.0] — 2026-11-03
 
 ### Added

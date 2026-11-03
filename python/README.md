@@ -62,8 +62,7 @@ newer than this package.
   `AtomicBasketOrder`, `SetPositionTriggers`, `CancelPositionTriggers`,
   `SetUserMarketLeverage`, `ApproveAgent`, `RevokeAgent`, `CreateSubAccount`,
   `SubAccountTransfer`, `Deposit`, `Withdraw`, `WithdrawRequest`.
-- **Operator (privileged):** `OracleUpdate`, `OracleUpdateComposite`,
-  `SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,
+- **Operator (privileged):** `SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,
   `ConfirmDeposit`, `ConfirmWithdrawal`, `FailWithdrawal`,
   `AuthorizeWithdrawal`, `ConfirmWithdrawalReceipt`, `FailWithdrawalReceipt`,
   `ClaimWithdrawalPayout`, `ResolveEvent`.

@@ -218,25 +218,10 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
             "ORACLE_PRIVATE_KEY env var in your test runner.",
         );
       }
-      // OracleUpdate is a relayer/oracle-authorised admin action. The
-      // engine checks signer == cmd.signer AND is_oracle_authorized
-      // (engine.rs:288). Timestamp must monotonically advance per
-      // market (audit B3 replay protection).
-      const action: Action = {
-        type: "OracleUpdate",
-        data: {
-          market,
-          price,
-          signer: oracleAddress,
-          publishTimeMs: BigInt(Date.now()),
-        },
-      };
-      const r = await oracleClient.submitTxCommit(action);
-      if (r.code !== 0) {
-        throw new Error(
-          `pushOracle(${market}, ${price}) failed: code=${r.code} log=${r.log ?? ""}`,
-        );
-      }
+      // OracleUpdate left the wire; no policy-signed replacement yet.
+      throw new Error(
+        `pushOracle(${market}, ${price}): no single-signer oracle push on this engine`,
+      );
     },
 
     waitOneBlock: async () => {

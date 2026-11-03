@@ -325,7 +325,7 @@ describe("decodeAdminAction", () => {
     const short = Array.from({ length: 19 }, () => 0xc1);
     expect(() =>
       decodeAdminAction({ CancelAllOrdersForAccount: [short, 7] }),
-    ).toThrow(/invalid length 19, expected an array of length 20/);
+    ).toThrow(/invalid length 19, expected 20 bytes/);
   });
 
   it("decodes the engine's frozen UpdateAuthoritySet bytes, add and remove", () => {

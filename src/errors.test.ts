@@ -56,11 +56,22 @@ describe("decodeExecError", () => {
   });
 
   it("decodes the unavailable-mark rejection (97)", () => {
-    expect(ExecErrorCode.MarkUnavailable).toBe(97);
+    expect(ExecErrorCode.UnpricedNoMark).toBe(97);
     const e97 = decodeExecError(97);
-    expect(e97?.name).toBe("MarkUnavailable");
+    expect(e97?.name).toBe("UnpricedNoMark");
     expect(e97?.description).toContain("no mark price");
-    expect(execErrorName(97)).toBe("MarkUnavailable");
+    expect(execErrorName(97)).toBe("UnpricedNoMark");
+  });
+
+  it("keeps each unpriced reason on its own code", () => {
+    expect([37, 77, 82, 97].map((code) => execErrorName(code))).toEqual([
+      "UnpricedStale",
+      "UnpricedNoVerdict",
+      "UnpricedGuardUnset",
+      "UnpricedNoMark",
+    ]);
+    expect(decodeExecError(37)?.description).toContain("stale");
+    expect(decodeExecError(82)?.description).toContain("max oracle age");
   });
 
   it("decodes the F2 trigger-order incompatibility (98)", () => {
@@ -150,7 +161,7 @@ describe("ExecErrorCode enum", () => {
   });
 
   it("pins the newly mirrored engine codes (77, 99, 100)", () => {
-    expect(ExecErrorCode.OracleVerdictUnavailable).toBe(77);
+    expect(ExecErrorCode.UnpricedNoVerdict).toBe(77);
     expect(ExecErrorCode.WithdrawalLimitExceeded).toBe(99);
     expect(ExecErrorCode.AccountOrderCapReached).toBe(100);
   });
