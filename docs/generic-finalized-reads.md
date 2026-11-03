@@ -2,9 +2,9 @@
 
 ## Design and release boundary
 
-Task: W43-06. This is read-only SDK infrastructure, not an insurance exit policy
-or permission to sign. It addresses the review on SDK #287. No engine economic
-rule is selected here. Each feature remains opt-in.
+This is read-only SDK infrastructure, not an insurance exit policy or
+permission to sign. No engine economic rule is selected here. Each feature
+remains opt-in.
 
 Following ADR 0003, callers use `client.reads().finalized` for witnessed state,
 `client.reads().evidence` for headers/transactions/block windows, and
@@ -13,13 +13,10 @@ including when `useGateway: false`, just like existing `reads()` methods. That
 flag still controls older query/submission paths, not the typed read facade.
 There is no raw-HTTP fallback in applications.
 
-Deploy gateway #267 before calling the new routes. Merge its compatible engine
-dependencies first. A 404 remains an error, not an empty portfolio or proof that
-a transaction was never admitted. No deployment or package release is part of
-this change. Financial format 3 is an npm MAJOR source change: narrow `format`
-before reading the format-1-only `plp` property. Include it in the next major
-release alongside the existing unreleased breaking changes; do not ship as a
-minor version of 8.1.0.
+The finalized and evidence routes, including `/v1/orderbook-snapshot/{market}`,
+need gateway #267 deployed first. `/v1/history/trades/{market}` is the existing
+history pass-through. A 404 remains an error, not an empty portfolio or proof
+that a transaction was never admitted.
 
 The unreleased raw agent read and parallel `queryFinalized*` methods are removed.
 Synchronous WASM-backed decoders are internal; facade methods await `ready()`
@@ -100,10 +97,3 @@ malformed or binding. Caller cancellation preserves the original signal reason.
 HTTP failures use `GatewayHttpError` with a bounded readable response body after
 upstream cleanup. Existing domain decoders can still raise their documented
 decode errors; do not convert such errors to empty data or retry permission.
-
-## Review sequence
-
-Separate review surfaces: remainder validation; financial format 3; shared
-bounded transport; witnessed state; chain evidence; book and indexed history.
-The transport precedes dependent reads, and the public facade grows with each
-feature. No service signing or activation is enabled by any of these changes.
