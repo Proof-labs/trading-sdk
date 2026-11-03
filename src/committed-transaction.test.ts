@@ -8,6 +8,7 @@ import {
   getPublicKey,
   pubkeyToOwner,
 } from "./crypto.js";
+import { transactionsRoot } from "./chain-evidence.js";
 import { GatewayHttpError } from "./errors.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 import { Side, TimeInForce } from "./types.js";
@@ -15,6 +16,32 @@ import { Side, TimeInForce } from "./types.js";
 const chainName = "exchange-evidence-test-1";
 const base64 = (value: Uint8Array) =>
   btoa(Array.from(value, (byte) => String.fromCharCode(byte)).join(""));
+const unbase64 = (value: string) =>
+  Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+/** A consistent gateway: header data_hash commits to the served txs unless a
+ * test pins a stale root to model a gateway that dropped or reordered them. */
+const withDataHash = (block: {
+  result: { block: { header: object; data: { txs: string[] } } };
+}) => {
+  const header = block.result.block.header as { data_hash?: string };
+  return header.data_hash !== undefined
+    ? block
+    : {
+        ...block,
+        result: {
+          ...block.result,
+          block: {
+            ...block.result.block,
+            header: {
+              ...header,
+              data_hash: transactionsRoot(
+                block.result.block.data.txs.map(unbase64),
+              ),
+            },
+          },
+        },
+      };
+};
 function fixture() {
   const key = new Uint8Array(32).fill(7);
   const signedBytes = signAndEncode(
@@ -81,7 +108,9 @@ function fixture() {
 function setup(f = fixture()) {
   const transport = vi.fn<ExchangeHttpTransport>(
     async (url) =>
-      new Response(JSON.stringify(url.includes("/v1/tx/") ? f.tx : f.block)),
+      new Response(
+        JSON.stringify(url.includes("/v1/tx/") ? f.tx : withDataHash(f.block)),
+      ),
   );
   const client = new ExchangeClient({
     gatewayUrl: "https://gateway.example/",
@@ -206,6 +235,28 @@ describe("trusted-gateway transaction evidence", () => {
       "missing block index",
       (f: ReturnType<typeof fixture>) => {
         f.block.result.block.data.txs.pop();
+      },
+    ],
+    [
+      "reordered block transactions",
+      (f: ReturnType<typeof fixture>) => {
+        const txs = f.block.result.block.data.txs;
+        Object.assign(f.block.result.block.header, {
+          data_hash: transactionsRoot(txs.map(unbase64)),
+        });
+        txs.reverse();
+        f.tx.result.index = 0;
+      },
+    ],
+    [
+      "dropped block transaction",
+      (f: ReturnType<typeof fixture>) => {
+        const txs = f.block.result.block.data.txs;
+        Object.assign(f.block.result.block.header, {
+          data_hash: transactionsRoot(txs.map(unbase64)),
+        });
+        txs.shift();
+        f.tx.result.index = 0;
       },
     ],
     [

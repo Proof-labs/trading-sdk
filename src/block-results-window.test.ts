@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ExchangeClient } from "./client.js";
 import { signAndEncode } from "./codec.js";
+import { transactionsRoot } from "./chain-evidence.js";
 import { chainIdFromString } from "./crypto.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 import { Side, TimeInForce } from "./types.js";
@@ -87,6 +88,22 @@ function fixture(first = 100) {
       ] as
         { type: string; attributes: { key: string; value: string }[] }[] | null,
     });
+  // A consistent gateway: header data_hash commits to the served txs unless a
+  // test pins a stale root to model a gateway that dropped or reordered them.
+  const blockResponse = (value: unknown) => {
+    const served = structuredClone(value) as ReturnType<typeof block>;
+    const header = served.result.block.header as { data_hash?: string };
+    const txs = served.result.block.data.txs;
+    header.data_hash ??=
+      txs === null || Array.isArray(txs)
+        ? transactionsRoot(
+            (txs ?? []).map((tx) =>
+              Uint8Array.from(atob(tx), (char) => char.charCodeAt(0)),
+            ),
+          )
+        : "00".repeat(32);
+    return new Response(JSON.stringify(served));
+  };
   const blocks = new Map<number, ReturnType<typeof block>>();
   const executions = new Map<number, ReturnType<typeof results>>();
   for (let height = first; height <= 103; height++) {
@@ -101,6 +118,7 @@ function fixture(first = 100) {
         ? executions.get(height)
         : blocks.get(height);
     if (!value) return new Response("pruned", { status: 404 });
+    if (parsed.pathname === "/v1/block") return blockResponse(value);
     return new Response(JSON.stringify(value));
   });
   const client = new ExchangeClient({
@@ -290,6 +308,17 @@ describe("bounded trusted-gateway block/results windows", () => {
       "non-array transactions",
       (f: ReturnType<typeof fixture>) => {
         Object.assign(f.blocks.get(101)!.result.block.data, { txs: "AA==" });
+      },
+    ],
+    [
+      "dropped transaction with its result",
+      (f: ReturnType<typeof fixture>) => {
+        const data = f.blocks.get(101)!.result.block.data;
+        Object.assign(f.blocks.get(101)!.result.block.header, {
+          data_hash: transactionsRoot([f.signedBytes]),
+        });
+        data.txs = [];
+        f.executions.get(101)!.result.txs_results = [];
       },
     ],
     [
