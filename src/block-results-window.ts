@@ -14,6 +14,7 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { boundedGatewayJson, type BoundedReadOptions } from "./bounded-read.js";
 import {
   I64_MAX,
+  bindBlockTransactions,
   bytes,
   events,
   invalid,
@@ -61,7 +62,9 @@ export interface BlockResultsEvidence {
 /** Complete bounded responses from one configured trusted gateway, NOT a
  * validator-signature or cryptographic event proof. Comet's results hash does
  * not include event strings. Node trust remains essential. Height continuity,
- * chain, result counts, times and post-state/header bindings are checked.
+ * chain, result counts, times, each block's transaction list against its
+ * header `data_hash`, and post-state/header bindings are checked. Block hashes
+ * are not recomputed from headers, so a coherently lying gateway is not caught.
  * Blocks include the lower-boundary block (before fromMs, or genesis) and may
  * include end-boundary blocks. Consumers must apply [fromMs,toMs) themselves. */
 export interface BlockResultsWindow {
@@ -208,6 +211,10 @@ export async function readBlockResultsWindow(
     transactionCount += txs.length;
     if (transactionCount > maxTransactions)
       invalid("window transaction budget", "limit");
+    const blockTransactions = txs.map((value) =>
+      bytes(value, "block transaction bytes"),
+    );
+    bindBlockTransactions(response, blockTransactions);
     const result = await read(`/v1/block_results?height=${height}`);
     if (uint(result.height, I64_MAX, "results height") !== height)
       invalid("results height mismatch", "binding");
@@ -225,23 +232,24 @@ export async function readBlockResultsWindow(
     const postAppHash = hash32(bytesToHex(postState), "results app hash");
     if (next.appHash === null || postAppHash !== next.appHash)
       invalid("post-state/header binding");
-    const transactions = txs.map((value, index): BlockTransactionEvidence => {
-      const signedBytes = bytes(value, "block transaction bytes");
-      const execution = object(txResults[index], "transaction result");
-      return {
-        index,
-        hash: hash32(bytesToHex(sha256(signedBytes))),
-        signedBytes,
-        code: Number(
-          uint(
-            execution.code === undefined ? 0 : execution.code,
-            0xffff_ffffn,
-            "execution code",
+    const transactions = blockTransactions.map(
+      (signedBytes, index): BlockTransactionEvidence => {
+        const execution = object(txResults[index], "transaction result");
+        return {
+          index,
+          hash: hash32(bytesToHex(sha256(signedBytes))),
+          signedBytes,
+          code: Number(
+            uint(
+              execution.code === undefined ? 0 : execution.code,
+              0xffff_ffffn,
+              "execution code",
+            ),
           ),
-        ),
-        events: decodeEvents(execution.events),
-      };
-    });
+          events: decodeEvents(execution.events),
+        };
+      },
+    );
     blocks.push({
       header,
       postAppHash,

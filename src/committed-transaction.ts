@@ -10,6 +10,7 @@ import {
   same,
   rpcResult,
   events,
+  bindBlockTransactions,
   type TransactionEvidenceEvent,
 } from "./chain-evidence.js";
 import {
@@ -32,9 +33,10 @@ export interface TransactionEvidenceSelection {
 export type { TransactionEvidenceEvent } from "./chain-evidence.js";
 
 /** Matching /tx and /block responses from the configured trusted gateway.
- * This is NOT validator-signature, Merkle-proof or cryptographic finality
- * verification. A caller must trust the gateway's result code/events and chain
- * view. This proves only the returned occurrence: identical bytes may occur
+ * The block's full transaction list must match its header `data_hash`, but the
+ * block hash is not recomputed from the header, and this is NOT
+ * validator-signature or cryptographic finality verification. A caller must
+ * trust the gateway's result code/events and chain view. This proves only the returned occurrence: identical bytes may occur
  * again. A later replay rejection cannot exclude an earlier successful fill.
  * An unavailable/malformed response throws and proves no non-admission. */
 export interface TransactionEvidence {
@@ -114,8 +116,12 @@ export async function readTransactionEvidence(
     index >= transactions.length
   )
     invalid("block transaction index");
-  if (!same(bytes(transactions[index], "block transaction bytes"), signedBytes))
+  const blockTransactions = transactions.map((value) =>
+    bytes(value, "block transaction bytes"),
+  );
+  if (!same(blockTransactions[index], signedBytes))
     invalid("block transaction binding");
+  bindBlockTransactions(response, blockTransactions);
   remaining();
   return {
     source: "trusted-gateway",

@@ -1,3 +1,5 @@
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "./crypto.js";
 import {
   canonicalBase64,
   hash32,
@@ -5,6 +7,7 @@ import {
   rfc3339,
 } from "./read-values.js";
 export { I64_MAX } from "./read-values.js";
+import type { Hash32Hex } from "./read-values.js";
 /** Internal structural decoders shared by trusted-gateway evidence reads. */
 /** Comet event strings are retained verbatim, not decoded as economic facts.
  * Optional attribute fields preserve protobuf JSON's omitted default values. */
@@ -103,4 +106,42 @@ export function events(
 }
 export function blockTime(value: unknown): string {
   return rfc3339(value).raw;
+}
+
+/** CometBFT `Txs.Hash()`: the RFC 6962 Merkle root (leaf prefix 0x00, inner
+ * prefix 0x01, SHA-256) over the SHA-256 of each transaction, in block order.
+ * An empty block hashes to SHA-256 of the empty string. */
+export function transactionsRoot(transactions: Uint8Array[]): Hash32Hex {
+  return hash32(bytesToHex(merkleRoot(transactions.map((tx) => sha256(tx)))));
+}
+function merkleRoot(leaves: Uint8Array[]): Uint8Array {
+  if (leaves.length === 0) return sha256(new Uint8Array());
+  if (leaves.length === 1) return sha256(prefixed(0, leaves[0]));
+  let split = 1;
+  while (split * 2 < leaves.length) split *= 2;
+  const left = merkleRoot(leaves.slice(0, split));
+  const right = merkleRoot(leaves.slice(split));
+  const inner = new Uint8Array(1 + left.length + right.length);
+  inner[0] = 1;
+  inner.set(left, 1);
+  inner.set(right, 1 + left.length);
+  return sha256(inner);
+}
+function prefixed(prefix: number, value: Uint8Array): Uint8Array {
+  const out = new Uint8Array(1 + value.length);
+  out[0] = prefix;
+  out.set(value, 1);
+  return out;
+}
+/** Binds a block's decoded transaction list to its header's `data_hash`, so a
+ * dropped, added or reordered transaction is refused, not merely mismatched. */
+export function bindBlockTransactions(
+  response: Record<string, unknown>,
+  transactions: Uint8Array[],
+): void {
+  const header = object(object(response.block, "block").header, "block header");
+  if (
+    hash(header.data_hash, "block data hash") !== transactionsRoot(transactions)
+  )
+    invalid("block transactions root", "binding");
 }
