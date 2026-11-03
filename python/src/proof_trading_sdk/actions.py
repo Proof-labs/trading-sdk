@@ -502,8 +502,7 @@ class CreateSubAccount(Action):
 
 @dataclass
 class SubAccountTransfer(Action):
-    """Move balance between a master and one of its sub-accounts (0x29);
-    refused like :class:`CreateSubAccount`."""
+    """Move balance between a master and one of its sub-accounts (0x29)."""
 
     ACTION_NAME = "SubAccountTransfer"
     owner: bytes

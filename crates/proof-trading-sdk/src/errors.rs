@@ -123,7 +123,7 @@ define_error_kinds! {
     77  => OracleVerdictUnavailable         ~ "The oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed); mark-dependent actions are refused until a later block certifies a price.",
     // 78-81 are reserved on the wire for oracle-policy errors.
     82  => OracleGuardUnset                 ~ "A mark-dependent read was refused because the oracle-guard gate is active and the market's mark_price_max_oracle_age_ms is still unset; governance sets the guard first.",
-    // Sub-accounts (dormant behind their activation).
+    // Sub-accounts.
     83  => SubAccountNotFound               ~ "No sub-account exists for the given master and id.",
     84  => SubAccountAlreadyExists          ~ "A sub-account with this master and id already exists.",
     85  => SubAccountTransferSameAccount    ~ "Sub-account transfer with from equal to to is a no-op and is rejected.",

@@ -82,8 +82,7 @@ export const ActionType = {
   ResolveEvent: 0x27,
   /** Create a derived sub-account under the signing master (0x28). */
   CreateSubAccount: 0x28,
-  /** Move balance between a master and one of its sub-accounts (0x29);
-   *  refused like `CreateSubAccount`. */
+  /** Move balance between a master and one of its sub-accounts (0x29). */
   SubAccountTransfer: 0x29,
   /** Acquire the single-holder Solana payout lease on a pending withdrawal
    *  (0x2e). Custody-authorized watchers only. */

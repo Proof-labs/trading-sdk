@@ -301,6 +301,13 @@ describe("decodeAdminAction", () => {
     });
   });
 
+  it("refuses the retired EnableSubAccounts unit variant", () => {
+    expect(() => decodeAdminAction("EnableSubAccounts")).toThrow(
+      /unknown variant `EnableSubAccounts`/,
+    );
+    expect(Object.values(ACTION_TAG_BY_KIND)).not.toContain(21);
+  });
+
   it("decodes the engine's frozen CancelAllOrdersForAccount bytes, scoped and unscoped", () => {
     // exchange-wire `cancel_all_orders_for_account_wire_vectors_frozen`: the
     // `AccountAddress` newtype is transparent, so the payload is a flat
