@@ -20,9 +20,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`historyFills` takes an optional `market`.** `GatewayReads.historyFills`
   accepts `OwnerHistoryParams & { market?: number }` and sends `market` in the
   `/info` body, so a caller gets one market's fills instead of the newest fills
-  across all markets. Needs a gateway with
-  [Proof-labs/api-gateway#266](https://github.com/Proof-labs/api-gateway/pull/266).
-  No wire change; additive API, MINOR.
+  across all markets. Needs api-gateway 10.1.0+ (first tagged in v10.4.0,
+  [Proof-labs/api-gateway#266](https://github.com/Proof-labs/api-gateway/pull/266));
+  an older gateway ignores `market` and returns every market's fills without
+  an error. No wire change; additive API, MINOR.
 
 ### Fixed
 
