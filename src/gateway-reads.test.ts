@@ -96,6 +96,11 @@ describe("named gateway reads", () => {
         { user: owner, from: 1, to: 2 },
       ],
       [
+        "historyFills",
+        () => reads.historyFills({ user: owner, market: 2 }, { signal }),
+        { user: owner, market: 2 },
+      ],
+      [
         "historyTrades",
         () => reads.historyTrades({ market: 2, to: 100 }, { signal }),
         { market: 2, to: 100 },
