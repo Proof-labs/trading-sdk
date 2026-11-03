@@ -313,6 +313,19 @@ describe("bounded finalized state and header reads", () => {
       ).rejects.toThrow();
     },
   );
+  it("reports a snapshot for another chain as a binding fault", async () => {
+    const b = markets();
+    b.data = Buffer.from(
+      encode([Array.from(chainIdFromString("other")), H, [], []], {
+        useBigInt64: true,
+      }),
+    ).toString("base64");
+    await expect(
+      client(b).client.reads().finalized.marketsSnapshot(),
+    ).rejects.toThrow(
+      expect.objectContaining({ kind: "binding", field: "market snapshot" }),
+    );
+  });
   it("requires pinned chain and never treats 404 as empty state", async () => {
     const unpinned = new ExchangeClient({
       gatewayUrl: "https://gateway.example",
