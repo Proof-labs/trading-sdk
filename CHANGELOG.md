@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `reads().evidence.transaction` and `blockResultsWindow` bind exact signed bytes and complete bounded windows to the pinned chain. Caller-reducible resource budgets refuse partial coverage. Trusted-gateway evidence, not cryptographic event proofs or non-admission permission.
+- `reads().evidence.transaction` and `blockResultsWindow` bind exact signed bytes and complete bounded windows to the pinned chain. Caller-reducible resource budgets (aggregate across the window, so a busy block may exceed the single-transaction 4,096-event/attribute caps) refuse partial coverage with `GatewayReadError` `kind: "limit"`. Trusted-gateway evidence, not cryptographic event proofs or non-admission permission.
 - `reads().finalized` returns account, authority, nonce, orders, financial, market and oracle facts with the gateway's finalized-state witness. The witness is the gateway's assertion: financial, account-state, market and oracle payloads are checked against its height, while account, authorization, nonce and open-order payloads carry no height (and sometimes no owner) and rely on the gateway's word. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header; a header fetched through the same gateway shows only that the gateway is self-consistent. Decode failures surface as `GatewayReadError`. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
 - `reads().finalized.account(owner)` decodes the engine-valued account through the canonical Rust codec, preserving pending funding and equity with a same-state witness. It does not recalculate funding or authorize execution.
 - `GatewayReadError` (typed bounded-read failure with `kind` and `field`) and the `hexAddress`, `hash32` and `marketId` validators with their `HexAddress`, `Hash32Hex` and `MarketId` branded types are exported. Additive (MINOR).
@@ -19,10 +19,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Market snapshot retains its explicit 10-second setting. HTTP failure bodies remain readable within the same cap, and an oversized, fragmented or stalled failure body is truncated rather than hiding the status; duplicate JSON keys refuse.
 - `queryFinancialState` errors are typed: an HTTP failure throws `GatewayHttpError` (was `Error("financial state HTTP <status>")`), and size, deadline, JSON and base64 failures throw `GatewayReadError` with `kind` / `field` (were plain `Error`s with message text). Callers matching on the old messages must switch to the types.
 - The bounded reader newly refuses JSON nested deeper than 32 levels, zero-length body chunks, more than 4,096 chunks and a non-decimal `content-length`; the markets snapshot accepts any 2xx status, not only 200.
-
-### Fixed
-
-- Block-results windows apply their remaining event/attribute budgets to each decoded list, accepting busy blocks above 4,096 events without exceeding the aggregate ceilings. Resource exhaustion reports `GatewayReadError` with `kind: "limit"`, not malformed data. Single-transaction evidence retains its 4,096-event/attribute caps and uses the same limit classification.
 
 ## [9.1.0] — 2026-11-03
 
