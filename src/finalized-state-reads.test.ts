@@ -3,6 +3,8 @@ import { encode } from "@msgpack/msgpack";
 import { ExchangeClient } from "./client.js";
 import { chainIdFromString } from "./crypto.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
+import { MARKETS_SNAPSHOT_TIMEOUT_MS } from "./market-snapshot.js";
+import { ready } from "./wasm-loader.js";
 
 const CHAIN = "state-read-test-1";
 const H = 9007199254740993n;
@@ -372,5 +374,34 @@ describe("bounded finalized state and header reads", () => {
         .client.reads()
         .finalized.marketsSnapshot(),
     ).rejects.toThrow("Duplicate");
+  });
+  it("waits the shared markets-snapshot deadline by default, not the 5-second read default", async () => {
+    await ready();
+    vi.useFakeTimers();
+    try {
+      const transport = vi.fn<ExchangeHttpTransport>(
+        () => new Promise<Response>(() => {}),
+      );
+      const exchange = new ExchangeClient({
+        gatewayUrl: "https://gateway.example",
+        chainId: CHAIN,
+        useGateway: false,
+        httpTransport: transport,
+      });
+      let settled = false;
+      const pending = exchange
+        .reads()
+        .finalized.marketsSnapshot()
+        .finally(() => {
+          settled = true;
+        });
+      const outcome = expect(pending).rejects.toThrow("deadline");
+      await vi.advanceTimersByTimeAsync(MARKETS_SNAPSHOT_TIMEOUT_MS - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

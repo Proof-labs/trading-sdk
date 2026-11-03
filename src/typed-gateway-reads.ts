@@ -118,6 +118,8 @@ export class FinalizedReads extends ReadClient {
       this.httpTransport,
     );
   }
+  /** Defaults to `MARKETS_SNAPSHOT_TIMEOUT_MS` (10 seconds), the same deadline
+   * as `queryMarketsSnapshot`; an explicit `timeoutMs` still wins. */
   async marketsSnapshot(
     options: BoundedReadOptions = {},
   ): Promise<FinalizedMarketsSnapshot> {
