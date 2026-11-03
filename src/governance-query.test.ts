@@ -326,8 +326,7 @@ describe("decodeAdminAction", () => {
       },
     );
     const short = Array.from({ length: 19 }, () => 0xc1);
-    // The wire's byte-array deserializer reports serde_bytes-style lengths
-    // ("expected N bytes") since the payout-record wave's proof-wire pin.
+    // The wire's byte-array deserializer reports lengths as "expected N bytes".
     expect(() =>
       decodeAdminAction({ CancelAllOrdersForAccount: [short, 7] }),
     ).toThrow(/invalid length 19, expected 20 bytes/);
