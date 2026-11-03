@@ -143,7 +143,10 @@ export class GatewayReads {
   historyOrders(params: OwnerHistoryParams, opts: GatewayReadOptions = {}) {
     return this.info("historyOrders", params, opts);
   }
-  historyFills(params: OwnerHistoryParams, opts: GatewayReadOptions = {}) {
+  historyFills(
+    params: OwnerHistoryParams & { market?: number },
+    opts: GatewayReadOptions = {},
+  ) {
     return this.info("historyFills", params, opts);
   }
   historyTrades(
