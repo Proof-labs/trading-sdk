@@ -21,8 +21,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   In Python, `tick_size` and `lot_size` come before the defaulted
   `max_open_interest`, so a positional `CreateMarket(...)` call that passed
   `max_open_interest` by position must now name it.
-  The Rust crate pins proof-wire on the review branch
-  `GH1327/create-market-tick-lot` until the release is tagged.
+
+- **Sub-accounts are always on: `EnableSubAccounts` is removed (MAJOR).**
+  The engine dropped the sub-account switch
+  ([Proof-labs/exchange#1358](https://github.com/Proof-labs/exchange/pull/1358)),
+  so `CreateSubAccount` and `SubAccountTransfer` need no governance
+  enablement. The `{ kind: "EnableSubAccounts" }` admin action leaves the
+  `AdminAction` union and `ACTION_TAG_BY_KIND`, its inner tag 21 is retired
+  and never reassigned, and the Rust, Python and conformance mirrors drop it.
+  Error code 90 (`SubAccountsInactive`) no longer decodes in TypeScript,
+  Rust or Python and is never reassigned. The Rust crate pins a proof-wire
+  `dev` commit carrying both changes until the matching release.
 
 ### Added
 
@@ -30,6 +39,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (124: `AttachConditional` names an underlying in another insurance pool than
   the event) and `ConditionalLotOffUnderlyingGrid` (125: a lot-size change
   would leave a conditional's lot off its underlying perpetual's lot grid).
+
+## [9.2.0] — 2026-11-03
+
+### Added
+
+- `reads().finalized.orderbook(market, { depth })` returns a height-bearing,
+  witnessed book snapshot of 1, 20 (default) or 100 levels per side from
+  `GET /v1/orderbook-snapshot/{market}`. It is not a full-book assertion.
+- `reads().tradeHistoryPage(market, { fromMs, toMs, limit, cursor })` returns
+  one indexed, participant-attributed page from `GET /v1/history/trades/{market}` with an opaque cursor. A page does
+  not prove complete ingestion. See [generic reads design](docs/generic-finalized-reads.md)
+  for trust boundaries, pagination, resource limits, typed errors and timestamp units.
+- `reads().evidence.transaction` and `blockResultsWindow` bind exact signed bytes and complete bounded windows to the pinned chain, and check each block's full transaction list against its header `data_hash` (a dropped, added or reordered transaction fails with `GatewayReadError` `kind: "binding"`). Caller-reducible resource budgets (aggregate across the window, so a busy block may exceed the single-transaction 4,096-event/attribute caps) refuse partial coverage with `GatewayReadError` `kind: "limit"`. Trusted-gateway evidence, not cryptographic event proofs or non-admission permission.
+- `reads().finalized` returns account, authority, nonce, orders, financial, market and oracle facts with the gateway's finalized-state witness. The witness is the gateway's assertion: financial, account-state, market and oracle payloads are checked against its height, while account, authorization, nonce and open-order payloads carry no height (and sometimes no owner) and rely on the gateway's word. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header; a header fetched through the same gateway shows only that the gateway is self-consistent. Decode failures surface as `GatewayReadError`. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
+- `reads().finalized.account(owner)` decodes the engine-valued account through the canonical Rust codec, preserving pending funding and equity with a same-state witness. It does not recalculate funding or authorize execution.
+- `GatewayReadError` (typed bounded-read failure with `kind` and `field`) and the `hexAddress`, `hash32` and `marketId` validators with their `HexAddress`, `Hash32Hex` and `MarketId` branded types are exported. Additive (MINOR).
+
+### Changed
+
+- Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Both markets-snapshot reads (`queryMarketsSnapshot` and `reads().finalized.marketsSnapshot`) default to the shared 10-second `MARKETS_SNAPSHOT_TIMEOUT_MS`. HTTP failure bodies remain readable within the same cap, and an oversized, fragmented or stalled failure body is truncated rather than hiding the status, waiting at most 250 ms for that body so an HTTP failure is reported promptly; duplicate JSON keys refuse.
+- `queryFinancialState` errors are typed: an HTTP failure throws `GatewayHttpError` (was `Error("financial state HTTP <status>")`), and size, deadline, JSON and base64 failures throw `GatewayReadError` with `kind` / `field` (were plain `Error`s with message text). Callers matching on the old messages must switch to the types.
+- The bounded reader newly refuses JSON nested deeper than 32 levels, zero-length body chunks, more than 4,096 chunks and a non-decimal `content-length`; the markets snapshot accepts any 2xx status, not only 200.
 
 ## [9.1.0] — 2026-11-03
 
@@ -1870,7 +1901,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.2.0...HEAD
+[9.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.1.0...npm-v9.2.0
 [9.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.0.0...npm-v9.1.0
 [9.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...npm-v9.0.0
 [8.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.0.0...npm-v8.1.0

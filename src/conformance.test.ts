@@ -697,7 +697,6 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
   // A unit variant (no fields) is serde's bare variant-name string, not a map.
   if (typeof input === "string") {
     if (input === "UnpauseBridge") return { kind: "UnpauseBridge" };
-    if (input === "EnableSubAccounts") return { kind: "EnableSubAccounts" };
     throw new Error(`toAdminAction: unknown unit variant ${input}`);
   }
   const v = input as Record<string, unknown>;
@@ -1153,7 +1152,7 @@ describe("conformance vectors (TypeScript)", () => {
     // insurance fund and withdraw),
     // approve, reject, and all three emergency arms (PauseMarket,
     // HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(32);
+    expect(govCases.length).toBe(31);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

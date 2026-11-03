@@ -304,11 +304,11 @@ describe("decodeAdminAction", () => {
     });
   });
 
-  it("decodes the EnableSubAccounts unit variant carried as a bare string", () => {
-    expect(decodeAdminAction("EnableSubAccounts")).toEqual({
-      kind: "EnableSubAccounts",
-    });
-    expect(ACTION_TAG_BY_KIND.EnableSubAccounts).toBe(21);
+  it("refuses the retired EnableSubAccounts unit variant", () => {
+    expect(() => decodeAdminAction("EnableSubAccounts")).toThrow(
+      /unknown variant `EnableSubAccounts`/,
+    );
+    expect(Object.values(ACTION_TAG_BY_KIND)).not.toContain(21);
   });
 
   it("decodes the engine's frozen CancelAllOrdersForAccount bytes, scoped and unscoped", () => {

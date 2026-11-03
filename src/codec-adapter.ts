@@ -130,10 +130,7 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
  * explicitly because a fieldless struct variant (`HaltTrading {}`) is NOT one
  * of these — it keeps the map form.
  */
-const GOVERNANCE_UNIT_VARIANTS = new Set<string>([
-  "UnpauseBridge",
-  "EnableSubAccounts",
-]);
+const GOVERNANCE_UNIT_VARIANTS = new Set<string>(["UnpauseBridge"]);
 
 /**
  * Encode a governance `AdminAction` / `EmergencyAction` for

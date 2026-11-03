@@ -162,6 +162,9 @@ describe("ExecErrorCode enum", () => {
     // 112 was InvalidPlpConfig, retired with the engine's backstop.
     expect(decodeExecError(112)).toBeNull();
     expect(execErrorName(112)).toBe("UnknownError");
+    // 90 was SubAccountsInactive, retired with the sub-account switch.
+    expect(decodeExecError(90)).toBeNull();
+    expect(execErrorName(90)).toBe("UnknownError");
     // 101 is unassigned on the wire: unknown, never a PLP fault.
     expect(decodeExecError(101)).toBeNull();
     expect(execErrorName(101)).toBe("UnknownError");

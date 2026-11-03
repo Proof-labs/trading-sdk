@@ -607,17 +607,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": "UnpauseBridge"
             }),
         ),
-        // EnableSubAccounts (inner tag 0x15) is the second unit variant: the
-        // bare string `"EnableSubAccounts"`, no payload.
-        codec_case(
-            "propose_admin_action/enable_sub_accounts",
-            PROPOSE_ADMIN_ACTION,
-            json!({
-                "proposer": vec![0xA1u8; 20],
-                "registry_version": 1u64,
-                "action": "EnableSubAccounts"
-            }),
-        ),
         // SetLiquidationConfig (inner tag 0x11): the configuration exchange-wire
         // freezes in its own vector. Every newtype is its bare integer and the
         // full-close threshold is a nested positional pair.
