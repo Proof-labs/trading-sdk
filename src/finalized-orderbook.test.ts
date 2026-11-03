@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { encode } from "@msgpack/msgpack";
 import { ExchangeClient } from "./client.js";
+import { GatewayReadError } from "./errors.js";
 import { decodeFinalizedOrderbook } from "./finalized-orderbook.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 
@@ -140,9 +141,14 @@ describe("finalized orderbook read", () => {
       encode([[[1, 2, 1]], []], { forceIntegerToFloat: true }),
     ]) {
       const data = base64(bytes);
-      expect(() =>
-        decodeFinalizedOrderbook({ ...frame(), data, bookMsgpackB64: data }, 1),
-      ).toThrow();
+      let thrown: unknown;
+      try {
+        decodeFinalizedOrderbook({ ...frame(), data, bookMsgpackB64: data }, 1);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(GatewayReadError);
+      expect(thrown).toMatchObject({ kind: "malformed" });
     }
   });
   it("refuses invalid selectors before networking and never retries an unsupported route", async () => {

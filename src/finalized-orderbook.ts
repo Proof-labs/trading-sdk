@@ -12,6 +12,7 @@ import { ready } from "./wasm-loader.js";
 import type { OrderbookLevel } from "./types.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 import {
+  asReadError,
   boundedGatewayJson,
   decodeFinalizedReadWitness,
   type BoundedReadOptions,
@@ -72,8 +73,10 @@ export function decodeFinalizedOrderbook(
   if (encoded !== frame.data) invalid("book encoding mismatch", "binding");
   const bytes = canonicalBase64(encoded, "book encoding", 512 * 1024);
   // Preflight before decoding bounds depth and rejects floats and trailing data.
-  rejectFloats(bytes);
-  const raw: unknown = decoder.decode(bytes);
+  const raw: unknown = asReadError("orderbook.msgpack", () => {
+    rejectFloats(bytes);
+    return decoder.decode(bytes);
+  });
   if (!Array.isArray(raw) || raw.length !== 2) invalid("book tuple");
   const levels = (value: unknown, side: "bids" | "asks"): OrderbookLevel[] => {
     if (!Array.isArray(value) || value.length > depth)
