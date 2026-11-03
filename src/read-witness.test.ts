@@ -45,6 +45,20 @@ describe("finalized witness binding", () => {
       verifyWitness(decodeFinalizedReadWitness(wire), next, header.chainId),
     ).toThrow(expect.objectContaining({ kind: "binding" }));
   });
+  it("labels a bad caller pin as configuration and a bad header as binding", () => {
+    const witness = decodeFinalizedReadWitness(wire);
+    expect(() => verifyWitness(witness, header, new Uint8Array(31))).toThrow(
+      expect.objectContaining({ kind: "configuration", field: "chainId" }),
+    );
+    for (const next of [
+      { ...header, chainId: "" },
+      { ...header, chainId: "x".repeat(129) },
+      { ...header, appHash: "not-a-hash" },
+    ])
+      expect(() => verifyWitness(witness, next, header.chainId)).toThrow(
+        expect.objectContaining({ kind: "binding", field: "witness" }),
+      );
+  });
   it("uses signed Comet height bounds consistently", () => {
     expect(() =>
       decodeFinalizedReadWitness({ ...wire, height: String(1n << 63n) }),

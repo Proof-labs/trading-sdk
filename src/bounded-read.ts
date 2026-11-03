@@ -109,11 +109,11 @@ export function verifyWitness(
   nextHeader: { height: bigint; chainId: string; appHash: string | null },
   chainId: string | Uint8Array,
 ): void {
+  // The caller's pin is configuration; everything about the header is binding.
   if (
-    (typeof chainId === "string" && (!chainId || chainId.length > 128)) ||
-    typeof nextHeader.chainId !== "string" ||
-    !nextHeader.chainId ||
-    nextHeader.chainId.length > 128
+    typeof chainId === "string"
+      ? !chainId || chainId.length > 128
+      : !(chainId instanceof Uint8Array) || chainId.length !== 32
   ) {
     throw new GatewayReadError(
       "configuration",
@@ -123,23 +123,32 @@ export function verifyWitness(
   }
   const expected =
     typeof chainId === "string" ? chainIdFromString(chainId) : chainId;
+  const bindingFault = (): never => {
+    throw new GatewayReadError(
+      "binding",
+      "witness",
+      "Finalized witness/header/chain mismatch",
+    );
+  };
+  if (
+    typeof nextHeader.chainId !== "string" ||
+    !nextHeader.chainId ||
+    nextHeader.chainId.length > 128 ||
+    (nextHeader.appHash !== null &&
+      (typeof nextHeader.appHash !== "string" ||
+        !/^[a-fA-F0-9]{64}$/.test(nextHeader.appHash)))
+  )
+    bindingFault();
   const actual = chainIdFromString(nextHeader.chainId);
   if (
-    !(expected instanceof Uint8Array) ||
-    expected.length !== 32 ||
     actual.some((byte, i) => byte !== expected[i]) ||
     witness.height < 1n ||
     witness.height >= I64_MAX ||
     nextHeader.height !== witness.height + 1n ||
     nextHeader.appHash === null ||
     hash32(witness.appHash) !== hash32(nextHeader.appHash)
-  ) {
-    throw new GatewayReadError(
-      "binding",
-      "witness",
-      "Finalized witness/header/chain mismatch",
-    );
-  }
+  )
+    bindingFault();
 }
 
 export function parseBoundedJson(text: string): unknown {
