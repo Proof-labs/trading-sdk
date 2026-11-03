@@ -31,12 +31,13 @@ export async function readMarketsSnapshot(
   expectedChain: Uint8Array,
   httpTransport: ExchangeHttpTransport = defaultExchangeHttpTransport,
 ): Promise<MarketsSnapshot> {
+  // Outside the try and the deadline: a WASM load failure surfaces as itself.
+  await ready();
   try {
     const envelope = await boundedGatewayJson(
       `${gatewayUrl.replace(/\/$/, "")}/v1/markets-snapshot`,
       httpTransport,
       { timeoutMs: 10_000 },
-      { prepare: ready },
     );
     // Transport validates JSON/duplicate keys; Rust still decodes the envelope's
     // base64 wire payload and every market/event field.
