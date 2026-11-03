@@ -59,19 +59,19 @@ export enum ExecErrorCode {
   BinaryPriceOutOfRange = 27,
   InvalidResolution = 28,
   PositionLimitExceeded = 29,
-  OracleTimestampNotMonotonic = 30,
+  // 30 was OracleTimestampNotMonotonic, retired with OracleUpdate; never reassigned.
   // 31 belonged to the retired impact-market family; never reassigned.
   SettlementPriceMismatch = 32,
   OracleNotApplicable = 33,
   PostOnlyWouldCross = 34,
   ReduceOnlyWouldIncrease = 35,
-  TestActionRejected = 36,
+  // 36 was TestActionRejected, retired with RunFundingTick; never reassigned.
   // 37, 77, 82 and 97 are the wire's `Unpriced`, one code per reason.
   UnpricedStale = 37,
   UserLeverageBelowMarketIm = 38,
   TickSizeViolation = 39,
   LotSizeViolation = 40,
-  OracleStaleNotElapsed = 41,
+  // 41 was OracleStaleNotElapsed, retired with OracleUpdate; never reassigned.
   FeeBpsOutOfRange = 42,
   FeeOverrideStaleSeq = 43,
   ClientOrderIdNotFound = 44,
@@ -256,11 +256,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "fill would push the taker's net position past MarketConfig.max_position_size",
   },
-  30: {
-    name: "OracleTimestampNotMonotonic",
-    description:
-      "OracleUpdate publish_time_ms must be strictly greater than the last accepted update (audit B3)",
-  },
   32: {
     name: "SettlementPriceMismatch",
     description:
@@ -269,7 +264,7 @@ const TABLE: Record<number, ExecErrorInfo> = {
   33: {
     name: "OracleNotApplicable",
     description:
-      "OracleUpdate targets a market kind that doesn't take oracle prices (conditional and binary books mark off the book)",
+      "the oracle action targets a conditional or prediction-binary book, which marks off its own trades and has no oracle layer",
   },
   34: {
     name: "PostOnlyWouldCross",
@@ -280,11 +275,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "ReduceOnlyWouldIncrease",
     description:
       "reduce-only order would have increased the position rather than reducing it",
-  },
-  36: {
-    name: "TestActionRejected",
-    description:
-      "test/admin action rejected (unauthorized signer or engine not configured to accept them)",
   },
   37: {
     name: "UnpricedStale",
@@ -305,11 +295,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "LotSizeViolation",
     description:
       "PlaceOrder/MarketOrder quantity is not a multiple of MarketConfig.lotSize (BE-48)",
-  },
-  41: {
-    name: "OracleStaleNotElapsed",
-    description:
-      "fallback oracle signer published before the primary's staleness window elapsed (BE-50)",
   },
   42: {
     name: "FeeBpsOutOfRange",

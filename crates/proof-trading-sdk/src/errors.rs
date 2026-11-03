@@ -68,19 +68,19 @@ define_error_kinds! {
     27  => BinaryPriceOutOfRange        ~ "Binary-book order price is outside the [0, BINARY_PRICE_MAX] range.",
     28  => InvalidResolution            ~ "ResolveEvent refused: the event is already resolved, not yet at its settlement time, still carries attached conditionals, or the asserted outcome contradicts the oracle source.",
     29  => PositionLimitExceeded        ~ "Fill would push absolute net position past MarketConfig.max_position_size. Engine cap enforced at placement time independent of margin.",
-    30  => OracleTimestampNotMonotonic  ~ "OracleUpdate publish_time_ms is not strictly greater than the last accepted update for this market — replay protection per audit B3 (2026-04-23).",
+    // 30 was OracleTimestampNotMonotonic, retired with OracleUpdate; never reassigned.
     // 31 belonged to the retired impact-market family; never reassigned.
     32  => SettlementPriceMismatch      ~ "Net-delta margin grouping found legs with disagreeing settle prices (data corruption across same underlying_market_id).",
-    33  => OracleNotApplicable          ~ "OracleUpdate targets a conditional or binary book, which marks off the book and has no oracle layer.",
+    33  => OracleNotApplicable          ~ "The oracle action targets a conditional or prediction-binary book, which marks off its own trades and has no oracle layer.",
     34  => PostOnlyWouldCross           ~ "PlaceOrder with post_only=true would have crossed the book. Rejected so makers retain maker-side fills.",
     35  => ReduceOnlyWouldIncrease      ~ "PlaceOrder/MarketOrder with reduce_only=true was same-side as the existing position (would increase exposure) or no position existed.",
-    36  => TestActionRejected           ~ "Test/admin action rejected because the engine isn't configured to accept them, or the position the action referenced does not exist.",
+    // 36 was TestActionRejected, retired with RunFundingTick; never reassigned.
     // 37, 77, 82 and 97 are `ExecError::Unpriced`, one code per reason.
     37  => UnpricedStale                ~ "Oracle price is stale for this market; refresh the oracle before placing orders, reading margin, or liquidating.",
     38  => UserLeverageBelowMarketIm    ~ "User-selected initial margin is below the market risk floor; only deleveraging above the market floor is allowed.",
     39  => TickSizeViolation            ~ "Order price is not an exact multiple of the market tick size.",
     40  => LotSizeViolation             ~ "Order quantity is not an exact multiple of the market lot size.",
-    41  => OracleStaleNotElapsed        ~ "Fallback oracle signer published before the market staleness window elapsed.",
+    // 41 was OracleStaleNotElapsed, retired with OracleUpdate; never reassigned.
     42  => FeeBpsOutOfRange             ~ "Per-account fee override has a fee outside the legal basis-point range.",
     43  => FeeOverrideStaleSeq          ~ "Per-account fee override sequence is stale or out of order.",
     44  => ClientOrderIdNotFound        ~ "No active resting order exists for the requested client order id.",
@@ -351,11 +351,6 @@ mod exec_error_meaning_tests {
                 limit: 0,
                 would_be: 0,
             },
-            ExecError::OracleTimestampNotMonotonic {
-                market: 0,
-                stored: 0,
-                submitted: 0,
-            },
             ExecError::SettlementPriceMismatch {
                 market: 0,
                 expected: 0,
@@ -364,7 +359,6 @@ mod exec_error_meaning_tests {
             ExecError::OracleNotApplicable { market: 0 },
             ExecError::PostOnlyWouldCross,
             ExecError::ReduceOnlyWouldIncrease,
-            ExecError::TestActionRejected("e".into()),
             ExecError::FeeBpsOutOfRange { bps: 0 },
             ExecError::FeeOverrideStaleSeq {
                 cmd_seq: 0,
@@ -379,12 +373,6 @@ mod exec_error_meaning_tests {
                 market: 0,
                 lot_size: 1,
                 quantity: 0,
-            },
-            ExecError::OracleStaleNotElapsed {
-                market: 0,
-                last_publish_ms: 0,
-                block_time_ms: 0,
-                staleness_ms: 1,
             },
             ExecError::Unpriced {
                 market: 0,
@@ -557,7 +545,8 @@ mod exec_error_meaning_tests {
 
     /// Every engine code must be covered by the public error manifest, with
     /// the holes the wire itself carries: 24, 25 and 31 (the retired
-    /// impact-market family), 78-81 (reserved for oracle errors), 101
+    /// impact-market family), 30, 36 and 41 (retired with OracleUpdate and
+    /// RunFundingTick), 78-81 (reserved for oracle errors), 101
     /// (unassigned) and 112 (the retired PLP configuration). Catches
     /// the case where a code is reserved by the mirrored engine error enum
     /// but no SDK classification maps to it.
@@ -567,7 +556,7 @@ mod exec_error_meaning_tests {
         codes.sort();
         codes.dedup();
         let expected: Vec<u32> = (1u32..=116)
-            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81 | 101 | 112))
+            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 101 | 112))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(

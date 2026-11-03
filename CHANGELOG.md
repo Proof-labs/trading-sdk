@@ -29,6 +29,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `get_error_name`. Code that matches on the old names must match on the new
   ones; code that matches on the numbers is unaffected (MAJOR).
 
+- **Error codes 30, 36 and 41 are retired.** Only `OracleUpdate` and
+  `RunFundingTick` raised `OracleTimestampNotMonotonic` (30),
+  `TestActionRejected` (36) and `OracleStaleNotElapsed` (41), so they leave
+  the TS `ExecErrorCode` and decoder, the Rust `ErrorKind` and the Python
+  `get_error_name`, and decode as unknown. The numbers are never reassigned.
+  Code 33 `OracleNotApplicable` no longer names `OracleUpdate` (MAJOR).
+
 - **The oracle-permissions read is seven slots.** The engine drops
   `activation_height` and `oracle_active` and the `Legacy` state, and the
   permission is always present. `OraclePermissions` loses `activationHeight`

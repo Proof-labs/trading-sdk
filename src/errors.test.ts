@@ -176,6 +176,13 @@ describe("ExecErrorCode enum", () => {
     expect(decodeExecError(100)?.name).toBe("AccountOrderCapReached");
     expect(decodeExecError(99)?.name).toBe("WithdrawalLimitExceeded");
   });
+
+  it("leaves the codes retired with OracleUpdate and RunFundingTick unknown", () => {
+    for (const code of [30, 36, 41]) {
+      expect(decodeExecError(code)).toBeNull();
+      expect(execErrorName(code)).toBe("UnknownError");
+    }
+  });
 });
 
 describe("GatewayHttpError", () => {
