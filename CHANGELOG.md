@@ -7,6 +7,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [9.2.0] — 2026-11-03
+
 ### Added
 
 - `reads().finalized.orderbook(market, { depth })` returns a height-bearing,
@@ -1866,7 +1868,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.2.0...HEAD
+[9.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.1.0...npm-v9.2.0
 [9.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.0.0...npm-v9.1.0
 [9.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...npm-v9.0.0
 [8.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.0.0...npm-v8.1.0
