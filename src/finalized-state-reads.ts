@@ -11,7 +11,10 @@ import {
 } from "./block-header.js";
 import { I64_MAX, rpcResult } from "./chain-evidence.js";
 import { invalidRead as invalid, readObject as object } from "./read-values.js";
-import { decodeMarketsSnapshot } from "./market-snapshot.js";
+import {
+  decodeMarketsSnapshot,
+  MARKETS_SNAPSHOT_TIMEOUT_MS,
+} from "./market-snapshot.js";
 import { ready } from "./wasm-loader.js";
 import { GatewayReadError } from "./errors.js";
 import type { MarketsSnapshot } from "./types.js";
@@ -107,7 +110,10 @@ export async function readFinalizedMarketsSnapshot(
     await boundedGatewayJson(
       `${gatewayUrl.replace(/\/+$/, "")}/v1/markets-snapshot`,
       transport,
-      options,
+      {
+        ...options,
+        timeoutMs: options.timeoutMs ?? MARKETS_SNAPSHOT_TIMEOUT_MS,
+      },
       { prepare: ready },
     ),
     "market snapshot envelope",

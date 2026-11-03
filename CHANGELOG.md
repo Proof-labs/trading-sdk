@@ -23,7 +23,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Market snapshot retains its explicit 10-second setting. HTTP failure bodies remain readable within the same cap, and an oversized, fragmented or stalled failure body is truncated rather than hiding the status, waiting at most 250 ms for that body so an HTTP failure is reported promptly; duplicate JSON keys refuse.
+- Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Both markets-snapshot reads (`queryMarketsSnapshot` and `reads().finalized.marketsSnapshot`) default to the shared 10-second `MARKETS_SNAPSHOT_TIMEOUT_MS`. HTTP failure bodies remain readable within the same cap, and an oversized, fragmented or stalled failure body is truncated rather than hiding the status, waiting at most 250 ms for that body so an HTTP failure is reported promptly; duplicate JSON keys refuse.
 - `queryFinancialState` errors are typed: an HTTP failure throws `GatewayHttpError` (was `Error("financial state HTTP <status>")`), and size, deadline, JSON and base64 failures throw `GatewayReadError` with `kind` / `field` (were plain `Error`s with message text). Callers matching on the old messages must switch to the types.
 - The bounded reader newly refuses JSON nested deeper than 32 levels, zero-length body chunks, more than 4,096 chunks and a non-decimal `content-length`; the markets snapshot accepts any 2xx status, not only 200.
 
@@ -38,8 +38,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the row's `status` is the feeder's 60-second rule, not the engine's
   per-market age gate: it is for a UI freshness poll; monitoring and maker
   guards read the bare path. Additive (MINOR).
-
-### Changed
 
 - **`historyFills` takes an optional `market`.** `GatewayReads.historyFills`
   accepts `OwnerHistoryParams & { market?: number }` and sends `market` in the

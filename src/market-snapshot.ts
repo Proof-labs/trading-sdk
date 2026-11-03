@@ -9,6 +9,9 @@ import {
 } from "./http-transport.js";
 
 export const MAX_SNAPSHOT_BYTES = 1024 * 1024;
+/** Default deadline for every `/v1/markets-snapshot` read: the snapshot is the
+ * largest routine gateway body, so it gets more than the 5-second read default. */
+export const MARKETS_SNAPSHOT_TIMEOUT_MS = 10_000;
 
 function invalid(): never {
   throw new Error("market snapshot: malformed complete response");
@@ -37,7 +40,7 @@ export async function readMarketsSnapshot(
     const envelope = await boundedGatewayJson(
       `${gatewayUrl.replace(/\/$/, "")}/v1/markets-snapshot`,
       httpTransport,
-      { timeoutMs: 10_000 },
+      { timeoutMs: MARKETS_SNAPSHOT_TIMEOUT_MS },
     );
     // Transport validates JSON/duplicate keys; Rust still decodes the envelope's
     // base64 wire payload and every market/event field.
