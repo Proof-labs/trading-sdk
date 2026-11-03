@@ -13,6 +13,7 @@ import { I64_MAX, rpcResult } from "./chain-evidence.js";
 import { invalidRead as invalid, readObject as object } from "./read-values.js";
 import { decodeMarketsSnapshot } from "./market-snapshot.js";
 import { ready } from "./wasm-loader.js";
+import { GatewayReadError } from "./errors.js";
 import type { MarketsSnapshot } from "./types.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 import {
@@ -113,12 +114,27 @@ export async function readFinalizedMarketsSnapshot(
   );
   // The witness here follows the Rust snapshot decoder, which tolerates
   // extra witness fields, rather than the exact five-field `?witness=1` shape.
-  const snapshot = asReadError("market snapshot", () =>
-    decodeMarketsSnapshot(
-      new TextEncoder().encode(JSON.stringify(response)),
-      chain,
-    ),
-  );
+  let snapshot: MarketsSnapshot;
+  try {
+    snapshot = asReadError("market snapshot", () =>
+      decodeMarketsSnapshot(
+        new TextEncoder().encode(JSON.stringify(response)),
+        chain,
+      ),
+    );
+  } catch (error) {
+    // A snapshot for another chain or an uncommitted height is well formed
+    // data bound to the wrong state, like every other finalized-read mismatch.
+    if (
+      error instanceof GatewayReadError &&
+      (error.message === "market snapshot: wrong chain" ||
+        error.message === "market snapshot: uncommitted height")
+    )
+      throw new GatewayReadError("binding", "market snapshot", error.message, {
+        cause: error,
+      });
+    throw error;
+  }
   return {
     ...snapshot,
     witness: decodeFinalizedReadWitness(response.witness, snapshot.height),

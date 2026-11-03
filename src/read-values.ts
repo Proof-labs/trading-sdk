@@ -14,6 +14,9 @@ export const MAX_READ_TIMEOUT_MS = 60_000;
 /** Whole HTTP envelope, not decoded MessagePack. Same cap as gateway #267. */
 export const MAX_READ_BYTES = 1024 * 1024;
 export const MAX_READ_CHUNKS = 4096;
+/** Longest an HTTP failure waits for its body. The status is the diagnosis,
+ * so a stalled error body must not cost the caller the whole read deadline. */
+export const MAX_ERROR_BODY_WAIT_MS = 250;
 
 export function invalidRead(
   field: string,
