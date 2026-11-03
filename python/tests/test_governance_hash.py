@@ -8,11 +8,11 @@ import pytest
 
 import proof_trading_sdk as pts
 
-GOLDEN_V3 = "6cdd8d6843bb4026d396b9e80c9599530b0ac4f14862af0204794219f8f8cbea"
-GOLDEN_V4 = "5fe2dd718a4aea63492a5ab95eee27588cc861c504643bf68ce3fdd2c45dab99"
+GOLDEN_V3 = "a4de11bbe373974cae0de8f1116681cd7f08ecab07b007bea1067cbd0f19fb4f"
+GOLDEN_V4 = "da916970c56796acd6cc8a67bfba8430598c94dafaf5b1eb54f40479a380be9c"
 # Admin-actions v2 (engine's ``admin_proposal_content_hash_v2_golden_vectors``)
 GOLDEN_ATTACH = "3ffeb7f420cf9f4f50bade95919d885dfc590c7f8c92fb69eacc1704d4662be4"
-GOLDEN_BATCH = "c099245946aaded3b995198f5ff0592d771729ab314fcf5736036ffb6f559fcd"
+GOLDEN_BATCH = "66a35d72765b3554acc039d0747f177680c1a1b08247ece47daa4a3492b9d0f7"
 # The one admin action that is NOT a map: a fieldless unit variant, whose
 # canonical bytes are the bare fixstr "UnpauseBridge". exchange-core has no
 # frozen content-hash vector for this arm yet, so the value comes from the
@@ -72,6 +72,8 @@ def engine_default_create_market() -> dict:
         "sz_decimals": 0,
         "ticker": "",
         "max_open_interest": 0,
+        "tick_size": 1,
+        "lot_size": 1,
     }
 
 

@@ -393,10 +393,20 @@ export interface CreateMarket {
   ticker: string;
   /**
    * Aggregate market open-interest cap in contracts. Omitted, null, and 0 all
-   * mean uncapped and encode identically as the canonical 12-field payload
-   * with an explicit 0 tail. Legacy 11-field payloads still decode as 0n.
+   * mean uncapped and encode identically as the canonical 14-field payload
+   * with an explicit 0 cap. Legacy 11-field payloads still decode as 0n.
    */
   maxOpenInterest?: bigint | null;
+  /**
+   * Price grid in micro-USDC: order prices must be multiples of it. MANDATORY
+   * and non-zero; the engine refuses creation with 0.
+   */
+  tickSize: bigint;
+  /**
+   * Quantity grid in contracts: order quantities must be multiples of it.
+   * MANDATORY and non-zero; the engine refuses creation with 0.
+   */
+  lotSize: bigint;
 }
 
 /** User requests a USDC withdrawal to a Solana address. Debits balance immediately. */

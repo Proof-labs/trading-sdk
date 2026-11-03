@@ -7,6 +7,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking changes
+
+- **`CreateMarket` carries `tickSize` and `lotSize` (exchange#1327).** Both
+  are required `bigint`s in TypeScript (`tick_size`, `lot_size` in Python and
+  Rust), appended after `maxOpenInterest`, and the engine refuses creation when
+  either is 0. The action is now a 14-element array, in a direct
+  `CreateMarket` and inside `ProposeAdminAction`, `ApproveAdminAction` and
+  `Batch` items, so the admin-proposal content hashes change. A 12-element
+  payload from stored history still decodes, with both fields 0, but an older
+  SDK fails to decode a 14-element one (MAJOR). Pending `CreateMarket`
+  proposals must be drained or re-proposed before the engine upgrade.
+  The Rust crate pins proof-wire on the review branch
+  `GH1327/create-market-tick-lot` until the release is tagged.
+
+### Added
+
+- **Error codes 123-125.** `DepositLimitExceeded` (123), `EventPoolMismatch`
+  (124: `AttachConditional` names an underlying in another insurance pool than
+  the event) and `ConditionalLotOffUnderlyingGrid` (125: a lot-size change
+  would leave a conditional's lot off its underlying perpetual's lot grid).
+
 ## [9.1.0] — 2026-11-03
 
 ### Added

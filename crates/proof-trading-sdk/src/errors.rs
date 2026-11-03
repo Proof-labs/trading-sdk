@@ -160,6 +160,9 @@ define_error_kinds! {
     114 => InsuranceActionRefused ~ "Governed insurance action is undecodable, not canonical, not permitted for an insurance account, or not owned by the pool's insurance account.",
     115 => LiquidationBatchTooManyOwners ~ "LiquidateAccounts names more owners than one batch may; split the owners across batches.",
     116 => LiquidationBatchOverBudget ~ "The owners a LiquidateAccounts batch names hold more positions together than its position budget; the batch is refused whole, so name fewer owners.",
+    123 => DepositLimitExceeded ~ "The ConfirmDeposit or Deposit would credit more than the governance-set deposit limits allow: either the per-deposit maximum, or the protocol-wide cap on deposits credited inside the rolling window.",
+    124 => EventPoolMismatch ~ "AttachConditional names an underlying whose insurance pool differs from the event's; an event and its conditionals share one pool.",
+    125 => ConditionalLotOffUnderlyingGrid ~ "A lot_size change would leave an unresolved event's conditional lot not a multiple of its underlying perpetual's lot.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -517,7 +520,8 @@ mod exec_error_meaning_tests {
     /// Every engine code must be covered by the public error manifest, with
     /// the holes the wire itself carries: 24, 25 and 31 (the retired
     /// impact-market family), 78-81 (reserved for oracle errors), 101
-    /// (unassigned) and 112 (the retired PLP configuration). Catches
+    /// (unassigned), 112 (the retired PLP configuration) and 117-122 (claimed
+    /// elsewhere, unassigned on the wire). Catches
     /// the case where a code is reserved by the mirrored engine error enum
     /// but no SDK classification maps to it.
     #[test]
@@ -525,8 +529,8 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=116)
-            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81 | 101 | 112))
+        let expected: Vec<u32> = (1u32..=125)
+            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81 | 101 | 112 | 117..=122))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(

@@ -173,6 +173,9 @@ describe("decodeProposalDisplayInfo", () => {
       szDecimals: 4,
       ticker: "GOLD",
       maxOpenInterest: 123_456_789n,
+      // A stored 12-element payload predates the grid and decodes with both 0.
+      tickSize: 0n,
+      lotSize: 0n,
     });
   });
 
@@ -325,7 +328,7 @@ describe("decodeAdminAction", () => {
     const short = Array.from({ length: 19 }, () => 0xc1);
     expect(() =>
       decodeAdminAction({ CancelAllOrdersForAccount: [short, 7] }),
-    ).toThrow(/invalid length 19, expected an array of length 20/);
+    ).toThrow(/invalid length 19, expected 20 bytes/);
   });
 
   it("decodes the engine's frozen UpdateAuthoritySet bytes, add and remove", () => {
@@ -528,6 +531,8 @@ describe("byte-field validation", () => {
           4,
           "T",
           0n,
+          1n,
+          1n,
         ],
       },
       [0xde, 0xad],
@@ -662,6 +667,13 @@ describe("byte-field validation", () => {
     );
   });
 
+  it("decodes a 14-element CreateMarket with its tick and lot size", () => {
+    const p = decodeProposalDisplayInfo(validProposalRaw());
+    if (p.action.kind !== "CreateMarket") throw new Error("unreachable");
+    expect(p.action.value.tickSize).toBe(1n);
+    expect(p.action.value.lotSize).toBe(1n);
+  });
+
   it("rejects an action tag that does not match the decoded action", () => {
     expect(withField(11, 2)).toThrow(
       /actionTag 2 does not match CreateMarket tag 1/,
@@ -673,7 +685,7 @@ describe("byte-field validation", () => {
     const action = raw[12] as { CreateMarket: unknown[] };
     action.CreateMarket.push("trailing");
     expect(() => decodeProposalDisplayInfo(raw)).toThrow(
-      /proposal\.action: array had incorrect length, expected 12/,
+      /proposal\.action: array had incorrect length, expected 14/,
     );
 
     const nonString = validProposalRaw();
@@ -752,6 +764,8 @@ describe("byte-field validation", () => {
         4,
         "T",
         0n,
+        1n,
+        1n,
       ],
     };
     expect(withField(12, action)).toThrow(

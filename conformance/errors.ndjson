@@ -105,6 +105,9 @@
 {"case":"manifest/114","code":114,"log":null,"expect":{"name":"InsuranceActionRefused"}}
 {"case":"manifest/115","code":115,"log":null,"expect":{"name":"LiquidationBatchTooManyOwners"}}
 {"case":"manifest/116","code":116,"log":null,"expect":{"name":"LiquidationBatchOverBudget"}}
+{"case":"manifest/123","code":123,"log":null,"expect":{"name":"DepositLimitExceeded"}}
+{"case":"manifest/124","code":124,"log":null,"expect":{"name":"EventPoolMismatch"}}
+{"case":"manifest/125","code":125,"log":null,"expect":{"name":"ConditionalLotOffUnderlyingGrid"}}
 {"case":"manifest/255","code":255,"log":null,"expect":{"name":"InternalError"}}
 {"case":"code50/oi_log","code":50,"log":"open interest limit exceeded on market 7: would be 4, cap 3","expect":{"name":"OpenInterestLimitExceeded"}}
 {"case":"code50/slippage_log","code":50,"log":"atomic basket aggregate slippage 51 bps exceeds budget 50 bps","expect":{"name":"SlippageExceeded"}}

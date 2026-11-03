@@ -271,6 +271,8 @@ function toAction(
           poolId: input.pool_id as number,
           szDecimals: input.sz_decimals as number,
           ticker: input.ticker as string,
+          tickSize: big(input.tick_size),
+          lotSize: big(input.lot_size),
           ...(input.max_open_interest === undefined
             ? {}
             : { maxOpenInterest: big(input.max_open_interest) }),
@@ -601,6 +603,8 @@ function toCreateMarketValue(
     poolId: m.pool_id as number,
     szDecimals: m.sz_decimals as number,
     ticker: m.ticker as string,
+    tickSize: big(m.tick_size),
+    lotSize: big(m.lot_size),
     maxOpenInterest: big(m.max_open_interest),
   };
 }
@@ -1176,7 +1180,7 @@ describe("conformance vectors (TypeScript)", () => {
     expect((explicitZero.expect as { payload_hex: string }).payload_hex).toBe(
       expected,
     );
-    expect(expected.startsWith("9c")).toBe(true);
+    expect(expected.startsWith("9e")).toBe(true);
 
     const base = toAction(
       omitted.action_type as ActionTypeValue,

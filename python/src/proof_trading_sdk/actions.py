@@ -845,7 +845,8 @@ class OracleUpdate(Action):
 @dataclass
 class CreateMarket(Action):
     """Register a perpetual market with its risk parameters (admin).
-    ``max_open_interest`` 0 means uncapped."""
+    ``max_open_interest`` 0 means uncapped. ``tick_size`` and ``lot_size`` are
+    the price and quantity grids; the engine refuses creation with 0."""
 
     ACTION_NAME = "CreateMarket"
     market: int
@@ -859,6 +860,8 @@ class CreateMarket(Action):
     pool_id: int
     sz_decimals: int
     ticker: str
+    tick_size: int
+    lot_size: int
     max_open_interest: int = 0
 
     def fields(self) -> dict[str, Any]:
@@ -875,6 +878,8 @@ class CreateMarket(Action):
             "sz_decimals": self.sz_decimals,
             "ticker": self.ticker,
             "max_open_interest": self.max_open_interest,
+            "tick_size": self.tick_size,
+            "lot_size": self.lot_size,
         }
 
 

@@ -345,6 +345,8 @@ describe("codec v1 all action types", () => {
         maxFundingRateBps: 100,
         szDecimals: 4,
         ticker: "ETH",
+        tickSize: 1n,
+        lotSize: 1n,
       },
     },
     {
@@ -732,6 +734,8 @@ describe("codec v1 all action types", () => {
         poolId: 9,
         szDecimals: 4,
         ticker: "BTC",
+        tickSize: 1n,
+        lotSize: 1n,
       },
     };
 
@@ -757,6 +761,8 @@ describe("codec v1 all action types", () => {
         poolId: 9,
         szDecimals: 5,
         ticker: "BTC",
+        tickSize: 1n,
+        lotSize: 1n,
         maxOpenInterest: 1_000_000n,
       },
     };
@@ -765,7 +771,7 @@ describe("codec v1 all action types", () => {
     expect(decoded).toEqual(action);
   });
 
-  it("encodes CreateMarket to a 12-element array whatever the cap's value", () => {
+  it("encodes CreateMarket to a 14-element array whatever the cap's value", () => {
     const base: Action = {
       type: "CreateMarket",
       data: {
@@ -780,6 +786,8 @@ describe("codec v1 all action types", () => {
         poolId: 9,
         szDecimals: 5,
         ticker: "BTC",
+        tickSize: 1n,
+        lotSize: 1n,
       },
     };
     const withCap = (maxOpenInterest?: bigint | null): Action => ({
@@ -795,10 +803,10 @@ describe("codec v1 all action types", () => {
     // which re-encodes the payload from JSON before the engine verifies the
     // signature over those bytes — could produce a different length than the
     // client signed, and every such tx would fail verification. Pin the msgpack
-    // fixarray header (0x90 | n): 0x9c is a 12-element array.
+    // fixarray header (0x90 | n): 0x9e is a 14-element array.
     for (const cap of [undefined, null, 0n, 1_000_000n]) {
       const bytes = encodePayloadBytes(withCap(cap));
-      expect(bytes[0]).toBe(0x9c);
+      expect(bytes[0]).toBe(0x9e);
     }
 
     // Omission, JSON-style null, and explicit zero are the same market and
@@ -830,6 +838,8 @@ describe("codec v1 all action types", () => {
           poolId: 9,
           szDecimals: 5,
           ticker: "BTC",
+          tickSize: 1n,
+          lotSize: 1n,
           maxOpenInterest,
         },
       };
@@ -1215,6 +1225,8 @@ describe("codec v2 signing", () => {
           maxFundingRateBps: 100,
           szDecimals: 4,
           ticker: "ETH",
+          tickSize: 1n,
+          lotSize: 1n,
         },
       },
       {
@@ -1524,6 +1536,8 @@ describe("decodeSigningMessage", () => {
       maxFundingRateBps: 100,
       szDecimals: 2,
       ticker: "XYZ-PERP",
+      tickSize: 1n,
+      lotSize: 1n,
     },
   };
 
