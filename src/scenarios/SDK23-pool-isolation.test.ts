@@ -4,25 +4,27 @@
  * The four-tier waterfall (docs/adl-vs-socialized-loss.md §3) groups
  * markets into pools by `MarketConfig.pool_id`. The whole point of
  * the per-pool insurance fund (Tier 1) is that a JELLY-shape blowout
- * in a high-vol prediction-binary pool can't drain the IF that backs
- * the BTC/ETH/SOL "majors" pool.
+ * in a high-vol pool can't drain the fund that backs another pool.
  *
- * This scenario verifies pool isolation by:
- *
- *   1. Liquidating a position on pool 0 (BTC perp) — emits
- *      InsuranceFundUpdated with `pool_id = 0`.
- *   2. Asserting no event with `pool_id != 0` was emitted.
- *
- * Future extension (post-alpha): create a market with `pool_id = 1`,
- * blow it up, verify pool 0 IF is unchanged. Today every seeded
- * market is `pool_id = 0` so this case isn't exercisable end-to-end
- * via the seed script; the engine-level tests in
- * `engine::tests::waterfall_*` cover the pool dispatch directly.
+ * This scenario creates one perp in pool 0 and one in pool 1, funds the
+ * pool-1 insurance fund, liquidates an insolvent pool-0 long, and checks
+ * that the pool-1 fund kept every dollar and took no position.
  *
  * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK23).
+ *
+ * Runs only when `RPC_URL`, `RELAYER_PRIVATE_KEY` and `ORACLE_PRIVATE_KEY`
+ * are set; the rest of the live-stack environment is in the README.
  */
 import { describe, it, beforeAll, expect } from "vitest";
-import { seedWorld, BTC_PERP, type World } from "./harness.js";
+import { ExchangeClient } from "../client.js";
+import {
+  envWorldOptions,
+  insuranceFundAddress,
+  seedWorld,
+  type Perp,
+  type World,
+} from "./harness.js";
+import { invariants } from "./invariants.js";
 
 const RPC_URL = process.env.RPC_URL;
 const RELAYER_PRIVATE_KEY = process.env.RELAYER_PRIVATE_KEY;
@@ -33,41 +35,65 @@ const describeScenario =
     ? describe
     : describe.skip;
 
+const ENTRY = 50_000_000_000n; // $50k
+const CRASH = 20_000_000_000n; // -60%: alice's loss exceeds her balance
+const POOL_1_FUNDING = 10_000_000_000n; // $10k
+
 describeScenario("SDK23: pool isolation across the IF dispatch", () => {
   let w: World;
+  let pool0: Perp;
+  let pool1: Perp;
+  let reader: ExchangeClient;
+
+  const pool1Fund = async () => {
+    const state = await reader.queryFinancialState({
+      markets: [pool0.market, pool1.market],
+      owners: [insuranceFundAddress(1)],
+    });
+    const balance = state.insurancePools.find((p) => p.pool === 1)?.balance;
+    return { balance, positions: state.accounts[0]?.positions ?? [] };
+  };
 
   beforeAll(async () => {
-    w = await seedWorld({
-      relayerPrivateKey: RELAYER_PRIVATE_KEY,
-      oraclePrivateKey: ORACLE_PRIVATE_KEY,
-      fallbackOraclePrivateKey: process.env.FALLBACK_ORACLE_PRIVATE_KEY,
-      relayBin: process.env.F16_RELAY_BIN,
-      gatewayUrl: process.env.GATEWAY_URL,
-    });
-  }, 60_000);
+    w = await seedWorld(envWorldOptions());
+    reader = new ExchangeClient({ gatewayUrl: w.gatewayUrl });
+    const spec = { imBps: 1000, mmBps: 500, szDecimals: 5 };
+    pool0 = await w.createPerp({ ...spec, poolId: 0 }, ENTRY);
+    pool1 = await w.createPerp({ ...spec, poolId: 1 }, ENTRY);
+    await w.govern(
+      {
+        kind: "FundInsuranceFund",
+        value: {
+          fundingId: BigInt(Date.now()),
+          source: w.carol.address,
+          allocations: [{ poolId: 1, amount: POOL_1_FUNDING }],
+        },
+      },
+      "FundInsuranceFund(pool 1)",
+    );
+  }, 120_000);
 
   it("a pool-0 liquidation only debits pool-0 IF", async () => {
-    const entry = 50_000_000_000n;
-    await w.pushOracle(BTC_PERP, entry);
+    expect(pool0.config.poolId).toBe(0);
+    expect(pool1.config.poolId).toBe(1);
+    const before = await pool1Fund();
+    expect(before.balance).toBeGreaterThanOrEqual(POOL_1_FUNDING);
 
-    const qty = 5n;
-    await w.alice.limitBuy(BTC_PERP, qty, entry);
-    await w.bob.limitSell(BTC_PERP, qty, entry);
+    const { market } = pool0;
+    const qty = pool0.quantityFor(250_000_000_000n, ENTRY);
+    await w.alice.limitBuy(market, qty, ENTRY);
+    await w.bob.limitSell(market, qty, ENTRY);
+    expect(await w.position("alice", market)).toBe(qty);
+    expect(await w.position("bob", market)).toBe(-qty);
 
-    // Crash the oracle so alice gets liquidated.
-    await w.pushOracle(BTC_PERP, 30_000_000_000n);
-    await w.waitOneBlock();
-    await w.waitOneBlock();
+    await w.pushOracle(market, CRASH);
+    await w.untilFlat(["alice"], market);
+    expect(await w.position("alice", market)).toBe(0n);
 
-    // Alice flat.
-    expect(await w.position("alice", BTC_PERP)).toBe(0n);
+    const after = await pool1Fund();
+    expect(after.balance).toBe(before.balance);
+    expect(after.positions).toEqual(before.positions);
 
-    // We don't have a chain-level event-stream query in the harness
-    // (yet — that's its own surface), so the strongest assertion
-    // we can make today is that bob's pool-0 account stays solvent
-    // and his IF didn't go positive (no surplus credit from
-    // unrelated pools mistakenly routed our way).
-    const bobAcct = await w.account("bob");
-    expect(bobAcct).not.toBeNull();
+    await invariants(w);
   }, 120_000);
 });

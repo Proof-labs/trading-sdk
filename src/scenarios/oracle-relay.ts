@@ -1,32 +1,91 @@
-// Test-only: prices a market through both F16 relay keys, as production does.
+// Test-only: oracle settings and prices through the F16 tools, as production does.
 import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { ExchangeClient } from "../client.js";
+import { pacedTransport } from "./pacing.js";
 import { bytesToHex, getPublicKey, hexToBytes } from "../crypto.js";
 import type { OraclePermissions } from "../oracle-permissions.js";
 
 const run = promisify(execFile);
 const CERTIFY_TIMEOUT_MS = 30_000;
+const POLICY_VERSION = 1;
+/** Blocks between proposing settings and their first use; a lapsed one retries longer. */
+const ACTIVATION_RUNWAYS = [15n, 100n];
+// proof-integration's test settings: always open, no recovery wait.
+const SETTINGS = `
+[policy]
+max_age_ms = 86400000
+future_skew_ms = 5000
+pair_time_ms = 86400000
+divergence_bps = 100
+max_updates_per_block = 128
+
+[anchor]
+bucket_ms = 100
+completed_buckets = 1
+
+[recovery]
+duration_ms = 1
+distinct_blocks = 1
+
+[calendar]
+kind = "always_open"
+lifetime_ms = 7776000000
+interval_capacity = 64
+provenance_statement = "proof.integration.calendar.always-open.v1"
+reopen = "GovernedResetOnly"
+manual_halt = false
+
+[slots.primary]
+source_id = 1
+provider = "Binance"
+relay = "primary"
+raw_quote = "USDC"
+confidence_required = false
+max_confidence_bps = 50
+
+[slots.fallback]
+source_id = 2
+provider = "Pyth"
+relay = "fallback"
+raw_quote = "USD"
+confidence_required = false
+max_confidence_bps = 50
+`;
 
 export interface OracleRelayOptions {
   gatewayUrl: string;
   /** Path to the `f16-relay` binary. */
   relayBin: string;
+  /** Path to `f16-policy-bundle`; defaults to the one beside `relayBin`. */
+  bundleBin?: string;
   /** Hex Ed25519 keys of the market policy's two sources. */
   primaryPrivateKey: string;
   fallbackPrivateKey: string;
 }
 
 export interface OracleRelay {
+  /**
+   * Generates `market`'s oracle settings, hands them to `propose` with an
+   * effective height, and resolves once the policy is active.
+   */
+  installSettings(
+    market: number,
+    base: string,
+    propose: (effectiveHeight: bigint, bundle: Uint8Array) => Promise<void>,
+  ): Promise<void>;
   /** Resolves once the chain certifies `price` for `market`. */
   setPrice(market: number, price: bigint): Promise<void>;
 }
 
 export function oracleRelay(opts: OracleRelayOptions): OracleRelay {
-  const reader = new ExchangeClient({ gatewayUrl: opts.gatewayUrl });
+  const reader = new ExchangeClient({
+    gatewayUrl: opts.gatewayUrl,
+    httpTransport: pacedTransport,
+  });
   // f16-relay reads raw 32-byte seed files.
   const dir = mkdtempSync(join(tmpdir(), "sdk-oracle-relay-"));
   process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
@@ -49,6 +108,78 @@ export function oracleRelay(opts: OracleRelayOptions): OracleRelay {
           (s as { result: { node_info: { network: string } } }).result.node_info
             .network,
       ));
+
+  const bundleBin =
+    opts.bundleBin ??
+    (opts.relayBin.includes("/")
+      ? join(dirname(opts.relayBin), "f16-policy-bundle")
+      : "f16-policy-bundle");
+
+  async function bundle(market: number, base: string): Promise<Uint8Array> {
+    const contract = {
+      format: 2,
+      base_asset: base,
+      instrument_basis: "spot",
+      pyth_source_id: 2,
+      binance_source_id: 1,
+      pyth_usd_feed: "0".repeat(63) + "1",
+      binance_usdc_symbol: `${base}USDC`,
+      mapping_evidence_sha256: Array.from({ length: 32 }, () => 1),
+    };
+    const file = join(dir, `contract-${market}.json`);
+    writeFileSync(file, JSON.stringify(contract));
+    const params = join(dir, `settings-${market}.toml`);
+    writeFileSync(
+      params,
+      `format = 1\nchain_id = "${await chainName()}"\npolicy_version = ${POLICY_VERSION}\n\n` +
+        `[generation]\ninputs = ["effective_height", "calendar_start_ms", "primary_authority", "fallback_authority"]\n` +
+        SETTINGS +
+        `\n[[markets]]\nmarket = ${market}\nbase = "${base}"\ncontract = "${file}"\n` +
+        `movement_bps = 10000\nmax_price_micro = 1000000000000000\n`,
+    );
+    const { stdout } = await run(bundleBin, [
+      params,
+      "--calendar-start-ms",
+      String(Date.now() - 60_000),
+      "--primary-authority",
+      keys[0]!.authority,
+      "--fallback-authority",
+      keys[1]!.authority,
+    ]);
+    const generated = JSON.parse(stdout) as {
+      markets: { market: number; bundle_hex: string }[];
+    };
+    const hex = generated.markets.find((m) => m.market === market)?.bundle_hex;
+    if (!hex)
+      throw new Error(`f16-policy-bundle wrote no bundle for ${market}`);
+    return hexToBytes(hex);
+  }
+
+  async function installSettings(
+    market: number,
+    base: string,
+    propose: (effectiveHeight: bigint, bundle: Uint8Array) => Promise<void>,
+  ): Promise<void> {
+    const settings = await bundle(market, base);
+    for (const runway of ACTIVATION_RUNWAYS) {
+      const { finalizedHeight } = await reader.queryOraclePermissions(market);
+      try {
+        await propose(finalizedHeight + runway, settings);
+        break;
+      } catch (error) {
+        if (runway === ACTIVATION_RUNWAYS.at(-1)) throw error;
+      }
+    }
+    const deadline = Date.now() + CERTIFY_TIMEOUT_MS;
+    while (!(await reader.queryOraclePermissions(market)).policy) {
+      if (Date.now() > deadline) {
+        throw new Error(
+          `market ${market}: oracle settings never became active`,
+        );
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
 
   async function send(market: number, price: bigint): Promise<void> {
     const read = await reader.queryOraclePermissions(market);
@@ -99,6 +230,7 @@ export function oracleRelay(opts: OracleRelayOptions): OracleRelay {
   }
 
   return {
+    installSettings,
     // Publish times must rise per source, so sends go one at a time.
     setPrice(market, price) {
       const next = queue.then(() => send(market, price));

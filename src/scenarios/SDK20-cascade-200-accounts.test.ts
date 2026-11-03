@@ -4,30 +4,28 @@
  * This is the headline stress test promised in
  * `docs/adl-vs-socialized-loss.md` §Integration tests. The setup:
  *
- *   1. Spin up N (default 200) trader keys, each funded with $10k.
- *   2. Each trader takes a long perp position sized to use 95% of IM
- *      (so a 5% adverse move blows them up).
+ *   1. Spin up N (default 25) trader keys, each funded with $10k.
+ *   2. Each trader takes a long sized to use 95% of the perp's initial
+ *      margin, so a 5% adverse move puts them under maintenance.
  *   3. The MM that fills the longs holds the symmetric short.
- *   4. Drop the oracle 30% in one tick.
- *   5. Run end-of-block liquidation. Every long should be closed;
- *      the four-tier waterfall must fully absorb the cumulative
- *      bad debt without crashing the chain or leaving negative
- *      account balances.
+ *   4. Drop the oracle 30% in one price.
+ *   5. Every long is liquidated and no account is left underwater.
  *
- * Pre-2026-04-25 the harness had no oracle push and the engine had
- * no four-tier waterfall, so this scenario was just a placeholder.
- * Now (item 5 + item 13) it can run end-to-end. The scaffolding
- * here covers the smaller-N case (default 25); set
- * `SDK20_TRADER_COUNT=200` to reproduce the full design-doc replay.
+ * Set `SDK20_TRADER_COUNT=200` to reproduce the full design-doc replay.
  *
  * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK20).
  *
- * Runs only when `RPC_URL`, `RELAYER_PRIVATE_KEY`, and
- * `ORACLE_PRIVATE_KEY` are set AND a quiet node (no concurrent MMs)
- * is available.
+ * Runs only when `RPC_URL`, `RELAYER_PRIVATE_KEY` and `ORACLE_PRIVATE_KEY`
+ * are set; the rest of the live-stack environment is in the README.
  */
 import { describe, it, beforeAll, expect } from "vitest";
-import { seedWorld, BTC_PERP, type World } from "./harness.js";
+import {
+  envWorldOptions,
+  seedWorld,
+  type Perp,
+  type World,
+} from "./harness.js";
+import { invariants } from "./invariants.js";
 
 const RPC_URL = process.env.RPC_URL;
 const RELAYER_PRIVATE_KEY = process.env.RELAYER_PRIVATE_KEY;
@@ -39,78 +37,61 @@ const describeScenario =
     ? describe
     : describe.skip;
 
+const ENTRY = 50_000_000_000n; // $50k
+const CRASH = 35_000_000_000n; // -30%
+const BALANCE = 10_000_000_000n; // $10k per trader
+
 describeScenario("SDK20: cascade liquidation across many accounts", () => {
   let w: World;
+  let perp: Perp;
+  const traders = Array.from(
+    { length: TRADER_COUNT },
+    (_, i) => `trader${i + 1}`,
+  );
 
   beforeAll(async () => {
-    // Generate trader names: trader1, trader2, ..., traderN. The MM
-    // (which provides the symmetric short side) is `mm`.
-    const traderNames = Array.from(
-      { length: TRADER_COUNT },
-      (_, i) => `trader${i + 1}`,
-    );
     w = await seedWorld({
-      relayerPrivateKey: RELAYER_PRIVATE_KEY,
-      oraclePrivateKey: ORACLE_PRIVATE_KEY,
-      fallbackOraclePrivateKey: process.env.FALLBACK_ORACLE_PRIVATE_KEY,
-      relayBin: process.env.F16_RELAY_BIN,
-      gatewayUrl: process.env.GATEWAY_URL,
-      users: ["mm", ...traderNames],
-      seedBalance: 10_000_000_000n, // $10k each
+      ...envWorldOptions(),
+      users: ["mm", ...traders],
+      seedBalance: BALANCE,
     });
-  }, 60_000);
+    perp = await w.createPerp(
+      { imBps: 1000, mmBps: 500, szDecimals: 5 },
+      ENTRY,
+    );
+    // The MM carries every trader's short, so it needs margin for all of them.
+    await w.deposit("mm", BALANCE * BigInt(TRADER_COUNT));
+  }, 120_000);
 
   it(`closes every long after a 30% oracle drop (${TRADER_COUNT} traders)`, async () => {
-    // Anchor the oracle at $50k.
-    const entry = 50_000_000_000n; // $50k
-    await w.pushOracle(BTC_PERP, entry);
-
-    // Each trader buys a 1-contract long — at $50k notional with
-    // im_bps=1000 (10% IM), that reserves $5k per trader.
-    // MM provides the symmetric short side at the same price.
-    // Build the order tape: every trader posts a buy first, MM
-    // crosses by selling N contracts at the same price.
-    const qty = 1n;
-    for (let i = 0; i < TRADER_COUNT; i++) {
-      await w.users[`trader${i + 1}`]!.limitBuy(BTC_PERP, qty, entry);
+    const { market } = perp;
+    // 95% of the notional the trader's balance can margin.
+    const notional =
+      (BALANCE * 10_000n * 95n) / BigInt(perp.config.imBps) / 100n;
+    const qty = perp.quantityFor(notional, ENTRY);
+    for (const name of traders) {
+      await w.users[name]!.limitBuy(market, qty, ENTRY);
     }
-    await w.users.mm!.limitSell(BTC_PERP, BigInt(TRADER_COUNT), entry);
+    await w.users.mm!.limitSell(market, qty * BigInt(TRADER_COUNT), ENTRY);
 
-    // Sanity: every trader is +1 long, MM is −N short.
-    for (let i = 0; i < TRADER_COUNT; i++) {
-      expect(await w.position(`trader${i + 1}`, BTC_PERP)).toBe(qty);
+    for (const name of traders) {
+      expect(await w.position(name, market)).toBe(qty);
     }
-    expect(await w.position("mm", BTC_PERP)).toBe(-BigInt(TRADER_COUNT));
+    expect(await w.position("mm", market)).toBe(-qty * BigInt(TRADER_COUNT));
 
-    // Drop the oracle 30% — every long is now under maintenance margin.
-    await w.pushOracle(BTC_PERP, 35_000_000_000n);
+    await w.pushOracle(market, CRASH);
+    await w.untilFlat(traders, market, 30_000);
 
-    // Wait for the end-of-block sweep to run. Two blocks gives the
-    // engine time to walk all positions.
-    await w.waitOneBlock();
-    await w.waitOneBlock();
-    await w.waitOneBlock();
-
-    // Every trader's position must be closed. The MM may have
-    // partial residual depending on cascade order.
-    for (let i = 0; i < TRADER_COUNT; i++) {
+    for (const name of traders) {
+      expect(await w.position(name, market), `${name} should be flat`).toBe(0n);
+      const acct = await w.account(name);
+      expect(acct, `${name} account`).not.toBeNull();
       expect(
-        await w.position(`trader${i + 1}`, BTC_PERP),
-        `trader${i + 1} should be flat after cascade`,
-      ).toBe(0n);
+        acct!.equity,
+        `${name} must not be underwater`,
+      ).toBeGreaterThanOrEqual(0n);
     }
 
-    // No trader should be left with negative equity — that's the
-    // invariant the four-tier waterfall enforces.
-    for (let i = 0; i < TRADER_COUNT; i++) {
-      const acct = await w.account(`trader${i + 1}`);
-      expect(acct).not.toBeNull();
-      if (acct) {
-        expect(
-          acct.equity,
-          `trader${i + 1} must not be underwater`,
-        ).toBeGreaterThanOrEqual(0n);
-      }
-    }
-  }, 120_000);
+    await invariants(w);
+  }, 180_000);
 });

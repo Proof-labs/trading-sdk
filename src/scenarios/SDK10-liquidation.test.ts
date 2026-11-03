@@ -1,24 +1,22 @@
 /**
  * SDK10 — Liquidation at maintenance margin threshold
  *
- * Alice opens a leveraged long, an adversarial price move pushes mark
- * below the maintenance margin threshold, and the end-of-block
- * liquidation sweep closes her position. The insurance fund is updated
- * iff the liquidation produced bad debt.
- *
- * Pre-2026-04-25 this file was a placeholder because the harness had
- * no way to push oracle updates. The harness now exposes
- * `world.pushOracle(market, price)` (gated on `relayerPrivateKey` /
- * the `RELAYER_PRIVATE_KEY` env var), so we can drive the oracle
- * downward without needing a market-order flow.
+ * Alice opens a leveraged long on a perp created for this scenario, an
+ * adverse oracle move takes her below maintenance margin, and the engine
+ * liquidates her. She ends flat and not underwater.
  *
  * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK10).
  *
- * Runs only when both `RPC_URL` and `RELAYER_PRIVATE_KEY` are set.
- * CI keeps this skipped so `npm test` stays green without a live node.
+ * Runs only when `RPC_URL`, `RELAYER_PRIVATE_KEY` and `ORACLE_PRIVATE_KEY`
+ * are set; the rest of the live-stack environment is in the README.
  */
 import { describe, it, expect, beforeAll } from "vitest";
-import { seedWorld, BTC_PERP, type World } from "./harness.js";
+import {
+  envWorldOptions,
+  seedWorld,
+  type Perp,
+  type World,
+} from "./harness.js";
 import { invariants } from "./invariants.js";
 
 const RPC_URL = process.env.RPC_URL;
@@ -29,64 +27,44 @@ const describeScenario =
     ? describe
     : describe.skip;
 
+const ENTRY = 50_000_000_000n; // $50,000
+const CRASH = 30_000_000_000n; // $30,000
+
 describeScenario("SDK10: liquidation on adverse price move", () => {
   let w: World;
+  let perp: Perp;
 
   beforeAll(async () => {
-    w = await seedWorld({
-      relayerPrivateKey: RELAYER_PRIVATE_KEY,
-      oraclePrivateKey: ORACLE_PRIVATE_KEY,
-      fallbackOraclePrivateKey: process.env.FALLBACK_ORACLE_PRIVATE_KEY,
-      relayBin: process.env.F16_RELAY_BIN,
-      gatewayUrl: process.env.GATEWAY_URL,
-    });
-  });
+    w = await seedWorld(envWorldOptions());
+    perp = await w.createPerp(
+      { imBps: 1000, mmBps: 500, szDecimals: 5 },
+      ENTRY,
+    );
+  }, 60_000);
 
   it("position closes and equity ≥ 0 after a sub-MM oracle move", async () => {
-    // 1. Anchor the oracle at $50k so margin math is round.
-    const entry = 50_000_000_000n; // $50,000 in microUSDC
-    await w.pushOracle(BTC_PERP, entry);
+    const { market } = perp;
+    // $250k notional against $100k: 2.5x, well inside the 10x IM limit.
+    const qty = perp.quantityFor(250_000_000_000n, ENTRY);
+    await w.alice.limitBuy(market, qty, ENTRY);
+    await w.bob.limitSell(market, qty, ENTRY);
+    expect(await w.position("alice", market)).toBe(qty);
+    expect(await w.position("bob", market)).toBe(-qty);
 
-    // 2. Alice opens a leveraged long. With im_bps=1000 (10x max
-    //    leverage), 5 contracts at $50k = $250k notional → IM=$25k.
-    //    Alice's seed balance is $100k so she's at ~25% utilisation.
-    //    Bob fills as counterparty.
-    const qty = 5n;
-    await w.alice.limitBuy(BTC_PERP, qty, entry);
-    await w.bob.limitSell(BTC_PERP, qty, entry);
+    // At $30k alice has lost $100k, her whole balance; MM is $7.5k.
+    const loss = perp.notional(qty, ENTRY) - perp.notional(qty, CRASH);
+    const mm =
+      (perp.notional(qty, CRASH) * BigInt(perp.config.mmBps)) / 10_000n;
+    expect(100_000_000_000n - loss).toBeLessThan(mm);
 
-    expect(await w.position("alice", BTC_PERP)).toBe(qty);
-    expect(await w.position("bob", BTC_PERP)).toBe(-qty);
+    await w.pushOracle(market, CRASH);
+    await w.untilFlat(["alice"], market);
 
-    // 3. Push the oracle down hard enough to break maintenance margin.
-    //    With mm_bps=500 (5%), MM at $30k = 5 × 30k × 5% = $7.5k.
-    //    Alice's equity at $30k mark = balance - uPnL_loss
-    //                                = $100k − $25k − (5 × ($50k − $30k))
-    //                                = $100k − $25k − $100k = −$25k.
-    //    Wait — open IM came out of balance (engine reserves it). So
-    //    available balance is $75k after open, equity = $75k − $100k
-    //    realized-loss-on-mark = −$25k. That's < MM of $7.5k → liquidate.
-    const liquidationMark = 30_000_000_000n; // $30k
-    await w.pushOracle(BTC_PERP, liquidationMark);
-
-    // 4. Wait for end-of-block liquidation sweep to run.
-    await w.waitOneBlock();
-    await w.waitOneBlock();
-
-    // 5. Assert position closed and core invariants hold.
-    expect(await w.position("alice", BTC_PERP)).toBe(0n);
+    expect(await w.position("alice", market)).toBe(0n);
     const post = await w.account("alice");
     expect(post).not.toBeNull();
-    if (post) {
-      // Equity may be 0 (clean liquidation, balance covered the loss)
-      // or negative-clamped-to-0 (insurance fund absorbed bad debt).
-      // Either way it must not be negative — the invariant guarantees
-      // post-liquidation accounts never sit underwater on chain.
-      expect(post.equity).toBeGreaterThanOrEqual(0n);
-    }
+    expect(post!.equity).toBeGreaterThanOrEqual(0n);
 
-    // 6. Run the universal invariants — orderbook not crossed,
-    //    positions sum to zero across users, no underwater accounts.
     await invariants(w);
-  });
+  }, 60_000);
 });

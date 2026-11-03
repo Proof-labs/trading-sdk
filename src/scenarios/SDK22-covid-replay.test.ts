@@ -8,30 +8,26 @@
  * more conservative pre-liquidation caps and better waterfalls (FTX,
  * Binance) absorbed the same shock without halting.
  *
- * This scenario replays the shape:
+ * This scenario replays the shape on a perp created for it:
  *
- *   1. Many small leveraged longs across $1k-$50k account sizes
- *      (typical retail distribution).
- *   2. Sharp ~50% oracle drop in a single tick.
- *   3. End-of-block sweep liquidates everyone underwater.
- *   4. The four-tier waterfall absorbs the cumulative bad debt.
- *
- * Validation:
- *   - Every long is closed after the drop.
- *   - No account is underwater.
- *   - Proof liquidity provider (PLP) and IF deficits are bounded by their respective layers
- *     (no single tier asked to absorb the entire shortfall).
- *   - Pool isolation respected — a tier-2 socialized loss event
- *     is emitted with the correct cap.
+ *   1. Many leveraged longs across $1k-$50k account sizes (typical
+ *      retail distribution), each near its initial margin limit.
+ *   2. Sharp 50% oracle drop in a single price.
+ *   3. Every long is liquidated and no account is left underwater.
  *
  * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK22).
  *
- * Runs only when `RPC_URL`, `RELAYER_PRIVATE_KEY`, and
- * `ORACLE_PRIVATE_KEY` are set AND the dev stack is running without
- * concurrent MMs (see scenarios/README.md).
+ * Runs only when `RPC_URL`, `RELAYER_PRIVATE_KEY` and `ORACLE_PRIVATE_KEY`
+ * are set; the rest of the live-stack environment is in the README.
  */
 import { describe, it, beforeAll, expect } from "vitest";
-import { seedWorld, BTC_PERP, type World } from "./harness.js";
+import {
+  envWorldOptions,
+  seedWorld,
+  type Perp,
+  type World,
+} from "./harness.js";
+import { invariants } from "./invariants.js";
 
 const RPC_URL = process.env.RPC_URL;
 const RELAYER_PRIVATE_KEY = process.env.RELAYER_PRIVATE_KEY;
@@ -42,76 +38,76 @@ const describeScenario =
     ? describe
     : describe.skip;
 
+const ENTRY = 50_000_000_000n; // $50k
+const CRASH = 25_000_000_000n; // -50%
+const SEED = 1_000_000_000n; // $1k
+// Account size per trader: small $1k, medium $10k, whale $50k.
+const BALANCES: Record<string, bigint> = {
+  s1: SEED,
+  s2: SEED,
+  s3: SEED,
+  s4: SEED,
+  s5: SEED,
+  m1: 10_000_000_000n,
+  m2: 10_000_000_000n,
+  m3: 10_000_000_000n,
+  w1: 50_000_000_000n,
+  w2: 50_000_000_000n,
+};
+const TRADERS = Object.keys(BALANCES);
+
 describeScenario("SDK22: COVID-style 50% crash absorbed cleanly", () => {
   let w: World;
-  // Three "buckets" of trader sizes — small / medium / whale.
-  const SMALL = ["s1", "s2", "s3", "s4", "s5"];
-  const MEDIUM = ["m1", "m2", "m3"];
-  const WHALES = ["w1", "w2"];
-  const ALL = [...SMALL, ...MEDIUM, ...WHALES];
+  let perp: Perp;
 
   beforeAll(async () => {
-    // Mixed-size pool: small=$1k, medium=$10k, whale=$50k. Plus the MM
-    // who provides counterparty liquidity.
     w = await seedWorld({
-      relayerPrivateKey: RELAYER_PRIVATE_KEY,
-      oraclePrivateKey: ORACLE_PRIVATE_KEY,
-      fallbackOraclePrivateKey: process.env.FALLBACK_ORACLE_PRIVATE_KEY,
-      relayBin: process.env.F16_RELAY_BIN,
-      gatewayUrl: process.env.GATEWAY_URL,
-      users: ["mm", ...ALL],
-      seedBalance: 1_000_000_000n, // $1k baseline; topup happens in the test
+      ...envWorldOptions(),
+      users: ["mm", ...TRADERS],
+      seedBalance: SEED,
     });
-
-    // Top up whales and mediums beyond the seed balance via additional
-    // relayer-signed deposits. This needs an extension to the harness;
-    // for v1 we keep all accounts at the seed balance and adjust position
-    // sizes to differentiate "small" vs "whale".
-  }, 60_000);
+    for (const name of TRADERS) {
+      if (BALANCES[name]! > SEED) await w.deposit(name, BALANCES[name]! - SEED);
+    }
+    await w.deposit("mm", 1_000_000_000_000n);
+    perp = await w.createPerp(
+      { imBps: 1000, mmBps: 500, szDecimals: 5 },
+      ENTRY,
+    );
+  }, 120_000);
 
   it("liquidates every long and leaves no account underwater", async () => {
-    // Anchor at $50k.
-    const entry = 50_000_000_000n;
-    await w.pushOracle(BTC_PERP, entry);
-
-    // Position-size by bucket. With $1k seed and 10x max leverage, max
-    // safe position is 0.2 contracts at $50k notional (= $10k position).
-    // We keep everyone at 1 contract each — fully exposed, will all
-    // blow up on the crash. Total long = SMALL+MEDIUM+WHALES contracts.
-    const qty = 1n;
-    for (const name of ALL) {
-      await w.users[name]!.limitBuy(BTC_PERP, qty, entry);
+    const { market } = perp;
+    // Each long uses 90% of the notional its balance can margin.
+    const sizes = new Map<string, bigint>();
+    for (const name of TRADERS) {
+      const notional =
+        (BALANCES[name]! * 10_000n * 90n) / BigInt(perp.config.imBps) / 100n;
+      const qty = perp.quantityFor(notional, ENTRY);
+      sizes.set(name, qty);
+      await w.users[name]!.limitBuy(market, qty, ENTRY);
     }
-    await w.users.mm!.limitSell(BTC_PERP, BigInt(ALL.length), entry);
-
-    // 50% crash.
-    await w.pushOracle(BTC_PERP, 25_000_000_000n);
-    await w.waitOneBlock();
-    await w.waitOneBlock();
-
-    // Every long flat.
-    for (const name of ALL) {
-      expect(await w.position(name, BTC_PERP), `${name} should be flat`).toBe(
-        0n,
-      );
+    const total = [...sizes.values()].reduce((a, b) => a + b, 0n);
+    await w.users.mm!.limitSell(market, total, ENTRY);
+    for (const name of TRADERS) {
+      expect(await w.position(name, market)).toBe(sizes.get(name));
     }
 
-    // No underwater accounts.
-    for (const name of ALL) {
+    await w.pushOracle(market, CRASH);
+    await w.untilFlat(TRADERS, market);
+
+    for (const name of TRADERS) {
+      expect(await w.position(name, market), `${name} should be flat`).toBe(0n);
+    }
+    for (const name of ["mm", ...TRADERS]) {
       const acct = await w.account(name);
-      expect(acct).not.toBeNull();
-      if (acct)
-        expect(
-          acct.equity,
-          `${name} must not be underwater`,
-        ).toBeGreaterThanOrEqual(0n);
+      expect(acct, `${name} account`).not.toBeNull();
+      expect(
+        acct!.equity,
+        `${name} must not be underwater`,
+      ).toBeGreaterThanOrEqual(0n);
     }
 
-    // MM solvent.
-    const mmAcct = await w.account("mm");
-    expect(mmAcct).not.toBeNull();
-    if (mmAcct) {
-      expect(mmAcct.equity).toBeGreaterThanOrEqual(0n);
-    }
+    await invariants(w);
   }, 120_000);
 });

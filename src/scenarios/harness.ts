@@ -8,9 +8,11 @@
  * scenarios don't collide on nonces or CometBFT's tx cache.
  */
 import { Decoder } from "@msgpack/msgpack";
+import { keccak_256 } from "@noble/hashes/sha3.js";
 import { rejectFloats } from "../codec.js";
 import { ready } from "../wasm-loader.js";
 import { ExchangeClient } from "../client.js";
+import { pacedTransport } from "./pacing.js";
 import {
   generateKeypair,
   pubkeyToOwner,
@@ -18,7 +20,15 @@ import {
   hexToBytes,
 } from "../crypto.js";
 import { Side } from "../types.js";
-import type { Action, AccountInfo, Orderbook, PositionInfo } from "../types.js";
+import type {
+  Action,
+  AccountInfo,
+  AdminAction,
+  MarketConfig,
+  Orderbook,
+  PositionInfo,
+} from "../types.js";
+import { governance, type Governance } from "./governance.js";
 import { oracleRelay, type OracleRelay } from "./oracle-relay.js";
 
 /** Canonical market IDs seeded by scripts/seed.ts. */
@@ -54,6 +64,42 @@ export interface SeedWorldOptions {
   fallbackOraclePrivateKey?: string;
   /** Path to `f16-relay`; defaults to the one on PATH. */
   relayBin?: string;
+  /** Hex Ed25519 keys of two admin multisig members, for `createPerp`. */
+  adminPrivateKeys?: readonly [string, string];
+}
+
+/** Live-stack options from the environment the scenario README documents. */
+export function envWorldOptions(): SeedWorldOptions {
+  const env = process.env;
+  return {
+    gatewayUrl: env.GATEWAY_URL,
+    relayerPrivateKey: env.RELAYER_PRIVATE_KEY,
+    oraclePrivateKey: env.ORACLE_PRIVATE_KEY,
+    fallbackOraclePrivateKey: env.FALLBACK_ORACLE_PRIVATE_KEY,
+    relayBin: env.F16_RELAY_BIN,
+    adminPrivateKeys:
+      env.ADMIN1_PRIVATE_KEY && env.ADMIN2_PRIVATE_KEY
+        ? [env.ADMIN1_PRIVATE_KEY, env.ADMIN2_PRIVATE_KEY]
+        : undefined,
+  };
+}
+
+/** What a scenario's own perpetual is created with. */
+export interface PerpSpec {
+  imBps: number;
+  mmBps: number;
+  szDecimals: number;
+  poolId?: number;
+}
+
+/** A perpetual a scenario created, with its config as the chain reads it. */
+export interface Perp {
+  market: number;
+  config: MarketConfig;
+  /** Contracts worth `notional` (microUSDC) at `price`. */
+  quantityFor(notional: bigint, price: bigint): bigint;
+  /** Notional (microUSDC) of `quantity` contracts at `price`. */
+  notional(quantity: bigint, price: bigint): bigint;
 }
 
 /** Fluent user API returned for each seeded account. */
@@ -79,6 +125,8 @@ export interface User {
 export interface World {
   gatewayUrl: string;
   users: Record<string, User>;
+  /** Markets this world created. */
+  markets: number[];
   alice: User;
   bob: User;
   carol: User;
@@ -95,12 +143,35 @@ export interface World {
    */
   position(user: string, market: number): Promise<bigint>;
 
+  /** Net signed position of any owner (hex address) on a market. */
+  positionOf(owner: string, market: number): Promise<bigint>;
+
+  /** Hex address of the insurance fund of `market`'s pool. */
+  insuranceFund(market: number): Promise<string>;
+
   /** Raw position info (if present) — gives callers the typed SDK shape. */
   positionInfo(user: string, market: number): Promise<PositionInfo | null>;
 
   /** Set a market's oracle price (microUSDC) through both F16 relay keys
    *  and wait until the chain certifies it. */
   pushOracle(market: number, priceMicroUsdc: bigint): Promise<void>;
+
+  /** Create a perpetual through the admin multisig, install its oracle
+   *  settings the same way, and certify `price` as its first price. */
+  createPerp(spec: PerpSpec, price: bigint): Promise<Perp>;
+
+  /** Execute an admin action through the two-member multisig. */
+  govern(action: AdminAction, label: string): Promise<void>;
+
+  /** Credit `amount` (microUSDC) to a user through a relayer deposit. */
+  deposit(user: string, amount: bigint): Promise<void>;
+
+  /** Poll until every named user is flat on `market` or `timeoutMs` passes. */
+  untilFlat(
+    names: readonly string[],
+    market: number,
+    timeoutMs?: number,
+  ): Promise<void>;
 
   /** Trigger end-of-block liquidation sweep. The engine runs this
    *  every FinalizeBlock; this method is a thin wait-for-block helper
@@ -130,7 +201,10 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
   let relayerClient: ExchangeClient | null = null;
   let relayerAddress: Uint8Array | null = null;
   if (opts.relayerPrivateKey) {
-    relayerClient = new ExchangeClient({ gatewayUrl });
+    relayerClient = new ExchangeClient({
+      gatewayUrl,
+      httpTransport: pacedTransport,
+    });
     const privBytes = hexToBytes(opts.relayerPrivateKey);
     relayerClient.setPrivateKey(privBytes);
     relayerClient.setUnsafeFastSubmit(true);
@@ -150,6 +224,12 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
     });
   }
 
+  let admins: Governance | null = null;
+  if (opts.adminPrivateKeys) {
+    const [a, b] = opts.adminPrivateKeys.map(hexToBytes);
+    admins = governance(gatewayUrl, [a!, b!]);
+  }
+
   const users: Record<string, User> = {};
   for (const name of names) {
     users[name] = await createUser(
@@ -162,11 +242,28 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
   }
 
   // Query client (no key — just for read endpoints).
-  const queryClient = new ExchangeClient({ gatewayUrl });
+  const queryClient = new ExchangeClient({
+    gatewayUrl,
+    httpTransport: pacedTransport,
+  });
+  const markets: number[] = [];
+
+  const positionOf = async (owner: string, market: number) => {
+    const acct = await queryClient.queryAccount(owner);
+    const pos = acct?.positions.find((p) => p.market === market);
+    if (!pos) return 0n;
+    return pos.side === "Buy" ? pos.size : -pos.size;
+  };
+  const position = async (user: string, market: number) => {
+    const u = users[user];
+    if (!u) throw new Error(`unknown user: ${user}`);
+    return positionOf(u.addressHex, market);
+  };
 
   return {
     gatewayUrl,
     users,
+    markets,
     alice: users.alice!,
     bob: users.bob!,
     carol: users.carol!,
@@ -186,14 +283,14 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
       return acct?.positions.find((p) => p.market === market) ?? null;
     },
 
-    position: async (user, market) => {
-      const u = users[user];
-      if (!u) throw new Error(`unknown user: ${user}`);
-      const acct = await queryClient.queryAccount(u.addressHex);
-      const pos = acct?.positions.find((p) => p.market === market);
-      if (!pos) return 0n;
-      // SDK stores (side, size). Expose as a signed bigint: +long / -short.
-      return pos.side === "Buy" ? pos.size : -pos.size;
+    position,
+    positionOf,
+
+    insuranceFund: async (market) => {
+      const config = (await queryClient.queryMarkets()).find(
+        (m) => m.market === market,
+      );
+      return insuranceFundAddress(config?.poolId ?? 0);
     },
 
     pushOracle: async (market, price) => {
@@ -204,6 +301,91 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
         );
       }
       await relay.setPrice(market, price);
+    },
+
+    createPerp: async (spec, price) => {
+      if (!admins || !relay) {
+        throw new Error(
+          "world.createPerp: pass adminPrivateKeys and both oracle keys to seedWorld()",
+        );
+      }
+      const govern = admins;
+      // Caller ids are bounded to i32::MAX; a random one avoids reruns.
+      const market = 1_000 + Math.floor(Math.random() * 2_000_000_000);
+      const ticker = `SDK${market}`;
+      await govern.execute(
+        {
+          kind: "CreateMarket",
+          value: {
+            market,
+            imBps: spec.imBps,
+            mmBps: spec.mmBps,
+            takerFeeBps: 5,
+            makerFeeBps: 2,
+            signer: new Uint8Array(20),
+            fundingIntervalMs: 0n,
+            maxFundingRateBps: 0,
+            poolId: spec.poolId ?? 0,
+            szDecimals: spec.szDecimals,
+            ticker,
+            maxOpenInterest: 0n,
+          },
+        },
+        `CreateMarket(${market})`,
+      );
+      await relay.installSettings(market, ticker, (effectiveHeight, bundle) =>
+        govern.execute(
+          { kind: "ConfigureOraclePolicy", value: { effectiveHeight, bundle } },
+          `ConfigureOraclePolicy(${market})`,
+        ),
+      );
+      await relay.setPrice(market, price);
+      const config = (await queryClient.queryMarkets()).find(
+        (m) => m.market === market,
+      );
+      if (!config)
+        throw new Error(`market ${market} not readable after creation`);
+      markets.push(market);
+      const scale = 10n ** BigInt(config.szDecimals ?? 0);
+      return {
+        market,
+        config,
+        quantityFor: (notional, at) => (notional * scale) / at,
+        notional: (quantity, at) => (quantity * at) / scale,
+      };
+    },
+
+    govern: async (action, label) => {
+      if (!admins) {
+        throw new Error("world.govern: pass adminPrivateKeys to seedWorld()");
+      }
+      await admins.execute(action, label);
+    },
+
+    deposit: async (user, amount) => {
+      const u = users[user];
+      if (!u) throw new Error(`unknown user: ${user}`);
+      if (!relayerClient || !relayerAddress) {
+        throw new Error("world.deposit: pass relayerPrivateKey to seedWorld()");
+      }
+      const r = await relayerClient.submitTxCommit({
+        type: "Deposit",
+        data: { owner: u.address, amount, signer: relayerAddress },
+      });
+      if (r.code !== 0) {
+        throw new Error(
+          `deposit to ${user} failed: code=${r.code} log=${r.log ?? ""}`,
+        );
+      }
+    },
+
+    untilFlat: async (names, market, timeoutMs = 15_000) => {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const sizes = await Promise.all(names.map((n) => position(n, market)));
+        if (sizes.every((size) => size === 0n) || Date.now() > deadline) return;
+        await new Promise((r) => setTimeout(r, 200));
+      }
     },
 
     waitOneBlock: async () => {
@@ -240,7 +422,10 @@ async function createUser(
   const address = pubkeyToOwner(publicKey);
   const addressHex = ownerToHex(address);
 
-  const client = new ExchangeClient({ gatewayUrl });
+  const client = new ExchangeClient({
+    gatewayUrl,
+    httpTransport: pacedTransport,
+  });
   client.setPrivateKey(privateKey);
   // Use submitTxCommit everywhere in the harness; skip the fire-and-verify
   // background check so scenario assertions use submitTxCommit directly.
@@ -357,6 +542,13 @@ async function createUser(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** The engine's derived insurance account of `pool` (exchange-wire `derive_vault`). */
+export function insuranceFundAddress(pool: number): string {
+  const domain = new TextEncoder().encode("ProofExchange-vault-v1");
+  const hash = keccak_256(new Uint8Array([...domain, 0, pool]));
+  return ownerToHex(hash.subarray(0, 20));
+}
 
 const msgpackDecoder = new Decoder({ useBigInt64: true });
 
