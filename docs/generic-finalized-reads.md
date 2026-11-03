@@ -83,7 +83,10 @@ shared validators. Existing byte-address trading types stay unchanged.
 `RawOpenOrder` is a stored engine tuple with queue priority and original/filled
 quantity; `OpenOrder` is the existing user-facing projection with byte owners.
 `ParticipantTrade` preserves both counterparties, exact indexed NUMERIC strings,
-integer fee units and block provenance; `HistoryFill` is the existing history
+integer fee units and block provenance. The indexer stores the engine's fill
+`price` attribute verbatim, so current-engine rows are integer micro-USDC
+rendered with a six-digit zero tail (`"66750000000.000000"` = $66,750); archived
+rows may hold decimal prices whose scale the SDK does not normalize; `HistoryFill` is the existing history
 projection. Neither is safely assignable to the other without explicit unit
 and representation conversion. `makerSide` normalizes to the existing `Side` enum.
 

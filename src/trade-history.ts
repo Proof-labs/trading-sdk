@@ -35,8 +35,12 @@ export interface ParticipantTrade {
   blockHeight: bigint;
   /** Original RFC3339 string, retaining fractional-second precision. */
   blockTime: string;
-  /** Exact NUMERIC text as indexed, without conversion or rounding. */
+  /** Exact NUMERIC text as indexed, without conversion or rounding. Rows
+   * from the current engine are integer micro-USDC (6 dp) with the column's
+   * six-digit zero tail, e.g. "66750000000.000000" = $66,750. Archived rows
+   * may hold decimal prices; the SDK does not normalize their scale. */
   price: string;
+  /** Exact NUMERIC text of an integer contract count. */
   quantity: string;
   makerOwner: HexAddress;
   takerOwner: HexAddress;
