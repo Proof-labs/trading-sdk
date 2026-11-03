@@ -272,6 +272,27 @@ describe("bounded trusted-gateway block/results windows", () => {
       },
     ],
     [
+      "surplus results",
+      (f: ReturnType<typeof fixture>) => {
+        const results = f.executions.get(101)!.result.txs_results!;
+        results.push(results[0]);
+      },
+    ],
+    [
+      "null execution code",
+      (f: ReturnType<typeof fixture>) => {
+        Object.assign(f.executions.get(101)!.result.txs_results![0], {
+          code: null,
+        });
+      },
+    ],
+    [
+      "non-array transactions",
+      (f: ReturnType<typeof fixture>) => {
+        Object.assign(f.blocks.get(101)!.result.block.data, { txs: "AA==" });
+      },
+    ],
+    [
       "null nonempty results",
       (f: ReturnType<typeof fixture>) => {
         f.executions.get(101)!.result.txs_results = null;
@@ -353,6 +374,18 @@ describe("bounded trusted-gateway block/results windows", () => {
       (await f.client.reads().evidence.blockResultsWindow(f.selection))
         .fromHeight,
     ).toBe(101n);
+  });
+  it("keeps scanning past a block timed exactly at fromMs (half-open lower bound)", async () => {
+    const f = fixture();
+    const window = await f.client
+      .reads()
+      .evidence.blockResultsWindow({ ...f.selection, fromMs: T + 2000 });
+    expect(window.fromHeight).toBe(100n);
+    expect(window.blocks.map((b) => b.header.height)).toEqual([
+      100n,
+      101n,
+      102n,
+    ]);
   });
   it("captures request fields before asynchronous reads", async () => {
     const f = fixture();

@@ -40,17 +40,20 @@ export interface BlockResultsWindowSelection {
   maxAttributes?: number;
 }
 
+/** One block transaction and its same-index execution result. */
+export interface BlockTransactionEvidence {
+  index: number;
+  hash: Hash32Hex;
+  signedBytes: Uint8Array;
+  code: number;
+  events: TransactionEvidenceEvent[];
+}
+
 export interface BlockResultsEvidence {
   header: BlockEvidenceHeader;
-  postAppHash: string;
+  postAppHash: Hash32Hex;
   /** Every block transaction and its same-index result, including rejections. */
-  transactions: {
-    index: number;
-    hash: Hash32Hex;
-    signedBytes: Uint8Array;
-    code: number;
-    events: TransactionEvidenceEvent[];
-  }[];
+  transactions: BlockTransactionEvidence[];
   /** All system events, including any trades outside user transactions. */
   finalizeBlockEvents: TransactionEvidenceEvent[];
 }
@@ -219,10 +222,10 @@ export async function readBlockResultsWindow(
       invalid("finalize block events");
     const postState = bytes(result.app_hash, "results app hash");
     if (postState.length !== 32) invalid("results app hash length");
-    const postAppHash = bytesToHex(postState).toUpperCase();
+    const postAppHash = hash32(bytesToHex(postState), "results app hash");
     if (next.appHash === null || postAppHash !== next.appHash)
       invalid("post-state/header binding");
-    const transactions = txs.map((value, index) => {
+    const transactions = txs.map((value, index): BlockTransactionEvidence => {
       const signedBytes = bytes(value, "block transaction bytes");
       const execution = object(txResults[index], "transaction result");
       return {
