@@ -2,6 +2,7 @@ import { GatewayHttpError, GatewayReadError } from "./errors.js";
 import {
   hash32,
   I64_MAX,
+  MAX_ERROR_BODY_WAIT_MS,
   MAX_READ_BYTES,
   MAX_READ_CHUNKS,
   readDeadline,
@@ -294,23 +295,42 @@ export async function boundedGatewayJson(
     checkDeadline();
     if (!response.ok) {
       // The status is the diagnosis. An error body that is oversized,
-      // fragmented, empty-chunked or stalled is truncated to what arrived in
-      // bounds; it never replaces the HTTP status. Caller cancellation wins.
+      // fragmented, empty-chunked or slower than MAX_ERROR_BODY_WAIT_MS is
+      // truncated to what arrived in bounds; it never replaces the HTTP status
+      // or holds the caller for the whole deadline. Caller cancellation wins.
       const chunks: Uint8Array[] = [];
       let size = 0;
       if (response.body) {
         reader = response.body.getReader();
+        const bodyDeadline = Math.min(
+          deadline,
+          performance.now() + MAX_ERROR_BODY_WAIT_MS,
+        );
+        let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+        const budgetSpent = new Promise<"budget">((resolve) => {
+          budgetTimer = setTimeout(
+            () => resolve("budget"),
+            Math.max(0, bodyDeadline - performance.now()),
+          );
+        });
         try {
           while (chunks.length < MAX_READ_CHUNKS && size < MAX_READ_BYTES) {
-            const part = await Promise.race([reader.read(), cancelled]);
-            if (part.done || part.value.length === 0) break;
+            const part = await Promise.race([
+              reader.read(),
+              budgetSpent,
+              cancelled,
+            ]);
+            if (part === "budget" || part.done || part.value.length === 0)
+              break;
             const kept = part.value.subarray(0, MAX_READ_BYTES - size);
             chunks.push(kept);
             size += kept.length;
-            if (performance.now() >= deadline) break;
+            if (performance.now() >= bodyDeadline) break;
           }
         } catch (error) {
           if (options.signal?.aborted) throw error;
+        } finally {
+          clearTimeout(budgetTimer);
         }
       }
       throw httpError(response, concat(chunks, size));

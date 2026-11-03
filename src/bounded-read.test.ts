@@ -93,6 +93,25 @@ describe("bounded read transport", () => {
     expect(failure).toMatchObject({ name: "GatewayHttpError", status: 504 });
     expect(await failure.response.text()).toBe("partial");
   });
+  it("reports an HTTP failure promptly when its body stalls, well inside the deadline", async () => {
+    const started = performance.now();
+    const failure = await boundedGatewayJson(
+      "https://gateway.example/read",
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(new TextEncoder().encode("partial"));
+            },
+          }),
+          { status: 503 },
+        ),
+      { timeoutMs: 5_000 },
+    ).catch((e) => e);
+    expect(failure).toMatchObject({ name: "GatewayHttpError", status: 503 });
+    expect(await failure.response.text()).toBe("partial");
+    expect(performance.now() - started).toBeLessThan(1_500);
+  });
   it("lets caller cancellation win over a failure body", async () => {
     const controller = new AbortController();
     const reason = new DOMException("operator stopped", "AbortError");
