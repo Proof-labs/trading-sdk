@@ -11,6 +11,14 @@ import {
 import { Side } from "./types.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 import { boundedGatewayJson, type BoundedReadOptions } from "./bounded-read.js";
+import type { GatewayReadError } from "./errors.js";
+
+const DEFAULT_TRADE_HISTORY_LIMIT = 200;
+const MAX_TRADE_HISTORY_LIMIT = 1000;
+const MAX_CURSOR_LENGTH = 4096;
+const MAX_NUMERIC_TEXT_LENGTH = 100;
+/** The indexer stores markets as signed i32. */
+const INDEXER_MAX_MARKET = 0x7fff_ffff;
 
 export interface TradeHistoryOptions extends BoundedReadOptions {
   /** Fixed inclusive lower and exclusive upper block-time bounds, epoch ms. */
@@ -48,7 +56,7 @@ export interface TradeHistoryPage {
 
 function invalid(
   field: string,
-  kind: import("./errors.js").GatewayReadError["kind"] = "malformed",
+  kind: GatewayReadError["kind"] = "malformed",
 ): never {
   return invalidRead(`trade history.${field}`, kind);
 }
@@ -64,13 +72,10 @@ function integer(value: unknown, field: string, signed = false): bigint {
   if (n < (signed ? -(1n << 63n) : 0n) || n > I64_MAX) invalid(field);
   return n;
 }
-function address(value: unknown) {
-  return hexAddress(value, "participant owner");
-}
 function numeric(value: unknown, field: string): string {
   if (
     typeof value !== "string" ||
-    value.length > 100 ||
+    value.length > MAX_NUMERIC_TEXT_LENGTH ||
     !/^(0|[1-9][0-9]*)(\.[0-9]+)?$/.test(value)
   )
     invalid(field);
@@ -79,7 +84,7 @@ function numeric(value: unknown, field: string): string {
 function cursor(value: unknown): string {
   if (
     typeof value !== "string" ||
-    value.length > 4096 ||
+    value.length > MAX_CURSOR_LENGTH ||
     Array.from(value).some(
       (char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127,
     )
@@ -87,16 +92,13 @@ function cursor(value: unknown): string {
     invalid("cursor");
   return value;
 }
-function time(value: unknown) {
-  return rfc3339(value);
-}
 export function tradeHistorySearchParams(
   market: number,
   options: TradeHistoryOptions,
 ): URLSearchParams {
   marketId(market);
   // Indexer storage uses signed i32; do not broaden its route contract.
-  if (market > 0x7fffffff) invalid("market outside indexer range");
+  if (market > INDEXER_MAX_MARKET) invalid("market outside indexer range");
   if (
     !Number.isSafeInteger(options.fromMs) ||
     !Number.isSafeInteger(options.toMs) ||
@@ -105,8 +107,12 @@ export function tradeHistorySearchParams(
     options.toMs > MAX_DATE_MS
   )
     invalid("window");
-  const limit = options.limit ?? 200;
-  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
+  const limit = options.limit ?? DEFAULT_TRADE_HISTORY_LIMIT;
+  if (
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > MAX_TRADE_HISTORY_LIMIT
+  )
     invalid("limit");
   const params = new URLSearchParams({
     from: String(options.fromMs),
@@ -132,7 +138,7 @@ export function decodeTradeHistoryPage(
   if (!value || typeof value !== "object" || Array.isArray(value))
     invalid("page");
   const page = value as Record<string, unknown>;
-  const limit = options.limit ?? 200;
+  const limit = options.limit ?? DEFAULT_TRADE_HISTORY_LIMIT;
   if (!Array.isArray(page.fills) || page.fills.length > limit)
     invalid("page size");
   const nextCursor = cursor(page.next_cursor);
@@ -149,7 +155,7 @@ export function decodeTradeHistoryPage(
     if (row.market !== market) invalid("market mismatch", "binding");
     const fillId = integer(row.fill_id, "fill id");
     const blockHeight = integer(row.block_height, "block height");
-    const block = time(row.block_time);
+    const block = rfc3339(row.block_time);
     if (
       block.nanos < BigInt(options.fromMs) * 1_000_000n ||
       block.nanos >= BigInt(options.toMs) * 1_000_000n
@@ -178,8 +184,8 @@ export function decodeTradeHistoryPage(
       blockTime: block.raw,
       price: numeric(row.price, "price"),
       quantity: numeric(row.quantity, "quantity"),
-      makerOwner: address(row.maker_owner),
-      takerOwner: address(row.taker_owner),
+      makerOwner: hexAddress(row.maker_owner, "participant owner"),
+      takerOwner: hexAddress(row.taker_owner, "participant owner"),
       makerSide: row.maker_side.toLowerCase() === "buy" ? Side.Buy : Side.Sell,
       takerFee: integer(row.taker_fee, "taker fee", true),
       makerFee: integer(row.maker_fee, "maker fee", true),

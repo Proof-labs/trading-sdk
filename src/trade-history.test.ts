@@ -5,6 +5,7 @@ import {
   decodeTradeHistoryPage,
   tradeHistorySearchParams,
 } from "./trade-history.js";
+import { Side } from "./types.js";
 
 const options = {
   fromMs: Date.parse("2026-10-26T10:00:00Z"),
@@ -49,7 +50,7 @@ describe("participant-attributed trade history", () => {
       quantity: "2.000000",
       makerOwner: row().maker_owner,
       takerOwner: row().taker_owner,
-      makerSide: 1,
+      makerSide: Side.Buy,
       takerFee: 5n,
       makerFee: -2n,
     });

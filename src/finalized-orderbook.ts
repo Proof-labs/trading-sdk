@@ -10,6 +10,7 @@ import { Decoder } from "@msgpack/msgpack";
 import { rejectFloats } from "./codec.js";
 import { ready } from "./wasm-loader.js";
 import type { OrderbookLevel } from "./types.js";
+import type { GatewayReadError } from "./errors.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 import {
   asReadError,
@@ -19,7 +20,13 @@ import {
   type FinalizedReadWitness,
 } from "./bounded-read.js";
 
-export type FinalizedOrderbookDepth = 1 | 20 | 100;
+const ORDERBOOK_DEPTHS = [1, 20, 100] as const;
+export type FinalizedOrderbookDepth = (typeof ORDERBOOK_DEPTHS)[number];
+const DEFAULT_ORDERBOOK_DEPTH: FinalizedOrderbookDepth = 20;
+const MAX_ORDERBOOK_DEPTH = Math.max(...ORDERBOOK_DEPTHS);
+/** Decoded MessagePack ceiling for one book; the 1 MiB HTTP cap applies first. */
+const MAX_BOOK_BYTES = 512 * 1024;
+const U32_MAX = 0xffff_ffffn;
 export interface FinalizedOrderbookOptions extends BoundedReadOptions {
   /** Requested levels per side. Default 20; this is not a full-book assertion. */
   depth?: FinalizedOrderbookDepth;
@@ -33,10 +40,13 @@ export interface FinalizedOrderbook {
   witness: FinalizedReadWitness;
 }
 
-const decoder = new Decoder({ useBigInt64: true, maxArrayLength: 100 });
+const decoder = new Decoder({
+  useBigInt64: true,
+  maxArrayLength: MAX_ORDERBOOK_DEPTH,
+});
 function invalid(
   field: string,
-  kind: import("./errors.js").GatewayReadError["kind"] = "malformed",
+  kind: GatewayReadError["kind"] = "malformed",
 ): never {
   return invalidRead(`orderbook.${field}`, kind);
 }
@@ -52,14 +62,14 @@ function uint(value: unknown, field: string, maximum = U64_MAX): bigint {
 }
 function request(market: number, depth: FinalizedOrderbookDepth): void {
   marketId(market);
-  if (![1, 20, 100].includes(depth)) invalid("depth");
+  if (!ORDERBOOK_DEPTHS.includes(depth)) invalid("depth");
 }
 
 /** Internal engine-height-bearing frame decoder. Requires await ready(). */
 export function decodeFinalizedOrderbook(
   value: unknown,
   market: number,
-  depth: FinalizedOrderbookDepth = 20,
+  depth: FinalizedOrderbookDepth = DEFAULT_ORDERBOOK_DEPTH,
 ): FinalizedOrderbook {
   request(market, depth);
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -71,7 +81,7 @@ export function decodeFinalizedOrderbook(
   if (height === 0n) invalid("unfinalized height");
   const encoded = frame.bookMsgpackB64;
   if (encoded !== frame.data) invalid("book encoding mismatch", "binding");
-  const bytes = canonicalBase64(encoded, "book encoding", 512 * 1024);
+  const bytes = canonicalBase64(encoded, "book encoding", MAX_BOOK_BYTES);
   // Preflight before decoding bounds depth and rejects floats and trailing data.
   const raw: unknown = asReadError("orderbook.msgpack", () => {
     rejectFloats(bytes);
@@ -94,7 +104,7 @@ export function decodeFinalizedOrderbook(
       return {
         price,
         totalQty: uint(row[1], "quantity"),
-        orderCount: Number(uint(row[2], "order count", 0xffff_ffffn)),
+        orderCount: Number(uint(row[2], "order count", U32_MAX)),
       };
     });
   };
@@ -115,7 +125,7 @@ export async function readFinalizedOrderbook(
   transport: ExchangeHttpTransport,
 ): Promise<FinalizedOrderbook> {
   const captured = { ...options };
-  const depth = captured.depth ?? 20;
+  const depth = captured.depth ?? DEFAULT_ORDERBOOK_DEPTH;
   request(market, depth);
   captured.signal?.throwIfAborted();
   const body = await boundedGatewayJson(

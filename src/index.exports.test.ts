@@ -54,6 +54,7 @@ it("exposes typed reads on the existing read surface", async () => {
   expect(reads.evidence.blockHeader).toBeTypeOf("function");
   expect(reads.evidence.transaction).toBeTypeOf("function");
   expect(reads.evidence.blockResultsWindow).toBeTypeOf("function");
+  expect(reads.finalized.orderbook).toBeTypeOf("function");
   expect(reads.tradeHistoryPage).toBeTypeOf("function");
   expect(sdk.verifyWitness).toBeTypeOf("function");
 });
