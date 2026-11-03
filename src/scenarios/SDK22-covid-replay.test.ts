@@ -56,6 +56,9 @@ describeScenario("SDK22: COVID-style 50% crash absorbed cleanly", () => {
     w = await seedWorld({
       relayerPrivateKey: RELAYER_PRIVATE_KEY,
       oraclePrivateKey: ORACLE_PRIVATE_KEY,
+      fallbackOraclePrivateKey: process.env.FALLBACK_ORACLE_PRIVATE_KEY,
+      relayBin: process.env.F16_RELAY_BIN,
+      gatewayUrl: process.env.GATEWAY_URL,
       users: ["mm", ...ALL],
       seedBalance: 1_000_000_000n, // $1k baseline; topup happens in the test
     });
@@ -79,7 +82,7 @@ describeScenario("SDK22: COVID-style 50% crash absorbed cleanly", () => {
     for (const name of ALL) {
       await w.users[name]!.limitBuy(BTC_PERP, qty, entry);
     }
-    await w.mm.limitSell(BTC_PERP, BigInt(ALL.length), entry);
+    await w.users.mm!.limitSell(BTC_PERP, BigInt(ALL.length), entry);
 
     // 50% crash.
     await w.pushOracle(BTC_PERP, 25_000_000_000n);

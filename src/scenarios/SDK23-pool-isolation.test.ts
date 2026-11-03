@@ -40,6 +40,9 @@ describeScenario("SDK23: pool isolation across the IF dispatch", () => {
     w = await seedWorld({
       relayerPrivateKey: RELAYER_PRIVATE_KEY,
       oraclePrivateKey: ORACLE_PRIVATE_KEY,
+      fallbackOraclePrivateKey: process.env.FALLBACK_ORACLE_PRIVATE_KEY,
+      relayBin: process.env.F16_RELAY_BIN,
+      gatewayUrl: process.env.GATEWAY_URL,
     });
   }, 60_000);
 

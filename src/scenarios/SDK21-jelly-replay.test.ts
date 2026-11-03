@@ -45,6 +45,9 @@ describeScenario("SDK21: JELLY-shape blowout absorbed by waterfall", () => {
     w = await seedWorld({
       relayerPrivateKey: RELAYER_PRIVATE_KEY,
       oraclePrivateKey: ORACLE_PRIVATE_KEY,
+      fallbackOraclePrivateKey: process.env.FALLBACK_ORACLE_PRIVATE_KEY,
+      relayBin: process.env.F16_RELAY_BIN,
+      gatewayUrl: process.env.GATEWAY_URL,
       users: ["whale", "mm", "winner1", "winner2", "winner3"],
       seedBalance: 1_000_000_000_000n, // $1M each — large enough for the replay
     });
@@ -58,8 +61,8 @@ describeScenario("SDK21: JELLY-shape blowout absorbed by waterfall", () => {
     // Whale opens a 100-contract long at $50k (so $5M notional).
     // MM crosses with the symmetric short.
     const qty = 100n;
-    await w.whale.limitBuy(BTC_PERP, qty, entry);
-    await w.mm.limitSell(BTC_PERP, qty, entry);
+    await w.users.whale!.limitBuy(BTC_PERP, qty, entry);
+    await w.users.mm!.limitSell(BTC_PERP, qty, entry);
 
     expect(await w.position("whale", BTC_PERP)).toBe(qty);
     expect(await w.position("mm", BTC_PERP)).toBe(-qty);
@@ -71,7 +74,7 @@ describeScenario("SDK21: JELLY-shape blowout absorbed by waterfall", () => {
       await w.users[name]!.limitSell(BTC_PERP, 5n, entry);
     }
     // MM crosses by buying 15 contracts at the same price.
-    await w.mm.limitBuy(BTC_PERP, 15n, entry);
+    await w.users.mm!.limitBuy(BTC_PERP, 15n, entry);
 
     // 80% oracle drop — JELLY-style.
     await w.pushOracle(BTC_PERP, 10_000_000_000n);

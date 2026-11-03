@@ -52,6 +52,9 @@ describeScenario("SDK20: cascade liquidation across many accounts", () => {
     w = await seedWorld({
       relayerPrivateKey: RELAYER_PRIVATE_KEY,
       oraclePrivateKey: ORACLE_PRIVATE_KEY,
+      fallbackOraclePrivateKey: process.env.FALLBACK_ORACLE_PRIVATE_KEY,
+      relayBin: process.env.F16_RELAY_BIN,
+      gatewayUrl: process.env.GATEWAY_URL,
       users: ["mm", ...traderNames],
       seedBalance: 10_000_000_000n, // $10k each
     });

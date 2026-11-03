@@ -19,6 +19,7 @@ import {
 } from "../crypto.js";
 import { Side } from "../types.js";
 import type { Action, AccountInfo, Orderbook, PositionInfo } from "../types.js";
+import { oracleRelay, type OracleRelay } from "./oracle-relay.js";
 
 /** Canonical market IDs seeded by scripts/seed.ts. */
 export const BTC_PERP = 1;
@@ -36,8 +37,8 @@ export type UserName = (typeof USER_NAMES)[number];
 const SEED_BALANCE_MICRO_USDC = 100_000_000_000n;
 
 export interface SeedWorldOptions {
-  rpcUrl?: string;
-  apiUrl?: string;
+  /** Defaults to the local stack's gateway. */
+  gatewayUrl?: string;
   /** Override user count/names for custom scenarios. */
   users?: readonly string[];
   /** Override starting balance (microUSDC). Default is $100k. */
@@ -47,11 +48,12 @@ export interface SeedWorldOptions {
    *  users (engine handle_deposit gates on the relayer allowlist —
    *  audit B1 / 2026-04-23). */
   relayerPrivateKey?: string;
-  /** Hex-encoded oracle private key (Ed25519). When set, exposes
-   *  `world.pushOracle(...)` so scenarios can drive oracle prices for
-   *  liquidation / margin-edge tests. Distinct from the relayer
-   *  allowlist; the oracle has its own on-chain authorization. */
+  /** Hex Ed25519 key of the oracle policy's primary source. */
   oraclePrivateKey?: string;
+  /** Hex Ed25519 key of the oracle policy's fallback source. */
+  fallbackOraclePrivateKey?: string;
+  /** Path to `f16-relay`; defaults to the one on PATH. */
+  relayBin?: string;
 }
 
 /** Fluent user API returned for each seeded account. */
@@ -75,8 +77,7 @@ export interface User {
 }
 
 export interface World {
-  rpcUrl: string;
-  apiUrl: string;
+  gatewayUrl: string;
   users: Record<string, User>;
   alice: User;
   bob: User;
@@ -97,11 +98,8 @@ export interface World {
   /** Raw position info (if present) — gives callers the typed SDK shape. */
   positionInfo(user: string, market: number): Promise<PositionInfo | null>;
 
-  /** Push an oracle update via the relayer key. Throws if the harness
-   *  was not initialised with `relayerPrivateKey`. Used by liquidation
-   *  scenarios (SDK10+) to drive mark prices toward maintenance margin
-   *  without needing market-order flow on the underlying. The price
-   *  must be expressed in microUSDC (6 dp), matching engine convention. */
+  /** Set a market's oracle price (microUSDC) through both F16 relay keys
+   *  and wait until the chain certifies it. */
   pushOracle(market: number, priceMicroUsdc: bigint): Promise<void>;
 
   /** Trigger end-of-block liquidation sweep. The engine runs this
@@ -122,13 +120,7 @@ export interface World {
  * Read-only scenarios (e.g. orderbook query smoke tests) can omit it.
  */
 export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
-  // Defaults are the local dev-stack endpoints. Tests that want to hit a
-  // different node (CI runner, remote testnet) can pass explicit rpcUrl /
-  // apiUrl, or read their own env vars — we don't touch `process` here
-  // so this module stays free of Node-type dependencies and builds as
-  // part of the published SDK cleanly.
-  const rpcUrl = opts.rpcUrl ?? "http://localhost:26657";
-  const apiUrl = opts.apiUrl ?? "http://localhost:8080";
+  const gatewayUrl = opts.gatewayUrl ?? "http://127.0.0.1:9080";
   const names = opts.users ?? USER_NAMES;
   const seedBalance = opts.seedBalance ?? SEED_BALANCE_MICRO_USDC;
 
@@ -138,7 +130,7 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
   let relayerClient: ExchangeClient | null = null;
   let relayerAddress: Uint8Array | null = null;
   if (opts.relayerPrivateKey) {
-    relayerClient = new ExchangeClient({ rpcUrl, apiUrl });
+    relayerClient = new ExchangeClient({ gatewayUrl });
     const privBytes = hexToBytes(opts.relayerPrivateKey);
     relayerClient.setPrivateKey(privBytes);
     relayerClient.setUnsafeFastSubmit(true);
@@ -148,26 +140,21 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
     }
   }
 
-  // Oracle client — separate allowlist from the relayer (engine gates
-  // OracleUpdate on `is_oracle_authorized(signer)` at engine.rs:288).
-  let oracleClient: ExchangeClient | null = null;
-  let oracleAddress: Uint8Array | null = null;
-  if (opts.oraclePrivateKey) {
-    oracleClient = new ExchangeClient({ rpcUrl, apiUrl });
-    oracleClient.setPrivateKey(hexToBytes(opts.oraclePrivateKey));
-    oracleClient.setUnsafeFastSubmit(true);
-    oracleAddress = oracleClient.getAddress();
-    if (!oracleAddress) {
-      throw new Error("scenarios harness: failed to derive oracle address");
-    }
+  let relay: OracleRelay | null = null;
+  if (opts.oraclePrivateKey && opts.fallbackOraclePrivateKey) {
+    relay = oracleRelay({
+      gatewayUrl,
+      relayBin: opts.relayBin ?? "f16-relay",
+      primaryPrivateKey: opts.oraclePrivateKey,
+      fallbackPrivateKey: opts.fallbackOraclePrivateKey,
+    });
   }
 
   const users: Record<string, User> = {};
   for (const name of names) {
     users[name] = await createUser(
       name,
-      rpcUrl,
-      apiUrl,
+      gatewayUrl,
       seedBalance,
       relayerClient,
       relayerAddress,
@@ -175,11 +162,10 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
   }
 
   // Query client (no key — just for read endpoints).
-  const queryClient = new ExchangeClient({ rpcUrl, apiUrl });
+  const queryClient = new ExchangeClient({ gatewayUrl });
 
   return {
-    rpcUrl,
-    apiUrl,
+    gatewayUrl,
     users,
     alice: users.alice!,
     bob: users.bob!,
@@ -211,17 +197,13 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
     },
 
     pushOracle: async (market, price) => {
-      if (!oracleClient || !oracleAddress) {
+      if (!relay) {
         throw new Error(
-          "world.pushOracle: harness was not initialised with oraclePrivateKey. " +
-            "Pass `{ oraclePrivateKey: '<hex>' }` to seedWorld() or set the " +
-            "ORACLE_PRIVATE_KEY env var in your test runner.",
+          "world.pushOracle: pass oraclePrivateKey and fallbackOraclePrivateKey " +
+            "(ORACLE_PRIVATE_KEY / FALLBACK_ORACLE_PRIVATE_KEY) to seedWorld()",
         );
       }
-      // OracleUpdate left the wire; no policy-signed replacement yet.
-      throw new Error(
-        `pushOracle(${market}, ${price}): no single-signer oracle push on this engine`,
-      );
+      await relay.setPrice(market, price);
     },
 
     waitOneBlock: async () => {
@@ -249,8 +231,7 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
  */
 async function createUser(
   name: string,
-  rpcUrl: string,
-  apiUrl: string,
+  gatewayUrl: string,
   seedBalance: bigint,
   relayerClient: ExchangeClient | null,
   relayerAddress: Uint8Array | null,
@@ -259,7 +240,7 @@ async function createUser(
   const address = pubkeyToOwner(publicKey);
   const addressHex = ownerToHex(address);
 
-  const client = new ExchangeClient({ rpcUrl, apiUrl });
+  const client = new ExchangeClient({ gatewayUrl });
   client.setPrivateKey(privateKey);
   // Use submitTxCommit everywhere in the harness; skip the fire-and-verify
   // background check so scenario assertions use submitTxCommit directly.
@@ -356,7 +337,7 @@ async function createUser(
       // expose a native `queryOpenOrders`, but /v1/orders/{addr} returns
       // an rmp-serde-encoded Vec<Order> we can decode inline. Avoids
       // threading a second query surface through the SDK just for this.
-      const orderIds = await fetchOpenOrderIds(apiUrl, addressHex);
+      const orderIds = await fetchOpenOrderIds(gatewayUrl, addressHex);
       let cancelled = 0;
       for (const orderId of orderIds) {
         const r = await client.submitTxCommit({
@@ -387,10 +368,10 @@ const msgpackDecoder = new Decoder({ useBigInt64: true });
  * stable caller-facing identifier.
  */
 async function fetchOpenOrderIds(
-  apiUrl: string,
+  gatewayUrl: string,
   addressHex: string,
 ): Promise<bigint[]> {
-  const res = await fetch(`${apiUrl}/v1/orders/${addressHex}`);
+  const res = await fetch(`${gatewayUrl}/v1/orders/${addressHex}`);
   if (!res.ok) return [];
   const json = (await res.json()) as { data?: string };
   if (!json.data) return [];

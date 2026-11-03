@@ -14,7 +14,7 @@ End-to-end behaviour tests for the exchange. Each file corresponds to a single s
 ## How they run
 
 - **CI (default, no node):** scenarios auto-skip because `RPC_URL` is unset. `npm test` stays green.
-- **Local, against a running node:** set `RPC_URL`, `RELAYER_PRIVATE_KEY`, and (for liquidation tests) `ORACLE_PRIVATE_KEY`, and they execute for real against live CometBFT + `exchange-node`.
+- **Local, against a running stack:** set `RPC_URL`, `RELAYER_PRIVATE_KEY`, and (for liquidation tests) `ORACLE_PRIVATE_KEY`, `FALLBACK_ORACLE_PRIVATE_KEY` and `F16_RELAY_BIN`, and they execute for real through the gateway (`GATEWAY_URL`, default `http://127.0.0.1:9080`).
 
 The local stack lives in [proof-integration](https://github.com/Proof-labs/proof-integration), checked out next to this repository with its sibling repositories built (see its README, "Setup from cold").
 
@@ -26,13 +26,15 @@ npm run stack:up:fresh
 
 # Back in this repository: run the scenarios with the seeded keys
 cd ../trading-sdk
-RELAYER_KEY=$(jq -r .relayer ~/.exchanged/seed-keys.json)
-ORACLE_KEY=$(jq -r .oracle ~/.exchanged/seed-keys.json)
+KEYS=~/.exchanged/seed-keys.json
 
 RPC_URL=http://localhost:26657 \
-  RELAYER_PRIVATE_KEY=$RELAYER_KEY \
-  ORACLE_PRIVATE_KEY=$ORACLE_KEY \
-  npx vitest run src/scenarios/
+  GATEWAY_URL=http://127.0.0.1:9080 \
+  RELAYER_PRIVATE_KEY=$(jq -r .relayer $KEYS) \
+  ORACLE_PRIVATE_KEY=$(jq -r .oracle $KEYS) \
+  FALLBACK_ORACLE_PRIVATE_KEY=$(jq -r .fallbackOracle $KEYS) \
+  F16_RELAY_BIN=../exchange/oracle-feeder/target/release/f16-relay \
+  npx vitest run --no-file-parallelism src/scenarios/
 
 # When done, in ../proof-integration
 npm run stack:down
@@ -43,7 +45,7 @@ npm run stack:down
 Each scenario creates fresh random-key users (`alice`, `bob`, `carol`) and funds them via the relayer-signed `Deposit` flow (engine `handle_deposit` gates on the on-chain relayer allowlist — audit B1, 2026-04-23). The test node must therefore have:
 
 - **Markets seeded** (`npm run stack:up:fresh` in proof-integration — creates BTC=1, ETH=2, SOL=3).
-- **Oracle prices set** (same command).
+- **Oracle settings installed** (same command): each perp's F16 policy names the `oracle` and `fallbackOracle` seed keys as its two sources. `world.pushOracle` sends the price from both with `f16-relay observe` (built by `cargo build --release` in `exchange/oracle-feeder`) and waits until the chain certifies it.
 - **Relayer + oracle keys exposed** via env vars (the fresh stack writes both to `~/.exchanged/seed-keys.json`; set `EXCHANGED_HOME` to move it).
 - **No competing traders.** Scenarios depend on positionSymmetry (Σ signed positions = 0 across the seeded users) and on order-book emptiness around the test prices. Any concurrent market maker (proof-integration's `mm` component, the Proof liquidity provider (PLP) market maker, and so on) breaks both: a market-maker bid at $77k will eat a scenario sell at $50k. **Run scenarios on a stack started without market makers**: proof-integration's default stack, without `WITH_MM=1`, and with no `mm` in `STACK_COMPONENTS`.
 

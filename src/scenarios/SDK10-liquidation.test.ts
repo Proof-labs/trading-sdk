@@ -36,6 +36,9 @@ describeScenario("SDK10: liquidation on adverse price move", () => {
     w = await seedWorld({
       relayerPrivateKey: RELAYER_PRIVATE_KEY,
       oraclePrivateKey: ORACLE_PRIVATE_KEY,
+      fallbackOraclePrivateKey: process.env.FALLBACK_ORACLE_PRIVATE_KEY,
+      relayBin: process.env.F16_RELAY_BIN,
+      gatewayUrl: process.env.GATEWAY_URL,
     });
   });
 
