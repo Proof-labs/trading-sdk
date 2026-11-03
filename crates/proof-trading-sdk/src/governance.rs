@@ -18,7 +18,7 @@ pub use proof_wire::types::{
     FundInsuranceFund, InsuranceFundAllocation, InsuranceFundingId, InsurancePoolId,
     InsuranceWithdrawalId, ProposalId, ProposeAdminAction, RegistryVersion, RejectAdminAction,
     ScheduleUpgrade, SetOracleGuards, SignatureThreshold, SignerAddress, UpdateAdminSignerRegistry,
-    WithdrawInsuranceFund,
+    VoidEvent, WithdrawInsuranceFund,
 };
 
 #[cfg(test)]
@@ -32,5 +32,6 @@ mod insurance_tag_tests {
         assert_eq!(AdminActionType::SetOperatorReceiptRegistry as u8, 20);
         assert_eq!(AdminActionType::EnableSubAccounts as u8, 21);
         assert_eq!(AdminActionType::WithdrawInsuranceFund as u8, 25);
+        assert_eq!(AdminActionType::VoidEvent as u8, 29);
     }
 }

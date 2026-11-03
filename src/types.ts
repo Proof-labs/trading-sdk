@@ -1219,6 +1219,14 @@ export interface SetMarginOffsetPolicy {
   pairs: MarginOffsetPair[];
 }
 
+/** Voids an event (inner tag 29): every binary and conditional on it
+ *  settles in cash at `yesPrice`. */
+export interface VoidEvent {
+  eventId: number;
+  /** Yes price in micro-USDC per share, `0..=1_000_000`. */
+  yesPrice: bigint;
+}
+
 /**
  * The liquidation settings shared by every market. Collar width is not a
  * field: it is each market's maintenance margin fraction.
@@ -1281,6 +1289,7 @@ export type AdminAction =
   | { kind: "WithdrawInsuranceFund"; value: WithdrawInsuranceFund }
   | { kind: "ExecInsuranceFund"; value: ExecInsuranceFund }
   | { kind: "SetMarginOffsetPolicy"; value: SetMarginOffsetPolicy }
+  | { kind: "VoidEvent"; value: VoidEvent }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }

@@ -729,6 +729,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }}
             }),
         ),
+        // VoidEvent (inner tag 0x1D, DEC-232).
+        codec_case(
+            "propose_admin_action/void_event",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "VoidEvent": { "event_id": 4u32, "yes_price": 350_000u64 } }
+            }),
+        ),
         codec_case(
             "approve_admin_action/rotate_registry",
             APPROVE_ADMIN_ACTION,
@@ -1457,6 +1467,29 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "pool_id": 1,
                 "size": 3u64,
                 "reason": "StaleOracleDependency",
+            }}),
+        ),
+        (
+            "event_voided/basic",
+            json!({"EventVoided": {
+                "event_id": 4,
+                "yes_price": 350_000u64,
+                "timestamp_ms": 1_700_000_000_000u64,
+                "proposal_id": 12u64,
+            }}),
+        ),
+        (
+            "conditional_void_settled/no_branch",
+            json!({"ConditionalVoidSettled": {
+                "event_id": 4,
+                "market": 9,
+                "owner": vec![0xABu8; 20],
+                "side": "Sell",
+                "size": 5u64,
+                "entry_price": 60_000_000u64,
+                "settlement_price": 64_000_000u64,
+                "branch_weight": 650_000u64,
+                "realized_pnl": -13_000_000i64,
             }}),
         ),
     ];

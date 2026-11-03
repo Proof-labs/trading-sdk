@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
+  that voids an event and settles every binary and conditional on it in cash
+  at `yesPrice` (micro-USDC per share, `0..=1_000_000`). The encoder refuses a
+  price above that range. `decodeVoidSettlementEvent` decodes the
+  `event_voided` and `conditional_void_settled` events. Needs the proof-wire
+  release carrying exchange#1361. Additive (MINOR).
+
 ## [9.1.0] — 2026-11-03
 
 ### Added
