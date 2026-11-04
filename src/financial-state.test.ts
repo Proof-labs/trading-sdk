@@ -508,7 +508,12 @@ describe("atomic finalized financial state", () => {
     expect((await client().queryFinancialState(selection)).format).toBe(1);
     expect(fetch).toHaveBeenCalledExactlyOnceWith(
       `http://gateway/v1/financial/state?markets=1&owners=${owner}`,
-      { signal: expect.any(AbortSignal), redirect: "error" },
+      {
+        signal: expect.any(AbortSignal),
+        redirect: "error",
+        method: "GET",
+        cache: "no-store",
+      },
     );
   });
 
@@ -583,9 +588,9 @@ describe("atomic finalized financial state", () => {
             new Response("sensitive upstream diagnostic", { status }),
           ),
       );
-      await expect(client().queryFinancialState(selection)).rejects.toThrow(
-        `financial state HTTP ${status}`,
-      );
+      await expect(
+        client().queryFinancialState(selection),
+      ).rejects.toMatchObject({ name: "GatewayHttpError", status });
     },
   );
 
@@ -617,9 +622,9 @@ describe("atomic finalized financial state", () => {
           }),
         ),
       );
-      await expect(client().queryFinancialState(selection)).rejects.toThrow(
-        "response size",
-      );
+      await expect(
+        client().queryFinancialState(selection),
+      ).rejects.toMatchObject({ kind: "limit", field: "responseBytes" });
     },
   );
 
@@ -734,7 +739,7 @@ describe("atomic finalized financial state", () => {
     vi.stubGlobal("fetch", fetch);
     const result = expect(
       client().queryFinancialState(selection),
-    ).rejects.toThrow("aborted");
+    ).rejects.toMatchObject({ kind: "deadline" });
     await vi.advanceTimersByTimeAsync(5000);
     await result;
     expect(fetch).toHaveBeenCalledOnce();
