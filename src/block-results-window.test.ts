@@ -181,11 +181,21 @@ describe("bounded trusted-gateway block/results windows", () => {
       { maxHeights: 0 },
     ]) {
       f.transport.mockClear();
+      const label = {
+        maxDecodedBytes: "bytes",
+        maxTransactions: "transactions",
+        maxEvents: "events",
+        maxAttributes: "attributes",
+        maxHeights: "heights",
+      }[Object.keys(limits)[0]];
       await expect(
         f.client
           .reads()
           .evidence.blockResultsWindow({ ...f.selection, ...limits }),
-      ).rejects.toMatchObject({ kind: "configuration" });
+      ).rejects.toMatchObject({
+        kind: "configuration",
+        field: `window ${label}`,
+      });
       expect(f.transport).not.toHaveBeenCalled();
     }
   });
@@ -831,29 +841,36 @@ describe("exact inclusive trusted-gateway block/results ranges", () => {
         .reads()
         .evidence.blockResultsRange(selection),
     ).rejects.toThrow("pinned chainId");
-    for (const invalid of [
-      { fromHeight: 0n },
-      { fromHeight: -1n },
-      { fromHeight: 103n },
-      { fromHeight: 100 as never },
-      { throughHeight: 102 as never },
-      { throughHeight: (1n << 63n) - 1n },
-      { throughHeight: 0n },
-      { maxHeights: 0 },
-      { maxHeights: 129 },
-      { maxHeights: 2 },
-      { fromHeight: 1n, throughHeight: 33n, maxHeights: undefined },
-      { maxDecodedBytes: 8 * 1024 * 1024 + 1 },
-      { maxTransactions: 10001 },
-      { maxEvents: 16385 },
-      { maxAttributes: 65537 },
-      { maxEvents: 0 },
-    ])
+    const fromHeight = { kind: "malformed", field: "from height" };
+    const throughHeight = { kind: "malformed", field: "through height" };
+    const span = { kind: "limit", field: "height budget" };
+    const budget = (name: string) => ({
+      kind: "configuration",
+      field: `range ${name}`,
+    });
+    for (const [invalid, expected] of [
+      [{ fromHeight: 0n }, fromHeight],
+      [{ fromHeight: -1n }, fromHeight],
+      [{ fromHeight: 103n }, fromHeight],
+      [{ fromHeight: 100 as never }, fromHeight],
+      [{ throughHeight: 102 as never }, throughHeight],
+      [{ throughHeight: (1n << 63n) - 1n }, throughHeight],
+      [{ throughHeight: 0n }, throughHeight],
+      [{ maxHeights: 0 }, budget("heights")],
+      [{ maxHeights: 129 }, budget("heights")],
+      [{ maxHeights: 2 }, span],
+      [{ fromHeight: 1n, throughHeight: 33n, maxHeights: undefined }, span],
+      [{ maxDecodedBytes: 8 * 1024 * 1024 + 1 }, budget("bytes")],
+      [{ maxTransactions: 10001 }, budget("transactions")],
+      [{ maxEvents: 16385 }, budget("events")],
+      [{ maxAttributes: 65537 }, budget("attributes")],
+      [{ maxEvents: 0 }, budget("events")],
+    ] as const)
       await expect(
         f.client
           .reads()
           .evidence.blockResultsRange({ ...selection, ...invalid }),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject(expected);
     expect(f.transport).not.toHaveBeenCalled();
   });
   it.each(["anchor", "middle block", "middle results"])(
