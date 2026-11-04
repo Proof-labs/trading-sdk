@@ -814,23 +814,18 @@ export interface UpdateMarketFees {
    */
   oracleStalenessMs?: bigint | null;
   /**
-   * BE-31 Phase A: mark-price source mode. Omit to leave unchanged.
-   * 0 = OracleOnly (legacy); 1 = Median (oracle + book-mid).
-   * Has no effect on impact-family child markets - those always
-   * mark off the EWMA per the no-oracle-MTM redesign.
+   * Mark-price source mode (0 = OracleOnly, 1 = Median). Omit to leave
+   * unchanged. Stored on the market config; the engine no longer reads it.
    */
   markSourceMode?: 0 | 1 | null;
   /**
-   * BE-31 Phase A: thin-book spread cap in bps for the median guard.
-   * Omit to leave unchanged. 0 resets to the engine default
-   * (DEFAULT_MAX_MARK_SPREAD_BPS = 100). Ignored unless
-   * `markSourceMode === 1`.
+   * Thin-book spread cap in bps for the Median mark mode. Omit to leave
+   * unchanged. Stored on the market config; the engine no longer reads it.
    */
   maxMarkSpreadBps?: number | null;
   /**
-   * BE-31 Phase B: max age in ms for the composite-CEX price source.
-   * Omit to leave unchanged. 0 resets to the engine default
-   * (DEFAULT_CEX_COMPOSITE_STALENESS_MS = 30s).
+   * Max age in ms of the retired composite price source. Omit to leave
+   * unchanged. Stored on the market config; the engine no longer reads it.
    */
   cexCompositeStalenessMs?: bigint | null;
   /**

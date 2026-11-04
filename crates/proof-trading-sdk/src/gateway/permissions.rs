@@ -35,9 +35,6 @@ pub enum VerdictReason {
     /// No longer produced under the primary-with-fallback policy
     /// (exchange#831); kept for encoding stability and older nodes.
     Disagreement,
-    /// The pre-rename name of [`VerdictReason::ReferenceUnavailable`], still
-    /// accepted from nodes that predate the exchange rename.
-    AnchorUnavailable,
     MovementBound,
     MissingSource,
     ExpiredSource,
@@ -148,7 +145,6 @@ string_enum!(VerdictReason {
     SessionClosed,
     BadQuality,
     Disagreement,
-    AnchorUnavailable,
     MovementBound,
     MissingSource,
     ExpiredSource,

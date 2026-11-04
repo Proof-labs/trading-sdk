@@ -44,12 +44,8 @@ export const ORACLE_FAULT_BITS = [
   "RecoveryPending",
 ] as const;
 
-/**
- * Every reason string a verdict can carry. `AnchorUnavailable` is the name
- * `ReferenceUnavailable` had before the exchange rename and is still accepted
- * from nodes that predate it.
- */
-const reasons = [...ORACLE_FAULT_BITS, "AnchorUnavailable", "Fresh"] as const;
+/** Every reason string a verdict can carry. */
+const reasons = [...ORACLE_FAULT_BITS, "Fresh"] as const;
 export type OracleVerdictReason = (typeof reasons)[number];
 
 /** The policy slot that priced: slot 0 is the primary, slot 1 the fallback. */

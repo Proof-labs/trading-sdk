@@ -46,6 +46,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the Rust `VerdictFormat` are removed and `diagnostics` is no longer
   nullable. Reads from engines before F16 activation no longer decode
   (MAJOR).
+
+- **The `AnchorUnavailable` verdict reason is removed.** It was the
+  pre-rename name of `ReferenceUnavailable`, sent only by engines before
+  F16, whose reads no longer decode. It leaves the TS `OracleVerdictReason`
+  and the Rust `VerdictReason` (MAJOR).
+
 ### Added
 
 - `reads().evidence.blockResultsRange({ fromHeight, throughHeight })` reads an exact inclusive height range with the existing window decoder, caller-reducible byte, transaction, event and attribute budgets, and H+1 header binding. The span is capped by `maxHeights` (default 32; raise it up to 128 for wider ranges). Equal or sub-millisecond timestamps do not omit or add blocks; backwards timestamps still refuse. Gateway-only, trusted-gateway evidence rather than cryptographic event proof or non-admission authorization. Existing `blockResultsWindow` selection is unchanged. Additive (MINOR).
