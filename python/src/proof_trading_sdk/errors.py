@@ -131,6 +131,36 @@ class EngineError(ProofTradingSdkError):
         return None
 
 
+class PreAdmissionRefusal(ProofTradingSdkError):
+    """The gateway refused the request before admitting it (``status: refused``).
+
+    Nothing was broadcast: there is no transaction hash to reconcile, no
+    engine verdict, and no on-chain outcome to wait for. The gateway's
+    ``error_code`` names why — ``InvalidRequest`` means the request must be
+    corrected, ``EncodingError`` is a gateway-internal encoding failure,
+    ``Unauthorized`` means the API key is wrong,
+    and ``RateLimited`` / ``Maintenance`` / ``Overloaded`` / ``Unavailable``
+    mean the gateway is not admitting writes right now, so a later resend may
+    succeed once that state clears.
+
+    Attributes:
+        error_code: The gateway's machine-readable ``errorCode`` (empty when it
+            sent none).
+        message: The gateway's own explanation, if it gave one.
+        status_code: The HTTP status the refusal arrived with, including legacy
+            200, admission 400 and internal encoding failure 500.
+    """
+
+    def __init__(
+        self, error_code: str = "", message: str = "", status_code: int = 0
+    ) -> None:
+        self.error_code = error_code
+        self.message = message
+        self.status_code = status_code
+        detail = message or error_code or "refused by gateway"
+        super().__init__(f"gateway refused the request: {detail}")
+
+
 class RateLimited(ProofTradingSdkError):
     """HTTP 429 — rate limit exceeded.
 
