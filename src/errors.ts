@@ -151,7 +151,7 @@ export enum ExecErrorCode {
   // 90 was SubAccountsInactive, retired with the engine's sub-account switch
   // (sub-accounts are always on); never reassigned.
   WithdrawalPayoutLeaseActive = 91,
-  WithdrawalPayoutLeaseNotHeld = 126,
+  WithdrawalPayoutLeaseNotHeld = 128,
   EventAlreadyExists = 92,
   EventNotFound = 93,
   UnderlyingAlreadyAttached = 94,
@@ -519,7 +519,7 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "a live payout lease on this withdrawal is held by a different watcher",
   },
-  126: {
+  128: {
     name: "WithdrawalPayoutLeaseNotHeld",
     description:
       "the withdrawal's payout lease is not held by the submitter, so the payout-signature report is rejected",

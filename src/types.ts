@@ -700,9 +700,10 @@ export interface ClaimWithdrawalPayout {
   holder: Address;
 }
 
-/** Report the Solana signature the payout-lease holder broadcast for a
- *  pending withdrawal (0x31). Stored as the withdrawal's payout record;
- *  peer watchers verify it against Solana before re-signing. */
+/** Record the Solana signature of the payout-lease holder's transfer for a
+ *  pending withdrawal (0x31), before the holder broadcasts it, while its
+ *  lease is live. Stored as the withdrawal's payout record; peer watchers
+ *  verify it against Solana before re-signing. */
 export interface RecordWithdrawalPayout {
   withdrawalId: bigint;
   /** The reporting watcher's own address; must equal the envelope signer
@@ -710,9 +711,10 @@ export interface RecordWithdrawalPayout {
   holder: Address;
   /** The reported Solana transaction signature bytes. */
   solanaSignature: Uint8Array;
-  /** The reported transfer's last valid block height; peer watchers bound
-   *  absence checks with it. `null` when the reporter cannot bound it. */
-  lastValidBlockHeight: bigint | null;
+  /** The reported transfer's last valid block height (never zero — the
+   *  reporter signed the transfer, so the bound is always known); peer
+   *  watchers bound absence checks with it. */
+  lastValidBlockHeight: bigint;
 }
 
 /** Resolve a standalone event (0x27). YES/NO only — the engine rejects `Void`. */
