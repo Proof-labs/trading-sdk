@@ -152,6 +152,7 @@ export enum ExecErrorCode {
   // (sub-accounts are always on); never reassigned.
   WithdrawalPayoutLeaseActive = 91,
   WithdrawalPayoutLeaseNotHeld = 128,
+  WithdrawalPayoutRecordLimitReached = 129,
   EventAlreadyExists = 92,
   EventNotFound = 93,
   UnderlyingAlreadyAttached = 94,
@@ -523,6 +524,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "WithdrawalPayoutLeaseNotHeld",
     description:
       "the withdrawal's payout lease is not held by the submitter, so the payout-signature report is rejected",
+  },
+  129: {
+    name: "WithdrawalPayoutRecordLimitReached",
+    description:
+      "the withdrawal's payout-signature record limit is reached; the rejected payout must not be broadcast",
   },
   92: { name: "EventAlreadyExists", description: "event id already exists" },
   93: { name: "EventNotFound", description: "no event under this id" },
