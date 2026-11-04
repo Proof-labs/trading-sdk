@@ -20,7 +20,7 @@ const envelope = (hex: string) => {
   const raw = new Decoder({ useBigInt64: true }).decode(
     Buffer.from(hex, "hex"),
   ) as unknown[];
-  const verdict = raw[8] as unknown[];
+  const verdict = raw[6] as unknown[];
   return {
     data: Buffer.from(hex, "hex").toString("base64"),
     witness: {
@@ -60,10 +60,10 @@ it("rejects cross-market, cross-height/time and absent evidence", () => {
     decodeFinalizedOraclePermissions({ data: body.data }, 1),
   ).toThrow();
 });
-it("keeps legacy state unqualified instead of manufacturing a certificate", () => {
+it("keeps an unavailable state unqualified instead of manufacturing a certificate", () => {
   const body = {
     data: Buffer.from(
-      encode([1, 9, 10, false, "Legacy", null, null, null, null]),
+      encode([1, 9, "Unavailable", "Unavailable", null, null, null]),
     ).toString("base64"),
     witness: {
       version: 1,
@@ -74,8 +74,8 @@ it("keeps legacy state unqualified instead of manufacturing a certificate", () =
     },
   };
   expect(decodeFinalizedOraclePermissions(body, 1)).toMatchObject({
-    oracleActive: false,
-    state: "Legacy",
+    state: "Unavailable",
+    oraclePermission: "Unavailable",
     verdict: null,
   });
 });
