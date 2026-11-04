@@ -202,7 +202,9 @@ export class EvidenceReads extends ReadClient {
       this.httpTransport,
     );
   }
-  /** Exact inclusive heights, with the same trusted-gateway checks and budgets. */
+  /** Exact inclusive heights, with the same trusted-gateway checks and budgets.
+   * The span may not exceed `maxHeights` (default 32, at most 128); a wider
+   * range fails with `GatewayReadError` kind `limit` before any request. */
   async blockResultsRange(
     selection: BlockResultsRangeSelection,
     options: BoundedReadOptions = {},

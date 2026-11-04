@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `reads().evidence.blockResultsRange({ fromHeight, throughHeight })` reads an exact inclusive height range with the existing window decoder, caller-reducible budgets and H+1 header binding. Equal or sub-millisecond timestamps do not omit or add blocks; backwards timestamps still refuse. Gateway-only, trusted-gateway evidence rather than cryptographic event proof or non-admission authorization. Existing `blockResultsWindow` selection is unchanged. Additive (MINOR).
+- `reads().evidence.blockResultsRange({ fromHeight, throughHeight })` reads an exact inclusive height range with the existing window decoder, caller-reducible byte, transaction, event and attribute budgets, and H+1 header binding. The span is capped by `maxHeights` (default 32; raise it up to 128 for wider ranges). Equal or sub-millisecond timestamps do not omit or add blocks; backwards timestamps still refuse. Gateway-only, trusted-gateway evidence rather than cryptographic event proof or non-admission authorization. Existing `blockResultsWindow` selection is unchanged. Additive (MINOR).
 
 ## [9.2.0] — 2026-11-03
 
