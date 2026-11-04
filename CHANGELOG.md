@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [9.3.0] — 2026-11-04
+
+TypeScript-only MINOR release. Wire compatibility remains unchanged from 9.2.0
+(proof-wire 9.0.0, exchange 2.21.0 / protocol 9.0); Rust and Python versions are unchanged.
+
 ### Added
 
 - `reads().evidence.blockResultsRange({ fromHeight, throughHeight })` reads an exact inclusive height range with the existing window decoder, caller-reducible byte, transaction, event and attribute budgets, and H+1 header binding. The span is capped by `maxHeights` (default 32; raise it up to 128 for wider ranges). Equal or sub-millisecond timestamps do not omit or add blocks; backwards timestamps still refuse. Gateway-only, trusted-gateway evidence rather than cryptographic event proof or non-admission authorization. Existing `blockResultsWindow` selection is unchanged. Additive (MINOR).
@@ -1872,7 +1877,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.2.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.3.0...HEAD
+[9.3.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.2.0...npm-v9.3.0
 [9.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.1.0...npm-v9.2.0
 [9.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.0.0...npm-v9.1.0
 [9.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...npm-v9.0.0
