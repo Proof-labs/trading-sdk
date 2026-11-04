@@ -1,13 +1,17 @@
+import { boundedGatewayJson } from "./bounded-read.js";
+import { GatewayHttpError, GatewayReadError } from "./errors.js";
 import type { MarketsSnapshot } from "./types.js";
 import { marketsSnapshotFromWasm } from "./codec-adapter.js";
 import { getWasm, ready } from "./wasm-loader.js";
 import {
   defaultExchangeHttpTransport,
-  readContext,
   type ExchangeHttpTransport,
 } from "./http-transport.js";
 
 export const MAX_SNAPSHOT_BYTES = 1024 * 1024;
+/** Default deadline for every `/v1/markets-snapshot` read: the snapshot is the
+ * largest routine gateway body, so it gets more than the 5-second read default. */
+export const MARKETS_SNAPSHOT_TIMEOUT_MS = 10_000;
 
 function invalid(): never {
   throw new Error("market snapshot: malformed complete response");
@@ -30,47 +34,30 @@ export async function readMarketsSnapshot(
   expectedChain: Uint8Array,
   httpTransport: ExchangeHttpTransport = defaultExchangeHttpTransport,
 ): Promise<MarketsSnapshot> {
+  // Outside the try and the deadline: a WASM load failure surfaces as itself.
   await ready();
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
   try {
-    const url = `${gatewayUrl.replace(/\/$/, "")}/v1/markets-snapshot`;
-    const response = await httpTransport(
-      url,
-      { signal: controller.signal, redirect: "error" },
-      readContext(url, "query"),
+    const envelope = await boundedGatewayJson(
+      `${gatewayUrl.replace(/\/$/, "")}/v1/markets-snapshot`,
+      httpTransport,
+      { timeoutMs: MARKETS_SNAPSHOT_TIMEOUT_MS },
     );
-    if (response.status !== 200)
-      throw new Error(`market snapshot returned HTTP ${response.status}`);
-    if (!response.body) invalid();
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        size += value.length;
-        if (size > MAX_SNAPSHOT_BYTES) invalid();
-        chunks.push(value);
-      }
-    } finally {
-      await reader.cancel();
-      reader.releaseLock();
-    }
-    const body = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      body.set(chunk, offset);
-      offset += chunk.length;
-    }
-    return decodeMarketsSnapshot(body, expectedChain);
+    // Transport validates JSON/duplicate keys; Rust still decodes the envelope's
+    // base64 wire payload and every market/event field.
+    return decodeMarketsSnapshot(
+      new TextEncoder().encode(JSON.stringify(envelope)),
+      expectedChain,
+    );
   } catch (error) {
-    // Transport errors can embed credential-bearing URLs; never forward them.
+    if (error instanceof GatewayHttpError)
+      throw new Error(`market snapshot returned HTTP ${error.status}`);
+    if (
+      error instanceof GatewayReadError &&
+      (error.kind === "limit" || error.kind === "malformed")
+    )
+      invalid();
     if (error instanceof Error && error.message.startsWith("market snapshot"))
       throw error;
     throw new Error("market snapshot: transport or response unavailable");
-  } finally {
-    clearTimeout(timer);
   }
 }
