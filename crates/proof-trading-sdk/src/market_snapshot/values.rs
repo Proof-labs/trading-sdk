@@ -123,6 +123,7 @@ impl MicroUsdc {
 
 /// A decimal with no leading zero and no sign, so one value has one spelling.
 /// Zero is refused: every field read through this is positive by contract.
+#[cfg(any(feature = "gateway", test))]
 pub(crate) fn positive_decimal(text: &str) -> Option<u64> {
     if text.is_empty() || text.starts_with('0') || !text.bytes().all(|b| b.is_ascii_digit()) {
         return None;
@@ -131,18 +132,21 @@ pub(crate) fn positive_decimal(text: &str) -> Option<u64> {
 }
 
 /// Exactly `N` bytes of hexadecimal, either case.
+#[cfg(any(feature = "gateway", test))]
 pub(crate) fn hex_array<const N: usize>(text: &str) -> Option<[u8; N]> {
     hex_array_with(text, u8::is_ascii_hexdigit)
 }
 
 /// Exactly `N` bytes of lowercase hexadecimal, for values whose source emits
 /// one spelling and whose consumer compares them as text elsewhere.
+#[cfg(any(feature = "gateway", test))]
 pub(crate) fn lowercase_hex_array<const N: usize>(text: &str) -> Option<[u8; N]> {
     hex_array_with(text, |byte| {
         byte.is_ascii_digit() || (b'a'..=b'f').contains(byte)
     })
 }
 
+#[cfg(any(feature = "gateway", test))]
 fn hex_array_with<const N: usize>(text: &str, accepted: impl Fn(&u8) -> bool) -> Option<[u8; N]> {
     if text.len() != N.checked_mul(2)? || !text.as_bytes().iter().all(accepted) {
         return None;
