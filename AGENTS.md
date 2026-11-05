@@ -301,7 +301,16 @@ read endpoints as follows:
 | `/v1/account/{hex}`                                                                                                                                      | ❌ **Not routed**  | 404s on gateway                               |
 | `/v1/account/{hex}/recent-nonces`, `/v1/nonce/{hex}`                                                                                                     | ✅ Routed          | Diagnostic                                    |
 | `/v1/history/*`                                                                                                                                          | ✅ Proxied         | Historical data only (not live state)         |
-| `POST /exchange`                                                                                                                                         | ✅ Routed          | Transaction submission (API key required)     |
+| `POST /exchange`                                                                                                                                         | ✅ Routed          | Signed submission; API-key policy varies     |
+
+On DevNet, `POST /exchange` accepts correctly signed, chain-bound transactions
+without an API key. An API key is not a substitute for the account signature;
+other deployments may require one in addition. A malformed request body is not
+evidence that an API key is missing.
+
+Private account WebSocket subscriptions have a separate authentication contract:
+an API key or the gateway's signed-subscription authentication is required.
+Keyless signed HTTP submission does not make private account feeds public.
 
 **Key caveat**: `GET /v1/account/{hex}` (live balance + positions + margin)
 is **not** routed on the gateway. The SDK's `queryAccount()` handles this:
