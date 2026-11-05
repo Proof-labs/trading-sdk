@@ -1257,7 +1257,9 @@ class ExchangeClient:
         after_height: int | None = None,
         limit: int = 100,
     ) -> CursorPage:
-        return self._cursor_page("GET", f"/v1/history/funding", locals())
+        return self._cursor_page(
+            "GET", "/v1/history/funding", locals(), data_key="funding"
+        )
 
     def history_positions(
         self,
@@ -1265,7 +1267,9 @@ class ExchangeClient:
         after_height: int | None = None,
         limit: int = 100,
     ) -> CursorPage:
-        return self._cursor_page("GET", f"/v1/history/positions", locals())
+        return self._cursor_page(
+            "GET", "/v1/history/positions", locals(), data_key="positions"
+        )
 
     def history_account_events(
         self,
