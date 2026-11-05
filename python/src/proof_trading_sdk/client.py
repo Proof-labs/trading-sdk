@@ -1272,8 +1272,18 @@ class ExchangeClient:
         owner: bytes | str,
         after_id: int | None = None,
         limit: int = 100,
+        *,
+        order: t.Literal["asc", "desc"] = "desc",
+        cursor: str | None = None,
     ) -> CursorPage:
-        return self._cursor_page("GET", f"/v1/history/account-events", locals())
+        """Account events, newest first by default; reuse the returned cursor
+        with the same owner and ordering for the next page.
+        """
+        if order not in ("asc", "desc"):
+            raise ValueError("order must be 'asc' or 'desc'")
+        return self._cursor_page(
+            "GET", "/v1/history/account-events", locals(), data_key="account_events"
+        )
 
     def history_triggers(
         self,
