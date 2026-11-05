@@ -357,8 +357,10 @@ class ExchangeClient:
         self,
         path: str,
         content: bytes | None = None,
+        *,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
-        return self._request("POST", path, content=content)
+        return self._request("POST", path, content=content, headers=headers)
 
     # ── Signing ──────────────────────────────────────────────────────────
 
@@ -473,7 +475,10 @@ class ExchangeClient:
             The engine's response dict with keys like ``code``,
             ``tx_hash``, etc.
         """
-        resp = self._post("/exchange", content=envelope)
+        body = json.dumps({"action": base64.b64encode(envelope).decode("ascii")}).encode()
+        resp = self._post(
+            "/exchange", content=body, headers={"Content-Type": "application/json"}
+        )
         # Keep the raw text. The gateway still emits engine rejections as a bare
         # "<code>: <message>" string — a pre-#90 gateway sends ONLY that — and
         # the TS binding recovers the code from it (`readGatewayBody` keeps the
