@@ -7,6 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [10.1.0] — 2026-11-05
+
+TypeScript MINOR release: two optional client options for callers that sign,
+store and later send exact transaction bytes. Rust and Python versions are
+unchanged.
+
 ### Added
 
 - **Exact-byte callers: a nonce floor on `signTx` and the action on byte-level
@@ -1963,8 +1969,9 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.3.0...HEAD
-[9.3.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.2.0...npm-v9.3.0
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.1.0...HEAD
+[10.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.0.0...npm-v10.1.0
+[10.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.2.0...npm-v10.0.0
 [9.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.1.0...npm-v9.2.0
 [9.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.0.0...npm-v9.1.0
 [9.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...npm-v9.0.0
