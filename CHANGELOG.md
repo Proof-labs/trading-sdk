@@ -30,12 +30,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `AdminAction` union and `ACTION_TAG_BY_KIND`, its inner tag 21 is retired
   and never reassigned, and the Rust, Python and conformance mirrors drop it.
   Error code 90 (`SubAccountsInactive`) no longer decodes in TypeScript,
-  Rust or Python and is never reassigned. The Rust crate pins a proof-wire
-  `dev` commit until the matching release.
+  Rust or Python and is never reassigned. The Rust crate pins proof-wire
+  10.0.0.
 
 - **proof-wire for exchange F16 activation** ([Proof-labs/exchange#1328](https://github.com/Proof-labs/exchange/pull/1328),
   [Proof-labs/exchange#1345](https://github.com/Proof-labs/exchange/pull/1345)).
-  The Rust crate pins a proof-wire `dev` commit until the matching release. Every perp is priced by its certified
+  The Rust crate pins proof-wire 10.0.0. Every perp is priced by its certified
   oracle verdict, so the single-signer price actions leave the wire:
   `OracleUpdate` (0x03), `RunFundingTick` (0x12) and `OracleUpdateComposite`
   (0x14) no longer encode or decode in TypeScript, Rust or Python. Their TS
