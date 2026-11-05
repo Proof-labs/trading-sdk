@@ -35,7 +35,17 @@ unchanged.
   `queryHistoryAccountEventsPage(owner, { order, eventType, fromMs, toMs, limit, cursor })`
   reads one page of indexed account events. Each validates every row and
   keeps prices, quantities, fees and payments as `bigint`; owner reads use the
-  `urgent` account lane.
+  `urgent` account lane. All three are bounded reads with a `timeoutMs`
+  deadline (default 5 seconds); an account-events page may be up to 16 MiB,
+  enough for the indexer's 5000-row maximum. Both paged reads return
+  `nextCursor: ""` on the last page, like `queryHistoryFills`. An account
+  event's `txHash` is the uppercase transaction hash, or the indexer's
+  synthetic key kept verbatim (`height-{h}-kind-block-event-{i}` for a
+  block-level event such as a funding settlement or liquidation). A caller
+  mistake in the options (limit out of range, an empty or reversed window, a
+  bad `order`) throws `GatewayReadError` with kind `"configuration"`; a bad
+  response throws it with kind `"malformed"`, `"binding"`, `"limit"` or
+  `"deadline"`.
 
 ## [10.0.0] — 2026-11-05
 

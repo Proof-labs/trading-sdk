@@ -64,14 +64,16 @@ export function recentTradesLimit(
   market: number,
   options: RecentTradesOptions,
 ): number {
-  marketId(market);
+  // Caller mistakes are configuration, not gateway faults.
+  if (!Number.isInteger(market) || market < 1 || market > 0xffffffff)
+    invalid("market", "configuration");
   const limit = options.limit ?? DEFAULT_RECENT_TRADES_LIMIT;
   if (
     !Number.isSafeInteger(limit) ||
     limit < 1 ||
     limit > MAX_RECENT_TRADES_LIMIT
   )
-    invalid("limit");
+    invalid("limit", "configuration");
   return limit;
 }
 

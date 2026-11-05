@@ -37,6 +37,7 @@ import {
   historySearchParams,
 } from "./history.js";
 import {
+  ACCOUNT_EVENTS_MAX_BYTES,
   accountEventsParams,
   decodeAccountEventsPage,
   decodeFundingPaymentsPage,
@@ -2281,7 +2282,9 @@ export class ExchangeClient {
   /** One market's recent trade tape, newest first (`GET /v1/trades/{market}`),
    * from the serving node's in-memory buffer of its last 500 fills. The tape
    * starts empty after a node restart and is not complete history; use
-   * `reads().tradeHistoryPage` for the indexed record. */
+   * `reads().tradeHistoryPage` for the indexed record. Times out after
+   * `opts.timeoutMs` (default 5 seconds); a bad market or limit throws
+   * `GatewayReadError` with kind `"configuration"`. */
   async queryRecentTrades(
     market: number,
     opts: RecentTradesOptions = {},
@@ -2299,14 +2302,17 @@ export class ExchangeClient {
   /** One newest-first page of an owner's funding payments
    * (`GET /v1/history/funding-payments/{owner}`, the indexed
    * `funding_settled` events). Keep filters fixed when passing `nextCursor`
-   * back as `opts.cursor`. Omitting `addressHex` with no bound key yields an
+   * back as `opts.cursor`; an empty `nextCursor` is the last page, as for
+   * `queryHistoryFills`. Times out after `opts.timeoutMs` (default 5 seconds).
+   * A caller mistake in `opts` throws `GatewayReadError` with kind
+   * `"configuration"`. Omitting `addressHex` with no bound key yields an
    * empty page, like the other history queries. */
   async queryHistoryFundingPayments(
     addressHex?: string,
     opts: FundingPaymentsOptions = {},
   ): Promise<FundingPaymentsPage> {
     const hex = addressHex ?? this.addressHex;
-    if (!hex) return { payments: [] };
+    if (!hex) return { payments: [], nextCursor: "" };
     const owner = historyOwner(hex);
     const captured = { ...opts };
     const params = fundingPaymentsSearchParams(owner, captured);
@@ -2322,22 +2328,30 @@ export class ExchangeClient {
   /** One page of an owner's indexed account events
    * (`GET /v1/history/account-events`) in the stated order, optionally one
    * event type. Keep filters fixed when passing `nextCursor` back as
-   * `opts.cursor`. Omitting `addressHex` with no bound key yields an empty
-   * page. */
+   * `opts.cursor`; an empty `nextCursor` is the last page, as for
+   * `queryHistoryFills`. Times out after `opts.timeoutMs` (default 5 seconds)
+   * and reads at most 16 MiB, enough for a full 5000-row page. A caller
+   * mistake in `opts` throws `GatewayReadError` with kind `"configuration"`.
+   * Omitting `addressHex` with no bound key yields an empty page. */
   async queryHistoryAccountEventsPage(
     addressHex: string | undefined,
     opts: AccountEventsOptions,
   ): Promise<AccountEventsPage> {
     const hex = addressHex ?? this.addressHex;
-    if (!hex) return { events: [] };
+    if (!hex) return { events: [], nextCursor: "" };
     const owner = historyOwner(hex);
     const captured = { ...opts };
-    const res = await this.reads().accountEvents(
+    const query = new URLSearchParams();
+    for (const [name, value] of Object.entries(
       accountEventsParams(owner, captured),
-      { signal: captured.signal },
+    ))
+      if (value !== undefined) query.set(name, String(value));
+    const body = await boundedGatewayJson(
+      `${this.gatewayUrl}/v1/history/account-events?${query}`,
+      this.httpTransport,
+      captured,
+      { purpose: "account", maxBytes: ACCOUNT_EVENTS_MAX_BYTES },
     );
-    const body: unknown = await res.json();
-    captured.signal?.throwIfAborted();
     return decodeAccountEventsPage(body, owner, captured);
   }
 
