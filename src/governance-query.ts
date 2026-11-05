@@ -261,7 +261,6 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   SetWithdrawalLimit: 19,
   SetLiquidationConfig: 17,
   SetOperatorReceiptRegistry: 20,
-  EnableSubAccounts: 21,
 };
 
 /** The typed inner operation a proposal carries, decoded as the wire's

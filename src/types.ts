@@ -30,18 +30,17 @@ export enum TimeInForce {
 // Action type constants (wire bytes 0x01–0x0D)
 // ---------------------------------------------------------------------------
 
-/** Wire-format action type identifiers. Each value is a single byte. */
+/**
+ * Wire-format action type identifiers. Each value is a single byte.
+ * Retired, never reassigned: 0x03 `OracleUpdate`, 0x12 `RunFundingTick`,
+ * 0x14 `OracleUpdateComposite`.
+ */
 export const ActionType = {
   /** Place a limit order on the order book. */
   PlaceOrder: 0x01,
   /** Cancel an existing resting order. */
   CancelOrder: 0x02,
-  /** Submit an oracle price update (relayer only). */
-  OracleUpdate: 0x03,
-  /** Operator-only: submit a composite-CEX price for the multi-source mark
-   *  median (BE-31 Phase B). Feeder infrastructure, not a trading action. */
-  OracleUpdateComposite: 0x14,
-  /** Quorum-policy source relay; dormant until the engine's oracle gate. */
+  /** Oracle-policy source observation relayed by the feeder. */
   SubmitOracleObservation: 0x2d,
   /** Place a market order that crosses immediately. */
   MarketOrder: 0x04,
@@ -80,12 +79,9 @@ export const ActionType = {
   RevokeAgent: 0x0d,
   /** Resolve an event with a YES/NO outcome (0x27). */
   ResolveEvent: 0x27,
-  /** Create a derived sub-account under the signing master (0x28). Refused
-   *  as `SubAccountsInactive` until a governed `EnableSubAccounts` proposal
-   *  executes. */
+  /** Create a derived sub-account under the signing master (0x28). */
   CreateSubAccount: 0x28,
-  /** Move balance between a master and one of its sub-accounts (0x29);
-   *  refused like `CreateSubAccount`. */
+  /** Move balance between a master and one of its sub-accounts (0x29). */
   SubAccountTransfer: 0x29,
   /** Acquire the single-holder Solana payout lease on a pending withdrawal
    *  (0x2e). Custody-authorized watchers only. */
@@ -242,55 +238,6 @@ export interface AmendOrder {
   newQuantity?: bigint | null;
 }
 
-/** Submit an oracle price update for a market (relayer only). */
-export interface OracleUpdate {
-  /** Market identifier to update. */
-  market: number;
-  /** New oracle price in micro-USDC (6 decimal places, e.g., 66752340000 = $66,752.34). */
-  price: bigint;
-  /** Authorized oracle signer address (20 bytes). */
-  signer: Address;
-  /**
-   * Oracle publish timestamp in ms since Unix epoch. Must be strictly
-   * greater than the last accepted update on this market (engine
-   * rejects with code 30 `OracleTimestampNotMonotonic` otherwise).
-   * Added 2026-04-23 per audit B3 as replay protection for the
-   * relayer-signed oracle feed.
-   */
-  publishTimeMs: bigint;
-}
-
-/**
- * **Operator action — not for trading integrations.** Submit a composite-CEX
- * price for a market: BE-31 Phase B's third source for the multi-source
- * mark-price median (oracle + book-mid + composite CEX index).
- *
- * A normal trading integration never submits this — it is feeder
- * infrastructure run by the operator. The engine re-checks the signer against
- * a **separate CEX-composite feeder allowlist** (a distinct trust domain from
- * the {@link OracleUpdate} relay), so a non-feeder signer is rejected
- * regardless. Markets ignore the composite entirely unless an operator has
- * flipped them to `Median` via {@link UpdateMarketFees} (`markSourceMode = 1`).
- *
- * @remarks Operator-only. Requires a signer on the engine's CEX-composite
- * feeder allowlist; not needed for trading integrations.
- */
-export interface OracleUpdateComposite {
-  /** Market identifier to update. */
-  market: number;
-  /** Composite price in micro-USDC (median/VWAP of `nSources` CEX feeds). */
-  price: bigint;
-  /** Number of CEX feeds that went into the composite. Observability only —
-   *  the engine does not gate on it. Encodes as 0 when absent. */
-  nSources: number;
-  /** Authorized feeder signer (20 bytes), on the CEX-composite allowlist. */
-  signer: Address;
-  /** Feeder publish timestamp in ms since Unix epoch. Must be strictly
-   *  greater than the last accepted composite on this market (replay guard,
-   *  same semantics as {@link OracleUpdate.publishTimeMs}). */
-  publishTimeMs: bigint;
-}
-
 /** Place a market order that crosses immediately against resting orders. */
 export interface MarketOrder {
   /** Market identifier. */
@@ -393,10 +340,20 @@ export interface CreateMarket {
   ticker: string;
   /**
    * Aggregate market open-interest cap in contracts. Omitted, null, and 0 all
-   * mean uncapped and encode identically as the canonical 12-field payload
-   * with an explicit 0 tail. Legacy 11-field payloads still decode as 0n.
+   * mean uncapped and encode identically as the canonical 14-field payload
+   * with an explicit 0 cap. Legacy 11-field payloads still decode as 0n.
    */
   maxOpenInterest?: bigint | null;
+  /**
+   * Price grid in micro-USDC: order prices must be multiples of it. MANDATORY
+   * and non-zero; the engine refuses creation with 0.
+   */
+  tickSize: bigint;
+  /**
+   * Quantity grid in contracts: order quantities must be multiples of it.
+   * MANDATORY and non-zero; the engine refuses creation with 0.
+   */
+  lotSize: bigint;
 }
 
 /** User requests a USDC withdrawal to a Solana address. Debits balance immediately. */
@@ -868,23 +825,18 @@ export interface UpdateMarketFees {
    */
   oracleStalenessMs?: bigint | null;
   /**
-   * BE-31 Phase A: mark-price source mode. Omit to leave unchanged.
-   * 0 = OracleOnly (legacy); 1 = Median (oracle + book-mid).
-   * Has no effect on impact-family child markets - those always
-   * mark off the EWMA per the no-oracle-MTM redesign.
+   * Mark-price source mode (0 = OracleOnly, 1 = Median). Omit to leave
+   * unchanged. Stored on the market config; the engine no longer reads it.
    */
   markSourceMode?: 0 | 1 | null;
   /**
-   * BE-31 Phase A: thin-book spread cap in bps for the median guard.
-   * Omit to leave unchanged. 0 resets to the engine default
-   * (DEFAULT_MAX_MARK_SPREAD_BPS = 100). Ignored unless
-   * `markSourceMode === 1`.
+   * Thin-book spread cap in bps for the Median mark mode. Omit to leave
+   * unchanged. Stored on the market config; the engine no longer reads it.
    */
   maxMarkSpreadBps?: number | null;
   /**
-   * BE-31 Phase B: max age in ms for the composite-CEX price source.
-   * Omit to leave unchanged. 0 resets to the engine default
-   * (DEFAULT_CEX_COMPOSITE_STALENESS_MS = 30s).
+   * Max age in ms of the retired composite price source. Omit to leave
+   * unchanged. Stored on the market config; the engine no longer reads it.
    */
   cexCompositeStalenessMs?: bigint | null;
   /**
@@ -1007,17 +959,15 @@ export type TraderAction =
 
 /**
  * Operator actions — privileged infrastructure submitted by the operator's
- * relayer / oracle relay / CEX-composite feeder, **not** by a trading
- * integration. Each is gated by a dedicated engine allowlist (relayer, oracle,
- * or composite-feeder); a normal trader's signer is rejected. They are part of
+ * relayer or oracle feeder, **not** by a trading integration. Each is gated
+ * by a dedicated engine allowlist or the market's oracle policy; a normal
+ * trader's signer is rejected. They are part of
  * the public wire contract (so operator tooling has one SDK), but a trading
  * consumer should never need them. See the "Operator actions" section in
  * AGENTS.md / README.md.
  */
 export type OperatorAction =
   | { type: "SubmitOracleObservation"; data: SubmitOracleObservation }
-  | { type: "OracleUpdate"; data: OracleUpdate }
-  | { type: "OracleUpdateComposite"; data: OracleUpdateComposite }
   | { type: "Deposit"; data: Deposit }
   | { type: "Withdraw"; data: Withdraw }
   | { type: "CreateMarket"; data: CreateMarket }
@@ -1296,8 +1246,6 @@ export type AdminAction =
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
-  // Unit variant; one-way switch that admits the sub-account actions.
-  | { kind: "EnableSubAccounts" }
   | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet }
   | { kind: "ScheduleUpgrade"; value: ScheduleUpgrade }
   | { kind: "CancelUpgrade"; value: CancelUpgrade };

@@ -9,8 +9,7 @@ means two SDKs would sign or encode the same logical action differently.
 > **Status: codec + signing green in all 3 runners.** The generator emits 7 codec
 > vectors, 3 signing vectors, and 4 nonce vectors. The Rust, Python, and TS
 > runners all pass their active tests. The TS runner skips the nonce family
-> (nonces are timestamp-derived; no standalone step function is needed) and
-> `OracleUpdateComposite` (0x14, internal feeder action).
+> (nonces are timestamp-derived; no standalone step function is needed).
 
 ---
 
@@ -91,12 +90,11 @@ against the identical checked-in bytes.
 ```json
 {"case":"v3/fresh_primary","exchange":"<commit>","format":3,"hex":"…","expect":{…}}
 ```
-Each `hex` is `rmp_serde::to_vec` of exchange-core's `OraclePermissionsInfo`
-from `query_oracle_permissions` at the named exchange commit: `format` 3 is the
-fourteen-field primary-with-fallback verdict (exchange#831), `format` 2 the
-twelve-field verdict of earlier nodes. The TS and Rust decoders must reproduce
-every `expect`. `oracle-permissions-legacy.hex` is the matching engine vector
-for the pre-activation `Legacy` read.
+Each `hex` is `rmp_serde::to_vec` of exchange-core's seven-slot
+`OraclePermissionsInfo` at the named exchange commit, with the fourteen-field
+primary-with-fallback verdict (exchange#831). The TS and Rust decoders must
+reproduce every `expect`. `oracle-permissions-unavailable.hex` is the matching
+engine vector for an `Unavailable` read with no policy.
 
 **`events.ndjson`** — `EventCase`:
 ```json
@@ -165,18 +163,12 @@ Ordered by value. Items 1–2 complete the cross-language guarantee; 3+ widen it
 - [ ] One case per `ActionType` (PlaceOrder…AmendOrder, 0x01–0x1b).
 - [ ] Integer edges: `0`, `u64::MAX` for every price/quantity/id field.
 - [ ] Optional/`None` vs `Some`: `client_order_id`, market-scoped cancels,
-      `OracleUpdate.publish_time_ms`, serde-default tails (`CreateMarket.pool_id`).
+      serde-default tails (`CreateMarket.pool_id`).
 - [ ] Every flag combo that changes layout: `post_only`/`reduce_only`, each
       `TimeInForce` (Gtc/Ioc/Fok), each `Side`.
 - [ ] Every enum: `Outcome`, `PriceComparison`,
       `MarkSourceMode`.
 - [ ] Nested shapes: `EventOracleSource` (3 variants), `FeeTier` lists.
-- [ ] **`OracleUpdateComposite` (0x14).** This is an **internal feeder action**
-      (composite CEX price submission) — no SDK user will ever submit it. The
-      TS SDK intentionally omits it; the `toAction` adapter skips its vector
-      gracefully. The Python and Rust runners include it because they generate
-      all action types uniformly. Do not delete the vector; the TS runner
-      skips unwired action types.
 
 ### 2. TypeScript runner (`src/conformance.test.ts`)
 
@@ -184,21 +176,18 @@ All three blockers resolved:
 
 - [x] **Export a payload-only encoder.** `encodePayloadBytes(action): Uint8Array`
       exported from `src/codec.ts` (and barrel `src/index.ts`). Codec block passes.
-- [x] **Finish the `toAction` adapter.** All 27 action types wired. `OracleUpdateComposite`
-      (0x14) intentionally omitted — internal feeder action. Codec block passes.
+- [x] **Finish the `toAction` adapter.** All action types wired. Codec block passes.
 - [x] **Add a sign-from-payload entry point.** `signEnvelopeFromPayload(chainId, actionType,
       seq, payloadBytes, privateKey)` in `src/codec.ts`. Signing block passes (1 sign + 2 owner
       vectors). Nonce is timestamp-derived — the TS SDK does not expose a standalone
       step function, matching the sibling SDKs' design.
 
-**Known gaps:** No nonce vectors (not applicable), no `OracleUpdateComposite` (intentional).
+**Known gaps:** No nonce vectors (not applicable).
 
 ### 3. CI wiring
 
 - [ ] Add the regen drift check (above) and all three runners to CI.
-- [ ] Gate releases on a green TS runner. The `OracleUpdateComposite` vector
-      is skipped by the TS runner (internal feeder action, intentionally
-      omitted) — the other 2 runners still verify it.
+- [ ] Gate releases on a green TS runner.
 
 ### 4. Replay corpus (see below)
 

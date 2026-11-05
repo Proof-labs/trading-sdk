@@ -89,8 +89,6 @@ fn committed() -> Value {
     json!([
         1,
         15,
-        10,
-        true,
         "Committed",
         "Satisfied",
         policy(1),
@@ -107,7 +105,9 @@ fn committed() -> Value {
             [990, 950],
             [null, null],
             null,
-            [123, 3_600_000, 3_600_000]
+            [123, 3_600_000, 3_600_000],
+            "Fallback",
+            1
         ]
     ])
 }
@@ -272,12 +272,10 @@ async fn chain_identity_uses_gateway_status_and_real_chain_binding_and_time() {
 async fn permissions_preserve_exact_typed_epoch_and_truthful_unavailability() {
     for wire in [
         committed(),
-        json!([1, 9, 10, false, "Legacy", null, null, null, null]),
+        json!([1, 9, "Unavailable", "Unavailable", null, null, null]),
         json!([
             1,
             15,
-            10,
-            true,
             "Unavailable",
             "Unavailable",
             null,
@@ -287,8 +285,6 @@ async fn permissions_preserve_exact_typed_epoch_and_truthful_unavailability() {
         json!([
             1,
             15,
-            10,
-            true,
             "Committed",
             "Unavailable",
             policy(1),
@@ -300,12 +296,14 @@ async fn permissions_preserve_exact_typed_epoch_and_truthful_unavailability() {
                 "ExpiredSource",
                 null,
                 null,
-                0,
+                1 << 11,
                 2,
                 [null, null],
                 [null, null],
                 null,
-                [null, 0, 3_600_000]
+                [null, 0, 3_600_000],
+                "Fallback",
+                1
             ]
         ]),
     ] {
@@ -323,12 +321,10 @@ async fn permissions_preserve_exact_typed_epoch_and_truthful_unavailability() {
 }
 
 #[tokio::test]
-async fn committed_verdict_decodes_all_twelve_fields_with_evidence_and_last_good() {
+async fn committed_verdict_decodes_all_fourteen_fields_with_evidence_and_last_good() {
     let wire = json!([
         1,
         15,
-        10,
-        true,
         "Committed",
         "Satisfied",
         policy(1),
@@ -345,7 +341,9 @@ async fn committed_verdict_decodes_all_twelve_fields_with_evidence_and_last_good
             [990, 950],
             [([1u8; 32]), ([2u8; 32])],
             [111, 900],
-            [123, 3_600_000, 7_200_000]
+            [123, 3_600_000, 7_200_000],
+            "Fallback",
+            1
         ]
     ]);
     let (client, task) = fixture(encoded(wire)).await;
@@ -365,6 +363,8 @@ async fn committed_verdict_decodes_all_twelve_fields_with_evidence_and_last_good
     assert_eq!(v.anchor.price, Some(123));
     assert_eq!(v.anchor.covered_ms, 3_600_000);
     assert_eq!(v.anchor.required_ms, 7_200_000);
+    assert_eq!(v.selected, Some(SelectedSource::Fallback));
+    assert_eq!(v.diagnostics, 1);
     task.await.unwrap();
 }
 
@@ -373,16 +373,21 @@ async fn malformed_or_false_permission_evidence_never_decodes_as_healthy() {
     let mut cases = vec![
         json!({"market":1}),
         json!([1, 15]),
-        json!([1, 15, 10, true, "Unknown", "Unavailable", null, null, null]),
+        json!([1, 15, "Unknown", "Unavailable", null, null, null]),
     ];
+    let mut nine_slot = committed();
+    let fields = nine_slot
+        .as_array_mut()
+        .expect("committed read is an array");
+    fields.splice(2..2, [json!(10), json!(true)]);
+    cases.push(nine_slot);
     for (index, replacement) in [
         (0, json!(2)),
         (1, json!(-1)),
-        (2, json!(16)),
-        (3, json!(false)),
-        (4, json!("Legacy")),
-        (5, json!("Unavailable")),
-        (6, Value::Null),
+        (2, json!("Legacy")),
+        (3, json!("Unavailable")),
+        (3, Value::Null),
+        (4, Value::Null),
     ] {
         let mut bad = committed();
         bad[index] = replacement;
@@ -398,17 +403,17 @@ async fn malformed_or_false_permission_evidence_never_decodes_as_healthy() {
         (10, json!([111, 2_000])),
     ] {
         let mut bad = committed();
-        bad[8][index] = replacement;
+        bad[6][index] = replacement;
         cases.push(bad);
     }
     let mut same_authority = committed();
-    same_authority[6][7][1][1] = json!(([4u8; 32]));
+    same_authority[4][7][1][1] = json!(([4u8; 32]));
     cases.push(same_authority);
     let mut wrong_scale = committed();
-    wrong_scale[6][7][1][3] = json!(8);
+    wrong_scale[4][7][1][3] = json!(8);
     cases.push(wrong_scale);
     let mut old_pending = committed();
-    old_pending[7] = json!([15, policy(1)]);
+    old_pending[5] = json!([15, policy(1)]);
     cases.push(old_pending);
     for case in cases {
         let (client, task) = fixture(encoded(case)).await;
@@ -431,9 +436,9 @@ async fn malformed_or_false_permission_evidence_never_decodes_as_healthy() {
 #[tokio::test]
 async fn enum_ordinals_maps_and_binary_strings_are_not_canonical_permission_reads() {
     let mut cases = Vec::new();
-    for replacement in [json!(0), json!({"Legacy":null})] {
-        let mut value = json!([1, 9, 10, false, "Legacy", null, null, null, null]);
-        value[4] = replacement;
+    for replacement in [json!(0), json!({"Unavailable":null})] {
+        let mut value = json!([1, 9, "Unavailable", "Unavailable", null, null, null]);
+        value[2] = replacement;
         cases.push(value);
     }
     for (index, replacement) in [
@@ -443,12 +448,12 @@ async fn enum_ordinals_maps_and_binary_strings_are_not_canonical_permission_read
         (3, json!({"Fresh":null})),
     ] {
         let mut value = committed();
-        value[8][index] = replacement;
+        value[6][index] = replacement;
         cases.push(value);
     }
     for replacement in [json!(0), json!({"Satisfied":null})] {
         let mut value = committed();
-        value[5] = replacement;
+        value[3] = replacement;
         cases.push(value);
     }
     for case in cases {
@@ -460,10 +465,21 @@ async fn enum_ordinals_maps_and_binary_strings_are_not_canonical_permission_read
         task.await.unwrap();
     }
     // Same bytes as the enum name, but MessagePack BIN rather than STR.
-    let mut bytes =
-        rmp_serde::to_vec(&json!([1, 9, 10, false, "Legacy", null, null, null, null])).unwrap();
-    let position = bytes.windows(7).position(|w| w == b"\xa6Legacy").unwrap();
-    bytes.splice(position..position + 1, [0xc4, 6]);
+    let mut bytes = rmp_serde::to_vec(&json!([
+        1,
+        9,
+        "Unavailable",
+        "Unavailable",
+        null,
+        null,
+        null
+    ]))
+    .expect("read encodes");
+    let position = bytes
+        .windows(12)
+        .position(|w| w == b"\xabUnavailable")
+        .expect("the encoded read carries the Unavailable string");
+    bytes.splice(position..position + 1, [0xc4, 11]);
     let (client, task) = fixture(json!({"data":STANDARD.encode(bytes)})).await;
     assert!(client.oracle_permissions(market()).await.is_err());
     task.await.unwrap();
