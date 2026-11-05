@@ -167,37 +167,30 @@ def test_submit_action_json_string_body_does_not_crash():
     assert exc.value.code == 12
 
 
-def test_submit_action_bare_error_string_without_code_is_engine_error():
-    """No leading "<code>: " still means a rejection, not a transport failure.
-
-    Classifying a terminal engine rejection as transport would invite the caller
-    to retry a submit that will never succeed. Falls back to code 1, matching
-    the TypeScript binding.
-    """
+def test_submit_action_bare_error_string_without_code_is_pending():
+    """An unstructured string without a code does not establish a verdict."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="signature verification failed")
 
-    with pytest.raises(EngineError) as exc:
+    with pytest.raises(SubmissionPending) as exc:
         _client(handler).submit_action(b"\x00")
-    assert exc.value.code == 1
-    assert "signature verification failed" in str(exc.value)
+    assert "reconcile" in str(exc.value)
 
 
-def test_submit_action_json_string_without_code_is_engine_error():
+def test_submit_action_json_string_without_code_is_pending():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json="signature verification failed")
 
-    with pytest.raises(EngineError) as exc:
+    with pytest.raises(SubmissionPending) as exc:
         _client(handler).submit_action(b"\x00")
-    assert exc.value.code == 1
+    assert exc.value.tx_hash
 
 
 def test_submit_action_json_list_body_does_not_crash():
-    # Not an object: must not reach .get(). Classified like any other non-object
-    # 2xx body rather than raising AttributeError.
+    # A JSON list is not a verdict, and must not reach .get().
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[1, 2, 3])
 
-    with pytest.raises(EngineError):
+    with pytest.raises(SubmissionPending):
         _client(handler).submit_action(b"\x00")

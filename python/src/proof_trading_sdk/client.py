@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -76,6 +77,16 @@ def _leading_error_code(text: str) -> int | None:
     """
     m = _LEADING_ERROR_CODE.match(text or "")
     return int(m.group(1)) if m else None
+
+
+def _response_json(resp: httpx.Response) -> t.Any:
+    """Keep invalid JSON inside the SDK error boundary without echoing its body."""
+    try:
+        return resp.json()
+    except (ValueError, UnicodeError) as exc:
+        raise TransportError(
+            "gateway returned malformed JSON", status_code=resp.status_code
+        ) from exc
 
 
 def _to_hex(owner: bytes | str) -> str:
@@ -474,30 +485,24 @@ class ExchangeClient:
             ``tx_hash``, etc.
         """
         resp = self._post("/exchange", content=envelope)
-        # Keep the raw text. The gateway still emits engine rejections as a bare
-        # "<code>: <message>" string — a pre-#90 gateway sends ONLY that — and
-        # the TS binding recovers the code from it (`readGatewayBody` keeps the
-        # raw body precisely so the fallback can parse it). A body that IS valid
-        # JSON but is not an object (a bare string, a list, null) is the same
-        # case: `resp.json()` hands back a `str`, which must never reach `.get()`
-        # — in TS `json?.code` on a string is merely `undefined`, but in Python
-        # it is an `AttributeError` escaping the SDK.
+        # Keep explicitly coded legacy errors, but do not infer an engine
+        # verdict from an arbitrary non-object or malformed response.
         raw = resp.text
         try:
             parsed: t.Any = resp.json()
-        except json.JSONDecodeError:
+        except (ValueError, UnicodeError):
             parsed = None
 
         if not isinstance(parsed, dict):
-            # `_check_response` already raised for every status >= 300, so this
-            # is a 2xx whose body is not an object: the gateway's compatibility
-            # error string. Classify it as an ENGINE error, like the TS binding
-            # does — calling a terminal rejection a transport failure invites a
-            # pointless resubmit. The code comes from the leading "<code>: " and
-            # falls back to 1 (DecodeError) when there is none.
             text = (parsed if isinstance(parsed, str) else raw or "").strip()
-            raise EngineError(
-                _leading_error_code(text) or 1, text[:200] or "unknown gateway error"
+            code = _leading_error_code(text)
+            if code is not None and code > 0:
+                raise EngineError(code, text[:200])
+            # An arbitrary proxy body or truncated response is not an engine
+            # rejection. The original transaction may still have committed.
+            raise SubmissionPending(
+                hashlib.sha256(envelope).hexdigest().upper(),
+                "malformed /exchange response; reconcile by hash",
             )
         data: dict[str, t.Any] = parsed
 
@@ -537,7 +542,10 @@ class ExchangeClient:
         err = str(data.get("error") or data.get("message") or "")
         if err or data.get("status") == "error":
             raise EngineError(_leading_error_code(err) or 1, err or "engine error")
-        raise TransportError(f"malformed /exchange response (no 'code'): {data!r}"[:200])
+        raise SubmissionPending(
+            hashlib.sha256(envelope).hexdigest().upper(),
+            "malformed /exchange response (no verdict); reconcile by hash",
+        )
 
     # ── Info queries ─────────────────────────────────────────────────────
 
@@ -604,7 +612,7 @@ class ExchangeClient:
         resp = self._request(
             "POST", "/info", content=body, headers={"Content-Type": "application/json"}
         )
-        return self._decode_envelope(resp.json(), source="/info", require_data=True)
+        return self._decode_envelope(_response_json(resp), source="/info", require_data=True)
 
     @staticmethod
     def _to_bytes(v: t.Any) -> bytes:
@@ -771,7 +779,7 @@ class ExchangeClient:
 
     def nonce_info(self, owner: bytes | str) -> dict[str, t.Any]:
         resp = self._get(f"/v1/nonce/{_to_hex(owner)}")
-        return resp.json()
+        return _response_json(resp)
 
     def _get_data(self, path: str, params: dict[str, t.Any] | None = None) -> t.Any:
         """GET a ``/v1/*`` read endpoint and decode the ``{data: base64 msgpack}``
@@ -779,7 +787,7 @@ class ExchangeClient:
         on a JSON ``{"error": …}`` body; a missing envelope yields ``None`` (the
         callers default to an empty list)."""
         resp = self._get(path, params=params)
-        return self._decode_envelope(resp.json(), source=path, require_data=False)
+        return self._decode_envelope(_response_json(resp), source=path, require_data=False)
 
     @staticmethod
     def _trigger_tuple(value: t.Any, name: str, size: int) -> t.Sequence[t.Any]:
@@ -1016,7 +1024,7 @@ class ExchangeClient:
             raise ValueError("trigger owner must be a 40-character hex address")
         path = f"/v1/triggers/{owner_hex.lower()}"
         resp = self._get(path)
-        raw = self._decode_envelope(resp.json(), source=path, require_data=True)
+        raw = self._decode_envelope(_response_json(resp), source=path, require_data=True)
         if not isinstance(raw, (list, tuple)):
             raise ProofTradingSdkError("trigger decode: response is not an array")
         return [self._decode_trigger_info(item) for item in raw]
@@ -1233,11 +1241,11 @@ class ExchangeClient:
 
     def market_status(self, market: int) -> dict[str, t.Any]:
         resp = self._get(f"/v1/market-status/{market}")
-        return resp.json()
+        return _response_json(resp)
 
     def trades(self, market: int) -> list[dict[str, t.Any]]:
         resp = self._get(f"/v1/trades/{market}")
-        return resp.json()
+        return _response_json(resp)
 
     # ── History (cursor-paginated) ───────────────────────────────────────
 
@@ -1328,14 +1336,14 @@ class ExchangeClient:
 
     def history_status(self) -> dict[str, t.Any]:
         resp = self._get("/v1/history/status")
-        return resp.json()
+        return _response_json(resp)
 
     # ── Health & status ──────────────────────────────────────────────────
 
     def health(self) -> dict[str, t.Any]:
         """Gateway health check: ``GET /v1/health``."""
         resp = self._get("/v1/health")
-        return resp.json()
+        return _response_json(resp)
 
     def status(self) -> dict[str, t.Any]:
         """CometBFT node status via the gateway: ``GET /v1/status``.
@@ -1344,18 +1352,18 @@ class ExchangeClient:
         (``result.sync_info``, ``result.node_info``, etc.).
         """
         resp = self._get("/v1/status")
-        return resp.json()
+        return _response_json(resp)
 
     def get_block(self, height: int | None = None) -> dict[str, t.Any]:
         """CometBFT block at *height* (latest if omitted) via ``GET /v1/block``."""
         params = {"height": height} if height is not None else None
         resp = self._get("/v1/block", params=params)
-        return resp.json()
+        return _response_json(resp)
 
     def get_block_results(self, height: int) -> dict[str, t.Any]:
         """CometBFT block results at *height* via ``GET /v1/block_results``."""
         resp = self._get("/v1/block_results", params={"height": height})
-        return resp.json()
+        return _response_json(resp)
 
     # ── Market data ──────────────────────────────────────────────────────
 
@@ -1366,7 +1374,7 @@ class ExchangeClient:
         """
         try:
             resp = self._get(f"/v1/ticker/{market}")
-            return resp.json()
+            return _response_json(resp)
         except TransportError as e:
             if e.status_code == 404:
                 return None
@@ -1464,18 +1472,18 @@ class ExchangeClient:
         if limit is not None:
             params["limit"] = limit
         resp = self._get(f"/v1/history/resolutions/{owner}", params=params or None)
-        data = resp.json()
+        data = _response_json(resp)
         return data if isinstance(data, list) else []
 
     # ── System ───────────────────────────────────────────────────────────
 
     def system_status(self) -> dict[str, t.Any]:
         resp = self._get("/system/status")
-        return resp.json()
+        return _response_json(resp)
 
     def maintenance_status(self) -> dict[str, t.Any]:
         resp = self._get("/maintenance/status")
-        return resp.json()
+        return _response_json(resp)
 
     # ── Account event stream ─────────────────────────────────────────────
 
@@ -1567,7 +1575,7 @@ class ExchangeClient:
         if limit is not None:
             params["limit"] = limit
         resp = self._get(f"/v1/history/{kind}/{owner}", params=params or None)
-        data = resp.json()
+        data = _response_json(resp)
         return data if isinstance(data, list) else []
 
     def _cursor_page(
@@ -1584,7 +1592,7 @@ class ExchangeClient:
 
         query = {k: v for k, v in params.items() if v is not None and k != "self"}
         resp = self._get(path, params=query)
-        data: dict[str, t.Any] = resp.json()
+        data: dict[str, t.Any] = _response_json(resp)
         return CursorPage(
             data=data.get(data_key, []),
             next_cursor=data.get("next_cursor"),
