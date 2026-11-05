@@ -376,7 +376,9 @@ async fn malformed_or_false_permission_evidence_never_decodes_as_healthy() {
         json!([1, 15, "Unknown", "Unavailable", null, null, null]),
     ];
     let mut nine_slot = committed();
-    let fields = nine_slot.as_array_mut().unwrap();
+    let fields = nine_slot
+        .as_array_mut()
+        .expect("committed read is an array");
     fields.splice(2..2, [json!(10), json!(true)]);
     cases.push(nine_slot);
     for (index, replacement) in [
@@ -472,11 +474,11 @@ async fn enum_ordinals_maps_and_binary_strings_are_not_canonical_permission_read
         null,
         null
     ]))
-    .unwrap();
+    .expect("read encodes");
     let position = bytes
         .windows(12)
         .position(|w| w == b"\xabUnavailable")
-        .unwrap();
+        .expect("the encoded read carries the Unavailable string");
     bytes.splice(position..position + 1, [0xc4, 11]);
     let (client, task) = fixture(json!({"data":STANDARD.encode(bytes)})).await;
     assert!(client.oracle_permissions(market()).await.is_err());

@@ -30,7 +30,11 @@ export enum TimeInForce {
 // Action type constants (wire bytes 0x01–0x0D)
 // ---------------------------------------------------------------------------
 
-/** Wire-format action type identifiers. Each value is a single byte. */
+/**
+ * Wire-format action type identifiers. Each value is a single byte.
+ * Retired, never reassigned: 0x03 `OracleUpdate`, 0x12 `RunFundingTick`,
+ * 0x14 `OracleUpdateComposite`.
+ */
 export const ActionType = {
   /** Place a limit order on the order book. */
   PlaceOrder: 0x01,

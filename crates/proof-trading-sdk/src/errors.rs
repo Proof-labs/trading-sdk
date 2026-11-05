@@ -512,7 +512,7 @@ mod exec_error_meaning_tests {
         ] {
             let e = ExecError::Unpriced { market: 1, reason };
             assert_eq!(
-                decode_exec_error_kind(e.code(), None).unwrap(),
+                decode_exec_error_kind(e.code(), None).expect("every Unpriced code decodes"),
                 DecodedExecErrorKind::Known(kind)
             );
             assert_eq!(kind.meaning(), e.meaning());

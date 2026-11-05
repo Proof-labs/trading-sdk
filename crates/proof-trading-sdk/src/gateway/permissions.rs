@@ -258,7 +258,7 @@ type PolicyWire = (
     [SourceWire; 2],
 );
 type CertifiedWire = Option<(u64, u64)>;
-type VerdictWire = (
+type VerdictTuple = (
     u64,
     u64,
     VerdictStatus,
@@ -274,6 +274,47 @@ type VerdictWire = (
     Option<SelectedSource>,
     u8,
 );
+
+/// The verdict's fourteen slots by name; decodes only from the tuple.
+#[derive(Deserialize)]
+#[serde(from = "VerdictTuple")]
+struct VerdictWire {
+    height: u64,
+    block_time: u64,
+    status: VerdictStatus,
+    reason: VerdictReason,
+    certified: CertifiedWire,
+    eligible_since: Option<u64>,
+    faults: u32,
+    valid_sources: u8,
+    current_times: [Option<u64>; 2],
+    evidence: [Option<[u8; 32]>; 2],
+    last_good: CertifiedWire,
+    anchor: (Option<u64>, u64, u64),
+    selected: Option<SelectedSource>,
+    diagnostics: u8,
+}
+
+impl From<VerdictTuple> for VerdictWire {
+    fn from(t: VerdictTuple) -> Self {
+        Self {
+            height: t.0,
+            block_time: t.1,
+            status: t.2,
+            reason: t.3,
+            certified: t.4,
+            eligible_since: t.5,
+            faults: t.6,
+            valid_sources: t.7,
+            current_times: t.8,
+            evidence: t.9,
+            last_good: t.10,
+            anchor: t.11,
+            selected: t.12,
+            diagnostics: t.13,
+        }
+    }
+}
 type PermissionWire = (
     u32,
     u64,
@@ -316,47 +357,47 @@ fn policy(w: PolicyWire) -> Result<PolicyEpoch, GatewayError> {
     })
 }
 fn verdict(w: VerdictWire) -> Result<CommittedVerdict, GatewayError> {
-    let certified = w.4.map(|c| CertifiedPrice {
+    let certified = w.certified.map(|c| CertifiedPrice {
         price: c.0,
         provider_time: c.1,
     });
-    let last_good = w.10.map(|c| CertifiedPrice {
+    let last_good = w.last_good.map(|c| CertifiedPrice {
         price: c.0,
         provider_time: c.1,
     });
-    let fresh = w.2 == VerdictStatus::Fresh;
-    if fresh != (w.3 == VerdictReason::Fresh)
+    let fresh = w.status == VerdictStatus::Fresh;
+    if fresh != (w.reason == VerdictReason::Fresh)
         || fresh != certified.is_some()
-        || fresh != w.5.is_some()
+        || fresh != w.eligible_since.is_some()
         || certified
             .as_ref()
-            .is_some_and(|c| c.price == 0 || c.provider_time > w.1)
-        || w.5.is_some_and(|t| t > w.1)
+            .is_some_and(|c| c.price == 0 || c.provider_time > w.block_time)
+        || w.eligible_since.is_some_and(|t| t > w.block_time)
         || last_good
             .as_ref()
-            .is_some_and(|c| c.price == 0 || c.provider_time > w.1)
+            .is_some_and(|c| c.price == 0 || c.provider_time > w.block_time)
     {
         return Err(invalid());
     }
     let value = CommittedVerdict {
-        height: w.0,
-        block_time: w.1,
-        status: w.2,
-        reason: w.3,
+        height: w.height,
+        block_time: w.block_time,
+        status: w.status,
+        reason: w.reason,
         certified,
-        eligible_since: w.5,
-        faults: w.6,
-        valid_sources: w.7,
-        current_times: w.8,
-        evidence: w.9,
+        eligible_since: w.eligible_since,
+        faults: w.faults,
+        valid_sources: w.valid_sources,
+        current_times: w.current_times,
+        evidence: w.evidence,
         last_good,
         anchor: AnchorCoverageInfo {
-            price: w.11 .0,
-            covered_ms: w.11 .1,
-            required_ms: w.11 .2,
+            price: w.anchor.0,
+            covered_ms: w.anchor.1,
+            required_ms: w.anchor.2,
         },
-        selected: w.12,
-        diagnostics: w.13,
+        selected: w.selected,
+        diagnostics: w.diagnostics,
     };
     if !primary_fallback_consistent(&value) {
         return Err(invalid());
@@ -499,7 +540,7 @@ mod tests {
         };
         edit(verdict);
         let mut out = Vec::new();
-        rmpv::encode::write_value(&mut out, &root).unwrap();
+        rmpv::encode::write_value(&mut out, &root).expect("value encodes");
         out
     }
 
@@ -568,31 +609,33 @@ mod tests {
 
     #[test]
     fn unavailable_read_decodes_and_the_nine_slot_layout_does_not() {
-        let unavailable = hex::decode(UNAVAILABLE.trim()).unwrap();
-        let read = decode(&unavailable, 1).unwrap();
+        let unavailable = hex::decode(UNAVAILABLE.trim()).expect("fixture is hex");
+        let read = decode(&unavailable, 1).expect("the seven-slot read decodes");
         assert_eq!(read.finalized_height, 9);
         assert_eq!(read.state, ReadState::Unavailable);
         assert_eq!(read.oracle_permission, OraclePermission::Unavailable);
         assert!(read.policy.is_none() && read.verdict.is_none());
 
-        let mut root = rmpv::decode::read_value(&mut unavailable.as_slice()).unwrap();
+        let mut root =
+            rmpv::decode::read_value(&mut unavailable.as_slice()).expect("fixture is msgpack");
         let rmpv::Value::Array(fields) = &mut root else {
             panic!("response is an array")
         };
         fields.splice(2..2, [rmpv::Value::from(10), rmpv::Value::from(false)]);
         fields[3] = rmpv::Value::Nil;
         let mut nine = Vec::new();
-        rmpv::encode::write_value(&mut nine, &root).unwrap();
+        rmpv::encode::write_value(&mut nine, &root).expect("value encodes");
         assert!(decode(&nine, 1).is_err(), "pre-F16 layout");
 
         for state in ["Legacy", "Committed"] {
-            let mut root = rmpv::decode::read_value(&mut unavailable.as_slice()).unwrap();
+            let mut root =
+                rmpv::decode::read_value(&mut unavailable.as_slice()).expect("fixture is msgpack");
             let rmpv::Value::Array(fields) = &mut root else {
                 panic!("response is an array")
             };
             fields[2] = rmpv::Value::from(state);
             let mut out = Vec::new();
-            rmpv::encode::write_value(&mut out, &root).unwrap();
+            rmpv::encode::write_value(&mut out, &root).expect("value encodes");
             assert!(decode(&out, 1).is_err(), "{state}");
         }
     }
