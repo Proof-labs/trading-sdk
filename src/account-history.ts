@@ -1,7 +1,6 @@
 import {
   I64_MAX,
   MAX_DATE_MS,
-  hexAddress,
   invalidRead,
   marketId,
   rfc3339,
@@ -11,13 +10,24 @@ import {
 import type { BoundedReadOptions } from "./bounded-read.js";
 import type { GatewayReadError } from "./errors.js";
 
-/** Defaults and caps of the indexer history server. It clamps a limit outside
- * its range; the SDK refuses one, so a page is never silently shorter. */
+/** Defaults and caps of the indexer history server (funding: `history.rs`,
+ * account events: `account_events.rs`). It clamps a limit outside its range;
+ * the SDK refuses one, so a page is never silently shorter.
+ *
+ * Coupled to the indexer: `pageCursor` accepts a next cursor only after a
+ * page of exactly `limit` rows. That holds only while these maximums equal
+ * the indexer's. If the indexer ever lowers one, a request at the old
+ * maximum gets a full clamped page with a cursor, and every non-final page
+ * fails closed as "non-progressing or truncated page". Lower these with it. */
 const DEFAULT_FUNDING_PAYMENTS_LIMIT = 200;
 const MAX_FUNDING_PAYMENTS_LIMIT = 1000;
 const DEFAULT_ACCOUNT_EVENTS_LIMIT = 500;
 const MAX_ACCOUNT_EVENTS_LIMIT = 5000;
 const MAX_CURSOR_LENGTH = 4096;
+/** Body cap for one account-events page. The indexer's maximum page is 5000
+ * rows of verbatim engine payloads, which can pass the 1 MiB default; 16 MiB
+ * leaves over 3 KiB a row. */
+export const ACCOUNT_EVENTS_MAX_BYTES = 16 * 1024 * 1024;
 /** The indexer stores markets as signed i32. */
 const INDEXER_MAX_MARKET = 0x7fff_ffff;
 
@@ -27,7 +37,8 @@ interface HistoryPageOptions {
   fromMs?: number;
   toMs?: number;
   limit?: number;
-  /** Opaque indexer cursor from the previous page's `nextCursor`. */
+  /** Opaque indexer cursor from the previous page's `nextCursor`; `""` or
+   * absent starts from the first page. */
   cursor?: string;
 }
 
@@ -51,18 +62,19 @@ export interface FundingPayment {
 export interface FundingPaymentsPage {
   /** Newest first. */
   payments: FundingPayment[];
-  /** Absent on the last page. */
-  nextCursor?: string;
+  /** Pass back as `cursor` for the next page; `""` on the last page, like
+   * `queryHistoryFills` and `queryHistoryPositionsPage`. */
+  nextCursor: string;
 }
 
-export interface AccountEventsOptions extends HistoryPageOptions {
+export interface AccountEventsOptions
+  extends HistoryPageOptions, BoundedReadOptions {
   /** Required by the indexer, which has no default direction. */
   order: "asc" | "desc";
   /** One indexed event type, e.g. `binary_issued_from_mtm`. */
   eventType?: string;
   /** 1–5000; defaults to 500. */
   limit?: number;
-  signal?: AbortSignal;
 }
 /** One indexed account event. The payload is the engine event's attributes,
  * verbatim; its fields depend on `eventType`. */
@@ -71,8 +83,12 @@ export interface AccountEvent {
   owner: HexAddress;
   blockHeight: bigint;
   blockTime: string;
-  /** Uppercase hex transaction hash; empty for an event a block emits
-   * outside any transaction. */
+  /** The indexer's row key: the uppercase hex transaction hash, or for an
+   * event without one a synthetic position kept verbatim:
+   * `height-{h}-kind-block-event-{i}` for an event the block emits outside
+   * any transaction (funding, liquidation, auto-deleveraging), and
+   * `height-{h}-kind-tx-idx-{idx}-event-{i}` for a row rebuilt from a
+   * version-1 archive. It matches a live `AccountEventFrame.txHash`. */
   txHash: string;
   eventIndex: number;
   /** The transaction's position in its block, present only when the block
@@ -84,8 +100,9 @@ export interface AccountEvent {
 export interface AccountEventsPage {
   /** In the requested order of (blockTime, eventId). */
   events: AccountEvent[];
-  /** Absent on the last page. */
-  nextCursor?: string;
+  /** Pass back as `cursor` for the next page; `""` on the last page, like
+   * `queryHistoryFills` and `queryHistoryPositionsPage`. */
+  nextCursor: string;
 }
 
 function invalid(
@@ -105,7 +122,11 @@ function count(value: unknown, read: string, field: string): bigint {
     invalid(read, field);
   return BigInt(value as number);
 }
-function cursor(value: unknown, read: string): string {
+function cursor(
+  value: unknown,
+  read: string,
+  kind: GatewayReadError["kind"] = "malformed",
+): string {
   if (
     typeof value !== "string" ||
     value.length > MAX_CURSOR_LENGTH ||
@@ -113,7 +134,7 @@ function cursor(value: unknown, read: string): string {
       (char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127,
     )
   )
-    invalid(read, "cursor");
+    invalid(read, "cursor", kind);
   return value;
 }
 
@@ -131,7 +152,7 @@ function pageParams(
     const ms = options[key];
     if (ms === undefined) continue;
     if (!Number.isSafeInteger(ms) || ms < 0 || ms > MAX_DATE_MS)
-      invalid(read, "window");
+      misconfigured(read, "window");
     params.set(name, String(ms));
   }
   if (
@@ -139,14 +160,23 @@ function pageParams(
     options.toMs !== undefined &&
     options.toMs <= options.fromMs
   )
-    invalid(read, "window");
+    misconfigured(read, "window");
   const limit = options.limit ?? defaultLimit;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > maxLimit)
-    invalid(read, "limit");
+    misconfigured(read, "limit");
   params.set("limit", String(limit));
   if (options.cursor !== undefined && options.cursor !== "")
-    params.set("cursor", cursor(options.cursor, read));
+    params.set("cursor", cursor(options.cursor, read, "configuration"));
   return { params, limit };
+}
+
+/** Caller mistakes in the options are configuration, not gateway faults. */
+function misconfigured(read: string, field: string): never {
+  return invalid(read, field, "configuration");
+}
+/** The caller's owner, checked as configuration. */
+function ownerOption(owner: string, read: string): void {
+  if (!/^[a-f0-9]{40}$/.test(owner)) misconfigured(read, "owner");
 }
 
 /** Rows ≤ limit, and a next cursor only after a full page that moved on. */
@@ -186,7 +216,7 @@ export function fundingPaymentsSearchParams(
   owner: string,
   options: FundingPaymentsOptions,
 ): URLSearchParams {
-  hexAddress(owner, `${FUNDING}.owner`);
+  ownerOption(owner, FUNDING);
   const { params } = pageParams(
     FUNDING,
     options,
@@ -194,8 +224,12 @@ export function fundingPaymentsSearchParams(
     MAX_FUNDING_PAYMENTS_LIMIT,
   );
   if (options.market !== undefined) {
-    marketId(options.market);
-    if (options.market > INDEXER_MAX_MARKET) invalid(FUNDING, "market");
+    if (
+      !Number.isInteger(options.market) ||
+      options.market < 1 ||
+      options.market > INDEXER_MAX_MARKET
+    )
+      misconfigured(FUNDING, "market");
     params.set("market", String(options.market));
   }
   return params;
@@ -245,13 +279,28 @@ export function decodeFundingPaymentsPage(
       blockTime: time.raw,
     };
   });
-  return { payments, ...(nextCursor ? { nextCursor } : {}) };
+  return { payments, nextCursor };
 }
 
 const EVENTS = "account events";
+const DIGITS = "(0|[1-9][0-9]{0,18})";
+/** The indexer's synthetic keys for an event with no transaction hash
+ * (indexer `TxRef` in `crates/domain/src/keys.rs`). */
+const SYNTHETIC_TX_REF = new RegExp(
+  `^height-${DIGITS}-kind-(block|tx-idx-${DIGITS})-event-${DIGITS}$`,
+);
 
-/** Query parameters for `GET /v1/history/account-events`, as the raw
- * `reads().accountEvents` takes them. */
+/** A real hash is uppercased like every SDK transaction hash; a synthetic key
+ * stays verbatim, so it still equals the live feed's key. */
+function txRef(value: unknown): string {
+  if (typeof value !== "string") invalid(EVENTS, "tx hash");
+  if (/^[0-9A-Fa-f]{64}$/.test(value)) return value.toUpperCase();
+  if (!SYNTHETIC_TX_REF.test(value)) invalid(EVENTS, "tx hash");
+  return value;
+}
+
+/** Query parameters for `GET /v1/history/account-events`, in the shape the
+ * raw `reads().accountEvents` takes. */
 export function accountEventsParams(
   owner: string,
   options: AccountEventsOptions,
@@ -264,14 +313,14 @@ export function accountEventsParams(
   from?: string;
   to?: string;
 } {
-  hexAddress(owner, `${EVENTS}.owner`);
+  ownerOption(owner, EVENTS);
   if (options.order !== "asc" && options.order !== "desc")
-    invalid(EVENTS, "order");
+    misconfigured(EVENTS, "order");
   if (
     options.eventType !== undefined &&
     !/^[a-z0-9_]{1,64}$/.test(options.eventType)
   )
-    invalid(EVENTS, "event type");
+    misconfigured(EVENTS, "event type");
   const { params, limit } = pageParams(
     EVENTS,
     options,
@@ -331,11 +380,7 @@ export function decodeAccountEventsPage(
         invalid(EVENTS, "duplicate or unordered event");
     }
     previous = { nanos: time.nanos, id: eventId };
-    if (
-      typeof row.tx_hash !== "string" ||
-      !/^([0-9A-Fa-f]{64})?$/.test(row.tx_hash)
-    )
-      invalid(EVENTS, "tx hash");
+    const txHash = txRef(row.tx_hash);
     const eventIndex = count(row.event_index, EVENTS, "event index");
     const txPosition =
       row.tx_position === undefined
@@ -346,12 +391,12 @@ export function decodeAccountEventsPage(
       owner: owner as HexAddress,
       blockHeight: count(row.block_height, EVENTS, "block height"),
       blockTime: time.raw,
-      txHash: row.tx_hash.toUpperCase(),
+      txHash,
       eventIndex: Number(eventIndex),
       ...(txPosition !== undefined ? { txPosition } : {}),
       eventType: row.event_type,
       payload: object(row.payload, EVENTS, "payload"),
     };
   });
-  return { events, ...(nextCursor ? { nextCursor } : {}) };
+  return { events, nextCursor };
 }

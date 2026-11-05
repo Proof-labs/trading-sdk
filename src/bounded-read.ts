@@ -197,6 +197,9 @@ export interface BoundedReadRequest {
   purpose?: "account" | "query";
   /** Awaited after the deadline and cancellation are armed, e.g. `ready()`. */
   prepare?: () => Promise<void>;
+  /** Success-body byte cap; defaults to `MAX_READ_BYTES` (1 MiB). A larger
+   * cap raises the chunk limit in proportion. Error bodies keep 1 MiB. */
+  maxBytes?: number;
 }
 function concat(chunks: Uint8Array[], size: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(size);
@@ -235,6 +238,9 @@ export async function boundedGatewayJson(
   request: BoundedReadRequest = {},
 ): Promise<unknown> {
   const { timeoutMs } = readDeadline(options);
+  const maxBytes = request.maxBytes ?? MAX_READ_BYTES;
+  const maxChunks =
+    MAX_READ_CHUNKS * Math.max(1, Math.ceil(maxBytes / MAX_READ_BYTES));
   options.signal?.throwIfAborted();
   const deadline = performance.now() + timeoutMs;
   const controller = new AbortController();
@@ -338,8 +344,7 @@ export async function boundedGatewayJson(
     const length = response.headers.get("content-length");
     if (
       length !== null &&
-      (!/^(0|[1-9][0-9]*)$/.test(length) ||
-        BigInt(length) > BigInt(MAX_READ_BYTES))
+      (!/^(0|[1-9][0-9]*)$/.test(length) || BigInt(length) > BigInt(maxBytes))
     )
       throw new GatewayReadError(
         "limit",
@@ -365,14 +370,14 @@ export async function boundedGatewayJson(
           "body",
           "Gateway read returned an empty body chunk",
         );
-      if (chunks.length >= MAX_READ_CHUNKS)
+      if (chunks.length >= maxChunks)
         throw new GatewayReadError(
           "limit",
           "chunks",
           "Gateway read exceeds fragmentation limit",
         );
       size += part.value.length;
-      if (size > MAX_READ_BYTES)
+      if (size > maxBytes)
         throw new GatewayReadError(
           "limit",
           "responseBytes",
