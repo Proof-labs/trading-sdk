@@ -9,10 +9,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking changes
 
+- **`CreateMarket` carries `tickSize` and `lotSize` (exchange#1327).** Both
+  are required `bigint`s in TypeScript (`tick_size`, `lot_size` in Python and
+  Rust), appended after `maxOpenInterest`, and the engine refuses creation when
+  either is 0. The action is now a 14-element array, in a direct
+  `CreateMarket` and inside `ProposeAdminAction`, `ApproveAdminAction` and
+  `Batch` items, so the admin-proposal content hashes change. A 12-element
+  payload from stored history still decodes, with both fields 0, but an older
+  SDK fails to decode a 14-element one (MAJOR). Pending `CreateMarket`
+  proposals must be drained or re-proposed before the engine upgrade.
+  In Python, `tick_size` and `lot_size` come before the defaulted
+  `max_open_interest`, so a positional `CreateMarket(...)` call that passed
+  `max_open_interest` by position must now name it.
+
+- **Sub-accounts are always on: `EnableSubAccounts` is removed (MAJOR).**
+  The engine dropped the sub-account switch
+  ([Proof-labs/exchange#1358](https://github.com/Proof-labs/exchange/pull/1358)),
+  so `CreateSubAccount` and `SubAccountTransfer` need no governance
+  enablement. The `{ kind: "EnableSubAccounts" }` admin action leaves the
+  `AdminAction` union and `ACTION_TAG_BY_KIND`, its inner tag 21 is retired
+  and never reassigned, and the Rust, Python and conformance mirrors drop it.
+  Error code 90 (`SubAccountsInactive`) no longer decodes in TypeScript,
+  Rust or Python and is never reassigned. The Rust crate pins a proof-wire
+  `dev` commit until the matching release.
+
 - **proof-wire for exchange F16 activation** ([Proof-labs/exchange#1328](https://github.com/Proof-labs/exchange/pull/1328),
   [Proof-labs/exchange#1345](https://github.com/Proof-labs/exchange/pull/1345)).
-  The Rust crate pins proof-wire 9 from the exchange review branch until a
-  Proof-labs/wire tag carries it. Every perp is priced by its certified
+  The Rust crate pins a proof-wire `dev` commit until the matching release. Every perp is priced by its certified
   oracle verdict, so the single-signer price actions leave the wire:
   `OracleUpdate` (0x03), `RunFundingTick` (0x12) and `OracleUpdateComposite`
   (0x14) no longer encode or decode in TypeScript, Rust or Python. Their TS
@@ -53,6 +76,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the Rust `VerdictReason` (MAJOR).
 
 ### Added
+
+- **Error codes 123-125.** `DepositLimitExceeded` (123), `EventPoolMismatch`
+  (124: `AttachConditional` names an underlying in another insurance pool than
+  the event) and `ConditionalLotOffUnderlyingGrid` (125: a lot-size change
+  would leave a conditional's lot off its underlying perpetual's lot grid).
 
 - `reads().evidence.blockResultsRange({ fromHeight, throughHeight })` reads an exact inclusive height range with the existing window decoder, caller-reducible byte, transaction, event and attribute budgets, and H+1 header binding. The span is capped by `maxHeights` (default 32; raise it up to 128 for wider ranges). Equal or sub-millisecond timestamps do not omit or add blocks; backwards timestamps still refuse. Gateway-only, trusted-gateway evidence rather than cryptographic event proof or non-admission authorization. Existing `blockResultsWindow` selection is unchanged. Additive (MINOR).
 

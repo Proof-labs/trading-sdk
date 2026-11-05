@@ -241,6 +241,8 @@ function toAction(
           poolId: input.pool_id as number,
           szDecimals: input.sz_decimals as number,
           ticker: input.ticker as string,
+          tickSize: big(input.tick_size),
+          lotSize: big(input.lot_size),
           ...(input.max_open_interest === undefined
             ? {}
             : { maxOpenInterest: big(input.max_open_interest) }),
@@ -571,6 +573,8 @@ function toCreateMarketValue(
     poolId: m.pool_id as number,
     szDecimals: m.sz_decimals as number,
     ticker: m.ticker as string,
+    tickSize: big(m.tick_size),
+    lotSize: big(m.lot_size),
     maxOpenInterest: big(m.max_open_interest),
   };
 }
@@ -663,7 +667,6 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
   // A unit variant (no fields) is serde's bare variant-name string, not a map.
   if (typeof input === "string") {
     if (input === "UnpauseBridge") return { kind: "UnpauseBridge" };
-    if (input === "EnableSubAccounts") return { kind: "EnableSubAccounts" };
     throw new Error(`toAdminAction: unknown unit variant ${input}`);
   }
   const v = input as Record<string, unknown>;
@@ -1118,7 +1121,7 @@ describe("conformance vectors (TypeScript)", () => {
     // insurance fund and withdraw),
     // approve, reject, and all three emergency arms (PauseMarket,
     // HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(32);
+    expect(govCases.length).toBe(31);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
@@ -1145,7 +1148,7 @@ describe("conformance vectors (TypeScript)", () => {
     expect((explicitZero.expect as { payload_hex: string }).payload_hex).toBe(
       expected,
     );
-    expect(expected.startsWith("9c")).toBe(true);
+    expect(expected.startsWith("9e")).toBe(true);
 
     const base = toAction(
       omitted.action_type as ActionTypeValue,

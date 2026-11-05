@@ -22,7 +22,7 @@ describe("decodeExecError", () => {
     expect(decodeExecError(255)?.name).toBe("InternalError");
   });
 
-  it("names the proof-wire 8.0.0 codes 102-116", () => {
+  it("names the proof-wire 8.0.0 codes 102-116 and 123-125", () => {
     for (const [code, name] of [
       [102, "InsuranceFundingReplayed"],
       [103, "InsuranceWithdrawalReplayed"],
@@ -38,6 +38,9 @@ describe("decodeExecError", () => {
       [114, "InsuranceActionRefused"],
       [115, "LiquidationBatchTooManyOwners"],
       [116, "LiquidationBatchOverBudget"],
+      [123, "DepositLimitExceeded"],
+      [124, "EventPoolMismatch"],
+      [125, "ConditionalLotOffUnderlyingGrid"],
     ] as const) {
       expect(decodeExecError(code)?.name).toBe(name);
       expect(execErrorName(code)).toBe(name);
@@ -170,6 +173,9 @@ describe("ExecErrorCode enum", () => {
     // 112 was InvalidPlpConfig, retired with the engine's backstop.
     expect(decodeExecError(112)).toBeNull();
     expect(execErrorName(112)).toBe("UnknownError");
+    // 90 was SubAccountsInactive, retired with the sub-account switch.
+    expect(decodeExecError(90)).toBeNull();
+    expect(execErrorName(90)).toBe("UnknownError");
     // 101 is unassigned on the wire: unknown, never a PLP fault.
     expect(decodeExecError(101)).toBeNull();
     expect(execErrorName(101)).toBe("UnknownError");

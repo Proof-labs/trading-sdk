@@ -343,6 +343,8 @@ describe("codec v1 all action types", () => {
         maxFundingRateBps: 100,
         szDecimals: 4,
         ticker: "ETH",
+        tickSize: 1n,
+        lotSize: 1n,
       },
     },
     {
@@ -610,19 +612,6 @@ describe("codec v1 all action types", () => {
     expect(decoded).toEqual(action);
   });
 
-  it("round-trips ProposeAdminAction with the EnableSubAccounts unit variant", () => {
-    const action: Action = {
-      type: "ProposeAdminAction",
-      data: {
-        proposer: new Uint8Array(20).fill(0xa1),
-        registryVersion: 1n,
-        action: { kind: "EnableSubAccounts" },
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 12n));
-    expect(decoded).toEqual(action);
-  });
-
   it("encodes an omitted, undefined, or null market identically (serde None)", () => {
     // The Rust side reads a missing Option field as None without a serde
     // default, so the adapter needs no special case: all three spellings
@@ -730,6 +719,8 @@ describe("codec v1 all action types", () => {
         poolId: 9,
         szDecimals: 4,
         ticker: "BTC",
+        tickSize: 1n,
+        lotSize: 1n,
       },
     };
 
@@ -755,6 +746,8 @@ describe("codec v1 all action types", () => {
         poolId: 9,
         szDecimals: 5,
         ticker: "BTC",
+        tickSize: 1n,
+        lotSize: 1n,
         maxOpenInterest: 1_000_000n,
       },
     };
@@ -763,7 +756,7 @@ describe("codec v1 all action types", () => {
     expect(decoded).toEqual(action);
   });
 
-  it("encodes CreateMarket to a 12-element array whatever the cap's value", () => {
+  it("encodes CreateMarket to a 14-element array whatever the cap's value", () => {
     const base: Action = {
       type: "CreateMarket",
       data: {
@@ -778,6 +771,8 @@ describe("codec v1 all action types", () => {
         poolId: 9,
         szDecimals: 5,
         ticker: "BTC",
+        tickSize: 1n,
+        lotSize: 1n,
       },
     };
     const withCap = (maxOpenInterest?: bigint | null): Action => ({
@@ -793,10 +788,10 @@ describe("codec v1 all action types", () => {
     // which re-encodes the payload from JSON before the engine verifies the
     // signature over those bytes — could produce a different length than the
     // client signed, and every such tx would fail verification. Pin the msgpack
-    // fixarray header (0x90 | n): 0x9c is a 12-element array.
+    // fixarray header (0x90 | n): 0x9e is a 14-element array.
     for (const cap of [undefined, null, 0n, 1_000_000n]) {
       const bytes = encodePayloadBytes(withCap(cap));
-      expect(bytes[0]).toBe(0x9c);
+      expect(bytes[0]).toBe(0x9e);
     }
 
     // Omission, JSON-style null, and explicit zero are the same market and
@@ -828,6 +823,8 @@ describe("codec v1 all action types", () => {
           poolId: 9,
           szDecimals: 5,
           ticker: "BTC",
+          tickSize: 1n,
+          lotSize: 1n,
           maxOpenInterest,
         },
       };
@@ -1204,6 +1201,8 @@ describe("codec v2 signing", () => {
           maxFundingRateBps: 100,
           szDecimals: 4,
           ticker: "ETH",
+          tickSize: 1n,
+          lotSize: 1n,
         },
       },
       {
@@ -1513,6 +1512,8 @@ describe("decodeSigningMessage", () => {
       maxFundingRateBps: 100,
       szDecimals: 2,
       ticker: "XYZ-PERP",
+      tickSize: 1n,
+      lotSize: 1n,
     },
   };
 
@@ -1825,6 +1826,34 @@ describe("legacy short-payload decode compatibility", () => {
       expect(action.data.postOnly).toBe(false);
       expect(action.data.reduceOnly).toBe(false);
       expect(action.data.timeInForce).toBe(TimeInForce.Gtc);
+    }
+  });
+
+  it("decodes a 12-field CreateMarket from before the grid, tick and lot 0", () => {
+    // [market, im_bps, mm_bps, taker_fee_bps, maker_fee_bps, signer,
+    //  funding_interval_ms, max_funding_rate_bps, pool_id, sz_decimals,
+    //  ticker, max_open_interest] — no tick_size / lot_size.
+    const bytes = envelope(ActionType.CreateMarket, [
+      42,
+      1000,
+      500,
+      5,
+      2,
+      OWNER,
+      60_000n,
+      100,
+      9,
+      4,
+      "BTC",
+      1_000_000n,
+    ]);
+    const { action } = decodeTx(bytes);
+    expect(action.type).toBe("CreateMarket");
+    if (action.type === "CreateMarket") {
+      expect(action.data.ticker).toBe("BTC");
+      expect(action.data.maxOpenInterest).toBe(1_000_000n);
+      expect(action.data.tickSize).toBe(0n);
+      expect(action.data.lotSize).toBe(0n);
     }
   });
 

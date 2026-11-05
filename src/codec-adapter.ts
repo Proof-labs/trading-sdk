@@ -130,10 +130,7 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
  * explicitly because a fieldless struct variant (`HaltTrading {}`) is NOT one
  * of these — it keeps the map form.
  */
-const GOVERNANCE_UNIT_VARIANTS = new Set<string>([
-  "UnpauseBridge",
-  "EnableSubAccounts",
-]);
+const GOVERNANCE_UNIT_VARIANTS = new Set<string>(["UnpauseBridge"]);
 
 /**
  * Encode a governance `AdminAction` / `EmergencyAction` for
@@ -326,7 +323,7 @@ export function toWasmFields(action: Action): {
   // core. The public TS input intentionally accepts omission/null as the
   // operator-facing spelling of "uncapped", so normalize both before crossing
   // the serde_wasm_bindgen boundary. This also makes the WASM migration path
-  // emit the same canonical 12-field payload as the current TS codec.
+  // emit the same canonical 14-field payload as the current TS codec.
   if (action.type === "CreateMarket" && fields.max_open_interest == null) {
     fields.max_open_interest = 0n;
   }

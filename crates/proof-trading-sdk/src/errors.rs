@@ -124,7 +124,7 @@ define_error_kinds! {
     77  => UnpricedNoVerdict                ~ "The oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed); mark-dependent actions are refused until a later block certifies a price.",
     // 78-81 are reserved on the wire for oracle-policy errors.
     82  => UnpricedGuardUnset               ~ "The oracle-guard gate is active and this market has no mark-price max oracle age set; every mark-dependent action is refused until governance sets one.",
-    // Sub-accounts (dormant behind their activation).
+    // Sub-accounts.
     83  => SubAccountNotFound               ~ "No sub-account exists for the given master and id.",
     84  => SubAccountAlreadyExists          ~ "A sub-account with this master and id already exists.",
     85  => SubAccountTransferSameAccount    ~ "Sub-account transfer with from equal to to is a no-op and is rejected.",
@@ -132,7 +132,8 @@ define_error_kinds! {
     87  => SubAccountTransferInsufficientBalance ~ "The source sub-account balance is below the transfer amount.",
     88  => SubAccountIdZero                 ~ "Sub-account id zero is not a valid id.",
     89  => SubAccountTransferZeroAmount     ~ "A sub-account transfer amount must be greater than zero.",
-    90  => SubAccountsInactive              ~ "Sub-account actions decode on this wire version but the chain has not enabled them yet; submissions before the activation fail closed.",
+    // 90 was SubAccountsInactive, retired with the engine's sub-account switch
+    // (sub-accounts are always on); never reassigned.
     91  => WithdrawalPayoutLeaseActive      ~ "A live Solana payout lease on this withdrawal is held by a different watcher, so this ClaimWithdrawalPayout is rejected; the rejected claimer must not sign a payout.",
     // Events and attached conditionals.
     92  => EventAlreadyExists               ~ "CreateEvent for an event id already in the registry.",
@@ -161,6 +162,9 @@ define_error_kinds! {
     114 => InsuranceActionRefused ~ "Governed insurance action is undecodable, not canonical, not permitted for an insurance account, or not owned by the pool's insurance account.",
     115 => LiquidationBatchTooManyOwners ~ "LiquidateAccounts names more owners than one batch may; split the owners across batches.",
     116 => LiquidationBatchOverBudget ~ "The owners a LiquidateAccounts batch names hold more positions together than its position budget; the batch is refused whole, so name fewer owners.",
+    123 => DepositLimitExceeded ~ "The ConfirmDeposit or Deposit would credit more than the governance-set deposit limits allow: either the per-deposit maximum, or the protocol-wide cap on deposits credited inside the rolling window.",
+    124 => EventPoolMismatch ~ "AttachConditional names an underlying whose insurance pool differs from the event's; an event and its conditionals share one pool.",
+    125 => ConditionalLotOffUnderlyingGrid ~ "A lot_size change would leave an unresolved event's conditional lot not a multiple of its underlying perpetual's lot.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -433,7 +437,6 @@ mod exec_error_meaning_tests {
             ExecError::SubAccountTransferInsufficientBalance,
             ExecError::SubAccountIdZero,
             ExecError::SubAccountTransferZeroAmount,
-            ExecError::SubAccountsInactive,
             ExecError::WithdrawalPayoutLeaseActive,
             ExecError::EventAlreadyExists(crate::types::EventId(0)),
             ExecError::EventNotFound(crate::types::EventId(0)),
@@ -546,17 +549,18 @@ mod exec_error_meaning_tests {
     /// Every engine code must be covered by the public error manifest, with
     /// the holes the wire itself carries: 24, 25 and 31 (the retired
     /// impact-market family), 30, 36 and 41 (retired with OracleUpdate and
-    /// RunFundingTick), 78-81 (reserved for oracle errors), 101
-    /// (unassigned) and 112 (the retired PLP configuration). Catches
-    /// the case where a code is reserved by the mirrored engine error enum
-    /// but no SDK classification maps to it.
+    /// RunFundingTick), 78-81 (reserved for oracle errors), 90 (the retired
+    /// sub-account switch), 101 (unassigned), 112 (the retired PLP
+    /// configuration) and 117-122 (claimed elsewhere, unassigned on the wire).
+    /// Catches the case where a code is reserved by the mirrored engine error
+    /// enum but no SDK classification maps to it.
     #[test]
     fn no_code_holes_in_documented_range() {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=116)
-            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 101 | 112))
+        let expected: Vec<u32> = (1u32..=125)
+            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(

@@ -252,7 +252,8 @@ mod tests {
             "market": 42, "im_bps": 1000, "mm_bps": 500, "taker_fee_bps": 5,
             "maker_fee_bps": 2, "signer": vec![0u8; 20], "funding_interval_ms": 60000u64,
             "max_funding_rate_bps": 100, "pool_id": 0, "sz_decimals": 0,
-            "ticker": ticker, "max_open_interest": 0u64
+            "ticker": ticker, "max_open_interest": 0u64,
+            "tick_size": 1u64, "lot_size": 1u64
         })
     }
 

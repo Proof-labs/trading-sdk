@@ -148,7 +148,8 @@ export enum ExecErrorCode {
   SubAccountTransferInsufficientBalance = 87,
   SubAccountIdZero = 88,
   SubAccountTransferZeroAmount = 89,
-  SubAccountsInactive = 90,
+  // 90 was SubAccountsInactive, retired with the engine's sub-account switch
+  // (sub-accounts are always on); never reassigned.
   WithdrawalPayoutLeaseActive = 91,
   EventAlreadyExists = 92,
   EventNotFound = 93,
@@ -184,6 +185,9 @@ export enum ExecErrorCode {
   InsuranceActionRefused = 114,
   LiquidationBatchTooManyOwners = 115,
   LiquidationBatchOverBudget = 116,
+  DepositLimitExceeded = 123,
+  EventPoolMismatch = 124,
+  ConditionalLotOffUnderlyingGrid = 125,
   InternalError = 255,
 }
 
@@ -509,11 +513,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "SubAccountTransferZeroAmount",
     description: "sub-account transfer amount must be greater than zero",
   },
-  90: {
-    name: "SubAccountsInactive",
-    description:
-      "sub-account actions decode but the chain has not enabled them yet",
-  },
   91: {
     name: "WithdrawalPayoutLeaseActive",
     description:
@@ -620,6 +619,21 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "LiquidationBatchOverBudget",
     description:
       "The owners a LiquidateAccounts batch names hold more positions together than its position budget; the batch is refused whole, so name fewer owners.",
+  },
+  123: {
+    name: "DepositLimitExceeded",
+    description:
+      "The ConfirmDeposit or Deposit would credit more than the governance-set deposit limits allow: either the per-deposit maximum, or the protocol-wide cap on deposits credited inside the rolling window.",
+  },
+  124: {
+    name: "EventPoolMismatch",
+    description:
+      "AttachConditional names an underlying whose insurance pool differs from the event's; an event and its conditionals share one pool.",
+  },
+  125: {
+    name: "ConditionalLotOffUnderlyingGrid",
+    description:
+      "A lot_size change would leave an unresolved event's conditional lot not a multiple of its underlying perpetual's lot.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

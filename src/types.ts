@@ -75,12 +75,9 @@ export const ActionType = {
   RevokeAgent: 0x0d,
   /** Resolve an event with a YES/NO outcome (0x27). */
   ResolveEvent: 0x27,
-  /** Create a derived sub-account under the signing master (0x28). Refused
-   *  as `SubAccountsInactive` until a governed `EnableSubAccounts` proposal
-   *  executes. */
+  /** Create a derived sub-account under the signing master (0x28). */
   CreateSubAccount: 0x28,
-  /** Move balance between a master and one of its sub-accounts (0x29);
-   *  refused like `CreateSubAccount`. */
+  /** Move balance between a master and one of its sub-accounts (0x29). */
   SubAccountTransfer: 0x29,
   /** Acquire the single-holder Solana payout lease on a pending withdrawal
    *  (0x2e). Custody-authorized watchers only. */
@@ -339,10 +336,20 @@ export interface CreateMarket {
   ticker: string;
   /**
    * Aggregate market open-interest cap in contracts. Omitted, null, and 0 all
-   * mean uncapped and encode identically as the canonical 12-field payload
-   * with an explicit 0 tail. Legacy 11-field payloads still decode as 0n.
+   * mean uncapped and encode identically as the canonical 14-field payload
+   * with an explicit 0 cap. Legacy 11-field payloads still decode as 0n.
    */
   maxOpenInterest?: bigint | null;
+  /**
+   * Price grid in micro-USDC: order prices must be multiples of it. MANDATORY
+   * and non-zero; the engine refuses creation with 0.
+   */
+  tickSize: bigint;
+  /**
+   * Quantity grid in contracts: order quantities must be multiples of it.
+   * MANDATORY and non-zero; the engine refuses creation with 0.
+   */
+  lotSize: bigint;
 }
 
 /** User requests a USDC withdrawal to a Solana address. Debits balance immediately. */
@@ -1235,8 +1242,6 @@ export type AdminAction =
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
-  // Unit variant; one-way switch that admits the sub-account actions.
-  | { kind: "EnableSubAccounts" }
   | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet }
   | { kind: "ScheduleUpgrade"; value: ScheduleUpgrade }
   | { kind: "CancelUpgrade"; value: CancelUpgrade };

@@ -22,9 +22,11 @@ serde_bytes = "0.11"
 rmp-serde = "1"
 rmpv = { version = "1.3.1", features = ["with-serde"] }
 # The wire contract, one definition shared with the engine. `version` pins
-# the compatible proof-wire major. Review pin on exchange#1345 until a
-# Proof-labs/wire tag carries it; released pins are a commit sha (#123).
-proof-wire = { version = "9", git = "https://github.com/Proof-labs/exchange.git", branch = "GH961/refactor/f16-hot-swap-activation", features = ["bridge"] }
+# the compatible proof-wire major. The rev stays a commit sha, never a tag
+# name, so the pin cannot move (#123).
+# Review pin: replace with the released proof-wire tag before merge. This is
+# wire dev, carrying exchange#1358, exchange#1327 and exchange#1345.
+proof-wire = { version = "9", git = "https://github.com/Proof-labs/wire.git", rev = "516e5c60901f8e56609aeac57897aa4229f94835", features = ["bridge"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.
