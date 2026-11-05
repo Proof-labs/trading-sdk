@@ -7,6 +7,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Decoded reads for the trade tape, funding payments and account events**
+  ([Proof-labs/proof-market-maker#685](https://github.com/Proof-labs/proof-market-maker/issues/685)).
+  `queryRecentTrades(market, { limit })` reads the node's in-memory tape
+  (`GET /v1/trades/{market}`, newest first, at most 500);
+  `queryHistoryFundingPayments(owner?, { market, fromMs, toMs, limit, cursor })`
+  reads one page of indexed `funding_settled` payments; and
+  `queryHistoryAccountEventsPage(owner, { order, eventType, fromMs, toMs, limit, cursor })`
+  reads one page of indexed account events. Each validates every row and
+  keeps prices, quantities, fees and payments as `bigint`; owner reads use the
+  `urgent` account lane.
+
 ## [10.1.0] — 2026-11-05
 
 TypeScript MINOR release: two optional client options for callers that sign,

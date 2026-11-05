@@ -37,6 +37,23 @@ import {
   historySearchParams,
 } from "./history.js";
 import {
+  accountEventsParams,
+  decodeAccountEventsPage,
+  decodeFundingPaymentsPage,
+  fundingPaymentsSearchParams,
+  type AccountEventsOptions,
+  type AccountEventsPage,
+  type FundingPaymentsOptions,
+  type FundingPaymentsPage,
+} from "./account-history.js";
+import {
+  decodeRecentTrades,
+  recentTradesLimit,
+  type RecentTrade,
+  type RecentTradesOptions,
+} from "./recent-trades.js";
+import { boundedGatewayJson } from "./bounded-read.js";
+import {
   decodeLiquidationHistoryPage,
   liquidationHistorySearchParams,
   type LiquidationHistoryFilters,
@@ -2259,6 +2276,69 @@ export class ExchangeClient {
       })),
       nextCursor: String(body.next_cursor ?? ""),
     };
+  }
+
+  /** One market's recent trade tape, newest first (`GET /v1/trades/{market}`),
+   * from the serving node's in-memory buffer of its last 500 fills. The tape
+   * starts empty after a node restart and is not complete history; use
+   * `reads().tradeHistoryPage` for the indexed record. */
+  async queryRecentTrades(
+    market: number,
+    opts: RecentTradesOptions = {},
+  ): Promise<RecentTrade[]> {
+    const captured = { ...opts };
+    const limit = recentTradesLimit(market, captured);
+    const body = await boundedGatewayJson(
+      `${this.readBaseUrl}/v1/trades/${market}?limit=${limit}`,
+      this.httpTransport,
+      captured,
+    );
+    return decodeRecentTrades(body, market, captured);
+  }
+
+  /** One newest-first page of an owner's funding payments
+   * (`GET /v1/history/funding-payments/{owner}`, the indexed
+   * `funding_settled` events). Keep filters fixed when passing `nextCursor`
+   * back as `opts.cursor`. Omitting `addressHex` with no bound key yields an
+   * empty page, like the other history queries. */
+  async queryHistoryFundingPayments(
+    addressHex?: string,
+    opts: FundingPaymentsOptions = {},
+  ): Promise<FundingPaymentsPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return { payments: [] };
+    const owner = historyOwner(hex);
+    const captured = { ...opts };
+    const params = fundingPaymentsSearchParams(owner, captured);
+    const body = await boundedGatewayJson(
+      `${this.gatewayUrl}/v1/history/funding-payments/${owner}?${params}`,
+      this.httpTransport,
+      captured,
+      { purpose: "account" },
+    );
+    return decodeFundingPaymentsPage(body, owner, captured);
+  }
+
+  /** One page of an owner's indexed account events
+   * (`GET /v1/history/account-events`) in the stated order, optionally one
+   * event type. Keep filters fixed when passing `nextCursor` back as
+   * `opts.cursor`. Omitting `addressHex` with no bound key yields an empty
+   * page. */
+  async queryHistoryAccountEventsPage(
+    addressHex: string | undefined,
+    opts: AccountEventsOptions,
+  ): Promise<AccountEventsPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return { events: [] };
+    const owner = historyOwner(hex);
+    const captured = { ...opts };
+    const res = await this.reads().accountEvents(
+      accountEventsParams(owner, captured),
+      { signal: captured.signal },
+    );
+    const body: unknown = await res.json();
+    captured.signal?.throwIfAborted();
+    return decodeAccountEventsPage(body, owner, captured);
   }
 
   // -----------------------------------------------------------------------

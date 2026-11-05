@@ -50,6 +50,15 @@ export {
   type TradeHistoryOptions,
   type TradeHistoryPage,
 } from "./trade-history.js";
+export { type RecentTrade, type RecentTradesOptions } from "./recent-trades.js";
+export {
+  type AccountEvent,
+  type AccountEventsOptions,
+  type AccountEventsPage,
+  type FundingPayment,
+  type FundingPaymentsOptions,
+  type FundingPaymentsPage,
+} from "./account-history.js";
 export {
   type Address,
   Side,
