@@ -7,6 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Exact-byte callers: a nonce floor on `signTx` and the action on byte-level
+  sends** ([Proof-labs/proof-market-maker#666](https://github.com/Proof-labs/proof-market-maker/issues/666)).
+  `signTx(action, { minimumNonceExclusive })` signs with a nonce strictly
+  above a caller-held floor, such as bytes a process stored durably before a
+  restart, and refuses a floor more than 60 seconds ahead of the clock.
+  `submitSignedTx`, `submitSignedTxCommit` and `waitForDelivery` take an
+  optional `action`, used only to label the transport requests, so a
+  pre-signed cancellation and its confirmation polls keep their `urgent`
+  priority. Both are optional; existing calls are unchanged.
+
 ## [10.0.0] — 2026-11-05
 
 TypeScript MAJOR release for proof-wire 10.0.0 (exchange 2.23.0 / protocol 11.0):
