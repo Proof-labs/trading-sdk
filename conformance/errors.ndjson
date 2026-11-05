@@ -25,17 +25,14 @@
 {"case":"manifest/27","code":27,"log":null,"expect":{"name":"BinaryPriceOutOfRange"}}
 {"case":"manifest/28","code":28,"log":null,"expect":{"name":"InvalidResolution"}}
 {"case":"manifest/29","code":29,"log":null,"expect":{"name":"PositionLimitExceeded"}}
-{"case":"manifest/30","code":30,"log":null,"expect":{"name":"OracleTimestampNotMonotonic"}}
 {"case":"manifest/32","code":32,"log":null,"expect":{"name":"SettlementPriceMismatch"}}
 {"case":"manifest/33","code":33,"log":null,"expect":{"name":"OracleNotApplicable"}}
 {"case":"manifest/34","code":34,"log":null,"expect":{"name":"PostOnlyWouldCross"}}
 {"case":"manifest/35","code":35,"log":null,"expect":{"name":"ReduceOnlyWouldIncrease"}}
-{"case":"manifest/36","code":36,"log":null,"expect":{"name":"TestActionRejected"}}
-{"case":"manifest/37","code":37,"log":null,"expect":{"name":"StaleOracle"}}
+{"case":"manifest/37","code":37,"log":null,"expect":{"name":"UnpricedStale"}}
 {"case":"manifest/38","code":38,"log":null,"expect":{"name":"UserLeverageBelowMarketIm"}}
 {"case":"manifest/39","code":39,"log":null,"expect":{"name":"TickSizeViolation"}}
 {"case":"manifest/40","code":40,"log":null,"expect":{"name":"LotSizeViolation"}}
-{"case":"manifest/41","code":41,"log":null,"expect":{"name":"OracleStaleNotElapsed"}}
 {"case":"manifest/42","code":42,"log":null,"expect":{"name":"FeeBpsOutOfRange"}}
 {"case":"manifest/43","code":43,"log":null,"expect":{"name":"FeeOverrideStaleSeq"}}
 {"case":"manifest/44","code":44,"log":null,"expect":{"name":"ClientOrderIdNotFound"}}
@@ -71,8 +68,8 @@
 {"case":"manifest/74","code":74,"log":null,"expect":{"name":"BridgeReceiptMismatch"}}
 {"case":"manifest/75","code":75,"log":null,"expect":{"name":"WithdrawalBelowMinimum"}}
 {"case":"manifest/76","code":76,"log":null,"expect":{"name":"WithdrawalTerminalGated"}}
-{"case":"manifest/77","code":77,"log":null,"expect":{"name":"OracleVerdictUnavailable"}}
-{"case":"manifest/82","code":82,"log":null,"expect":{"name":"OracleGuardUnset"}}
+{"case":"manifest/77","code":77,"log":null,"expect":{"name":"UnpricedNoVerdict"}}
+{"case":"manifest/82","code":82,"log":null,"expect":{"name":"UnpricedGuardUnset"}}
 {"case":"manifest/83","code":83,"log":null,"expect":{"name":"SubAccountNotFound"}}
 {"case":"manifest/84","code":84,"log":null,"expect":{"name":"SubAccountAlreadyExists"}}
 {"case":"manifest/85","code":85,"log":null,"expect":{"name":"SubAccountTransferSameAccount"}}
@@ -80,14 +77,13 @@
 {"case":"manifest/87","code":87,"log":null,"expect":{"name":"SubAccountTransferInsufficientBalance"}}
 {"case":"manifest/88","code":88,"log":null,"expect":{"name":"SubAccountIdZero"}}
 {"case":"manifest/89","code":89,"log":null,"expect":{"name":"SubAccountTransferZeroAmount"}}
-{"case":"manifest/90","code":90,"log":null,"expect":{"name":"SubAccountsInactive"}}
 {"case":"manifest/91","code":91,"log":null,"expect":{"name":"WithdrawalPayoutLeaseActive"}}
 {"case":"manifest/92","code":92,"log":null,"expect":{"name":"EventAlreadyExists"}}
 {"case":"manifest/93","code":93,"log":null,"expect":{"name":"EventNotFound"}}
 {"case":"manifest/94","code":94,"log":null,"expect":{"name":"UnderlyingAlreadyAttached"}}
 {"case":"manifest/95","code":95,"log":null,"expect":{"name":"TooManyAttachedConditionals"}}
 {"case":"manifest/96","code":96,"log":null,"expect":{"name":"TooManyActiveEvents"}}
-{"case":"manifest/97","code":97,"log":null,"expect":{"name":"MarkUnavailable"}}
+{"case":"manifest/97","code":97,"log":null,"expect":{"name":"UnpricedNoMark"}}
 {"case":"manifest/98","code":98,"log":null,"expect":{"name":"TriggerOrderIncompatible"}}
 {"case":"manifest/99","code":99,"log":null,"expect":{"name":"WithdrawalLimitExceeded"}}
 {"case":"manifest/100","code":100,"log":null,"expect":{"name":"AccountOrderCapReached"}}
@@ -105,6 +101,9 @@
 {"case":"manifest/114","code":114,"log":null,"expect":{"name":"InsuranceActionRefused"}}
 {"case":"manifest/115","code":115,"log":null,"expect":{"name":"LiquidationBatchTooManyOwners"}}
 {"case":"manifest/116","code":116,"log":null,"expect":{"name":"LiquidationBatchOverBudget"}}
+{"case":"manifest/123","code":123,"log":null,"expect":{"name":"DepositLimitExceeded"}}
+{"case":"manifest/124","code":124,"log":null,"expect":{"name":"EventPoolMismatch"}}
+{"case":"manifest/125","code":125,"log":null,"expect":{"name":"ConditionalLotOffUnderlyingGrid"}}
 {"case":"manifest/255","code":255,"log":null,"expect":{"name":"InternalError"}}
 {"case":"code50/oi_log","code":50,"log":"open interest limit exceeded on market 7: would be 4, cap 3","expect":{"name":"OpenInterestLimitExceeded"}}
 {"case":"code50/slippage_log","code":50,"log":"atomic basket aggregate slippage 51 bps exceeds budget 50 bps","expect":{"name":"SlippageExceeded"}}

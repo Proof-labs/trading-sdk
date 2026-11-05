@@ -4,103 +4,84 @@
  * The 2025 Hyperliquid JELLY incident: a single concentrated long
  * position on a low-liquidity perp blew up when the oracle dropped
  * 80%, triggering a cascading liquidation that exhausted the
- * insurance fund. Hyperliquid's protocol-owned market maker
- * (Hyperliquid's HLP) was forced to inherit the stuck position,
- * taking a $10M+ unrealized loss while quoting downward for hours.
+ * insurance fund. Hyperliquid's protocol-owned market maker was
+ * forced to inherit the stuck position, taking a $10M+ unrealized
+ * loss while quoting downward for hours.
  *
- * This scenario replays the shape — single whale, thin book, sharp
- * adverse move — against Proof's four-tier waterfall to verify:
+ * This scenario replays the shape (single whale, thin book, sharp
+ * adverse move) on a perp created for it and verifies that:
  *
- *   1. Pre-liquidation per-account position cap rejected the
- *      whale's escalation BEFORE the position grew large enough
- *      to trigger the cascade. (Proof's `MarketConfig.max_position_size`
- *      is the structural fix Hyperliquid lacked.)
- *   2. If the cap were disabled or the position grew within it,
- *      the four-tier waterfall (Proof liquidity provider (PLP) → IF →
- *      socialized → ADL) absorbs the bad debt cleanly without forcing
- *      the PLP to hold inherited positions.
- *   3. No trader account left underwater post-event.
+ *   1. The whale is liquidated: its position is closed.
+ *   2. No trader account, and not the MM, is left underwater.
  *
  * Catalog: ProofOfBrain vault, testing/exchange-test-scenarios.md — "SDK-suite scenarios" section (SDK21).
  *
- * Runs only when `RPC_URL`, `RELAYER_PRIVATE_KEY`, and
- * `ORACLE_PRIVATE_KEY` are set.
+ * Runs only when the live-stack environment in the README is set.
  */
 import { describe, it, beforeAll, expect } from "vitest";
-import { seedWorld, BTC_PERP, type World } from "./harness.js";
+import {
+  canCreatePerps,
+  envWorldOptions,
+  seedWorld,
+  type Perp,
+  type World,
+} from "./harness.js";
+import { invariants } from "./invariants.js";
 
-const RPC_URL = process.env.RPC_URL;
-const RELAYER_PRIVATE_KEY = process.env.RELAYER_PRIVATE_KEY;
-const ORACLE_PRIVATE_KEY = process.env.ORACLE_PRIVATE_KEY;
+const describeScenario = canCreatePerps() ? describe : describe.skip;
 
-const describeScenario =
-  RPC_URL && RELAYER_PRIVATE_KEY && ORACLE_PRIVATE_KEY
-    ? describe
-    : describe.skip;
+const ENTRY = 50_000_000_000n; // $50k
+const CRASH = 10_000_000_000n; // -80%
+const WINNERS = ["winner1", "winner2", "winner3"] as const;
 
 describeScenario("SDK21: JELLY-shape blowout absorbed by waterfall", () => {
   let w: World;
+  let perp: Perp;
 
   beforeAll(async () => {
     w = await seedWorld({
-      relayerPrivateKey: RELAYER_PRIVATE_KEY,
-      oraclePrivateKey: ORACLE_PRIVATE_KEY,
-      users: ["whale", "mm", "winner1", "winner2", "winner3"],
-      seedBalance: 1_000_000_000_000n, // $1M each — large enough for the replay
+      ...envWorldOptions(),
+      users: ["whale", "mm", ...WINNERS],
+      seedBalance: 1_000_000_000_000n, // $1M each
     });
+    perp = await w.createPerp(
+      { imBps: 1000, mmBps: 500, szDecimals: 5 },
+      ENTRY,
+    );
   }, 60_000);
 
   it("absorbs an 80% oracle drop on a concentrated whale long", async () => {
-    // Anchor the oracle at $50k.
-    const entry = 50_000_000_000n;
-    await w.pushOracle(BTC_PERP, entry);
+    const { market } = perp;
+    // $5M notional on $1M: 5x, inside the 10x IM limit.
+    const whaleQty = perp.quantityFor(5_000_000_000_000n, ENTRY);
+    await w.users.whale!.limitBuy(market, whaleQty, ENTRY);
+    await w.users.mm!.limitSell(market, whaleQty, ENTRY);
+    expect(await w.position("whale", market)).toBe(whaleQty);
+    expect(await w.position("mm", market)).toBe(-whaleQty);
 
-    // Whale opens a 100-contract long at $50k (so $5M notional).
-    // MM crosses with the symmetric short.
-    const qty = 100n;
-    await w.whale.limitBuy(BTC_PERP, qty, entry);
-    await w.mm.limitSell(BTC_PERP, qty, entry);
-
-    expect(await w.position("whale", BTC_PERP)).toBe(qty);
-    expect(await w.position("mm", BTC_PERP)).toBe(-qty);
-
-    // Three "winner" accounts open profitable shorts at the same price
-    // so they appear in the ADL queue with positive uPnL once the
-    // oracle drops. They each go short 5 contracts.
-    for (const name of ["winner1", "winner2", "winner3"] as const) {
-      await w.users[name]!.limitSell(BTC_PERP, 5n, entry);
+    // Three winners short $250k each; the MM buys their side.
+    const winnerQty = perp.quantityFor(250_000_000_000n, ENTRY);
+    for (const name of WINNERS) {
+      await w.users[name]!.limitSell(market, winnerQty, ENTRY);
     }
-    // MM crosses by buying 15 contracts at the same price.
-    await w.mm.limitBuy(BTC_PERP, 15n, entry);
+    await w.users.mm!.limitBuy(market, winnerQty * 3n, ENTRY);
+    for (const name of WINNERS) {
+      expect(await w.position(name, market)).toBe(-winnerQty);
+    }
 
-    // 80% oracle drop — JELLY-style.
-    await w.pushOracle(BTC_PERP, 10_000_000_000n);
-    await w.waitOneBlock();
-    await w.waitOneBlock();
-    await w.waitOneBlock();
+    await w.pushOracle(market, CRASH);
+    await w.untilFlat(["whale"], market);
 
-    // Whale should be flat (liquidated by sweep).
-    expect(await w.position("whale", BTC_PERP)).toBe(0n);
-
-    // No trader-side account underwater (winners profited; whale's
-    // realised loss was absorbed via the waterfall).
-    for (const name of ["whale", "winner1", "winner2", "winner3"] as const) {
+    expect(await w.position("whale", market)).toBe(0n);
+    for (const name of ["whale", "mm", ...WINNERS]) {
       const acct = await w.account(name);
-      expect(acct).not.toBeNull();
-      if (acct)
-        expect(
-          acct.equity,
-          `${name} must not be underwater`,
-        ).toBeGreaterThanOrEqual(0n);
+      expect(acct, `${name} account`).not.toBeNull();
+      expect(
+        acct!.equity,
+        `${name} must not be underwater`,
+      ).toBeGreaterThanOrEqual(0n);
     }
 
-    // The MM (which inherited part of the whale's bad fill via the
-    // symmetric short) should also be solvent — Proof doesn't force
-    // the MM to hold inherited positions like Hyperliquid did.
-    const mmAcct = await w.account("mm");
-    expect(mmAcct).not.toBeNull();
-    if (mmAcct) {
-      expect(mmAcct.equity).toBeGreaterThanOrEqual(0n);
-    }
+    await invariants(w);
   }, 120_000);
 });

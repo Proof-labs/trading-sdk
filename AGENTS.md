@@ -267,9 +267,9 @@ await client.submitTx({
 ## Operator actions (privileged — not for trading integrations)
 
 **If you are building a trading integration, stop here — you never need this
-section.** The actions below are operator infrastructure (oracle relay,
-composite-CEX feeder, relayer/admin). Each is gated by a dedicated engine
-allowlist; a trader's signer is rejected, so they grant nothing without an
+section.** The actions below are operator infrastructure (oracle feeder,
+relayer/admin). Each is gated by a dedicated engine allowlist or the market's
+oracle policy; a trader's signer is rejected, so they grant nothing without an
 operator-provisioned key. They live in the public SDK so operator tooling needs
 no second SDK.
 
@@ -283,36 +283,7 @@ const order: TraderAction = { type: "PlaceOrder", data: {/* … */} };
 await client.submitTx(order); // submitTx still accepts the full Action union
 ```
 
-`OracleUpdateComposite` (0x14) — submit a composite-CEX price for the
-multi-source mark-price median (BE-31 Phase B). Requires a signer on the
-engine's **CEX-composite feeder allowlist** (a separate trust domain from the
-oracle relay). A market only consults the composite once an operator flips it to
-`Median` via `UpdateMarketFees` (`markSourceMode: 1`).
-
-```typescript
-await client.submitTx({
-  type: "OracleUpdateComposite",
-  data: {
-    market: 1,
-    price: 66_750_000_000n, // composite price in micro-USDC ($66,750)
-    nSources: 4, // # of CEX feeds (observability only)
-    signer: feederAddress, // on the composite-feeder allowlist
-    publishTimeMs: BigInt(Date.now()), // strictly monotonic per market
-  },
-});
-```
-
-Python (typed builder):
-
-```python
-from proof_trading_sdk import OracleUpdateComposite
-client.submit_tx(OracleUpdateComposite(
-    market=1, price=66_750_000_000, signer=feeder_addr, n_sources=4,  # micro-USDC ($66,750)
-    publish_time_ms=now_ms,
-))
-```
-
-Other operator actions (`OracleUpdate`, `CreateMarket`, `UpdateMarketFees`,
+Operator actions (`SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,
 `ConfirmDeposit`/`ConfirmWithdrawal`/`FailWithdrawal`, `Deposit`/`Withdraw`,
 `ResolveEvent`, `ClaimWithdrawalPayout`) are in `OperatorAction`; the Python SDK
 exposes them via typed builders where present or `RawAction` otherwise. See

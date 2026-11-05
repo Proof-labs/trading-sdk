@@ -16,10 +16,10 @@ import { BTC_PERP, ETH_PERP } from "./harness.js";
  * at the end of each `it(...)` block.
  */
 export async function invariants(w: World): Promise<void> {
-  await orderbookNotCrossed(w, BTC_PERP);
-  await orderbookNotCrossed(w, ETH_PERP);
-  await positionSymmetry(w, BTC_PERP);
-  await positionSymmetry(w, ETH_PERP);
+  for (const market of [BTC_PERP, ETH_PERP, ...w.markets]) {
+    await orderbookNotCrossed(w, market);
+    await positionSymmetry(w, market);
+  }
   await noNegativeEquity(w);
   // Balance conservation would need a per-scenario baseline snapshot.
   // Add once the harness records starting deposits.
@@ -42,17 +42,14 @@ async function orderbookNotCrossed(w: World, market: number): Promise<void> {
 }
 
 /**
- * Signed position sizes across all seeded users must sum to zero on every
- * market. Every contract long has a corresponding short; a non-zero sum
- * implies phantom contracts were minted or burned by the matcher.
- *
- * Caveats:
- *   - Only holds when liquidity providers and takers are all in `w.users`.
- *     If a scenario introduces off-book counterparties, skip this check
- *     or adjust the expected sum.
+ * Signed position sizes across all seeded users and the market's insurance
+ * fund must sum to zero on every market. Every contract long has a
+ * corresponding short; a non-zero sum implies phantom contracts were minted
+ * or burned. The fund counts because a liquidation's takeover moves the
+ * positions no counterparty took into it.
  */
 async function positionSymmetry(w: World, market: number): Promise<void> {
-  let sum = 0n;
+  let sum = await w.positionOf(await w.insuranceFund(market), market);
   for (const name of Object.keys(w.users)) {
     sum += await w.position(name, market);
   }

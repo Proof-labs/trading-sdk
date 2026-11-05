@@ -276,6 +276,8 @@ class TestEngineParityActions:
                 "ticker": "BTC",
                 "pool_id": 9,
                 "max_open_interest": 1_000_000,
+                "tick_size": 1_000,
+                "lot_size": 100,
             },
         )
         action_type, payload = pts.encode_action(action)
@@ -285,6 +287,8 @@ class TestEngineParityActions:
         assert decoded["ticker"] == "BTC"
         assert decoded["pool_id"] == 9
         assert decoded["max_open_interest"] == 1_000_000
+        assert decoded["tick_size"] == 1_000
+        assert decoded["lot_size"] == 100
 
     @staticmethod
     def _market(ticker: str) -> dict:
@@ -301,6 +305,8 @@ class TestEngineParityActions:
             "ticker": ticker,
             "pool_id": 0,
             "max_open_interest": 0,
+            "tick_size": 1,
+            "lot_size": 1,
         }
 
     def _market_creations(self, ticker: str) -> list[tuple[str, int, dict]]:

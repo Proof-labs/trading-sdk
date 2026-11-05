@@ -22,7 +22,7 @@ describe("decodeExecError", () => {
     expect(decodeExecError(255)?.name).toBe("InternalError");
   });
 
-  it("names the proof-wire 8.0.0 codes 102-116", () => {
+  it("names the proof-wire 8.0.0 codes 102-116 and 123-125", () => {
     for (const [code, name] of [
       [102, "InsuranceFundingReplayed"],
       [103, "InsuranceWithdrawalReplayed"],
@@ -38,6 +38,9 @@ describe("decodeExecError", () => {
       [114, "InsuranceActionRefused"],
       [115, "LiquidationBatchTooManyOwners"],
       [116, "LiquidationBatchOverBudget"],
+      [123, "DepositLimitExceeded"],
+      [124, "EventPoolMismatch"],
+      [125, "ConditionalLotOffUnderlyingGrid"],
     ] as const) {
       expect(decodeExecError(code)?.name).toBe(name);
       expect(execErrorName(code)).toBe(name);
@@ -56,11 +59,22 @@ describe("decodeExecError", () => {
   });
 
   it("decodes the unavailable-mark rejection (97)", () => {
-    expect(ExecErrorCode.MarkUnavailable).toBe(97);
+    expect(ExecErrorCode.UnpricedNoMark).toBe(97);
     const e97 = decodeExecError(97);
-    expect(e97?.name).toBe("MarkUnavailable");
+    expect(e97?.name).toBe("UnpricedNoMark");
     expect(e97?.description).toContain("no mark price");
-    expect(execErrorName(97)).toBe("MarkUnavailable");
+    expect(execErrorName(97)).toBe("UnpricedNoMark");
+  });
+
+  it("keeps each unpriced reason on its own code", () => {
+    expect([37, 77, 82, 97].map((code) => execErrorName(code))).toEqual([
+      "UnpricedStale",
+      "UnpricedNoVerdict",
+      "UnpricedGuardUnset",
+      "UnpricedNoMark",
+    ]);
+    expect(decodeExecError(37)?.description).toContain("stale");
+    expect(decodeExecError(82)?.description).toContain("max oracle age");
   });
 
   it("decodes the F2 trigger-order incompatibility (98)", () => {
@@ -150,7 +164,7 @@ describe("ExecErrorCode enum", () => {
   });
 
   it("pins the newly mirrored engine codes (77, 99, 100)", () => {
-    expect(ExecErrorCode.OracleVerdictUnavailable).toBe(77);
+    expect(ExecErrorCode.UnpricedNoVerdict).toBe(77);
     expect(ExecErrorCode.WithdrawalLimitExceeded).toBe(99);
     expect(ExecErrorCode.AccountOrderCapReached).toBe(100);
   });
@@ -159,11 +173,21 @@ describe("ExecErrorCode enum", () => {
     // 112 was InvalidPlpConfig, retired with the engine's backstop.
     expect(decodeExecError(112)).toBeNull();
     expect(execErrorName(112)).toBe("UnknownError");
+    // 90 was SubAccountsInactive, retired with the sub-account switch.
+    expect(decodeExecError(90)).toBeNull();
+    expect(execErrorName(90)).toBe("UnknownError");
     // 101 is unassigned on the wire: unknown, never a PLP fault.
     expect(decodeExecError(101)).toBeNull();
     expect(execErrorName(101)).toBe("UnknownError");
     expect(decodeExecError(100)?.name).toBe("AccountOrderCapReached");
     expect(decodeExecError(99)?.name).toBe("WithdrawalLimitExceeded");
+  });
+
+  it("leaves the codes retired with OracleUpdate and RunFundingTick unknown", () => {
+    for (const code of [30, 36, 41]) {
+      expect(decodeExecError(code)).toBeNull();
+      expect(execErrorName(code)).toBe("UnknownError");
+    }
   });
 });
 

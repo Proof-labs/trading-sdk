@@ -62,9 +62,6 @@ def _admin(i: dict, *byte_keys: str) -> dict:
 
 
 BUILDERS = {
-    "oracle_update/no_publish_time": lambda i: actions.OracleUpdate(
-        **_admin(i, "signer")
-    ),
     "create_market/full": lambda i: actions.CreateMarket(**_admin(i, "signer")),
     "authorize_withdrawal/operator": lambda i: actions.AuthorizeWithdrawal(
         authorization=_b(i["authorization"]), proof=_proof(i["proof"])

@@ -485,9 +485,7 @@ class SetTriggerMarketConfig:
 
 @dataclass
 class CreateSubAccount(Action):
-    """Create a derived sub-account under the signing master (0x28). The
-    engine refuses it as ``SubAccountsInactive`` until a governed
-    ``EnableSubAccounts`` proposal executes."""
+    """Create a derived sub-account under the signing master (0x28)."""
 
     ACTION_NAME = "CreateSubAccount"
     owner: bytes
@@ -504,8 +502,7 @@ class CreateSubAccount(Action):
 
 @dataclass
 class SubAccountTransfer(Action):
-    """Move balance between a master and one of its sub-accounts (0x29);
-    refused like :class:`CreateSubAccount`."""
+    """Move balance between a master and one of its sub-accounts (0x29)."""
 
     ACTION_NAME = "SubAccountTransfer"
     owner: bytes
@@ -823,29 +820,10 @@ class FailWithdrawalReceipt(Action):
 
 
 @dataclass
-class OracleUpdate(Action):
-    """Submit an oracle price for one market (relayer only).
-    ``publish_time_ms`` 0 means the relayer supplies no publish time."""
-
-    ACTION_NAME = "OracleUpdate"
-    market: int
-    price: int
-    signer: bytes
-    publish_time_ms: int = 0
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "price": self.price,
-            "signer": self.signer,
-            "publish_time_ms": self.publish_time_ms,
-        }
-
-
-@dataclass
 class CreateMarket(Action):
     """Register a perpetual market with its risk parameters (admin).
-    ``max_open_interest`` 0 means uncapped."""
+    ``max_open_interest`` 0 means uncapped. ``tick_size`` and ``lot_size`` are
+    the price and quantity grids; the engine refuses creation with 0."""
 
     ACTION_NAME = "CreateMarket"
     market: int
@@ -859,6 +837,8 @@ class CreateMarket(Action):
     pool_id: int
     sz_decimals: int
     ticker: str
+    tick_size: int
+    lot_size: int
     max_open_interest: int = 0
 
     def fields(self) -> dict[str, Any]:
@@ -875,6 +855,8 @@ class CreateMarket(Action):
             "sz_decimals": self.sz_decimals,
             "ticker": self.ticker,
             "max_open_interest": self.max_open_interest,
+            "tick_size": self.tick_size,
+            "lot_size": self.lot_size,
         }
 
 
@@ -946,54 +928,11 @@ class UpdateMarketFees(Action):
 # ── Operator actions (privileged — feeder / relayer infrastructure) ──────────
 #
 # These are NOT trading actions. A normal trading integration never builds
-# them — they are submitted by the operator's oracle relay / CEX-composite
-# feeder / relayer, each gated by a dedicated engine allowlist. They live in
-# the public SDK so operator tooling needs no second SDK, but a trading
-# consumer should ignore this section. Most operator actions (OracleUpdate,
-# CreateMarket, Confirm*/Fail*, ResolveEvent, …) are reachable via
-# :class:`RawAction`; OracleUpdateComposite gets a typed builder because Auros'
-# Python feeder requested first-class support.
-
-
-@dataclass
-class OracleUpdateComposite(Action):
-    """**Operator-only.** Submit a composite-CEX price for a market — BE-31
-    Phase B's third source for the multi-source mark-price median.
-
-    Not a trading action: the engine re-checks ``signer`` against a *separate*
-    CEX-composite feeder allowlist (a distinct trust domain from the
-    ``OracleUpdate`` relay), so a non-feeder signer is rejected regardless.
-    Markets ignore the composite entirely unless an operator has flipped them
-    to ``Median`` via :class:`UpdateMarketFees` (``mark_source_mode=1``).
-
-    Field order matches the engine struct: ``market, price, n_sources,
-    signer, publish_time_ms``. ``n_sources`` is observability-only (the engine
-    does not gate on it); ``publish_time_ms`` is a strictly-monotonic replay
-    guard, same as :class:`OracleUpdate`.
-    """
-
-    ACTION_NAME = "OracleUpdateComposite"
-    market: int
-    price: int
-    signer: bytes
-    # Required — NOT defaulted. `publish_time_ms` is the strictly-monotonic
-    # replay guard the engine enforces; a silent `0` default lets a feeder mint
-    # a first update at ts 0 and then have every later omitted update rejected,
-    # silently dropping the composite from the median. Matches the TS builder
-    # (`publishTimeMs` required) and Rust construction. The `serde(default)` on
-    # the Rust struct is decode-only (legacy payloads), not a mint-time default.
-    publish_time_ms: int
-    # Observability-only (the engine doesn't gate on it); safe to default.
-    n_sources: int = 0
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "price": self.price,
-            "n_sources": self.n_sources,
-            "signer": self.signer,
-            "publish_time_ms": self.publish_time_ms,
-        }
+# them — they are submitted by the operator's oracle feeder or relayer, each
+# gated by a dedicated engine allowlist or oracle policy. They live in the
+# public SDK so operator tooling needs no second SDK, but a trading consumer
+# should ignore this section. Operator actions without a typed builder are
+# reachable via :class:`RawAction`.
 
 
 # ── Codec helpers (delegate to the shared Rust core) ─────────────────────────
@@ -1194,14 +1133,12 @@ __all__ = [
     "AuthorizeWithdrawal",
     "ConfirmWithdrawalReceipt",
     "FailWithdrawalReceipt",
-    "OracleUpdate",
     "CreateMarket",
     "SetUserMarketLeverage",
     "CreateSubAccount",
     "SubAccountTransfer",
     "ClaimWithdrawalPayout",
     "UpdateMarketFees",
-    "OracleUpdateComposite",
     "SubmitOracleObservation",
     "ConfigureOraclePolicy",
     "AdminActionWire",

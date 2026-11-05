@@ -68,18 +68,19 @@ define_error_kinds! {
     27  => BinaryPriceOutOfRange        ~ "Binary-book order price is outside the [0, BINARY_PRICE_MAX] range.",
     28  => InvalidResolution            ~ "ResolveEvent refused: the event is already resolved, not yet at its settlement time, still carries attached conditionals, or the asserted outcome contradicts the oracle source.",
     29  => PositionLimitExceeded        ~ "Fill would push absolute net position past MarketConfig.max_position_size. Engine cap enforced at placement time independent of margin.",
-    30  => OracleTimestampNotMonotonic  ~ "OracleUpdate publish_time_ms is not strictly greater than the last accepted update for this market — replay protection per audit B3 (2026-04-23).",
+    // 30 was OracleTimestampNotMonotonic, retired with OracleUpdate; never reassigned.
     // 31 belonged to the retired impact-market family; never reassigned.
     32  => SettlementPriceMismatch      ~ "Net-delta margin grouping found legs with disagreeing settle prices (data corruption across same underlying_market_id).",
-    33  => OracleNotApplicable          ~ "OracleUpdate targets a conditional or binary book, which marks off the book and has no oracle layer.",
+    33  => OracleNotApplicable          ~ "The oracle action targets a conditional or prediction-binary book, which marks off its own trades and has no oracle layer.",
     34  => PostOnlyWouldCross           ~ "PlaceOrder with post_only=true would have crossed the book. Rejected so makers retain maker-side fills.",
     35  => ReduceOnlyWouldIncrease      ~ "PlaceOrder/MarketOrder with reduce_only=true was same-side as the existing position (would increase exposure) or no position existed.",
-    36  => TestActionRejected           ~ "Test/admin action rejected because the engine isn't configured to accept them, or the position the action referenced does not exist.",
-    37  => StaleOracle                  ~ "Oracle price is stale for this market; refresh the oracle before placing orders, reading margin, or liquidating.",
+    // 36 was TestActionRejected, retired with RunFundingTick; never reassigned.
+    // 37, 77, 82 and 97 are `ExecError::Unpriced`, one code per reason.
+    37  => UnpricedStale                ~ "Oracle price is stale for this market; refresh the oracle before placing orders, reading margin, or liquidating.",
     38  => UserLeverageBelowMarketIm    ~ "User-selected initial margin is below the market risk floor; only deleveraging above the market floor is allowed.",
     39  => TickSizeViolation            ~ "Order price is not an exact multiple of the market tick size.",
     40  => LotSizeViolation             ~ "Order quantity is not an exact multiple of the market lot size.",
-    41  => OracleStaleNotElapsed        ~ "Fallback oracle signer published before the market staleness window elapsed.",
+    // 41 was OracleStaleNotElapsed, retired with OracleUpdate; never reassigned.
     42  => FeeBpsOutOfRange             ~ "Per-account fee override has a fee outside the legal basis-point range.",
     43  => FeeOverrideStaleSeq          ~ "Per-account fee override sequence is stale or out of order.",
     44  => ClientOrderIdNotFound        ~ "No active resting order exists for the requested client order id.",
@@ -120,10 +121,10 @@ define_error_kinds! {
     74  => BridgeReceiptMismatch            ~ "The signed receipt does not bind to this withdrawal or deployment (id, owner, amount, destination, epoch or terminal state differs); the log names the field.",
     75  => WithdrawalBelowMinimum           ~ "The net withdrawal amount is below the effective minimum (the configured minimum, floored at the flat fee): the payout would be worth less than it costs to settle.",
     76  => WithdrawalTerminalGated          ~ "A retired legacy relayer terminal (ConfirmWithdrawal / FailWithdrawal) was submitted at or above the receipt cutover; rejected as a normal failed action.",
-    77  => OracleVerdictUnavailable         ~ "The oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed); mark-dependent actions are refused until a later block certifies a price.",
+    77  => UnpricedNoVerdict                ~ "The oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed); mark-dependent actions are refused until a later block certifies a price.",
     // 78-81 are reserved on the wire for oracle-policy errors.
-    82  => OracleGuardUnset                 ~ "A mark-dependent read was refused because the oracle-guard gate is active and the market's mark_price_max_oracle_age_ms is still unset; governance sets the guard first.",
-    // Sub-accounts (dormant behind their activation).
+    82  => UnpricedGuardUnset               ~ "The oracle-guard gate is active and this market has no mark-price max oracle age set; every mark-dependent action is refused until governance sets one.",
+    // Sub-accounts.
     83  => SubAccountNotFound               ~ "No sub-account exists for the given master and id.",
     84  => SubAccountAlreadyExists          ~ "A sub-account with this master and id already exists.",
     85  => SubAccountTransferSameAccount    ~ "Sub-account transfer with from equal to to is a no-op and is rejected.",
@@ -131,7 +132,8 @@ define_error_kinds! {
     87  => SubAccountTransferInsufficientBalance ~ "The source sub-account balance is below the transfer amount.",
     88  => SubAccountIdZero                 ~ "Sub-account id zero is not a valid id.",
     89  => SubAccountTransferZeroAmount     ~ "A sub-account transfer amount must be greater than zero.",
-    90  => SubAccountsInactive              ~ "Sub-account actions decode on this wire version but the chain has not enabled them yet; submissions before the activation fail closed.",
+    // 90 was SubAccountsInactive, retired with the engine's sub-account switch
+    // (sub-accounts are always on); never reassigned.
     91  => WithdrawalPayoutLeaseActive      ~ "A live Solana payout lease on this withdrawal is held by a different watcher, so this ClaimWithdrawalPayout is rejected; the rejected claimer must not sign a payout.",
     // Events and attached conditionals.
     92  => EventAlreadyExists               ~ "CreateEvent for an event id already in the registry.",
@@ -139,7 +141,7 @@ define_error_kinds! {
     94  => UnderlyingAlreadyAttached        ~ "AttachConditional for an underlying that is already attached to this event.",
     95  => TooManyAttachedConditionals      ~ "AttachConditional would exceed the event's attachment cap; the log names the count and the cap.",
     96  => TooManyActiveEvents              ~ "Account would touch more events than the scenario margin engine can enumerate (the per-account event cap). Close a leg on another event before opening this one.",
-    97  => MarkUnavailable                   ~ "No mark price is available for the market: an impact-family book has no recent-trade EWMA and no oracle fallback value.",
+    97  => UnpricedNoMark                   ~ "No mark price is available for the market: a conditional or prediction-binary book has no recent-trade EWMA and no oracle fallback value. Fund or trade the market once a mark exists.",
     98  => TriggerOrderIncompatible         ~ "Order cannot carry attached SL/TP (reduce-only order, ineligible market, or inactive feature).",
     99  => WithdrawalLimitExceeded          ~ "The withdrawal would push the account's rolling-window outflow past the configured per-account cap. The attempted debit, the cap, and when the oldest in-window outflow expires are in the log; capacity returns as in-window outflows age out.",
     100 => AccountOrderCapReached           ~ "The account already holds the maximum number of resting orders; cancel one before placing another.",
@@ -160,6 +162,9 @@ define_error_kinds! {
     114 => InsuranceActionRefused ~ "Governed insurance action is undecodable, not canonical, not permitted for an insurance account, or not owned by the pool's insurance account.",
     115 => LiquidationBatchTooManyOwners ~ "LiquidateAccounts names more owners than one batch may; split the owners across batches.",
     116 => LiquidationBatchOverBudget ~ "The owners a LiquidateAccounts batch names hold more positions together than its position budget; the batch is refused whole, so name fewer owners.",
+    123 => DepositLimitExceeded ~ "The ConfirmDeposit or Deposit would credit more than the governance-set deposit limits allow: either the per-deposit maximum, or the protocol-wide cap on deposits credited inside the rolling window.",
+    124 => EventPoolMismatch ~ "AttachConditional names an underlying whose insurance pool differs from the event's; an event and its conditionals share one pool.",
+    125 => ConditionalLotOffUnderlyingGrid ~ "A lot_size change would leave an unresolved event's conditional lot not a multiple of its underlying perpetual's lot.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -243,7 +248,7 @@ pub fn error_code_manifest() -> &'static [ErrorKind] {
 #[cfg(test)]
 mod exec_error_meaning_tests {
     use super::*;
-    use proof_wire::types::ExecError;
+    use proof_wire::types::{ExecError, UnpricedReason};
 
     #[test]
     #[allow(clippy::unwrap_used)]
@@ -350,11 +355,6 @@ mod exec_error_meaning_tests {
                 limit: 0,
                 would_be: 0,
             },
-            ExecError::OracleTimestampNotMonotonic {
-                market: 0,
-                stored: 0,
-                submitted: 0,
-            },
             ExecError::SettlementPriceMismatch {
                 market: 0,
                 expected: 0,
@@ -363,7 +363,6 @@ mod exec_error_meaning_tests {
             ExecError::OracleNotApplicable { market: 0 },
             ExecError::PostOnlyWouldCross,
             ExecError::ReduceOnlyWouldIncrease,
-            ExecError::TestActionRejected("e".into()),
             ExecError::FeeBpsOutOfRange { bps: 0 },
             ExecError::FeeOverrideStaleSeq {
                 cmd_seq: 0,
@@ -379,17 +378,25 @@ mod exec_error_meaning_tests {
                 lot_size: 1,
                 quantity: 0,
             },
-            ExecError::OracleStaleNotElapsed {
+            ExecError::Unpriced {
                 market: 0,
-                last_publish_ms: 0,
-                block_time_ms: 0,
-                staleness_ms: 1,
+                reason: UnpricedReason::Stale {
+                    publish_time_ms: 0,
+                    block_time_ms: 0,
+                    max_staleness_ms: 1,
+                },
             },
-            ExecError::StaleOracle {
+            ExecError::Unpriced {
                 market: 0,
-                publish_time_ms: 0,
-                block_time_ms: 0,
-                max_staleness_ms: 1,
+                reason: UnpricedReason::NoVerdict(None),
+            },
+            ExecError::Unpriced {
+                market: 0,
+                reason: UnpricedReason::GuardUnset,
+            },
+            ExecError::Unpriced {
+                market: 0,
+                reason: UnpricedReason::NoMark,
             },
             ExecError::UserLeverageBelowMarketIm {
                 market: 0,
@@ -423,7 +430,6 @@ mod exec_error_meaning_tests {
             ExecError::BridgeReceiptMismatch("e".into()),
             ExecError::WithdrawalBelowMinimum { amount: 0, min: 1 },
             ExecError::WithdrawalTerminalGated("e".into()),
-            ExecError::OracleGuardUnset { market: 0 },
             ExecError::SubAccountNotFound,
             ExecError::SubAccountAlreadyExists,
             ExecError::SubAccountTransferSameAccount,
@@ -431,7 +437,6 @@ mod exec_error_meaning_tests {
             ExecError::SubAccountTransferInsufficientBalance,
             ExecError::SubAccountIdZero,
             ExecError::SubAccountTransferZeroAmount,
-            ExecError::SubAccountsInactive,
             ExecError::WithdrawalPayoutLeaseActive,
             ExecError::EventAlreadyExists(crate::types::EventId(0)),
             ExecError::EventNotFound(crate::types::EventId(0)),
@@ -487,6 +492,33 @@ mod exec_error_meaning_tests {
         ]
     }
 
+    /// Each unpriced reason keeps its own code, name and the wire's meaning.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn unpriced_reasons_stay_distinct() {
+        let stale = UnpricedReason::Stale {
+            publish_time_ms: 0,
+            block_time_ms: 0,
+            max_staleness_ms: 1,
+        };
+        for (reason, kind) in [
+            (stale, ErrorKind::UnpricedStale),
+            (
+                UnpricedReason::NoVerdict(None),
+                ErrorKind::UnpricedNoVerdict,
+            ),
+            (UnpricedReason::GuardUnset, ErrorKind::UnpricedGuardUnset),
+            (UnpricedReason::NoMark, ErrorKind::UnpricedNoMark),
+        ] {
+            let e = ExecError::Unpriced { market: 1, reason };
+            assert_eq!(
+                decode_exec_error_kind(e.code(), None).expect("every Unpriced code decodes"),
+                DecodedExecErrorKind::Known(kind)
+            );
+            assert_eq!(kind.meaning(), e.meaning());
+        }
+    }
+
     /// Every code returned by `code()` must have a non-empty `meaning()`.
     /// This is the integration contract for the openapi-yaml `ExecErrorCode`
     /// table — clients (Auros, etc.) read these to map raw codes to
@@ -516,17 +548,19 @@ mod exec_error_meaning_tests {
 
     /// Every engine code must be covered by the public error manifest, with
     /// the holes the wire itself carries: 24, 25 and 31 (the retired
-    /// impact-market family), 78-81 (reserved for oracle errors), 101
-    /// (unassigned) and 112 (the retired PLP configuration). Catches
-    /// the case where a code is reserved by the mirrored engine error enum
-    /// but no SDK classification maps to it.
+    /// impact-market family), 30, 36 and 41 (retired with OracleUpdate and
+    /// RunFundingTick), 78-81 (reserved for oracle errors), 90 (the retired
+    /// sub-account switch), 101 (unassigned), 112 (the retired PLP
+    /// configuration) and 117-122 (claimed elsewhere, unassigned on the wire).
+    /// Catches the case where a code is reserved by the mirrored engine error
+    /// enum but no SDK classification maps to it.
     #[test]
     fn no_code_holes_in_documented_range() {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=116)
-            .filter(|c| !matches!(c, 24 | 25 | 31 | 78..=81 | 101 | 112))
+        let expected: Vec<u32> = (1u32..=125)
+            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(
@@ -550,9 +584,9 @@ pub mod prelude {
         CancelReplaceOrder, ClosePosition, ConfirmDeposit, ConfirmWithdrawal, CreateEvent,
         CreateMarket, Deposit, Event, EventId, EventInfo, EventOracleSource, EventStatus,
         ExecError, FailDepositReason, FailWithdrawal, FillId, MarkSourceMode, MarketConfig,
-        MarketId, MarketKind, MarketOrder, OracleUpdate, Order, OrderId, Outcome, PlaceOrder,
-        Position, ResolveEvent, RevokeAgent, SetUserMarketLeverage, Side, TimeInForce,
-        UpdateMarketFees, Withdraw, WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX,
+        MarketId, MarketKind, MarketOrder, Order, OrderId, Outcome, PlaceOrder, Position,
+        ResolveEvent, RevokeAgent, SetUserMarketLeverage, Side, TimeInForce, UpdateMarketFees,
+        Withdraw, WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX,
         DEFAULT_CEX_COMPOSITE_STALENESS_MS, DEFAULT_MAX_MARK_SPREAD_BPS,
     };
 }

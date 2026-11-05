@@ -34,6 +34,8 @@ function engineDefaultCreateMarket(): AdminAction {
       poolId: 0,
       szDecimals: 0,
       ticker: "",
+      tickSize: 1n,
+      lotSize: 1n,
       maxOpenInterest: 0n,
     },
   };
@@ -99,7 +101,7 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     const hash = adminProposalContentHash(goldenContext());
     expect(hash).toBeInstanceOf(Uint8Array);
     expect(bytesToHex(hash)).toBe(
-      "6cdd8d6843bb4026d396b9e80c9599530b0ac4f14862af0204794219f8f8cbea",
+      "a4de11bbe373974cae0de8f1116681cd7f08ecab07b007bea1067cbd0f19fb4f",
     );
   });
 
@@ -109,7 +111,7 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
       registryVersion: 4n,
     });
     expect(bytesToHex(hash)).toBe(
-      "5fe2dd718a4aea63492a5ab95eee27588cc861c504643bf68ce3fdd2c45dab99",
+      "da916970c56796acd6cc8a67bfba8430598c94dafaf5b1eb54f40479a380be9c",
     );
   });
 
@@ -131,7 +133,7 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
       action: engineV2Batch(),
     });
     expect(bytesToHex(hash)).toBe(
-      "c099245946aaded3b995198f5ff0592d771729ab314fcf5736036ffb6f559fcd",
+      "66a35d72765b3554acc039d0747f177680c1a1b08247ece47daa4a3492b9d0f7",
     );
   });
 
@@ -153,18 +155,6 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     });
     expect(bytesToHex(hash)).toBe(
       "ffa74c9323512ffb8272eea55fc49baf047f55aa8979e56e06229b57d1350f56",
-    );
-  });
-
-  it("reproduces the EnableSubAccounts unit-variant hash bit-for-bit", () => {
-    // Bare fixstr `b1 456e61626c655375624163636f756e7473`; expected value from
-    // exchange-wire's `codec::admin_proposal_content_hash` at the pinned rev.
-    const hash = adminProposalContentHash({
-      ...goldenContext(),
-      action: { kind: "EnableSubAccounts" },
-    });
-    expect(bytesToHex(hash)).toBe(
-      "abd23dad614e0ac4a3afc5503bfeb7c89079ff223f401bda2c09cc30a76c4076",
     );
   });
 

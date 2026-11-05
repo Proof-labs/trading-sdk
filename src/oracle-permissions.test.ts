@@ -21,8 +21,6 @@ const policy = () => [
 const fresh = (): unknown[] => [
   1,
   14,
-  10,
-  true,
   "Committed",
   "Satisfied",
   policy(),
@@ -40,6 +38,8 @@ const fresh = (): unknown[] => [
     [null, null],
     null,
     [100000000, 3600000, 3600000],
+    "Fallback",
+    1,
   ],
 ];
 const encode = (data: unknown) =>
@@ -48,28 +48,35 @@ const encode = (data: unknown) =>
   );
 
 describe("committed oracle permissions", () => {
-  it("decodes the engine-pinned legacy query bytes", () => {
+  it("decodes the engine-encoded unavailable read", () => {
     const fixture = readFileSync(
-      new URL("../conformance/oracle-permissions-legacy.hex", import.meta.url),
+      new URL(
+        "../conformance/oracle-permissions-unavailable.hex",
+        import.meta.url,
+      ),
       "utf8",
     ).trim();
     const bytes = Uint8Array.from(Buffer.from(fixture, "hex"));
-    expect(
-      decodeOraclePermissions(new Decoder({ useBigInt64: true }).decode(bytes)),
-    ).toMatchObject({
+    const raw = new Decoder({ useBigInt64: true }).decode(bytes) as unknown[];
+    expect(decodeOraclePermissions(raw)).toEqual({
       market: 1,
       finalizedHeight: 9n,
-      activationHeight: 10n,
-      oracleActive: false,
-      state: "Legacy",
-      oraclePermission: null,
+      state: "Unavailable",
+      oraclePermission: "Unavailable",
+      policy: null,
+      pending: null,
+      verdict: null,
     });
+    // The nine-slot read of engines before F16 activation.
+    const nine = [...raw];
+    nine.splice(2, 0, 10, true);
+    expect(() => decodeOraclePermissions(nine)).toThrow("invalid response");
   });
   describe("exchange-encoded committed reads", () => {
     interface CommittedCase {
       case: string;
       exchange: string;
-      format: 2 | 3;
+      format: 3;
       hex: string;
       expect: {
         height: number;
@@ -84,9 +91,8 @@ describe("committed oracle permissions", () => {
         diagnostic_flags: string[];
       };
     }
-    // Captured from exchange-core `query_oracle_permissions` (rmp_serde) at
-    // the `exchange` commit on each row: format 3 from exchange#831, format 2
-    // from exchange dev before it.
+    // exchange-core `OraclePermissionsInfo` (rmp_serde) at the `exchange`
+    // commit on each row.
     const committedCases = readFileSync(
       new URL(
         "../conformance/oracle-permissions-committed.ndjson",
@@ -102,18 +108,12 @@ describe("committed oracle permissions", () => {
         Uint8Array.from(Buffer.from(hex, "hex")),
       ) as unknown[];
 
-    it("covers both verdict layouts", () => {
-      expect(new Set(committedCases.map((c) => c.format))).toEqual(
-        new Set([2, 3]),
-      );
-    });
     it.each(committedCases.map((c) => [c.case, c] as const))(
       "decodes %s exactly",
       (_, c) => {
         const read = decodeOraclePermissions(bytes(c.hex), 1);
         expect(read.state).toBe("Committed");
         const v = read.verdict!;
-        expect(v.format).toBe(c.format);
         expect(v.height).toBe(BigInt(c.expect.height));
         expect(v.status).toBe(c.expect.status);
         expect(v.reason).toBe(c.expect.reason);
@@ -140,19 +140,22 @@ describe("committed oracle permissions", () => {
       const v = decodeOraclePermissions(bytes(c.hex), 1).verdict!;
       expect(v.certified?.providerTime).toBe(v.currentTimes[1]);
     });
-    it("keeps one fault-bit layout across both formats", () => {
-      const byCase = (name: string) =>
-        decodeOraclePermissions(
-          bytes(committedCases.find((c) => c.case === name)!.hex),
-          1,
-        ).verdict!;
-      const v3 = byCase("v3/unpriceable_warmup_reference_unavailable");
-      const v2 = byCase("v2/unpriceable_warmup_reference_unavailable");
+    it("keeps the fault-bit positions", () => {
+      const v3 = decodeOraclePermissions(
+        bytes(
+          committedCases.find(
+            (c) => c.case === "v3/unpriceable_warmup_reference_unavailable",
+          )!.hex,
+        ),
+        1,
+      ).verdict!;
       // ReferenceUnavailable stays bit 8 and RecoveryPending bit 14: the
       // retired Disagreement (7) and PairTimeMismatch (13) keep their slots.
       expect(v3.faults).toBe((1 << 8) | (1 << 14));
-      expect(v3.faults).toBe(v2.faults);
-      expect(v3.faultReasons).toEqual(v2.faultReasons);
+      expect(v3.faultReasons).toEqual([
+        "ReferenceUnavailable",
+        "RecoveryPending",
+      ]);
       expect(ORACLE_FAULT_BITS[7]).toBe("Disagreement");
       expect(ORACLE_FAULT_BITS[13]).toBe("PairTimeMismatch");
     });
@@ -160,6 +163,7 @@ describe("committed oracle permissions", () => {
     const v3Fresh = () =>
       bytes(committedCases.find((c) => c.case === "v3/fresh_primary")!.hex);
     it.each([
+      ["a twelve-field verdict", (v: unknown[]) => v.splice(12)],
       ["a thirteen-field verdict", (v: unknown[]) => v.pop()],
       ["a fifteen-field verdict", (v: unknown[]) => v.push(0)],
       ["an unknown selected slot", (v: unknown[]) => (v[12] = "Secondary")],
@@ -194,51 +198,36 @@ describe("committed oracle permissions", () => {
       ["a source mask past slot 1", (v: unknown[]) => (v[7] = 7)],
     ])("rejects %s", (_, change) => {
       const raw = v3Fresh();
-      change(raw[8] as unknown[]);
+      change(raw[6] as unknown[]);
       expect(() => decodeOraclePermissions(raw, 1)).toThrow(
         "oracle permissions decode",
       );
     });
-    it("rejects a format-3 non-fresh reason missing from its fault word", () => {
+    it("rejects a non-fresh reason missing from its fault word", () => {
       const c = committedCases.find(
         (c) => c.case === "v3/unpriceable_no_usable_source",
       )!;
       const raw = bytes(c.hex);
-      (raw[8] as unknown[])[3] = "ManualHalt";
+      (raw[6] as unknown[])[3] = "ManualHalt";
       expect(() => decodeOraclePermissions(raw, 1)).toThrow(
         "verdict selection",
       );
-    });
-    it("still accepts the reasons older nodes emit in the format-2 layout", () => {
-      for (const reason of [
-        "Disagreement",
-        "PairTimeMismatch",
-        "AnchorUnavailable",
-        "ReferenceUnavailable",
-      ]) {
-        const c = committedCases.find(
-          (c) => c.case === "v2/unpriceable_no_usable_source",
-        )!;
-        const raw = bytes(c.hex);
-        (raw[8] as unknown[])[3] = reason;
-        expect(decodeOraclePermissions(raw, 1).verdict?.reason).toBe(reason);
-      }
     });
   });
   afterEach(() => vi.unstubAllGlobals());
   it("preserves exact finalized data and large u64 values", () => {
     const raw = fresh();
     raw[1] = 9007199254740993n;
-    (raw[8] as unknown[])[0] = raw[1];
+    (raw[6] as unknown[])[0] = raw[1];
     const decoded = decodeOraclePermissions(raw, 1);
     expect(decoded.finalizedHeight).toBe(9007199254740993n);
     expect(decoded.policy?.calendarHash).toBe("02".repeat(32));
     expect(decoded.policy?.sources[1].authority).toBe("05".repeat(32));
     expect(decoded.verdict?.certified?.price).toBe(100000000n);
   });
-  it("decodes the twelve-field format-2 verdict with evidence digests and last-good", () => {
+  it("decodes the verdict with evidence digests and last-good", () => {
     const raw = fresh();
-    raw[8] = [
+    raw[6] = [
       14,
       1000,
       "Fresh",
@@ -251,6 +240,8 @@ describe("committed oracle permissions", () => {
       [Array(32).fill(7), Array(32).fill(9)],
       [50000000, 800],
       [100000000, 3600000, 7200000],
+      "Fallback",
+      1,
     ];
     const verdict = decodeOraclePermissions(raw, 1).verdict!;
     expect(verdict.faults).toBe(0);
@@ -267,50 +258,38 @@ describe("committed oracle permissions", () => {
       requiredMs: 7200000n,
     });
   });
-  it("does not invent a permission for legacy or an absent policy", () => {
-    expect(
-      decodeOraclePermissions([
-        1,
-        9,
-        null,
-        false,
-        "Legacy",
-        null,
-        null,
-        null,
-        null,
-      ]).oraclePermission,
-    ).toBeNull();
+  it("does not invent a permission for an absent policy", () => {
     const unavailable = decodeOraclePermissions([
       1,
       10,
-      10,
-      true,
       "Unavailable",
       "Unavailable",
       null,
       [12, policy()],
       null,
     ]);
+    expect(unavailable.oraclePermission).toBe("Unavailable");
     expect(unavailable.pending?.effectiveHeight).toBe(12n);
     expect(unavailable.verdict).toBeNull();
   });
   it("retains stale reason without authorizing a last-good price", () => {
     const raw = fresh();
-    raw[5] = "Unavailable";
-    raw[8] = [
+    raw[3] = "Unavailable";
+    raw[6] = [
       14,
       9000,
       "Stale",
       "ExpiredSource",
       null,
       null,
-      0,
+      1 << 11,
       2,
       [null, null],
       [null, null],
       null,
       [null, 0, 3600000],
+      "Fallback",
+      1,
     ];
     expect(decodeOraclePermissions(raw).verdict).toMatchObject({
       status: "Stale",
@@ -326,43 +305,40 @@ describe("committed oracle permissions", () => {
       r[1] = Number.MAX_SAFE_INTEGER + 1;
     },
     (r: unknown[]) => {
-      r[2] = null;
+      r[2] = "Legacy";
     },
     (r: unknown[]) => {
-      r[3] = false;
+      r[3] = null;
     },
     (r: unknown[]) => {
-      r[4] = "Legacy";
+      r[3] = "Unavailable";
     },
     (r: unknown[]) => {
-      r[5] = "Unavailable";
+      r[4] = null;
     },
     (r: unknown[]) => {
-      r[6] = null;
+      r[5] = [14, policy()];
     },
     (r: unknown[]) => {
-      r[7] = [14, policy()];
+      (r[6] as unknown[])[0] = 13;
     },
     (r: unknown[]) => {
-      (r[8] as unknown[])[0] = 13;
+      (r[6] as unknown[])[3] = "MissingSource";
     },
     (r: unknown[]) => {
-      (r[8] as unknown[])[3] = "MissingSource";
+      (r[6] as unknown[])[4] = null;
     },
     (r: unknown[]) => {
-      (r[8] as unknown[])[4] = null;
+      (r[6] as unknown[])[4] = [0, 900];
     },
     (r: unknown[]) => {
-      (r[8] as unknown[])[4] = [0, 900];
+      (r[6] as unknown[])[5] = 1001;
     },
     (r: unknown[]) => {
-      (r[8] as unknown[])[5] = 1001;
+      (r[6] as unknown[])[10] = [0, 800];
     },
     (r: unknown[]) => {
-      (r[8] as unknown[])[10] = [0, 800];
-    },
-    (r: unknown[]) => {
-      (r[8] as unknown[])[10] = [50000000, 2000];
+      (r[6] as unknown[])[10] = [50000000, 2000];
     },
   ])("rejects malformed or falsely permissive state", (change) => {
     const raw = fresh();
