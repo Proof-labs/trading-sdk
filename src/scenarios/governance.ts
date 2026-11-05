@@ -4,6 +4,16 @@ import { pacedTransport } from "./pacing.js";
 import { decodeExecError } from "../errors.js";
 import type { AdminAction, ProposalDisplayInfo, TxResult } from "../types.js";
 
+/** An approved proposal whose action the engine refused with `code`. */
+export class ProposalFailed extends Error {
+  constructor(
+    message: string,
+    readonly code: number,
+  ) {
+    super(message);
+  }
+}
+
 export interface Governance {
   /** admin1 proposes, admin2 approves; resolves once the action executed. */
   execute(action: AdminAction, label: string): Promise<void>;
@@ -72,11 +82,13 @@ export function governance(
       refused(approved, `${label}: approve`);
       const status = (await find(id)).statusEffective;
       if (status.kind === "Executed") return;
-      const failed =
-        status.kind === "Failed"
-          ? ` with code ${status.code} (${decodeExecError(status.code)?.name ?? "unknown"})`
-          : "";
-      throw new Error(`${label}: proposal ${id} is ${status.kind}${failed}`);
+      if (status.kind === "Failed") {
+        throw new ProposalFailed(
+          `${label}: proposal ${id} is Failed with code ${status.code} (${decodeExecError(status.code)?.name ?? "unknown"})`,
+          status.code,
+        );
+      }
+      throw new Error(`${label}: proposal ${id} is ${status.kind}`);
     },
   };
 }

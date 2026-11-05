@@ -7,7 +7,9 @@ import { promisify } from "node:util";
 import { ExchangeClient } from "../client.js";
 import { pacedTransport } from "./pacing.js";
 import { bytesToHex, getPublicKey, hexToBytes } from "../crypto.js";
+import { ExecErrorCode } from "../errors.js";
 import type { OraclePermissions } from "../oracle-permissions.js";
+import { ProposalFailed } from "./governance.js";
 
 const run = promisify(execFile);
 const CERTIFY_TIMEOUT_MS = 30_000;
@@ -86,28 +88,57 @@ export function oracleRelay(opts: OracleRelayOptions): OracleRelay {
     gatewayUrl: opts.gatewayUrl,
     httpTransport: pacedTransport,
   });
-  // f16-relay reads raw 32-byte seed files.
   const dir = mkdtempSync(join(tmpdir(), "sdk-oracle-relay-"));
   process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
   const keys = [opts.primaryPrivateKey, opts.fallbackPrivateKey].map(
     (hex, index) => {
-      const seed = hexToBytes(hex).subarray(0, 32);
-      const path = join(dir, `source-${index}.seed`);
-      writeFileSync(path, seed, { mode: 0o600 });
-      return { path, authority: bytesToHex(getPublicKey(seed)) };
+      const key = hexToBytes(hex);
+      // A 32-byte seed, or the 64-byte seed-plus-public-key form.
+      if (key.length !== 32 && key.length !== 64) {
+        throw new Error(
+          `oracle source ${index}: key is ${key.length} bytes, want 32 or 64`,
+        );
+      }
+      const seed = key.subarray(0, 32);
+      return { index, seed, authority: bytesToHex(getPublicKey(seed)) };
     },
   );
   let chain: Promise<string> | undefined;
   let queue: Promise<unknown> = Promise.resolve();
 
   const chainName = () =>
-    (chain ??= fetch(`${opts.gatewayUrl}/v1/status`)
-      .then((r) => r.json())
-      .then(
-        (s) =>
-          (s as { result: { node_info: { network: string } } }).result.node_info
-            .network,
-      ));
+    (chain ??= (async () => {
+      const res = await pacedTransport(
+        `${opts.gatewayUrl}/v1/status`,
+        undefined,
+        {
+          purpose: "chain_id",
+          priority: "critical",
+          surface: "status_chain_id",
+        },
+      );
+      if (!res.ok) throw new Error(`/v1/status returned HTTP ${res.status}`);
+      const status = (await res.json()) as {
+        result?: { node_info?: { network?: string } };
+      };
+      const network = status.result?.node_info?.network;
+      if (!network) throw new Error("/v1/status has no node_info.network");
+      return network;
+    })());
+
+  /** Runs f16-relay with a source's seed file present only for the call. */
+  async function observe(
+    key: (typeof keys)[number],
+    args: (seedPath: string) => string[],
+  ): Promise<void> {
+    const path = join(dir, `source-${key.index}.seed`);
+    writeFileSync(path, key.seed, { mode: 0o600 });
+    try {
+      await run(opts.relayBin, args(path));
+    } finally {
+      rmSync(path, { force: true });
+    }
+  }
 
   const bundleBin =
     opts.bundleBin ??
@@ -161,24 +192,52 @@ export function oracleRelay(opts: OracleRelayOptions): OracleRelay {
     propose: (effectiveHeight: bigint, bundle: Uint8Array) => Promise<void>,
   ): Promise<void> {
     const settings = await bundle(market, base);
+    let effectiveHeight = 0n;
     for (const runway of ACTIVATION_RUNWAYS) {
       const { finalizedHeight } = await reader.queryOraclePermissions(market);
+      effectiveHeight = finalizedHeight + runway;
       try {
-        await propose(finalizedHeight + runway, settings);
+        await propose(effectiveHeight, settings);
         break;
       } catch (error) {
         if (runway === ACTIVATION_RUNWAYS.at(-1)) throw error;
+        if (!(await lapsed(market, effectiveHeight, error))) throw error;
+        console.warn(
+          `market ${market}: retrying oracle settings with a longer runway after`,
+          error,
+        );
       }
     }
-    const deadline = Date.now() + CERTIFY_TIMEOUT_MS;
-    while (!(await reader.queryOraclePermissions(market)).policy) {
-      if (Date.now() > deadline) {
+    // The timeout counts from the effective height, not from the proposal.
+    let deadline = Date.now() + CERTIFY_TIMEOUT_MS;
+    for (;;) {
+      const read = await reader.queryOraclePermissions(market);
+      if (read.policy) return;
+      if (read.finalizedHeight < effectiveHeight) {
+        deadline = Date.now() + CERTIFY_TIMEOUT_MS;
+      } else if (Date.now() > deadline) {
         throw new Error(
-          `market ${market}: oracle settings never became active`,
+          `market ${market}: oracle settings for height ${effectiveHeight} never became active`,
         );
       }
       await new Promise((r) => setTimeout(r, 50));
     }
+  }
+
+  /** Whether the engine refused the settings because the chain passed their effective height. */
+  async function lapsed(
+    market: number,
+    effectiveHeight: bigint,
+    error: unknown,
+  ): Promise<boolean> {
+    if (
+      !(error instanceof ProposalFailed) ||
+      error.code !== ExecErrorCode.InvalidMarketConfig
+    ) {
+      return false;
+    }
+    const { finalizedHeight } = await reader.queryOraclePermissions(market);
+    return finalizedHeight >= effectiveHeight;
   }
 
   async function send(market: number, price: bigint): Promise<void> {
@@ -199,11 +258,11 @@ export function oracleRelay(opts: OracleRelayOptions): OracleRelay {
     const time = publishTime(read);
     const chainId = await chainName();
     for (const source of sources) {
-      await run(opts.relayBin, [
+      await observe(source, (seedPath) => [
         "observe",
         opts.gatewayUrl,
         chainId,
-        source.path,
+        seedPath,
         String(market),
         String(policy.version),
         String(source.id),

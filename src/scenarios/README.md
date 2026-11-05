@@ -14,7 +14,7 @@ End-to-end behaviour tests for the exchange. Each file corresponds to a single s
 ## How they run
 
 - **CI (default, no node):** scenarios auto-skip because `RPC_URL` is unset. `npm test` stays green.
-- **Local, against a running stack:** set `RPC_URL`, `RELAYER_PRIVATE_KEY`, and (for liquidation tests) `ORACLE_PRIVATE_KEY`, `FALLBACK_ORACLE_PRIVATE_KEY`, `ADMIN1_PRIVATE_KEY`, `ADMIN2_PRIVATE_KEY` and `F16_RELAY_BIN`, and they execute for real through the gateway (`GATEWAY_URL`, default `http://127.0.0.1:9080`).
+- **Local, against a running stack:** set `RPC_URL`, `RELAYER_PRIVATE_KEY`, and (for liquidation tests) `ORACLE_PRIVATE_KEY`, `FALLBACK_ORACLE_PRIVATE_KEY`, `ADMIN1_PRIVATE_KEY`, `ADMIN2_PRIVATE_KEY` and `F16_RELAY_BIN`, and they execute for real through the gateway (`GATEWAY_URL`, default `http://127.0.0.1:9080`). The liquidation scenarios skip unless all of these are set and `F16_RELAY_BIN`, with `f16-policy-bundle` beside it, exists.
 
 The local stack lives in [proof-integration](https://github.com/Proof-labs/proof-integration), checked out next to this repository with its sibling repositories built (see its README, "Setup from cold").
 

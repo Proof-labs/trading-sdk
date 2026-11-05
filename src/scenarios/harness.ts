@@ -7,6 +7,8 @@
  * reimplementing exchange logic. Every user is a fresh random keypair so
  * scenarios don't collide on nonces or CometBFT's tx cache.
  */
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { Decoder } from "@msgpack/msgpack";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { rejectFloats } from "../codec.js";
@@ -82,6 +84,23 @@ export function envWorldOptions(): SeedWorldOptions {
         ? [env.ADMIN1_PRIVATE_KEY, env.ADMIN2_PRIVATE_KEY]
         : undefined,
   };
+}
+
+/** Whether the environment can create and price a scenario perp, as the README lists. */
+export function canCreatePerps(): boolean {
+  const env = process.env;
+  const relay = env.F16_RELAY_BIN;
+  return Boolean(
+    env.RPC_URL &&
+    env.RELAYER_PRIVATE_KEY &&
+    env.ORACLE_PRIVATE_KEY &&
+    env.FALLBACK_ORACLE_PRIVATE_KEY &&
+    env.ADMIN1_PRIVATE_KEY &&
+    env.ADMIN2_PRIVATE_KEY &&
+    relay &&
+    existsSync(relay) &&
+    existsSync(join(dirname(relay), "f16-policy-bundle")),
+  );
 }
 
 /** What a scenario's own perpetual is created with. */
@@ -166,7 +185,7 @@ export interface World {
   /** Credit `amount` (microUSDC) to a user through a relayer deposit. */
   deposit(user: string, amount: bigint): Promise<void>;
 
-  /** Poll until every named user is flat on `market` or `timeoutMs` passes. */
+  /** Poll until every named user is flat on `market`; throws after `timeoutMs`. */
   untilFlat(
     names: readonly string[],
     market: number,
@@ -329,6 +348,8 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
             szDecimals: spec.szDecimals,
             ticker,
             maxOpenInterest: 0n,
+            tickSize: 1n,
+            lotSize: 1n,
           },
         },
         `CreateMarket(${market})`,
@@ -383,7 +404,15 @@ export async function seedWorld(opts: SeedWorldOptions = {}): Promise<World> {
       const deadline = Date.now() + timeoutMs;
       for (;;) {
         const sizes = await Promise.all(names.map((n) => position(n, market)));
-        if (sizes.every((size) => size === 0n) || Date.now() > deadline) return;
+        if (sizes.every((size) => size === 0n)) return;
+        if (Date.now() > deadline) {
+          const open = names
+            .map((n, i) => `${n}=${sizes[i]}`)
+            .filter((_, i) => sizes[i] !== 0n);
+          throw new Error(
+            `untilFlat: market ${market} still open after ${timeoutMs}ms: ${open.join(", ")}`,
+          );
+        }
         await new Promise((r) => setTimeout(r, 200));
       }
     },
