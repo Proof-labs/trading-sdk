@@ -573,7 +573,9 @@ export class ExchangeClient {
       floor !== undefined &&
       (typeof floor !== "bigint" || floor < 0n || floor >= U64_MAX)
     ) {
-      throw new Error("minimumNonceExclusive must be an unsigned-64 nonce floor");
+      throw new Error(
+        "minimumNonceExclusive must be an unsigned-64 nonce floor",
+      );
     }
     // Freeze caller-owned inputs before any await (wallet prompts may be long).
     const snapshot = cloneSigningInput(action);
