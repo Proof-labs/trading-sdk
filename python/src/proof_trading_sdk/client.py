@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -473,7 +474,22 @@ class ExchangeClient:
             The engine's response dict with keys like ``code``,
             ``tx_hash``, etc.
         """
-        resp = self._post("/exchange", content=envelope)
+        try:
+            resp = self._post(
+                "/exchange", content=envelope
+            )
+        except TransportError as exc:
+            # A write may have been partial, or the response may have been lost
+            # after admission. Preserve the original bytes' hash; never retry.
+            if isinstance(exc.__cause__, (
+                httpx.ReadTimeout, httpx.ReadError, httpx.WriteTimeout,
+                httpx.WriteError, httpx.RemoteProtocolError,
+            )):
+                raise SubmissionPending(
+                    hashlib.sha256(envelope).hexdigest().upper(),
+                    "submission transport failed after sending may have started; reconcile by hash",
+                ) from exc
+            raise
         # Keep the raw text. The gateway still emits engine rejections as a bare
         # "<code>: <message>" string — a pre-#90 gateway sends ONLY that — and
         # the TS binding recovers the code from it (`readGatewayBody` keeps the
