@@ -562,8 +562,13 @@ class AtomicBasketLeg:
     quantity: int
     client_order_id: Optional[int] = None
     reduce_only: bool = False
+    stop_loss: Optional[TriggerLimb] = None
+    take_profit: Optional[TriggerLimb] = None
 
     def as_wire(self) -> dict[str, Any]:
+        _validate_order_triggers(
+            self.stop_loss, self.take_profit, reduce_only=self.reduce_only
+        )
         return {
             "market": self.market,
             "side": self.side,
@@ -571,6 +576,8 @@ class AtomicBasketLeg:
             "quantity": self.quantity,
             "client_order_id": self.client_order_id,
             "reduce_only": self.reduce_only,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
         }
 
 

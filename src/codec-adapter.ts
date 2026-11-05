@@ -313,6 +313,9 @@ export function toWasmFields(action: Action): {
     // 0x25/0x26 validators above (absent limbs pass — no bracket requested).
     validateOrderTriggers(action.data);
   }
+  if (action.type === "AtomicBasketOrder") {
+    for (const leg of action.data.legs) validateOrderTriggers(leg);
+  }
   validateCreateMarketTickers(action);
   const actionType = ActionType[action.type] as ActionTypeValue;
   const fields = convertObject(

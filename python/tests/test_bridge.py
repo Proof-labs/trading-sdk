@@ -429,6 +429,22 @@ class TestEngineParityActions:
         assert decoded["legs"][1]["reduce_only"] is True
         assert decoded["max_slippage_bps"] == 50
 
+    def test_atomic_basket_protection_round_trips(self):
+        limb = pts.actions.TriggerLimb(trigger_price=110, max_slippage_bps=75, client_trigger_id=99)
+        action = pts.actions.AtomicBasketOrder(owner=b"\x11" * 20, legs=[
+            pts.actions.AtomicBasketLeg(market=1, side=pts.Side.Buy, price=100, quantity=5, take_profit=limb)
+        ])
+        action_type, payload = pts.encode_action(action)
+        decoded = pts.decode_action(action_type, payload)
+        assert decoded["legs"][0]["take_profit"] == limb.as_wire()
+        assert decoded["legs"][0]["stop_loss"] is None
+
+    def test_reduce_only_atomic_protection_is_rejected(self):
+        leg = pts.actions.AtomicBasketLeg(market=1, side=pts.Side.Buy, price=100, quantity=5,
+            reduce_only=True, take_profit=pts.actions.TriggerLimb(trigger_price=110, max_slippage_bps=75))
+        with pytest.raises(ValueError, match="reduce_only"):
+            leg.as_wire()
+
     def test_atomic_basket_order_default_slippage_is_zero(self):
         action = pts.actions.AtomicBasketOrder(
             owner=b"\x11" * 20,

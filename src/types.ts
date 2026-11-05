@@ -917,6 +917,9 @@ export interface AtomicBasketLeg {
   clientOrderId?: bigint | null;
   /** When true, this leg may only reduce an existing position. */
   reduceOnly?: boolean;
+  /** Whole-position bracket installed by the engine on this leg's first fill. */
+  stopLoss?: TriggerLimb | null;
+  takeProfit?: TriggerLimb | null;
 }
 
 /** Native all-or-revert multi-leg basket order (action `0x1c`). Every leg fills
