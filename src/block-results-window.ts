@@ -26,19 +26,28 @@ import {
 import { bytesToHex } from "./crypto.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 
-export interface BlockResultsWindowSelection {
+interface BlockResultsBudgets {
+  /** Maximum backward-scanned heights, 1..128. Default 32. No partial success. */
+  maxHeights?: number;
+  /** Caller may reduce these aggregate ceilings, never exceed them. */
+  maxDecodedBytes?: number;
+  maxTransactions?: number;
+  maxEvents?: number;
+  maxAttributes?: number;
+}
+
+export interface BlockResultsWindowSelection extends BlockResultsBudgets {
   /** Fixed half-open wall-clock window, in exact epoch milliseconds. */
   fromMs: number;
   toMs: number;
   /** Explicit last height to inspect; its block time must reach toMs. */
   throughHeight: bigint;
-  /** Maximum backward-scanned heights, 1..128. Default 32. No partial success. */
-  maxHeights?: number;
-  /** Caller may reduce these per-window ceilings, never exceed them. */
-  maxDecodedBytes?: number;
-  maxTransactions?: number;
-  maxEvents?: number;
-  maxAttributes?: number;
+}
+
+export interface BlockResultsRangeSelection extends BlockResultsBudgets {
+  /** Exact inclusive bounds. No timestamp-based selection or extra boundary block. */
+  fromHeight: bigint;
+  throughHeight: bigint;
 }
 
 /** One block transaction and its same-index execution result. */
@@ -65,18 +74,22 @@ export interface BlockResultsEvidence {
  * chain, result counts, times, each block's transaction list against its
  * header `data_hash`, and post-state/header bindings are checked. Block hashes
  * are not recomputed from headers, so a coherently lying gateway is not caught.
- * Blocks include the lower-boundary block (before fromMs, or genesis) and may
- * include end-boundary blocks. Consumers must apply [fromMs,toMs) themselves. */
-export interface BlockResultsWindow {
+ * Range bounds are inclusive; equal and sub-millisecond block times are retained. */
+export interface BlockResultsRange {
   source: "trusted-gateway";
-  fromMs: number;
-  toMs: number;
   fromHeight: bigint;
   throughHeight: bigint;
   /** H+1 header binding the final scanned block's post-state hash. */
   anchor: BlockEvidenceHeader;
   /** Ascending heights; no missing or skipped blocks within this range. */
   blocks: BlockResultsEvidence[];
+}
+
+/** Blocks include the lower-boundary block (before fromMs, or genesis) and may
+ * include end-boundary blocks. Consumers must apply [fromMs,toMs) themselves. */
+export interface BlockResultsWindow extends BlockResultsRange {
+  fromMs: number;
+  toMs: number;
 }
 
 const WINDOW_DEFAULT_HEIGHTS = 32;
@@ -95,7 +108,55 @@ export async function readBlockResultsWindow(
   options: BoundedReadOptions,
   transport: ExchangeHttpTransport,
 ): Promise<BlockResultsWindow> {
-  const { fromMs, toMs, throughHeight } = selection;
+  const { fromMs, toMs } = selection;
+  const range = await readBlockResults(
+    gatewayUrl,
+    expectedChainId,
+    selection,
+    { kind: "window", fromMs, toMs },
+    options,
+    transport,
+  );
+  return {
+    source: range.source,
+    fromMs,
+    toMs,
+    fromHeight: range.fromHeight,
+    throughHeight: range.throughHeight,
+    anchor: range.anchor,
+    blocks: range.blocks,
+  };
+}
+
+/** The same bounded decoder as the window read, selected by inclusive heights. */
+export async function readBlockResultsRange(
+  gatewayUrl: string,
+  expectedChainId: Uint8Array,
+  selection: BlockResultsRangeSelection,
+  options: BoundedReadOptions,
+  transport: ExchangeHttpTransport,
+): Promise<BlockResultsRange> {
+  return readBlockResults(
+    gatewayUrl,
+    expectedChainId,
+    selection,
+    { kind: "range", fromHeight: selection.fromHeight },
+    options,
+    transport,
+  );
+}
+
+async function readBlockResults(
+  gatewayUrl: string,
+  expectedChainId: Uint8Array,
+  selection: BlockResultsBudgets & { throughHeight: bigint },
+  boundary:
+    | { kind: "window"; fromMs: number; toMs: number }
+    | { kind: "range"; fromHeight: bigint },
+  options: BoundedReadOptions,
+  transport: ExchangeHttpTransport,
+): Promise<BlockResultsRange> {
+  const { throughHeight } = selection;
   const deadline = readDeadline(options);
   const budget = (
     value: number | undefined,
@@ -110,34 +171,35 @@ export async function readBlockResultsWindow(
   const maxHeights = budget(
     selection.maxHeights ?? WINDOW_DEFAULT_HEIGHTS,
     WINDOW_MAX_HEIGHTS,
-    "window heights",
+    `${boundary.kind} heights`,
   );
   const maxBytes = budget(
     selection.maxDecodedBytes,
     WINDOW_MAX_DECODED_BYTES,
-    "window bytes",
+    `${boundary.kind} bytes`,
   );
   const maxTransactions = budget(
     selection.maxTransactions,
     WINDOW_MAX_TRANSACTIONS,
-    "window transactions",
+    `${boundary.kind} transactions`,
   );
   const maxEvents = budget(
     selection.maxEvents,
     WINDOW_MAX_EVENTS,
-    "window events",
+    `${boundary.kind} events`,
   );
   const maxAttributes = budget(
     selection.maxAttributes,
     WINDOW_MAX_ATTRIBUTES,
-    "window attributes",
+    `${boundary.kind} attributes`,
   );
   if (
-    !Number.isSafeInteger(fromMs) ||
-    fromMs < 0 ||
-    !Number.isSafeInteger(toMs) ||
-    toMs <= fromMs ||
-    toMs > MAX_DATE_MS
+    boundary.kind === "window" &&
+    (!Number.isSafeInteger(boundary.fromMs) ||
+      boundary.fromMs < 0 ||
+      !Number.isSafeInteger(boundary.toMs) ||
+      boundary.toMs <= boundary.fromMs ||
+      boundary.toMs > MAX_DATE_MS)
   )
     invalid("fixed window");
   if (
@@ -146,6 +208,16 @@ export async function readBlockResultsWindow(
     throughHeight >= I64_MAX
   )
     invalid("through height");
+  if (boundary.kind === "range") {
+    if (
+      typeof boundary.fromHeight !== "bigint" ||
+      boundary.fromHeight < 1n ||
+      boundary.fromHeight > throughHeight
+    )
+      invalid("from height");
+    if (throughHeight - boundary.fromHeight + 1n > BigInt(maxHeights))
+      invalid("height budget", "limit");
+  }
   if (!(expectedChainId instanceof Uint8Array) || expectedChainId.length !== 32)
     invalid("pinned chain");
   const chain = Uint8Array.from(expectedChainId);
@@ -161,12 +233,13 @@ export async function readBlockResultsWindow(
       deadline.remaining(),
     );
     decodedBytes += new TextEncoder().encode(JSON.stringify(raw)).length;
-    if (decodedBytes > maxBytes) invalid("window byte budget", "limit");
+    if (decodedBytes > maxBytes)
+      invalid(`${boundary.kind} byte budget`, "limit");
     deadline.remaining();
     return rpcResult(raw);
   };
   const decodeEvents = (value: unknown): TransactionEvidenceEvent[] => {
-    // Enforce the remaining window budget before allocating decoded lists.
+    // Enforce the remaining aggregate budget before allocating decoded lists.
     // A busy block must not inherit the single-transaction evidence limits.
     const decoded = events(value, {
       maxEvents: maxEvents - eventCount,
@@ -184,8 +257,10 @@ export async function readBlockResultsWindow(
     throughHeight + 1n,
     chain,
   );
-  const fromNs = BigInt(fromMs) * 1_000_000n;
-  const toNs = BigInt(toMs) * 1_000_000n;
+  const fromNs =
+    boundary.kind === "window" ? BigInt(boundary.fromMs) * 1_000_000n : null;
+  const toNs =
+    boundary.kind === "window" ? BigInt(boundary.toMs) * 1_000_000n : null;
   const blocks: BlockResultsEvidence[] = [];
   let next = anchor;
   for (
@@ -198,7 +273,11 @@ export async function readBlockResultsWindow(
     if (next.parentHash !== header.hash) invalid("parent hash continuity");
     if (rfc3339(header.time).nanos > rfc3339(next.time).nanos)
       invalid("block time continuity");
-    if (height === throughHeight && rfc3339(header.time).nanos < toNs)
+    if (
+      height === throughHeight &&
+      toNs !== null &&
+      rfc3339(header.time).nanos < toNs
+    )
       invalid("source has not reached window end");
     const rawTransactions = object(
       object(response.block, "block").data,
@@ -210,7 +289,7 @@ export async function readBlockResultsWindow(
     const txs = (rawTransactions ?? []) as unknown[];
     transactionCount += txs.length;
     if (transactionCount > maxTransactions)
-      invalid("window transaction budget", "limit");
+      invalid(`${boundary.kind} transaction budget`, "limit");
     const blockTransactions = txs.map((value) =>
       bytes(value, "block transaction bytes"),
     );
@@ -257,11 +336,14 @@ export async function readBlockResultsWindow(
       finalizeBlockEvents: decodeEvents(result.finalize_block_events ?? []),
     });
     deadline.remaining();
-    if (rfc3339(header.time).nanos < fromNs || height === 1n) {
+    const complete =
+      boundary.kind === "range"
+        ? height === boundary.fromHeight
+        : (fromNs !== null && rfc3339(header.time).nanos < fromNs) ||
+          height === 1n;
+    if (complete) {
       return {
         source: "trusted-gateway",
-        fromMs,
-        toMs,
         fromHeight: height,
         throughHeight,
         anchor,
@@ -273,6 +355,6 @@ export async function readBlockResultsWindow(
   throw new GatewayReadError(
     "limit",
     "height budget",
-    "Block-results window exceeds height budget; no complete window available",
+    `Block-results ${boundary.kind} exceeds height budget; no complete ${boundary.kind} available`,
   );
 }
