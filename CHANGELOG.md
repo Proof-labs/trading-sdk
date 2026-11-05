@@ -7,6 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [10.0.0] — 2026-11-05
+
+TypeScript MAJOR release for proof-wire 10.0.0 (exchange 2.23.0 / protocol 11.0):
+F16 certified oracle prices, sub-accounts always on, and `CreateMarket` tick and
+lot size. Rust and Python versions are unchanged.
+
 ### Breaking changes
 
 - **`CreateMarket` carries `tickSize` and `lotSize` (exchange#1327).** Both
@@ -1945,7 +1951,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.2.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.3.0...HEAD
+[9.3.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.2.0...npm-v9.3.0
 [9.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.1.0...npm-v9.2.0
 [9.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.0.0...npm-v9.1.0
 [9.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...npm-v9.0.0
