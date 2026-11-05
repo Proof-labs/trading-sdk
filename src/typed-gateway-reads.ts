@@ -35,7 +35,10 @@ import {
   type TransactionEvidenceSelection,
 } from "./committed-transaction.js";
 import {
+  readBlockResultsRange,
   readBlockResultsWindow,
+  type BlockResultsRange,
+  type BlockResultsRangeSelection,
   type BlockResultsWindow,
   type BlockResultsWindowSelection,
 } from "./block-results-window.js";
@@ -194,6 +197,21 @@ export class EvidenceReads extends ReadClient {
     return readBlockResultsWindow(
       this.gatewayUrl,
       this.requirePinnedChain("blockResultsWindow"),
+      selection,
+      options,
+      this.httpTransport,
+    );
+  }
+  /** Exact inclusive heights, with the same trusted-gateway checks and budgets.
+   * The span may not exceed `maxHeights` (default 32, at most 128); a wider
+   * range fails with `GatewayReadError` kind `limit` before any request. */
+  async blockResultsRange(
+    selection: BlockResultsRangeSelection,
+    options: BoundedReadOptions = {},
+  ): Promise<BlockResultsRange> {
+    return readBlockResultsRange(
+      this.gatewayUrl,
+      this.requirePinnedChain("blockResultsRange"),
       selection,
       options,
       this.httpTransport,

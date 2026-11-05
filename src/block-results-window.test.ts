@@ -15,7 +15,7 @@ const appHash = (height: number) =>
   base64(Uint8Array.from(hex(height).match(/../g)!, (v) => parseInt(v, 16)));
 const rpc = <T>(result: T) => ({ jsonrpc: "2.0", id: -1, result });
 
-function fixture(first = 100) {
+function fixture(first = 100, last = 103) {
   const signedBytes = signAndEncode(
     chainIdFromString(CHAIN),
     {
@@ -106,7 +106,7 @@ function fixture(first = 100) {
   };
   const blocks = new Map<number, ReturnType<typeof block>>();
   const executions = new Map<number, ReturnType<typeof results>>();
-  for (let height = first; height <= 103; height++) {
+  for (let height = first; height <= last; height++) {
     blocks.set(height, block(height));
     executions.set(height, results(height));
   }
@@ -181,11 +181,21 @@ describe("bounded trusted-gateway block/results windows", () => {
       { maxHeights: 0 },
     ]) {
       f.transport.mockClear();
+      const label = {
+        maxDecodedBytes: "bytes",
+        maxTransactions: "transactions",
+        maxEvents: "events",
+        maxAttributes: "attributes",
+        maxHeights: "heights",
+      }[Object.keys(limits)[0]];
       await expect(
         f.client
           .reads()
           .evidence.blockResultsWindow({ ...f.selection, ...limits }),
-      ).rejects.toMatchObject({ kind: "configuration" });
+      ).rejects.toMatchObject({
+        kind: "configuration",
+        field: `window ${label}`,
+      });
       expect(f.transport).not.toHaveBeenCalled();
     }
   });
@@ -369,6 +379,12 @@ describe("bounded trusted-gateway block/results windows", () => {
       mutate(f);
       await expect(
         f.client.reads().evidence.blockResultsWindow(f.selection),
+      ).rejects.toMatchObject({ name: "GatewayReadError" });
+      await expect(
+        f.client.reads().evidence.blockResultsRange({
+          fromHeight: 100n,
+          throughHeight: 102n,
+        }),
       ).rejects.toMatchObject({ name: "GatewayReadError" });
     },
   );
@@ -644,5 +660,281 @@ describe("bounded trusted-gateway block/results windows", () => {
         f.client.reads().evidence.blockResultsWindow(f.selection),
       ).rejects.toMatchObject({ kind: "malformed" });
     }
+  });
+});
+
+describe("exact inclusive trusted-gateway block/results ranges", () => {
+  const selection = { fromHeight: 100n, throughHeight: 102n, maxHeights: 3 };
+  it.each([(1n << 53n) + 1n, (1n << 63n) - 4n])(
+    "preserves exact heights above Number.MAX_SAFE_INTEGER from %s",
+    async (fromHeight) => {
+      const f = fixture();
+      const replies = new Map<string, unknown>();
+      for (let index = 100; index <= 103; index++) {
+        const height = fromHeight + BigInt(index - 100);
+        const block = f.blocks.get(index)!;
+        block.result.block.header.height = height.toString();
+        Object.assign(block.result.block.header, {
+          data_hash: transactionsRoot([f.signedBytes]),
+        });
+        replies.set(`/v1/block?height=${height}`, block);
+        const results = f.executions.get(index)!;
+        results.result.height = height.toString();
+        replies.set(`/v1/block_results?height=${height}`, results);
+      }
+      const transport = vi.fn<ExchangeHttpTransport>(async (url) => {
+        const parsed = new URL(url);
+        const value = replies.get(parsed.pathname + parsed.search);
+        return value
+          ? new Response(JSON.stringify(value))
+          : new Response("missing", { status: 404 });
+      });
+      const client = new ExchangeClient({
+        gatewayUrl: "https://gateway.example",
+        chainId: CHAIN,
+        httpTransport: transport,
+      });
+      const range = await client.reads().evidence.blockResultsRange({
+        fromHeight,
+        throughHeight: fromHeight + 2n,
+      });
+      expect(range.blocks.map((b) => b.header.height)).toEqual([
+        fromHeight,
+        fromHeight + 1n,
+        fromHeight + 2n,
+      ]);
+      expect(range.anchor.height).toBe(fromHeight + 3n);
+      expect(
+        transport.mock.calls.map(([url]) =>
+          new URL(url).searchParams.get("height"),
+        ),
+      ).toEqual(
+        [3n, 2n, 2n, 1n, 1n, 0n, 0n].map((offset) =>
+          (fromHeight + offset).toString(),
+        ),
+      );
+    },
+  );
+  it("accepts exactly 128 heights and rejects an extra height before I/O", async () => {
+    const f = fixture(1, 129);
+    f.blocks.get(1)!.result.block.header.app_hash = "";
+    f.blocks.get(1)!.result.block.header.last_block_id.hash = "";
+    const range = await f.client.reads().evidence.blockResultsRange({
+      fromHeight: 1n,
+      throughHeight: 128n,
+      maxHeights: 128,
+    });
+    expect(range.blocks).toHaveLength(128);
+    expect(range.anchor.height).toBe(129n);
+    expect(f.transport).toHaveBeenCalledTimes(257);
+    f.transport.mockClear();
+    await expect(
+      f.client.reads().evidence.blockResultsRange({
+        fromHeight: 1n,
+        throughHeight: 129n,
+        maxHeights: 128,
+      }),
+    ).rejects.toMatchObject({ kind: "limit", field: "height budget" });
+    expect(f.transport).not.toHaveBeenCalled();
+  });
+  it("shares complete evidence with windows without returning time-selection fields", async () => {
+    const f = fixture();
+    const window = await f.client
+      .reads()
+      .evidence.blockResultsWindow(f.selection);
+    f.transport.mockClear();
+    const range = await f.client.reads().evidence.blockResultsRange(selection);
+    expect(range).toEqual({
+      source: window.source,
+      fromHeight: 100n,
+      throughHeight: 102n,
+      anchor: window.anchor,
+      blocks: window.blocks,
+    });
+    expect(range).not.toHaveProperty("fromMs");
+    expect(range).not.toHaveProperty("toMs");
+    expect(f.transport).toHaveBeenCalledTimes(7);
+    expect(
+      f.transport.mock.calls.every(
+        ([url]) => new URL(url).origin === "https://gateway.example",
+      ),
+    ).toBe(true);
+  });
+  it("reads a single requested height plus its anchor, not an earlier time boundary", async () => {
+    const f = fixture();
+    f.blocks.delete(100);
+    f.blocks.delete(101);
+    f.executions.delete(101);
+    const range = await f.client.reads().evidence.blockResultsRange({
+      fromHeight: 102n,
+      throughHeight: 102n,
+      maxHeights: 1,
+    });
+    expect(range.blocks.map((b) => b.header.height)).toEqual([102n]);
+    expect(range.anchor.height).toBe(103n);
+    expect(f.transport).toHaveBeenCalledTimes(3);
+  });
+  it("accepts genesis as an exact lower bound without a preceding block", async () => {
+    const f = fixture(1);
+    f.blocks.get(1)!.result.block.header.app_hash = "";
+    f.blocks.get(1)!.result.block.header.last_block_id.hash = "";
+    const range = await f.client
+      .reads()
+      .evidence.blockResultsRange({ fromHeight: 1n, throughHeight: 1n });
+    expect(range.blocks).toHaveLength(1);
+    expect(range.blocks[0].header).toMatchObject({
+      height: 1n,
+      parentHash: null,
+      appHash: null,
+    });
+    expect(f.transport).toHaveBeenCalledTimes(3);
+  });
+  it.each([0, 1, 100_000, 1_000_000])(
+    "keeps every height at %i ns timestamp spacing",
+    async (spacing) => {
+      const f = fixture();
+      for (let h = 100; h <= 103; h++) {
+        f.blocks.get(h)!.result.block.header.time =
+          `2026-10-26T00:00:00.${String((h - 100) * spacing).padStart(9, "0")}Z`;
+      }
+      const range = await f.client
+        .reads()
+        .evidence.blockResultsRange(selection);
+      expect(range.blocks.map((b) => b.header.height)).toEqual([
+        100n,
+        101n,
+        102n,
+      ]);
+      expect(range.blocks.map((b) => b.header.time)).toEqual(
+        [100, 101, 102].map((h) => f.blocks.get(h)!.result.block.header.time),
+      );
+      expect(f.transport).toHaveBeenCalledTimes(7);
+    },
+  );
+  it("rejects a backwards nanosecond even when Date.parse loses the difference", async () => {
+    const f = fixture();
+    for (const block of f.blocks.values())
+      block.result.block.header.time = "2026-10-26T00:00:00.000000001Z";
+    f.blocks.get(101)!.result.block.header.time =
+      "2026-10-26T00:00:00.000000002Z";
+    await expect(
+      f.client.reads().evidence.blockResultsRange(selection),
+    ).rejects.toThrow("block time continuity");
+  });
+  it("captures the exact bounds and all budgets before asynchronous reads", async () => {
+    const f = fixture(),
+      request = { ...selection, maxEvents: 9 };
+    const pending = f.client.reads().evidence.blockResultsRange(request);
+    request.fromHeight = 1n;
+    request.throughHeight = 1n;
+    request.maxHeights = 1;
+    request.maxEvents = 1;
+    expect(await pending).toMatchObject({
+      fromHeight: 100n,
+      throughHeight: 102n,
+    });
+  });
+  it("requires a chain pin and valid, fully bounded heights before I/O", async () => {
+    const f = fixture();
+    await expect(
+      new ExchangeClient({ httpTransport: f.transport })
+        .reads()
+        .evidence.blockResultsRange(selection),
+    ).rejects.toThrow("pinned chainId");
+    const fromHeight = { kind: "malformed", field: "from height" };
+    const throughHeight = { kind: "malformed", field: "through height" };
+    const span = { kind: "limit", field: "height budget" };
+    const budget = (name: string) => ({
+      kind: "configuration",
+      field: `range ${name}`,
+    });
+    for (const [invalid, expected] of [
+      [{ fromHeight: 0n }, fromHeight],
+      [{ fromHeight: -1n }, fromHeight],
+      [{ fromHeight: 103n }, fromHeight],
+      [{ fromHeight: 100 as never }, fromHeight],
+      [{ throughHeight: 102 as never }, throughHeight],
+      [{ throughHeight: (1n << 63n) - 1n }, throughHeight],
+      [{ throughHeight: 0n }, throughHeight],
+      [{ maxHeights: 0 }, budget("heights")],
+      [{ maxHeights: 129 }, budget("heights")],
+      [{ maxHeights: 2 }, span],
+      [{ fromHeight: 1n, throughHeight: 33n, maxHeights: undefined }, span],
+      [{ maxDecodedBytes: 8 * 1024 * 1024 + 1 }, budget("bytes")],
+      [{ maxTransactions: 10001 }, budget("transactions")],
+      [{ maxEvents: 16385 }, budget("events")],
+      [{ maxAttributes: 65537 }, budget("attributes")],
+      [{ maxEvents: 0 }, budget("events")],
+    ] as const)
+      await expect(
+        f.client
+          .reads()
+          .evidence.blockResultsRange({ ...selection, ...invalid }),
+      ).rejects.toMatchObject(expected);
+    expect(f.transport).not.toHaveBeenCalled();
+  });
+  it.each(["anchor", "middle block", "middle results"])(
+    "refuses pruned %s without partial coverage",
+    async (missing) => {
+      const f = fixture();
+      if (missing === "anchor") f.blocks.delete(103);
+      else if (missing === "middle block") f.blocks.delete(101);
+      else f.executions.delete(101);
+      await expect(
+        f.client.reads().evidence.blockResultsRange(selection),
+      ).rejects.toThrow();
+    },
+  );
+  it.each([{ maxTransactions: 3 }, { maxEvents: 9 }, { maxAttributes: 12 }])(
+    "shares exact aggregate budget %j and rejects one less",
+    async (budget) => {
+      const f = fixture();
+      await expect(
+        f.client
+          .reads()
+          .evidence.blockResultsRange({ ...selection, ...budget }),
+      ).resolves.toMatchObject({ fromHeight: 100n });
+      const reduced = Object.fromEntries(
+        Object.entries(budget).map(([key, value]) => [key, value - 1]),
+      );
+      await expect(
+        f.client
+          .reads()
+          .evidence.blockResultsRange({ ...selection, ...reduced }),
+      ).rejects.toMatchObject({ kind: "limit" });
+    },
+  );
+  it("enforces the range byte budget and one shared cancellable deadline", async () => {
+    const f = fixture();
+    await expect(
+      f.client
+        .reads()
+        .evidence.blockResultsRange({ ...selection, maxDecodedBytes: 1 }),
+    ).rejects.toMatchObject({ kind: "limit", field: "range byte budget" });
+    f.transport.mockClear();
+    let clock = 100;
+    const spy = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const implementation = f.transport.getMockImplementation()!;
+    f.transport.mockImplementation(async (...args) => {
+      clock += 3;
+      return implementation(...args);
+    });
+    try {
+      await expect(
+        f.client
+          .reads()
+          .evidence.blockResultsRange(selection, { timeoutMs: 12 }),
+      ).rejects.toThrow(/deadline/);
+      expect(f.transport.mock.calls.length).toBeLessThan(7);
+    } finally {
+      spy.mockRestore();
+    }
+    const before = f.transport.mock.calls.length;
+    await expect(
+      f.client.reads().evidence.blockResultsRange(selection, {
+        signal: AbortSignal.abort(new Error("cancelled")),
+      }),
+    ).rejects.toThrow("cancelled");
+    expect(f.transport).toHaveBeenCalledTimes(before);
   });
 });
