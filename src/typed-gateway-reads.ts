@@ -4,6 +4,10 @@ import {
   type FinalizedOrderbookOptions,
 } from "./finalized-orderbook.js";
 import {
+  readFinalizedAuthorizedAgents,
+  type FinalizedAuthorizedAgents,
+} from "./authorized-agents.js";
+import {
   readFinalizedOraclePermissions,
   type FinalizedOraclePermissions,
 } from "./finalized-oracle-read.js";
@@ -73,6 +77,17 @@ class ReadClient {
 }
 /** Same-view facts. See FinalizedReadWitness for the trust and binding boundary. */
 export class FinalizedReads extends ReadClient {
+  async authorizedAgents(
+    owner: string,
+    options: BoundedReadOptions = {},
+  ): Promise<FinalizedAuthorizedAgents> {
+    return readFinalizedAuthorizedAgents(
+      this.gatewayUrl,
+      owner,
+      options,
+      this.httpTransport,
+    );
+  }
   async account(
     owner: string,
     options: BoundedReadOptions = {},

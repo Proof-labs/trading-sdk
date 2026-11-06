@@ -3,3 +3,4 @@
 //! drift). Client representation that needs it wraps these.
 
 pub use proof_wire::query::{AccountInfo, BindingScenario, PositionBrief};
+pub use proof_wire::query_v2::{AuthorizedAgents, AUTHORIZED_AGENTS_LIMIT};

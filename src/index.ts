@@ -9,6 +9,7 @@ export {
   type InsuranceHistoryStream,
 } from "./insurance-fund-history.js";
 export { GatewayReadError } from "./errors.js";
+export type { FinalizedAuthorizedAgents } from "./authorized-agents.js";
 export {
   hexAddress,
   hash32,
