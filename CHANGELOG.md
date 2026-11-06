@@ -7,6 +7,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [10.2.0] — 2026-11-06
+
+Release preparation for npm 10.2.0 and Python 5.0.0; publication is a separate
+approved step. npm adds refusal reason metadata without changing its outcome
+union (MINOR). Python changes refusal and ambiguous-submission exceptions
+(MAJOR). Rust crate versions are unchanged. Python also includes the shared
+core's F16 action and wire changes described under 10.0.0 below.
+
 ### Fixed
 
 - **Preserve structured gateway refusals.** Valid `status: "refused"`
@@ -2015,7 +2023,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.2.0...HEAD
+[10.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.1.0...npm-v10.2.0
 [10.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.0.0...npm-v10.1.0
 [10.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.2.0...npm-v10.0.0
 [9.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.1.0...npm-v9.2.0
