@@ -1290,6 +1290,10 @@ class ExchangeClient:
             {"owner": owner, "order": order, "limit": limit, "cursor": cursor},
             data_key="account_events",
         )
+        if not isinstance(page.raw.get("account_events"), list):
+            raise CodecError("expected account_events rows in account history page")
+        if "next_cursor" not in page.raw or (page.next_cursor is not None and not isinstance(page.next_cursor, str)):
+            raise CodecError("invalid account event cursor")
         if page.next_cursor == "":
             page.next_cursor = None
         return page

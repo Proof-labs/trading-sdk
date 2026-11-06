@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from proof_trading_sdk import ExchangeClient, SdkConfig
+from proof_trading_sdk import CodecError, ExchangeClient, SdkConfig
 
 
 @pytest.mark.parametrize("options,order", [({}, "desc"), ({"order": "asc"}, "asc")])
@@ -41,5 +41,20 @@ def test_account_history_request_and_cursor_pages(options, order):
         with pytest.raises(ValueError, match="order"):
             client.history_account_events("ab" * 20, order="invalid")
         assert len(requests) == 2
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("page", [
+    {"next_cursor": ""}, {"account_events": {}, "next_cursor": ""},
+    {"account_events": []}, {"account_events": [], "next_cursor": 1},
+])
+def test_wrong_page_shape_is_not_empty_history(page):
+    client = ExchangeClient(config=SdkConfig(gateway_url="https://gateway.example"))
+    client._http.close()
+    client._http = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=page)))
+    try:
+        with pytest.raises(CodecError):
+            client.history_account_events("ab" * 20)
     finally:
         client.close()
