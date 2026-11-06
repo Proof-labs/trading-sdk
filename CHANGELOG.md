@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Python reads per-account funding payments and position history with cursor pagination. Passing the unsupported `after_height` filter now raises `ValueError`.
+
 ## [10.1.0] — 2026-11-05
 
 TypeScript MINOR release: two optional client options for callers that sign,
