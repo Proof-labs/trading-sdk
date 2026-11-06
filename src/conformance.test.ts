@@ -821,6 +821,16 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       value: { eventId: e.event_id as number, yesPrice: big(e.yes_price) },
     };
   }
+  if (v.SettleEvent) {
+    const e = v.SettleEvent as Record<string, unknown>;
+    return {
+      kind: "SettleEvent",
+      value: {
+        eventId: e.event_id as number,
+        outcome: Outcome[e.outcome as keyof typeof Outcome],
+      },
+    };
+  }
   if (v.WithdrawInsuranceFund) {
     const w = v.WithdrawInsuranceFund as Record<string, unknown>;
     return {
@@ -1131,7 +1141,7 @@ describe("conformance vectors (TypeScript)", () => {
     // insurance fund and withdraw, void-event),
     // approve, reject, and all three emergency arms (PauseMarket,
     // HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(32);
+    expect(govCases.length).toBe(33);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

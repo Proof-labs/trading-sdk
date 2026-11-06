@@ -1169,6 +1169,14 @@ export interface SetMarginOffsetPolicy {
   pairs: MarginOffsetPair[];
 }
 
+/** Settles a price event whose resolution window closed unresolved
+ *  (inner tag 30), on the outcome the quorum names. `Yes` or `No` only:
+ *  the encoder and the engine refuse `Void`. */
+export interface SettleEvent {
+  eventId: number;
+  outcome: Outcome;
+}
+
 /** Voids an event (inner tag 29): every binary and conditional on it
  *  settles in cash at `yesPrice`. */
 export interface VoidEvent {
@@ -1240,6 +1248,7 @@ export type AdminAction =
   | { kind: "ExecInsuranceFund"; value: ExecInsuranceFund }
   | { kind: "SetMarginOffsetPolicy"; value: SetMarginOffsetPolicy }
   | { kind: "VoidEvent"; value: VoidEvent }
+  | { kind: "SettleEvent"; value: SettleEvent }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }

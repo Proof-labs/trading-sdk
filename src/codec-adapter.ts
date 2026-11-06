@@ -36,6 +36,7 @@ import {
   type ScheduleUpgrade,
   type SetLiquidationConfig,
   type SetOperatorReceiptRegistry,
+  type SettleEvent,
   type VoidEvent,
 } from "./types.js";
 import {
@@ -187,6 +188,17 @@ function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   }
   if (v.kind === "VoidEvent") {
     validateVoidEvent(v.value as VoidEvent);
+  }
+  if (v.kind === "SettleEvent") {
+    validateSettleEvent(v.value as SettleEvent);
+  }
+}
+
+function validateSettleEvent(action: SettleEvent): void {
+  if (action.outcome !== Outcome.Yes && action.outcome !== Outcome.No) {
+    throw new Error(
+      `settleEvent outcome must be Yes or No, got ${Outcome[action.outcome] ?? action.outcome}`,
+    );
   }
 }
 

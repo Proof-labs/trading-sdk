@@ -100,6 +100,7 @@ export {
   type InsuranceFundAllocation,
   type WithdrawInsuranceFund,
   type VoidEvent,
+  type SettleEvent,
   type LiquidationConfig,
   type LiquidationConfigInfo,
   type SetLiquidationConfig,
