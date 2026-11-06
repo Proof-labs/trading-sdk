@@ -15,7 +15,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   encoder refuses a price outside that range; the Rust and Python surfaces
   leave the check to the engine. `decodeVoidSettlementEvent` decodes the
   `event_voided` and `conditional_void_settled` events. proof-wire moves to
-  mirror commit `bbc3ff2d`, which carries exchange#1361. Additive (MINOR).
+  mirror commit `eecafea4`, which adds only `VoidEvent` to 10.0.0. Additive (MINOR).
 
 ### Fixed
 

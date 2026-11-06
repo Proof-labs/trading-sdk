@@ -24,9 +24,9 @@ rmpv = { version = "1.3.1", features = ["with-serde"] }
 # The wire contract, one definition shared with the engine. `version` pins
 # the compatible proof-wire major. The rev stays a commit sha, never a tag
 # name, so the pin cannot move (#123).
-# proof-wire 10.0.0 at mirror dev bbc3ff2d (exchange dfd6c9a), carrying
-# exchange#1358, exchange#1327, exchange#1345 and exchange#1361 (VoidEvent).
-proof-wire = { version = "10", git = "https://github.com/Proof-labs/wire.git", rev = "bbc3ff2d71b5d90a7b63d7b6c999762b2abe30ea", features = ["bridge"] }
+# proof-wire 10.0.0 plus VoidEvent (inner admin tag 29), untagged; move to
+# the next proof-wire release once one is cut.
+proof-wire = { version = "10", git = "https://github.com/Proof-labs/wire.git", rev = "eecafea4aeac0d52107efd9b1b336e11f35fef1e", features = ["bridge"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.
