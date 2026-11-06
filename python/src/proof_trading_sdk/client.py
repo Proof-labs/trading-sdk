@@ -1031,7 +1031,7 @@ class ExchangeClient:
             raise ValueError("trigger owner must be a 40-character hex address")
         path = f"/v1/triggers/{owner_hex.lower()}"
         resp = self._get(path)
-        raw = self._decode_envelope(_response_json(resp), source=path, require_data=True)
+        raw = self._decode_envelope(_response_object(resp), source=path, require_data=True)
         if not isinstance(raw, (list, tuple)):
             raise ProofTradingSdkError("trigger decode: response is not an array")
         return [self._decode_trigger_info(item) for item in raw]

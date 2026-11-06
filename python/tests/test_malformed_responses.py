@@ -54,6 +54,7 @@ def test_malformed_reads_raise_sdk_transport_error(method, args):
 @pytest.mark.parametrize("method,args", [
     ("status", ()), ("history_fills", ("ab" * 20,)), ("account", ("ab" * 20,)),
     ("history_triggers", ("ab" * 20,)), ("history_trigger_markets", (1,)),
+    ("position_triggers", ("ab" * 20,)),
 ])
 def test_object_reads_reject_valid_json_of_the_wrong_shape(body, method, args):
     client = client_for(body)
