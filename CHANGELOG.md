@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Python account-event history supports explicit ordering and cursor pagination. Passing the unsupported `after_id` filter now raises `ValueError`.
+- Python account-event history supports explicit ordering and cursor pagination. The client validates owner addresses and page limits (1–5000) before sending a request. Passing the unsupported `after_id` filter now raises `ValueError`.
 
 ## [10.1.0] — 2026-11-05
 

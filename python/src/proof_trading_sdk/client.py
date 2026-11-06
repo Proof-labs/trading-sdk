@@ -1278,7 +1278,11 @@ class ExchangeClient:
     ) -> CursorPage:
         """Account events, newest first by default; reuse the returned cursor
         with the same owner and ordering until next_cursor is None.
+        Each page accepts a limit of 1 to 5000 events.
         """
+        owner_hex = canonical_owner(owner)
+        if type(limit) is not int or not 1 <= limit <= 5000:
+            raise ValueError("account event limit must be an integer between 1 and 5000")
         if after_id is not None:
             raise ValueError("after_id is unsupported; paginate with cursor instead")
         if cursor == "":
@@ -1287,7 +1291,7 @@ class ExchangeClient:
             raise ValueError("order must be 'asc' or 'desc'")
         page = self._cursor_page(
             "GET", "/v1/history/account-events",
-            {"owner": owner, "order": order, "limit": limit, "cursor": cursor},
+            {"owner": owner_hex, "order": order, "limit": limit, "cursor": cursor},
             data_key="account_events",
         )
         if not isinstance(page.raw.get("account_events"), list):

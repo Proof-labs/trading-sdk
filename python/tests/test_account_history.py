@@ -28,7 +28,7 @@ def test_account_history_request_and_cursor_pages(options, order):
         first = client.history_account_events(bytes.fromhex("ab" * 20), None, 1, **options)
         assert first.data == [{"event_id": 14}]
         second = client.history_account_events(
-            "ab" * 20, None, 1, cursor=first.next_cursor, **options
+            "0x" + "AB" * 20, None, 1, cursor=first.next_cursor, **options
         )
         assert second.data == [{"event_id": 13}]
         assert second.next_cursor is None
@@ -56,5 +56,39 @@ def test_wrong_page_shape_is_not_empty_history(page):
     try:
         with pytest.raises(CodecError):
             client.history_account_events("ab" * 20)
+    finally:
+        client.close()
+
+
+def test_upper_bound_and_uppercase_hex_prefix():
+    def handler(request):
+        assert request.url.params["owner"] == "ab" * 20
+        assert request.url.params["limit"] == "5000"
+        return httpx.Response(200, json={"account_events": [], "next_cursor": ""})
+
+    client = ExchangeClient(config=SdkConfig(gateway_url="https://gateway.example"))
+    client._http.close()
+    client._http = httpx.Client(transport=httpx.MockTransport(handler))
+    try:
+        page = client.history_account_events("0X" + "AB" * 20, limit=5000)
+        assert page.next_cursor is None
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("invalid", [
+    {"limit": True}, {"limit": 0}, {"limit": 5001}, {"limit": 1.0}, {"limit": "1"},
+    {"owner": "zz" * 20}, {"owner": bytes(19)}, {"owner": "0x1234"},
+])
+def test_invalid_account_history_input_fails_before_request(invalid):
+    def unexpected_request(request):
+        pytest.fail("invalid inputs reached the gateway")
+
+    client = ExchangeClient(config=SdkConfig(gateway_url="https://gateway.example"))
+    client._http.close()
+    client._http = httpx.Client(transport=httpx.MockTransport(unexpected_request))
+    try:
+        with pytest.raises(ValueError, match=next(iter(invalid))):
+            client.history_account_events(**{"owner": "ab" * 20, **invalid})
     finally:
         client.close()
