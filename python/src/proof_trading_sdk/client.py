@@ -1447,8 +1447,10 @@ class ExchangeClient:
     ) -> list[dict[str, t.Any]]:
         """Raw withdrawal account-event records for *owner*, newest first.
 
-        Returns a bounded merged head (default 200). Ownerless confirmations
-        are not indexed here; use ``withdrawal_status`` for current status.
+        This method returns up to ``limit`` records across event types (default 200).
+        A ``withdrawal_confirmed`` event appears only when indexed under this
+        owner. A confirmation without an owner cannot appear in this account
+        history. Use ``withdrawal_status(withdrawal_id)`` to check its current status.
         Request/refund amounts omit custody fees, so do not infer cash deltas.
         """
         return self._history_cashflow("withdrawals", owner, from_ms, to_ms, limit)
