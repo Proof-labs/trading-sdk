@@ -5,7 +5,10 @@ import { ACTION_TAG_BY_KIND, decodeAdminAction } from "./governance-query.js";
 import type { Action, AdminAction } from "./types.js";
 import { decodeVoidSettlementEvent } from "./void-events.js";
 
-/** exchange-wire's bytes for `VoidEvent { event_id: 4, yes_price: 350_000 }`. */
+/** exchange-wire's bytes for `VoidEvent { event_id: 4, yes_price: 350_000 }`:
+ *  the inner action of `propose_admin_action/void_event` in
+ *  `conformance/codec.ndjson` (regenerate with
+ *  `cargo run -p proof-trading-sdk-conformance --bin gen-vectors`). */
 const VOID_HEX = "81a9566f69644576656e749204ce00055730";
 
 const voidEvent = (yesPrice = 350_000n): AdminAction => ({

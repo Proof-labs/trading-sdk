@@ -700,7 +700,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }}
             }),
         ),
-        // VoidEvent (inner tag 0x1D, DEC-232).
+        // VoidEvent (inner tag 0x1D).
         codec_case(
             "propose_admin_action/void_event",
             PROPOSE_ADMIN_ACTION,
