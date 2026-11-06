@@ -228,30 +228,23 @@ describe("codec v1", () => {
     }
   });
 
-  it("refuses retired action bytes in both directions", () => {
-    for (const [name, byte] of [
-      ["OracleUpdate", 0x03],
-      ["RunLiquidationSweep", 0x11],
-      ["RunFundingTick", 0x12],
-      ["OracleUpdateComposite", 0x14],
-    ] as const) {
-      expect(name in ActionType).toBe(false);
-      expect(() =>
-        encodePayloadBytes({
-          type: name,
-          data: { market: 1, price: 1n, signer: SIGNER },
-        } as unknown as Action),
-      ).toThrow();
-      // A well-formed envelope must fail on its retired tag alone.
-      const wire = new Encoder().encode([
-        2,
-        byte,
-        1,
-        new Encoder().encode([1, 1, Array.from(SIGNER), 0]),
-        new Uint8Array(32),
-        new Uint8Array(64),
-      ]);
-      expect(() => decodeTx(wire)).toThrow();
+  it("round-trips OracleUpdate", () => {
+    const action: Action = {
+      type: "OracleUpdate",
+      data: {
+        market: 1,
+        price: 5000n,
+        signer: SIGNER,
+        publishTimeMs: 1_000_000n,
+      },
+    };
+    const bytes = encodeTx(action, 7n);
+    const { action: decoded } = decodeTx(bytes);
+    expect(decoded.type).toBe("OracleUpdate");
+    if (decoded.type === "OracleUpdate") {
+      expect(decoded.data.market).toBe(1);
+      expect(decoded.data.price).toBe(5000n);
+      expect(decoded.data.publishTimeMs).toBe(1_000_000n);
     }
   });
 
@@ -321,6 +314,15 @@ describe("codec v1 all action types", () => {
       },
     },
     { type: "CancelOrder", data: { orderId: 42n, owner: OWNER } },
+    {
+      type: "OracleUpdate",
+      data: {
+        market: 1,
+        price: 50000n,
+        signer: SIGNER,
+        publishTimeMs: 100n,
+      },
+    },
     {
       type: "MarketOrder",
       data: { market: 1, owner: OWNER, side: Side.Sell, quantity: 5n },
@@ -609,6 +611,19 @@ describe("codec v1 all action types", () => {
     const { action: decoded } = decodeTx(encodeTx(action, 12n));
     // The unit variant serializes as a bare string, not a `{ Variant: {} }`
     // map; it must survive encode→decode structurally identical.
+    expect(decoded).toEqual(action);
+  });
+
+  it("round-trips ProposeAdminAction with the EnableSubAccounts unit variant", () => {
+    const action: Action = {
+      type: "ProposeAdminAction",
+      data: {
+        proposer: new Uint8Array(20).fill(0xa1),
+        registryVersion: 1n,
+        action: { kind: "EnableSubAccounts" },
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 12n));
     expect(decoded).toEqual(action);
   });
 
@@ -1176,6 +1191,15 @@ describe("codec v2 signing", () => {
         },
       },
       { type: "CancelOrder", data: { orderId: 42n, owner: OWNER } },
+      {
+        type: "OracleUpdate",
+        data: {
+          market: 1,
+          price: 50000n,
+          signer: SIGNER,
+          publishTimeMs: 200n,
+        },
+      },
       {
         type: "MarketOrder",
         data: { market: 1, owner: OWNER, side: Side.Sell, quantity: 5n },
@@ -1826,34 +1850,6 @@ describe("legacy short-payload decode compatibility", () => {
       expect(action.data.postOnly).toBe(false);
       expect(action.data.reduceOnly).toBe(false);
       expect(action.data.timeInForce).toBe(TimeInForce.Gtc);
-    }
-  });
-
-  it("decodes a 12-field CreateMarket from before the grid, tick and lot 0", () => {
-    // [market, im_bps, mm_bps, taker_fee_bps, maker_fee_bps, signer,
-    //  funding_interval_ms, max_funding_rate_bps, pool_id, sz_decimals,
-    //  ticker, max_open_interest] — no tick_size / lot_size.
-    const bytes = envelope(ActionType.CreateMarket, [
-      42,
-      1000,
-      500,
-      5,
-      2,
-      OWNER,
-      60_000n,
-      100,
-      9,
-      4,
-      "BTC",
-      1_000_000n,
-    ]);
-    const { action } = decodeTx(bytes);
-    expect(action.type).toBe("CreateMarket");
-    if (action.type === "CreateMarket") {
-      expect(action.data.ticker).toBe("BTC");
-      expect(action.data.maxOpenInterest).toBe(1_000_000n);
-      expect(action.data.tickSize).toBe(0n);
-      expect(action.data.lotSize).toBe(0n);
     }
   });
 

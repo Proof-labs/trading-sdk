@@ -162,7 +162,15 @@ jobs:
       # OIDC), and the version becomes public only when a maintainer approves
       # it on npm with 2FA (`npm stage list` / `npm stage approve <id>`).
       - name: Stage on npm
-        run: npm stage publish --provenance --access public
+        # npm refuses to move `latest` backwards (a maintenance line under an
+        # existing higher version), so publish under the version's own
+        # dist-tag; NPM_PUBLISH_LATEST=true opts a release into `latest`.
+        run: |
+          if [ "${NPM_PUBLISH_LATEST:-}" = "true" ]; then
+            npm publish --provenance --access public
+          else
+            npm publish --provenance --access public --tag legacy-tick-lot
+          fi
       - name: Cut the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}

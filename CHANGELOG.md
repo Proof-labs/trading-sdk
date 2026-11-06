@@ -5,7 +5,11 @@ package) are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [9.3.0] — 2026-11-06
+
+TypeScript-only release on the `GH1327/create-market-tick-lot` line. Wire
+compatibility from 9.2.0 changes only in `CreateMarket`'s shape; the harness
+test actions and the oracle actions stay.
 
 ### Fixed
 

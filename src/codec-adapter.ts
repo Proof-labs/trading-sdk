@@ -130,7 +130,10 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
  * explicitly because a fieldless struct variant (`HaltTrading {}`) is NOT one
  * of these — it keeps the map form.
  */
-const GOVERNANCE_UNIT_VARIANTS = new Set<string>(["UnpauseBridge"]);
+const GOVERNANCE_UNIT_VARIANTS = new Set<string>([
+  "UnpauseBridge",
+  "EnableSubAccounts",
+]);
 
 /**
  * Encode a governance `AdminAction` / `EmergencyAction` for
@@ -314,7 +317,8 @@ export function toWasmFields(action: Action): {
     validateOrderTriggers(action.data);
   }
   validateCreateMarketTickers(action);
-  const actionType = ActionType[action.type] as ActionTypeValue;
+  const actionType = (ActionType[action.type] ??
+    TEST_ACTION_TYPES[action.type]) as ActionTypeValue;
   const fields = convertObject(
     action.data as unknown as Record<string, unknown>,
   );
@@ -342,6 +346,25 @@ export function toWasmFields(action: Action): {
 const ACTION_TYPE_NAMES = Object.fromEntries(
   Object.entries(ActionType).map(([name, byte]) => [byte, name]),
 ) as Record<number, Action["type"]>;
+
+/**
+ * Engine-internal test actions registered by `@proof-labs/trading-sdk/testing`.
+ * Consulted only after the public `ActionType` table, so a registration can
+ * never shadow a public byte.
+ */
+const TEST_ACTION_TYPES: Record<string, number> = {};
+const TEST_ACTION_TYPE_NAMES: Record<number, string> = {};
+
+/** @internal Used by `@proof-labs/trading-sdk/testing`; not part of the public API. */
+export function registerTestActionType(name: string, byte: number): void {
+  if ((Object.values(ActionType) as number[]).includes(byte)) {
+    throw new Error(
+      `test action byte 0x${byte.toString(16)} is a public action`,
+    );
+  }
+  TEST_ACTION_TYPES[name] = byte;
+  TEST_ACTION_TYPE_NAMES[byte] = name;
+}
 
 /** snake_case override → camelCase (inverse of `FIELD_OVERRIDES`). */
 const FIELD_OVERRIDES_REVERSE: Record<string, string> = Object.fromEntries(
@@ -566,7 +589,8 @@ export function fromWasmFields(
   actionType: ActionTypeValue,
   fields: unknown,
 ): Action {
-  const type = ACTION_TYPE_NAMES[actionType];
+  const type =
+    ACTION_TYPE_NAMES[actionType] ?? TEST_ACTION_TYPE_NAMES[actionType];
   if (!type) throw new Error(`unknown action_type: ${actionType}`);
   return {
     type,

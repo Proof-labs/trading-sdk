@@ -32,15 +32,18 @@ export enum TimeInForce {
 
 /**
  * Wire-format action type identifiers. Each value is a single byte.
- * Retired, never reassigned: 0x03 `OracleUpdate`, 0x12 `RunFundingTick`,
- * 0x14 `OracleUpdateComposite`.
  */
 export const ActionType = {
   /** Place a limit order on the order book. */
   PlaceOrder: 0x01,
   /** Cancel an existing resting order. */
   CancelOrder: 0x02,
-  /** Oracle-policy source observation relayed by the feeder. */
+  /** Submit an oracle price update (relayer only). */
+  OracleUpdate: 0x03,
+  /** Operator-only: submit a composite-CEX price for the multi-source mark
+   *  median (BE-31 Phase B). Feeder infrastructure, not a trading action. */
+  OracleUpdateComposite: 0x14,
+  /** Quorum-policy source relay; dormant until the engine's oracle gate. */
   SubmitOracleObservation: 0x2d,
   /** Place a market order that crosses immediately. */
   MarketOrder: 0x04,
@@ -1246,6 +1249,8 @@ export type AdminAction =
   // Unit variant — no fields; lifts a bridge pause under multisig
   // authorization. Serializes as the bare string `"UnpauseBridge"`.
   | { kind: "UnpauseBridge" }
+  // Unit variant; one-way switch that admits the sub-account actions.
+  | { kind: "EnableSubAccounts" }
   | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet }
   | { kind: "ScheduleUpgrade"; value: ScheduleUpgrade }
   | { kind: "CancelUpgrade"; value: CancelUpgrade };
