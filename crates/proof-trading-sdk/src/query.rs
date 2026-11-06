@@ -4,3 +4,10 @@
 
 pub use proof_wire::query::{AccountInfo, BindingScenario, PositionBrief};
 pub use proof_wire::query_v2::{AuthorizedAgents, AUTHORIZED_AGENTS_LIMIT};
+pub use proof_wire::query_v2::{InsuranceFundDirectory, InsuranceFundLedger, InsuranceFundState};
+
+/// Validate the canonical account binding using the wire's sole address derivation.
+pub fn insurance_fund_owner_matches(fund: &InsuranceFundLedger) -> bool {
+    use proof_wire::crypto::{derive_vault, Vault};
+    fund.owner.0 == *derive_vault(Vault::Insurance(fund.pool_id)).as_bytes()
+}

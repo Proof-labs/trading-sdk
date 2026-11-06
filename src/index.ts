@@ -10,6 +10,13 @@ export {
 } from "./insurance-fund-history.js";
 export { GatewayReadError } from "./errors.js";
 export type { FinalizedAuthorizedAgents } from "./authorized-agents.js";
+export type {
+  FinalizedInsuranceFunds,
+  FinalizedInsuranceFund,
+  InsuranceFundLedger,
+  InsuranceFundPosition,
+  InsurancePositionNotional,
+} from "./insurance-funds.js";
 export {
   hexAddress,
   hash32,
