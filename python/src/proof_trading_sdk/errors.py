@@ -71,7 +71,7 @@ class TransportError(ProofTradingSdkError):
 
 
 class GatewayError(TransportError):
-    """Gateway returned a 5xx response — retry with backoff."""
+    """Gateway returned a 5xx response. Read-only calls can retry with backoff."""
 
     def __init__(self, status_code: int, body: str) -> None:
         self.status_code = status_code
@@ -82,18 +82,17 @@ class GatewayError(TransportError):
 
 
 class SubmissionPending(ProofTradingSdkError):
-    """The gateway broadcast the transaction but could not report its outcome.
+    """The transaction's admission or execution outcome is unknown.
 
-    This is **not** a rejection. The gateway accepted the envelope and pushed it
-    to the chain, but could not tell us the on-chain result in time (park
-    deadline exceeded, a byte-identical tx already in flight, or a result it
-    could not parse). The transaction may still commit, so the caller must
+    This is **not** a rejection. The gateway may report a broadcast without a
+    final result, or a transport failure after sending may hide whether the
+    request was admitted at all. The transaction may still commit, so the caller must
     reconcile by ``tx_hash`` — re-submitting an order that is still in flight
     risks a double fill.
 
     Attributes:
         tx_hash: Transaction hash to reconcile the submission against.
-        message: The gateway's own explanation, if it gave one.
+        message: The gateway or client's explanation of the unknown outcome.
     """
 
     def __init__(self, tx_hash: str, message: str = "") -> None:
