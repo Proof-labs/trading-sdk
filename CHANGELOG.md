@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `reads().finalized.authorizedAgents(owner)` reads up to 100 current stored trading-agent grants with an atomic finalized-state witness and an explicit completeness flag. Grants have no stored expiry or per-action scope; this read does not authorize signing.
+
 ### Fixed
 
 - Python submits signed transactions to the gateway in its JSON/base64 envelope.

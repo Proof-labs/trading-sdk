@@ -92,6 +92,8 @@ pub enum ReadKind {
     Account = 3,
     /// One `AdminAction`, as stored on a proposal.
     AdminAction = 4,
+    /// `query_v2::AuthorizedAgents`, a current bounded map-encoded grant list.
+    AuthorizedAgents = 5,
 }
 
 fn decode_as<T: serde::de::DeserializeOwned + serde::Serialize>(
@@ -130,6 +132,12 @@ pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
         ),
         ReadKind::Account => decode_records::<core_sdk::query::AccountInfo>(bytes, &ACCOUNT_INFO),
         ReadKind::AdminAction => decode_as::<governance::AdminAction>(bytes),
+        ReadKind::AuthorizedAgents => {
+            if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+                return Err(JsError::new("authorized agents must be a MessagePack map"));
+            }
+            decode_as::<core_sdk::query::AuthorizedAgents>(bytes)
+        }
     }
 }
 

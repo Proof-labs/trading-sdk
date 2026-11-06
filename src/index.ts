@@ -1,5 +1,6 @@
 export { verifyWitness } from "./bounded-read.js";
 export { GatewayReadError } from "./errors.js";
+export type { FinalizedAuthorizedAgents } from "./authorized-agents.js";
 export {
   hexAddress,
   hash32,

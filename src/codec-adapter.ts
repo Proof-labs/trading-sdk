@@ -41,6 +41,25 @@ import {
   validateFundInsuranceFund,
   validateWithdrawInsuranceFund,
 } from "./insurance-funding.js";
+import type { AuthorizedAgentsView } from "./authorized-agents.js";
+
+/** Names and byte representation only; the Rust wire type owns decoding. */
+export function authorizedAgentsFromWasm(value: unknown): AuthorizedAgentsView {
+  const view = value as {
+    owner: Uint8Array;
+    finalized_height: bigint;
+    agents: Uint8Array[];
+    complete: boolean;
+  };
+  const hex = (address: Uint8Array) =>
+    Array.from(address, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return {
+    owner: hex(view.owner),
+    finalizedHeight: view.finalized_height,
+    agents: view.agents.map(hex),
+    complete: view.complete,
+  };
+}
 import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
