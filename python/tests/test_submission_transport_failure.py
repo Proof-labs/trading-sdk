@@ -3,7 +3,7 @@ import hashlib
 import httpx
 import pytest
 
-from proof_trading_sdk import ExchangeClient, SdkConfig, SubmissionPending, TransportError
+from proof_trading_sdk import ExchangeClient, GatewayError, SdkConfig, SubmissionPending, TransportError
 
 
 @pytest.mark.parametrize("failure,pending", [
@@ -46,5 +46,28 @@ def test_read_timeout_remains_a_transport_error():
     try:
         with pytest.raises(TransportError):
             client.status()
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("status", [500, 502, 504])
+def test_5xx_preserves_hash_for_writes_and_gateway_error_for_reads(status):
+    calls = []
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(status, text="upstream timeout")
+
+    client = ExchangeClient(config=SdkConfig(gateway_url="https://gateway.example"))
+    client._http.close()
+    client._http = httpx.Client(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(SubmissionPending) as error:
+            client.submit_action(b"original signed bytes")
+        assert error.value.tx_hash == hashlib.sha256(b"original signed bytes").hexdigest().upper()
+        assert isinstance(error.value.__cause__, GatewayError)
+        with pytest.raises(GatewayError) as read_error:
+            client.status()
+        assert read_error.value.status_code == status
+        assert calls == ["/exchange", "/v1/status"]
     finally:
         client.close()

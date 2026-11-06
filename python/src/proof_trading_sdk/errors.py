@@ -71,7 +71,7 @@ class TransportError(ProofTradingSdkError):
 
 
 class GatewayError(TransportError):
-    """Gateway returned a 5xx response — retry with backoff."""
+    """Gateway returned a 5xx response. Read-only calls can retry with backoff."""
 
     def __init__(self, status_code: int, body: str) -> None:
         self.status_code = status_code

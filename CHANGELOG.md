@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses.
+
 ## [10.1.0] — 2026-11-05
 
 TypeScript MINOR release: two optional client options for callers that sign,

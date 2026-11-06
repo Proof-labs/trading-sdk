@@ -481,13 +481,13 @@ class ExchangeClient:
         except TransportError as exc:
             # A write may have been partial, or the response may have been lost
             # after admission. Preserve the original bytes' hash; never retry.
-            if isinstance(exc.__cause__, (
+            if isinstance(exc, GatewayError) or isinstance(exc.__cause__, (
                 httpx.ReadTimeout, httpx.ReadError, httpx.WriteTimeout,
                 httpx.WriteError, httpx.RemoteProtocolError,
             )):
                 raise SubmissionPending(
                     hashlib.sha256(envelope).hexdigest().upper(),
-                    "submission transport failed after sending may have started; reconcile by hash",
+                    "submission outcome unknown; reconcile by hash",
                 ) from exc
             raise
         # Keep the raw text. The gateway still emits engine rejections as a bare
