@@ -48,3 +48,26 @@ def test_malformed_reads_raise_sdk_transport_error(method, args):
         assert "{bad" not in str(caught.value)
     finally:
         client.close()
+
+
+@pytest.mark.parametrize("body", [b"[]", b"null", b'"unexpected"'])
+@pytest.mark.parametrize("method,args", [
+    ("status", ()), ("history_fills", ("ab" * 20,)), ("account", ("ab" * 20,)),
+    ("history_triggers", ("ab" * 20,)), ("history_trigger_markets", (1,)),
+])
+def test_object_reads_reject_valid_json_of_the_wrong_shape(body, method, args):
+    client = client_for(body)
+    try:
+        with pytest.raises(TransportError, match="expected a JSON object") as error:
+            getattr(client, method)(*args)
+        assert error.value.status_code == 200
+    finally:
+        client.close()
+
+
+def test_list_read_retains_valid_list():
+    client = client_for(b'[{"market":1}]')
+    try:
+        assert client.trades(1) == [{"market": 1}]
+    finally:
+        client.close()

@@ -89,6 +89,13 @@ def _response_json(resp: httpx.Response) -> t.Any:
         ) from exc
 
 
+def _response_object(resp: httpx.Response) -> dict[str, t.Any]:
+    data = _response_json(resp)
+    if not isinstance(data, dict):
+        raise TransportError("expected a JSON object from gateway", status_code=resp.status_code)
+    return data
+
+
 def _to_hex(owner: bytes | str) -> str:
     """Normalise *owner* to a hex string (with or without ``0x`` prefix).
 
@@ -612,7 +619,7 @@ class ExchangeClient:
         resp = self._request(
             "POST", "/info", content=body, headers={"Content-Type": "application/json"}
         )
-        return self._decode_envelope(_response_json(resp), source="/info", require_data=True)
+        return self._decode_envelope(_response_object(resp), source="/info", require_data=True)
 
     @staticmethod
     def _to_bytes(v: t.Any) -> bytes:
@@ -779,7 +786,7 @@ class ExchangeClient:
 
     def nonce_info(self, owner: bytes | str) -> dict[str, t.Any]:
         resp = self._get(f"/v1/nonce/{_to_hex(owner)}")
-        return _response_json(resp)
+        return _response_object(resp)
 
     def _get_data(self, path: str, params: dict[str, t.Any] | None = None) -> t.Any:
         """GET a ``/v1/*`` read endpoint and decode the ``{data: base64 msgpack}``
@@ -787,7 +794,7 @@ class ExchangeClient:
         on a JSON ``{"error": …}`` body; a missing envelope yields ``None`` (the
         callers default to an empty list)."""
         resp = self._get(path, params=params)
-        return self._decode_envelope(_response_json(resp), source=path, require_data=False)
+        return self._decode_envelope(_response_object(resp), source=path, require_data=False)
 
     @staticmethod
     def _trigger_tuple(value: t.Any, name: str, size: int) -> t.Sequence[t.Any]:
@@ -1042,7 +1049,7 @@ class ExchangeClient:
         Python's JSON decoder preserves arbitrary-size integers, so both
         heights remain exact ``int`` values.
         """
-        data = self._get("/v1/triggers/status").json()
+        data = _response_object(self._get("/v1/triggers/status"))
         if not isinstance(data, dict):
             raise ProofTradingSdkError("trigger status decode: expected an object")
         try:
@@ -1081,7 +1088,7 @@ class ExchangeClient:
         """
         path = "/v1/triggers/markets"
         raw = self._decode_envelope(
-            self._get(path).json(), source=path, require_data=True
+            _response_object(self._get(path)), source=path, require_data=True
         )
         return decode_trigger_market_config_infos(raw)
 
@@ -1241,7 +1248,7 @@ class ExchangeClient:
 
     def market_status(self, market: int) -> dict[str, t.Any]:
         resp = self._get(f"/v1/market-status/{market}")
-        return _response_json(resp)
+        return _response_object(resp)
 
     def trades(self, market: int) -> list[dict[str, t.Any]]:
         resp = self._get(f"/v1/trades/{market}")
@@ -1307,9 +1314,10 @@ class ExchangeClient:
             limit=limit,
             cursor=cursor,
         )
-        data = self._get(
+        resp = self._get(
             f"/v1/history/triggers/{route_owner}", params=params or None
-        ).json()
+        )
+        data = _response_object(resp)
         return decode_position_trigger_history_page(data, route_owner, market)
 
     def history_trigger_markets(
@@ -1329,21 +1337,22 @@ class ExchangeClient:
             limit=limit,
             cursor=cursor,
         )
-        data = self._get(
+        resp = self._get(
             f"/v1/history/trigger-markets/{route_market}", params=params or None
-        ).json()
+        )
+        data = _response_object(resp)
         return decode_trigger_market_history_page(data, route_market)
 
     def history_status(self) -> dict[str, t.Any]:
         resp = self._get("/v1/history/status")
-        return _response_json(resp)
+        return _response_object(resp)
 
     # ── Health & status ──────────────────────────────────────────────────
 
     def health(self) -> dict[str, t.Any]:
         """Gateway health check: ``GET /v1/health``."""
         resp = self._get("/v1/health")
-        return _response_json(resp)
+        return _response_object(resp)
 
     def status(self) -> dict[str, t.Any]:
         """CometBFT node status via the gateway: ``GET /v1/status``.
@@ -1352,18 +1361,18 @@ class ExchangeClient:
         (``result.sync_info``, ``result.node_info``, etc.).
         """
         resp = self._get("/v1/status")
-        return _response_json(resp)
+        return _response_object(resp)
 
     def get_block(self, height: int | None = None) -> dict[str, t.Any]:
         """CometBFT block at *height* (latest if omitted) via ``GET /v1/block``."""
         params = {"height": height} if height is not None else None
         resp = self._get("/v1/block", params=params)
-        return _response_json(resp)
+        return _response_object(resp)
 
     def get_block_results(self, height: int) -> dict[str, t.Any]:
         """CometBFT block results at *height* via ``GET /v1/block_results``."""
         resp = self._get("/v1/block_results", params={"height": height})
-        return _response_json(resp)
+        return _response_object(resp)
 
     # ── Market data ──────────────────────────────────────────────────────
 
@@ -1374,7 +1383,7 @@ class ExchangeClient:
         """
         try:
             resp = self._get(f"/v1/ticker/{market}")
-            return _response_json(resp)
+            return _response_object(resp)
         except TransportError as e:
             if e.status_code == 404:
                 return None
@@ -1479,11 +1488,11 @@ class ExchangeClient:
 
     def system_status(self) -> dict[str, t.Any]:
         resp = self._get("/system/status")
-        return _response_json(resp)
+        return _response_object(resp)
 
     def maintenance_status(self) -> dict[str, t.Any]:
         resp = self._get("/maintenance/status")
-        return _response_json(resp)
+        return _response_object(resp)
 
     # ── Account event stream ─────────────────────────────────────────────
 
@@ -1592,7 +1601,7 @@ class ExchangeClient:
 
         query = {k: v for k, v in params.items() if v is not None and k != "self"}
         resp = self._get(path, params=query)
-        data: dict[str, t.Any] = _response_json(resp)
+        data: dict[str, t.Any] = _response_object(resp)
         return CursorPage(
             data=data.get(data_key, []),
             next_cursor=data.get("next_cursor"),

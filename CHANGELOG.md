@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Python raises SDK errors for malformed read responses and preserves the transaction hash when a malformed submission response leaves the outcome unknown.
+
 ## [10.1.0] — 2026-11-05
 
 TypeScript MINOR release: two optional client options for callers that sign,
