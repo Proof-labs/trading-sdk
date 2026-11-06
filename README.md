@@ -230,18 +230,16 @@ durable journal, nonce allocation, retries or cutover authority.
 
 `queryOraclePermissions(market)` reads one underlying perp's committed oracle
 policy, calendar epoch and verdict at an exact finalized height. It preserves
-u64 values as `bigint`, and returns `Legacy` with no permission claim while the
-new policy is inactive. `Satisfied` covers only this oracle dependency, not all
+u64 values as `bigint`; with no committed verdict the read is `Unavailable`
+with an `Unavailable` permission. `Satisfied` covers only this oracle dependency, not all
 portfolio dependencies or other trading checks. It never reads provider/observer
 health; feeder freshness is a separate operational read, described below.
 
-Nodes running the primary-with-fallback policy (exchange#831) serve a
-fourteen-field verdict: `format: 3`, the `selected` slot (`"Primary"` or
-`"Fallback"`) and a `diagnostics` bitset (`diagnosticFlags`: `OnFallback`,
+The verdict carries the `selected` slot (`"Primary"` or `"Fallback"`) and a
+`diagnostics` bitset (`diagnosticFlags`: `OnFallback`,
 `PrimaryRefusedDivergence`, `DivergenceUnchecked`, `FallbackUnusable`), which
-are monitoring signals rather than faults. Older nodes serve the twelve-field
-`format: 2` verdict, with `selected` null. Both formats share one `faults` bit
-layout (`ORACLE_FAULT_BITS`, named in `faultReasons`); `Disagreement` and
+are monitoring signals rather than faults. `faults` follows
+`ORACLE_FAULT_BITS`, named in `faultReasons`; `Disagreement` and
 `PairTimeMismatch` keep their bits but are no longer produced.
 
 ### Trading No on an event's binary book
@@ -481,13 +479,11 @@ keep operator actions out of autocomplete. `submitTx` still accepts the full
 
 #### Operator actions (privileged)
 
-`OperatorAction` covers oracle-relay / composite-CEX-feeder / relayer-admin
-actions — e.g. `OracleUpdate`, `OracleUpdateComposite`, `UpdateMarketFees`,
-`CreateMarket`. **A trading integration never needs these.** Each is gated by a
-dedicated engine allowlist, so codec availability grants nothing without an
-operator-provisioned key. See [AGENTS.md](AGENTS.md) → "Operator actions" for
-usage (e.g. driving the BE-31 multi-source mark via `OracleUpdateComposite` +
-`UpdateMarketFees` `markSourceMode`).
+`OperatorAction` covers oracle-feeder / relayer-admin actions — e.g.
+`SubmitOracleObservation`, `UpdateMarketFees`, `CreateMarket`. **A trading
+integration never needs these.** Each is gated by a dedicated engine allowlist
+or the market's oracle policy, so codec availability grants nothing without an
+operator-provisioned key. See [AGENTS.md](AGENTS.md) → "Operator actions".
 
 #### Governance actions (admin multisig)
 

@@ -15,38 +15,45 @@ pip install proof-trading-sdk
 
 ## Quick Start
 
+The generated owner must have DevNet test funds before placing an order. Use
+an active market and adjust the example price/quantity to its tick/lot sizes.
+The example's quantities and prices are integers; prices use micro-USDC.
+
 ```python
 import proof_trading_sdk as pts
 
-# Load or generate a keypair
 kp = pts.generate_keypair()
-secret_key = kp["secret_key"]
-public_key = kp["public_key"]
-
-# Derive the 20-byte owner address
-owner = pts.pubkey_to_owner(public_key)
-
-# Create a client
+owner = pts.pubkey_to_owner(kp["public_key"])
 client = pts.ExchangeClient(
-    gateway_url="https://api.dev.proof.trade",
-    api_key="...",
-    secret_key=secret_key,
+    config=pts.SdkConfig(
+        gateway_url="https://api.dev.proof.trade",
+        chain_id="exchange-devnet-1",
+    ),
+    secret_key=kp["secret_key"],
 )
 
-# Check account state
-state = client.account(owner)
-
-# Place an order
-from proof_trading_sdk import Side, TimeInForce
-result = client.submit_action({
-    "action_type": 1,  # PlaceOrder
-    "market": 1,
-    "owner": bytes(owner),
-    "side": Side.Buy,
-    "price": 50_000_000_000,  # $50,000.00 in micro-USDC (6 dp)
-    "quantity": 1,
-})
+try:
+    state = client.account(owner)
+    action = pts.PlaceOrder(
+        owner=owner,
+        market=1,
+        side=pts.Side.Buy,
+        price=50_000_000_000,  # $50,000 in micro-USDC
+        quantity=1,
+        post_only=True,
+        time_in_force=pts.TimeInForce.Gtc,
+    )
+    result = client.submit(action)  # Encode, sign, and submit the typed action.
+finally:
+    client.close()
 ```
+
+For separate signing and submission, use `envelope = client.sign_action(action)`
+followed by `client.submit_action(envelope)`. `submit_action` accepts signed
+bytes, not an action dictionary. Keep private keys and signed envelopes out of
+logs. A gateway acknowledgement alone is not a final fill. When the outcome is
+uncertain the SDK raises `SubmissionPending` carrying the original transaction
+hash as `tx_hash`; reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
@@ -62,8 +69,7 @@ newer than this package.
   `AtomicBasketOrder`, `SetPositionTriggers`, `CancelPositionTriggers`,
   `SetUserMarketLeverage`, `ApproveAgent`, `RevokeAgent`, `CreateSubAccount`,
   `SubAccountTransfer`, `Deposit`, `Withdraw`, `WithdrawRequest`.
-- **Operator (privileged):** `OracleUpdate`, `OracleUpdateComposite`,
-  `SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,
+- **Operator (privileged):** `SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,
   `ConfirmDeposit`, `ConfirmWithdrawal`, `FailWithdrawal`,
   `AuthorizeWithdrawal`, `ConfirmWithdrawalReceipt`, `FailWithdrawalReceipt`,
   `ClaimWithdrawalPayout`, `ResolveEvent`.
@@ -183,21 +189,27 @@ persisted even if the handler fails). Only invalid signatures skip the burn.
 
 ### Crash recovery
 
-Pure in-memory — no persistence, no I/O. On restart the allocator resets and
-the first `allocate()` returns `now_ms`, which is always ahead of any pre-crash
-nonce. The one edge case (restart within the same millisecond) produces a
-duplicate nonce; the engine rejects it with code 21 (not burned), the caller
-retries, and the second call returns `now_ms + 1`.
+The allocator is in-memory and does not persist its high-water mark. On restart,
+the first allocation uses `now_ms`; this can repeat an already-used nonce or fall
+below a previous high-water mark after a burst or clock adjustment. A restart in
+the same millisecond is not the only collision case.
+
+A confirmed code-21 rejection permits a fresh nonce allocation, but another
+collision is possible. For a submission whose outcome is unknown, reconcile the
+original transaction hash before signing a replacement; do not treat a timeout
+as a confirmed nonce rejection.
 
 ### Multi-process safety
 
-Multiple processes sharing the same account each use their own allocator with
-independent wall clocks. Nonces are naturally unique per process (different
-`now_ms` values). The engine's sorted-vec handles interleaving.
+Uniqueness is guaranteed only for callers sharing one `NonceAllocator` instance.
+Independent instances or processes can observe the same millisecond and return
+the same nonce. Coordinate allocation across workers sharing an account; the
+allocator's lock does not coordinate separate instances or processes. The engine
+accepts out-of-order unique nonces within its window and rejects replays.
 
 ### Key properties
 
 - No sequential ordering required — nonces can arrive out of order
 - No sync call needed before the first transaction
-- Thread-safe, lock-free allocation in the common case
+- Thread-safe allocation within one shared allocator instance
 - Wide engine window (+1 day / −2 days) tolerates NTP skew

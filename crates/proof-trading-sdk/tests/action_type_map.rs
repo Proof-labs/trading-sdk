@@ -15,10 +15,6 @@ use proof_trading_sdk::codec;
 /// Adding a name here is a reviewed decision, not a way to quiet the check.
 const NOT_IN_THE_MAIN_ENTRY: &[(&str, &str)] = &[
     (
-        "RunFundingTick",
-        "engine-internal; exported only from the `testing` subpath",
-    ),
-    (
         "SetAccountFeeOverride",
         "relayer-only; removed from the SDK surface",
     ),
@@ -88,18 +84,6 @@ fn the_typescript_action_map_matches_the_core() {
         assert!(
             core.contains_key(*name),
             "`{name}` is excused from the main entry but the core no longer has it"
-        );
-    }
-    let testing = ts_map(&read("src/testing.ts"), "TestActionType");
-    for (name, byte) in &testing {
-        assert_eq!(
-            core.get(name),
-            Some(byte),
-            "src/testing.ts `{name}` disagrees with the core"
-        );
-        assert!(
-            excluded.contains_key(name.as_str()),
-            "`{name}` is in both entries"
         );
     }
 }

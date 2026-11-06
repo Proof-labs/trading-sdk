@@ -30,7 +30,6 @@ mod insurance_tag_tests {
         assert_eq!(AdminActionType::SetLiquidationConfig as u8, 17);
         assert_eq!(AdminActionType::FundInsuranceFund as u8, 18);
         assert_eq!(AdminActionType::SetOperatorReceiptRegistry as u8, 20);
-        assert_eq!(AdminActionType::EnableSubAccounts as u8, 21);
         assert_eq!(AdminActionType::WithdrawInsuranceFund as u8, 25);
         assert_eq!(AdminActionType::VoidEvent as u8, 29);
     }

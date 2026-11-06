@@ -267,9 +267,9 @@ await client.submitTx({
 ## Operator actions (privileged — not for trading integrations)
 
 **If you are building a trading integration, stop here — you never need this
-section.** The actions below are operator infrastructure (oracle relay,
-composite-CEX feeder, relayer/admin). Each is gated by a dedicated engine
-allowlist; a trader's signer is rejected, so they grant nothing without an
+section.** The actions below are operator infrastructure (oracle feeder,
+relayer/admin). Each is gated by a dedicated engine allowlist or the market's
+oracle policy; a trader's signer is rejected, so they grant nothing without an
 operator-provisioned key. They live in the public SDK so operator tooling needs
 no second SDK.
 
@@ -283,36 +283,7 @@ const order: TraderAction = { type: "PlaceOrder", data: {/* … */} };
 await client.submitTx(order); // submitTx still accepts the full Action union
 ```
 
-`OracleUpdateComposite` (0x14) — submit a composite-CEX price for the
-multi-source mark-price median (BE-31 Phase B). Requires a signer on the
-engine's **CEX-composite feeder allowlist** (a separate trust domain from the
-oracle relay). A market only consults the composite once an operator flips it to
-`Median` via `UpdateMarketFees` (`markSourceMode: 1`).
-
-```typescript
-await client.submitTx({
-  type: "OracleUpdateComposite",
-  data: {
-    market: 1,
-    price: 66_750_000_000n, // composite price in micro-USDC ($66,750)
-    nSources: 4, // # of CEX feeds (observability only)
-    signer: feederAddress, // on the composite-feeder allowlist
-    publishTimeMs: BigInt(Date.now()), // strictly monotonic per market
-  },
-});
-```
-
-Python (typed builder):
-
-```python
-from proof_trading_sdk import OracleUpdateComposite
-client.submit_tx(OracleUpdateComposite(
-    market=1, price=66_750_000_000, signer=feeder_addr, n_sources=4,  # micro-USDC ($66,750)
-    publish_time_ms=now_ms,
-))
-```
-
-Other operator actions (`OracleUpdate`, `CreateMarket`, `UpdateMarketFees`,
+Operator actions (`SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,
 `ConfirmDeposit`/`ConfirmWithdrawal`/`FailWithdrawal`, `Deposit`/`Withdraw`,
 `ResolveEvent`, `ClaimWithdrawalPayout`) are in `OperatorAction`; the Python SDK
 exposes them via typed builders where present or `RawAction` otherwise. See
@@ -330,7 +301,16 @@ read endpoints as follows:
 | `/v1/account/{hex}`                                                                                                                                      | ❌ **Not routed**  | 404s on gateway                               |
 | `/v1/account/{hex}/recent-nonces`, `/v1/nonce/{hex}`                                                                                                     | ✅ Routed          | Diagnostic                                    |
 | `/v1/history/*`                                                                                                                                          | ✅ Proxied         | Historical data only (not live state)         |
-| `POST /exchange`                                                                                                                                         | ✅ Routed          | Transaction submission (API key required)     |
+| `POST /exchange`                                                                                                                                         | ✅ Routed          | Signed submission; API-key policy varies     |
+
+On DevNet, `POST /exchange` accepts correctly signed, chain-bound transactions
+without an API key. An API key is not a substitute for the account signature;
+other deployments may require one in addition. A malformed request body is not
+evidence that an API key is missing.
+
+Private account WebSocket subscriptions have a separate authentication contract:
+an API key or the gateway's signed-subscription authentication is required.
+Keyless signed HTTP submission does not make private account feeds public.
 
 **Key caveat**: `GET /v1/account/{hex}` (live balance + positions + margin)
 is **not** routed on the gateway. The SDK's `queryAccount()` handles this:

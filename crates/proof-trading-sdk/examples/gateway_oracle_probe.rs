@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "market": permission.market,
             "finalizedHeight": permission.finalized_height.to_string(),
             "state": format!("{:?}", permission.state),
-            "oraclePermission": permission.oracle_permission.map(|p| format!("{p:?}")),
+            "oraclePermission": format!("{:?}", permission.oracle_permission),
             "verdictStatus": permission.verdict.as_ref().map(|v| format!("{:?}", v.status)),
             "verdictReason": permission.verdict.as_ref().map(|v| format!("{:?}", v.reason)),
             "releaseAccepted": false

@@ -37,6 +37,24 @@ import {
   historySearchParams,
 } from "./history.js";
 import {
+  ACCOUNT_EVENTS_MAX_BYTES,
+  accountEventsParams,
+  decodeAccountEventsPage,
+  decodeFundingPaymentsPage,
+  fundingPaymentsSearchParams,
+  type AccountEventsOptions,
+  type AccountEventsPage,
+  type FundingPaymentsOptions,
+  type FundingPaymentsPage,
+} from "./account-history.js";
+import {
+  decodeRecentTrades,
+  recentTradesLimit,
+  type RecentTrade,
+  type RecentTradesOptions,
+} from "./recent-trades.js";
+import { boundedGatewayJson } from "./bounded-read.js";
+import {
   decodeLiquidationHistoryPage,
   liquidationHistorySearchParams,
   type LiquidationHistoryFilters,
@@ -160,6 +178,7 @@ import {
 } from "./trigger-history.js";
 
 const msgpackDecoder = new Decoder({ useBigInt64: true });
+const U64_MAX = 0xffff_ffff_ffff_ffffn;
 import {
   decodeOraclePermissions,
   validateOraclePermissionMarket,
@@ -549,23 +568,40 @@ export class ExchangeClient {
     this.addressHex = ownerToHex(this.address);
   }
 
-  /** Sign only. Cancellation or a replaced connection prevents submission. */
+  /**
+   * Sign only. Cancellation or a replaced connection prevents submission.
+   *
+   * `minimumNonceExclusive` makes the allocated nonce strictly greater than a
+   * caller-held floor, for example the nonce of signed bytes a process stored
+   * durably before a restart. The floor must be an unsigned-64 value; a floor
+   * that would put the nonce more than 60 seconds ahead of the clock throws
+   * instead of signing.
+   */
   async signTx(
     action: Action,
-    opts: { signal?: AbortSignal } = {},
+    opts: { signal?: AbortSignal; minimumNonceExclusive?: bigint } = {},
   ): Promise<Uint8Array> {
     opts.signal?.throwIfAborted();
     const signer = this.externalSigner;
     const key = this.privateKey?.slice();
     const revision = this.signerRevision;
     if (!signer && !key) throw new Error("No signer set");
+    const floor = opts.minimumNonceExclusive;
+    if (
+      floor !== undefined &&
+      (typeof floor !== "bigint" || floor < 0n || floor >= U64_MAX)
+    ) {
+      throw new Error(
+        "minimumNonceExclusive must be an unsigned-64 nonce floor",
+      );
+    }
     // Freeze caller-owned inputs before any await (wallet prompts may be long).
     const snapshot = cloneSigningInput(action);
     const [chainId] = await Promise.all([this.resolveChainId(), initWasm()]);
     opts.signal?.throwIfAborted();
     if (revision !== this.signerRevision)
       throw new Error("Signing connection changed");
-    const seq = this.nextTimestampNonce();
+    const seq = this.nextTimestampNonce(floor);
     if (!signer) return signAndEncode(chainId, snapshot, seq, key!);
     const payload = encodePayloadBytes(snapshot);
     const message = signingMessage(
@@ -680,8 +716,8 @@ export class ExchangeClient {
   /**
    * Allocate the next timestamp nonce.
    *
-   * Algorithm: `max(now_ms, last_nonce + 1)`. Refuse allocation above
-   * `now_ms + 60s` without rewinding or repeating the last nonce.
+   * Algorithm: `max(now_ms, last_nonce + 1, floor + 1)`. Refuse allocation
+   * above `now_ms + 60s` without rewinding or repeating the last nonce.
    *
    * Engine window: `[block_time - 2 days, block_time + 1 day]`. All four
    * rejection modes (too old, too far future, replay, below oldest) map to
@@ -689,11 +725,13 @@ export class ExchangeClient {
    *
    * Concurrent calls on this client reserve distinct nonces synchronously.
    */
-  private nextTimestampNonce(): bigint {
+  private nextTimestampNonce(minimumNonceExclusive?: bigint): bigint {
     const now = BigInt(Date.now());
     const max = now + 60_000n;
-    const next =
+    let next =
       this.lastTimestampNonce >= now ? this.lastTimestampNonce + 1n : now;
+    if (minimumNonceExclusive !== undefined && minimumNonceExclusive >= next)
+      next = minimumNonceExclusive + 1n;
     if (next > max)
       throw new Error("Timestamp nonce allocation exceeds clock safety window");
     this.lastTimestampNonce = next;
@@ -763,11 +801,19 @@ export class ExchangeClient {
    * final and returns as-is; a hash-only ambiguous response spawns the same
    * fire-and-forget `/tx?hash=` reconciliation, awaitable via
    * `awaitPendingVerifies()`.
+   *
+   * `opts.action` is the action the bytes carry, when the caller knows it.
+   * It only labels the transport requests (the submission and its
+   * confirmation polls) so a cancellation keeps its `urgent` priority; it is
+   * never encoded, sent or checked against the bytes.
    */
-  async submitSignedTx(txBytes: Uint8Array): Promise<TxResult> {
-    const r = await this.broadcastSignedBytes(txBytes);
+  async submitSignedTx(
+    txBytes: Uint8Array,
+    opts: { action?: Action } = {},
+  ): Promise<TxResult> {
+    const r = await this.broadcastSignedBytes(txBytes, opts.action);
     if (this.autoVerifyDelivery && r.hash && !this.isFinalResult(r)) {
-      this.spawnDeliveryVerifier(r.hash);
+      this.spawnDeliveryVerifier(r.hash, opts.action);
     }
     return r;
   }
@@ -1150,10 +1196,14 @@ export class ExchangeClient {
    * draining the client-global `awaitPendingVerifies()` buffer. Use this
    * when the caller must know definitively whether the tx landed (an
    * operator action, a multisig proposal) rather than fire-and-forget.
+   * `opts.action` is the same transport priority hint as on `submitSignedTx`.
    */
-  async submitSignedTxCommit(txBytes: Uint8Array): Promise<TxResult> {
-    const sync = await this.broadcastSignedBytes(txBytes);
-    return this.awaitCommit(sync);
+  async submitSignedTxCommit(
+    txBytes: Uint8Array,
+    opts: { action?: Action } = {},
+  ): Promise<TxResult> {
+    const sync = await this.broadcastSignedBytes(txBytes, opts.action);
+    return this.awaitCommit(sync, opts.action);
   }
 
   /**
@@ -1171,12 +1221,14 @@ export class ExchangeClient {
 
   /** Per-submission finality. Timeout/cancellation retains the hash as unknown.
    * Never resubmits writes. Use setUnsafeFastSubmit(true) to avoid a second poller.
+   * `opts.action` labels the confirmation polls with that action's transport
+   * priority, as on `submitSignedTx`; it is never checked against the hash.
    */
   async waitForDelivery(
     sync: TxResult,
-    opts: { timeoutMs?: number; signal?: AbortSignal } = {},
+    opts: { timeoutMs?: number; signal?: AbortSignal; action?: Action } = {},
   ): Promise<TxResult> {
-    return this.pollDelivery(sync, opts);
+    return this.pollDelivery(sync, opts, opts.action);
   }
 
   /** `waitForDelivery`, with the originating action (when the client signed
@@ -2225,6 +2277,82 @@ export class ExchangeClient {
       })),
       nextCursor: String(body.next_cursor ?? ""),
     };
+  }
+
+  /** One market's recent trade tape, newest first (`GET /v1/trades/{market}`),
+   * from the serving node's in-memory buffer of its last 500 fills. The tape
+   * starts empty after a node restart and is not complete history; use
+   * `reads().tradeHistoryPage` for the indexed record. Times out after
+   * `opts.timeoutMs` (default 5 seconds); a bad market or limit throws
+   * `GatewayReadError` with kind `"configuration"`. */
+  async queryRecentTrades(
+    market: number,
+    opts: RecentTradesOptions = {},
+  ): Promise<RecentTrade[]> {
+    const captured = { ...opts };
+    const limit = recentTradesLimit(market, captured);
+    const body = await boundedGatewayJson(
+      `${this.readBaseUrl}/v1/trades/${market}?limit=${limit}`,
+      this.httpTransport,
+      captured,
+    );
+    return decodeRecentTrades(body, market, captured);
+  }
+
+  /** One newest-first page of an owner's funding payments
+   * (`GET /v1/history/funding-payments/{owner}`, the indexed
+   * `funding_settled` events). Keep filters fixed when passing `nextCursor`
+   * back as `opts.cursor`; an empty `nextCursor` is the last page, as for
+   * `queryHistoryFills`. Times out after `opts.timeoutMs` (default 5 seconds).
+   * A caller mistake in `opts` throws `GatewayReadError` with kind
+   * `"configuration"`. Omitting `addressHex` with no bound key yields an
+   * empty page, like the other history queries. */
+  async queryHistoryFundingPayments(
+    addressHex?: string,
+    opts: FundingPaymentsOptions = {},
+  ): Promise<FundingPaymentsPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return { payments: [], nextCursor: "" };
+    const owner = historyOwner(hex);
+    const captured = { ...opts };
+    const params = fundingPaymentsSearchParams(owner, captured);
+    const body = await boundedGatewayJson(
+      `${this.gatewayUrl}/v1/history/funding-payments/${owner}?${params}`,
+      this.httpTransport,
+      captured,
+      { purpose: "account" },
+    );
+    return decodeFundingPaymentsPage(body, owner, captured);
+  }
+
+  /** One page of an owner's indexed account events
+   * (`GET /v1/history/account-events`) in the stated order, optionally one
+   * event type. Keep filters fixed when passing `nextCursor` back as
+   * `opts.cursor`; an empty `nextCursor` is the last page, as for
+   * `queryHistoryFills`. Times out after `opts.timeoutMs` (default 5 seconds)
+   * and reads at most 16 MiB, enough for a full 5000-row page. A caller
+   * mistake in `opts` throws `GatewayReadError` with kind `"configuration"`.
+   * Omitting `addressHex` with no bound key yields an empty page. */
+  async queryHistoryAccountEventsPage(
+    addressHex: string | undefined,
+    opts: AccountEventsOptions,
+  ): Promise<AccountEventsPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return { events: [], nextCursor: "" };
+    const owner = historyOwner(hex);
+    const captured = { ...opts };
+    const query = new URLSearchParams();
+    for (const [name, value] of Object.entries(
+      accountEventsParams(owner, captured),
+    ))
+      if (value !== undefined) query.set(name, String(value));
+    const body = await boundedGatewayJson(
+      `${this.gatewayUrl}/v1/history/account-events?${query}`,
+      this.httpTransport,
+      captured,
+      { purpose: "account", maxBytes: ACCOUNT_EVENTS_MAX_BYTES },
+    );
+    return decodeAccountEventsPage(body, owner, captured);
   }
 
   // -----------------------------------------------------------------------

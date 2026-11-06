@@ -17,7 +17,7 @@ import { ready } from "./wasm-loader.js";
 export interface FinalizedOraclePermissions extends OraclePermissions {
   witness: FinalizedReadWitness;
 }
-/** Requires ready(). Refusals and Legacy remain data, never a healthy fallback. */
+/** Requires ready(). Refusals and Unavailable remain data, never a healthy fallback. */
 export function decodeFinalizedOraclePermissions(
   value: unknown,
   market: number,

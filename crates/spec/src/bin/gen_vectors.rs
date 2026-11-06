@@ -145,8 +145,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     // vectors, and Python/TS map names→bytes via the core's get_action_types).
     const PLACE_ORDER: u8 = 0x01;
     const CANCEL_ORDER: u8 = 0x02;
-    const ORACLE_UPDATE: u8 = 0x03;
-    const ORACLE_UPDATE_COMPOSITE: u8 = 0x14;
     const MARKET_ORDER: u8 = 0x04;
     const CLOSE_POSITION: u8 = 0x17;
     const CONFIRM_DEPOSIT: u8 = 0x09;
@@ -230,11 +228,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({ "order_id": 42, "owner": vec![0x02u8; 20] }),
         ),
         codec_case(
-            "oracle_update/no_publish_time",
-            ORACLE_UPDATE,
-            json!({ "market": 1, "price": 5000, "signer": signer, "publish_time_ms": 0 }),
-        ),
-        codec_case(
             "submit_oracle_observation/max_u64_with_confidence",
             SUBMIT_ORACLE_OBSERVATION,
             json!({"market": 7, "policy_version": u64::MAX, "source_id": 2,
@@ -247,22 +240,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({"market": 1, "policy_version": 1, "source_id": 1,
                    "publish_time_ms": 1700000000123u64, "price_micro": 67000000000u64,
                    "confidence_micro": null, "evidence_digest": vec![0x5Au8;32], "signer": signer}),
-        ),
-        // OracleUpdateComposite (0x14) — BE-31 composite-CEX feeder action.
-        // Operator-only; pins the cross-language wire shape now that the TS
-        // and Python SDKs expose it. Field order: market, price, n_sources,
-        // signer, publish_time_ms (n_sources/publish_time are serde-default).
-        codec_case(
-            "oracle_update_composite/four_sources",
-            ORACLE_UPDATE_COMPOSITE,
-            json!({ "market": 1, "price": 6675000u64, "n_sources": 4,
-                    "signer": signer, "publish_time_ms": 1700000000123u64 }),
-        ),
-        codec_case(
-            "oracle_update_composite/no_publish_time",
-            ORACLE_UPDATE_COMPOSITE,
-            json!({ "market": 7, "price": 250000u64, "n_sources": 1,
-                    "signer": signer, "publish_time_ms": 0 }),
         ),
         codec_case(
             "market_order/basic",
@@ -314,12 +291,13 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "market": 42, "im_bps": 1000, "mm_bps": 500,
                 "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": signer,
                 "funding_interval_ms": 60000u64, "max_funding_rate_bps": 100,
-                "pool_id": 9, "sz_decimals": 4, "ticker": "BTC"
+                "pool_id": 9, "sz_decimals": 4, "ticker": "BTC",
+                "tick_size": 10_000u64, "lot_size": 1u64
             }),
         ),
         // An explicit zero cap is semantically identical to omission, so both
-        // must produce the SAME bytes — the canonical 12-element uncapped
-        // payload with an explicit `0` tail. The array length never depends on
+        // must produce the SAME bytes — the canonical 14-element uncapped
+        // payload with an explicit `0` cap. The array length never depends on
         // the cap's value; see `CreateMarket::max_open_interest`.
         codec_case(
             "create_market/max_open_interest_zero_explicit",
@@ -329,11 +307,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": signer,
                 "funding_interval_ms": 60000u64, "max_funding_rate_bps": 100,
                 "pool_id": 9, "sz_decimals": 4, "ticker": "BTC",
-                "max_open_interest": 0u64
+                "max_open_interest": 0u64,
+                "tick_size": 10_000u64, "lot_size": 1u64
             }),
         ),
         // S40: the CreateMarket cap tail. The uncapped case above encodes the
-        // same 12 elements with a zero in slot 11; this case pins a non-zero
+        // same 14 elements with a zero in slot 11; this case pins a non-zero
         // slot 11. Only the value differs between them, never the length.
         codec_case(
             "create_market/max_open_interest",
@@ -343,7 +322,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": signer,
                 "funding_interval_ms": 60000u64, "max_funding_rate_bps": 100,
                 "pool_id": 9, "sz_decimals": 5, "ticker": "ETH",
-                "max_open_interest": 1_000_000u64
+                "max_open_interest": 1_000_000u64,
+                "tick_size": 1_000u64, "lot_size": 100u64
             }),
         ),
         // UpdateMarketFees appends the existing live-risk ratio levers at
@@ -401,7 +381,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "market": 0, "im_bps": 3334, "mm_bps": 1667,
                     "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": vec![0u8; 20],
                     "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
-                    "pool_id": 0, "sz_decimals": 0, "ticker": "BTC", "max_open_interest": 0u64
+                    "pool_id": 0, "sz_decimals": 0, "ticker": "BTC", "max_open_interest": 0u64,
+                    "tick_size": 1u64, "lot_size": 1u64
                 }}
             }),
         ),
@@ -421,7 +402,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                         "market": 15, "im_bps": 3334, "mm_bps": 1667,
                         "taker_fee_bps": 5, "maker_fee_bps": 2, "signer": vec![0u8; 20],
                         "funding_interval_ms": 60000u64, "max_funding_rate_bps": 3000,
-                        "pool_id": 0, "sz_decimals": 0, "ticker": "BTC", "max_open_interest": 0u64
+                        "pool_id": 0, "sz_decimals": 0, "ticker": "BTC", "max_open_interest": 0u64,
+                        "tick_size": 1u64, "lot_size": 1u64
                     }},
                     { "AttachConditional": attach_fields() }
                 ]}
@@ -600,17 +582,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "proposer": vec![0xA1u8; 20],
                 "registry_version": 1u64,
                 "action": "UnpauseBridge"
-            }),
-        ),
-        // EnableSubAccounts (inner tag 0x15) is the second unit variant: the
-        // bare string `"EnableSubAccounts"`, no payload.
-        codec_case(
-            "propose_admin_action/enable_sub_accounts",
-            PROPOSE_ADMIN_ACTION,
-            json!({
-                "proposer": vec![0xA1u8; 20],
-                "registry_version": 1u64,
-                "action": "EnableSubAccounts"
             }),
         ),
         // SetLiquidationConfig (inner tag 0x11): the configuration exchange-wire

@@ -10,10 +10,6 @@
 //   - errors vectors:  PASS (ExecErrorCode manifest + execErrorName log decoder)
 //   - events vectors:  PASS (decodeLiquidationEvent / decodeVoidSettlementEvent over the engine's attributes)
 //   - nonce vectors:   SKIPPED — nonces are derived from timestamps, not a step function
-//
-// `OracleUpdateComposite` (0x14) is now wired (operator action — composite-CEX
-// feeder price submission). Its codec vectors are exercised here like any other
-// action; the toAction adapter below maps it.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -113,11 +109,7 @@ function bigOrNull(v: unknown): bigint | null {
   return BigInt(v as number | string);
 }
 
-/**
- * Adapter: core snake_case `input` dict → this SDK's `Action` union.
- * Wired for all action types including 0x14 OracleUpdateComposite (operator
- * action — composite-CEX feeder).
- */
+/** Adapter: core snake_case `input` dict → this SDK's `Action` union. */
 function toAction(
   actionType: ActionTypeValue,
   input: Record<string, unknown>,
@@ -204,28 +196,6 @@ function toAction(
           newQuantity: bigOrNull(input.new_quantity),
         },
       };
-    case ActionType.OracleUpdateComposite:
-      return {
-        type: "OracleUpdateComposite",
-        data: {
-          market: input.market as number,
-          price: big(input.price),
-          nSources: input.n_sources == null ? 0 : Number(big(input.n_sources)),
-          signer: bytes(input.signer),
-          publishTimeMs:
-            input.publish_time_ms == null ? 0n : big(input.publish_time_ms),
-        },
-      };
-    case ActionType.OracleUpdate:
-      return {
-        type: "OracleUpdate",
-        data: {
-          market: input.market as number,
-          price: big(input.price),
-          signer: bytes(input.signer),
-          publishTimeMs: big(input.publish_time_ms ?? 0),
-        },
-      };
     case ActionType.MarketOrder:
       return {
         type: "MarketOrder",
@@ -272,6 +242,8 @@ function toAction(
           poolId: input.pool_id as number,
           szDecimals: input.sz_decimals as number,
           ticker: input.ticker as string,
+          tickSize: big(input.tick_size),
+          lotSize: big(input.lot_size),
           ...(input.max_open_interest === undefined
             ? {}
             : { maxOpenInterest: big(input.max_open_interest) }),
@@ -602,6 +574,8 @@ function toCreateMarketValue(
     poolId: m.pool_id as number,
     szDecimals: m.sz_decimals as number,
     ticker: m.ticker as string,
+    tickSize: big(m.tick_size),
+    lotSize: big(m.lot_size),
     maxOpenInterest: big(m.max_open_interest),
   };
 }
@@ -694,7 +668,6 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
   // A unit variant (no fields) is serde's bare variant-name string, not a map.
   if (typeof input === "string") {
     if (input === "UnpauseBridge") return { kind: "UnpauseBridge" };
-    if (input === "EnableSubAccounts") return { kind: "EnableSubAccounts" };
     throw new Error(`toAdminAction: unknown unit variant ${input}`);
   }
   const v = input as Record<string, unknown>;
@@ -940,9 +913,8 @@ function parseOracleSource(v: unknown): any {
 }
 
 describe("conformance vectors (TypeScript)", () => {
-  // All action types wired, including OracleUpdateComposite (0x14) — the
-  // operator composite-CEX feeder action. Nonce is timestamp-derived, no
-  // standalone step function needed.
+  // All action types wired. Nonce is timestamp-derived, no standalone step
+  // function needed.
 
   it("signing: (payload,key) → envelope; pubkey → owner", () => {
     for (const c of cases("signing.ndjson")) {
@@ -1159,7 +1131,7 @@ describe("conformance vectors (TypeScript)", () => {
     // insurance fund and withdraw, void-event),
     // approve, reject, and all three emergency arms (PauseMarket,
     // HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(33);
+    expect(govCases.length).toBe(32);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
@@ -1186,7 +1158,7 @@ describe("conformance vectors (TypeScript)", () => {
     expect((explicitZero.expect as { payload_hex: string }).payload_hex).toBe(
       expected,
     );
-    expect(expected.startsWith("9c")).toBe(true);
+    expect(expected.startsWith("9e")).toBe(true);
 
     const base = toAction(
       omitted.action_type as ActionTypeValue,

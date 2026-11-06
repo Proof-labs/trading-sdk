@@ -54,7 +54,7 @@ class TestCodecVectors:
         ]
         expected = omitted["expect"]["payload_hex"]
         assert explicit_zero["expect"]["payload_hex"] == expected
-        assert expected.startswith("9c")  # MessagePack fixarray(12)
+        assert expected.startswith("9e")  # MessagePack fixarray(14)
 
         for case in (omitted, explicit_zero):
             payload = _native.encode_action(case["action_type"], case["input"])
