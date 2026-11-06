@@ -1707,9 +1707,7 @@ class ExchangeClient:
         to_ms: int | None = None,
         limit: int | None = None,
     ) -> list[dict[str, t.Any]]:
-        owner = _to_hex(owner).lower()
-        if not re.fullmatch(r"[0-9a-f]{40}", owner):
-            raise ValueError("invalid history owner")
+        owner = canonical_owner(owner)
         limit = 200 if limit is None else limit
         if type(limit) is not int or not 1 <= limit <= 5000:
             raise ValueError("history limit must be between 1 and 5000")
