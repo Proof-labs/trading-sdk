@@ -15,38 +15,45 @@ pip install proof-trading-sdk
 
 ## Quick Start
 
+The generated owner must have DevNet test funds before placing an order. Use
+an active market and adjust the example price/quantity to its tick/lot sizes.
+The example's quantities and prices are integers; prices use micro-USDC.
+
 ```python
 import proof_trading_sdk as pts
 
-# Load or generate a keypair
 kp = pts.generate_keypair()
-secret_key = kp["secret_key"]
-public_key = kp["public_key"]
-
-# Derive the 20-byte owner address
-owner = pts.pubkey_to_owner(public_key)
-
-# Create a client
+owner = pts.pubkey_to_owner(kp["public_key"])
 client = pts.ExchangeClient(
-    gateway_url="https://api.dev.proof.trade",
-    api_key="...",
-    secret_key=secret_key,
+    config=pts.SdkConfig(
+        gateway_url="https://api.dev.proof.trade",
+        chain_id="exchange-devnet-1",
+    ),
+    secret_key=kp["secret_key"],
 )
 
-# Check account state
-state = client.account(owner)
-
-# Place an order
-from proof_trading_sdk import Side, TimeInForce
-result = client.submit_action({
-    "action_type": 1,  # PlaceOrder
-    "market": 1,
-    "owner": bytes(owner),
-    "side": Side.Buy,
-    "price": 50_000_000_000,  # $50,000.00 in micro-USDC (6 dp)
-    "quantity": 1,
-})
+try:
+    state = client.account(owner)
+    action = pts.PlaceOrder(
+        owner=owner,
+        market=1,
+        side=pts.Side.Buy,
+        price=50_000_000_000,  # $50,000 in micro-USDC
+        quantity=1,
+        post_only=True,
+        time_in_force=pts.TimeInForce.Gtc,
+    )
+    result = client.submit(action)  # Encode, sign, and submit the typed action.
+finally:
+    client.close()
 ```
+
+For separate signing and submission, use `envelope = client.sign_action(action)`
+followed by `client.submit_action(envelope)`. `submit_action` accepts signed
+bytes, not an action dictionary. Keep private keys and signed envelopes out of
+logs. A gateway acknowledgement alone is not a final fill. When the outcome is
+uncertain the SDK raises `SubmissionPending` carrying the original transaction
+hash as `tx_hash`; reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
