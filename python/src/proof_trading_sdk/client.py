@@ -1340,8 +1340,35 @@ class ExchangeClient:
         owner: bytes | str,
         after_id: int | None = None,
         limit: int = 100,
+        *,
+        order: t.Literal["asc", "desc"] = "desc",
+        cursor: str | None = None,
     ) -> CursorPage:
-        return self._cursor_page("GET", f"/v1/history/account-events", locals())
+        """Account events, newest first by default; reuse the returned cursor
+        with the same owner and ordering until next_cursor is None.
+        Each page accepts a limit of 1 to 5000 events.
+        """
+        owner_hex = canonical_owner(owner)
+        if type(limit) is not int or not 1 <= limit <= 5000:
+            raise ValueError("account event limit must be an integer between 1 and 5000")
+        if after_id is not None:
+            raise ValueError("after_id is unsupported; paginate with cursor instead")
+        if cursor == "":
+            raise ValueError("cursor must be a nonempty continuation token")
+        if order not in ("asc", "desc"):
+            raise ValueError("order must be 'asc' or 'desc'")
+        page = self._cursor_page(
+            "GET", "/v1/history/account-events",
+            {"owner": owner_hex, "order": order, "limit": limit, "cursor": cursor},
+            data_key="account_events",
+        )
+        if not isinstance(page.raw.get("account_events"), list):
+            raise CodecError("expected account_events rows in account history page")
+        if "next_cursor" not in page.raw or (page.next_cursor is not None and not isinstance(page.next_cursor, str)):
+            raise CodecError("invalid account event cursor")
+        if page.next_cursor == "":
+            page.next_cursor = None
+        return page
 
     def history_triggers(
         self,
