@@ -25,14 +25,17 @@
 {"case":"manifest/27","code":27,"log":null,"expect":{"name":"BinaryPriceOutOfRange"}}
 {"case":"manifest/28","code":28,"log":null,"expect":{"name":"InvalidResolution"}}
 {"case":"manifest/29","code":29,"log":null,"expect":{"name":"PositionLimitExceeded"}}
+{"case":"manifest/30","code":30,"log":null,"expect":{"name":"OracleTimestampNotMonotonic"}}
 {"case":"manifest/32","code":32,"log":null,"expect":{"name":"SettlementPriceMismatch"}}
 {"case":"manifest/33","code":33,"log":null,"expect":{"name":"OracleNotApplicable"}}
 {"case":"manifest/34","code":34,"log":null,"expect":{"name":"PostOnlyWouldCross"}}
 {"case":"manifest/35","code":35,"log":null,"expect":{"name":"ReduceOnlyWouldIncrease"}}
+{"case":"manifest/36","code":36,"log":null,"expect":{"name":"TestActionRejected"}}
 {"case":"manifest/37","code":37,"log":null,"expect":{"name":"StaleOracle"}}
 {"case":"manifest/38","code":38,"log":null,"expect":{"name":"UserLeverageBelowMarketIm"}}
 {"case":"manifest/39","code":39,"log":null,"expect":{"name":"TickSizeViolation"}}
 {"case":"manifest/40","code":40,"log":null,"expect":{"name":"LotSizeViolation"}}
+{"case":"manifest/41","code":41,"log":null,"expect":{"name":"OracleStaleNotElapsed"}}
 {"case":"manifest/42","code":42,"log":null,"expect":{"name":"FeeBpsOutOfRange"}}
 {"case":"manifest/43","code":43,"log":null,"expect":{"name":"FeeOverrideStaleSeq"}}
 {"case":"manifest/44","code":44,"log":null,"expect":{"name":"ClientOrderIdNotFound"}}
@@ -77,6 +80,7 @@
 {"case":"manifest/87","code":87,"log":null,"expect":{"name":"SubAccountTransferInsufficientBalance"}}
 {"case":"manifest/88","code":88,"log":null,"expect":{"name":"SubAccountIdZero"}}
 {"case":"manifest/89","code":89,"log":null,"expect":{"name":"SubAccountTransferZeroAmount"}}
+{"case":"manifest/90","code":90,"log":null,"expect":{"name":"SubAccountsInactive"}}
 {"case":"manifest/91","code":91,"log":null,"expect":{"name":"WithdrawalPayoutLeaseActive"}}
 {"case":"manifest/92","code":92,"log":null,"expect":{"name":"EventAlreadyExists"}}
 {"case":"manifest/93","code":93,"log":null,"expect":{"name":"EventNotFound"}}

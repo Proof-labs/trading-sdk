@@ -19,11 +19,7 @@ export class GatewayReadError extends Error {
   readonly name = "GatewayReadError";
   constructor(
     readonly kind:
-      | "deadline"
-      | "limit"
-      | "malformed"
-      | "binding"
-      | "configuration",
+      "deadline" | "limit" | "malformed" | "binding" | "configuration",
     readonly field: string,
     message = `Invalid gateway read: ${field}`,
     options?: ErrorOptions,
