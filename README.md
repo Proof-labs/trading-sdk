@@ -292,10 +292,12 @@ included, it goes through the SDK
 ### Insurance fund observations
 
 ```typescript
-const page = await client.reads().insuranceFundHistory(
-  { poolId: 2, stream: "balances", limit: 50 },
-  { timeoutMs: 5000 },
-);
+const page = await client
+  .reads()
+  .insuranceFundHistory(
+    { poolId: 2, stream: "balances", limit: 50 },
+    { timeoutMs: 5000 },
+  );
 // Pass page.nextCursor unchanged to fetch an older page. "" means no next page.
 ```
 
