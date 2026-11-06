@@ -55,15 +55,38 @@ def test_owner_history_pagination(client, method, key, path):
     assert len(seen) == 2
 
 
-@pytest.mark.parametrize("body", [
-    {"funding": []}, [], {"funding_payments": [{"owner": "cd" * 20}], "next_cursor": ""},
-    {"funding_payments": [], "next_cursor": 3},
+def _rejected_pages(key):
+    return [
+        {"funding": []},  # wrong rows key
+        [],  # not an object
+        {key: [{"owner": "cd" * 20}], "next_cursor": ""},  # another owner's row
+        {key: [], "next_cursor": 3},  # cursor of the wrong type
+        {key: []},  # no next_cursor key at all
+    ]
+
+
+@pytest.mark.parametrize("method,key", [
+    ("history_funding", "funding_payments"), ("history_positions", "positions"),
 ])
-def test_funding_rejects_wrong_page_or_owner(client, body):
+@pytest.mark.parametrize("case", range(5))
+def test_owner_history_rejects_wrong_page_or_owner(client, method, key, case):
+    body = _rejected_pages(key)[case]
     client._http.close()
     client._http = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body)))
     with pytest.raises(CodecError):
-        client.history_funding(OWNER)
+        getattr(client, method)(OWNER)
+
+
+@pytest.mark.parametrize("method,key", [
+    ("history_funding", "funding_payments"), ("history_positions", "positions"),
+])
+def test_owner_history_null_cursor_is_the_last_page(client, method, key):
+    client._http.close()
+    client._http = httpx.Client(transport=httpx.MockTransport(
+        lambda _: httpx.Response(200, json={key: [], "next_cursor": None})
+    ))
+    page = getattr(client, method)(OWNER)
+    assert page.data == [] and page.next_cursor is None
 
 
 @pytest.mark.parametrize("method,max_limit", [("history_funding", 1000), ("history_positions", 5000)])
