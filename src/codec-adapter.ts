@@ -36,6 +36,7 @@ import {
   type ScheduleUpgrade,
   type SetLiquidationConfig,
   type SetOperatorReceiptRegistry,
+  type VoidEvent,
 } from "./types.js";
 import {
   validateFundInsuranceFund,
@@ -45,6 +46,7 @@ import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import { validateTicker } from "./ticker.js";
+import { BINARY_PRICE_MAX } from "./binary.js";
 import {
   validateCancelPositionTriggers,
   validateOrderTriggers,
@@ -182,6 +184,17 @@ function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   }
   if (v.kind === "SetOperatorReceiptRegistry") {
     validateSetOperatorReceiptRegistry(v.value as SetOperatorReceiptRegistry);
+  }
+  if (v.kind === "VoidEvent") {
+    validateVoidEvent(v.value as VoidEvent);
+  }
+}
+
+function validateVoidEvent(action: VoidEvent): void {
+  if (action.yesPrice < 0n || action.yesPrice > BINARY_PRICE_MAX) {
+    throw new Error(
+      `voidEvent yesPrice ${action.yesPrice} is outside 0..=${BINARY_PRICE_MAX}`,
+    );
   }
 }
 

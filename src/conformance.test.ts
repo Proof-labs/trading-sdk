@@ -8,7 +8,7 @@
 //   - codec vectors: PASS
 //   - signing vectors: PASS (signEnvelopeFromPayload + pubkeyToOwner/ownerToHex)
 //   - errors vectors:  PASS (ExecErrorCode manifest + execErrorName log decoder)
-//   - events vectors:  PASS (decodeLiquidationEvent over the engine's attributes)
+//   - events vectors:  PASS (decodeLiquidationEvent / decodeVoidSettlementEvent over the engine's attributes)
 //   - nonce vectors:   SKIPPED — nonces are derived from timestamps, not a step function
 
 import { readFileSync } from "node:fs";
@@ -26,6 +26,7 @@ import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
 import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
 import { decodeLiquidationEvent } from "./liquidation-events.js";
+import { decodeVoidSettlementEvent } from "./void-events.js";
 import {
   ActionType,
   Outcome,
@@ -813,6 +814,13 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       },
     };
   }
+  if (v.VoidEvent) {
+    const e = v.VoidEvent as Record<string, unknown>;
+    return {
+      kind: "VoidEvent",
+      value: { eventId: e.event_id as number, yesPrice: big(e.yes_price) },
+    };
+  }
   if (v.WithdrawInsuranceFund) {
     const w = v.WithdrawInsuranceFund as Record<string, unknown>;
     return {
@@ -984,10 +992,12 @@ describe("conformance vectors (TypeScript)", () => {
         event_type: string;
         attributes: [string, string][];
       };
-      const decoded = decodeLiquidationEvent({
+      const input = {
         type: want.event_type,
         attributes: want.attributes.map(([key, value]) => ({ key, value })),
-      });
+      };
+      const decoded =
+        decodeLiquidationEvent(input) ?? decodeVoidSettlementEvent(input);
       const [[variant, fields]] = Object.entries(
         c.event as Record<string, unknown>,
       );
@@ -1118,10 +1128,10 @@ describe("conformance vectors (TypeScript)", () => {
     // remove, cancel-all-for
     // -account scoped and unscoped, four set-oracle-guards shapes, and
     // oracle policy, two schedule-upgrade shapes, cancel-upgrade, and
-    // insurance fund and withdraw),
+    // insurance fund and withdraw, void-event),
     // approve, reject, and all three emergency arms (PauseMarket,
     // HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(31);
+    expect(govCases.length).toBe(32);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

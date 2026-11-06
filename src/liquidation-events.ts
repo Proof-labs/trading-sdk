@@ -198,7 +198,8 @@ const I64_MIN = -(1n << 63n);
 const I64_MAX = (1n << 63n) - 1n;
 const UNSIGNED = /^(0|[1-9][0-9]*)$/;
 
-class Attributes {
+/** String attributes of one ABCI event, read with range checks. */
+export class Attributes {
   private readonly values = new Map<string, unknown>();
 
   constructor(
