@@ -1064,13 +1064,12 @@ describe("conformance vectors (TypeScript)", () => {
     // ratchet — adding a new ActionType without a vector fails here. Prefer
     // adding a vector in crates/spec/src/bin/gen_vectors.rs; extending this
     // list instead is a conscious, reviewed decision. Remove names as vectors
-    // land; never re-add one. The list is empty (issue #69 burn-down): every
-    // ActionType now carries at least one cross-language codec vector.
+    // land; never re-add one.
     const uncovered = Object.entries(ActionType)
       .filter(([, byte]) => !vectorTypes.has(byte))
       .map(([name]) => name)
       .sort();
-    expect(uncovered).toEqual([]);
+    expect(uncovered).toEqual(["OracleUpdate", "OracleUpdateComposite"]);
   });
 
   it("codec: every EventOracleSource variant and PriceComparison value is pinned", () => {

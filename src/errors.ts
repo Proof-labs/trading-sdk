@@ -19,7 +19,11 @@ export class GatewayReadError extends Error {
   readonly name = "GatewayReadError";
   constructor(
     readonly kind:
-      "deadline" | "limit" | "malformed" | "binding" | "configuration",
+      | "deadline"
+      | "limit"
+      | "malformed"
+      | "binding"
+      | "configuration",
     readonly field: string,
     message = `Invalid gateway read: ${field}`,
     options?: ErrorOptions,
@@ -74,19 +78,18 @@ export enum ExecErrorCode {
   BinaryPriceOutOfRange = 27,
   InvalidResolution = 28,
   PositionLimitExceeded = 29,
-  // 30 was OracleTimestampNotMonotonic, retired with OracleUpdate; never reassigned.
+  OracleTimestampNotMonotonic = 30,
   // 31 belonged to the retired impact-market family; never reassigned.
   SettlementPriceMismatch = 32,
   OracleNotApplicable = 33,
   PostOnlyWouldCross = 34,
   ReduceOnlyWouldIncrease = 35,
-  // 36 was TestActionRejected, retired with RunFundingTick; never reassigned.
-  // 37, 77, 82 and 97 are the wire's `Unpriced`, one code per reason.
-  UnpricedStale = 37,
+  TestActionRejected = 36,
+  StaleOracle = 37,
   UserLeverageBelowMarketIm = 38,
   TickSizeViolation = 39,
   LotSizeViolation = 40,
-  // 41 was OracleStaleNotElapsed, retired with OracleUpdate; never reassigned.
+  OracleStaleNotElapsed = 41,
   FeeBpsOutOfRange = 42,
   FeeOverrideStaleSeq = 43,
   ClientOrderIdNotFound = 44,
@@ -138,9 +141,9 @@ export enum ExecErrorCode {
   /** The block has no certified oracle-policy verdict for the market, so a
    *  mark-dependent action is refused until a later block certifies a price
    *  — the market is stale or unpriceable this block, not misconfigured. */
-  UnpricedNoVerdict = 77,
+  OracleVerdictUnavailable = 77,
   // 78-81 remain reserved on the wire for oracle-policy errors.
-  UnpricedGuardUnset = 82,
+  OracleGuardUnset = 82,
   SubAccountNotFound = 83,
   SubAccountAlreadyExists = 84,
   SubAccountTransferSameAccount = 85,
@@ -148,16 +151,15 @@ export enum ExecErrorCode {
   SubAccountTransferInsufficientBalance = 87,
   SubAccountIdZero = 88,
   SubAccountTransferZeroAmount = 89,
-  // 90 was SubAccountsInactive, retired with the engine's sub-account switch
-  // (sub-accounts are always on); never reassigned.
+  SubAccountsInactive = 90,
   WithdrawalPayoutLeaseActive = 91,
   EventAlreadyExists = 92,
   EventNotFound = 93,
   UnderlyingAlreadyAttached = 94,
   TooManyAttachedConditionals = 95,
   TooManyActiveEvents = 96,
-  /** No mark price exists for the market (no trade EWMA, no fallback). */
-  UnpricedNoMark = 97,
+  /** No mark price exists for the market (impact-family book, no fallback). */
+  MarkUnavailable = 97,
   /** F2 trigger expansion: the order cannot carry attached SL/TP limbs. */
   TriggerOrderIncompatible = 98,
   /** The withdrawal would push the account's rolling-window outflow past
@@ -275,6 +277,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "fill would push the taker's net position past MarketConfig.max_position_size",
   },
+  30: {
+    name: "OracleTimestampNotMonotonic",
+    description:
+      "OracleUpdate publish_time_ms must be strictly greater than the last accepted update (audit B3)",
+  },
   32: {
     name: "SettlementPriceMismatch",
     description:
@@ -283,7 +290,7 @@ const TABLE: Record<number, ExecErrorInfo> = {
   33: {
     name: "OracleNotApplicable",
     description:
-      "the oracle action targets a conditional or prediction-binary book, which marks off its own trades and has no oracle layer",
+      "OracleUpdate targets a market kind that doesn't take oracle prices (conditional and binary books mark off the book)",
   },
   34: {
     name: "PostOnlyWouldCross",
@@ -295,8 +302,13 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "reduce-only order would have increased the position rather than reducing it",
   },
+  36: {
+    name: "TestActionRejected",
+    description:
+      "test/admin action rejected (unauthorized signer or engine not configured to accept them)",
+  },
   37: {
-    name: "UnpricedStale",
+    name: "StaleOracle",
     description:
       "oracle for this market is older than MarketConfig.mark_price_max_oracle_age_ms; order placement, margin, and liquidation refuse to use a stale oracle (BE-33)",
   },
@@ -314,6 +326,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "LotSizeViolation",
     description:
       "PlaceOrder/MarketOrder quantity is not a multiple of MarketConfig.lotSize (BE-48)",
+  },
+  41: {
+    name: "OracleStaleNotElapsed",
+    description:
+      "fallback oracle signer published before the primary's staleness window elapsed (BE-50)",
   },
   42: {
     name: "FeeBpsOutOfRange",
@@ -476,14 +493,14 @@ const TABLE: Record<number, ExecErrorInfo> = {
       "retired legacy relayer terminal submitted at or above the receipt cutover",
   },
   77: {
-    name: "UnpricedNoVerdict",
+    name: "OracleVerdictUnavailable",
     description:
       "the oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed) — mark-dependent actions are refused until a later block certifies a price",
   },
   82: {
-    name: "UnpricedGuardUnset",
+    name: "OracleGuardUnset",
     description:
-      "the oracle-guard gate is active and the market's max oracle age is unset; every mark-dependent action is refused until governance sets one",
+      "mark-dependent read refused: the oracle-guard gate is active and the market's max oracle age is unset",
   },
   83: {
     name: "SubAccountNotFound",
@@ -513,6 +530,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "SubAccountTransferZeroAmount",
     description: "sub-account transfer amount must be greater than zero",
   },
+  90: {
+    name: "SubAccountsInactive",
+    description:
+      "sub-account actions decode but the chain has not enabled them yet",
+  },
   91: {
     name: "WithdrawalPayoutLeaseActive",
     description:
@@ -534,9 +556,9 @@ const TABLE: Record<number, ExecErrorInfo> = {
       "account would touch more events than the scenario margin engine can enumerate (per-account cap)",
   },
   97: {
-    name: "UnpricedNoMark",
+    name: "MarkUnavailable",
     description:
-      "no mark price is available for the market: a conditional or prediction-binary book has no recent-trade EWMA and no oracle fallback value",
+      "no mark price is available for the market: an impact-family book has no recent-trade EWMA and no oracle fallback value",
   },
   98: {
     name: "TriggerOrderIncompatible",

@@ -29,7 +29,7 @@
 {"case":"manifest/33","code":33,"log":null,"expect":{"name":"OracleNotApplicable"}}
 {"case":"manifest/34","code":34,"log":null,"expect":{"name":"PostOnlyWouldCross"}}
 {"case":"manifest/35","code":35,"log":null,"expect":{"name":"ReduceOnlyWouldIncrease"}}
-{"case":"manifest/37","code":37,"log":null,"expect":{"name":"UnpricedStale"}}
+{"case":"manifest/37","code":37,"log":null,"expect":{"name":"StaleOracle"}}
 {"case":"manifest/38","code":38,"log":null,"expect":{"name":"UserLeverageBelowMarketIm"}}
 {"case":"manifest/39","code":39,"log":null,"expect":{"name":"TickSizeViolation"}}
 {"case":"manifest/40","code":40,"log":null,"expect":{"name":"LotSizeViolation"}}
@@ -68,8 +68,8 @@
 {"case":"manifest/74","code":74,"log":null,"expect":{"name":"BridgeReceiptMismatch"}}
 {"case":"manifest/75","code":75,"log":null,"expect":{"name":"WithdrawalBelowMinimum"}}
 {"case":"manifest/76","code":76,"log":null,"expect":{"name":"WithdrawalTerminalGated"}}
-{"case":"manifest/77","code":77,"log":null,"expect":{"name":"UnpricedNoVerdict"}}
-{"case":"manifest/82","code":82,"log":null,"expect":{"name":"UnpricedGuardUnset"}}
+{"case":"manifest/77","code":77,"log":null,"expect":{"name":"OracleVerdictUnavailable"}}
+{"case":"manifest/82","code":82,"log":null,"expect":{"name":"OracleGuardUnset"}}
 {"case":"manifest/83","code":83,"log":null,"expect":{"name":"SubAccountNotFound"}}
 {"case":"manifest/84","code":84,"log":null,"expect":{"name":"SubAccountAlreadyExists"}}
 {"case":"manifest/85","code":85,"log":null,"expect":{"name":"SubAccountTransferSameAccount"}}
@@ -83,7 +83,7 @@
 {"case":"manifest/94","code":94,"log":null,"expect":{"name":"UnderlyingAlreadyAttached"}}
 {"case":"manifest/95","code":95,"log":null,"expect":{"name":"TooManyAttachedConditionals"}}
 {"case":"manifest/96","code":96,"log":null,"expect":{"name":"TooManyActiveEvents"}}
-{"case":"manifest/97","code":97,"log":null,"expect":{"name":"UnpricedNoMark"}}
+{"case":"manifest/97","code":97,"log":null,"expect":{"name":"MarkUnavailable"}}
 {"case":"manifest/98","code":98,"log":null,"expect":{"name":"TriggerOrderIncompatible"}}
 {"case":"manifest/99","code":99,"log":null,"expect":{"name":"WithdrawalLimitExceeded"}}
 {"case":"manifest/100","code":100,"log":null,"expect":{"name":"AccountOrderCapReached"}}

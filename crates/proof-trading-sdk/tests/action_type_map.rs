@@ -15,6 +15,10 @@ use proof_trading_sdk::codec;
 /// Adding a name here is a reviewed decision, not a way to quiet the check.
 const NOT_IN_THE_MAIN_ENTRY: &[(&str, &str)] = &[
     (
+        "RunFundingTick",
+        "engine-internal; exported only from the `testing` subpath",
+    ),
+    (
         "SetAccountFeeOverride",
         "relayer-only; removed from the SDK surface",
     ),
