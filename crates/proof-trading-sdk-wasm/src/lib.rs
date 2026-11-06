@@ -94,6 +94,8 @@ pub enum ReadKind {
     AdminAction = 4,
     /// `query_v2::AuthorizedAgents`, a current bounded map-encoded grant list.
     AuthorizedAgents = 5,
+    InsuranceFundDirectory = 6,
+    InsuranceFundState = 7,
 }
 
 fn decode_as<T: serde::de::DeserializeOwned + serde::Serialize>(
@@ -137,6 +139,36 @@ pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
                 return Err(JsError::new("authorized agents must be a MessagePack map"));
             }
             decode_as::<core_sdk::query::AuthorizedAgents>(bytes)
+        }
+        ReadKind::InsuranceFundDirectory => {
+            if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+                return Err(JsError::new(
+                    "insurance fund directory must be a MessagePack map",
+                ));
+            }
+            let view: core_sdk::query::InsuranceFundDirectory =
+                rmp_serde::from_slice(bytes).map_err(|error| JsError::new(&error.to_string()))?;
+            if !view
+                .funds
+                .iter()
+                .all(core_sdk::query::insurance_fund_owner_matches)
+            {
+                return Err(JsError::new("insurance fund owner does not match pool"));
+            }
+            to_bigint_js(&view)
+        }
+        ReadKind::InsuranceFundState => {
+            if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+                return Err(JsError::new(
+                    "insurance fund state must be a MessagePack map",
+                ));
+            }
+            let view: core_sdk::query::InsuranceFundState =
+                rmp_serde::from_slice(bytes).map_err(|error| JsError::new(&error.to_string()))?;
+            if !core_sdk::query::insurance_fund_owner_matches(&view.fund) {
+                return Err(JsError::new("insurance fund owner does not match pool"));
+            }
+            to_bigint_js(&view)
         }
     }
 }
