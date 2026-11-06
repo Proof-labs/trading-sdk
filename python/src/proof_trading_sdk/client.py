@@ -1277,13 +1277,22 @@ class ExchangeClient:
         cursor: str | None = None,
     ) -> CursorPage:
         """Account events, newest first by default; reuse the returned cursor
-        with the same owner and ordering for the next page.
+        with the same owner and ordering until next_cursor is None.
         """
+        if after_id is not None:
+            raise ValueError("after_id is unsupported; paginate with cursor instead")
+        if cursor == "":
+            raise ValueError("cursor must be a nonempty continuation token")
         if order not in ("asc", "desc"):
             raise ValueError("order must be 'asc' or 'desc'")
-        return self._cursor_page(
-            "GET", "/v1/history/account-events", locals(), data_key="account_events"
+        page = self._cursor_page(
+            "GET", "/v1/history/account-events",
+            {"owner": owner, "order": order, "limit": limit, "cursor": cursor},
+            data_key="account_events",
         )
+        if page.next_cursor == "":
+            page.next_cursor = None
+        return page
 
     def history_triggers(
         self,

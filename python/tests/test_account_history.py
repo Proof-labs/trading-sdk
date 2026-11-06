@@ -12,7 +12,7 @@ def test_account_history_request_and_cursor_pages(options, order):
         requests.append(request)
         assert request.url.path == "/v1/history/account-events"
         params = dict(request.url.params)
-        expected = {"owner": "ab" * 20, "after_id": "12", "limit": "1", "order": order}
+        expected = {"owner": "ab" * 20, "limit": "1", "order": order}
         if len(requests) == 2:
             expected["cursor"] = "opaque+/="
         assert params == expected
@@ -25,13 +25,18 @@ def test_account_history_request_and_cursor_pages(options, order):
     client._http.close()
     client._http = httpx.Client(transport=httpx.MockTransport(handler))
     try:
-        first = client.history_account_events(bytes.fromhex("ab" * 20), 12, 1, **options)
+        first = client.history_account_events(bytes.fromhex("ab" * 20), None, 1, **options)
         assert first.data == [{"event_id": 14}]
         second = client.history_account_events(
-            "ab" * 20, 12, 1, cursor=first.next_cursor, **options
+            "ab" * 20, None, 1, cursor=first.next_cursor, **options
         )
         assert second.data == [{"event_id": 13}]
-        assert second.next_cursor == ""
+        assert second.next_cursor is None
+        assert second.raw["next_cursor"] == ""
+        with pytest.raises(ValueError, match="after_id"):
+            client.history_account_events("ab" * 20, 12)
+        with pytest.raises(ValueError, match="cursor"):
+            client.history_account_events("ab" * 20, cursor="")
         assert second.raw["account_events"] == second.data
         with pytest.raises(ValueError, match="order"):
             client.history_account_events("ab" * 20, order="invalid")
