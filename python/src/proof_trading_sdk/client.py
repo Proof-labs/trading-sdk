@@ -79,6 +79,43 @@ def _leading_error_code(text: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+# httpx failures raised before any request byte reaches the gateway. Every other
+# httpx failure (read or write errors, a dropped connection, an undecodable
+# response body) may follow an admitted submission.
+_NOT_SENT = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.LocalProtocolError,
+    httpx.UnsupportedProtocol,
+)
+
+
+def _submission_may_have_been_admitted(exc: TransportError) -> bool:
+    """Whether a failed ``/exchange`` request may still have been admitted.
+
+    A 5xx is ambiguous unless the gateway proves the refusal: a
+    ``status: refused`` body naming no ``txHash``, ``code`` or ``height`` means
+    the transaction never reached the broadcaster, as the TypeScript binding
+    reads it. An httpx failure is ambiguous unless it is in ``_NOT_SENT``. A
+    TransportError raised from an HTTP status (4xx, 3xx) was answered by the
+    gateway without admission.
+    """
+    if isinstance(exc, GatewayError):
+        try:
+            body = json.loads(exc.body)
+        except ValueError:
+            return True
+        proven_refusal = (
+            isinstance(body, dict)
+            and body.get("status") == "refused"
+            and not any(k in body for k in ("txHash", "tx_hash", "code", "height"))
+        )
+        return not proven_refusal
+    cause = exc.__cause__
+    return isinstance(cause, httpx.RequestError) and not isinstance(cause, _NOT_SENT)
+
+
 def _to_hex(owner: bytes | str) -> str:
     """Normalise *owner* to a hex string (with or without ``0x`` prefix).
 
@@ -336,7 +373,8 @@ class ExchangeClient:
             raise GatewayError(resp.status_code, resp.text)
 
         # Anything else non-2xx (400, 402, 405-428, 431, 3xx, …) is NOT success.
-        # `GatewayError` specifically means "5xx — retry with backoff"; a 3xx/4xx
+        # `GatewayError` specifically means "5xx — a read can retry with backoff,
+        # a submission's outcome is unknown"; a 3xx/4xx
         # is a client-side error that must NOT be blind-retried, so it surfaces
         # as a plain TransportError carrying the status.
         if resp.status_code >= 300:
@@ -481,10 +519,7 @@ class ExchangeClient:
         except TransportError as exc:
             # A write may have been partial, or the response may have been lost
             # after admission. Preserve the original bytes' hash; never retry.
-            if isinstance(exc, GatewayError) or isinstance(exc.__cause__, (
-                httpx.ReadTimeout, httpx.ReadError, httpx.WriteTimeout,
-                httpx.WriteError, httpx.RemoteProtocolError,
-            )):
+            if _submission_may_have_been_admitted(exc):
                 raise SubmissionPending(
                     hashlib.sha256(envelope).hexdigest().upper(),
                     "submission outcome unknown; reconcile by hash",
