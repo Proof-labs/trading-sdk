@@ -118,14 +118,14 @@ _RFC3339_RE = re.compile(
 def canonical_owner(value: bytes | str) -> str:
     if isinstance(value, bytes):
         if len(value) != 20:
-            raise ValueError("trigger history owner must be exactly 20 bytes")
+            raise ValueError("history owner must be exactly 20 bytes")
         text = value.hex()
     elif isinstance(value, str):
-        text = value.removeprefix("0x").lower()
+        text = value.lower().removeprefix("0x")
     else:
-        raise ValueError("trigger history owner must be bytes or hex")
+        raise ValueError("history owner must be bytes or hex")
     if not _OWNER_RE.fullmatch(text):
-        raise ValueError("trigger history owner must be a 40-character hex address")
+        raise ValueError("history owner must be a 40-character hex address")
     return text
 
 
