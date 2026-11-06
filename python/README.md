@@ -51,8 +51,9 @@ finally:
 For separate signing and submission, use `envelope = client.sign_action(action)`
 followed by `client.submit_action(envelope)`. `submit_action` accepts signed
 bytes, not an action dictionary. Keep private keys and signed envelopes out of
-logs. A gateway acknowledgement alone is not a final fill; reconcile the original
-transaction hash before retrying an uncertain submission.
+logs. A gateway acknowledgement alone is not a final fill. When the outcome is
+uncertain the SDK raises `SubmissionPending` carrying the original transaction
+hash as `tx_hash`; reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
