@@ -27,11 +27,13 @@ class NonceAllocator:
 
         allocate() = max(now_ms, last_seen + 1)
 
-    Pure in-memory, no persistence, no I/O. On restart the counter resets
-    to ``0`` and the first call returns ``now_ms`` — always ahead of any
-    pre-crash nonce. The only edge case (restart within the same millisecond)
-    produces a duplicate nonce; the engine rejects it with code 21 (not
-    burned), the caller retries, and the second call returns ``now_ms + 1``.
+    In-memory only: restart resets the high-water mark. The first allocation
+    uses the wall clock, which may repeat a nonce or lag a previous burst.
+    Independent allocator instances can also choose the same millisecond.
+    Coordinate workers sharing an account; the instance lock does not provide
+    process-wide uniqueness. Reconcile an unknown submission by its original
+    hash before signing a replacement. A confirmed code-21 rejection permits
+    a fresh allocation, but does not guarantee that its first retry is unique.
 
     Thread safety: uses a lock, suitable for concurrent callers.
     """

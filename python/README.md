@@ -189,21 +189,27 @@ persisted even if the handler fails). Only invalid signatures skip the burn.
 
 ### Crash recovery
 
-Pure in-memory — no persistence, no I/O. On restart the allocator resets and
-the first `allocate()` returns `now_ms`, which is always ahead of any pre-crash
-nonce. The one edge case (restart within the same millisecond) produces a
-duplicate nonce; the engine rejects it with code 21 (not burned), the caller
-retries, and the second call returns `now_ms + 1`.
+The allocator is in-memory and does not persist its high-water mark. On restart,
+the first allocation uses `now_ms`; this can repeat an already-used nonce or fall
+below a previous high-water mark after a burst or clock adjustment. A restart in
+the same millisecond is not the only collision case.
+
+A confirmed code-21 rejection permits a fresh nonce allocation, but another
+collision is possible. For a submission whose outcome is unknown, reconcile the
+original transaction hash before signing a replacement; do not treat a timeout
+as a confirmed nonce rejection.
 
 ### Multi-process safety
 
-Multiple processes sharing the same account each use their own allocator with
-independent wall clocks. Nonces are naturally unique per process (different
-`now_ms` values). The engine's sorted-vec handles interleaving.
+Uniqueness is guaranteed only for callers sharing one `NonceAllocator` instance.
+Independent instances or processes can observe the same millisecond and return
+the same nonce. Coordinate allocation across workers sharing an account; the
+allocator's lock does not coordinate separate instances or processes. The engine
+accepts out-of-order unique nonces within its window and rejects replays.
 
 ### Key properties
 
 - No sequential ordering required — nonces can arrive out of order
 - No sync call needed before the first transaction
-- Thread-safe, lock-free allocation in the common case
+- Thread-safe allocation within one shared allocator instance
 - Wide engine window (+1 day / −2 days) tolerates NTP skew
