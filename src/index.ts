@@ -1,4 +1,13 @@
 export { verifyWitness } from "./bounded-read.js";
+export {
+  decodeInsuranceFundHistory,
+  type InsuranceFundHistoryParams,
+  type InsuranceFundHistoryPage,
+  type InsuranceHistoryCoordinate,
+  type InsuranceHistoryEvent,
+  type InsuranceHistoryPhase,
+  type InsuranceHistoryStream,
+} from "./insurance-fund-history.js";
 export { GatewayReadError } from "./errors.js";
 export type { FinalizedAuthorizedAgents } from "./authorized-agents.js";
 export {
