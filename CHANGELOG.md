@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `reads().insuranceFundHistory({ poolId, stream, limit, cursor })` reads one bounded page of indexed insurance balances or activity through the gateway. Amounts and chain coordinates remain exact integers; coverage explicitly describes retained observations, never complete history, equity or a finalized-state witness.
+
 ### Fixed
 
 - Python submits signed transactions to the gateway in its JSON/base64 envelope.
