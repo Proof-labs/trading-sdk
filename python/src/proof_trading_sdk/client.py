@@ -596,12 +596,14 @@ class ExchangeClient:
             raise SubmissionPending(str(tx_hash), str(data.get("error") or ""))
 
         # 4. No code and no hash: an error string is all the gateway gave us. It
-        #    still emits the "<code>: <message>" compatibility format, so recover
-        #    the engine code from the text and fall back to 1 (DecodeError), the
-        #    same conservative default the TS binding uses.
+        #    still emits the "<code>: <message>" compatibility format, so an
+        #    explicit non-zero code is a terminal engine verdict. Anything else
+        #    proves nothing about admission, so reconcile by hash, as the TS
+        #    binding's final fallback does.
         err = str(data.get("error") or data.get("message") or "")
-        if err or data.get("status") == "error":
-            raise EngineError(_leading_error_code(err) or 1, err or "engine error")
+        code = _leading_error_code(err)
+        if code is not None and code > 0:
+            raise EngineError(code, err)
         raise SubmissionPending(
             hashlib.sha256(envelope).hexdigest().upper(),
             "malformed /exchange response (no verdict); reconcile by hash",
@@ -1103,8 +1105,6 @@ class ExchangeClient:
         heights remain exact ``int`` values.
         """
         data = _response_object(self._get("/v1/triggers/status"))
-        if not isinstance(data, dict):
-            raise ProofTradingSdkError("trigger status decode: expected an object")
         try:
             finalized = data["finalized_height"]
             admission = data["admission_height"]

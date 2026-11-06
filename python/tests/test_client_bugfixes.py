@@ -9,6 +9,8 @@ with the falsy constructor defaults (`gateway_url=""`, `timeout_secs=0`).
 
 from __future__ import annotations
 
+import hashlib
+
 import httpx
 import pytest
 
@@ -40,16 +42,25 @@ def test_submit_action_400_raises():
     assert exc.value.status_code == 400
 
 
-def test_submit_action_error_status_no_code_raises():
-    # 200 body carrying no `code` and no hash, but an explicit error status:
-    # NOT code-0 success. With no leading "<code>: " in the text the engine code
-    # falls back to 1 (DecodeError), matching the TypeScript binding.
+@pytest.mark.parametrize("body", [
+    {"status": "error", "message": "rejected"},
+    {"status": "error"},
+    {"error": "park deadline exceeded"},
+    {"message": "upstream timeout"},
+    {"error": "0: not a rejection"},
+])
+def test_submit_action_error_without_engine_code_is_pending(body):
+    # 200 body carrying no `code`, no hash and no leading non-zero "<code>: ":
+    # NOT code-0 success, and NOT a terminal engine verdict either. The gateway
+    # always sends `code` with a real rejection, so this proves nothing about
+    # admission; reconcile by the hash of the bytes sent, as the TypeScript
+    # binding's final fallback does.
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"status": "error", "message": "rejected"})
+        return httpx.Response(200, json=body)
 
-    with pytest.raises(EngineError) as exc:
+    with pytest.raises(SubmissionPending) as exc:
         _client(handler).submit_action(b"\x00")
-    assert exc.value.code == 1
+    assert exc.value.tx_hash == hashlib.sha256(b"\x00").hexdigest().upper()
 
 
 def test_submit_action_error_string_recovers_leading_engine_code():
