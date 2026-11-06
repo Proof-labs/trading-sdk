@@ -8,6 +8,7 @@ import re
 import time
 import typing as t
 from dataclasses import dataclass, field
+from datetime import datetime
 from urllib.parse import urljoin
 
 import httpx
@@ -1567,7 +1568,11 @@ class ExchangeClient:
         to_ms: int | None = None,
         limit: int | None = None,
     ) -> list[dict[str, t.Any]]:
-        """Deposit log for *owner*: ``GET /v1/history/deposits/{hex}``."""
+        """Raw deposit account-event records for *owner*, newest first.
+
+        Returns a bounded merged head (default 200), not the complete history.
+        Amounts remain in the original event payload.
+        """
         return self._history_cashflow("deposits", owner, from_ms, to_ms, limit)
 
     def history_withdrawals(
@@ -1577,7 +1582,14 @@ class ExchangeClient:
         to_ms: int | None = None,
         limit: int | None = None,
     ) -> list[dict[str, t.Any]]:
-        """Withdrawal log for *owner*: ``GET /v1/history/withdrawals/{hex}``."""
+        """Raw withdrawal account-event records for *owner*, newest first.
+
+        This method returns up to ``limit`` records across event types (default 200).
+        A ``withdrawal_confirmed`` event appears only when indexed under this
+        owner. A confirmation without an owner cannot appear in this account
+        history. Use ``withdrawal_status(withdrawal_id)`` to check its current status.
+        Request/refund amounts omit custody fees, so do not infer cash deltas.
+        """
         return self._history_cashflow("withdrawals", owner, from_ms, to_ms, limit)
 
     def history_resolutions(
@@ -1695,17 +1707,59 @@ class ExchangeClient:
         to_ms: int | None = None,
         limit: int | None = None,
     ) -> list[dict[str, t.Any]]:
-        owner = _to_hex(owner)
-        params: dict[str, t.Any] = {}
+        owner = canonical_owner(owner)
+        limit = 200 if limit is None else limit
+        if type(limit) is not int or not 1 <= limit <= 5000:
+            raise ValueError("history limit must be between 1 and 5000")
+        for value in (from_ms, to_ms):
+            if value is not None and (type(value) is not int or value < 0):
+                raise ValueError("history time bounds must be nonnegative milliseconds")
+        if from_ms is not None and to_ms is not None and from_ms >= to_ms:
+            raise ValueError("history from_ms must be less than to_ms")
+        params: dict[str, t.Any] = {"owner": owner, "order": "desc", "limit": limit}
         if from_ms is not None:
             params["from"] = from_ms
         if to_ms is not None:
             params["to"] = to_ms
-        if limit is not None:
-            params["limit"] = limit
-        resp = self._get(f"/v1/history/{kind}/{owner}", params=params or None)
-        data = _response_json(resp)
-        return data if isinstance(data, list) else []
+        kinds = (
+            ("deposited", "deposit_confirmed") if kind == "deposits" else
+            ("withdrawn", "withdraw_requested", "withdrawal_confirmed", "withdrawal_failed")
+        )
+        events = []
+        for event_type in kinds:
+            resp = self._get(
+                "/v1/history/account-events", params={**params, "event_type": event_type}
+            )
+            data = _response_json(resp)
+            if (not isinstance(data, dict)
+                    or not isinstance(data.get("account_events"), list)
+                    or not isinstance(data.get("next_cursor"), str)):
+                raise CodecError("invalid cashflow account-event page")
+            for row in data["account_events"]:
+                if (not isinstance(row, dict) or row.get("owner") != owner
+                        or row.get("event_type") != event_type
+                        or not isinstance(row.get("payload"), dict)
+                        or row["payload"].get("owner", owner) != owner):
+                    raise CodecError("cashflow account-event scope mismatch")
+                # Preserve the gateway's nanosecond ordering before applying
+                # the merged limit. Millisecond truncation can select wrong rows.
+                match = re.fullmatch(
+                    r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z",
+                    str(row.get("block_time", "")),
+                )
+                event_id = row.get("event_id")
+                if (match is None or isinstance(event_id, bool)
+                        or not isinstance(event_id, (int, str))
+                        or not re.fullmatch(r"[0-9]+", str(event_id))):
+                    raise CodecError("invalid cashflow event time or id")
+                try:
+                    seconds = datetime.fromisoformat(match[1])
+                except ValueError as exc:
+                    raise CodecError("invalid cashflow event time") from exc
+                key = (seconds, int((match[2] or "").ljust(9, "0")), int(event_id))
+                events.append((key, row))
+        events.sort(key=lambda item: item[0], reverse=True)
+        return [row for _, row in events[:limit]]
 
     def _cursor_page(
         self,
