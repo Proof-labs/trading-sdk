@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Python reads deposit and withdrawal history from owner-scoped account events.
+
 ## [10.1.0] — 2026-11-05
 
 TypeScript MINOR release: two optional client options for callers that sign,
