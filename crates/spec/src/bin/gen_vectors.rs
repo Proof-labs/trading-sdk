@@ -710,6 +710,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": { "VoidEvent": { "event_id": 4u32, "yes_price": 350_000u64 } }
             }),
         ),
+        // SettleEvent (inner tag 0x1E).
+        codec_case(
+            "propose_admin_action/settle_event",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SettleEvent": { "event_id": 4u32, "outcome": "No" } }
+            }),
+        ),
         codec_case(
             "approve_admin_action/rotate_registry",
             APPROVE_ADMIN_ACTION,

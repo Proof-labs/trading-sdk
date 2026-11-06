@@ -16,6 +16,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   leave the check to the engine. `decodeVoidSettlementEvent` decodes the
   `event_voided` and `conditional_void_settled` events. proof-wire moves to
   mirror commit `eecafea4`, which adds only `VoidEvent` to 10.0.0. Additive (MINOR).
+- **`SettleEvent` admin action** (inner tag 30, DEC-244): a multisig proposal
+  that settles a price event whose resolution window closed unresolved, on
+  the `Yes` or `No` the quorum names. The TypeScript encoder refuses `Void`,
+  as the engine does. A pending `SettleEvent` proposal now lists in
+  `decodeProposalPage` instead of failing the whole page. proof-wire moves to
+  mirror commit `bbc3ff2d`, which adds `SettleEvent`. Additive (MINOR).
 
 ### Fixed
 
