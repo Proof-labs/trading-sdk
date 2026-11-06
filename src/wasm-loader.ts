@@ -34,6 +34,7 @@ export interface WasmCore {
     readonly Event: number;
     readonly Account: number;
     readonly AdminAction: number;
+    readonly AuthorizedAgents: number;
   };
   /** Strictly decode a node read response as its wire type (serde-shaped JS). */
   decode_read(kind: number, bytes: Uint8Array): unknown;
