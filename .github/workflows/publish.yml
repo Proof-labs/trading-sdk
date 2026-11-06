@@ -169,7 +169,7 @@ jobs:
           if [ "${NPM_PUBLISH_LATEST:-}" = "true" ]; then
             npm publish --provenance --access public
           else
-            npm publish --provenance --access public --tag "v$(node -p "require('./package.json').version")"
+            npm publish --provenance --access public --tag legacy-tick-lot
           fi
       - name: Cut the GitHub Release
         env:
