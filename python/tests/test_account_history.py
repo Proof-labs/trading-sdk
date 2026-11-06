@@ -92,3 +92,19 @@ def test_invalid_account_history_input_fails_before_request(invalid):
             client.history_account_events(**{"owner": "ab" * 20, **invalid})
     finally:
         client.close()
+
+
+def test_account_history_null_cursor_is_the_last_page():
+    # The gateway contract sends `next_cursor: null` on the last page.
+    def handler(request):
+        return httpx.Response(200, json={"account_events": [], "next_cursor": None})
+
+    client = ExchangeClient(config=SdkConfig(gateway_url="https://gateway.example"))
+    client._http.close()
+    client._http = httpx.Client(transport=httpx.MockTransport(handler))
+    try:
+        page = client.history_account_events("ab" * 20)
+        assert page.data == []
+        assert page.next_cursor is None
+    finally:
+        client.close()
