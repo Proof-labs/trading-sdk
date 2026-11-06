@@ -1324,16 +1324,56 @@ class ExchangeClient:
         owner: bytes | str,
         after_height: int | None = None,
         limit: int = 100,
+        *,
+        cursor: str | None = None,
     ) -> CursorPage:
-        return self._cursor_page("GET", f"/v1/history/funding", locals())
+        """Indexed funding payments for this account. Continue with next_cursor until None."""
+        owner_hex = canonical_owner(owner)
+        return self._account_history_rows(
+            f"/v1/history/funding-payments/{owner_hex}", "funding_payments",
+            owner_hex, {"limit": limit, "cursor": cursor}, after_height, max_limit=1000,
+        )
 
     def history_positions(
         self,
         owner: bytes | str,
         after_height: int | None = None,
         limit: int = 100,
+        *,
+        cursor: str | None = None,
     ) -> CursorPage:
-        return self._cursor_page("GET", f"/v1/history/positions", locals())
+        """Position history for this account. Continue with next_cursor until None."""
+        owner_hex = canonical_owner(owner)
+        return self._account_history_rows(
+            "/v1/history/positions", "positions", owner_hex,
+            {"owner": owner_hex, "limit": limit, "cursor": cursor}, after_height, max_limit=5000,
+        )
+
+    def _account_history_rows(
+        self, path: str, key: str, owner: str, params: dict[str, t.Any], after_height: int | None,
+        *, max_limit: int,
+    ) -> CursorPage:
+        if after_height is not None:
+            raise ValueError("after_height is unsupported; paginate with cursor instead")
+        limit = params["limit"]
+        if type(limit) is not int or not 1 <= limit <= max_limit:
+            raise ValueError(f"history limit must be between 1 and {max_limit}")
+        if params["cursor"] == "":
+            raise ValueError("cursor must be a nonempty continuation token")
+        response = self._get(path, params={k: v for k, v in params.items() if v is not None})
+        try:
+            page = response.json()
+        except ValueError as exc:
+            raise TransportError("invalid JSON in account history", status_code=response.status_code) from exc
+        if not isinstance(page, dict) or not isinstance(page.get(key), list):
+            raise CodecError(f"expected an account history page with {key} rows")
+        rows = page[key]
+        if any(not isinstance(row, dict) or row.get("owner") != owner for row in rows):
+            raise CodecError("unexpected account history row owner")
+        token = page.get("next_cursor")
+        if "next_cursor" not in page or (token is not None and not isinstance(token, str)):
+            raise CodecError("invalid account history cursor")
+        return CursorPage(data=rows, next_cursor=token or None, raw=page)
 
     def history_account_events(
         self,
