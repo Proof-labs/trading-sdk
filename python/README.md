@@ -72,7 +72,7 @@ newer than this package.
 - **Operator (privileged):** `SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,
   `ConfirmDeposit`, `ConfirmWithdrawal`, `FailWithdrawal`,
   `AuthorizeWithdrawal`, `ConfirmWithdrawalReceipt`, `FailWithdrawalReceipt`,
-  `ClaimWithdrawalPayout`, `ResolveEvent`.
+  `ClaimWithdrawalPayout`, `RecordWithdrawalPayout`, `ResolveEvent`.
 - **Governance (admin multisig):** `ProposeAdminAction`, `ApproveAdminAction`,
   `RejectAdminAction`, `EmergencyAdminAction`. Their `action` is the inner
   admin action in its externally tagged wire form:

@@ -402,6 +402,15 @@ describe("codec v1 all action types", () => {
       data: { withdrawalId: 777n, holder: new Uint8Array(20).fill(0x05) },
     },
     {
+      type: "RecordWithdrawalPayout",
+      data: {
+        withdrawalId: 777n,
+        holder: new Uint8Array(20).fill(0x05),
+        solanaSignature: new Uint8Array(64).fill(0x07),
+        lastValidBlockHeight: 500n,
+      },
+    },
+    {
       type: "ResolveEvent",
       data: { eventId: 700, outcome: Outcome.No, signer: SIGNER },
     },
