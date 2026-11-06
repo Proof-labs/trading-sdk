@@ -1263,7 +1263,7 @@ class ExchangeClient:
         owner_hex = canonical_owner(owner)
         return self._account_history_rows(
             f"/v1/history/funding-payments/{owner_hex}", "funding_payments",
-            owner_hex, {"limit": limit, "cursor": cursor}, after_height,
+            owner_hex, {"limit": limit, "cursor": cursor}, after_height, max_limit=1000,
         )
 
     def history_positions(
@@ -1278,14 +1278,18 @@ class ExchangeClient:
         owner_hex = canonical_owner(owner)
         return self._account_history_rows(
             "/v1/history/positions", "positions", owner_hex,
-            {"owner": owner_hex, "limit": limit, "cursor": cursor}, after_height,
+            {"owner": owner_hex, "limit": limit, "cursor": cursor}, after_height, max_limit=5000,
         )
 
     def _account_history_rows(
         self, path: str, key: str, owner: str, params: dict[str, t.Any], after_height: int | None,
+        *, max_limit: int,
     ) -> CursorPage:
         if after_height is not None:
             raise ValueError("after_height is unsupported; paginate with cursor instead")
+        limit = params["limit"]
+        if type(limit) is not int or not 1 <= limit <= max_limit:
+            raise ValueError(f"history limit must be between 1 and {max_limit}")
         if params["cursor"] == "":
             raise ValueError("cursor must be a nonempty continuation token")
         response = self._get(path, params={k: v for k, v in params.items() if v is not None})

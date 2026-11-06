@@ -64,3 +64,14 @@ def test_funding_rejects_wrong_page_or_owner(client, body):
     client._http = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body)))
     with pytest.raises(CodecError):
         client.history_funding(OWNER)
+
+
+@pytest.mark.parametrize("method,max_limit", [("history_funding", 1000), ("history_positions", 5000)])
+def test_account_history_limit_bounds(client, method, max_limit):
+    client._http.close()
+    client._http = httpx.Client(transport=httpx.MockTransport(
+        lambda _: pytest.fail("invalid limit reached gateway")
+    ))
+    for limit in (True, 0, max_limit + 1):
+        with pytest.raises(ValueError, match=f"between 1 and {max_limit}"):
+            getattr(client, method)(OWNER, limit=limit)
