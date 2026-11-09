@@ -9,6 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Python typed `authorities()` and `liquidation_config()` reads, backed by
+  canonical Rust wire types with strict record/address/range checks. Failed
+  reads raise rather than synthesize empty authorities or default configuration.
+
 - **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
   that voids an event and settles every binary and conditional on it in cash
   at `yesPrice` (micro-USDC per share, `0..=1_000_000`). The TypeScript

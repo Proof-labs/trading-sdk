@@ -118,3 +118,11 @@ def get_action_types() -> list[dict[str, object]]:
 
 def get_error_code_table() -> list[dict[str, object]]:
     ...
+
+MAX_GOVERNANCE_READ_BYTES: int
+
+def decode_authorities(data: bytes) -> dict:
+    ...
+
+def decode_liquidation_config(data: bytes) -> tuple:
+    ...

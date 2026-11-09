@@ -235,6 +235,19 @@ fn decode_markets_snapshot<'py>(
     Ok(dict)
 }
 
+#[pyfunction]
+fn decode_authorities<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+    let value = core_sdk::governance_reads::decode_authorities(bytes).map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &value).map_err(map_pythonize_err)
+}
+
+#[pyfunction]
+fn decode_liquidation_config<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+    let value = core_sdk::governance_reads::decode_liquidation_config(bytes)
+        .map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &value).map_err(map_pythonize_err)
+}
+
 /// Strict, type-preserving MessagePack preflight for gateway read payloads.
 ///
 /// Rejects the float families that Python would otherwise keep distinct from a
@@ -457,6 +470,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(encode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_tx, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_authorities, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_liquidation_config, m)?)?;
+    m.add(
+        "MAX_GOVERNANCE_READ_BYTES",
+        core_sdk::governance_reads::MAX_GOVERNANCE_READ_BYTES,
+    )?;
     m.add_function(wrap_pyfunction!(decode_markets_snapshot, m)?)?;
     m.add(
         "MAX_MARKETS_SNAPSHOT_BYTES",
