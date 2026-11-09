@@ -2035,8 +2035,7 @@ export interface Orderbook {
   asks: OrderbookLevel[];
 }
 
-/** A resting order on the book. Returned by `GET /v1/orders/{addr}`.
- *  Wire shape: 6-tuple `[id, market, owner, side, price, quantity]`. */
+/** A canonical resting order from the gateway openOrders read. */
 export interface OpenOrder {
   /** Engine-assigned order ID (monotonic within the market). */
   id: bigint;
@@ -2050,6 +2049,20 @@ export interface OpenOrder {
   price: bigint;
   /** Resting quantity in contracts. */
   quantity: bigint;
+  /** Client-assigned ID, or null when absent. Zero remains a stored ID. */
+  clientOrderId: bigint | null;
+  /** Quantity originally accepted; zero for legacy records. */
+  originalQuantity: bigint;
+  /** Cumulative quantity filled while resting as maker. */
+  filledQuantity: bigint;
+  /** Placement block timestamp in milliseconds; zero if unrecorded. */
+  createdAtMs: bigint;
+  /** FIFO priority; zero means legacy readers fall back to id. */
+  queuePriority: bigint;
+  /** Placement time in force; currently only Gtc orders rest. */
+  timeInForce: "Gtc" | "Ioc" | "Fok";
+  postOnly: boolean;
+  reduceOnly: boolean;
 }
 
 export type TriggerKind = "StopLoss" | "TakeProfit";

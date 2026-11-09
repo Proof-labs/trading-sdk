@@ -1,4 +1,6 @@
 import base64
+import json
+from pathlib import Path
 from copy import deepcopy
 
 import httpx
@@ -122,3 +124,20 @@ def test_bad_owner_rejected_before_request(client, owner):
     client._http = httpx.Client(transport=httpx.MockTransport(lambda _: pytest.fail("bad owner sent")))
     with pytest.raises(ValueError):
         client.open_orders(owner)
+
+
+SHARED_VECTORS = json.loads((Path(__file__).parents[2] / "conformance" / "open-orders.json").read_text())
+
+
+@pytest.mark.parametrize("vector", SHARED_VECTORS, ids=lambda v: v["name"])
+def test_shared_typescript_python_read_contract(client, vector):
+    client._http = httpx.Client(transport=httpx.MockTransport(
+        lambda _: httpx.Response(200, json={"data": vector["msgpack_base64"]})
+    ))
+    orders = client.open_orders(vector["owner"])
+    normalized = [{
+        key: value.hex() if isinstance(value, bytes) else
+        str(value) if type(value) is int and key != "market" else value
+        for key, value in order.items()
+    } for order in orders]
+    assert normalized == vector["orders"]

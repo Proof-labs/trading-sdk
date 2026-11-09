@@ -242,6 +242,31 @@ are monitoring signals rather than faults. `faults` follows
 `ORACLE_FAULT_BITS`, named in `faultReasons`; `Disagreement` and
 `PairTimeMismatch` keep their bits but are no longer produced.
 
+### Resting order fields
+
+`queryOpenOrders(owner)` and Python `open_orders(owner)` read the gateway's
+`POST /info` `openOrders` response through the same Rust decoder. TypeScript
+returns camelCase fields; Python returns snake_case fields.
+
+| TypeScript | Python | Value |
+| --- | --- | --- |
+| `id`, `price`, `quantity` | same | Exact `bigint` / `int`; quantity is remaining size |
+| `market`, `owner`, `side` | same | Market number, 20-byte `Uint8Array` / `bytes`, `Buy` or `Sell` |
+| `clientOrderId` | `client_order_id` | Exact `bigint` / `int`, or `null` / `None`; stored zero stays zero |
+| `originalQuantity`, `filledQuantity` | `original_quantity`, `filled_quantity` | Exact `bigint` / `int` |
+| `createdAtMs`, `queuePriority` | `created_at_ms`, `queue_priority` | Exact `bigint` / `int` |
+| `timeInForce` | `time_in_force` | `Gtc`, `Ioc` or `Fok`; currently only `Gtc` rests |
+| `postOnly`, `reduceOnly` | `post_only`, `reduce_only` | Booleans |
+
+Legacy six-field records default to an absent client ID, zero metadata, `Gtc`,
+and false flags. Zero placement time means unrecorded; zero queue priority is
+legacy metadata whose effective priority falls back to `id`.
+
+Malformed or wrong-owner responses, duplicate/out-of-order IDs, zero remaining
+quantity, and decoded payloads over 1 MiB throw (`Error` in TypeScript,
+`CodecError` in Python). A valid empty list returns `[]`. The server may cap
+results; this read does not prove completeness or verify a finalized witness.
+
 ### Trading No on an event's binary book
 
 Each event has one binary book, priced in Yes (`EventInfo.ebyMarket`). Buying
