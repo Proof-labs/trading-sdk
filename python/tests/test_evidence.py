@@ -165,3 +165,10 @@ def test_huge_manual_integer_stays_inside_sdk_error_boundary():
     with pytest.raises(sdk.GatewayReadError) as raised:
         sdk.verify_witness(witness, decode(), CHAIN)
     assert raised.value.kind == "malformed"
+
+
+def test_a_wrong_32_byte_chain_pin_is_refused():
+    witness = sdk.decode_finalized_read_witness(witness_wire())
+    with pytest.raises(sdk.GatewayReadError) as raised:
+        sdk.verify_witness(witness, decode(), bytes(32))
+    assert raised.value.kind == "binding"

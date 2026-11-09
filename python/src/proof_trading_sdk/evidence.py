@@ -14,7 +14,8 @@ _I64_MAX = (1 << 63) - 1
 _SAFE_INTEGER = (1 << 53) - 1
 _HASH = re.compile(r"[a-fA-F0-9]{64}")
 _DECIMAL = re.compile(r"(?:0|[1-9][0-9]{0,19})")
-_TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z")
+# Hour 24 is excluded here because datetime.fromisoformat accepts it from Python 3.14.
+_TIME = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T(?:[01][0-9]|2[0-3]):[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z")
 
 
 @dataclass(frozen=True)

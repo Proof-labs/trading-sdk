@@ -91,6 +91,8 @@ verify_witness(witness, header, chain_id="exchange-devnet-1")
 
 When the read's payload supplies its own height/time, pass `expected_height`
 and `expected_time_ms` to `decode_finalized_read_witness` to bind those values.
+Parse `witness_json` with a parser that refuses duplicate keys: plain `json.loads`
+silently keeps the last value, and only `block_header` applies this check itself.
 `verify_witness` checks the pinned chain, H+1 height and app hash. It deliberately
 does not compare H's witness time with H+1's header time. Success against a
 header from the same gateway establishes consistency of that gateway's claims;
