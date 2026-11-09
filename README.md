@@ -569,8 +569,9 @@ Python raises `PreAdmissionRefusal` for validated admission refusals and interna
 `EncodingError` refusals, including HTTP 500. Catch it for those responses rather
 than treating them as ambiguous submissions or unstructured transport errors;
 its `error_code`, `message` and
-`status_code` preserve the gateway reason. Existing authentication, rate-limit
-and overload exceptions remain unchanged. `SubmissionPending.tx_hash` is the
+`status_code` preserve the gateway reason. Refusals at HTTP 401, 403, 429 and other
+5xx responses, including `Maintenance` and `Unavailable`, keep their existing
+exceptions. `SubmissionPending.tx_hash` is the
 hash to reconcile when a refusal is malformed or contradictory.
 
 **Read `code` from the field, not from the message.** The gateway still sends the

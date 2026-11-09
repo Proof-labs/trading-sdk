@@ -104,6 +104,22 @@ def test_unknown_string_code_survives_without_coercion(answer, status):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize("status,message", [
+    (411, "Content-Length required"),
+    (413, "payload too large"),
+])
+def test_refusal_before_the_body_is_read_keeps_its_reason(answer, status, message):
+    client, calls = answer(status, {
+        "status": "refused", "errorCode": "InvalidRequest", "error": message,
+    })
+    with pytest.raises(PreAdmissionRefusal) as exc:
+        client.submit_action(WIRE)
+    assert exc.value.error_code == "InvalidRequest"
+    assert exc.value.message == message
+    assert exc.value.status_code == status
+    assert len(calls) == 1
+
+
 def test_auth_exception_is_preserved(answer):
     client, _ = answer(401, {"status": "refused", "errorCode": "Unauthorized"})
     with pytest.raises(AuthenticationError):
@@ -114,6 +130,14 @@ def test_rate_limit_exception_is_preserved(answer):
     client, _ = answer(429, {"status": "refused", "errorCode": "RateLimited"})
     with pytest.raises(RateLimited):
         client.submit_action(WIRE)
+
+
+@pytest.mark.parametrize("error_code", ["Maintenance", "Unavailable"])
+def test_unavailable_gateway_exception_is_preserved(answer, error_code):
+    client, _ = answer(503, {"status": "refused", "errorCode": error_code})
+    with pytest.raises(GatewayError) as exc:
+        client.submit_action(WIRE)
+    assert error_code in exc.value.body
 
 
 def test_overload_exception_is_preserved(answer):

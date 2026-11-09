@@ -1908,7 +1908,7 @@ export type ExchangeEvent =
  *                   see {@link TxResult.error} for the decoded name/description.
  * - `"transport"` — a gateway/HTTP-level failure, or a structured
  *                   pre-admission refusal (`status: "refused"` at HTTP 200,
- *                   400, 401, 429, 500 or 503). `code` is synthetic (1 for HTTP
+ *                   400, 401, 411, 413, 429, 500 or 503). `code` is synthetic (1 for HTTP
  *                   200), not an engine code; a refusal also carries the
  *                   gateway's own `errorCode`. Unrecognized 5xx responses
  *                   stay `timeout`.

@@ -405,8 +405,8 @@ class ExchangeClient:
             raise GatewayError(resp.status_code, resp.text)
 
         # Anything else non-2xx (400, 402, 405-428, 431, 3xx, …) is NOT success.
-        # `GatewayError` specifically means "5xx — a read can retry with backoff,
-        # a submission's outcome is unknown"; a 3xx/4xx
+        # `GatewayError` specifically means "5xx — a read can retry with backoff";
+        # `submit_action` decides what a 5xx means for a submission. A 3xx/4xx
         # is a client-side error that must NOT be blind-retried, so it surfaces
         # as a plain TransportError carrying the status.
         if resp.status_code >= 300:
@@ -557,6 +557,11 @@ class ExchangeClient:
             PreAdmissionRefusal: the gateway refused the request before
                 admitting it; nothing was broadcast and there is nothing to
                 poll for.
+            AuthenticationError: HTTP 401 or 403.
+            RateLimited: HTTP 429.
+            GatewayError: a validated refusal at HTTP 5xx other than
+                ``EncodingError``, such as ``Overloaded``, ``Maintenance`` or
+                ``Unavailable``. An ambiguous 5xx is ``SubmissionPending``.
             TransportError: a transport or HTTP failure with no refusal
                 envelope.
         """
@@ -616,10 +621,14 @@ class ExchangeClient:
                     hashlib.sha256(envelope).hexdigest().upper(),
                     "malformed gateway refusal; reconcile by hash",
                 )
-            # Preserve the existing auth/rate-limit/overload exceptions. An
-            # EncodingError is different: the gateway explicitly failed before
+            # Auth, rate-limit and 5xx refusals keep their existing exceptions.
+            # An EncodingError is different: the gateway explicitly failed before
             # broadcast, including when it reports that refusal with HTTP 500.
-            if error_code != "EncodingError" and resp.status_code not in (200, 400):
+            # Every other status, such as the gateway's 413, is an admission
+            # refusal whose reason must survive.
+            if error_code != "EncodingError" and (
+                resp.status_code in (401, 403, 429) or resp.status_code >= 500
+            ):
                 self._check_response(resp)
             raise PreAdmissionRefusal(
                 error_code=error_code,

@@ -14,11 +14,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `TxResult.errorCode` and the open `GatewayRefusalCode` type (MINOR for npm).
   Python raises `PreAdmissionRefusal` with `error_code`, `message` and
   `status_code` for admission refusals, instead of treating legacy HTTP 200
-  refusals as unresolved or flattening HTTP 400 refusals into transport text.
-  An internal `EncodingError` refusal is also preserved at HTTP 500.
-  Malformed or contradictory refusals remain unresolved against the hash of
-  the submitted bytes. Existing Python authentication, rate-limit and
-  overload exceptions remain unchanged for valid envelopes. A refusal
+  refusals as unresolved or flattening HTTP 400, 411 and 413 refusals into
+  transport text. An internal `EncodingError` refusal is also preserved at
+  HTTP 500. Malformed or contradictory refusals remain unresolved against the
+  hash of the submitted bytes. Valid envelopes at HTTP 401, 403, 429 and other 5xx
+  responses keep their existing Python exceptions. A refusal
   describes this attempt only; it cannot resolve an earlier ambiguous
   attempt. Retry decisions depend on the refusal reason, not HTTP status
   alone. Python callers must catch `PreAdmissionRefusal` for valid admission

@@ -137,18 +137,19 @@ class PreAdmissionRefusal(ProofTradingSdkError):
     Nothing was broadcast: there is no transaction hash to reconcile, no
     engine verdict, and no on-chain outcome to wait for. The gateway's
     ``error_code`` names why — ``InvalidRequest`` means the request must be
-    corrected, ``EncodingError`` is a gateway-internal encoding failure,
-    ``Unauthorized`` means the API key is wrong,
-    and ``RateLimited`` / ``Maintenance`` / ``Overloaded`` / ``Unavailable``
-    mean the gateway is not admitting writes right now, so a later resend may
-    succeed once that state clears.
+    corrected and ``EncodingError`` is a gateway-internal encoding failure.
+
+    Refusals at HTTP 401, 403, 429 and 5xx other than ``EncodingError`` keep
+    their own exceptions: :class:`AuthenticationError`, :class:`RateLimited` and
+    :class:`GatewayError`. ``Unauthorized``, ``RateLimited``, ``Maintenance``,
+    ``Overloaded`` and ``Unavailable`` therefore reach this class only on a
+    legacy HTTP 200.
 
     Attributes:
-        error_code: The gateway's machine-readable ``errorCode`` (empty when it
-            sent none).
+        error_code: The gateway's machine-readable ``errorCode``, never empty.
         message: The gateway's own explanation, if it gave one.
-        status_code: The HTTP status the refusal arrived with, including legacy
-            200, admission 400 and internal encoding failure 500.
+        status_code: The HTTP status the refusal arrived with, such as legacy
+            200, admission 400 or 413, and internal encoding failure 500.
     """
 
     def __init__(
