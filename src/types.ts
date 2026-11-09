@@ -2037,7 +2037,7 @@ export interface Orderbook {
 
 /** A canonical resting order from the gateway openOrders read. */
 export interface OpenOrder {
-  /** Engine-assigned order ID (monotonic within the market). */
+  /** Engine-assigned order ID (globally monotonic). */
   id: bigint;
   /** Market ID. */
   market: number;
