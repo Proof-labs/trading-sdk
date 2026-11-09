@@ -118,3 +118,8 @@ def get_action_types() -> list[dict[str, object]]:
 
 def get_error_code_table() -> list[dict[str, object]]:
     ...
+
+AUTHORIZED_AGENTS_LIMIT: int
+
+def decode_authorized_agents(payload: bytes) -> dict[str, object]:
+    ...

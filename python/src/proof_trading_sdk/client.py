@@ -30,6 +30,7 @@ from proof_trading_sdk.actions import (
     TriggerLimb,
     encode_action,
 )
+from proof_trading_sdk.authorized_agents import AuthorizedAgentsSnapshot, _read_authorized_agents
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
 from proof_trading_sdk.errors import (
@@ -1299,6 +1300,18 @@ class ExchangeClient:
         except httpx.RequestError as e:
             raise TransportError(f"markets snapshot: request failed: {e}") from e
         return decode_markets_snapshot(bytes(body), self._chain_id)
+
+    def authorized_agents(self, owner: bytes | str, *, timeout: float = 5.0) -> AuthorizedAgentsSnapshot:
+        """Read a complete current list of explicit grants through the gateway.
+
+        Refuses unavailable, malformed or incomplete (>100 grants) responses.
+        Owner-key and inherited master authority are not enumerated. Witness
+        metadata is unverified; this read does not prove chain authenticity.
+        Body/payload limits are 32/16 KiB. Timeout bounds each network wait and
+        is checked between chunks, like markets_snapshot, not a hard total-call
+        deadline. Requires the upstream authorized-agents route to be deployed.
+        """
+        return _read_authorized_agents(self, owner, timeout=timeout)
 
     def market_status(self, market: int) -> dict[str, t.Any]:
         resp = self._get(f"/v1/market-status/{market}")

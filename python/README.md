@@ -213,3 +213,33 @@ accepts out-of-order unique nonces within its window and rejects replays.
 - No sync call needed before the first transaction
 - Thread-safe allocation within one shared allocator instance
 - Wide engine window (+1 day / −2 days) tolerates NTP skew
+
+## Complete current agent grants
+
+```python
+snapshot = client.authorized_agents(owner)
+print(snapshot.agents)  # Immutable tuple of 40-digit lowercase hex addresses.
+print(snapshot.finalized_height)
+```
+
+This reads explicit grants from `GET /v2/account/{owner}/agents?witness=1`.
+It does not enumerate owner-key or inherited master authority. The result is
+complete at the gateway's reported finalized height: more than 100 grants
+(`complete=false`), an unavailable route, malformed data, or an owner/height
+mismatch raises an error; none becomes an empty list. A complete empty list
+is valid. Every call requests a new snapshot rather than reconstructing grants
+from history or probing individual agent pairs.
+
+`AuthorizedAgentsSnapshot` retains the owner, immutable agents, finalized height,
+block time, node ID and app hash. This metadata is an **unverified gateway
+assertion**, not proof of chain authenticity, freshness, or permission to sign.
+HTTP bodies are capped at 32 KiB and canonical MessagePack payloads at 16 KiB.
+
+This Python support depends on [SDK #385](https://github.com/Proof-labs/trading-sdk/pull/385),
+[wire #38](https://github.com/Proof-labs/wire/pull/38),
+[exchange #1417](https://github.com/Proof-labs/exchange/pull/1417), and
+[gateway #302](https://github.com/Proof-labs/api-gateway/pull/302).
+The server route must be deployed before the call can succeed. This change
+implements the contract ahead of those dependencies; it does not claim a live
+deployment. Unlike TypeScript's partial-result API, this Python method returns
+only complete snapshots.

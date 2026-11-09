@@ -28,6 +28,7 @@ def hex_to_owner(hex_str: str) -> bytes:
     """Hex string (with or without ``0x``) → 20-byte owner bytes."""
     return bytes.fromhex(hex_str.removeprefix("0x"))
 
+from proof_trading_sdk.authorized_agents import AuthorizedAgentsSnapshot
 from proof_trading_sdk import actions
 from proof_trading_sdk.binary import (  # noqa: F401
     BINARY_PRICE_MAX,
@@ -139,6 +140,7 @@ from proof_trading_sdk.trigger_config import (
 )
 
 __all__ = [
+    "AuthorizedAgentsSnapshot",
     "admin_proposal_content_hash",
     "chain_id_from_string",
     "owner_to_hex",
