@@ -319,6 +319,9 @@ function validateCreateMarketTickers(action: Action): void {
   }
 }
 
+/** Wire byte of `SetUserMarketLeverage`, kept for decoding only. */
+export const SET_USER_MARKET_LEVERAGE_BYTE = 0x16;
+
 /**
  * Translate a TS `Action` into `(actionType, fields)` for `encode_payload`.
  */
@@ -599,7 +602,7 @@ export function fromWasmFields(
   fields: unknown,
 ): DecodedAction {
   const type =
-    actionType === 0x16
+    actionType === SET_USER_MARKET_LEVERAGE_BYTE
       ? "SetUserMarketLeverage"
       : ACTION_TYPE_NAMES[actionType];
   if (!type) throw new Error(`unknown action_type: ${actionType}`);

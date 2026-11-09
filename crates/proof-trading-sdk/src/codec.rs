@@ -7,9 +7,12 @@
 pub use proof_wire::codec::*;
 use proof_wire::types::ExecError;
 
+/// Wire discriminant of `SetUserMarketLeverage`, kept for decoding only.
+const SET_USER_MARKET_LEVERAGE: u8 = 0x16;
+
 /// Reject actions that this SDK does not support creating or signing.
 pub fn ensure_supported_action(action_type: u8) -> Result<(), ExecError> {
-    if action_type == 0x16 {
+    if action_type == SET_USER_MARKET_LEVERAGE {
         return Err(ExecError::DecodeError(
             "SetUserMarketLeverage (0x16) is not supported by this SDK".into(),
         ));
@@ -19,7 +22,7 @@ pub fn ensure_supported_action(action_type: u8) -> Result<(), ExecError> {
 
 fn ensure_supported_typed_action(action: &Action) -> Result<(), ExecError> {
     if matches!(action, Action::SetUserMarketLeverage(_)) {
-        ensure_supported_action(0x16)?;
+        ensure_supported_action(SET_USER_MARKET_LEVERAGE)?;
     }
     Ok(())
 }
@@ -28,7 +31,7 @@ fn ensure_supported_typed_action(action: &Action) -> Result<(), ExecError> {
 pub fn get_action_types() -> Vec<(&'static str, u8)> {
     proof_wire::codec::get_action_types()
         .into_iter()
-        .filter(|(_, byte)| *byte != 0x16)
+        .filter(|(_, byte)| *byte != SET_USER_MARKET_LEVERAGE)
         .collect()
 }
 

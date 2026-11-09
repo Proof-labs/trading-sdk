@@ -11,6 +11,7 @@ import {
   adminActionToWasm,
   toWasmFields,
   fromWasmFields,
+  SET_USER_MARKET_LEVERAGE_BYTE,
 } from "./codec-adapter.js";
 import { DOMAIN_PREFIX } from "./crypto.js";
 
@@ -280,7 +281,7 @@ const ACTION_TYPE_NAMES: ReadonlyMap<number, string> = new Map([
     byte,
     name,
   ]),
-  [0x16, "SetUserMarketLeverage"], // Historical name; creation remains unsupported.
+  [SET_USER_MARKET_LEVERAGE_BYTE, "SetUserMarketLeverage"], // Historical name; creation remains unsupported.
 ]);
 
 /**
