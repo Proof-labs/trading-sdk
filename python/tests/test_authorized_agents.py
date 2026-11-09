@@ -43,21 +43,29 @@ def client_for(handler):
     return closing(client)
 
 
-def test_current_grant_then_revoke_returns_fresh_complete_snapshots():
+def test_two_grants_then_each_revoke_returns_fresh_complete_snapshots():
     calls = []
-    responses = iter([body(), body(raw(agents=[], finalized_height=HEIGHT + 1), height=str(HEIGHT + 1))])
+    # Authoritative endpoint fixtures after two grants, one revocation, then
+    # the final revocation. The SDK must query each state, never infer history.
+    responses = iter([
+        body(raw(agents=[bytes([2]) * 20, bytes([3]) * 20])),
+        body(raw(agents=[bytes([3]) * 20], finalized_height=HEIGHT + 1), height=str(HEIGHT + 1)),
+        body(raw(agents=[], finalized_height=HEIGHT + 2), height=str(HEIGHT + 2)),
+    ])
     def handler(request):
         calls.append(request)
         return httpx.Response(200, content=next(responses))
     with client_for(handler) as client:
         granted = client.authorized_agents(OWNER)
-        revoked = client.authorized_agents("0x" + HEX)
+        one_left = client.authorized_agents("0x" + HEX)
+        revoked = client.authorized_agents(HEX)
     assert isinstance(granted, AuthorizedAgentsSnapshot)
-    assert granted.agents == ("02" * 20,)
+    assert granted.agents == ("02" * 20, "03" * 20)
+    assert one_left.agents == ("03" * 20,)
     assert revoked.agents == ()  # No owner-key or inherited authority invented.
-    assert granted.finalized_height == HEIGHT
-    assert revoked.finalized_height == HEIGHT + 1
-    assert granted.owner == revoked.owner == HEX
+    assert [s.finalized_height for s in (granted, one_left, revoked)] == [HEIGHT, HEIGHT + 1, HEIGHT + 2]
+    assert granted.owner == one_left.owner == revoked.owner == HEX
+    assert len(calls) == 3
     assert all(str(r.url) == f"https://gateway.example/v2/account/{HEX}/agents?witness=1" for r in calls)
     assert all(r.headers["accept-encoding"] == "identity" for r in calls)
     with pytest.raises(FrozenInstanceError):
