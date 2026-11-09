@@ -68,6 +68,7 @@ log = logging.getLogger("proof_trading_sdk")
 
 
 _LEADING_ERROR_CODE = re.compile(r"^(\d+):\s")
+_DEFAULT_RATE_LIMIT_BUCKET = "default"
 
 
 def _leading_error_code(text: str) -> int | None:
@@ -312,7 +313,7 @@ class ExchangeClient:
     # ── Rate-limit helpers ───────────────────────────────────────────────
 
     def _parse_rate_limits(self, resp: httpx.Response) -> None:
-        bucket = resp.headers.get("X-RateLimit-Bucket", "default")
+        bucket = resp.headers.get("X-RateLimit-Bucket", _DEFAULT_RATE_LIMIT_BUCKET)
         state = RateLimitState(
             limit=int(resp.headers.get("X-RateLimit-Limit", 0)),
             remaining=int(resp.headers.get("X-RateLimit-Remaining", 0)),
@@ -332,6 +333,11 @@ class ExchangeClient:
         return state.remaining if state else 0
 
     def rate_limit_state(self, bucket: str = "orders") -> RateLimitState:
+        """Return cached response headers for *bucket*.
+
+        Responses without ``X-RateLimit-Bucket`` use ``"default"``. After a
+        429, pass ``RateLimited.bucket`` to retrieve that response's state.
+        """
         return self._rate_limits.get(bucket, RateLimitState())
 
     # ── HTTP helpers ─────────────────────────────────────────────────────
@@ -369,7 +375,7 @@ class ExchangeClient:
     def _check_response(self, resp: httpx.Response) -> httpx.Response:
         if resp.status_code == 429:
             retry_after = float(resp.headers.get("Retry-After", "5"))
-            bucket = resp.headers.get("X-RateLimit-Bucket", "")
+            bucket = resp.headers.get("X-RateLimit-Bucket", _DEFAULT_RATE_LIMIT_BUCKET)
             raise RateLimited(retry_after_secs=retry_after, bucket=bucket)
 
         if resp.status_code == 401:

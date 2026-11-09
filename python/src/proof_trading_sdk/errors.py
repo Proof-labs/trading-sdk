@@ -136,7 +136,9 @@ class RateLimited(ProofTradingSdkError):
 
     Attributes:
         retry_after_secs: Seconds to wait before retrying.
-        bucket: The rate-limit bucket that was exceeded.
+        bucket: The rate-limit bucket that was exceeded. ExchangeClient uses
+            ``"default"`` when the response omits ``X-RateLimit-Bucket``;
+            pass this value to ``client.rate_limit_state`` for its headers.
     """
 
     def __init__(self, retry_after_secs: float, bucket: str = "") -> None:
