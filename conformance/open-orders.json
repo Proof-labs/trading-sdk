@@ -23,6 +23,29 @@
     ]
   },
   {
+    "name": "engine_owner_array",
+    "owner": "abababababababababababababababababababab",
+    "msgpack_base64": "kZ7PACAAAAAAAAEH3AAUzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq6NCdXnP//////////8Uz///////////FwPPAAABob2ayADP//////////+jR3Rjw8I=",
+    "orders": [
+      {
+        "id": "9007199254740993",
+        "market": 7,
+        "owner": "abababababababababababababababababababab",
+        "side": "Buy",
+        "price": "18446744073709551615",
+        "quantity": "20",
+        "client_order_id": "18446744073709551615",
+        "original_quantity": "23",
+        "filled_quantity": "3",
+        "created_at_ms": "1794182400000",
+        "queue_priority": "18446744073709551615",
+        "time_in_force": "Gtc",
+        "post_only": true,
+        "reduce_only": false
+      }
+    ]
+  },
+  {
     "name": "legacy_six",
     "owner": "abababababababababababababababababababab",
     "msgpack_base64": "kZbPACAAAAAAAAEHxBSrq6urq6urq6urq6urq6urq6urq6NCdXnP//////////8U",
