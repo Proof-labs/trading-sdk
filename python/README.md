@@ -73,6 +73,48 @@ rather than returning a shorter list, so a very large account gets an error. The
 read does not verify a finalized-state witness. The remaining Python API gaps are tracked in
 [#362](https://github.com/Proof-labs/trading-sdk/issues/362).
 
+## Block headers and witness comparison
+
+`client.block_header(height, chain_id=...)` reads a typed `BlockEvidenceHeader`
+through `/v1/block`. The chain pin is required on each call, as a chain name or
+32-byte binding; implicit client/environment defaults are not trust pins.
+Heights are exact Python integers and timestamps retain their nanoseconds.
+
+```python
+from proof_trading_sdk import decode_finalized_read_witness, verify_witness
+
+# witness_json is the witness object accompanying a gateway finalized read.
+witness = decode_finalized_read_witness(witness_json)
+header = client.block_header(witness.height + 1, chain_id="exchange-devnet-1")
+verify_witness(witness, header, chain_id="exchange-devnet-1")
+```
+
+When the read's payload supplies its own height/time, pass `expected_height`
+and `expected_time_ms` to `decode_finalized_read_witness` to bind those values.
+`verify_witness` checks the pinned chain, H+1 height and app hash. It deliberately
+does not compare H's witness time with H+1's header time. Success against a
+header from the same gateway establishes consistency of that gateway's claims;
+it does not authenticate the state, verify validator signatures or the block
+hash, prove payload contents, or establish freshness or permission to trade.
+`decode_block_evidence_header` accepts a complete, already-parsed JSON-RPC
+envelope, not a bare `result` object. `get_block` keeps its raw response API.
+
+The full block response is fetched, even though only the header is retained.
+Responses over 1 MiB, over 4096 chunks, deeper than 32 JSON containers, duplicate
+keys at any depth, invalid UTF-8, and compressed bodies are refused. Large blocks
+therefore require a future header-only gateway route. No redirect, retry or
+alternate endpoint is used. HTTP refusals retain the SDK's existing exception
+types and their bodies are discarded.
+
+`timeout` is in seconds: default 5, minimum 0.001, maximum 60. Python bounds each
+network wait and checks elapsed time between body chunks; unlike the TS async
+deadline, this cannot interrupt slowly arriving headers or a custom transport
+that ignores timeouts. `GatewayReadError.kind` distinguishes `configuration`,
+`malformed`, `binding`, `limit`, and `deadline`; `field` identifies the failed
+check. Missing/pruned blocks remain errors, not empty evidence.
+The H+1 block may not exist yet when a fresh witness is received; wait for it
+to be committed before retrying the same height.
+
 ## Typed actions
 
 Every action has a typed builder in `proof_trading_sdk.actions`;
