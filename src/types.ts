@@ -86,6 +86,10 @@ export const ActionType = {
   /** Acquire the single-holder Solana payout lease on a pending withdrawal
    *  (0x2e). Custody-authorized watchers only. */
   ClaimWithdrawalPayout: 0x2e,
+  /** Record the payout-lease holder's Solana transfer signature on a
+   *  pending withdrawal before broadcasting it (0x31). Custody-authorized
+   *  watchers only. */
+  RecordWithdrawalPayout: 0x31,
   /** Update a subset of `MarketConfig` tunables on a live market (admin).
    *  Fee tiering, funding-rate cap tightening, position-limit updates
    *  without a chain rebase. */
@@ -696,6 +700,24 @@ export interface ClaimWithdrawalPayout {
   holder: Address;
 }
 
+/** Record the Solana signature of the payout-lease holder's transfer for a
+ *  pending withdrawal (0x31), before the holder broadcasts it, while its
+ *  lease is live. Stored as the withdrawal's payout record; peer watchers
+ *  verify it against Solana before re-signing. */
+export interface RecordWithdrawalPayout {
+  withdrawalId: bigint;
+  /** The reporting watcher's own address; must equal the envelope signer
+   *  and the withdrawal's payout lease holder. */
+  holder: Address;
+  /** The reported Solana transaction signature: exactly 64 raw bytes, or
+   *  the engine refuses the transaction. */
+  solanaSignature: Uint8Array;
+  /** The reported transfer's last valid block height (never zero — the
+   *  reporter signed the transfer, so the bound is always known); peer
+   *  watchers bound absence checks with it. */
+  lastValidBlockHeight: bigint;
+}
+
 /** Resolve a standalone event (0x27). YES/NO only — the engine rejects `Void`. */
 export interface ResolveEvent {
   eventId: number;
@@ -979,6 +1001,7 @@ export type OperatorAction =
   | { type: "AuthorizeWithdrawal"; data: AuthorizeWithdrawal }
   | { type: "ResolveEvent"; data: ResolveEvent }
   | { type: "ClaimWithdrawalPayout"; data: ClaimWithdrawalPayout }
+  | { type: "RecordWithdrawalPayout"; data: RecordWithdrawalPayout }
   | { type: "UpdateMarketFees"; data: UpdateMarketFees };
 
 /**
@@ -1177,6 +1200,17 @@ export interface SettleEvent {
   outcome: Outcome;
 }
 
+/** A market's governed status. */
+export type MarketStatus = "Trading" | "ReduceOnly" | "Halted" | "Delisted";
+
+/** Moves a market's status (inner tag 31); also lifts a `PauseMarket`
+ *  halt. Delisting settles every open position at the last certified
+ *  price. */
+export interface SetMarketStatus {
+  market: number;
+  status: MarketStatus;
+}
+
 /** Voids an event (inner tag 29): every binary and conditional on it
  *  settles in cash at `yesPrice`. */
 export interface VoidEvent {
@@ -1249,6 +1283,7 @@ export type AdminAction =
   | { kind: "SetMarginOffsetPolicy"; value: SetMarginOffsetPolicy }
   | { kind: "VoidEvent"; value: VoidEvent }
   | { kind: "SettleEvent"; value: SettleEvent }
+  | { kind: "SetMarketStatus"; value: SetMarketStatus }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
@@ -1289,14 +1324,13 @@ export interface ConfigureOraclePolicy {
 }
 
 /**
- * Closed set of immediate, loss-reducing single-signer actions. Reverse
- * transitions (unpause/resume) are intentionally absent — they require a
- * multisig `AdminAction`.
+ * Immediate single-signer action. `PauseMarket` halts one market; a
+ * multisig `SetMarketStatus` lifts it.
  */
-export type EmergencyAction =
-  | { kind: "PauseMarket"; value: { marketId: number } }
-  | { kind: "HaltTrading"; value?: Record<string, never> }
-  | { kind: "SetReduceOnly"; value: { marketId: number } };
+export type EmergencyAction = {
+  kind: "PauseMarket";
+  value: { marketId: number };
+};
 
 /** Signed governance proposal (action 0x1e). */
 export interface ProposeAdminAction {
@@ -2064,6 +2098,7 @@ export type TriggerOutcomeReason =
   | "OpenInterestLimitExceeded"
   | "MarketClosed"
   | "EngineFault"
+  | "MarketHalted"
   | OpenLabel;
 
 /** Last deterministic evaluation of one stored trigger limb. */

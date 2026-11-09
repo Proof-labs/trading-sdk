@@ -26,6 +26,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as the engine does. A pending `SettleEvent` proposal now lists in
   `decodeProposalPage` instead of failing the whole page. proof-wire moves to
   mirror commit `bbc3ff2d`, which adds `SettleEvent`. Additive (MINOR).
+- **proof-wire 11.0.0 (exchange 2.24.0).** The `SetMarketStatus` admin action
+  (inner tag 31) with `MarketStatus` (`Trading`, `ReduceOnly`, `Halted`,
+  `Delisted`); the `RecordWithdrawalPayout` operator action (`0x31`), which a
+  payout-lease holder sends to record its Solana transfer signature before
+  broadcasting it; error codes 128-134 (`WithdrawalPayoutLeaseNotHeld`,
+  `WithdrawalPayoutRecordLimitReached`, `MarketReduceOnly`, `MarketDelisted`,
+  `MarketStatusTransitionRefused`, `MarketBacksLiveEvent`, `MarketHalted`);
+  and the `MarketHalted` trigger outcome reason.
+
+### Removed
+
+- **The `HaltTrading` and `SetReduceOnly` emergency arms**, which the engine
+  never admitted and proof-wire 11.0.0 drops. `PauseMarket` is the one
+  emergency action: it halts one market, and `SetMarketStatus` lifts it.
+  Breaking for code that names the retired arms (MAJOR).
 
 ### Fixed
 

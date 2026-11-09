@@ -340,6 +340,16 @@ function toAction(
           holder: bytes(input.holder),
         },
       };
+    case ActionType.RecordWithdrawalPayout:
+      return {
+        type: "RecordWithdrawalPayout",
+        data: {
+          withdrawalId: big(input.withdrawal_id),
+          holder: bytes(input.holder),
+          solanaSignature: bytes(input.solana_signature),
+          lastValidBlockHeight: big(input.last_valid_block_height),
+        },
+      };
     case ActionType.ResolveEvent:
       return {
         type: "ResolveEvent",
@@ -831,6 +841,16 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       },
     };
   }
+  if (v.SetMarketStatus) {
+    const s = v.SetMarketStatus as Record<string, unknown>;
+    return {
+      kind: "SetMarketStatus",
+      value: {
+        market: s.market as number,
+        status: s.status as import("./types.js").MarketStatus,
+      },
+    };
+  }
   if (v.WithdrawInsuranceFund) {
     const w = v.WithdrawInsuranceFund as Record<string, unknown>;
     return {
@@ -858,16 +878,9 @@ function toEmergencyAction(
       },
     };
   }
-  if (v.SetReduceOnly) {
-    return {
-      kind: "SetReduceOnly",
-      value: {
-        marketId: (v.SetReduceOnly as Record<string, unknown>)
-          .market_id as number,
-      },
-    };
-  }
-  return { kind: "HaltTrading" };
+  throw new Error(
+    `toEmergencyAction: unknown variant ${Object.keys(v).join(",")}`,
+  );
 }
 
 /**
@@ -1138,10 +1151,9 @@ describe("conformance vectors (TypeScript)", () => {
     // remove, cancel-all-for
     // -account scoped and unscoped, four set-oracle-guards shapes, and
     // oracle policy, two schedule-upgrade shapes, cancel-upgrade, and
-    // insurance fund and withdraw, void-event),
-    // approve, reject, and all three emergency arms (PauseMarket,
-    // HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(33);
+    // insurance fund and withdraw, void-event, settle-event,
+    // set-market-status), approve, reject, and the PauseMarket emergency arm.
+    expect(govCases.length).toBe(32);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
