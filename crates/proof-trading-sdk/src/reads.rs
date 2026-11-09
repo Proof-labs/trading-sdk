@@ -61,6 +61,44 @@ pub const ACCOUNT_INFO: Shape = Shape::Record {
     ],
 };
 
+/// `proof_wire::types::Order`, including client id and resting-order metadata.
+pub const ORDER: Shape = Shape::Record {
+    width: 14,
+    nested: &[],
+};
+
+pub const MAX_OPEN_ORDERS_BYTES: usize = 1024 * 1024;
+
+/// Decode the owner's resting orders using the canonical wire type. Legacy
+/// trailing fields use its serde defaults; appended future fields are ignored.
+/// This validates the response's owner but does not verify a finalized witness
+/// or prove that the server returned every order.
+pub fn decode_open_orders(
+    bytes: &[u8],
+    owner: &[u8; 20],
+) -> Result<Vec<crate::types::Order>, &'static str> {
+    if bytes.len() > MAX_OPEN_ORDERS_BYTES {
+        return Err("open orders payload is too large");
+    }
+    crate::msgpack::reject_floats(bytes).map_err(|_| "invalid open orders payload")?;
+    let orders: Vec<crate::types::Order> =
+        decode(bytes, &Shape::List(&ORDER)).map_err(|_| "invalid open orders payload")?;
+    let mut previous = None;
+    for order in &orders {
+        if &order.owner != owner {
+            return Err("open orders owner does not match request");
+        }
+        if previous.is_some_and(|id| order.id <= id) {
+            return Err("open orders are not strictly ordered by id");
+        }
+        if order.quantity == 0 {
+            return Err("open orders contains an empty order");
+        }
+        previous = Some(order.id);
+    }
+    Ok(orders)
+}
+
 /// Decode `bytes` as `T`, first cutting every record `shape` names to its
 /// pinned width. A value that does not have the shape is passed on unchanged
 /// for the typed decode to refuse.

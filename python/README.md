@@ -57,6 +57,21 @@ hash as `tx_hash`; reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
+## Resting orders
+
+`client.open_orders(owner)` returns the shared wire order fields, including
+`client_order_id`, `original_quantity`, `filled_quantity`, `created_at_ms`,
+`queue_priority`, `time_in_force`, `post_only` and `reduce_only`. Integer values
+remain exact; `owner` is 20-byte `bytes`. A missing client ID is `None`.
+Legacy six-field orders use the wire's defaults for appended fields: `None`,
+zero, `Gtc` and false flags. Zero placement time means no timestamp was recorded.
+
+Malformed or wrong-owner responses, duplicate/out-of-order IDs, zero remaining
+quantity, and decoded MessagePack payloads over 1 MiB raise `CodecError`.
+The gateway may cap the returned list: this read does not prove all orders were returned or verify a
+finalized-state witness. The remaining Python API gaps are tracked in
+[#362](https://github.com/Proof-labs/trading-sdk/issues/362).
+
 ## Typed actions
 
 Every action has a typed builder in `proof_trading_sdk.actions`;
