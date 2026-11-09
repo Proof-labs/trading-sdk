@@ -37,6 +37,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **`SetUserMarketLeverage` SDK support (MAJOR).** Removed TypeScript and
+  Python action builders, active action types and exports. SDK payload/envelope
+  encoding and signing reject `0x16`, including raw-action entrypoints.
+  Historical transaction decoding and wire types remain available; this does
+  not change the engine or retire the proof-wire variant. TypeScript
+  `decodeTx().action` now returns `DecodedAction`, which must be narrowed to
+  a supported `Action` before signing.
+
 - **The `HaltTrading` and `SetReduceOnly` emergency arms**, which the engine
   never admitted and proof-wire 11.0.0 drops. `PauseMarket` is the one
   emergency action: it halts one market, and `SetMarketStatus` lifts it.

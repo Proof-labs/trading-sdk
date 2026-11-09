@@ -228,3 +228,12 @@ against production traffic, for free.
 - **Vectors reflect the core at generation time.** They are only as correct as
   the core. They guard *cross-language agreement*, not spec-correctness — a
   shared bug across all three bindings would pass. Pair with the spec review.
+
+### Decode-only fixtures
+
+`historical-codec.ndjson` preserves payload bytes removed from supported
+creation vectors. Its `SetUserMarketLeverage` payload was generated before
+SDK support was removed; its envelope is a synthetic unsigned wrapper for
+decoder coverage, not evidence of an accepted transaction. Rust, Python and
+TypeScript test decoding and refusal to encode/sign these actions. The vector
+generator does not regenerate historical bytes.

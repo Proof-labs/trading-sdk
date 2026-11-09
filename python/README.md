@@ -67,7 +67,7 @@ newer than this package.
 - **Trading:** `PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder`,
   `CancelAllOrders`, `CancelReplaceOrder`, `AmendOrder`, `ClosePosition`,
   `AtomicBasketOrder`, `SetPositionTriggers`, `CancelPositionTriggers`,
-  `SetUserMarketLeverage`, `ApproveAgent`, `RevokeAgent`, `CreateSubAccount`,
+  `ApproveAgent`, `RevokeAgent`, `CreateSubAccount`,
   `SubAccountTransfer`, `Deposit`, `Withdraw`, `WithdrawRequest`.
 - **Operator (privileged):** `SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,
   `ConfirmDeposit`, `ConfirmWithdrawal`, `FailWithdrawal`,
@@ -213,3 +213,11 @@ accepts out-of-order unique nonces within its window and rejects replays.
 - No sync call needed before the first transaction
 - Thread-safe allocation within one shared allocator instance
 - Wide engine window (+1 day / −2 days) tolerates NTP skew
+
+### Unsupported leverage action
+
+`SetUserMarketLeverage` (`0x16`) is not supported for creation or signing.
+The SDK rejects it even through raw action/payload encoding entrypoints.
+Historical payload and transaction decoding remains available. The shared
+proof-wire types, low-level cryptography and already-signed byte transport
+remain wire-compatible; they do not imply SDK support for this action.

@@ -1,6 +1,7 @@
 import { Decoder } from "@msgpack/msgpack";
 import {
   type Action,
+  type DecodedAction,
   ActionType,
   type ActionTypeValue,
   type AdminAction,
@@ -196,7 +197,7 @@ export function adminProposalContentHash(
 // Decoding
 // ---------------------------------------------------------------------------
 
-/** Every wire action-type byte this SDK build knows — the validation set
+/** Every action-type byte this SDK supports creating — the validation set
  *  behind `peekActionType`'s return type. */
 const KNOWN_ACTION_TYPES: ReadonlySet<number> = new Set<number>(
   Object.values(ActionType),
@@ -205,9 +206,10 @@ const KNOWN_ACTION_TYPES: ReadonlySet<number> = new Set<number>(
 /** Peek at the action_type byte without a full decode.
  *
  *  Returns `null` both for structurally unreadable bytes AND for an
- *  action-type slot this SDK build does not know (an unassigned byte, a
- *  newer engine's wire type under an older SDK, or a non-numeric msgpack
- *  value), matching its declared return type — never a raw slot value cast
+ *  action-type slot this SDK does not support creating (including 0x16), an
+ *  unassigned byte, a newer engine's wire type under an older SDK, or a
+ *  non-numeric msgpack
+ *  value, matching its declared return type — never a raw slot value cast
  *  through unvalidated. Callers that need the raw byte of an unknown envelope
  *  should decode the envelope themselves. */
 export function peekActionType(bytes: Uint8Array): ActionTypeValue | null {
@@ -239,7 +241,7 @@ function toBigInt(v: unknown): bigint {
 
 /** Decode wire bytes into an action + sequence number + auth fields. */
 export function decodeTx(bytes: Uint8Array): {
-  action: Action;
+  action: DecodedAction;
   seq: bigint;
   version: number;
   pubkey: Uint8Array;
@@ -273,9 +275,13 @@ export function decodeTx(bytes: Uint8Array): {
 // Signing-preimage decode (signer-side review)
 // ---------------------------------------------------------------------------
 
-const ACTION_TYPE_NAMES: ReadonlyMap<number, string> = new Map(
-  Object.entries(ActionType).map(([name, byte]) => [byte, name]),
-);
+const ACTION_TYPE_NAMES: ReadonlyMap<number, string> = new Map([
+  ...Object.entries(ActionType).map(([name, byte]): [number, string] => [
+    byte,
+    name,
+  ]),
+  [0x16, "SetUserMarketLeverage"], // Historical name; creation remains unsupported.
+]);
 
 /**
  * Decoded form of a v3 **signing preimage** — the exact bytes
@@ -362,6 +368,11 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
         actionType as ActionTypeValue,
         getWasm().decode_payload(actionType, payloadBytes),
       );
+      if (decodedAction.type === "SetUserMarketLeverage") {
+        throw new Error(
+          "SetUserMarketLeverage (0x16) is not supported by this SDK",
+        );
+      }
       const canonicalPayloadBytes = encodePayloadBytes(decodedAction);
       const isCanonical =
         canonicalPayloadBytes.length === payloadBytes.length &&

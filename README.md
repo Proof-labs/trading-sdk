@@ -713,3 +713,11 @@ unavailable, never zero. Top-level status describes frontier freshness; inspect
 market status, `unavailable_reason` and `open_interest_unavailable_reason` too.
 The server freshness budget is `stale_after_seconds`; the application must age
 cached responses and label stale data. None of these reads authorize trading.
+
+### Unsupported leverage action
+
+`SetUserMarketLeverage` (`0x16`) is not supported for creation or signing.
+The SDK rejects it even through raw action/payload encoding entrypoints.
+Historical payload and transaction decoding remains available. The shared
+proof-wire types, low-level cryptography and already-signed byte transport
+remain wire-compatible; they do not imply SDK support for this action.

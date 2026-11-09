@@ -443,15 +443,6 @@ describe("codec v1 all action types", () => {
       },
     },
     {
-      // BE-16: per-user leverage selector.
-      type: "SetUserMarketLeverage",
-      data: {
-        owner: OWNER,
-        market: 1,
-        userImBps: 2000,
-      },
-    },
-    {
       type: "ConfirmWithdrawalReceipt",
       data: {
         receipt: RECEIPT(1),

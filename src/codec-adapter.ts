@@ -18,6 +18,7 @@ import {
   TimeInForce,
   type AccountInfo,
   type Action,
+  type DecodedAction,
   type ActionTypeValue,
   type AdminAction,
   type EmergencyAction,
@@ -325,6 +326,12 @@ export function toWasmFields(action: Action): {
   actionType: ActionTypeValue;
   fields: Record<string, unknown>;
 } {
+  // Runtime callers can bypass TypeScript's Action union.
+  if ((action.type as string) === "SetUserMarketLeverage") {
+    throw new Error(
+      "SetUserMarketLeverage (0x16) is not supported by this SDK",
+    );
+  }
   if (action.type === "SetPositionTriggers") {
     validateSetPositionTriggers(action.data);
   } else if (action.type === "CancelPositionTriggers") {
@@ -585,18 +592,21 @@ function fromWasmObject(
 }
 
 /**
- * Translate `decode_payload`'s output back into a TS `Action`.
+ * Translate `decode_payload`'s output into supported or historical action data.
  */
 export function fromWasmFields(
-  actionType: ActionTypeValue,
+  actionType: number,
   fields: unknown,
-): Action {
-  const type = ACTION_TYPE_NAMES[actionType];
+): DecodedAction {
+  const type =
+    actionType === 0x16
+      ? "SetUserMarketLeverage"
+      : ACTION_TYPE_NAMES[actionType];
   if (!type) throw new Error(`unknown action_type: ${actionType}`);
   return {
     type,
     data: fromWasmObject(fields as Record<string, unknown>),
-  } as unknown as Action;
+  } as unknown as DecodedAction;
 }
 
 // ---------------------------------------------------------------------------

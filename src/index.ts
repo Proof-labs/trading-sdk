@@ -125,7 +125,7 @@ export {
   type ClaimWithdrawalPayout,
   type RecordWithdrawalPayout,
   type UpdateMarketFees,
-  type SetUserMarketLeverage,
+  type DecodedAction,
   type GovernanceAction,
   type AdminAction,
   type AdminBatchItem,

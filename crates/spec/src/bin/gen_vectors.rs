@@ -8,9 +8,10 @@
 //! CI should run this and fail if `git diff --exit-code conformance/` is dirty.
 //!
 //! Coverage status:
-//!   * codec: every `ActionType` in the registry now has at least one vector
+//!   * codec: every supported TypeScript `ActionType` has at least one vector
 //!     (the coverage ratchet in `src/conformance.test.ts` enforces this — the
-//!     debt list is empty, #69). Every nested enum reachable through the codec
+//!     debt list is empty, #69). Decode-only history stays in
+//!     `conformance/historical-codec.ndjson`. Every nested enum reachable through the codec
 //!     adapter is pinned too: `side` (both), `time_in_force` (all three),
 //!     `outcome` (all three), and — as of #98 — all three `EventOracleSource`
 //!     variants with all four `PriceComparison` values, both standalone (0x0e)
@@ -172,7 +173,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     const SUB_ACCOUNT_TRANSFER: u8 = 0x29;
     const CLAIM_WITHDRAWAL_PAYOUT: u8 = 0x2e;
     const RECORD_WITHDRAWAL_PAYOUT: u8 = 0x31;
-    const SET_USER_MARKET_LEVERAGE: u8 = 0x16;
     const CANCEL_CLIENT_ORDER: u8 = 0x18;
     const CANCEL_ALL_ORDERS: u8 = 0x19;
     const CANCEL_REPLACE_ORDER: u8 = 0x1a;
@@ -890,12 +890,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             "resolve_event/no",
             RESOLVE_EVENT,
             json!({ "event_id": 700, "outcome": "No", "signer": signer }),
-        ),
-        // Per-user leverage override.
-        codec_case(
-            "set_user_market_leverage/basic",
-            SET_USER_MARKET_LEVERAGE,
-            json!({ "owner": owner, "market": 7, "user_im_bps": 2000 }),
         ),
         // Order management: cancel-by-cloid, cancel-all (scoped + global),
         // cancel-replace (by order id + by client id), amend (populated + null).

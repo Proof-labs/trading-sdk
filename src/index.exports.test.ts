@@ -350,3 +350,16 @@ describe("public barrel: ticker rule", () => {
     );
   });
 });
+
+it("historical leverage records cannot be passed to creation APIs", async () => {
+  const sdk = await import("./index.js");
+  const historical: import("./index.js").DecodedAction = {
+    type: "SetUserMarketLeverage",
+    data: { owner: new Uint8Array(20), market: 1, userImBps: 2000 },
+  };
+  // @ts-expect-error The historical decoded variant is not a supported Action.
+  const unsupported: import("./index.js").Action = historical;
+  expect(unsupported.type).toBe("SetUserMarketLeverage");
+  // @ts-expect-error Unsupported actions have no active ActionType export.
+  expect(sdk.ActionType.SetUserMarketLeverage).toBeUndefined();
+});

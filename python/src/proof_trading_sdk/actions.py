@@ -11,10 +11,9 @@ guesses the wire layout.
 Byte fields (`owner`, `signer`, …) are passed as raw ``bytes``; the
 core's `wire` newtypes accept them directly and length-check on decode.
 
-Every action byte is pulled from the core via `get_action_types()`, so
-the `ActionType` map can never drift from the Rust `impl_action_encoding!`
-list. Every action has a dedicated builder; :class:`RawAction` stays as the
-escape hatch for an action newer than this module.
+Supported action bytes come from the SDK core's `get_action_types()`.
+:class:`RawAction` supports generic fields for those actions; it does not
+bypass the SDK's unsupported-action checks.
 """
 
 from __future__ import annotations
@@ -884,22 +883,6 @@ class CreateMarket(Action):
 
 
 @dataclass
-class SetUserMarketLeverage(Action):
-    ACTION_NAME = "SetUserMarketLeverage"
-    owner: bytes
-    market: int
-    user_im_bps: int
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "owner": self.owner,
-            "market": self.market,
-            "user_im_bps": self.user_im_bps,
-        }
-
-
-
-@dataclass
 class UpdateMarketFees(Action):
     ACTION_NAME = "UpdateMarketFees"
     market: int
@@ -1157,7 +1140,6 @@ __all__ = [
     "ConfirmWithdrawalReceipt",
     "FailWithdrawalReceipt",
     "CreateMarket",
-    "SetUserMarketLeverage",
     "CreateSubAccount",
     "SubAccountTransfer",
     "ClaimWithdrawalPayout",

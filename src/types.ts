@@ -95,11 +95,6 @@ export const ActionType = {
    *  without a chain rebase. */
   UpdateMarketFees: 0x10,
 
-  /** User picks a per-market initial-margin override capped by the
-   *  market's risk floor. `user_im_bps == 0` clears the override.
-   *  Engine takes max(market.im_bps, user_im_bps) on every IM check.
-   *  BE-16. */
-  SetUserMarketLeverage: 0x16,
   /** Close an entire position by placing an opposite-side IOC order at
    *  oracle±spread. Idempotent on already-closed positions. User-signed. */
   ClosePosition: 0x17,
@@ -895,22 +890,6 @@ export type EventStatus =
 // Action union type
 // ---------------------------------------------------------------------------
 
-/** Pick a per-account override on the initial-margin ratio for one
- *  market. Engine takes max(market.imBps, userImBps), so users can
- *  deleverage but not exceed the market's risk floor. `userImBps == 0`
- *  clears the override. User-signed (signer == owner). BE-16. */
-export interface SetUserMarketLeverage {
-  /** Account address picking the override (20 bytes). Must equal the
-   *  envelope signer's derived address. */
-  owner: Address;
-  /** Market identifier the override applies to. */
-  market: number;
-  /** Initial margin in basis points. `0` clears the override;
-   *  otherwise must be `>= market.imBps` (engine rejects with
-   *  `UserLeverageBelowMarketIm`, code 38). */
-  userImBps: number;
-}
-
 /** Close an entire position on a market by placing an opposite-side IOC
  *  order at oracle±spread. Idempotent: returns code=0 without events if
  *  no position exists. User-signed (signer == owner). S49. */
@@ -972,7 +951,6 @@ export type TraderAction =
   | { type: "WithdrawRequest"; data: WithdrawRequest }
   | { type: "ApproveAgent"; data: ApproveAgent }
   | { type: "RevokeAgent"; data: RevokeAgent }
-  | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage }
   | { type: "ClosePosition"; data: ClosePosition }
   | { type: "SetPositionTriggers"; data: SetPositionTriggers }
   | { type: "CancelPositionTriggers"; data: CancelPositionTriggers }
@@ -1400,6 +1378,15 @@ export type GovernanceAction =
   | { type: "EmergencyAdminAction"; data: EmergencyAdminAction };
 
 export type Action = TraderAction | OperatorAction | GovernanceAction;
+
+/** Decoded wire history, including actions this SDK no longer creates.
+ * This union is not accepted by signing or submission APIs. */
+export type DecodedAction =
+  | Action
+  | {
+      type: "SetUserMarketLeverage";
+      data: { owner: Address; market: number; userImBps: number };
+    };
 
 // ---------------------------------------------------------------------------
 // Governance read model (GET /v1/admin/signer-registry, GET /v1/proposals)

@@ -3,16 +3,18 @@
 //! The wire contract (MessagePack codec, Ed25519 signing preimage, action +
 //! wire types, the admin content hash) lives in the shared `exchange-wire`
 //! crate and is re-exported here, so the SDK uses the *same* codec as the
-//! engine and cannot drift from it. The SDK owns only client representation:
+//! engine. The SDK codec delegates wire encoding while rejecting unsupported
+//! action creation. Historical decoding remains available. The SDK also owns:
 //! the `signer` seam and the `errors` result-code decode, plus the `wire`
 //! byte newtypes and `governance` re-exports.
 
 pub use proof_wire::{
-    abci_event, bridge, codec, crypto, liquidation_config, liquidation_progress,
-    liquidation_report, triggers, types,
+    abci_event, bridge, crypto, liquidation_config, liquidation_progress, liquidation_report,
+    triggers, types,
 };
 
 pub mod binary;
+pub mod codec;
 pub mod errors;
 #[cfg(feature = "gateway")]
 pub mod gateway;

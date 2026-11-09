@@ -67,6 +67,7 @@ impl SigningHandle {
         action_payload: &[u8],
         seq: u64,
     ) -> PyResult<Bound<'py, PyBytes>> {
+        codec::ensure_supported_action(action_type).map_err(map_err)?;
         let chain_id_arr: [u8; 32] = chain_id
             .try_into()
             .map_err(|_| PyValueError::new_err("chain_id must be exactly 32 bytes"))?;
