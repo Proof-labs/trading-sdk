@@ -84,8 +84,9 @@ A matching subscription acknowledgment or account data frame confirms the
 subscription and cancels pending retries. Errors after confirmation remain
 observable without restarting live delivery. A new connection resets the retry
 budget. The synchronous iterator performs retries while it is being consumed;
-`stream.close()` cancels pending retries. Backend exception text is omitted from
-synthetic error frames to avoid exposing sensitive diagnostics. HTTP 401/403
+`stream.close()` cancels pending retries. Synthetic error frames carry the SDK's
+fixed `SigningError` text and omit other exception text, which could expose
+sensitive diagnostics. HTTP 401/403
 refusals during the WebSocket upgrade separately raise `AuthenticationError`.
 
 `client.account_auth(owner, after_id=0)` returns signed subscription parameters.

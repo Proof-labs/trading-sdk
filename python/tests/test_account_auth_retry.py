@@ -8,6 +8,7 @@ import websockets.sync.client as ws_client
 import proof_trading_sdk as pts
 from proof_trading_sdk import _native
 from proof_trading_sdk.errors import SigningError
+from proof_trading_sdk.streams import AccountEventStream
 from test_account_auth import CHAIN, FIXTURE, NOW, OWNER, SEED, client, handle
 from test_ws_streams import FakeSocket
 
@@ -450,3 +451,25 @@ def test_unbound_chain_stream_never_sends_unsigned_subscription(monkeypatch):
         assert socket.sent == []
     finally:
         stream.close(); frames.close(); c.close()
+
+
+def test_account_stream_backoff_cap_defaults_to_ten_seconds() -> None:
+    assert AccountEventStream("ws://gateway", "ab" * 20)._backoff_cap == 10.0
+
+
+def test_signing_error_reason_reaches_the_frame_but_other_text_does_not() -> None:
+    def refuse() -> dict:
+        raise SigningError("chain_id not configured for account authentication")
+
+    def leak() -> dict:
+        raise RuntimeError("secret backend detail")
+
+    stream = AccountEventStream("ws://gateway", "ab" * 20, auth=refuse)
+    stream._ws = object()
+    frame = next(stream._subscribe())
+    assert "chain_id not configured" in frame["error"]
+
+    stream = AccountEventStream("ws://gateway", "ab" * 20, auth=leak)
+    stream._ws = object()
+    frame = next(stream._subscribe())
+    assert "secret backend detail" not in frame["error"]

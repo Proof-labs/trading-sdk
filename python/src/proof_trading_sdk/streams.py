@@ -7,7 +7,7 @@ import time
 import typing as t
 from dataclasses import dataclass, field
 
-from proof_trading_sdk.errors import AuthenticationError
+from proof_trading_sdk.errors import AuthenticationError, SigningError
 
 log = logging.getLogger("proof_trading_sdk")
 
@@ -288,7 +288,15 @@ class AccountEventStream:
         if self._auth is not None:
             try:
                 params.update(self._auth())
-            except Exception:
+            except SigningError as err:
+                # The SDK's signing errors are fixed text with no key material.
+                log.warning("account-stream auth failed: %s", err)
+                if not self._closed and self._ws is socket:
+                    yield from self._auth_failed(str(err))
+                return
+            except Exception as err:
+                # Backend messages may contain sensitive material: type only.
+                log.warning("account-stream auth failed: %s", type(err).__name__)
                 if not self._closed and self._ws is socket:
                     yield from self._auth_failed()
                 return
@@ -316,23 +324,24 @@ class AccountEventStream:
         return delay
 
     @staticmethod
-    def _retry_exhausted() -> dict[str, t.Any]:
+    def _retry_exhausted(cause: str | None = None) -> dict[str, t.Any]:
+        failed = f"failed ({cause})" if cause else "failed"
         return {
             "type": "error", "channel": "accountEvents",
-            "error": f"accountEvents subscription authentication failed; not retrying after {_MAX_AUTH_RETRIES} retries",
+            "error": f"accountEvents subscription authentication {failed}; not retrying after {_MAX_AUTH_RETRIES} retries",
         }
 
-    def _auth_failed(self) -> t.Iterator[dict[str, t.Any]]:
+    def _auth_failed(self, cause: str | None = None) -> t.Iterator[dict[str, t.Any]]:
         if self._confirmed:
             return
         if self._auth_retry_attempts >= _MAX_AUTH_RETRIES:
-            yield self._retry_exhausted()
+            yield self._retry_exhausted(cause)
             return
         delay = self._schedule_auth_retry()
-        # Backend messages may contain sensitive material; expose no raw cause.
+        failed = f"failed ({cause})" if cause else "failed"
         yield {
             "type": "error", "channel": "accountEvents",
-            "error": f"accountEvents subscription authentication failed; retrying in {delay * 1000:g}ms",
+            "error": f"accountEvents subscription authentication {failed}; retrying in {delay * 1000:g}ms",
         }
 
     def _confirm(self) -> None:
