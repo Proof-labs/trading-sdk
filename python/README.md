@@ -153,6 +153,37 @@ These are settled ledger facts, without current marks, accrued funding, PnL,
 equity, margin or withdrawal/trading authorization. The witness is a gateway
 assertion; decoding it does not prove payload contents or consensus authenticity.
 
+## Finalized market reads
+
+```python
+book = client.finalized_orderbook(3, depth=20)
+snapshot = client.finalized_markets_snapshot(chain_id="exchange-devnet-1")
+```
+
+`finalized_orderbook()` returns `FinalizedOrderbook` with market, requested
+depth, height, typed bids/asks (`price`, `total_qty`, `order_count`) and witness.
+Depth is 1, 20 or 100 (default 20); the result does not assert a complete book.
+The canonical Rust decoder validates exact two-side/three-field tuples,
+integer ranges, per-side depth and strictly descending bids/ascending asks.
+The gateway frame's market/depth, duplicate book encodings and witness height
+must agree. Its JSON numeric height must be a safe positive integer, as in TS;
+MessagePack level values retain the full u64 range. Decoded books are capped
+at 512 KiB. Extra frame/witness fields are tolerated.
+
+`finalized_markets_snapshot()` extends the existing `MarketsSnapshot` with its
+witness and reuses the canonical decoder. `chain_id` is mandatory on each call,
+as a chain name or 32-byte binding. Wrong chains and uncommitted snapshots are
+binding errors. Existing `markets_snapshot()`, `orderbook()` and WebSocket
+`orderbook_snapshot()` remain unchanged. Standalone decoders are exported as
+`decode_finalized_orderbook` and `decode_finalized_markets_snapshot`.
+
+Both use the bounded HTTP and synchronous timeout policy described above:
+1 MiB response, 4096 chunks, no redirect/retry/fallback. Defaults are 5 seconds
+for the book and 10 for markets. Neither fetches an H+1 header automatically;
+call `block_header` and `verify_witness` separately for that consistency check.
+Witnesses remain gateway assertions, without validator signatures, payload
+proofs, freshness guarantees or trading authorization.
+
 ## Typed actions
 
 Every action has a typed builder in `proof_trading_sdk.actions`;

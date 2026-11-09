@@ -113,6 +113,10 @@ from proof_trading_sdk.finalized_account import (
     RawAccountPosition,
     decode_finalized_account_state,
 )
+from proof_trading_sdk.finalized_markets import (
+    FinalizedOrderbookLevel, FinalizedOrderbook, FinalizedMarketsSnapshot,
+    decode_finalized_orderbook, decode_finalized_markets_snapshot,
+)
 from proof_trading_sdk.client import ExchangeClient
 from proof_trading_sdk.streams import (
     AccountEventStream,
@@ -255,6 +259,9 @@ __all__ = [
     "FinalizedAccountState",
     "RawAccountPosition",
     "decode_finalized_account_state",
+
+    "FinalizedOrderbookLevel", "FinalizedOrderbook", "FinalizedMarketsSnapshot",
+    "decode_finalized_orderbook", "decode_finalized_markets_snapshot",
     "PositionTriggerHistoryEventType",
     "PendingTriggerDiscardReason",
     "TriggerMarketHistoryEventType",

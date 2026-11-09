@@ -19,6 +19,8 @@ pub mod errors;
 pub mod gateway;
 pub mod governance;
 pub mod finalized_account_reads;
+
+pub mod finalized_orderbook;
 pub mod market_snapshot;
 pub mod msgpack;
 pub mod query;

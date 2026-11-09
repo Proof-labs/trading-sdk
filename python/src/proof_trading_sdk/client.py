@@ -34,6 +34,10 @@ from proof_trading_sdk.actions import (
     encode_action,
 )
 from proof_trading_sdk.config import SdkConfig, load_config
+from proof_trading_sdk.finalized_markets import (
+    FinalizedOrderbook, FinalizedMarketsSnapshot, orderbook_request,
+    decode_finalized_orderbook, decode_finalized_markets_snapshot,
+)
 from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
 from proof_trading_sdk.evidence import (
     BlockEvidenceHeader,
@@ -1572,6 +1576,31 @@ class ExchangeClient:
         return decode_finalized_open_orders(self._finalized_account_read(
             f"/v1/orders/{owner}", {"limit": str(limit), "witness": "1"}, timeout,
         ), owner, limit)
+
+    def finalized_orderbook(self, market: int, *, depth: int = 20, timeout: float = 5.0) -> FinalizedOrderbook:
+        """Height-bound book at depth 1, 20 or 100; never a full-book assertion."""
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+        orderbook_request(market, depth)
+        body = bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, f"/v1/orderbook-snapshot/{market}"),
+            {"depth": str(depth)}, timeout=timeout, on_response=self._parse_rate_limits,
+            check_response=self._check_response,
+        )
+        return decode_finalized_orderbook(body, market, depth)
+
+    def finalized_markets_snapshot(self, *, chain_id: str | bytes, timeout: float = 10.0) -> FinalizedMarketsSnapshot:
+        """Existing atomic snapshot plus witness; an explicit chain pin is required.
+
+        Uses bounded HTTP without fallback. Witness comparison does not prove
+        payload contents, validator signatures, freshness or action permission.
+        """
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+        chain = _chain_pin(chain_id)
+        body = bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, "/v1/markets-snapshot"), {},
+            timeout=timeout, on_response=self._parse_rate_limits, check_response=self._check_response,
+        )
+        return decode_finalized_markets_snapshot(body, chain_id=chain)
 
     def block_header(
         self, height: int, *, chain_id: str | bytes, timeout: float = 5.0,

@@ -285,6 +285,16 @@ fn decode_finalized_open_orders<'py>(
     pythonize::pythonize(py, &value).map_err(map_pythonize_err)
 }
 
+#[pyfunction]
+fn decode_finalized_orderbook<'py>(
+    py: Python<'py>,
+    bytes: &[u8],
+    depth: usize,
+) -> PyResult<Bound<'py, PyAny>> {
+    let book = core_sdk::finalized_orderbook::decode(bytes, depth).map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &book).map_err(map_pythonize_err)
+}
+
 /// Strict, type-preserving MessagePack preflight for gateway read payloads.
 ///
 /// Rejects the float families that Python would otherwise keep distinct from a
@@ -526,6 +536,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(decode_finalized_agent_authorization, m)?)?;
     m.add_function(wrap_pyfunction!(decode_finalized_recent_nonces, m)?)?;
     m.add_function(wrap_pyfunction!(decode_finalized_open_orders, m)?)?;
+
+    m.add_function(wrap_pyfunction!(decode_finalized_orderbook, m)?)?;
     m.add_function(wrap_pyfunction!(decode_markets_snapshot, m)?)?;
     m.add_function(wrap_pyfunction!(decode_account_state, m)?)?;
     m.add(
