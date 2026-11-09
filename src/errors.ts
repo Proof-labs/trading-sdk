@@ -151,6 +151,8 @@ export enum ExecErrorCode {
   // 90 was SubAccountsInactive, retired with the engine's sub-account switch
   // (sub-accounts are always on); never reassigned.
   WithdrawalPayoutLeaseActive = 91,
+  WithdrawalPayoutLeaseNotHeld = 128,
+  WithdrawalPayoutRecordLimitReached = 129,
   EventAlreadyExists = 92,
   EventNotFound = 93,
   UnderlyingAlreadyAttached = 94,
@@ -188,6 +190,11 @@ export enum ExecErrorCode {
   DepositLimitExceeded = 123,
   EventPoolMismatch = 124,
   ConditionalLotOffUnderlyingGrid = 125,
+  MarketReduceOnly = 130,
+  MarketDelisted = 131,
+  MarketStatusTransitionRefused = 132,
+  MarketBacksLiveEvent = 133,
+  MarketHalted = 134,
   InternalError = 255,
 }
 
@@ -518,6 +525,16 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "a live payout lease on this withdrawal is held by a different watcher",
   },
+  128: {
+    name: "WithdrawalPayoutLeaseNotHeld",
+    description:
+      "the withdrawal's payout lease is not held by the submitter, so the payout-signature report is rejected",
+  },
+  129: {
+    name: "WithdrawalPayoutRecordLimitReached",
+    description:
+      "the withdrawal's payout-signature record limit is reached; the rejected payout must not be broadcast",
+  },
   92: { name: "EventAlreadyExists", description: "event id already exists" },
   93: { name: "EventNotFound", description: "no event under this id" },
   94: {
@@ -634,6 +651,30 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "ConditionalLotOffUnderlyingGrid",
     description:
       "A lot_size change would leave an unresolved event's conditional lot not a multiple of its underlying perpetual's lot.",
+  },
+  130: {
+    name: "MarketReduceOnly",
+    description:
+      "The market is reduce-only: an order or fill there must shrink its owner's position.",
+  },
+  131: {
+    name: "MarketDelisted",
+    description: "The market is delisted and takes no orders.",
+  },
+  132: {
+    name: "MarketStatusTransitionRefused",
+    description:
+      "SetMarketStatus or PauseMarket names a move the market cannot make: any market moves Trading to Halted and back; a perpetual also moves Trading or Halted to ReduceOnly and back, then ReduceOnly to Delisted.",
+  },
+  133: {
+    name: "MarketBacksLiveEvent",
+    description:
+      "The perpetual backs a Conditional on an unresolved event and cannot wind down until the event resolves.",
+  },
+  134: {
+    name: "MarketHalted",
+    description:
+      "The market is halted and takes no orders or fills; cancels still work.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

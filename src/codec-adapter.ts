@@ -36,6 +36,8 @@ import {
   type ScheduleUpgrade,
   type SetLiquidationConfig,
   type SetOperatorReceiptRegistry,
+  type SettleEvent,
+  type VoidEvent,
 } from "./types.js";
 import {
   validateFundInsuranceFund,
@@ -64,6 +66,7 @@ import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import { validateTicker } from "./ticker.js";
+import { BINARY_PRICE_MAX } from "./binary.js";
 import {
   validateCancelPositionTriggers,
   validateOrderTriggers,
@@ -146,7 +149,7 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
 /**
  * Externally-tagged governance enum variants that carry NO fields, so serde
  * serializes them as a bare string rather than a `{ Variant: … }` map. Keyed
- * explicitly because a fieldless struct variant (`HaltTrading {}`) is NOT one
+ * explicitly because a fieldless struct variant (`Variant {}`) is NOT one
  * of these — it keeps the map form.
  */
 const GOVERNANCE_UNIT_VARIANTS = new Set<string>(["UnpauseBridge"]);
@@ -163,7 +166,7 @@ function governanceActionToWasm(value: unknown): unknown {
   const v = value as { kind: string; value?: unknown };
   // True UNIT variants (no fields at all) serialize as a bare string, matching
   // serde's externally-tagged unit-variant form. This is distinct from
-  // fieldless STRUCT variants (e.g. EmergencyAction's `HaltTrading {}`), which
+  // fieldless STRUCT variants (`Variant {}`), which
   // stay in the `{ Variant: {} }` map form — so the set is explicit, not
   // inferred from a missing `value`.
   if (GOVERNANCE_UNIT_VARIANTS.has(v.kind)) return v.kind;
@@ -201,6 +204,28 @@ function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   }
   if (v.kind === "SetOperatorReceiptRegistry") {
     validateSetOperatorReceiptRegistry(v.value as SetOperatorReceiptRegistry);
+  }
+  if (v.kind === "VoidEvent") {
+    validateVoidEvent(v.value as VoidEvent);
+  }
+  if (v.kind === "SettleEvent") {
+    validateSettleEvent(v.value as SettleEvent);
+  }
+}
+
+function validateSettleEvent(action: SettleEvent): void {
+  if (action.outcome !== Outcome.Yes && action.outcome !== Outcome.No) {
+    throw new Error(
+      `settleEvent outcome must be Yes or No, got ${Outcome[action.outcome] ?? action.outcome}`,
+    );
+  }
+}
+
+function validateVoidEvent(action: VoidEvent): void {
+  if (action.yesPrice < 0n || action.yesPrice > BINARY_PRICE_MAX) {
+    throw new Error(
+      `voidEvent yesPrice ${action.yesPrice} is outside 0..=${BINARY_PRICE_MAX}`,
+    );
   }
 }
 
