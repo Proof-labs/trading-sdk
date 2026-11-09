@@ -15,6 +15,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   match the TS finalized account-state contract. Existing `account()` is unchanged;
   valuation, authorization, payload proofs and validator verification are excluded.
 
+- Python: add typed finalized valued-account, agent-authorization, recent-nonce and open-order reads with bounded witness transport and canonical Rust payload decoding. Existing account/order APIs are unchanged.
 - Python chain-pinned `block_header`, typed header/witness decoders and
   `verify_witness` bind a finalized-read witness to an H+1 app hash. Reads are
   bounded and preserve exact heights/timestamps; validator signatures and

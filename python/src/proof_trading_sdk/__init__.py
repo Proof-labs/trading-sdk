@@ -151,7 +151,33 @@ from proof_trading_sdk.trigger_config import (
     decode_trigger_market_config_infos,
 )
 
+from proof_trading_sdk.finalized_accounts import (
+    FinalizedAccountInfo,
+    FinalizedPositionBrief,
+    FinalizedBindingScenario,
+    FinalizedAgentAuthorization,
+    FinalizedRecentNonces,
+    FinalizedOpenOrder,
+    FinalizedOpenOrders,
+    decode_finalized_account,
+    decode_finalized_agent_authorization,
+    decode_finalized_recent_nonces,
+    decode_finalized_open_orders,
+)
+
 __all__ = [
+    "FinalizedAccountInfo",
+    "FinalizedPositionBrief",
+    "FinalizedBindingScenario",
+    "FinalizedAgentAuthorization",
+    "FinalizedRecentNonces",
+    "FinalizedOpenOrder",
+    "FinalizedOpenOrders",
+    "decode_finalized_account",
+    "decode_finalized_agent_authorization",
+    "decode_finalized_recent_nonces",
+    "decode_finalized_open_orders",
+
     "admin_proposal_content_hash",
     "chain_id_from_string",
     "owner_to_hex",

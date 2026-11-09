@@ -18,6 +18,7 @@ pub mod errors;
 #[cfg(feature = "gateway")]
 pub mod gateway;
 pub mod governance;
+pub mod finalized_account_reads;
 pub mod market_snapshot;
 pub mod msgpack;
 pub mod query;

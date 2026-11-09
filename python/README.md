@@ -309,3 +309,38 @@ accepts out-of-order unique nonces within its window and rejects replays.
 - No sync call needed before the first transaction
 - Thread-safe allocation within one shared allocator instance
 - Wide engine window (+1 day / −2 days) tolerates NTP skew
+
+### Finalized account reads
+
+```python
+account = client.finalized_account(owner)
+authorization = client.finalized_agent_authorization(owner, agent)
+nonces = client.finalized_recent_nonces(owner)
+orders = client.finalized_open_orders(owner, limit=101)
+```
+
+These opt-in reads return typed values and a `FinalizedReadWitness`. Existing
+`account()` and `open_orders()` behavior is unchanged. Account values come from
+canonical Rust `AccountInfo`/`PositionBrief`; Python integers preserve u64/i64
+precision. `positions`, `binding_scenario`, and the fourteen order fields use
+snake_case. Position owners are 20-byte `bytes` (matching the existing valued
+position convention); result and order owners are canonical lowercase hex strings.
+`cashout_equity` is the engine's display estimate, not guaranteed
+execution proceeds. Funding, PnL and margin are returned without recomputation;
+they do not establish trading authorization or solvency.
+
+Each payload is limited to 512 KiB. The shared bounded transport caps the full
+JSON body at 1 MiB, 4096 nonempty chunks and depth 32. The envelope has exactly
+`data` and `witness`, and the witness exactly five fields. All methods default
+to a 5-second timeout (0.001–60); synchronous network waits and between-chunk
+elapsed checks do not guarantee a hard whole-call deadline for slow headers or
+custom transports. No retry, fallback, redirect or automatic H+1 header fetch.
+
+Valued positions and nonempty orders bind their owners. Empty accounts/orders,
+bare authorization booleans and nonce lists bind identities and height only by
+the request and gateway assertion. Call `verify_witness` with a separately
+chain-pinned H+1 header if needed; this checks consistency, not validator
+signatures, authenticity or freshness. Nonces are a prunable retained set, not
+a lifetime floor or absence proof. Orders require the current 14-field tuple
+and strictly increasing IDs; `complete` is false whenever the requested limit
+(1–101) is reached, even if that number happens to be exact.

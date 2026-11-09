@@ -41,6 +41,12 @@ from proof_trading_sdk.evidence import (
     _requested_height,
     decode_block_evidence_header,
 )
+from proof_trading_sdk.finalized_accounts import (
+    FinalizedAccountInfo, FinalizedAgentAuthorization, FinalizedRecentNonces,
+    FinalizedOpenOrders, _address, _limit, decode_finalized_account,
+    decode_finalized_agent_authorization, decode_finalized_recent_nonces,
+    decode_finalized_open_orders,
+)
 from proof_trading_sdk.errors import (
     AuthenticationError,
     CodecError,
@@ -1531,6 +1537,41 @@ class ExchangeClient:
             check_response=self._check_response,
         )
         return decode_finalized_account_state(response, bound_owner)
+    def _finalized_account_read(self, path: str, params: dict[str, str], timeout: float) -> dict[str, t.Any]:
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+
+        return bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, path), params, timeout=timeout,
+            on_response=self._parse_rate_limits, check_response=self._check_response,
+        )
+
+    def finalized_account(self, owner: bytes | str, *, timeout: float = 5.0) -> FinalizedAccountInfo:
+        """Engine-valued account and gateway witness; no recomputation or authorization guarantee."""
+        owner = _address(owner)
+        return decode_finalized_account(self._finalized_account_read(
+            f"/v1/account/{owner}", {"witness": "1"}, timeout,
+        ), owner)
+
+    def finalized_agent_authorization(self, owner: bytes | str, agent: bytes | str, *, timeout: float = 5.0) -> FinalizedAgentAuthorization:
+        """Bare authorization fact; owner, agent and height rely on the gateway."""
+        owner, agent = _address(owner), _address(agent)
+        return decode_finalized_agent_authorization(self._finalized_account_read(
+            f"/v1/account/{owner}/agents/{agent}", {"witness": "1"}, timeout,
+        ), owner, agent)
+
+    def finalized_recent_nonces(self, signer: bytes | str, *, timeout: float = 5.0) -> FinalizedRecentNonces:
+        """Prunable retained nonces, never a lifetime floor or absence proof."""
+        signer = _address(signer)
+        return decode_finalized_recent_nonces(self._finalized_account_read(
+            f"/v1/account/{signer}/recent-nonces", {"witness": "1"}, timeout,
+        ), signer)
+
+    def finalized_open_orders(self, owner: bytes | str, *, limit: int = 101, timeout: float = 5.0) -> FinalizedOpenOrders:
+        """Owner-bound current 14-field orders; complete is false at the requested limit."""
+        owner, limit = _address(owner), _limit(limit)
+        return decode_finalized_open_orders(self._finalized_account_read(
+            f"/v1/orders/{owner}", {"limit": str(limit), "witness": "1"}, timeout,
+        ), owner, limit)
 
     def block_header(
         self, height: int, *, chain_id: str | bytes, timeout: float = 5.0,
