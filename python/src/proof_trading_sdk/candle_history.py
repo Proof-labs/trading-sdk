@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 import typing as t
 from dataclasses import dataclass
-from datetime import datetime
 
 from proof_trading_sdk.errors import CodecError
 
@@ -14,14 +13,15 @@ CandleHistoryTime: t.TypeAlias = str | int
 _RESOLUTION = re.compile(r"[1-9][0-9]{0,3}[mhdwMy]")
 _DECIMAL = re.compile(r"[0-9]+(?:\.[0-9]+)?")
 _TIME = re.compile(
-    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
-    r"(?:\.([0-9]{1,9}))?(?:Z|[+-][0-9]{2}:[0-9]{2})"
+    r"(?P<year>[+-]?[0-9]{4,})-(?P<month>[0-9]{2})-(?P<day>[0-9]{2})"
+    r"T(?P<hour>[0-9]{2}):(?P<minute>[0-9]{2}):(?P<second>[0-9]{2})"
+    r"(?:\.(?P<fraction>[0-9]{1,9}))?(?P<offset>Z|[+-][0-9]{2}:[0-9]{2})"
 )
 
 
 @dataclass(frozen=True)
 class HistoryCandle:
-    """One bar; decimal strings and RFC3339 timestamps retain their precision."""
+    """One bar; decimal strings and server timestamps retain their precision."""
 
     time: str
     open: str
@@ -44,13 +44,41 @@ class CandleHistoryPage:
     earliest: str | None
 
 
-def _time(value: t.Any) -> tuple[datetime, int]:
+def _time(value: t.Any) -> tuple[int, int]:
+    """UTC seconds and nanoseconds, including the server's extended years."""
     match = _TIME.fullmatch(value) if isinstance(value, str) else None
     if match is None:
-        raise ValueError("expected an RFC3339 timestamp")
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    # Compare every nanosecond; datetime alone truncates after six digits.
-    return parsed.replace(microsecond=0), int((match[1] or "").ljust(9, "0"))
+        raise ValueError("expected a timestamp with a UTC offset")
+    year, month, day, hour, minute, second = (
+        int(match[name]) for name in ("year", "month", "day", "hour", "minute", "second")
+    )
+    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    month_days = (31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    if not (1 <= month <= 12 and 1 <= day <= month_days[month - 1]):
+        raise ValueError("invalid calendar date")
+    if not (0 <= hour < 24 and 0 <= minute < 60 and 0 <= second <= 60):
+        raise ValueError("invalid clock time")
+    offset = match["offset"]
+    offset_seconds = 0
+    if offset != "Z":
+        offset_hour, offset_minute = int(offset[1:3]), int(offset[4:6])
+        if offset_hour >= 24 or offset_minute >= 60:
+            raise ValueError("invalid UTC offset")
+        offset_seconds = (offset_hour * 60 + offset_minute) * 60
+        if offset[0] == "-":
+            offset_seconds = -offset_seconds
+    # Proleptic Gregorian days since 1970-01-01. Floor division also handles
+    # year zero and negative years; datetime is limited to years 1..9999.
+    year -= month <= 2
+    era, year_of_era = divmod(year, 400)
+    day_of_year = (153 * (month - 3 if month > 2 else month + 9) + 2) // 5 + day - 1
+    day_of_era = year_of_era * 365 + year_of_era // 4 - year_of_era // 100 + day_of_year
+    days = era * 146097 + day_of_era - 719468
+    seconds = days * 86400 + hour * 3600 + minute * 60 + min(second, 59) - offset_seconds
+    # A leap second sorts after :59 and before the next minute. Keep it in
+    # the nanosecond component rather than equating it with the next minute.
+    nanos = int((match["fraction"] or "").ljust(9, "0")) + (1_000_000_000 if second == 60 else 0)
+    return seconds, nanos
 
 
 def candle_history_params(
@@ -70,6 +98,10 @@ def candle_history_params(
         if isinstance(value, int) and not isinstance(value, bool) and -(2**63) <= value < 2**63:
             params[name] = str(value)
         elif isinstance(value, str):
+            # The server can emit extended years but its RFC3339 query
+            # parser only accepts unsigned four-digit years.
+            if not (value[:4].isdigit() and value[4:5] == "-"):
+                raise ValueError(f"candle {name} must be RFC3339 or integer epoch milliseconds")
             _time(value)
             params[name] = value
         else:

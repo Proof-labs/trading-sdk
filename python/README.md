@@ -61,7 +61,14 @@ See the full API at `help(proof_trading_sdk)`.
 
 `history_candles` reads durable OHLCV bars through the gateway's
 `/v1/history/candles`. Prices and volumes remain decimal strings; timestamps
-remain RFC3339 strings, including nanoseconds. No float conversion is applied.
+retain the server's original strings, including nanoseconds and extended years
+in wide historical windows. No float conversion is applied.
+
+Values retain the indexer's stored units: `volume` sums raw fill quantities,
+and `quote_volume` sums stored price × raw quantity. These are not automatically
+converted to human-size units or USDC; historical archives may use a different
+price representation. Apply the market and data-era scaling contract before
+displaying monetary values.
 
 ```python
 page = client.history_candles(7, "1h", limit=100)
@@ -74,6 +81,9 @@ The newest bars in the requested window are returned oldest first. Empty
 buckets are omitted. `from_` and `to` accept RFC3339 or integer epoch
 milliseconds; `to` is exclusive. Omit `from_` when paging backward to let the
 server choose the older window. `earliest` is null when no history exists.
+The server accepts unsigned four-digit years in RFC3339 request strings;
+extended-year response boundaries require integer epoch milliseconds if reused
+as request parameters.
 Resolutions use a positive count (1–9999) followed by `m`, `h`, `d`, `w`, `M`
 or `y`; uppercase `M` means calendar months. The server decides which resolutions
 its deployed version accepts. `limit` is 1–5000 (default 1500).

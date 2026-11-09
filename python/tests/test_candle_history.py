@@ -146,3 +146,80 @@ def test_broken_json_uses_sdk_error(client):
     client._http = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, content=b"{bad")))
     with pytest.raises(TransportError):
         client.history_candles(7)
+
+
+def test_server_extended_year_window_preserves_original_timestamps(client):
+    body = page() | {
+        "resolution": "2y", "from": "-0972-01-01T00:00:00Z",
+        "to": "2026-11-09T07:59:31.053233466Z",
+    }
+    mock(client, body)
+    result = client.history_candles(7, "2y")
+    assert result.from_ == "-0972-01-01T00:00:00Z"
+    assert result.to == "2026-11-09T07:59:31.053233466Z"
+    assert result.candles[0].time == body["candles"][0]["t"]
+
+
+@pytest.mark.parametrize("timestamp, expected", [
+    ("1970-01-01T00:00:00Z", (0, 0)),
+    ("1969-12-31T23:59:59.999999999Z", (-1, 999999999)),
+    ("0000-01-01T00:00:00Z", (-62167219200, 0)),
+    ("-0001-12-31T23:59:59Z", (-62167219201, 0)),
+    ("-0400-01-01T00:00:00Z", (-62167219200 - 146097 * 86400, 0)),
+    ("+10000-01-01T00:00:00.123456789Z", (253402300800, 123456789)),
+    ("+10000-01-01T01:30:00.123456789+01:30", (253402300800, 123456789)),
+    ("9999-12-31T23:00:00-01:00", (253402300800, 0)),
+])
+def test_proleptic_gregorian_epoch_anchors(timestamp, expected):
+    from proof_trading_sdk.candle_history import _time
+    assert _time(timestamp) == expected
+
+
+@pytest.mark.parametrize("timestamp", [
+    "0000-02-29T00:00:00Z", "-0400-02-29T00:00:00Z",
+    "+10000-02-29T00:00:00Z", "-4000-01-01T00:00:00Z",
+])
+def test_valid_extended_calendar_dates(timestamp):
+    from proof_trading_sdk.candle_history import _time
+    _time(timestamp)
+
+
+@pytest.mark.parametrize("timestamp", [
+    "-0100-02-29T00:00:00Z", "+10001-02-29T00:00:00Z",
+    "0000-04-31T00:00:00Z", "0000-00-01T00:00:00Z",
+    "0000-13-01T00:00:00Z", "0000-01-00T00:00:00Z",
+    "0000-01-01T24:00:00Z", "0000-01-01T00:60:00Z",
+    "0000-01-01T00:00:61Z", "0000-01-01T00:00:00+24:00",
+    "0000-01-01T00:00:00-00:60", "0000-01-01T00:00:00.1234567890Z",
+])
+def test_invalid_extended_timestamps_are_rejected(timestamp):
+    from proof_trading_sdk.candle_history import _time
+    with pytest.raises(ValueError):
+        _time(timestamp)
+
+
+def test_extended_candle_ordering_compares_offsets_and_nanoseconds(client):
+    body = page() | {"from": "-0001-01-01T00:00:00Z", "to": "+10001-01-01T00:00:00Z"}
+    times = ["-0001-12-31T23:59:59.999999999Z", "0000-01-01T00:00:00Z",
+             "+10000-01-01T01:00:00.000000001+01:00", "+10000-01-01T00:00:00.000000002Z"]
+    body["candles"] = [body["candles"][0] | {"t": timestamp} for timestamp in times]
+    mock(client, body)
+    assert [row.time for row in client.history_candles(7).candles] == times
+    body["candles"][-1]["t"] = "+10000-01-01T00:00:00.000000001Z"
+    client._http.close()
+    mock(client, body)
+    with pytest.raises(CodecError):
+        client.history_candles(7)
+
+
+@pytest.mark.parametrize("timestamp", ["-0972-01-01T00:00:00Z", "+10000-01-01T00:00:00Z"])
+def test_extended_response_year_is_not_sent_as_rfc3339_request(client, timestamp):
+    client._http = httpx.Client(transport=httpx.MockTransport(lambda _: pytest.fail("invalid request sent")))
+    with pytest.raises(ValueError, match="RFC3339"):
+        client.history_candles(7, to=timestamp)
+
+
+def test_leap_second_order_is_not_collapsed_into_next_minute():
+    from proof_trading_sdk.candle_history import _time
+    assert _time("2016-12-31T23:59:59.999999999Z") < _time("2016-12-31T23:59:60Z")
+    assert _time("2016-12-31T23:59:60.999999999Z") < _time("2017-01-01T00:00:00Z")
