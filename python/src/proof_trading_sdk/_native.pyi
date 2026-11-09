@@ -70,6 +70,20 @@ def encode_signed_tx(
 ) -> bytes:
     ...
 
+def signing_message(chain_id: bytes, action_type: int, seq: int, payload: bytes) -> bytes:
+    """Canonical transaction message, owned by the shared Rust core."""
+    ...
+
+def account_ws_auth_message(
+    chain_id: bytes, public_key: bytes, timestamp_ms: int, after_id: int = 0,
+) -> bytes:
+    """Owner-bound account-stream authentication message."""
+    ...
+
+def verify_raw_signature(public_key: bytes, signature: bytes, message: bytes) -> bool:
+    """Strict Ed25519 verification for callback results."""
+    ...
+
 def encode_action(action_type: int, fields: dict[str, object]) -> bytes:
     ...
 

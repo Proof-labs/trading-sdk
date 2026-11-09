@@ -57,10 +57,41 @@ hash as `tx_hash`; reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
+## Callback signer
+
+```python
+# wallet_public_key is 32 bytes; wallet_sign_raw accepts bytes and returns
+# the 64-byte Ed25519 signature from your wallet or device.
+client.set_external_signer(pts.ExternalSigner(wallet_public_key, wallet_sign_raw))
+envelope = client.sign_action(action)  # Signing only; no network submission.
+```
+
+This is the synchronous counterpart of TS `setExternalSigner`. The callback
+receives immutable, domain-separated message bytes prepared by Rust. Rust
+verifies every signature before it is encoded or returned as account-stream
+authentication. `sign_action`, `submit`, owner-derived helpers and
+`account_auth` all use the connected signer. The nonce allocator and chain
+configuration are unchanged; set the correct chain ID explicitly.
+
+Connecting snapshots the public key and callable and drops the client's
+references to its previous secret key or opaque handle. It cannot erase copies
+held by the caller. Connecting another signer while a callback is running
+discards the old result with `SigningError`, including reentrant replacement.
+Signature bytes, public-key bytes and payload bytes are copied at the boundary.
+
+Callbacks must return bytes (or a bytearray/memoryview), never an awaitable.
+The synchronous API cannot forcibly cancel a wallet prompt or device call; the
+callback must provide its own timeout. Ordinary callback failures become a
+generic `SigningError` without logging or chaining wallet diagnostics.
+`KeyboardInterrupt` and `SystemExit` propagate. Signing does not retry the
+callback; account-stream authentication retains its documented bounded retry
+policy and signs again on reconnect. Callbacks must therefore tolerate repeated
+authentication prompts. Existing `SigningHandle`/PKCS#11 support is unchanged.
+
 ## Private account events
 
 `client.account_event_stream(owner)` sends the client's API key when configured.
-When `secret_key` or `key_handle` is present, it also signs the gateway's
+When a secret key, signing handle or external signer is connected, it also signs the gateway's
 subscription challenge on every attempt, matching TypeScript. A stale or
 non-admin API key therefore does not suppress valid signed authentication.
 Set the client's chain ID to the gateway's chain: Python does not resolve it

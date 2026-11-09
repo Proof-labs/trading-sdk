@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import typing as t
 
+from proof_trading_sdk.external_signer import ExternalSigner
+
 from proof_trading_sdk._native import (
     SigningHandle,
     admin_proposal_content_hash,
@@ -149,6 +151,7 @@ __all__ = [
     "load_key_from_fd",
     "load_key_from_pkcs11",
     "SigningHandle",
+    "ExternalSigner",
     "pubkey_to_owner",
     "sign_and_encode",
     "verify_signature",
