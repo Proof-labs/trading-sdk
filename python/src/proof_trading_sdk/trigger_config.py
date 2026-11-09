@@ -1,4 +1,4 @@
-"""Strict read models for the governed stop-loss/take-profit market policy."""
+"""Strict read models for legacy stored trigger policies, not TP/SL availability."""
 
 from __future__ import annotations
 
@@ -127,7 +127,7 @@ def _decode_state(value: t.Any) -> TriggerMarketConfigState:
 
 
 def decode_trigger_market_config_infos(value: t.Any) -> list[TriggerMarketConfigInfo]:
-    """Decode the engine's strict, ascending market-policy registry."""
+    """Decode legacy stored policy rows in ascending market order."""
 
     if not isinstance(value, (list, tuple)):
         raise _error("market configs response is not an array")

@@ -572,7 +572,7 @@ export interface CancelPositionTriggers {
   expectedPositionEpoch: bigint;
 }
 
-/** Complete multisig-controlled trigger policy for one market (admin tag 5). */
+/** Legacy admin tag 5 value; the current engine rejects this retired action. */
 export interface SetTriggerMarketConfig {
   market: number;
   expectedCurrentVersion?: bigint | null;
@@ -2143,7 +2143,7 @@ export interface PendingTriggerMarketConfig {
   effectiveHeight: bigint;
 }
 
-/** Current and scheduled policy for one trigger-enabled market. */
+/** Current and scheduled legacy policy stored for one market. */
 export interface TriggerMarketConfigState {
   current: TriggerMarketConfig | null;
   pending: PendingTriggerMarketConfig | null;

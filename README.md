@@ -438,11 +438,12 @@ requires at least one limb, and each limb carries an explicit `1..=9999` bps
 IOC collar. Owner defaults to the loaded signer; a version-active trading agent
 passes the delegated owner explicitly and the engine verifies the grant.
 
-Before setting a bracket, read `queryTriggerMarketConfigs()`. The current
-policy is the only valid source for `enabled` and the maximum IOC slippage;
-absence means disabled. The optional pending policy is shown with its accepted
-and next-block effective heights. The SDK rejects malformed, empty, unsorted,
-or version-skipping policy state rather than inventing a default.
+`queryTriggerMarketConfigs()` reads legacy stored policy rows and is deprecated
+as a TP/SL availability check. An empty registry, a missing market, or a disabled
+legacy row does not prevent position-trigger placement. Use the current
+position epoch and an explicit per-limb IOC collar; the engine validates the
+request. Successful placement does not guarantee a fill. The SDK distinguishes
+a valid empty registry from malformed policy data, which still raises an error.
 
 `queryTriggerStatus()` is deprecated: `GET /v1/triggers/status` is deleted
 upstream (the node dropped it with its activation gates, exchange#619,

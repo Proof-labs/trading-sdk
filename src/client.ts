@@ -1631,8 +1631,11 @@ export class ExchangeClient {
     return decodePositionTriggerInfos(await this.strictDecode(bytes));
   }
 
-  /** Read the complete governed trigger-market policy registry. Missing
-   * markets are disabled; callers must never synthesize a default policy. */
+  /** Read legacy stored trigger-policy rows, sorted by market id.
+   * @deprecated Do not use this read as a TP/SL availability check. Empty
+   * results, missing markets, and disabled legacy rows do not prevent
+   * placement. Use the current position epoch and explicit per-limb slippage;
+   * the engine validates the request. Malformed data still raises an error. */
   async queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]> {
     const path = "/v1/triggers/markets";
     const json = await this.apiJson(`${this.readBaseUrl}${path}`);

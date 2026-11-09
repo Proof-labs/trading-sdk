@@ -1135,10 +1135,13 @@ class ExchangeClient:
         }
 
     def trigger_market_configs(self) -> list[TriggerMarketConfigInfo]:
-        """Complete governed trigger policy, sorted by market id.
+        """Read legacy stored trigger-policy rows, sorted by market id.
 
-        Missing markets are disabled. A malformed/missing envelope is an error;
-        this method never substitutes a permissive client-side default.
+        Deprecated as a TP/SL availability check. Empty results, missing markets,
+        and disabled legacy rows do not prevent position-trigger placement.
+        Use the current position epoch and explicit per-limb slippage; the
+        engine validates the request. A malformed/missing envelope is an error,
+        distinct from a valid empty registry.
         """
         path = "/v1/triggers/markets"
         raw = self._decode_envelope(

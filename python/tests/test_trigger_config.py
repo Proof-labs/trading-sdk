@@ -1,4 +1,4 @@
-"""Strict first-attach trigger-policy query contract."""
+"""Strict legacy trigger-policy query contract."""
 
 from __future__ import annotations
 

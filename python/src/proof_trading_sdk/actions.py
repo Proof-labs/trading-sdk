@@ -431,7 +431,7 @@ class CancelPositionTriggers(Action):
 
 @dataclass
 class SetTriggerMarketConfig:
-    """Typed value for multisig ``AdminAction::SetTriggerMarketConfig`` (tag 5)."""
+    """Legacy admin tag 5 value; the current engine rejects this retired action."""
 
     market: int
     enabled: bool
