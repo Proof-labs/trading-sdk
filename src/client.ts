@@ -1839,7 +1839,7 @@ export class ExchangeClient {
 
   /** Resting orders with exact bigint metadata and canonical legacy defaults.
    * Malformed responses, foreign owners, invalid ordering and payloads over
-   * 1 MiB are rejected. This capped read does not verify a finalized witness. */
+   * 1 MiB are rejected. This read does not verify a finalized witness. */
   async queryOpenOrders(addressHex?: string): Promise<OpenOrder[]> {
     const address = addressHex ?? this.addressHex;
     if (address == null) return [];

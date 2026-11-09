@@ -68,8 +68,9 @@ zero, `Gtc` and false flags. Zero placement time means no timestamp was recorded
 
 Malformed or wrong-owner responses, duplicate/out-of-order IDs, zero remaining
 quantity, and decoded MessagePack payloads over 1 MiB raise `CodecError`.
-The gateway may cap the returned list: this read does not prove all orders were returned or verify a
-finalized-state witness. The remaining Python API gaps are tracked in
+This read sends no `limit`, and the gateway refuses a response body over 1 MiB
+rather than returning a shorter list, so a very large account gets an error. The
+read does not verify a finalized-state witness. The remaining Python API gaps are tracked in
 [#362](https://github.com/Proof-labs/trading-sdk/issues/362).
 
 ## Typed actions

@@ -155,7 +155,11 @@ fn open_orders_reject_duplicate_ids_empty_orders_and_trailing_bytes() {
     let mut trailing = rmp_serde::to_vec(&vec![resting_order()]).unwrap();
     trailing.push(0);
     assert!(decode_open_orders(&trailing, &[0xab; 20]).is_err());
-    assert!(decode_open_orders(&vec![0; MAX_OPEN_ORDERS_BYTES + 1], &[0xab; 20]).is_err());
+    assert_eq!(
+        decode_open_orders(&vec![0; MAX_OPEN_ORDERS_BYTES + 1], &[0xab; 20])
+            .expect_err("a payload over the cap is refused"),
+        "open orders payload is too large"
+    );
 }
 
 /// One `MarketConfig` row as `rmp_serde::to_vec` writes it (no fee tiers).

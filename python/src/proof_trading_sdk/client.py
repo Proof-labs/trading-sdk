@@ -763,9 +763,9 @@ class ExchangeClient:
         exact; ``owner`` is bytes. Legacy six-field rows use wire defaults
         (client ID None, metadata 0, Gtc, false flags).
 
-        The gateway may cap the number of rows. This list does not establish
-        completeness or verify a finalized-state witness. Malformed or foreign
-        rows raise CodecError instead of becoming empty state.
+        The gateway refuses a response body over 1 MiB rather than returning a
+        shorter list. This read does not verify a finalized-state witness.
+        Malformed or foreign rows raise CodecError instead of becoming empty state.
         """
         owner_hex = canonical_owner(owner)
         resp = self._request(
@@ -775,7 +775,7 @@ class ExchangeClient:
         )
         payload = _response_object(resp)
         if payload.get("error") is not None:
-            raise ProofTradingSdkError("gateway error for openOrders")
+            raise ProofTradingSdkError(f"gateway error for openOrders: {payload['error']}")
         encoded = payload.get("data")
         if not isinstance(encoded, str) or len(encoded) > 4 * ((MAX_OPEN_ORDERS_BYTES + 2) // 3):
             raise CodecError("invalid open orders data envelope")

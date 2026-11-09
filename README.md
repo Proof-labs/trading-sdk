@@ -264,8 +264,10 @@ legacy metadata whose effective priority falls back to `id`.
 
 Malformed or wrong-owner responses, duplicate/out-of-order IDs, zero remaining
 quantity, and decoded payloads over 1 MiB throw (`Error` in TypeScript,
-`CodecError` in Python). A valid empty list returns `[]`. The server may cap
-results; this read does not prove completeness or verify a finalized witness.
+`CodecError` in Python). A valid empty list returns `[]`. This read sends no
+`limit`, and the gateway refuses a response body over 1 MiB rather than returning
+a shorter list, so a very large account gets an error. The read does not verify a
+finalized witness.
 
 ### Trading No on an event's binary book
 
