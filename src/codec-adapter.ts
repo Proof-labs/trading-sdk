@@ -130,7 +130,7 @@ const MARK_SOURCE_MODE_NAMES: Record<number, string> = {
 /**
  * Externally-tagged governance enum variants that carry NO fields, so serde
  * serializes them as a bare string rather than a `{ Variant: … }` map. Keyed
- * explicitly because a fieldless struct variant (`HaltTrading {}`) is NOT one
+ * explicitly because a fieldless struct variant (`Variant {}`) is NOT one
  * of these — it keeps the map form.
  */
 const GOVERNANCE_UNIT_VARIANTS = new Set<string>(["UnpauseBridge"]);
@@ -147,7 +147,7 @@ function governanceActionToWasm(value: unknown): unknown {
   const v = value as { kind: string; value?: unknown };
   // True UNIT variants (no fields at all) serialize as a bare string, matching
   // serde's externally-tagged unit-variant form. This is distinct from
-  // fieldless STRUCT variants (e.g. EmergencyAction's `HaltTrading {}`), which
+  // fieldless STRUCT variants (`Variant {}`), which
   // stay in the `{ Variant: {} }` map form — so the set is explicit, not
   // inferred from a missing `value`.
   if (GOVERNANCE_UNIT_VARIANTS.has(v.kind)) return v.kind;

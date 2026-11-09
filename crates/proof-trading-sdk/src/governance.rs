@@ -16,9 +16,9 @@ pub use proof_wire::types::{
     AdminAction, AdminActionType, AdminBatchItem, ApproveAdminAction, CancelUpgrade,
     ConfigureOraclePolicy, EmergencyAction, EmergencyActionType, EmergencyAdminAction,
     FundInsuranceFund, InsuranceFundAllocation, InsuranceFundingId, InsurancePoolId,
-    InsuranceWithdrawalId, ProposalId, ProposeAdminAction, RegistryVersion, RejectAdminAction,
-    ScheduleUpgrade, SetOracleGuards, SettleEvent, SignatureThreshold, SignerAddress,
-    UpdateAdminSignerRegistry, VoidEvent, WithdrawInsuranceFund,
+    InsuranceWithdrawalId, MarketStatus, ProposalId, ProposeAdminAction, RegistryVersion,
+    RejectAdminAction, ScheduleUpgrade, SetMarketStatus, SetOracleGuards, SettleEvent,
+    SignatureThreshold, SignerAddress, UpdateAdminSignerRegistry, VoidEvent, WithdrawInsuranceFund,
 };
 
 #[cfg(test)]
@@ -33,5 +33,6 @@ mod insurance_tag_tests {
         assert_eq!(AdminActionType::WithdrawInsuranceFund as u8, 25);
         assert_eq!(AdminActionType::VoidEvent as u8, 29);
         assert_eq!(AdminActionType::SettleEvent as u8, 30);
+        assert_eq!(AdminActionType::SetMarketStatus as u8, 31);
     }
 }

@@ -78,6 +78,8 @@
 {"case":"manifest/88","code":88,"log":null,"expect":{"name":"SubAccountIdZero"}}
 {"case":"manifest/89","code":89,"log":null,"expect":{"name":"SubAccountTransferZeroAmount"}}
 {"case":"manifest/91","code":91,"log":null,"expect":{"name":"WithdrawalPayoutLeaseActive"}}
+{"case":"manifest/128","code":128,"log":null,"expect":{"name":"WithdrawalPayoutLeaseNotHeld"}}
+{"case":"manifest/129","code":129,"log":null,"expect":{"name":"WithdrawalPayoutRecordLimitReached"}}
 {"case":"manifest/92","code":92,"log":null,"expect":{"name":"EventAlreadyExists"}}
 {"case":"manifest/93","code":93,"log":null,"expect":{"name":"EventNotFound"}}
 {"case":"manifest/94","code":94,"log":null,"expect":{"name":"UnderlyingAlreadyAttached"}}
@@ -104,6 +106,11 @@
 {"case":"manifest/123","code":123,"log":null,"expect":{"name":"DepositLimitExceeded"}}
 {"case":"manifest/124","code":124,"log":null,"expect":{"name":"EventPoolMismatch"}}
 {"case":"manifest/125","code":125,"log":null,"expect":{"name":"ConditionalLotOffUnderlyingGrid"}}
+{"case":"manifest/130","code":130,"log":null,"expect":{"name":"MarketReduceOnly"}}
+{"case":"manifest/131","code":131,"log":null,"expect":{"name":"MarketDelisted"}}
+{"case":"manifest/132","code":132,"log":null,"expect":{"name":"MarketStatusTransitionRefused"}}
+{"case":"manifest/133","code":133,"log":null,"expect":{"name":"MarketBacksLiveEvent"}}
+{"case":"manifest/134","code":134,"log":null,"expect":{"name":"MarketHalted"}}
 {"case":"manifest/255","code":255,"log":null,"expect":{"name":"InternalError"}}
 {"case":"code50/oi_log","code":50,"log":"open interest limit exceeded on market 7: would be 4, cap 3","expect":{"name":"OpenInterestLimitExceeded"}}
 {"case":"code50/slippage_log","code":50,"log":"atomic basket aggregate slippage 51 bps exceeds budget 50 bps","expect":{"name":"SlippageExceeded"}}
