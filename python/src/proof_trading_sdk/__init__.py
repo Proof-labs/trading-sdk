@@ -108,6 +108,11 @@ from proof_trading_sdk.errors import (
 )
 from proof_trading_sdk.nonce import NonceAllocator
 from proof_trading_sdk.config import SdkConfig, load_config
+from proof_trading_sdk.finalized_account import (
+    FinalizedAccountState,
+    RawAccountPosition,
+    decode_finalized_account_state,
+)
 from proof_trading_sdk.client import ExchangeClient
 from proof_trading_sdk.streams import (
     AccountEventStream,
@@ -221,6 +226,9 @@ __all__ = [
     "decode_action",
     "NonceAllocator",
     "ExchangeClient",
+    "FinalizedAccountState",
+    "RawAccountPosition",
+    "decode_finalized_account_state",
     "PositionTriggerHistoryEventType",
     "PendingTriggerDiscardReason",
     "TriggerMarketHistoryEventType",

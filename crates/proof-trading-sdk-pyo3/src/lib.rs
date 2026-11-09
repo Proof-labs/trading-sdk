@@ -235,6 +235,20 @@ fn decode_markets_snapshot<'py>(
     Ok(dict)
 }
 
+/// Decode raw settled account facts through the shared wire AccountStateInfo.
+#[pyfunction]
+fn decode_account_state<'py>(
+    py: Python<'py>,
+    bytes: &[u8],
+    owner: &[u8],
+) -> PyResult<Bound<'py, PyAny>> {
+    let owner: &[u8; 20] = owner
+        .try_into()
+        .map_err(|_| PyValueError::new_err("owner must be exactly 20 bytes"))?;
+    let state = core_sdk::account_state::decode(bytes, owner).map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &state).map_err(map_pythonize_err)
+}
+
 /// Strict, type-preserving MessagePack preflight for gateway read payloads.
 ///
 /// Rejects the float families that Python would otherwise keep distinct from a
@@ -473,6 +487,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(decode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_tx, m)?)?;
     m.add_function(wrap_pyfunction!(decode_markets_snapshot, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_account_state, m)?)?;
+    m.add(
+        "MAX_ACCOUNT_STATE_BYTES",
+        core_sdk::account_state::MAX_ACCOUNT_STATE_BYTES,
+    )?;
     m.add(
         "MAX_MARKETS_SNAPSHOT_BYTES",
         market_snapshot::MAX_SNAPSHOT_BYTES,

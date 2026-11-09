@@ -117,6 +117,42 @@ check. Missing/pruned blocks remain errors, not empty evidence.
 The H+1 block may not exist yet when a fresh witness is received; wait for it
 to be committed before retrying the same height.
 
+## Finalized raw account state
+
+`client.finalized_account_state(owner, timeout=5)` reads
+`/v1/account/{owner}/state?witness=1` and returns `FinalizedAccountState`.
+The existing `account()` method and its valued `AccountState` remain unchanged.
+
+```python
+state = client.finalized_account_state(owner)
+print(state.finalized_height, state.balance, state.positions)
+# Optional separate comparison; the H+1 block must already exist.
+header = client.block_header(state.finalized_height + 1, chain_id="exchange-devnet-1")
+verify_witness(state.witness, header, chain_id="exchange-devnet-1")
+```
+
+The result contains `owner`, `finalized_height`, `balance`, `positions`, and
+`witness`. Each `RawAccountPosition` contains `owner`, `market`, `side`,
+`entry_price`, `size`, signed `last_funding_index`, and `entry_remainder`.
+All numeric fields are exact Python integers. The remainder defaults to zero
+for legacy six-field positions; position cost is `entry_price * size + entry_remainder`.
+Owners are lowercase 40-character hex; inputs also accept 20-byte addresses,
+uppercase hex and an optional `0x` prefix.
+
+The canonical Rust wire decoder checks the exact account/position field counts,
+20-byte owners, request/position owner bindings, strictly increasing market IDs,
+at most 2048 positions, integer ranges, and remainder bounds. The response must
+contain exactly `data` and `witness`; the witness must have its five defined
+fields and match the payload height. Canonical base64 is limited to 512 KiB of
+decoded MessagePack. Malformed or mismatched data raises `GatewayReadError`;
+missing witness support is an error with no legacy fallback.
+
+This read uses the block-header reader's bounded HTTP and synchronous timeout
+policy above. It makes one request and never fetches an H+1 header automatically.
+These are settled ledger facts, without current marks, accrued funding, PnL,
+equity, margin or withdrawal/trading authorization. The witness is a gateway
+assertion; decoding it does not prove payload contents or consensus authenticity.
+
 ## Typed actions
 
 Every action has a typed builder in `proof_trading_sdk.actions`;

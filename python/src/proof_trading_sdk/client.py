@@ -68,6 +68,10 @@ from proof_trading_sdk.trigger_config import (
     decode_trigger_market_config_infos,
 )
 
+from proof_trading_sdk.finalized_account import (
+    FinalizedAccountState, account_state_owner, decode_finalized_account_state,
+)
+
 if t.TYPE_CHECKING:
     from proof_trading_sdk.streams import AccountEventStream
 
@@ -1506,6 +1510,27 @@ class ExchangeClient:
         params = {"height": height} if height is not None else None
         resp = self._get("/v1/block", params=params)
         return _response_object(resp)
+
+    def finalized_account_state(
+        self, owner: bytes | str, *, timeout: float = 5.0,
+    ) -> FinalizedAccountState:
+        """Raw settled account facts with a height-bound gateway witness.
+
+        Reads only ``/v1/account/{owner}/state?witness=1``. No valuation,
+        fallback or automatic header request. To check H+1 consistency, call
+        ``block_header`` with an explicit chain pin and then ``verify_witness``.
+        The same gateway supplying both is not independent authentication.
+        HTTP bounds and synchronous timeout limitations match ``block_header``.
+        """
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+
+        bound_owner = account_state_owner(owner)
+        response = bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, f"/v1/account/{bound_owner}/state"),
+            {"witness": "1"}, timeout=timeout, on_response=self._parse_rate_limits,
+            check_response=self._check_response,
+        )
+        return decode_finalized_account_state(response, bound_owner)
 
     def block_header(
         self, height: int, *, chain_id: str | bytes, timeout: float = 5.0,

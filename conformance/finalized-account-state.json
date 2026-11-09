@@ -1,0 +1,82 @@
+[
+  {
+    "name": "current",
+    "owner": "abababababababababababababababababababab",
+    "envelope": {
+      "data": "lMQUq6urq6urq6urq6urq6urq6urq6vPACAAAAAAAAHP//////////+Rl8QUq6urq6urq6urq6urq6urq6urq6sApFNlbGzP//////////8D04AAAAAAAAAAAg==",
+      "witness": {
+        "version": 1,
+        "nodeId": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "height": "9007199254740993",
+        "finalizedBlockTimeMs": "1794200000000",
+        "appHash": "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+      }
+    },
+    "expected": {
+      "owner": "abababababababababababababababababababab",
+      "finalizedHeight": "9007199254740993",
+      "balance": "18446744073709551615",
+      "positions": [
+        {
+          "owner": "abababababababababababababababababababab",
+          "market": 0,
+          "side": "Sell",
+          "entryPrice": "18446744073709551615",
+          "size": "3",
+          "lastFundingIndex": "-9223372036854775808",
+          "entryRemainder": "2"
+        }
+      ]
+    }
+  },
+  {
+    "name": "legacy",
+    "owner": "abababababababababababababababababababab",
+    "envelope": {
+      "data": "lNwAFMyrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvPACAAAAAAAAEAkZbcABTMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzv////+jQnV5AADPf/////////8=",
+      "witness": {
+        "version": 1,
+        "nodeId": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "height": "9007199254740993",
+        "finalizedBlockTimeMs": "1794200000000",
+        "appHash": "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+      }
+    },
+    "expected": {
+      "owner": "abababababababababababababababababababab",
+      "finalizedHeight": "9007199254740993",
+      "balance": "0",
+      "positions": [
+        {
+          "owner": "abababababababababababababababababababab",
+          "market": 4294967295,
+          "side": "Buy",
+          "entryPrice": "0",
+          "size": "0",
+          "lastFundingIndex": "9223372036854775807",
+          "entryRemainder": "0"
+        }
+      ]
+    }
+  },
+  {
+    "name": "empty",
+    "owner": "abababababababababababababababababababab",
+    "envelope": {
+      "data": "lMQUq6urq6urq6urq6urq6urq6urq6vPACAAAAAAAAEAkA==",
+      "witness": {
+        "version": 1,
+        "nodeId": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "height": "9007199254740993",
+        "finalizedBlockTimeMs": "1794200000000",
+        "appHash": "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+      }
+    },
+    "expected": {
+      "owner": "abababababababababababababababababababab",
+      "finalizedHeight": "9007199254740993",
+      "balance": "0",
+      "positions": []
+    }
+  }
+]

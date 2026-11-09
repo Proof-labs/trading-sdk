@@ -124,3 +124,9 @@ def get_action_types() -> list[dict[str, object]]:
 
 def get_error_code_table() -> list[dict[str, object]]:
     ...
+
+MAX_ACCOUNT_STATE_BYTES: int
+
+def decode_account_state(data: bytes, owner: bytes) -> dict:
+    """Canonical raw account state with owner binding and strict record widths."""
+    ...

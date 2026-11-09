@@ -12,6 +12,7 @@ pub use proof_wire::{
     liquidation_report, triggers, types,
 };
 
+pub mod account_state;
 pub mod binary;
 pub mod errors;
 #[cfg(feature = "gateway")]
