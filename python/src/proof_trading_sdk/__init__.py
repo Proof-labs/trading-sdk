@@ -110,6 +110,7 @@ from proof_trading_sdk.errors import (
 from proof_trading_sdk.nonce import NonceAllocator
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.client import ExchangeClient
+from proof_trading_sdk.trade_stream import PublicTradeStream
 from proof_trading_sdk.streams import (
     AccountEventStream,
     OrderbookDeltaStream,
@@ -236,6 +237,7 @@ __all__ = [
     "decode_markets_snapshot",
     "SdkConfig",
     "load_config",
+    "PublicTradeStream",
     "AccountEventStream",
     "OrderbookDeltaStream",
     "RecoveryStatus",

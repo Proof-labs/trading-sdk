@@ -126,6 +126,46 @@ SDK's JSON-safe domain. Zero is signed but omitted from the returned parameters.
 Direct helper failures raise `SigningError`. The default account stream signs
 cursor zero; its history-based reconnect recovery does not change this cursor.
 
+## Public trade stream
+
+```python
+with client.trade_stream(7) as stream:
+    for frame in stream:
+        if frame["type"] == "error":
+            print(frame["error"])
+        else:
+            print(frame["fillId"], frame["price"], frame["quantity"])
+```
+
+`PublicTradeStream(ws_url, market, api_key="")` is also exported. `trade_stream`
+uses the client's gateway URL and optional API key; `ws_url=` overrides the
+WebSocket base URL. No account signer is called. Each stream owns one socket;
+`close()` or its context manager releases it, independently of `client.close()`.
+
+The first public data is a live `trade`, not a snapshot. Frames retain the
+TypeScript feed's gateway keys: `channel`, `type`, `market`, `fillId`,
+`makerSide`, `price`, `quantity`, and `payload`. Numeric strings remain strings;
+`price` is integer micro-USDC and `quantity` is integer lots. Only the requested
+channel/market and matching subscription errors are delivered. Control ACKs
+are consumed internally. Subscription refusals are yielded without retrying on
+the same socket, matching TypeScript's public trade subscription.
+
+Disconnects resubscribe automatically with 0.5-second exponential backoff,
+capped at 10 seconds by default (`reconnect_backoff_max` overrides the cap).
+Only one iterator may consume a stream, and reconnect work proceeds as it is
+consumed. There is no replay, deduplication or HTTP backfill: disconnected or
+slow consumers can miss fills, including gateway queue drops that have no
+client-visible gap notification.
+
+Python now requires `websockets>=15` for synchronous keepalive; installations
+pinned to version 14 must upgrade. The stream explicitly sends protocol-level
+Ping frames every 15 seconds and closes an unresponsive socket after a
+10-second Pong timeout. TypeScript uses JSON ping/pong frames with those
+intervals instead. Both detect half-open connections, but Python's keepalive
+runs in the library thread while reconnection waits for iterator consumption.
+Closing cancels receive and backoff waits; a connection handshake already in
+progress completes or reaches the library's connection timeout before cleanup.
+
 ## Typed actions
 
 Every action has a typed builder in `proof_trading_sdk.actions`;

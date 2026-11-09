@@ -18,6 +18,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   opaque `SigningHandle`, alongside an API key when configured, renewing the signed
   challenge on every retry and reconnect. `account_auth(owner, after_id=0)`
   supports direct owner keys and JSON-safe nonnegative cursors.
+
+- Python `PublicTradeStream` and `ExchangeClient.trade_stream` expose the public
+  `trades` WebSocket channel with exact gateway frames, subscription errors,
+  cancellation and automatic resubscription. No snapshot or missed-fill recovery.
+  Requires `websockets>=15` (previously >=14); callers pinning version 14 must
+  upgrade. Protocol Ping/Pong uses explicit 15-second/10-second timings.
+
 - **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
   that voids an event and settles every binary and conditional on it in cash
   at `yesPrice` (micro-USDC per share, `0..=1_000_000`). The TypeScript
