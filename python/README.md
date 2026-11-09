@@ -57,6 +57,9 @@ hash as `tx_hash`; reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
+For funding units, exact signed rounding and a read-only historical block
+example, see [Python funding reconciliation](../docs/python-funding-reconciliation.md).
+
 ## Typed actions
 
 Every action has a typed builder in `proof_trading_sdk.actions`;
