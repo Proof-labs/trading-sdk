@@ -30,6 +30,36 @@
     }
   },
   {
+    "name": "engine_owner_array",
+    "owner": "abababababababababababababababababababab",
+    "envelope": {
+      "data": "lNwAFMyrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvPACAAAAAAAAHP//////////+Rl9wAFMyrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKvMq8yrzKsApFNlbGzP//////////8D04AAAAAAAAAAAg==",
+      "witness": {
+        "version": 1,
+        "nodeId": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "height": "9007199254740993",
+        "finalizedBlockTimeMs": "1794200000000",
+        "appHash": "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+      }
+    },
+    "expected": {
+      "owner": "abababababababababababababababababababab",
+      "finalizedHeight": "9007199254740993",
+      "balance": "18446744073709551615",
+      "positions": [
+        {
+          "owner": "abababababababababababababababababababab",
+          "market": 0,
+          "side": "Sell",
+          "entryPrice": "18446744073709551615",
+          "size": "3",
+          "lastFundingIndex": "-9223372036854775808",
+          "entryRemainder": "2"
+        }
+      ]
+    }
+  },
+  {
     "name": "legacy",
     "owner": "abababababababababababababababababababab",
     "envelope": {
