@@ -549,6 +549,29 @@ describe("resolution history", () => {
     ]);
   });
 
+  it("maps a Void's conditional settlement, which converts nothing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        json([
+          {
+            ...settled,
+            kind: "conditional_void_settled",
+            settlement_price: "110000000",
+            realized_pnl: "8000000",
+            converted_size: "0",
+            fallback_reason: "",
+          },
+        ]),
+      ),
+    );
+    const [row] = await client().queryHistoryResolutions(owner);
+    expect(row.kind).toBe("conditional_void_settled");
+    expect(row.settlementPrice).toBe("110000000");
+    expect(row.realizedPnl).toBe("8000000");
+    expect(row.convertedSize).toBe("0");
+  });
+
   it("reads a row without the conversion keys as not converted", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json([settled])));
     const [row] = await client().queryHistoryResolutions(owner);

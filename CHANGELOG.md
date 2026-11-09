@@ -14,7 +14,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   at `yesPrice` (micro-USDC per share, `0..=1_000_000`). The TypeScript
   encoder refuses a price outside that range; the Rust and Python surfaces
   leave the check to the engine. `decodeVoidSettlementEvent` decodes the
-  `event_voided` and `conditional_void_settled` events. proof-wire moves to
+  `event_voided` and `conditional_void_settled` events, and
+  `HistoryResolution.kind` gains `conditional_void_settled`, which
+  `queryHistoryResolutions` already returns for a Void. proof-wire moves to
   mirror commit `eecafea4`, which adds only `VoidEvent` to 10.0.0. Additive (MINOR).
 
 ### Fixed
