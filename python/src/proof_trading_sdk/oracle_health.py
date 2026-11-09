@@ -84,7 +84,7 @@ def decode_oracle_health(value: t.Any) -> OracleHealth:
         markets = {}
         for key, raw in rows.items():
             market = _market_key(key)
-            if not isinstance(raw, dict) or type(raw.get("market")) is not int or raw["market"] != market:
+            if not isinstance(raw, dict) or ("market" in raw and (type(raw["market"]) is not int or raw["market"] != market)):
                 _fail("market binding")
             row_status = _optional(raw, "status", str)
             stale = raw.get("stale_seconds")

@@ -59,6 +59,8 @@ def _object(value: t.Any) -> dict:
 
 
 def _integer(value: t.Any, minimum: int, maximum: int, field: str) -> int:
+    if type(value) is float and value.is_integer() and abs(value) <= (1 << 53)-1:
+        value = int(value)
     if type(value) is not int or not minimum <= value <= maximum: _fail(field)
     return value
 
@@ -133,7 +135,7 @@ def decode_market_stats_response(value: t.Any) -> MarketStatsResponse:
             row = _object(raw)
             market = _integer(row["market"], 0, 0x7fff_ffff, "market")
             sz = row["sz_decimals"]
-            if sz is not None: _integer(sz, 0, 18, "sz_decimals")
+            if sz is not None: sz = _integer(sz, 0, 18, "sz_decimals")
             oi = row["open_interest"]
             if oi is not None:
                 oi = _object(oi)

@@ -23,6 +23,15 @@ def test_market_stats_shared_ts_precision_fixture():
     assert asdict(sdk.decode_market_stats_response(stats())) == stats()
 
 
+def test_json_integral_numbers_match_ts_and_return_typed_ints():
+    value = stats(); value["stale_after_seconds"] = 60.0
+    value["markets"][0].update(market=0.0, sz_decimals=18.0)
+    result = sdk.decode_market_stats_response(value)
+    assert type(result.stale_after_seconds) is int
+    assert type(result.markets[0].market) is int and type(result.markets[0].sz_decimals) is int
+    assert asdict(result) == stats()
+
+
 def test_market_stats_absence_and_zero_remain_distinct():
     value = stats(); value.update(indexed_height=None, indexed_at=None, status="unavailable")
     row = value["markets"][0]
@@ -95,6 +104,15 @@ def test_oracle_f16_and_slim_route_preserve_optional_maps():
     assert result.divergence_bps == {3:2**64-1} and result.journal_healthy == {"primary":True}
     value=f16(); del value["journal_healthy"]; del value["divergence_bps"]
     assert sdk.decode_oracle_health(value).divergence_bps is None
+
+
+def test_node_proxy_market_rows_can_name_market_only_in_map_key():
+    # exchange-node/api_test.go TestAPIOracleHealth_ExternalProxy fixture.
+    value = {"status":"ok", "embedded_feeder":True, "source":"oracle-feeder",
+             "markets":{"3":{"last_update_unix_ms":1781160240000, "stale_seconds":4.2}}}
+    row = sdk.decode_oracle_health(value).markets[3]
+    assert row.market == 3 and row.status is None and row.stale_seconds == 4.2
+    assert row.extra == {"last_update_unix_ms":1781160240000}
 
 
 def test_oracle_market_freshness_extra_diagnostics_and_empty_market_map():
