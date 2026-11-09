@@ -24,8 +24,7 @@ rmpv = { version = "1.3.1", features = ["with-serde"] }
 # The wire contract, one definition shared with the engine. `version` pins
 # the compatible proof-wire major. The rev stays a commit sha, never a tag
 # name, so the pin cannot move (#123).
-# proof-wire 10.0.0 plus VoidEvent (inner admin tag 29), untagged; move to
-# the next proof-wire release once one is cut.
+# TODO(#382): move to the proof-wire release that carries VoidEvent.
 proof-wire = { version = "10", git = "https://github.com/Proof-labs/wire.git", rev = "eecafea4aeac0d52107efd9b1b336e11f35fef1e", features = ["bridge"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
