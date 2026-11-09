@@ -171,6 +171,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     const CREATE_SUB_ACCOUNT: u8 = 0x28;
     const SUB_ACCOUNT_TRANSFER: u8 = 0x29;
     const CLAIM_WITHDRAWAL_PAYOUT: u8 = 0x2e;
+    const RECORD_WITHDRAWAL_PAYOUT: u8 = 0x31;
     const SET_USER_MARKET_LEVERAGE: u8 = 0x16;
     const CANCEL_CLIENT_ORDER: u8 = 0x18;
     const CANCEL_ALL_ORDERS: u8 = 0x19;
@@ -572,7 +573,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ),
         // UnpauseBridge is a UNIT admin-action variant: it carries no fields
         // and serializes as the bare string `"UnpauseBridge"` (not a
-        // `{ Variant: {} }` map like the fieldless struct variant HaltTrading).
+        // `{ Variant: {} }` map a fieldless struct variant would take).
         // Byte-for-byte the engine's frozen ProposeAdminAction::UnpauseBridge
         // vector (exchange-wire `codec::tests::admin_action_wire_vectors_frozen`).
         codec_case(
@@ -700,6 +701,36 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }}
             }),
         ),
+        // VoidEvent (inner tag 0x1D).
+        codec_case(
+            "propose_admin_action/void_event",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "VoidEvent": { "event_id": 4u32, "yes_price": 350_000u64 } }
+            }),
+        ),
+        // SettleEvent (inner tag 0x1E).
+        codec_case(
+            "propose_admin_action/settle_event",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SettleEvent": { "event_id": 4u32, "outcome": "No" } }
+            }),
+        ),
+        // SetMarketStatus (inner tag 0x1F); also lifts a PauseMarket halt.
+        codec_case(
+            "propose_admin_action/set_market_status",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetMarketStatus": { "market": 7u32, "status": "ReduceOnly" } }
+            }),
+        ),
         codec_case(
             "approve_admin_action/rotate_registry",
             APPROVE_ADMIN_ACTION,
@@ -734,26 +765,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({
                 "signer": vec![0x44u8; 20],
                 "action": { "PauseMarket": { "market_id": 7 } }
-            }),
-        ),
-        // HaltTrading is the trickiest arm to mirror: a fieldless STRUCT
-        // variant (`HaltTrading {}`), so it stays in serde's map form
-        // `{ "HaltTrading": {} }` — not the bare-string form a unit variant
-        // would take.
-        codec_case(
-            "emergency_admin_action/halt_trading",
-            EMERGENCY_ADMIN_ACTION,
-            json!({
-                "signer": vec![0x44u8; 20],
-                "action": { "HaltTrading": {} }
-            }),
-        ),
-        codec_case(
-            "emergency_admin_action/set_reduce_only",
-            EMERGENCY_ADMIN_ACTION,
-            json!({
-                "signer": vec![0x44u8; 20],
-                "action": { "SetReduceOnly": { "market_id": 7 } }
             }),
         ),
         // W28-20 receipt-gated terminal withdrawals (0x22 / 0x23). The receipt
@@ -858,6 +869,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             "claim_withdrawal_payout/basic",
             CLAIM_WITHDRAWAL_PAYOUT,
             json!({ "withdrawal_id": 777u64, "holder": vec![0x05u8; 20] }),
+        ),
+        // The wire's vectors/record_withdrawal_payout.hex fixture.
+        codec_case(
+            "record_withdrawal_payout/basic",
+            RECORD_WITHDRAWAL_PAYOUT,
+            json!({ "withdrawal_id": 777u64, "holder": vec![0x05u8; 20],
+                    "solana_signature": vec![0x07u8; 64],
+                    "last_valid_block_height": 500u64 }),
         ),
         // `outcome` is a NUMERIC_ENUM_FIELDS entry in codec-adapter.ts (the
         // integer-vs-name class the markSourceMode regression belonged to);
@@ -1428,6 +1447,29 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "pool_id": 1,
                 "size": 3u64,
                 "reason": "StaleOracleDependency",
+            }}),
+        ),
+        (
+            "event_voided/basic",
+            json!({"EventVoided": {
+                "event_id": 4,
+                "yes_price": 350_000u64,
+                "timestamp_ms": 1_700_000_000_000u64,
+                "proposal_id": 12u64,
+            }}),
+        ),
+        (
+            "conditional_void_settled/no_branch",
+            json!({"ConditionalVoidSettled": {
+                "event_id": 4,
+                "market": 9,
+                "owner": vec![0xABu8; 20],
+                "side": "Sell",
+                "size": 5u64,
+                "entry_price": 60_000_000u64,
+                "settlement_price": 64_000_000u64,
+                "branch_weight": 650_000u64,
+                "realized_pnl": -13_000_000i64,
             }}),
         ),
     ];
