@@ -256,6 +256,8 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   WithdrawInsuranceFund: 25,
   ExecInsuranceFund: 26,
   SetMarginOffsetPolicy: 27,
+  VoidEvent: 29,
+  SettleEvent: 30,
   ScheduleUpgrade: 14,
   CancelUpgrade: 15,
   SetWithdrawalLimit: 19,

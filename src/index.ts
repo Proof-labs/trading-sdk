@@ -99,6 +99,8 @@ export {
   type FundInsuranceFund,
   type InsuranceFundAllocation,
   type WithdrawInsuranceFund,
+  type VoidEvent,
+  type SettleEvent,
   type LiquidationConfig,
   type LiquidationConfigInfo,
   type SetLiquidationConfig,
@@ -281,6 +283,13 @@ export {
   type PartialLiquidationFeeEvent,
   type PositionLiquidatedEvent,
 } from "./liquidation-events.js";
+export type { AbciEventInput } from "./abci-event.js";
+export {
+  decodeVoidSettlementEvent,
+  type ConditionalVoidSettledEvent,
+  type EventVoidedEvent,
+  type VoidSettlementEvent,
+} from "./void-events.js";
 export {
   LIQUIDATION_HISTORY_EVENT_TYPES,
   decodeLiquidationHistoryPage,

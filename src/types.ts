@@ -1169,6 +1169,22 @@ export interface SetMarginOffsetPolicy {
   pairs: MarginOffsetPair[];
 }
 
+/** Settles a price event whose resolution window closed unresolved
+ *  (inner tag 30), on the outcome the quorum names. `Yes` or `No` only:
+ *  the encoder and the engine refuse `Void`. */
+export interface SettleEvent {
+  eventId: number;
+  outcome: Outcome;
+}
+
+/** Voids an event (inner tag 29): every binary and conditional on it
+ *  settles in cash at `yesPrice`. */
+export interface VoidEvent {
+  eventId: number;
+  /** Yes price in micro-USDC per share, `0..=1_000_000`. */
+  yesPrice: bigint;
+}
+
 /**
  * The liquidation settings shared by every market. Collar width is not a
  * field: it is each market's maintenance margin fraction.
@@ -1231,6 +1247,8 @@ export type AdminAction =
   | { kind: "WithdrawInsuranceFund"; value: WithdrawInsuranceFund }
   | { kind: "ExecInsuranceFund"; value: ExecInsuranceFund }
   | { kind: "SetMarginOffsetPolicy"; value: SetMarginOffsetPolicy }
+  | { kind: "VoidEvent"; value: VoidEvent }
+  | { kind: "SettleEvent"; value: SettleEvent }
   | { kind: "SetOracleGuards"; value: SetOracleGuards }
   | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
   | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
@@ -2586,7 +2604,7 @@ export type ConversionFallbackReason =
   | "cannot_price_or_margin"
   | "insufficient_balance";
 
-/** One row of the per-user position-at-resolution log. Covers three
+/** One row of the per-user position-at-resolution log. Covers four
  * kinds — see `kind` field. Feeds Portfolio Resolved tab + Impact /
  * Prediction resolved-state "your outcome" block.
  *
@@ -2594,9 +2612,14 @@ export type ConversionFallbackReason =
  * `historyResolutions` InfoRequest. Shipped 2026-04-24 (see Jesse's
  * P2 #7 in docs/api-scope.md). */
 export interface HistoryResolution {
-  /** One of "condition_met" | "condition_not_met" | "prediction_settled",
-   *  the names the indexer serves resolution history under. */
-  kind: "condition_met" | "condition_not_met" | "prediction_settled";
+  /** One of "condition_met" | "condition_not_met" | "prediction_settled" |
+   *  "conditional_void_settled", the names the indexer serves resolution
+   *  history under. */
+  kind:
+    | "condition_met"
+    | "condition_not_met"
+    | "prediction_settled"
+    | "conditional_void_settled";
   /** Event the resolved position belonged to, as a decimal string. */
   eventId: string;
   /** Child market ID (CPY/CPN or EBY/EBN). */
@@ -2611,7 +2634,9 @@ export interface HistoryResolution {
   entryPrice: string;
   /** Settlement price. condition_met → the underlying's oracle price
    *  at or after the event's settlement time;
-   *  prediction_settled → payoff_per_share (BINARY_PRICE_MAX winner, 0 loser);
+   *  prediction_settled → payoff_per_share (BINARY_PRICE_MAX winner, 0 loser;
+   *  on a `VoidEvent`, its Yes price);
+   *  conditional_void_settled → the underlying's oracle price at the Void;
    *  condition_not_met → "" (no mark; void path returns margin, no cash movement). */
   settlementPrice: string;
   /** Signed µUSDC paid to the owner's balance at resolution.
@@ -2619,7 +2644,10 @@ export interface HistoryResolution {
    *  side, for a converted winner and a winner that fell back alike: a
    *  converted winner's perpetual opens at the settlement price and its
    *  result is paid in cash, exactly as a fallback's is;
-   *  prediction_settled → the cash paid; condition_not_met → "0". */
+   *  prediction_settled → the cash paid;
+   *  conditional_void_settled → the payoff at settlementPrice, weighted by
+   *  the Void's Yes price (its complement on a No book);
+   *  condition_not_met → "0". */
   realizedPnl: string;
   /** Quantity, in integer lots, that became a perpetual position on the
    *  underlying, opened at the settlement price (`settlementPrice`): the

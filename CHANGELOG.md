@@ -7,6 +7,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
+  that voids an event and settles every binary and conditional on it in cash
+  at `yesPrice` (micro-USDC per share, `0..=1_000_000`). The TypeScript
+  encoder refuses a price outside that range; the Rust and Python surfaces
+  leave the check to the engine. `decodeVoidSettlementEvent` decodes the
+  `event_voided` and `conditional_void_settled` events, and
+  `HistoryResolution.kind` gains `conditional_void_settled`, which
+  `queryHistoryResolutions` already returns for a Void. proof-wire moves to
+  mirror commit `eecafea4`, which adds only `VoidEvent` to 10.0.0. Additive (MINOR).
+- `AbciEventInput`, the input type of `decodeVoidSettlementEvent`.
+  `LiquidationEventInput` stays as an alias of it.
+- **`SettleEvent` admin action** (inner tag 30, DEC-244): a multisig proposal
+  that settles a price event whose resolution window closed unresolved, on
+  the `Yes` or `No` the quorum names. The TypeScript encoder refuses `Void`,
+  as the engine does. A pending `SettleEvent` proposal now lists in
+  `decodeProposalPage` instead of failing the whole page. proof-wire moves to
+  mirror commit `bbc3ff2d`, which adds `SettleEvent`. Additive (MINOR).
+
 ### Fixed
 
 - Python submits signed transactions to the gateway in its JSON/base64 envelope.

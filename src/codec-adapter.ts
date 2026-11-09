@@ -36,6 +36,8 @@ import {
   type ScheduleUpgrade,
   type SetLiquidationConfig,
   type SetOperatorReceiptRegistry,
+  type SettleEvent,
+  type VoidEvent,
 } from "./types.js";
 import {
   validateFundInsuranceFund,
@@ -45,6 +47,7 @@ import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import { validateTicker } from "./ticker.js";
+import { BINARY_PRICE_MAX } from "./binary.js";
 import {
   validateCancelPositionTriggers,
   validateOrderTriggers,
@@ -182,6 +185,28 @@ function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   }
   if (v.kind === "SetOperatorReceiptRegistry") {
     validateSetOperatorReceiptRegistry(v.value as SetOperatorReceiptRegistry);
+  }
+  if (v.kind === "VoidEvent") {
+    validateVoidEvent(v.value as VoidEvent);
+  }
+  if (v.kind === "SettleEvent") {
+    validateSettleEvent(v.value as SettleEvent);
+  }
+}
+
+function validateSettleEvent(action: SettleEvent): void {
+  if (action.outcome !== Outcome.Yes && action.outcome !== Outcome.No) {
+    throw new Error(
+      `settleEvent outcome must be Yes or No, got ${Outcome[action.outcome] ?? action.outcome}`,
+    );
+  }
+}
+
+function validateVoidEvent(action: VoidEvent): void {
+  if (action.yesPrice < 0n || action.yesPrice > BINARY_PRICE_MAX) {
+    throw new Error(
+      `voidEvent yesPrice ${action.yesPrice} is outside 0..=${BINARY_PRICE_MAX}`,
+    );
   }
 }
 
