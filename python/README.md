@@ -83,8 +83,8 @@ Read decoding preserves numeric facts without enforcing action-admission rules.
 `decode_authorities_snapshot` and `decode_liquidation_config_info` accept the
 complete gateway `{"data": "<base64 MessagePack>"}` envelope. Rust owns the wire
 decoding. Exact tuple widths, address lengths, integer ranges, 4096 entries per
-authority set, and a 1 MiB decoded payload cap are checked. Malformed data raises
-`CodecError`; HTTP failures retain existing SDK exceptions with no fallback.
+authority set, and a 1 MiB decoded payload cap are checked; the byte cap can be
+reached first when every set is near full. Malformed data raises `CodecError`; HTTP failures retain existing SDK exceptions with no fallback.
 These methods use the existing client transport and configured timeout; the
 payload cap is checked after HTTP buffering and is not a streaming HTTP-body
 limit. They return no finalized witness or cryptographic proof.

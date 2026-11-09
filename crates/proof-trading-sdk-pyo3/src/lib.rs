@@ -237,7 +237,8 @@ fn decode_markets_snapshot<'py>(
 
 #[pyfunction]
 fn decode_authorities<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
-    let value = core_sdk::governance_reads::decode_authorities(bytes).map_err(PyValueError::new_err)?;
+    let value =
+        core_sdk::governance_reads::decode_authorities(bytes).map_err(PyValueError::new_err)?;
     pythonize::pythonize(py, &value).map_err(map_pythonize_err)
 }
 
