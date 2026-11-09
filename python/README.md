@@ -71,7 +71,8 @@ receives immutable, domain-separated message bytes prepared by Rust. Rust
 verifies every signature before it is encoded or returned as account-stream
 authentication. `sign_action`, `submit`, owner-derived helpers and
 `account_auth` all use the connected signer. The nonce allocator and chain
-configuration are unchanged; set the correct chain ID explicitly.
+configuration are unchanged; set the correct chain ID explicitly. Without one,
+transaction signing raises `SigningError` before the callback runs.
 
 Connecting snapshots the public key and callable and drops the client's
 references to its previous secret key or opaque handle. It cannot erase copies

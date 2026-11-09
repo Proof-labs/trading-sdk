@@ -486,7 +486,10 @@ fn classify_error_name(code: u32, log: Option<&str>) -> Option<&'static str> {
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(callback_signer::signing_message, m)?)?;
-    m.add_function(wrap_pyfunction!(callback_signer::account_ws_auth_message, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        callback_signer::account_ws_auth_message,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(callback_signer::verify_raw_signature, m)?)?;
     m.add_class::<SigningHandle>()?;
     m.add_function(wrap_pyfunction!(sign_and_encode, m)?)?;

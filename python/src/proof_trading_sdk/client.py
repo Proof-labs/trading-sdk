@@ -444,7 +444,10 @@ class ExchangeClient:
             raise SigningError("expected ExternalSigner")
         if not isinstance(signer.public_key, (bytes, bytearray, memoryview)):
             raise SigningError("external signer public key must be 32 bytes")
-        public_key = bytes(signer.public_key)
+        try:
+            public_key = bytes(signer.public_key)
+        except ValueError:
+            raise SigningError("external signer public key must be 32 bytes") from None
         if len(public_key) != 32 or not callable(signer.sign_raw) or inspect.iscoroutinefunction(signer.sign_raw):
             raise SigningError("invalid external signer connection")
         snapshot = ExternalSigner(public_key, signer.sign_raw)
@@ -514,11 +517,15 @@ class ExchangeClient:
         seq = self._nonce.allocate()
         try:
             if signer is not None:
+                # A zero-chain signature stays valid on any unbound chain, so a
+                # wallet is never asked for one.
+                if chain_id == UNBOUND_CHAIN_ID:
+                    raise SigningError("chain_id not configured for external signing")
                 if not isinstance(action_payload, (bytes, bytearray, memoryview)):
                     raise CodecError("action payload must be bytes")
                 action_payload = bytes(action_payload)
-                # Apply the canonical encoder's action policy before asking a
-                # wallet to sign. Discard this unsigned preflight envelope.
+                # Whatever the encoder refuses never reaches the wallet. Discard
+                # this unsigned preflight envelope.
                 encode_signed_tx(action_type, action_payload, seq, signer.public_key, bytes(64))
                 message = signing_message(chain_id, action_type, seq, action_payload)
                 signature = self._sign_external(signer, revision, message)
