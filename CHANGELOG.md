@@ -9,6 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Python chain-pinned `block_header`, typed header/witness decoders and
+  `verify_witness` bind a finalized-read witness to an H+1 app hash. Reads are
+  bounded and preserve exact heights/timestamps; validator signatures and
+  payload proofs are not verified.
 - **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
   that voids an event and settles every binary and conditional on it in cash
   at `yesPrice` (micro-USDC per share, `0..=1_000_000`). The TypeScript
