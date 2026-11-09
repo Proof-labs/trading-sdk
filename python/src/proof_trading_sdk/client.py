@@ -461,21 +461,29 @@ class ExchangeClient:
 
     def _sign_external(self, signer: ExternalSigner, revision: int, message: bytes) -> bytes:
         self._check_signer_revision(revision)
+        callback_failed = False
         try:
             signature = signer.sign_raw(message)
         except Exception:
             # Wallet/device errors can contain key material. Do not chain them
             # into SDK exceptions or log callback inputs or outputs.
-            raise SigningError("external signer callback failed") from None
+            callback_failed = True
+        if callback_failed:
+            # Raising outside except also removes __context__, which diagnostic
+            # loggers may inspect even when `raise ... from None` hides it.
+            raise SigningError("external signer callback failed")
         self._check_signer_revision(revision)
         if not isinstance(signature, (bytes, bytearray, memoryview)):
             if inspect.iscoroutine(signature):
                 signature.close()
             raise SigningError("external signer returned an invalid signature")
+        conversion_failed = False
         try:
             signature = bytes(signature)
-        except (TypeError, ValueError):
-            raise SigningError("external signer returned an invalid signature") from None
+        except Exception:
+            conversion_failed = True
+        if conversion_failed:
+            raise SigningError("external signer returned an invalid signature")
         if len(signature) != 64 or not verify_raw_signature(signer.public_key, signature, message):
             raise SigningError("external signer returned an invalid signature")
         self._check_signer_revision(revision)

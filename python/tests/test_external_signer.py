@@ -180,7 +180,8 @@ def test_invalid_callback_result_is_never_sent(client, result, operation):
             client.submit(CancelAllOrders(owner=client._own_owner()))
 
 
-def test_callback_exceptions_are_sanitized_without_retry(client, caplog):
+@pytest.mark.parametrize("operation", ["transaction", "auth"])
+def test_callback_exceptions_are_sanitized_without_retry(client, caplog, operation):
     calls = []
 
     def callback(message):
@@ -189,9 +190,14 @@ def test_callback_exceptions_are_sanitized_without_retry(client, caplog):
 
     client.set_external_signer(ExternalSigner(KEY, callback))
     with pytest.raises(SigningError) as error:
-        client.sign_and_encode_action(1, b"payload")
+        if operation == "auth":
+            client.account_auth()
+        else:
+            client.sign_and_encode_action(1, b"payload")
     assert len(calls) == 1
-    assert client._nonce.peek() > 0
+    if operation == "transaction":
+        assert client._nonce.peek() > 0
+    assert error.value.__context__ is error.value.__cause__ is None
     assert "sensitive wallet error text" not in "".join(traceback.format_exception(error.value))
     assert not caplog.text
 
@@ -200,6 +206,17 @@ def test_valid_signature_for_different_message_is_refused(client):
     client.set_external_signer(ExternalSigner(KEY, lambda message: sign(message + b"changed")))
     with pytest.raises(SigningError, match="invalid signature"):
         client.sign_and_encode_action(1, b"payload")
+
+
+def test_callback_result_conversion_errors_are_redacted(client):
+    class BrokenBytes(bytes):
+        def __bytes__(self):
+            raise RuntimeError("sensitive conversion error")
+
+    client.set_external_signer(ExternalSigner(KEY, lambda _: BrokenBytes(64)))
+    with pytest.raises(SigningError, match="invalid signature") as error:
+        client.sign_and_encode_action(1, b"payload")
+    assert error.value.__context__ is error.value.__cause__ is None
 
 
 def test_encoder_policy_refusal_precedes_callback(client, monkeypatch):
