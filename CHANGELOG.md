@@ -46,7 +46,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Historical transaction decoding and wire types remain available; this does
   not change the engine or retire the proof-wire variant. TypeScript
   `decodeTx().action` now returns `DecodedAction`, which must be narrowed to
-  a supported `Action` before signing.
+  a supported `Action` before signing. A historical `0x16` envelope now makes
+  `peekActionType` return `null`, and `decodeSigningMessage` returns
+  `action: null` with a `decodeError`. The refusal checks the outer action
+  only: bytes nested in `ExecInsuranceFund.action` are not checked.
 
 - **The `HaltTrading` and `SetReduceOnly` emergency arms**, which the engine
   never admitted and proof-wire 11.0.0 drops. `PauseMarket` is the one

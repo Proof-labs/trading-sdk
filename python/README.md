@@ -221,3 +221,5 @@ The SDK rejects it even through raw action/payload encoding entrypoints.
 Historical payload and transaction decoding remains available. The shared
 proof-wire types, low-level cryptography and already-signed byte transport
 remain wire-compatible; they do not imply SDK support for this action.
+The refusal checks the outer action only: bytes nested in the
+`ExecInsuranceFund` action are not checked.
