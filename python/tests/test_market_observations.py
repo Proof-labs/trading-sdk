@@ -193,3 +193,15 @@ def test_http_failures_remain_errors(client,method,args,status,error):
     calls=serve(client,{"error":"unavailable"},status)
     with pytest.raises(error): getattr(client,method)(*args)
     assert len(calls) == 1
+
+
+def test_a_partial_response_fails_requested_coverage(client):
+    serve(client, stats())
+    with pytest.raises(sdk.CodecError, match="coverage"):
+        client.market_stats([0, 1])
+
+
+def test_stats_read_bypasses_caches(client):
+    calls = serve(client, stats())
+    client.market_stats([0])
+    assert calls[0].headers["Cache-Control"] == "no-store"

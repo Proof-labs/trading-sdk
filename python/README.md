@@ -110,12 +110,12 @@ Tracked in [#362](https://github.com/Proof-labs/trading-sdk/issues/362):
 | --- | --- |
 | Public trades | `trades(market)` is an HTTP read. A dedicated public trade subscription is not exposed. |
 | Finalized state and chain evidence | `status`, `get_block`, and `get_block_results` return gateway data. They do not verify witnesses or establish a trusted finalized checkpoint. Typed reads and the shared verifier still need Python bindings. |
-| Authority, financial state, market statistics, oracle health, liquidation configuration | No dedicated typed Python reads. Expose the shared Rust read decoders through PyO3 before adding methods; do not treat generic dictionaries as verified state. |
+| Authority, financial state, liquidation configuration | No dedicated typed Python reads. Expose the shared Rust read decoders through PyO3 before adding methods; do not treat generic dictionaries as verified state. |
 | Callback signing | `secret_key` and `SigningHandle` (including PKCS#11) are supported. An arbitrary signing callback cannot be supplied to `ExchangeClient`. |
 | Resting order client IDs | `open_orders` returns six fields and omits `client_order_id`. Current upstream order reads support the field; Python needs the extended read contract and validation. Do not infer IDs from order placement or incomplete history. |
 
-`history_candles` covers the candle reader portion of #362. The other rows
-remain open; raw HTTP calls outside the SDK are not a supported workaround.
+`history_candles`, `market_stats` and `oracle_health` cover those portions of
+#362. The rows above remain open; raw HTTP calls outside the SDK are not a supported workaround.
 
 ## Market observations
 
