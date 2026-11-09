@@ -123,8 +123,10 @@ the engine verify authorization.
 `trigger_market_configs()` reads legacy stored policy rows and is deprecated
 as a TP/SL availability check. An empty list, a missing market, or a disabled
 legacy row does not prevent position-trigger placement. Each limb requires
-explicit slippage in `1..=9999` bps; the engine validates the position epoch,
-authorization, and request. Successful placement does not guarantee a fill.
+explicit slippage in `1..=1000` bps under the current engine admission rule.
+The SDK wire validator retains `1..=9999` for compatibility; encoding does not
+guarantee admission. The engine validates the position epoch, authorization,
+and request. Successful placement does not guarantee a fill.
 The legacy `SetTriggerMarketConfig` action remains encodable for compatibility,
 but the current engine rejects it as retired.
 

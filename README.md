@@ -434,8 +434,10 @@ bracket, `queryPositionTriggers()` returns its epoch; first attach must use the
 epoch on the canonical account position read and must never guess `1`. Submit
 action `0x25` (`SetPositionTriggers`) or `0x26`
 (`CancelPositionTriggers`). A set replaces the whole bracket atomically,
-requires at least one limb, and each limb carries an explicit `1..=9999` bps
-IOC collar. Owner defaults to the loaded signer; a version-active trading agent
+requires at least one limb, and each limb carries an explicit `1..=1000` bps
+IOC collar under the current engine admission rule. The SDK wire validators
+retain the wider `1..=9999` range for compatibility; encoding does not guarantee
+engine admission. Owner defaults to the loaded signer; a version-active trading agent
 passes the delegated owner explicitly and the engine verifies the grant.
 
 `queryTriggerMarketConfigs()` reads legacy stored policy rows and is deprecated

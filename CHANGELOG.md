@@ -35,6 +35,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `MarketStatusTransitionRefused`, `MarketBacksLiveEvent`, `MarketHalted`);
   and the `MarketHalted` trigger outcome reason.
 
+### Deprecated
+
+- `queryTriggerMarketConfigs()` and Python `trigger_market_configs()` as
+  TP/SL availability checks: these read legacy stored policies. The engine
+  rejects the legacy `SetTriggerMarketConfig` admin action as retired (#388).
+
 ### Removed
 
 - **The `HaltTrading` and `SetReduceOnly` emergency arms**, which the engine
@@ -43,6 +49,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Breaking for code that names the retired arms (MAJOR).
 
 ### Fixed
+
+- Correct legacy trigger-policy documentation: empty or disabled stored rows
+  do not gate position TP/SL. Document the current 1000 bps admission ceiling
+  separately from the wider wire-compatible slippage range (#388).
 
 - Python submits signed transactions to the gateway in its JSON/base64 envelope.
 - Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. A 5xx carrying the gateway's proven `status: refused` body still raises `GatewayError`.

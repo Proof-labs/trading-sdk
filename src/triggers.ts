@@ -17,6 +17,7 @@ import type {
 
 const U64_MAX = (1n << 64n) - 1n;
 const U32_MAX = 0xffff_ffff;
+/** Structural wire bound; current engine admission separately caps limbs at 1000 bps. */
 export const MAX_TRIGGER_SLIPPAGE_BPS = 9_999;
 
 function assertU64(name: string, value: bigint, nonzero = false): void {
@@ -103,7 +104,8 @@ export interface OrderTriggerFields {
  * Validate the placement-time SL/TP limbs carried on an order action
  * (`PlaceOrder` 0x01, `MarketOrder` 0x04, `CancelReplaceOrder` 0x1A).
  * Mirrors `validateSetPositionTriggers`' limb parity (`triggerPrice > 0`,
- * bps in `1..=9999`, distinct limb client ids) plus the engine's reduce-only
+ * structural bps in `1..=9999` (engine admission caps at 1000), distinct
+ * limb client ids) plus the engine's reduce-only
  * incompatibility (`TriggerOrderIncompatible`): a reduce-only entry cannot
  * open the exposure the limbs are meant to protect. Absent limbs mean "no
  * bracket requested" and pass.
@@ -327,7 +329,7 @@ function decodeConfigState(value: unknown): TriggerMarketConfigState {
   return { current, pending };
 }
 
-/** Decode the canonical, market-sorted trigger-policy registry. */
+/** Decode the legacy stored trigger-policy registry, sorted by market. */
 export function decodeTriggerMarketConfigInfos(
   value: unknown,
 ): TriggerMarketConfigInfo[] {

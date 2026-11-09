@@ -547,7 +547,8 @@ export interface AuthorizeWithdrawal {
 export interface TriggerLimb {
   /** Trigger threshold in micro-USDC; must be non-zero. */
   triggerPrice: bigint;
-  /** IOC execution collar in basis points; must be in `1..=9999`. */
+  /** IOC execution collar in basis points. Current engine admission: `1..=1000`;
+   * wire validation retains `1..=9999` for compatibility. */
   maxSlippageBps: number;
   /** Optional non-zero client correlation id for this limb. */
   clientTriggerId?: bigint | null;
@@ -2126,7 +2127,7 @@ export interface StoredTriggerLimb {
   lastEvaluation: TriggerEvaluation | null;
 }
 
-/** Effective trigger policy returned alongside each bracket. */
+/** Legacy stored trigger policy; not a current placement-availability check. */
 export interface TriggerMarketConfig {
   version: bigint;
   enabled: boolean;
@@ -2136,7 +2137,7 @@ export interface TriggerMarketConfig {
   maxActiveBrackets: bigint;
 }
 
-/** A governed trigger policy accepted in one block and effective next block. */
+/** Legacy scheduled policy with its accepted and effective heights. */
 export interface PendingTriggerMarketConfig {
   config: TriggerMarketConfig;
   acceptedHeight: bigint;

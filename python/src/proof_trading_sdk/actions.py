@@ -279,6 +279,7 @@ class ClosePosition(Action):
 _U64_MAX = (1 << 64) - 1
 _U32_MAX = (1 << 32) - 1
 _U16_MAX = (1 << 16) - 1
+# Structural wire bound; current engine admission separately caps limbs at 1000 bps.
 MAX_TRIGGER_SLIPPAGE_BPS = 9_999
 
 
