@@ -135,6 +135,8 @@ define_error_kinds! {
     // 90 was SubAccountsInactive, retired with the engine's sub-account switch
     // (sub-accounts are always on); never reassigned.
     91  => WithdrawalPayoutLeaseActive      ~ "A live Solana payout lease on this withdrawal is held by a different watcher, so this ClaimWithdrawalPayout is rejected; the rejected claimer must not sign a payout.",
+    128 => WithdrawalPayoutLeaseNotHeld     ~ "The withdrawal's payout lease is not held by the submitter, so the payout-signature report is rejected; acquire the lease with a payout claim first.",
+    129 => WithdrawalPayoutRecordLimitReached ~ "The withdrawal's payout-signature record limit is reached; the rejected payout must not be broadcast.",
     // Events and attached conditionals.
     92  => EventAlreadyExists               ~ "CreateEvent for an event id already in the registry.",
     93  => EventNotFound                    ~ "No event exists under this id: nothing can attach to it, resolve it or read it.",
@@ -165,6 +167,12 @@ define_error_kinds! {
     123 => DepositLimitExceeded ~ "The ConfirmDeposit or Deposit would credit more than the governance-set deposit limits allow: either the per-deposit maximum, or the protocol-wide cap on deposits credited inside the rolling window.",
     124 => EventPoolMismatch ~ "AttachConditional names an underlying whose insurance pool differs from the event's; an event and its conditionals share one pool.",
     125 => ConditionalLotOffUnderlyingGrid ~ "A lot_size change would leave an unresolved event's conditional lot not a multiple of its underlying perpetual's lot.",
+    // Market status.
+    130 => MarketReduceOnly ~ "The market is reduce-only: an order or fill there must shrink its owner's position.",
+    131 => MarketDelisted ~ "The market is delisted and takes no orders.",
+    132 => MarketStatusTransitionRefused ~ "SetMarketStatus or PauseMarket names a move the market cannot make: any market moves Trading to Halted and back; a perpetual also moves Trading or Halted to ReduceOnly and back, then ReduceOnly to Delisted.",
+    133 => MarketBacksLiveEvent ~ "The perpetual backs a Conditional on an unresolved event and cannot wind down until the event resolves.",
+    134 => MarketHalted ~ "The market is halted and takes no orders or fills; cancels still work.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -489,6 +497,20 @@ mod exec_error_meaning_tests {
                 positions: 2,
                 budget: 1,
             },
+            ExecError::WithdrawalPayoutLeaseNotHeld,
+            ExecError::WithdrawalPayoutRecordLimitReached,
+            ExecError::MarketReduceOnly { market: 1 },
+            ExecError::MarketDelisted { market: 1 },
+            ExecError::MarketStatusTransitionRefused {
+                market: 1,
+                from: crate::types::MarketStatus::Delisted,
+                to: crate::types::MarketStatus::Trading,
+            },
+            ExecError::MarketBacksLiveEvent {
+                market: 1,
+                event_id: crate::types::EventId(0),
+            },
+            ExecError::MarketHalted { market: 1 },
         ]
     }
 
@@ -551,7 +573,8 @@ mod exec_error_meaning_tests {
     /// impact-market family), 30, 36 and 41 (retired with OracleUpdate and
     /// RunFundingTick), 78-81 (reserved for oracle errors), 90 (the retired
     /// sub-account switch), 101 (unassigned), 112 (the retired PLP
-    /// configuration) and 117-122 (claimed elsewhere, unassigned on the wire).
+    /// configuration), 117-122 and 126-127 (claimed elsewhere, unassigned on the
+    /// wire).
     /// Catches the case where a code is reserved by the mirrored engine error
     /// enum but no SDK classification maps to it.
     #[test]
@@ -559,8 +582,8 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=125)
-            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122))
+        let expected: Vec<u32> = (1u32..=134)
+            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(

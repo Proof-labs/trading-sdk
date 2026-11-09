@@ -109,8 +109,8 @@ def admin_proposal_content_hash(
     (``{"Variant": {snake_case_fields}}``), as used by :func:`encode_action`
     for the governance actions' ``action`` field — except for a fieldless UNIT
     variant, which serde represents as the bare variant-name string (e.g.
-    ``"UnpauseBridge"``). A fieldless STRUCT variant such as ``HaltTrading {}``
-    is NOT one of those and keeps the ``{"HaltTrading": {}}`` map form."""
+    ``"UnpauseBridge"``). A fieldless STRUCT variant (``Variant {}``) is NOT
+    one of those and keeps the ``{"Variant": {}}`` map form."""
     ...
 
 def get_action_types() -> list[dict[str, object]]:

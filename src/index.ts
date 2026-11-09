@@ -116,6 +116,10 @@ export {
   type FundInsuranceFund,
   type InsuranceFundAllocation,
   type WithdrawInsuranceFund,
+  type VoidEvent,
+  type SettleEvent,
+  type SetMarketStatus,
+  type MarketStatus,
   type LiquidationConfig,
   type LiquidationConfigInfo,
   type SetLiquidationConfig,
@@ -136,6 +140,7 @@ export {
   type CreateSubAccount,
   type SubAccountTransfer,
   type ClaimWithdrawalPayout,
+  type RecordWithdrawalPayout,
   type UpdateMarketFees,
   type SetUserMarketLeverage,
   type GovernanceAction,
@@ -298,6 +303,13 @@ export {
   type PartialLiquidationFeeEvent,
   type PositionLiquidatedEvent,
 } from "./liquidation-events.js";
+export type { AbciEventInput } from "./abci-event.js";
+export {
+  decodeVoidSettlementEvent,
+  type ConditionalVoidSettledEvent,
+  type EventVoidedEvent,
+  type VoidSettlementEvent,
+} from "./void-events.js";
 export {
   LIQUIDATION_HISTORY_EVENT_TYPES,
   decodeLiquidationHistoryPage,
