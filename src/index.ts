@@ -282,6 +282,7 @@ export {
   type PartialLiquidationFeeEvent,
   type PositionLiquidatedEvent,
 } from "./liquidation-events.js";
+export type { AbciEventInput } from "./abci-event.js";
 export {
   decodeVoidSettlementEvent,
   type ConditionalVoidSettledEvent,

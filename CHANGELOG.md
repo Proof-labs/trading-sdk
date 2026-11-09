@@ -18,6 +18,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `HistoryResolution.kind` gains `conditional_void_settled`, which
   `queryHistoryResolutions` already returns for a Void. proof-wire moves to
   mirror commit `eecafea4`, which adds only `VoidEvent` to 10.0.0. Additive (MINOR).
+- `AbciEventInput`, the input type of `decodeVoidSettlementEvent`.
+  `LiquidationEventInput` stays as an alias of it.
 
 ### Fixed
 
