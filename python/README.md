@@ -59,14 +59,20 @@ See the full API at `help(proof_trading_sdk)`.
 
 ## Private account events
 
-`client.account_event_stream(owner)` uses the client's API key when configured.
-Without an API key, it signs the gateway's subscription challenge using
-`secret_key` or `key_handle`, with fresh authentication on every reconnect.
-Set the client's chain ID to the gateway's chain. An opaque signing handle
+`client.account_event_stream(owner)` sends the client's API key when configured.
+When `secret_key` or `key_handle` is present, it also signs the gateway's
+subscription challenge on every attempt, matching TypeScript. A stale or
+non-admin API key therefore does not suppress valid signed authentication.
+Set the client's chain ID to the gateway's chain: Python does not resolve it
+automatically. `account_auth()` raises `SigningError` for an unbound chain ID
+before signing; a stream reports the signing failure through its bounded retry
+error frames and never sends an unsigned subscription. An opaque signing handle
 keeps private key material in Rust memory or the HSM.
 
 Signed authentication supports the signer's own account only. A trading-agent
-grant does not authorize reading another owner's private feed. Before the first
+grant does not authorize reading another owner's private feed. With a signer,
+this restriction also applies when an API key is configured. Use a client with
+only an authorized API key for another owner's feed. Before the first
 subscription is confirmed, signing failures and gateway error codes 401/429/503
 yield error frames and retry on the same socket: at most five retries after the
 initial attempt, with default delays of 0.5, 1, 2, 4, and 8 seconds. Every attempt

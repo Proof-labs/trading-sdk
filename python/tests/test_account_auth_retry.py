@@ -299,11 +299,11 @@ def test_transient_signer_failure_then_success(monkeypatch):
         stream.close(); frames.close(); c.close()
 
 
-def test_api_key_retry_keeps_header_without_signer(monkeypatch):
+def test_api_key_only_retry_keeps_header(monkeypatch):
     c, stream, socket, _, connects = setup_stream(monkeypatch,
         lambda msg, n: [{"type": "error", "code": 429, "id": msg["id"]}] if n == 1 else [data()])
     stream.close()
-    keyed = client(secret_key=SEED, api_key="test-key")
+    keyed = client(api_key="test-key")
     monkeypatch.setattr(keyed, "account_auth", lambda *_: pytest.fail("must not sign API key subscriptions"))
     stream = keyed.account_event_stream(OWNER)
     frames = iter(stream)
@@ -390,3 +390,63 @@ def test_close_while_connecting_never_calls_signer(monkeypatch):
     monkeypatch.setattr(ws_client, "connect", connect)
     assert list(stream) == []
     assert socket.sent == [] and socket.closed
+
+
+@pytest.mark.parametrize("opaque", [False, True])
+def test_stale_api_key_does_not_suppress_valid_signer(monkeypatch, opaque):
+    clock = Clock(monkeypatch)
+    socket = ScriptSocket(clock, lambda msg, _: [data()] if "signature" in msg["params"] else [
+        {"type": "error", "code": 401, "id": msg["id"]}])
+    headers = []
+    def connect(*args, **kwargs):
+        headers.append(kwargs["additional_headers"])
+        return socket
+    monkeypatch.setattr(ws_client, "connect", connect)
+    c = client(api_key="stale-key", **({"key_handle": handle()} if opaque else {"secret_key": SEED}))
+    stream = c.account_event_stream(OWNER)
+    frames = iter(stream)
+    try:
+        assert next(frames)["type"] == "snapshot"
+        assert headers == [{"X-API-Key": "stale-key"}]
+        assert socket.sent[0]["params"]["signature"] == FIXTURE["signature"]
+        assert len(socket.sent) == 1
+    finally:
+        stream.close(); frames.close(); c.close()
+
+
+def test_api_key_with_signer_still_requires_matching_owner(monkeypatch):
+    clock = Clock(monkeypatch)
+    socket = ScriptSocket(clock)
+    monkeypatch.setattr(ws_client, "connect", lambda *args, **kwargs: socket)
+    c = client(secret_key=SEED, api_key="authorized-key")
+    stream = c.account_event_stream("00" * 20)
+    frames = iter(stream)
+    try:
+        assert "retrying" in next(frames)["error"]
+        assert socket.sent == []
+    finally:
+        stream.close(); frames.close(); c.close()
+
+
+@pytest.mark.parametrize("opaque", [False, True])
+def test_unbound_chain_fails_before_signing(monkeypatch, opaque):
+    import proof_trading_sdk.client as client_module
+    monkeypatch.setattr(client_module, "sign_account_ws_auth", lambda *args: pytest.fail("must not sign"))
+    c = client(**({"key_handle": handle()} if opaque else {"secret_key": SEED}))
+    c._chain_id = bytes(32)
+    try:
+        with pytest.raises(SigningError, match="chain_id not configured"):
+            c.account_auth()
+    finally:
+        c.close()
+
+
+def test_unbound_chain_stream_never_sends_unsigned_subscription(monkeypatch):
+    c, stream, socket, _, _ = setup_stream(monkeypatch)
+    c._chain_id = bytes(32)
+    frames = iter(stream)
+    try:
+        assert "retrying" in next(frames)["error"]
+        assert socket.sent == []
+    finally:
+        stream.close(); frames.close(); c.close()

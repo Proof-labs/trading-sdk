@@ -122,7 +122,7 @@ def test_reconnect_renews_auth_and_closes_old_socket(monkeypatch, opaque):
     assert sockets[1].closed
 
 
-def test_api_key_keeps_other_owner_access_without_using_signer(monkeypatch):
+def test_api_key_only_keeps_other_owner_access(monkeypatch):
     socket = FakeSocket([{"type": "snapshot", "channel": "accountEvents", "owner": "00" * 20}])
     calls = []
 
@@ -131,7 +131,7 @@ def test_api_key_keeps_other_owner_access_without_using_signer(monkeypatch):
         return socket
 
     monkeypatch.setattr(ws_client, "connect", connect)
-    c = client(secret_key=SEED, api_key="test-api-key")
+    c = client(api_key="test-api-key")
     monkeypatch.setattr(c, "account_auth", lambda *_: pytest.fail("API key auth needs no signer"))
     other = "00" * 20
     stream = c.account_event_stream(other)

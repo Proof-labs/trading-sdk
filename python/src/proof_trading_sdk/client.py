@@ -1644,6 +1644,8 @@ class ExchangeClient:
         try:
             if type(after_id) is not int or not 0 <= after_id <= (1 << 53) - 1:
                 raise SigningError("invalid account auth cursor")
+            if self._chain_id == UNBOUND_CHAIN_ID:
+                raise SigningError("chain_id not configured for account authentication")
             signer_owner = self._own_owner()
             if owner is not None and canonical_owner(owner) != signer_owner.hex():
                 raise SigningError("account auth owner does not match signer")
@@ -1670,8 +1672,9 @@ class ExchangeClient:
     ) -> AccountEventStream:
         """An :class:`~proof_trading_sdk.streams.AccountEventStream` for ``owner``.
 
-        Uses this client's API key when present; otherwise the configured
-        secret key or opaque signing handle signs fresh auth on every attempt.
+        Sends this client's API key when present. A configured secret key or
+        opaque signing handle also signs fresh auth on every attempt, matching
+        TypeScript even when an API key is configured.
         Only the signer's own account can use this signed-auth path. Signing
         failures yield error frames and retry within the stream's bounded
         first-subscription retry budget, without an unsigned fallback.
@@ -1683,7 +1686,7 @@ class ExchangeClient:
         from proof_trading_sdk.streams import AccountEventStream
 
         kwargs.setdefault("history_url", self._gateway_url)
-        if not self._api_key and (self._secret_key is not None or self._key_handle is not None):
+        if self._secret_key is not None or self._key_handle is not None:
             kwargs.setdefault("auth", lambda: self.account_auth(owner))
         return AccountEventStream(
             ws_url or self._gateway_url.replace("http", "ws", 1),

@@ -10,7 +10,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Python account-event streams authenticate with the client's secret key or
-  opaque `SigningHandle` when no API key is configured, renewing the signed
+  opaque `SigningHandle`, alongside an API key when configured, renewing the signed
   challenge on every retry and reconnect. `account_auth(owner, after_id=0)`
   supports direct owner keys and JSON-safe nonnegative cursors.
 - **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
@@ -41,6 +41,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Python account-stream reconnect backoff now defaults to a 10-second cap
+  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
+- Python signed account authentication rejects an unconfigured chain ID before
+  signing. Configure the gateway's chain ID explicitly.
 - Python account streams match TypeScript's bounded first-subscription auth
   retries: signing failures and 401/429/503 frames yield errors and retry up to
   five times. Exhaustion and 403 frames leave the socket open without further
