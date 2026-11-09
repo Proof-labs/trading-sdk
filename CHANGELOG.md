@@ -12,6 +12,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Python `history_candles` reads durable OHLCV history with typed pages, exact
   decimal strings, and backward time-window pagination.
 
+- Python typed `market_stats()` preserves exact indexed rolling metrics and
+  unavailable values; `oracle_health()` exposes optional operational feeder facts
+  across disabled, F16 relay and market-freshness responses without inferring
+  trading authorization.
+
 - **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
   that voids an event and settles every binary and conditional on it in cash
   at `yesPrice` (micro-USDC per share, `0..=1_000_000`). The TypeScript

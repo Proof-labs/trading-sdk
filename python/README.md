@@ -117,6 +117,38 @@ Tracked in [#362](https://github.com/Proof-labs/trading-sdk/issues/362):
 `history_candles` covers the candle reader portion of #362. The other rows
 remain open; raw HTTP calls outside the SDK are not a supported workaround.
 
+## Market observations
+
+```python
+stats = client.market_stats([3, 4])
+health = client.oracle_health(market=3)  # omit market for the full feeder snapshot
+```
+
+`market_stats()` returns typed `MarketStatsResponse` from the indexer's rolling
+24-hour snapshot. Select 1–50 distinct market IDs in `0..2147483647`; every
+requested market must appear exactly once. Contract quantities, raw micro-USDC
+prices, USDC dollar volume and signed basis-point changes retain their exact
+numeric strings. `None`, zero, stale and unavailable remain distinct. Timestamps
+retain their original precision/offset; window comparisons use milliseconds,
+matching TS. Unknown additive fields are ignored. `decode_market_stats_response`
+also accepts an already parsed gateway body.
+
+`oracle_health()` returns `OracleHealth`, with typed optional source, readiness,
+submission status, feeder presence, note/error and update time. It supports the
+node's disabled-feeder response, F16 relay health and gateway market-freshness
+rows. This follows the gateway/feeder JSON contract; TS exposes the raw response.
+Per-market requests accept positive u32 IDs. Missing fields remain `None`, an
+unreported requested market remains an empty map, and extra diagnostic fields
+are preserved under `extra`. F16 journal/divergence maps may be absent from the
+per-market gateway projection. `decode_oracle_health` accepts a parsed body.
+
+`status="ok"` with `embedded_feeder=False` does not imply a ready oracle. Feeder
+readiness and market freshness do not grant trading permission; thresholds stay
+with the caller. HTTP failures raise existing SDK errors and malformed known
+fields raise `CodecError`, without synthesizing healthy or zero-valued results.
+Both methods use the existing buffered HTTP transport and configured timeout;
+these methods do not add a streaming response-size limit or a whole-call deadline.
+
 ## Typed actions
 
 Every action has a typed builder in `proof_trading_sdk.actions`;
