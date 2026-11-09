@@ -190,6 +190,7 @@ class ExchangeClient {
   queryOraclePermissions(market: number): Promise<OraclePermissions>;
   queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null>;
   queryPositionTriggers(addressHex?: string): Promise<PositionTriggerInfo[]>;
+  // Legacy stored policy rows, not a TP/SL availability check; see below.
   queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]>;
   // Deprecated: GET /v1/triggers/status is deleted upstream; see below.
   queryTriggerStatus(): Promise<TriggerStatus>;

@@ -1021,7 +1021,7 @@ class ConfigureOraclePolicy:
 # ── Admin-multisig governance ────────────────────────────────────────────────
 #
 # ``action`` is the inner admin action in its externally tagged wire form:
-# ``{"SetTriggerMarketConfig": config.as_wire()}``, ``{"PauseMarket":
+# ``{"SetMarketStatus": {"market": 7, "status": "ReduceOnly"}}``, ``{"PauseMarket":
 # {"market_id": 7}}``, or the bare string ``"UnpauseBridge"`` for the one
 # fieldless arm. The core validates it against the wire enum on encode.
 
