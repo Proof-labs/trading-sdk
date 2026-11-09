@@ -8,7 +8,7 @@
 //   - codec vectors: PASS
 //   - signing vectors: PASS (signEnvelopeFromPayload + pubkeyToOwner/ownerToHex)
 //   - errors vectors:  PASS (ExecErrorCode manifest + execErrorName log decoder)
-//   - events vectors:  PASS (decodeLiquidationEvent over the engine's attributes)
+//   - events vectors:  PASS (decodeLiquidationEvent / decodeVoidSettlementEvent over the engine's attributes)
 //   - nonce vectors:   SKIPPED — nonces are derived from timestamps, not a step function
 
 import { readFileSync } from "node:fs";
@@ -26,6 +26,7 @@ import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
 import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
 import { decodeLiquidationEvent } from "./liquidation-events.js";
+import { decodeVoidSettlementEvent } from "./void-events.js";
 import {
   ActionType,
   Outcome,
@@ -337,6 +338,16 @@ function toAction(
         data: {
           withdrawalId: big(input.withdrawal_id),
           holder: bytes(input.holder),
+        },
+      };
+    case ActionType.RecordWithdrawalPayout:
+      return {
+        type: "RecordWithdrawalPayout",
+        data: {
+          withdrawalId: big(input.withdrawal_id),
+          holder: bytes(input.holder),
+          solanaSignature: bytes(input.solana_signature),
+          lastValidBlockHeight: big(input.last_valid_block_height),
         },
       };
     case ActionType.ResolveEvent:
@@ -813,6 +824,33 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       },
     };
   }
+  if (v.VoidEvent) {
+    const e = v.VoidEvent as Record<string, unknown>;
+    return {
+      kind: "VoidEvent",
+      value: { eventId: e.event_id as number, yesPrice: big(e.yes_price) },
+    };
+  }
+  if (v.SettleEvent) {
+    const e = v.SettleEvent as Record<string, unknown>;
+    return {
+      kind: "SettleEvent",
+      value: {
+        eventId: e.event_id as number,
+        outcome: Outcome[e.outcome as keyof typeof Outcome],
+      },
+    };
+  }
+  if (v.SetMarketStatus) {
+    const s = v.SetMarketStatus as Record<string, unknown>;
+    return {
+      kind: "SetMarketStatus",
+      value: {
+        market: s.market as number,
+        status: s.status as import("./types.js").MarketStatus,
+      },
+    };
+  }
   if (v.WithdrawInsuranceFund) {
     const w = v.WithdrawInsuranceFund as Record<string, unknown>;
     return {
@@ -840,16 +878,9 @@ function toEmergencyAction(
       },
     };
   }
-  if (v.SetReduceOnly) {
-    return {
-      kind: "SetReduceOnly",
-      value: {
-        marketId: (v.SetReduceOnly as Record<string, unknown>)
-          .market_id as number,
-      },
-    };
-  }
-  return { kind: "HaltTrading" };
+  throw new Error(
+    `toEmergencyAction: unknown variant ${Object.keys(v).join(",")}`,
+  );
 }
 
 /**
@@ -984,10 +1015,12 @@ describe("conformance vectors (TypeScript)", () => {
         event_type: string;
         attributes: [string, string][];
       };
-      const decoded = decodeLiquidationEvent({
+      const input = {
         type: want.event_type,
         attributes: want.attributes.map(([key, value]) => ({ key, value })),
-      });
+      };
+      const decoded =
+        decodeLiquidationEvent(input) ?? decodeVoidSettlementEvent(input);
       const [[variant, fields]] = Object.entries(
         c.event as Record<string, unknown>,
       );
@@ -1118,10 +1151,9 @@ describe("conformance vectors (TypeScript)", () => {
     // remove, cancel-all-for
     // -account scoped and unscoped, four set-oracle-guards shapes, and
     // oracle policy, two schedule-upgrade shapes, cancel-upgrade, and
-    // insurance fund and withdraw),
-    // approve, reject, and all three emergency arms (PauseMarket,
-    // HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(31);
+    // insurance fund and withdraw, void-event, settle-event,
+    // set-market-status), approve, reject, and the PauseMarket emergency arm.
+    expect(govCases.length).toBe(32);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

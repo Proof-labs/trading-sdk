@@ -10,6 +10,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `reads().finalized.authorizedAgents(owner)` reads up to 100 current stored trading-agent grants with an atomic finalized-state witness and an explicit completeness flag. Grants have no stored expiry or per-action scope; this read does not authorize signing.
+- **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
+  that voids an event and settles every binary and conditional on it in cash
+  at `yesPrice` (micro-USDC per share, `0..=1_000_000`). The TypeScript
+  encoder refuses a price outside that range; the Rust and Python surfaces
+  leave the check to the engine. `decodeVoidSettlementEvent` decodes the
+  `event_voided` and `conditional_void_settled` events, and
+  `HistoryResolution.kind` gains `conditional_void_settled`, which
+  `queryHistoryResolutions` already returns for a Void. proof-wire moves to
+  mirror commit `eecafea4`, which adds only `VoidEvent` to 10.0.0. Additive (MINOR).
+- `AbciEventInput`, the input type of `decodeVoidSettlementEvent`.
+  `LiquidationEventInput` stays as an alias of it.
+- **`SettleEvent` admin action** (inner tag 30, DEC-244): a multisig proposal
+  that settles a price event whose resolution window closed unresolved, on
+  the `Yes` or `No` the quorum names. The TypeScript encoder refuses `Void`,
+  as the engine does. A pending `SettleEvent` proposal now lists in
+  `decodeProposalPage` instead of failing the whole page. proof-wire moves to
+  mirror commit `bbc3ff2d`, which adds `SettleEvent`. Additive (MINOR).
+- **proof-wire 11.0.0 (exchange 2.24.0).** The `SetMarketStatus` admin action
+  (inner tag 31) with `MarketStatus` (`Trading`, `ReduceOnly`, `Halted`,
+  `Delisted`); the `RecordWithdrawalPayout` operator action (`0x31`), which a
+  payout-lease holder sends to record its Solana transfer signature before
+  broadcasting it; error codes 128-134 (`WithdrawalPayoutLeaseNotHeld`,
+  `WithdrawalPayoutRecordLimitReached`, `MarketReduceOnly`, `MarketDelisted`,
+  `MarketStatusTransitionRefused`, `MarketBacksLiveEvent`, `MarketHalted`);
+  and the `MarketHalted` trigger outcome reason.
+
+### Removed
+
+- **The `HaltTrading` and `SetReduceOnly` emergency arms**, which the engine
+  never admitted and proof-wire 11.0.0 drops. `PauseMarket` is the one
+  emergency action: it halts one market, and `SetMarketStatus` lifts it.
+  Breaking for code that names the retired arms (MAJOR).
 
 ### Fixed
 

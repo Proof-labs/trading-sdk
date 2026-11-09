@@ -22,7 +22,7 @@ describe("decodeExecError", () => {
     expect(decodeExecError(255)?.name).toBe("InternalError");
   });
 
-  it("names the proof-wire 8.0.0 codes 102-116 and 123-125", () => {
+  it("names the proof-wire codes 102-116, 123-125 and 128-134", () => {
     for (const [code, name] of [
       [102, "InsuranceFundingReplayed"],
       [103, "InsuranceWithdrawalReplayed"],
@@ -41,6 +41,13 @@ describe("decodeExecError", () => {
       [123, "DepositLimitExceeded"],
       [124, "EventPoolMismatch"],
       [125, "ConditionalLotOffUnderlyingGrid"],
+      [128, "WithdrawalPayoutLeaseNotHeld"],
+      [129, "WithdrawalPayoutRecordLimitReached"],
+      [130, "MarketReduceOnly"],
+      [131, "MarketDelisted"],
+      [132, "MarketStatusTransitionRefused"],
+      [133, "MarketBacksLiveEvent"],
+      [134, "MarketHalted"],
     ] as const) {
       expect(decodeExecError(code)?.name).toBe(name);
       expect(execErrorName(code)).toBe(name);

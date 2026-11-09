@@ -84,6 +84,12 @@ BUILDERS = {
     "emergency_admin_action/pause_market": lambda i: actions.EmergencyAdminAction(
         **_admin(i, "signer")
     ),
+    "record_withdrawal_payout/basic": lambda i: actions.RecordWithdrawalPayout(
+        **_admin(i, "holder", "solana_signature")
+    ),
+    "propose_admin_action/set_market_status": lambda i: actions.ProposeAdminAction(
+        **_admin(i, "proposer")
+    ),
 }
 
 
