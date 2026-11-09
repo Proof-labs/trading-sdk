@@ -239,7 +239,6 @@ This Python support depends on [SDK #385](https://github.com/Proof-labs/trading-
 [wire #38](https://github.com/Proof-labs/wire/pull/38),
 [exchange #1417](https://github.com/Proof-labs/exchange/pull/1417), and
 [gateway #302](https://github.com/Proof-labs/api-gateway/pull/302).
-The server route must be deployed before the call can succeed. This change
-implements the contract ahead of those dependencies; it does not claim a live
-deployment. Unlike TypeScript's partial-result API, this Python method returns
-only complete snapshots.
+The server route must be deployed before the call can succeed. Upstream PR
+status does not establish a live deployment. Unlike TypeScript's partial-result
+API, this Python method returns only complete snapshots.
