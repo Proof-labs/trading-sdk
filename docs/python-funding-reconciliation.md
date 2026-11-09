@@ -69,9 +69,12 @@ applicable market config and engine version too; the example cannot establish
 that continuity. It also does not reconstruct an arbitrary historical position.
 Missing scale, a missing event, a wrong response height or an ambiguous match
 is an error, never a zero payment. A zero or fully deferred debit may emit no
-cash event; a same-block liquidation can produce an additional settlement.
-The example refuses both missing and multiple cash events instead of choosing
-one or inventing zero.
+cash event. The example refuses missing and multiple cash events in
+`finalize_block_events` instead of choosing one or inventing zero. A fill or a
+`LiquidateAccounts` transaction in the same block emits its `funding_settled` in
+`txs_results[i].events`, which the example does not read. Such a settlement can
+appear as a mismatch or a missing event, so check those events before treating
+either result as a discrepancy.
 
 Run the read-only example with your preserved position inputs:
 
