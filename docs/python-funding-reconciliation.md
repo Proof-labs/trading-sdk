@@ -10,13 +10,13 @@ funding mark and is a separate check.
 This contract describes the engine's current perpetual funding settlement.
 Conditionals and prediction binaries do not accrue funding.
 
-| Value | Raw unit |
-| --- | --- |
-| Price / funding mark | Micro-USDC per whole unit of the base asset |
-| Cash / signed payment | Micro-USDC; `1_000_000` = 1 USDC |
-| Position `size` | `10^-sz_decimals` whole base units |
+| Value                                        | Raw unit                                                  |
+| -------------------------------------------- | --------------------------------------------------------- |
+| Price / funding mark                         | Micro-USDC per whole unit of the base asset               |
+| Cash / signed payment                        | Micro-USDC; `1_000_000` = 1 USDC                          |
+| Position `size`                              | `10^-sz_decimals` whole base units                        |
 | Cumulative and position `last_funding_index` | Micro-USDC per whole base unit, multiplied by `1_000_000` |
-| Funding rate | Integer basis points; `10_000` = 100% |
+| Funding rate                                 | Integer basis points; `10_000` = 100%                     |
 
 Let `delta = cumulative_funding - last_funding_index`. The **full accrued
 payment**, positive for a credit and negative for a debit, is:
@@ -94,12 +94,12 @@ verification. A correct arithmetic match does not establish gateway honesty.
 These are full-payment examples; the short rows use the same hypothetical raw
 size and prior index as the corresponding long rows.
 
-| Index difference | Raw size | `sz_decimals` | Long payment | Short payment |
-| ---: | ---: | ---: | ---: | ---: |
-| `171_557_716_500` | 1 | 2 | `-1_716` | `1_715` |
-| `-171_557_716_500` | 1 | 2 | `1_715` | `-1_716` |
-| `1` | 1 | 0 | `-1` | `0` |
-| `200_000_000` | 100 | 2 | `-200` | `200` |
+|   Index difference | Raw size | `sz_decimals` | Long payment | Short payment |
+| -----------------: | -------: | ------------: | -----------: | ------------: |
+|  `171_557_716_500` |        1 |             2 |     `-1_716` |       `1_715` |
+| `-171_557_716_500` |        1 |             2 |      `1_715` |      `-1_716` |
+|                `1` |        1 |             0 |         `-1` |           `0` |
+|      `200_000_000` |      100 |             2 |       `-200` |         `200` |
 
 The first long row reproduces the reported DevNet market 3 settlement at height
 `10013501`: index `727_391_420_303_900` minus retained last index
