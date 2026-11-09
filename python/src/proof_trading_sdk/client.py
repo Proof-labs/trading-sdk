@@ -35,6 +35,12 @@ from proof_trading_sdk.actions import (
 )
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
+from proof_trading_sdk.evidence import (
+    BlockEvidenceHeader,
+    _chain_pin,
+    _requested_height,
+    decode_block_evidence_header,
+)
 from proof_trading_sdk.errors import (
     AuthenticationError,
     CodecError,
@@ -1500,6 +1506,33 @@ class ExchangeClient:
         params = {"height": height} if height is not None else None
         resp = self._get("/v1/block", params=params)
         return _response_object(resp)
+
+    def block_header(
+        self, height: int, *, chain_id: str | bytes, timeout: float = 5.0,
+    ) -> BlockEvidenceHeader:
+        """Chain-pinned gateway header, without validator-signature verification.
+
+        ``chain_id`` must be supplied explicitly; constructor/env defaults are
+        not used as a trust pin. The full ``/v1/block`` response is fetched and
+        capped at 1 MiB, 4096 nonempty chunks and JSON depth 32. Duplicate keys
+        at any depth, malformed UTF-8 and compressed bodies are refused.
+
+        ``timeout`` is in seconds (default 5, minimum 0.001, maximum 60). It
+        bounds network waits and elapsed time between chunks, not the whole
+        call: slowly arriving headers or custom transports may run longer.
+        HTTP refusals retain existing exception types; their bodies are not
+        read. There is no retry, redirect, unheighted or direct-node fallback.
+        """
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+
+        chain = _chain_pin(chain_id)
+        _requested_height(height)
+        response = bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, "/v1/block"), {"height": str(height)},
+            timeout=timeout, on_response=self._parse_rate_limits,
+            check_response=self._check_response,
+        )
+        return decode_block_evidence_header(response, height=height, chain_id=chain)
 
     def get_block_results(self, height: int) -> dict[str, t.Any]:
         """CometBFT block results at *height* via ``GET /v1/block_results``."""

@@ -97,6 +97,7 @@ from proof_trading_sdk.errors import (
     CodecError,
     EngineError,
     GatewayError,
+    GatewayReadError,
     ProofTradingSdkError,
     RateLimited,
     SigningError,
@@ -129,6 +130,13 @@ from proof_trading_sdk.markets_snapshot import (
     MarketOpenInterest,
     MarketsSnapshot,
     decode_markets_snapshot,
+)
+from proof_trading_sdk.evidence import (
+    BlockEvidenceHeader,
+    FinalizedReadWitness,
+    decode_block_evidence_header,
+    decode_finalized_read_witness,
+    verify_witness,
 )
 from proof_trading_sdk.trigger_config import (
     TriggerMarketConfig,
@@ -240,6 +248,12 @@ __all__ = [
     "CodecError",
     "EngineError",
     "GatewayError",
+    "GatewayReadError",
+    "BlockEvidenceHeader",
+    "FinalizedReadWitness",
+    "decode_block_evidence_header",
+    "decode_finalized_read_witness",
+    "verify_witness",
     "ProofTradingSdkError",
     "RateLimited",
     "SigningError",

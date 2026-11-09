@@ -58,6 +58,19 @@ class CodecError(ProofTradingSdkError):
     """MessagePack codec encoding or decoding failure."""
 
 
+class GatewayReadError(ProofTradingSdkError):
+    """Bounded read failure, with TypeScript-compatible ``kind`` and ``field``.
+
+    Kinds: ``configuration``, ``malformed``, ``binding``, ``limit``, ``deadline``.
+    HTTP refusals retain the existing SDK transport/auth/rate-limit exceptions.
+    """
+
+    def __init__(self, kind: str, field: str, message: str | None = None) -> None:
+        self.kind = kind
+        self.field = field
+        super().__init__(message or f"invalid gateway read: {field}")
+
+
 class SigningError(ProofTradingSdkError):
     """Ed25519 signing or key-loading failure."""
 
