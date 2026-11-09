@@ -208,8 +208,8 @@ const KNOWN_ACTION_TYPES: ReadonlySet<number> = new Set<number>(
  *  Returns `null` both for structurally unreadable bytes AND for an
  *  action-type slot this SDK does not support creating (including 0x16), an
  *  unassigned byte, a newer engine's wire type under an older SDK, or a
- *  non-numeric msgpack
- *  value, matching its declared return type — never a raw slot value cast
+ *  non-numeric msgpack value, matching its declared return type — never a
+ *  raw slot value cast
  *  through unvalidated. Callers that need the raw byte of an unknown envelope
  *  should decode the envelope themselves. */
 export function peekActionType(bytes: Uint8Array): ActionTypeValue | null {

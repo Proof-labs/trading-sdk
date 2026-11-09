@@ -40,6 +40,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`SetUserMarketLeverage` SDK support (MAJOR).** Removed TypeScript and
   Python action builders, active action types and exports. SDK payload/envelope
   encoding and signing reject `0x16`, including raw-action entrypoints.
+  Rust `codec::get_action_types()` excludes it, and the `codec::` creation
+  and signing functions reject it; `SetUserMarketLeverage` is also removed
+  from `errors::prelude`.
   Historical transaction decoding and wire types remain available; this does
   not change the engine or retire the proof-wire variant. TypeScript
   `decodeTx().action` now returns `DecodedAction`, which must be narrowed to
