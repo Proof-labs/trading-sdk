@@ -1332,6 +1332,8 @@ class ExchangeClient:
         are omitted. Prices and volumes remain exact decimal strings. Read older
         bars with ``to=page.candles[0].time`` when ``page.has_more`` is true.
         An empty window can still have older history; use ``to=page.from_`` then.
+        Coarser boundary bars may be partial; align windows for complete bars.
+        The server rejects windows wider than roughly 50,000 resolution widths.
         This is an indexer read, not a witnessed finalized-state proof.
         """
         params = candle_history_params(market, resolution, from_, to, limit)

@@ -87,6 +87,12 @@ as request parameters.
 Resolutions use a positive count (1–9999) followed by `m`, `h`, `d`, `w`, `M`
 or `y`; uppercase `M` means calendar months. The server decides which resolutions
 its deployed version accepts. `limit` is 1–5000 (default 1500).
+The server rejects windows wider than roughly 50,000 resolution widths with
+`window_too_large`; request a narrower time window even when `limit` is small.
+Coarser candles aggregate only source rows inside the requested window, so a
+boundary candle may be partial and its label may precede `from_`. Align window
+edges to the resolution boundaries when complete historical bars are required;
+paging by that partial bar's label does not recover its excluded source rows.
 
 These are indexer observations, not witnessed finalized-state proofs. A failed
 or malformed read raises an SDK error, rather than becoming an empty page.
