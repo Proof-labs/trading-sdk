@@ -1920,7 +1920,7 @@ export type TxOutcome = "ok" | "engine" | "transport" | "timeout";
 
 /**
  * The gateway's machine-readable `errorCode` on a refusal (`status:
- * "refused"`). The names api-gateway 11.0.0 sends, plus any other string so a
+ * "refused"`). The names the gateway sends, plus any other string so a
  * code the gateway adds later still types. `InvalidRequest` names a request
  * to correct; `EncodingError` is a gateway-internal encoding failure.
  */

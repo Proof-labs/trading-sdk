@@ -66,8 +66,7 @@ def test_submit_action_400_refusal_is_a_refusal_not_a_transport_error():
 
 
 def test_submit_action_legacy_200_refusal_is_not_an_engine_rejection():
-    # Legacy HTTP 200 refusal envelopes carry no engine verdict. Earlier
-    # bindings incorrectly synthesized an engine code from their message.
+    # Legacy HTTP 200 refusal envelopes carry no engine verdict.
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,

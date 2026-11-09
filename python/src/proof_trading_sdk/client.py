@@ -655,7 +655,7 @@ class ExchangeClient:
             #    trader would re-place it into a double fill.
             raise SubmissionPending(str(tx_hash), str(data.get("error") or ""))
 
-        # 4. No code and no hash: an error string is all the gateway gave us. It
+        # No code and no hash: an error string is all the gateway gave us. It
         #    still emits the "<code>: <message>" compatibility format, so an
         #    explicit non-zero code is a terminal engine verdict. Anything else
         #    proves nothing about admission, so reconcile by hash, as the TS

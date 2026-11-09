@@ -152,13 +152,11 @@ class PreAdmissionRefusal(ProofTradingSdkError):
             200, admission 400 or 413, and internal encoding failure 500.
     """
 
-    def __init__(
-        self, error_code: str = "", message: str = "", status_code: int = 0
-    ) -> None:
+    def __init__(self, error_code: str, message: str, status_code: int) -> None:
         self.error_code = error_code
         self.message = message
         self.status_code = status_code
-        detail = message or error_code or "refused by gateway"
+        detail = message or error_code
         super().__init__(f"gateway refused the request: {detail}")
 
 
