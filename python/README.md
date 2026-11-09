@@ -57,6 +57,20 @@ hash as `tx_hash`; reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
+## Private account events
+
+`client.account_event_stream(owner)` uses the client's API key when configured.
+Without an API key, it signs the gateway's subscription challenge using
+`secret_key` or `key_handle`, with fresh authentication on every reconnect.
+Set the client's chain ID to the gateway's chain. An opaque signing handle
+keeps private key material in Rust memory or the HSM.
+
+Signed authentication supports the signer's own account only. A trading-agent
+grant does not authorize reading another owner's private feed. Signing failures
+raise `SigningError`. Authentication refusals (401/403) raise
+`AuthenticationError` and stop the stream; other gateway refusals remain
+`{"type": "error", ...}` frames. Call `stream.close()` when finished.
+
 ## Typed actions
 
 Every action has a typed builder in `proof_trading_sdk.actions`;

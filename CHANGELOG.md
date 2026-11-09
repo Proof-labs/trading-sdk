@@ -9,6 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Python account-event streams authenticate with the client's secret key or
+  opaque `SigningHandle` when no API key is configured, renewing the signed
+  challenge on every reconnect. `account_auth()` supports direct owner keys.
 - **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
   that voids an event and settles every binary and conditional on it in cash
   at `yesPrice` (micro-USDC per share, `0..=1_000_000`). The TypeScript
@@ -34,6 +37,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `WithdrawalPayoutRecordLimitReached`, `MarketReduceOnly`, `MarketDelisted`,
   `MarketStatusTransitionRefused`, `MarketBacksLiveEvent`, `MarketHalted`);
   and the `MarketHalted` trigger outcome reason.
+
+### Changed
+
+- Python account-stream authentication refusals (401/403) now raise
+  `AuthenticationError` and close the stream instead of yielding an error
+  frame or retrying a refused upgrade. Signing failures raise `SigningError`
+  before any unsigned subscription is sent.
 
 ### Removed
 

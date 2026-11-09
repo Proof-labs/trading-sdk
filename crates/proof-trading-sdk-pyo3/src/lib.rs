@@ -10,6 +10,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
+mod account_auth;
 #[cfg(feature = "pkcs11")]
 mod pkcs11;
 
@@ -52,6 +53,17 @@ impl SigningHandle {
     fn owner<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         let owner = crypto::pubkey_to_owner(&self.signer.public_key());
         PyBytes::new(py, &owner)
+    }
+
+    /// Sign this owner's account-stream authentication without exporting the key.
+    fn sign_account_ws_auth<'py>(
+        &self,
+        py: Python<'py>,
+        chain_id: &[u8],
+        timestamp_ms: u64,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let signature = account_auth::sign(self.signer.as_ref(), chain_id, timestamp_ms)?;
+        Ok(PyBytes::new(py, &signature))
     }
 
     /// Sign an action payload and encode it as a wire-ready envelope.
@@ -117,6 +129,23 @@ fn sign_and_encode<'py>(
     .map_err(map_err)?;
 
     Ok(PyBytes::new(py, &encoded))
+}
+
+/// Sign the gateway's owner-bound account-stream challenge (cursor zero).
+#[pyfunction]
+fn sign_account_ws_auth<'py>(
+    py: Python<'py>,
+    chain_id: &[u8],
+    timestamp_ms: u64,
+    secret_key: &[u8],
+) -> PyResult<Bound<'py, PyBytes>> {
+    let seed = zeroize::Zeroizing::new(
+        <[u8; 32]>::try_from(secret_key)
+            .map_err(|_| PyValueError::new_err("secret_key must be exactly 32 bytes"))?,
+    );
+    let signer = core_sdk::LocalSigner::from_bytes(&seed);
+    let signature = account_auth::sign(&signer, chain_id, timestamp_ms)?;
+    Ok(PyBytes::new(py, &signature))
 }
 
 /// Encode a pre-signed action into a wire envelope.
@@ -453,6 +482,7 @@ fn classify_error_name(code: u32, log: Option<&str>) -> Option<&'static str> {
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SigningHandle>()?;
     m.add_function(wrap_pyfunction!(sign_and_encode, m)?)?;
+    m.add_function(wrap_pyfunction!(sign_account_ws_auth, m)?)?;
     m.add_function(wrap_pyfunction!(encode_signed_tx, m)?)?;
     m.add_function(wrap_pyfunction!(encode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_action, m)?)?;

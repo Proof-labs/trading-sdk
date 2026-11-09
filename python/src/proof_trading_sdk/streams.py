@@ -7,6 +7,8 @@ import time
 import typing as t
 from dataclasses import dataclass, field
 
+from proof_trading_sdk.errors import AuthenticationError, SigningError
+
 log = logging.getLogger("proof_trading_sdk")
 
 
@@ -157,7 +159,8 @@ class AccountEventStream:
     ``/ws`` feed and yields its channel-tagged frames: a ``snapshot`` frame,
     then one frame per live event (``orderUpdate``, ``fill``,
     ``positionUpdate``, liquidation events, ...). A refused subscription
-    arrives as a ``{"type": "error", ...}`` frame.
+    arrives as a ``{"type": "error", ...}`` frame, except authentication
+    refusals (401/403), which raise ``AuthenticationError`` and stop the stream.
 
     Each reconnect subscribes again and receives a fresh snapshot. By default
     it then recovers the events missed while disconnected: it reads
@@ -178,6 +181,11 @@ class AccountEventStream:
         ws_url: WebSocket base URL (the gateway URL with a ``ws`` scheme).
         owner: 20-byte owner address (bytes) or hex string.
         api_key: API key for auth.
+        auth: Optional signed-subscription params factory, called again on
+            every connection. Use :meth:`ExchangeClient.account_event_stream`
+            to authenticate with the client's secret key or opaque handle.
+            Signing failures raise ``SigningError`` without sending an
+            unsigned subscription.
         reconnect_backoff_max: Maximum backoff in seconds (default 30).
         reconnect_attempts: Maximum reconnect attempts (``None`` = infinite).
         recover: Backfill missed events from history on reconnect.
@@ -210,11 +218,13 @@ class AccountEventStream:
         recover: bool = True,
         on_recovery: t.Callable[[RecoveryStatus], None] | None = None,
         history_url: str | None = None,
+        auth: t.Callable[[], dict[str, t.Any]] | None = None,
     ) -> None:
         self._ws_url = ws_url.rstrip("/")
         owner_hex = owner.hex() if isinstance(owner, bytes) else owner
-        self._owner = owner_hex.removeprefix("0x").lower()
+        self._owner = owner_hex.lower().removeprefix("0x")
         self._api_key = api_key
+        self._auth = auth
         self._backoff_cap = reconnect_backoff_max
         self._max_attempts = reconnect_attempts
         self._recover_enabled = recover
@@ -240,19 +250,31 @@ class AccountEventStream:
 
     def _connect(self) -> None:
         import websockets.sync.client as ws_client
+        from websockets.exceptions import InvalidStatus
 
+        params: dict[str, t.Any] = {"channel": "accountEvents", "owner": self._owner}
+        if self._auth is not None:
+            try:
+                params.update(self._auth())
+            except Exception as err:
+                raise SigningError("account-stream authentication failed") from err
         extra_headers = {}
         if self._api_key:
             extra_headers["X-API-Key"] = self._api_key
-        self._ws = ws_client.connect(
-            f"{self._ws_url}/ws", additional_headers=extra_headers
-        )
+        try:
+            self._ws = ws_client.connect(
+                f"{self._ws_url}/ws", additional_headers=extra_headers
+            )
+        except InvalidStatus as err:
+            if err.response.status_code in (401, 403):
+                raise AuthenticationError("account-stream connection authentication refused") from err
+            raise
         self._ws.send(
             json.dumps(
                 {
                     "method": "subscribe",
                     "id": 1,
-                    "params": {"channel": "accountEvents", "owner": self._owner},
+                    "params": params,
                 }
             )
         )
@@ -417,6 +439,8 @@ class AccountEventStream:
             yield from self._live(frame)
 
     def _live(self, frame: dict[str, t.Any]) -> t.Iterator[dict[str, t.Any]]:
+        if frame.get("type") == "error" and frame.get("code") in (401, 403):
+            raise AuthenticationError("account-events subscription authentication refused")
         if frame.get("type") in ("snapshot", "error"):
             yield frame
             return
@@ -464,6 +488,9 @@ class AccountEventStream:
                     elif self._recover_enabled:
                         yield from self._recover(frame)
 
+            except (AuthenticationError, SigningError):
+                self.close()
+                raise
             except Exception:
                 if self._closed:
                     return
@@ -474,6 +501,10 @@ class AccountEventStream:
                 log.warning("ws reconnect attempt %d in %.1fs", attempt, backoff)
                 time.sleep(backoff)
                 backoff = min(backoff * 2, self._backoff_cap)
+            finally:
+                if self._ws is not None:
+                    self._ws.close()
+                    self._ws = None
 
 
 class OrderbookDeltaStream:

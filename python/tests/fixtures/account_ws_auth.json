@@ -1,0 +1,8 @@
+{
+  "source": "Gateway account_ws_auth_message layout at api-gateway 29c972b; signed independently with Node crypto Ed25519. Synthetic bytes(range(32)) seed.",
+  "chain_id": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+  "owner": "6c87813fdfc7b0f59e46c29459bc6fea12923ba7",
+  "public_key": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+  "timestamp_ms": 1754000000000,
+  "signature": "56bee99ba80de4777cd0c4052e87d2408b623f9df01e3c9d51dd534a5ffed4cf8f0d6a83447cda72bc50b232088a0554fefe2d925f91f9fd1395cdaffe9bfa05"
+}

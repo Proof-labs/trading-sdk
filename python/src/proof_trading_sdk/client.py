@@ -21,6 +21,7 @@ from proof_trading_sdk._native import (
     generate_keypair,
     pubkey_to_owner,
     reject_floats,
+    sign_account_ws_auth,
     sign_and_encode,
 )
 from proof_trading_sdk.actions import (
@@ -1628,12 +1629,45 @@ class ExchangeClient:
 
     # ── Account event stream ─────────────────────────────────────────────
 
+    def account_auth(self, owner: bytes | str | None = None) -> dict[str, t.Any]:
+        """Fresh signed authentication for the signer's account-events feed.
+
+        Uses the configured chain binding and the current timestamp. Only the
+        signer's own account is supported; trading-agent grants do not authorize
+        another owner's private feed. Reconnect recovery uses history reads,
+        so the signed legacy cursor is always zero.
+        """
+        try:
+            signer_owner = self._own_owner()
+            if owner is not None and canonical_owner(owner) != signer_owner.hex():
+                raise SigningError("account auth owner does not match signer")
+            timestamp_ms = time.time_ns() // 1_000_000
+            if self._key_handle is not None:
+                public_key = self._key_handle.public_key
+                signature = self._key_handle.sign_account_ws_auth(self._chain_id, timestamp_ms)
+            else:
+                public_key = generate_keypair(self._secret_key)["public_key"]
+                signature = sign_account_ws_auth(self._chain_id, timestamp_ms, self._secret_key)
+        except SigningError:
+            raise
+        except Exception as err:
+            raise SigningError("account-stream authentication signing failed") from err
+        return {
+            "public_key": public_key.hex(),
+            "signature": signature.hex(),
+            "timestamp_ms": timestamp_ms,
+        }
+
     def account_event_stream(
         self, owner: bytes | str, *, ws_url: str | None = None, **kwargs: t.Any
     ) -> AccountEventStream:
         """An :class:`~proof_trading_sdk.streams.AccountEventStream` for ``owner``.
 
-        Uses this client's API key, and its gateway URL for the history reads
+        Uses this client's API key when present; otherwise the configured
+        secret key or opaque signing handle signs fresh auth on every reconnect.
+        Only the signer's own account can use this signed-auth path. Signing
+        failures raise :class:`SigningError` without an unsigned fallback.
+        Uses the client's gateway URL for the history reads
         that reconnect recovery makes, so recovery works when ``/ws`` is
         served on its own port (pass that as ``ws_url``). Other keyword
         arguments go to the stream.
@@ -1641,6 +1675,8 @@ class ExchangeClient:
         from proof_trading_sdk.streams import AccountEventStream
 
         kwargs.setdefault("history_url", self._gateway_url)
+        if not self._api_key and (self._secret_key is not None or self._key_handle is not None):
+            kwargs.setdefault("auth", lambda: self.account_auth(owner))
         return AccountEventStream(
             ws_url or self._gateway_url.replace("http", "ws", 1),
             owner,
