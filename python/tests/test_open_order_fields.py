@@ -85,6 +85,8 @@ def malformed_rows():
     yield [order(), lower]
     for index, value in [
         (0, -1), (1, True), (2, b"\xcd" * 20), (2, b"short"),
+        (2, OWNER + b"X"), (2, list(OWNER) + [88]),
+        (2, [256] + list(OWNER[1:])), (2, [True] + list(OWNER[1:])),
         (3, "NotASide"), (4, 10.0), (5, 0), (6, -1), (6, True),
         (7, "23"), (8, -1), (9, None), (10, -1), (11, "Unknown"),
         (12, 1), (13, "false"),

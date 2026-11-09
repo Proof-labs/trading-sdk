@@ -125,6 +125,27 @@ fn open_orders_legacy_rows_use_wire_defaults() {
 }
 
 #[test]
+fn open_orders_reject_overlong_or_non_byte_owners_before_wire_decode() {
+    let encoded = rmp_serde::to_vec(&resting_order()).unwrap();
+    let row = rmpv::decode::read_value(&mut Cursor::new(encoded)).unwrap();
+    for owner in [
+        Value::Binary(vec![0xab; 21]),
+        Value::Array(vec![Value::from(0xab); 21]),
+        Value::Array(vec![Value::from(256); 20]),
+        Value::Array(vec![Value::Boolean(true); 20]),
+    ] {
+        for width in [6, 14] {
+            let mut malformed = row.clone();
+            fields(&mut malformed).truncate(width);
+            fields(&mut malformed)[2] = owner.clone();
+            assert!(
+                decode_open_orders(&bytes(&Value::Array(vec![malformed])), &[0xab; 20]).is_err()
+            );
+        }
+    }
+}
+
+#[test]
 fn open_orders_reject_duplicate_ids_empty_orders_and_trailing_bytes() {
     let duplicate = rmp_serde::to_vec(&vec![resting_order(), resting_order()]).unwrap();
     assert!(decode_open_orders(&duplicate, &[0xab; 20]).is_err());

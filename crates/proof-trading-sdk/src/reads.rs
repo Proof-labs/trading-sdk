@@ -81,6 +81,27 @@ pub fn decode_open_orders(
         return Err("open orders payload is too large");
     }
     crate::msgpack::reject_floats(bytes).map_err(|_| "invalid open orders payload")?;
+    let raw = rmpv::decode::read_value(&mut Cursor::new(bytes))
+        .map_err(|_| "invalid open orders payload")?;
+    let rows = raw.as_array().ok_or("invalid open orders payload")?;
+    for row in rows {
+        let raw_owner = row.as_array().and_then(|fields| fields.get(2));
+        // wire_bytes' tuple visitor may accept a longer bin and consume only
+        // its first 20 bytes. Validate the raw owner before typed decoding.
+        let valid = match raw_owner {
+            Some(Value::Binary(bytes)) => bytes.len() == 20,
+            Some(Value::Array(bytes)) => {
+                bytes.len() == 20
+                    && bytes
+                        .iter()
+                        .all(|value| value.as_u64().is_some_and(|b| b <= 255))
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err("invalid open orders owner bytes");
+        }
+    }
     let orders: Vec<crate::types::Order> =
         decode(bytes, &Shape::List(&ORDER)).map_err(|_| "invalid open orders payload")?;
     let mut previous = None;
