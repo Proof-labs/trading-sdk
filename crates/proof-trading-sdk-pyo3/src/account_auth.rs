@@ -8,9 +8,14 @@ pub(super) fn sign(
     signer: &dyn core_sdk::Signer,
     chain_id: &[u8],
     timestamp_ms: u64,
+    after_id: i64,
 ) -> PyResult<[u8; 64]> {
     if chain_id.len() != 32 {
         return Err(PyValueError::new_err("chain_id must be exactly 32 bytes"));
+    }
+    // Match the TypeScript accountAuth JSON-safe cursor domain.
+    if !(0..=9_007_199_254_740_991).contains(&after_id) {
+        return Err(PyValueError::new_err("invalid account auth cursor"));
     }
     let public_key = signer.public_key();
     let owner = core_sdk::crypto::pubkey_to_owner(&public_key);
@@ -19,8 +24,7 @@ pub(super) fn sign(
     for byte in owner {
         message.extend_from_slice(format!("{byte:02x}").as_bytes());
     }
-    // Reconnect recovery uses history reads, not the gateway's legacy cursor.
-    message.extend_from_slice(&0i64.to_be_bytes());
+    message.extend_from_slice(&after_id.to_be_bytes());
     message.extend_from_slice(&timestamp_ms.to_be_bytes());
     let signature = signer.try_sign(&message).map_err(super::map_signer_err)?;
     let key = VerifyingKey::from_bytes(&public_key)

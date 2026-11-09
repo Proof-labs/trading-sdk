@@ -1629,25 +1629,31 @@ class ExchangeClient:
 
     # ── Account event stream ─────────────────────────────────────────────
 
-    def account_auth(self, owner: bytes | str | None = None) -> dict[str, t.Any]:
+    def account_auth(
+        self, owner: bytes | str | None = None, after_id: int = 0,
+    ) -> dict[str, t.Any]:
         """Fresh signed authentication for the signer's account-events feed.
 
         Uses the configured chain binding and the current timestamp. Only the
         signer's own account is supported; trading-agent grants do not authorize
-        another owner's private feed. Reconnect recovery uses history reads,
-        so the signed legacy cursor is always zero.
+        another owner's private feed. ``after_id`` is an integer from zero to
+        ``2**53 - 1``, matching TypeScript's JSON-safe cursor domain. Zero is
+        signed but omitted from the returned params. Default stream recovery
+        uses history reads and leaves this legacy cursor at zero.
         """
         try:
+            if type(after_id) is not int or not 0 <= after_id <= (1 << 53) - 1:
+                raise SigningError("invalid account auth cursor")
             signer_owner = self._own_owner()
             if owner is not None and canonical_owner(owner) != signer_owner.hex():
                 raise SigningError("account auth owner does not match signer")
             timestamp_ms = time.time_ns() // 1_000_000
             if self._key_handle is not None:
                 public_key = self._key_handle.public_key
-                signature = self._key_handle.sign_account_ws_auth(self._chain_id, timestamp_ms)
+                signature = self._key_handle.sign_account_ws_auth(self._chain_id, timestamp_ms, after_id)
             else:
                 public_key = generate_keypair(self._secret_key)["public_key"]
-                signature = sign_account_ws_auth(self._chain_id, timestamp_ms, self._secret_key)
+                signature = sign_account_ws_auth(self._chain_id, timestamp_ms, self._secret_key, after_id)
         except SigningError:
             raise
         except Exception as err:
@@ -1656,6 +1662,7 @@ class ExchangeClient:
             "public_key": public_key.hex(),
             "signature": signature.hex(),
             "timestamp_ms": timestamp_ms,
+            **({"after_id": after_id} if after_id > 0 else {}),
         }
 
     def account_event_stream(
@@ -1664,9 +1671,10 @@ class ExchangeClient:
         """An :class:`~proof_trading_sdk.streams.AccountEventStream` for ``owner``.
 
         Uses this client's API key when present; otherwise the configured
-        secret key or opaque signing handle signs fresh auth on every reconnect.
+        secret key or opaque signing handle signs fresh auth on every attempt.
         Only the signer's own account can use this signed-auth path. Signing
-        failures raise :class:`SigningError` without an unsigned fallback.
+        failures yield error frames and retry within the stream's bounded
+        first-subscription retry budget, without an unsigned fallback.
         Uses the client's gateway URL for the history reads
         that reconnect recovery makes, so recovery works when ``/ws`` is
         served on its own port (pass that as ``ws_url``). Other keyword

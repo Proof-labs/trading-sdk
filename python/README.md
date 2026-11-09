@@ -66,10 +66,27 @@ Set the client's chain ID to the gateway's chain. An opaque signing handle
 keeps private key material in Rust memory or the HSM.
 
 Signed authentication supports the signer's own account only. A trading-agent
-grant does not authorize reading another owner's private feed. Signing failures
-raise `SigningError`. Authentication refusals (401/403) raise
-`AuthenticationError` and stop the stream; other gateway refusals remain
-`{"type": "error", ...}` frames. Call `stream.close()` when finished.
+grant does not authorize reading another owner's private feed. Before the first
+subscription is confirmed, signing failures and gateway error codes 401/429/503
+yield error frames and retry on the same socket: at most five retries after the
+initial attempt, with default delays of 0.5, 1, 2, 4, and 8 seconds. Every attempt
+signs fresh authentication; signing failures never send an unsigned subscription.
+Exhaustion yields a final error frame and leaves the socket open without more
+subscription attempts. A 403 frame is yielded without retrying or closing.
+
+A matching subscription acknowledgment or account data frame confirms the
+subscription and cancels pending retries. Errors after confirmation remain
+observable without restarting live delivery. A new connection resets the retry
+budget. The synchronous iterator performs retries while it is being consumed;
+`stream.close()` cancels pending retries. Backend exception text is omitted from
+synthetic error frames to avoid exposing sensitive diagnostics. HTTP 401/403
+refusals during the WebSocket upgrade separately raise `AuthenticationError`.
+
+`client.account_auth(owner, after_id=0)` returns signed subscription parameters.
+The optional cursor must be a Python integer in `0..2**53 - 1`, matching the TS
+SDK's JSON-safe domain. Zero is signed but omitted from the returned parameters.
+Direct helper failures raise `SigningError`. The default account stream signs
+cursor zero; its history-based reconnect recovery does not change this cursor.
 
 ## Typed actions
 

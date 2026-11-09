@@ -11,7 +11,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Python account-event streams authenticate with the client's secret key or
   opaque `SigningHandle` when no API key is configured, renewing the signed
-  challenge on every reconnect. `account_auth()` supports direct owner keys.
+  challenge on every retry and reconnect. `account_auth(owner, after_id=0)`
+  supports direct owner keys and JSON-safe nonnegative cursors.
 - **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
   that voids an event and settles every binary and conditional on it in cash
   at `yesPrice` (micro-USDC per share, `0..=1_000_000`). The TypeScript
@@ -40,10 +41,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Python account-stream authentication refusals (401/403) now raise
-  `AuthenticationError` and close the stream instead of yielding an error
-  frame or retrying a refused upgrade. Signing failures raise `SigningError`
-  before any unsigned subscription is sent.
+- Python account streams match TypeScript's bounded first-subscription auth
+  retries: signing failures and 401/429/503 frames yield errors and retry up to
+  five times. Exhaustion and 403 frames leave the socket open without further
+  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
+  401/403 refusals raise `AuthenticationError`.
 
 ### Removed
 

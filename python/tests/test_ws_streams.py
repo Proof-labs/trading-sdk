@@ -28,6 +28,8 @@ class FakeSocket:
 
     def recv(self, timeout: float | None = None) -> str:
         if not self._frames:
+            if timeout is None:
+                raise EOFError("fake peer closed")
             raise TimeoutError
         return self._frames.pop(0)
 
@@ -138,6 +140,8 @@ class RecoverySocket(FakeSocket):
         self._waiting = [json.dumps(f) for f in waiting or []]
 
     def recv(self, timeout: float | None = None) -> str:
+        if timeout != 0:
+            return super().recv(timeout)
         if not self._waiting:
             raise TimeoutError
         return self._waiting.pop(0)
@@ -452,6 +456,8 @@ def test_close_stops_a_backfill_waiting_to_retry(monkeypatch) -> None:
     def closing_wait(stream):
         class Stop:
             def wait(self, _t):
+                if _t != stream.history_retry_delay:
+                    return False
                 stream.close()
                 return True
 

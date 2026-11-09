@@ -10,8 +10,8 @@ class SigningHandle:
     def public_key(self) -> bytes: ...
     @property
     def owner(self) -> bytes: ...
-    def sign_account_ws_auth(self, chain_id: bytes, timestamp_ms: int) -> bytes:
-        """Sign owner-bound account-stream auth, with cursor zero."""
+    def sign_account_ws_auth(self, chain_id: bytes, timestamp_ms: int, after_id: int = 0) -> bytes:
+        """Sign owner-bound account-stream auth with a JSON-safe cursor."""
         ...
     def sign_and_encode(
         self,
@@ -56,9 +56,9 @@ def sign_and_encode(
     ...
 
 def sign_account_ws_auth(
-    chain_id: bytes, timestamp_ms: int, secret_key: bytes,
+    chain_id: bytes, timestamp_ms: int, secret_key: bytes, after_id: int = 0,
 ) -> bytes:
-    """Sign owner-bound account-stream auth, with cursor zero."""
+    """Sign owner-bound account-stream auth with a JSON-safe cursor."""
     ...
 
 def encode_signed_tx(

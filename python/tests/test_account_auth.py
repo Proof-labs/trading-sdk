@@ -71,17 +71,11 @@ def test_native_auth_binds_chain_and_time():
 
 
 @pytest.mark.parametrize("owner", ["00" * 20, "not-an-owner", bytes(19)])
-def test_wrong_owner_never_opens_an_unsigned_connection(monkeypatch, owner):
-    def unexpected_connect(*args, **kwargs):
-        pytest.fail("authentication must fail before opening a connection")
-
-    monkeypatch.setattr(ws_client, "connect", unexpected_connect)
+def test_wrong_owner_rejected_by_auth_helper(owner):
     c = client(secret_key=SEED)
-    stream = c.account_event_stream(owner)
     try:
         with pytest.raises(SigningError):
-            next(iter(stream))
-        assert stream._closed
+            c.account_auth(owner)
     finally:
         c.close()
 
@@ -99,7 +93,7 @@ def test_missing_signer_reports_signing_error():
 def test_reconnect_renews_auth_and_closes_old_socket(monkeypatch, opaque):
     clock = [NOW]
     monkeypatch.setattr("time.time_ns", lambda: clock[0] * 1_000_000)
-    sockets = [FakeSocket([{"type": "snapshot"}]), FakeSocket([{"type": "snapshot"}])]
+    sockets = [FakeSocket([{"type": "snapshot", "channel": "accountEvents", "owner": OWNER}]), FakeSocket([{"type": "snapshot", "channel": "accountEvents", "owner": OWNER}])]
     calls = []
 
     def connect(url, additional_headers):
@@ -129,7 +123,7 @@ def test_reconnect_renews_auth_and_closes_old_socket(monkeypatch, opaque):
 
 
 def test_api_key_keeps_other_owner_access_without_using_signer(monkeypatch):
-    socket = FakeSocket([{"type": "snapshot"}])
+    socket = FakeSocket([{"type": "snapshot", "channel": "accountEvents", "owner": "00" * 20}])
     calls = []
 
     def connect(url, additional_headers):
@@ -149,50 +143,6 @@ def test_api_key_keeps_other_owner_access_without_using_signer(monkeypatch):
     finally:
         stream.close()
         frames.close()
-        c.close()
-
-
-def test_signing_backend_failure_is_reported_once_without_connection(monkeypatch):
-    calls = []
-
-    class FailedHandle:
-        owner = bytes.fromhex(OWNER)
-        public_key = bytes.fromhex(FIXTURE["public_key"])
-
-        def sign_account_ws_auth(self, chain_id, timestamp_ms):
-            calls.append((chain_id, timestamp_ms))
-            raise ValueError("signing device unavailable")
-
-    monkeypatch.setattr(ws_client, "connect", lambda *a, **kw: pytest.fail("unsigned fallback"))
-    c = client(key_handle=FailedHandle())
-    stream = c.account_event_stream(OWNER)
-    try:
-        with pytest.raises(SigningError):
-            next(iter(stream))
-        assert len(calls) == 1
-        assert stream._closed
-    finally:
-        c.close()
-
-
-@pytest.mark.parametrize("code", [401, 403])
-def test_authentication_refusal_stops_and_closes_socket(monkeypatch, code):
-    socket = FakeSocket([{"type": "error", "code": code, "id": 1, "error": "auth refused"}])
-    calls = []
-
-    def connect(*args, **kwargs):
-        calls.append(1)
-        return socket
-
-    monkeypatch.setattr(ws_client, "connect", connect)
-    c = client(secret_key=SEED)
-    stream = c.account_event_stream(OWNER)
-    try:
-        with pytest.raises(AuthenticationError):
-            next(iter(stream))
-        assert calls == [1]
-        assert socket.closed and stream._closed
-    finally:
         c.close()
 
 

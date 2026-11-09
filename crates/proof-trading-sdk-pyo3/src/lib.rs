@@ -56,13 +56,15 @@ impl SigningHandle {
     }
 
     /// Sign this owner's account-stream authentication without exporting the key.
+    #[pyo3(signature = (chain_id, timestamp_ms, after_id=0))]
     fn sign_account_ws_auth<'py>(
         &self,
         py: Python<'py>,
         chain_id: &[u8],
         timestamp_ms: u64,
+        after_id: i64,
     ) -> PyResult<Bound<'py, PyBytes>> {
-        let signature = account_auth::sign(self.signer.as_ref(), chain_id, timestamp_ms)?;
+        let signature = account_auth::sign(self.signer.as_ref(), chain_id, timestamp_ms, after_id)?;
         Ok(PyBytes::new(py, &signature))
     }
 
@@ -131,20 +133,22 @@ fn sign_and_encode<'py>(
     Ok(PyBytes::new(py, &encoded))
 }
 
-/// Sign the gateway's owner-bound account-stream challenge (cursor zero).
+/// Sign the gateway's owner-bound account-stream challenge.
 #[pyfunction]
+#[pyo3(signature = (chain_id, timestamp_ms, secret_key, after_id=0))]
 fn sign_account_ws_auth<'py>(
     py: Python<'py>,
     chain_id: &[u8],
     timestamp_ms: u64,
     secret_key: &[u8],
+    after_id: i64,
 ) -> PyResult<Bound<'py, PyBytes>> {
     let seed = zeroize::Zeroizing::new(
         <[u8; 32]>::try_from(secret_key)
             .map_err(|_| PyValueError::new_err("secret_key must be exactly 32 bytes"))?,
     );
     let signer = core_sdk::LocalSigner::from_bytes(&seed);
-    let signature = account_auth::sign(&signer, chain_id, timestamp_ms)?;
+    let signature = account_auth::sign(&signer, chain_id, timestamp_ms, after_id)?;
     Ok(PyBytes::new(py, &signature))
 }
 
