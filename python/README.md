@@ -145,7 +145,9 @@ WebSocket base URL. No account signer is called. Each stream owns one socket;
 The first public data is a live `trade`, not a snapshot. Frames retain the
 TypeScript feed's gateway keys: `channel`, `type`, `market`, `fillId`,
 `makerSide`, `price`, `quantity`, and `payload`. Numeric strings remain strings;
-`price` is integer micro-USDC and `quantity` is integer lots. Only the requested
+`price` is integer micro-USDC and `quantity` is the raw integer size. Divide
+quantity by `10**sz_decimals` from the market configuration for base units;
+the stream performs no conversion. Only the requested
 channel/market and matching subscription errors are delivered. Control ACKs
 are consumed internally. Subscription refusals are yielded without retrying on
 the same socket, matching TypeScript's public trade subscription.
