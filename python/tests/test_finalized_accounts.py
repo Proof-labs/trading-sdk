@@ -203,3 +203,31 @@ def test_invalid_request_and_timeout_do_not_send():
     with client(unexpected) as c:
         for call in [lambda: c.finalized_account("bad"), lambda: c.finalized_agent_authorization(OWNER, b''), lambda: c.finalized_open_orders(OWNER, limit=True), lambda: c.finalized_recent_nonces(OWNER, timeout=0)]:
             with pytest.raises(sdk.GatewayReadError): call()
+
+
+@pytest.mark.parametrize("side", [0, 1, {"Buy": None}])
+def test_position_side_must_be_the_wire_name(side):
+    raw = account()
+    raw[1][0][2] = side
+    with pytest.raises(sdk.GatewayReadError):
+        sdk.decode_finalized_account(envelope(raw), OWNER)
+
+
+@pytest.mark.parametrize("branch", [0, {"Yes": None}])
+def test_binding_branch_must_be_the_wire_name(branch):
+    raw = account()
+    raw[6][0][1] = branch
+    with pytest.raises(sdk.GatewayReadError):
+        sdk.decode_finalized_account(envelope(raw), OWNER)
+
+
+def test_order_owner_mismatch_is_a_binding_failure():
+    raw = order()
+    raw[2] = OTHER
+    with pytest.raises(sdk.GatewayReadError) as error:
+        sdk.decode_finalized_open_orders(envelope([raw]), OWNER)
+    assert error.value.kind == "binding"
+
+
+def test_uppercase_address_prefix_matches_the_other_reads():
+    assert sdk.decode_finalized_account(envelope(account()), "0X" + OWNER.hex()).owner == OWNER.hex()

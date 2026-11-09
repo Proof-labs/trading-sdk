@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import base64
 import binascii
-import re
 import typing as t
 from dataclasses import dataclass
 
 from proof_trading_sdk import _native
 from proof_trading_sdk.errors import CodecError, GatewayReadError
 from proof_trading_sdk.evidence import FinalizedReadWitness, decode_finalized_read_witness
+from proof_trading_sdk.trigger_history import canonical_owner
 
 
 @dataclass(frozen=True)
@@ -95,13 +95,10 @@ class FinalizedOpenOrders:
 
 
 def _address(value: bytes | str) -> str:
-    if isinstance(value, bytes) and len(value) == 20:
-        return value.hex()
-    if isinstance(value, str):
-        text = value.removeprefix("0x")
-        if re.fullmatch(r"[0-9a-fA-F]{40}", text):
-            return text.lower()
-    raise GatewayReadError("malformed", "account address")
+    try:
+        return canonical_owner(value)
+    except ValueError as err:
+        raise GatewayReadError("malformed", "account address") from err
 
 
 def _limit(value: int) -> int:

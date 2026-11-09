@@ -15,10 +15,10 @@ pub use proof_wire::{
 pub mod account_state;
 pub mod binary;
 pub mod errors;
+pub mod finalized_account_reads;
 #[cfg(feature = "gateway")]
 pub mod gateway;
 pub mod governance;
-pub mod finalized_account_reads;
 pub mod market_snapshot;
 pub mod msgpack;
 pub mod query;
