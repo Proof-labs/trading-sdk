@@ -276,3 +276,29 @@ def test_invalid_backoff_is_refused(cap):
 @pytest.mark.parametrize("market", [0, 2**32 - 1])
 def test_wire_market_boundaries(market):
     PublicTradeStream("ws://g", market).close()
+
+
+def test_real_websocket_delivers_a_trade_through_the_installed_library(monkeypatch):
+    # The other tests fake connect(), so they cannot catch a keepalive argument
+    # the installed websockets version refuses.
+    import threading
+
+    from websockets.sync.server import serve
+
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+    trade = {"channel": "trades", "type": "trade", "market": 7, "fillId": "1"}
+    received = []
+
+    def handler(connection):
+        received.append(json.loads(connection.recv()))
+        connection.send(json.dumps(trade))
+        connection.recv()
+
+    with serve(handler, "127.0.0.1", 0) as server:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        host, port = server.socket.getsockname()[:2]
+        with PublicTradeStream(f"ws://{host}:{port}", 7) as stream:
+            assert next(iter(stream)) == trade
+        server.shutdown()
+    assert received == [{"method": "subscribe", "id": 1, "params": {"channel": "trades", "market": 7}}]

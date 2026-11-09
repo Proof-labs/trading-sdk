@@ -23,7 +23,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `trades` WebSocket channel with exact gateway frames, subscription errors,
   cancellation and automatic resubscription. No snapshot or missed-fill recovery.
   Requires `websockets>=15` (previously >=14); callers pinning version 14 must
-  upgrade. Protocol Ping/Pong uses explicit 15-second/10-second timings.
+  upgrade. Protocol Ping/Pong uses explicit 15-second/10-second timings. Version
+  15 also changes the account and orderbook streams and the `client.py` socket:
+  they now honour proxy environment variables such as `HTTPS_PROXY` and inherit
+  the library's 20-second keepalive.
 
 - **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
   that voids an event and settles every binary and conditional on it in cash

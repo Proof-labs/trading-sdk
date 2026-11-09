@@ -167,6 +167,11 @@ intervals instead. Both detect half-open connections, but Python's keepalive
 runs in the library thread while reconnection waits for iterator consumption.
 Closing cancels receive and backoff waits; a connection handshake already in
 progress completes or reaches the library's connection timeout before cleanup.
+Against a peer that has stopped responding, `close()` itself can block for the
+library's 10-second close timeout.
+
+`websockets` 15 connects through proxies named by environment variables such as
+`HTTPS_PROXY` by default, and this applies to every WebSocket in this package.
 
 ## Typed actions
 

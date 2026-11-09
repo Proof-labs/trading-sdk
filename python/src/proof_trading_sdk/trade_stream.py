@@ -28,7 +28,8 @@ class PublicTradeStream:
     Only one iterator may consume a stream. Reconnect work runs while that
     iterator is consumed. Call ``close()`` or use a context manager when done;
     closing the iterator also closes the stream. Closing wakes pending reads
-    and reconnect waits; an in-flight connect ends within its own timeout.
+    and reconnect waits; an in-flight connect ends within its own timeout, and
+    closing against an unresponsive peer can block for the library's timeout.
     """
 
     def __init__(
