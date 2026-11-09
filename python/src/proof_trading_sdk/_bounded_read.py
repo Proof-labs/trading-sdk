@@ -15,6 +15,20 @@ MAX_READ_BYTES = 1024 * 1024
 MAX_READ_CHUNKS = 4096
 
 
+def read_deadline(timeout: float) -> float:
+    """Validate a timeout and start one deadline for a whole evidence read."""
+    _validate_timeout(timeout)
+    return time.monotonic() + timeout
+
+
+def _validate_timeout(timeout: float) -> None:
+    if (
+        isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+        or not 0.001 <= timeout <= 60
+    ):
+        raise GatewayReadError("configuration", "timeout")
+
+
 def _parse_json(body: bytes | bytearray) -> dict[str, t.Any]:
     try:
         text = body.decode("utf-8-sig", errors="strict")
@@ -61,6 +75,7 @@ def bounded_gateway_json(
     http: httpx.Client, url: str, params: dict[str, str], *, timeout: float,
     on_response: t.Callable[[httpx.Response], None],
     check_response: t.Callable[[httpx.Response], httpx.Response],
+    deadline: float | None = None,
 ) -> dict[str, t.Any]:
     """One managed request; no retry, redirect, decompression or fallback.
 
@@ -68,12 +83,14 @@ def bounded_gateway_json(
     headers or a custom transport that ignores httpx timeouts. Error bodies
     are discarded so a slow/erroring body cannot replace its HTTP status.
     """
-    if (
-        isinstance(timeout, bool) or not isinstance(timeout, (int, float))
-        or not 0.001 <= timeout <= 60
-    ):
-        raise GatewayReadError("configuration", "timeout")
-    deadline = time.monotonic() + timeout
+    _validate_timeout(timeout)
+    request_timeout = timeout
+    if deadline is None:
+        deadline = time.monotonic() + timeout
+    else:
+        request_timeout = min(timeout, deadline - time.monotonic())
+        if request_timeout <= 0:
+            raise GatewayReadError("deadline", "timeout", "gateway read deadline exceeded")
 
     def check_deadline() -> None:
         if time.monotonic() >= deadline:
@@ -82,7 +99,7 @@ def bounded_gateway_json(
     body = bytearray()
     try:
         with http.stream(
-            "GET", url, params=params, timeout=httpx.Timeout(timeout),
+            "GET", url, params=params, timeout=httpx.Timeout(request_timeout),
             headers={"Accept-Encoding": "identity", "Cache-Control": "no-store"},
             follow_redirects=False,
         ) as response:

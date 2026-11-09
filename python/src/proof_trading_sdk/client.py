@@ -39,6 +39,10 @@ from proof_trading_sdk.finalized_markets import (
     decode_finalized_orderbook, decode_finalized_markets_snapshot,
 )
 from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
+from proof_trading_sdk.chain_evidence import (
+    BlockResultsRange, BlockResultsWindow, TransactionEvidence,
+    read_block_results, read_transaction_evidence,
+)
 from proof_trading_sdk.evidence import (
     BlockEvidenceHeader,
     _chain_pin,
@@ -1628,6 +1632,56 @@ class ExchangeClient:
             check_response=self._check_response,
         )
         return decode_block_evidence_header(response, height=height, chain_id=chain)
+
+    def transaction_evidence(
+        self, tx_hash: str, signed_bytes: bytes, *, chain_id: str | bytes, timeout: float = 5.0,
+    ) -> TransactionEvidence:
+        """Read one exact transaction occurrence and bind it to its block.
+
+        Two bounded GETs share one timeout; no polling, signing or submission.
+        Checks SHA256, transaction index, block data hash and explicit chain pin.
+        Gateway execution codes/events remain trusted observations. Validator
+        signatures and the block header's own hash are not verified. A replay
+        rejection cannot rule out earlier admission of the same signed bytes.
+        """
+        return read_transaction_evidence(self, tx_hash, signed_bytes, chain_id=chain_id, timeout=timeout)
+
+    def block_results_range(
+        self, from_height: int, through_height: int, *, chain_id: str | bytes,
+        timeout: float = 5.0, max_heights: int = 32,
+        max_decoded_bytes: int = 8 * 1024 * 1024, max_transactions: int = 10_000,
+        max_events: int = 16_384, max_attributes: int = 65_536,
+    ) -> BlockResultsRange:
+        """Read an exact inclusive height range, including rejected transactions.
+
+        Binds contiguous headers, transaction roots/counts and H+1 post-state.
+        All requests share one timeout and aggregate limits; no partial success.
+        Gateway trust and synchronous timeout limits match ``block_header``.
+        """
+        return read_block_results(
+            self, through_height, from_height=from_height, chain_id=chain_id, timeout=timeout,
+            max_heights=max_heights, max_decoded_bytes=max_decoded_bytes,
+            max_transactions=max_transactions, max_events=max_events, max_attributes=max_attributes,
+        )
+
+    def block_results_window(
+        self, from_ms: int, to_ms: int, through_height: int, *, chain_id: str | bytes,
+        timeout: float = 5.0, max_heights: int = 32,
+        max_decoded_bytes: int = 8 * 1024 * 1024, max_transactions: int = 10_000,
+        max_events: int = 16_384, max_attributes: int = 65_536,
+    ) -> BlockResultsWindow:
+        """Scan backwards until before ``from_ms`` or genesis, retaining boundaries.
+
+        ``through_height`` must reach ``to_ms``. Results are ascending and may
+        include blocks outside [from_ms,to_ms); apply that filter explicitly.
+        Equal/sub-millisecond block times remain exact. No partial success when
+        a budget is exhausted; gateway trust remains essential.
+        """
+        return read_block_results(
+            self, through_height, from_ms=from_ms, to_ms=to_ms, chain_id=chain_id, timeout=timeout,
+            max_heights=max_heights, max_decoded_bytes=max_decoded_bytes,
+            max_transactions=max_transactions, max_events=max_events, max_attributes=max_attributes,
+        )
 
     def get_block_results(self, height: int) -> dict[str, t.Any]:
         """CometBFT block results at *height* via ``GET /v1/block_results``."""

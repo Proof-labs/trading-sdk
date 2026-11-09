@@ -22,6 +22,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   using canonical Rust decoders and bounded HTTP. Existing snapshot APIs remain
   unchanged; witness consistency is not validator or payload verification.
 
+- Python chain-pinned transaction evidence and bounded block-result ranges/windows
+  check exact transaction bytes, Merkle roots and H+1 app-hash continuity.
+  Results remain trusted gateway observations, without validator verification.
+
 - Python chain-pinned `block_header`, typed header/witness decoders and
   `verify_witness` bind a finalized-read witness to an H+1 app hash. Reads are
   bounded and preserve exact heights/timestamps; validator signatures and

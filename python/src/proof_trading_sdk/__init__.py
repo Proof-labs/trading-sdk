@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import typing as t
 
+from proof_trading_sdk.chain_evidence import (
+    TransactionEvidenceAttribute, TransactionEvidenceEvent, TransactionEvidence,
+    BlockTransactionEvidence, BlockResultsEvidence, BlockResultsRange, BlockResultsWindow,
+)
+
 from proof_trading_sdk._native import (
     SigningHandle,
     admin_proposal_content_hash,
@@ -182,6 +187,9 @@ __all__ = [
     "decode_finalized_recent_nonces",
     "decode_finalized_open_orders",
 
+
+    "TransactionEvidenceAttribute", "TransactionEvidenceEvent", "TransactionEvidence",
+    "BlockTransactionEvidence", "BlockResultsEvidence", "BlockResultsRange", "BlockResultsWindow",
     "admin_proposal_content_hash",
     "chain_id_from_string",
     "owner_to_hex",
