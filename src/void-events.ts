@@ -3,10 +3,7 @@
  * one ABCI event, with the conventions of `decodeLiquidationEvent`.
  */
 
-import {
-  Attributes,
-  type LiquidationEventInput,
-} from "./liquidation-events.js";
+import { Attributes, type AbciEventInput } from "./abci-event.js";
 
 /** The admin quorum voided an event at `yesPrice`. */
 export interface EventVoidedEvent {
@@ -70,7 +67,7 @@ const DECODERS: Record<string, (a: Attributes) => VoidSettlementEvent> = {
 /** Decode `event_voided` or `conditional_void_settled`; `null` for any
  *  other event type. */
 export function decodeVoidSettlementEvent(
-  event: LiquidationEventInput,
+  event: AbciEventInput,
 ): VoidSettlementEvent | null {
   const decode = Object.hasOwn(DECODERS, event.type)
     ? DECODERS[event.type]

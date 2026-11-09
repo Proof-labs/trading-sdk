@@ -54,13 +54,23 @@ describe("VoidEvent admin action", () => {
     expect(decodeAdminAction({ VoidEvent: [4, 350_000] })).toEqual(voidEvent());
   });
 
-  it("refuses a Yes price above 1_000_000", () => {
+  it("refuses a Yes price outside 0..=1_000_000", () => {
     expect(() => encodePayloadBytes(propose(voidEvent(1_000_001n)))).toThrow(
       /yesPrice 1000001 is outside/,
+    );
+    expect(() => encodePayloadBytes(propose(voidEvent(-1n)))).toThrow(
+      /yesPrice -1 is outside/,
     );
     expect(() =>
       encodePayloadBytes(propose(voidEvent(1_000_000n))),
     ).not.toThrow();
+    expect(() => encodePayloadBytes(propose(voidEvent(0n)))).not.toThrow();
+  });
+
+  it("refuses a stored Yes price above 1_000_000 on read", () => {
+    expect(() => decodeAdminAction({ VoidEvent: [4, 1_000_001] })).toThrow(
+      /yesPrice 1000001 is outside/,
+    );
   });
 });
 
