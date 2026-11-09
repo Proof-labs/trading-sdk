@@ -44,24 +44,7 @@ import {
   validateWithdrawInsuranceFund,
 } from "./insurance-funding.js";
 import type { AuthorizedAgentsView } from "./authorized-agents.js";
-
-/** Names and byte representation only; the Rust wire type owns decoding. */
-export function authorizedAgentsFromWasm(value: unknown): AuthorizedAgentsView {
-  const view = value as {
-    owner: Uint8Array;
-    finalized_height: bigint;
-    agents: Uint8Array[];
-    complete: boolean;
-  };
-  const hex = (address: Uint8Array) =>
-    Array.from(address, (byte) => byte.toString(16).padStart(2, "0")).join("");
-  return {
-    owner: hex(view.owner),
-    finalizedHeight: view.finalized_height,
-    agents: view.agents.map(hex),
-    complete: view.complete,
-  };
-}
+import { bytesToHex } from "./crypto.js";
 import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
@@ -742,6 +725,17 @@ export function accountInfoFromWasm(v: unknown): AccountInfo {
     })),
     feesAccrued: a.fees_accrued as bigint,
     volume30dMicroUsdc: a.volume_30d_micro_usdc as bigint,
+  };
+}
+
+/** The `/v2/account/{owner}/agents` grant list. */
+export function authorizedAgentsFromWasm(v: unknown): AuthorizedAgentsView {
+  const a = v as WasmRecord;
+  return {
+    owner: bytesToHex(bytesOf(a.owner)),
+    finalizedHeight: a.finalized_height as bigint,
+    agents: (a.agents as unknown[]).map((agent) => bytesToHex(bytesOf(agent))),
+    complete: a.complete as boolean,
   };
 }
 
