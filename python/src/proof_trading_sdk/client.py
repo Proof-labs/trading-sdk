@@ -113,24 +113,13 @@ _NOT_SENT = (
 def _submission_may_have_been_admitted(exc: TransportError) -> bool:
     """Whether a failed ``/exchange`` request may still have been admitted.
 
-    A 5xx is ambiguous unless the gateway proves the refusal: a
-    ``status: refused`` body naming no ``txHash``, ``code`` or ``height`` means
-    the transaction never reached the broadcaster, as the TypeScript binding
-    reads it. An httpx failure is ambiguous unless it is in ``_NOT_SENT``. A
+    A 5xx reaching this check carries no refusal envelope, so it is ambiguous.
+    An httpx failure is ambiguous unless it is in ``_NOT_SENT``. A
     TransportError raised from an HTTP status (4xx, 3xx) was answered by the
     gateway without admission.
     """
     if isinstance(exc, GatewayError):
-        try:
-            body = json.loads(exc.body)
-        except ValueError:
-            return True
-        proven_refusal = (
-            isinstance(body, dict)
-            and body.get("status") == "refused"
-            and not any(k in body for k in ("txHash", "tx_hash", "code", "height"))
-        )
-        return not proven_refusal
+        return True
     cause = exc.__cause__
     return isinstance(cause, httpx.RequestError) and not isinstance(cause, _NOT_SENT)
 
