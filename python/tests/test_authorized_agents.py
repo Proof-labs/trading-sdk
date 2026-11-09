@@ -13,7 +13,7 @@ from proof_trading_sdk import AuthorizedAgentsSnapshot, ExchangeClient, SdkConfi
 from proof_trading_sdk import _native
 from proof_trading_sdk.authorized_agents import _decode_snapshot
 import proof_trading_sdk.authorized_agents as module
-from proof_trading_sdk.errors import CodecError, ProofTradingSdkError, TransportError
+from proof_trading_sdk.errors import AuthenticationError, CodecError, GatewayError, RateLimited, TransportError
 
 OWNER = bytes([1]) * 20
 HEX = OWNER.hex()
@@ -163,11 +163,52 @@ def test_invalid_timeout_does_not_issue_request(timeout):
         client.authorized_agents(OWNER, timeout=timeout)
 
 
-@pytest.mark.parametrize("status", [201, 301, 401, 404, 429, 503])
-def test_unavailable_or_non_200_responses_never_return_empty_snapshot(status):
-    with client_for(lambda _: httpx.Response(status, content=body())) as client:
-        with pytest.raises(ProofTradingSdkError):
+@pytest.mark.parametrize("status,error_type", [
+    (201, TransportError), (301, TransportError), (401, AuthenticationError),
+    (404, TransportError), (429, RateLimited), (503, GatewayError),
+])
+def test_unavailable_or_non_200_responses_never_return_empty_snapshot(status, error_type):
+    calls = []
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(status, content=body())
+    with client_for(handler) as client, pytest.raises(error_type) as caught:
+        client.authorized_agents(OWNER)
+    assert len(calls) == 1  # No fallback to legacy routes or inferred history.
+    if status == 404:
+        assert caught.value.status_code == 404
+
+
+@pytest.mark.parametrize("status,headers", [
+    (200, {"X-RateLimit-Limit": "abc"}),
+    (429, {"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}),
+])
+def test_malformed_rate_limit_headers_raise_typed_transport_error(status, headers):
+    with client_for(lambda _: httpx.Response(status, headers=headers, content=body())) as client:
+        with pytest.raises(TransportError, match="invalid response headers"):
             client.authorized_agents(OWNER)
+
+
+@pytest.mark.parametrize("error_type", [httpx.ConnectError, httpx.ReadTimeout])
+def test_request_failures_raise_typed_transport_error(error_type):
+    def handler(request):
+        raise error_type("offline", request=request)
+    with client_for(handler) as client, pytest.raises(TransportError, match="request failed"):
+        client.authorized_agents(OWNER)
+
+
+def test_exact_payload_and_http_body_limits_are_accepted():
+    # Named future fields are ignored by the canonical DTO, but count toward budgets.
+    value = raw(future=b"" )
+    value["future"] = bytes(16384 - len(msgpack.packb(value)) - 1)
+    assert len(msgpack.packb(value)) == 16384
+    encoded = body(value)
+    encoded += b" " * (32768 - len(encoded))
+    assert len(encoded) == 32768
+    with client_for(lambda _: httpx.Response(200, content=encoded)) as client:
+        snapshot = client.authorized_agents(OWNER)
+    assert snapshot.agents == ("02" * 20,)
+    assert snapshot.app_hash == "CD" * 32
 
 
 class Chunks(httpx.SyncByteStream):
@@ -205,3 +246,13 @@ def test_stream_deadline_refuses_incomplete_read(monkeypatch):
         with pytest.raises(TransportError, match="deadline"):
             client.authorized_agents(OWNER, timeout=5)
     assert stream.closed
+
+
+def test_error_prefix_deadline_stops_reading_and_preserves_http_error(monkeypatch):
+    times = iter([0, 10])
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(times)))
+    stream = Chunks([b"error", b"must not read"])
+    with client_for(lambda _: httpx.Response(503, stream=stream)) as client:
+        with pytest.raises(GatewayError):
+            client.authorized_agents(OWNER, timeout=5)
+    assert stream.read == 1 and stream.closed

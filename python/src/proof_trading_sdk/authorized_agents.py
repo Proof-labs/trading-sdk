@@ -113,7 +113,7 @@ def _decode_snapshot(body: bytes, owner: str) -> AuthorizedAgentsSnapshot:
             if len(agents) != AUTHORIZED_AGENTS_LIMIT:
                 raise ValueError("invalid incomplete list length")
             raise CodecError("authorized agents: incomplete list (more than 100 grants); no complete snapshot")
-        return AuthorizedAgentsSnapshot(owner, agents, height, timestamp, node_id, app_hash.lower())
+        return AuthorizedAgentsSnapshot(owner, agents, height, timestamp, node_id, app_hash.upper())
     except (ValueError, TypeError, KeyError, RecursionError, binascii.Error) as error:
         raise CodecError(f"authorized agents: malformed response: {error}") from error
 
@@ -154,6 +154,8 @@ def _read_authorized_agents(client: ExchangeClient, owner: bytes | str, *, timeo
                 body.extend(chunk)
                 if time.monotonic() > deadline:
                     raise TransportError("authorized agents: response deadline exceeded")
+    except ValueError as error:
+        raise TransportError(f"authorized agents: invalid response headers: {error}") from error
     except httpx.RequestError as error:
         raise TransportError(f"authorized agents: request failed: {error}") from error
     return _decode_snapshot(bytes(body), bound_owner)
