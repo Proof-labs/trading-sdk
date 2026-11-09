@@ -108,6 +108,7 @@ from proof_trading_sdk.errors import (
 from proof_trading_sdk.nonce import NonceAllocator
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.client import ExchangeClient
+from proof_trading_sdk.candle_history import CandleHistoryPage, CandleHistoryTime, HistoryCandle
 from proof_trading_sdk.streams import (
     AccountEventStream,
     OrderbookDeltaStream,
@@ -139,6 +140,9 @@ from proof_trading_sdk.trigger_config import (
 )
 
 __all__ = [
+    "CandleHistoryPage",
+    "CandleHistoryTime",
+    "HistoryCandle",
     "admin_proposal_content_hash",
     "chain_id_from_string",
     "owner_to_hex",

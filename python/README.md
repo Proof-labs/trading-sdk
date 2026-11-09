@@ -57,6 +57,45 @@ hash as `tx_hash`; reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
+## Candle history
+
+`history_candles` reads durable OHLCV bars through the gateway's
+`/v1/history/candles`. Prices and volumes remain decimal strings; timestamps
+remain RFC3339 strings, including nanoseconds. No float conversion is applied.
+
+```python
+page = client.history_candles(7, "1h", limit=100)
+if page.has_more:
+    older_than = page.candles[0].time if page.candles else page.from_
+    page = client.history_candles(7, "1h", to=older_than, limit=100)
+```
+
+The newest bars in the requested window are returned oldest first. Empty
+buckets are omitted. `from_` and `to` accept RFC3339 or integer epoch
+milliseconds; `to` is exclusive. Omit `from_` when paging backward to let the
+server choose the older window. `earliest` is null when no history exists.
+Resolutions use a positive count (1–9999) followed by `m`, `h`, `d`, `w`, `M`
+or `y`; uppercase `M` means calendar months. The server decides which resolutions
+its deployed version accepts. `limit` is 1–5000 (default 1500).
+
+These are indexer observations, not witnessed finalized-state proofs. A failed
+or malformed read raises an SDK error, rather than becoming an empty page.
+
+## Python coverage still pending
+
+Tracked in [#362](https://github.com/Proof-labs/trading-sdk/issues/362):
+
+| Capability | Current Python contract / remaining work |
+| --- | --- |
+| Public trades | `trades(market)` is an HTTP read. A dedicated public trade subscription is not exposed. |
+| Finalized state and chain evidence | `status`, `get_block`, and `get_block_results` return gateway data. They do not verify witnesses or establish a trusted finalized checkpoint. Typed reads and the shared verifier still need Python bindings. |
+| Authority, financial state, market statistics, oracle health, liquidation configuration | No dedicated typed Python reads. Expose the shared Rust read decoders through PyO3 before adding methods; do not treat generic dictionaries as verified state. |
+| Callback signing | `secret_key` and `SigningHandle` (including PKCS#11) are supported. An arbitrary signing callback cannot be supplied to `ExchangeClient`. |
+| Resting order client IDs | `open_orders` returns six fields and omits `client_order_id`. Current upstream order reads support the field; Python needs the extended read contract and validation. Do not infer IDs from order placement or incomplete history. |
+
+`history_candles` covers the candle reader portion of #362. The other rows
+remain open; raw HTTP calls outside the SDK are not a supported workaround.
+
 ## Typed actions
 
 Every action has a typed builder in `proof_trading_sdk.actions`;
