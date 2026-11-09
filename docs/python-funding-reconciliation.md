@@ -59,13 +59,19 @@ outside these ranges instead of silently overflowing or guessing a scale.
 - Before settlement, retain `side`, raw `size`, and `last_funding_index` from
   `client.account(owner).positions`, with the observed position epoch and market.
   Do not replace this input with the position's post-settlement index.
+  The current Python account decoder defaults an absent legacy index to `0`.
+  If the source could omit that field, zero is ambiguous: obtain a complete
+  retained position record instead of treating it as a confirmed zero index.
 
 A current immutable market scale can be combined with retained indexes on the
 same chain. For a historical protocol migration or a chain reset, retain the
 applicable market config and engine version too; the example cannot establish
 that continuity. It also does not reconstruct an arbitrary historical position.
 Missing scale, a missing event, a wrong response height or an ambiguous match
-is an error, never a zero payment.
+is an error, never a zero payment. A zero or fully deferred debit may emit no
+cash event; a same-block liquidation can produce an additional settlement.
+The example refuses both missing and multiple cash events instead of choosing
+one or inventing zero.
 
 Run the read-only example with your preserved position inputs:
 

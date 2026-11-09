@@ -60,6 +60,10 @@ def _event_attributes(event: dict[str, Any]) -> dict[str, str]:
 
 def reconcile(client: ExchangeClient, *, height: int, market: int, owner: str,
               side: str, raw_size: int, last_index: int) -> dict[str, Any]:
+    if side not in ("Buy", "Sell"):
+        raise ValueError("side must be Buy (long) or Sell (short)")
+    raw_size = _integer(raw_size, "raw_size", 0, (1 << 64) - 1)
+    last_index = _integer(last_index, "last_index", -(1 << 63), (1 << 63) - 1)
     height = _integer(height, "height", 1, (1 << 63) - 1)
     market = _integer(market, "market", 0, (1 << 32) - 1)
     owner = owner.lower().removeprefix("0x")
@@ -94,7 +98,7 @@ def reconcile(client: ExchangeClient, *, height: int, market: int, owner: str,
     if len(applied) != 1 or len(settled) != 1:
         raise ValueError("expected one funding application and one owner settlement; missing is not zero")
     cumulative = _integer(applied[0].get("cumulative_funding"), "cumulative_funding", -(1 << 63), (1 << 63) - 1)
-    rate = _integer(applied[0].get("funding_rate_bps"), "funding_rate_bps", -3000, 3000)
+    rate = _integer(applied[0].get("funding_rate_bps"), "funding_rate_bps", -(1 << 63), (1 << 63) - 1)
     observed = _integer(settled[0].get("payment"), "settled payment", -(1 << 63), (1 << 63) - 1)
     expected = accrued_payment(side, raw_size, last_index, cumulative, decimals)
     return {

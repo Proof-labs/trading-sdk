@@ -133,3 +133,28 @@ def test_duplicate_event_attribute_is_rejected():
 def test_invalid_inputs_and_engine_overflow_bounds_are_rejected(args):
     with pytest.raises(ValueError):
         payment(*args)
+
+
+@pytest.mark.parametrize("rate", [3001, -3001, (1 << 63) - 1, -(1 << 63)])
+def test_informational_rate_does_not_gate_index_reconciliation(rate):
+    c = FakeClient()
+    c.block["result"]["finalize_block_events"][0] = event(
+        "funding_applied", market=3, funding_rate_bps=rate, cumulative_funding=CURRENT,
+    )
+    report = run(c)
+    assert report["funding_rate_bps"] == rate
+    assert report["full_payment_matches_event"]
+
+
+@pytest.mark.parametrize("change", [
+    {"side": "Long"}, {"raw_size": True}, {"raw_size": -1}, {"last_index": 1 << 63},
+])
+def test_invalid_position_inputs_refuse_before_network_reads(change):
+    class NoReads:
+        def markets(self):
+            raise AssertionError("invalid input must not issue reads")
+
+    args = dict(height=10013501, market=3, owner=OWNER, side="Buy", raw_size=1, last_index=LAST)
+    args.update(change)
+    with pytest.raises(ValueError):
+        reconcile(NoReads(), **args)
