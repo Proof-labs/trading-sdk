@@ -223,3 +223,11 @@ def test_leap_second_order_is_not_collapsed_into_next_minute():
     from proof_trading_sdk.candle_history import _time
     assert _time("2016-12-31T23:59:59.999999999Z") < _time("2016-12-31T23:59:60Z")
     assert _time("2016-12-31T23:59:60.999999999Z") < _time("2017-01-01T00:00:00Z")
+
+
+def test_a_refused_window_raises_rather_than_returning_an_empty_page(client) -> None:
+    client._http = httpx.Client(transport=httpx.MockTransport(
+        lambda _: httpx.Response(400, json={"error": "window_too_large"})
+    ))
+    with pytest.raises(TransportError):
+        client.history_candles(7, "1m")

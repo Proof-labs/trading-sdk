@@ -93,6 +93,11 @@ Coarser candles aggregate only source rows inside the requested window, so a
 boundary candle may be partial and its label may precede `from_`. Align window
 edges to the resolution boundaries when complete historical bars are required;
 paging by that partial bar's label does not recover its excluded source rows.
+This also applies to a call that omits `from_` on a stride that is not a native
+bar (for example `5m`), because the server's default window is not aligned. In
+that case `candles[0].time < from_` marks a partial first bar, and its missing
+rows are not returned by later pages. Pass aligned `from_` and `to` for complete
+history. Native `1m`, `1h` and `1d` bars and calendar strides are not affected.
 
 These are indexer observations, not witnessed finalized-state proofs. A failed
 or malformed read raises an SDK error, rather than becoming an empty page.
