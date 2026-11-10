@@ -85,3 +85,19 @@ def test_bucket_lookup_returns_the_latest_response_state():
         assert client.rate_limit_state(caught.value.bucket).remaining == 19
     finally:
         client.close()
+
+
+def test_default_lookup_reads_responses_without_a_bucket_header():
+    client = ExchangeClient(config=SdkConfig(gateway_url="https://example.invalid"))
+    client._http.close()
+    client._http = httpx.Client(transport=httpx.MockTransport(
+        lambda _: httpx.Response(200, headers={
+            "X-RateLimit-Limit": "20", "X-RateLimit-Remaining": "19"
+        }, json={})
+    ))
+    try:
+        client.status()
+        assert client.rate_limit_remaining() == 19
+        assert client.rate_limit_state().limit == 20
+    finally:
+        client.close()

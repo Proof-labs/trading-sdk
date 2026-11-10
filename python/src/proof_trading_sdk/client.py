@@ -323,7 +323,7 @@ class ExchangeClient:
         )
         self._rate_limits[bucket] = state
 
-    def rate_limit_remaining(self, bucket: str = "orders") -> int:
+    def rate_limit_remaining(self, bucket: str = _DEFAULT_RATE_LIMIT_BUCKET) -> int:
         """Return the remaining rate-limit tokens for *bucket*.
 
         This is a synchronous, local check — the authoritative value is
@@ -332,7 +332,7 @@ class ExchangeClient:
         state = self._rate_limits.get(bucket)
         return state.remaining if state else 0
 
-    def rate_limit_state(self, bucket: str = "orders") -> RateLimitState:
+    def rate_limit_state(self, bucket: str = _DEFAULT_RATE_LIMIT_BUCKET) -> RateLimitState:
         """Return cached response headers for *bucket*.
 
         Responses without ``X-RateLimit-Bucket`` use ``"default"``. After a
