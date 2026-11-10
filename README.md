@@ -269,6 +269,35 @@ quantity, and decoded payloads over 1 MiB throw (`Error` in TypeScript,
 a shorter list, so a very large account gets an error. The read does not verify a
 finalized witness.
 
+### Open-order migration
+
+This change requires the next TypeScript MAJOR release. Code that constructs
+`OpenOrder` objects (including test fixtures) must supply these eight added fields.
+For fixtures representing legacy six-field records, use:
+
+```typescript
+const order: OpenOrder = {
+  ...legacyOrder, // id, market, owner, side, price, quantity
+  clientOrderId: null,
+  originalQuantity: 0n,
+  filledQuantity: 0n,
+  createdAtMs: 0n,
+  queuePriority: 0n,
+  timeInForce: "Gtc",
+  postOnly: false,
+  reduceOnly: false,
+};
+```
+
+Preserve actual metadata when it is available; these defaults describe legacy
+records, not newly placed orders.
+
+Handle read failures separately from an empty account in both SDKs. A valid
+empty response still returns `[]`, but malformed or wrong-owner data now raises
+an error. Remove fallbacks such as `.catch(() => [])` that disguise a failed read
+as an account with no orders. TypeScript callers must also stop passing an empty
+owner string: `queryOpenOrders("")` now throws.
+
 ### Trading No on an event's binary book
 
 Each event has one binary book, priced in Yes (`EventInfo.ebyMarket`). Buying
