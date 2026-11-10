@@ -9,6 +9,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Python `ExternalSigner` and `ExchangeClient.set_external_signer` accept
+  synchronous Ed25519 callbacks for transactions and account-stream auth.
+  Rust prepares canonical messages and verifies returned signatures; replacing
+  the signing connection invalidates an in-flight callback result. TP/SL helpers
+  bind owner selection to that connection. Account streams use the current
+  signer on each authentication attempt, including a signer connected later.
+
 - Python account-event streams authenticate with the client's secret key or
   opaque `SigningHandle`, alongside an API key when configured, renewing the signed
   challenge on every retry and reconnect. `account_auth(owner, after_id=0)`
