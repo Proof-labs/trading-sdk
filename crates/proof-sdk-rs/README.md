@@ -178,8 +178,11 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
         WsMessage::AccountSnapshot { account, .. } => {}      // typed AccountInfo
         WsMessage::AccountEvent(e) => match e.kind {          // typed engine events
             AccountEventKind::Fill(f) => {
-                let side = f.side_of(client.address());       // this account's side and fee
-                let fee = f.fee_of(client.address());
+                let (side, fee) = if f.maker_owner == client.address() {
+                    (f.maker_side, f.maker_fee)               // micro-USDC; negative = rebate
+                } else {
+                    (f.taker_side(), f.taker_fee)
+                };
             }
             AccountEventKind::OrderPlaced(o) => {}
             AccountEventKind::OrderCancelled(c) => {}

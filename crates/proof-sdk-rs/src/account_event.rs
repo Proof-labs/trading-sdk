@@ -83,41 +83,10 @@ pub struct Fill {
 }
 
 impl Fill {
-    /// `owner`'s side of this fill, if it took part.
+    /// The aggressing order's side: always the opposite of `maker_side`.
     #[must_use]
-    pub fn side_of(&self, owner: Address) -> Option<Side> {
-        if owner == self.maker_owner {
-            Some(self.maker_side)
-        } else if owner == self.taker_owner {
-            Some(opposite(self.maker_side))
-        } else {
-            None
-        }
-    }
-
-    /// The fee `owner` paid (negative: rebate), if it took part. Maker wins
-    /// if `owner` was both.
-    #[must_use]
-    pub fn fee_of(&self, owner: Address) -> Option<i64> {
-        if owner == self.maker_owner {
-            Some(self.maker_fee)
-        } else if owner == self.taker_owner {
-            Some(self.taker_fee)
-        } else {
-            None
-        }
-    }
-
-    /// The order id `owner` filled, if it took part.
-    #[must_use]
-    pub fn order_id_of(&self, owner: Address) -> Option<OrderId> {
-        if owner == self.maker_owner {
-            Some(self.maker_order_id)
-        } else if owner == self.taker_owner {
-            Some(self.taker_order_id)
-        } else {
-            None
-        }
+    pub fn taker_side(&self) -> Side {
+        opposite(self.maker_side)
     }
 }
 
@@ -424,20 +393,18 @@ mod tests {
     const TAKER: &str = "4f19b63a2067a0164c658858b981312aedb00c77";
 
     #[test]
-    fn a_fill_reads_each_sides_view() {
+    fn a_fill_decodes_both_sides() {
         let p = json!({"block_height": "10878715", "event_key": "10878715:4:0", "event_ordinal": "0", "execution_ordinal": "4", "fill_id": "376233", "maker_client_order_id": "1794152258902228", "maker_fee": "172", "maker_order_id": "3211366", "maker_owner": MAKER, "maker_side": "sell", "mark_price": "85678332", "market": "105", "oracle_price": "", "price": "85700000", "quantity": "1", "reason": "order", "taker_client_order_id": "0", "taker_fee": "429", "taker_order_id": "3211403", "taker_owner": TAKER});
         let AccountEventKind::Fill(f) = kind_of("trade_executed", &p) else {
             panic!()
         };
         let (maker, taker): (Address, Address) = (MAKER.parse().unwrap(), TAKER.parse().unwrap());
         assert_eq!((f.market, f.price, f.quantity), (105, 85_700_000, 1));
-        assert_eq!(f.side_of(maker), Some(Side::Sell));
-        assert_eq!(f.side_of(taker), Some(Side::Buy));
-        assert_eq!(f.fee_of(taker), Some(429));
-        assert_eq!(f.order_id_of(maker), Some(3_211_366));
+        assert_eq!((f.maker_owner, f.maker_side), (maker, Side::Sell));
+        assert_eq!((f.taker_owner, f.taker_side()), (taker, Side::Buy));
+        assert_eq!((f.taker_fee, f.maker_order_id), (429, 3_211_366));
         assert_eq!(f.maker_client_order_id, Some(1_794_152_258_902_228));
         assert_eq!(f.taker_client_order_id, None, "\"0\" is the engine's none");
-        assert_eq!(f.side_of(Address::default()), None);
     }
 
     #[test]
