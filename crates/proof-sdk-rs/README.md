@@ -102,12 +102,12 @@ On devnet, fund a new address with the faucet first:
 Each submission returns a `Submitted`, holding the signed tx with its locally
 computed hash, a `TxStatus`, and `retry_after: Option<Duration>`:
 
-| `TxStatus`          | Meaning                                                                          |
-| ------------------- | -------------------------------------------------------------------------------- |
-| `Committed(receipt)` | In a block. `receipt.is_success()` (code 0), otherwise an engine error code.    |
-| `Rejected { code }` | Refused at `CheckTx`; it will never execute.                                     |
-| `Pending`           | Admitted without a verdict yet; call `wait_for_receipt`.                         |
-| `Refused(reason)`   | Turned away by the gateway (`Unauthorized`, `RateLimited`, `Paused`, `CancelOnly`, `Unavailable`, `InvalidRequest`). |
+| `TxStatus`           | Meaning                                                                                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `Committed(receipt)` | In a block. `receipt.is_success()` (code 0), otherwise an engine error code.                                         |
+| `Rejected { code }`  | Refused at `CheckTx`; it will never execute.                                                                         |
+| `Pending`            | Admitted without a verdict yet; call `wait_for_receipt`.                                                             |
+| `Refused(reason)`    | Turned away by the gateway (`Unauthorized`, `RateLimited`, `Paused`, `CancelOnly`, `Unavailable`, `InvalidRequest`). |
 
 `is_success()`, `is_pending()` and `error_code()` cover the common checks. Error
 codes decode with `core::decode_exec_error_kind(code, None)` (for example 12 is insufficient
@@ -136,16 +136,16 @@ Resending the same `tx` is safe (same nonce, executes at most once).
 
 `client.info()`, or `InfoClient::new(&config)` for read-only use:
 
-| Method                      | Route                                   | Returns                    |
-| --------------------------- | --------------------------------------- | -------------------------- |
-| `chain_status()`            | `GET /v1/status`                        | network, height            |
-| `markets()`                 | `GET /v1/markets`                       | `Vec<MarketConfig>`        |
-| `events()` / `event(id)`    | `GET /v1/events`, `/v1/event/{id}`      | `EventInfo` (with books)   |
-| `orderbook(market)`         | `GET /v1/orderbook/{market}`            | `Orderbook` (best first)   |
-| `recent_trades(market, n)`  | `GET /v1/trades/{market}`               | `Vec<Trade>`, newest first |
-| `account(owner)`            | `POST /info` `clearinghouseState`       | `AccountInfo`              |
-| `open_orders(owner)`        | `POST /info` `openOrders`               | `Vec<Order>`               |
-| `recent_nonces(owner)`      | `GET /v1/account/{owner}/recent-nonces` | `Vec<u64>`                 |
+| Method                     | Route                                   | Returns                    |
+| -------------------------- | --------------------------------------- | -------------------------- |
+| `chain_status()`           | `GET /v1/status`                        | network, height            |
+| `markets()`                | `GET /v1/markets`                       | `Vec<MarketConfig>`        |
+| `events()` / `event(id)`   | `GET /v1/events`, `/v1/event/{id}`      | `EventInfo` (with books)   |
+| `orderbook(market)`        | `GET /v1/orderbook/{market}`            | `Orderbook` (best first)   |
+| `recent_trades(market, n)` | `GET /v1/trades/{market}`               | `Vec<Trade>`, newest first |
+| `account(owner)`           | `POST /info` `clearinghouseState`       | `AccountInfo`              |
+| `open_orders(owner)`       | `POST /info` `openOrders`               | `Vec<Order>`               |
+| `recent_nonces(owner)`     | `GET /v1/account/{owner}/recent-nonces` | `Vec<u64>`                 |
 
 Records decode as the engine's own `proof-wire` types through the core's
 `reads::decode`, so a field appended by a newer engine does not break a read.
@@ -154,12 +154,13 @@ from a `{"data": ...}` route), `get_json(path)` or `post_info(&body)`.
 
 ### `WsClient`: live feed (feature `ws`, default)
 
-One socket carries every subscription. A background task owns it, sends an
+One socket carries every subscription. A background task (spawned with
+`tokio::spawn`, so `connect` needs a tokio runtime) owns it, sends an
 app-level ping every 15 s, and reconnects with backoff when a pong is missed or
 the socket drops. It then re-sends every subscription.
 
 ```rust,no_run
-use proof_sdk_rs::{ClientConfig, ExchangeClient, LocalSigner, Subscription, WsClient, WsConfig, WsMessage};
+use proof_sdk_rs::{AccountEventKind, ClientConfig, ExchangeClient, Subscription, WsClient, WsConfig, WsMessage};
 
 # async fn run(client: ExchangeClient, config: ClientConfig) -> Result<(), proof_sdk_rs::Error> {
 let ws_config = WsConfig::from_client_config(&config)?      // wss://…/ws, same API key
@@ -175,7 +176,16 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
         WsMessage::OrderbookUpdate { market, side, level } => { /* quantity 0 = remove */ }
         WsMessage::Trade(t) => {}
         WsMessage::AccountSnapshot { account, .. } => {}      // typed AccountInfo
-        WsMessage::AccountEvent(e) => {}                      // e.kind: "fill", "orderUpdate", …
+        WsMessage::AccountEvent(e) => match e.kind {          // typed engine events
+            AccountEventKind::Fill(f) => {
+                let side = f.side_of(client.address());       // this account's side and fee
+                let fee = f.fee_of(client.address());
+            }
+            AccountEventKind::OrderPlaced(o) => {}
+            AccountEventKind::OrderCancelled(c) => {}
+            AccountEventKind::PositionUpdated(p) => {}
+            _ => {}                                           // `Other`: see e.event_type / e.payload
+        },
         WsMessage::Reconnected => {}                          // books re-snapshot next
         WsMessage::Refused { code, message, .. } => {}        // e.g. 401 on an unsigned account sub
         _ => {}
@@ -193,7 +203,13 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
   the gap are **not** replayed (the TypeScript SDK's history backfill is not
   ported). Reconcile through `InfoClient::open_orders` / `account` if a missed
   fill matters.
-- **Backpressure.** Messages buffer up to `WsConfig::buffer` (4096). A
+- **Account events are typed**, like hyperliquid's `UserFills` / `OrderUpdates`:
+  `Fill`, `OrderPlaced`, `OrderCancelled`, `OrderAmended`, `OrderRejected`,
+  `MarketOrderProcessed`, `PositionUpdated`, `PositionClosed`,
+  `FundingSettled`, `Deposited`. Anything else (or a payload that does not
+  match) is `AccountEventKind::Other`; the engine event name and raw
+  attributes are always on `e.event_type` / `e.payload`.
+- **Backpressure.** Messages buffer up to `WsConfig::with_buffer` (default 4096). A
   consumer that falls further behind pauses socket reads, and with them the
   heartbeat. Keep the receive loop fast and hand slow work to another task.
 - Turn the feature off with `default-features = false` to drop
@@ -222,13 +238,13 @@ identical to `core::codec::sign_and_encode_with_chain`, and a test checks that.
 
 `ClientConfig::new(url)` or `ClientConfig::devnet()`, then:
 
-| Setter                    | Default (`devnet()`)          | Notes                                                                |
-| ------------------------- | ----------------------------- | -------------------------------------------------------------------- |
-| _(constructor URL)_       | `https://api.dev.proof.trade` | HTTPS, or HTTP on a loopback **IP** (`http://127.0.0.1:9080`)        |
-| `with_chain_id`           | `exchange-devnet-1`           | `connect` checks it against the gateway; unset, `connect` trusts it. |
-| `with_api_key`            | none                          | Sent as `X-Api-Key`; redacted from `Debug`.                          |
-| `with_timeout`            | 10 s                          | Per request, 1 ms to 60 s.                                           |
-| `with_max_read_bytes`     | 8 MiB                         | Response cap for reads.                                              |
+| Setter                | Default (`devnet()`)          | Notes                                                                |
+| --------------------- | ----------------------------- | -------------------------------------------------------------------- |
+| _(constructor URL)_   | `https://api.dev.proof.trade` | HTTPS, or HTTP on a loopback **IP** (`http://127.0.0.1:9080`)        |
+| `with_chain_id`       | `exchange-devnet-1`           | `connect` checks it against the gateway; unset, `connect` trusts it. |
+| `with_api_key`        | none                          | Sent as `X-Api-Key`; redacted from `Debug`.                          |
+| `with_timeout`        | 10 s                          | Per request, 1 ms to 60 s.                                           |
+| `with_max_read_bytes` | 8 MiB                         | Response cap for reads.                                              |
 
 ## Units
 

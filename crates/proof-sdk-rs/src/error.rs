@@ -43,6 +43,10 @@ pub enum Error {
     /// No committed receipt for `hash` arrived before the deadline. The
     /// transaction may still land.
     ReceiptTimeout { hash: TxHash },
+    /// The WebSocket handshake failed or timed out.
+    WsConnect(String),
+    /// The feed has closed; the handle can no longer subscribe.
+    Closed,
     /// The gateway's chain differs from the one the client was configured for.
     ChainMismatch { expected: String, actual: String },
 }
@@ -63,6 +67,8 @@ impl fmt::Display for Error {
                 "nonce {next} would run more than 60s ahead of the clock ({now_ms})"
             ),
             Error::ReceiptTimeout { hash } => write!(f, "no committed receipt for {hash} yet"),
+            Error::WsConnect(m) => write!(f, "websocket connect: {m}"),
+            Error::Closed => f.write_str("the feed is closed"),
             Error::ChainMismatch { expected, actual } => {
                 write!(f, "gateway serves chain {actual:?}, expected {expected:?}")
             }

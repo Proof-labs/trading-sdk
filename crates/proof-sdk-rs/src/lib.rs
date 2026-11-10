@@ -44,6 +44,8 @@
 //! Prices and balances are `u64` micro-USDC (`1_000_000` = $1). Quantities are
 //! integer contracts. Nothing is a float.
 
+#[cfg(feature = "ws")]
+mod account_event;
 mod address;
 mod error;
 mod exchange;
@@ -52,6 +54,11 @@ mod nonce;
 #[cfg(feature = "ws")]
 mod ws;
 
+#[cfg(feature = "ws")]
+pub use account_event::{
+    AccountEvent, AccountEventKind, Deposited, Fill, FundingSettled, MarketOrderProcessed,
+    OrderAmended, OrderCancelled, OrderPlaced, OrderRejected, PositionClosed, PositionUpdated,
+};
 pub use address::Address;
 pub use error::{Error, Result};
 pub use exchange::{ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted, TxStatus};
@@ -62,8 +69,7 @@ pub use info::{
 pub use nonce::{NonceAllocator, MAX_CLOCK_LEAD_MS};
 #[cfg(feature = "ws")]
 pub use ws::{
-    AccountAuth, AccountEvent, Subscription, WsAccount, WsClient, WsConfig, WsMessage, WsReceiver,
-    WsTrade,
+    AccountAuth, Subscription, WsAccount, WsClient, WsConfig, WsMessage, WsReceiver, WsTrade,
 };
 
 /// The core crate, re-exported so callers need one dependency.

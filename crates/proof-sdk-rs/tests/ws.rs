@@ -64,10 +64,7 @@ async fn reconnects_and_resubscribes_after_a_drop() {
         seen
     });
 
-    let config = WsConfig {
-        max_backoff: Duration::from_millis(50),
-        ..WsConfig::new(url)
-    };
+    let config = WsConfig::new(url).with_max_backoff(Duration::from_millis(50));
     let (client, mut rx) = WsClient::connect(config).await.unwrap();
     client.subscribe(Subscription::Orderbook(1)).unwrap();
 

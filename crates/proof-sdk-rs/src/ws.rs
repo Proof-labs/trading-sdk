@@ -31,6 +31,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
+use crate::account_event::{kind_of, AccountEvent};
 use crate::address::Address;
 use crate::error::{Error, Result};
 use crate::info::{ClientConfig, Level};
@@ -91,32 +92,25 @@ impl std::fmt::Debug for AccountAuth {
     }
 }
 
-/// WebSocket feed settings.
+/// WebSocket feed settings. Build with [`WsConfig::new`] or
+/// [`WsConfig::from_client_config`] and the `with_*` setters.
 #[derive(Clone)]
 pub struct WsConfig {
-    /// Full feed URL, e.g. `wss://api.dev.proof.trade/ws`.
-    pub url: String,
-    /// Sent as `X-Api-Key` on the handshake when set.
-    pub api_key: Option<String>,
-    /// Signs `accountEvents` subscriptions; see [`AccountAuth`].
-    pub account_auth: Option<AccountAuth>,
-    /// App-level ping cadence. Default 15s.
-    pub ping_interval: Duration,
-    /// Reconnect if no pong arrives this long after a ping. Default 10s.
-    pub pong_timeout: Duration,
-    /// Reconnect after a drop. Default `true`; when `false` the receiver ends
-    /// on the first disconnect.
-    pub reconnect: bool,
-    /// Upper bound of the reconnect backoff (starts at 250ms, doubles).
-    /// Default 10s.
-    pub max_backoff: Duration,
-    /// Messages buffered for a slow consumer before the reader waits. Default
-    /// 4096. While the buffer is full the socket is not read.
-    pub buffer: usize,
+    url: String,
+    api_key: Option<String>,
+    account_auth: Option<AccountAuth>,
+    ping_interval: Duration,
+    pong_timeout: Duration,
+    reconnect: bool,
+    max_backoff: Duration,
+    buffer: usize,
 }
 
 impl WsConfig {
-    /// Settings for a feed at `url` with defaults.
+    /// Settings for the feed at `url` (e.g. `wss://api.dev.proof.trade/ws`)
+    /// with defaults: ping every 15s, reconnect after a 10s pong timeout with
+    /// backoff up to 10s, 4096-message buffer, no API key, no account auth.
+    #[must_use]
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
@@ -133,24 +127,74 @@ impl WsConfig {
     /// The `/ws` feed of `config`'s gateway (`https` becomes `wss`), with its
     /// API key.
     pub fn from_client_config(config: &ClientConfig) -> Result<Self> {
-        let base = config.gateway_url.trim_end_matches('/');
+        let base = config.gateway_url().trim_end_matches('/');
         let url = if let Some(rest) = base.strip_prefix("https://") {
             format!("wss://{rest}/ws")
         } else if let Some(rest) = base.strip_prefix("http://") {
             format!("ws://{rest}/ws")
         } else {
-            return Err(Error::Config("gateway_url needs an http(s) scheme".into()));
+            return Err(Error::Config("gateway url needs an http(s) scheme".into()));
         };
-        Ok(Self {
-            api_key: config.api_key.clone(),
-            ..Self::new(url)
-        })
+        let mut ws = Self::new(url);
+        ws.api_key = config.api_key().map(str::to_owned);
+        Ok(ws)
     }
 
+    /// Sign `accountEvents` subscriptions; see [`AccountAuth`].
     #[must_use]
     pub fn with_account_auth(mut self, auth: AccountAuth) -> Self {
         self.account_auth = Some(auth);
         self
+    }
+
+    /// Sent as `X-Api-Key` on the handshake.
+    #[must_use]
+    pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
+        self.api_key = Some(key.into());
+        self
+    }
+
+    /// App-level ping cadence.
+    #[must_use]
+    pub fn with_ping_interval(mut self, every: Duration) -> Self {
+        self.ping_interval = every;
+        self
+    }
+
+    /// Reconnect if no pong arrives this long after a ping.
+    #[must_use]
+    pub fn with_pong_timeout(mut self, timeout: Duration) -> Self {
+        self.pong_timeout = timeout;
+        self
+    }
+
+    /// Reconnect after a drop (default). With `false` the receiver ends on
+    /// the first disconnect.
+    #[must_use]
+    pub fn with_reconnect(mut self, reconnect: bool) -> Self {
+        self.reconnect = reconnect;
+        self
+    }
+
+    /// Upper bound of the reconnect backoff, which starts at 250ms and
+    /// doubles.
+    #[must_use]
+    pub fn with_max_backoff(mut self, max: Duration) -> Self {
+        self.max_backoff = max;
+        self
+    }
+
+    /// Messages buffered for a slow consumer. While the buffer is full the
+    /// socket is not read (and no pings go out).
+    #[must_use]
+    pub fn with_buffer(mut self, messages: usize) -> Self {
+        self.buffer = messages;
+        self
+    }
+
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
     }
 }
 
@@ -171,19 +215,21 @@ impl std::fmt::Debug for WsConfig {
 
 /// A feed channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum Subscription {
     /// Aggregated book: a snapshot, then one update per changed level.
     Orderbook(MarketId),
     /// Public fills.
     Trades(MarketId),
     /// An account's snapshot, then its live engine events (orders, fills,
-    /// positions, liquidations). Needs [`WsConfig::account_auth`] on gateways
-    /// that require auth.
+    /// positions, funding). Needs [`WsConfig::with_account_auth`] on gateways
+    /// that require auth, the public devnet among them.
     AccountEvents(Address),
 }
 
 /// A public fill on the `trades` channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WsTrade {
     pub market: MarketId,
     pub fill_id: u64,
@@ -191,21 +237,6 @@ pub struct WsTrade {
     pub maker_side: Side,
     pub price: u64,
     pub quantity: u64,
-}
-
-/// A live engine event for a subscribed account.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AccountEvent {
-    pub owner: Address,
-    /// The gateway's normalised frame type (`orderUpdate`, `fill`, ...).
-    pub kind: String,
-    /// The engine's event name (`order_placed`, `trade_executed`, ...).
-    pub event_type: String,
-    pub height: u64,
-    /// The transaction hash (or block-event key), when the gateway sends it.
-    pub tx_hash: Option<String>,
-    /// The event's attributes, as the gateway sends them (decimal strings).
-    pub payload: serde_json::Value,
 }
 
 /// An account snapshot from the feed: the engine's [`AccountInfo`], which
@@ -315,6 +346,9 @@ impl Stream for WsReceiver {
 impl WsClient {
     /// Open the feed. The first connection is made before this returns, so a
     /// bad URL or an unreachable gateway is an error here and not a silent retry.
+    ///
+    /// Spawns the connection task with `tokio::spawn`, so it must be called
+    /// inside a tokio runtime. The task ends when the feed closes.
     pub async fn connect(config: WsConfig) -> Result<(Self, WsReceiver)> {
         let socket = open(&config).await?;
         let (commands, command_rx) = mpsc::unbounded_channel();
@@ -339,9 +373,7 @@ impl WsClient {
     }
 
     fn send(&self, command: Command) -> Result<()> {
-        self.commands
-            .send(command)
-            .map_err(|_| Error::Config("the feed is closed".into()))
+        self.commands.send(command).map_err(|_| Error::Closed)
     }
 }
 
@@ -362,8 +394,8 @@ async fn open(config: &WsConfig) -> Result<Socket> {
     let connect = tokio_tungstenite::connect_async(request);
     match tokio::time::timeout(Duration::from_secs(10), connect).await {
         Ok(Ok((socket, _))) => Ok(socket),
-        Ok(Err(e)) => Err(Error::Config(format!("ws connect: {e}"))),
-        Err(_) => Err(Error::Config("ws connect: timed out".into())),
+        Ok(Err(e)) => Err(Error::WsConnect(e.to_string())),
+        Err(_) => Err(Error::WsConnect("timed out".into())),
     }
 }
 
@@ -465,7 +497,7 @@ async fn session(
                 Some(Ok(Message::Text(text))) => {
                     match parse(&text) {
                         Parsed::Message(m) => {
-                            if out.send(m).await.is_err() {
+                            if out.send(*m).await.is_err() {
                                 return End::Closed;
                             }
                         }
@@ -562,8 +594,14 @@ fn hex(bytes: &[u8]) -> String {
 
 // -- frame parsing ---------------------------------------------------------------
 
+impl Parsed {
+    fn message(m: WsMessage) -> Self {
+        Self::Message(Box::new(m))
+    }
+}
+
 enum Parsed {
-    Message(WsMessage),
+    Message(Box<WsMessage>),
     Pong,
     Ignore,
 }
@@ -655,7 +693,7 @@ fn side(s: Option<&str>) -> Option<Side> {
 }
 
 fn malformed(reason: impl Into<String>) -> Parsed {
-    Parsed::Message(WsMessage::Malformed {
+    Parsed::message(WsMessage::Malformed {
         reason: reason.into(),
     })
 }
@@ -668,7 +706,7 @@ fn parse(text: &str) -> Parsed {
     match raw.kind.as_deref() {
         Some("pong") => Parsed::Pong,
         Some("subscribed" | "unsubscribed") => Parsed::Ignore,
-        Some("error") => Parsed::Message(WsMessage::Refused {
+        Some("error") => Parsed::message(WsMessage::Refused {
             id: raw.id,
             channel: raw.channel.map(Cow::into_owned),
             code: raw.code,
@@ -695,7 +733,7 @@ fn orderbook(raw: Raw<'_>) -> Parsed {
         Some("snapshot") => {
             let levels =
                 |v: Option<Vec<RawLevel>>| v.unwrap_or_default().into_iter().map(|l| l.0).collect();
-            Parsed::Message(WsMessage::OrderbookSnapshot {
+            Parsed::message(WsMessage::OrderbookSnapshot {
                 market,
                 bids: levels(raw.bids),
                 asks: levels(raw.asks),
@@ -703,7 +741,7 @@ fn orderbook(raw: Raw<'_>) -> Parsed {
         }
         Some("update") => match (side(raw.side.as_deref()), raw.price, raw.total_quantity) {
             (Some(side), Some(price), Some(quantity)) => {
-                Parsed::Message(WsMessage::OrderbookUpdate {
+                Parsed::message(WsMessage::OrderbookUpdate {
                     market,
                     side,
                     level: Level {
@@ -731,7 +769,7 @@ fn trade(raw: &Raw<'_>) -> Parsed {
         raw.quantity,
     ) {
         (Some(market), Some(fill_id), Some(maker_side), Some(price), Some(quantity)) => {
-            Parsed::Message(WsMessage::Trade(WsTrade {
+            Parsed::message(WsMessage::Trade(WsTrade {
                 market,
                 fill_id,
                 maker_side,
@@ -753,7 +791,7 @@ fn account(raw: Raw<'_>) -> Parsed {
                 return malformed("account snapshot without an account");
             };
             match decode_account(&account.data) {
-                Ok(account) => Parsed::Message(WsMessage::AccountSnapshot {
+                Ok(account) => Parsed::message(WsMessage::AccountSnapshot {
                     owner,
                     height: raw.height,
                     account: Box::new(WsAccount(account)),
@@ -761,17 +799,18 @@ fn account(raw: Raw<'_>) -> Parsed {
                 Err(reason) => malformed(reason),
             }
         }
-        Some(kind) => {
+        Some(_) => {
             let Some(event_type) = raw.event_type else {
                 return malformed("account event without an eventType");
             };
-            Parsed::Message(WsMessage::AccountEvent(AccountEvent {
+            let payload = raw.payload.unwrap_or(serde_json::Value::Null);
+            Parsed::message(WsMessage::AccountEvent(AccountEvent {
                 owner,
-                kind: kind.to_owned(),
+                kind: kind_of(&event_type, &payload),
                 event_type: event_type.into_owned(),
                 height: raw.height.unwrap_or(0),
                 tx_hash: raw.tx_hash,
-                payload: raw.payload.unwrap_or(serde_json::Value::Null),
+                payload,
             }))
         }
         None => Parsed::Ignore,
@@ -794,7 +833,7 @@ mod tests {
 
     fn message(text: &str) -> WsMessage {
         match parse(text) {
-            Parsed::Message(m) => m,
+            Parsed::Message(m) => *m,
             Parsed::Pong => panic!("pong"),
             Parsed::Ignore => panic!("ignored"),
         }
@@ -887,18 +926,28 @@ mod tests {
     }
 
     #[test]
-    fn account_event() {
+    fn account_events_arrive_typed_with_the_raw_payload_kept() {
         let m = message(
-            r#"{"channel":"accountEvents","type":"fill","eventType":"trade_executed","owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","height":7,"txHash":"AB","payload":{"price":"1"}}"#,
+            r#"{"channel":"accountEvents","type":"orderUpdate","eventType":"order_cancelled","owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","height":7,"txHash":"AB","payload":{"client_order_id":"9","filled_quantity":"1","market":"1","order_id":"3211376","original_quantity":"260","owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","reason":"user_requested","remaining_quantity":"259"}}"#,
         );
         let WsMessage::AccountEvent(e) = m else {
             panic!("{m:?}")
         };
-        assert_eq!(
-            (e.kind.as_str(), e.event_type.as_str()),
-            ("fill", "trade_executed")
+        assert_eq!((e.event_type.as_str(), e.height), ("order_cancelled", 7));
+        let crate::AccountEventKind::OrderCancelled(c) = &e.kind else {
+            panic!("{:?}", e.kind)
+        };
+        assert_eq!((c.order_id, c.client_order_id), (3_211_376, Some(9)));
+        assert_eq!(e.payload["reason"], "user_requested");
+
+        // A payload that does not match its event stays raw rather than mistyped.
+        let m = message(
+            r#"{"channel":"accountEvents","type":"fill","eventType":"trade_executed","owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","height":8,"payload":{"price":"1"}}"#,
         );
-        assert_eq!(e.payload["price"], "1");
+        let WsMessage::AccountEvent(e) = m else {
+            panic!("{m:?}")
+        };
+        assert_eq!(e.kind, crate::AccountEventKind::Other);
     }
 
     #[test]
