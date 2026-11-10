@@ -358,11 +358,14 @@ validator, and does not prove consensus compatibility or authorize a rollout. Us
 
 ### Optional native Rust gateway transport
 
-Rust `proof-trading-sdk` 3.2.0 exposes `gateway::GatewayClient` with the optional
+Rust `proof-trading-sdk` 4.2.0 exposes `gateway::GatewayClient` with the optional
 `gateway` feature. Default codec/WASM builds do not acquire an HTTP transport.
-The four explicit operations are `chain_identity`, `oracle_permissions`,
-`submit_signed_bytes` and `committed_receipt`; they use only the existing gateway
-routes, with no direct-node fallback, signing, nonce allocation or hidden retry.
+Its six explicit operations are `chain_identity`, `oracle_permissions`,
+`account_valuation`, `submit_signed_bytes`, `submit_signed_bytes_with_evidence`
+and `committed_receipt`. They use only the existing gateway routes, with no
+direct-node fallback, signing, nonce allocation or hidden retry. The crate's own
+[README](crates/proof-trading-sdk/README.md) covers the codec, signing and read
+decoding for Rust integrators.
 
 Configure an HTTPS origin (HTTP requires a URL-normalized loopback IP, not a DNS
 name; numeric IPv4 aliases that normalize to loopback are allowed), a
