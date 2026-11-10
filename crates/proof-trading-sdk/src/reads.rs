@@ -68,6 +68,7 @@ pub const ORDER: Shape = Shape::Record {
 };
 
 pub const MAX_OPEN_ORDERS_BYTES: usize = 1024 * 1024;
+pub const OPEN_ORDERS_OWNER_MISMATCH: &str = "open orders owner does not match request";
 
 /// Decode the owner's resting orders using the canonical wire type. Legacy
 /// trailing fields use its serde defaults; appended future fields are ignored.
@@ -107,7 +108,7 @@ pub fn decode_open_orders(
     let mut previous = None;
     for order in &orders {
         if &order.owner != owner {
-            return Err("open orders owner does not match request");
+            return Err(OPEN_ORDERS_OWNER_MISMATCH);
         }
         if previous.is_some_and(|id| order.id <= id) {
             return Err("open orders are not strictly ordered by id");

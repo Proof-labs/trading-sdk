@@ -15,7 +15,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   match the TS finalized account-state contract. Existing `account()` is unchanged;
   valuation, authorization, payload proofs and validator verification are excluded.
 
-- Python: add typed finalized valued-account, agent-authorization, recent-nonce and open-order reads with bounded witness transport and canonical Rust payload decoding. Existing account/order APIs are unchanged. Python and TypeScript finalized order reads accept market ID zero, matching positions and the wire u32 domain; invalid market values remain errors. TypeScript `RawOpenOrder.market` now includes the literal `0`.
+- Python: add typed finalized valued-account, agent-authorization, recent-nonce and open-order reads with bounded witness transport and canonical Rust payload decoding. Existing account/order APIs are unchanged. Python and TypeScript finalized order reads accept market ID zero, matching positions and the wire u32 domain; invalid market values remain errors.
 - Python chain-pinned `block_header`, typed header/witness decoders and
   `verify_witness` compare a finalized-read witness with an H+1 app hash.
   Byte, chunk and JSON-depth limits apply; synchronous HTTP cannot guarantee a
@@ -25,6 +25,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- TypeScript `RawOpenOrder.market` widens from `MarketId` to `MarketId | 0`;
+  code that assumes a branded `MarketId` must handle market zero.
 - **Breaking (TypeScript MAJOR):** `queryOpenOrders` and Python `open_orders`
   preserve all 14 resting-order fields through the shared Rust decoder, including
   client order IDs and exact integer metadata. The eight added TypeScript

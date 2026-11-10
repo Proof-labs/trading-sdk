@@ -17,6 +17,19 @@ fn map_err(e: ExecError) -> PyErr {
     PyValueError::new_err(format!("{e:?}"))
 }
 
+pyo3::create_exception!(_native, FinalizedBindingError, PyValueError);
+
+fn map_read_err(e: core_sdk::finalized_account_reads::ReadError) -> PyErr {
+    match e.kind {
+        core_sdk::finalized_account_reads::ReadErrorKind::Binding => {
+            FinalizedBindingError::new_err(e.message)
+        }
+        core_sdk::finalized_account_reads::ReadErrorKind::Malformed => {
+            PyValueError::new_err(e.message)
+        }
+    }
+}
+
 fn map_pythonize_err(e: pythonize::PythonizeError) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
@@ -258,8 +271,7 @@ fn decode_finalized_account<'py>(
     let owner: &[u8; 20] = owner
         .try_into()
         .map_err(|_| PyValueError::new_err("owner must be 20 bytes"))?;
-    let value =
-        core_sdk::finalized_account_reads::account(bytes, owner).map_err(PyValueError::new_err)?;
+    let value = core_sdk::finalized_account_reads::account(bytes, owner).map_err(map_read_err)?;
     pythonize::pythonize(py, &value).map_err(map_pythonize_err)
 }
 #[pyfunction]
@@ -281,7 +293,7 @@ fn decode_finalized_open_orders<'py>(
         .try_into()
         .map_err(|_| PyValueError::new_err("owner must be 20 bytes"))?;
     let value = core_sdk::finalized_account_reads::open_orders(bytes, owner, limit)
-        .map_err(PyValueError::new_err)?;
+        .map_err(map_read_err)?;
     pythonize::pythonize(py, &value).map_err(map_pythonize_err)
 }
 
@@ -517,6 +529,10 @@ fn classify_error_name(code: u32, log: Option<&str>) -> Option<&'static str> {
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SigningHandle>()?;
+    m.add(
+        "FinalizedBindingError",
+        m.py().get_type::<FinalizedBindingError>(),
+    )?;
     m.add_function(wrap_pyfunction!(sign_and_encode, m)?)?;
     m.add_function(wrap_pyfunction!(encode_signed_tx, m)?)?;
     m.add_function(wrap_pyfunction!(encode_action, m)?)?;
