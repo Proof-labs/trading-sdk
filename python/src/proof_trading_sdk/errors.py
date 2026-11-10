@@ -106,7 +106,7 @@ class SubmissionPending(ProofTradingSdkError):
 
 
 class AuthenticationError(ProofTradingSdkError):
-    """HTTP 401 — API key missing, invalid, or expired."""
+    """HTTP or WebSocket authentication was refused (API key or signed auth)."""
 
 
 class EngineError(ProofTradingSdkError):
