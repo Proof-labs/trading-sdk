@@ -98,9 +98,6 @@ pub fn open_orders(
             .as_array()
             .filter(|v| v.len() == 14)
             .ok_or("finalized order must have exactly 14 fields")?;
-        if fields[1].as_u64() == Some(0) {
-            return Err("invalid finalized order market");
-        }
         if !matches!(fields[3].as_str(), Some("Buy" | "Sell"))
             || !matches!(fields[11].as_str(), Some("Gtc" | "Ioc" | "Fok"))
         {
@@ -126,6 +123,32 @@ mod tests {
             assert!(recent_nonces(&rmp_serde::to_vec(&values).expect("nonces encode")).is_err());
         }
     }
+    #[test]
+    fn finalized_orders_accept_the_full_wire_market_domain() -> Result<(), String> {
+        for market in [0u32, 1, u32::MAX] {
+            let row = (
+                1u64,
+                market,
+                [7u8; 20],
+                "Buy",
+                1u64,
+                1u64,
+                None::<u64>,
+                1u64,
+                0u64,
+                0u64,
+                0u64,
+                "Gtc",
+                false,
+                false,
+            );
+            let bytes = rmp_serde::to_vec(&vec![row]).map_err(|e| e.to_string())?;
+            let orders = open_orders(&bytes, &[7; 20], 101)?;
+            assert_eq!(orders[0].market, market);
+        }
+        Ok(())
+    }
+
     #[test]
     fn finalized_orders_refuse_legacy_width_before_shared_decoder() {
         let bytes = rmp_serde::to_vec(&vec![(1u64, 3u32, [7u8; 20], "Buy", 1u64, 1u64)])

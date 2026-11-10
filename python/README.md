@@ -312,6 +312,8 @@ accepts out-of-order unique nonces within its window and rejects replays.
 
 ### Finalized account reads
 
+Positions and open orders preserve market ID zero; market IDs use the wire u32 domain.
+
 ```python
 account = client.finalized_account(owner)
 authorization = client.finalized_agent_authorization(owner, agent)

@@ -203,3 +203,10 @@ def test_duplicate_json_and_missing_witness_fail_closed(client):
     calls, stream = serve(client, body=raw)
     with pytest.raises(sdk.GatewayReadError): client.finalized_account_state(OWNER)
     assert len(calls) == 1 and stream.closed
+
+
+def test_witness_height_zero_is_refused():
+    value = envelope([OWNER, 0, U64, []])
+    value["witness"]["height"] = "0"
+    with pytest.raises(sdk.GatewayReadError):
+        decode(value)

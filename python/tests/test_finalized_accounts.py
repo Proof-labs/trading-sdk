@@ -109,6 +109,19 @@ def test_nonce_invalid_domain_or_order(bad):
         sdk.decode_finalized_recent_nonces(envelope(bad), OWNER)
 
 
+@pytest.mark.parametrize("market", [0, 1, (1 << 32) - 1])
+def test_positions_and_orders_preserve_the_same_market_domain(market):
+    raw_account = account()
+    raw_account[1][0][1] = market
+    raw_order = order()
+    raw_order[1] = market
+    account_value = sdk.decode_finalized_account(envelope(raw_account), OWNER)
+    orders_value = sdk.decode_finalized_open_orders(envelope([raw_order]), OWNER)
+    assert account_value.positions[0].market == market
+    assert orders_value.orders[0].market == market
+    assert orders_value.complete
+
+
 def test_orders_all_fields_and_completeness():
     value = sdk.decode_finalized_open_orders(envelope([order()]), OWNER, 1)
     row = value.orders[0]
@@ -120,7 +133,7 @@ def test_orders_all_fields_and_completeness():
     assert sdk.decode_finalized_open_orders(envelope([order()]), OWNER, 2).complete
 
 
-@pytest.mark.parametrize("index,bad", [(0, -1), (1, 0), (1, 1 << 32), (2, OTHER), (2, OWNER + b'x'), (2, list(OWNER) + [0]), (3, 0), (3, "Maybe"), (4, -1), (5, 0), (6, -1), (7, True), (8, -1), (9, -1), (10, -1), (11, 0), (11, "Maybe"), (12, 1), (13, 0)])
+@pytest.mark.parametrize("index,bad", [(0, -1), (1, -1), (1, True), (1, 0.5), (1, "0"), (1, 1 << 32), (2, OTHER), (2, OWNER + b'x'), (2, list(OWNER) + [0]), (3, 0), (3, "Maybe"), (4, -1), (5, 0), (6, -1), (7, True), (8, -1), (9, -1), (10, -1), (11, 0), (11, "Maybe"), (12, 1), (13, 0)])
 def test_order_field_domains(index, bad):
     raw = order(); raw[index] = bad
     with pytest.raises(sdk.GatewayReadError):
