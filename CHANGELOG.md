@@ -20,6 +20,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   opaque `SigningHandle`, alongside an API key when configured, renewing the signed
   challenge on every retry and reconnect. `account_auth(owner, after_id=0)`
   supports direct owner keys and JSON-safe nonnegative cursors.
+
+### Changed
+
+- Python account-stream reconnect backoff now defaults to a 10-second cap
+  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
+- Python signed account authentication rejects an unconfigured chain ID before
+  signing. Configure the gateway's chain ID explicitly.
+- Python account streams match TypeScript's bounded first-subscription auth
+  retries: signing failures and 401/429/503 frames yield errors and retry up to
+  five times. Exhaustion and 403 frames leave the socket open without further
+  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
+  401/403 refusals raise `AuthenticationError` before the first successful
+  connection; on reconnect they use the configured retry budget and backoff
+  without discarding history recovery state.
+- A Python client with a signer now signs every account subscription, even with
+  an API key configured. Subscribing to another owner's feed, or to any feed
+  with an unconfigured chain ID, now fails with error frames instead of relying
+  on the API key. Use a client with only the API key for those feeds.
+
+- **Breaking (TypeScript MAJOR):** `queryOpenOrders` and Python `open_orders`
+  preserve all 14 resting-order fields through the shared Rust decoder, including
+  client order IDs and exact integer metadata. The eight added TypeScript
+  `OpenOrder` fields are required in manually constructed objects; see the
+  [migration guide](README.md#open-order-migration).
+  Invalid responses now throw instead of appearing empty, and
+  `queryOpenOrders("")` throws. Valid empty lists still return `[]`; legacy
+  six-field records use wire defaults. Decoded payloads over 1 MiB are rejected.
+  Ship this change in the next TypeScript MAJOR release; it is not part of 11.0.0.
+
+### Fixed
+
+- Python submits signed transactions to the gateway in its JSON/base64 envelope.
+- Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. A 5xx carrying the gateway's proven `status: refused` body still raises `GatewayError`.
+- Python raises `TransportError` for malformed or wrong-shaped read responses (a 200 with `null` or `[]` on an object-valued read such as `markets` or `ticker` no longer reads as empty), and raises `SubmissionPending` with the transaction hash when a submission response carries no verdict; only an explicit non-zero `"<code>: <message>"` stays a terminal `EngineError`.
+- Python account-event history supports explicit ordering and cursor pagination. The client validates owner addresses and page limits (1–5000) before sending a request. Passing the unsupported `after_id` filter now raises `ValueError`.
+- Python reads per-account funding payments and position history with cursor pagination. Passing the unsupported `after_height` filter now raises `ValueError`.
+- Python reads deposit and withdrawal history from owner-scoped account events.
+
+## [11.0.0] — 2026-11-09
+
+TypeScript MAJOR release for exchange 2.24.0 (proof-wire 11.0.0, engine 12.0):
+the `VoidEvent`, `SettleEvent` and `SetMarketStatus` admin actions,
+`RecordWithdrawalPayout`, error codes 128-134, and the retired `HaltTrading` /
+`SetReduceOnly` arms. Rust and Python versions are unchanged.
+
+### Added
+
 - **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
   that voids an event and settles every binary and conditional on it in cash
   at `yesPrice` (micro-USDC per share, `0..=1_000_000`). The TypeScript
@@ -46,39 +93,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `MarketStatusTransitionRefused`, `MarketBacksLiveEvent`, `MarketHalted`);
   and the `MarketHalted` trigger outcome reason.
 
-### Changed
-
-- Python account-stream reconnect backoff now defaults to a 10-second cap
-  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
-- Python signed account authentication rejects an unconfigured chain ID before
-  signing. Configure the gateway's chain ID explicitly.
-- Python account streams match TypeScript's bounded first-subscription auth
-  retries: signing failures and 401/429/503 frames yield errors and retry up to
-  five times. Exhaustion and 403 frames leave the socket open without further
-  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
-  401/403 refusals raise `AuthenticationError` before the first successful
-  connection; on reconnect they use the configured retry budget and backoff
-  without discarding history recovery state.
-- A Python client with a signer now signs every account subscription, even with
-  an API key configured. Subscribing to another owner's feed, or to any feed
-  with an unconfigured chain ID, now fails with error frames instead of relying
-  on the API key. Use a client with only the API key for those feeds.
-
 ### Removed
 
 - **The `HaltTrading` and `SetReduceOnly` emergency arms**, which the engine
   never admitted and proof-wire 11.0.0 drops. `PauseMarket` is the one
   emergency action: it halts one market, and `SetMarketStatus` lifts it.
   Breaking for code that names the retired arms (MAJOR).
-
-### Fixed
-
-- Python submits signed transactions to the gateway in its JSON/base64 envelope.
-- Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. A 5xx carrying the gateway's proven `status: refused` body still raises `GatewayError`.
-- Python raises `TransportError` for malformed or wrong-shaped read responses (a 200 with `null` or `[]` on an object-valued read such as `markets` or `ticker` no longer reads as empty), and raises `SubmissionPending` with the transaction hash when a submission response carries no verdict; only an explicit non-zero `"<code>: <message>"` stays a terminal `EngineError`.
-- Python account-event history supports explicit ordering and cursor pagination. The client validates owner addresses and page limits (1–5000) before sending a request. Passing the unsupported `after_id` filter now raises `ValueError`.
-- Python reads per-account funding payments and position history with cursor pagination. Passing the unsupported `after_height` filter now raises `ValueError`.
-- Python reads deposit and withdrawal history from owner-scoped account events.
 
 ## [10.1.0] — 2026-11-05
 
@@ -2064,7 +2084,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v11.0.0...HEAD
+[11.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.1.0...npm-v11.0.0
 [10.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.0.0...npm-v10.1.0
 [10.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.2.0...npm-v10.0.0
 [9.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.1.0...npm-v9.2.0

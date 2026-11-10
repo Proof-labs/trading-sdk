@@ -280,6 +280,21 @@ fn reject_floats(bytes: &[u8]) -> PyResult<()> {
     core_sdk::msgpack::reject_floats(bytes).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// Decode owner-bound resting orders with the shared proof-wire DTO.
+#[pyfunction]
+fn decode_open_orders<'py>(
+    py: Python<'py>,
+    bytes: &[u8],
+    owner: &[u8],
+) -> PyResult<Bound<'py, PyAny>> {
+    let owner: [u8; 20] = owner
+        .try_into()
+        .map_err(|_| PyValueError::new_err("owner must be exactly 20 bytes"))?;
+    let orders =
+        core_sdk::reads::decode_open_orders(bytes, &owner).map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &orders).map_err(map_pythonize_err)
+}
+
 /// Derive a 20-byte owner address from a 32-byte Ed25519 public key.
 #[pyfunction]
 fn pubkey_to_owner<'py>(py: Python<'py>, pubkey: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
@@ -504,6 +519,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         market_snapshot::MAX_SNAPSHOT_BYTES,
     )?;
     m.add_function(wrap_pyfunction!(reject_floats, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_open_orders, m)?)?;
+    m.add(
+        "MAX_OPEN_ORDERS_BYTES",
+        core_sdk::reads::MAX_OPEN_ORDERS_BYTES,
+    )?;
     m.add_function(wrap_pyfunction!(pubkey_to_owner, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;
     m.add_function(wrap_pyfunction!(chain_id_from_string, m)?)?;
