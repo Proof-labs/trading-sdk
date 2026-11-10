@@ -57,6 +57,47 @@ hash as `tx_hash`; reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
+## Private account events
+
+`client.account_event_stream(owner)` sends the client's API key when configured.
+When `secret_key` or `key_handle` is present, it also signs the gateway's
+subscription challenge on every attempt, matching TypeScript. A stale or
+non-admin API key therefore does not suppress valid signed authentication.
+Set the client's chain ID to the gateway's chain: Python does not resolve it
+automatically. `account_auth()` raises `SigningError` for an unbound chain ID
+before signing; a stream reports the signing failure through its bounded retry
+error frames and never sends an unsigned subscription. An opaque signing handle
+keeps private key material in Rust memory or the HSM.
+
+Signed authentication supports the signer's own account only. A trading-agent
+grant does not authorize reading another owner's private feed. With a signer,
+this restriction also applies when an API key is configured. Use a client with
+only an authorized API key for another owner's feed. Before the first
+subscription is confirmed, signing failures and gateway error codes 401/429/503
+yield error frames and retry on the same socket: at most five retries after the
+initial attempt, with default delays of 0.5, 1, 2, 4, and 8 seconds. Every attempt
+signs fresh authentication; signing failures never send an unsigned subscription.
+Exhaustion yields a final error frame and leaves the socket open without more
+subscription attempts. A 403 frame is yielded without retrying or closing.
+
+A matching subscription acknowledgment or account data frame confirms the
+subscription and cancels pending retries. Errors after confirmation remain
+observable without restarting live delivery. A new connection resets the retry
+budget. The synchronous iterator performs retries while it is being consumed;
+`stream.close()` cancels pending retries. Synthetic error frames carry the SDK's
+fixed `SigningError` text and omit other exception text, which could expose
+sensitive diagnostics. HTTP 401/403
+refusals during the WebSocket upgrade raise `AuthenticationError` before the
+first successful connection. On reconnect, they follow `reconnect_attempts`
+and the normal backoff (`None` retries indefinitely), preserving recovery state.
+`close()` cancels the wait. This is separate from subscription-error frames.
+
+`client.account_auth(owner, after_id=0)` returns signed subscription parameters.
+The optional cursor must be a Python integer in `0..2**53 - 1`, matching the TS
+SDK's JSON-safe domain. Zero is signed but omitted from the returned parameters.
+Direct helper failures raise `SigningError`. The default account stream signs
+cursor zero; its history-based reconnect recovery does not change this cursor.
+
 ## Resting orders
 
 `client.open_orders(owner)` returns the shared wire order fields, including
