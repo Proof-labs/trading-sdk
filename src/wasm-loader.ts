@@ -22,7 +22,6 @@ export interface WasmCore {
     module_or_path?: BufferSource | URL;
   }) => Promise<unknown>;
   encode_payload(actionType: number, fields: unknown): Uint8Array;
-  canonicalize_payload(actionType: number, payload: Uint8Array): Uint8Array;
   decode_payload(actionType: number, payload: Uint8Array): unknown;
   /** Strict, type-preserving MessagePack preflight for gateway read payloads.
    *  Throws when the bytes carry a float family or another shape no read DTO
@@ -38,6 +37,8 @@ export interface WasmCore {
   };
   /** Strictly decode a node read response as its wire type (serde-shaped JS). */
   decode_read(kind: number, bytes: Uint8Array): unknown;
+  /** Canonical resting orders, validated against the requested owner. */
+  decode_open_orders(bytes: Uint8Array, owner: Uint8Array): unknown;
   /** Decode a complete `/v1/markets-snapshot` HTTP body bound to `chainId`. */
   decode_markets_snapshot(body: Uint8Array, chainId: Uint8Array): unknown;
   signing_message(

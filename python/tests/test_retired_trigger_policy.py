@@ -1,4 +1,4 @@
-"""Retired policy writes fail before signing; historical payloads remain readable."""
+"""Retired helpers are removed; low-level codecs retain the wire contract."""
 import os
 import json
 from pathlib import Path
@@ -34,18 +34,18 @@ def test_removed_public_surface():
 
 
 @pytest.mark.parametrize('tag,fields,payload', retired_cases())
-def test_refuses_typed_raw_and_preencoded_submissions(tag, fields, payload):
+def test_low_level_codec_defers_policy_to_engine(tag, fields, payload):
     assert 'SetTriggerMarketConfig' in _native.decode_action(tag, payload)['action']
-    with pytest.raises(ValueError, match='retired'):
-        actions.encode_action(actions.RawAction(tag, fields))
-    with pytest.raises(ValueError, match='retired'):
-        _native.sign_and_encode(bytes(32), tag, payload, 1, bytes(32))
-    with pytest.raises(ValueError, match='retired'):
-        _native.encode_signed_tx(tag, payload, 1, bytes(32), bytes(64))
-
+    encoded_tag, encoded = actions.encode_action(actions.RawAction(tag, fields))
+    assert encoded_tag == tag and bytes(encoded) == payload
+    for envelope in (
+        _native.sign_and_encode(bytes(32), tag, payload, 1, bytes(32)),
+        _native.encode_signed_tx(tag, payload, 1, bytes(32), bytes(64)),
+    ):
+        decoded = sdk.decode_tx(bytes(envelope))
+        assert decoded['action_type'] == tag and decoded['payload'] == payload
     read_fd, write_fd = os.pipe()
     os.write(write_fd, bytes(32))
     os.close(write_fd)
     handle = sdk.load_key_from_fd(read_fd)
-    with pytest.raises(ValueError, match='retired'):
-        handle.sign_and_encode(bytes(32), tag, payload, 1)
+    assert sdk.decode_tx(handle.sign_and_encode(bytes(32), tag, payload, 1))['payload'] == payload

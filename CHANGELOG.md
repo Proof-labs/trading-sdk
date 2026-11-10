@@ -11,9 +11,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Breaking (next TypeScript MAJOR):** remove `queryTriggerMarketConfigs()`,
   Python `trigger_market_configs()`, the `SetTriggerMarketConfig` builder/type,
-  and TypeScript `validateSetTriggerMarketConfig`. New proposals and approvals
-  for this retired admin action are rejected by the SDK bindings, including
-  raw payload signing. Historical decoding and proposal hashes remain available.
+  and TypeScript `validateSetTriggerMarketConfig`. Low-level payload encoding,
+  signing and historical decoding remain wire-compatible; the engine owns
+  proposal/execution refusal for the retired action. Proposal hashes remain available.
   Decoded TypeScript actions must be narrowed before resubmission.
   Remove legacy-policy prechecks before placing TP/SL; no replacement lookup is needed.
 
@@ -23,7 +23,59 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (current engine ceiling: 1000 bps). Empty or disabled legacy policy rows do not
   gate placement. Existing TP/SL placement, cancellation and history APIs remain.
 
+### Added
+
+- Python typed `authorities()` and `liquidation_config()` reads, backed by
+  canonical Rust wire types with strict record/address/range checks. Failed
+  reads raise rather than synthesize empty authorities or default configuration.
+
+- Python `history_candles` reads durable OHLCV history with typed pages, exact
+  decimal strings, and backward time-window pagination.
+
+- Python `ExternalSigner` and `ExchangeClient.set_external_signer` accept
+  synchronous Ed25519 callbacks for transactions and account-stream auth.
+  Rust prepares canonical messages and verifies returned signatures; replacing
+  the signing connection invalidates an in-flight callback result. TP/SL helpers
+  bind owner selection to that connection. Account streams use the current
+  signer on each authentication attempt, including a signer connected later.
+
+- Python account-event streams authenticate with the client's secret key or
+  opaque `SigningHandle`, alongside an API key when configured, renewing the signed
+  challenge on every retry and reconnect. `account_auth(owner, after_id=0)`
+  supports direct owner keys and JSON-safe nonnegative cursors.
+
+### Changed
+
+- Python account-stream reconnect backoff now defaults to a 10-second cap
+  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
+- Python signed account authentication rejects an unconfigured chain ID before
+  signing. Configure the gateway's chain ID explicitly.
+- Python account streams match TypeScript's bounded first-subscription auth
+  retries: signing failures and 401/429/503 frames yield errors and retry up to
+  five times. Exhaustion and 403 frames leave the socket open without further
+  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
+  401/403 refusals raise `AuthenticationError` before the first successful
+  connection; on reconnect they use the configured retry budget and backoff
+  without discarding history recovery state.
+- A Python client with a signer now signs every account subscription, even with
+  an API key configured. Subscribing to another owner's feed, or to any feed
+  with an unconfigured chain ID, now fails with error frames instead of relying
+  on the API key. Use a client with only the API key for those feeds.
+
+- **Breaking (TypeScript MAJOR):** `queryOpenOrders` and Python `open_orders`
+  preserve all 14 resting-order fields through the shared Rust decoder, including
+  client order IDs and exact integer metadata. The eight added TypeScript
+  `OpenOrder` fields are required in manually constructed objects; see the
+  [migration guide](README.md#open-order-migration).
+  Invalid responses now throw instead of appearing empty, and
+  `queryOpenOrders("")` throws. Valid empty lists still return `[]`; legacy
+  six-field records use wire defaults. Decoded payloads over 1 MiB are rejected.
+  Ship this change in the next TypeScript MAJOR release; it is not part of 11.0.0.
+
 ### Fixed
+
+- Python `RateLimited.bucket` now uses `"default"`, matching the cached
+  `rate_limit_state` key, when the gateway omits `X-RateLimit-Bucket` (#395).
 
 - Python submits signed transactions to the gateway in its JSON/base64 envelope.
 - Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. A 5xx carrying the gateway's proven `status: refused` body still raises `GatewayError`.

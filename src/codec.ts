@@ -363,12 +363,8 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
         actionType as ActionTypeValue,
         getWasm().decode_payload(actionType, payloadBytes),
       );
-      // Preserve adapter validation without authorizing historical resubmission.
-      toWasmFields(decodedAction as Action);
-      const canonicalPayloadBytes = getWasm().canonicalize_payload(
-        actionType,
-        payloadBytes,
-      );
+      // Re-encoding also applies the adapter's structural validation.
+      const canonicalPayloadBytes = encodePayloadBytes(decodedAction as Action);
       const isCanonical =
         canonicalPayloadBytes.length === payloadBytes.length &&
         canonicalPayloadBytes.every((byte, i) => byte === payloadBytes[i]);

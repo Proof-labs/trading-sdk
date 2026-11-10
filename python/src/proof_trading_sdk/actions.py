@@ -14,8 +14,8 @@ core's `wire` newtypes accept them directly and length-check on decode.
 Every action byte is pulled from the core via `get_action_types()`, so
 the `ActionType` map can never drift from the Rust `impl_action_encoding!`
 list. Supported actions have dedicated builders; :class:`RawAction` stays as the
-escape hatch for an action newer than this module. Retired trigger-policy
-proposals and approvals are rejected even through that escape hatch.
+escape hatch for an action newer than this module. The engine decides whether
+a decoded action is currently admissible.
 """
 
 from __future__ import annotations

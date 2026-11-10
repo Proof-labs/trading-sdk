@@ -17,6 +17,7 @@ import {
   Side,
   TimeInForce,
   type AccountInfo,
+  type OpenOrder,
   type Action,
   type ActionTypeValue,
   type AdminAction,
@@ -726,6 +727,26 @@ export function accountInfoFromWasm(v: unknown): AccountInfo {
     feesAccrued: a.fees_accrued as bigint,
     volume30dMicroUsdc: a.volume_30d_micro_usdc as bigint,
   };
+}
+
+/** Canonical resting orders; Rust owns validation and legacy defaults. */
+export function openOrdersFromWasm(value: unknown): OpenOrder[] {
+  return (value as WasmRecord[]).map((o) => ({
+    id: o.id as bigint,
+    market: o.market as number,
+    owner: bytesOf(o.owner),
+    side: o.side as OpenOrder["side"],
+    price: o.price as bigint,
+    quantity: o.quantity as bigint,
+    clientOrderId: (o.client_order_id ?? null) as bigint | null,
+    originalQuantity: o.original_quantity as bigint,
+    filledQuantity: o.filled_quantity as bigint,
+    createdAtMs: o.created_at_ms as bigint,
+    queuePriority: o.queue_priority as bigint,
+    timeInForce: o.time_in_force as OpenOrder["timeInForce"],
+    postOnly: o.post_only as boolean,
+    reduceOnly: o.reduce_only as boolean,
+  }));
 }
 
 /** One stored `AdminAction`, with the same client-side checks as encoding. */

@@ -61,12 +61,6 @@ describe.skipIf(!built)("wasm codec ↔ authoritative vectors", () => {
 
   it("encode_payload reproduces every conformance payload byte-for-byte", () => {
     for (const v of vectors) {
-      if (v.case === "propose_admin_action/set_trigger_market_config") {
-        expect(() => wasm.encode_payload(v.action_type, v.input)).toThrow(
-          /retired/,
-        );
-        continue;
-      }
       const got = Buffer.from(
         wasm.encode_payload(v.action_type, v.input),
       ).toString("hex");
@@ -80,9 +74,7 @@ describe.skipIf(!built)("wasm codec ↔ authoritative vectors", () => {
       const decoded = wasm.decode_payload(v.action_type, payload);
       expect(decoded).toBeDefined();
       const reencoded = Buffer.from(
-        v.case === "propose_admin_action/set_trigger_market_config"
-          ? wasm.canonicalize_payload(v.action_type, payload)
-          : wasm.encode_payload(v.action_type, decoded),
+        wasm.encode_payload(v.action_type, decoded),
       ).toString("hex");
       expect(reencoded, v.case).toBe(v.expect.payload_hex);
     }

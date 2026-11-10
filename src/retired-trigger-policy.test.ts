@@ -55,7 +55,7 @@ describe("retired trigger policy", () => {
     [30, vector.input, proposal],
     [31, approvalFields, approval],
   ] as const)(
-    "refuses proposal/approval %i across submission paths but preserves reads",
+    "preserves proposal/approval %i wire encoding without copying engine policy",
     (tag, fields, payload) => {
       const wasm = getWasm();
       const action = fromWasmFields(
@@ -71,17 +71,15 @@ describe("retired trigger policy", () => {
         new Uint8Array(64),
       ]);
       expect(sdk.decodeTx(envelope).action).toEqual(action);
-      expect(() => sdk.encodePayloadBytes(action as Action)).toThrow(/retired/);
-      expect(() =>
+      expect(sdk.encodePayloadBytes(action as Action)).toEqual(payload);
+      expect(wasm.encode_payload(tag, fields)).toEqual(payload);
+      for (const encoded of [
         sdk.encodeSignedTx(
           action as Action,
           1n,
           new Uint8Array(32),
           new Uint8Array(64),
         ),
-      ).toThrow(/retired/);
-      expect(() => wasm.encode_payload(tag, fields)).toThrow(/retired/);
-      expect(() =>
         wasm.encode_signed_tx(
           tag,
           payload,
@@ -89,8 +87,6 @@ describe("retired trigger policy", () => {
           new Uint8Array(32),
           new Uint8Array(64),
         ),
-      ).toThrow(/retired/);
-      expect(() =>
         wasm.sign_and_encode(
           new Uint8Array(32),
           tag,
@@ -98,7 +94,9 @@ describe("retired trigger policy", () => {
           1n,
           new Uint8Array(32),
         ),
-      ).toThrow(/retired/);
+      ]) {
+        expect(sdk.decodeTx(encoded).action).toEqual(action);
+      }
       const message = wasm.signing_message(
         new Uint8Array(32),
         tag,

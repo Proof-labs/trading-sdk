@@ -13,7 +13,6 @@ newtypes), so no hex/byte massaging is needed for codec inputs.
 from __future__ import annotations
 
 import json
-import pytest
 from pathlib import Path
 
 import proof_trading_sdk as pts
@@ -36,13 +35,6 @@ class TestCodecVectors:
     def test_payload_matches_core(self):
         seen = 0
         for n, c in _cases("codec.ndjson"):
-            if c["case"] == "propose_admin_action/set_trigger_market_config":
-                with pytest.raises(ValueError, match="retired"):
-                    _native.encode_action(c["action_type"], c["input"])
-                decoded = _native.decode_action(c["action_type"], bytes.fromhex(c["expect"]["payload_hex"]))
-                assert "SetTriggerMarketConfig" in decoded["action"]
-                seen += 1
-                continue
             payload = _native.encode_action(c["action_type"], c["input"])
             assert payload.hex() == c["expect"]["payload_hex"], (
                 f"codec.ndjson:{n} case {c['case']!r}"

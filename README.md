@@ -241,6 +241,62 @@ are monitoring signals rather than faults. `faults` follows
 `ORACLE_FAULT_BITS`, named in `faultReasons`; `Disagreement` and
 `PairTimeMismatch` keep their bits but are no longer produced.
 
+### Resting order fields
+
+`queryOpenOrders(owner)` and Python `open_orders(owner)` read the gateway's
+`POST /info` `openOrders` response through the same Rust decoder. TypeScript
+returns camelCase fields; Python returns snake_case fields.
+
+| TypeScript                           | Python                                 | Value                                                              |
+| ------------------------------------ | -------------------------------------- | ------------------------------------------------------------------ |
+| `id`, `price`, `quantity`            | same                                   | Exact `bigint` / `int`; quantity is remaining size                 |
+| `market`, `owner`, `side`            | same                                   | Market number, 20-byte `Uint8Array` / `bytes`, `Buy` or `Sell`     |
+| `clientOrderId`                      | `client_order_id`                      | Exact `bigint` / `int`, or `null` / `None`; stored zero stays zero |
+| `originalQuantity`, `filledQuantity` | `original_quantity`, `filled_quantity` | Exact `bigint` / `int`                                             |
+| `createdAtMs`, `queuePriority`       | `created_at_ms`, `queue_priority`      | Exact `bigint` / `int`                                             |
+| `timeInForce`                        | `time_in_force`                        | `Gtc`, `Ioc` or `Fok`; currently only `Gtc` rests                  |
+| `postOnly`, `reduceOnly`             | `post_only`, `reduce_only`             | Booleans                                                           |
+
+Legacy six-field records default to an absent client ID, zero metadata, `Gtc`,
+and false flags. Zero placement time means unrecorded; zero queue priority is
+legacy metadata whose effective priority falls back to `id`.
+
+Malformed or wrong-owner responses, duplicate/out-of-order IDs, zero remaining
+quantity, and decoded payloads over 1 MiB throw (`Error` in TypeScript,
+`CodecError` in Python). A valid empty list returns `[]`. This read sends no
+`limit`, and the gateway refuses a response body over 1 MiB rather than returning
+a shorter list, so a very large account gets an error. The read does not verify a
+finalized witness.
+
+### Open-order migration
+
+This change requires the next TypeScript MAJOR release. Code that constructs
+`OpenOrder` objects (including test fixtures) must supply these eight added fields.
+For fixtures representing legacy six-field records, use:
+
+```typescript
+const order: OpenOrder = {
+  ...legacyOrder, // id, market, owner, side, price, quantity
+  clientOrderId: null,
+  originalQuantity: 0n,
+  filledQuantity: 0n,
+  createdAtMs: 0n,
+  queuePriority: 0n,
+  timeInForce: "Gtc",
+  postOnly: false,
+  reduceOnly: false,
+};
+```
+
+Preserve actual metadata when it is available; these defaults describe legacy
+records, not newly placed orders.
+
+Handle read failures separately from an empty account in both SDKs. A valid
+empty response still returns `[]`, but malformed or wrong-owner data now raises
+an error. Remove fallbacks such as `.catch(() => [])` that disguise a failed read
+as an account with no orders. TypeScript callers must also stop passing an empty
+owner string: `queryOpenOrders("")` now throws.
+
 ### Trading No on an event's binary book
 
 Each event has one binary book, priced in Yes (`EventInfo.ebyMarket`). Buying
@@ -447,8 +503,8 @@ request; successful placement does not guarantee a fill.
 
 Historical policy and proposal decoders remain available. `DecodedAdminAction`
 and `DecodedAction` include retired actions for inspection; narrow them before
-passing them to an encoding or signing API. The SDK rejects new proposals and
-approvals for `SetTriggerMarketConfig`, including pre-encoded payloads.
+passing them to a typed submission API. Low-level encoding and signing retain
+the wire contract; the engine rejects retired proposals and approvals.
 Proposal content hashes remain available for historical verification.
 
 `queryTriggerStatus()` is deprecated: `GET /v1/triggers/status` is deleted
