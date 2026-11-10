@@ -191,7 +191,7 @@ async fn a_funded_account_trades_and_reconciles() {
         .unwrap();
     let tick = btc.tick_size.max(1);
     let price = (bid.price / 2) / tick * tick; // half the touch: never fills
-    let mut order = actions::limit_order(me, 1, Side::Buy, price, btc.lot_size);
+    let mut order = actions::limit_order(me, 1, Side::Buy, price, btc.lot_size.max(1));
     order.post_only = true;
     order.client_order_id = Some(77);
 
