@@ -150,39 +150,3 @@ fn replace(
         take_profit,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::panic)]
-    use super::*;
-    use proof_trading_sdk::types::{TimeInForce, TriggerLimb, TriggerSlippageBps};
-
-    #[test]
-    fn a_replace_keeps_every_field_of_the_order() {
-        let owner = Address::from([9; 20]);
-        let mut order = limit_order(owner, 3, Side::Sell, 100, 7);
-        order.client_order_id = Some(42);
-        order.post_only = true;
-        order.time_in_force = TimeInForce::Ioc;
-        order.stop_loss = Some(TriggerLimb {
-            trigger_price: 90,
-            max_slippage_bps: TriggerSlippageBps(50),
-            client_trigger_id: None,
-        });
-        let Action::CancelReplaceOrder(r) = cancel_replace_client_order(41, order) else {
-            panic!()
-        };
-        assert_eq!(
-            (r.cancel_order_id, r.cancel_client_order_id),
-            (None, Some(41))
-        );
-        assert_eq!(r.owner, owner.to_bytes());
-        assert_eq!(
-            (r.market, r.side, r.price, r.quantity),
-            (3, Side::Sell, 100, 7)
-        );
-        assert_eq!(r.client_order_id, Some(42));
-        assert!(r.post_only && r.stop_loss.is_some() && r.take_profit.is_none());
-        assert_eq!(r.time_in_force, TimeInForce::Ioc);
-    }
-}

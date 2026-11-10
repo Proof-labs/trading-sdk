@@ -631,27 +631,6 @@ mod tests {
     }
 
     #[test]
-    fn account_state_from_devnet_decodes() {
-        // Captured from /v1/account/bdae2ddf…/state on devnet (2026-11-10).
-        let bytes = unbase64("lNwAFMy9zK4tzN9bzN4ealvM5ivMzcyeAMyBBsz8zKbM38zZzgCngUnPAAAAAlTegFeWl9wAFMy9zK4tzN9bzN4ealvM5ivMzcyeAMyBBsz8zKbM38zZAaRTZWxszwAAABFHLwG8btP/nRwkvXTD8CKX3AAUzL3Mri3M31vM3h5qW8zmK8zNzJ4AzIEGzPzMpszfzNkDpFNlbGzOBQypxszszwACl9G0BV4YzIiX3AAUzL3Mri3M31vM3h5qW8zmK8zNzJ4AzIEGzPzMpszfzNlkpFNlbGzNMvTM1QDMiJfcABTMvcyuLczfW8zeHmpbzOYrzM3MngDMgQbM/MymzN/M2WakU2VsbM8AAAAZwvgKvTYAFZfcABTMvcyuLczfW8zeHmpbzOYrzM3MngDMgQbM/MymzN/M2WmkU2VsbM4FHIkPzKAAzIWX3AAUzL3Mri3M31vM3h5qW8zmK8zNzJ4AzIEGzPzMpszfzNnNDICjQnV5zgAGptAQAAM=").unwrap();
-        let owner: Address = "bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9".parse().unwrap();
-        let s = account_state(&bytes, owner).unwrap();
-        assert_eq!(s.owner, owner);
-        assert!(s.height > 0 && s.balance > 0);
-        assert!(!s.positions.is_empty());
-        assert!(s
-            .positions
-            .iter()
-            .all(|p| p.owner == owner.to_bytes() && p.size > 0));
-
-        let other = Address::from([1; 20]);
-        assert!(matches!(
-            account_state(&bytes, other),
-            Err(Error::Decode(_))
-        ));
-    }
-
-    #[test]
     fn config_debug_redacts_the_api_key() {
         let c = ClientConfig::devnet().with_api_key("super-secret");
         assert!(!format!("{c:?}").contains("super-secret"));

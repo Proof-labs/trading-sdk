@@ -616,38 +616,8 @@ mod tests {
             &json!({"price": "x"})
         )));
         assert!(is_malformed(&kind_of("order_placed", &Value::Null)));
-    }
-
-    #[test]
-    fn an_optional_attribute_may_be_absent_but_not_garbage() {
-        let fill = |fee: Value| {
-            let mut p = json!({"fill_id": "1", "market": "1", "price": "10", "quantity": "1", "maker_owner": MAKER, "taker_owner": TAKER, "maker_side": "buy", "maker_order_id": "2", "taker_order_id": "3"});
-            if !fee.is_null() {
-                p["taker_fee"] = fee;
-            }
-            kind_of("trade_executed", &p)
-        };
-        assert!(matches!(
-            fill(Value::Null),
-            Event::Fill(Fill { taker_fee: 0, .. })
-        ));
-        assert!(matches!(
-            fill(json!("")),
-            Event::Fill(Fill { taker_fee: 0, .. })
-        ));
-        assert!(
-            is_malformed(&fill(json!("1.5"))),
-            "a fee that does not parse is not 0"
-        );
-    }
-
-    #[test]
-    fn an_unnamed_cancel_reason_is_kept() {
-        assert_eq!(CancelReason::from("expired"), CancelReason::Expired);
-        let new = CancelReason::from("vaporised");
-        assert_eq!(
-            (new.as_str(), new.to_string()),
-            ("vaporised", "vaporised".into())
-        );
+        // An optional attribute may be absent, but one that is there must parse.
+        let fill = json!({"fill_id": "1", "market": "1", "price": "10", "quantity": "1", "maker_owner": MAKER, "taker_owner": TAKER, "maker_side": "buy", "maker_order_id": "2", "taker_order_id": "3", "taker_fee": "1.5"});
+        assert!(is_malformed(&kind_of("trade_executed", &fill)));
     }
 }

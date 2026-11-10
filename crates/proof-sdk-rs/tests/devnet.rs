@@ -33,5 +33,8 @@ async fn every_read_decodes_against_devnet() {
         info.open_orders(t.maker_owner).await.unwrap();
         info.account(t.maker_owner).await.unwrap();
         info.recent_nonces(t.maker_owner).await.unwrap();
+        let state = info.account_state(t.maker_owner).await.unwrap();
+        assert_eq!(state.owner, t.maker_owner);
+        assert!(state.height > 0);
     }
 }
