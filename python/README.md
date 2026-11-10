@@ -57,6 +57,41 @@ hash as `tx_hash`; reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
+## Governance reads
+
+```python
+authorities = client.authorities()
+config = client.liquidation_config()
+print(authorities.relayer, config.sequence, config.config.takeover_discount_bps)
+```
+
+`authorities()` reads `/v1/admin/authorities` as `AuthoritiesSnapshot`: six
+lists of 20-byte addresses (`relayer`, `oracle`, `cex_composite`, `custody`,
+`market_params`, `scheduled_ops`). Empty sets are valid; a failed read raises
+instead of returning empty sets. Membership facts do not prove that a proposed
+action is authorized or that the response is authentic.
+
+`liquidation_config()` reads `/v1/liquidation-config` as `LiquidationConfigInfo`
+with exact integer `sequence` and typed `config`. The config includes
+`target_ratio_bps`, `full_close_threshold` (numerator/denominator),
+`partial_penalty_bps`, `max_book_orders`, `max_committed_fills`, and
+`takeover_discount_bps`. The two pacing fields remain readable for wire
+compatibility; the engine no longer applies those caps. Legacy five-field
+configs default the takeover discount to 50, matching the canonical wire type.
+Read decoding preserves numeric facts without enforcing action-admission rules.
+For example, a structurally valid `full_close_threshold` with denominator zero
+is returned unchanged, matching TypeScript. Check the denominator before division;
+successful decoding does not establish that a configuration is usable.
+
+`decode_authorities_snapshot` and `decode_liquidation_config_info` accept the
+complete gateway `{"data": "<base64 MessagePack>"}` envelope. Rust owns the wire
+decoding. Exact tuple widths, address lengths, integer ranges, 4096 entries per
+authority set, and a 1 MiB decoded payload cap are checked; the byte cap can be
+reached first when every set is near full. Malformed data raises `CodecError`; HTTP failures retain existing SDK exceptions with no fallback.
+These methods use the existing client transport and configured timeout; the
+payload cap is checked after HTTP buffering and is not a streaming HTTP-body
+limit. They return no finalized witness or cryptographic proof.
+
 ## Candle history
 
 `history_candles` reads durable OHLCV bars through the gateway's
@@ -142,10 +177,104 @@ Both methods use the existing buffered HTTP transport and configured timeout;
 these methods do not add a streaming response-size limit or a whole-call deadline.
 
 These JSON routes are decoded in Python; canonical MessagePack wire records
-use the shared Rust decoders through PyO3. Market-statistics timestamps match
-TypeScript `Date.parse`, including date overflow and `24:00:00` normalization.
-Candle timestamps instead require valid calendar dates and preserve nanoseconds.
+use the shared Rust decoders through PyO3. Market statistics and candles share strict calendar validation. Python rejects
+invalid dates and `24:00:00` even where TypeScript `Date.parse` normalizes them.
+Market-statistics window comparisons use milliseconds; candles preserve nanoseconds.
 The parsers intentionally enforce different contracts.
+
+## Callback signer
+
+```python
+# wallet_public_key is 32 bytes; wallet_sign_raw accepts bytes and returns
+# the 64-byte Ed25519 signature from your wallet or device.
+client.set_external_signer(pts.ExternalSigner(wallet_public_key, wallet_sign_raw))
+envelope = client.sign_action(action)  # Signing only; no network submission.
+```
+
+This is the synchronous counterpart of TS `setExternalSigner`. The callback
+receives immutable, domain-separated message bytes prepared by Rust. Rust
+verifies every signature before it is encoded or returned as account-stream
+authentication. `sign_action`, `submit`, owner-derived helpers and
+`account_auth` all use the connected signer. The nonce allocator and chain
+configuration are unchanged; set the correct chain ID explicitly. Without one,
+transaction signing raises `SigningError` before the callback runs.
+
+Connecting snapshots the public key and callable and drops the client's
+references to its previous secret key or opaque handle. It cannot erase copies
+held by the caller. Connecting another signer while a callback is running
+discards the old result with `SigningError`, including reentrant replacement.
+The TP/SL helpers bind owner selection to that same connection; replacement
+before signing fails without asking the new wallet to sign the old request.
+Signature bytes, public-key bytes and payload bytes are copied at the boundary.
+
+Callbacks must return bytes (or a bytearray/memoryview), never an awaitable.
+The synchronous API cannot forcibly cancel a wallet prompt or device call; the
+callback must provide its own timeout. Ordinary callback failures become a
+generic `SigningError` without logging or chaining wallet diagnostics.
+`KeyboardInterrupt` and `SystemExit` propagate. Signing does not retry the
+callback; account-stream authentication retains its documented bounded retry
+policy and signs again on reconnect. Callbacks must therefore tolerate repeated
+authentication prompts. Existing `SigningHandle`/PKCS#11 support is unchanged.
+
+## Private account events
+
+`client.account_event_stream(owner)` sends the client's API key when configured.
+When a secret key, signing handle or external signer is connected, it also signs the gateway's
+subscription challenge on every attempt, matching TypeScript. A stale or
+non-admin API key therefore does not suppress valid signed authentication.
+The default authentication factory checks the current signer on every attempt,
+including one connected after stream creation. The subscribed owner stays fixed;
+a signer for another owner produces an error rather than an unsigned fallback.
+Set the client's chain ID to the gateway's chain: Python does not resolve it
+automatically. `account_auth()` raises `SigningError` for an unbound chain ID
+before signing; a stream reports the signing failure through its bounded retry
+error frames and never sends an unsigned subscription. An opaque signing handle
+keeps private key material in Rust memory or the HSM.
+
+Signed authentication supports the signer's own account only. A trading-agent
+grant does not authorize reading another owner's private feed. With a signer,
+this restriction also applies when an API key is configured. Use a client with
+only an authorized API key for another owner's feed. Before the first
+subscription is confirmed, signing failures and gateway error codes 401/429/503
+yield error frames and retry on the same socket: at most five retries after the
+initial attempt, with default delays of 0.5, 1, 2, 4, and 8 seconds. Every attempt
+signs fresh authentication; signing failures never send an unsigned subscription.
+Exhaustion yields a final error frame and leaves the socket open without more
+subscription attempts. A 403 frame is yielded without retrying or closing.
+
+A matching subscription acknowledgment or account data frame confirms the
+subscription and cancels pending retries. Errors after confirmation remain
+observable without restarting live delivery. A new connection resets the retry
+budget. The synchronous iterator performs retries while it is being consumed;
+`stream.close()` cancels pending retries. Synthetic error frames carry the SDK's
+fixed `SigningError` text and omit other exception text, which could expose
+sensitive diagnostics. HTTP 401/403
+refusals during the WebSocket upgrade raise `AuthenticationError` before the
+first successful connection. On reconnect, they follow `reconnect_attempts`
+and the normal backoff (`None` retries indefinitely), preserving recovery state.
+`close()` cancels the wait. This is separate from subscription-error frames.
+
+`client.account_auth(owner, after_id=0)` returns signed subscription parameters.
+The optional cursor must be a Python integer in `0..2**53 - 1`, matching the TS
+SDK's JSON-safe domain. Zero is signed but omitted from the returned parameters.
+Direct helper failures raise `SigningError`. The default account stream signs
+cursor zero; its history-based reconnect recovery does not change this cursor.
+
+## Resting orders
+
+`client.open_orders(owner)` returns the shared wire order fields, including
+`client_order_id`, `original_quantity`, `filled_quantity`, `created_at_ms`,
+`queue_priority`, `time_in_force`, `post_only` and `reduce_only`. Integer values
+remain exact; `owner` is 20-byte `bytes`. A missing client ID is `None`.
+Legacy six-field orders use the wire's defaults for appended fields: `None`,
+zero, `Gtc` and false flags. Zero placement time means no timestamp was recorded.
+
+Malformed or wrong-owner responses, duplicate/out-of-order IDs, zero remaining
+quantity, and decoded MessagePack payloads over 1 MiB raise `CodecError`.
+This read sends no `limit`, and the gateway refuses a response body over 1 MiB
+rather than returning a shorter list, so a very large account gets an error. The
+read does not verify a finalized-state witness. The remaining Python API gaps are tracked in
+[#362](https://github.com/Proof-labs/trading-sdk/issues/362).
 
 ## Typed actions
 

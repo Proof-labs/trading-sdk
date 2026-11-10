@@ -6,12 +6,12 @@ import re
 import typing as t
 
 from proof_trading_sdk.errors import CodecError
+from proof_trading_sdk.candle_history import _time
 
 MarketStatsStatus = t.Literal["ready", "stale", "unavailable"]
 _UNSIGNED = re.compile(r"(?:0|[1-9][0-9]*)")
 _USDC = re.compile(r"(?:0|[1-9][0-9]*)(?:\.[0-9]{1,24})?")
 _BPS = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]{1,6})?")
-_TIME = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})")
 
 
 @dataclass(frozen=True)
@@ -94,27 +94,12 @@ def _nullable(value: t.Any, field: str, pattern: re.Pattern = _UNSIGNED) -> str 
 
 
 def _timestamp(value: t.Any, field: str) -> int:
-    """The TS Date.parse contract: exact format, millisecond comparison, year 0000 allowed."""
-    match = _TIME.fullmatch(value) if isinstance(value, str) else None
-    if match is None: _fail(field)
-    year, month, day, hour, minute, second = map(int, match.groups()[:6])
-    fraction, zone = match.groups()[6:]
-    if not (1 <= month <= 12 and 1 <= day <= 31 and hour <= 24 and minute <= 59 and second <= 59):
+    """Validate through the shared calendar parser, retaining millisecond comparison."""
+    try:
+        seconds, nanos = _time(value)
+    except (ValueError, TypeError):
         _fail(field)
-    if hour == 24 and (minute or second or int(fraction or "0")): _fail(field)
-    offset = 0
-    if zone != "Z":
-        zh, zm = int(zone[1:3]), int(zone[4:6])
-        if zh > 23 or zm > 59: _fail(field)
-        offset = (zh * 60 + zm) * (1 if zone[0] == "+" else -1)
-    # Gregorian days from civil date. Like JS Date.parse, day 29..31 can
-    # normalize into the next month. Sub-millisecond digits remain in the output.
-    year -= month <= 2
-    era = year // 400
-    yoe = year - era * 400
-    doy = (153 * (month + (-3 if month > 2 else 9)) + 2) // 5 + day - 1
-    days = era * 146097 + yoe * 365 + yoe // 4 - yoe // 100 + doy - 719468
-    return ((days * 24 + hour) * 60 + minute - offset) * 60000 + second * 1000 + int(((fraction or "") + "000")[:3])
+    return seconds * 1000 + nanos // 1_000_000
 
 
 def decode_market_stats_response(value: t.Any) -> MarketStatsResponse:

@@ -133,6 +133,16 @@ pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
     }
 }
 
+/// Decode resting orders bound to the requested owner using the shared wire type.
+#[wasm_bindgen]
+pub fn decode_open_orders(bytes: &[u8], owner: &[u8]) -> Result<JsValue, JsError> {
+    let owner: &[u8; 20] = owner
+        .try_into()
+        .map_err(|_| JsError::new("owner must be exactly 20 bytes"))?;
+    let orders = reads::decode_open_orders(bytes, owner).map_err(JsError::new)?;
+    to_bigint_js(&orders)
+}
+
 /// Decode a complete `GET /v1/markets-snapshot` HTTP body bound to
 /// `chain_id`, via the core's `market_snapshot::decode_snapshot`.
 #[wasm_bindgen]

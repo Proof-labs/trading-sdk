@@ -44,8 +44,6 @@ def test_market_stats_absence_and_zero_remain_distinct():
 @pytest.mark.parametrize("start,end", [
     ("0000-01-01T00:00:00Z", "0000-01-02T00:00:00Z"),
     ("2026-11-08T09:00:00+09:00", "2026-11-09T00:00:00Z"),
-    ("2026-04-30T24:00:00.0000Z", "2026-05-02T00:00:00Z"),
-    ("2026-02-30T00:00:00Z", "2026-03-03T00:00:00Z"),
 ])
 def test_js_date_parse_window_semantics(start, end):
     value=stats(); value.update(window_start=start,window_end=end,as_of=end)
@@ -205,3 +203,11 @@ def test_stats_read_bypasses_caches(client):
     calls = serve(client, stats())
     client.market_stats([0])
     assert calls[0].headers["Cache-Control"] == "no-store"
+
+
+@pytest.mark.parametrize("value", ["2026-02-30T00:00:00Z", "2026-11-10T24:00:00Z", "2025-02-29T00:00:00Z"])
+def test_invalid_calendar_timestamp_is_not_normalized(value):
+    body = stats()
+    body["indexed_at"] = value
+    with pytest.raises(sdk.CodecError, match="indexed_at"):
+        sdk.decode_market_stats_response(body)

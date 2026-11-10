@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import typing as t
 
+from proof_trading_sdk.external_signer import ExternalSigner
+
 from proof_trading_sdk._native import (
     SigningHandle,
     admin_proposal_content_hash,
@@ -111,6 +113,15 @@ from proof_trading_sdk.market_stats import (
     MarketStatsStatus, MarketStatsOpenInterest, MarketStats, MarketStatsResponse, decode_market_stats_response,
 )
 from proof_trading_sdk.oracle_health import OracleMarketHealth, OracleHealth, decode_oracle_health
+
+from proof_trading_sdk.governance_reads import (
+    AuthoritiesSnapshot,
+    FullCloseThreshold,
+    LiquidationConfig,
+    LiquidationConfigInfo,
+    decode_authorities_snapshot,
+    decode_liquidation_config_info,
+)
 from proof_trading_sdk.client import ExchangeClient
 from proof_trading_sdk.candle_history import CandleHistoryPage, CandleHistoryTime, HistoryCandle
 from proof_trading_sdk.streams import (
@@ -157,6 +168,7 @@ __all__ = [
     "load_key_from_fd",
     "load_key_from_pkcs11",
     "SigningHandle",
+    "ExternalSigner",
     "pubkey_to_owner",
     "sign_and_encode",
     "verify_signature",
@@ -223,6 +235,13 @@ __all__ = [
     "ExchangeClient",
     "MarketStatsStatus", "MarketStatsOpenInterest", "MarketStats", "MarketStatsResponse",
     "decode_market_stats_response", "OracleMarketHealth", "OracleHealth", "decode_oracle_health",
+
+    "AuthoritiesSnapshot",
+    "FullCloseThreshold",
+    "LiquidationConfig",
+    "LiquidationConfigInfo",
+    "decode_authorities_snapshot",
+    "decode_liquidation_config_info",
     "PositionTriggerHistoryEventType",
     "PendingTriggerDiscardReason",
     "TriggerMarketHistoryEventType",
