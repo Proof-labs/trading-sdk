@@ -323,9 +323,11 @@ serve **historical snapshots**, not current live state.
 const book = await client.queryOrderbook(1);
 // { bids: [{ price: bigint, totalQty: bigint, orderCount: number }], asks: [...] }
 
-// Open orders for an address (empty array if none or endpoint unreachable)
+// Open orders for an address (empty array if none; throws on a failed or malformed read)
 const orders = await client.queryOpenOrders(hex); // or omit for own address
-// [{ id: bigint, market: number, owner: Uint8Array, side: "Buy"|"Sell", price: bigint, quantity: bigint }]
+// [{ id: bigint, market: number, owner: Uint8Array, side: "Buy"|"Sell", price: bigint, quantity: bigint,
+//    clientOrderId: bigint | null, originalQuantity: bigint, filledQuantity: bigint, createdAtMs: bigint,
+//    queuePriority: bigint, timeInForce: "Gtc"|"Ioc"|"Fok", postOnly: boolean, reduceOnly: boolean }]
 
 // Account (balance, positions, margin) — uses POST /info fallback internally
 const acct = await client.queryAccount(hex); // or omit for own address

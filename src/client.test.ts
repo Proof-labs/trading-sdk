@@ -2479,7 +2479,9 @@ describe("ExchangeClient owner byte-coercion (serde array shape)", () => {
   const originalFetch = globalThis.fetch;
   const encoder = new Encoder({ useBigInt64: true });
   const ownerArr = Array.from({ length: 20 }, (_, i) => i + 1);
-  const hex = "ab".repeat(20);
+  const hex = ownerArr
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 
   function toB64(bytes: Uint8Array): string {
     let s = "";

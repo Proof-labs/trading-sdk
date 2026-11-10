@@ -84,7 +84,7 @@ def test_open_orders_posts_info():
         captured["method"] = request.method
         captured["path"] = request.url.path
         captured["body"] = json.loads(request.read())
-        orders = [[7, 1, list(b"\x01" * 20), "Buy", 6_675_000, 100]]
+        orders = [[7, 1, list(b"\xbb" * 20), "Buy", 6_675_000, 100]]
         return _info_response(orders)
 
     orders = _client(handler).open_orders("bb" * 20)
@@ -94,7 +94,7 @@ def test_open_orders_posts_info():
     assert captured["body"] == {"type": "openOrders", "user": "bb" * 20}
     assert orders[0]["id"] == 7
     assert orders[0]["price"] == 6_675_000
-    assert orders[0]["owner"] == b"\x01" * 20
+    assert orders[0]["owner"] == b"\xbb" * 20
 
 
 def _sub_account_row(
