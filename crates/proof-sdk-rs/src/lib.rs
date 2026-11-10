@@ -59,9 +59,10 @@ pub use nonce::{NonceAllocator, MAX_CLOCK_LEAD_MS};
 /// The core crate, re-exported so callers need one dependency.
 pub use proof_trading_sdk as core;
 pub use proof_trading_sdk::gateway::TxHash;
+pub use proof_trading_sdk::query::{AccountInfo, PositionBrief};
 pub use proof_trading_sdk::types::{
-    Action, CancelReplaceOrder, EventId, EventInfo, MarketConfig, MarketId, OrderId, PlaceOrder,
-    Side, TimeInForce,
+    Action, CancelReplaceOrder, EventId, EventInfo, MarketConfig, MarketId, Order, OrderId,
+    PlaceOrder, Side, TimeInForce,
 };
 pub use proof_trading_sdk::{LocalSigner, Signer, SignerError};
 

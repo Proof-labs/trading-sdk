@@ -48,7 +48,8 @@ async fn main() -> Result<(), proof_sdk_rs::Error> {
     println!("bid {:?} ask {:?} balance {}", book.best_bid(), book.best_ask(), account.balance);
 
     // A post-only bid, tagged with a client order id
-    let mut order = client.limit_order(1, Side::Buy, 60_000_000_000, 1); // $60,000 x 1
+    // $60,000 for 0.01 BTC (market 1 has sz_decimals = 5; see Units)
+    let mut order = client.limit_order(1, Side::Buy, 60_000_000_000, 1_000);
     order.post_only = true;
     order.client_order_id = Some(42);
     let placed = client.submit_and_wait(&Action::PlaceOrder(order), Duration::from_secs(10)).await?;
@@ -91,8 +92,11 @@ On devnet, fund a new address with the faucet first:
 | `close_position(market)`                        | `ClosePosition`                                    |
 | `submit(&action)`                               | sign with the next nonce, `POST /exchange` once    |
 | `submit_and_wait(&action, timeout)`             | `submit`, then wait if the verdict is pending      |
-| `sign(&action)` / `send(signed_tx)`             | the two halves, for pre-signing on a hot path      |
+| `sign(&action)` / `send(&signed_tx)`            | the two halves, for pre-signing on a hot path      |
+| `sign_with_seq(&action, seq)`                   | sign under a nonce you allocated                   |
 | `wait_for_receipt(hash, timeout)`               | polls `GET /v1/tx/{hash}`                          |
+| `address()` / `public_key()` / `network()`      | this signer's account, key and chain id            |
+| `nonces()` / `info()`                           | the shared nonce allocator; the read client        |
 
 Each submission returns a `Submitted`, holding the signed tx with its locally
 computed hash, a `TxStatus`, and `retry_after: Option<Duration>`:
@@ -180,9 +184,11 @@ identical to `core::codec::sign_and_encode_with_chain`, and a test checks that.
 
 ## Units
 
-Prices, balances and fees are `u64` micro-USDC (`1_000_000` = $1). Quantities
-are integer contracts. Round prices to the market's `tick_size` and quantities to
-its `lot_size` (both on `MarketConfig`). Nothing is a float.
+Prices, balances and fees are `u64` micro-USDC (`1_000_000` = $1). A quantity
+is an integer count of `10^-sz_decimals` base units: on a market with
+`sz_decimals = 5`, `100_000` is one whole BTC and `1` is 0.00001 BTC. Prices
+must be multiples of `tick_size` and quantities multiples of `lot_size`; all
+three are on `MarketConfig`. Nothing is a float.
 
 ## Testing
 

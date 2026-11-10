@@ -250,3 +250,14 @@ async fn a_gateway_refusal_is_typed_with_its_retry_hint() {
     // 1501 ms rounds up to whole seconds, never down.
     assert_eq!(s.retry_after, Some(Duration::from_secs(2)));
 }
+
+#[tokio::test]
+async fn receipt_wait_reports_a_rate_limit_instead_of_timing_out() {
+    let (url, _) = fixture(vec![(404, json!({})), (429, json!({}))]).await;
+    let hash = TxHash::from_bytes([1; 32]);
+    let err = client(&url)
+        .wait_for_receipt(hash, Duration::from_secs(5))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Http { status: 429, .. }), "{err:?}");
+}

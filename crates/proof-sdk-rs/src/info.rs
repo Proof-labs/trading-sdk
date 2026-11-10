@@ -167,8 +167,8 @@ impl Orderbook {
 pub struct Trade {
     #[serde(deserialize_with = "de_u64")]
     pub fill_id: u64,
-    #[serde(deserialize_with = "de_u64")]
-    pub market: u64,
+    #[serde(deserialize_with = "de_market")]
+    pub market: MarketId,
     #[serde(deserialize_with = "de_u64")]
     pub price: u64,
     #[serde(deserialize_with = "de_u64")]
@@ -527,6 +527,10 @@ fn de_u64<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error>
         Raw::N(n) => Ok(n),
         Raw::S(s) => s.parse().map_err(serde::de::Error::custom),
     }
+}
+
+fn de_market<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<MarketId, D::Error> {
+    MarketId::try_from(de_u64(d)?).map_err(serde::de::Error::custom)
 }
 
 fn de_side<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Side, D::Error> {

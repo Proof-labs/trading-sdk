@@ -215,6 +215,17 @@ impl fmt::Debug for ExchangeClient {
     }
 }
 
+/// A receipt read that means "not committed yet" (404, the node's JSON-RPC
+/// not-found) or a transient failure. Anything else (401, 403, 429, a
+/// malformed answer) is returned, not hidden behind a timeout.
+fn still_pending(kind: ErrorKind) -> bool {
+    match kind {
+        ErrorKind::HttpStatus(status) => status == 404 || status >= 500,
+        ErrorKind::RpcUnavailable | ErrorKind::Transport | ErrorKind::Timeout => true,
+        _ => false,
+    }
+}
+
 /// First receipt poll delay; each poll adds [`RECEIPT_POLL_STEP`] up to
 /// [`RECEIPT_POLL_MAX`]. Matches the TypeScript SDK.
 const RECEIPT_POLL_START: Duration = Duration::from_millis(200);
@@ -414,23 +425,17 @@ impl ExchangeClient {
     ///
     /// # Errors
     ///
-    /// [`Error::ReceiptTimeout`] at the deadline. Other failures are retried
-    /// until then, except [`Error::Config`] and [`Error::InvalidInput`].
+    /// [`Error::ReceiptTimeout`] at the deadline. A 404, a 5xx or a transport
+    /// failure is retried until then; any other failure is returned at once.
     pub async fn wait_for_receipt(&self, hash: TxHash, timeout: Duration) -> Result<Receipt> {
         let deadline = tokio::time::Instant::now() + timeout;
         let mut delay = RECEIPT_POLL_START;
         loop {
             match self.inner.info.gateway().committed_receipt(hash).await {
                 Ok(receipt) => return Ok(receipt.into()),
-                Err(e)
-                    if matches!(
-                        e.kind,
-                        ErrorKind::InvalidInput | ErrorKind::InvalidConfiguration
-                    ) =>
-                {
-                    return Err(e.into())
-                }
-                Err(_) => {} // not found / not indexed yet / transient: keep polling
+                // Not found yet, not indexed yet, or transient: keep polling.
+                Err(e) if still_pending(e.kind) => {}
+                Err(e) => return Err(e.into()),
             }
             let now = tokio::time::Instant::now();
             if now >= deadline {

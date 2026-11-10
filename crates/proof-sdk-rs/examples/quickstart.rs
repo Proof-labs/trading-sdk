@@ -45,8 +45,8 @@ async fn main() -> AnyResult<()> {
         return Err(format!("market {market} not listed").into());
     };
     println!(
-        "market {} {:?}: tick {} lot {}",
-        cfg.market, cfg.ticker, cfg.tick_size, cfg.lot_size
+        "market {} {:?}: tick {} lot {} sz_decimals {}",
+        cfg.market, cfg.ticker, cfg.tick_size, cfg.lot_size, cfg.sz_decimals
     );
 
     let book = info.orderbook(market).await?;
@@ -72,7 +72,7 @@ async fn main() -> AnyResult<()> {
         return Err("empty bid side".into());
     };
     let price = bid.price.saturating_sub(cfg.tick_size.saturating_mul(10));
-    let mut order = client.limit_order(market, Side::Buy, price, cfg.lot_size.max(1));
+    let mut order = client.limit_order(market, Side::Buy, price, cfg.lot_size);
     order.post_only = true;
     order.client_order_id = Some(proof_sdk_rs::NonceAllocator::new().next()?);
     let cid = order.client_order_id;
