@@ -7,6 +7,8 @@
 //! - [`ExchangeClient`]: timestamp-nonce allocation, signing through any
 //!   [`Signer`], one-shot submission, receipt waiting, and order helpers
 //!   (place, cancel, amend, cancel-replace, market, close).
+//! - [`actions`]: the same actions as plain values, for callers that sign and
+//!   send them themselves.
 //! - [`InfoClient`]: typed reads for markets, events, the order book, an
 //!   account, its open orders, the recent trade tape and recent nonces.
 //!
@@ -41,6 +43,7 @@
 //! Prices and balances are `u64` micro-USDC (`1_000_000` = $1). Quantities are
 //! integer contracts. Nothing is a float.
 
+pub mod actions;
 mod address;
 mod error;
 mod event;
@@ -51,14 +54,14 @@ mod nonce;
 pub use address::Address;
 pub use error::{Error, Result};
 pub use event::{
-    Deposited, Event, Fill, FundingSettled, MarketOrderProcessed, OrderAmended, OrderCancelled,
-    OrderPlaced, OrderRejected, PositionClosed, PositionUpdated,
+    CancelReason, Deposited, Event, Fill, FundingSettled, MarketOrderProcessed, OrderAmended,
+    OrderCancelled, OrderPlaced, OrderRejected, PositionClosed, PositionUpdated,
 };
 pub use exchange::{
     EngineError, ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted, TxStatus,
 };
 pub use info::{
-    ChainStatus, ClientConfig, InfoClient, Level, Orderbook, Trade, DEVNET_CHAIN_ID,
+    AccountState, ChainStatus, ClientConfig, InfoClient, Level, Orderbook, Trade, DEVNET_CHAIN_ID,
     DEVNET_GATEWAY_URL,
 };
 pub use nonce::{NonceAllocator, MAX_CLOCK_LEAD_MS};
@@ -68,8 +71,8 @@ pub use proof_trading_sdk as core;
 pub use proof_trading_sdk::gateway::{TxAttribute, TxEvent, TxHash};
 pub use proof_trading_sdk::query::{AccountInfo, PositionBrief};
 pub use proof_trading_sdk::types::{
-    Action, CancelReplaceOrder, EventId, EventInfo, MarketConfig, MarketId, Order, OrderId,
-    PlaceOrder, Side, TimeInForce,
+    Action, CancelReplaceOrder, EventId, EventInfo, MarketConfig, MarketId, MarketOrder, Order,
+    OrderId, PlaceOrder, Position, Side, TimeInForce,
 };
 pub use proof_trading_sdk::ErrorKind;
 pub use proof_trading_sdk::{LocalSigner, Signer, SignerError};

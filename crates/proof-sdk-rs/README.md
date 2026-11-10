@@ -84,36 +84,52 @@ On devnet, fund a new address with the faucet first:
 
 ### `ExchangeClient`: sign and submit
 
-| Method                                          | Action / route                                     |
-| ----------------------------------------------- | -------------------------------------------------- |
-| `connect(&config, signer)`                      | reads `GET /v1/status`, binds signatures to it     |
-| `new(&config, signer)`                          | no request; signs for the config's chain id       |
-| `limit_order(market, side, price, qty)`         | builds a GTC `PlaceOrder` for this account         |
-| `place_order(order)`                            | `PlaceOrder`                                       |
-| `market_order(market, side, qty)`               | `MarketOrder` (IOC)                                |
-| `cancel_order(order_id)`                        | `CancelOrder`                                      |
-| `cancel_client_order(client_order_id)`          | `CancelClientOrder`                                |
-| `cancel_all_orders(Option<market>)`             | `CancelAllOrders`                                  |
-| `amend_order(order_id, new_price, new_qty)`     | `AmendOrder` (same-price size cuts keep priority)  |
-| `cancel_replace_order(order)`                   | `CancelReplaceOrder`                               |
-| `close_position(market)`                        | `ClosePosition`                                    |
-| `submit(&action)`                               | sign with the next nonce, `POST /exchange` once    |
-| `submit_and_wait(&action, timeout)`             | `submit`, then wait if the verdict is pending      |
-| `sign(&action)` / `send(&signed_tx)`            | the two halves, for pre-signing on a hot path      |
-| `sign_with_seq(&action, seq)`                   | sign under a nonce you allocated                   |
-| `wait_for_receipt(hash, timeout)`               | polls `GET /v1/tx/{hash}`                          |
-| `address()` / `public_key()` / `network()`      | this signer's account, key and chain id            |
-| `nonces()` / `info()`                           | the shared nonce allocator; the read client        |
+| Method                                      | Action / route                                    |
+| ------------------------------------------- | ------------------------------------------------- |
+| `connect(&config, signer)`                  | reads `GET /v1/status`, binds signatures to it    |
+| `new(&config, signer)`                      | no request; signs for the config's chain id       |
+| `limit_order(market, side, price, qty)`     | builds a GTC `PlaceOrder` for this account        |
+| `place_order(order)`                        | `PlaceOrder`                                      |
+| `market_order(market, side, qty)`           | `MarketOrder` (IOC)                               |
+| `cancel_order(order_id)`                    | `CancelOrder`                                     |
+| `cancel_client_order(client_order_id)`      | `CancelClientOrder`                               |
+| `cancel_all_orders(Option<market>)`         | `CancelAllOrders`                                 |
+| `amend_order(order_id, new_price, new_qty)` | `AmendOrder` (same-price size cuts keep priority) |
+| `cancel_replace_order(order_id, order)`     | `CancelReplaceOrder`                              |
+| `cancel_replace_client_order(cid, order)`   | `CancelReplaceOrder`, cancelling by client id     |
+| `close_position(market)`                    | `ClosePosition`                                   |
+| `submit(&action)`                           | sign with the next nonce, `POST /exchange` once   |
+| `submit_and_wait(&action, timeout)`         | `submit`, then wait if the verdict is pending     |
+| `sign(&action)` / `send(&signed_tx)`        | the two halves, for pre-signing on a hot path     |
+| `sign_with_seq(&action, seq)`               | sign under a nonce you allocated                  |
+| `wait_for_receipt(hash, timeout)`           | polls `GET /v1/tx/{hash}`                         |
+| `address()` / `public_key()` / `network()`  | this signer's account, key and chain id           |
+| `nonces()` / `info()`                       | the shared nonce allocator; the read client       |
+
+Every helper is a function in `proof_sdk_rs::actions` with this client's
+address, submitted at once. Call those directly to build an `Action` without
+sending it: to gate submission yourself, batch, or trade for another owner.
+
+```rust,ignore
+use proof_sdk_rs::actions;
+
+let order = client.limit_order(1, Side::Buy, price, 10);
+let action = actions::cancel_replace_client_order(old_cid, order); // keeps brackets
+let tx = client.sign(&action)?;
+```
 
 Each submission returns a `Submitted`, holding the signed tx with its locally
 computed hash, a `TxStatus`, and `retry_after: Option<Duration>`:
 
-| `TxStatus`          | Meaning                                                                          |
-| ------------------- | -------------------------------------------------------------------------------- |
-| `Committed(receipt)` | In a block. `receipt.error` is `None` on success. `receipt.events` says what it did. |
-| `Rejected(error)`   | Refused at `CheckTx`; it will never execute.                                     |
-| `Pending`           | Admitted without a verdict yet; call `wait_for_receipt`.                         |
-| `Refused(reason)`   | Turned away by the gateway (`Unauthorized`, `RateLimited`, `Paused`, `CancelOnly`, `Unavailable`, `InvalidRequest`). |
+| `TxStatus`           | Meaning                                                                                                              |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `Committed(receipt)` | In a block. `receipt.error` is `None` on success. `receipt.events` says what it did.                                 |
+| `Rejected(error)`    | Refused at `CheckTx`; it will never execute.                                                                         |
+| `Pending`            | Admitted without a verdict yet; call `wait_for_receipt`.                                                             |
+| `Refused(reason)`    | Turned away by the gateway (`Unauthorized`, `RateLimited`, `Paused`, `CancelOnly`, `Unavailable`, `InvalidRequest`). |
+
+`TxStatus` is exhaustive, so a `match` decides every case. Only `Committed`
+executed; `Pending` may still.
 
 `is_success()`, `is_pending()`, `error()` and `receipt()` cover the common
 checks. An `EngineError` is `Known(ErrorKind)` (`InsufficientMargin`,
@@ -124,14 +140,15 @@ The gateway answers once the transaction is in a block, so the receipt
 carries its events, typed, in emission order: `Event::OrderPlaced` carries
 the resting order's `order_id` (a basket or cancel-replace can emit several),
 and `Event::Fill` is each fill it took. An order that fully fills on arrival
-emits no `OrderPlaced`. An event this SDK does not type stays raw in
-`Event::Other`.
+emits no `OrderPlaced`. A kind this SDK does not type stays raw in
+`Event::Other`; a typed kind whose attributes do not read stays raw in
+`Event::Malformed`, so a bad fill is never mistaken for an unknown event.
 
-**Failed submissions.** The client posts once and keeps no state. An
-`Err` means no verdict came back; engine rejections and gateway refusals are
-`TxStatus`, not errors. After `Error::Transport` or an `Error::Http` 5xx the
-bytes may still have reached the gateway. To keep the handle, sign and send
-separately:
+**Failed submissions.** The client posts once and keeps no state. Engine
+rejections and gateway refusals are `TxStatus`, not errors. An `Err` from
+`sign` means nothing was sent; an `Err` from `send` means no verdict came
+back, and the transaction may still execute. `submit` is the two together, so
+when the difference matters, call them separately:
 
 ```rust,ignore
 let tx = client.sign(&action)?;
@@ -145,21 +162,21 @@ Resending the same `tx` is safe (same nonce, executes at most once).
 **Signing the action again makes a second transaction.** Each method's
 `# Errors` doc lists what it returns.
 
-
 ### `InfoClient`: reads
 
 `client.info()`, or `InfoClient::new(&config)` for read-only use:
 
-| Method                      | Route                                   | Returns                    |
-| --------------------------- | --------------------------------------- | -------------------------- |
-| `chain_status()`            | `GET /v1/status`                        | network, height            |
-| `markets()`                 | `GET /v1/markets`                       | `Vec<MarketConfig>`        |
-| `events()` / `event(id)`    | `GET /v1/events`, `/v1/event/{id}`      | `EventInfo` (with books)   |
-| `orderbook(market)`         | `GET /v1/orderbook/{market}`            | `Orderbook` (best first)   |
-| `recent_trades(market, n)`  | `GET /v1/trades/{market}`               | `Vec<Trade>`, newest first |
-| `account(owner)`            | `POST /info` `clearinghouseState`       | `AccountInfo`              |
-| `open_orders(owner)`        | `POST /info` `openOrders`               | `Vec<Order>`               |
-| `recent_nonces(owner)`      | `GET /v1/account/{owner}/recent-nonces` | `Vec<u64>`                 |
+| Method                     | Route                                   | Returns                    |
+| -------------------------- | --------------------------------------- | -------------------------- |
+| `chain_status()`           | `GET /v1/status`                        | network, height            |
+| `markets()`                | `GET /v1/markets`                       | `Vec<MarketConfig>`        |
+| `events()` / `event(id)`   | `GET /v1/events`, `/v1/event/{id}`      | `EventInfo` (with books)   |
+| `orderbook(market)`        | `GET /v1/orderbook/{market}`            | `Orderbook` (best first)   |
+| `recent_trades(market, n)` | `GET /v1/trades/{market}`               | `Vec<Trade>`, newest first |
+| `account(owner)`           | `POST /info` `clearinghouseState`       | `AccountInfo`              |
+| `account_state(owner)`     | `GET /v1/account/{owner}/state`         | `AccountState` (at height) |
+| `open_orders(owner)`       | `POST /info` `openOrders`               | `Vec<Order>`               |
+| `recent_nonces(owner)`     | `GET /v1/account/{owner}/recent-nonces` | `Vec<u64>`                 |
 
 Records decode as the engine's own `proof-wire` types through the core's
 `reads::decode`, so a field appended by a newer engine does not break a read.
@@ -189,13 +206,13 @@ identical to `core::codec::sign_and_encode_with_chain`, and a test checks that.
 
 `ClientConfig::new(url)` or `ClientConfig::devnet()`, then:
 
-| Setter                    | Default (`devnet()`)          | Notes                                                                |
-| ------------------------- | ----------------------------- | -------------------------------------------------------------------- |
-| _(constructor URL)_       | `https://api.dev.proof.trade` | HTTPS, or HTTP on a loopback **IP** (`http://127.0.0.1:9080`)        |
-| `with_chain_id`           | `exchange-devnet-1`           | `connect` checks it against the gateway; unset, `connect` trusts it. |
-| `with_api_key`            | none                          | Sent as `X-Api-Key`; redacted from `Debug`.                          |
-| `with_timeout`            | 10 s                          | Per request, 1 ms to 60 s.                                           |
-| `with_max_read_bytes`     | 8 MiB                         | Response cap for reads.                                              |
+| Setter                | Default (`devnet()`)          | Notes                                                                |
+| --------------------- | ----------------------------- | -------------------------------------------------------------------- |
+| _(constructor URL)_   | `https://api.dev.proof.trade` | HTTPS, or HTTP on a loopback **IP** (`http://127.0.0.1:9080`)        |
+| `with_chain_id`       | `exchange-devnet-1`           | `connect` checks it against the gateway; unset, `connect` trusts it. |
+| `with_api_key`        | none                          | Sent as `X-Api-Key`; redacted from `Debug`.                          |
+| `with_timeout`        | 10 s                          | Per request, 1 ms to 60 s.                                           |
+| `with_max_read_bytes` | 8 MiB                         | Response cap for reads.                                              |
 
 ## Units
 

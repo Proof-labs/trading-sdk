@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use proof_trading_sdk::gateway::{GatewayClient, GatewayOptions};
-use proof_trading_sdk::query::AccountInfo;
+use proof_trading_sdk::query::{AccountInfo, AccountStateInfo};
 use proof_trading_sdk::reads::{self, Shape};
-use proof_trading_sdk::types::{EventId, EventInfo, MarketConfig, MarketId, Order, Side};
+use proof_trading_sdk::types::{EventId, EventInfo, MarketConfig, MarketId, Order, Position, Side};
 use reqwest::StatusCode;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -122,7 +122,6 @@ impl std::fmt::Debug for ClientConfig {
 
 /// The chain the gateway serves, from `GET /v1/status`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct ChainStatus {
     /// The network name, e.g. `exchange-devnet-1`. Signatures bind to it.
     pub network: String,
@@ -134,7 +133,6 @@ pub struct ChainStatus {
 
 /// One aggregated price level. `price` in micro-USDC, `quantity` in contracts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub struct Level {
     pub price: u64,
     pub quantity: u64,
@@ -144,7 +142,6 @@ pub struct Level {
 /// A market's aggregated book: bids best (highest) first, asks best (lowest)
 /// first.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct Orderbook {
     pub bids: Vec<Level>,
     pub asks: Vec<Level>,
@@ -163,7 +160,6 @@ impl Orderbook {
 
 /// One public fill from `GET /v1/trades/{market}`.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
-#[non_exhaustive]
 pub struct Trade {
     #[serde(deserialize_with = "de_u64")]
     pub fill_id: u64,
@@ -183,6 +179,19 @@ pub struct Trade {
     pub timestamp: u64,
 }
 
+/// An account's finalized ledger at one block, from
+/// `GET /v1/account/{owner}/state`: what reconciliation needs, with no mark,
+/// equity or margin (see [`InfoClient::account`] for those).
+#[derive(Clone, Debug)]
+pub struct AccountState {
+    pub owner: Address,
+    /// The finalized block this state is as of.
+    pub height: u64,
+    /// Collateral, micro-USDC.
+    pub balance: u64,
+    pub positions: Vec<Position>,
+}
+
 // -- record shapes the core does not name -----------------------------------
 
 const LEVEL: Shape = Shape::Record {
@@ -193,6 +202,16 @@ const LEVEL: Shape = Shape::Record {
 const ORDERBOOK: Shape = Shape::Record {
     width: 2,
     nested: &[(0, Shape::List(&LEVEL)), (1, Shape::List(&LEVEL))],
+};
+/// `types::Position`.
+const POSITION: Shape = Shape::Record {
+    width: 7,
+    nested: &[],
+};
+/// `query::AccountStateInfo`; field 3 is `positions`.
+const ACCOUNT_STATE: Shape = Shape::Record {
+    width: 4,
+    nested: &[(3, Shape::List(&POSITION))],
 };
 /// `types::Order`, as `openOrders` returns it.
 const ORDER: Shape = Shape::Record {
@@ -360,6 +379,19 @@ impl InfoClient {
         decode(&bytes, &reads::ACCOUNT_INFO, "account")
     }
 
+    /// `GET /v1/account/{owner}/state`: balance and positions as of a
+    /// finalized height. An account never credited reads as zeros.
+    ///
+    /// # Errors
+    ///
+    /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
+    /// (also when the answer is for another owner) or
+    /// [`Error::ResponseTooLarge`].
+    pub async fn account_state(&self, owner: Address) -> Result<AccountState> {
+        let bytes = self.get_data(&format!("/v1/account/{owner}/state")).await?;
+        account_state(&bytes, owner)
+    }
+
     /// `POST /info {openOrders}`: `owner`'s resting orders.
     ///
     /// # Errors
@@ -490,6 +522,22 @@ fn decode<T: DeserializeOwned>(bytes: &[u8], shape: &Shape, what: &str) -> Resul
     reads::decode(bytes, shape).map_err(|e| Error::Decode(format!("{what}: {e}")))
 }
 
+fn account_state(bytes: &[u8], owner: Address) -> Result<AccountState> {
+    let s: AccountStateInfo = decode(bytes, &ACCOUNT_STATE, "account state")?;
+    let got = Address::from(s.owner.0);
+    if got != owner {
+        return Err(Error::Decode(format!(
+            "account state is for {got}, asked for {owner}"
+        )));
+    }
+    Ok(AccountState {
+        owner: got,
+        height: s.finalized_height.0,
+        balance: s.balance,
+        positions: s.positions,
+    })
+}
+
 /// A u64 the gateway serves as a JSON number or a decimal string.
 struct Dec(u64);
 impl<'de> Deserialize<'de> for Dec {
@@ -580,6 +628,27 @@ mod tests {
         .unwrap();
         assert_eq!(t.price, 74_737_000_000);
         assert_eq!(t.maker_side, Side::Sell);
+    }
+
+    #[test]
+    fn account_state_from_devnet_decodes() {
+        // Captured from /v1/account/bdae2ddf…/state on devnet (2026-11-10).
+        let bytes = unbase64("lNwAFMy9zK4tzN9bzN4ealvM5ivMzcyeAMyBBsz8zKbM38zZzgCngUnPAAAAAlTegFeWl9wAFMy9zK4tzN9bzN4ealvM5ivMzcyeAMyBBsz8zKbM38zZAaRTZWxszwAAABFHLwG8btP/nRwkvXTD8CKX3AAUzL3Mri3M31vM3h5qW8zmK8zNzJ4AzIEGzPzMpszfzNkDpFNlbGzOBQypxszszwACl9G0BV4YzIiX3AAUzL3Mri3M31vM3h5qW8zmK8zNzJ4AzIEGzPzMpszfzNlkpFNlbGzNMvTM1QDMiJfcABTMvcyuLczfW8zeHmpbzOYrzM3MngDMgQbM/MymzN/M2WakU2VsbM8AAAAZwvgKvTYAFZfcABTMvcyuLczfW8zeHmpbzOYrzM3MngDMgQbM/MymzN/M2WmkU2VsbM4FHIkPzKAAzIWX3AAUzL3Mri3M31vM3h5qW8zmK8zNzJ4AzIEGzPzMpszfzNnNDICjQnV5zgAGptAQAAM=").unwrap();
+        let owner: Address = "bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9".parse().unwrap();
+        let s = account_state(&bytes, owner).unwrap();
+        assert_eq!(s.owner, owner);
+        assert!(s.height > 0 && s.balance > 0);
+        assert!(!s.positions.is_empty());
+        assert!(s
+            .positions
+            .iter()
+            .all(|p| p.owner == owner.to_bytes() && p.size > 0));
+
+        let other = Address::from([1; 20]);
+        assert!(matches!(
+            account_state(&bytes, other),
+            Err(Error::Decode(_))
+        ));
     }
 
     #[test]

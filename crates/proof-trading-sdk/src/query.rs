@@ -3,5 +3,6 @@
 //! drift). Client representation that needs it wraps these.
 
 pub use proof_wire::query::{
-    AccountInfo, BindingScenario, LevelSummary, OrderbookSnapshot, PositionBrief,
+    AccountInfo, AccountStateInfo, BindingScenario, FinalizedHeight, LevelSummary,
+    OrderbookSnapshot, PositionBrief,
 };

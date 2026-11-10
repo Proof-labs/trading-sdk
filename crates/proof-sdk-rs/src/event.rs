@@ -3,13 +3,18 @@
 //! The engine writes each event as string attributes: numbers are decimal
 //! strings, `""` means absent, and a client order id of `"0"` is the engine's
 //! "none". [`Event::from`] reads them once, so a bot matches on [`Event`]
-//! instead of string keys. An event this version does not type, or whose
-//! attributes do not match, stays raw as [`Event::Other`].
+//! instead of string keys. A kind this version does not type stays raw as
+//! [`Event::Other`]; a kind it types whose attributes do not read stays raw as
+//! [`Event::Malformed`], so a bad fill is never mistaken for an unknown event.
+
+use std::fmt;
+use std::str::FromStr;
 
 use proof_trading_sdk::gateway::{TxAttribute, TxEvent};
 use proof_trading_sdk::types::{MarketId, OrderId, Side, TimeInForce};
 
 use crate::address::Address;
+use crate::exchange::EngineError;
 
 /// What happened, by engine event.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,13 +41,15 @@ pub enum Event {
     FundingSettled(FundingSettled),
     /// `deposited`: collateral arrived.
     Deposited(Deposited),
-    /// Any other event, or one whose attributes did not match, as received.
+    /// An event kind this version does not type, as received.
     Other(TxEvent),
+    /// One of the kinds above whose attributes did not read (a required
+    /// attribute missing, or a value that does not parse), as received.
+    Malformed(TxEvent),
 }
 
 /// `trade_executed`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct Fill {
     pub fill_id: u64,
     pub market: MarketId,
@@ -72,7 +79,6 @@ impl Fill {
 
 /// `order_placed`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct OrderPlaced {
     pub order_id: OrderId,
     pub market: MarketId,
@@ -87,7 +93,6 @@ pub struct OrderPlaced {
 
 /// `order_cancelled`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct OrderCancelled {
     pub order_id: OrderId,
     pub market: MarketId,
@@ -95,13 +100,76 @@ pub struct OrderCancelled {
     pub original_quantity: u64,
     pub filled_quantity: u64,
     pub remaining_quantity: u64,
-    /// Engine reason, e.g. `user_requested`.
-    pub reason: String,
+    pub reason: CancelReason,
+}
+
+/// Why a resting order left the book.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CancelReason {
+    /// The owner (or its agent) cancelled it.
+    UserRequested,
+    Expired,
+    AdminForce,
+    Liquidation,
+    /// An engine upgrade moved its book and the order would have crossed.
+    Upgrade,
+    /// A reduce-only order had no position left to reduce.
+    ReduceOnly,
+    /// The maker could not pay its side of a fill.
+    Unfunded,
+    /// The fill would have left the maker below maintenance.
+    InsufficientMargin,
+    /// The maker's own position cap refused the fill.
+    MakerRefused,
+    /// A reason this version does not name, as the engine wrote it.
+    Other(String),
+}
+
+impl CancelReason {
+    /// The engine's name for the reason, e.g. `user_requested`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::UserRequested => "user_requested",
+            Self::Expired => "expired",
+            Self::AdminForce => "admin_force",
+            Self::Liquidation => "liquidation",
+            Self::Upgrade => "upgrade",
+            Self::ReduceOnly => "reduce_only",
+            Self::Unfunded => "unfunded",
+            Self::InsufficientMargin => "insufficient_margin",
+            Self::MakerRefused => "maker_refused",
+            Self::Other(s) => s,
+        }
+    }
+}
+
+impl From<&str> for CancelReason {
+    fn from(s: &str) -> Self {
+        match s {
+            "user_requested" => Self::UserRequested,
+            "expired" => Self::Expired,
+            "admin_force" => Self::AdminForce,
+            "liquidation" => Self::Liquidation,
+            "upgrade" => Self::Upgrade,
+            "reduce_only" => Self::ReduceOnly,
+            "unfunded" => Self::Unfunded,
+            "insufficient_margin" => Self::InsufficientMargin,
+            "maker_refused" => Self::MakerRefused,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+}
+
+impl fmt::Display for CancelReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// `order_amended`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct OrderAmended {
     pub order_id: OrderId,
     pub market: MarketId,
@@ -119,17 +187,14 @@ pub struct OrderAmended {
 
 /// `order_rejected`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct OrderRejected {
     pub market: MarketId,
     pub client_order_id: Option<u64>,
-    /// Engine error code (`core::decode_exec_error_kind`).
-    pub code: u32,
+    pub error: EngineError,
 }
 
 /// `market_order_processed`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct MarketOrderProcessed {
     pub order_id: OrderId,
     pub market: MarketId,
@@ -143,7 +208,6 @@ pub struct MarketOrderProcessed {
 
 /// `position_updated`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct PositionUpdated {
     pub market: MarketId,
     pub side: Side,
@@ -155,7 +219,6 @@ pub struct PositionUpdated {
 
 /// `position_closed`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct PositionClosed {
     pub market: MarketId,
     pub realized_pnl: i64,
@@ -163,7 +226,6 @@ pub struct PositionClosed {
 
 /// `funding_settled`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct FundingSettled {
     pub market: MarketId,
     /// micro-USDC; positive is paid to this account.
@@ -172,7 +234,6 @@ pub struct FundingSettled {
 
 /// `deposited`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct Deposited {
     pub amount: u64,
     pub new_balance: u64,
@@ -181,6 +242,10 @@ pub struct Deposited {
 // -- decoding ------------------------------------------------------------------
 
 /// Reads the engine's string attributes.
+///
+/// A required attribute (`u64`, `side`, ...) must be present and parse. An
+/// optional one (`opt_*`) may be absent or `""`, but a value that is there
+/// must parse: `None` from either means the event is malformed.
 struct Attrs<'a>(&'a [TxAttribute]);
 
 impl Attrs<'_> {
@@ -190,43 +255,62 @@ impl Attrs<'_> {
             .find(|a| a.key == key)
             .map(|a| a.value.as_str())
     }
-    fn u64(&self, key: &str) -> Option<u64> {
+    fn parse<T: FromStr>(&self, key: &str) -> Option<T> {
         self.str(key)?.parse().ok()
     }
-    fn i64(&self, key: &str) -> Option<i64> {
-        self.str(key)?.parse().ok()
-    }
-    fn u32(&self, key: &str) -> Option<u32> {
-        self.u64(key).and_then(|v| u32::try_from(v).ok())
-    }
-    fn bool(&self, key: &str) -> Option<bool> {
-        self.str(key)?.parse().ok()
-    }
-    fn side(&self, key: &str) -> Option<Side> {
-        match self.str(key)? {
-            "buy" | "Buy" | "bid" => Some(Side::Buy),
-            "sell" | "Sell" | "ask" => Some(Side::Sell),
-            _ => None,
+    /// `Some(None)` when absent or empty, `None` when present and unreadable.
+    fn opt<T: FromStr>(&self, key: &str) -> Option<Option<T>> {
+        match self.str(key) {
+            None | Some("") => Some(None),
+            Some(s) => s.parse().ok().map(Some),
         }
     }
+    fn u64(&self, key: &str) -> Option<u64> {
+        self.parse(key)
+    }
+    fn market(&self, key: &str) -> Option<MarketId> {
+        self.parse(key)
+    }
+    fn side(&self, key: &str) -> Option<Side> {
+        side(self.str(key)?)
+    }
     fn address(&self, key: &str) -> Option<Address> {
-        self.str(key)?.parse().ok()
+        self.parse(key)
+    }
+    /// Absent, `""` or `"0"` (the engine's "none") reads as `0`.
+    fn opt_u64(&self, key: &str) -> Option<u64> {
+        Some(self.opt(key)?.unwrap_or(0))
+    }
+    fn opt_i64(&self, key: &str) -> Option<i64> {
+        Some(self.opt(key)?.unwrap_or(0))
+    }
+    fn opt_bool(&self, key: &str) -> Option<bool> {
+        Some(self.opt(key)?.unwrap_or(false))
     }
     /// A client order id: absent, `""` and `"0"` all mean none.
-    fn client_order_id(&self, key: &str) -> Option<u64> {
-        self.u64(key).filter(|&id| id != 0)
+    fn client_order_id(&self, key: &str) -> Option<Option<u64>> {
+        Some(self.opt::<u64>(key)?.filter(|&id| id != 0))
     }
     /// A string that is absent when empty.
     fn text(&self, key: &str) -> Option<String> {
         self.str(key).filter(|s| !s.is_empty()).map(str::to_owned)
     }
     fn time_in_force(&self, key: &str) -> Option<TimeInForce> {
-        match self.str(key)? {
-            "gtc" | "Gtc" => Some(TimeInForce::Gtc),
-            "ioc" | "Ioc" => Some(TimeInForce::Ioc),
-            "fok" | "Fok" => Some(TimeInForce::Fok),
-            _ => None,
+        match self.str(key) {
+            None | Some("") => Some(TimeInForce::default()),
+            Some("gtc" | "Gtc") => Some(TimeInForce::Gtc),
+            Some("ioc" | "Ioc") => Some(TimeInForce::Ioc),
+            Some("fok" | "Fok") => Some(TimeInForce::Fok),
+            Some(_) => None,
         }
+    }
+}
+
+fn side(s: &str) -> Option<Side> {
+    match s {
+        "buy" | "Buy" | "bid" => Some(Side::Buy),
+        "sell" | "Sell" | "ask" => Some(Side::Sell),
+        _ => None,
     }
 }
 
@@ -239,7 +323,11 @@ const fn opposite(side: Side) -> Side {
 
 impl From<TxEvent> for Event {
     fn from(raw: TxEvent) -> Self {
-        typed(&raw.kind, &Attrs(&raw.attributes)).unwrap_or(Event::Other(raw))
+        match typed(&raw.kind, &Attrs(&raw.attributes)) {
+            Some(Some(event)) => event,
+            Some(None) => Event::Malformed(raw),
+            None => Event::Other(raw),
+        }
     }
 }
 
@@ -267,37 +355,20 @@ pub(crate) fn raw_from_json(kind: &str, payload: &serde_json::Value) -> TxEvent 
     }
 }
 
-fn typed(event_type: &str, a: &Attrs<'_>) -> Option<Event> {
+/// `None` for a kind this version does not type; `Some(None)` for a typed
+/// kind whose attributes do not read.
+fn typed(event_type: &str, a: &Attrs<'_>) -> Option<Option<Event>> {
     Some(match event_type {
-        "trade_executed" => Event::Fill(fill(a)?),
-        "order_placed" => Event::OrderPlaced(order_placed(a)?),
-        "order_cancelled" => Event::OrderCancelled(order_cancelled(a)?),
-        "order_amended" => Event::OrderAmended(order_amended(a)?),
-        "order_rejected" => Event::OrderRejected(OrderRejected {
-            market: a.u32("market")?,
-            client_order_id: a.client_order_id("client_order_id"),
-            code: a.u32("code")?,
-        }),
-        "market_order_processed" => Event::MarketOrderProcessed(market_order_processed(a)?),
-        "position_updated" => Event::PositionUpdated(PositionUpdated {
-            market: a.u32("market")?,
-            side: a.side("side")?,
-            size: a.u64("size")?,
-            entry_price: a.u64("entry_price")?,
-            realized_pnl: a.i64("realized_pnl").unwrap_or(0),
-        }),
-        "position_closed" => Event::PositionClosed(PositionClosed {
-            market: a.u32("market")?,
-            realized_pnl: a.i64("realized_pnl").unwrap_or(0),
-        }),
-        "funding_settled" => Event::FundingSettled(FundingSettled {
-            market: a.u32("market")?,
-            payment: a.i64("payment")?,
-        }),
-        "deposited" => Event::Deposited(Deposited {
-            amount: a.u64("amount")?,
-            new_balance: a.u64("new_balance")?,
-        }),
+        "trade_executed" => fill(a).map(Event::Fill),
+        "order_placed" => order_placed(a).map(Event::OrderPlaced),
+        "order_cancelled" => order_cancelled(a).map(Event::OrderCancelled),
+        "order_amended" => order_amended(a).map(Event::OrderAmended),
+        "order_rejected" => order_rejected(a).map(Event::OrderRejected),
+        "market_order_processed" => market_order_processed(a).map(Event::MarketOrderProcessed),
+        "position_updated" => position_updated(a).map(Event::PositionUpdated),
+        "position_closed" => position_closed(a).map(Event::PositionClosed),
+        "funding_settled" => funding_settled(a).map(Event::FundingSettled),
+        "deposited" => deposited(a).map(Event::Deposited),
         _ => return None,
     })
 }
@@ -305,7 +376,7 @@ fn typed(event_type: &str, a: &Attrs<'_>) -> Option<Event> {
 fn fill(a: &Attrs<'_>) -> Option<Fill> {
     Some(Fill {
         fill_id: a.u64("fill_id")?,
-        market: a.u32("market")?,
+        market: a.market("market")?,
         price: a.u64("price")?,
         quantity: a.u64("quantity")?,
         maker_owner: a.address("maker_owner")?,
@@ -313,64 +384,104 @@ fn fill(a: &Attrs<'_>) -> Option<Fill> {
         maker_side: a.side("maker_side")?,
         maker_order_id: a.u64("maker_order_id")?,
         taker_order_id: a.u64("taker_order_id")?,
-        maker_client_order_id: a.client_order_id("maker_client_order_id"),
-        taker_client_order_id: a.client_order_id("taker_client_order_id"),
-        maker_fee: a.i64("maker_fee").unwrap_or(0),
-        taker_fee: a.i64("taker_fee").unwrap_or(0),
+        maker_client_order_id: a.client_order_id("maker_client_order_id")?,
+        taker_client_order_id: a.client_order_id("taker_client_order_id")?,
+        maker_fee: a.opt_i64("maker_fee")?,
+        taker_fee: a.opt_i64("taker_fee")?,
     })
 }
 
 fn order_placed(a: &Attrs<'_>) -> Option<OrderPlaced> {
     Some(OrderPlaced {
         order_id: a.u64("order_id")?,
-        market: a.u32("market")?,
+        market: a.market("market")?,
         side: a.side("side")?,
         price: a.u64("price")?,
         quantity: a.u64("quantity")?,
-        client_order_id: a.client_order_id("client_order_id"),
-        post_only: a.bool("post_only").unwrap_or(false),
-        reduce_only: a.bool("reduce_only").unwrap_or(false),
-        time_in_force: a.time_in_force("time_in_force").unwrap_or_default(),
+        client_order_id: a.client_order_id("client_order_id")?,
+        post_only: a.opt_bool("post_only")?,
+        reduce_only: a.opt_bool("reduce_only")?,
+        time_in_force: a.time_in_force("time_in_force")?,
     })
 }
 
 fn order_cancelled(a: &Attrs<'_>) -> Option<OrderCancelled> {
     Some(OrderCancelled {
         order_id: a.u64("order_id")?,
-        market: a.u32("market")?,
-        client_order_id: a.client_order_id("client_order_id"),
-        original_quantity: a.u64("original_quantity").unwrap_or(0),
-        filled_quantity: a.u64("filled_quantity").unwrap_or(0),
-        remaining_quantity: a.u64("remaining_quantity").unwrap_or(0),
-        reason: a.text("reason").unwrap_or_default(),
+        market: a.market("market")?,
+        client_order_id: a.client_order_id("client_order_id")?,
+        original_quantity: a.opt_u64("original_quantity")?,
+        filled_quantity: a.opt_u64("filled_quantity")?,
+        remaining_quantity: a.opt_u64("remaining_quantity")?,
+        reason: CancelReason::from(a.str("reason")?),
     })
 }
 
 fn order_amended(a: &Attrs<'_>) -> Option<OrderAmended> {
     Some(OrderAmended {
         order_id: a.u64("order_id")?,
-        market: a.u32("market")?,
+        market: a.market("market")?,
         side: a.side("side")?,
-        client_order_id: a.client_order_id("client_order_id"),
+        client_order_id: a.client_order_id("client_order_id")?,
         old_price: a.u64("old_price")?,
         new_price: a.u64("new_price")?,
         old_quantity: a.u64("old_quantity")?,
         new_quantity: a.u64("new_quantity")?,
-        filled_quantity: a.u64("filled_quantity").unwrap_or(0),
-        remaining_quantity: a.u64("remaining_quantity").unwrap_or(0),
-        queue_priority_reset: a.bool("queue_priority_reset").unwrap_or(false),
+        filled_quantity: a.opt_u64("filled_quantity")?,
+        remaining_quantity: a.opt_u64("remaining_quantity")?,
+        queue_priority_reset: a.opt_bool("queue_priority_reset")?,
+    })
+}
+
+fn order_rejected(a: &Attrs<'_>) -> Option<OrderRejected> {
+    let code: u32 = a.parse("code")?;
+    Some(OrderRejected {
+        market: a.market("market")?,
+        client_order_id: a.client_order_id("client_order_id")?,
+        error: EngineError::new(code, None),
     })
 }
 
 fn market_order_processed(a: &Attrs<'_>) -> Option<MarketOrderProcessed> {
     Some(MarketOrderProcessed {
         order_id: a.u64("order_id")?,
-        market: a.u32("market")?,
+        market: a.market("market")?,
         side: a.side("side")?,
         requested_quantity: a.u64("requested_quantity")?,
-        filled_quantity: a.u64("filled_quantity").unwrap_or(0),
-        client_order_id: a.client_order_id("client_order_id"),
+        filled_quantity: a.opt_u64("filled_quantity")?,
+        client_order_id: a.client_order_id("client_order_id")?,
         unfilled_reason: a.text("unfilled_reason"),
+    })
+}
+
+fn position_updated(a: &Attrs<'_>) -> Option<PositionUpdated> {
+    Some(PositionUpdated {
+        market: a.market("market")?,
+        side: a.side("side")?,
+        size: a.u64("size")?,
+        entry_price: a.u64("entry_price")?,
+        realized_pnl: a.opt_i64("realized_pnl")?,
+    })
+}
+
+fn position_closed(a: &Attrs<'_>) -> Option<PositionClosed> {
+    Some(PositionClosed {
+        market: a.market("market")?,
+        realized_pnl: a.opt_i64("realized_pnl")?,
+    })
+}
+
+fn funding_settled(a: &Attrs<'_>) -> Option<FundingSettled> {
+    Some(FundingSettled {
+        market: a.market("market")?,
+        payment: a.parse("payment")?,
+    })
+}
+
+fn deposited(a: &Attrs<'_>) -> Option<Deposited> {
+    Some(Deposited {
+        amount: a.u64("amount")?,
+        new_balance: a.u64("new_balance")?,
     })
 }
 
@@ -384,8 +495,8 @@ mod tests {
         Event::from(raw_from_json(kind, payload))
     }
 
-    fn is_other(e: &Event) -> bool {
-        matches!(e, Event::Other(_))
+    fn is_malformed(e: &Event) -> bool {
+        matches!(e, Event::Malformed(_))
     }
 
     // Payloads below are verbatim from devnet `/v1/history/account-events`
@@ -423,8 +534,8 @@ mod tests {
             panic!()
         };
         assert_eq!(
-            (c.remaining_quantity, c.reason.as_str()),
-            (259, "user_requested")
+            (c.remaining_quantity, &c.reason),
+            (259, &CancelReason::UserRequested)
         );
 
         let amended = json!({"client_order_id": "1794152258902198", "filled_quantity": "0", "market": "1", "new_price": "74660000000", "new_quantity": "182", "old_price": "74693000000", "old_quantity": "182", "order_id": "3211222", "owner": MAKER, "queue_priority_reset": "true", "remaining_quantity": "182", "side": "sell"});
@@ -441,7 +552,7 @@ mod tests {
             Event::OrderRejected(OrderRejected {
                 market: 104,
                 client_order_id: None,
-                code: 51
+                error: EngineError::new(51, None),
             })
         );
 
@@ -491,7 +602,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_or_mismatched_events_fall_back_to_other() {
+    fn unknown_kinds_are_other_and_bad_known_kinds_are_malformed() {
         let fees = json!({"maker_fee": "172", "maker_owner": MAKER, "market": "105", "taker_fee": "429", "taker_owner": TAKER});
         let Event::Other(raw) = kind_of("fees_collected", &fees) else {
             panic!()
@@ -500,7 +611,43 @@ mod tests {
             (raw.kind.as_str(), raw.attributes.len()),
             ("fees_collected", 5)
         );
-        assert!(is_other(&kind_of("trade_executed", &json!({"price": "x"}))));
-        assert!(is_other(&kind_of("order_placed", &Value::Null)));
+        assert!(is_malformed(&kind_of(
+            "trade_executed",
+            &json!({"price": "x"})
+        )));
+        assert!(is_malformed(&kind_of("order_placed", &Value::Null)));
+    }
+
+    #[test]
+    fn an_optional_attribute_may_be_absent_but_not_garbage() {
+        let fill = |fee: Value| {
+            let mut p = json!({"fill_id": "1", "market": "1", "price": "10", "quantity": "1", "maker_owner": MAKER, "taker_owner": TAKER, "maker_side": "buy", "maker_order_id": "2", "taker_order_id": "3"});
+            if !fee.is_null() {
+                p["taker_fee"] = fee;
+            }
+            kind_of("trade_executed", &p)
+        };
+        assert!(matches!(
+            fill(Value::Null),
+            Event::Fill(Fill { taker_fee: 0, .. })
+        ));
+        assert!(matches!(
+            fill(json!("")),
+            Event::Fill(Fill { taker_fee: 0, .. })
+        ));
+        assert!(
+            is_malformed(&fill(json!("1.5"))),
+            "a fee that does not parse is not 0"
+        );
+    }
+
+    #[test]
+    fn an_unnamed_cancel_reason_is_kept() {
+        assert_eq!(CancelReason::from("expired"), CancelReason::Expired);
+        let new = CancelReason::from("vaporised");
+        assert_eq!(
+            (new.as_str(), new.to_string()),
+            ("vaporised", "vaporised".into())
+        );
     }
 }
