@@ -3,6 +3,7 @@ import base64
 from contextlib import closing
 from dataclasses import FrozenInstanceError
 import json
+import pickle
 from types import SimpleNamespace
 
 import httpx
@@ -89,6 +90,8 @@ def test_exact_limit_complete_succeeds_but_partial_is_never_returned():
     error = caught.value
     assert type(error) is AuthorizedAgentsIncomplete
     assert error.complete is False
+    with pytest.raises(AttributeError):
+        error.complete = True
     assert error.owner == HEX
     assert error.agents == tuple(agent.hex() for agent in agents)
     assert error.witness == AuthorizedAgentsWitness(HEIGHT, 123000, "ab" * 20, "CD" * 32)
@@ -114,6 +117,25 @@ def test_binding_mismatch_is_distinct_and_never_exposes_partial_grants(complete,
     assert (error.expected_height, error.actual_height) == (HEIGHT, actual_height)
     assert error.__cause__ is None
     assert not hasattr(error, "agents")
+
+
+@pytest.mark.parametrize("response,error_type", [
+    (body(raw(agents=[n.to_bytes(20, "big") for n in range(100)], complete=False)),
+     AuthorizedAgentsIncomplete),
+    (body(raw(owner=bytes([3]) * 20)), AuthorizedAgentsBindingMismatch),
+])
+def test_typed_errors_survive_process_serialization(response, error_type):
+    with pytest.raises(error_type) as caught:
+        _decode_snapshot(response, HEX)
+    restored = pickle.loads(pickle.dumps(caught.value))
+    assert type(restored) is error_type
+    assert isinstance(restored, CodecError)
+    assert str(restored) == str(caught.value)
+    assert vars(restored) == vars(caught.value)
+    if isinstance(restored, AuthorizedAgentsIncomplete):
+        assert restored.complete is False
+        with pytest.raises(AttributeError):
+            restored.complete = True
 
 
 @pytest.mark.parametrize("agents", [

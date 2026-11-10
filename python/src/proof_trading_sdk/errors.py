@@ -68,7 +68,9 @@ class AuthorizedAgentsIncomplete(CodecError):
     ``witness`` is an unverified gateway assertion, not a chain proof.
     """
 
-    complete: Literal[False] = False
+    @property
+    def complete(self) -> Literal[False]:
+        return False
 
     def __init__(
         self, owner: str, agents: tuple[str, ...], witness: AuthorizedAgentsWitness,
@@ -81,12 +83,15 @@ class AuthorizedAgentsIncomplete(CodecError):
             "no complete snapshot"
         )
 
+    def __reduce__(self) -> tuple:
+        return (type(self), (self.owner, self.agents, self.witness))
+
 
 class AuthorizedAgentsBindingMismatch(CodecError):
     """The payload owner or finalized height does not match its binding."""
 
     def __init__(
-        self, *, expected_owner: str, actual_owner: str,
+        self, expected_owner: str, actual_owner: str,
         expected_height: int, actual_height: int,
     ) -> None:
         self.expected_owner = expected_owner
@@ -94,6 +99,12 @@ class AuthorizedAgentsBindingMismatch(CodecError):
         self.expected_height = expected_height
         self.actual_height = actual_height
         super().__init__("authorized agents: owner or finalized height mismatch")
+
+    def __reduce__(self) -> tuple:
+        return (type(self), (
+            self.expected_owner, self.actual_owner,
+            self.expected_height, self.actual_height,
+        ))
 
 
 class SigningError(ProofTradingSdkError):
