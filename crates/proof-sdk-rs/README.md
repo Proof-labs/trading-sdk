@@ -79,7 +79,7 @@ On devnet, fund a new address with the faucet first:
 | Method                                          | Action / route                                     |
 | ----------------------------------------------- | -------------------------------------------------- |
 | `connect(&config, signer)`                      | reads `GET /v1/status`, binds signatures to it     |
-| `offline(&config, signer)`                      | no request; signs for `config.chain_id`            |
+| `new(&config, signer)`                          | no request; signs for the config's chain id       |
 | `limit_order(market, side, price, qty)`         | builds a GTC `PlaceOrder` for this account         |
 | `place_order(order)`                            | `PlaceOrder`                                       |
 | `market_order(market, side, qty)`               | `MarketOrder` (IOC)                                |
@@ -95,14 +95,14 @@ On devnet, fund a new address with the faucet first:
 | `wait_for_receipt(hash, timeout)`               | polls `GET /v1/tx/{hash}`                          |
 
 Each submission returns a `Submitted`, holding the signed tx with its locally
-computed hash plus the gateway's `SubmissionOutcome`:
+computed hash, a `TxStatus`, and `retry_after: Option<Duration>`:
 
-| Outcome                           | Meaning                                                                 |
-| --------------------------------- | ----------------------------------------------------------------------- |
-| `Committed(receipt)`              | In a block. `receipt.code == 0` is success; otherwise an engine error. |
-| `CheckTxRejected { code }`        | Refused before the mempool; it will never execute.                     |
-| `Pending { hash }`                | Admitted without a verdict yet; call `wait_for_receipt`.               |
-| `RejectedBeforeAdmission { .. }`  | Gateway refusal (auth, rate limit, maintenance); see `retry_after`.     |
+| `TxStatus`          | Meaning                                                                          |
+| ------------------- | -------------------------------------------------------------------------------- |
+| `Committed(receipt)` | In a block. `receipt.is_success()` (code 0), otherwise an engine error code.    |
+| `Rejected { code }` | Refused at `CheckTx`; it will never execute.                                     |
+| `Pending`           | Admitted without a verdict yet; call `wait_for_receipt`.                         |
+| `Refused(reason)`   | Turned away by the gateway (`Unauthorized`, `RateLimited`, `Paused`, `CancelOnly`, `Unavailable`, `InvalidRequest`). |
 
 `is_success()`, `is_pending()` and `error_code()` cover the common checks. Error
 codes decode with `core::decode_exec_error_kind(code, None)` (for example 12 is insufficient
@@ -120,7 +120,7 @@ nonce.** Both copies could execute.
 
 | Method                      | Route                                   | Returns                    |
 | --------------------------- | --------------------------------------- | -------------------------- |
-| `chain_identity()`          | `GET /v1/status`                        | network, chain binding     |
+| `chain_status()`            | `GET /v1/status`                        | network, height            |
 | `markets()`                 | `GET /v1/markets`                       | `Vec<MarketConfig>`        |
 | `events()` / `event(id)`    | `GET /v1/events`, `/v1/event/{id}`      | `EventInfo` (with books)   |
 | `orderbook(market)`         | `GET /v1/orderbook/{market}`            | `Orderbook` (best first)   |
@@ -155,13 +155,15 @@ identical to `core::codec::sign_and_encode_with_chain`, and a test checks that.
 
 ## Configuration
 
-| `ClientConfig` field | Default                       | Notes                                                               |
-| -------------------- | ----------------------------- | ------------------------------------------------------------------- |
-| `gateway_url`        | `https://api.dev.proof.trade` | HTTPS, or HTTP on a loopback **IP** (`http://127.0.0.1:9080`)       |
-| `chain_id`           | `exchange-devnet-1`           | `connect` checks it against the gateway; `None` trusts the gateway. |
-| `api_key`            | none                          | Sent as `X-Api-Key`; redacted from `Debug`.                         |
-| `timeout`            | 10 s                          | Per request, 1 ms to 60 s.                                          |
-| `max_read_bytes`     | 8 MiB                         | Response cap for reads.                                             |
+`ClientConfig::new(url)` or `ClientConfig::devnet()`, then:
+
+| Setter                    | Default (`devnet()`)          | Notes                                                                |
+| ------------------------- | ----------------------------- | -------------------------------------------------------------------- |
+| _(constructor URL)_       | `https://api.dev.proof.trade` | HTTPS, or HTTP on a loopback **IP** (`http://127.0.0.1:9080`)        |
+| `with_chain_id`           | `exchange-devnet-1`           | `connect` checks it against the gateway; unset, `connect` trusts it. |
+| `with_api_key`            | none                          | Sent as `X-Api-Key`; redacted from `Debug`.                          |
+| `with_timeout`            | 10 s                          | Per request, 1 ms to 60 s.                                           |
+| `with_max_read_bytes`     | 8 MiB                         | Response cap for reads.                                              |
 
 ## Units
 

@@ -29,7 +29,7 @@
 //!     order.post_only = true;
 //!     order.client_order_id = Some(7);
 //!     let placed = client.place_order(order).await?;
-//!     println!("{:?} code={:?}", placed.outcome, placed.error_code());
+//!     println!("{:?} code={:?}", placed.status, placed.error_code());
 //!     client.cancel_client_order(7).await?;
 //! }
 //! # Ok(())
@@ -49,15 +49,16 @@ mod nonce;
 
 pub use address::Address;
 pub use error::{Error, Result};
-pub use exchange::{ExchangeClient, SignedTx, Submitted};
+pub use exchange::{ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted, TxStatus};
 pub use info::{
-    ClientConfig, InfoClient, Level, Orderbook, Trade, DEVNET_CHAIN_ID, DEVNET_GATEWAY_URL,
+    ChainStatus, ClientConfig, InfoClient, Level, Orderbook, Trade, DEVNET_CHAIN_ID,
+    DEVNET_GATEWAY_URL,
 };
 pub use nonce::{NonceAllocator, MAX_CLOCK_LEAD_MS};
 
 /// The core crate, re-exported so callers need one dependency.
 pub use proof_trading_sdk as core;
-pub use proof_trading_sdk::gateway::{CommittedReceipt, RetryAfter, SubmissionOutcome, TxHash};
+pub use proof_trading_sdk::gateway::TxHash;
 pub use proof_trading_sdk::types::{
     Action, CancelReplaceOrder, EventId, EventInfo, MarketConfig, MarketId, OrderId, PlaceOrder,
     Side, TimeInForce,

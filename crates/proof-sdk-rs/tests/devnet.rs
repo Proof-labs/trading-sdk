@@ -9,7 +9,7 @@ use proof_sdk_rs::{ClientConfig, EventId, InfoClient};
 async fn every_read_decodes_against_devnet() {
     let info = InfoClient::new(&ClientConfig::devnet()).unwrap();
 
-    let id = info.chain_identity().await.unwrap();
+    let id = info.chain_status().await.unwrap();
     assert_eq!(id.network, "exchange-devnet-1");
 
     let markets = info.markets().await.unwrap();

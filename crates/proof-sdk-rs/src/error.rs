@@ -23,8 +23,12 @@ pub enum Error {
     Http { status: u16, body: String },
     /// A response did not decode as the type the route promises.
     Decode(String),
-    /// A transport call from the core [`proof_trading_sdk::gateway`] failed
-    /// with no submission in flight (chain identity, receipt read).
+    /// A read response exceeded the configured cap
+    /// ([`crate::ClientConfig::with_max_read_bytes`]).
+    ResponseTooLarge,
+    /// A gateway call made through the core transport failed with no
+    /// submission in flight (chain identity, receipt read). The source error
+    /// names the operation and kind.
     Gateway(GatewayError),
     /// The submission may have reached the gateway, but no verdict came back.
     /// The transaction can still land. Keep `tx` and reconcile it with
@@ -56,6 +60,7 @@ impl fmt::Display for Error {
             Error::Transport(e) => write!(f, "transport: {e}"),
             Error::Http { status, body } => write!(f, "HTTP {status}: {body}"),
             Error::Decode(m) => write!(f, "decode: {m}"),
+            Error::ResponseTooLarge => f.write_str("response exceeds max_read_bytes"),
             Error::Gateway(e) => write!(f, "{e}"),
             Error::Ambiguous { tx, source } => write!(
                 f,

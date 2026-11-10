@@ -2,10 +2,11 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use proof_trading_sdk::gateway::{
-    CommittedReceipt, ErrorKind, RetryAfter, SubmissionOutcome, TxHash,
+    CommittedReceipt, ErrorKind, MaintenanceMode, PreAdmissionRefusal, RetryAfter,
+    SubmissionOutcome, TxHash,
 };
 use proof_trading_sdk::types::{
     Action, AmendOrder, CancelAllOrders, CancelClientOrder, CancelOrder, CancelReplaceOrder,
@@ -24,6 +25,7 @@ use crate::nonce::NonceAllocator;
 /// before the gateway answers. The bytes include the signature and are kept
 /// out of `Debug`.
 #[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SignedTx {
     pub bytes: Vec<u8>,
     pub hash: TxHash,
@@ -40,39 +42,143 @@ impl fmt::Debug for SignedTx {
     }
 }
 
-/// What the gateway said about one submission.
+/// A committed transaction's result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Receipt {
+    pub hash: TxHash,
+    /// The block it executed in.
+    pub height: u64,
+    /// 0 is success; anything else is an engine error code.
+    pub code: u32,
+}
+
+impl Receipt {
+    #[must_use]
+    pub fn is_success(&self) -> bool {
+        self.code == 0
+    }
+}
+
+impl From<CommittedReceipt> for Receipt {
+    fn from(r: CommittedReceipt) -> Self {
+        Self {
+            hash: r.hash,
+            height: r.height.get(),
+            code: r.code,
+        }
+    }
+}
+
+/// Why the gateway turned a submission away before admitting it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RefusalReason {
+    /// Missing or wrong API key.
+    Unauthorized,
+    /// Too many requests; see [`Submitted::retry_after`].
+    RateLimited,
+    /// Trading is paused.
+    Paused,
+    /// Only cancels are accepted.
+    CancelOnly,
+    /// The gateway or its verifier is overloaded or unavailable.
+    Unavailable,
+    /// The request itself was malformed.
+    InvalidRequest,
+}
+
+impl From<PreAdmissionRefusal> for RefusalReason {
+    fn from(r: PreAdmissionRefusal) -> Self {
+        match r {
+            PreAdmissionRefusal::Unauthorized => Self::Unauthorized,
+            PreAdmissionRefusal::RateLimited => Self::RateLimited,
+            PreAdmissionRefusal::Maintenance(MaintenanceMode::Paused) => Self::Paused,
+            PreAdmissionRefusal::Maintenance(MaintenanceMode::CancelOnly) => Self::CancelOnly,
+            PreAdmissionRefusal::Overloaded | PreAdmissionRefusal::VerifierUnavailable => {
+                Self::Unavailable
+            }
+            PreAdmissionRefusal::InvalidRequest | PreAdmissionRefusal::InvalidEncoding => {
+                Self::InvalidRequest
+            }
+        }
+    }
+}
+
+/// Where one submission ended up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TxStatus {
+    /// Executed in a block. Check [`Receipt::code`]: 0 is success.
+    Committed(Receipt),
+    /// Refused at `CheckTx` with engine error `code`. It will never execute.
+    Rejected { code: u32 },
+    /// Admitted with no verdict yet. Reconcile with
+    /// [`ExchangeClient::wait_for_receipt`]; never re-sign.
+    Pending,
+    /// Turned away by the gateway before admission. It did not execute.
+    Refused(RefusalReason),
+}
+
+/// The answer to one submission.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Submitted {
     pub tx: SignedTx,
-    pub outcome: SubmissionOutcome,
-    /// The gateway's `Retry-After` hint (rate limiting), if any.
-    pub retry_after: Option<RetryAfter>,
+    pub status: TxStatus,
+    /// How long the gateway asked callers to wait before the next request,
+    /// if it said. An unreadable `Retry-After` reads as one second, never as
+    /// "retry now".
+    pub retry_after: Option<Duration>,
 }
 
 impl Submitted {
     /// Executed in a block with code 0.
     #[must_use]
     pub fn is_success(&self) -> bool {
-        matches!(&self.outcome, SubmissionOutcome::Committed(r) if r.code == 0)
+        matches!(self.status, TxStatus::Committed(r) if r.is_success())
     }
 
-    /// Admitted, but no verdict yet. Reconcile with
-    /// [`ExchangeClient::wait_for_receipt`]; never re-sign.
+    /// Admitted, but no verdict yet.
     #[must_use]
     pub fn is_pending(&self) -> bool {
-        matches!(self.outcome, SubmissionOutcome::Pending { .. })
+        matches!(self.status, TxStatus::Pending)
     }
 
     /// The engine error code, when the engine refused the transaction
     /// (at `CheckTx`, or in the block). Decode it with
-    /// [`proof_trading_sdk::decode_exec_error_kind`]. For example, 12 is
-    /// insufficient margin and 21 is an invalid nonce.
+    /// `proof_sdk_rs::core::decode_exec_error_kind(code, None)`. For example,
+    /// 12 is insufficient margin and 21 is an invalid nonce.
     #[must_use]
     pub fn error_code(&self) -> Option<u32> {
-        match &self.outcome {
-            SubmissionOutcome::Committed(r) if r.code != 0 => Some(r.code),
-            SubmissionOutcome::CheckTxRejected { code, .. } => Some(code.get()),
+        match self.status {
+            TxStatus::Committed(r) if !r.is_success() => Some(r.code),
+            TxStatus::Rejected { code } => Some(code),
             _ => None,
+        }
+    }
+}
+
+/// An unreadable `Retry-After` must never mean "retry now".
+const INVALID_RETRY_AFTER: Duration = Duration::from_secs(1);
+
+fn retry_after(hint: Option<RetryAfter>) -> Option<Duration> {
+    hint.map(|h| match h {
+        RetryAfter::DelaySeconds(s) => Duration::from_secs(s),
+        RetryAfter::At(at) => at
+            .duration_since(SystemTime::now())
+            .unwrap_or(Duration::ZERO),
+        RetryAfter::Invalid => INVALID_RETRY_AFTER,
+    })
+}
+
+fn status(outcome: SubmissionOutcome<PreAdmissionRefusal>) -> TxStatus {
+    match outcome {
+        SubmissionOutcome::Committed(r) => TxStatus::Committed(r.into()),
+        SubmissionOutcome::CheckTxRejected { code, .. } => TxStatus::Rejected { code: code.get() },
+        SubmissionOutcome::Pending { .. } => TxStatus::Pending,
+        SubmissionOutcome::RejectedBeforeAdmission { refusal, .. } => {
+            TxStatus::Refused(refusal.into())
         }
     }
 }
@@ -116,34 +222,38 @@ const RECEIPT_POLL_STEP: Duration = Duration::from_millis(100);
 const RECEIPT_POLL_MAX: Duration = Duration::from_millis(600);
 
 impl ExchangeClient {
-    /// Connect: read the gateway's chain identity and bind signatures to it.
-    /// If `config.chain_id` is set, the gateway must serve that chain.
-    pub async fn connect(config: &ClientConfig, signer: impl Signer + 'static) -> Result<Self> {
-        let info = InfoClient::new(config)?;
-        let identity = info.chain_identity().await?;
-        if let Some(expected) = &config.chain_id {
-            if *expected != identity.network {
-                return Err(Error::ChainMismatch {
-                    expected: expected.clone(),
-                    actual: identity.network,
-                });
-            }
-        }
-        Ok(Self::build(info, Arc::new(signer), identity.network))
-    }
-
-    /// Build without a network round trip, signing for `config.chain_id`.
-    /// Use when the chain is known and start-up latency matters.
-    pub fn offline(config: &ClientConfig, signer: impl Signer + 'static) -> Result<Self> {
+    /// Build a client signing for `config`'s chain id. Makes no request.
+    /// Use [`Self::connect`] to check the chain against the gateway first.
+    pub fn new(config: &ClientConfig, signer: impl Signer + 'static) -> Result<Self> {
         let network = config
-            .chain_id
-            .clone()
-            .ok_or_else(|| Error::Config("offline construction needs config.chain_id".into()))?;
+            .chain_id()
+            .ok_or_else(|| {
+                Error::Config(
+                    "ExchangeClient::new needs a chain id; use connect() to read it".into(),
+                )
+            })?
+            .to_owned();
         Ok(Self::build(
             InfoClient::new(config)?,
             Arc::new(signer),
             network,
         ))
+    }
+
+    /// Read the gateway's chain and bind signatures to it. If `config` names
+    /// a chain id, the gateway must serve that chain.
+    pub async fn connect(config: &ClientConfig, signer: impl Signer + 'static) -> Result<Self> {
+        let info = InfoClient::new(config)?;
+        let chain = info.chain_status().await?;
+        if let Some(expected) = config.chain_id() {
+            if expected != chain.network {
+                return Err(Error::ChainMismatch {
+                    expected: expected.to_owned(),
+                    actual: chain.network,
+                });
+            }
+        }
+        Ok(Self::build(info, Arc::new(signer), chain.network))
     }
 
     fn build(info: InfoClient, signer: Arc<dyn Signer>, network: String) -> Self {
@@ -236,13 +346,13 @@ impl ExchangeClient {
             .inner
             .info
             .gateway()
-            .submit_signed_bytes(&tx.bytes)
+            .submit_signed_bytes_with_evidence(&tx.bytes)
             .await
         {
             Ok(s) => Ok(Submitted {
                 tx,
-                outcome: s.outcome,
-                retry_after: s.retry_after,
+                status: status(s.outcome),
+                retry_after: retry_after(s.retry_after),
             }),
             Err(source) if source.reconcile_hash.is_some() => Err(Error::Ambiguous {
                 tx: Box::new(tx),
@@ -263,7 +373,7 @@ impl ExchangeClient {
         let mut submitted = self.submit(action).await?;
         if submitted.is_pending() {
             let receipt = self.wait_for_receipt(submitted.tx.hash, timeout).await?;
-            submitted.outcome = SubmissionOutcome::Committed(receipt);
+            submitted.status = TxStatus::Committed(receipt);
         }
         Ok(submitted)
     }
@@ -271,16 +381,12 @@ impl ExchangeClient {
     /// Poll `GET /v1/tx/{hash}` until the transaction commits or `timeout`
     /// passes. Not found is not failure: it returns
     /// [`Error::ReceiptTimeout`], and the transaction may still land later.
-    pub async fn wait_for_receipt(
-        &self,
-        hash: TxHash,
-        timeout: Duration,
-    ) -> Result<CommittedReceipt> {
+    pub async fn wait_for_receipt(&self, hash: TxHash, timeout: Duration) -> Result<Receipt> {
         let deadline = tokio::time::Instant::now() + timeout;
         let mut delay = RECEIPT_POLL_START;
         loop {
             match self.inner.info.gateway().committed_receipt(hash).await {
-                Ok(receipt) => return Ok(receipt),
+                Ok(receipt) => return Ok(receipt.into()),
                 Err(e)
                     if matches!(
                         e.kind,
@@ -419,7 +525,7 @@ mod tests {
     use proof_trading_sdk::LocalSigner;
 
     fn client() -> ExchangeClient {
-        ExchangeClient::offline(&ClientConfig::devnet(), LocalSigner::from_bytes(&[7; 32])).unwrap()
+        ExchangeClient::new(&ClientConfig::devnet(), LocalSigner::from_bytes(&[7; 32])).unwrap()
     }
 
     #[test]
@@ -483,7 +589,7 @@ mod tests {
 
     #[test]
     fn offline_requires_a_chain_id() {
-        let err = ExchangeClient::offline(
+        let err = ExchangeClient::new(
             &ClientConfig::new("https://api.dev.proof.trade"),
             LocalSigner::from_bytes(&[1; 32]),
         )

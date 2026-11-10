@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use proof_sdk_rs::{
-    Action, Address, ClientConfig, Error, ExchangeClient, LocalSigner, Side, TxHash,
+    Action, Address, ClientConfig, Error, ExchangeClient, LocalSigner, RefusalReason, Side, TxHash,
+    TxStatus,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -60,7 +61,7 @@ async fn fixture(answers: Vec<(u16, Value)>) -> (String, Log) {
 
 fn client(url: &str) -> ExchangeClient {
     let config = ClientConfig::new(url).with_chain_id("exchange-devnet-1");
-    ExchangeClient::offline(&config, LocalSigner::from_bytes(&[9; 32])).unwrap()
+    ExchangeClient::new(&config, LocalSigner::from_bytes(&[9; 32])).unwrap()
 }
 
 fn cancel_all(c: &ExchangeClient) -> Action {
@@ -130,7 +131,7 @@ async fn a_pending_submission_reconciles_through_its_receipt() {
         .await
         .unwrap();
     assert_eq!(receipt.code, 0);
-    assert_eq!(receipt.height.get(), 7);
+    assert_eq!(receipt.height, 7);
     let targets: Vec<String> = log.lock().unwrap().iter().map(|r| r.0.clone()).collect();
     assert_eq!(targets[1], format!("GET /v1/tx/{hash}"));
 }
@@ -220,4 +221,25 @@ fn rmp_order(owner: Address) -> Vec<u8> {
         reduce_only: false,
     };
     rmp_serde::to_vec(&vec![order]).unwrap()
+}
+
+#[tokio::test]
+async fn a_gateway_refusal_is_typed_with_its_retry_hint() {
+    let c = client("http://127.0.0.1:1");
+    let tx = c.sign(&cancel_all(&c)).unwrap();
+    let (url, _) = fixture(vec![(
+        429,
+        json!({"status":"refused","error":"rate limited","errorCode":"RateLimited","retryAfterMs":1501}),
+    )])
+    .await;
+    let s = client(&url).send(tx).await.unwrap();
+    assert_eq!(s.status, TxStatus::Refused(RefusalReason::RateLimited));
+    assert!(!s.is_success() && !s.is_pending());
+    assert_eq!(
+        s.error_code(),
+        None,
+        "a gateway refusal is not an engine error"
+    );
+    // 1501 ms rounds up to whole seconds, never down.
+    assert_eq!(s.retry_after, Some(Duration::from_secs(2)));
 }

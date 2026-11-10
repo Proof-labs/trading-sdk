@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use proof_trading_sdk::gateway::{ChainIdentity, GatewayClient, GatewayOptions};
+use proof_trading_sdk::gateway::{GatewayClient, GatewayOptions};
 use proof_trading_sdk::query::AccountInfo;
 use proof_trading_sdk::reads::{self, Shape};
 use proof_trading_sdk::types::{EventId, EventInfo, MarketConfig, MarketId, Order, Side};
@@ -22,24 +22,25 @@ pub const DEVNET_CHAIN_ID: &str = "exchange-devnet-1";
 
 /// Where and how to reach the gateway. Every read and every submission goes
 /// through this one URL; the client never talks to a node directly.
+///
+/// Build with [`ClientConfig::new`] or [`ClientConfig::devnet`] and the
+/// `with_*` setters. Fields are private so new settings can be added without
+/// a breaking change.
 #[derive(Clone)]
 pub struct ClientConfig {
-    /// Gateway origin. HTTPS, or HTTP on a loopback IP literal
-    /// (`http://127.0.0.1:9080`, not `localhost`).
-    pub gateway_url: String,
-    /// The chain to sign for. `None` reads it from the gateway on connect;
-    /// `Some` is checked against the gateway.
-    pub chain_id: Option<String>,
-    /// Sent as `X-Api-Key` when set. Never logged.
-    pub api_key: Option<String>,
-    /// Per-request deadline (1ms..=60s). Default 10s.
-    pub timeout: Duration,
-    /// Response cap for reads. Default 8 MiB.
-    pub max_read_bytes: usize,
+    gateway_url: String,
+    chain_id: Option<String>,
+    api_key: Option<String>,
+    timeout: Duration,
+    max_read_bytes: usize,
 }
 
 impl ClientConfig {
-    /// Config for `gateway_url` with defaults.
+    /// Config for `gateway_url` with defaults: no pinned chain, no API key,
+    /// 10s timeout, 8 MiB read cap.
+    ///
+    /// The URL must be HTTPS, or HTTP on a loopback IP literal
+    /// (`http://127.0.0.1:9080`, not `localhost`), with no path.
     #[must_use]
     pub fn new(gateway_url: impl Into<String>) -> Self {
         Self {
@@ -57,22 +58,53 @@ impl ClientConfig {
         Self::new(DEVNET_GATEWAY_URL).with_chain_id(DEVNET_CHAIN_ID)
     }
 
+    /// The chain to sign for. [`crate::ExchangeClient::connect`] checks it
+    /// against the gateway; without it, `connect` trusts the gateway's chain.
     #[must_use]
     pub fn with_chain_id(mut self, chain_id: impl Into<String>) -> Self {
         self.chain_id = Some(chain_id.into());
         self
     }
 
+    /// Sent as `X-Api-Key` on every request. Never logged.
     #[must_use]
     pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
         self.api_key = Some(key.into());
         self
     }
 
+    /// Per-request deadline, 1ms..=60s.
     #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
+    }
+
+    /// Response size cap for reads.
+    #[must_use]
+    pub fn with_max_read_bytes(mut self, bytes: usize) -> Self {
+        self.max_read_bytes = bytes;
+        self
+    }
+
+    #[must_use]
+    pub fn gateway_url(&self) -> &str {
+        &self.gateway_url
+    }
+
+    #[must_use]
+    pub fn chain_id(&self) -> Option<&str> {
+        self.chain_id.as_deref()
+    }
+
+    #[must_use]
+    pub fn api_key(&self) -> Option<&str> {
+        self.api_key.as_deref()
+    }
+
+    #[must_use]
+    pub fn timeout(&self) -> Duration {
+        self.timeout
     }
 }
 
@@ -88,8 +120,21 @@ impl std::fmt::Debug for ClientConfig {
     }
 }
 
+/// The chain the gateway serves, from `GET /v1/status`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ChainStatus {
+    /// The network name, e.g. `exchange-devnet-1`. Signatures bind to it.
+    pub network: String,
+    /// Latest committed height.
+    pub height: u64,
+    /// That block's time, ms since the epoch.
+    pub block_time_ms: u64,
+}
+
 /// One aggregated price level. `price` in micro-USDC, `quantity` in contracts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Level {
     pub price: u64,
     pub quantity: u64,
@@ -99,6 +144,7 @@ pub struct Level {
 /// A market's aggregated book: bids best (highest) first, asks best (lowest)
 /// first.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Orderbook {
     pub bids: Vec<Level>,
     pub asks: Vec<Level>,
@@ -117,6 +163,7 @@ impl Orderbook {
 
 /// One public fill from `GET /v1/trades/{market}`.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct Trade {
     #[serde(deserialize_with = "de_u64")]
     pub fill_id: u64,
@@ -219,14 +266,19 @@ impl InfoClient {
     }
 
     /// The core transport this client submits through.
-    #[must_use]
-    pub fn gateway(&self) -> &GatewayClient {
+    pub(crate) fn gateway(&self) -> &GatewayClient {
         &self.gateway
     }
 
-    /// `GET /v1/status`: network name, chain binding, latest height.
-    pub async fn chain_identity(&self) -> Result<ChainIdentity> {
-        Ok(self.gateway.chain_identity().await?)
+    /// `GET /v1/status`: the network the gateway serves and its latest
+    /// committed block.
+    pub async fn chain_status(&self) -> Result<ChainStatus> {
+        let id = self.gateway.chain_identity().await?;
+        Ok(ChainStatus {
+            network: id.network,
+            height: id.latest_height.get(),
+            block_time_ms: id.latest_block_time_ms,
+        })
     }
 
     /// `GET /v1/markets`: every market's config (tick, lot, margin, kind,
@@ -356,12 +408,12 @@ impl InfoClient {
             .content_length()
             .is_some_and(|n| n > self.max_read_bytes as u64)
         {
-            return Err(Error::Decode("response exceeds max_read_bytes".into()));
+            return Err(Error::ResponseTooLarge);
         }
         let mut body = Vec::new();
         while let Some(chunk) = resp.chunk().await? {
             if chunk.len() > self.max_read_bytes.saturating_sub(body.len()) {
-                return Err(Error::Decode("response exceeds max_read_bytes".into()));
+                return Err(Error::ResponseTooLarge);
             }
             body.extend_from_slice(&chunk);
         }
