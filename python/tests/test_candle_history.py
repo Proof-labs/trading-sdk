@@ -231,3 +231,37 @@ def test_a_refused_window_raises_rather_than_returning_an_empty_page(client) -> 
     ))
     with pytest.raises(TransportError):
         client.history_candles(7, "1m")
+
+
+def test_backward_pages_follow_exclusive_time_windows_without_gaps(client):
+    rows = [page()["candles"][0] | {"t": f"2026-11-09T00:{minute:02d}:00Z"}
+            for minute in (0, 1, 4, 7, 9)]
+    seen = []
+
+    def handler(request):
+        params = request.url.params
+        assert "from" not in params
+        end = params["to"]
+        seen.append(end)
+        eligible = [row for row in rows if row["t"] < end]
+        selected = eligible[-int(params["limit"]):]
+        return httpx.Response(200, json=page() | {
+            "from": "2026-11-08T00:00:00Z", "to": end,
+            "candles": selected, "has_more": len(eligible) > len(selected),
+            "earliest": rows[0]["t"],
+        })
+
+    client._http = httpx.Client(transport=httpx.MockTransport(handler))
+    end = "2026-11-09T01:00:00Z"
+    collected = []
+    for _ in range(4):
+        result = client.history_candles(7, "1m", to=end, limit=2)
+        collected = result.candles + collected
+        if not result.has_more:
+            break
+        end = result.candles[0].time if result.candles else result.from_
+    else:
+        pytest.fail("backward pagination did not terminate")
+    assert [row.time for row in collected] == [row["t"] for row in rows]
+    assert seen == ["2026-11-09T01:00:00Z", "2026-11-09T00:07:00Z",
+                    "2026-11-09T00:01:00Z"]
