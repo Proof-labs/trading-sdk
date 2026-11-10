@@ -7,6 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (TypeScript MAJOR):** `queryOpenOrders` and Python `open_orders`
+  preserve all 14 resting-order fields through the shared Rust decoder, including
+  client order IDs and exact integer metadata. The eight added TypeScript
+  `OpenOrder` fields are required in manually constructed objects; see the
+  [migration guide](README.md#open-order-migration).
+  Invalid responses now throw instead of appearing empty, and
+  `queryOpenOrders("")` throws. Valid empty lists still return `[]`; legacy
+  six-field records use wire defaults. Decoded payloads over 1 MiB are rejected.
+  Ship this change in the next TypeScript MAJOR release; it is not part of 11.0.0.
+
 ### Fixed
 
 - Python submits signed transactions to the gateway in its JSON/base64 envelope.
