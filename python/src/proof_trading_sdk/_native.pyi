@@ -82,6 +82,12 @@ def decode_tx(tx_bytes: bytes) -> dict[str, object]:
 MAX_MARKETS_SNAPSHOT_BYTES: int
 """Largest complete ``GET /v1/markets-snapshot`` body the decoder accepts."""
 
+MAX_OPEN_ORDERS_BYTES: int
+
+def decode_open_orders(body: bytes, owner: bytes) -> list[dict[str, object]]:
+    """Decode canonical resting orders; raises ValueError on malformed or foreign rows."""
+    ...
+
 def decode_markets_snapshot(body: bytes, chain_id: bytes) -> dict[str, object]:
     """Decode a complete ``GET /v1/markets-snapshot`` response body bound to
     ``chain_id``. Raises ``ValueError`` on any fault; nothing partial is
