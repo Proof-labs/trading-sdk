@@ -242,6 +242,9 @@ pub struct WsTrade {
 /// An account snapshot from the feed: the engine's [`AccountInfo`], which
 /// derefs to it. (`AccountInfo` itself has no `Debug`; this prints the
 /// headline fields.)
+// TODO: derive `Debug` and `Clone` on `AccountInfo` (and `OrderbookSnapshot`,
+// `LevelSummary`) in proof-wire (exchange `exchange-wire/src/query.rs`), then
+// drop this wrapper for `AccountInfo` and make `WsMessage` `Clone`.
 pub struct WsAccount(pub AccountInfo);
 
 impl std::ops::Deref for WsAccount {
