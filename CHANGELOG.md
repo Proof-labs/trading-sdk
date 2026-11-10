@@ -49,7 +49,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   retries: signing failures and 401/429/503 frames yield errors and retry up to
   five times. Exhaustion and 403 frames leave the socket open without further
   retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
-  401/403 refusals raise `AuthenticationError`.
+  401/403 refusals raise `AuthenticationError` before the first successful
+  connection; on reconnect they use the configured retry budget and backoff
+  without discarding history recovery state.
 - A Python client with a signer now signs every account subscription, even with
   an API key configured. Subscribing to another owner's feed, or to any feed
   with an unconfigured chain ID, now fails with error frames instead of relying
