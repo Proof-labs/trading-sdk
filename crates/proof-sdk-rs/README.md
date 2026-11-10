@@ -123,19 +123,9 @@ match client.send(&tx).await {
 ```
 
 Resending the same `tx` is safe (same nonce, executes at most once).
-**Signing the action again makes a second transaction.**
+**Signing the action again makes a second transaction.** Each method's
+`# Errors` doc lists what it returns.
 
-### Errors
-
-| `Error`                         | Meaning                                                    |
-| ------------------------------- | ---------------------------------------------------------- |
-| `Transport`                     | Connect, TLS, reset or timeout. No answer.                 |
-| `Http { status, body }`         | The gateway answered non-2xx.                              |
-| `Decode` / `ResponseTooLarge`   | The answer was unreadable or over `max_read_bytes`.        |
-| `ReceiptTimeout { hash }`       | `wait_for_receipt` ran out of time; it may still land.     |
-| `Config` / `InvalidInput`       | Bad configuration or argument.                             |
-| `Encode` / `Signer`             | The action did not encode, or the signer failed.           |
-| `NonceWindow` / `ChainMismatch` | Clock ran 60s ahead; gateway serves another chain.         |
 
 ### `InfoClient`: reads
 
