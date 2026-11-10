@@ -164,9 +164,17 @@ async fn live_account_events_arrive_typed() {
         (o.market, o.price, o.client_order_id, o.post_only),
         (1, price, Some(77), true)
     );
+    let placed_ids: Vec<_> = placed
+        .receipt()
+        .unwrap()
+        .events
+        .iter()
+        .filter(|e| e.kind == "order_placed")
+        .filter_map(|e| e.attribute("order_id"))
+        .collect();
     assert_eq!(
-        placed.receipt().and_then(proof_sdk_rs::Receipt::order_id),
-        Some(o.order_id),
+        placed_ids,
+        [o.order_id.to_string()],
         "the receipt names the order the feed reports"
     );
 

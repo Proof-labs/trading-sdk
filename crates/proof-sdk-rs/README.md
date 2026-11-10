@@ -227,8 +227,8 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
   `FundingSettled`, `Deposited`. Anything else (or a payload that does not
   match) is `AccountEventKind::Other`; the engine event name and raw
   attributes are always on `e.event_type` / `e.payload`.
-- **Order ids.** `receipt.order_id()` gives the id of an order your own
-  submission rested. `OrderPlaced` carries the same id, with your
+- **Order ids.** Your own submission's receipt events carry them
+  (`order_placed`). `OrderPlaced` on the feed carries the same id, with your
   `client_order_id`, for orders placed by another process.
 - **Backpressure.** Messages buffer up to `WsConfig::with_buffer` (default 4096). A
   consumer that falls further behind pauses socket reads, and with them the
