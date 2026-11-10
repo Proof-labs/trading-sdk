@@ -126,6 +126,10 @@ impl WsConfig {
 
     /// The `/ws` feed of `config`'s gateway (`https` becomes `wss`), with its
     /// API key.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] if the gateway URL is not `http(s)`.
     pub fn from_client_config(config: &ClientConfig) -> Result<Self> {
         let base = config.gateway_url().trim_end_matches('/');
         let url = if let Some(rest) = base.strip_prefix("https://") {
@@ -352,6 +356,11 @@ impl WsClient {
     ///
     /// Spawns the connection task with `tokio::spawn`, so it must be called
     /// inside a tokio runtime. The task ends when the feed closes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] for a bad URL or API key, [`Error::WsConnect`] if the
+    /// handshake fails or times out.
     pub async fn connect(config: WsConfig) -> Result<(Self, WsReceiver)> {
         let socket = open(&config).await?;
         let (commands, command_rx) = mpsc::unbounded_channel();
@@ -361,11 +370,19 @@ impl WsClient {
     }
 
     /// Subscribe. Idempotent; kept across reconnects.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Closed`] once the feed has ended.
     pub fn subscribe(&self, subscription: Subscription) -> Result<()> {
         self.send(Command::Subscribe(subscription))
     }
 
     /// Unsubscribe. Idempotent.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Closed`] once the feed has ended.
     pub fn unsubscribe(&self, subscription: Subscription) -> Result<()> {
         self.send(Command::Unsubscribe(subscription))
     }
