@@ -43,10 +43,9 @@ def client_for(handler):
     return closing(client)
 
 
-def test_two_grants_then_each_revoke_returns_fresh_complete_snapshots():
+def test_successive_fixture_snapshots_decode_independently():
     calls = []
-    # Authoritative endpoint fixtures after two grants, one revocation, then
-    # the final revocation. The SDK must query each state, never infer history.
+    # Synthetic snapshots exercise SDK decoding, not engine grant/revoke behavior.
     responses = iter([
         body(raw(agents=[bytes([2]) * 20, bytes([3]) * 20])),
         body(raw(agents=[bytes([3]) * 20], finalized_height=HEIGHT + 1), height=str(HEIGHT + 1)),
@@ -256,3 +255,11 @@ def test_error_prefix_deadline_stops_reading_and_preserves_http_error(monkeypatc
         with pytest.raises(GatewayError):
             client.authorized_agents(OWNER, timeout=5)
     assert stream.read == 1 and stream.closed
+
+
+@pytest.mark.parametrize("address", ["A" * 20, [65] * 20])
+@pytest.mark.parametrize("field", ["owner", "agents"])
+def test_native_addresses_require_binary_not_serde_coercions(address, field):
+    payload = msgpack.packb(raw(**{field: address if field == "owner" else [address]}))
+    with pytest.raises(ValueError, match="20-byte binary"):
+        _native.decode_authorized_agents(payload)

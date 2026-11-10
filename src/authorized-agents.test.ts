@@ -109,6 +109,10 @@ describe("finalized current agent grants", () => {
       { ...raw(), owner: new Uint8Array(20).fill(3) },
       { ...raw(), finalized_height: height - 1n },
       { ...raw(), agents: [new Uint8Array(19)] },
+      { ...raw(), owner: "x".repeat(20) },
+      { ...raw(), owner: Array(20).fill(1) },
+      { ...raw(), agents: ["x".repeat(20)] },
+      { ...raw(), agents: [Array(20).fill(2)] },
       {
         ...raw(),
         agents: [new Uint8Array(20).fill(3), new Uint8Array(20).fill(2)],

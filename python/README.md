@@ -235,10 +235,5 @@ block time, node ID and app hash. This metadata is an **unverified gateway
 assertion**, not proof of chain authenticity, freshness, or permission to sign.
 HTTP bodies are capped at 32 KiB and canonical MessagePack payloads at 16 KiB.
 
-This Python support depends on [SDK #385](https://github.com/Proof-labs/trading-sdk/pull/385),
-[wire #38](https://github.com/Proof-labs/wire/pull/38),
-[exchange #1417](https://github.com/Proof-labs/exchange/pull/1417), and
-[gateway #302](https://github.com/Proof-labs/api-gateway/pull/302).
-The server route must be deployed before the call can succeed. Upstream PR
-status does not establish a live deployment. Unlike TypeScript's partial-result
-API, this Python method returns only complete snapshots.
+The gateway must serve `GET /v2/account/{owner}/agents?witness=1`.
+Unlike TypeScript's partial-result API, this Python method returns only complete snapshots.

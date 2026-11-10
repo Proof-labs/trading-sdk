@@ -238,19 +238,8 @@ fn decode_markets_snapshot<'py>(
 /// Decode the canonical bounded agent-list DTO from the pinned proof-wire crate.
 #[pyfunction]
 fn decode_authorized_agents<'py>(py: Python<'py>, payload: &[u8]) -> PyResult<Bound<'py, PyAny>> {
-    if payload.len() > 16 * 1024 {
-        return Err(PyValueError::new_err(
-            "authorized agents payload exceeds 16 KiB",
-        ));
-    }
-    core_sdk::msgpack::reject_floats(payload).map_err(|e| PyValueError::new_err(e.to_string()))?;
-    if !matches!(payload.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
-        return Err(PyValueError::new_err(
-            "authorized agents must be a MessagePack map",
-        ));
-    }
-    let value: core_sdk::query::AuthorizedAgents =
-        rmp_serde::from_slice(payload).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let value =
+        core_sdk::query::decode_authorized_agents(payload).map_err(PyValueError::new_err)?;
     pythonize::pythonize(py, &value).map_err(map_pythonize_err)
 }
 
@@ -478,6 +467,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(decode_tx, m)?)?;
     m.add_function(wrap_pyfunction!(decode_markets_snapshot, m)?)?;
     m.add_function(wrap_pyfunction!(decode_authorized_agents, m)?)?;
+    m.add(
+        "MAX_AUTHORIZED_AGENTS_BYTES",
+        core_sdk::query::MAX_AUTHORIZED_AGENTS_BYTES,
+    )?;
     m.add(
         "AUTHORIZED_AGENTS_LIMIT",
         core_sdk::query::AUTHORIZED_AGENTS_LIMIT,

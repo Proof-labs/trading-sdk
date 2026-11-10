@@ -133,10 +133,9 @@ pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
         ReadKind::Account => decode_records::<core_sdk::query::AccountInfo>(bytes, &ACCOUNT_INFO),
         ReadKind::AdminAction => decode_as::<governance::AdminAction>(bytes),
         ReadKind::AuthorizedAgents => {
-            if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
-                return Err(JsError::new("authorized agents must be a MessagePack map"));
-            }
-            decode_as::<core_sdk::query::AuthorizedAgents>(bytes)
+            let value =
+                core_sdk::query::decode_authorized_agents(bytes).map_err(|e| JsError::new(&e))?;
+            to_bigint_js(&value)
         }
     }
 }

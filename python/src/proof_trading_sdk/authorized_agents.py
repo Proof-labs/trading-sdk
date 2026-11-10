@@ -17,6 +17,7 @@ import httpx
 
 from proof_trading_sdk._native import (
     AUTHORIZED_AGENTS_LIMIT,
+    MAX_AUTHORIZED_AGENTS_BYTES,
     decode_authorized_agents as _decode_wire,
 )
 from proof_trading_sdk.errors import CodecError, TransportError
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
     from proof_trading_sdk.client import ExchangeClient
 
 _MAX_BODY = 32 * 1024
-_MAX_PAYLOAD = 16 * 1024
+_MAX_PAYLOAD = MAX_AUTHORIZED_AGENTS_BYTES
 _I64_MAX = (1 << 63) - 1
 
 
@@ -108,11 +109,11 @@ def _decode_snapshot(body: bytes, owner: str) -> AuthorizedAgentsSnapshot:
             raise ValueError("owner or finalized height mismatch")
         agents = tuple(bytes(agent).hex() for agent in decoded["agents"])
         if len(agents) > AUTHORIZED_AGENTS_LIMIT or any(a >= b for a, b in zip(agents, agents[1:])):
-            raise ValueError("agent list must be sorted, unique and at most 100 entries")
+            raise ValueError(f"agent list must be sorted, unique and at most {AUTHORIZED_AGENTS_LIMIT} entries")
         if not decoded["complete"]:
             if len(agents) != AUTHORIZED_AGENTS_LIMIT:
                 raise ValueError("invalid incomplete list length")
-            raise CodecError("authorized agents: incomplete list (more than 100 grants); no complete snapshot")
+            raise CodecError(f"authorized agents: incomplete list (more than {AUTHORIZED_AGENTS_LIMIT} grants); no complete snapshot")
         return AuthorizedAgentsSnapshot(owner, agents, height, timestamp, node_id, app_hash.upper())
     except (ValueError, TypeError, KeyError, RecursionError, binascii.Error) as error:
         raise CodecError(f"authorized agents: malformed response: {error}") from error

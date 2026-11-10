@@ -120,6 +120,7 @@ def get_error_code_table() -> list[dict[str, object]]:
     ...
 
 AUTHORIZED_AGENTS_LIMIT: int
+MAX_AUTHORIZED_AGENTS_BYTES: int
 
 def decode_authorized_agents(payload: bytes) -> dict[str, object]:
     ...

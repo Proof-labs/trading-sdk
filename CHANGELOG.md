@@ -13,7 +13,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   explicit-grant snapshot through the canonical wire decoder. Incomplete lists
   over 100 grants, unavailable routes and malformed/binding failures refuse
   instead of becoming empty lists. Requires the upstream authorized-agents
-  route; witness metadata remains unverified (#381).
+  route; witness metadata remains unverified (#381). Both bindings share the
+  bounded Rust decoder and require 20-byte MessagePack binary addresses;
+  strings and integer arrays are refused.
 
 - `reads().finalized.authorizedAgents(owner)` reads up to 100 current stored trading-agent grants with an atomic finalized-state witness and an explicit completeness flag. Grants have no stored expiry or per-action scope; this read does not authorize signing.
 - **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
