@@ -291,7 +291,8 @@ fn decode_finalized_orderbook<'py>(
     bytes: &[u8],
     depth: usize,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let book = core_sdk::finalized_orderbook::decode(bytes, depth).map_err(PyValueError::new_err)?;
+    let book =
+        core_sdk::finalized_orderbook::decode(bytes, depth).map_err(PyValueError::new_err)?;
     pythonize::pythonize(py, &book).map_err(map_pythonize_err)
 }
 

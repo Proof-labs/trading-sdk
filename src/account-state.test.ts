@@ -95,6 +95,21 @@ describe("raw finalized account state", () => {
     change(r);
     expect(() => decodeAccountState(r, hex)).toThrow("account state decode");
   });
+  it.each([-1n, 256n, true, "4", 4.5])(
+    "rejects invalid owner byte %s",
+    (value) => {
+      for (const position of [false, true]) {
+        const r = raw();
+        const address = Array(20).fill(4);
+        address[0] = value;
+        if (position) (r[3] as unknown[][])[0][0] = address;
+        else r[0] = address;
+        expect(() => decodeAccountState(r, hex)).toThrow(
+          "account state decode",
+        );
+      }
+    },
+  );
   it("uses the canonical gateway route and checks returned owner", async () => {
     const data = Buffer.from(
       new Encoder({ useBigInt64: true }).encode(raw()),
