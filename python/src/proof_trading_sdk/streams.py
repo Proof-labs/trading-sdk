@@ -7,6 +7,8 @@ import time
 import typing as t
 from dataclasses import dataclass, field
 
+from proof_trading_sdk.errors import AuthenticationError, SigningError
+
 log = logging.getLogger("proof_trading_sdk")
 
 
@@ -19,6 +21,9 @@ class AccountEvent:
 
 # Acknowledgements the gateway sends for control messages; not data.
 _ACK_TYPES = frozenset({"subscribed", "unsubscribed", "pong"})
+_RETRYABLE_ACCOUNT_REFUSALS = frozenset({401, 429, 503})
+# As in TypeScript GatewayFeed: an initial attempt plus five retries.
+_MAX_AUTH_RETRIES = 5
 
 
 # Live frame type for a history row; mirrors api-gateway
@@ -157,7 +162,15 @@ class AccountEventStream:
     ``/ws`` feed and yields its channel-tagged frames: a ``snapshot`` frame,
     then one frame per live event (``orderUpdate``, ``fill``,
     ``positionUpdate``, liquidation events, ...). A refused subscription
-    arrives as a ``{"type": "error", ...}`` frame.
+    arrives as a ``{"type": "error", ...}`` frame. Before confirmation,
+    signing failures and subscription refusals 401/429/503 retry on the same
+    socket, with fresh auth and exponential backoff, at most five times.
+    Exhaustion emits a final error frame and leaves the socket quiet until it
+    disconnects or is closed. Other refusals (including 403), and errors after
+    confirmation, do not resubscribe. A new socket starts a fresh retry budget.
+    HTTP upgrade 401/403 raises ``AuthenticationError`` before the first
+    successful connection; on reconnect it uses the normal reconnect budget
+    and backoff, preserving the history recovery boundary.
 
     Each reconnect subscribes again and receives a fresh snapshot. By default
     it then recovers the events missed while disconnected: it reads
@@ -178,7 +191,12 @@ class AccountEventStream:
         ws_url: WebSocket base URL (the gateway URL with a ``ws`` scheme).
         owner: 20-byte owner address (bytes) or hex string.
         api_key: API key for auth.
-        reconnect_backoff_max: Maximum backoff in seconds (default 30).
+        auth: Optional signed-subscription params factory, called again on
+            every connection. Use :meth:`ExchangeClient.account_event_stream`
+            to authenticate with the client's secret key or opaque handle.
+            Signing failures yield error frames without sending an unsigned
+            subscription. Also used by the first-subscription retry loop.
+        reconnect_backoff_max: Maximum backoff in seconds (default 10).
         reconnect_attempts: Maximum reconnect attempts (``None`` = infinite).
         recover: Backfill missed events from history on reconnect.
         on_recovery: Called with the outcome of each reconnect's recovery.
@@ -205,16 +223,18 @@ class AccountEventStream:
         owner: bytes | str,
         api_key: str = "",
         *,
-        reconnect_backoff_max: float = 30.0,
+        reconnect_backoff_max: float = 10.0,
         reconnect_attempts: int | None = None,
         recover: bool = True,
         on_recovery: t.Callable[[RecoveryStatus], None] | None = None,
         history_url: str | None = None,
+        auth: t.Callable[[], dict[str, t.Any]] | None = None,
     ) -> None:
         self._ws_url = ws_url.rstrip("/")
         owner_hex = owner.hex() if isinstance(owner, bytes) else owner
-        self._owner = owner_hex.removeprefix("0x").lower()
+        self._owner = owner_hex.lower().removeprefix("0x")
         self._api_key = api_key
+        self._auth = auth
         self._backoff_cap = reconnect_backoff_max
         self._max_attempts = reconnect_attempts
         self._recover_enabled = recover
@@ -234,31 +254,118 @@ class AccountEventStream:
         self._stop = threading.Event()
         self._ws: t.Any = None
         self._closed = False
+        self._next_subscribe_id = 1
+        self._last_subscribe_id: int | None = None
+        self._confirmed = False
+        self._auth_retry_attempts = 0
+        self._auth_retry_at: float | None = None
 
     def __iter__(self) -> t.Iterator[dict[str, t.Any]]:
         return self._run()
 
     def _connect(self) -> None:
         import websockets.sync.client as ws_client
+        from websockets.exceptions import InvalidStatus
 
         extra_headers = {}
         if self._api_key:
             extra_headers["X-API-Key"] = self._api_key
-        self._ws = ws_client.connect(
-            f"{self._ws_url}/ws", additional_headers=extra_headers
-        )
-        self._ws.send(
+        try:
+            self._ws = ws_client.connect(
+                f"{self._ws_url}/ws", additional_headers=extra_headers
+            )
+        except InvalidStatus as err:
+            if err.response.status_code in (401, 403):
+                raise AuthenticationError("account-stream connection authentication refused") from err
+            raise
+        self._confirmed = False
+        self._auth_retry_attempts = 0
+        self._auth_retry_at = None
+        self._last_subscribe_id = None
+
+    def _subscribe(self) -> t.Iterator[dict[str, t.Any]]:
+        socket = self._ws
+        if self._closed or socket is None:
+            return
+        params: dict[str, t.Any] = {}
+        if self._auth is not None:
+            try:
+                params.update(self._auth())
+            except SigningError as err:
+                # The SDK's signing errors are fixed text with no key material.
+                log.warning("account-stream auth failed: %s", err)
+                if not self._closed and self._ws is socket:
+                    yield from self._auth_failed(str(err))
+                return
+            except Exception as err:
+                # Backend messages may contain sensitive material: type only.
+                log.warning("account-stream auth failed: %s", type(err).__name__)
+                if not self._closed and self._ws is socket:
+                    yield from self._auth_failed()
+                return
+        # A device call can finish after close(); never send that stale result.
+        if self._closed or self._ws is not socket:
+            return
+        # Authentication providers cannot replace the subscription identity.
+        params.update(channel="accountEvents", owner=self._owner)
+        self._last_subscribe_id = self._next_subscribe_id
+        self._next_subscribe_id += 1
+        socket.send(
             json.dumps(
                 {
                     "method": "subscribe",
-                    "id": 1,
-                    "params": {"channel": "accountEvents", "owner": self._owner},
+                    "id": self._last_subscribe_id,
+                    "params": params,
                 }
             )
         )
 
+    def _schedule_auth_retry(self) -> float:
+        delay = min(self._backoff_cap, 0.5 * 2 ** self._auth_retry_attempts)
+        self._auth_retry_attempts += 1
+        self._auth_retry_at = time.monotonic() + delay
+        return delay
+
+    @staticmethod
+    def _retry_exhausted(cause: str | None = None) -> dict[str, t.Any]:
+        failed = f"failed ({cause})" if cause else "failed"
+        return {
+            "type": "error", "channel": "accountEvents",
+            "error": f"accountEvents subscription authentication {failed}; not retrying after {_MAX_AUTH_RETRIES} retries",
+        }
+
+    def _auth_failed(self, cause: str | None = None) -> t.Iterator[dict[str, t.Any]]:
+        if self._confirmed:
+            return
+        if self._auth_retry_attempts >= _MAX_AUTH_RETRIES:
+            yield self._retry_exhausted(cause)
+            return
+        delay = self._schedule_auth_retry()
+        failed = f"failed ({cause})" if cause else "failed"
+        yield {
+            "type": "error", "channel": "accountEvents",
+            "error": f"accountEvents subscription authentication {failed}; retrying in {delay * 1000:g}ms",
+        }
+
+    def _confirm(self) -> None:
+        self._confirmed = True
+        self._auth_retry_attempts = 0
+        self._auth_retry_at = None
+
+    def _matches_subscribe(self, frame: dict[str, t.Any]) -> bool:
+        return type(frame.get("id")) is int and frame["id"] == self._last_subscribe_id
+
+    def _belongs_to_account(self, frame: dict[str, t.Any]) -> bool:
+        owner = frame.get("owner")
+        return (
+            frame.get("channel") == "accountEvents"
+            and isinstance(owner, str)
+            and owner.lower().removeprefix("0x") == self._owner
+        )
+
     def close(self) -> None:
         self._closed = True
+        self._auth_retry_at = None
         self._stop.set()
         if self._ws is not None:
             self._ws.close()
@@ -348,7 +455,9 @@ class AccountEventStream:
             except TimeoutError:
                 return
             frame = json.loads(raw)
-            if frame.get("type") not in _ACK_TYPES:
+            if frame.get("type") == "error" or (
+                frame.get("type") not in _ACK_TYPES and self._belongs_to_account(frame)
+            ):
                 buffer.append(frame)
 
     def _recover(self, snapshot: dict[str, t.Any]) -> t.Iterator[dict[str, t.Any]]:
@@ -437,19 +546,60 @@ class AccountEventStream:
         attempt = 0
         backoff = 0.5
         seen_snapshot = False
+        connected_once = False
 
         while not self._closed:
             try:
                 self._connect()
+                connected_once = True
                 attempt = 0
                 backoff = 0.5
+                yield from self._subscribe()
 
-                for raw in self._ws:
+                while not self._closed:
+                    # A busy socket must not starve the scheduled auth retry.
+                    if self._auth_retry_at is not None and time.monotonic() >= self._auth_retry_at:
+                        self._auth_retry_at = None
+                        yield from self._subscribe()
+                        if self._closed:
+                            return
+                    timeout = (
+                        None if self._auth_retry_at is None
+                        else max(0.0, self._auth_retry_at - time.monotonic())
+                    )
+                    try:
+                        raw = self._ws.recv(timeout=timeout)
+                    except TimeoutError:
+                        if self._closed:
+                            return
+                        if self._auth_retry_at is None:
+                            raise
+                        if time.monotonic() >= self._auth_retry_at:
+                            self._auth_retry_at = None
+                            yield from self._subscribe()
+                        continue
                     if self._closed:
                         return
                     frame = json.loads(raw)
+                    if frame.get("type") == "subscribed" and self._matches_subscribe(frame):
+                        self._confirm()
                     if frame.get("type") in _ACK_TYPES:
                         continue
+                    if frame.get("type") == "error":
+                        retryable = (
+                            not self._confirmed and self._matches_subscribe(frame)
+                            and frame.get("code") in _RETRYABLE_ACCOUNT_REFUSALS
+                        )
+                        exhausted = retryable and self._auth_retry_attempts >= _MAX_AUTH_RETRIES
+                        if retryable and not exhausted:
+                            self._schedule_auth_retry()
+                        yield frame
+                        if exhausted and not self._closed:
+                            yield self._retry_exhausted()
+                        continue
+                    if not self._belongs_to_account(frame):
+                        continue
+                    self._confirm()
                     if frame.get("type") != "snapshot":
                         yield from self._live(frame)
                         continue
@@ -464,16 +614,24 @@ class AccountEventStream:
                     elif self._recover_enabled:
                         yield from self._recover(frame)
 
-            except Exception:
+            except Exception as err:
                 if self._closed:
                     return
+                if isinstance(err, AuthenticationError) and not connected_once:
+                    self.close()
+                    raise
                 attempt += 1
                 if self._max_attempts is not None and attempt > self._max_attempts:
                     log.error("reconnect attempts exhausted")
                     return
                 log.warning("ws reconnect attempt %d in %.1fs", attempt, backoff)
-                time.sleep(backoff)
+                if self._stop.wait(backoff):
+                    return
                 backoff = min(backoff * 2, self._backoff_cap)
+            finally:
+                if self._ws is not None:
+                    self._ws.close()
+                    self._ws = None
 
 
 class OrderbookDeltaStream:
