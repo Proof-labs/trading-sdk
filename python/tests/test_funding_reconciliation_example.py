@@ -158,3 +158,86 @@ def test_invalid_position_inputs_refuse_before_network_reads(change):
     args.update(change)
     with pytest.raises(ValueError):
         reconcile(NoReads(), **args)
+
+
+@pytest.mark.parametrize("market,owner,refuses", [
+    (3, OWNER, True), (4, OWNER, False), (3, "22" * 20, False),
+])
+def test_transaction_settlement_refuses_only_the_same_owner_and_market(market, owner, refuses):
+    client = FakeClient()
+    client.block["result"]["txs_results"] = [{"events": [
+        event("funding_settled", market=market, owner=owner, payment=-1),
+    ]}]
+    if refuses:
+        with pytest.raises(ValueError, match="transaction-level"):
+            run(client)
+    else:
+        assert run(client)["full_payment_matches_event"]
+
+
+@pytest.mark.parametrize("transactions", [{}, [None], [{"events": {}}], [{"events": [None]}]])
+def test_malformed_transaction_evidence_refuses(transactions):
+    client = FakeClient()
+    client.block["result"]["txs_results"] = transactions
+    with pytest.raises(ValueError, match="transaction"):
+        run(client)
+
+
+@pytest.mark.parametrize("network", ["exchange-devnet-1", "wrong-chain"])
+def test_cli_uses_real_sdk_routes_and_market_decoder(monkeypatch, capsys, network):
+    import base64
+    import json
+    import sys
+    import httpx
+    import msgpack
+
+    owner = "ab" * 20
+    block = deepcopy(FakeClient().block)
+    block["result"]["txs_results"] = None
+    block["result"]["finalize_block_events"][1] = event(
+        "funding_settled", market=3, owner=owner, payment=-1716,
+    )
+    config = [None] * 24
+    config[0], config[7], config[21] = 3, "Perp", 2
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        assert request.method == "GET"
+        if request.url.path == "/v1/status":
+            return httpx.Response(200, json={"result": {"node_info": {"network": network}}})
+        if request.url.path == "/v1/markets":
+            return httpx.Response(200, json={
+                "data": base64.b64encode(msgpack.packb([config])).decode(),
+            })
+        assert request.url.path == "/v1/block_results"
+        assert request.url.params["height"] == "10013501"
+        return httpx.Response(200, json=block)
+
+    real_http_client = httpx.Client
+    clients = []
+
+    def http_client(*args, **kwargs):
+        client = real_http_client(*args, **kwargs, transport=httpx.MockTransport(handler))
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(httpx, "Client", http_client)
+    monkeypatch.setattr(sys, "argv", [
+        "reconcile_funding.py", "--gateway-url", "https://gateway.example",
+        "--chain-id", "exchange-devnet-1", "--height", "10013501", "--market", "3",
+        "--owner", "0x" + owner.upper(), "--side", "Buy", "--raw-size", "1",
+        "--last-index", str(LAST),
+    ])
+    if network != "exchange-devnet-1":
+        with pytest.raises(ValueError, match="chain"):
+            EXAMPLE["main"]()
+        assert seen == ["/v1/status"]
+    else:
+        EXAMPLE["main"]()
+        report = json.loads(capsys.readouterr().out)
+        assert report["full_payment_matches_event"]
+        assert report["full_accrued_payment_micro_usdc"] == -1716
+        assert report["sz_decimals"] == 2
+        assert seen == ["/v1/status", "/v1/markets", "/v1/block_results"]
+    assert clients and all(client.is_closed for client in clients)

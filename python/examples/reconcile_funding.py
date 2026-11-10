@@ -78,6 +78,28 @@ def reconcile(client: ExchangeClient, *, height: int, market: int, owner: str,
     result = body.get("result")
     if not isinstance(result, dict) or _integer(result.get("height"), "response height", 1, (1 << 63) - 1) != height:
         raise ValueError("block results do not match the requested height")
+    transactions = result.get("txs_results")
+    if transactions is None:
+        transactions = []
+    if not isinstance(transactions, list):
+        raise ValueError("invalid transaction results")
+    for transaction in transactions:
+        if not isinstance(transaction, dict):
+            raise ValueError("invalid transaction result")
+        tx_events = transaction.get("events")
+        if tx_events is None:
+            tx_events = []
+        if not isinstance(tx_events, list):
+            raise ValueError("invalid transaction events")
+        for event in tx_events:
+            if not isinstance(event, dict):
+                raise ValueError("invalid transaction event")
+            if event.get("type") != "funding_settled":
+                continue
+            attrs = _event_attributes(event)
+            tx_market = _integer(attrs.get("market"), "event market", 0, (1 << 32) - 1)
+            if tx_market == market and attrs.get("owner") == owner:
+                raise ValueError("transaction-level funding settlement makes this block ambiguous")
     events = result.get("finalize_block_events")
     if not isinstance(events, list):
         raise ValueError("missing finalize_block_events")

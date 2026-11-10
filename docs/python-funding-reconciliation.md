@@ -72,9 +72,9 @@ is an error, never a zero payment. A zero or fully deferred debit may emit no
 cash event. The example refuses missing and multiple cash events in
 `finalize_block_events` instead of choosing one or inventing zero. A fill or a
 `LiquidateAccounts` transaction in the same block emits its `funding_settled` in
-`txs_results[i].events`, which the example does not read. Such a settlement can
-appear as a mismatch or a missing event, so check those events before treating
-either result as a discrepancy.
+`txs_results[i].events`. The example refuses the block if it finds one for the
+same owner and market: a retained pre-block position cannot isolate the final
+settlement after an earlier transaction-level payment.
 
 Run the read-only example with your preserved position inputs:
 
