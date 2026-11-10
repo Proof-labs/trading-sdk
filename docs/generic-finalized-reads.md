@@ -56,8 +56,8 @@ Genesis can have `parentHash: null` and `appHash: null`, never a fabricated hash
 
 Payload decoder ceilings are not promises that a whole response of that size
 fits in HTTP. Financial decoded bytes are capped at 768 KiB, account/book at
-512 KiB; the 1 MiB HTTP ceiling always applies first. The book envelope repeats
-base64 in two fields, which must match. Actual valid 100-level/u64 books are far
+512 KiB; the 1 MiB HTTP ceiling always applies first. The legacy book `data` field is optional;
+when present, it must match `bookMsgpackB64`. Actual valid 100-level/u64 books are far
 below these ceilings; oversized/padded inputs are refused, never truncated.
 MessagePack shape, nesting and collection checks remain independent of byte caps.
 

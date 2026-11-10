@@ -158,7 +158,7 @@ _ORDERBOOK_VECTORS = json.loads((Path(__file__).resolve().parents[2] / "conforma
 @pytest.mark.parametrize("case", _ORDERBOOK_VECTORS, ids=lambda case: case["name"])
 def test_shared_orderbook_vectors(case):
     frame = {"market": "3", "depth": str(case["depth"]), "height": H,
-             "bookMsgpackB64": case["payload"], "witness": witness()}
+             "bookMsgpackB64": case.get("payload"), "witness": witness()}
     if "data" in case: frame["data"] = case["data"]
     if "error" in case:
         with pytest.raises(sdk.GatewayReadError) as err:

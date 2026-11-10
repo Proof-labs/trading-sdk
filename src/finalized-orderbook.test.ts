@@ -179,7 +179,7 @@ describe("finalized orderbook read", () => {
 type BookVector = {
   name: string;
   depth: FinalizedOrderbookDepth;
-  payload: string;
+  payload?: string;
   data?: string;
   error?: string;
   bids?: [string, string, number][];
