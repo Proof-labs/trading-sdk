@@ -12,7 +12,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Python `ExternalSigner` and `ExchangeClient.set_external_signer` accept
   synchronous Ed25519 callbacks for transactions and account-stream auth.
   Rust prepares canonical messages and verifies returned signatures; replacing
-  the signing connection invalidates an in-flight callback result.
+  the signing connection invalidates an in-flight callback result. TP/SL helpers
+  bind owner selection to that connection. Account streams use the current
+  signer on each authentication attempt, including a signer connected later.
 
 - Python account-event streams authenticate with the client's secret key or
   opaque `SigningHandle`, alongside an API key when configured, renewing the signed
@@ -64,7 +66,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   retries: signing failures and 401/429/503 frames yield errors and retry up to
   five times. Exhaustion and 403 frames leave the socket open without further
   retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
-  401/403 refusals raise `AuthenticationError`.
+  401/403 refusals raise `AuthenticationError` before the first successful
+  connection; on reconnect they use the configured retry budget and backoff
+  without discarding history recovery state.
 - A Python client with a signer now signs every account subscription, even with
   an API key configured. Subscribing to another owner's feed, or to any feed
   with an unconfigured chain ID, now fails with error frames instead of relying

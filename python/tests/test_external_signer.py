@@ -301,3 +301,27 @@ def test_stream_calls_current_external_signer_for_each_auth_attempt(client, monk
     client.set_external_signer(ExternalSigner(KEY, lambda _: (_ for _ in ()).throw(RuntimeError("denied"))))
     with pytest.raises(SigningError, match="callback failed"):
         captured["auth"]()
+
+
+def test_an_unbound_chain_never_reaches_the_wallet():
+    calls = []
+
+    def wallet(message):
+        calls.append(message)
+        return bytes(64)
+
+    c = ExchangeClient(config=SdkConfig(gateway_url="https://gateway.example"))
+    try:
+        c.set_external_signer(ExternalSigner(KEY, wallet))
+        with pytest.raises(SigningError, match="chain_id not configured"):
+            c.sign_and_encode_action(2, b"payload")
+    finally:
+        c.close()
+    assert calls == []
+
+
+def test_a_released_public_key_view_is_a_signing_error(client):
+    view = memoryview(KEY)
+    view.release()
+    with pytest.raises(SigningError):
+        client.set_external_signer(ExternalSigner(view, sign))

@@ -71,12 +71,15 @@ receives immutable, domain-separated message bytes prepared by Rust. Rust
 verifies every signature before it is encoded or returned as account-stream
 authentication. `sign_action`, `submit`, owner-derived helpers and
 `account_auth` all use the connected signer. The nonce allocator and chain
-configuration are unchanged; set the correct chain ID explicitly.
+configuration are unchanged; set the correct chain ID explicitly. Without one,
+transaction signing raises `SigningError` before the callback runs.
 
 Connecting snapshots the public key and callable and drops the client's
 references to its previous secret key or opaque handle. It cannot erase copies
 held by the caller. Connecting another signer while a callback is running
 discards the old result with `SigningError`, including reentrant replacement.
+The TP/SL helpers bind owner selection to that same connection; replacement
+before signing fails without asking the new wallet to sign the old request.
 Signature bytes, public-key bytes and payload bytes are copied at the boundary.
 
 Callbacks must return bytes (or a bytearray/memoryview), never an awaitable.
@@ -94,6 +97,9 @@ authentication prompts. Existing `SigningHandle`/PKCS#11 support is unchanged.
 When a secret key, signing handle or external signer is connected, it also signs the gateway's
 subscription challenge on every attempt, matching TypeScript. A stale or
 non-admin API key therefore does not suppress valid signed authentication.
+The default authentication factory checks the current signer on every attempt,
+including one connected after stream creation. The subscribed owner stays fixed;
+a signer for another owner produces an error rather than an unsigned fallback.
 Set the client's chain ID to the gateway's chain: Python does not resolve it
 automatically. `account_auth()` raises `SigningError` for an unbound chain ID
 before signing; a stream reports the signing failure through its bounded retry
@@ -118,7 +124,10 @@ budget. The synchronous iterator performs retries while it is being consumed;
 `stream.close()` cancels pending retries. Synthetic error frames carry the SDK's
 fixed `SigningError` text and omit other exception text, which could expose
 sensitive diagnostics. HTTP 401/403
-refusals during the WebSocket upgrade separately raise `AuthenticationError`.
+refusals during the WebSocket upgrade raise `AuthenticationError` before the
+first successful connection. On reconnect, they follow `reconnect_attempts`
+and the normal backoff (`None` retries indefinitely), preserving recovery state.
+`close()` cancels the wait. This is separate from subscription-error frames.
 
 `client.account_auth(owner, after_id=0)` returns signed subscription parameters.
 The optional cursor must be a Python integer in `0..2**53 - 1`, matching the TS

@@ -445,7 +445,10 @@ class ExchangeClient:
             raise SigningError("expected ExternalSigner")
         if not isinstance(signer.public_key, (bytes, bytearray, memoryview)):
             raise SigningError("external signer public key must be 32 bytes")
-        public_key = bytes(signer.public_key)
+        try:
+            public_key = bytes(signer.public_key)
+        except ValueError:
+            raise SigningError("external signer public key must be 32 bytes") from None
         if len(public_key) != 32 or not callable(signer.sign_raw) or inspect.iscoroutinefunction(signer.sign_raw):
             raise SigningError("invalid external signer connection")
         snapshot = ExternalSigner(public_key, signer.sign_raw)
@@ -508,18 +511,29 @@ class ExchangeClient:
             CodecError: If encoding fails.
             SigningError: If signing fails.
         """
+        return self._sign_and_encode_action(action_type, action_payload)
+
+    def _sign_and_encode_action(
+        self, action_type: int, action_payload: bytes, *, expected_revision: int | None = None,
+    ) -> bytes:
         with self._signer_lock:
+            if expected_revision is not None:
+                self._check_signer_revision(expected_revision)
             signer, revision = self._external_signer, self._signer_revision
             key_handle, secret_key = self._key_handle, self._secret_key
             chain_id = self._chain_id
         seq = self._nonce.allocate()
         try:
             if signer is not None:
+                # A zero-chain signature stays valid on any unbound chain, so a
+                # wallet is never asked for one.
+                if chain_id == UNBOUND_CHAIN_ID:
+                    raise SigningError("chain_id not configured for external signing")
                 if not isinstance(action_payload, (bytes, bytearray, memoryview)):
                     raise CodecError("action payload must be bytes")
                 action_payload = bytes(action_payload)
-                # Apply the canonical encoder's action policy before asking a
-                # wallet to sign. Discard this unsigned preflight envelope.
+                # Whatever the encoder refuses never reaches the wallet. Discard
+                # this unsigned preflight envelope.
                 encode_signed_tx(action_type, action_payload, seq, signer.public_key, bytes(64))
                 message = signing_message(chain_id, action_type, seq, action_payload)
                 signature = self._sign_external(signer, revision, message)
@@ -563,6 +577,11 @@ class ExchangeClient:
         """Encode + sign + submit a typed action in one call."""
         return self.submit_action(self.sign_action(action))
 
+    def _submit_with_signer_revision(self, action: Action, revision: int) -> dict[str, t.Any]:
+        action_type, payload = encode_action(action)
+        envelope = self._sign_and_encode_action(action_type, payload, expected_revision=revision)
+        return self.submit_action(envelope)
+
     def set_position_triggers(
         self,
         market: int,
@@ -579,15 +598,19 @@ class ExchangeClient:
         pass the delegated owner explicitly; authorization remains an engine
         decision and is not guessed from stale client state.
         """
-        return self.submit(
+        with self._signer_lock:
+            revision = self._signer_revision
+            selected_owner = self._own_owner() if owner is None else owner
+        return self._submit_with_signer_revision(
             SetPositionTriggers(
                 market=market,
-                owner=self._own_owner() if owner is None else owner,
+                owner=selected_owner,
                 expected_position_epoch=expected_position_epoch,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
                 client_group_id=client_group_id,
-            )
+            ),
+            revision,
         )
 
     def cancel_position_triggers(
@@ -598,12 +621,16 @@ class ExchangeClient:
         owner: bytes | None = None,
     ) -> dict[str, t.Any]:
         """Cancel one bracket, defaulting owner to the loaded signer."""
-        return self.submit(
+        with self._signer_lock:
+            revision = self._signer_revision
+            selected_owner = self._own_owner() if owner is None else owner
+        return self._submit_with_signer_revision(
             CancelPositionTriggers(
                 market=market,
-                owner=self._own_owner() if owner is None else owner,
+                owner=selected_owner,
                 expected_position_epoch=expected_position_epoch,
-            )
+            ),
+            revision,
         )
 
     # ── Write action ─────────────────────────────────────────────────────
@@ -1801,9 +1828,16 @@ class ExchangeClient:
         """
         from proof_trading_sdk.streams import AccountEventStream
 
+        def current_auth() -> dict[str, t.Any]:
+            with self._signer_lock:
+                has_signer = (
+                    self._secret_key is not None or self._key_handle is not None
+                    or self._external_signer is not None
+                )
+            return self.account_auth(owner) if has_signer else {}
+
         kwargs.setdefault("history_url", self._gateway_url)
-        if self._secret_key is not None or self._key_handle is not None or self._external_signer is not None:
-            kwargs.setdefault("auth", lambda: self.account_auth(owner))
+        kwargs.setdefault("auth", current_auth)
         return AccountEventStream(
             ws_url or self._gateway_url.replace("http", "ws", 1),
             owner,
