@@ -119,7 +119,10 @@ budget. The synchronous iterator performs retries while it is being consumed;
 `stream.close()` cancels pending retries. Synthetic error frames carry the SDK's
 fixed `SigningError` text and omit other exception text, which could expose
 sensitive diagnostics. HTTP 401/403
-refusals during the WebSocket upgrade separately raise `AuthenticationError`.
+refusals during the WebSocket upgrade raise `AuthenticationError` before the
+first successful connection. On reconnect, they follow `reconnect_attempts`
+and the normal backoff (`None` retries indefinitely), preserving recovery state.
+`close()` cancels the wait. This is separate from subscription-error frames.
 
 `client.account_auth(owner, after_id=0)` returns signed subscription parameters.
 The optional cursor must be a Python integer in `0..2**53 - 1`, matching the TS

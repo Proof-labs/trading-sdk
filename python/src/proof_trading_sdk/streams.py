@@ -168,6 +168,9 @@ class AccountEventStream:
     Exhaustion emits a final error frame and leaves the socket quiet until it
     disconnects or is closed. Other refusals (including 403), and errors after
     confirmation, do not resubscribe. A new socket starts a fresh retry budget.
+    HTTP upgrade 401/403 raises ``AuthenticationError`` before the first
+    successful connection; on reconnect it uses the normal reconnect budget
+    and backoff, preserving the history recovery boundary.
 
     Each reconnect subscribes again and receives a fresh snapshot. By default
     it then recovers the events missed while disconnected: it reads
@@ -543,10 +546,12 @@ class AccountEventStream:
         attempt = 0
         backoff = 0.5
         seen_snapshot = False
+        connected_once = False
 
         while not self._closed:
             try:
                 self._connect()
+                connected_once = True
                 attempt = 0
                 backoff = 0.5
                 yield from self._subscribe()
@@ -609,12 +614,12 @@ class AccountEventStream:
                     elif self._recover_enabled:
                         yield from self._recover(frame)
 
-            except AuthenticationError:
-                self.close()
-                raise
-            except Exception:
+            except Exception as err:
                 if self._closed:
                     return
+                if isinstance(err, AuthenticationError) and not connected_once:
+                    self.close()
+                    raise
                 attempt += 1
                 if self._max_attempts is not None and attempt > self._max_attempts:
                     log.error("reconnect attempts exhausted")
