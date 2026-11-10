@@ -88,8 +88,8 @@ async fn place_order_posts_the_signed_bytes_and_reads_the_committed_events() {
     assert!(submitted.is_success());
     assert_eq!(submitted.error(), None);
     let receipt = submitted.receipt().unwrap();
-    assert_eq!(receipt.order_id(), Some(33514));
     assert_eq!(receipt.events[0].kind, "order_placed");
+    assert_eq!(receipt.events[0].attribute("order_id"), Some("33514"));
 
     let (target, body) = log.lock().unwrap()[0].clone();
     assert_eq!(target, "POST /exchange");

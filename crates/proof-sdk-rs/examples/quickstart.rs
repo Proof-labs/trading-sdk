@@ -84,9 +84,9 @@ async fn main() -> AnyResult<()> {
         )
         .await?;
     println!(
-        "placed {}: order={:?} error={:?}",
+        "placed {}: events={:?} error={:?}",
         placed.tx.hash,
-        placed.receipt().and_then(proof_sdk_rs::Receipt::order_id),
+        placed.receipt().map(|r| &r.events),
         placed.error()
     );
 
