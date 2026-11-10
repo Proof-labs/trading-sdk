@@ -9,6 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Python typed `authorities()` and `liquidation_config()` reads, backed by
+  canonical Rust wire types with strict record/address/range checks. Failed
+  reads raise rather than synthesize empty authorities or default configuration.
+
 - Python `history_candles` reads durable OHLCV history with typed pages, exact
   decimal strings, and backward time-window pagination.
 

@@ -57,6 +57,41 @@ hash as `tx_hash`; reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
+## Governance reads
+
+```python
+authorities = client.authorities()
+config = client.liquidation_config()
+print(authorities.relayer, config.sequence, config.config.takeover_discount_bps)
+```
+
+`authorities()` reads `/v1/admin/authorities` as `AuthoritiesSnapshot`: six
+lists of 20-byte addresses (`relayer`, `oracle`, `cex_composite`, `custody`,
+`market_params`, `scheduled_ops`). Empty sets are valid; a failed read raises
+instead of returning empty sets. Membership facts do not prove that a proposed
+action is authorized or that the response is authentic.
+
+`liquidation_config()` reads `/v1/liquidation-config` as `LiquidationConfigInfo`
+with exact integer `sequence` and typed `config`. The config includes
+`target_ratio_bps`, `full_close_threshold` (numerator/denominator),
+`partial_penalty_bps`, `max_book_orders`, `max_committed_fills`, and
+`takeover_discount_bps`. The two pacing fields remain readable for wire
+compatibility; the engine no longer applies those caps. Legacy five-field
+configs default the takeover discount to 50, matching the canonical wire type.
+Read decoding preserves numeric facts without enforcing action-admission rules.
+For example, a structurally valid `full_close_threshold` with denominator zero
+is returned unchanged, matching TypeScript. Check the denominator before division;
+successful decoding does not establish that a configuration is usable.
+
+`decode_authorities_snapshot` and `decode_liquidation_config_info` accept the
+complete gateway `{"data": "<base64 MessagePack>"}` envelope. Rust owns the wire
+decoding. Exact tuple widths, address lengths, integer ranges, 4096 entries per
+authority set, and a 1 MiB decoded payload cap are checked; the byte cap can be
+reached first when every set is near full. Malformed data raises `CodecError`; HTTP failures retain existing SDK exceptions with no fallback.
+These methods use the existing client transport and configured timeout; the
+payload cap is checked after HTTP buffering and is not a streaming HTTP-body
+limit. They return no finalized witness or cryptographic proof.
+
 ## Candle history
 
 `history_candles` reads durable OHLCV bars through the gateway's

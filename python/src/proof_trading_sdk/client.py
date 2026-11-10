@@ -42,6 +42,10 @@ from proof_trading_sdk.actions import (
     encode_action,
 )
 from proof_trading_sdk.config import SdkConfig, load_config
+from proof_trading_sdk.governance_reads import (
+    AuthoritiesSnapshot, LiquidationConfigInfo,
+    decode_authorities_snapshot, decode_liquidation_config_info,
+)
 from proof_trading_sdk.candle_history import (
     CandleHistoryPage,
     CandleHistoryTime,
@@ -976,6 +980,22 @@ class ExchangeClient:
     def nonce_info(self, owner: bytes | str) -> dict[str, t.Any]:
         resp = self._get(f"/v1/nonce/{_to_hex(owner)}")
         return _response_object(resp)
+
+    def authorities(self) -> AuthoritiesSnapshot:
+        """Read the six operator-authority sets. HTTP/decode failures remain errors.
+
+        Addresses are 20-byte values. These are gateway-reported membership
+        facts, without a witness or proof of action authorization.
+        """
+        return decode_authorities_snapshot(_response_object(self._get("/v1/admin/authorities")))
+
+    def liquidation_config(self) -> LiquidationConfigInfo:
+        """Read the stored global liquidation configuration and exact sequence.
+
+        No default configuration is synthesized on a failed read. Retired
+        pacing fields are preserved as wire facts, not enforced limits.
+        """
+        return decode_liquidation_config_info(_response_object(self._get("/v1/liquidation-config")))
 
     def _get_data(self, path: str, params: dict[str, t.Any] | None = None) -> t.Any:
         """GET a ``/v1/*`` read endpoint and decode the ``{data: base64 msgpack}``
