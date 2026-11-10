@@ -11,7 +11,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Python `finalized_account_state(owner, timeout=5)` returns typed raw balance,
   positions and a height-bound witness through the canonical Rust wire decoder.
-  Exact integer ranges, owner bindings, strict field counts and bounded responses
+  Exact integer ranges, owner bindings, minimum field counts and bounded responses
   match the TS finalized account-state contract. Existing `account()` is unchanged;
   valuation, authorization, payload proofs and validator verification are excluded.
 

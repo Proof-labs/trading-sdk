@@ -143,7 +143,7 @@ for legacy six-field positions; position cost is `entry_price * size + entry_rem
 Owners are lowercase 40-character hex; inputs also accept 20-byte addresses,
 uppercase hex and an optional `0x` prefix.
 
-The canonical Rust wire decoder checks the exact account/position field counts,
+The canonical Rust wire decoder checks minimum account/position field counts (appended engine fields are ignored),
 20-byte owners, request/position owner bindings, strictly increasing market IDs,
 at most 2048 positions, integer ranges, and remainder bounds. The response must
 contain exactly `data` and `witness`; the witness must have its five defined

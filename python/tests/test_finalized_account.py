@@ -94,10 +94,14 @@ def test_owner_width_and_byte_types_cannot_be_truncated(address, which):
         _native.decode_account_state(msgpack.packb(raw), OWNER)
 
 
+def test_appended_engine_fields_decode():
+    raw = state(); raw[3][0].append("future"); raw.append("future")
+    assert decode(envelope(raw)) == decode()
+
+
 def invalid_states():
     yield []
     yield {"owner": OWNER, "finalized_height": H, "balance": 0, "positions": []}
-    yield state() + ["future"]
     yield [list(OWNER) + [1], 100, [], []]
     for index, value in [(0, b"\xcd" * 20), (1, -1), (1, True), (1, 1.0),
                          (2, -1), (2, True), (2, 1.0), (2, "1"), (3, None), (3, {})]:
@@ -106,7 +110,6 @@ def invalid_states():
                          (2, "Long"), (2, 0), (2, {"Buy": None}), (3, -1), (3, 1.0),
                          (4, -1), (4, True), (5, 2**63), (5, 1.0), (6, -1), (6, 3), (6, None)]:
         raw = state(); raw[3][0][index] = value; yield raw
-    raw = state(); raw[3][0].append("future"); yield raw
     raw = state(); raw[3][0] = raw[3][0][:5]; yield raw
     raw = state(); raw[3].append(deepcopy(raw[3][0])); yield raw
     raw = state(); raw[3][0][1] = 1; raw[3].append(position()); yield raw

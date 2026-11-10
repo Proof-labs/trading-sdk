@@ -39,14 +39,20 @@ fn wire_legacy_and_current_positions_preserve_exact_integers() {
 }
 
 #[test]
-fn refuses_extra_fields_owner_mismatch_and_invalid_positions() {
+fn appended_engine_fields_decode() {
     let mut row = position();
     row.push(Value::from(1));
     row.push(Value::from(2));
-    assert!(decode(&encode(raw(row)), &[0xab; 20]).is_err());
-    let mut fields = raw(position());
+    let mut fields = raw(row);
     fields.push(Value::Nil);
-    assert!(decode(&encode(fields), &[0xab; 20]).is_err());
+    let state = decode(&encode(fields), &[0xab; 20]).unwrap();
+    assert_eq!(state.balance, u64::MAX);
+    assert_eq!(state.positions[0].size, 3);
+    assert_eq!(state.positions[0].entry_remainder, 1);
+}
+
+#[test]
+fn refuses_owner_mismatch_and_invalid_positions() {
     assert!(decode(&encode(raw(position())), &[0xcd; 20]).is_err());
     let mut row = position();
     row[0] = Value::Binary(vec![0xcd; 20]);
