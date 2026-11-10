@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import threading
 import time
 import typing as t
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit, urlunsplit
 
-from proof_trading_sdk.errors import AuthenticationError, SigningError
+from proof_trading_sdk.errors import AuthenticationError, SigningError, TransportError
 
 log = logging.getLogger("proof_trading_sdk")
 
@@ -155,7 +157,112 @@ def _row_frame(row: dict[str, t.Any]) -> dict[str, t.Any]:
 _UNKEYED = object()
 
 
-class AccountEventStream:
+class _WebSocketStream:
+    """Shared connection ownership, startup errors and cancelable reconnects.
+
+    Subclasses only implement a connected session. Subscription authentication
+    and history recovery remain channel-specific; transport failures do not.
+    """
+
+    def __init__(
+        self, ws_url: str, *, api_key: str = "",
+        reconnect_backoff_max: float, reconnect_attempts: int | None = None,
+    ) -> None:
+        if (
+            isinstance(reconnect_backoff_max, bool)
+            or not isinstance(reconnect_backoff_max, (int, float))
+            or not math.isfinite(reconnect_backoff_max)
+            or reconnect_backoff_max <= 0
+        ):
+            raise ValueError("reconnect_backoff_max must be finite and positive")
+        url = urlsplit(ws_url)
+        path = url.path.rstrip("/")
+        if not path.endswith("/ws"):
+            path += "/ws"
+        self._ws_url = urlunsplit(url._replace(path=path))
+        self._api_key = api_key
+        self._backoff_cap = reconnect_backoff_max
+        self._max_attempts = reconnect_attempts
+        self._stop = threading.Event()
+        self._iterator_lock = threading.Lock()
+        self._ws: t.Any = None
+        self._closed = False
+
+    def _connect_options(self) -> dict[str, t.Any]:
+        return {"additional_headers": {"X-API-Key": self._api_key} if self._api_key else {}}
+
+    def _session(self) -> t.Iterator[dict[str, t.Any]]:
+        raise NotImplementedError
+
+    def _close_socket(self) -> None:
+        socket, self._ws = self._ws, None
+        if socket is not None:
+            socket.close()
+
+    def close(self) -> None:
+        self._closed = True
+        self._stop.set()
+        self._close_socket()
+
+    def __enter__(self) -> t.Self:
+        return self
+
+    def __exit__(self, *_: t.Any) -> None:
+        self.close()
+
+    def __iter__(self) -> t.Iterator[dict[str, t.Any]]:
+        return self._run()
+
+    def _run(self) -> t.Iterator[dict[str, t.Any]]:
+        import websockets.sync.client as ws_client
+        from websockets.exceptions import InvalidStatus
+
+        if not self._iterator_lock.acquire(blocking=False):
+            raise RuntimeError("stream already has an active iterator")
+        attempt = 0
+        backoff = 0.5
+        connected_once = False
+        try:
+            while not self._closed:
+                try:
+                    self._ws = ws_client.connect(self._ws_url, **self._connect_options())
+                    connected_once = True
+                    if self._closed:
+                        return
+                    attempt = 0
+                    backoff = 0.5
+                    yield from self._session()
+                except Exception as error:
+                    if self._closed:
+                        return
+                    if not connected_once:
+                        code = error.response.status_code if isinstance(error, InvalidStatus) else None
+                        if code in (401, 403):
+                            raise AuthenticationError("stream connection authentication refused") from error
+                        message = "stream connection failed"
+                        if code is not None:
+                            message += f" (HTTP {code})"
+                        raise TransportError(message, status_code=code) from error
+                    log.warning("stream disconnected; reconnecting")
+                finally:
+                    self._close_socket()
+                if self._closed:
+                    return
+                attempt += 1
+                if self._max_attempts is not None and attempt > self._max_attempts:
+                    log.error("reconnect attempts exhausted")
+                    return
+                if self._stop.wait(min(backoff, self._backoff_cap)):
+                    return
+                backoff = min(backoff * 2, self._backoff_cap)
+        finally:
+            try:
+                self.close()
+            finally:
+                self._iterator_lock.release()
+
+
+class AccountEventStream(_WebSocketStream):
     """WebSocket stream for account events.
 
     Subscribes to the ``accountEvents`` channel of the gateway's multiplexed
@@ -168,9 +275,11 @@ class AccountEventStream:
     Exhaustion emits a final error frame and leaves the socket quiet until it
     disconnects or is closed. Other refusals (including 403), and errors after
     confirmation, do not resubscribe. A new socket starts a fresh retry budget.
-    HTTP upgrade 401/403 raises ``AuthenticationError`` before the first
-    successful connection; on reconnect it uses the normal reconnect budget
-    and backoff, preserving the history recovery boundary.
+    Before the first successful connection, HTTP upgrade 401/403 raises
+    ``AuthenticationError`` and other connection failures raise ``TransportError``.
+    Reconnects use the configured retry budget and backoff, preserving the
+    history recovery boundary. Closing the iterator closes the stream; only
+    one iterator may consume it at a time.
 
     Each reconnect subscribes again and receives a fresh snapshot. By default
     it then recovers the events missed while disconnected: it reads
@@ -188,7 +297,7 @@ class AccountEventStream:
     recovery off.
 
     Args:
-        ws_url: WebSocket base URL (the gateway URL with a ``ws`` scheme).
+        ws_url: WebSocket base URL or endpoint already ending in ``/ws``.
         owner: 20-byte owner address (bytes) or hex string.
         api_key: API key for auth.
         auth: Optional signed-subscription params factory, called again on
@@ -230,16 +339,21 @@ class AccountEventStream:
         history_url: str | None = None,
         auth: t.Callable[[], dict[str, t.Any]] | None = None,
     ) -> None:
-        self._ws_url = ws_url.rstrip("/")
+        super().__init__(
+            ws_url, api_key=api_key, reconnect_backoff_max=reconnect_backoff_max,
+            reconnect_attempts=reconnect_attempts,
+        )
         owner_hex = owner.hex() if isinstance(owner, bytes) else owner
         self._owner = owner_hex.lower().removeprefix("0x")
-        self._api_key = api_key
         self._auth = auth
-        self._backoff_cap = reconnect_backoff_max
-        self._max_attempts = reconnect_attempts
         self._recover_enabled = recover
         self._on_recovery = on_recovery
-        self._history_url = (history_url or self._ws_url.replace("ws", "http", 1)).rstrip("/")
+        endpoint = urlsplit(self._ws_url)
+        default_history = urlunsplit(endpoint._replace(
+            scheme=endpoint.scheme.replace("ws", "http", 1),
+            path=endpoint.path.removesuffix("/ws"), query="", fragment="",
+        ))
+        self._history_url = (history_url or default_history).rstrip("/")
         # None: nothing yielded yet. _UNKEYED: the last event had no key.
         self._last: t.Any = None
         # Height of the latest snapshot recovery has caught up to.
@@ -251,37 +365,12 @@ class AccountEventStream:
         self._recent: tuple[
             dict[tuple[int, str, int, str], list[EventKey]], int, int
         ] | None = None
-        self._stop = threading.Event()
-        self._ws: t.Any = None
-        self._closed = False
+        self._seen_snapshot = False
         self._next_subscribe_id = 1
         self._last_subscribe_id: int | None = None
         self._confirmed = False
         self._auth_retry_attempts = 0
         self._auth_retry_at: float | None = None
-
-    def __iter__(self) -> t.Iterator[dict[str, t.Any]]:
-        return self._run()
-
-    def _connect(self) -> None:
-        import websockets.sync.client as ws_client
-        from websockets.exceptions import InvalidStatus
-
-        extra_headers = {}
-        if self._api_key:
-            extra_headers["X-API-Key"] = self._api_key
-        try:
-            self._ws = ws_client.connect(
-                f"{self._ws_url}/ws", additional_headers=extra_headers
-            )
-        except InvalidStatus as err:
-            if err.response.status_code in (401, 403):
-                raise AuthenticationError("account-stream connection authentication refused") from err
-            raise
-        self._confirmed = False
-        self._auth_retry_attempts = 0
-        self._auth_retry_at = None
-        self._last_subscribe_id = None
 
     def _subscribe(self) -> t.Iterator[dict[str, t.Any]]:
         socket = self._ws
@@ -364,12 +453,8 @@ class AccountEventStream:
         )
 
     def close(self) -> None:
-        self._closed = True
         self._auth_retry_at = None
-        self._stop.set()
-        if self._ws is not None:
-            self._ws.close()
-            self._ws = None
+        super().close()
 
     def _report(self, status: RecoveryStatus) -> None:
         if self._on_recovery is not None and not self._closed:
@@ -542,99 +627,73 @@ class AccountEventStream:
         self._last = key if key is not None else _UNKEYED
         yield frame
 
-    def _run(self) -> t.Iterator[dict[str, t.Any]]:
-        attempt = 0
-        backoff = 0.5
-        seen_snapshot = False
-        connected_once = False
+    def _session(self) -> t.Iterator[dict[str, t.Any]]:
+        self._confirmed = False
+        self._auth_retry_attempts = 0
+        self._auth_retry_at = None
+        self._last_subscribe_id = None
+        yield from self._subscribe()
 
         while not self._closed:
-            try:
-                self._connect()
-                connected_once = True
-                attempt = 0
-                backoff = 0.5
+            # A busy socket must not starve the scheduled auth retry.
+            if self._auth_retry_at is not None and time.monotonic() >= self._auth_retry_at:
+                self._auth_retry_at = None
                 yield from self._subscribe()
-
-                while not self._closed:
-                    # A busy socket must not starve the scheduled auth retry.
-                    if self._auth_retry_at is not None and time.monotonic() >= self._auth_retry_at:
-                        self._auth_retry_at = None
-                        yield from self._subscribe()
-                        if self._closed:
-                            return
-                    timeout = (
-                        None if self._auth_retry_at is None
-                        else max(0.0, self._auth_retry_at - time.monotonic())
-                    )
-                    try:
-                        raw = self._ws.recv(timeout=timeout)
-                    except TimeoutError:
-                        if self._closed:
-                            return
-                        if self._auth_retry_at is None:
-                            raise
-                        if time.monotonic() >= self._auth_retry_at:
-                            self._auth_retry_at = None
-                            yield from self._subscribe()
-                        continue
-                    if self._closed:
-                        return
-                    frame = json.loads(raw)
-                    if frame.get("type") == "subscribed" and self._matches_subscribe(frame):
-                        self._confirm()
-                    if frame.get("type") in _ACK_TYPES:
-                        continue
-                    if frame.get("type") == "error":
-                        retryable = (
-                            not self._confirmed and self._matches_subscribe(frame)
-                            and frame.get("code") in _RETRYABLE_ACCOUNT_REFUSALS
-                        )
-                        exhausted = retryable and self._auth_retry_attempts >= _MAX_AUTH_RETRIES
-                        if retryable and not exhausted:
-                            self._schedule_auth_retry()
-                        yield frame
-                        if exhausted and not self._closed:
-                            yield self._retry_exhausted()
-                        continue
-                    if not self._belongs_to_account(frame):
-                        continue
-                    self._confirm()
-                    if frame.get("type") != "snapshot":
-                        yield from self._live(frame)
-                        continue
-                    yield frame
-                    # A resend for another listener is not a reconnect.
-                    if frame.get("snapshot") == "resent":
-                        continue
-                    if not seen_snapshot:
-                        seen_snapshot = True
-                        height = frame.get("height")
-                        self._snapshot_height = height if isinstance(height, int) else None
-                    elif self._recover_enabled:
-                        yield from self._recover(frame)
-
-            except Exception as err:
                 if self._closed:
                     return
-                if isinstance(err, AuthenticationError) and not connected_once:
-                    self.close()
+            timeout = (
+                None if self._auth_retry_at is None
+                else max(0.0, self._auth_retry_at - time.monotonic())
+            )
+            try:
+                raw = self._ws.recv(timeout=timeout)
+            except TimeoutError:
+                if self._closed:
+                    return
+                if self._auth_retry_at is None:
                     raise
-                attempt += 1
-                if self._max_attempts is not None and attempt > self._max_attempts:
-                    log.error("reconnect attempts exhausted")
-                    return
-                log.warning("ws reconnect attempt %d in %.1fs", attempt, backoff)
-                if self._stop.wait(backoff):
-                    return
-                backoff = min(backoff * 2, self._backoff_cap)
-            finally:
-                if self._ws is not None:
-                    self._ws.close()
-                    self._ws = None
+                if time.monotonic() >= self._auth_retry_at:
+                    self._auth_retry_at = None
+                    yield from self._subscribe()
+                continue
+            if self._closed:
+                return
+            frame = json.loads(raw)
+            if frame.get("type") == "subscribed" and self._matches_subscribe(frame):
+                self._confirm()
+            if frame.get("type") in _ACK_TYPES:
+                continue
+            if frame.get("type") == "error":
+                retryable = (
+                    not self._confirmed and self._matches_subscribe(frame)
+                    and frame.get("code") in _RETRYABLE_ACCOUNT_REFUSALS
+                )
+                exhausted = retryable and self._auth_retry_attempts >= _MAX_AUTH_RETRIES
+                if retryable and not exhausted:
+                    self._schedule_auth_retry()
+                yield frame
+                if exhausted and not self._closed:
+                    yield self._retry_exhausted()
+                continue
+            if not self._belongs_to_account(frame):
+                continue
+            self._confirm()
+            if frame.get("type") != "snapshot":
+                yield from self._live(frame)
+                continue
+            yield frame
+            # A resend for another listener is not a reconnect.
+            if frame.get("snapshot") == "resent":
+                continue
+            if not self._seen_snapshot:
+                self._seen_snapshot = True
+                height = frame.get("height")
+                self._snapshot_height = height if isinstance(height, int) else None
+            elif self._recover_enabled:
+                yield from self._recover(frame)
 
 
-class OrderbookDeltaStream:
+class OrderbookDeltaStream(_WebSocketStream):
     """WebSocket stream for one market's orderbook.
 
     Subscribes to the ``orderbook`` channel of the gateway's multiplexed
@@ -643,10 +702,13 @@ class OrderbookDeltaStream:
     (``side``, ``price``, ``totalQuantity``, ``orderCount``; a zero quantity
     empties the level). A refused subscription arrives as a
     ``{"type": "error", ...}`` frame. Each reconnect subscribes again and
-    starts from a fresh snapshot.
+    starts from a fresh snapshot. Before the first successful connection, HTTP
+    401/403 raises ``AuthenticationError``; other failures raise ``TransportError``.
+    Thereafter failures retry with cancelable exponential backoff. Only one
+    iterator may consume the stream; closing that iterator closes the socket.
 
     Args:
-        ws_url: WebSocket base URL (the gateway URL with a ``ws`` scheme).
+        ws_url: WebSocket base URL or endpoint already ending in ``/ws``.
         market: Numeric market ID.
         reconnect_backoff_max: Maximum backoff in seconds (default 30).
     """
@@ -658,57 +720,85 @@ class OrderbookDeltaStream:
         *,
         reconnect_backoff_max: float = 30.0,
     ) -> None:
-        self._ws_url = ws_url.rstrip("/")
+        super().__init__(ws_url, reconnect_backoff_max=reconnect_backoff_max)
         self._market = market
-        self._backoff_cap = reconnect_backoff_max
-        self._ws: t.Any = None
-        self._closed = False
 
-    def close(self) -> None:
-        self._closed = True
-        if self._ws is not None:
-            self._ws.close()
-            self._ws = None
+    def _session(self) -> t.Iterator[dict[str, t.Any]]:
+        self._ws.send(json.dumps({
+            "method": "subscribe", "id": 1,
+            "params": {"channel": "orderbook", "market": self._market},
+        }))
+        for raw in self._ws:
+            if self._closed:
+                return
+            frame = json.loads(raw)
+            if frame.get("type") not in _ACK_TYPES:
+                yield frame
 
-    def __iter__(self) -> t.Iterator[dict[str, t.Any]]:
-        return self._run()
 
-    def _connect(self) -> None:
-        import websockets.sync.client as ws_client
+class PublicTradeStream(_WebSocketStream):
+    """One market's live ``trades`` channel on a dedicated connection.
 
-        self._ws = ws_client.connect(f"{self._ws_url}/ws")
-        self._ws.send(
-            json.dumps(
-                {
-                    "method": "subscribe",
-                    "id": 1,
-                    "params": {"channel": "orderbook", "market": self._market},
-                }
-            )
-        )
+    Iterate to receive the gateway's original ``trade`` dictionaries (including
+    camelCase keys and decimal strings) and subscription error frames. There is
+    no initial snapshot, replay, deduplication or recovery of missed fills.
+    Before the first successful connection, failures raise ``AuthenticationError``
+    for HTTP 401/403, or ``TransportError`` otherwise. After connecting once,
+    reconnects resubscribe with a fresh request ID and failures back off from
+    0.5 seconds to 10 seconds by default, as in TypeScript GatewayFeed.
+    A subscription refusal is yielded, without a same-socket retry.
+    ``ws_url`` accepts a base URL or an endpoint already ending in ``/ws``.
 
-    def _run(self) -> t.Iterator[dict[str, t.Any]]:
-        attempt = 0
-        backoff = 0.5
+    No signer is used. An optional API key sets the connection's gateway tier.
+    WebSocket Ping/Pong uses a 15-second interval and 10-second timeout.
+    TypeScript uses JSON heartbeat frames with those timings; Python uses the
+    protocol-level keepalive provided by ``websockets>=15``.
 
-        while not self._closed:
+    Only one iterator may consume a stream. Reconnect work runs while that
+    iterator is consumed. Call ``close()`` or use a context manager when done;
+    closing the iterator also closes the stream. Closing wakes pending reads
+    and reconnect waits; an in-flight connect ends within its own timeout, and
+    closing against an unresponsive peer can block for the library's timeout.
+    """
+
+    def __init__(
+        self, ws_url: str, market: int, api_key: str = "", *,
+        reconnect_backoff_max: float = 10.0,
+    ) -> None:
+        if type(market) is not int or not 0 <= market <= 0xffffffff:
+            raise ValueError("trade stream market must be a u32 integer")
+        super().__init__(ws_url, api_key=api_key, reconnect_backoff_max=reconnect_backoff_max)
+        self._market = market
+        self._request_id = 0
+
+    def _connect_options(self) -> dict[str, t.Any]:
+        return {**super()._connect_options(), "ping_interval": 15, "ping_timeout": 10}
+
+    def _session(self) -> t.Iterator[dict[str, t.Any]]:
+        self._request_id += 1
+        self._ws.send(json.dumps({
+            "method": "subscribe", "id": self._request_id,
+            "params": {"channel": "trades", "market": self._market},
+        }))
+        for raw in self._ws:
+            if self._closed:
+                return
             try:
-                self._connect()
-                attempt = 0
-                backoff = 0.5
-
-                for raw in self._ws:
-                    if self._closed:
-                        return
-                    frame = json.loads(raw)
-                    if frame.get("type") in _ACK_TYPES:
-                        continue
+                frame = json.loads(raw)
+            except (ValueError, TypeError):
+                log.warning("trade stream ignored invalid JSON")
+                continue
+            if not isinstance(frame, dict):
+                continue
+            if frame.get("type") == "error":
+                # Gateway errors can omit channel and market; the subscribe
+                # request ID binds them to this caller.
+                if type(frame.get("id")) is int and frame["id"] == self._request_id:
                     yield frame
-
-            except Exception:
-                if self._closed:
-                    return
-                attempt += 1
-                log.warning("ws reconnect attempt %d in %.1fs", attempt, backoff)
-                time.sleep(backoff)
-                backoff = min(backoff * 2, self._backoff_cap)
+            elif (
+                frame.get("channel") == "trades"
+                and frame.get("type") == "trade"
+                and type(frame.get("market")) is int
+                and frame["market"] == self._market
+            ):
+                yield frame

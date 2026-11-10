@@ -269,6 +269,20 @@ fn decode_markets_snapshot<'py>(
     Ok(dict)
 }
 
+#[pyfunction]
+fn decode_authorities<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+    let value =
+        core_sdk::governance_reads::decode_authorities(bytes).map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &value).map_err(map_pythonize_err)
+}
+
+#[pyfunction]
+fn decode_liquidation_config<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+    let value = core_sdk::governance_reads::decode_liquidation_config(bytes)
+        .map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &value).map_err(map_pythonize_err)
+}
+
 /// Strict, type-preserving MessagePack preflight for gateway read payloads.
 ///
 /// Rejects the float families that Python would otherwise keep distinct from a
@@ -278,6 +292,21 @@ fn decode_markets_snapshot<'py>(
 #[pyfunction]
 fn reject_floats(bytes: &[u8]) -> PyResult<()> {
     core_sdk::msgpack::reject_floats(bytes).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Decode owner-bound resting orders with the shared proof-wire DTO.
+#[pyfunction]
+fn decode_open_orders<'py>(
+    py: Python<'py>,
+    bytes: &[u8],
+    owner: &[u8],
+) -> PyResult<Bound<'py, PyAny>> {
+    let owner: [u8; 20] = owner
+        .try_into()
+        .map_err(|_| PyValueError::new_err("owner must be exactly 20 bytes"))?;
+    let orders =
+        core_sdk::reads::decode_open_orders(bytes, &owner).map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &orders).map_err(map_pythonize_err)
 }
 
 /// Derive a 20-byte owner address from a 32-byte Ed25519 public key.
@@ -498,12 +527,23 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(encode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_tx, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_authorities, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_liquidation_config, m)?)?;
+    m.add(
+        "MAX_GOVERNANCE_READ_BYTES",
+        core_sdk::governance_reads::MAX_GOVERNANCE_READ_BYTES,
+    )?;
     m.add_function(wrap_pyfunction!(decode_markets_snapshot, m)?)?;
     m.add(
         "MAX_MARKETS_SNAPSHOT_BYTES",
         market_snapshot::MAX_SNAPSHOT_BYTES,
     )?;
     m.add_function(wrap_pyfunction!(reject_floats, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_open_orders, m)?)?;
+    m.add(
+        "MAX_OPEN_ORDERS_BYTES",
+        core_sdk::reads::MAX_OPEN_ORDERS_BYTES,
+    )?;
     m.add_function(wrap_pyfunction!(pubkey_to_owner, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;
     m.add_function(wrap_pyfunction!(chain_id_from_string, m)?)?;

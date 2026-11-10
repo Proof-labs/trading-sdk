@@ -38,12 +38,12 @@ def no_wait(monkeypatch, stream):
 
 @pytest.mark.parametrize("code", [401, 403])
 def test_upgrade_refusal_before_any_connection_still_fails(monkeypatch, code):
-    calls = connections(monkeypatch, [OSError("offline"), refusal(code)])
+    calls = connections(monkeypatch, [refusal(code)])
     stream = AccountEventStream("wss://gateway.example", OWNER)
     waits = no_wait(monkeypatch, stream)
     with pytest.raises(AuthenticationError):
         next(iter(stream))
-    assert len(calls) == 2 and waits == [0.5]
+    assert len(calls) == 1 and waits == []
     assert stream._closed
 
 

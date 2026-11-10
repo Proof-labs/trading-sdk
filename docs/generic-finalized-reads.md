@@ -81,7 +81,7 @@ when absence or coverage matters.
 New hex read fields use `HexAddress`, `Hash32Hex` and `MarketId`, constructed by
 shared validators. Existing byte-address trading types stay unchanged.
 `RawOpenOrder` is a stored engine tuple with queue priority and original/filled
-quantity; `OpenOrder` is the existing user-facing projection with byte owners.
+quantity; `OpenOrder` carries the same fields with byte owners.
 `ParticipantTrade` preserves both counterparties, exact indexed NUMERIC strings,
 integer fee units and block provenance. The indexer stores the engine's fill
 `price` attribute verbatim, so current-engine rows are integer micro-USDC

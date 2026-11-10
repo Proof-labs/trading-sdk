@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import inspect
 import json
@@ -18,8 +19,10 @@ import msgpack
 
 from proof_trading_sdk._native import (
     MAX_MARKETS_SNAPSHOT_BYTES,
+    MAX_OPEN_ORDERS_BYTES,
     SigningHandle,
     chain_id_from_string,
+    decode_open_orders,
     generate_keypair,
     pubkey_to_owner,
     reject_floats,
@@ -39,6 +42,16 @@ from proof_trading_sdk.actions import (
     encode_action,
 )
 from proof_trading_sdk.config import SdkConfig, load_config
+from proof_trading_sdk.governance_reads import (
+    AuthoritiesSnapshot, LiquidationConfigInfo,
+    decode_authorities_snapshot, decode_liquidation_config_info,
+)
+from proof_trading_sdk.candle_history import (
+    CandleHistoryPage,
+    CandleHistoryTime,
+    candle_history_params,
+    decode_candle_history,
+)
 from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
 from proof_trading_sdk.errors import (
     AuthenticationError,
@@ -68,8 +81,7 @@ from proof_trading_sdk.trigger_config import (
 )
 
 if t.TYPE_CHECKING:
-    from proof_trading_sdk.streams import AccountEventStream
-    from proof_trading_sdk.trade_stream import PublicTradeStream
+    from proof_trading_sdk.streams import AccountEventStream, PublicTradeStream
 
 log = logging.getLogger("proof_trading_sdk")
 
@@ -77,6 +89,7 @@ log = logging.getLogger("proof_trading_sdk")
 
 
 _LEADING_ERROR_CODE = re.compile(r"^(\d+):\s")
+_DEFAULT_RATE_LIMIT_BUCKET = "default"
 
 
 def _leading_error_code(text: str) -> int | None:
@@ -324,7 +337,7 @@ class ExchangeClient:
     # ── Rate-limit helpers ───────────────────────────────────────────────
 
     def _parse_rate_limits(self, resp: httpx.Response) -> None:
-        bucket = resp.headers.get("X-RateLimit-Bucket", "default")
+        bucket = resp.headers.get("X-RateLimit-Bucket", _DEFAULT_RATE_LIMIT_BUCKET)
         state = RateLimitState(
             limit=int(resp.headers.get("X-RateLimit-Limit", 0)),
             remaining=int(resp.headers.get("X-RateLimit-Remaining", 0)),
@@ -334,7 +347,7 @@ class ExchangeClient:
         )
         self._rate_limits[bucket] = state
 
-    def rate_limit_remaining(self, bucket: str = "orders") -> int:
+    def rate_limit_remaining(self, bucket: str = _DEFAULT_RATE_LIMIT_BUCKET) -> int:
         """Return the remaining rate-limit tokens for *bucket*.
 
         This is a synchronous, local check — the authoritative value is
@@ -343,7 +356,12 @@ class ExchangeClient:
         state = self._rate_limits.get(bucket)
         return state.remaining if state else 0
 
-    def rate_limit_state(self, bucket: str = "orders") -> RateLimitState:
+    def rate_limit_state(self, bucket: str = _DEFAULT_RATE_LIMIT_BUCKET) -> RateLimitState:
+        """Return cached response headers for *bucket*.
+
+        Responses without ``X-RateLimit-Bucket`` use ``"default"``. After a
+        429, pass ``RateLimited.bucket`` to retrieve that response's state.
+        """
         return self._rate_limits.get(bucket, RateLimitState())
 
     # ── HTTP helpers ─────────────────────────────────────────────────────
@@ -381,7 +399,7 @@ class ExchangeClient:
     def _check_response(self, resp: httpx.Response) -> httpx.Response:
         if resp.status_code == 429:
             retry_after = float(resp.headers.get("Retry-After", "5"))
-            bucket = resp.headers.get("X-RateLimit-Bucket", "")
+            bucket = resp.headers.get("X-RateLimit-Bucket", _DEFAULT_RATE_LIMIT_BUCKET)
             raise RateLimited(retry_after_secs=retry_after, bucket=bucket)
 
         if resp.status_code == 401:
@@ -871,25 +889,33 @@ class ExchangeClient:
     def open_orders(self, owner: bytes | str) -> list[dict[str, t.Any]]:
         """Open orders for *owner* via ``POST /info`` (``openOrders``).
 
-        Each order decodes from a msgpack 6-tuple
-        ``[id, market, owner, side, price, quantity]`` (mirrors TS
-        ``queryOpenOrders``).
+        Returns every field in the shared wire Order, including
+        ``client_order_id``, original/filled quantity, placement time, queue
+        priority, time in force and post/reduce-only flags. Integers remain
+        exact; ``owner`` is bytes. Legacy six-field rows use wire defaults
+        (client ID None, metadata 0, Gtc, false flags).
+
+        The gateway refuses a response body over 1 MiB rather than returning a
+        shorter list. This read does not verify a finalized-state witness.
+        Malformed or foreign rows raise CodecError instead of becoming empty state.
         """
-        raw = self._post_info({"type": "openOrders", "user": _to_hex(owner)})
-        if not isinstance(raw, (list, tuple)):
-            return []
-        return [
-            {
-                "id": int(o[0]),
-                "market": int(o[1]),
-                "owner": self._to_bytes(o[2]),
-                "side": o[3],
-                "price": int(o[4]),
-                "quantity": int(o[5]),
-            }
-            for o in raw
-            if isinstance(o, (list, tuple)) and len(o) >= 6
-        ]
+        owner_hex = canonical_owner(owner)
+        resp = self._request(
+            "POST", "/info",
+            content=json.dumps({"type": "openOrders", "user": owner_hex}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        payload = _response_object(resp)
+        if payload.get("error") is not None:
+            raise ProofTradingSdkError(f"gateway error for openOrders: {payload['error']}")
+        encoded = payload.get("data")
+        if not isinstance(encoded, str) or len(encoded) > 4 * ((MAX_OPEN_ORDERS_BYTES + 2) // 3):
+            raise CodecError("invalid open orders data envelope")
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+            return decode_open_orders(raw, bytes.fromhex(owner_hex))
+        except (ValueError, binascii.Error) as exc:
+            raise CodecError("invalid open orders response") from exc
 
     def sub_account_list(self, owner: bytes | str) -> list[dict[str, t.Any]]:
         """Registry rows for *owner* via ``POST /info`` (``subAccountList``).
@@ -960,6 +986,22 @@ class ExchangeClient:
     def nonce_info(self, owner: bytes | str) -> dict[str, t.Any]:
         resp = self._get(f"/v1/nonce/{_to_hex(owner)}")
         return _response_object(resp)
+
+    def authorities(self) -> AuthoritiesSnapshot:
+        """Read the six operator-authority sets. HTTP/decode failures remain errors.
+
+        Addresses are 20-byte values. These are gateway-reported membership
+        facts, without a witness or proof of action authorization.
+        """
+        return decode_authorities_snapshot(_response_object(self._get("/v1/admin/authorities")))
+
+    def liquidation_config(self) -> LiquidationConfigInfo:
+        """Read the stored global liquidation configuration and exact sequence.
+
+        No default configuration is synthesized on a failed read. Retired
+        pacing fields are preserved as wire facts, not enforced limits.
+        """
+        return decode_liquidation_config_info(_response_object(self._get("/v1/liquidation-config")))
 
     def _get_data(self, path: str, params: dict[str, t.Any] | None = None) -> t.Any:
         """GET a ``/v1/*`` read endpoint and decode the ``{data: base64 msgpack}``
@@ -1425,7 +1467,32 @@ class ExchangeClient:
         resp = self._get(f"/v1/trades/{market}")
         return _response_json(resp)
 
-    # ── History (cursor-paginated) ───────────────────────────────────────
+    # ── History ─────────────────────────────────────────────────────────
+
+    def history_candles(
+        self,
+        market: int,
+        resolution: str = "1m",
+        *,
+        from_: CandleHistoryTime | None = None,
+        to: CandleHistoryTime | None = None,
+        limit: int = 1500,
+    ) -> CandleHistoryPage:
+        """Durable OHLCV history through ``GET /v1/history/candles``.
+
+        Times accept RFC3339 strings or integer epoch milliseconds. The newest
+        ``limit`` buckets in the window are returned oldest first; empty buckets
+        are omitted. Prices and volumes remain exact decimal strings. Read older
+        bars with ``to=page.candles[0].time`` when ``page.has_more`` is true.
+        An empty window can still have older history; use ``to=page.from_`` then.
+        Coarser boundary bars may be partial, including under the server's
+        default window; align ``from_`` and ``to`` for complete bars.
+        The server rejects windows wider than roughly 50,000 resolution widths.
+        This is an indexer read, not a witnessed finalized-state proof.
+        """
+        params = candle_history_params(market, resolution, from_, to, limit)
+        body = _response_json(self._get("/v1/history/candles", params))
+        return decode_candle_history(body, market=market, resolution=resolution, limit=limit)
 
     def history_fills(
         self,
@@ -1754,7 +1821,7 @@ class ExchangeClient:
         stream explicitly or use it as a context manager; it owns its socket
         independently of the client's HTTP transport.
         """
-        from proof_trading_sdk.trade_stream import PublicTradeStream
+        from proof_trading_sdk.streams import PublicTradeStream
 
         return PublicTradeStream(
             ws_url or self._gateway_url.replace("http", "ws", 1),

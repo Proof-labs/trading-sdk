@@ -57,6 +57,93 @@ hash as `tx_hash`; reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
+## Governance reads
+
+```python
+authorities = client.authorities()
+config = client.liquidation_config()
+print(authorities.relayer, config.sequence, config.config.takeover_discount_bps)
+```
+
+`authorities()` reads `/v1/admin/authorities` as `AuthoritiesSnapshot`: six
+lists of 20-byte addresses (`relayer`, `oracle`, `cex_composite`, `custody`,
+`market_params`, `scheduled_ops`). Empty sets are valid; a failed read raises
+instead of returning empty sets. Membership facts do not prove that a proposed
+action is authorized or that the response is authentic.
+
+`liquidation_config()` reads `/v1/liquidation-config` as `LiquidationConfigInfo`
+with exact integer `sequence` and typed `config`. The config includes
+`target_ratio_bps`, `full_close_threshold` (numerator/denominator),
+`partial_penalty_bps`, `max_book_orders`, `max_committed_fills`, and
+`takeover_discount_bps`. The two pacing fields remain readable for wire
+compatibility; the engine no longer applies those caps. Legacy five-field
+configs default the takeover discount to 50, matching the canonical wire type.
+Read decoding preserves numeric facts without enforcing action-admission rules.
+For example, a structurally valid `full_close_threshold` with denominator zero
+is returned unchanged, matching TypeScript. Check the denominator before division;
+successful decoding does not establish that a configuration is usable.
+
+`decode_authorities_snapshot` and `decode_liquidation_config_info` accept the
+complete gateway `{"data": "<base64 MessagePack>"}` envelope. Rust owns the wire
+decoding. Exact tuple widths, address lengths, integer ranges, 4096 entries per
+authority set, and a 1 MiB decoded payload cap are checked; the byte cap can be
+reached first when every set is near full. Malformed data raises `CodecError`; HTTP failures retain existing SDK exceptions with no fallback.
+These methods use the existing client transport and configured timeout; the
+payload cap is checked after HTTP buffering and is not a streaming HTTP-body
+limit. They return no finalized witness or cryptographic proof.
+
+## Candle history
+
+`history_candles` reads durable OHLCV bars through the gateway's
+`/v1/history/candles`. Prices and volumes remain decimal strings; timestamps
+retain the server's original strings, including nanoseconds and extended years
+in wide historical windows. No float conversion is applied.
+
+Values retain the indexer's stored units: `volume` sums raw fill quantities,
+and `quote_volume` sums stored price × raw quantity. These are not automatically
+converted to human-size units or USDC; historical archives may use a different
+price representation. Apply the market and data-era scaling contract before
+displaying monetary values.
+
+```python
+page = client.history_candles(7, "1h", limit=100)
+if page.has_more:
+    older_than = page.candles[0].time if page.candles else page.from_
+    page = client.history_candles(7, "1h", to=older_than, limit=100)
+```
+
+The newest bars in the requested window are returned oldest first. Empty
+buckets are omitted. `from_` and `to` accept RFC3339 or integer epoch
+milliseconds; `to` is exclusive. Omit `from_` when paging backward to let the
+server choose the older window. `earliest` is null when no history exists.
+The server accepts unsigned four-digit years in RFC3339 request strings;
+extended-year response boundaries require integer epoch milliseconds if reused
+as request parameters.
+Resolutions use a positive count (1–9999) followed by `m`, `h`, `d`, `w`, `M`
+or `y`; uppercase `M` means calendar months. The server decides which resolutions
+its deployed version accepts. `limit` is 1–5000 (default 1500).
+The server rejects windows wider than roughly 50,000 resolution widths with
+`window_too_large`; request a narrower time window even when `limit` is small.
+Coarser candles aggregate only source rows inside the requested window, so a
+boundary candle may be partial and its label may precede `from_`. Align window
+edges to the resolution boundaries when complete historical bars are required;
+paging by that partial bar's label does not recover its excluded source rows.
+This also applies to a call that omits `from_` on a stride that is not a native
+bar (for example `5m`), because the server's default window is not aligned. In
+that case `candles[0].time < from_` marks a partial first bar, and its missing
+rows are not returned by later pages. Pass aligned `from_` and `to` for complete
+history. Native `1m`, `1h` and `1d` bars and calendar strides are not affected.
+
+These are indexer observations, not witnessed finalized-state proofs. A failed
+or malformed read raises an SDK error, rather than becoming an empty page.
+
+## Python coverage
+
+Track the remaining Python capabilities and their PRs in
+[#362](https://github.com/Proof-labs/trading-sdk/issues/362).
+This change covers candle history; capabilities in other open PRs become
+available when those changes are merged and released.
+
 ## Callback signer
 
 ```python
@@ -125,7 +212,8 @@ budget. The synchronous iterator performs retries while it is being consumed;
 fixed `SigningError` text and omit other exception text, which could expose
 sensitive diagnostics. HTTP 401/403
 refusals during the WebSocket upgrade raise `AuthenticationError` before the
-first successful connection. On reconnect, they follow `reconnect_attempts`
+first successful connection; other connection failures raise `TransportError`
+with the HTTP status when available. On reconnect, failures follow `reconnect_attempts`
 and the normal backoff (`None` retries indefinitely), preserving recovery state.
 `close()` cancels the wait. This is separate from subscription-error frames.
 
@@ -134,6 +222,15 @@ The optional cursor must be a Python integer in `0..2**53 - 1`, matching the TS
 SDK's JSON-safe domain. Zero is signed but omitted from the returned parameters.
 Direct helper failures raise `SigningError`. The default account stream signs
 cursor zero; its history-based reconnect recovery does not change this cursor.
+
+All three stream classes share connection, cleanup and reconnect handling in
+`streams.py`. Initial connection failures surface immediately (`AuthenticationError`
+for HTTP 401/403, `TransportError` otherwise), including for orderbook streams.
+After connecting once, they retry with cancelable exponential backoff. Account
+streams retain their reconnect budget, signed-subscription retries and history
+recovery. Each stream accepts base URLs or `/ws` endpoints and permits only one
+active iterator. Closing the iterator closes its stream; context managers and
+`close()` also release the socket and cancel backoff waits.
 
 ## Public trade stream
 
@@ -188,6 +285,22 @@ library's 10-second close timeout.
 
 `websockets` 15 connects through proxies named by environment variables such as
 `HTTPS_PROXY` by default, and this applies to every WebSocket in this package.
+
+## Resting orders
+
+`client.open_orders(owner)` returns the shared wire order fields, including
+`client_order_id`, `original_quantity`, `filled_quantity`, `created_at_ms`,
+`queue_priority`, `time_in_force`, `post_only` and `reduce_only`. Integer values
+remain exact; `owner` is 20-byte `bytes`. A missing client ID is `None`.
+Legacy six-field orders use the wire's defaults for appended fields: `None`,
+zero, `Gtc` and false flags. Zero placement time means no timestamp was recorded.
+
+Malformed or wrong-owner responses, duplicate/out-of-order IDs, zero remaining
+quantity, and decoded MessagePack payloads over 1 MiB raise `CodecError`.
+This read sends no `limit`, and the gateway refuses a response body over 1 MiB
+rather than returning a shorter list, so a very large account gets an error. The
+read does not verify a finalized-state witness. The remaining Python API gaps are tracked in
+[#362](https://github.com/Proof-labs/trading-sdk/issues/362).
 
 ## Typed actions
 

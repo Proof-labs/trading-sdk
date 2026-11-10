@@ -523,4 +523,4 @@ def test_client_stream_reads_history_from_the_gateway_url() -> None:
     client = ExchangeClient(gateway_url="https://gateway.example", chain_id=b"\x00" * 32)
     stream = client.account_event_stream(OWNER, ws_url="wss://ws.gateway.example:9091")
     assert stream._history_url == "https://gateway.example"
-    assert stream._ws_url == "wss://ws.gateway.example:9091"
+    assert stream._ws_url == "wss://ws.gateway.example:9091/ws"
