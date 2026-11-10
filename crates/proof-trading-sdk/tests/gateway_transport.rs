@@ -140,7 +140,9 @@ async fn exact_signed_request_and_committed_execution_are_distinct_from_permissi
         SubmissionOutcome::Committed(CommittedReceipt {
             hash,
             height: BlockHeight::new(17).expect("a positive fixture height"),
-            code: 21
+            code: 21,
+            log: String::new(),
+            events: Vec::new(),
         })
     );
     let request = String::from_utf8(task.await.unwrap()).unwrap();

@@ -84,19 +84,15 @@ async fn main() -> AnyResult<()> {
         )
         .await?;
     println!(
-        "placed {}: success={} code={:?}",
+        "placed {}: order={:?} error={:?}",
         placed.tx.hash,
-        placed.is_success(),
-        placed.error_code()
+        placed.receipt().and_then(proof_sdk_rs::Receipt::order_id),
+        placed.error()
     );
 
     if let Some(cid) = cid.filter(|_| placed.is_success()) {
         let cancelled = client.cancel_client_order(cid).await?;
-        println!(
-            "cancelled {}: {:?}",
-            cancelled.tx.hash,
-            cancelled.error_code()
-        );
+        println!("cancelled {}: {:?}", cancelled.tx.hash, cancelled.error());
     }
     Ok(())
 }

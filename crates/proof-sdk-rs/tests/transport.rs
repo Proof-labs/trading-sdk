@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use proof_sdk_rs::{
-    Action, Address, ClientConfig, Error, ExchangeClient, LocalSigner, RefusalReason, Side, TxHash,
-    TxStatus,
+    Action, Address, ClientConfig, EngineError, Error, ErrorKind, ExchangeClient, LocalSigner,
+    RefusalReason, Side, TxHash, TxStatus,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -72,19 +72,24 @@ fn cancel_all(c: &ExchangeClient) -> Action {
 }
 
 #[tokio::test]
-async fn place_order_posts_the_signed_bytes_and_reads_a_committed_verdict() {
+async fn place_order_posts_the_signed_bytes_and_reads_the_committed_events() {
     let c = client("http://127.0.0.1:1");
     let order = c.limit_order(1, Side::Buy, 66_000_000_000, 2);
     let tx = c.sign(&Action::PlaceOrder(order)).unwrap();
     let (url, log) = fixture(vec![(
         200,
-        json!({"status":"ok","txHash":tx.hash.to_string(),"code":0,"height":42}),
+        // As devnet answers a resting order.
+        json!({"status":"ok","txHash":tx.hash.to_string(),"code":0,"height":42,"log":"",
+               "events":[{"type":"order_placed","attributes":[{"index":false,"key":"order_id","value":"33514"}]}]}),
     )])
     .await;
     let c = client(&url);
     let submitted = c.send(&tx).await.unwrap();
     assert!(submitted.is_success());
-    assert_eq!(submitted.error_code(), None);
+    assert_eq!(submitted.error(), None);
+    let receipt = submitted.receipt().unwrap();
+    assert_eq!(receipt.order_id(), Some(33514));
+    assert_eq!(receipt.events[0].kind, "order_placed");
 
     let (target, body) = log.lock().unwrap()[0].clone();
     assert_eq!(target, "POST /exchange");
@@ -96,7 +101,7 @@ async fn place_order_posts_the_signed_bytes_and_reads_a_committed_verdict() {
 }
 
 #[tokio::test]
-async fn a_checktx_rejection_surfaces_its_engine_code() {
+async fn a_checktx_rejection_surfaces_a_typed_engine_error() {
     let c = client("http://127.0.0.1:1");
     let tx = c.sign(&cancel_all(&c)).unwrap();
     let (url, _) = fixture(vec![(
@@ -106,7 +111,50 @@ async fn a_checktx_rejection_surfaces_its_engine_code() {
     .await;
     let s = client(&url).send(&tx).await.unwrap();
     assert!(!s.is_success());
-    assert_eq!(s.error_code(), Some(12));
+    assert_eq!(
+        s.error(),
+        Some(EngineError::Known(ErrorKind::InsufficientMargin))
+    );
+    assert_eq!(
+        s.status,
+        TxStatus::Rejected(EngineError::Known(ErrorKind::InsufficientMargin))
+    );
+}
+
+#[tokio::test]
+async fn a_failure_in_the_block_is_typed_from_its_code_and_log() {
+    let c = client("http://127.0.0.1:1");
+    let tx = c.sign(&cancel_all(&c)).unwrap();
+    let (url, _) = fixture(vec![
+        (
+            200,
+            json!({"status":"error","txHash":tx.hash.to_string(),"code":44,"height":9,"log":"client order id not found","events":[]}),
+        ),
+        (
+            200,
+            json!({"status":"error","txHash":tx.hash.to_string(),"code":50,"height":9,
+                   "log":"atomic basket aggregate slippage exceeded","events":[]}),
+        ),
+        (
+            200,
+            json!({"status":"error","txHash":tx.hash.to_string(),"code":60_000,"height":9,"events":[]}),
+        ),
+    ])
+    .await;
+    let c = client(&url);
+    let gone = c.send(&tx).await.unwrap().error().unwrap();
+    assert!(gone.is_order_not_found());
+    assert_eq!(gone.code(), 44);
+    assert_eq!(
+        c.send(&tx).await.unwrap().error(),
+        Some(EngineError::Known(ErrorKind::SlippageExceeded)),
+        "code 50 reads from its log"
+    );
+    assert_eq!(
+        c.send(&tx).await.unwrap().error(),
+        Some(EngineError::Unknown(60_000)),
+        "a code newer than the SDK keeps its number"
+    );
 }
 
 #[tokio::test]
@@ -119,7 +167,8 @@ async fn a_pending_submission_reconciles_through_its_receipt() {
         (404, json!({"error":"not found"})),
         (
             200,
-            json!({"result":{"hash":hash.to_string(),"height":"7","tx_result":{"code":0}}}),
+            json!({"result":{"hash":hash.to_string(),"height":"7","tx_result":{"code":0,"log":"",
+                "events":[{"type":"order_cancelled","attributes":[{"key":"order_id","value":"5"}]}]}}}),
         ),
     ])
     .await;
@@ -130,8 +179,9 @@ async fn a_pending_submission_reconciles_through_its_receipt() {
         .wait_for_receipt(hash, Duration::from_secs(5))
         .await
         .unwrap();
-    assert_eq!(receipt.code, 0);
+    assert!(receipt.is_success());
     assert_eq!(receipt.height, 7);
+    assert_eq!(receipt.events[0].attribute("order_id"), Some("5"));
     let targets: Vec<String> = log.lock().unwrap().iter().map(|r| r.0.clone()).collect();
     assert_eq!(targets[1], format!("GET /v1/tx/{hash}"));
 }
@@ -242,11 +292,7 @@ async fn a_gateway_refusal_is_typed_with_its_retry_hint() {
     let s = client(&url).send(&tx).await.unwrap();
     assert_eq!(s.status, TxStatus::Refused(RefusalReason::RateLimited));
     assert!(!s.is_success() && !s.is_pending());
-    assert_eq!(
-        s.error_code(),
-        None,
-        "a gateway refusal is not an engine error"
-    );
+    assert_eq!(s.error(), None, "a gateway refusal is not an engine error");
     // 1501 ms rounds up to whole seconds, never down.
     assert_eq!(s.retry_after, Some(Duration::from_secs(2)));
 }

@@ -8,12 +8,26 @@
 
 macro_rules! define_error_kinds {
     ($($code:literal => $name:ident ~ $meaning:literal),+ $(,)?) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        /// A named engine result code. New codes arrive as the engine
+        /// grows, so match with a wildcard arm.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        #[non_exhaustive]
         pub enum ErrorKind {
             $($name,)+
         }
 
         impl ErrorKind {
+            /// The kind with this numeric code, if this SDK knows it. Code 50
+            /// reads as `SlippageExceeded`; use [`decode_exec_error_kind`]
+            /// with the log when talking to an engine mid-upgrade.
+            #[must_use]
+            pub fn from_code(code: u32) -> Option<Self> {
+                match code {
+                    $($code => Some(Self::$name),)+
+                    _ => None,
+                }
+            }
+
             pub fn code(self) -> u32 {
                 match self {
                     $(Self::$name => $code,)+

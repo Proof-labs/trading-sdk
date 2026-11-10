@@ -312,6 +312,8 @@ async fn exact_hash_execution_outcomes_keep_the_existing_contract() {
                 hash,
                 height: BlockHeight::new(12).expect("a positive fixture height"),
                 code: 0,
+                log: String::new(),
+                events: Vec::new(),
             }),
         ),
         (
@@ -320,6 +322,8 @@ async fn exact_hash_execution_outcomes_keep_the_existing_contract() {
                 hash,
                 height: BlockHeight::new(12).expect("a positive fixture height"),
                 code: 21,
+                log: String::new(),
+                events: Vec::new(),
             }),
         ),
         (

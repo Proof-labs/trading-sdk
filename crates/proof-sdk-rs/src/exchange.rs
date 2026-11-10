@@ -5,14 +5,15 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use proof_trading_sdk::gateway::{
-    CommittedReceipt, ErrorKind, MaintenanceMode, PreAdmissionRefusal, RetryAfter,
-    SubmissionOutcome, TxHash,
+    CommittedReceipt, ErrorKind as GatewayErrorKind, MaintenanceMode, PreAdmissionRefusal,
+    RetryAfter, SubmissionOutcome, TxEvent, TxHash,
 };
 use proof_trading_sdk::types::{
     Action, AmendOrder, CancelAllOrders, CancelClientOrder, CancelOrder, CancelReplaceOrder,
     ClosePosition, MarketId, MarketOrder, OrderId, PlaceOrder, Side,
 };
 use proof_trading_sdk::{codec, crypto, Signer};
+use proof_trading_sdk::{decode_exec_error_kind, DecodedExecErrorKind, ErrorKind};
 
 use crate::address::Address;
 use crate::error::{Error, Result};
@@ -42,21 +43,95 @@ impl fmt::Debug for SignedTx {
     }
 }
 
-/// A committed transaction's result.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Why the engine refused a transaction.
+///
+/// `Unknown` keeps the number for a code this SDK predates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum EngineError {
+    Known(ErrorKind),
+    Unknown(u32),
+}
+
+impl EngineError {
+    /// Classify a nonzero engine `code`, reading `log` where the code alone
+    /// is ambiguous (50 during the open-interest/slippage renumbering).
+    #[must_use]
+    pub fn new(code: u32, log: Option<&str>) -> Self {
+        match decode_exec_error_kind(code, log) {
+            Some(DecodedExecErrorKind::Known(kind)) => Self::Known(kind),
+            Some(DecodedExecErrorKind::SlippageExceeded) => {
+                Self::Known(ErrorKind::SlippageExceeded)
+            }
+            Some(DecodedExecErrorKind::LegacyOpenInterestLimitExceeded) => {
+                Self::Known(ErrorKind::OpenInterestLimitExceeded)
+            }
+            Some(DecodedExecErrorKind::AmbiguousCode50) | None => Self::Unknown(code),
+        }
+    }
+
+    /// The engine's numeric code.
+    #[must_use]
+    pub fn code(self) -> u32 {
+        match self {
+            Self::Known(kind) => kind.code(),
+            Self::Unknown(code) => code,
+        }
+    }
+
+    /// The order a cancel, amend or replace named no longer rests (filled,
+    /// cancelled or never placed).
+    #[must_use]
+    pub fn is_order_not_found(self) -> bool {
+        matches!(
+            self,
+            Self::Known(ErrorKind::OrderNotFound | ErrorKind::ClientOrderIdNotFound)
+        )
+    }
+}
+
+impl fmt::Display for EngineError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Known(kind) => write!(f, "{} ({})", kind.name(), kind.code()),
+            Self::Unknown(code) => write!(f, "engine error {code}"),
+        }
+    }
+}
+
+/// A committed transaction's result: where it landed, whether it worked, and
+/// what it did.
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Receipt {
     pub hash: TxHash,
     /// The block it executed in.
     pub height: u64,
-    /// 0 is success; anything else is an engine error code.
-    pub code: u32,
+    /// `None` is success.
+    pub error: Option<EngineError>,
+    /// The engine's log, unchanged.
+    pub log: String,
+    /// What the transaction did, in order: `order_placed`, `trade_executed`,
+    /// `order_cancelled`, ... An order that fully fills on arrival emits
+    /// trades and no `order_placed`; an IOC remainder or a refused post-only
+    /// emits neither.
+    pub events: Vec<TxEvent>,
 }
 
 impl Receipt {
     #[must_use]
     pub fn is_success(&self) -> bool {
-        self.code == 0
+        self.error.is_none()
+    }
+
+    /// The id of the order this transaction rested on the book, if it
+    /// rested one (`order_placed`).
+    #[must_use]
+    pub fn order_id(&self) -> Option<OrderId> {
+        self.events
+            .iter()
+            .find(|e| e.kind == "order_placed")
+            .and_then(|e| e.attribute("order_id")?.parse().ok())
     }
 }
 
@@ -65,7 +140,9 @@ impl From<CommittedReceipt> for Receipt {
         Self {
             hash: r.hash,
             height: r.height.get(),
-            code: r.code,
+            error: (r.code != 0).then(|| EngineError::new(r.code, Some(&r.log))),
+            log: r.log,
+            events: r.events,
         }
     }
 }
@@ -106,13 +183,13 @@ impl From<PreAdmissionRefusal> for RefusalReason {
 }
 
 /// Where one submission ended up.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TxStatus {
-    /// Executed in a block. Check [`Receipt::code`]: 0 is success.
+    /// Executed in a block. Check [`Receipt::error`]: `None` is success.
     Committed(Receipt),
-    /// Refused at `CheckTx` with engine error `code`. It will never execute.
-    Rejected { code: u32 },
+    /// Refused at `CheckTx`. It will never execute.
+    Rejected(EngineError),
     /// Admitted with no verdict yet. Reconcile with
     /// [`ExchangeClient::wait_for_receipt`]; never re-sign.
     Pending,
@@ -136,7 +213,7 @@ impl Submitted {
     /// Executed in a block with code 0.
     #[must_use]
     pub fn is_success(&self) -> bool {
-        matches!(self.status, TxStatus::Committed(r) if r.is_success())
+        matches!(&self.status, TxStatus::Committed(r) if r.is_success())
     }
 
     /// Admitted, but no verdict yet.
@@ -145,15 +222,21 @@ impl Submitted {
         matches!(self.status, TxStatus::Pending)
     }
 
-    /// The engine error code, when the engine refused the transaction
-    /// (at `CheckTx`, or in the block). Decode it with
-    /// `proof_sdk_rs::core::decode_exec_error_kind(code, None)`. For example,
-    /// 12 is insufficient margin and 21 is an invalid nonce.
+    /// Why the engine refused the transaction, at `CheckTx` or in the block.
     #[must_use]
-    pub fn error_code(&self) -> Option<u32> {
-        match self.status {
-            TxStatus::Committed(r) if !r.is_success() => Some(r.code),
-            TxStatus::Rejected { code } => Some(code),
+    pub fn error(&self) -> Option<EngineError> {
+        match &self.status {
+            TxStatus::Committed(r) => r.error,
+            TxStatus::Rejected(e) => Some(*e),
+            _ => None,
+        }
+    }
+
+    /// The committed receipt, if the transaction executed.
+    #[must_use]
+    pub fn receipt(&self) -> Option<&Receipt> {
+        match &self.status {
+            TxStatus::Committed(r) => Some(r),
             _ => None,
         }
     }
@@ -175,7 +258,9 @@ fn retry_after(hint: Option<RetryAfter>) -> Option<Duration> {
 fn status(outcome: SubmissionOutcome<PreAdmissionRefusal>) -> TxStatus {
     match outcome {
         SubmissionOutcome::Committed(r) => TxStatus::Committed(r.into()),
-        SubmissionOutcome::CheckTxRejected { code, .. } => TxStatus::Rejected { code: code.get() },
+        SubmissionOutcome::CheckTxRejected { code, .. } => {
+            TxStatus::Rejected(EngineError::new(code.get(), None))
+        }
         SubmissionOutcome::Pending { .. } => TxStatus::Pending,
         SubmissionOutcome::RejectedBeforeAdmission { refusal, .. } => {
             TxStatus::Refused(refusal.into())
@@ -218,10 +303,12 @@ impl fmt::Debug for ExchangeClient {
 /// A receipt read that means "not committed yet" (404, the node's JSON-RPC
 /// not-found) or a transient failure. Anything else (401, 403, 429, a
 /// malformed answer) is returned, not hidden behind a timeout.
-fn still_pending(kind: ErrorKind) -> bool {
+fn still_pending(kind: GatewayErrorKind) -> bool {
     match kind {
-        ErrorKind::HttpStatus(status) => status == 404 || status >= 500,
-        ErrorKind::RpcUnavailable | ErrorKind::Transport | ErrorKind::Timeout => true,
+        GatewayErrorKind::HttpStatus(status) => status == 404 || status >= 500,
+        GatewayErrorKind::RpcUnavailable
+        | GatewayErrorKind::Transport
+        | GatewayErrorKind::Timeout => true,
         _ => false,
     }
 }

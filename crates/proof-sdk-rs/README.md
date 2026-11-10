@@ -53,8 +53,9 @@ async fn main() -> Result<(), proof_sdk_rs::Error> {
     order.post_only = true;
     order.client_order_id = Some(42);
     let placed = client.submit_and_wait(&Action::PlaceOrder(order), Duration::from_secs(10)).await?;
-    if let Some(code) = placed.error_code() {
-        eprintln!("refused: {:?}", proof_sdk_rs::core::decode_exec_error_kind(code, None));
+    match placed.error() {
+        None => println!("resting as order {:?}", placed.receipt().and_then(|r| r.order_id())),
+        Some(e) => eprintln!("refused: {e}"), // e.g. InsufficientMargin (12)
     }
 
     client.cancel_client_order(42).await?;
@@ -103,14 +104,20 @@ computed hash, a `TxStatus`, and `retry_after: Option<Duration>`:
 
 | `TxStatus`          | Meaning                                                                          |
 | ------------------- | -------------------------------------------------------------------------------- |
-| `Committed(receipt)` | In a block. `receipt.is_success()` (code 0), otherwise an engine error code.    |
-| `Rejected { code }` | Refused at `CheckTx`; it will never execute.                                     |
+| `Committed(receipt)` | In a block. `receipt.error` is `None` on success. `receipt.events` says what it did. |
+| `Rejected(error)`   | Refused at `CheckTx`; it will never execute.                                     |
 | `Pending`           | Admitted without a verdict yet; call `wait_for_receipt`.                         |
 | `Refused(reason)`   | Turned away by the gateway (`Unauthorized`, `RateLimited`, `Paused`, `CancelOnly`, `Unavailable`, `InvalidRequest`). |
 
-`is_success()`, `is_pending()` and `error_code()` cover the common checks. Error
-codes decode with `core::decode_exec_error_kind(code, None)` (for example 12 is insufficient
-margin and 21 is an invalid nonce).
+`is_success()`, `is_pending()`, `error()` and `receipt()` cover the common
+checks. An `EngineError` is `Known(ErrorKind)` (`InsufficientMargin`,
+`InvalidNonce`, ...) or `Unknown(code)` for a code newer than this SDK;
+`is_order_not_found()` says a cancel or replace found nothing to act on.
+
+The gateway answers once the transaction is in a block, so the receipt
+carries its events: `receipt.order_id()` is the resting order's id, and
+`trade_executed` events are the fills it took. An order that fully fills on
+arrival emits no `order_placed`.
 
 **Failed submissions.** The client posts once and keeps no state. An
 `Err` means no verdict came back; engine rejections and gateway refusals are
