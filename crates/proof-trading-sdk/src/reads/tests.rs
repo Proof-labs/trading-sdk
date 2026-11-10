@@ -71,6 +71,7 @@ fn inner(shape: &Shape, index: usize) -> &Shape {
 
 #[test]
 fn widths_and_nested_fields_follow_the_pinned_wire_types() {
+    assert_shape::<crate::types::Order>(&ORDER, &[]);
     assert_shape::<MarketConfig>(&MARKET_CONFIG, &["fee_tiers"]);
     assert_shape::<FeeTier>(inner(&MARKET_CONFIG, 0), &[]);
     assert_shape::<EventInfo>(&EVENT_INFO, &["attached_conditionals"]);
@@ -78,6 +79,87 @@ fn widths_and_nested_fields_follow_the_pinned_wire_types() {
     assert_shape::<AccountInfo>(&ACCOUNT_INFO, &["positions", "binding_scenario"]);
     assert_shape::<PositionBrief>(inner(&ACCOUNT_INFO, 0), &[]);
     assert_shape::<BindingScenario>(inner(&ACCOUNT_INFO, 1), &[]);
+}
+
+fn resting_order() -> crate::types::Order {
+    crate::types::Order {
+        id: 9_007_199_254_740_993,
+        market: 7,
+        owner: [0xab; 20],
+        side: crate::types::Side::Buy,
+        price: u64::MAX,
+        quantity: 20,
+        client_order_id: Some(u64::MAX),
+        original_quantity: 23,
+        filled_quantity: 3,
+        created_at_ms: 1_794_182_400_000,
+        queue_priority: u64::MAX,
+        time_in_force: crate::types::TimeInForce::Gtc,
+        post_only: true,
+        reduce_only: false,
+    }
+}
+
+#[test]
+fn open_orders_preserve_wire_metadata_and_bind_owner() {
+    let encoded = rmp_serde::to_vec(&vec![resting_order()]).unwrap();
+    let decoded = decode_open_orders(&encoded, &[0xab; 20]).unwrap();
+    assert_eq!(decoded[0].client_order_id, Some(u64::MAX));
+    assert_eq!(decoded[0].original_quantity, 23);
+    assert_eq!(decoded[0].filled_quantity, 3);
+    assert_eq!(decoded[0].queue_priority, u64::MAX);
+    assert!(decoded[0].post_only);
+    assert!(decode_open_orders(&encoded, &[0xcd; 20]).is_err());
+}
+
+#[test]
+fn open_orders_legacy_rows_use_wire_defaults() {
+    let encoded = rmp_serde::to_vec(&resting_order()).unwrap();
+    let mut row = rmpv::decode::read_value(&mut Cursor::new(encoded)).unwrap();
+    fields(&mut row).truncate(6);
+    let decoded = decode_open_orders(&bytes(&Value::Array(vec![row])), &[0xab; 20]).unwrap();
+    assert_eq!(decoded[0].client_order_id, None);
+    assert_eq!(decoded[0].original_quantity, 0);
+    assert_eq!(decoded[0].created_at_ms, 0);
+    assert!(!decoded[0].post_only);
+}
+
+#[test]
+fn open_orders_reject_overlong_or_non_byte_owners_before_wire_decode() {
+    let encoded = rmp_serde::to_vec(&resting_order()).unwrap();
+    let row = rmpv::decode::read_value(&mut Cursor::new(encoded)).unwrap();
+    for owner in [
+        Value::Binary(vec![0xab; 21]),
+        Value::Array(vec![Value::from(0xab); 21]),
+        Value::Array(vec![Value::from(256); 20]),
+        Value::Array(vec![Value::Boolean(true); 20]),
+    ] {
+        for width in [6, 14] {
+            let mut malformed = row.clone();
+            fields(&mut malformed).truncate(width);
+            fields(&mut malformed)[2] = owner.clone();
+            assert!(
+                decode_open_orders(&bytes(&Value::Array(vec![malformed])), &[0xab; 20]).is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn open_orders_reject_duplicate_ids_empty_orders_and_trailing_bytes() {
+    let duplicate = rmp_serde::to_vec(&vec![resting_order(), resting_order()]).unwrap();
+    assert!(decode_open_orders(&duplicate, &[0xab; 20]).is_err());
+    let mut empty = resting_order();
+    empty.quantity = 0;
+    assert!(decode_open_orders(&rmp_serde::to_vec(&vec![empty]).unwrap(), &[0xab; 20]).is_err());
+    let mut trailing = rmp_serde::to_vec(&vec![resting_order()]).unwrap();
+    trailing.push(0);
+    assert!(decode_open_orders(&trailing, &[0xab; 20]).is_err());
+    assert_eq!(
+        decode_open_orders(&vec![0; MAX_OPEN_ORDERS_BYTES + 1], &[0xab; 20])
+            .expect_err("a payload over the cap is refused"),
+        "open orders payload is too large"
+    );
 }
 
 /// One `MarketConfig` row as `rmp_serde::to_vec` writes it (no fee tiers).
