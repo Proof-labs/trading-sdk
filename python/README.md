@@ -102,20 +102,12 @@ history. Native `1m`, `1h` and `1d` bars and calendar strides are not affected.
 These are indexer observations, not witnessed finalized-state proofs. A failed
 or malformed read raises an SDK error, rather than becoming an empty page.
 
-## Python coverage still pending
+## Python coverage
 
-Tracked in [#362](https://github.com/Proof-labs/trading-sdk/issues/362):
-
-| Capability | Current Python contract / remaining work |
-| --- | --- |
-| Public trades | `trades(market)` is an HTTP read. A dedicated public trade subscription is not exposed. |
-| Finalized state and chain evidence | `status`, `get_block`, and `get_block_results` return gateway data. They do not verify witnesses or establish a trusted finalized checkpoint. Typed reads and the shared verifier still need Python bindings. |
-| Authority, financial state, liquidation configuration | No dedicated typed Python reads. Expose the shared Rust read decoders through PyO3 before adding methods; do not treat generic dictionaries as verified state. |
-| Callback signing | `secret_key` and `SigningHandle` (including PKCS#11) are supported. An arbitrary signing callback cannot be supplied to `ExchangeClient`. |
-| Resting order client IDs | `open_orders` returns six fields and omits `client_order_id`. Current upstream order reads support the field; Python needs the extended read contract and validation. Do not infer IDs from order placement or incomplete history. |
-
-`history_candles`, `market_stats` and `oracle_health` cover those portions of
-#362. The rows above remain open; raw HTTP calls outside the SDK are not a supported workaround.
+Track the remaining Python capabilities and their PRs in
+[#362](https://github.com/Proof-labs/trading-sdk/issues/362).
+Candle history and market observations are covered here; other capabilities become
+available when those changes are merged and released.
 
 ## Market observations
 
@@ -148,6 +140,12 @@ with the caller. HTTP failures raise existing SDK errors and malformed known
 fields raise `CodecError`, without synthesizing healthy or zero-valued results.
 Both methods use the existing buffered HTTP transport and configured timeout;
 these methods do not add a streaming response-size limit or a whole-call deadline.
+
+These JSON routes are decoded in Python; canonical MessagePack wire records
+use the shared Rust decoders through PyO3. Market-statistics timestamps match
+TypeScript `Date.parse`, including date overflow and `24:00:00` normalization.
+Candle timestamps instead require valid calendar dates and preserve nanoseconds.
+The parsers intentionally enforce different contracts.
 
 ## Typed actions
 
