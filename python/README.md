@@ -119,6 +119,10 @@ to be committed before retrying the same height.
 
 ## Finalized raw account state
 
+Owner arrays accept exact byte values (0–255) regardless of integer encoding width,
+matching TypeScript. Six-field position records default the omitted remainder to zero;
+that layout is not limited to historical records.
+
 `client.finalized_account_state(owner, timeout=5)` reads
 `/v1/account/{owner}/state?witness=1` and returns `FinalizedAccountState`.
 The existing `account()` method and its valued `AccountState` remain unchanged.
@@ -342,6 +346,8 @@ accepts out-of-order unique nonces within its window and rejects replays.
 - Wide engine window (+1 day / −2 days) tolerates NTP skew
 
 ### Finalized account reads
+
+Positions and open orders preserve market ID zero; market IDs use the wire u32 domain.
 
 ```python
 account = client.finalized_account(owner)

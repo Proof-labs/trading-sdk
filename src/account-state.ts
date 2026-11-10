@@ -47,15 +47,13 @@ function owner(value: unknown): string {
   if (!(value instanceof Uint8Array) && !Array.isArray(value))
     return invalid("owner");
   const bytes = Array.from(value as ArrayLike<unknown>);
-  if (
-    bytes.length !== 20 ||
-    bytes.some(
-      (b) => typeof b !== "number" || !Number.isInteger(b) || b < 0 || b > 255,
-    )
-  )
-    return invalid("owner");
-  return (bytes as number[])
-    .map((b) => b.toString(16).padStart(2, "0"))
+  if (bytes.length !== 20) return invalid("owner");
+  return bytes
+    .map((b) => {
+      const byte = integer(b, "owner byte");
+      if (byte > 255n) return invalid("owner byte");
+      return byte.toString(16).padStart(2, "0");
+    })
     .join("");
 }
 
