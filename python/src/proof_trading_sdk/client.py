@@ -1305,6 +1305,10 @@ class ExchangeClient:
         """Read a complete current list of explicit grants through the gateway.
 
         Refuses unavailable, malformed or incomplete (>100 grants) responses.
+        Incomplete lists raise AuthorizedAgentsIncomplete with diagnostic partial
+        grants and witness metadata. Owner/height mismatches raise
+        AuthorizedAgentsBindingMismatch. Both remain CodecError subclasses;
+        malformed responses raise CodecError.
         Owner-key and inherited master authority are not enumerated. Witness
         metadata is unverified; this read does not prove chain authenticity.
         Body/payload limits are 32/16 KiB. Timeout bounds each network wait and

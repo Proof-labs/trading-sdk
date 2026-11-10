@@ -20,7 +20,12 @@ from proof_trading_sdk._native import (
     MAX_AUTHORIZED_AGENTS_BYTES,
     decode_authorized_agents as _decode_wire,
 )
-from proof_trading_sdk.errors import CodecError, TransportError
+from proof_trading_sdk.errors import (
+    AuthorizedAgentsBindingMismatch,
+    AuthorizedAgentsIncomplete,
+    CodecError,
+    TransportError,
+)
 
 if TYPE_CHECKING:
     from proof_trading_sdk.client import ExchangeClient
@@ -28,6 +33,16 @@ if TYPE_CHECKING:
 _MAX_BODY = 32 * 1024
 _MAX_PAYLOAD = MAX_AUTHORIZED_AGENTS_BYTES
 _I64_MAX = (1 << 63) - 1
+
+
+@dataclass(frozen=True)
+class AuthorizedAgentsWitness:
+    """Unverified gateway finality metadata for a partial grant list."""
+
+    finalized_height: int
+    finalized_block_time_ms: int
+    node_id: str
+    app_hash: str
 
 
 @dataclass(frozen=True)
@@ -106,14 +121,20 @@ def _decode_snapshot(body: bytes, owner: str) -> AuthorizedAgentsSnapshot:
         decoded = _decode_wire(payload)
         bound_owner = bytes(decoded["owner"]).hex()
         if bound_owner != owner or decoded["finalized_height"] != height:
-            raise ValueError("owner or finalized height mismatch")
+            raise AuthorizedAgentsBindingMismatch(
+                expected_owner=owner, actual_owner=bound_owner,
+                expected_height=height, actual_height=decoded["finalized_height"],
+            )
         agents = tuple(bytes(agent).hex() for agent in decoded["agents"])
         if len(agents) > AUTHORIZED_AGENTS_LIMIT or any(a >= b for a, b in zip(agents, agents[1:])):
             raise ValueError(f"agent list must be sorted, unique and at most {AUTHORIZED_AGENTS_LIMIT} entries")
         if not decoded["complete"]:
             if len(agents) != AUTHORIZED_AGENTS_LIMIT:
                 raise ValueError("invalid incomplete list length")
-            raise CodecError(f"authorized agents: incomplete list (more than {AUTHORIZED_AGENTS_LIMIT} grants); no complete snapshot")
+            raise AuthorizedAgentsIncomplete(
+                owner, agents,
+                AuthorizedAgentsWitness(height, timestamp, node_id, app_hash.upper()),
+            )
         return AuthorizedAgentsSnapshot(owner, agents, height, timestamp, node_id, app_hash.upper())
     except (ValueError, TypeError, KeyError, RecursionError, binascii.Error) as error:
         raise CodecError(f"authorized agents: malformed response: {error}") from error

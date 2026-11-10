@@ -235,5 +235,15 @@ block time, node ID and app hash. This metadata is an **unverified gateway
 assertion**, not proof of chain authenticity, freshness, or permission to sign.
 HTTP bodies are capped at 32 KiB and canonical MessagePack payloads at 16 KiB.
 
+`AuthorizedAgentsIncomplete(CodecError)` carries the validated but partial
+`agents` tuple, `owner`, `complete=False`, and an immutable `witness` with
+`finalized_height`, `finalized_block_time_ms`, `node_id` and `app_hash`.
+Use it for diagnostics; a missing agent in that partial list proves nothing.
+`AuthorizedAgentsBindingMismatch(CodecError)` distinguishes payload owner/height
+mismatches and includes `expected_owner`, `actual_owner`, `expected_height` and
+`actual_height`. Malformed responses retain `CodecError`. Existing
+`except CodecError` handlers continue to catch all three cases.
+
 The gateway must serve `GET /v2/account/{owner}/agents?witness=1`.
 Unlike TypeScript's partial-result API, this Python method returns only complete snapshots.
+The incomplete exception does not provide pagination or recover the missing grants.

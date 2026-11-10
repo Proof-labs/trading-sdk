@@ -9,7 +9,14 @@ import httpx
 import msgpack
 import pytest
 
-from proof_trading_sdk import AuthorizedAgentsSnapshot, ExchangeClient, SdkConfig
+from proof_trading_sdk import (
+    AuthorizedAgentsBindingMismatch,
+    AuthorizedAgentsIncomplete,
+    AuthorizedAgentsSnapshot,
+    AuthorizedAgentsWitness,
+    ExchangeClient,
+    SdkConfig,
+)
 from proof_trading_sdk import _native
 from proof_trading_sdk.authorized_agents import _decode_snapshot
 import proof_trading_sdk.authorized_agents as module
@@ -74,8 +81,52 @@ def test_successive_fixture_snapshots_decode_independently():
 def test_exact_limit_complete_succeeds_but_partial_is_never_returned():
     agents = [n.to_bytes(20, "big") for n in range(100)]
     assert len(_decode_snapshot(body(raw(agents=agents)), HEX).agents) == 100
-    with pytest.raises(CodecError, match="incomplete list"):
+    response = body(raw(agents=agents, complete=False))
+    with client_for(lambda _: httpx.Response(200, content=response)) as client:
+        # Existing broad handlers still catch it; no partial snapshot is returned.
+        with pytest.raises(CodecError, match="incomplete list") as caught:
+            client.authorized_agents(OWNER)
+    error = caught.value
+    assert type(error) is AuthorizedAgentsIncomplete
+    assert error.complete is False
+    assert error.owner == HEX
+    assert error.agents == tuple(agent.hex() for agent in agents)
+    assert error.witness == AuthorizedAgentsWitness(HEIGHT, 123000, "ab" * 20, "CD" * 32)
+    with pytest.raises(FrozenInstanceError):
+        error.witness.finalized_height = 1
+
+
+@pytest.mark.parametrize("complete", [True, False])
+@pytest.mark.parametrize("wrong_owner,wrong_height", [(True, False), (False, True), (True, True)])
+def test_binding_mismatch_is_distinct_and_never_exposes_partial_grants(complete, wrong_owner, wrong_height):
+    actual_owner = bytes([3]) * 20 if wrong_owner else OWNER
+    actual_height = HEIGHT - 1 if wrong_height else HEIGHT
+    response = body(raw(
+        owner=actual_owner, finalized_height=actual_height, complete=complete,
+        agents=[n.to_bytes(20, "big") for n in range(100)],
+    ))
+    with client_for(lambda _: httpx.Response(200, content=response)) as client:
+        with pytest.raises(CodecError, match="owner or finalized height mismatch") as caught:
+            client.authorized_agents(OWNER)
+    error = caught.value
+    assert type(error) is AuthorizedAgentsBindingMismatch
+    assert (error.expected_owner, error.actual_owner) == (HEX, actual_owner.hex())
+    assert (error.expected_height, error.actual_height) == (HEIGHT, actual_height)
+    assert error.__cause__ is None
+    assert not hasattr(error, "agents")
+
+
+@pytest.mark.parametrize("agents", [
+    [n.to_bytes(20, "big") for n in range(99)],
+    [n.to_bytes(20, "big") for n in reversed(range(100))],
+    [bytes(20)] * 100,
+    [n.to_bytes(20, "big") for n in range(99)] + [bytes(19)],
+])
+def test_invalid_partial_data_stays_malformed_without_exposing_grants(agents):
+    with pytest.raises(CodecError) as caught:
         _decode_snapshot(body(raw(agents=agents, complete=False)), HEX)
+    assert type(caught.value) is CodecError
+    assert not hasattr(caught.value, "agents")
 
 
 @pytest.mark.parametrize("change", [

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Literal, Optional
+
+if TYPE_CHECKING:
+    from proof_trading_sdk.authorized_agents import AuthorizedAgentsWitness
 
 # Delay imports to avoid circular access during proof_trading_sdk init
 _ERROR_CODES: list[dict[str, object]] = []
@@ -56,6 +59,41 @@ class ProofTradingSdkError(Exception):
 
 class CodecError(ProofTradingSdkError):
     """MessagePack codec encoding or decoding failure."""
+
+
+class AuthorizedAgentsIncomplete(CodecError):
+    """A valid, bound response contains only part of the explicit grants.
+
+    ``agents`` is diagnostic partial data, never a complete authority list.
+    ``witness`` is an unverified gateway assertion, not a chain proof.
+    """
+
+    complete: Literal[False] = False
+
+    def __init__(
+        self, owner: str, agents: tuple[str, ...], witness: AuthorizedAgentsWitness,
+    ) -> None:
+        self.owner = owner
+        self.agents = agents
+        self.witness = witness
+        super().__init__(
+            f"authorized agents: incomplete list (more than {len(agents)} grants); "
+            "no complete snapshot"
+        )
+
+
+class AuthorizedAgentsBindingMismatch(CodecError):
+    """The payload owner or finalized height does not match its binding."""
+
+    def __init__(
+        self, *, expected_owner: str, actual_owner: str,
+        expected_height: int, actual_height: int,
+    ) -> None:
+        self.expected_owner = expected_owner
+        self.actual_owner = actual_owner
+        self.expected_height = expected_height
+        self.actual_height = actual_height
+        super().__init__("authorized agents: owner or finalized height mismatch")
 
 
 class SigningError(ProofTradingSdkError):
