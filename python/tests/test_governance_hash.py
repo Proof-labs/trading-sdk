@@ -52,7 +52,7 @@ GOLDEN_UPDATE_AUTHORITY_SET_REMOVE = (
 GOLDEN_SET_LIQUIDATION_CONFIG = (
     "1759bbe56cdd4604699aa7fc464b04fa8e79f055a23b26c9b4f25d386943136c"
 )
-# SetMarginOffsetPolicy (inner tag 0x1A): a struct variant whose predecessor is
+# SetMarginOffsetPolicy (inner tag 0x1B): a struct variant whose predecessor is
 # an absent Option and whose pair list is positional. Same authority as above;
 # the Rust and TypeScript suites pin the identical constant.
 GOLDEN_SET_MARGIN_OFFSET_POLICY = (

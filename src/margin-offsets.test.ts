@@ -178,6 +178,43 @@ describe("client-side offset policy validation", () => {
       }),
     ).toThrow(/at most/);
   });
+
+  const one = (overrides: Partial<MarginOffsetPair>) => () =>
+    validateSetMarginOffsetPolicy({
+      predecessor: null,
+      pairs: [pair(overrides)],
+    });
+
+  it("bounds the rate to 1..=9999 basis points", () => {
+    expect(one({ rate: 1 })).not.toThrow();
+    expect(one({ rate: 9_999 })).not.toThrow();
+    expect(one({ rate: 0 })).toThrow(/rate must be in 1\.\.=9999/);
+    expect(one({ rate: 10_000 })).toThrow(
+      /rate must be an unsigned integer at most 9999/,
+    );
+  });
+
+  it("requires distinct markets and the perpetual as settlement reference", () => {
+    expect(one({ conditional: 1 })).toThrow(/pair markets must differ/);
+    expect(one({ settlementReference: 2 })).toThrow(
+      /settlementReference must equal perpetual/,
+    );
+  });
+
+  it("accepts only the RemoveOnResolution treatment", () => {
+    expect(
+      one({ resolution: "Keep" as MarginOffsetPair["resolution"] }),
+    ).toThrow(/unknown resolution treatment/);
+  });
+
+  it("rejects descending conditionals", () => {
+    expect(() =>
+      validateSetMarginOffsetPolicy({
+        predecessor: null,
+        pairs: [pair({ conditional: 3 }), pair({ conditional: 2 })],
+      }),
+    ).toThrow(/strictly increasing/);
+  });
 });
 
 describe("offset event decoding", () => {
