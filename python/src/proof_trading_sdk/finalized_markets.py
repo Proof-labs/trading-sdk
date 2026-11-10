@@ -54,6 +54,8 @@ def decode_finalized_orderbook(value: t.Any, market: int, depth: int = 20) -> Fi
     if type(height) is not int or not 1 <= height <= _SAFE_INTEGER:
         raise GatewayReadError("malformed", "orderbook.height")
     encoded = value.get("bookMsgpackB64")
+    if not isinstance(encoded, str):
+        raise GatewayReadError("malformed", "orderbook.base64")
     if "data" in value and encoded != value["data"]:
         raise GatewayReadError("binding", "orderbook.encoding")
     if not isinstance(encoded, str) or not encoded or len(encoded) > 4*((MAX_BOOK_BYTES+2)//3):

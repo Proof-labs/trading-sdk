@@ -80,6 +80,7 @@ export function decodeFinalizedOrderbook(
   const height = uint(frame.height, "height", I64_MAX);
   if (height === 0n) invalid("unfinalized height");
   const encoded = frame.bookMsgpackB64;
+  if (typeof encoded !== "string") invalid("book encoding");
   if ("data" in frame && encoded !== frame.data)
     invalid("book encoding mismatch", "binding");
   const bytes = canonicalBase64(encoded, "book encoding", MAX_BOOK_BYTES);

@@ -11,8 +11,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Python `finalized_orderbook()` and explicitly chain-pinned
   `finalized_markets_snapshot()` return typed facts plus height-bound witnesses,
-  using the canonical Rust snapshot decoder and Rust orderbook validation over `OrderbookSnapshot` and bounded HTTP. Existing snapshot APIs remain
-  unchanged; witness consistency is not validator or payload verification.
+  through bounded HTTP. Snapshot decoding uses canonical Rust; orderbooks use
+  Rust validation over `OrderbookSnapshot` and shared TS/Python vectors.
+  Existing snapshot APIs remain unchanged; witness consistency is not
+  validator or payload verification.
 
 - Python `finalized_account_state(owner, timeout=5)` returns typed raw balance,
   positions and a height-bound witness through the canonical Rust wire decoder.

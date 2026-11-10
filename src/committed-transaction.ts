@@ -1,3 +1,4 @@
+import { chainPin } from "./read-values.js";
 import {
   MAX_TX_BYTES,
   MAX_BLOCK_TXS,
@@ -61,8 +62,6 @@ export async function readTransactionEvidence(
   transport: ExchangeHttpTransport,
 ): Promise<TransactionEvidence> {
   const { remaining } = readDeadline(options);
-  if (!(expectedChainId instanceof Uint8Array) || expectedChainId.length !== 32)
-    invalid("pinned chain");
   if (
     !(selection.signedBytes instanceof Uint8Array) ||
     selection.signedBytes.length === 0 ||
@@ -71,7 +70,7 @@ export async function readTransactionEvidence(
     invalid("signed bytes");
   // Copy caller-owned mutable data before the first await.
   const signedBytes = Uint8Array.from(selection.signedBytes);
-  const chain = Uint8Array.from(expectedChainId);
+  const chain = chainPin(expectedChainId);
   const requestedHash = hash(selection.hash, "requested hash");
   if (bytesToHex(sha256(signedBytes)).toUpperCase() !== requestedHash)
     invalid("requested hash/bytes mismatch", "binding");

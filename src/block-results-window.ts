@@ -1,3 +1,4 @@
+import { chainPin } from "./read-values.js";
 import {
   decodeBlockEvidenceHeader,
   type BlockEvidenceHeader,
@@ -218,9 +219,7 @@ async function readBlockResults(
     if (throughHeight - boundary.fromHeight + 1n > BigInt(maxHeights))
       invalid("height budget", "limit");
   }
-  if (!(expectedChainId instanceof Uint8Array) || expectedChainId.length !== 32)
-    invalid("pinned chain");
-  const chain = Uint8Array.from(expectedChainId);
+  const chain = chainPin(expectedChainId);
   const base = gatewayUrl.replace(/\/+$/, "");
   let decodedBytes = 0;
   let transactionCount = 0;

@@ -169,7 +169,7 @@ depth, height, typed bids/asks (`price`, `total_qty`, `order_count`) and witness
 Depth is 1, 20 or 100 (default 20); the result does not assert a complete book.
 The canonical Rust decoder validates exact two-side/three-field tuples,
 integer ranges, per-side depth and strictly descending bids/ascending asks.
-The gateway frame's market/depth, duplicate book encodings and witness height
+The gateway frame's market/depth, the legacy `data` encoding, when present, and `bookMsgpackB64` and witness height
 must agree. Its JSON numeric height must be a safe positive integer, as in TS;
 MessagePack level values retain the full u64 range. Decoded books are capped
 at 512 KiB. Extra frame/witness fields are tolerated.

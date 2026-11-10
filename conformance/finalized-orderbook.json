@@ -101,5 +101,11 @@
     "payload": "kpCQ",
     "data": "kA==",
     "error": "binding"
+  },
+  {
+    "name": "legacy-only frame",
+    "depth": 20,
+    "data": "kpCQ",
+    "error": "malformed"
   }
 ]
