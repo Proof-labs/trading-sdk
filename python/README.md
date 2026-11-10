@@ -79,6 +79,9 @@ with exact integer `sequence` and typed `config`. The config includes
 compatibility; the engine no longer applies those caps. Legacy five-field
 configs default the takeover discount to 50, matching the canonical wire type.
 Read decoding preserves numeric facts without enforcing action-admission rules.
+For example, a structurally valid `full_close_threshold` with denominator zero
+is returned unchanged, matching TypeScript. Check the denominator before division;
+successful decoding does not establish that a configuration is usable.
 
 `decode_authorities_snapshot` and `decode_liquidation_config_info` accept the
 complete gateway `{"data": "<base64 MessagePack>"}` envelope. Rust owns the wire

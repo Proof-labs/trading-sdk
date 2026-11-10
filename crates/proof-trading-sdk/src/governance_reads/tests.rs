@@ -70,3 +70,24 @@ fn liquidation_uses_wire_default_and_exact_ranges_shapes() {
     assert!(decode_liquidation_config(&encoded(&pair(config))).is_err());
     assert!(decode_liquidation_config(&[0x92, 0xcb, 0, 0, 0, 0, 0, 0, 0, 0, 0x90]).is_err());
 }
+
+#[test]
+fn engine_array_address_sets_obey_entry_and_total_byte_limits() {
+    let address = Value::Array(vec![Value::from(171); 20]);
+    let mut sets = vec![Value::Array(vec![]); 6];
+    sets[0] = Value::Array(vec![address.clone(); MAX_AUTHORITY_SET_ENTRIES]);
+    let decoded = decode_authorities(&encoded(&Value::Array(sets.clone()))).unwrap();
+    assert_eq!(decoded.relayer.len(), MAX_AUTHORITY_SET_ENTRIES);
+    assert_eq!(decoded.relayer.last().unwrap().0, [171; 20]);
+
+    sets[0] = Value::Array(vec![address.clone(); MAX_AUTHORITY_SET_ENTRIES + 1]);
+    assert!(decode_authorities(&encoded(&Value::Array(sets))).is_err());
+
+    let full = Value::Array(vec![
+        Value::Array(vec![address; MAX_AUTHORITY_SET_ENTRIES]);
+        6
+    ]);
+    let bytes = encoded(&full);
+    assert!(bytes.len() > MAX_GOVERNANCE_READ_BYTES);
+    assert!(decode_authorities(&bytes).is_err());
+}
