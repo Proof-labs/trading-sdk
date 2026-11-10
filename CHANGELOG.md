@@ -58,6 +58,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Python `RateLimited.bucket` now uses `"default"`, matching the cached
+  `rate_limit_state` key, when the gateway omits `X-RateLimit-Bucket` (#395).
+
 - Python submits signed transactions to the gateway in its JSON/base64 envelope.
 - Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. A 5xx carrying the gateway's proven `status: refused` body still raises `GatewayError`.
 - Python raises `TransportError` for malformed or wrong-shaped read responses (a 200 with `null` or `[]` on an object-valued read such as `markets` or `ticker` no longer reads as empty), and raises `SubmissionPending` with the transaction hash when a submission response carries no verdict; only an explicit non-zero `"<code>: <message>"` stays a terminal `EngineError`.
