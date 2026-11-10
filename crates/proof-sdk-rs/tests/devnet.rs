@@ -164,6 +164,11 @@ async fn live_account_events_arrive_typed() {
         (o.market, o.price, o.client_order_id, o.post_only),
         (1, price, Some(77), true)
     );
+    assert_eq!(
+        placed.receipt().and_then(proof_sdk_rs::Receipt::order_id),
+        Some(o.order_id),
+        "the receipt names the order the feed reports"
+    );
 
     let cancelled = client.cancel_client_order(77).await.unwrap();
     assert!(

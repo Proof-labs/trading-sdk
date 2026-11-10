@@ -32,7 +32,8 @@
 //!     order.post_only = true;
 //!     order.client_order_id = Some(7);
 //!     let placed = client.place_order(order).await?;
-//!     println!("{:?} code={:?}", placed.status, placed.error_code());
+//!     let order_id = placed.receipt().and_then(|r| r.order_id());
+//!     println!("order {order_id:?} error {:?}", placed.error());
 //!     client.cancel_client_order(7).await?;
 //! }
 //! # Ok(())
@@ -61,7 +62,9 @@ pub use account_event::{
 };
 pub use address::Address;
 pub use error::{Error, Result};
-pub use exchange::{ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted, TxStatus};
+pub use exchange::{
+    EngineError, ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted, TxStatus,
+};
 pub use info::{
     ChainStatus, ClientConfig, InfoClient, Level, Orderbook, Trade, DEVNET_CHAIN_ID,
     DEVNET_GATEWAY_URL,
@@ -74,12 +77,13 @@ pub use ws::{
 
 /// The core crate, re-exported so callers need one dependency.
 pub use proof_trading_sdk as core;
-pub use proof_trading_sdk::gateway::TxHash;
+pub use proof_trading_sdk::gateway::{TxAttribute, TxEvent, TxHash};
 pub use proof_trading_sdk::query::{AccountInfo, PositionBrief};
 pub use proof_trading_sdk::types::{
     Action, CancelReplaceOrder, EventId, EventInfo, MarketConfig, MarketId, Order, OrderId,
     PlaceOrder, Side, TimeInForce,
 };
+pub use proof_trading_sdk::ErrorKind;
 pub use proof_trading_sdk::{LocalSigner, Signer, SignerError};
 
 /// 32 random bytes from the OS, for a fresh Ed25519 seed. Store it as

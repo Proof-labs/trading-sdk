@@ -244,6 +244,43 @@ pub struct CommittedReceipt {
     pub hash: TxHash,
     pub height: BlockHeight,
     pub code: u32,
+    /// The engine's execution log, forwarded unchanged. For a failure it
+    /// names the reason; [`crate::decode_exec_error_kind`] needs it to read
+    /// code 50. Empty from the market snapshot client, which reads its own
+    /// evidence.
+    pub log: String,
+    /// The transaction's ABCI events in emission order (`order_placed`,
+    /// `trade_executed`, ...). Empty from the market snapshot client.
+    pub events: Vec<TxEvent>,
+}
+
+/// One ABCI event a committed transaction emitted.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct TxEvent {
+    /// The engine's event name, e.g. `order_placed`.
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default)]
+    pub attributes: Vec<TxAttribute>,
+}
+
+/// One `key = value` attribute of a [`TxEvent`].
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+pub struct TxAttribute {
+    pub key: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+impl TxEvent {
+    /// The value of the first attribute named `key`.
+    #[must_use]
+    pub fn attribute(&self, key: &str) -> Option<&str> {
+        self.attributes
+            .iter()
+            .find(|a| a.key == key)
+            .map(|a| a.value.as_str())
+    }
 }
 /// `R` is what a pre-admission rejection carries: `()` from
 /// `submit_signed_bytes`, the classified [`PreAdmissionRefusal`] from
@@ -351,6 +388,10 @@ struct SubmitRead {
     tx_hash: Option<String>,
     code: Option<u32>,
     height: Option<u64>,
+    #[serde(default)]
+    log: String,
+    #[serde(default)]
+    events: Vec<TxEvent>,
 }
 
 #[derive(Deserialize)]
@@ -362,6 +403,10 @@ struct TxRead {
 #[derive(Deserialize)]
 struct TxExecution {
     code: u32,
+    #[serde(default)]
+    log: String,
+    #[serde(default)]
+    events: Vec<TxEvent>,
 }
 
 struct ResponseBody {
@@ -705,7 +750,10 @@ impl GatewayClient {
                 ..GatewayError::new(op, ErrorKind::HttpStatus(body.status.as_u16()))
             };
             let has_hash = read.tx_hash.is_some();
-            let outcome = match (read.status.as_str(), read.code, read.height) {
+            let SubmitRead {
+                status, code, height, log, events, ..
+            } = read;
+            let outcome = match (status.as_str(), code, height) {
                 ("refused", None, None) if !has_hash => match R::classify(&body.bytes) {
                     Some(refusal) => SubmissionOutcome::RejectedBeforeAdmission { hash, refusal },
                     None if body.status.is_success() => return Err(invalid()),
@@ -715,12 +763,14 @@ impl GatewayClient {
                 // `height` says the tx reached a block; `ok` is a clean
                 // execution, `error` there is the engine failing it.
                 ("ok" | "error", Some(code), Some(height))
-                    if has_hash && (read.status == "ok") == (code == 0) =>
+                    if has_hash && (status == "ok") == (code == 0) =>
                 {
                     SubmissionOutcome::Committed(CommittedReceipt {
                         hash,
                         code,
                         height: BlockHeight::new(height).ok_or_else(invalid)?,
+                        log,
+                        events,
                     })
                 }
                 ("error", Some(code), None) => SubmissionOutcome::CheckTxRejected {
@@ -756,6 +806,8 @@ impl GatewayClient {
             height: BlockHeight::new(decimal(&read.height, op)?)
                 .ok_or_else(|| GatewayError::new(op, ErrorKind::InvalidResponse))?,
             code: read.tx_result.code,
+            log: read.tx_result.log,
+            events: read.tx_result.events,
         })
     }
 }
