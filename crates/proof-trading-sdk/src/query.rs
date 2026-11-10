@@ -2,4 +2,6 @@
 //! crate so the SDK and the engine share one definition (no positional-wire
 //! drift). Client representation that needs it wraps these.
 
-pub use proof_wire::query::{AccountInfo, BindingScenario, PositionBrief};
+pub use proof_wire::query::{
+    AccountInfo, BindingScenario, LevelSummary, OrderbookSnapshot, PositionBrief,
+};

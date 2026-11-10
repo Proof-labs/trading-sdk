@@ -10,9 +10,10 @@ The default build has **no network, no async runtime and no I/O**. That is what
 lets it compile to `wasm32-unknown-unknown`. A native gateway transport is
 available behind the opt-in `gateway` feature.
 
-> **Building a trading bot?** This crate gives you the codec and the signer.
-> It does not allocate nonces, read markets or stream the book. Those belong
-> in a client on top of it.
+> **Building a trading bot?** Use
+> [`proof-sdk-rs`](../proof-sdk-rs). It adds nonce
+> allocation, submission, receipts, order helpers and typed reads on top of this
+> crate, without adding tokio to it.
 
 ## Install
 
