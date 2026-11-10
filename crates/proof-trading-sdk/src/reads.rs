@@ -61,6 +61,65 @@ pub const ACCOUNT_INFO: Shape = Shape::Record {
     ],
 };
 
+/// `proof_wire::types::Order`, including client id and resting-order metadata.
+pub const ORDER: Shape = Shape::Record {
+    width: 14,
+    nested: &[],
+};
+
+pub const MAX_OPEN_ORDERS_BYTES: usize = 1024 * 1024;
+
+/// Decode the owner's resting orders using the canonical wire type. Legacy
+/// trailing fields use its serde defaults; appended future fields are ignored.
+/// This validates the response's owner but does not verify a finalized witness
+/// or prove that the server returned every order.
+pub fn decode_open_orders(
+    bytes: &[u8],
+    owner: &[u8; 20],
+) -> Result<Vec<crate::types::Order>, &'static str> {
+    if bytes.len() > MAX_OPEN_ORDERS_BYTES {
+        return Err("open orders payload is too large");
+    }
+    crate::msgpack::reject_floats(bytes).map_err(|_| "invalid open orders payload")?;
+    let raw = rmpv::decode::read_value(&mut Cursor::new(bytes))
+        .map_err(|_| "invalid open orders payload")?;
+    let rows = raw.as_array().ok_or("invalid open orders payload")?;
+    for row in rows {
+        let raw_owner = row.as_array().and_then(|fields| fields.get(2));
+        // wire_bytes' tuple visitor may accept a longer bin and consume only
+        // its first 20 bytes. Validate the raw owner before typed decoding.
+        let valid = match raw_owner {
+            Some(Value::Binary(bytes)) => bytes.len() == 20,
+            Some(Value::Array(bytes)) => {
+                bytes.len() == 20
+                    && bytes
+                        .iter()
+                        .all(|value| value.as_u64().is_some_and(|b| b <= 255))
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err("invalid open orders owner bytes");
+        }
+    }
+    let orders: Vec<crate::types::Order> =
+        decode(bytes, &Shape::List(&ORDER)).map_err(|_| "invalid open orders payload")?;
+    let mut previous = None;
+    for order in &orders {
+        if &order.owner != owner {
+            return Err("open orders owner does not match request");
+        }
+        if previous.is_some_and(|id| order.id <= id) {
+            return Err("open orders are not strictly ordered by id");
+        }
+        if order.quantity == 0 {
+            return Err("open orders contains an empty order");
+        }
+        previous = Some(order.id);
+    }
+    Ok(orders)
+}
+
 /// Decode `bytes` as `T`, first cutting every record `shape` names to its
 /// pinned width. A value that does not have the shape is passed on unchanged
 /// for the typed decode to refuse.

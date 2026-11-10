@@ -16,6 +16,9 @@ import { authorizedAgentsFromWasm } from "./codec-adapter.js";
 import { getWasm, ready } from "./wasm-loader.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 
+/** `AUTHORIZED_AGENTS_LIMIT` in proof-wire's `query_v2`. */
+const AUTHORIZED_AGENTS_LIMIT = 100;
+
 /** Current explicit grants, not owner-key or inherited master authority. */
 export interface FinalizedAuthorizedAgents {
   owner: HexAddress;
@@ -60,8 +63,8 @@ export function decodeFinalizedAuthorizedAgents(
   if (view.owner !== boundOwner || view.finalizedHeight !== witness.height)
     invalidRead("authorized agents owner or height mismatch", "binding");
   if (
-    view.agents.length > 100 ||
-    (!view.complete && view.agents.length !== 100)
+    view.agents.length > AUTHORIZED_AGENTS_LIMIT ||
+    (!view.complete && view.agents.length !== AUTHORIZED_AGENTS_LIMIT)
   )
     invalidRead("authorized agents completeness");
   let previous = "";
