@@ -30,7 +30,8 @@ pin on their transport alone would falsely suggest chain binding.
 checks H1 is height H+1, belongs to the pinned chain, and commits the witness's
 app hash. Hashes are uppercase `Hash32Hex`. The source of the header must still
 be authenticated; the helper does not verify validator signatures. Comet event
-strings are not committed by its results hash. Keep the gateway trusted for
+strings are not committed by its results hash. These SDK reads also do not
+check execution codes against H+1 `last_results_hash`. Keep the gateway trusted for
 event truth and check node identity, same-view witnesses and freshness separately.
 
 Use `verifyWitness` for financial/account reads before treating them as bound to
@@ -59,6 +60,12 @@ fits in HTTP. Financial decoded bytes are capped at 768 KiB, account/book at
 base64 in two fields, which must match. Actual valid 100-level/u64 books are far
 below these ceilings; oversized/padded inputs are refused, never truncated.
 MessagePack shape, nesting and collection checks remain independent of byte caps.
+
+Transaction evidence rejects signed inputs above 785,664 bytes before HTTP,
+allowing for base64 expansion and a 1 KiB envelope reserve. This is only a
+payload upper bound, not a whole-response fit guarantee: transaction events,
+block headers, validator commit signatures and other block transactions share
+the 1 MiB response budget. Either response can still fail with `limit`.
 
 ## Ordering and pagination
 

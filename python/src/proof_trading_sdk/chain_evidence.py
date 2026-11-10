@@ -20,8 +20,8 @@ from proof_trading_sdk.evidence import (
 )
 
 _MAX_TX_BYTES = 1024 * 1024
-# Base64 expansion plus a 1 KiB JSON envelope reserve. Responses remain bounded
-# independently: unusually large events can still exhaust the response budget.
+# Payload upper bound after base64 expansion and 1 KiB envelope reserve.
+# Both responses also contain metadata/other txs and can still exceed the cap.
 _MAX_SIGNED_TX_BYTES = (MAX_READ_BYTES - 1024) * 3 // 4
 _MAX_DATE_MS = 8_640_000_000_000_000
 _MISSING = object()

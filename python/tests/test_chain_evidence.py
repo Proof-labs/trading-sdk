@@ -330,7 +330,7 @@ def test_single_transaction_event_budget(client):
     assert err.value.kind == "limit"
 
 
-COMET = json.loads((Path(__file__).parent / "fixtures/comet_transaction_roots.json").read_text())
+COMET = json.loads((Path(__file__).resolve().parents[2] / "conformance/comet-transaction-roots.json").read_text())
 
 
 @pytest.mark.parametrize("vector", COMET, ids=lambda v: f"real-devnet-{len(v['txs'])}-txs")
@@ -364,7 +364,7 @@ def test_decoded_byte_budget_includes_nested_float_expansion(client):
 
 @pytest.mark.parametrize("tamper", [False, True])
 def test_range_pairs_independent_comet_vector_in_order(client, tamper):
-    vectors = json.loads((Path(__file__).parent / "fixtures/comet_transaction_roots.json").read_text())
+    vectors = json.loads((Path(__file__).resolve().parents[2] / "conformance/comet-transaction-roots.json").read_text())
     vector = next(v for v in vectors if len(v["txs"]) == 3)
     txs = [base64.b64decode(v) for v in vector["txs"]]
     b = block(10)

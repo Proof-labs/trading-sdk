@@ -947,10 +947,7 @@ it.each([false, true])(
   async (tamper) => {
     const vectors = JSON.parse(
       readFileSync(
-        new URL(
-          "../python/tests/fixtures/comet_transaction_roots.json",
-          import.meta.url,
-        ),
+        new URL("../conformance/comet-transaction-roots.json", import.meta.url),
         "utf8",
       ),
     ) as { txs: string[]; dataHash: string }[];

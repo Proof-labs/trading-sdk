@@ -22,8 +22,8 @@ export interface TransactionEvidenceEvent {
 }
 
 export const MAX_TX_BYTES = 1024 * 1024;
-// Base64 expansion and 1 KiB envelope reserve; event-heavy responses remain
-// independently subject to the full response byte budget.
+// Payload upper bound after base64 expansion and 1 KiB envelope reserve.
+// Both responses also contain metadata/other txs and can still exceed the cap.
 export const MAX_SIGNED_TX_BYTES = Math.floor(
   ((MAX_READ_BYTES - 1024) * 3) / 4,
 );

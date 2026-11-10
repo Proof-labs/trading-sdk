@@ -7,10 +7,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-
-- Transaction evidence rejects signed bytes exceeding the bounded response's base64 capacity before HTTP. Python and TypeScript distinguish caller configuration and cross-response binding failures.
-
 ### Added
 
 - Python chain-pinned transaction evidence and bounded block-result ranges/windows
@@ -49,6 +45,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Ship this change in the next TypeScript MAJOR release; it is not part of 11.0.0.
 
 ### Fixed
+
+- Transaction evidence rejects signed bytes exceeding the bounded response's
+  base64 capacity before HTTP. Python and TypeScript distinguish caller
+  configuration and cross-response binding failures.
 
 - Python submits signed transactions to the gateway in its JSON/base64 envelope.
 - Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. A 5xx carrying the gateway's proven `status: refused` body still raises `GatewayError`.
