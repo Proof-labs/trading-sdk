@@ -360,3 +360,55 @@ def test_decoded_byte_budget_includes_nested_float_expansion(client):
     with pytest.raises(sdk.GatewayReadError) as err:
         client.block_results_range(10, 10, chain_id=CHAIN, max_decoded_bytes=naive)
     assert err.value.kind == "limit"
+
+
+@pytest.mark.parametrize("tamper", [False, True])
+def test_range_pairs_independent_comet_vector_in_order(client, tamper):
+    vectors = json.loads((Path(__file__).parent / "fixtures/comet_transaction_roots.json").read_text())
+    vector = next(v for v in vectors if len(v["txs"]) == 3)
+    txs = [base64.b64decode(v) for v in vector["txs"]]
+    b = block(10)
+    b["result"]["block"]["data"]["txs"] = vector["txs"]
+    b["result"]["block"]["header"]["data_hash"] = "0" * 64 if tamper else vector["dataHash"]
+    r = results(10, txs)
+    for entry, code in zip(r["result"]["txs_results"], [0, 21, 7]): entry["code"] = code
+    mock(client, [block(11), b, r, block(9), results(9)])
+    if tamper:
+        with pytest.raises(sdk.GatewayReadError) as err: read_range(client)
+        assert (err.value.kind, err.value.field) == ("binding", "block transactions root")
+    else:
+        transactions = read_range(client).blocks[-1].transactions
+        assert [t.code for t in transactions] == [0, 21, 7]
+        assert [t.hash for t in transactions] == [hashlib.sha256(tx).hexdigest().upper() for tx in txs]
+
+@pytest.mark.parametrize("tx_hash,tx,kind,field", [
+    ("bad", TX, "configuration", "requested hash"),
+    (TX_HASH, b"other", "configuration", "requested hash/bytes mismatch"),
+    (TX_HASH, b"", "configuration", "signed bytes"),
+    (TX_HASH, bytes(ce._MAX_SIGNED_TX_BYTES + 1), "limit", "signed bytes"),
+    (TX_HASH, "text", "configuration", "signed bytes"),
+])
+def test_selection_error_contract_before_io(client, tx_hash, tx, kind, field):
+    seen = mock(client)
+    with pytest.raises(sdk.GatewayReadError) as err:
+        client.transaction_evidence(tx_hash, tx, chain_id=CHAIN)
+    assert (err.value.kind, err.value.field) == (kind, field)
+    assert not seen
+
+@pytest.mark.parametrize("field,mutate", [
+    ("parent hash continuity", lambda b: b["result"]["block"]["header"].update(last_block_id={"hash": "F"*64})),
+    ("post-state/header binding", lambda b: b["result"]["block"]["header"].update(app_hash="F"*64)),
+])
+def test_range_binding_error_contract(client, field, mutate):
+    anchor = block(11); mutate(anchor)
+    mock(client, [anchor, block(10), results(10)])
+    with pytest.raises(sdk.GatewayReadError) as err: read_range(client)
+    assert (err.value.kind, err.value.field) == ("binding", field)
+
+@pytest.mark.parametrize("start,end,field", [(0,10,"from height"),(9,0,"through height")])
+def test_range_configuration_contract(client, start, end, field):
+    seen = mock(client)
+    with pytest.raises(sdk.GatewayReadError) as err:
+        client.block_results_range(start, end, chain_id=CHAIN)
+    assert (err.value.kind, err.value.field) == ("configuration", field)
+    assert not seen

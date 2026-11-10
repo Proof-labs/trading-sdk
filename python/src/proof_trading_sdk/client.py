@@ -1677,11 +1677,13 @@ class ExchangeClient:
         Equal/sub-millisecond block times remain exact. No partial success when
         a budget is exhausted; gateway trust remains essential.
         """
-        return read_block_results(
+        result = read_block_results(
             self, through_height, from_ms=from_ms, to_ms=to_ms, chain_id=chain_id, timeout=timeout,
             max_heights=max_heights, max_decoded_bytes=max_decoded_bytes,
             max_transactions=max_transactions, max_events=max_events, max_attributes=max_attributes,
         )
+        assert isinstance(result, BlockResultsWindow)
+        return result
 
     def get_block_results(self, height: int) -> dict[str, t.Any]:
         """CometBFT block results at *height* via ``GET /v1/block_results``."""

@@ -8,7 +8,7 @@ import {
   getPublicKey,
   pubkeyToOwner,
 } from "./crypto.js";
-import { transactionsRoot } from "./chain-evidence.js";
+import { MAX_SIGNED_TX_BYTES, transactionsRoot } from "./chain-evidence.js";
 import { GatewayHttpError } from "./errors.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 import { Side, TimeInForce } from "./types.js";
@@ -450,3 +450,25 @@ describe("trusted-gateway transaction evidence", () => {
     }
   });
 });
+
+it.each([
+  ["bad hash", "configuration", "requested hash"],
+  ["mismatched bytes", "configuration", "requested hash/bytes mismatch"],
+  ["oversize", "limit", "signed bytes"],
+] as const)(
+  "selection fails before transport: %s",
+  async (test, kind, field) => {
+    const f = fixture();
+    const { client, transport } = setup(f);
+    const selection = { ...f.selection };
+    if (test === "bad hash") selection.hash = "bad";
+    if (test === "mismatched bytes")
+      selection.signedBytes = new Uint8Array([1]);
+    if (test === "oversize")
+      selection.signedBytes = new Uint8Array(MAX_SIGNED_TX_BYTES + 1);
+    await expect(
+      client.reads().evidence.transaction(selection),
+    ).rejects.toMatchObject({ kind, field });
+    expect(transport).not.toHaveBeenCalled();
+  },
+);

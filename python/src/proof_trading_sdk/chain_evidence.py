@@ -12,15 +12,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import urljoin
 
-from proof_trading_sdk._bounded_read import bounded_gateway_json, read_deadline
+from proof_trading_sdk._bounded_read import MAX_READ_BYTES, bounded_gateway_json, read_deadline
 from proof_trading_sdk.errors import GatewayReadError
 from proof_trading_sdk.evidence import (
-    BlockEvidenceHeader, _chain_pin, _hash, _object, _uint,
+    BlockEvidenceHeader, _chain_pin, _hash, _object, _uint, _I64_MAX,
     decode_block_evidence_header,
 )
 
-_I64_MAX = (1 << 63) - 1
 _MAX_TX_BYTES = 1024 * 1024
+# Base64 expansion plus a 1 KiB JSON envelope reserve. Responses remain bounded
+# independently: unusually large events can still exhaust the response budget.
+_MAX_SIGNED_TX_BYTES = (MAX_READ_BYTES - 1024) * 3 // 4
 _MAX_DATE_MS = 8_640_000_000_000_000
 _MISSING = object()
 
@@ -84,35 +86,35 @@ class BlockResultsWindow(BlockResultsRange):
     to_ms: int
 
 
-def _fail(field: str, kind: str = "malformed") -> t.NoReturn:
+def _fail(field: str, kind: str) -> t.NoReturn:
     raise GatewayReadError(kind, field)
 
 
 def _rpc(value: t.Any) -> dict[str, t.Any]:
     envelope = _object(value, "RPC envelope")
     if "error" in envelope:
-        _fail("RPC error")
+        _fail("RPC error", "malformed")
     if envelope.get("jsonrpc") != "2.0":
-        _fail("RPC version")
+        _fail("RPC version", "malformed")
     return _object(envelope.get("result"), "RPC result")
 
 
 def _number(value: t.Any, maximum: int, field: str) -> int:
     n = _uint(value, field)
     if n > maximum:
-        _fail(field)
+        _fail(field, "malformed")
     return n
 
 
 def _bytes(value: t.Any, field: str) -> bytes:
     if not isinstance(value, str) or not value or len(value) > 4 * ((_MAX_TX_BYTES + 2) // 3):
-        _fail(field)
+        _fail(field, "malformed")
     try:
         decoded = base64.b64decode(value, validate=True)
     except (ValueError, binascii.Error):
-        _fail(field)
+        _fail(field, "malformed")
     if len(decoded) > _MAX_TX_BYTES or base64.b64encode(decoded).decode("ascii") != value:
-        _fail(field)
+        _fail(field, "malformed")
     return decoded
 
 
@@ -121,7 +123,7 @@ def _events(value: t.Any = _MISSING, *, max_events: int = 4096,
     if value is _MISSING:
         return []
     if not isinstance(value, list):
-        _fail("events")
+        _fail("events", "malformed")
     if len(value) > max_events:
         _fail("event limit", "limit")
     count, result = 0, []
@@ -129,12 +131,12 @@ def _events(value: t.Any = _MISSING, *, max_events: int = 4096,
         event = _object(entry, "event")
         name = event.get("type")
         if not isinstance(name, str) or not 1 <= len(name.encode("utf-16-le", "surrogatepass")) // 2 <= 1024:
-            _fail("event type")
+            _fail("event type", "malformed")
         attributes = None
         if "attributes" in event:
             raw = event["attributes"]
             if not isinstance(raw, list):
-                _fail("event attributes")
+                _fail("event attributes", "malformed")
             count += len(raw)
             if count > max_attributes:
                 _fail("attribute limit", "limit")
@@ -145,7 +147,7 @@ def _events(value: t.Any = _MISSING, *, max_events: int = 4096,
                 for key in ("key", "value", "index"):
                     if key in a:
                         if type(a[key]) is not (bool if key == "index" else str):
-                            _fail(f"attribute {key}")
+                            _fail(f"attribute {key}", "malformed")
                         decoded[key] = a[key]
                 attributes.append(decoded)
         result.append(TransactionEvidenceEvent(name, attributes))
@@ -235,25 +237,28 @@ def read_transaction_evidence(client: t.Any, tx_hash: str, signed_bytes: bytes, 
     read = _Read(client, timeout)
     chain = _chain_pin(chain_id)
     if not isinstance(signed_bytes, (bytes, bytearray, memoryview)):
-        _fail("signed bytes")
+        _fail("signed bytes", "configuration")
     try:
         size = signed_bytes.nbytes if isinstance(signed_bytes, memoryview) else len(signed_bytes)
-        if not 1 <= size <= _MAX_TX_BYTES:
-            _fail("signed bytes")
+        if size == 0:
+            _fail("signed bytes", "configuration")
+        if size > _MAX_SIGNED_TX_BYTES:
+            _fail("signed bytes", "limit")
         signed_bytes = bytes(signed_bytes)
     except (ValueError, TypeError):
-        _fail("signed bytes")
-    if not 1 <= len(signed_bytes) <= _MAX_TX_BYTES:
-        _fail("signed bytes")
-    requested_hash = _hash(tx_hash, "requested hash")
+        _fail("signed bytes", "configuration")
+    try:
+        requested_hash = _hash(tx_hash, "requested hash")
+    except GatewayReadError as err:
+        raise GatewayReadError("configuration", "requested hash") from err
     if hashlib.sha256(signed_bytes).hexdigest().upper() != requested_hash:
-        _fail("requested hash/bytes mismatch", "binding")
+        _fail("requested hash/bytes mismatch", "configuration")
     tx = _rpc(read.get(f"/v1/tx/{requested_hash}"))
     if _hash(tx.get("hash"), "transaction hash") != requested_hash or _bytes(tx.get("tx"), "transaction bytes") != signed_bytes:
-        _fail("returned transaction binding")
+        _fail("returned transaction binding", "binding")
     height = _number(tx.get("height"), _I64_MAX, "transaction height")
     if height == 0:
-        _fail("transaction height")
+        _fail("transaction height", "malformed")
     index = _number(tx.get("index"), 0xffffffff, "transaction index")
     result = _object(tx.get("tx_result"), "execution result")
     code = _number(result.get("code", 0), 0xffffffff, "execution code")
@@ -263,10 +268,10 @@ def read_transaction_evidence(client: t.Any, tx_hash: str, signed_bytes: bytes, 
     header = decode_block_evidence_header(raw, height=height, chain_id=chain)
     transactions = _object(_object(response.get("block"), "block").get("data"), "block data").get("txs")
     if not isinstance(transactions, list) or len(transactions) > 100_000 or index >= len(transactions):
-        _fail("block transaction index")
+        _fail("block transaction index", "malformed")
     transactions = [_bytes(tx, "block transaction bytes") for tx in transactions]
     if transactions[index] != signed_bytes:
-        _fail("block transaction binding")
+        _fail("block transaction binding", "binding")
     _bind_transactions(response, transactions)
     read.check()
     return TransactionEvidence("trusted-gateway", requested_hash, signed_bytes, height, index, code, events, header)
@@ -290,12 +295,12 @@ def read_block_results(
     window = from_height is None
     if window:
         if type(from_ms) is not int or type(to_ms) is not int or not 0 <= from_ms < to_ms <= _MAX_DATE_MS:
-            _fail("fixed window")
+            _fail("fixed window", "configuration")
     if type(through_height) is not int or not 1 <= through_height < _I64_MAX:
-        _fail("through height")
+        _fail("through height", "configuration")
     if not window:
         if type(from_height) is not int or not 1 <= from_height <= through_height:
-            _fail("from height")
+            _fail("from height", "configuration")
         if through_height - from_height + 1 > max_heights:
             _fail("height budget", "limit")
     raw = read.get("/v1/block", {"height": str(through_height + 1)})
@@ -316,14 +321,14 @@ def read_block_results(
         response = _rpc(raw)
         header = decode_block_evidence_header(raw, height=height, chain_id=chain)
         if next_header.parent_hash != header.hash:
-            _fail("parent hash continuity")
+            _fail("parent hash continuity", "binding")
         if _nanos(header.time) > _nanos(next_header.time):
-            _fail("block time continuity")
+            _fail("block time continuity", "binding")
         if window and height == through_height and _nanos(header.time) < to_ms * 1_000_000:
-            _fail("source has not reached window end")
+            _fail("source has not reached window end", "malformed")
         txs = _object(_object(response.get("block"), "block").get("data"), "block data").get("txs", _MISSING)
         if txs is not None and not isinstance(txs, list):
-            _fail("block transactions")
+            _fail("block transactions", "malformed")
         txs = txs or []
         transaction_count += len(txs)
         if transaction_count > max_transactions:
@@ -335,19 +340,19 @@ def read_block_results(
             _fail("results height mismatch", "binding")
         tx_results = result.get("txs_results", _MISSING)
         if tx_results is not None and not isinstance(tx_results, list):
-            _fail("transaction results")
+            _fail("transaction results", "malformed")
         tx_results = tx_results or []
         if len(tx_results) != len(txs):
-            _fail("transaction result count")
+            _fail("transaction result count", "binding")
         final_events = result.get("finalize_block_events", _MISSING)
         if final_events is not None and not isinstance(final_events, list):
-            _fail("finalize block events")
+            _fail("finalize block events", "malformed")
         post_state = _bytes(result.get("app_hash"), "results app hash")
         if len(post_state) != 32:
-            _fail("results app hash length")
+            _fail("results app hash length", "malformed")
         post_hash = post_state.hex().upper()
         if next_header.app_hash is None or post_hash != next_header.app_hash:
-            _fail("post-state/header binding")
+            _fail("post-state/header binding", "binding")
         evidence = []
         for index, signed_bytes in enumerate(transactions):
             execution = _object(tx_results[index], "transaction result")

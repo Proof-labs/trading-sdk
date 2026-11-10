@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Transaction evidence rejects signed bytes exceeding the bounded response's base64 capacity before HTTP. Python and TypeScript distinguish caller configuration and cross-response binding failures.
+
 ### Added
 
 - Python chain-pinned transaction evidence and bounded block-result ranges/windows

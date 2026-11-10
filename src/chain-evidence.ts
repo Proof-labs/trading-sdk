@@ -1,6 +1,7 @@
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bytesToHex } from "./crypto.js";
 import {
+  MAX_READ_BYTES,
   canonicalBase64,
   hash32,
   invalidRead,
@@ -21,19 +22,24 @@ export interface TransactionEvidenceEvent {
 }
 
 export const MAX_TX_BYTES = 1024 * 1024;
+// Base64 expansion and 1 KiB envelope reserve; event-heavy responses remain
+// independently subject to the full response byte budget.
+export const MAX_SIGNED_TX_BYTES = Math.floor(
+  ((MAX_READ_BYTES - 1024) * 3) / 4,
+);
 export const MAX_BLOCK_TXS = 100_000;
 export const MAX_EVENTS = 4096;
 export const MAX_ATTRIBUTES = 4096;
 
 export function invalid(
   field: string,
-  kind: import("./errors.js").GatewayReadError["kind"] = "malformed",
+  kind: import("./errors.js").GatewayReadError["kind"],
 ): never {
   return invalidRead(field, kind);
 }
 export function object(value: unknown, field: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
-    invalid(field);
+    invalid(field, "malformed");
   return value as Record<string, unknown>;
 }
 export function hash(value: unknown, field: string) {
@@ -46,9 +52,9 @@ export function uint(value: unknown, max: bigint, field: string): bigint {
       value.length <= 20 &&
       /^(0|[1-9][0-9]*)$/.test(value))
   ))
-    invalid(field);
+    invalid(field, "malformed");
   const n = BigInt(value as string | number);
-  if (n > max) invalid(field);
+  if (n > max) invalid(field, "malformed");
   return n;
 }
 export function bytes(value: unknown, field: string): Uint8Array {
@@ -59,8 +65,8 @@ export function same(a: Uint8Array, b: Uint8Array): boolean {
 }
 export function rpcResult(value: unknown): Record<string, unknown> {
   const response = object(value, "RPC envelope");
-  if (response.error !== undefined) invalid("RPC error");
-  if (response.jsonrpc !== "2.0") invalid("RPC version");
+  if (response.error !== undefined) invalid("RPC error", "malformed");
+  if (response.jsonrpc !== "2.0") invalid("RPC version", "malformed");
   return object(response.result, "RPC result");
 }
 export function events(
@@ -69,7 +75,7 @@ export function events(
 ): TransactionEvidenceEvent[] {
   // These defaults are defined by abci/types/types.pb.go, not inferred success.
   if (value === undefined) return [];
-  if (!Array.isArray(value)) invalid("events");
+  if (!Array.isArray(value)) invalid("events", "malformed");
   if (value.length > limits.maxEvents) invalid("event limit", "limit");
   let attributes = 0;
   return value.map((entry) => {
@@ -79,21 +85,22 @@ export function events(
       event.type.length === 0 ||
       event.type.length > 1024
     )
-      invalid("event type");
+      invalid("event type", "malformed");
     const result: TransactionEvidenceEvent = { type: event.type as string };
     if (event.attributes !== undefined) {
-      if (!Array.isArray(event.attributes)) invalid("event attributes");
+      if (!Array.isArray(event.attributes))
+        invalid("event attributes", "malformed");
       attributes += (event.attributes as unknown[]).length;
       if (attributes > limits.maxAttributes)
         invalid("attribute limit", "limit");
       result.attributes = (event.attributes as unknown[]).map((value) => {
         const a = object(value, "event attribute");
         if (a.key !== undefined && typeof a.key !== "string")
-          invalid("attribute key");
+          invalid("attribute key", "malformed");
         if (a.value !== undefined && typeof a.value !== "string")
-          invalid("attribute value");
+          invalid("attribute value", "malformed");
         if (a.index !== undefined && typeof a.index !== "boolean")
-          invalid("attribute index");
+          invalid("attribute index", "malformed");
         return {
           ...(a.key !== undefined ? { key: a.key as string } : {}),
           ...(a.value !== undefined ? { value: a.value as string } : {}),

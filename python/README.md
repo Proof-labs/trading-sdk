@@ -213,6 +213,9 @@ themselves. No partial result is returned when coverage or a limit fails.
 Every call requires an explicit chain pin and uses one shared timeout across
 all requests, with the synchronous HTTP limitations described above. Each
 response has the same 1 MiB/4096-chunk/depth-32 bounds as `block_header`.
+Transaction inputs are limited to 785,664 bytes before HTTP, allowing for base64
+expansion and a 1 KiB envelope reserve within that response bound. Large event
+metadata can still exhaust the response budget.
 Range/window defaults are 32 heights, 8 MiB decoded JSON, 10,000 transactions,
 16,384 events and 65,536 attributes. `max_heights` may be raised to 128; other
 limits may only be reduced. JSON byte accounting conservatively allows for
@@ -220,7 +223,8 @@ number formatting differences, so floating metadata may exhaust the byte
 budget earlier than in TypeScript. Numeric evidence fields never accept floats.
 
 Execution codes and raw event strings are gateway observations, not authenticated
-receipts or interpreted financial values. These methods do not verify validator
+receipts or interpreted financial values. Execution codes are not checked against
+H+1 `last_results_hash`. These methods do not verify validator
 signatures, recompute block hashes, prove events or state payloads, establish
 freshness/finality, or prove that a transaction was never admitted. A returned
 replay refusal cannot exclude an earlier successful occurrence. Missing/pruned

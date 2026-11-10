@@ -201,25 +201,25 @@ async function readBlockResults(
       boundary.toMs <= boundary.fromMs ||
       boundary.toMs > MAX_DATE_MS)
   )
-    invalid("fixed window");
+    invalid("fixed window", "configuration");
   if (
     typeof throughHeight !== "bigint" ||
     throughHeight < 1n ||
     throughHeight >= I64_MAX
   )
-    invalid("through height");
+    invalid("through height", "configuration");
   if (boundary.kind === "range") {
     if (
       typeof boundary.fromHeight !== "bigint" ||
       boundary.fromHeight < 1n ||
       boundary.fromHeight > throughHeight
     )
-      invalid("from height");
+      invalid("from height", "configuration");
     if (throughHeight - boundary.fromHeight + 1n > BigInt(maxHeights))
       invalid("height budget", "limit");
   }
   if (!(expectedChainId instanceof Uint8Array) || expectedChainId.length !== 32)
-    invalid("pinned chain");
+    invalid("pinned chain", "configuration");
   const chain = Uint8Array.from(expectedChainId);
   const base = gatewayUrl.replace(/\/+$/, "");
   let decodedBytes = 0;
@@ -270,22 +270,23 @@ async function readBlockResults(
   ) {
     const response = await read(`/v1/block?height=${height}`);
     const header = decodeBlockEvidenceHeader(response, height, chain);
-    if (next.parentHash !== header.hash) invalid("parent hash continuity");
+    if (next.parentHash !== header.hash)
+      invalid("parent hash continuity", "binding");
     if (rfc3339(header.time).nanos > rfc3339(next.time).nanos)
-      invalid("block time continuity");
+      invalid("block time continuity", "binding");
     if (
       height === throughHeight &&
       toNs !== null &&
       rfc3339(header.time).nanos < toNs
     )
-      invalid("source has not reached window end");
+      invalid("source has not reached window end", "malformed");
     const rawTransactions = object(
       object(response.block, "block").data,
       "block data",
     ).txs;
     // Go's non-omitempty slices encode a genuine empty list as null or [].
     if (rawTransactions !== null && !Array.isArray(rawTransactions))
-      invalid("block transactions");
+      invalid("block transactions", "malformed");
     const txs = (rawTransactions ?? []) as unknown[];
     transactionCount += txs.length;
     if (transactionCount > maxTransactions)
@@ -298,19 +299,21 @@ async function readBlockResults(
     if (uint(result.height, I64_MAX, "results height") !== height)
       invalid("results height mismatch", "binding");
     if (result.txs_results !== null && !Array.isArray(result.txs_results))
-      invalid("transaction results");
+      invalid("transaction results", "malformed");
     const txResults = (result.txs_results ?? []) as unknown[];
-    if (txResults.length !== txs.length) invalid("transaction result count");
+    if (txResults.length !== txs.length)
+      invalid("transaction result count", "binding");
     if (
       result.finalize_block_events !== null &&
       !Array.isArray(result.finalize_block_events)
     )
-      invalid("finalize block events");
+      invalid("finalize block events", "malformed");
     const postState = bytes(result.app_hash, "results app hash");
-    if (postState.length !== 32) invalid("results app hash length");
+    if (postState.length !== 32)
+      invalid("results app hash length", "malformed");
     const postAppHash = hash32(bytesToHex(postState), "results app hash");
     if (next.appHash === null || postAppHash !== next.appHash)
-      invalid("post-state/header binding");
+      invalid("post-state/header binding", "binding");
     const transactions = blockTransactions.map(
       (signedBytes, index): BlockTransactionEvidence => {
         const execution = object(txResults[index], "transaction result");
