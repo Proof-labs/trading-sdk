@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use proof_sdk_rs::{
-    Action, Address, ClientConfig, EngineError, Error, ErrorKind, ExchangeClient, LocalSigner,
-    RefusalReason, Side, TxHash, TxStatus,
+    Action, Address, ClientConfig, EngineError, Error, ErrorKind, Event, ExchangeClient,
+    LocalSigner, RefusalReason, Side, TxHash, TxStatus,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -80,7 +80,12 @@ async fn place_order_posts_the_signed_bytes_and_reads_the_committed_events() {
         200,
         // As devnet answers a resting order.
         json!({"status":"ok","txHash":tx.hash.to_string(),"code":0,"height":42,"log":"",
-               "events":[{"type":"order_placed","attributes":[{"index":false,"key":"order_id","value":"33514"}]}]}),
+               "events":[{"type":"order_placed","attributes":[
+                   {"index":false,"key":"order_id","value":"33514"},{"key":"market","value":"1"},
+                   {"key":"side","value":"buy"},{"key":"price","value":"66000000000"},
+                   {"key":"quantity","value":"2"},{"key":"client_order_id","value":"0"},
+                   {"key":"post_only","value":"false"},{"key":"time_in_force","value":"gtc"}]},
+                   {"type":"fees_collected","attributes":[]}]}),
     )])
     .await;
     let c = client(&url);
@@ -88,8 +93,14 @@ async fn place_order_posts_the_signed_bytes_and_reads_the_committed_events() {
     assert!(submitted.is_success());
     assert_eq!(submitted.error(), None);
     let receipt = submitted.receipt().unwrap();
-    assert_eq!(receipt.events[0].kind, "order_placed");
-    assert_eq!(receipt.events[0].attribute("order_id"), Some("33514"));
+    let Event::OrderPlaced(o) = &receipt.events[0] else {
+        panic!("{:?}", receipt.events)
+    };
+    assert_eq!(
+        (o.order_id, o.price, o.client_order_id),
+        (33514, 66_000_000_000, None)
+    );
+    assert!(matches!(&receipt.events[1], Event::Other(raw) if raw.kind == "fees_collected"));
 
     let (target, body) = log.lock().unwrap()[0].clone();
     assert_eq!(target, "POST /exchange");
@@ -168,7 +179,8 @@ async fn a_pending_submission_reconciles_through_its_receipt() {
         (
             200,
             json!({"result":{"hash":hash.to_string(),"height":"7","tx_result":{"code":0,"log":"",
-                "events":[{"type":"order_cancelled","attributes":[{"key":"order_id","value":"5"}]}]}}}),
+                "events":[{"type":"order_cancelled","attributes":[{"key":"order_id","value":"5"},
+                    {"key":"market","value":"1"},{"key":"reason","value":"user_requested"}]}]}}}),
         ),
     ])
     .await;
@@ -181,7 +193,7 @@ async fn a_pending_submission_reconciles_through_its_receipt() {
         .unwrap();
     assert!(receipt.is_success());
     assert_eq!(receipt.height, 7);
-    assert_eq!(receipt.events[0].attribute("order_id"), Some("5"));
+    assert!(matches!(&receipt.events[0], Event::OrderCancelled(c) if c.order_id == 5));
     let targets: Vec<String> = log.lock().unwrap().iter().map(|r| r.0.clone()).collect();
     assert_eq!(targets[1], format!("GET /v1/tx/{hash}"));
 }

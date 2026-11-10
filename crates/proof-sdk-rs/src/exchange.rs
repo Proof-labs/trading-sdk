@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime};
 
 use proof_trading_sdk::gateway::{
     CommittedReceipt, ErrorKind as GatewayErrorKind, MaintenanceMode, PreAdmissionRefusal,
-    RetryAfter, SubmissionOutcome, TxEvent, TxHash,
+    RetryAfter, SubmissionOutcome, TxHash,
 };
 use proof_trading_sdk::types::{
     Action, AmendOrder, CancelAllOrders, CancelClientOrder, CancelOrder, CancelReplaceOrder,
@@ -17,6 +17,7 @@ use proof_trading_sdk::{decode_exec_error_kind, DecodedExecErrorKind, ErrorKind}
 
 use crate::address::Address;
 use crate::error::{Error, Result};
+use crate::event::Event;
 use crate::info::{ClientConfig, InfoClient};
 use crate::nonce::NonceAllocator;
 
@@ -111,12 +112,12 @@ pub struct Receipt {
     pub error: Option<EngineError>,
     /// The engine's log, unchanged.
     pub log: String,
-    /// What the transaction did, in emission order: `order_placed` (with
-    /// `order_id`), `trade_executed`, `order_cancelled`, ... One transaction
-    /// can emit several of each (a basket, a cancel-replace). An order that
-    /// fully fills on arrival emits trades and no `order_placed`; an IOC
-    /// remainder or a refused post-only emits neither.
-    pub events: Vec<TxEvent>,
+    /// What the transaction did, in emission order: [`Event::OrderPlaced`],
+    /// [`Event::Fill`], [`Event::OrderCancelled`], ... One transaction can
+    /// emit several of each (a basket, a cancel-replace). An order that fully
+    /// fills on arrival emits fills and no `OrderPlaced`; an IOC remainder or
+    /// a refused post-only emits neither.
+    pub events: Vec<Event>,
 }
 
 impl Receipt {
@@ -133,7 +134,7 @@ impl From<CommittedReceipt> for Receipt {
             height: r.height.get(),
             error: (r.code != 0).then(|| EngineError::new(r.code, Some(&r.log))),
             log: r.log,
-            events: r.events,
+            events: r.events.into_iter().map(Event::from).collect(),
         }
     }
 }
