@@ -180,6 +180,7 @@ These JSON routes are decoded in Python; canonical MessagePack wire records
 use the shared Rust decoders through PyO3. Market statistics and candles share strict calendar validation. Python rejects
 invalid dates and `24:00:00` even where TypeScript `Date.parse` normalizes them.
 Market-statistics window comparisons use milliseconds; candles preserve nanoseconds.
+The shared Python parser accepts extended years that TypeScript may reject.
 The parsers intentionally enforce different contracts.
 
 ## Callback signer
