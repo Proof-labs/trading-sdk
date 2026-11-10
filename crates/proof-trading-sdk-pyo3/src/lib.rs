@@ -10,6 +10,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
+mod account_auth;
+mod callback_signer;
 #[cfg(feature = "pkcs11")]
 mod pkcs11;
 
@@ -52,6 +54,19 @@ impl SigningHandle {
     fn owner<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         let owner = crypto::pubkey_to_owner(&self.signer.public_key());
         PyBytes::new(py, &owner)
+    }
+
+    /// Sign this owner's account-stream authentication without exporting the key.
+    #[pyo3(signature = (chain_id, timestamp_ms, after_id=0))]
+    fn sign_account_ws_auth<'py>(
+        &self,
+        py: Python<'py>,
+        chain_id: &[u8],
+        timestamp_ms: u64,
+        after_id: i64,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let signature = account_auth::sign(self.signer.as_ref(), chain_id, timestamp_ms, after_id)?;
+        Ok(PyBytes::new(py, &signature))
     }
 
     /// Sign an action payload and encode it as a wire-ready envelope.
@@ -117,6 +132,25 @@ fn sign_and_encode<'py>(
     .map_err(map_err)?;
 
     Ok(PyBytes::new(py, &encoded))
+}
+
+/// Sign the gateway's owner-bound account-stream challenge.
+#[pyfunction]
+#[pyo3(signature = (chain_id, timestamp_ms, secret_key, after_id=0))]
+fn sign_account_ws_auth<'py>(
+    py: Python<'py>,
+    chain_id: &[u8],
+    timestamp_ms: u64,
+    secret_key: &[u8],
+    after_id: i64,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let seed = zeroize::Zeroizing::new(
+        <[u8; 32]>::try_from(secret_key)
+            .map_err(|_| PyValueError::new_err("secret_key must be exactly 32 bytes"))?,
+    );
+    let signer = core_sdk::LocalSigner::from_bytes(&seed);
+    let signature = account_auth::sign(&signer, chain_id, timestamp_ms, after_id)?;
+    Ok(PyBytes::new(py, &signature))
 }
 
 /// Encode a pre-signed action into a wire envelope.
@@ -244,6 +278,21 @@ fn decode_markets_snapshot<'py>(
 #[pyfunction]
 fn reject_floats(bytes: &[u8]) -> PyResult<()> {
     core_sdk::msgpack::reject_floats(bytes).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Decode owner-bound resting orders with the shared proof-wire DTO.
+#[pyfunction]
+fn decode_open_orders<'py>(
+    py: Python<'py>,
+    bytes: &[u8],
+    owner: &[u8],
+) -> PyResult<Bound<'py, PyAny>> {
+    let owner: [u8; 20] = owner
+        .try_into()
+        .map_err(|_| PyValueError::new_err("owner must be exactly 20 bytes"))?;
+    let orders =
+        core_sdk::reads::decode_open_orders(bytes, &owner).map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &orders).map_err(map_pythonize_err)
 }
 
 /// Derive a 20-byte owner address from a 32-byte Ed25519 public key.
@@ -451,8 +500,15 @@ fn classify_error_name(code: u32, log: Option<&str>) -> Option<&'static str> {
 /// Native Python extension module for proof-trading-sdk (internal name: _native).
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(callback_signer::signing_message, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        callback_signer::account_ws_auth_message,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(callback_signer::verify_raw_signature, m)?)?;
     m.add_class::<SigningHandle>()?;
     m.add_function(wrap_pyfunction!(sign_and_encode, m)?)?;
+    m.add_function(wrap_pyfunction!(sign_account_ws_auth, m)?)?;
     m.add_function(wrap_pyfunction!(encode_signed_tx, m)?)?;
     m.add_function(wrap_pyfunction!(encode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_action, m)?)?;
@@ -463,6 +519,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         market_snapshot::MAX_SNAPSHOT_BYTES,
     )?;
     m.add_function(wrap_pyfunction!(reject_floats, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_open_orders, m)?)?;
+    m.add(
+        "MAX_OPEN_ORDERS_BYTES",
+        core_sdk::reads::MAX_OPEN_ORDERS_BYTES,
+    )?;
     m.add_function(wrap_pyfunction!(pubkey_to_owner, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;
     m.add_function(wrap_pyfunction!(chain_id_from_string, m)?)?;
