@@ -7,7 +7,7 @@ use proof_trading_sdk::gateway::{GatewayClient, GatewayOptions};
 use proof_trading_sdk::query::AccountInfo;
 use proof_trading_sdk::reads::{self, Shape};
 use proof_trading_sdk::types::{EventId, EventInfo, MarketConfig, MarketId, Order, Side};
-use reqwest::{header, StatusCode};
+use reqwest::StatusCode;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
@@ -208,7 +208,6 @@ const ORDER: Shape = Shape::Record {
 /// does not break the read.
 #[derive(Clone)]
 pub struct InfoClient {
-    http: reqwest::Client,
     base: Url,
     max_read_bytes: usize,
     gateway: GatewayClient,
@@ -245,24 +244,7 @@ impl InfoClient {
             )
         })?;
         let base = Url::parse(&config.gateway_url).map_err(|e| Error::Config(e.to_string()))?;
-        let mut headers = header::HeaderMap::new();
-        if let Some(key) = &config.api_key {
-            let mut v = header::HeaderValue::from_str(key)
-                .map_err(|_| Error::Config("api key is not a valid header value".into()))?;
-            v.set_sensitive(true);
-            headers.insert("X-Api-Key", v);
-        }
-        let http = reqwest::Client::builder()
-            .timeout(config.timeout)
-            .connect_timeout(config.timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .tcp_nodelay(true)
-            .default_headers(headers)
-            .build()
-            .map_err(|e| Error::Config(e.to_string()))?;
         Ok(Self {
-            http,
             base,
             max_read_bytes: config.max_read_bytes,
             gateway,
@@ -433,7 +415,7 @@ impl InfoClient {
     /// As [`Self::get_data`].
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let url = self.url(path)?;
-        let resp = self.http.get(url).send().await?;
+        let resp = self.gateway.http().get(url).send().await?;
         self.json(resp).await
     }
 
@@ -447,7 +429,7 @@ impl InfoClient {
         body: &B,
     ) -> Result<T> {
         let url = self.url("/info")?;
-        let resp = self.http.post(url).json(body).send().await?;
+        let resp = self.gateway.http().post(url).json(body).send().await?;
         self.json(resp).await
     }
 

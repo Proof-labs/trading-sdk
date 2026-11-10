@@ -427,6 +427,14 @@ fn retry_after(headers: &HeaderMap) -> Option<RetryAfter> {
 }
 
 impl GatewayClient {
+    /// The hardened HTTP client this gateway client sends through (no
+    /// redirects, retries or proxy; the API key as a default header). Share
+    /// it for other gateway reads so they reuse the same connection pool.
+    #[must_use]
+    pub fn http(&self) -> &Client {
+        &self.client
+    }
+
     /// HTTPS for remote hosts; HTTP requires a URL-normalized loopback IP (no
     /// DNS names). Numeric IPv4 aliases that normalize to loopback are allowed.
     /// No credentials in URLs, redirect following, environment proxy, or node fallback.
