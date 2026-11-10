@@ -17,6 +17,7 @@ import {
   Side,
   TimeInForce,
   type AccountInfo,
+  type OpenOrder,
   type Action,
   type ActionTypeValue,
   type AdminAction,
@@ -44,24 +45,7 @@ import {
   validateWithdrawInsuranceFund,
 } from "./insurance-funding.js";
 import type { AuthorizedAgentsView } from "./authorized-agents.js";
-
-/** Names and byte representation only; the Rust wire type owns decoding. */
-export function authorizedAgentsFromWasm(value: unknown): AuthorizedAgentsView {
-  const view = value as {
-    owner: Uint8Array;
-    finalized_height: bigint;
-    agents: Uint8Array[];
-    complete: boolean;
-  };
-  const hex = (address: Uint8Array) =>
-    Array.from(address, (byte) => byte.toString(16).padStart(2, "0")).join("");
-  return {
-    owner: hex(view.owner),
-    finalizedHeight: view.finalized_height,
-    agents: view.agents.map(hex),
-    complete: view.complete,
-  };
-}
+import { bytesToHex } from "./crypto.js";
 import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
@@ -743,6 +727,37 @@ export function accountInfoFromWasm(v: unknown): AccountInfo {
     feesAccrued: a.fees_accrued as bigint,
     volume30dMicroUsdc: a.volume_30d_micro_usdc as bigint,
   };
+}
+
+/** The `/v2/account/{owner}/agents` grant list. */
+export function authorizedAgentsFromWasm(v: unknown): AuthorizedAgentsView {
+  const a = v as WasmRecord;
+  return {
+    owner: bytesToHex(bytesOf(a.owner)),
+    finalizedHeight: a.finalized_height as bigint,
+    agents: (a.agents as unknown[]).map((agent) => bytesToHex(bytesOf(agent))),
+    complete: a.complete as boolean,
+  };
+}
+
+/** Canonical resting orders; Rust owns validation and legacy defaults. */
+export function openOrdersFromWasm(value: unknown): OpenOrder[] {
+  return (value as WasmRecord[]).map((o) => ({
+    id: o.id as bigint,
+    market: o.market as number,
+    owner: bytesOf(o.owner),
+    side: o.side as OpenOrder["side"],
+    price: o.price as bigint,
+    quantity: o.quantity as bigint,
+    clientOrderId: (o.client_order_id ?? null) as bigint | null,
+    originalQuantity: o.original_quantity as bigint,
+    filledQuantity: o.filled_quantity as bigint,
+    createdAtMs: o.created_at_ms as bigint,
+    queuePriority: o.queue_priority as bigint,
+    timeInForce: o.time_in_force as OpenOrder["timeInForce"],
+    postOnly: o.post_only as boolean,
+    reduceOnly: o.reduce_only as boolean,
+  }));
 }
 
 /** One stored `AdminAction`, with the same client-side checks as encoding. */

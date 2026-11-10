@@ -40,6 +40,8 @@ export interface WasmCore {
   };
   /** Strictly decode a node read response as its wire type (serde-shaped JS). */
   decode_read(kind: number, bytes: Uint8Array): unknown;
+  /** Canonical resting orders, validated against the requested owner. */
+  decode_open_orders(bytes: Uint8Array, owner: Uint8Array): unknown;
   /** Decode a complete `/v1/markets-snapshot` HTTP body bound to `chainId`. */
   decode_markets_snapshot(body: Uint8Array, chainId: Uint8Array): unknown;
   signing_message(
