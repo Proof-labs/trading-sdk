@@ -176,3 +176,37 @@ def test_account_history_uses_http_base_not_ws_path_or_query():
     with AccountEventStream("wss://gateway/prefix/ws/?region=test", OWNER) as stream:
         assert stream._history_url == "https://gateway/prefix"
         assert stream._ws_url == "wss://gateway/prefix/ws?region=test"
+
+
+def test_closed_stream_is_empty_while_original_iterator_is_suspended(monkeypatch, channel):
+    socket = Socket(data_frame(channel))
+    monkeypatch.setattr(ws_client, "connect", lambda *args, **kwargs: socket)
+    stream = make_stream(channel)
+    frames = iter(stream)
+    assert next(frames) == data_frame(channel)
+    stream.close()
+    assert list(stream) == []
+    frames.close()
+    assert socket.closed and not stream._iterator_lock.locked()
+
+
+def test_reconnect_logs_type_attempt_and_delay_without_error_text(monkeypatch, channel, caplog):
+    first, last = Socket(data_frame(channel)), Socket(data_frame(channel))
+    results = iter([first, OSError("sensitive-key-material"), last])
+
+    def connect(*args, **kwargs):
+        result = next(results)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(ws_client, "connect", connect)
+    with make_stream(channel) as stream:
+        monkeypatch.setattr(stream._stop, "wait", lambda _: False)
+        frames = iter(stream)
+        assert next(frames) == next(frames) == data_frame(channel)
+    frames.close()
+    first_reason = "EOFError" if channel == "account" else "peer closed"
+    assert f"reconnect attempt 1 in 0.5s ({first_reason})" in caplog.text
+    assert "reconnect attempt 2 in 1.0s (OSError)" in caplog.text
+    assert "sensitive-key-material" not in caplog.text

@@ -230,7 +230,11 @@ After connecting once, they retry with cancelable exponential backoff. Account
 streams retain their reconnect budget, signed-subscription retries and history
 recovery. Each stream accepts base URLs or `/ws` endpoints and permits only one
 active iterator. Closing the iterator closes its stream; context managers and
-`close()` also release the socket and cancel backoff waits.
+`close()` also release the socket and cancel backoff waits. Closed streams are
+inert: new iteration is empty, even if an older iterator is still suspended.
+Retry exhaustion also closes the stream permanently. `reconnect_backoff_max`
+must be finite and positive. These startup and iterator contract changes are
+for the next Python MAJOR release.
 
 ## Public trade stream
 

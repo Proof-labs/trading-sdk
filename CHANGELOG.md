@@ -42,13 +42,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Python account, orderbook and public trade streams share one connection and
+- **Breaking (Python MAJOR):** account, orderbook and public trade streams share one connection and
   reconnect loop in `streams.py`. All now raise on initial connection failure
   (`AuthenticationError` for HTTP 401/403, `TransportError` otherwise), accept
   base URLs or `/ws` endpoints, close sockets before reconnect waits, and
   cancel waits on `close()`. Closing an iterator closes its stream, and a second
   concurrent iterator is rejected. Account auth retries and history recovery
   remain channel-specific; reconnect backoff caps and budgets are unchanged.
+  All three require a finite positive `reconnect_backoff_max`; exhaustion or
+  iterator closure makes the stream permanently closed. Closed streams iterate
+  as empty even while an older iterator is suspended. Reconnect diagnostics
+  include attempt, delay and exception type without sensitive exception text.
+  Changed startup and iterator contracts require the next Python MAJOR release;
+  this entry is not part of Python 4.0.0.
 
 - Python account-stream reconnect backoff now defaults to a 10-second cap
   (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.

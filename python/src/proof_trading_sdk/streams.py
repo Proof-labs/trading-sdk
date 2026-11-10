@@ -217,13 +217,18 @@ class _WebSocketStream:
         import websockets.sync.client as ws_client
         from websockets.exceptions import InvalidStatus
 
+        if self._closed:
+            return
         if not self._iterator_lock.acquire(blocking=False):
+            if self._closed:
+                return
             raise RuntimeError("stream already has an active iterator")
         attempt = 0
         backoff = 0.5
         connected_once = False
         try:
             while not self._closed:
+                reason = "peer closed"
                 try:
                     self._ws = ws_client.connect(self._ws_url, **self._connect_options())
                     connected_once = True
@@ -243,7 +248,9 @@ class _WebSocketStream:
                         if code is not None:
                             message += f" (HTTP {code})"
                         raise TransportError(message, status_code=code) from error
-                    log.warning("stream disconnected; reconnecting")
+                    # Exception messages can contain gateway credentials or
+                    # signer diagnostics; only expose the exception type.
+                    reason = type(error).__name__
                 finally:
                     self._close_socket()
                 if self._closed:
@@ -252,7 +259,9 @@ class _WebSocketStream:
                 if self._max_attempts is not None and attempt > self._max_attempts:
                     log.error("reconnect attempts exhausted")
                     return
-                if self._stop.wait(min(backoff, self._backoff_cap)):
+                delay = min(backoff, self._backoff_cap)
+                log.warning("stream reconnect attempt %d in %.1fs (%s)", attempt, delay, reason)
+                if self._stop.wait(delay):
                     return
                 backoff = min(backoff * 2, self._backoff_cap)
         finally:
