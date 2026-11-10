@@ -29,8 +29,7 @@
 //!     order.post_only = true;
 //!     order.client_order_id = Some(7);
 //!     let placed = client.place_order(order).await?;
-//!     let order_id = placed.receipt().and_then(|r| r.order_id());
-//!     println!("order {order_id:?} error {:?}", placed.error());
+//!     println!("{:?} error {:?}", placed.receipt().map(|r| &r.events), placed.error());
 //!     client.cancel_client_order(7).await?;
 //! }
 //! # Ok(())

@@ -54,7 +54,13 @@ async fn main() -> Result<(), proof_sdk_rs::Error> {
     order.client_order_id = Some(42);
     let placed = client.submit_and_wait(&Action::PlaceOrder(order), Duration::from_secs(10)).await?;
     match placed.error() {
-        None => println!("resting as order {:?}", placed.receipt().and_then(|r| r.order_id())),
+        None => {
+            for e in placed.receipt().into_iter().flat_map(|r| &r.events) {
+                if e.kind == "order_placed" {
+                    println!("resting as order {:?}", e.attribute("order_id"));
+                }
+            }
+        }
         Some(e) => eprintln!("refused: {e}"), // e.g. InsufficientMargin (12)
     }
 
@@ -115,9 +121,10 @@ checks. An `EngineError` is `Known(ErrorKind)` (`InsufficientMargin`,
 `is_order_not_found()` says a cancel or replace found nothing to act on.
 
 The gateway answers once the transaction is in a block, so the receipt
-carries its events: `receipt.order_id()` is the resting order's id, and
-`trade_executed` events are the fills it took. An order that fully fills on
-arrival emits no `order_placed`.
+carries its events in emission order. Search them: `order_placed` carries
+the resting order's `order_id` (a basket or cancel-replace can emit several),
+and `trade_executed` events are the fills it took. An order that fully fills
+on arrival emits no `order_placed`.
 
 **Failed submissions.** The client posts once and keeps no state. An
 `Err` means no verdict came back; engine rejections and gateway refusals are

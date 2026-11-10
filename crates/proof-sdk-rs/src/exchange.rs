@@ -111,10 +111,11 @@ pub struct Receipt {
     pub error: Option<EngineError>,
     /// The engine's log, unchanged.
     pub log: String,
-    /// What the transaction did, in order: `order_placed`, `trade_executed`,
-    /// `order_cancelled`, ... An order that fully fills on arrival emits
-    /// trades and no `order_placed`; an IOC remainder or a refused post-only
-    /// emits neither.
+    /// What the transaction did, in emission order: `order_placed` (with
+    /// `order_id`), `trade_executed`, `order_cancelled`, ... One transaction
+    /// can emit several of each (a basket, a cancel-replace). An order that
+    /// fully fills on arrival emits trades and no `order_placed`; an IOC
+    /// remainder or a refused post-only emits neither.
     pub events: Vec<TxEvent>,
 }
 
@@ -122,16 +123,6 @@ impl Receipt {
     #[must_use]
     pub fn is_success(&self) -> bool {
         self.error.is_none()
-    }
-
-    /// The id of the order this transaction rested on the book, if it
-    /// rested one (`order_placed`).
-    #[must_use]
-    pub fn order_id(&self) -> Option<OrderId> {
-        self.events
-            .iter()
-            .find(|e| e.kind == "order_placed")
-            .and_then(|e| e.attribute("order_id")?.parse().ok())
     }
 }
 
