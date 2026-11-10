@@ -34,7 +34,7 @@ is enough.
 
 ```rust,no_run
 use std::time::Duration;
-use proof_sdk_rs::{Action, ClientConfig, ExchangeClient, LocalSigner, Side};
+use proof_sdk_rs::{Action, ClientConfig, Event, ExchangeClient, LocalSigner, Side};
 
 #[tokio::main]
 async fn main() -> Result<(), proof_sdk_rs::Error> {
@@ -56,8 +56,8 @@ async fn main() -> Result<(), proof_sdk_rs::Error> {
     match placed.error() {
         None => {
             for e in placed.receipt().into_iter().flat_map(|r| &r.events) {
-                if e.kind == "order_placed" {
-                    println!("resting as order {:?}", e.attribute("order_id"));
+                if let Event::OrderPlaced(o) = e {
+                    println!("resting as order {}", o.order_id);
                 }
             }
         }
@@ -123,10 +123,11 @@ checks. An `EngineError` is `Known(ErrorKind)` (`InsufficientMargin`,
 `is_order_not_found()` says a cancel or replace found nothing to act on.
 
 The gateway answers once the transaction is in a block, so the receipt
-carries its events in emission order. Search them: `order_placed` carries
+carries its events, typed, in emission order: `Event::OrderPlaced` carries
 the resting order's `order_id` (a basket or cancel-replace can emit several),
-and `trade_executed` events are the fills it took. An order that fully fills
-on arrival emits no `order_placed`.
+and `Event::Fill` is each fill it took. An order that fully fills on arrival
+emits no `OrderPlaced`. An event this SDK does not type stays raw in
+`Event::Other`.
 
 **Failed submissions.** The client posts once and keeps no state. An
 `Err` means no verdict came back; engine rejections and gateway refusals are

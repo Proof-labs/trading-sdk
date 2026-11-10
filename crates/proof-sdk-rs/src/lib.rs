@@ -48,6 +48,7 @@
 mod account_event;
 mod address;
 mod error;
+mod event;
 mod exchange;
 mod info;
 mod nonce;
@@ -61,6 +62,10 @@ pub use account_event::{
 };
 pub use address::Address;
 pub use error::{Error, Result};
+pub use event::{
+    Deposited, Event, Fill, FundingSettled, MarketOrderProcessed, OrderAmended, OrderCancelled,
+    OrderPlaced, OrderRejected, PositionClosed, PositionUpdated,
+};
 pub use exchange::{
     EngineError, ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted, TxStatus,
 };
