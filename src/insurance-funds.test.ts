@@ -133,6 +133,59 @@ describe("witnessed insurance fund directory and positions", () => {
     ).toEqual([]);
   });
 
+  it("retains balances and positions across future wire variants without inventing valuations", () => {
+    const positions = [
+      position(),
+      {
+        ...position(),
+        market: 2,
+        side: "future_side",
+        notional: { status: "future_status" },
+      },
+      {
+        ...position(),
+        market: 3,
+        notional: { status: "unpriced", reason: "future_reason" },
+      },
+    ];
+    const result = decodeFinalizedInsuranceFund(
+      envelope({ ...state(), positions }),
+      7,
+    );
+    expect(result.fund).toMatchObject({ cash: 23n, debt: 29n, netCash: -6n });
+    expect(result.positions).toHaveLength(3);
+    expect(result.positions[0].notional).toEqual({
+      status: "priced",
+      referencePrice: 13n,
+      notionalMicroUsdc: 9n,
+    });
+    expect(result.positions[1]).toMatchObject({
+      market: 2,
+      side: "unknown",
+      size: 7n,
+      notional: { status: "unknown" },
+    });
+    expect(result.positions[2].notional).toEqual({
+      status: "unpriced",
+      reason: "unknown",
+    });
+    expect(() =>
+      decodeFinalizedInsuranceFund(
+        envelope({
+          ...state(),
+          positions: [
+            {
+              ...position(),
+              notional: { ...position().notional, notional_micro_usdc: "10" },
+            },
+            positions[1],
+          ],
+        }),
+        7,
+      ),
+    ).toThrow();
+  });
+
   it("preserves unsigned 128-bit display amounts and rejects rounded or malformed amounts", () => {
     const size = (1n << 64n) - 1n;
     expect(

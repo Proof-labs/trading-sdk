@@ -30,12 +30,13 @@ export type InsurancePositionNotional =
   | { status: "priced"; referencePrice: bigint; notionalMicroUsdc: bigint }
   | {
       status: "unpriced";
-      reason: "stale" | "guard_unset" | "no_verdict" | "no_mark";
+      reason: "stale" | "guard_unset" | "no_verdict" | "no_mark" | "unknown";
     }
-  | { status: "unsupported_binary" };
+  | { status: "unsupported_binary" }
+  | { status: "unknown" };
 export interface InsuranceFundPosition {
   market: number;
-  side: "buy" | "sell";
+  side: "buy" | "sell" | "unknown";
   size: bigint;
   szDecimals: number;
   /** Engine settlement reference and floor notional, not an execution quote. */
@@ -111,7 +112,7 @@ function position(value: unknown): InsuranceFundPosition {
     };
   };
   if (
-    (raw.side !== "buy" && raw.side !== "sell") ||
+    (raw.side !== "buy" && raw.side !== "sell" && raw.side !== "unknown") ||
     raw.size === 0n ||
     raw.sz_decimals > 37
   )
@@ -144,12 +145,15 @@ function position(value: unknown): InsuranceFundPosition {
       reason !== "stale" &&
       reason !== "guard_unset" &&
       reason !== "no_verdict" &&
-      reason !== "no_mark"
+      reason !== "no_mark" &&
+      reason !== "unknown"
     )
       invalidRead("insurance unpriced reason");
     notional = { status: "unpriced", reason };
   } else if (raw.notional.status === "unsupported_binary") {
     notional = { status: "unsupported_binary" };
+  } else if (raw.notional.status === "unknown") {
+    notional = { status: "unknown" };
   } else invalidRead("insurance notional status");
   return {
     market: marketId(raw.market),

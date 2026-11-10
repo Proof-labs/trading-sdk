@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Fund reads retain balances and positions when future wire variants are unknown, explicitly reporting unknown sides or valuations; known priced values still require exact validation.
 - `reads().finalized.insuranceFunds()` lists every registered or stored-ledger pool, including marketless funds, with cash, debt and net cash at one witnessed state. `insuranceFund(poolId)` adds bounded positions and engine-settlement notionals, explicitly reporting incomplete lists, unpriced references and unsupported prediction binaries. These display values are not equity, historical profit or execution quotes.
 - `reads().insuranceFundHistory({ poolId, stream, limit, cursor })` reads one bounded page of indexed insurance balances or activity through the gateway. Amounts and chain coordinates remain exact integers; coverage explicitly describes retained observations, never complete history, equity or a finalized-state witness.
 - `reads().finalized.authorizedAgents(owner)` reads up to 100 current stored trading-agent grants with an atomic finalized-state witness and an explicit completeness flag. Grants have no stored expiry or per-action scope; this read does not authorize signing.
