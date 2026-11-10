@@ -67,6 +67,8 @@ impl SigningHandle {
         action_payload: &[u8],
         seq: u64,
     ) -> PyResult<Bound<'py, PyBytes>> {
+        core_sdk::submission::check_payload(action_type, action_payload)
+            .map_err(PyValueError::new_err)?;
         let chain_id_arr: [u8; 32] = chain_id
             .try_into()
             .map_err(|_| PyValueError::new_err("chain_id must be exactly 32 bytes"))?;
@@ -99,6 +101,8 @@ fn sign_and_encode<'py>(
     seq: u64,
     secret_key: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
+    core_sdk::submission::check_payload(action_type, action_payload)
+        .map_err(PyValueError::new_err)?;
     let chain_id_arr: [u8; 32] = chain_id
         .try_into()
         .map_err(|_| PyValueError::new_err("chain_id must be exactly 32 bytes"))?;
@@ -129,6 +133,8 @@ fn encode_signed_tx<'py>(
     pubkey: &[u8],
     signature: &[u8],
 ) -> PyResult<Bound<'py, PyBytes>> {
+    core_sdk::submission::check_payload(action_type, action_payload)
+        .map_err(PyValueError::new_err)?;
     let pk: [u8; 32] = pubkey
         .try_into()
         .map_err(|_| PyValueError::new_err("pubkey must be exactly 32 bytes"))?;
@@ -167,6 +173,7 @@ fn encode_action<'py>(
 ) -> PyResult<Bound<'py, PyBytes>> {
     let mut de = pythonize::Depythonizer::from_object(fields);
     let payload = codec::encode_payload_dyn(action_type, &mut de).map_err(map_err)?;
+    core_sdk::submission::check_payload(action_type, &payload).map_err(PyValueError::new_err)?;
     core_sdk::ticker::check_payload_tickers(action_type, &payload)
         .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(PyBytes::new(py, &payload))

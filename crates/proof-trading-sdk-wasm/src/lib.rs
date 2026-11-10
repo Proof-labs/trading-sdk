@@ -44,7 +44,16 @@ fn arr64(bytes: &[u8], what: &str) -> Result<[u8; 64], JsError> {
 #[wasm_bindgen]
 pub fn encode_payload(action_type: u8, fields: JsValue) -> Result<Vec<u8>, JsError> {
     let de = serde_wasm_bindgen::Deserializer::from(fields);
-    codec::encode_payload_dyn(action_type, de).map_err(to_js)
+    let payload = codec::encode_payload_dyn(action_type, de).map_err(to_js)?;
+    core_sdk::submission::check_payload(action_type, &payload).map_err(|e| JsError::new(&e))?;
+    Ok(payload)
+}
+
+/// Canonicalize historical payloads for read-only signing-message inspection.
+#[wasm_bindgen]
+pub fn canonicalize_payload(action_type: u8, payload: &[u8]) -> Result<Vec<u8>, JsError> {
+    let mut de = rmp_serde::Deserializer::new(payload);
+    codec::encode_payload_dyn(action_type, &mut de).map_err(to_js)
 }
 
 /// Decode MessagePack payload bytes for `action_type` back into a JS object,
@@ -172,6 +181,7 @@ pub fn encode_signed_tx(
     pubkey: &[u8],
     signature: &[u8],
 ) -> Result<Vec<u8>, JsError> {
+    core_sdk::submission::check_payload(action_type, payload).map_err(|e| JsError::new(&e))?;
     let pk = arr32(pubkey, "pubkey")?;
     let sig = arr64(signature, "signature")?;
     codec::encode_signed_tx_raw(action_type, payload, seq, &pk, &sig).map_err(to_js)
@@ -190,6 +200,7 @@ pub fn sign_and_encode(
 ) -> Result<Vec<u8>, JsError> {
     let cid = arr32(chain_id, "chain_id")?;
     let sk = arr32(secret_key, "secret_key")?;
+    core_sdk::submission::check_payload(action_type, payload).map_err(|e| JsError::new(&e))?;
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&sk);
     codec::sign_and_encode_payload(&cid, action_type, payload, seq, &signing_key).map_err(to_js)
 }

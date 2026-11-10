@@ -190,8 +190,6 @@ class ExchangeClient {
   queryOraclePermissions(market: number): Promise<OraclePermissions>;
   queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null>;
   queryPositionTriggers(addressHex?: string): Promise<PositionTriggerInfo[]>;
-  // Legacy stored policy rows, not a TP/SL availability check; see below.
-  queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]>;
   // Deprecated: GET /v1/triggers/status is deleted upstream; see below.
   queryTriggerStatus(): Promise<TriggerStatus>;
   queryPositionTriggerHistory(addressHex?: string, filters?: PositionTriggerHistoryFilters): Promise<PositionTriggerHistoryPage>;
@@ -441,12 +439,17 @@ retain the wider `1..=9999` range for compatibility; encoding does not guarantee
 engine admission. Owner defaults to the loaded signer; a version-active trading agent
 passes the delegated owner explicitly and the engine verifies the grant.
 
-`queryTriggerMarketConfigs()` reads legacy stored policy rows and is deprecated
-as a TP/SL availability check. An empty registry, a missing market, or a disabled
-legacy row does not prevent position-trigger placement. Use the current
-position epoch and an explicit per-limb IOC collar; the engine validates the
-request. Successful placement does not guarantee a fill. The SDK distinguishes
-a valid empty registry from malformed policy data, which still raises an error.
+The legacy `queryTriggerMarketConfigs()` read and `SetTriggerMarketConfig`
+submission API have been removed. Delete policy lookups and enabled checks before
+placing TP/SL; no replacement availability lookup is needed. Use the current
+position epoch and an explicit per-limb IOC collar. The engine validates the
+request; successful placement does not guarantee a fill.
+
+Historical policy and proposal decoders remain available. `DecodedAdminAction`
+and `DecodedAction` include retired actions for inspection; narrow them before
+passing them to an encoding or signing API. The SDK rejects new proposals and
+approvals for `SetTriggerMarketConfig`, including pre-encoded payloads.
+Proposal content hashes remain available for historical verification.
 
 `queryTriggerStatus()` is deprecated: `GET /v1/triggers/status` is deleted
 upstream (the node dropped it with its activation gates, exchange#619,

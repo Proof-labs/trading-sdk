@@ -4,7 +4,7 @@ import type {
   PositionTriggerBracket,
   PositionTriggerInfo,
   SetPositionTriggers,
-  SetTriggerMarketConfig,
+  RetiredTriggerMarketConfig,
   StoredTriggerLimb,
   TriggerEffectiveAvailability,
   TriggerEvaluation,
@@ -123,9 +123,9 @@ export function validateOrderTriggers(action: OrderTriggerFields): void {
   assertDistinctLimbClientIds(stopLoss, takeProfit);
 }
 
-/** Validate the state-independent portion of admin action tag 0x05. */
-export function validateSetTriggerMarketConfig(
-  config: SetTriggerMarketConfig,
+/** @internal Validate stored legacy policy fields when decoding historical data. */
+export function validateLegacyTriggerConfig(
+  config: RetiredTriggerMarketConfig,
 ): void {
   assertU32("market", config.market);
   if (typeof config.enabled !== "boolean") {
@@ -286,7 +286,7 @@ function decodeConfig(value: unknown): TriggerMarketConfig | null {
     maxFuturePublishSkewMs: uint(row[4], "config.max_future_publish_skew_ms"),
     maxActiveBrackets: uint(row[5], "config.max_active_brackets"),
   } satisfies TriggerMarketConfig;
-  validateSetTriggerMarketConfig({
+  validateLegacyTriggerConfig({
     market: 0,
     expectedCurrentVersion: null,
     enabled: config.enabled,

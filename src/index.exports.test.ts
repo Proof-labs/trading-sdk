@@ -350,3 +350,13 @@ describe("public barrel: ticker rule", () => {
     );
   });
 });
+
+// Historical policy records remain readable, but not assignable to a new action.
+function retiredPolicyIsReadOnly(
+  action: import("./index.js").DecodedAdminAction,
+) {
+  // @ts-expect-error retired historical actions are not submit-capable
+  const submit: AdminAction = action;
+  return submit;
+}
+void retiredPolicyIsReadOnly;

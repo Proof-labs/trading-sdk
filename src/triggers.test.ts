@@ -15,7 +15,11 @@ import {
   validateOrderTriggers,
   validateSetPositionTriggers,
 } from "./triggers.js";
-import type { Action, AdminAction, SetPositionTriggers } from "./types.js";
+import type {
+  Action,
+  DecodedAdminAction,
+  SetPositionTriggers,
+} from "./types.js";
 
 const SET_PAYLOAD =
   "9607dc0014cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca5cca50393ce000173184b0b93ce0001adb0320c09";
@@ -99,7 +103,7 @@ describe("W32-10 position trigger wire contract", () => {
   });
 
   it("matches the engine's admin tag-5 proposal hash", () => {
-    const action: AdminAction = {
+    const action: DecodedAdminAction = {
       kind: "SetTriggerMarketConfig",
       value: {
         market: 7,

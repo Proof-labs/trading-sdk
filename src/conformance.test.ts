@@ -1039,6 +1039,10 @@ describe("conformance vectors (TypeScript)", () => {
         c.action_type as ActionTypeValue,
         c.input as Record<string, unknown>,
       );
+      if (c.case === "propose_admin_action/set_trigger_market_config") {
+        expect(() => encodePayloadBytes(action)).toThrow(/retired/);
+        continue;
+      }
       const payload = encodePayloadBytes(action);
       expect(bytesToHex(payload)).toBe(
         (c.expect as { payload_hex: string }).payload_hex,
@@ -1160,9 +1164,13 @@ describe("conformance vectors (TypeScript)", () => {
         c.action_type as ActionTypeValue,
         c.input as Record<string, unknown>,
       );
-      expect(bytesToHex(encodePayloadBytes(action))).toBe(
-        (c.expect as { payload_hex: string }).payload_hex,
-      );
+      if (c.case === "propose_admin_action/set_trigger_market_config") {
+        expect(() => encodePayloadBytes(action)).toThrow(/retired/);
+      } else {
+        expect(bytesToHex(encodePayloadBytes(action))).toBe(
+          (c.expect as { payload_hex: string }).payload_hex,
+        );
+      }
     }
   });
 

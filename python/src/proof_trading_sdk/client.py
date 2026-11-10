@@ -54,10 +54,6 @@ from proof_trading_sdk.trigger_history import (
     history_params,
     validate_market,
 )
-from proof_trading_sdk.trigger_config import (
-    TriggerMarketConfigInfo,
-    decode_trigger_market_config_infos,
-)
 
 if t.TYPE_CHECKING:
     from proof_trading_sdk.streams import AccountEventStream
@@ -1133,21 +1129,6 @@ class ExchangeClient:
             "admission_height": admission,
             "actions_active": active,
         }
-
-    def trigger_market_configs(self) -> list[TriggerMarketConfigInfo]:
-        """Read legacy stored trigger-policy rows, sorted by market id.
-
-        Deprecated as a TP/SL availability check. Empty results, missing markets,
-        and disabled legacy rows do not prevent position-trigger placement.
-        Use the current position epoch and explicit per-limb slippage; the
-        engine validates the request. A malformed/missing envelope is an error,
-        distinct from a valid empty registry.
-        """
-        path = "/v1/triggers/markets"
-        raw = self._decode_envelope(
-            _response_object(self._get(path)), source=path, require_data=True
-        )
-        return decode_trigger_market_config_infos(raw)
 
     @staticmethod
     def _decode_market_config(raw: t.Sequence[t.Any]) -> dict[str, t.Any]:

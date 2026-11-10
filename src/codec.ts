@@ -3,7 +3,8 @@ import {
   type Action,
   ActionType,
   type ActionTypeValue,
-  type AdminAction,
+  type DecodedAdminAction,
+  type DecodedAction,
 } from "./types.js";
 import { getWasm } from "./wasm-loader.js";
 import {
@@ -163,7 +164,7 @@ export interface AdminProposalContext {
   createdHeight: bigint;
   createdMs: bigint;
   expiryMs: bigint;
-  action: AdminAction;
+  action: DecodedAdminAction;
 }
 
 /**
@@ -239,7 +240,7 @@ function toBigInt(v: unknown): bigint {
 
 /** Decode wire bytes into an action + sequence number + auth fields. */
 export function decodeTx(bytes: Uint8Array): {
-  action: Action;
+  action: DecodedAction;
   seq: bigint;
   version: number;
   pubkey: Uint8Array;
@@ -295,7 +296,7 @@ export interface DecodedSigningMessage {
   /** Raw payload bytes (a MessagePack positional array). */
   payloadBytes: Uint8Array;
   /** The decoded action, or null when the payload could not be decoded. */
-  action: Action | null;
+  action: DecodedAction | null;
   /** Present exactly when `action` is null — why the payload didn't decode. */
   decodeError: string | null;
 }
@@ -348,7 +349,7 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
   const payloadBytes = msg.slice(offset);
 
   const actionName = ACTION_TYPE_NAMES.get(actionType) ?? null;
-  let action: Action | null = null;
+  let action: DecodedAction | null = null;
   let decodeError: string | null = null;
   if (actionName === null) {
     decodeError = `unknown action type 0x${actionType.toString(16).padStart(2, "0")} — not in this SDK build`;
@@ -362,7 +363,12 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
         actionType as ActionTypeValue,
         getWasm().decode_payload(actionType, payloadBytes),
       );
-      const canonicalPayloadBytes = encodePayloadBytes(decodedAction);
+      // Preserve adapter validation without authorizing historical resubmission.
+      toWasmFields(decodedAction as Action);
+      const canonicalPayloadBytes = getWasm().canonicalize_payload(
+        actionType,
+        payloadBytes,
+      );
       const isCanonical =
         canonicalPayloadBytes.length === payloadBytes.length &&
         canonicalPayloadBytes.every((byte, i) => byte === payloadBytes[i]);

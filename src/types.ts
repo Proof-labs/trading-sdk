@@ -574,7 +574,7 @@ export interface CancelPositionTriggers {
 }
 
 /** Legacy admin tag 5 value; the current engine rejects this retired action. */
-export interface SetTriggerMarketConfig {
+export interface RetiredTriggerMarketConfig {
   market: number;
   expectedCurrentVersion?: bigint | null;
   enabled: boolean;
@@ -1293,7 +1293,6 @@ export type AdminAction =
   | { kind: "CreateEvent"; value: CreateEvent }
   | { kind: "AttachConditional"; value: AttachConditional }
   | { kind: "Batch"; value: AdminBatchItem[] }
-  | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig }
   | { kind: "SetWithdrawalLimit"; value: SetWithdrawalLimit }
   | { kind: "SetOperatorReceiptRegistry"; value: SetOperatorReceiptRegistry }
   | { kind: "SetLiquidationConfig"; value: SetLiquidationConfig }
@@ -1303,6 +1302,14 @@ export type AdminAction =
   | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet }
   | { kind: "ScheduleUpgrade"; value: ScheduleUpgrade }
   | { kind: "CancelUpgrade"; value: CancelUpgrade };
+
+/** Historical proposals may contain retired actions; these cannot be submitted. */
+export type DecodedAdminAction =
+  | AdminAction
+  | {
+      kind: "SetTriggerMarketConfig";
+      value: RetiredTriggerMarketConfig;
+    };
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */
@@ -1401,6 +1408,18 @@ export type GovernanceAction =
   | { type: "EmergencyAdminAction"; data: EmergencyAdminAction };
 
 export type Action = TraderAction | OperatorAction | GovernanceAction;
+
+/** Read-only transaction shape, including retired governance actions. */
+export type DecodedAction =
+  | Exclude<Action, { type: "ProposeAdminAction" | "ApproveAdminAction" }>
+  | {
+      type: "ProposeAdminAction";
+      data: Omit<ProposeAdminAction, "action"> & { action: DecodedAdminAction };
+    }
+  | {
+      type: "ApproveAdminAction";
+      data: Omit<ApproveAdminAction, "action"> & { action: DecodedAdminAction };
+    };
 
 // ---------------------------------------------------------------------------
 // Governance read model (GET /v1/admin/signer-registry, GET /v1/proposals)
@@ -1525,7 +1544,7 @@ export interface ProposalDisplayInfo {
   actionTag: number;
   /** Typed decode of the proposed operation. `null` when the stored bytes
    *  predate a breaking change to that action's shape. */
-  action: AdminAction | null;
+  action: DecodedAdminAction | null;
   /** The EXACT stored engine-canonical bytes the content hash covers. */
   actionCanonicalBytes: Uint8Array;
   /** Domain-separated commitment to the immutable proposal context. */

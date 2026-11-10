@@ -22,6 +22,7 @@ pub mod msgpack;
 pub mod query;
 pub mod reads;
 pub mod signer;
+pub mod submission;
 pub mod ticker;
 pub mod wire;
 

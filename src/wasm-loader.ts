@@ -22,6 +22,7 @@ export interface WasmCore {
     module_or_path?: BufferSource | URL;
   }) => Promise<unknown>;
   encode_payload(actionType: number, fields: unknown): Uint8Array;
+  canonicalize_payload(actionType: number, payload: Uint8Array): Uint8Array;
   decode_payload(actionType: number, payload: Uint8Array): unknown;
   /** Strict, type-preserving MessagePack preflight for gateway read payloads.
    *  Throws when the bytes carry a float family or another shape no read DTO

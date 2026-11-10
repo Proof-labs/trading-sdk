@@ -13,8 +13,9 @@ core's `wire` newtypes accept them directly and length-check on decode.
 
 Every action byte is pulled from the core via `get_action_types()`, so
 the `ActionType` map can never drift from the Rust `impl_action_encoding!`
-list. Every action has a dedicated builder; :class:`RawAction` stays as the
-escape hatch for an action newer than this module.
+list. Supported actions have dedicated builders; :class:`RawAction` stays as the
+escape hatch for an action newer than this module. Retired trigger-policy
+proposals and approvals are rejected even through that escape hatch.
 """
 
 from __future__ import annotations
@@ -427,60 +428,6 @@ class CancelPositionTriggers(Action):
             "market": self.market,
             "owner": self.owner,
             "expected_position_epoch": self.expected_position_epoch,
-        }
-
-
-@dataclass
-class SetTriggerMarketConfig:
-    """Legacy admin tag 5 value; the current engine rejects this retired action."""
-
-    market: int
-    enabled: bool
-    max_trigger_slippage_bps: int
-    max_mark_age_ms: int
-    max_future_publish_skew_ms: int
-    max_active_brackets: int
-    expected_current_version: Optional[int] = None
-
-    def __post_init__(self) -> None:
-        _trigger_uint("market", self.market, _U32_MAX)
-        if not isinstance(self.enabled, bool):
-            raise ValueError("enabled must be boolean")
-        if self.expected_current_version is not None:
-            _trigger_uint(
-                "expected_current_version", self.expected_current_version, _U64_MAX
-            )
-        _trigger_uint(
-            "max_trigger_slippage_bps",
-            self.max_trigger_slippage_bps,
-            MAX_TRIGGER_SLIPPAGE_BPS,
-        )
-        for name in (
-            "max_mark_age_ms",
-            "max_future_publish_skew_ms",
-            "max_active_brackets",
-        ):
-            _trigger_uint(name, getattr(self, name), _U64_MAX)
-        if self.enabled and (
-            self.max_trigger_slippage_bps == 0
-            or self.max_mark_age_ms == 0
-            or self.max_future_publish_skew_ms == 0
-            or self.max_active_brackets == 0
-        ):
-            raise ValueError(
-                "enabled trigger config requires non-zero slippage, mark-age, "
-                "future-skew and bracket bounds"
-            )
-
-    def as_wire(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "expected_current_version": self.expected_current_version,
-            "enabled": self.enabled,
-            "max_trigger_slippage_bps": self.max_trigger_slippage_bps,
-            "max_mark_age_ms": self.max_mark_age_ms,
-            "max_future_publish_skew_ms": self.max_future_publish_skew_ms,
-            "max_active_brackets": self.max_active_brackets,
         }
 
 
@@ -1142,7 +1089,6 @@ __all__ = [
     "TriggerLimb",
     "SetPositionTriggers",
     "CancelPositionTriggers",
-    "SetTriggerMarketConfig",
     "ApproveAgent",
     "RevokeAgent",
     "Deposit",

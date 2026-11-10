@@ -130,7 +130,6 @@ import type {
   PositionTriggerHistoryPage,
   TriggerMarketHistoryFilters,
   TriggerMarketHistoryPage,
-  TriggerMarketConfigInfo,
   NodeVersion,
   UpgradesInfo,
   LiquidationConfigInfo,
@@ -163,7 +162,6 @@ import type { MarketsSnapshot } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import {
   decodePositionTriggerInfos,
-  decodeTriggerMarketConfigInfos,
   decodeTriggerStatusJson,
   validateCancelPositionTriggers,
   validateOrderTriggers,
@@ -1629,18 +1627,6 @@ export class ExchangeClient {
     const json = await this.apiJson(`${this.readBaseUrl}${path}`, "account");
     const bytes = fromBase64(requireEncodedData(json, path));
     return decodePositionTriggerInfos(await this.strictDecode(bytes));
-  }
-
-  /** Read legacy stored trigger-policy rows, sorted by market id.
-   * @deprecated Do not use this read as a TP/SL availability check. Empty
-   * results, missing markets, and disabled legacy rows do not prevent
-   * placement. Use the current position epoch and explicit per-limb slippage;
-   * the engine validates the request. Malformed data still raises an error. */
-  async queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]> {
-    const path = "/v1/triggers/markets";
-    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
-    const bytes = fromBase64(requireEncodedData(json, path));
-    return decodeTriggerMarketConfigInfos(await this.strictDecode(bytes));
   }
 
   /** Read the fail-closed next-height trigger admission predicate. Heights

@@ -29,7 +29,9 @@ import {
   type MarketsSnapshot,
   type PositionInfo,
   type PriceComparison,
-  type SetTriggerMarketConfig,
+  type RetiredTriggerMarketConfig,
+  type DecodedAdminAction,
+  type DecodedAction,
   type SetOracleGuards,
   type FundInsuranceFund,
   type WithdrawInsuranceFund,
@@ -49,10 +51,10 @@ import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import { validateTicker } from "./ticker.js";
 import { BINARY_PRICE_MAX } from "./binary.js";
 import {
+  validateLegacyTriggerConfig,
   validateCancelPositionTriggers,
   validateOrderTriggers,
   validateSetPositionTriggers,
-  validateSetTriggerMarketConfig,
 } from "./triggers.js";
 
 /** camelCase → snake_case for field names (matches Rust serde field idents). */
@@ -166,7 +168,7 @@ function governanceActionToWasm(value: unknown): unknown {
 /** Client-side parity checks shared by the encode and read directions. */
 function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   if (v.kind === "SetTriggerMarketConfig") {
-    validateSetTriggerMarketConfig(v.value as SetTriggerMarketConfig);
+    validateLegacyTriggerConfig(v.value as RetiredTriggerMarketConfig);
   }
   if (v.kind === "SetOracleGuards") {
     validateSetOracleGuards(v.value as SetOracleGuards);
@@ -228,7 +230,7 @@ function validateSetOperatorReceiptRegistry(
  * content-hash binding in `codec.ts`).
  */
 export function adminActionToWasm(
-  action: AdminAction | EmergencyAction,
+  action: DecodedAdminAction | EmergencyAction,
 ): unknown {
   return governanceActionToWasm(action);
 }
@@ -590,13 +592,13 @@ function fromWasmObject(
 export function fromWasmFields(
   actionType: ActionTypeValue,
   fields: unknown,
-): Action {
+): DecodedAction {
   const type = ACTION_TYPE_NAMES[actionType];
   if (!type) throw new Error(`unknown action_type: ${actionType}`);
   return {
     type,
     data: fromWasmObject(fields as Record<string, unknown>),
-  } as unknown as Action;
+  } as unknown as DecodedAction;
 }
 
 // ---------------------------------------------------------------------------
@@ -727,8 +729,8 @@ export function accountInfoFromWasm(v: unknown): AccountInfo {
 }
 
 /** One stored `AdminAction`, with the same client-side checks as encoding. */
-export function adminActionFromWasm(v: unknown): AdminAction {
-  const action = governanceActionFromWasm(v) as AdminAction;
+export function adminActionFromWasm(v: unknown): DecodedAdminAction {
+  const action = governanceActionFromWasm(v) as DecodedAdminAction;
   validateGovernanceAction(action);
   return action;
 }

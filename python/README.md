@@ -120,15 +120,16 @@ removed in the next major version. For a first attach, take the epoch from the
 canonical account position read; never guess `1`. `owner` defaults to the
 signer, but a version-active trading agent may pass its delegated owner and let
 the engine verify authorization.
-`trigger_market_configs()` reads legacy stored policy rows and is deprecated
-as a TP/SL availability check. An empty list, a missing market, or a disabled
-legacy row does not prevent position-trigger placement. Each limb requires
-explicit slippage in `1..=1000` bps under the current engine admission rule.
-The SDK wire validator retains `1..=9999` for compatibility; encoding does not
-guarantee admission. The engine validates the position epoch, authorization,
-and request. Successful placement does not guarantee a fill.
-The legacy `SetTriggerMarketConfig` action remains encodable for compatibility,
-but the current engine rejects it as retired.
+`trigger_market_configs()` and the `SetTriggerMarketConfig` builder have been
+removed. Delete legacy-policy lookups and enabled checks before placing TP/SL;
+no replacement availability lookup is needed. Each limb requires explicit
+slippage in `1..=1000` bps under the current engine admission rule. The wire
+validator retains `1..=9999`; encoding does not guarantee admission or a fill.
+
+New proposals and approvals for the retired configuration are rejected even
+through `RawAction` or pre-encoded signing APIs. Historical action/policy
+decoding and proposal content hashes remain supported. Current TP/SL placement,
+cancellation and history APIs are unchanged.
 
 `history_triggers()` and `history_trigger_markets()` use only the public gateway
 history routes. Their dataclass pages preserve chain coordinates, market ids,
