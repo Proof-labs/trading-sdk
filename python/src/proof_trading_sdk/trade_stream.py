@@ -6,6 +6,9 @@ import logging
 import math
 import threading
 import typing as t
+from urllib.parse import urlsplit, urlunsplit
+
+from proof_trading_sdk.errors import AuthenticationError, TransportError
 
 log = logging.getLogger("proof_trading_sdk")
 
@@ -16,9 +19,12 @@ class PublicTradeStream:
     Iterate to receive the gateway's original ``trade`` dictionaries (including
     camelCase keys and decimal strings) and subscription error frames. There is
     no initial snapshot, replay, deduplication or recovery of missed fills.
-    Reconnects resubscribe with a fresh request ID. Failed connections back off
-    from 0.5 seconds to 10 seconds by default, as in TypeScript GatewayFeed.
+    Before the first successful connection, failures raise ``AuthenticationError``
+    for HTTP 401/403, or ``TransportError`` otherwise. After connecting once,
+    reconnects resubscribe with a fresh request ID and failures back off from
+    0.5 seconds to 10 seconds by default, as in TypeScript GatewayFeed.
     A subscription refusal is yielded, without a same-socket retry.
+    ``ws_url`` accepts a base URL or an endpoint already ending in ``/ws``.
 
     No signer is used. An optional API key sets the connection's gateway tier.
     WebSocket Ping/Pong uses a 15-second interval and 10-second timeout.
@@ -45,7 +51,11 @@ class PublicTradeStream:
             or reconnect_backoff_max <= 0
         ):
             raise ValueError("reconnect_backoff_max must be finite and positive")
-        self._ws_url = ws_url.rstrip("/")
+        url = urlsplit(ws_url)
+        path = url.path.rstrip("/")
+        if not path.endswith("/ws"):
+            path += "/ws"
+        self._ws_url = urlunsplit(url._replace(path=path))
         self._market = market
         self._api_key = api_key
         self._backoff_cap = reconnect_backoff_max
@@ -70,21 +80,24 @@ class PublicTradeStream:
 
     def _run(self) -> t.Iterator[dict[str, t.Any]]:
         import websockets.sync.client as ws_client
+        from websockets.exceptions import InvalidStatus
 
         if not self._iterator_lock.acquire(blocking=False):
             raise RuntimeError("trade stream already has an active iterator")
         backoff = 0.5
         request_id = 0
+        connected_once = False
         try:
             while not self._stop.is_set():
                 socket = None
                 try:
                     headers = {"X-API-Key": self._api_key} if self._api_key else {}
                     socket = ws_client.connect(
-                        f"{self._ws_url}/ws", additional_headers=headers,
+                        self._ws_url, additional_headers=headers,
                         ping_interval=15, ping_timeout=10,
                     )
                     self._ws = socket
+                    connected_once = True
                     if self._stop.is_set():
                         return
                     backoff = 0.5
@@ -115,9 +128,17 @@ class PublicTradeStream:
                             and frame["market"] == self._market
                         ):
                             yield frame
-                except Exception:
+                except Exception as error:
                     if self._stop.is_set():
                         return
+                    if not connected_once:
+                        code = error.response.status_code if isinstance(error, InvalidStatus) else None
+                        if code in (401, 403):
+                            raise AuthenticationError("trade stream connection authentication refused") from error
+                        message = "trade stream connection failed"
+                        if code is not None:
+                            message += f" (HTTP {code})"
+                        raise TransportError(message, status_code=code) from error
                     log.warning("trade stream disconnected; reconnecting")
                 finally:
                     if self._ws is socket:

@@ -24,6 +24,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Python `PublicTradeStream` and `ExchangeClient.trade_stream` expose the public
   `trades` WebSocket channel with exact gateway frames, subscription errors,
   cancellation and automatic resubscription. No snapshot or missed-fill recovery.
+  The first connection fails with `AuthenticationError` for HTTP 401/403 or
+  `TransportError` otherwise; after connecting once, failures retry with backoff.
+  Both base URLs and endpoints already ending in `/ws` are accepted.
   Requires `websockets>=15` (previously >=14); callers pinning version 14 must
   upgrade. Protocol Ping/Pong uses explicit 15-second/10-second timings. Version
   15 also changes the account and orderbook streams and the `client.py` socket:

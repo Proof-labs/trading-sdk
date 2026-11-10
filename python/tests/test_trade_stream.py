@@ -4,8 +4,12 @@ import threading
 
 import pytest
 import websockets.sync.client as ws_client
+from websockets.datastructures import Headers
+from websockets.exceptions import InvalidStatus
+from websockets.http11 import Response
 
 from proof_trading_sdk import ExchangeClient, PublicTradeStream, SdkConfig
+from proof_trading_sdk.errors import AuthenticationError, TransportError
 
 TRADE = {
     "channel": "trades", "type": "trade", "market": 7,
@@ -56,6 +60,62 @@ def fast_wait(monkeypatch, stream):
     waits = []
     monkeypatch.setattr(stream._stop, "wait", lambda delay: waits.append(delay) or False)
     return waits
+
+
+@pytest.mark.parametrize("code", [401, 403, 404, 429, 503])
+def test_first_upgrade_refusal_raises_instead_of_silently_retrying(monkeypatch, code):
+    calls = connect_sockets(monkeypatch, InvalidStatus(Response(code, "Refused", Headers())))
+    with PublicTradeStream("ws://g", 7) as stream:
+        monkeypatch.setattr(stream._stop, "wait", lambda _: pytest.fail("initial refusal retried"))
+        expected = AuthenticationError if code in (401, 403) else TransportError
+        with pytest.raises(expected) as failure:
+            next(iter(stream))
+        if isinstance(failure.value, TransportError):
+            assert failure.value.status_code == code
+    assert len(calls) == 1
+    assert stream._stop.is_set() and not stream._iterator_lock.locked()
+
+
+@pytest.mark.parametrize("error", [OSError("offline"), TimeoutError("timed out")])
+def test_first_transport_failure_raises(monkeypatch, error):
+    calls = connect_sockets(monkeypatch, error)
+    with PublicTradeStream("ws://g", 7) as stream:
+        monkeypatch.setattr(stream._stop, "wait", lambda _: pytest.fail("initial failure retried"))
+        with pytest.raises(TransportError, match="connection failed"):
+            next(iter(stream))
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("code", [401, 403, 404, 429, 503])
+def test_upgrade_refusal_on_reconnect_retries(monkeypatch, code):
+    first, second = Socket(TRADE), Socket(TRADE)
+    calls = connect_sockets(monkeypatch, first, InvalidStatus(Response(code, "Refused", Headers())), second)
+    with PublicTradeStream("ws://g", 7) as stream:
+        waits = fast_wait(monkeypatch, stream)
+        frames = iter(stream)
+        assert next(frames) == next(frames) == TRADE
+        assert len(calls) == 3 and waits == [0.5, 1]
+        assert first.closed
+        assert second.sent[0]["id"] == 2
+    frames.close()
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("wss://g", "wss://g/ws"),
+    ("wss://g/", "wss://g/ws"),
+    ("wss://g/ws", "wss://g/ws"),
+    ("wss://g/ws/", "wss://g/ws"),
+    ("wss://g/prefix", "wss://g/prefix/ws"),
+    ("wss://g/prefix/ws?region=test", "wss://g/prefix/ws?region=test"),
+    ("wss://g?region=test", "wss://g/ws?region=test"),
+])
+def test_base_and_endpoint_urls_connect_to_one_ws_path(monkeypatch, url, expected):
+    calls = connect_sockets(monkeypatch, Socket(TRADE))
+    with PublicTradeStream(url, 7) as stream:
+        frames = iter(stream)
+        assert next(frames) == TRADE
+        assert calls[0][0] == expected
+    frames.close()
 
 
 def test_public_subscription_preserves_raw_trade_and_keepalive(monkeypatch):
@@ -122,10 +182,11 @@ def test_reconnect_is_fresh_subscription_without_replay_or_dedup(monkeypatch, di
 
 def test_failed_connections_back_off_and_cap_like_typescript(monkeypatch):
     socket = Socket(TRADE)
-    connect_sockets(monkeypatch, *([OSError("offline")] * 7), socket)
+    connect_sockets(monkeypatch, Socket(TRADE), *([OSError("offline")] * 6), socket)
     with PublicTradeStream("ws://g", 7) as stream:
         waits = fast_wait(monkeypatch, stream)
         frames = iter(stream)
+        assert next(frames) == TRADE
         assert next(frames) == TRADE
         assert waits == [0.5, 1, 2, 4, 8, 10, 10]
     frames.close()
@@ -133,10 +194,11 @@ def test_failed_connections_back_off_and_cap_like_typescript(monkeypatch):
 
 def test_successful_connection_resets_backoff(monkeypatch):
     first, second = Socket(TRADE), Socket(TRADE)
-    connect_sockets(monkeypatch, OSError(), OSError(), first, second)
+    connect_sockets(monkeypatch, Socket(TRADE), OSError(), first, second)
     with PublicTradeStream("ws://g", 7, reconnect_backoff_max=1) as stream:
         waits = fast_wait(monkeypatch, stream)
         frames = iter(stream)
+        assert next(frames) == TRADE
         assert next(frames) == TRADE
         assert next(frames) == TRADE
         assert waits == [0.5, 1, 0.5]
@@ -197,6 +259,8 @@ def test_close_cancels_backoff(monkeypatch):
 
     def connect(*args, **kwargs):
         calls.append(1)
+        if len(calls) == 1:
+            return Socket()
         called.set()
         raise OSError("offline")
 
@@ -210,7 +274,7 @@ def test_close_cancels_backoff(monkeypatch):
         stream.close()
         worker.join(1)
     assert not worker.is_alive()
-    assert calls == [1]
+    assert calls == [1, 1]
 
 
 def test_close_wakes_blocked_receive_without_reconnect(monkeypatch):
@@ -278,7 +342,8 @@ def test_wire_market_boundaries(market):
     PublicTradeStream("ws://g", market).close()
 
 
-def test_real_websocket_delivers_a_trade_through_the_installed_library(monkeypatch):
+@pytest.mark.parametrize("suffix", ["", "/ws"])
+def test_real_websocket_delivers_a_trade_through_the_installed_library(monkeypatch, suffix):
     # The other tests fake connect(), so they cannot catch a keepalive argument
     # the installed websockets version refuses.
     import threading
@@ -298,7 +363,7 @@ def test_real_websocket_delivers_a_trade_through_the_installed_library(monkeypat
     with serve(handler, "127.0.0.1", 0) as server:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         host, port = server.socket.getsockname()[:2]
-        with PublicTradeStream(f"ws://{host}:{port}", 7) as stream:
+        with PublicTradeStream(f"ws://{host}:{port}{suffix}", 7) as stream:
             assert next(iter(stream)) == trade
         server.shutdown()
     assert received == [{"method": "subscribe", "id": 1, "params": {"channel": "trades", "market": 7}}]

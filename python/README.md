@@ -148,12 +148,14 @@ with client.trade_stream(7) as stream:
 
 `PublicTradeStream(ws_url, market, api_key="")` is also exported. `trade_stream`
 uses the client's gateway URL and optional API key; `ws_url=` overrides the
-WebSocket base URL. No account signer is called. Each stream owns one socket;
+WebSocket base URL or an endpoint already ending in `/ws`; it never adds a
+second `/ws` suffix. No account signer is called. Each stream owns one socket;
 `close()` or its context manager releases it, independently of `client.close()`.
 
 The first public data is a live `trade`, not a snapshot. Frames retain the
 TypeScript feed's gateway keys: `channel`, `type`, `market`, `fillId`,
-`makerSide`, `price`, `quantity`, and `payload`. Numeric strings remain strings;
+`makerSide`, `price`, `quantity`, and `payload`. Numeric strings remain strings,
+and gateway `null` values remain `None`;
 `price` is integer micro-USDC and `quantity` is the raw integer size. Divide
 quantity by `10**sz_decimals` from the market configuration for base units;
 the stream performs no conversion. Only the requested
@@ -161,12 +163,17 @@ channel/market and matching subscription errors are delivered. Control ACKs
 are consumed internally. Subscription refusals are yielded without retrying on
 the same socket, matching TypeScript's public trade subscription.
 
-Disconnects resubscribe automatically with 0.5-second exponential backoff,
+Before the first successful connection, HTTP 401/403 raises `AuthenticationError`;
+other connection failures raise `TransportError` (with `status_code` for HTTP
+refusals). This includes 404, 429, DNS failures and timeouts, so a failed start
+does not silently retry forever. After a successful connection, disconnects
+and refused reconnects resubscribe automatically with 0.5-second exponential backoff,
 capped at 10 seconds by default (`reconnect_backoff_max` overrides the cap).
 Only one iterator may consume a stream, and reconnect work proceeds as it is
 consumed. There is no replay, deduplication or HTTP backfill: disconnected or
 slow consumers can miss fills, including gateway queue drops that have no
-client-visible gap notification.
+client-visible gap notification. A stalled consumer can also fill receive queues
+and lose the socket; reconnecting does not recover those missed fills.
 
 Python now requires `websockets>=15` for synchronous keepalive; installations
 pinned to version 14 must upgrade. The stream explicitly sends protocol-level
