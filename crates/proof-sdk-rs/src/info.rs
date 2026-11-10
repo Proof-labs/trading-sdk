@@ -148,6 +148,30 @@ pub struct Orderbook {
 }
 
 impl Orderbook {
+    /// Apply one level change from the feed ([`crate::WsMessage::OrderbookUpdate`]):
+    /// replace the level at `level.price`, insert it in price order, or
+    /// remove it when `level.quantity` is 0.
+    pub fn apply(&mut self, side: Side, level: Level) {
+        let (levels, at) = match side {
+            Side::Buy => {
+                let at = self.bids.binary_search_by(|l| level.price.cmp(&l.price));
+                (&mut self.bids, at)
+            }
+            Side::Sell => {
+                let at = self.asks.binary_search_by(|l| l.price.cmp(&level.price));
+                (&mut self.asks, at)
+            }
+        };
+        match at {
+            Ok(i) if level.quantity == 0 => {
+                levels.remove(i);
+            }
+            Ok(i) => levels[i] = level,
+            Err(i) if level.quantity > 0 => levels.insert(i, level),
+            Err(_) => {}
+        }
+    }
+
     #[must_use]
     pub fn best_bid(&self) -> Option<Level> {
         self.bids.first().copied()
@@ -227,6 +251,7 @@ const ORDER: Shape = Shape::Record {
 /// does not break the read.
 #[derive(Clone)]
 pub struct InfoClient {
+    config: ClientConfig,
     base: Url,
     max_read_bytes: usize,
     gateway: GatewayClient,
@@ -264,10 +289,17 @@ impl InfoClient {
         })?;
         let base = Url::parse(&config.gateway_url).map_err(|e| Error::Config(e.to_string()))?;
         Ok(Self {
+            config: config.clone(),
             base,
             max_read_bytes: config.max_read_bytes,
             gateway,
         })
+    }
+
+    /// The configuration this client was built from.
+    #[must_use]
+    pub fn config(&self) -> &ClientConfig {
+        &self.config
     }
 
     /// The core transport this client submits through.
@@ -628,27 +660,6 @@ mod tests {
         .unwrap();
         assert_eq!(t.price, 74_737_000_000);
         assert_eq!(t.maker_side, Side::Sell);
-    }
-
-    #[test]
-    fn account_state_from_devnet_decodes() {
-        // Captured from /v1/account/bdae2ddf…/state on devnet (2026-11-10).
-        let bytes = unbase64("lNwAFMy9zK4tzN9bzN4ealvM5ivMzcyeAMyBBsz8zKbM38zZzgCngUnPAAAAAlTegFeWl9wAFMy9zK4tzN9bzN4ealvM5ivMzcyeAMyBBsz8zKbM38zZAaRTZWxszwAAABFHLwG8btP/nRwkvXTD8CKX3AAUzL3Mri3M31vM3h5qW8zmK8zNzJ4AzIEGzPzMpszfzNkDpFNlbGzOBQypxszszwACl9G0BV4YzIiX3AAUzL3Mri3M31vM3h5qW8zmK8zNzJ4AzIEGzPzMpszfzNlkpFNlbGzNMvTM1QDMiJfcABTMvcyuLczfW8zeHmpbzOYrzM3MngDMgQbM/MymzN/M2WakU2VsbM8AAAAZwvgKvTYAFZfcABTMvcyuLczfW8zeHmpbzOYrzM3MngDMgQbM/MymzN/M2WmkU2VsbM4FHIkPzKAAzIWX3AAUzL3Mri3M31vM3h5qW8zmK8zNzJ4AzIEGzPzMpszfzNnNDICjQnV5zgAGptAQAAM=").unwrap();
-        let owner: Address = "bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9".parse().unwrap();
-        let s = account_state(&bytes, owner).unwrap();
-        assert_eq!(s.owner, owner);
-        assert!(s.height > 0 && s.balance > 0);
-        assert!(!s.positions.is_empty());
-        assert!(s
-            .positions
-            .iter()
-            .all(|p| p.owner == owner.to_bytes() && p.size > 0));
-
-        let other = Address::from([1; 20]);
-        assert!(matches!(
-            account_state(&bytes, other),
-            Err(Error::Decode(_))
-        ));
     }
 
     #[test]

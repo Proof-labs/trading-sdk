@@ -77,10 +77,10 @@ async fn reconnects_and_resubscribes_after_a_drop() {
         WsMessage::Disconnected { .. }
     ));
     assert!(matches!(next(&mut rx).await, WsMessage::Reconnected));
-    let WsMessage::OrderbookSnapshot { bids, .. } = next(&mut rx).await else {
+    let WsMessage::OrderbookSnapshot { book, .. } = next(&mut rx).await else {
         panic!("expected a fresh snapshot after reconnect")
     };
-    assert_eq!(bids[0].price, 10);
+    assert_eq!(book.bids[0].price, 10);
 
     client.close();
     assert!(timeout(Duration::from_secs(5), rx.recv())

@@ -10,7 +10,7 @@
 //! are not replayed.
 
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use futures_util::{SinkExt, Stream, StreamExt};
+use proof_trading_sdk::gateway::TxHash;
 use proof_trading_sdk::query::AccountInfo;
 use proof_trading_sdk::reads;
 use proof_trading_sdk::types::{MarketId, Side};
@@ -35,7 +36,7 @@ use crate::account_event::AccountEvent;
 use crate::address::Address;
 use crate::error::{Error, Result};
 use crate::event::{raw_from_json, Event};
-use crate::info::{ClientConfig, Level};
+use crate::info::{ClientConfig, Level, Orderbook};
 use crate::nonce::now_ms;
 
 type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
@@ -48,8 +49,8 @@ const ACCOUNT_AUTH_DOMAIN: &[u8] = b"ProofExchange-account-events-v1";
 /// Signs `accountEvents` subscriptions. Gateways running with an API key (the
 /// public devnet among them) refuse an unsigned account subscription.
 ///
-/// Build it with [`crate::ExchangeClient::account_auth`], or from any
-/// [`Signer`] and the network name.
+/// [`crate::ExchangeClient::ws_config`] sets it for the client's account.
+/// Build one yourself from any [`Signer`] and the network name.
 #[derive(Clone)]
 pub struct AccountAuth {
     signer: Arc<dyn Signer>,
@@ -93,8 +94,8 @@ impl std::fmt::Debug for AccountAuth {
     }
 }
 
-/// WebSocket feed settings. Build with [`WsConfig::new`] or
-/// [`WsConfig::from_client_config`] and the `with_*` setters.
+/// WebSocket feed settings. Build with [`crate::ExchangeClient::ws_config`],
+/// [`WsConfig::for_gateway`] or [`WsConfig::new`], then the `with_*` setters.
 #[derive(Clone)]
 pub struct WsConfig {
     url: String,
@@ -109,40 +110,39 @@ pub struct WsConfig {
 
 impl WsConfig {
     /// Settings for the feed at `url` (e.g. `wss://api.dev.proof.trade/ws`)
-    /// with defaults: ping every 15s, reconnect after a 10s pong timeout with
+    /// with defaults: ping every 5s, reconnect after a 5s pong timeout with
     /// backoff up to 10s, 4096-message buffer, no API key, no account auth.
+    /// A dead socket is noticed within 10s.
     #[must_use]
     pub fn new(url: impl Into<String>) -> Self {
         Self {
             url: url.into(),
             api_key: None,
             account_auth: None,
-            ping_interval: Duration::from_secs(15),
-            pong_timeout: Duration::from_secs(10),
+            ping_interval: Duration::from_secs(5),
+            pong_timeout: Duration::from_secs(5),
             reconnect: true,
             max_backoff: Duration::from_secs(10),
             buffer: 4096,
         }
     }
 
-    /// The `/ws` feed of `config`'s gateway (`https` becomes `wss`), with its
-    /// API key.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Config`] if the gateway URL is not `http(s)`.
-    pub fn from_client_config(config: &ClientConfig) -> Result<Self> {
+    /// The `/ws` feed of `config`'s gateway (`https` becomes `wss`, `http`
+    /// becomes `ws`), with its API key. A URL with another scheme is kept as
+    /// is and fails at [`WsClient::connect`].
+    #[must_use]
+    pub fn for_gateway(config: &ClientConfig) -> Self {
         let base = config.gateway_url().trim_end_matches('/');
         let url = if let Some(rest) = base.strip_prefix("https://") {
             format!("wss://{rest}/ws")
         } else if let Some(rest) = base.strip_prefix("http://") {
             format!("ws://{rest}/ws")
         } else {
-            return Err(Error::Config("gateway url needs an http(s) scheme".into()));
+            format!("{base}/ws")
         };
         let mut ws = Self::new(url);
         ws.api_key = config.api_key().map(str::to_owned);
-        Ok(ws)
+        ws
     }
 
     /// Sign `accountEvents` subscriptions; see [`AccountAuth`].
@@ -234,7 +234,6 @@ pub enum Subscription {
 
 /// A public fill on the `trades` channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct WsTrade {
     pub market: MarketId,
     pub fill_id: u64,
@@ -275,12 +274,9 @@ impl std::fmt::Debug for WsAccount {
 #[non_exhaustive]
 pub enum WsMessage {
     /// A market's full book. Replace local state with it.
-    OrderbookSnapshot {
-        market: MarketId,
-        bids: Vec<Level>,
-        asks: Vec<Level>,
-    },
-    /// One level changed. A `quantity` of 0 removes the level.
+    OrderbookSnapshot { market: MarketId, book: Orderbook },
+    /// One level changed; [`Orderbook::apply`] it. A `quantity` of 0 removes
+    /// the level.
     OrderbookUpdate {
         market: MarketId,
         side: Side,
@@ -297,11 +293,10 @@ pub enum WsMessage {
     },
     /// A live account event.
     AccountEvent(AccountEvent),
-    /// The gateway refused a subscription or control message (`id` names the
-    /// request). A `code` of 401 on `accountEvents` means it needs auth.
+    /// The gateway refused a subscription (named when known). A `code` of 401
+    /// on [`Subscription::AccountEvents`] means it needs auth.
     Refused {
-        id: Option<u64>,
-        channel: Option<String>,
+        subscription: Option<Subscription>,
         code: Option<u16>,
         message: String,
     },
@@ -311,8 +306,33 @@ pub enum WsMessage {
     Reconnected,
     /// The socket dropped. With `reconnect` on, a reconnect is under way.
     Disconnected { reason: String },
-    /// A frame this client could not read. The connection carries on.
-    Malformed { reason: String },
+    /// A frame this client could not read, and the subscription it belongs
+    /// to when that much was readable. The connection carries on.
+    Malformed {
+        subscription: Option<Subscription>,
+        reason: String,
+    },
+}
+
+impl WsMessage {
+    /// Read one text frame as the feed would deliver it. `None` for control
+    /// frames (pong, subscribe acks) and channels this client does not know.
+    /// A refusal read here has no `subscription`: only the live feed knows
+    /// which request it answers.
+    ///
+    /// For tests and replays: [`WsClient`] already does this for every frame.
+    #[must_use]
+    pub fn parse(frame: &str) -> Option<Self> {
+        match parse(frame) {
+            Parsed::Message(m) => Some(*m),
+            Parsed::Refused { code, message, .. } => Some(Self::Refused {
+                subscription: None,
+                code,
+                message,
+            }),
+            Parsed::Ack(_) | Parsed::Pong | Parsed::Ignore => None,
+        }
+    }
 }
 
 // -- client / receiver ---------------------------------------------------------------
@@ -488,8 +508,11 @@ async fn session(
     commands: &mut mpsc::UnboundedReceiver<Command>,
     out: &mpsc::Sender<WsMessage>,
 ) -> End {
+    // Requests awaiting an ack or a refusal, so a refusal can name its
+    // subscription. Cleared per session: ids from a dead socket never answer.
+    let mut requests: HashMap<u64, Subscription> = HashMap::new();
     for &s in subscriptions.iter() {
-        if let Err(e) = send_subscribe(config, ws, s, true, next_id, out).await {
+        if let Err(e) = send_subscribe(config, ws, s, true, next_id, &mut requests, out).await {
             return e;
         }
     }
@@ -501,14 +524,14 @@ async fn session(
                 None | Some(Command::Close) => return End::Closed,
                 Some(Command::Subscribe(s)) => {
                     if subscriptions.insert(s) {
-                        if let Err(e) = send_subscribe(config, ws, s, true, next_id, out).await {
+                        if let Err(e) = send_subscribe(config, ws, s, true, next_id, &mut requests, out).await {
                             return e;
                         }
                     }
                 }
                 Some(Command::Unsubscribe(s)) => {
                     if subscriptions.remove(&s) {
-                        if let Err(e) = send_subscribe(config, ws, s, false, next_id, out).await {
+                        if let Err(e) = send_subscribe(config, ws, s, false, next_id, &mut requests, out).await {
                             return e;
                         }
                     }
@@ -516,14 +539,27 @@ async fn session(
             },
             frame = ws.next() => match frame {
                 Some(Ok(Message::Text(text))) => {
-                    match parse(&text) {
-                        Parsed::Message(m) => {
-                            if out.send(*m).await.is_err() {
-                                return End::Closed;
+                    let message = match parse(text.as_str()) {
+                        Parsed::Message(m) => *m,
+                        Parsed::Refused { id, code, message } => WsMessage::Refused {
+                            subscription: id.and_then(|id| requests.remove(&id)),
+                            code,
+                            message,
+                        },
+                        Parsed::Ack(id) => {
+                            if let Some(id) = id {
+                                requests.remove(&id);
                             }
+                            continue;
                         }
-                        Parsed::Pong => pong_deadline = None,
-                        Parsed::Ignore => {}
+                        Parsed::Pong => {
+                            pong_deadline = None;
+                            continue;
+                        }
+                        Parsed::Ignore => continue,
+                    };
+                    if out.send(message).await.is_err() {
+                        return End::Closed;
                     }
                 }
                 Some(Ok(Message::Close(frame))) => {
@@ -535,7 +571,7 @@ async fn session(
             },
             () = sleep_until(next_ping) => {
                 let ping = json!({ "method": "ping", "id": take_id(next_id) }).to_string();
-                if let Err(e) = ws.send(Message::Text(ping)).await {
+                if let Err(e) = ws.send(Message::Text(ping.into())).await {
                     return End::Dropped(e.to_string());
                 }
                 next_ping = Instant::now() + config.ping_interval;
@@ -554,6 +590,7 @@ async fn send_subscribe(
     subscription: Subscription,
     subscribe: bool,
     next_id: &mut u64,
+    requests: &mut HashMap<u64, Subscription>,
     out: &mpsc::Sender<WsMessage>,
 ) -> Result<(), End> {
     let id = take_id(next_id);
@@ -577,8 +614,7 @@ async fn send_subscribe(
             Err(e) => {
                 // Never send an unsigned account subscribe in place of a signed one.
                 let refused = WsMessage::Refused {
-                    id: Some(id),
-                    channel: Some("accountEvents".into()),
+                    subscription: Some(subscription),
                     code: None,
                     message: format!("signing the subscription failed: {e}"),
                 };
@@ -592,7 +628,8 @@ async fn send_subscribe(
         "unsubscribe"
     };
     let frame = json!({ "method": method, "id": id, "params": params }).to_string();
-    ws.send(Message::Text(frame))
+    requests.insert(id, subscription);
+    ws.send(Message::Text(frame.into()))
         .await
         .map_err(|e| End::Dropped(e.to_string()))
 }
@@ -623,6 +660,14 @@ impl Parsed {
 
 enum Parsed {
     Message(Box<WsMessage>),
+    /// A refusal, by request id; the session names the subscription.
+    Refused {
+        id: Option<u64>,
+        code: Option<u16>,
+        message: String,
+    },
+    /// A subscribe or unsubscribe ack, by request id.
+    Ack(Option<u64>),
     Pong,
     Ignore,
 }
@@ -713,8 +758,9 @@ fn side(s: Option<&str>) -> Option<Side> {
     }
 }
 
-fn malformed(reason: impl Into<String>) -> Parsed {
+fn malformed(subscription: Option<Subscription>, reason: impl Into<String>) -> Parsed {
     Parsed::message(WsMessage::Malformed {
+        subscription,
         reason: reason.into(),
     })
 }
@@ -722,17 +768,16 @@ fn malformed(reason: impl Into<String>) -> Parsed {
 fn parse(text: &str) -> Parsed {
     let raw: Raw = match serde_json::from_str(text) {
         Ok(raw) => raw,
-        Err(e) => return malformed(e.to_string()),
+        Err(e) => return malformed(None, e.to_string()),
     };
     match raw.kind.as_deref() {
         Some("pong") => Parsed::Pong,
-        Some("subscribed" | "unsubscribed") => Parsed::Ignore,
-        Some("error") => Parsed::message(WsMessage::Refused {
+        Some("subscribed" | "unsubscribed") => Parsed::Ack(raw.id),
+        Some("error") => Parsed::Refused {
             id: raw.id,
-            channel: raw.channel.map(Cow::into_owned),
             code: raw.code,
             message: raw.error.map(Cow::into_owned).unwrap_or_default(),
-        }),
+        },
         _ => match raw.channel.as_deref() {
             Some("orderbook") => orderbook(raw),
             Some("trades") => trade(&raw),
@@ -748,16 +793,19 @@ fn market(raw: &Raw<'_>) -> Option<MarketId> {
 
 fn orderbook(raw: Raw<'_>) -> Parsed {
     let Some(market) = market(&raw) else {
-        return malformed("orderbook frame without a market");
+        return malformed(None, "orderbook frame without a market");
     };
+    let this = Some(Subscription::Orderbook(market));
     match raw.kind.as_deref() {
         Some("snapshot") => {
             let levels =
                 |v: Option<Vec<RawLevel>>| v.unwrap_or_default().into_iter().map(|l| l.0).collect();
             Parsed::message(WsMessage::OrderbookSnapshot {
                 market,
-                bids: levels(raw.bids),
-                asks: levels(raw.asks),
+                book: Orderbook {
+                    bids: levels(raw.bids),
+                    asks: levels(raw.asks),
+                },
             })
         }
         Some("update") => match (side(raw.side.as_deref()), raw.price, raw.total_quantity) {
@@ -775,7 +823,7 @@ fn orderbook(raw: Raw<'_>) -> Parsed {
                     },
                 })
             }
-            _ => malformed("orderbook update missing side/price/totalQuantity"),
+            _ => malformed(this, "orderbook update missing side/price/totalQuantity"),
         },
         _ => Parsed::Ignore,
     }
@@ -798,18 +846,22 @@ fn trade(raw: &Raw<'_>) -> Parsed {
                 quantity,
             }))
         }
-        _ => malformed("trade missing market/fillId/makerSide/price/quantity"),
+        _ => malformed(
+            market(raw).map(Subscription::Trades),
+            "trade missing market/fillId/makerSide/price/quantity",
+        ),
     }
 }
 
 fn account(raw: Raw<'_>) -> Parsed {
     let Some(owner) = raw.owner.as_deref().and_then(|o| o.parse().ok()) else {
-        return malformed("account frame without an owner");
+        return malformed(None, "account frame without an owner");
     };
+    let this = Some(Subscription::AccountEvents(owner));
     match raw.kind.as_deref() {
         Some("snapshot") => {
             let Some(account) = raw.account else {
-                return malformed("account snapshot without an account");
+                return malformed(this, "account snapshot without an account");
             };
             match decode_account(&account.data) {
                 Ok(account) => Parsed::message(WsMessage::AccountSnapshot {
@@ -817,18 +869,22 @@ fn account(raw: Raw<'_>) -> Parsed {
                     height: raw.height,
                     account: Box::new(WsAccount(account)),
                 }),
-                Err(reason) => malformed(reason),
+                Err(reason) => malformed(this, reason),
             }
         }
         Some(_) => {
-            let Some(event_type) = raw.event_type else {
-                return malformed("account event without an eventType");
+            let (Some(event_type), Some(height)) = (raw.event_type, raw.height) else {
+                return malformed(this, "account event without an eventType or height");
             };
             let payload = raw.payload.unwrap_or(serde_json::Value::Null);
             Parsed::message(WsMessage::AccountEvent(AccountEvent {
                 owner,
-                height: raw.height.unwrap_or(0),
-                tx_hash: raw.tx_hash,
+                height,
+                // A block event's key (`height-N-kind-block-event-I`) is not a hash.
+                tx_hash: raw
+                    .tx_hash
+                    .as_deref()
+                    .and_then(|h| TxHash::from_hex(h).ok()),
                 event: Event::from(raw_from_json(&event_type, &payload)),
             }))
         }
@@ -849,13 +905,10 @@ fn decode_account(data: &str) -> std::result::Result<AccountInfo, String> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic)]
     use super::*;
+    use crate::event::CancelReason;
 
     fn message(text: &str) -> WsMessage {
-        match parse(text) {
-            Parsed::Message(m) => *m,
-            Parsed::Pong => panic!("pong"),
-            Parsed::Ignore => panic!("ignored"),
-        }
+        WsMessage::parse(text).unwrap_or_else(|| panic!("no message from {text}"))
     }
 
     // Frames below are verbatim from wss://api.dev.proof.trade/ws (2026-11-10).
@@ -865,12 +918,12 @@ mod tests {
         let m = message(
             r#"{"asks":[[74737000000,274,1],[74817000000,202,1]],"bids":[[74595000000,1137,1]],"channel":"orderbook","market":1,"snapshot":"initial","type":"snapshot"}"#,
         );
-        let WsMessage::OrderbookSnapshot { market, bids, asks } = m else {
+        let WsMessage::OrderbookSnapshot { market, book } = m else {
             panic!("{m:?}")
         };
         assert_eq!(market, 1);
-        assert_eq!(bids[0].price, 74_595_000_000);
-        assert_eq!(asks.len(), 2);
+        assert_eq!(book.best_bid().unwrap().price, 74_595_000_000);
+        assert_eq!(book.asks.len(), 2);
     }
 
     #[test]
@@ -900,16 +953,22 @@ mod tests {
         assert!(matches!(parse(r#"{"id":5,"type":"pong"}"#), Parsed::Pong));
         assert!(matches!(
             parse(r#"{"channel":"orderbook","id":1,"type":"subscribed"}"#),
-            Parsed::Ignore
+            Parsed::Ack(Some(1))
         ));
-        let m = message(
-            r#"{"channel":"accountEvents","code":401,"error":"unauthorized: provide X-Api-Key or signed account auth","id":3,"type":"error"}"#,
-        );
+        let refusal = r#"{"channel":"accountEvents","code":401,"error":"unauthorized: provide X-Api-Key or signed account auth","id":3,"type":"error"}"#;
         assert!(matches!(
-            m,
-            WsMessage::Refused {
+            parse(refusal),
+            Parsed::Refused {
                 code: Some(401),
                 id: Some(3),
+                ..
+            }
+        ));
+        assert!(matches!(
+            message(refusal),
+            WsMessage::Refused {
+                code: Some(401),
+                subscription: None,
                 ..
             }
         ));
@@ -947,34 +1006,55 @@ mod tests {
     #[test]
     fn account_events_arrive_typed_with_the_raw_payload_kept() {
         let m = message(
-            r#"{"channel":"accountEvents","type":"orderUpdate","eventType":"order_cancelled","owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","height":7,"txHash":"AB","payload":{"client_order_id":"9","filled_quantity":"1","market":"1","order_id":"3211376","original_quantity":"260","owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","reason":"user_requested","remaining_quantity":"259"}}"#,
+            r#"{"channel":"accountEvents","type":"orderUpdate","eventType":"order_cancelled","owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","height":7,"txHash":"8D4D7F2C1A5E0B6F3C9A2E7D1B4F8A6C0E3D5B7A9C1E2F4A6B8D0C2E4F6A8B0C","payload":{"client_order_id":"9","filled_quantity":"1","market":"1","order_id":"3211376","original_quantity":"260","owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","reason":"user_requested","remaining_quantity":"259"}}"#,
         );
         let WsMessage::AccountEvent(e) = m else {
             panic!("{m:?}")
         };
         assert_eq!(e.height, 7);
+        assert!(e.tx_hash.is_some());
         let Event::OrderCancelled(c) = &e.event else {
             panic!("{:?}", e.event)
         };
         assert_eq!((c.order_id, c.client_order_id), (3_211_376, Some(9)));
-        assert_eq!(c.reason, crate::CancelReason::UserRequested);
+        assert_eq!(c.reason, CancelReason::UserRequested);
 
         // A payload that does not match its event stays raw rather than mistyped.
         let m = message(
-            r#"{"channel":"accountEvents","type":"fill","eventType":"trade_executed","owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","height":8,"payload":{"price":"1"}}"#,
+            r#"{"channel":"accountEvents","type":"fill","eventType":"trade_executed","owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","height":8,"txHash":"height-8-kind-block-event-0","payload":{"price":"1"}}"#,
         );
         let WsMessage::AccountEvent(e) = m else {
             panic!("{m:?}")
         };
         assert!(matches!(&e.event, Event::Malformed(raw) if raw.kind == "trade_executed"));
+        assert_eq!(e.tx_hash, None, "a block-event key is not a tx hash");
     }
 
     #[test]
     fn garbage_is_reported_not_dropped() {
-        assert!(matches!(message("{"), WsMessage::Malformed { .. }));
+        assert!(matches!(
+            message("{"),
+            WsMessage::Malformed {
+                subscription: None,
+                ..
+            }
+        ));
         assert!(matches!(
             message(r#"{"channel":"orderbook","type":"update","market":1}"#),
-            WsMessage::Malformed { .. }
+            WsMessage::Malformed {
+                subscription: Some(Subscription::Orderbook(1)),
+                ..
+            }
+        ));
+        // No height: malformed, never height 0 (which a baseline filter would drop).
+        assert!(matches!(
+            message(
+                r#"{"channel":"accountEvents","type":"fill","eventType":"deposited","owner":"bdae2ddf5bde1e6a5be62bcd9e008106fca6dfd9","payload":{}}"#
+            ),
+            WsMessage::Malformed {
+                subscription: Some(Subscription::AccountEvents(_)),
+                ..
+            }
         ));
     }
 
@@ -1000,9 +1080,9 @@ mod tests {
 
     #[test]
     fn ws_url_follows_the_gateway() {
-        let c = WsConfig::from_client_config(&ClientConfig::devnet()).unwrap();
+        let c = WsConfig::for_gateway(&ClientConfig::devnet());
         assert_eq!(c.url, "wss://api.dev.proof.trade/ws");
-        let c = WsConfig::from_client_config(&ClientConfig::new("http://127.0.0.1:9080/")).unwrap();
+        let c = WsConfig::for_gateway(&ClientConfig::new("http://127.0.0.1:9080/"));
         assert_eq!(c.url, "ws://127.0.0.1:9080/ws");
     }
 }

@@ -106,7 +106,7 @@ On devnet, fund a new address with the faucet first:
 | `wait_for_receipt(hash, timeout)`           | polls `GET /v1/tx/{hash}`                         |
 | `address()` / `public_key()` / `network()`  | this signer's account, key and chain id           |
 | `nonces()` / `info()`                       | the shared nonce allocator; the read client       |
-| `account_auth()`                            | signs the feed's `accountEvents` subscriptions    |
+| `ws_config()`                               | a feed config with this account's signed auth     |
 
 Every helper is a function in `proof_sdk_rs::actions` with this client's
 address, submitted at once. Call those directly to build an `Action` without
@@ -189,24 +189,24 @@ from a `{"data": ...}` route), `get_json(path)` or `post_info(&body)`.
 
 One socket carries every subscription. A background task (spawned with
 `tokio::spawn`, so `connect` needs a tokio runtime) owns it, sends an
-app-level ping every 15 s, and reconnects with backoff when a pong is missed or
-the socket drops. It then re-sends every subscription.
+app-level ping every 5 s, and reconnects with backoff when a pong is 5 s late
+or the socket drops. It then re-sends every subscription.
 
 ```rust,no_run
-use proof_sdk_rs::{ClientConfig, Event, ExchangeClient, Subscription, WsClient, WsConfig, WsMessage};
+use proof_sdk_rs::{Event, ExchangeClient, Orderbook, Subscription, WsClient, WsMessage};
 
-# async fn run(client: ExchangeClient, config: ClientConfig) -> Result<(), proof_sdk_rs::Error> {
-let ws_config = WsConfig::from_client_config(&config)?      // wss://…/ws, same API key
-    .with_account_auth(client.account_auth());              // signs accountEvents subscribes
-let (ws, mut rx) = WsClient::connect(ws_config).await?;
+# async fn run(client: ExchangeClient) -> Result<(), proof_sdk_rs::Error> {
+// wss://…/ws, the client's API key, and signed accountEvents subscribes.
+let (ws, mut rx) = WsClient::connect(client.ws_config()).await?;
 ws.subscribe(Subscription::Orderbook(1))?;
 ws.subscribe(Subscription::Trades(1))?;
 ws.subscribe(Subscription::AccountEvents(client.address()))?;
 
+let mut book = Orderbook::default();
 while let Some(msg) = rx.recv().await {                      // or use it as a `Stream`
     match msg {
-        WsMessage::OrderbookSnapshot { market, bids, asks } => { /* replace the book */ }
-        WsMessage::OrderbookUpdate { market, side, level } => { /* quantity 0 = remove */ }
+        WsMessage::OrderbookSnapshot { book: b, .. } => book = b,
+        WsMessage::OrderbookUpdate { side, level, .. } => book.apply(side, level),
         WsMessage::Trade(t) => {}
         WsMessage::AccountSnapshot { account, .. } => {}      // typed AccountInfo
         WsMessage::AccountEvent(e) => match e.event {         // typed, as on a receipt
@@ -220,10 +220,11 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
             Event::OrderPlaced(o) => {}                       // o.order_id, keyed by o.client_order_id
             Event::OrderCancelled(c) => {}
             Event::PositionUpdated(p) => {}
-            _ => {}                                           // `Event::Other(raw)`: name + attributes
+            _ => {}                                           // `Other` / `Malformed`: raw attributes
         },
         WsMessage::Reconnected => {}                          // books re-snapshot next
-        WsMessage::Refused { code, message, .. } => {}        // e.g. 401 on an unsigned account sub
+        WsMessage::Refused { subscription, code, .. } => {}   // e.g. 401 on an unsigned account sub
+        WsMessage::Malformed { subscription, .. } => {}       // drop just that book, then resubscribe
         _ => {}
     }
 }
@@ -232,18 +233,25 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
 
 - **Account auth.** Gateways running with an API key, the public devnet among
   them, refuse an unsigned `accountEvents` subscribe with 401.
+  `client.ws_config()` sets it up; for a read-only or external signer, use
+  `WsConfig::for_gateway(&config).with_account_auth(AccountAuth::new(signer, network))`.
   `AccountAuth` signs
   `"ProofExchange-account-events-v1" || chain_id || owner_hex || after_id || timestamp_ms`
   afresh on every (re)subscribe, through any `Signer`.
 - **After a reconnect** each book re-sends its snapshot. Account events from
   the gap are **not** replayed (the TypeScript SDK's history backfill is not
-  ported). Reconcile through `InfoClient::open_orders` / `account` if a missed
-  fill matters.
+  ported). Reconcile through `InfoClient::open_orders` / `account_state` (balance
+  and positions at a block height) if a missed fill matters.
 - **Account events are typed** with the same `Event` as receipts: `Fill`,
   `OrderPlaced`, `OrderCancelled`, `OrderAmended`, `OrderRejected`,
   `MarketOrderProcessed`, `PositionUpdated`, `PositionClosed`,
-  `FundingSettled`, `Deposited`. Anything else (or a payload that does not
-  match) is `Event::Other`, carrying the engine event name and raw attributes.
+  `FundingSettled`, `Deposited`. Any other kind is `Event::Other`, and a known
+  kind whose payload does not read is `Event::Malformed`; both carry the
+  engine event name and raw attributes. `tx_hash` is the causing
+  transaction's `TxHash`, `None` for block events (funding, expiry).
+- **Resync a book** by unsubscribing and subscribing again: the gateway sends
+  a fresh snapshot, in order after the updates already delivered. The feed
+  has no sequence numbers, so a long-quiet book is worth resyncing.
 - **Order ids.** Your own submission's receipt events carry them
   (`Event::OrderPlaced`). `OrderPlaced` on the feed carries the same id, with your
   `client_order_id`, for orders placed by another process.
@@ -295,8 +303,9 @@ three are on `MarketConfig`. Nothing is a float.
 ## Testing
 
 ```sh
-cargo test -p proof-sdk-rs                     # unit + loopback contract tests
-cargo test -p proof-sdk-rs --test devnet -- --ignored   # read-only devnet smoke
+cargo test -p proof-sdk-rs                              # unit + loopback contract tests
+cargo test -p proof-sdk-rs --test devnet -- --ignored   # end to end on devnet: reads and the feed
+PROOF_FAUCET_TOKEN=<token> cargo test -p proof-sdk-rs --test devnet -- --ignored  # also trades
 ```
 
 ## License

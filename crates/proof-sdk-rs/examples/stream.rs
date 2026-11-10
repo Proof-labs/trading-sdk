@@ -6,10 +6,8 @@
 //! PROOF_PRIVATE_KEY_HEX=<64 hex> PROOF_MESSAGES=0 cargo run -p proof-sdk-rs --example stream
 //! ```
 
-use std::collections::BTreeMap;
-
 use proof_sdk_rs::{
-    ClientConfig, ExchangeClient, LocalSigner, Side, Subscription, WsClient, WsConfig, WsMessage,
+    ClientConfig, ExchangeClient, LocalSigner, Orderbook, Subscription, WsClient, WsMessage,
 };
 
 #[tokio::main]
@@ -30,44 +28,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = ClientConfig::devnet();
     let client = ExchangeClient::connect(&config, LocalSigner::from_bytes(&seed)).await?;
-    let ws_config = WsConfig::from_client_config(&config)?.with_account_auth(client.account_auth());
-    let (ws, mut rx) = WsClient::connect(ws_config).await?;
+    let (ws, mut rx) = WsClient::connect(client.ws_config()).await?;
     ws.subscribe(Subscription::Orderbook(market))?;
     ws.subscribe(Subscription::Trades(market))?;
     ws.subscribe(Subscription::AccountEvents(client.address()))?;
 
-    // price -> quantity, per side
-    let mut bids = BTreeMap::new();
-    let mut asks = BTreeMap::new();
+    let mut book = Orderbook::default();
     let mut received = 0;
     while let Some(msg) = rx.recv().await {
         match msg {
-            WsMessage::OrderbookSnapshot {
-                bids: b, asks: a, ..
-            } => {
-                bids = b.iter().map(|l| (l.price, l.quantity)).collect();
-                asks = a.iter().map(|l| (l.price, l.quantity)).collect();
-            }
-            WsMessage::OrderbookUpdate { side, level, .. } => {
-                let book = if side == Side::Buy {
-                    &mut bids
-                } else {
-                    &mut asks
-                };
-                if level.quantity == 0 {
-                    book.remove(&level.price);
-                } else {
-                    book.insert(level.price, level.quantity);
-                }
-            }
+            WsMessage::OrderbookSnapshot { book: b, .. } => book = b,
+            WsMessage::OrderbookUpdate { side, level, .. } => book.apply(side, level),
             WsMessage::Reconnected => println!("reconnected; books will re-snapshot"),
             other => println!("{other:?}"),
         }
-        println!(
-            "top of book: {:?} / {:?}",
-            bids.last_key_value(),
-            asks.first_key_value()
-        );
+        println!("top of book: {:?} / {:?}", book.best_bid(), book.best_ask());
         received += 1;
         if limit != 0 && received >= limit {
             break;
