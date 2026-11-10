@@ -957,7 +957,7 @@ mod tests {
             panic!("{:?}", e.event)
         };
         assert_eq!((c.order_id, c.client_order_id), (3_211_376, Some(9)));
-        assert_eq!(c.reason, "user_requested");
+        assert_eq!(c.reason, crate::CancelReason::UserRequested);
 
         // A payload that does not match its event stays raw rather than mistyped.
         let m = message(
@@ -966,7 +966,7 @@ mod tests {
         let WsMessage::AccountEvent(e) = m else {
             panic!("{m:?}")
         };
-        assert!(matches!(&e.event, Event::Other(raw) if raw.kind == "trade_executed"));
+        assert!(matches!(&e.event, Event::Malformed(raw) if raw.kind == "trade_executed"));
     }
 
     #[test]

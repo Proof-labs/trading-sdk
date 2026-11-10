@@ -8,13 +8,11 @@ use proof_trading_sdk::gateway::{
     CommittedReceipt, ErrorKind as GatewayErrorKind, MaintenanceMode, PreAdmissionRefusal,
     RetryAfter, SubmissionOutcome, TxHash,
 };
-use proof_trading_sdk::types::{
-    Action, AmendOrder, CancelAllOrders, CancelClientOrder, CancelOrder, CancelReplaceOrder,
-    ClosePosition, MarketId, MarketOrder, OrderId, PlaceOrder, Side,
-};
+use proof_trading_sdk::types::{Action, MarketId, OrderId, PlaceOrder, Side};
 use proof_trading_sdk::{codec, crypto, Signer};
 use proof_trading_sdk::{decode_exec_error_kind, DecodedExecErrorKind, ErrorKind};
 
+use crate::actions;
 use crate::address::Address;
 use crate::error::{Error, Result};
 use crate::event::Event;
@@ -27,7 +25,6 @@ use crate::nonce::NonceAllocator;
 /// before the gateway answers. The bytes include the signature and are kept
 /// out of `Debug`.
 #[derive(Clone, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct SignedTx {
     pub bytes: Vec<u8>,
     pub hash: TxHash,
@@ -46,9 +43,9 @@ impl fmt::Debug for SignedTx {
 
 /// Why the engine refused a transaction.
 ///
-/// `Unknown` keeps the number for a code this SDK predates.
+/// `Unknown` keeps the number for a code this SDK predates. [`ErrorKind`] grows
+/// with the engine; match the kinds you handle and fall through on the rest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[non_exhaustive]
 pub enum EngineError {
     Known(ErrorKind),
     Unknown(u32),
@@ -103,7 +100,6 @@ impl fmt::Display for EngineError {
 /// A committed transaction's result: where it landed, whether it worked, and
 /// what it did.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct Receipt {
     pub hash: TxHash,
     /// The block it executed in.
@@ -174,9 +170,12 @@ impl From<PreAdmissionRefusal> for RefusalReason {
     }
 }
 
-/// Where one submission ended up.
+/// Where one submission ended up. Exhaustive: a trading loop should decide
+/// every case.
+///
+/// Only `Committed` executed. `Rejected` and `Refused` never will. `Pending`
+/// may still execute.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum TxStatus {
     /// Executed in a block. Check [`Receipt::error`]: `None` is success.
     Committed(Receipt),
@@ -191,7 +190,6 @@ pub enum TxStatus {
 
 /// The answer to one submission.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub struct Submitted {
     pub tx: SignedTx,
     pub status: TxStatus,
@@ -266,8 +264,21 @@ fn status(outcome: SubmissionOutcome<PreAdmissionRefusal>) -> TxStatus {
 /// allocator, so hand a clone to every task that trades with this key.
 ///
 /// Each submit is one `POST /exchange` with no hidden retry. The order helpers
-/// fill `owner` with this client's address. To trade as a delegated agent for
-/// another owner, build the action yourself and call [`Self::submit`].
+/// are the [`crate::actions`] builders with this client's address, submitted
+/// at once. To trade as a delegated agent for another owner, or to gate
+/// submission yourself, build the action with [`crate::actions`].
+///
+/// # Did it execute?
+///
+/// - An `Err` from [`Self::sign`] means nothing was sent.
+/// - An `Err` from [`Self::send`] means no verdict came back: the transaction
+///   may or may not execute. Reconcile `tx.hash` with
+///   [`Self::wait_for_receipt`], or resend the same [`SignedTx`]; never sign
+///   the action again.
+/// - `Ok` carries a [`TxStatus`] that says which.
+///
+/// [`Self::submit`] is `sign` then `send`, so its `Err` is either. Call the two
+/// yourself when the difference matters.
 #[derive(Clone)]
 pub struct ExchangeClient {
     inner: Arc<Inner>,
@@ -410,7 +421,8 @@ impl ExchangeClient {
 
     // -- sign / submit ------------------------------------------------------
 
-    /// Sign `action` with the next nonce. Pure CPU, no I/O.
+    /// Sign `action` with the next nonce. Pure CPU, no I/O: an `Err` means
+    /// nothing was sent.
     ///
     /// # Errors
     ///
@@ -535,8 +547,9 @@ impl ExchangeClient {
 
     // -- order helpers --------------------------------------------------------
 
-    /// A GTC limit order for this account. Adjust the fields (`post_only`,
-    /// `client_order_id`, `time_in_force`, ...) before [`Self::place_order`].
+    /// [`actions::limit_order`] for this account. Adjust the fields
+    /// (`post_only`, `client_order_id`, `time_in_force`, ...) before
+    /// [`Self::place_order`].
     #[must_use]
     pub fn limit_order(
         &self,
@@ -545,14 +558,7 @@ impl ExchangeClient {
         price: u64,
         quantity: u64,
     ) -> PlaceOrder {
-        PlaceOrder {
-            market,
-            owner: self.inner.address.to_bytes(),
-            side,
-            price,
-            quantity,
-            ..PlaceOrder::default()
-        }
+        actions::limit_order(self.address(), market, side, price, quantity)
     }
 
     /// Place a limit order (`PlaceOrder`).
@@ -564,7 +570,8 @@ impl ExchangeClient {
         self.submit(&Action::PlaceOrder(order)).await
     }
 
-    /// Immediate-or-cancel at the best available prices (`MarketOrder`).
+    /// Immediate-or-cancel at the best available prices
+    /// ([`actions::market_order`]).
     ///
     /// # Errors
     ///
@@ -575,60 +582,46 @@ impl ExchangeClient {
         side: Side,
         quantity: u64,
     ) -> Result<Submitted> {
-        self.submit(&Action::MarketOrder(MarketOrder {
-            market,
-            owner: self.owner(),
-            side,
-            quantity,
-            client_order_id: None,
-            stop_loss: None,
-            take_profit: None,
-        }))
-        .await
+        let order = actions::market_order(self.address(), market, side, quantity);
+        self.submit(&Action::MarketOrder(order)).await
     }
 
-    /// Cancel by exchange order id (`CancelOrder`).
+    /// Cancel by exchange order id ([`actions::cancel_order`]).
     ///
     /// # Errors
     ///
     /// As [`Self::submit`].
     pub async fn cancel_order(&self, order_id: OrderId) -> Result<Submitted> {
-        self.submit(&Action::CancelOrder(CancelOrder {
-            order_id,
-            owner: self.owner(),
-        }))
-        .await
+        self.submit(&actions::cancel_order(self.address(), order_id))
+            .await
     }
 
-    /// Cancel by client order id (`CancelClientOrder`).
+    /// Cancel by client order id ([`actions::cancel_client_order`]).
     ///
     /// # Errors
     ///
     /// As [`Self::submit`].
     pub async fn cancel_client_order(&self, client_order_id: u64) -> Result<Submitted> {
-        self.submit(&Action::CancelClientOrder(CancelClientOrder {
-            owner: self.owner(),
+        self.submit(&actions::cancel_client_order(
+            self.address(),
             client_order_id,
-        }))
+        ))
         .await
     }
 
     /// Cancel every resting order, or only those on `market`
-    /// (`CancelAllOrders`).
+    /// ([`actions::cancel_all_orders`]).
     ///
     /// # Errors
     ///
     /// As [`Self::submit`].
     pub async fn cancel_all_orders(&self, market: Option<MarketId>) -> Result<Submitted> {
-        self.submit(&Action::CancelAllOrders(CancelAllOrders {
-            owner: self.owner(),
-            market,
-        }))
-        .await
+        self.submit(&actions::cancel_all_orders(self.address(), market))
+            .await
     }
 
     /// Change a resting order's price and/or total quantity in place
-    /// (`AmendOrder`). A same-price size cut keeps queue priority.
+    /// ([`actions::amend_order`]).
     ///
     /// # Errors
     ///
@@ -639,41 +632,57 @@ impl ExchangeClient {
         new_price: Option<u64>,
         new_quantity: Option<u64>,
     ) -> Result<Submitted> {
-        self.submit(&Action::AmendOrder(AmendOrder {
-            owner: self.owner(),
+        self.submit(&actions::amend_order(
+            self.address(),
             order_id,
             new_price,
             new_quantity,
-        }))
+        ))
         .await
     }
 
-    /// Atomically cancel one order and place another
-    /// (`CancelReplaceOrder`). Set exactly one of `cancel_order_id` /
-    /// `cancel_client_order_id`.
+    /// Atomically cancel exchange order `order_id` and place `order`
+    /// ([`actions::cancel_replace_order`]).
     ///
     /// # Errors
     ///
     /// As [`Self::submit`].
-    pub async fn cancel_replace_order(&self, order: CancelReplaceOrder) -> Result<Submitted> {
-        self.submit(&Action::CancelReplaceOrder(order)).await
+    pub async fn cancel_replace_order(
+        &self,
+        order_id: OrderId,
+        order: PlaceOrder,
+    ) -> Result<Submitted> {
+        self.submit(&actions::cancel_replace_order(order_id, order))
+            .await
     }
 
-    /// Flatten this account's position on `market` (`ClosePosition`).
+    /// Atomically cancel the order with `client_order_id` and place `order`
+    /// ([`actions::cancel_replace_client_order`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
+    pub async fn cancel_replace_client_order(
+        &self,
+        client_order_id: u64,
+        order: PlaceOrder,
+    ) -> Result<Submitted> {
+        self.submit(&actions::cancel_replace_client_order(
+            client_order_id,
+            order,
+        ))
+        .await
+    }
+
+    /// Flatten this account's position on `market`
+    /// ([`actions::close_position`]).
     ///
     /// # Errors
     ///
     /// As [`Self::submit`].
     pub async fn close_position(&self, market: MarketId) -> Result<Submitted> {
-        self.submit(&Action::ClosePosition(ClosePosition {
-            market,
-            owner: self.owner(),
-        }))
-        .await
-    }
-
-    fn owner(&self) -> [u8; 20] {
-        self.inner.address.to_bytes()
+        self.submit(&actions::close_position(self.address(), market))
+            .await
     }
 }
 
@@ -707,10 +716,7 @@ mod tests {
     fn signatures_verify_against_the_bound_chain_only() {
         let c = client();
         let tx = c
-            .sign(&Action::CancelAllOrders(CancelAllOrders {
-                owner: c.owner(),
-                market: None,
-            }))
+            .sign(&actions::cancel_all_orders(c.address(), None))
             .unwrap();
         let raw = codec::decode_tx_raw(&tx.bytes).unwrap();
         let verify = |chain: &str| {

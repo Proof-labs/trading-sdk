@@ -1,6 +1,11 @@
 //! Read-only smoke test against the public devnet. Ignored by default (needs
 //! the network): `cargo test -p proof-sdk-rs --test devnet -- --ignored`.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::too_many_lines)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::too_many_lines
+)]
 
 use proof_sdk_rs::{ClientConfig, EventId, InfoClient};
 
