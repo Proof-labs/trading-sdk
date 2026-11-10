@@ -66,7 +66,15 @@ mod tests {
         ))
         .unwrap();
         assert!(decode(&bytes, 1).is_err());
-        assert!(decode(&bytes, 2).is_err());
+        let equal_asks = rmp_serde::to_vec(&(
+            Vec::<(u64, u64, u32)>::new(),
+            vec![(1u64, 1u64, 1u32), (1, 2, 1)],
+        ))
+        .unwrap();
+        assert_eq!(
+            decode(&equal_asks, 20).err().expect("equal asks must fail"),
+            "invalid orderbook level ordering"
+        );
         let mut bad = bytes.clone();
         bad.push(0);
         assert!(decode(&bad, 20).is_err());

@@ -62,7 +62,8 @@ def bad_books():
 
 @pytest.mark.parametrize("raw",list(bad_books()))
 def test_book_malformed_native_payload(raw):
-    with pytest.raises(sdk.GatewayReadError): sdk.decode_finalized_orderbook(book(raw),3)
+    with pytest.raises(sdk.GatewayReadError) as err: sdk.decode_finalized_orderbook(book(raw),3)
+    assert (err.value.kind, err.value.field) == ("malformed", "orderbook.msgpack")
 
 
 def test_book_depth_limit_and_extra_witness_fields():
@@ -145,4 +146,25 @@ def test_chain_pin_required_before_transport(client):
     calls,_=serve(client,snapshot())
     with pytest.raises(TypeError):client.finalized_markets_snapshot()
     with pytest.raises(sdk.GatewayReadError):client.finalized_markets_snapshot(chain_id="")
+    with pytest.raises(sdk.GatewayReadError) as err: client.finalized_markets_snapshot(chain_id=bytes(32))
+    assert (err.value.kind, err.value.field) == ("configuration", "chainId")
     assert not calls
+
+
+from pathlib import Path
+
+_ORDERBOOK_VECTORS = json.loads((Path(__file__).resolve().parents[2] / "conformance/finalized-orderbook.json").read_text())
+
+@pytest.mark.parametrize("case", _ORDERBOOK_VECTORS, ids=lambda case: case["name"])
+def test_shared_orderbook_vectors(case):
+    frame = {"market": "3", "depth": str(case["depth"]), "height": H,
+             "bookMsgpackB64": case["payload"], "witness": witness()}
+    if "data" in case: frame["data"] = case["data"]
+    if "error" in case:
+        with pytest.raises(sdk.GatewayReadError) as err:
+            sdk.decode_finalized_orderbook(frame, 3, case["depth"])
+        assert err.value.kind == case["error"]
+    else:
+        result = sdk.decode_finalized_orderbook(frame, 3, case["depth"])
+        for side in ("bids", "asks"):
+            assert [[str(v.price), str(v.total_qty), v.order_count] for v in getattr(result, side)] == case[side]

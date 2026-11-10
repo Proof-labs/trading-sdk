@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import type { FinalizedOrderbookDepth } from "./finalized-orderbook.js";
 import { describe, expect, it, vi } from "vitest";
 import { encode } from "@msgpack/msgpack";
 import { ExchangeClient } from "./client.js";
@@ -172,4 +174,45 @@ describe("finalized orderbook read", () => {
     });
     expect(transport).toHaveBeenCalledTimes(1);
   });
+});
+
+type BookVector = {
+  name: string;
+  depth: FinalizedOrderbookDepth;
+  payload: string;
+  data?: string;
+  error?: string;
+  bids?: [string, string, number][];
+  asks?: [string, string, number][];
+};
+const vectors: BookVector[] = JSON.parse(
+  readFileSync(
+    new URL("../conformance/finalized-orderbook.json", import.meta.url),
+    "utf8",
+  ),
+);
+it.each(vectors)("shared finalized orderbook: $name", (vector) => {
+  const value: Record<string, unknown> = {
+    ...frame(),
+    depth: String(vector.depth),
+    bookMsgpackB64: vector.payload,
+  };
+  delete value.data;
+  if ("data" in vector) value.data = vector.data;
+  if (vector.error) {
+    expect(() => decodeFinalizedOrderbook(value, 1, vector.depth)).toThrow(
+      expect.objectContaining({ kind: vector.error }),
+    );
+  } else {
+    const result = decodeFinalizedOrderbook(value, 1, vector.depth);
+    for (const side of ["bids", "asks"] as const) {
+      expect(
+        result[side].map((v) => [
+          String(v.price),
+          String(v.totalQty),
+          v.orderCount,
+        ]),
+      ).toEqual(vector[side]);
+    }
+  }
 });
