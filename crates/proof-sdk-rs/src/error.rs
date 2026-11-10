@@ -2,42 +2,37 @@
 
 use std::fmt;
 
-use proof_trading_sdk::gateway::{GatewayError, TxHash};
+use proof_trading_sdk::gateway::{ErrorKind, GatewayError, TxHash};
 use proof_trading_sdk::SignerError;
 
-use crate::exchange::SignedTx;
-
 /// A client failure. Never carries a key, signature or API key in its text.
+///
+/// Engine rejections and gateway refusals are not errors: they come back as
+/// [`crate::TxStatus`]. An `Err` means the call did not get an answer, or the
+/// caller passed something unusable.
+///
+/// The client keeps no state about a failed submission. A [`Error::Transport`]
+/// or [`Error::Http`] 5xx from [`crate::ExchangeClient::send`] can mean the
+/// bytes reached the gateway anyway; check the [`crate::SignedTx`] hash with
+/// [`crate::ExchangeClient::wait_for_receipt`] before signing a replacement.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
-    /// The configuration was refused (bad URL, out-of-range timeout, empty
+    /// The configuration was refused (bad URL, out-of-range timeout, invalid
     /// API key).
     Config(String),
-    /// A caller argument was malformed (address, hash).
+    /// A caller argument was malformed (address, hash, path).
     InvalidInput(String),
-    /// A read failed below HTTP (connect, TLS, reset) or timed out.
-    Transport(reqwest::Error),
-    /// A read returned a non-success status. `body` is the gateway's error
-    /// text, truncated.
+    /// The request failed below HTTP (connect, TLS, reset) or timed out.
+    Transport(Box<dyn std::error::Error + Send + Sync>),
+    /// The gateway answered with a non-success status. `body` is its error
+    /// text, truncated, and may be empty.
     Http { status: u16, body: String },
-    /// A response did not decode as the type the route promises.
+    /// The response did not decode as the type the route promises.
     Decode(String),
-    /// A read response exceeded the configured cap
+    /// The response exceeded the configured cap
     /// ([`crate::ClientConfig::with_max_read_bytes`]).
     ResponseTooLarge,
-    /// A gateway call made through the core transport failed with no
-    /// submission in flight (chain identity, receipt read). The source error
-    /// names the operation and kind.
-    Gateway(GatewayError),
-    /// The submission may have reached the gateway, but no verdict came back.
-    /// The transaction can still land. Keep `tx` and reconcile it with
-    /// [`crate::ExchangeClient::wait_for_receipt`] on `tx.hash`. **Do not
-    /// re-sign it under a fresh nonce**, or both copies may execute.
-    Ambiguous {
-        tx: Box<SignedTx>,
-        source: GatewayError,
-    },
     /// The action could not be encoded (engine `ExecError` text).
     Encode(String),
     /// The signing backend failed.
@@ -61,12 +56,6 @@ impl fmt::Display for Error {
             Error::Http { status, body } => write!(f, "HTTP {status}: {body}"),
             Error::Decode(m) => write!(f, "decode: {m}"),
             Error::ResponseTooLarge => f.write_str("response exceeds max_read_bytes"),
-            Error::Gateway(e) => write!(f, "{e}"),
-            Error::Ambiguous { tx, source } => write!(
-                f,
-                "submission of {} may have landed ({source}); reconcile by hash, do not re-sign",
-                tx.hash
-            ),
             Error::Encode(m) => write!(f, "encode: {m}"),
             Error::Signer(e) => write!(f, "{e}"),
             Error::NonceWindow { next, now_ms } => write!(
@@ -84,17 +73,37 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Error::Transport(e) => Some(e),
-            Error::Gateway(e) | Error::Ambiguous { source: e, .. } => Some(e),
+            Error::Transport(e) => Some(&**e),
             Error::Signer(e) => Some(e),
             _ => None,
         }
     }
 }
 
+/// The core transport's failures, folded into the same variants the reads
+/// use, so one failure has one name whichever path the call took.
 impl From<GatewayError> for Error {
     fn from(e: GatewayError) -> Self {
-        Error::Gateway(e)
+        let what = format!("{:?}", e.operation);
+        match e.kind {
+            ErrorKind::InvalidConfiguration => Error::Config(what),
+            ErrorKind::InvalidInput => Error::InvalidInput(what),
+            ErrorKind::Transport | ErrorKind::Timeout | ErrorKind::RpcUnavailable => {
+                Error::Transport(Box::new(e))
+            }
+            ErrorKind::BodyTooLarge => Error::ResponseTooLarge,
+            ErrorKind::HttpStatus(status) => Error::Http {
+                status,
+                body: String::new(),
+            },
+            ErrorKind::MissingMark => Error::Http {
+                status: 503,
+                body: "MissingMark".into(),
+            },
+            ErrorKind::InvalidResponse | ErrorKind::HashMismatch => {
+                Error::Decode(format!("{what}: {:?}", e.kind))
+            }
+        }
     }
 }
 
@@ -106,7 +115,7 @@ impl From<SignerError> for Error {
 
 impl From<reqwest::Error> for Error {
     fn from(e: reqwest::Error) -> Self {
-        Error::Transport(e.without_url())
+        Error::Transport(Box::new(e.without_url()))
     }
 }
 

@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Rust `proof-sdk-rs` 1.0.0**, a new crate with an async (tokio) trading client over the gateway (#425). `ExchangeClient` allocates lock-free timestamp nonces, signs through any `Signer`, and submits exactly once. An ambiguous submission returns its exact signed bytes for reconciliation. It also has `submit_and_wait` / `wait_for_receipt` and order helpers: place, market, cancel by id / client id / all, amend, cancel-replace and close. `InfoClient` reads markets, events, the order book, an account, open orders, the recent trade tape and recent nonces, decoding records as `proof-wire` types. tokio and reqwest stay out of the core, so the wasm build is unchanged. Engine-compatible with exchange 2.24.0 (proof-wire 11).
+- **Rust `proof-sdk-rs` 1.0.0**, a new crate with an async (tokio) trading client over the gateway (#425). `ExchangeClient` allocates lock-free timestamp nonces, signs through any `Signer`, and submits exactly once with no retry or hidden state. One `Error` covers both transport paths; engine rejections and gateway refusals are `TxStatus`, not errors. It also has `submit_and_wait` / `wait_for_receipt` and order helpers: place, market, cancel by id / client id / all, amend, cancel-replace and close. `InfoClient` reads markets, events, the order book, an account, open orders, the recent trade tape and recent nonces, decoding records as `proof-wire` types. tokio and reqwest stay out of the core, so the wasm build is unchanged. Engine-compatible with exchange 2.24.0 (proof-wire 11).
 - Rust core: `query` re-exports `OrderbookSnapshot` and `LevelSummary` from proof-wire. Additive (MINOR).
 
 ### Fixed

@@ -108,11 +108,34 @@ computed hash, a `TxStatus`, and `retry_after: Option<Duration>`:
 codes decode with `core::decode_exec_error_kind(code, None)` (for example 12 is insufficient
 margin and 21 is an invalid nonce).
 
-**Ambiguous submissions.** If the POST may have reached the gateway but no
-verdict came back (timeout, 5xx, unreadable body), `send` returns
-`Error::Ambiguous { tx, .. }` carrying the exact signed bytes. Reconcile with
-`wait_for_receipt(tx.hash, ..)`. **Do not re-sign the same intent under a new
-nonce.** Both copies could execute.
+**Failed submissions.** The client posts once and keeps no state. An
+`Err` means no verdict came back; engine rejections and gateway refusals are
+`TxStatus`, not errors. After `Error::Transport` or an `Error::Http` 5xx the
+bytes may still have reached the gateway. To keep the handle, sign and send
+separately:
+
+```rust,ignore
+let tx = client.sign(&action)?;
+match client.send(&tx).await {
+    Ok(s) => { /* verdict */ }
+    Err(_) => { /* look up tx.hash with wait_for_receipt, or resend &tx */ }
+}
+```
+
+Resending the same `tx` is safe (same nonce, executes at most once).
+**Signing the action again makes a second transaction.**
+
+### Errors
+
+| `Error`                         | Meaning                                                    |
+| ------------------------------- | ---------------------------------------------------------- |
+| `Transport`                     | Connect, TLS, reset or timeout. No answer.                 |
+| `Http { status, body }`         | The gateway answered non-2xx.                              |
+| `Decode` / `ResponseTooLarge`   | The answer was unreadable or over `max_read_bytes`.        |
+| `ReceiptTimeout { hash }`       | `wait_for_receipt` ran out of time; it may still land.     |
+| `Config` / `InvalidInput`       | Bad configuration or argument.                             |
+| `Encode` / `Signer`             | The action did not encode, or the signer failed.           |
+| `NonceWindow` / `ChainMismatch` | Clock ran 60s ahead; gateway serves another chain.         |
 
 ### `InfoClient`: reads
 

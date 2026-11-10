@@ -82,7 +82,7 @@ async fn place_order_posts_the_signed_bytes_and_reads_a_committed_verdict() {
     )])
     .await;
     let c = client(&url);
-    let submitted = c.send(tx.clone()).await.unwrap();
+    let submitted = c.send(&tx).await.unwrap();
     assert!(submitted.is_success());
     assert_eq!(submitted.error_code(), None);
 
@@ -104,7 +104,7 @@ async fn a_checktx_rejection_surfaces_its_engine_code() {
         json!({"status":"error","txHash":tx.hash.to_string(),"code":12}),
     )])
     .await;
-    let s = client(&url).send(tx).await.unwrap();
+    let s = client(&url).send(&tx).await.unwrap();
     assert!(!s.is_success());
     assert_eq!(s.error_code(), Some(12));
 }
@@ -124,7 +124,7 @@ async fn a_pending_submission_reconciles_through_its_receipt() {
     ])
     .await;
     let c2 = client(&url);
-    let s = c2.send(tx).await.unwrap();
+    let s = c2.send(&tx).await.unwrap();
     assert!(s.is_pending());
     let receipt = c2
         .wait_for_receipt(hash, Duration::from_secs(5))
@@ -137,16 +137,23 @@ async fn a_pending_submission_reconciles_through_its_receipt() {
 }
 
 #[tokio::test]
-async fn an_unreadable_verdict_is_ambiguous_and_returns_the_exact_bytes() {
+async fn a_5xx_on_submit_is_a_plain_http_error() {
     let c = client("http://127.0.0.1:1");
     let tx = c.sign(&cancel_all(&c)).unwrap();
     let (url, _) = fixture(vec![(502, json!({"oops": true}))]).await;
-    match client(&url).send(tx.clone()).await {
-        Err(Error::Ambiguous { tx: kept, source }) => {
-            assert_eq!(*kept, tx, "caller gets back the bytes to reconcile");
-            assert_eq!(source.reconcile_hash, Some(tx.hash));
-        }
-        other => panic!("expected Ambiguous, got {other:?}"),
+    match client(&url).send(&tx).await {
+        Err(Error::Http { status: 502, .. }) => {}
+        other => panic!("expected Http 502, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn an_unreachable_gateway_is_a_transport_error() {
+    let c = client("http://127.0.0.1:1");
+    let tx = c.sign(&cancel_all(&c)).unwrap();
+    match c.send(&tx).await {
+        Err(Error::Transport(_)) => {}
+        other => panic!("expected Transport, got {other:?}"),
     }
 }
 
@@ -232,7 +239,7 @@ async fn a_gateway_refusal_is_typed_with_its_retry_hint() {
         json!({"status":"refused","error":"rate limited","errorCode":"RateLimited","retryAfterMs":1501}),
     )])
     .await;
-    let s = client(&url).send(tx).await.unwrap();
+    let s = client(&url).send(&tx).await.unwrap();
     assert_eq!(s.status, TxStatus::Refused(RefusalReason::RateLimited));
     assert!(!s.is_success() && !s.is_pending());
     assert_eq!(

@@ -224,6 +224,10 @@ impl std::fmt::Debug for InfoClient {
 
 impl InfoClient {
     /// Build a client. Makes no request.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] for an invalid URL, API key or timeout.
     pub fn new(config: &ClientConfig) -> Result<Self> {
         let gateway = GatewayClient::new(
             &config.gateway_url,
@@ -272,6 +276,11 @@ impl InfoClient {
 
     /// `GET /v1/status`: the network the gateway serves and its latest
     /// committed block.
+    ///
+    /// # Errors
+    ///
+    /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
+    /// or [`Error::ResponseTooLarge`].
     pub async fn chain_status(&self) -> Result<ChainStatus> {
         let id = self.gateway.chain_identity().await?;
         Ok(ChainStatus {
@@ -283,6 +292,11 @@ impl InfoClient {
 
     /// `GET /v1/markets`: every market's config (tick, lot, margin, kind,
     /// ticker).
+    ///
+    /// # Errors
+    ///
+    /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
+    /// or [`Error::ResponseTooLarge`].
     pub async fn markets(&self) -> Result<Vec<MarketConfig>> {
         let bytes = self.get_data("/v1/markets").await?;
         decode(&bytes, &Shape::List(&reads::MARKET_CONFIG), "markets")
@@ -290,12 +304,22 @@ impl InfoClient {
 
     /// `GET /v1/events`: every event, with its binary book and attached
     /// conditionals.
+    ///
+    /// # Errors
+    ///
+    /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
+    /// or [`Error::ResponseTooLarge`].
     pub async fn events(&self) -> Result<Vec<EventInfo>> {
         let bytes = self.get_data("/v1/events").await?;
         decode(&bytes, &Shape::List(&reads::EVENT_INFO), "events")
     }
 
     /// `GET /v1/event/{id}`; `None` when it does not exist.
+    ///
+    /// # Errors
+    ///
+    /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
+    /// or [`Error::ResponseTooLarge`]. A missing event is `Ok(None)`, not an error.
     pub async fn event(&self, event_id: EventId) -> Result<Option<EventInfo>> {
         match self.get_data(&format!("/v1/event/{event_id}")).await {
             Ok(bytes) => decode(&bytes, &Shape::Optional(&reads::EVENT_INFO), "event"),
@@ -305,6 +329,11 @@ impl InfoClient {
     }
 
     /// `GET /v1/orderbook/{market}`: the aggregated book.
+    ///
+    /// # Errors
+    ///
+    /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
+    /// or [`Error::ResponseTooLarge`].
     pub async fn orderbook(&self, market: MarketId) -> Result<Orderbook> {
         let bytes = self.get_data(&format!("/v1/orderbook/{market}")).await?;
         let snap: proof_trading_sdk::query::OrderbookSnapshot =
@@ -321,6 +350,11 @@ impl InfoClient {
     }
 
     /// `GET /v1/trades/{market}?limit=`: the recent public tape, newest first.
+    ///
+    /// # Errors
+    ///
+    /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
+    /// or [`Error::ResponseTooLarge`].
     pub async fn recent_trades(&self, market: MarketId, limit: u32) -> Result<Vec<Trade>> {
         #[derive(Deserialize)]
         struct Tape {
@@ -334,12 +368,22 @@ impl InfoClient {
 
     /// `POST /info {clearinghouseState}`: balance, positions, equity and
     /// margin for `owner`. An account never credited reads as zeros.
+    ///
+    /// # Errors
+    ///
+    /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
+    /// or [`Error::ResponseTooLarge`].
     pub async fn account(&self, owner: Address) -> Result<AccountInfo> {
         let bytes = self.post_info_data("clearinghouseState", owner).await?;
         decode(&bytes, &reads::ACCOUNT_INFO, "account")
     }
 
     /// `POST /info {openOrders}`: `owner`'s resting orders.
+    ///
+    /// # Errors
+    ///
+    /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
+    /// or [`Error::ResponseTooLarge`].
     pub async fn open_orders(&self, owner: Address) -> Result<Vec<Order>> {
         let bytes = self.post_info_data("openOrders", owner).await?;
         decode(&bytes, &Shape::List(&ORDER), "open orders")
@@ -349,6 +393,11 @@ impl InfoClient {
     /// remembers for `owner`. Pass the maximum to
     /// [`crate::NonceAllocator::next_after`] when a restarted process must stay
     /// ahead of its predecessor.
+    ///
+    /// # Errors
+    ///
+    /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
+    /// or [`Error::ResponseTooLarge`].
     pub async fn recent_nonces(&self, owner: Address) -> Result<Vec<u64>> {
         #[derive(Deserialize)]
         struct Recent {
@@ -366,12 +415,22 @@ impl InfoClient {
     /// GET a `{"data": "<base64 msgpack>"}` route and return the decoded
     /// `MessagePack` bytes, for routes this client does not wrap. Decode them
     /// with [`proof_trading_sdk::reads::decode`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for a bad `path`, otherwise a read failure:
+    /// [`Error::Transport`], [`Error::Http`], [`Error::Decode`] or
+    /// [`Error::ResponseTooLarge`].
     pub async fn get_data(&self, path: &str) -> Result<Vec<u8>> {
         let env: DataEnvelope = self.get_json(path).await?;
         unbase64(&env.data)
     }
 
     /// GET a JSON route.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::get_data`].
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let url = self.url(path)?;
         let resp = self.http.get(url).send().await?;
@@ -379,6 +438,10 @@ impl InfoClient {
     }
 
     /// POST a JSON body to `/info` and return the JSON answer.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::get_data`].
     pub async fn post_info<B: Serialize + ?Sized, T: DeserializeOwned>(
         &self,
         body: &B,

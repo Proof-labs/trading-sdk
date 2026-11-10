@@ -37,6 +37,11 @@ impl NonceAllocator {
     }
 
     /// The next nonce.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NonceWindow`] if the next nonce would be more than
+    /// [`MAX_CLOCK_LEAD_MS`] ahead of the wall clock.
     pub fn next(&self) -> Result<u64> {
         self.next_after(0)
     }
@@ -44,6 +49,10 @@ impl NonceAllocator {
     /// The next nonce, strictly above `floor`. Use the floor to stay ahead of
     /// nonces a previous process signed with the same key (for example the
     /// highest value from [`crate::InfoClient::recent_nonces`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::next`].
     pub fn next_after(&self, floor: u64) -> Result<u64> {
         let now = now_ms();
         let mut prev = self.last.load(Ordering::Relaxed);

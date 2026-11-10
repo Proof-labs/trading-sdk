@@ -224,6 +224,10 @@ const RECEIPT_POLL_MAX: Duration = Duration::from_millis(600);
 impl ExchangeClient {
     /// Build a client signing for `config`'s chain id. Makes no request.
     /// Use [`Self::connect`] to check the chain against the gateway first.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] if `config` has no chain id or is invalid.
     pub fn new(config: &ClientConfig, signer: impl Signer + 'static) -> Result<Self> {
         let network = config
             .chain_id()
@@ -242,6 +246,11 @@ impl ExchangeClient {
 
     /// Read the gateway's chain and bind signatures to it. If `config` names
     /// a chain id, the gateway must serve that chain.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Config`] for an invalid `config`, a read failure from
+    /// [`InfoClient::chain_status`], or [`Error::ChainMismatch`].
     pub async fn connect(config: &ClientConfig, signer: impl Signer + 'static) -> Result<Self> {
         let info = InfoClient::new(config)?;
         let chain = info.chain_status().await?;
@@ -304,6 +313,11 @@ impl ExchangeClient {
     // -- sign / submit ------------------------------------------------------
 
     /// Sign `action` with the next nonce. Pure CPU, no I/O.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NonceWindow`] if the allocator would run too far ahead of the
+    /// clock, [`Error::Encode`] or [`Error::Signer`].
     pub fn sign(&self, action: &Action) -> Result<SignedTx> {
         let seq = self.inner.nonces.next()?;
         self.sign_with_seq(action, seq)
@@ -311,6 +325,10 @@ impl ExchangeClient {
 
     /// Sign `action` with a caller-chosen `seq`. The caller guarantees it is
     /// unique for this key.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Encode`] or [`Error::Signer`].
     pub fn sign_with_seq(&self, action: &Action, seq: u64) -> Result<SignedTx> {
         let encode = |e: proof_trading_sdk::types::ExecError| Error::Encode(e.to_string());
         let inner = &*self.inner;
@@ -337,38 +355,50 @@ impl ExchangeClient {
         })
     }
 
-    /// Submit signed bytes exactly once.
+    /// `POST /exchange` the signed bytes once. No retry.
     ///
-    /// Returns [`Error::Ambiguous`] carrying `tx` when the request may have
-    /// reached the gateway without a verdict coming back.
-    pub async fn send(&self, tx: SignedTx) -> Result<Submitted> {
-        match self
+    /// On [`Error::Transport`] or an [`Error::Http`] 5xx the bytes may still
+    /// have reached the gateway: look `tx.hash` up with
+    /// [`Self::wait_for_receipt`], or resend the same `tx` (same nonce, so it
+    /// executes at most once). Signing the action again creates a second
+    /// transaction.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Transport`] or [`Error::Http`] when no verdict came back,
+    /// [`Error::Decode`] or [`Error::ResponseTooLarge`] when it was unreadable.
+    pub async fn send(&self, tx: &SignedTx) -> Result<Submitted> {
+        let s = self
             .inner
             .info
             .gateway()
             .submit_signed_bytes_with_evidence(&tx.bytes)
-            .await
-        {
-            Ok(s) => Ok(Submitted {
-                tx,
-                status: status(s.outcome),
-                retry_after: retry_after(s.retry_after),
-            }),
-            Err(source) if source.reconcile_hash.is_some() => Err(Error::Ambiguous {
-                tx: Box::new(tx),
-                source,
-            }),
-            Err(e) => Err(e.into()),
-        }
+            .await?;
+        Ok(Submitted {
+            tx: tx.clone(),
+            status: status(s.outcome),
+            retry_after: retry_after(s.retry_after),
+        })
     }
 
     /// Sign `action` with a fresh nonce and submit it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NonceWindow`], [`Error::Encode`] or [`Error::Signer`] before
+    /// anything is sent, then whatever [`Self::send`] returns.
     pub async fn submit(&self, action: &Action) -> Result<Submitted> {
-        self.send(self.sign(action)?).await
+        self.send(&self.sign(action)?).await
     }
 
     /// [`Self::submit`], then wait up to `timeout` for a pending result to
     /// commit. A refused or already-committed result returns immediately.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NonceWindow`], [`Error::Encode`] or [`Error::Signer`] before
+    /// anything is sent, then whatever [`Self::send`] returns.
+    /// [`Error::ReceiptTimeout`] if a pending result does not commit in time.
     pub async fn submit_and_wait(&self, action: &Action, timeout: Duration) -> Result<Submitted> {
         let mut submitted = self.submit(action).await?;
         if submitted.is_pending() {
@@ -381,6 +411,11 @@ impl ExchangeClient {
     /// Poll `GET /v1/tx/{hash}` until the transaction commits or `timeout`
     /// passes. Not found is not failure: it returns
     /// [`Error::ReceiptTimeout`], and the transaction may still land later.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ReceiptTimeout`] at the deadline. Other failures are retried
+    /// until then, except [`Error::Config`] and [`Error::InvalidInput`].
     pub async fn wait_for_receipt(&self, hash: TxHash, timeout: Duration) -> Result<Receipt> {
         let deadline = tokio::time::Instant::now() + timeout;
         let mut delay = RECEIPT_POLL_START;
@@ -429,11 +464,19 @@ impl ExchangeClient {
     }
 
     /// Place a limit order (`PlaceOrder`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
     pub async fn place_order(&self, order: PlaceOrder) -> Result<Submitted> {
         self.submit(&Action::PlaceOrder(order)).await
     }
 
     /// Immediate-or-cancel at the best available prices (`MarketOrder`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
     pub async fn market_order(
         &self,
         market: MarketId,
@@ -453,6 +496,10 @@ impl ExchangeClient {
     }
 
     /// Cancel by exchange order id (`CancelOrder`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
     pub async fn cancel_order(&self, order_id: OrderId) -> Result<Submitted> {
         self.submit(&Action::CancelOrder(CancelOrder {
             order_id,
@@ -462,6 +509,10 @@ impl ExchangeClient {
     }
 
     /// Cancel by client order id (`CancelClientOrder`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
     pub async fn cancel_client_order(&self, client_order_id: u64) -> Result<Submitted> {
         self.submit(&Action::CancelClientOrder(CancelClientOrder {
             owner: self.owner(),
@@ -472,6 +523,10 @@ impl ExchangeClient {
 
     /// Cancel every resting order, or only those on `market`
     /// (`CancelAllOrders`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
     pub async fn cancel_all_orders(&self, market: Option<MarketId>) -> Result<Submitted> {
         self.submit(&Action::CancelAllOrders(CancelAllOrders {
             owner: self.owner(),
@@ -482,6 +537,10 @@ impl ExchangeClient {
 
     /// Change a resting order's price and/or total quantity in place
     /// (`AmendOrder`). A same-price size cut keeps queue priority.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
     pub async fn amend_order(
         &self,
         order_id: OrderId,
@@ -500,11 +559,19 @@ impl ExchangeClient {
     /// Atomically cancel one order and place another
     /// (`CancelReplaceOrder`). Set exactly one of `cancel_order_id` /
     /// `cancel_client_order_id`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
     pub async fn cancel_replace_order(&self, order: CancelReplaceOrder) -> Result<Submitted> {
         self.submit(&Action::CancelReplaceOrder(order)).await
     }
 
     /// Flatten this account's position on `market` (`ClosePosition`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
     pub async fn close_position(&self, market: MarketId) -> Result<Submitted> {
         self.submit(&Action::ClosePosition(ClosePosition {
             market,
