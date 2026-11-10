@@ -64,7 +64,7 @@ def _chain_name(value: t.Any) -> bool:
 
 
 def _chain_pin(chain_id: str | bytes) -> bytes:
-    if isinstance(chain_id, bytes) and len(chain_id) == 32:
+    if isinstance(chain_id, bytes) and len(chain_id) == 32 and any(chain_id):
         return chain_id
     if _chain_name(chain_id):
         return chain_id_from_string(chain_id)

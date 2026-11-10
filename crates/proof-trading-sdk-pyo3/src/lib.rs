@@ -291,7 +291,8 @@ fn decode_finalized_orderbook<'py>(
     bytes: &[u8],
     depth: usize,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let book = core_sdk::finalized_orderbook::decode(bytes, depth).map_err(PyValueError::new_err)?;
+    let book =
+        core_sdk::finalized_orderbook::decode(bytes, depth).map_err(PyValueError::new_err)?;
     pythonize::pythonize(py, &book).map_err(map_pythonize_err)
 }
 
@@ -540,6 +541,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(decode_finalized_orderbook, m)?)?;
     m.add_function(wrap_pyfunction!(decode_markets_snapshot, m)?)?;
     m.add_function(wrap_pyfunction!(decode_account_state, m)?)?;
+    m.add(
+        "MAX_BOOK_BYTES",
+        core_sdk::finalized_orderbook::MAX_BOOK_BYTES,
+    )?;
     m.add(
         "MAX_ACCOUNT_STATE_BYTES",
         core_sdk::account_state::MAX_ACCOUNT_STATE_BYTES,

@@ -7,9 +7,9 @@ from dataclasses import dataclass
 import json
 import typing as t
 
-from proof_trading_sdk._native import decode_finalized_orderbook as _decode_book
+from proof_trading_sdk._native import MAX_BOOK_BYTES, decode_finalized_orderbook as _decode_book
 from proof_trading_sdk.errors import CodecError, GatewayReadError
-from proof_trading_sdk.evidence import FinalizedReadWitness, decode_finalized_read_witness, _chain_pin
+from proof_trading_sdk.evidence import FinalizedReadWitness, decode_finalized_read_witness, _chain_pin, _SAFE_INTEGER
 from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
 
 
@@ -49,20 +49,20 @@ def decode_finalized_orderbook(value: t.Any, market: int, depth: int = 20) -> Fi
     if value.get("market") != str(market) or value.get("depth") != str(depth):
         raise GatewayReadError("binding", "orderbook.market/depth")
     height = value.get("height")
-    if type(height) is float and height.is_integer() and abs(height) <= (1 << 53)-1:
+    if type(height) is float and height.is_integer() and abs(height) <= _SAFE_INTEGER:
         height = int(height)
-    if type(height) is not int or not 1 <= height <= (1 << 53)-1:
+    if type(height) is not int or not 1 <= height <= _SAFE_INTEGER:
         raise GatewayReadError("malformed", "orderbook.height")
     encoded = value.get("bookMsgpackB64")
-    if encoded != value.get("data"):
+    if "data" in value and encoded != value["data"]:
         raise GatewayReadError("binding", "orderbook.encoding")
-    if not isinstance(encoded, str) or not encoded or len(encoded) > 4*((512*1024+2)//3):
+    if not isinstance(encoded, str) or not encoded or len(encoded) > 4*((MAX_BOOK_BYTES+2)//3):
         raise GatewayReadError("malformed", "orderbook.base64")
     try:
         payload = base64.b64decode(encoded, validate=True)
     except (ValueError, binascii.Error) as err:
         raise GatewayReadError("malformed", "orderbook.base64") from err
-    if len(payload) > 512*1024 or base64.b64encode(payload).decode("ascii") != encoded:
+    if len(payload) > MAX_BOOK_BYTES or base64.b64encode(payload).decode("ascii") != encoded:
         raise GatewayReadError("malformed", "orderbook.base64")
     try:
         book = _decode_book(payload, depth)
