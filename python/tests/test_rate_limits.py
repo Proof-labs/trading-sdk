@@ -12,9 +12,10 @@ from proof_trading_sdk import ExchangeClient, RateLimited, SdkConfig
 @pytest.mark.parametrize("method,args", [
     ("account", (bytes(20),)),
     ("status", ()),
+    ("markets_snapshot", ()),
     ("submit_action", (b"mock-envelope",)),
 ])
-def test_rate_limit_exception_selects_its_cached_response_state(
+def test_rate_limit_exception_selects_the_matching_bucket(
     bucket_header, expected_bucket, method, args
 ):
     headers = {
@@ -64,5 +65,23 @@ def test_default_and_named_bucket_state_stay_separate():
             assert client.rate_limit_state(caught.value.bucket).limit == limit
         assert client.rate_limit_state("default").limit == 20
         assert client.rate_limit_state("orders").limit == 40
+    finally:
+        client.close()
+
+
+def test_bucket_lookup_returns_the_latest_response_state():
+    responses = iter([
+        httpx.Response(429, headers={"X-RateLimit-Remaining": "0"}),
+        httpx.Response(200, headers={"X-RateLimit-Remaining": "19"}, json={}),
+    ])
+    client = ExchangeClient(config=SdkConfig(gateway_url="https://example.invalid"))
+    client._http.close()
+    client._http = httpx.Client(transport=httpx.MockTransport(lambda _: next(responses)))
+    try:
+        with pytest.raises(RateLimited) as caught:
+            client.status()
+        assert client.rate_limit_state(caught.value.bucket).remaining == 0
+        client.status()
+        assert client.rate_limit_state(caught.value.bucket).remaining == 19
     finally:
         client.close()
