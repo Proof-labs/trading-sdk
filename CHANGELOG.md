@@ -9,6 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Python `history_candles` reads durable OHLCV history with typed pages, exact
+  decimal strings, and backward time-window pagination.
+
 - Python `ExternalSigner` and `ExchangeClient.set_external_signer` accept
   synchronous Ed25519 callbacks for transactions and account-stream auth.
   Rust prepares canonical messages and verifies returned signatures; replacing

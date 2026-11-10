@@ -57,6 +57,58 @@ hash as `tx_hash`; reconcile that hash before retrying.
 
 See the full API at `help(proof_trading_sdk)`.
 
+## Candle history
+
+`history_candles` reads durable OHLCV bars through the gateway's
+`/v1/history/candles`. Prices and volumes remain decimal strings; timestamps
+retain the server's original strings, including nanoseconds and extended years
+in wide historical windows. No float conversion is applied.
+
+Values retain the indexer's stored units: `volume` sums raw fill quantities,
+and `quote_volume` sums stored price × raw quantity. These are not automatically
+converted to human-size units or USDC; historical archives may use a different
+price representation. Apply the market and data-era scaling contract before
+displaying monetary values.
+
+```python
+page = client.history_candles(7, "1h", limit=100)
+if page.has_more:
+    older_than = page.candles[0].time if page.candles else page.from_
+    page = client.history_candles(7, "1h", to=older_than, limit=100)
+```
+
+The newest bars in the requested window are returned oldest first. Empty
+buckets are omitted. `from_` and `to` accept RFC3339 or integer epoch
+milliseconds; `to` is exclusive. Omit `from_` when paging backward to let the
+server choose the older window. `earliest` is null when no history exists.
+The server accepts unsigned four-digit years in RFC3339 request strings;
+extended-year response boundaries require integer epoch milliseconds if reused
+as request parameters.
+Resolutions use a positive count (1–9999) followed by `m`, `h`, `d`, `w`, `M`
+or `y`; uppercase `M` means calendar months. The server decides which resolutions
+its deployed version accepts. `limit` is 1–5000 (default 1500).
+The server rejects windows wider than roughly 50,000 resolution widths with
+`window_too_large`; request a narrower time window even when `limit` is small.
+Coarser candles aggregate only source rows inside the requested window, so a
+boundary candle may be partial and its label may precede `from_`. Align window
+edges to the resolution boundaries when complete historical bars are required;
+paging by that partial bar's label does not recover its excluded source rows.
+This also applies to a call that omits `from_` on a stride that is not a native
+bar (for example `5m`), because the server's default window is not aligned. In
+that case `candles[0].time < from_` marks a partial first bar, and its missing
+rows are not returned by later pages. Pass aligned `from_` and `to` for complete
+history. Native `1m`, `1h` and `1d` bars and calendar strides are not affected.
+
+These are indexer observations, not witnessed finalized-state proofs. A failed
+or malformed read raises an SDK error, rather than becoming an empty page.
+
+## Python coverage
+
+Track the remaining Python capabilities and their PRs in
+[#362](https://github.com/Proof-labs/trading-sdk/issues/362).
+This change covers candle history; capabilities in other open PRs become
+available when those changes are merged and released.
+
 ## Callback signer
 
 ```python

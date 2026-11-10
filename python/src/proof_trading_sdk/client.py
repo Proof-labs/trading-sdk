@@ -42,6 +42,12 @@ from proof_trading_sdk.actions import (
     encode_action,
 )
 from proof_trading_sdk.config import SdkConfig, load_config
+from proof_trading_sdk.candle_history import (
+    CandleHistoryPage,
+    CandleHistoryTime,
+    candle_history_params,
+    decode_candle_history,
+)
 from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
 from proof_trading_sdk.errors import (
     AuthenticationError,
@@ -1435,7 +1441,32 @@ class ExchangeClient:
         resp = self._get(f"/v1/trades/{market}")
         return _response_json(resp)
 
-    # ── History (cursor-paginated) ───────────────────────────────────────
+    # ── History ─────────────────────────────────────────────────────────
+
+    def history_candles(
+        self,
+        market: int,
+        resolution: str = "1m",
+        *,
+        from_: CandleHistoryTime | None = None,
+        to: CandleHistoryTime | None = None,
+        limit: int = 1500,
+    ) -> CandleHistoryPage:
+        """Durable OHLCV history through ``GET /v1/history/candles``.
+
+        Times accept RFC3339 strings or integer epoch milliseconds. The newest
+        ``limit`` buckets in the window are returned oldest first; empty buckets
+        are omitted. Prices and volumes remain exact decimal strings. Read older
+        bars with ``to=page.candles[0].time`` when ``page.has_more`` is true.
+        An empty window can still have older history; use ``to=page.from_`` then.
+        Coarser boundary bars may be partial, including under the server's
+        default window; align ``from_`` and ``to`` for complete bars.
+        The server rejects windows wider than roughly 50,000 resolution widths.
+        This is an indexer read, not a witnessed finalized-state proof.
+        """
+        params = candle_history_params(market, resolution, from_, to, limit)
+        body = _response_json(self._get("/v1/history/candles", params))
+        return decode_candle_history(body, market=market, resolution=resolution, limit=limit)
 
     def history_fills(
         self,
