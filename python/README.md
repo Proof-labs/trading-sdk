@@ -78,6 +78,8 @@ Connecting snapshots the public key and callable and drops the client's
 references to its previous secret key or opaque handle. It cannot erase copies
 held by the caller. Connecting another signer while a callback is running
 discards the old result with `SigningError`, including reentrant replacement.
+The TP/SL helpers bind owner selection to that same connection; replacement
+before signing fails without asking the new wallet to sign the old request.
 Signature bytes, public-key bytes and payload bytes are copied at the boundary.
 
 Callbacks must return bytes (or a bytearray/memoryview), never an awaitable.
@@ -95,6 +97,9 @@ authentication prompts. Existing `SigningHandle`/PKCS#11 support is unchanged.
 When a secret key, signing handle or external signer is connected, it also signs the gateway's
 subscription challenge on every attempt, matching TypeScript. A stale or
 non-admin API key therefore does not suppress valid signed authentication.
+The default authentication factory checks the current signer on every attempt,
+including one connected after stream creation. The subscribed owner stays fixed;
+a signer for another owner produces an error rather than an unsigned fallback.
 Set the client's chain ID to the gateway's chain: Python does not resolve it
 automatically. `account_auth()` raises `SigningError` for an unbound chain ID
 before signing; a stream reports the signing failure through its bounded retry
