@@ -1,6 +1,6 @@
 //! Read-only smoke test against the public devnet. Ignored by default (needs
 //! the network): `cargo test -p proof-sdk-rs --test devnet -- --ignored`.
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, clippy::panic)]
 
 use proof_sdk_rs::{ClientConfig, EventId, InfoClient};
 
@@ -34,4 +34,44 @@ async fn every_read_decodes_against_devnet() {
         info.account(t.maker_owner).await.unwrap();
         info.recent_nonces(t.maker_owner).await.unwrap();
     }
+}
+
+#[cfg(feature = "ws")]
+#[tokio::test]
+#[ignore = "hits the public devnet gateway"]
+async fn the_feed_snapshots_a_book_and_accepts_a_signed_account_subscription() {
+    use proof_sdk_rs::{ExchangeClient, LocalSigner, Subscription, WsClient, WsConfig, WsMessage};
+    use std::time::Duration;
+
+    let config = ClientConfig::devnet();
+    let client = ExchangeClient::offline(
+        &config,
+        LocalSigner::from_bytes(&proof_sdk_rs::random_seed()),
+    )
+    .unwrap();
+    let ws_config = WsConfig::from_client_config(&config)
+        .unwrap()
+        .with_account_auth(client.account_auth());
+    let (ws, mut rx) = WsClient::connect(ws_config).await.unwrap();
+    ws.subscribe(Subscription::Orderbook(1)).unwrap();
+    ws.subscribe(Subscription::AccountEvents(client.address()))
+        .unwrap();
+
+    let (mut book, mut account) = (false, false);
+    while !(book && account) {
+        let msg = tokio::time::timeout(Duration::from_secs(15), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        match msg {
+            WsMessage::OrderbookSnapshot { market: 1, .. } => book = true,
+            WsMessage::AccountSnapshot { owner, .. } => {
+                assert_eq!(owner, client.address());
+                account = true;
+            }
+            WsMessage::Refused { .. } | WsMessage::Malformed { .. } => panic!("{msg:?}"),
+            _ => {}
+        }
+    }
+    ws.close();
 }

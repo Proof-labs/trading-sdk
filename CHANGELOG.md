@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Rust `proof-sdk-rs` 1.0.0**, a new async (tokio) trading client over the gateway (#425). The core and WASM build are unchanged.
+- **Rust `proof-sdk-rs` 1.0.0**, a new async (tokio) trading client over the gateway (#425), with a WebSocket feed (`ws` feature, on by default). The core and WASM build are unchanged.
 
 ### Fixed
 

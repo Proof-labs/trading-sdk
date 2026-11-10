@@ -3,8 +3,8 @@
 An async (tokio) trading client for the Proof Exchange, built on the
 [`proof-trading-sdk`](../proof-trading-sdk) core. The core signs and encodes
 transactions exactly as the engine does. This crate adds what a trading bot
-needs on top: nonce allocation, submission, receipts, order helpers and typed
-reads.
+needs on top: nonce allocation, submission, receipts, order helpers, typed
+reads and the live WebSocket feed.
 
 - **Thin and fast.** Signing is pure CPU (no I/O, no locks). The nonce
   allocator is a single atomic. Clones share one keep-alive connection pool.
@@ -66,6 +66,7 @@ Run the bundled example (read-only unless `PROOF_LIVE=1`):
 
 ```sh
 cargo run -p proof-sdk-rs --example quickstart
+cargo run -p proof-sdk-rs --example stream      # book + trades + signed account feed
 PROOF_PRIVATE_KEY_HEX=<64 hex> PROOF_LIVE=1 cargo run -p proof-sdk-rs --example quickstart
 ```
 
@@ -150,6 +151,53 @@ Records decode as the engine's own `proof-wire` types through the core's
 `reads::decode`, so a field appended by a newer engine does not break a read.
 For a route this client does not wrap, use `get_data(path)` (MessagePack bytes
 from a `{"data": ...}` route), `get_json(path)` or `post_info(&body)`.
+
+### `WsClient`: live feed (feature `ws`, default)
+
+One socket carries every subscription. A background task owns it, sends an
+app-level ping every 15 s, and reconnects with backoff when a pong is missed or
+the socket drops. It then re-sends every subscription.
+
+```rust,no_run
+use proof_sdk_rs::{ClientConfig, ExchangeClient, LocalSigner, Subscription, WsClient, WsConfig, WsMessage};
+
+# async fn run(client: ExchangeClient, config: ClientConfig) -> Result<(), proof_sdk_rs::Error> {
+let ws_config = WsConfig::from_client_config(&config)?      // wss://…/ws, same API key
+    .with_account_auth(client.account_auth());              // signs accountEvents subscribes
+let (ws, mut rx) = WsClient::connect(ws_config).await?;
+ws.subscribe(Subscription::Orderbook(1))?;
+ws.subscribe(Subscription::Trades(1))?;
+ws.subscribe(Subscription::AccountEvents(client.address()))?;
+
+while let Some(msg) = rx.recv().await {                      // or use it as a `Stream`
+    match msg {
+        WsMessage::OrderbookSnapshot { market, bids, asks } => { /* replace the book */ }
+        WsMessage::OrderbookUpdate { market, side, level } => { /* quantity 0 = remove */ }
+        WsMessage::Trade(t) => {}
+        WsMessage::AccountSnapshot { account, .. } => {}      // typed AccountInfo
+        WsMessage::AccountEvent(e) => {}                      // e.kind: "fill", "orderUpdate", …
+        WsMessage::Reconnected => {}                          // books re-snapshot next
+        WsMessage::Refused { code, message, .. } => {}        // e.g. 401 on an unsigned account sub
+        _ => {}
+    }
+}
+# Ok(()) }
+```
+
+- **Account auth.** Gateways running with an API key, the public devnet among
+  them, refuse an unsigned `accountEvents` subscribe with 401.
+  `AccountAuth` signs
+  `"ProofExchange-account-events-v1" || chain_id || owner_hex || after_id || timestamp_ms`
+  afresh on every (re)subscribe, through any `Signer`.
+- **After a reconnect** each book re-sends its snapshot. Account events from
+  the gap are **not** replayed (the TypeScript SDK's history backfill is not
+  ported). Reconcile through `InfoClient::open_orders` / `account` if a missed
+  fill matters.
+- **Backpressure.** Messages buffer up to `WsConfig::buffer` (4096). A
+  consumer that falls further behind pauses socket reads, and with them the
+  heartbeat. Keep the receive loop fast and hand slow work to another task.
+- Turn the feature off with `default-features = false` to drop
+  `tokio-tungstenite`.
 
 ## Nonces
 

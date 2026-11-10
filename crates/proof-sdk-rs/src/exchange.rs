@@ -315,6 +315,14 @@ impl ExchangeClient {
         &self.inner.info
     }
 
+    /// Signs this account's `accountEvents` WebSocket subscriptions with this
+    /// client's signer, for this client's network.
+    #[cfg(feature = "ws")]
+    #[must_use]
+    pub fn account_auth(&self) -> crate::AccountAuth {
+        crate::AccountAuth::new(Arc::clone(&self.inner.signer), &self.inner.network)
+    }
+
     /// The nonce allocator every [`Self::sign`] draws from.
     #[must_use]
     pub fn nonces(&self) -> &NonceAllocator {
