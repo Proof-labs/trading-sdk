@@ -146,7 +146,7 @@ async fn live_account_events_arrive_typed() {
         .unwrap();
     let tick = btc.tick_size.max(1);
     let price = (bid.price / 2) / tick * tick; // half the touch: never fills
-    let mut order = client.limit_order(1, Side::Buy, price, btc.lot_size.max(1));
+    let mut order = client.limit_order(1, Side::Buy, price, btc.lot_size);
     order.post_only = true;
     order.client_order_id = Some(77);
     let placed = client

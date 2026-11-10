@@ -98,6 +98,7 @@ On devnet, fund a new address with the faucet first:
 | `wait_for_receipt(hash, timeout)`               | polls `GET /v1/tx/{hash}`                          |
 | `address()` / `public_key()` / `network()`      | this signer's account, key and chain id            |
 | `nonces()` / `info()`                           | the shared nonce allocator; the read client        |
+| `account_auth()`                                | signs the feed's `accountEvents` subscriptions     |
 
 Each submission returns a `Submitted`, holding the signed tx with its locally
 computed hash, a `TxStatus`, and `retry_after: Option<Duration>`:
@@ -184,7 +185,7 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
                     (f.taker_side(), f.taker_fee)
                 };
             }
-            AccountEventKind::OrderPlaced(o) => {}
+            AccountEventKind::OrderPlaced(o) => {}            // o.order_id, keyed by o.client_order_id
             AccountEventKind::OrderCancelled(c) => {}
             AccountEventKind::PositionUpdated(p) => {}
             _ => {}                                           // `Other`: see e.event_type / e.payload
@@ -212,6 +213,9 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
   `FundingSettled`, `Deposited`. Anything else (or a payload that does not
   match) is `AccountEventKind::Other`; the engine event name and raw
   attributes are always on `e.event_type` / `e.payload`.
+- **Order ids.** A submission's receipt carries no order id. The engine
+  assigns it, and it arrives on the `OrderPlaced` event with your
+  `client_order_id`; use it for `cancel_order` / `amend_order`.
 - **Backpressure.** Messages buffer up to `WsConfig::with_buffer` (default 4096). A
   consumer that falls further behind pauses socket reads, and with them the
   heartbeat. Keep the receive loop fast and hand slow work to another task.
