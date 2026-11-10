@@ -176,7 +176,7 @@ app-level ping every 15 s, and reconnects with backoff when a pong is missed or
 the socket drops. It then re-sends every subscription.
 
 ```rust,no_run
-use proof_sdk_rs::{AccountEventKind, ClientConfig, ExchangeClient, Subscription, WsClient, WsConfig, WsMessage};
+use proof_sdk_rs::{ClientConfig, Event, ExchangeClient, Subscription, WsClient, WsConfig, WsMessage};
 
 # async fn run(client: ExchangeClient, config: ClientConfig) -> Result<(), proof_sdk_rs::Error> {
 let ws_config = WsConfig::from_client_config(&config)?      // wss://…/ws, same API key
@@ -192,18 +192,18 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
         WsMessage::OrderbookUpdate { market, side, level } => { /* quantity 0 = remove */ }
         WsMessage::Trade(t) => {}
         WsMessage::AccountSnapshot { account, .. } => {}      // typed AccountInfo
-        WsMessage::AccountEvent(e) => match e.kind {          // typed engine events
-            AccountEventKind::Fill(f) => {
+        WsMessage::AccountEvent(e) => match e.event {         // typed, as on a receipt
+            Event::Fill(f) => {
                 let (side, fee) = if f.maker_owner == client.address() {
                     (f.maker_side, f.maker_fee)               // micro-USDC; negative = rebate
                 } else {
                     (f.taker_side(), f.taker_fee)
                 };
             }
-            AccountEventKind::OrderPlaced(o) => {}            // o.order_id, keyed by o.client_order_id
-            AccountEventKind::OrderCancelled(c) => {}
-            AccountEventKind::PositionUpdated(p) => {}
-            _ => {}                                           // `Other`: see e.event_type / e.payload
+            Event::OrderPlaced(o) => {}                       // o.order_id, keyed by o.client_order_id
+            Event::OrderCancelled(c) => {}
+            Event::PositionUpdated(p) => {}
+            _ => {}                                           // `Event::Other(raw)`: name + attributes
         },
         WsMessage::Reconnected => {}                          // books re-snapshot next
         WsMessage::Refused { code, message, .. } => {}        // e.g. 401 on an unsigned account sub
@@ -222,14 +222,13 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
   the gap are **not** replayed (the TypeScript SDK's history backfill is not
   ported). Reconcile through `InfoClient::open_orders` / `account` if a missed
   fill matters.
-- **Account events are typed**, like hyperliquid's `UserFills` / `OrderUpdates`:
-  `Fill`, `OrderPlaced`, `OrderCancelled`, `OrderAmended`, `OrderRejected`,
+- **Account events are typed** with the same `Event` as receipts: `Fill`,
+  `OrderPlaced`, `OrderCancelled`, `OrderAmended`, `OrderRejected`,
   `MarketOrderProcessed`, `PositionUpdated`, `PositionClosed`,
   `FundingSettled`, `Deposited`. Anything else (or a payload that does not
-  match) is `AccountEventKind::Other`; the engine event name and raw
-  attributes are always on `e.event_type` / `e.payload`.
+  match) is `Event::Other`, carrying the engine event name and raw attributes.
 - **Order ids.** Your own submission's receipt events carry them
-  (`order_placed`). `OrderPlaced` on the feed carries the same id, with your
+  (`Event::OrderPlaced`). `OrderPlaced` on the feed carries the same id, with your
   `client_order_id`, for orders placed by another process.
 - **Backpressure.** Messages buffer up to `WsConfig::with_buffer` (default 4096). A
   consumer that falls further behind pauses socket reads, and with them the

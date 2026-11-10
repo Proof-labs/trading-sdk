@@ -1,6 +1,6 @@
 //! Read-only smoke test against the public devnet. Ignored by default (needs
 //! the network): `cargo test -p proof-sdk-rs --test devnet -- --ignored`.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::too_many_lines)]
 
 use proof_sdk_rs::{ClientConfig, EventId, InfoClient};
 
@@ -84,12 +84,12 @@ async fn the_feed_snapshots_a_book_and_accepts_a_signed_account_subscription() {
 #[ignore = "trades on the public devnet; needs PROOF_FAUCET_TOKEN"]
 async fn live_account_events_arrive_typed() {
     use proof_sdk_rs::{
-        AccountEventKind, ExchangeClient, LocalSigner, Side, Subscription, WsClient, WsConfig,
-        WsMessage, WsReceiver,
+        Event, ExchangeClient, LocalSigner, Side, Subscription, WsClient, WsConfig, WsMessage,
+        WsReceiver,
     };
     use std::time::Duration;
 
-    async fn next_kind(rx: &mut WsReceiver) -> AccountEventKind {
+    async fn next_kind(rx: &mut WsReceiver) -> Event {
         loop {
             let msg = tokio::time::timeout(Duration::from_secs(30), rx.recv())
                 .await
@@ -97,8 +97,8 @@ async fn live_account_events_arrive_typed() {
                 .expect("feed ended");
             match msg {
                 WsMessage::AccountEvent(e) => {
-                    eprintln!("{} -> {:?}", e.event_type, e.kind);
-                    return e.kind;
+                    eprintln!("{:?}", e.event);
+                    return e.event;
                 }
                 WsMessage::Refused { message, .. } => panic!("refused: {message}"),
                 _ => {}
@@ -132,7 +132,7 @@ async fn live_account_events_arrive_typed() {
     assert!(drip.status().is_success(), "faucet: {}", drip.status());
     assert!(matches!(
         next_kind(&mut rx).await,
-        AccountEventKind::Deposited(d) if d.amount > 0
+        Event::Deposited(d) if d.amount > 0
     ));
 
     let markets = client.info().markets().await.unwrap();
@@ -157,7 +157,7 @@ async fn live_account_events_arrive_typed() {
         .await
         .unwrap();
     assert!(placed.is_success(), "{:?}", placed.status);
-    let AccountEventKind::OrderPlaced(o) = next_kind(&mut rx).await else {
+    let Event::OrderPlaced(o) = next_kind(&mut rx).await else {
         panic!("expected OrderPlaced")
     };
     assert_eq!(
@@ -169,12 +169,14 @@ async fn live_account_events_arrive_typed() {
         .unwrap()
         .events
         .iter()
-        .filter(|e| e.kind == "order_placed")
-        .filter_map(|e| e.attribute("order_id"))
+        .filter_map(|e| match e {
+            Event::OrderPlaced(p) => Some(p.order_id),
+            _ => None,
+        })
         .collect();
     assert_eq!(
         placed_ids,
-        [o.order_id.to_string()],
+        [o.order_id],
         "the receipt names the order the feed reports"
     );
 
@@ -184,7 +186,7 @@ async fn live_account_events_arrive_typed() {
         "{:?}",
         cancelled.status
     );
-    let AccountEventKind::OrderCancelled(c) = next_kind(&mut rx).await else {
+    let Event::OrderCancelled(c) = next_kind(&mut rx).await else {
         panic!("expected OrderCancelled")
     };
     assert_eq!((c.order_id, c.client_order_id), (o.order_id, Some(77)));

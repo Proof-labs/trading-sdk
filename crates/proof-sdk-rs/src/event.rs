@@ -243,7 +243,7 @@ impl From<TxEvent> for Event {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(feature = "ws", test))]
 /// A feed payload (a JSON object of attributes) as the raw event `kind`.
 /// Non-string values keep their JSON text.
 pub(crate) fn raw_from_json(kind: &str, payload: &serde_json::Value) -> TxEvent {

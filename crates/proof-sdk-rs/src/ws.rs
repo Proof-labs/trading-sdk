@@ -31,9 +31,10 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-use crate::account_event::{kind_of, AccountEvent};
+use crate::account_event::AccountEvent;
 use crate::address::Address;
 use crate::error::{Error, Result};
+use crate::event::{raw_from_json, Event};
 use crate::info::{ClientConfig, Level};
 use crate::nonce::now_ms;
 
@@ -826,11 +827,9 @@ fn account(raw: Raw<'_>) -> Parsed {
             let payload = raw.payload.unwrap_or(serde_json::Value::Null);
             Parsed::message(WsMessage::AccountEvent(AccountEvent {
                 owner,
-                kind: kind_of(&event_type, &payload),
-                event_type: event_type.into_owned(),
                 height: raw.height.unwrap_or(0),
                 tx_hash: raw.tx_hash,
-                payload,
+                event: Event::from(raw_from_json(&event_type, &payload)),
             }))
         }
         None => Parsed::Ignore,
@@ -953,12 +952,12 @@ mod tests {
         let WsMessage::AccountEvent(e) = m else {
             panic!("{m:?}")
         };
-        assert_eq!((e.event_type.as_str(), e.height), ("order_cancelled", 7));
-        let crate::AccountEventKind::OrderCancelled(c) = &e.kind else {
-            panic!("{:?}", e.kind)
+        assert_eq!(e.height, 7);
+        let Event::OrderCancelled(c) = &e.event else {
+            panic!("{:?}", e.event)
         };
         assert_eq!((c.order_id, c.client_order_id), (3_211_376, Some(9)));
-        assert_eq!(e.payload["reason"], "user_requested");
+        assert_eq!(c.reason, "user_requested");
 
         // A payload that does not match its event stays raw rather than mistyped.
         let m = message(
@@ -967,7 +966,7 @@ mod tests {
         let WsMessage::AccountEvent(e) = m else {
             panic!("{m:?}")
         };
-        assert_eq!(e.kind, crate::AccountEventKind::Other);
+        assert!(matches!(&e.event, Event::Other(raw) if raw.kind == "trade_executed"));
     }
 
     #[test]

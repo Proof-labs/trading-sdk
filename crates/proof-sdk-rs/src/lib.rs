@@ -56,10 +56,7 @@ mod nonce;
 mod ws;
 
 #[cfg(feature = "ws")]
-pub use account_event::{
-    AccountEvent, AccountEventKind, Deposited, Fill, FundingSettled, MarketOrderProcessed,
-    OrderAmended, OrderCancelled, OrderPlaced, OrderRejected, PositionClosed, PositionUpdated,
-};
+pub use account_event::AccountEvent;
 pub use address::Address;
 pub use error::{Error, Result};
 pub use event::{
