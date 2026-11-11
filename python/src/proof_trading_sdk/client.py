@@ -108,7 +108,7 @@ from proof_trading_sdk.finalized_account import (
 )
 
 if t.TYPE_CHECKING:
-    from proof_trading_sdk.streams import AccountEventStream
+    from proof_trading_sdk.streams import AccountEventStream, PublicTradeStream
 
 log = logging.getLogger("proof_trading_sdk")
 
@@ -2054,6 +2054,24 @@ class ExchangeClient:
     def maintenance_status(self) -> dict[str, t.Any]:
         resp = self._get("/maintenance/status")
         return _response_object(resp)
+
+    def trade_stream(
+        self, market: int, *, ws_url: str | None = None,
+        reconnect_backoff_max: float = 10.0,
+    ) -> PublicTradeStream:
+        """Public live fills on a dedicated socket; no snapshot or gap recovery.
+
+        Uses this client's gateway and optional API key, never its signer.
+        Decimal strings and gateway frame keys are preserved. Close the returned
+        stream explicitly or use it as a context manager; it owns its socket
+        independently of the client's HTTP transport.
+        """
+        from proof_trading_sdk.streams import PublicTradeStream
+
+        return PublicTradeStream(
+            ws_url or self._gateway_url.replace("http", "ws", 1),
+            market, self._api_key, reconnect_backoff_max=reconnect_backoff_max,
+        )
 
     # ── Account event stream ─────────────────────────────────────────────
 

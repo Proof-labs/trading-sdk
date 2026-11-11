@@ -137,6 +137,7 @@ from proof_trading_sdk.candle_history import CandleHistoryPage, CandleHistoryTim
 from proof_trading_sdk.streams import (
     AccountEventStream,
     OrderbookDeltaStream,
+    PublicTradeStream,
     RecoveryStatus,
 )
 from proof_trading_sdk.trigger_history import (
@@ -311,6 +312,7 @@ __all__ = [
     "decode_markets_snapshot",
     "SdkConfig",
     "load_config",
+    "PublicTradeStream",
     "AccountEventStream",
     "OrderbookDeltaStream",
     "RecoveryStatus",
