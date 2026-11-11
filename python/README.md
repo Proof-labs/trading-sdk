@@ -164,6 +164,8 @@ also accepts an already parsed gateway body.
 submission status, feeder presence, note/error and update time. It supports the
 node's disabled-feeder response, F16 relay health and gateway market-freshness
 rows. This follows the gateway/feeder JSON contract; TS exposes the raw response.
+Optional scalar fields may be absent or JSON `null`; both decode to `None`.
+F16 `ready` and `submit_enabled` remain required booleans.
 Per-market requests accept positive u32 IDs. Missing fields, including a missing
 `markets` map, remain `None`. If the response contains a `markets` map but not
 the requested market, that map is empty. Extra diagnostic fields

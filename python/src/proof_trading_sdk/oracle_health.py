@@ -44,9 +44,11 @@ def oracle_health_market(market: int | None) -> int | None:
 
 
 def _optional(raw: dict, name: str, kind: type) -> t.Any:
-    if name not in raw: return None
-    value = raw[name]
-    if type(value) is not kind: _fail(name)
+    value = raw.get(name)
+    if value is None:
+        return None
+    if type(value) is not kind:
+        _fail(name)
     return value
 
 
@@ -61,7 +63,8 @@ def _market_key(key: t.Any) -> int:
 def decode_oracle_health(value: t.Any) -> OracleHealth:
     """Decode node-disabled, F16 relay, and gateway market-freshness shapes.
 
-    Absent fields stay None. Unknown diagnostics are preserved in ``extra``;
+    Absent or null optional scalars stay None; shape-required facts are checked.
+    Unknown diagnostics are preserved in ``extra``;
     the caller decides freshness thresholds and action permissions separately.
     """
     if not isinstance(value, dict): _fail("object")

@@ -105,6 +105,46 @@ def test_oracle_f16_and_slim_route_preserve_optional_maps():
     assert sdk.decode_oracle_health(value).divergence_bps is None
 
 
+@pytest.mark.parametrize("factory", [disabled, f16, freshness])
+@pytest.mark.parametrize("field", ["note", "error", "updated_at_unix_ms"])
+def test_oracle_nullable_diagnostics_match_absent_fields(factory, field):
+    body = factory()
+    body.pop(field, None)
+    absent = sdk.decode_oracle_health(body)
+    assert sdk.decode_oracle_health(body | {field: None}) == absent
+
+
+def test_f16_nullable_embedded_feeder_does_not_change_readiness():
+    body = f16()
+    assert sdk.decode_oracle_health(body | {"embedded_feeder": None}) == sdk.decode_oracle_health(body)
+
+
+@pytest.mark.parametrize("field", ["ready", "submit_enabled"])
+@pytest.mark.parametrize("invalid", [None, 0, 1, "true"])
+def test_f16_readiness_still_requires_boolean_facts(field, invalid):
+    with pytest.raises(sdk.CodecError):
+        sdk.decode_oracle_health(f16() | {field: invalid})
+    body = f16()
+    del body[field]
+    with pytest.raises(sdk.CodecError):
+        sdk.decode_oracle_health(body)
+
+
+@pytest.mark.parametrize("field, invalid", [
+    ("note", 1), ("error", False), ("updated_at_unix_ms", True),
+    ("updated_at_unix_ms", -1), ("updated_at_unix_ms", 2**64),
+    ("embedded_feeder", 0),
+])
+def test_nullable_oracle_fields_still_reject_wrong_types_and_ranges(field, invalid):
+    with pytest.raises(sdk.CodecError):
+        sdk.decode_oracle_health(f16() | {field: invalid})
+
+
+def test_disabled_feeder_still_requires_its_shape_discriminator():
+    with pytest.raises(sdk.CodecError):
+        sdk.decode_oracle_health(disabled() | {"embedded_feeder": None})
+
+
 def test_node_proxy_market_rows_can_name_market_only_in_map_key():
     # exchange-node/api_test.go TestAPIOracleHealth_ExternalProxy fixture.
     value = {"status":"ok", "embedded_feeder":True, "source":"oracle-feeder",
@@ -192,6 +232,16 @@ def test_client_oracle_market_scope_and_unreported_market(client):
     assert client.oracle_health(4).markets is None
     assert client.oracle_health().embedded_feeder is False
     assert str(calls[-1].url) == "https://gateway.example/v1/oracle/health"
+
+
+def test_client_accepts_null_optional_diagnostics_without_inventing_readiness(client):
+    serve(client, {"status": "ok", "embedded_feeder": False,
+                   "note": None, "error": None, "updated_at_unix_ms": None})
+    result = client.oracle_health()
+    assert result.note is None and result.error is None
+    assert result.updated_at_unix_ms is None
+    assert result.ready is None and result.submit_enabled is None
+    assert result.markets is None and result.embedded_feeder is False
 
 
 @pytest.mark.parametrize("market", [0,-1,True,1.0,2**32,"3"])
