@@ -64,6 +64,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Export `SubmitOracleObservation` and `ConfigureOraclePolicy` payload types
+  from the TypeScript package root for typed operator integrations.
+
 - **Preserve structured gateway refusals.** Valid `status: "refused"`
   responses retain their machine-readable reason. TypeScript adds
   `TxResult.errorCode` and the open `GatewayRefusalCode` type (MINOR for npm).
