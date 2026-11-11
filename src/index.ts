@@ -106,6 +106,8 @@ export {
   type LiquidationConfig,
   type LiquidationConfigInfo,
   type SetLiquidationConfig,
+  type SetMarginOffsetPolicy,
+  type MarginOffsetPair,
   type ScheduleUpgrade,
   type CancelUpgrade,
   type BridgeWithdrawalReceipt,
@@ -261,6 +263,7 @@ export {
 export { validateScheduleUpgrade } from "./upgrade-plan.js";
 export {
   MAX_MARGIN_OFFSET_PAIRS,
+  MAX_MARGIN_OFFSET_RATE_BPS,
   decodeMarginOffsetEvent,
   validateSetMarginOffsetPolicy,
   type MarginOffsetEvent,

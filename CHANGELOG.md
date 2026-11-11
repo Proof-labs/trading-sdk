@@ -9,19 +9,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **The `SetMarginOffsetPolicy` governance action** (inner tag 27, `0x1B`).
-  A complete replacement of the explicit perpetual/conditional offset
-  policy: an optional `predecessor` sequence plus canonically ordered pairs,
-  each naming its perpetual, conditional, shared settlement reference,
-  partial rate in basis points and resolution treatment.
-  `validateSetMarginOffsetPolicy` mirrors proof-wire's bounds before encoding
-  and on decode; `decodeAdminAction` fails closed on a non-canonical policy.
+- `validateSetMarginOffsetPolicy` checks policy bounds before encoding and
+  through `decodeAdminAction`.
   `decodeMarginOffsetEvent` reads the engine's `margin_offset_policy_set`
-  and `margin_offset_pair_configured` attributes. A conformance vector and a
-  content-hash constant pin the bytes and the approval hash across the
-  TypeScript, Rust and Python suites. Tag 27 leaves 26 (`0x1A`) to the
-  insurance-account action; the policy is governed and no live offsets are
-  implied.
+  and `margin_offset_pair_configured` attributes against wire-generated vectors.
+  Rust re-exports the margin-offset types. Conformance vectors and content-hash
+  constants pin policy encoding across TypeScript, Rust and Python.
 - Python typed `authorities()` and `liquidation_config()` reads, backed by
   canonical Rust wire types with strict record/address/range checks. Failed
   reads raise rather than synthesize empty authorities or default configuration.

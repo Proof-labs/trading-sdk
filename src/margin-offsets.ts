@@ -4,8 +4,9 @@ import type {
   TxEvent,
 } from "./types.js";
 
-/** Canonical proof-wire capacity; the Rust suite pins the same value. */
+/** Canonical proof-wire capacity, checked through the WASM codec in tests. */
 export const MAX_MARGIN_OFFSET_PAIRS = 52;
+export const MAX_MARGIN_OFFSET_RATE_BPS = 9_999;
 const U32_MAX = 0xffff_ffff;
 const U64_MAX = (1n << 64n) - 1n;
 
@@ -60,8 +61,11 @@ function validateMarginOffsetPair(pair: MarginOffsetPair): void {
   unsignedNumber(pair.perpetual, "perpetual");
   unsignedNumber(pair.conditional, "conditional");
   unsignedNumber(pair.settlementReference, "settlementReference");
-  unsignedNumber(pair.rate, "rate", 9_999);
-  if (pair.rate === 0) throw new Error("rate must be in 1..=9999 basis points");
+  unsignedNumber(pair.rate, "rate", MAX_MARGIN_OFFSET_RATE_BPS);
+  if (pair.rate === 0)
+    throw new Error(
+      `rate must be in 1..=${MAX_MARGIN_OFFSET_RATE_BPS} basis points`,
+    );
   if (pair.perpetual === pair.conditional)
     throw new Error("pair markets must differ");
   if (pair.settlementReference !== pair.perpetual)
@@ -130,7 +134,7 @@ export function decodeMarginOffsetEvent(
       attributes,
       "settlement_reference_market",
     ),
-    rate: numberAttribute(attributes, "rate_bps", 9_999),
+    rate: numberAttribute(attributes, "rate_bps", MAX_MARGIN_OFFSET_RATE_BPS),
     resolution: "RemoveOnResolution",
   };
   validateMarginOffsetPair(pair);

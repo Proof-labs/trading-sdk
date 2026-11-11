@@ -26,6 +26,7 @@ import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
 import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
 import { decodeLiquidationEvent } from "./liquidation-events.js";
+import { decodeMarginOffsetEvent } from "./margin-offsets.js";
 import { decodeVoidSettlementEvent } from "./void-events.js";
 import {
   ActionType,
@@ -1036,12 +1037,26 @@ describe("conformance vectors (TypeScript)", () => {
         attributes: want.attributes.map(([key, value]) => ({ key, value })),
       };
       const decoded =
-        decodeLiquidationEvent(input) ?? decodeVoidSettlementEvent(input);
+        decodeLiquidationEvent(input) ??
+        decodeVoidSettlementEvent(input) ??
+        decodeMarginOffsetEvent(input);
       const [[variant, fields]] = Object.entries(
         c.event as Record<string, unknown>,
       );
       expect(decoded?.type, c.case).toBe(variant);
-      expect(normalise(decoded), c.case).toEqual(normalise(fields));
+      const flat =
+        decoded?.type === "MarginOffsetPairConfigured"
+          ? {
+              sequence: decoded.sequence,
+              index: decoded.index,
+              conditional_market: decoded.pair.conditional,
+              perpetual_market: decoded.pair.perpetual,
+              settlement_reference_market: decoded.pair.settlementReference,
+              rate_bps: decoded.pair.rate,
+              resolution: decoded.pair.resolution,
+            }
+          : decoded;
+      expect(normalise(flat), c.case).toEqual(normalise(fields));
     }
   });
 

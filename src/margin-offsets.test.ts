@@ -63,9 +63,8 @@ function propose(action: AdminAction): Action {
   };
 }
 
-/** exchange-wire's frozen `canonical_admin_action_bytes` (the action map
- *  carries the variant name, not the tag; the proposal envelope carries
- *  inner tag 0x1B). */
+/** proof-wire's frozen `canonical_admin_action_bytes`: the action map carries
+ *  the variant name; neither it nor the proposal tuple carries a numeric tag. */
 const FROZEN_ACTION_HEX =
   "81b55365744d617267696e4f6666736574506f6c69637992c09195010201cd1388b252656d6f76654f6e5265736f6c7574696f6e";
 const FROZEN_REVOKE_HEX =
@@ -151,6 +150,28 @@ describe("SetMarginOffsetPolicy governance action", () => {
     ).toThrow(
       /partial offset rate 10_?000 must be in 1\.\.10_?000 basis points/,
     );
+  });
+
+  it("matches the wire capacity at the boundary", () => {
+    const pairs = Array.from({ length: MAX_MARGIN_OFFSET_PAIRS }, (_, i) =>
+      pair({ conditional: i + 2 }),
+    );
+    expect(() => encodePayloadBytes(propose(policy({ pairs })))).not.toThrow();
+    pairs.push(pair({ conditional: MAX_MARGIN_OFFSET_PAIRS + 2 }));
+    expect(() =>
+      decodeAdminAction({
+        SetMarginOffsetPolicy: [
+          null,
+          pairs.map((p) => [
+            p.perpetual,
+            p.conditional,
+            p.settlementReference,
+            p.rate,
+            p.resolution,
+          ]),
+        ],
+      }),
+    ).toThrow(/margin offset pair count.*exceeds/);
   });
 });
 

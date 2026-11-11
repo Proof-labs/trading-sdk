@@ -1423,6 +1423,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     let event_inputs = vec![
         (
+            "margin_offset_policy_set/basic",
+            json!({"MarginOffsetPolicySet": {
+                "sequence": 1u64,
+                "pair_count": 1,
+                "proposal_id": 42u64,
+            }}),
+        ),
+        (
+            "margin_offset_pair_configured/basic",
+            json!({"MarginOffsetPairConfigured": {
+                "sequence": 1u64,
+                "index": 0,
+                "conditional_market": 2,
+                "perpetual_market": 1,
+                "settlement_reference_market": 1,
+                "rate_bps": 5_000,
+                "resolution": "RemoveOnResolution",
+            }}),
+        ),
+        (
             "position_liquidated/partial",
             position_liquidated(
                 "Partial",
