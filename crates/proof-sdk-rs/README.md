@@ -186,7 +186,9 @@ Resending the same `tx` is safe (same nonce, executes at most once).
 Records decode as the engine's own `proof-wire` types through the core's
 `reads::decode`, so a field appended by a newer engine does not break a read.
 For a route this client does not wrap, use `get_data(path)` (MessagePack bytes
-from a `{"data": ...}` route), `get_json(path)` or `post_info(&body)`.
+from a `{"data": ...}` route), `get_json(path)` or `post_info(&body)`. A
+`path` that resolves outside the gateway origin is refused, since requests
+carry the API key.
 
 ## Nonces
 

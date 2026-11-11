@@ -445,12 +445,11 @@ impl ExchangeClient {
     /// [`Error::Encode`] or [`Error::Signer`].
     pub fn sign_with_seq(&self, action: &Action, seq: u64) -> Result<SignedTx> {
         let inner = &*self.inner;
-        let bytes = sign_action(&*inner.signer, &inner.chain_id, action, seq).map_err(
-            |e| match e {
+        let bytes =
+            sign_action(&*inner.signer, &inner.chain_id, action, seq).map_err(|e| match e {
                 SignActionError::Encode(m) => Error::Encode(m),
                 SignActionError::Signer(e) => Error::Signer(e),
-            },
-        )?;
+            })?;
         Ok(SignedTx {
             hash: TxHash::of_signed_bytes(&bytes),
             bytes,
@@ -535,23 +534,25 @@ impl ExchangeClient {
     ///
     /// # Errors
     ///
-    /// [`Error::ReceiptTimeout`] at the deadline. A 404, a 5xx or a transport
+    /// [`Error::ReceiptTimeout`] at the deadline, including one that passes
+    /// mid-request. A 404, a 5xx or a transport
     /// failure is retried until then; any other failure is returned at once.
     pub async fn wait_for_receipt(&self, hash: TxHash, timeout: Duration) -> Result<Receipt> {
         let deadline = tokio::time::Instant::now() + timeout;
         let mut delay = RECEIPT_POLL_START;
         loop {
-            match self.inner.info.gateway().committed_receipt(hash).await {
-                Ok(receipt) => return Ok(receipt.into()),
+            let poll = self.inner.info.gateway().committed_receipt(hash);
+            match tokio::time::timeout_at(deadline, poll).await {
+                Ok(Ok(receipt)) => return Ok(receipt.into()),
                 // Not found yet, not indexed yet, or transient: keep polling.
-                Err(e) if still_pending(e.kind) => {}
-                Err(e) => return Err(e.into()),
+                Ok(Err(e)) if still_pending(e.kind) => {}
+                Ok(Err(e)) => return Err(e.into()),
+                Err(_elapsed) => return Err(Error::ReceiptTimeout { hash }),
             }
-            let now = tokio::time::Instant::now();
-            if now >= deadline {
+            tokio::time::sleep_until((tokio::time::Instant::now() + delay).min(deadline)).await;
+            if tokio::time::Instant::now() >= deadline {
                 return Err(Error::ReceiptTimeout { hash });
             }
-            tokio::time::sleep(delay.min(deadline - now)).await;
             delay = (delay + RECEIPT_POLL_STEP).min(RECEIPT_POLL_MAX);
         }
     }

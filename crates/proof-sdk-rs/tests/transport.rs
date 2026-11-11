@@ -262,7 +262,10 @@ async fn null_events_and_logs_read_as_empty() {
     let r = c.send(&tx).await.unwrap();
     assert!(r.error().unwrap().is_order_not_found());
     assert!(r.receipt().unwrap().events.is_empty());
-    let r = c.wait_for_receipt(tx.hash, Duration::from_secs(1)).await.unwrap();
+    let r = c
+        .wait_for_receipt(tx.hash, Duration::from_secs(1))
+        .await
+        .unwrap();
     assert_eq!((r.height, r.events.len()), (9, 0));
 }
 
@@ -275,6 +278,49 @@ async fn receipt_wait_times_out_without_claiming_failure() {
         .await
         .unwrap_err();
     assert!(matches!(err, Error::ReceiptTimeout { hash: h } if h == hash));
+}
+
+/// The deadline holds across a request that stalls past it.
+#[tokio::test]
+async fn receipt_wait_times_out_during_a_slow_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let (_held, _) = listener.accept().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(10)).await;
+    });
+    let hash = TxHash::from_bytes([1; 32]);
+    let start = std::time::Instant::now();
+    let err = client(&url)
+        .wait_for_receipt(hash, Duration::from_millis(100))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::ReceiptTimeout { hash: h } if h == hash));
+    assert!(
+        start.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        start.elapsed()
+    );
+}
+
+/// Reads never leave the gateway origin: the client carries the API key.
+#[tokio::test]
+async fn a_read_path_cannot_leave_the_gateway() {
+    let c = ExchangeClient::new(
+        &ClientConfig::new("https://gw.example:8443").with_chain_id("exchange-devnet-1"),
+        LocalSigner::from_bytes(&[9; 32]),
+    )
+    .unwrap();
+    for path in [
+        "http://127.0.0.1:1/v1/markets",
+        "//127.0.0.1:1/v1/markets",
+        "http://gw.example:8443/v1/markets",
+        "https://gw.example/v1/markets",
+        "https://other.example:8443/v1/markets",
+    ] {
+        let err = c.info().get_json::<Value>(path).await.unwrap_err();
+        assert!(matches!(err, Error::InvalidInput(_)), "{path}: {err:?}");
+    }
 }
 
 #[tokio::test]
