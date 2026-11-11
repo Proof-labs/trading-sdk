@@ -405,6 +405,9 @@ Every action has a typed builder in `proof_trading_sdk.actions`;
 Rust core, ready for `sign_and_encode`. `RawAction` remains only for an action
 newer than this package.
 
+`SetUserMarketLeverage` has a typed builder, but ordinary-account submission is
+unsupported. See [availability](../README.md#setusermarketleverage-availability).
+
 - **Trading:** `PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder`,
   `CancelAllOrders`, `CancelReplaceOrder`, `AmendOrder`, `ClosePosition`,
   `AtomicBasketOrder`, `SetPositionTriggers`, `CancelPositionTriggers`,

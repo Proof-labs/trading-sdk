@@ -61,6 +61,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Document `SetUserMarketLeverage` admission limits, its governed insurance-fund
+  path and initial-margin-only semantics. SDK APIs and wire support are unchanged.
+
 - **TypeScript `readTransactionEvidence` and block-results reads reclassify
   `GatewayReadError.kind` (MINOR for npm).** Callers that branch on `kind`
   should review these fields:
