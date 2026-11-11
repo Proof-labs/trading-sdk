@@ -61,6 +61,7 @@ from proof_trading_sdk.errors import (
     CodecError,
     EngineError,
     GatewayError,
+    PreAdmissionRefusal,
     ProofTradingSdkError,
     RateLimited,
     SigningError,
@@ -137,24 +138,13 @@ _NOT_SENT = (
 def _submission_may_have_been_admitted(exc: TransportError) -> bool:
     """Whether a failed ``/exchange`` request may still have been admitted.
 
-    A 5xx is ambiguous unless the gateway proves the refusal: a
-    ``status: refused`` body naming no ``txHash``, ``code`` or ``height`` means
-    the transaction never reached the broadcaster, as the TypeScript binding
-    reads it. An httpx failure is ambiguous unless it is in ``_NOT_SENT``. A
+    A 5xx reaching this check carries no refusal envelope, so it is ambiguous.
+    An httpx failure is ambiguous unless it is in ``_NOT_SENT``. A
     TransportError raised from an HTTP status (4xx, 3xx) was answered by the
     gateway without admission.
     """
     if isinstance(exc, GatewayError):
-        try:
-            body = json.loads(exc.body)
-        except ValueError:
-            return True
-        proven_refusal = (
-            isinstance(body, dict)
-            and body.get("status") == "refused"
-            and not any(k in body for k in ("txHash", "tx_hash", "code", "height"))
-        )
-        return not proven_refusal
+        return True
     cause = exc.__cause__
     return isinstance(cause, httpx.RequestError) and not isinstance(cause, _NOT_SENT)
 
@@ -377,6 +367,7 @@ class ExchangeClient:
         content: bytes | None = None,
         params: dict[str, t.Any] | None = None,
         headers: dict[str, str] | None = None,
+        read_refusal_body: bool = False,
     ) -> httpx.Response:
         url = urljoin(self._gateway_url, path)
         try:
@@ -397,9 +388,21 @@ class ExchangeClient:
             raise TransportError(f"request failed: {e}") from e
 
         self._parse_rate_limits(resp)
-        return self._check_response(resp)
+        return self._check_response(resp, read_refusal_body=read_refusal_body)
 
-    def _check_response(self, resp: httpx.Response) -> httpx.Response:
+    def _check_response(
+        self, resp: httpx.Response, *, read_refusal_body: bool = False
+    ) -> httpx.Response:
+        if read_refusal_body:
+            # Submission envelopes are validated with the original bytes in
+            # submit_action; the HTTP status cannot prove their finality.
+            try:
+                body = resp.json()
+            except (ValueError, UnicodeError):
+                body = None
+            if isinstance(body, dict) and body.get("status") in ("refused", "pending"):
+                return resp
+
         if resp.status_code == 429:
             retry_after = float(resp.headers.get("Retry-After", "5"))
             bucket = resp.headers.get("X-RateLimit-Bucket", _DEFAULT_RATE_LIMIT_BUCKET)
@@ -424,8 +427,8 @@ class ExchangeClient:
             raise GatewayError(resp.status_code, resp.text)
 
         # Anything else non-2xx (400, 402, 405-428, 431, 3xx, …) is NOT success.
-        # `GatewayError` specifically means "5xx — a read can retry with backoff,
-        # a submission's outcome is unknown"; a 3xx/4xx
+        # `GatewayError` specifically means "5xx — a read can retry with backoff";
+        # `submit_action` decides what a 5xx means for a submission. A 3xx/4xx
         # is a client-side error that must NOT be blind-retried, so it surfaces
         # as a plain TransportError carrying the status.
         if resp.status_code >= 300:
@@ -449,8 +452,12 @@ class ExchangeClient:
         content: bytes | None = None,
         *,
         headers: dict[str, str] | None = None,
+        read_refusal_body: bool = False,
     ) -> httpx.Response:
-        return self._request("POST", path, content=content, headers=headers)
+        return self._request(
+            "POST", path, content=content, headers=headers,
+            read_refusal_body=read_refusal_body,
+        )
 
     # ── Signing ──────────────────────────────────────────────────────────
 
@@ -666,11 +673,27 @@ class ExchangeClient:
         Returns:
             The engine's response dict with keys like ``code``,
             ``tx_hash``, etc.
+
+        Raises:
+            EngineError: the engine rejected the tx with an ``ExecError`` code.
+            SubmissionPending: the gateway broadcast it but could not report
+                the outcome; reconcile by ``tx_hash``.
+            PreAdmissionRefusal: the gateway refused the request before
+                admitting it; nothing was broadcast and there is nothing to
+                poll for.
+            AuthenticationError: HTTP 401 or 403.
+            RateLimited: HTTP 429.
+            GatewayError: a validated refusal at HTTP 5xx other than
+                ``EncodingError``, such as ``Overloaded``, ``Maintenance`` or
+                ``Unavailable``. An ambiguous 5xx is ``SubmissionPending``.
+            TransportError: a transport or HTTP failure with no refusal
+                envelope.
         """
         body = json.dumps({"action": base64.b64encode(envelope).decode("ascii")}).encode()
         try:
             resp = self._post(
-                "/exchange", content=body, headers={"Content-Type": "application/json"}
+                "/exchange", content=body, headers={"Content-Type": "application/json"},
+                read_refusal_body=True,
             )
         except TransportError as exc:
             # A write may have been partial, or the response may have been lost
@@ -702,27 +725,63 @@ class ExchangeClient:
             )
         data: dict[str, t.Any] = parsed
 
-        # The gateway's `/exchange` response has four distinct shapes. Which one
-        # arrived is decided by the body, never by defaulting a missing `code`
+        # Classify the gateway's envelope, never by defaulting a missing `code`
         # to 0 — and, just as importantly, never by treating "no code" as a
         # rejection. This mirrors the contract pinned by the TypeScript binding
         # (`submitViaGateway` in src/client.ts); the two must agree.
+        if data.get("status") == "refused":
+            # Even null/empty execution fields contradict a refusal. Never
+            # reconcile a response-supplied hash or coerce invalid fields.
+            error_code = data.get("errorCode")
+            if (
+                any(key in data for key in (
+                    "txHash", "tx_hash", "code", "height", "events", "log", "info",
+                ))
+                or not isinstance(error_code, str)
+                or not error_code.strip()
+                or ("error" in data and not isinstance(data["error"], str))
+            ):
+                raise SubmissionPending(
+                    hashlib.sha256(envelope).hexdigest().upper(),
+                    "malformed gateway refusal; reconcile by hash",
+                )
+            # Auth, rate-limit and 5xx refusals keep their existing exceptions.
+            # An EncodingError is different: the gateway explicitly failed before
+            # broadcast, including when it reports that refusal with HTTP 500.
+            # Every other status, such as the gateway's 413, is an admission
+            # refusal whose reason must survive.
+            if error_code != "EncodingError" and (
+                resp.status_code in (401, 403, 429) or resp.status_code >= 500
+            ):
+                self._check_response(resp)
+            raise PreAdmissionRefusal(
+                error_code=error_code,
+                message=data.get("error", ""),
+                status_code=resp.status_code,
+            )
+
+        if data.get("status") == "pending":
+            raise SubmissionPending(
+                hashlib.sha256(envelope).hexdigest().upper(),
+                data.get("error") if isinstance(data.get("error"), str) else "submission pending",
+            )
+
         code = data.get("code")
         if isinstance(code, int) and not isinstance(code, bool):
-            # 1. Structured chain verdict — the engine code is authoritative.
+            # Structured chain verdict — the engine code is authoritative.
             if code != 0:
                 msg = data.get("message") or data.get("log") or data.get("error") or ""
                 raise EngineError(code, msg)
             return data
 
         if data.get("status") == "ok":
-            # 2. Legacy gateway: CheckTx accepted, execution still unknown.
+            # Legacy gateway: CheckTx accepted, execution still unknown.
             #    A code-less `status: ok` is a SUCCESS, not a malformed body.
             return data
 
         tx_hash = data.get("txHash") or data.get("tx_hash")
         if tx_hash:
-            # 3. Broadcast but unresolved — NOT a rejection. The gateway pushed
+            # Broadcast but unresolved — NOT a rejection. The gateway pushed
             #    the tx and could not report the outcome in time (park deadline
             #    exceeded, a byte-identical tx already in flight, or a result it
             #    could not parse). It may still commit, so the caller reconciles
@@ -731,7 +790,7 @@ class ExchangeClient:
             #    trader would re-place it into a double fill.
             raise SubmissionPending(str(tx_hash), str(data.get("error") or ""))
 
-        # 4. No code and no hash: an error string is all the gateway gave us. It
+        # No code and no hash: an error string is all the gateway gave us. It
         #    still emits the "<code>: <message>" compatibility format, so an
         #    explicit non-zero code is a terminal engine verdict. Anything else
         #    proves nothing about admission, so reconcile by hash, as the TS
