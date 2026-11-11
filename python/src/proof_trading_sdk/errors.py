@@ -155,7 +155,7 @@ class SubmissionPending(ProofTradingSdkError):
 
 
 class AuthenticationError(ProofTradingSdkError):
-    """HTTP 401 — API key missing, invalid, or expired."""
+    """HTTP or WebSocket authentication was refused (API key or signed auth)."""
 
 
 class EngineError(ProofTradingSdkError):
@@ -185,7 +185,10 @@ class RateLimited(ProofTradingSdkError):
 
     Attributes:
         retry_after_secs: Seconds to wait before retrying.
-        bucket: The rate-limit bucket that was exceeded.
+        bucket: The rate-limit bucket that was exceeded. ExchangeClient uses
+            ``"default"`` when the response omits ``X-RateLimit-Bucket``;
+            pass this value to ``client.rate_limit_state`` for the bucket's latest
+            cached state. Later responses in that bucket replace earlier state.
     """
 
     def __init__(self, retry_after_secs: float, bucket: str = "") -> None:
