@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Wire compatibility boundary:** pin canonical wire `2a707bc` (engine
+  `23ee1f0`). Conditional attachment proposal bytes/hashes now include impact
+  notional; fee updates require the funding dead-band and interest-rate tail.
+  Older fee-update payloads are rejected, matching the engine. Rebuild and
+  reapprove affected governance proposals against the matching engine; do not
+  reuse old signatures. This source change does not publish or authorize a release.
+
 ### Added
 
 - **Rust `proof-sdk-rs` 1.0.0**, a new async (tokio) trading client over the gateway (#425), with a WebSocket feed (`ws` feature, on by default). The WASM build is unchanged.
