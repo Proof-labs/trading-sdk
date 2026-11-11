@@ -28,17 +28,18 @@ proof-trading-sdk = { git = "https://github.com/Proof-labs/trading-sdk", rev = "
 # proof-trading-sdk = { git = "...", rev = "<commit>", features = ["gateway"] }
 ```
 
-| Feature   | Default | Adds                                                                                         |
-| --------- | ------- | -------------------------------------------------------------------------------------------- |
-| _(none)_  | yes     | Codec, signing, wire and read types, error-code decode. No I/O; builds for wasm.            |
-| `gateway` | no      | `gateway::GatewayClient`: a bounded, gateway-only HTTPS transport (`reqwest`, `tokio` time). |
+| Feature   | Default | Adds                                                                                                            |
+| --------- | ------- | --------------------------------------------------------------------------------------------------------------- |
+| _(none)_  | yes     | Codec, signing, wire and read types, error-code decode. No I/O; builds for wasm.                                |
+| `gateway` | no      | `gateway::GatewayClient`, a bounded gateway-only HTTPS transport, and `market_snapshot::MarketsSnapshotClient`. |
 
 ## Sign an order
 
 Everything a transaction needs is a typed `Action`, a chain id, a nonce and a
-key:
+key. This block is illustrative; the same example is compiled as a doctest in
+`src/lib.rs`.
 
-```rust
+```rust,ignore
 use ed25519_dalek::SigningKey;
 use proof_trading_sdk::{codec, crypto, types::{Action, PlaceOrder, Side, TimeInForce}};
 
@@ -51,7 +52,7 @@ let action = Action::PlaceOrder(PlaceOrder {
     owner,
     side: Side::Buy,
     price: 66_750_000_000, // $66,750 in micro-USDC
-    quantity: 1,           // integer contracts
+    quantity: 1,           // 1 unit = 10^-sz_decimals of the base asset
     client_order_id: Some(42),
     post_only: true,
     time_in_force: TimeInForce::Gtc,
@@ -59,7 +60,10 @@ let action = Action::PlaceOrder(PlaceOrder {
 });
 
 // `seq` is a wall-clock-millisecond timestamp nonce, unique per signature.
-let seq = 1_762_000_000_000;
+// The engine accepts it only within [block time - 2 days, block time + 1 day].
+let seq = std::time::SystemTime::now()
+    .duration_since(std::time::UNIX_EPOCH)?
+    .as_millis() as u64;
 let wire = codec::sign_and_encode_with_chain(&chain_id, &action, seq, &key)
     .map_err(|e| e.to_string())?; // `ExecError` implements `Display` only
 // Submit `wire` as `{"action": "<base64>"}` to `POST {gateway}/exchange`.
@@ -67,9 +71,20 @@ let wire = codec::sign_and_encode_with_chain(&chain_id, &action, seq, &key)
 
 To keep the key out of process memory, implement [`Signer`](src/signer.rs) for
 your HSM, KMS or remote signer. `LocalSigner` is the in-memory implementation and
-zeroizes its key on drop. Sign
-`crypto::signing_message(chain_id, action_type, seq, payload)` and assemble the
-envelope with `codec::encode_signed_tx_raw`.
+zeroizes its key on drop. Take the canonical action type and payload from the
+codec rather than serialising by hand:
+
+```rust,ignore
+// The codec signs only with an in-memory key, so encode an unsigned envelope
+// and lift (action_type, payload) out of it.
+let unsigned = codec::encode_signed_tx(&action, seq, &signer.public_key(), &[0; 64])?;
+let raw = codec::decode_tx_raw(&unsigned)?;
+let msg = crypto::signing_message(&chain_id, raw.action_type, seq, &raw.payload);
+let signature = signer.try_sign(&msg)?;
+let wire = codec::encode_signed_tx_raw(
+    raw.action_type, &raw.payload, seq, &signer.public_key(), &signature,
+)?;
+```
 
 ## Wire rules
 
@@ -82,25 +97,29 @@ envelope with `codec::encode_signed_tx_raw`.
 - `seq` is a millisecond timestamp nonce. The engine checks it against a sliding
   window, not a strict sequence. Reusing a nonce is rejected with code 21
   (`InvalidNonce`).
-- Money is `u64` **micro-USDC** (6 dp, `1_000_000` = $1). Quantities are integer
-  contracts. Fees and rates are basis points. There are no floats anywhere on the
-  wire.
+- Money is integer **micro-USDC** (6 dp, `1_000_000` = $1): `u64` for prices
+  and deposits, `i64` where it can be negative (fee amounts, equity, funding
+  index). Fee and margin rates are basis points. There are no floats anywhere on
+  the wire.
+- `quantity` is an integer count of `10^-sz_decimals` base units (read
+  `MarketConfig::sz_decimals`). It must be a multiple of `lot_size`, and `price`
+  a multiple of `tick_size`.
 - An owner address is `keccak256(pubkey)[12..32]`: `crypto::pubkey_to_owner`.
 
 ## Modules
 
-| Module                            | What it holds                                                                                                                                         |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `types`, `codec`, `crypto`        | Re-exported from [`proof-wire`](https://github.com/Proof-labs/wire), the engine's own wire crate: `Action` and every payload, encode/decode, signing. |
-| `signer`                          | The `Signer` seam (`LocalSigner`, or bring your own custody backend).                                                                                 |
-| `errors`                          | Engine result codes as a typed `ErrorKind` (`decode_exec_error_kind`, `error_code_manifest`).                                                         |
-| `query`, `reads`                  | Read-model types and `reads::decode`, which tolerates fields a newer engine appends to a stored record.                                              |
-| `binary`                          | Trade an event's binary book in No terms (`yes_order`, `yes_limb`, `binary_position_view`).                                                          |
-| `ticker`                          | The market ticker rule, checked before signing a `CreateMarket`.                                                                                     |
-| `governance`                      | Admin-proposal types and the proposal content hash.                                                                                                  |
-| `market_snapshot`                 | The atomic committed markets snapshot (`MarketsSnapshotClient`) and its witness.                                                                     |
-| `msgpack`, `wire`                 | Strict MessagePack preflight (`reject_floats`) and byte-field newtypes.                                                                              |
-| `gateway` _(feature `gateway`)_   | `GatewayClient`, documented below.                                                                                                                   |
+| Module                          | What it holds                                                                                                                                         |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `types`, `codec`, `crypto`      | Re-exported from [`proof-wire`](https://github.com/Proof-labs/wire), the engine's own wire crate: `Action` and every payload, encode/decode, signing. |
+| `signer`                        | The `Signer` seam (`LocalSigner`, or bring your own custody backend).                                                                                 |
+| `errors`                        | Engine result codes as a typed `ErrorKind` (`decode_exec_error_kind`, `error_code_manifest`).                                                         |
+| `query`, `reads`                | Read-model types and `reads::decode`, which tolerates fields a newer engine appends to a stored record.                                               |
+| `binary`                        | Trade an event's binary book in No terms (`yes_order`, `yes_limb`, `binary_position_view`).                                                           |
+| `ticker`                        | The market ticker rule, checked before signing a `CreateMarket`.                                                                                      |
+| `governance`                    | Admin-proposal types and the proposal content hash.                                                                                                   |
+| `market_snapshot`               | The atomic committed markets snapshot and its witness (`MarketsSnapshotClient` needs feature `gateway`).                                              |
+| `msgpack`, `wire`               | Strict MessagePack preflight (`reject_floats`) and byte-field newtypes.                                                                               |
+| `gateway` _(feature `gateway`)_ | `GatewayClient`, documented below.                                                                                                                    |
 
 `types` and `codec` are the source of truth for the action set. A new action
 appears in this crate when the `proof-wire` pin moves.
@@ -127,14 +146,14 @@ pinned width and decodes it as the typed struct.
 `gateway::GatewayClient` is a bounded transport over the public API gateway. It
 never reaches the node, and it holds no keys and allocates no nonces:
 
-| Method                              | Route                                       |
-| ----------------------------------- | ------------------------------------------- |
-| `chain_identity`                    | `GET /v1/status`                            |
-| `oracle_permissions`                | `GET /v1/oracle/permissions/{market}`       |
-| `account_valuation`                 | `POST /info` (`clearinghouseState`)         |
-| `submit_signed_bytes`               | `POST /exchange`                            |
+| Method                              | Route                                         |
+| ----------------------------------- | --------------------------------------------- |
+| `chain_identity`                    | `GET /v1/status`                              |
+| `oracle_permissions`                | `GET /v1/oracle/permissions/{market}`         |
+| `account_valuation`                 | `POST /info` (`clearinghouseState`)           |
+| `submit_signed_bytes`               | `POST /exchange`                              |
 | `submit_signed_bytes_with_evidence` | `POST /exchange`, with the refusal classified |
-| `committed_receipt`                 | `GET /v1/tx/{hash}`                         |
+| `committed_receipt`                 | `GET /v1/tx/{hash}`                           |
 
 The base URL must be HTTPS. Plain HTTP is accepted only for a loopback IP
 literal (`http://127.0.0.1:9080`, not `http://localhost:9080`). Redirects,
@@ -143,7 +162,11 @@ proxies and automatic retries are disabled, and an API key is sent only as
 
 A `GatewayError` whose `reconcile_hash` is set means the POST may have landed.
 Keep the exact signed bytes and reconcile by that hash with `committed_receipt`.
-Do not re-sign them under a new nonce. The repository
+Do not re-sign them under a new nonce.
+
+`RejectedBeforeAdmission` covers that one HTTP attempt only. It does not prove
+that an earlier attempt of the same bytes did not land: if an earlier attempt
+left a `reconcile_hash`, reconcile with `committed_receipt` before re-signing. The repository
 [README](../../README.md#optional-native-rust-gateway-transport) covers the
 submission and refusal contract in full.
 

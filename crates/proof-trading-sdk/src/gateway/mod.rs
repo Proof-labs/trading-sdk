@@ -262,8 +262,13 @@ pub enum SubmissionOutcome<R = ()> {
     Pending {
         hash: TxHash,
     },
-    /// The gateway refused the request before admitting it (auth, rate
-    /// limit, maintenance, overload).
+    /// The gateway refused this attempt before admitting it.
+    ///
+    /// This covers this attempt only. It does not prove that an earlier
+    /// attempt of the same bytes did not land: reconcile by `hash` with
+    /// `committed_receipt` before re-signing. With
+    /// `submit_signed_bytes_with_evidence` the cause is a classified
+    /// [`PreAdmissionRefusal`].
     RejectedBeforeAdmission {
         hash: TxHash,
         refusal: R,
