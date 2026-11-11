@@ -58,7 +58,7 @@ pub fn cancel_order(owner: Address, order_id: OrderId) -> Action {
 
 /// `CancelClientOrder` by client order id.
 #[must_use]
-pub fn cancel_client_order(owner: Address, client_order_id: u64) -> Action {
+pub fn cancel_order_by_client_id(owner: Address, client_order_id: u64) -> Action {
     Action::CancelClientOrder(CancelClientOrder {
         owner: owner.to_bytes(),
         client_order_id,
@@ -101,7 +101,7 @@ pub fn cancel_replace_order(order_id: OrderId, order: PlaceOrder) -> Action {
 
 /// [`cancel_replace_order`], naming the order to cancel by client order id.
 #[must_use]
-pub fn cancel_replace_client_order(client_order_id: u64, order: PlaceOrder) -> Action {
+pub fn cancel_replace_order_by_client_id(client_order_id: u64, order: PlaceOrder) -> Action {
     Action::CancelReplaceOrder(replace(None, Some(client_order_id), order))
 }
 
