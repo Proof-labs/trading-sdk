@@ -222,7 +222,7 @@ def tags(frames: list[dict]) -> list[str]:
     ]
 
 
-def run_stream(monkeypatch, sockets, reads, count, *, on_stream=None, **kwargs):
+def run_stream(monkeypatch, sockets, reads, count, *, on_stream=None, expect_exhausted=False, **kwargs):
     """Iterate a stream over fake sockets. ``reads`` lists the history
     responses in order: ``indexed(...)`` answers a status read, anything else
     an account-events read."""
@@ -272,10 +272,18 @@ def run_stream(monkeypatch, sockets, reads, count, *, on_stream=None, **kwargs):
     if on_stream:
         on_stream(stream)
     frames = []
-    for frame in stream:
-        frames.append(frame)
-        if len(frames) == count:
-            break
+
+    def consume():
+        for frame in stream:
+            frames.append(frame)
+            if len(frames) == count:
+                break
+
+    if expect_exhausted:
+        with pytest.raises(TransportError, match="reconnect attempts exhausted"):
+            consume()
+    else:
+        consume()
     stream.close()
     return frames, statuses, made
 
@@ -325,7 +333,7 @@ def test_reconnect_reports_history_behind_not_backfilled(monkeypatch) -> None:
     first = RecoverySocket([snap(10), live_frame(A)])
     second = RecoverySocket([snap(13)])
     reads = [indexed(10)] * 30 + [page(A)]
-    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99)
+    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99, expect_exhausted=True)
     assert tags(frames) == ["snapshot", "10-0", "snapshot"]
     assert statuses == [RecoveryStatus("history_behind", 0)]
 
@@ -352,7 +360,7 @@ def test_a_gap_longer_than_the_page_budget_reports_failed(monkeypatch) -> None:
             {**page(*(at(top - 499 + i) for i in range(500))), "next_cursor": f"c{p + 1}"}
         )
     frames, statuses, _ = run_stream(
-        monkeypatch, [first, second], [indexed(5511), *pages], 99
+        monkeypatch, [first, second], [indexed(5511), *pages], 99, expect_exhausted=True
     )
     assert tags(frames) == ["snapshot", "snapshot"]
     assert [s.kind for s in statuses] == ["failed"]
@@ -379,7 +387,7 @@ def test_reconnect_with_nothing_yielded_backfills_from_the_snapshot_height(monke
 def test_reconnect_reports_once_even_without_a_boundary(monkeypatch) -> None:
     first = RecoverySocket([snap()])
     second = RecoverySocket([snap()])
-    frames, statuses, made = run_stream(monkeypatch, [first, second], [], 99)
+    frames, statuses, made = run_stream(monkeypatch, [first, second], [], 99, expect_exhausted=True)
     assert tags(frames) == ["snapshot", "snapshot"]
     assert statuses == [RecoveryStatus("unverified", 0)]
     assert made == []
@@ -387,7 +395,7 @@ def test_reconnect_reports_once_even_without_a_boundary(monkeypatch) -> None:
 
 def test_a_resent_snapshot_is_not_a_reconnect(monkeypatch) -> None:
     only = RecoverySocket([snap(10, "initial"), live_frame(A), snap(10, "resent"), live_frame(C)])
-    frames, statuses, made = run_stream(monkeypatch, [only], [], 99)
+    frames, statuses, made = run_stream(monkeypatch, [only], [], 99, expect_exhausted=True)
     assert tags(frames) == ["snapshot", "10-0", "snapshot", "11-0"]
     assert statuses == [] and made == []
 
@@ -397,7 +405,7 @@ def test_a_live_frame_already_backfilled_is_dropped_after_the_backfill(monkeypat
     # A slow socket delivers D after the indexer already served it.
     second = RecoverySocket([snap(12), live_frame(D), live_frame(E), live_frame(D)])
     reads = [indexed(12), page(A, C, D)]
-    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99)
+    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99, expect_exhausted=True)
     assert tags(frames) == ["snapshot", "10-0", "snapshot", "11-0*", "12-3*", "13-0", "12-3"]
 
 
@@ -406,7 +414,7 @@ def test_history_rows_without_position_match_live_frames_with_one(monkeypatch) -
     first = RecoverySocket([snap(10), live_frame(A)])
     second = RecoverySocket([snap(12)], waiting=[live_frame(D)])
     reads = [indexed(12), page(A, C, D)]
-    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99)
+    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99, expect_exhausted=True)
     # The unpositioned boundary row A still stops the scan, and the live D is
     # dropped against its unpositioned row.
     assert tags(frames) == ["snapshot", "10-0", "snapshot", "11-0*", "12-3*"]
@@ -424,7 +432,7 @@ def test_two_copies_of_one_hash_in_a_block_are_separated_by_position(monkeypatch
         indexed(12),
         page_rows(history_row(A, 1), history_row(f, 2, 0), history_row(g, 3, 1)),
     ]
-    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99)
+    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99, expect_exhausted=True)
     # Each live copy matches its own row: no double delivery, no skip.
     assert tags(frames) == ["snapshot", "10-0", "snapshot", "12-0*", "12-1*"]
     assert statuses == [RecoveryStatus("backfilled", 2)]
@@ -434,7 +442,7 @@ def test_a_late_live_duplicate_of_a_positionless_backfilled_row_is_dropped(monke
     first = RecoverySocket([snap(10), live_frame(A)])
     second = RecoverySocket([snap(12), live_frame(D), live_frame(E)])
     reads = [indexed(12), page(A, C, D)]
-    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99)
+    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99, expect_exhausted=True)
     assert tags(frames) == ["snapshot", "10-0", "snapshot", "11-0*", "12-3*", "13-0"]
 
 
@@ -443,7 +451,7 @@ def test_boundary_not_found_when_history_no_longer_holds_the_boundary(monkeypatc
     second = RecoverySocket([snap(13)])
     # History was pruned past the boundary: every row is newer than A.
     reads = [indexed(13), page(E, at(14))]
-    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99)
+    frames, statuses, _ = run_stream(monkeypatch, [first, second], reads, 99, expect_exhausted=True)
     assert tags(frames) == ["snapshot", "10-0", "snapshot", "13-0*", "14-0*"]
     assert statuses == [RecoveryStatus("boundary_not_found", 2)]
 
@@ -512,9 +520,9 @@ def test_reconnect_matches_a_legacy_settlement_name_to_history(monkeypatch) -> N
     assert statuses == [RecoveryStatus("backfilled", 2)]
 
 
-def test_a_stream_out_of_sockets_ends_instead_of_reconnecting(monkeypatch) -> None:
+def test_a_stream_out_of_sockets_raises_after_exhausting_reconnects(monkeypatch) -> None:
     only = RecoverySocket([snap(10), live_frame(A)])
-    frames, statuses, _ = run_stream(monkeypatch, [only], [], 99)
+    frames, statuses, _ = run_stream(monkeypatch, [only], [], 99, expect_exhausted=True)
     assert tags(frames) == ["snapshot", "10-0"]
     assert statuses == []
 

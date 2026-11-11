@@ -59,8 +59,8 @@ class Socket:
 
 
 @pytest.mark.parametrize("error", [
-    InvalidStatus(Response(code, "Refused", Headers())) for code in (401, 403, 404, 429, 503)
-] + [OSError("offline"), TimeoutError("connect timeout")])
+    InvalidStatus(Response(code, "Refused", Headers())) for code in (400, 401, 403, 404)
+])
 def test_initial_failures_surface_for_every_channel(monkeypatch, channel, error):
     calls = []
 
@@ -97,7 +97,9 @@ def test_url_and_iterator_cleanup(monkeypatch, channel, suffix):
     with pytest.raises(RuntimeError, match="active iterator"):
         next(iter(stream))
     frames.close()
-    assert socket.closed and list(stream) == []
+    assert socket.closed
+    with pytest.raises(RuntimeError, match="create a new stream"):
+        next(iter(stream))
     assert urls == ["ws://gateway/prefix/ws"]
 
 
@@ -179,7 +181,7 @@ def test_empty_or_refused_sessions_keep_backoff(monkeypatch, channel, response):
 
     def connect(*args, **kwargs):
         frame = None if response is None else {
-            "type": response, "id": len(sockets) + 1,
+            "type": response, "id": 1 if channel == "orderbook" else len(sockets) + 1,
             "code": 403, "error": "refused",
         }
         socket = Socket(frame)
@@ -196,9 +198,14 @@ def test_empty_or_refused_sessions_keep_backoff(monkeypatch, channel, response):
 
     monkeypatch.setattr(ws_client, "connect", connect)
     monkeypatch.setattr(stream._stop, "wait", wait)
-    list(stream)
-    assert len(sockets) == 3
-    assert waits == [0.5, 1.0, 1.5]
+    if response == "error" and channel == "trades":
+        with pytest.raises(TransportError, match="subscription refused"):
+            list(stream)
+        assert len(sockets) == 1 and waits == []
+    else:
+        list(stream)
+        assert len(sockets) == 3
+        assert waits == ([0.5, 0.5, 0.5] if response == "subscribed" else [0.5, 1.0, 1.5])
 
 
 def test_account_reconnect_budget_survives_successful_handshakes(monkeypatch):
@@ -213,10 +220,12 @@ def test_account_reconnect_budget_survives_successful_handshakes(monkeypatch):
 
     monkeypatch.setattr(ws_client, "connect", connect)
     monkeypatch.setattr(stream._stop, "wait", lambda delay: waits.append(delay) or False)
-    assert list(stream) == []
+    with pytest.raises(TransportError, match="attempts exhausted"):
+        list(stream)
     assert len(sockets) == 3 and all(socket.closed for socket in sockets)
     assert waits == [0.5, 1.0]
-    assert list(stream) == []
+    with pytest.raises(RuntimeError, match="create a new stream"):
+        list(stream)
 
 
 def test_data_delivery_resets_account_reconnect_budget_and_backoff(monkeypatch):
@@ -233,7 +242,10 @@ def test_data_delivery_resets_account_reconnect_budget_and_backoff(monkeypatch):
 
     monkeypatch.setattr(ws_client, "connect", connect)
     monkeypatch.setattr(stream._stop, "wait", lambda delay: waits.append(delay) or False)
-    assert list(stream) == [frame]
+    frames = iter(stream)
+    assert next(frames) == frame
+    with pytest.raises(TransportError, match="attempts exhausted"):
+        next(frames)
     assert len(calls) == 4 and all(socket.closed for socket in sockets)
     assert waits == [0.5, 0.5, 1.0]
 
@@ -276,3 +288,76 @@ def test_reconnect_logs_type_attempt_and_delay_without_error_text(monkeypatch, c
     assert f"reconnect attempt 1 in 0.5s ({first_reason})" in caplog.text
     assert "reconnect attempt 2 in 1.0s (OSError)" in caplog.text
     assert "sensitive-key-material" not in caplog.text
+
+
+@pytest.mark.parametrize("error", [
+    OSError("offline"), TimeoutError("connect timeout"),
+    *[InvalidStatus(Response(code, "Temporary", Headers())) for code in (408, 429, 500, 503)],
+])
+def test_temporary_startup_failure_retries_then_delivers(monkeypatch, channel, error):
+    stream = make_stream(channel)
+    socket = Socket(data_frame(channel))
+    results = iter([error, socket])
+    def connect(*args, **kwargs):
+        result = next(results)
+        if isinstance(result, Exception):
+            raise result
+        return result
+    waits = []
+    monkeypatch.setattr(ws_client, "connect", connect)
+    monkeypatch.setattr(stream._stop, "wait", lambda delay: waits.append(delay) or False)
+    with stream:
+        frames = iter(stream)
+        assert next(frames) == data_frame(channel)
+        assert waits == [0.5]
+    frames.close()
+
+
+def test_startup_retry_budget_exhaustion_is_not_silent(monkeypatch, channel):
+    stream = make_stream(channel)
+    stream._max_attempts = 2
+    calls, waits = [], []
+    def connect(*args, **kwargs):
+        calls.append(1)
+        raise OSError("offline")
+    monkeypatch.setattr(ws_client, "connect", connect)
+    monkeypatch.setattr(stream._stop, "wait", lambda delay: waits.append(delay) or False)
+    with pytest.raises(TransportError, match="attempts exhausted"):
+        next(iter(stream))
+    assert len(calls) == 3 and waits == [0.5, 1.0]
+    with pytest.raises(RuntimeError, match="create a new stream"):
+        next(iter(stream))
+
+
+def test_unmatched_ack_does_not_reset_backoff(monkeypatch, channel):
+    stream = make_stream(channel)
+    waits = []
+    monkeypatch.setattr(ws_client, "connect", lambda *a, **k: Socket({"type": "subscribed", "id": 999}))
+    def wait(delay):
+        waits.append(delay)
+        if len(waits) == 3:
+            stream.close()
+            return True
+        return False
+    monkeypatch.setattr(stream._stop, "wait", wait)
+    assert list(stream) == []
+    assert waits == [0.5, 1.0, 2.0]
+
+
+def test_confirmed_quiet_account_does_not_exhaust_budget(monkeypatch):
+    stream = AccountEventStream("ws://gateway", OWNER, reconnect_attempts=1)
+    sockets, waits = [], []
+    def connect(*args, **kwargs):
+        socket = Socket({"type": "subscribed", "id": len(sockets) + 1})
+        sockets.append(socket)
+        return socket
+    def wait(delay):
+        waits.append(delay)
+        if len(waits) == 4:
+            stream.close()
+            return True
+        return False
+    monkeypatch.setattr(ws_client, "connect", connect)
+    monkeypatch.setattr(stream._stop, "wait", wait)
+    assert list(stream) == []
+    assert len(sockets) == 4 and waits == [0.5] * 4

@@ -7,7 +7,7 @@ from websockets.exceptions import InvalidStatus
 from websockets.http11 import Response
 
 from proof_trading_sdk import AccountEventStream
-from proof_trading_sdk.errors import AuthenticationError
+from proof_trading_sdk.errors import AuthenticationError, TransportError
 from test_ws_streams import OWNER, A, B, FakeSocket, indexed, live_frame, page, snap, tags
 
 
@@ -91,7 +91,10 @@ def test_reconnect_refusal_respects_attempt_limit(monkeypatch, code):
     calls = connections(monkeypatch, [first, refusal(code), refusal(code)])
     stream = AccountEventStream("wss://gateway.example", OWNER, reconnect_attempts=2)
     waits = no_wait(monkeypatch, stream)
-    assert list(stream) == [snap(10)]
+    frames = iter(stream)
+    assert next(frames) == snap(10)
+    with pytest.raises(TransportError, match="reconnect attempts exhausted"):
+        next(frames)
     assert len(calls) == 3 and waits == [0.5, 1]
     assert first.closed
     stream.close()

@@ -62,7 +62,7 @@ def fast_wait(monkeypatch, stream):
     return waits
 
 
-@pytest.mark.parametrize("code", [401, 403, 404, 429, 503])
+@pytest.mark.parametrize("code", [400, 401, 403, 404])
 def test_first_upgrade_refusal_raises_instead_of_silently_retrying(monkeypatch, code):
     calls = connect_sockets(monkeypatch, InvalidStatus(Response(code, "Refused", Headers())))
     with PublicTradeStream("ws://g", 7) as stream:
@@ -74,16 +74,6 @@ def test_first_upgrade_refusal_raises_instead_of_silently_retrying(monkeypatch, 
             assert failure.value.status_code == code
     assert len(calls) == 1
     assert stream._stop.is_set() and not stream._iterator_lock.locked()
-
-
-@pytest.mark.parametrize("error", [OSError("offline"), TimeoutError("timed out")])
-def test_first_transport_failure_raises(monkeypatch, error):
-    calls = connect_sockets(monkeypatch, error)
-    with PublicTradeStream("ws://g", 7) as stream:
-        monkeypatch.setattr(stream._stop, "wait", lambda _: pytest.fail("initial failure retried"))
-        with pytest.raises(TransportError, match="connection failed"):
-            next(iter(stream))
-    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("code", [401, 403, 404, 429, 503])
@@ -149,15 +139,23 @@ def test_filters_controls_other_channels_markets_and_invalid_json(monkeypatch):
 
 
 @pytest.mark.parametrize("code", [401, 403, 429, 503])
-def test_matching_refusal_is_yielded_without_resubscribe(monkeypatch, code):
+def test_matching_refusal_is_yielded_then_raises_without_waiting(monkeypatch, code):
     error = {"type": "error", "id": 1, "code": code, "error": "refused"}
-    socket = Socket(error, TRADE)
-    connect_sockets(monkeypatch, socket)
+    class RefusedSocket(Socket):
+        def __iter__(self):
+            yield json.dumps(error)
+            pytest.fail("read again after terminal subscription refusal")
+    socket = RefusedSocket()
+    calls = connect_sockets(monkeypatch, socket)
     with PublicTradeStream("ws://g", 7) as stream:
         frames = iter(stream)
         assert next(frames) == error
-        assert next(frames) == TRADE
-        assert len(socket.sent) == 1
+        with pytest.raises(TransportError, match="subscription refused") as failure:
+            next(frames)
+        assert failure.value.status_code == code
+        assert len(socket.sent) == 1 and len(calls) == 1 and socket.closed
+        with pytest.raises(RuntimeError, match="create a new stream"):
+            next(iter(stream))
     frames.close()
 
 
@@ -224,7 +222,8 @@ def test_iterator_close_releases_socket_and_prevents_reopen(monkeypatch):
     assert next(frames) == TRADE
     frames.close()
     assert socket.closed
-    assert list(stream) == []
+    with pytest.raises(RuntimeError, match="stream is closed"):
+        list(stream)
     assert len(calls) == 1
 
 

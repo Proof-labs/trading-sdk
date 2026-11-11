@@ -157,6 +157,10 @@ def _row_frame(row: dict[str, t.Any]) -> dict[str, t.Any]:
 _UNKEYED = object()
 
 
+class _SubscriptionRefused(TransportError):
+    """Terminal refusal of this connection's only trade subscription."""
+
+
 class _WebSocketStream:
     """Shared connection ownership, startup errors and cancelable reconnects.
 
@@ -187,6 +191,8 @@ class _WebSocketStream:
         self._iterator_lock = threading.Lock()
         self._ws: t.Any = None
         self._closed = False
+        self._closed_by_user = False
+        self._recovered = False
 
     def _connect_options(self) -> dict[str, t.Any]:
         return {"additional_headers": {"X-API-Key": self._api_key} if self._api_key else {}}
@@ -200,6 +206,10 @@ class _WebSocketStream:
             socket.close()
 
     def close(self) -> None:
+        self._closed_by_user = True
+        self._shutdown()
+
+    def _shutdown(self) -> None:
         self._closed = True
         self._stop.set()
         self._close_socket()
@@ -213,14 +223,19 @@ class _WebSocketStream:
     def __iter__(self) -> t.Iterator[dict[str, t.Any]]:
         return self._run()
 
+    def _mark_recovered(self) -> None:
+        self._recovered = True
+
     def _run(self) -> t.Iterator[dict[str, t.Any]]:
         import websockets.sync.client as ws_client
         from websockets.exceptions import InvalidStatus
 
         if self._closed:
+            if not self._closed_by_user:
+                raise RuntimeError("stream is closed; create a new stream")
             return
         if not self._iterator_lock.acquire(blocking=False):
-            if self._closed:
+            if self._closed_by_user:
                 return
             raise RuntimeError("stream already has an active iterator")
         attempt = 0
@@ -229,39 +244,40 @@ class _WebSocketStream:
         try:
             while not self._closed:
                 reason = "peer closed"
+                self._recovered = False
                 try:
                     self._ws = ws_client.connect(self._ws_url, **self._connect_options())
                     connected_once = True
                     if self._closed:
                         return
                     for frame in self._session():
-                        # A handshake or refusal alone is not a recovered feed.
                         if frame.get("type") != "error":
-                            attempt = 0
-                            backoff = 0.5
+                            self._mark_recovered()
                         yield frame
+                except _SubscriptionRefused as error:
+                    raise TransportError("trade subscription refused", status_code=error.status_code) from None
                 except Exception as error:
                     if self._closed:
                         return
                     if not connected_once:
                         code = error.response.status_code if isinstance(error, InvalidStatus) else None
+                        permanent = code is not None and 400 <= code < 500 and code not in (408, 429)
                         if code in (401, 403):
                             raise AuthenticationError("stream connection authentication refused") from error
-                        message = "stream connection failed"
-                        if code is not None:
-                            message += f" (HTTP {code})"
-                        raise TransportError(message, status_code=code) from error
-                    # Exception messages can contain gateway credentials or
-                    # signer diagnostics; only expose the exception type.
+                        if permanent or not isinstance(error, (OSError, TimeoutError, InvalidStatus)):
+                            raise TransportError("stream connection failed", status_code=code) from error
+                    # Never log exception messages: they may contain credentials.
                     reason = type(error).__name__
                 finally:
                     self._close_socket()
                 if self._closed:
                     return
+                if self._recovered:
+                    attempt = 0
+                    backoff = 0.5
                 attempt += 1
                 if self._max_attempts is not None and attempt > self._max_attempts:
-                    log.error("reconnect attempts exhausted")
-                    return
+                    raise TransportError("stream reconnect attempts exhausted")
                 delay = min(backoff, self._backoff_cap)
                 log.warning("stream reconnect attempt %d in %.1fs (%s)", attempt, delay, reason)
                 if self._stop.wait(delay):
@@ -269,7 +285,7 @@ class _WebSocketStream:
                 backoff = min(backoff * 2, self._backoff_cap)
         finally:
             try:
-                self.close()
+                self._shutdown()
             finally:
                 self._iterator_lock.release()
 
@@ -288,8 +304,9 @@ class AccountEventStream(_WebSocketStream):
     disconnects or is closed. Other refusals (including 403), and errors after
     confirmation, do not resubscribe. A new socket starts a fresh retry budget.
     Before the first successful connection, HTTP upgrade 401/403 raises
-    ``AuthenticationError`` and other connection failures raise ``TransportError``.
-    Reconnects use the configured retry budget and backoff, preserving the
+    ``AuthenticationError``; other permanent HTTP 4xx raise ``TransportError``.
+    Temporary connection failures retry, including on startup. Exhausting the
+    configured reconnect budget raises ``TransportError``. Reconnects preserve the
     history recovery boundary. Closing the iterator closes the stream; only
     one iterator may consume it at a time.
 
@@ -318,8 +335,9 @@ class AccountEventStream(_WebSocketStream):
             Signing failures yield error frames without sending an unsigned
             subscription. Also used by the first-subscription retry loop.
         reconnect_backoff_max: Maximum backoff in seconds (default 10).
-        reconnect_attempts: Maximum reconnect attempts without data delivery
-            (``None`` = infinite). Handshakes alone do not reset this budget.
+        reconnect_attempts: Maximum reconnect attempts without a matching
+            subscription acknowledgment or data (``None`` = infinite).
+            Handshakes alone do not reset this budget; exhaustion raises.
         recover: Backfill missed events from history on reconnect.
         on_recovery: Called with the outcome of each reconnect's recovery.
         history_url: Gateway HTTP base URL for the history reads. Defaults to
@@ -450,6 +468,7 @@ class AccountEventStream(_WebSocketStream):
         }
 
     def _confirm(self) -> None:
+        self._mark_recovered()
         self._confirmed = True
         self._auth_retry_attempts = 0
         self._auth_retry_at = None
@@ -465,9 +484,9 @@ class AccountEventStream(_WebSocketStream):
             and owner.lower().removeprefix("0x") == self._owner
         )
 
-    def close(self) -> None:
+    def _shutdown(self) -> None:
         self._auth_retry_at = None
-        super().close()
+        super()._shutdown()
 
     def _report(self, status: RecoveryStatus) -> None:
         if self._on_recovery is not None and not self._closed:
@@ -716,8 +735,9 @@ class OrderbookDeltaStream(_WebSocketStream):
     empties the level). A refused subscription arrives as a
     ``{"type": "error", ...}`` frame. Each reconnect subscribes again and
     starts from a fresh snapshot. Before the first successful connection, HTTP
-    401/403 raises ``AuthenticationError``; other failures raise ``TransportError``.
-    Thereafter failures retry with cancelable exponential backoff. Only one
+    401/403 raises ``AuthenticationError``; other permanent HTTP 4xx raise
+    ``TransportError``. Temporary failures retry with cancelable exponential
+    backoff, including on startup (HTTP 408/429 are retryable). Only one
     iterator may consume the stream; closing that iterator closes the socket.
 
     Args:
@@ -745,6 +765,8 @@ class OrderbookDeltaStream(_WebSocketStream):
             if self._closed:
                 return
             frame = json.loads(raw)
+            if frame.get("type") == "subscribed" and type(frame.get("id")) is int and frame["id"] == 1:
+                self._mark_recovered()
             if frame.get("type") not in _ACK_TYPES:
                 yield frame
 
@@ -755,11 +777,12 @@ class PublicTradeStream(_WebSocketStream):
     Iterate to receive the gateway's original ``trade`` dictionaries (including
     camelCase keys and decimal strings) and subscription error frames. There is
     no initial snapshot, replay, deduplication or recovery of missed fills.
-    Before the first successful connection, failures raise ``AuthenticationError``
-    for HTTP 401/403, or ``TransportError`` otherwise. After connecting once,
-    reconnects resubscribe with a fresh request ID and failures back off from
-    0.5 seconds to 10 seconds by default, as in TypeScript GatewayFeed.
-    A subscription refusal is yielded, without a same-socket retry.
+    Before the first successful connection, HTTP 401/403 raises
+    ``AuthenticationError``; other permanent HTTP 4xx raise ``TransportError``.
+    Temporary failures retry, including on startup (HTTP 408/429 are retryable).
+    Reconnects use a fresh request ID and back off from 0.5 to 10 seconds by
+    default. A matching refusal is yielded once; the next iteration raises
+    ``TransportError`` and closes the socket, without retrying the subscription.
     ``ws_url`` accepts a base URL or an endpoint already ending in ``/ws``.
 
     No signer is used. An optional API key sets the connection's gateway tier.
@@ -808,6 +831,12 @@ class PublicTradeStream(_WebSocketStream):
                 # request ID binds them to this caller.
                 if type(frame.get("id")) is int and frame["id"] == self._request_id:
                     yield frame
+                    if not self._closed:
+                        code = frame.get("code")
+                        raise _SubscriptionRefused("trade subscription refused", status_code=code if type(code) is int else None)
+            elif frame.get("type") == "subscribed":
+                if type(frame.get("id")) is int and frame["id"] == self._request_id:
+                    self._mark_recovered()
             elif (
                 frame.get("channel") == "trades"
                 and frame.get("type") == "trade"

@@ -62,8 +62,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Python `PublicTradeStream` and `ExchangeClient.trade_stream` expose the public
   `trades` WebSocket channel with exact gateway frames, subscription errors,
   cancellation and automatic resubscription. No snapshot or missed-fill recovery.
-  The first connection fails with `AuthenticationError` for HTTP 401/403 or
-  `TransportError` otherwise; after connecting once, failures retry with backoff.
+  Matching subscription refusals are yielded once, then raise `TransportError`
+  and close the socket on the next iteration.
   Both base URLs and endpoints already ending in `/ws` are accepted.
   Requires `websockets>=15` (previously >=14); callers pinning version 14 must
   upgrade. Protocol Ping/Pong uses explicit 15-second/10-second timings. Version
@@ -73,23 +73,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Python stream reconnect attempts and backoff reset only after data delivery,
-  so connections that immediately close or only yield errors cannot bypass
-  the retry budget or keep reconnecting at the minimum delay.
+- Python stream reconnect attempts and backoff reset after a matching subscription
+  acknowledgment or data delivery. Handshakes and refusals alone do not reset them.
 
-- **Breaking (Python MAJOR):** account, orderbook and public trade streams share one connection and
-  reconnect loop in `streams.py`. All now raise on initial connection failure
-  (`AuthenticationError` for HTTP 401/403, `TransportError` otherwise), accept
-  base URLs or `/ws` endpoints, close sockets before reconnect waits, and
-  cancel waits on `close()`. Closing an iterator closes its stream, and a second
-  concurrent iterator is rejected. Account auth retries and history recovery
-  remain channel-specific; reconnect backoff caps and budgets are unchanged.
-  All three require a finite positive `reconnect_backoff_max`; exhaustion or
-  iterator closure makes the stream permanently closed. Closed streams iterate
-  as empty even while an older iterator is suspended. Reconnect diagnostics
-  include attempt, delay and exception type without sensitive exception text.
-  Changed startup and iterator contracts require the next Python MAJOR release;
-  this entry is not part of Python 4.0.0.
+- **Breaking (Python MAJOR):** account, orderbook and public trade streams share
+  connection and cleanup handling. Permanent initial HTTP 4xx errors raise
+  (`AuthenticationError` for 401/403, `TransportError` otherwise); network errors,
+  timeouts, HTTP 408/429 and 5xx retry, including on startup. Reconnect budget
+  exhaustion raises `TransportError`. After failure or iterator closure, reuse
+  raises `RuntimeError`; explicit `close()` leaves iteration empty. Streams accept
+  base URLs or `/ws` endpoints, reject concurrent iterators, close sockets before
+  reconnect waits and cancel waits on `close()`. Backoff caps must be finite and
+  positive. Account auth retries and history recovery remain channel-specific.
+  Reconnect logs omit exception text. These contracts target the next Python
+  MAJOR release, not Python 4.0.0.
 
 - Document `SetUserMarketLeverage` admission limits, its governed insurance-fund
   path and initial-margin-only semantics. SDK APIs and wire support are unchanged.

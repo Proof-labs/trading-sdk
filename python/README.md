@@ -210,12 +210,9 @@ observable without restarting live delivery. A new connection resets the retry
 budget. The synchronous iterator performs retries while it is being consumed;
 `stream.close()` cancels pending retries. Synthetic error frames carry the SDK's
 fixed `SigningError` text and omit other exception text, which could expose
-sensitive diagnostics. HTTP 401/403
-refusals during the WebSocket upgrade raise `AuthenticationError` before the
-first successful connection; other connection failures raise `TransportError`
-with the HTTP status when available. On reconnect, failures follow `reconnect_attempts`
-and the normal backoff (`None` retries indefinitely), preserving recovery state.
-`close()` cancels the wait. This is separate from subscription-error frames.
+sensitive diagnostics. Connection failures follow the shared retry policy below,
+separately from subscription-error frames. Account reconnects preserve recovery
+state and follow `reconnect_attempts` (`None` retries indefinitely).
 
 `client.account_auth(owner, after_id=0)` returns signed subscription parameters.
 The optional cursor must be a Python integer in `0..2**53 - 1`, matching the TS
@@ -224,19 +221,22 @@ Direct helper failures raise `SigningError`. The default account stream signs
 cursor zero; its history-based reconnect recovery does not change this cursor.
 
 All three stream classes share connection, cleanup and reconnect handling in
-`streams.py`. Initial connection failures surface immediately (`AuthenticationError`
-for HTTP 401/403, `TransportError` otherwise), including for orderbook streams.
-After connecting once, they retry with cancelable exponential backoff. A delivered
-non-error data frame resets reconnect attempts and backoff; a handshake or
-subscription refusal alone does not. Account
-streams retain their reconnect budget, signed-subscription retries and history
-recovery. Each stream accepts base URLs or `/ws` endpoints and permits only one
-active iterator. Closing the iterator closes its stream; context managers and
-`close()` also release the socket and cancel backoff waits. Closed streams are
-inert: new iteration is empty, even if an older iterator is still suspended.
-Retry exhaustion also closes the stream permanently. `reconnect_backoff_max`
-must be finite and positive. These startup and iterator contract changes are
-for the next Python MAJOR release.
+`streams.py`. Before the first successful connection, HTTP 401/403 raises
+`AuthenticationError`; other HTTP 4xx except 408/429 raises `TransportError`.
+Temporary connection failures (network errors, timeouts, HTTP 408/429 and 5xx)
+retry with cancelable exponential backoff, including on startup. Other startup
+errors raise `TransportError`. After connecting once, connection failures retry.
+A matching subscription acknowledgment or non-error data frame resets attempts
+and backoff; a handshake, unrelated acknowledgment or refusal does not.
+
+Account streams retain their signed-subscription retries and history recovery.
+Exhausting a configured reconnect budget raises `TransportError` and closes the
+stream. Each stream accepts base URLs or `/ws` endpoints and permits one active
+iterator. Closing the iterator closes its stream; context managers and `close()`
+also release the socket and cancel waits. Iterating after explicit `close()` is
+empty; after failure or iterator closure it raises `RuntimeError`, requiring a
+new stream. `reconnect_backoff_max` must be finite and positive. These startup
+and iterator contract changes are for the next Python MAJOR release.
 
 ## Public trade stream
 
@@ -264,15 +264,15 @@ and gateway `null` values remain `None`;
 quantity by `10**sz_decimals` from the market configuration for base units;
 the stream performs no conversion. Only the requested
 channel/market and matching subscription errors are delivered. Control ACKs
-are consumed internally. Subscription refusals are yielded without retrying on
-the same socket, matching TypeScript's public trade subscription.
+are consumed internally. A matching subscription refusal is yielded once; the
+next iteration raises `TransportError` with its code and closes the socket.
+It does not leave an unsubscribed iterator waiting indefinitely or retry the
+refusal automatically. Call `close()` or exit the context manager after handling
+an error frame if you do not need the exception.
 
-Before the first successful connection, HTTP 401/403 raises `AuthenticationError`;
-other connection failures raise `TransportError` (with `status_code` for HTTP
-refusals). This includes 404, 429, DNS failures and timeouts, so a failed start
-does not silently retry forever. After a successful connection, disconnects
-and refused reconnects resubscribe automatically with 0.5-second exponential backoff,
-capped at 10 seconds by default (`reconnect_backoff_max` overrides the cap).
+Connections follow the shared retry policy above. Reconnects resubscribe with
+0.5-second exponential backoff, capped at 10 seconds by default
+(`reconnect_backoff_max` overrides the cap).
 Only one iterator may consume a stream, and reconnect work proceeds as it is
 consumed. There is no replay, deduplication or HTTP backfill: disconnected or
 slow consumers can miss fills, including gateway queue drops that have no
