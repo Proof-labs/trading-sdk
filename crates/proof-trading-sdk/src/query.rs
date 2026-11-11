@@ -1,8 +1,10 @@
-//! Node read-model (response) DTOs — re-exported from the shared `exchange-wire`
+//! Node read-model (response) DTOs — re-exported from the shared `proof-wire`
 //! crate so the SDK and the engine share one definition (no positional-wire
 //! drift). Client representation that needs it wraps these.
 
-pub use proof_wire::query::{AccountInfo, BindingScenario, PositionBrief};
+pub use proof_wire::query::{
+    AccountInfo, AccountStateInfo, BindingScenario, LevelSummary, OrderbookSnapshot, PositionBrief,
+};
 pub use proof_wire::query_v2::{AuthorizedAgents, AUTHORIZED_AGENTS_LIMIT};
 pub use proof_wire::query_v2::{InsuranceFundDirectory, InsuranceFundLedger, InsuranceFundState};
 
