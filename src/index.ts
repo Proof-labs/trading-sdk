@@ -150,6 +150,7 @@ export {
   Outcome,
   type TxResult,
   type TxOutcome,
+  type GatewayRefusalCode,
   type TxEvent,
   type ExchangeEvent,
   type OrderPlacedEvent,

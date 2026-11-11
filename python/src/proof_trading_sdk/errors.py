@@ -131,6 +131,35 @@ class EngineError(ProofTradingSdkError):
         return None
 
 
+class PreAdmissionRefusal(ProofTradingSdkError):
+    """The gateway refused the request before admitting it (``status: refused``).
+
+    Nothing was broadcast: there is no transaction hash to reconcile, no
+    engine verdict, and no on-chain outcome to wait for. The gateway's
+    ``error_code`` names why — ``InvalidRequest`` means the request must be
+    corrected and ``EncodingError`` is a gateway-internal encoding failure.
+
+    Refusals at HTTP 401, 403, 429 and 5xx other than ``EncodingError`` keep
+    their own exceptions: :class:`AuthenticationError`, :class:`RateLimited` and
+    :class:`GatewayError`. ``Unauthorized``, ``RateLimited``, ``Maintenance``,
+    ``Overloaded`` and ``Unavailable`` therefore reach this class only on a
+    legacy HTTP 200.
+
+    Attributes:
+        error_code: The gateway's machine-readable ``errorCode``, never empty.
+        message: The gateway's own explanation, if it gave one.
+        status_code: The HTTP status the refusal arrived with, such as legacy
+            200, admission 400 or 413, and internal encoding failure 500.
+    """
+
+    def __init__(self, error_code: str, message: str, status_code: int) -> None:
+        self.error_code = error_code
+        self.message = message
+        self.status_code = status_code
+        detail = message or error_code
+        super().__init__(f"gateway refused the request: {detail}")
+
+
 class RateLimited(ProofTradingSdkError):
     """HTTP 429 — rate limit exceeded.
 
