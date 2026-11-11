@@ -421,7 +421,9 @@ Its six explicit operations are `chain_identity`, `oracle_permissions`,
 and `committed_receipt`. They use only the existing gateway routes, with no
 direct-node fallback, signing, nonce allocation or hidden retry. The crate's own
 [README](crates/proof-trading-sdk/README.md) covers the codec, signing and read
-decoding for Rust integrators.
+decoding for Rust integrators. For a trading bot, use the async
+[`proof-sdk-rs`](crates/proof-sdk-rs/README.md) crate on
+top of it: nonces, order helpers, receipts and typed reads.
 
 Configure an HTTPS origin (HTTP requires a URL-normalized loopback IP, not a DNS
 name; numeric IPv4 aliases that normalize to loopback are allowed), a

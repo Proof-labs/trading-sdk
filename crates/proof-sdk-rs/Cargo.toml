@@ -1,0 +1,38 @@
+[package]
+name = "proof-sdk-rs"
+version = "1.0.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Async (tokio) trading and read client for the Proof Exchange gateway, built on the proof-trading-sdk core: nonce allocation, signing, order helpers, typed reads."
+repository = "https://github.com/Proof-labs/trading-sdk"
+readme = "README.md"
+keywords = ["proof", "exchange", "trading", "perpetuals", "sdk"]
+categories = ["api-bindings", "cryptography::cryptocurrencies"]
+# Not on crates.io until proof-wire is (#425); consumers depend on the git repo.
+publish = false
+
+# Kept out of the core on purpose: the core (and the wasm/PyO3 bindings over it)
+# stays free of tokio, reqwest and every other runtime dependency. Nothing in
+# this crate is reachable from `npm run build:wasm`.
+
+[dependencies]
+proof-trading-sdk = { path = "../proof-trading-sdk", version = "4.2", features = ["gateway"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
+tokio = { version = "1", features = ["time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+zeroize = "1"
+url = "2"
+
+[dev-dependencies]
+rmp-serde = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+float_arithmetic = "deny"

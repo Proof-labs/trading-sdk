@@ -8,8 +8,10 @@
 use serde::de::{self, Deserializer, Visitor};
 
 use super::*;
-use crate::query::{AccountInfo, BindingScenario, PositionBrief};
-use crate::types::{AttachedConditional, EventInfo, FeeTier, MarketConfig};
+use crate::query::{
+    AccountInfo, AccountStateInfo, BindingScenario, LevelSummary, OrderbookSnapshot, PositionBrief,
+};
+use crate::types::{AttachedConditional, EventInfo, FeeTier, MarketConfig, Position};
 
 /// A deserializer that only records the field list serde derives for a struct.
 struct FieldProbe<'a>(&'a mut &'static [&'static str]);
@@ -79,6 +81,10 @@ fn widths_and_nested_fields_follow_the_pinned_wire_types() {
     assert_shape::<AccountInfo>(&ACCOUNT_INFO, &["positions", "binding_scenario"]);
     assert_shape::<PositionBrief>(inner(&ACCOUNT_INFO, 0), &[]);
     assert_shape::<BindingScenario>(inner(&ACCOUNT_INFO, 1), &[]);
+    assert_shape::<OrderbookSnapshot>(&ORDERBOOK, &["bids", "asks"]);
+    assert_shape::<LevelSummary>(inner(&ORDERBOOK, 0), &[]);
+    assert_shape::<AccountStateInfo>(&ACCOUNT_STATE, &["positions"]);
+    assert_shape::<Position>(inner(&ACCOUNT_STATE, 0), &[]);
 }
 
 fn resting_order() -> crate::types::Order {

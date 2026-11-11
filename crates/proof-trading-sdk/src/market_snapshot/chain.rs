@@ -137,6 +137,9 @@ fn decode_receipt(body: &[u8], hash: TxHash) -> Result<CommittedReceipt, Snapsho
         hash,
         height: positive_height(&read.height)?,
         code: read.tx_result.code,
+        // This client reads its own evidence from the raw events.
+        log: String::new(),
+        events: Vec::new(),
     })
 }
 
