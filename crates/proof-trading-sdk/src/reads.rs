@@ -32,7 +32,7 @@ const FEE_TIER: Shape = Shape::Record {
 };
 /// `MarketConfig`; field 13 is `fee_tiers`.
 pub const MARKET_CONFIG: Shape = Shape::Record {
-    width: 24,
+    width: 27,
     nested: &[(13, Shape::List(&FEE_TIER))],
 };
 const ATTACHED_CONDITIONAL: Shape = Shape::Record {
