@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/proof-trading-sdk",
+    "crates/proof-sdk-rs",
     "crates/proof-trading-sdk-derive",
     "crates/proof-trading-sdk-pyo3",
     "crates/proof-trading-sdk-wasm",

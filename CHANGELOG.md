@@ -15,6 +15,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (TypeScript and Python, `1_000`) mirrors the engine's per-limb TP/SL slippage
   ceiling as an advisory clamp; encoding does not enforce it.
 
+- **Rust `proof-sdk-rs` 1.0.0**, a new async (tokio) trading client over the gateway (#425), with a WebSocket feed (`ws` feature, on by default). The WASM build is unchanged.
+
 - Python chain-pinned transaction evidence and bounded block-result ranges/windows
   check exact transaction bytes, Merkle roots and H+1 app-hash continuity.
   Results remain trusted gateway observations, without validator verification.
@@ -65,6 +67,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   challenge on every retry and reconnect. `account_auth(owner, after_id=0)`
   supports direct owner keys and JSON-safe nonnegative cursors.
 
+- Python `PublicTradeStream` and `ExchangeClient.trade_stream` expose the public
+  `trades` WebSocket channel with exact gateway frames, subscription errors,
+  cancellation and automatic resubscription. No snapshot or missed-fill recovery.
+  Matching subscription refusals are yielded once, then raise `TransportError`
+  and close the socket on the next iteration.
+  Both base URLs and endpoints already ending in `/ws` are accepted.
+  Requires `websockets>=15` (previously >=14); callers pinning version 14 must
+  upgrade. Protocol Ping/Pong uses explicit 15-second/10-second timings. Version
+  15 also changes the account and orderbook streams and the `client.py` socket:
+  they now honour proxy environment variables such as `HTTPS_PROXY` and inherit
+  the library's 20-second keepalive.
+
 ### Changed
 
 - **Breaking (TypeScript):** `decodeTx().action`, `decodeSigningMessage().action`,
@@ -78,6 +92,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
   still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
   placement. Existing TP/SL placement, cancellation and history APIs remain.
+
+- Python stream reconnect attempts and backoff reset after a matching subscription
+  acknowledgment or data delivery. Handshakes and refusals alone do not reset them.
+
+- **Breaking (Python MAJOR):** account, orderbook and public trade streams share
+  connection and cleanup handling. At startup, HTTP 401/403 raise
+  `AuthenticationError` and any other non-transient response raises
+  `TransportError`; network errors, timeouts, a connection dropped during the
+  handshake, and HTTP 408/429/5xx from the gateway or a proxy retry. Exhausting
+  `AccountEventStream`'s `reconnect_attempts` budget raises `TransportError`;
+  orderbook and trade streams retry until closed. After a failure or iterator
+  closure, reuse raises `RuntimeError`, even after a later `close()`; `close()`
+  on an open stream leaves iteration empty. Streams accept
+  base URLs or `/ws` endpoints, reject concurrent iterators, close sockets before
+  reconnect waits and cancel waits on `close()`. Backoff caps must be finite and
+  positive. Account auth retries and history recovery remain channel-specific.
+  Reconnect logs omit exception text. These contracts target the next Python
+  MAJOR release, not Python 4.0.0.
+
+- **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `gateway::CommittedReceipt` gains `log` and
+  `events` (`TxEvent`), read from the `POST /exchange` and `GET /v1/tx/{hash}` responses that already
+  carried them; `SubmissionOutcome::CheckTxRejected` gains `log`. `errors::ErrorKind` is
+  `#[non_exhaustive]` and gains `ErrorKind::from_code` (`None` for the version-dependent code 50).
+  New `sign_action` signs any `Action` through a custody `Signer`.
 
 - Document `SetUserMarketLeverage` admission limits, its governed insurance-fund
   path and initial-margin-only semantics. SDK APIs and wire support are unchanged.
