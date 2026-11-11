@@ -9,7 +9,7 @@
 
 pub use proof_wire::{
     abci_event, bridge, codec, crypto, liquidation_config, liquidation_progress,
-    liquidation_report, triggers, types,
+    liquidation_report, margin_offsets, triggers, types,
 };
 
 pub mod binary;

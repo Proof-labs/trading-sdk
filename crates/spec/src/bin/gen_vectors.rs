@@ -608,6 +608,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }}
             }),
         ),
+        // SetMarginOffsetPolicy (inner tag 0x1B): a complete policy replacement.
+        // The predecessor is `Option`, so the first write carries nil; pairs are
+        // positional with a bare-string resolution treatment.
+        codec_case(
+            "propose_admin_action/set_margin_offset_policy",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetMarginOffsetPolicy": {
+                    "predecessor": null,
+                    "pairs": [{
+                        "perpetual": 1u32,
+                        "conditional": 2u32,
+                        "settlement_reference": 1u32,
+                        "rate": 5_000u16,
+                        "resolution": "RemoveOnResolution"
+                    }]
+                }}
+            }),
+        ),
         // UpdateAuthoritySet (inner tag 0x07, exchange#422 / DEC-87,
         // exchange#472): addition/removal of members in one privileged
         // authority allowlist. `domain` is externally tagged as its bare
@@ -1401,6 +1422,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         }})
     };
     let event_inputs = vec![
+        (
+            "margin_offset_policy_set/basic",
+            json!({"MarginOffsetPolicySet": {
+                "sequence": 1u64,
+                "pair_count": 1,
+                "proposal_id": 42u64,
+            }}),
+        ),
+        (
+            "margin_offset_pair_configured/basic",
+            json!({"MarginOffsetPairConfigured": {
+                "sequence": 1u64,
+                "index": 0,
+                "conditional_market": 2,
+                "perpetual_market": 1,
+                "settlement_reference_market": 1,
+                "rate_bps": 5_000,
+                "resolution": "RemoveOnResolution",
+            }}),
+        ),
         (
             "position_liquidated/partial",
             position_liquidated(
