@@ -30,9 +30,12 @@ const FEE_TIER: Shape = Shape::Record {
     width: 3,
     nested: &[],
 };
-/// `MarketConfig`; field 13 is `fee_tiers`.
+/// `MarketConfig`; field 13 is `fee_tiers`. Width 27 includes the wire-12
+/// tail (`impact_notional`, `funding_dead_band_bps`,
+/// `funding_interest_rate`), all `#[serde(default)]`, so pre-12 rows still
+/// decode with the defaults.
 pub const MARKET_CONFIG: Shape = Shape::Record {
-    width: 24,
+    width: 27,
     nested: &[(13, Shape::List(&FEE_TIER))],
 };
 const ATTACHED_CONDITIONAL: Shape = Shape::Record {

@@ -134,8 +134,10 @@ define_error_kinds! {
     71  => InvalidAdminRegistry             ~ "Proposed signer roster violates the registry invariants (threshold bounds, sorted unique members, roster size, version headroom).",
     // Operator-custody withdrawals (receipt-gated terminals).
     72  => BridgeReceiptRegistryInactive    ~ "A receipt-gated withdrawal action was submitted while no operator receipt registry exists on this chain; the operator custody phase is inactive and the path fails closed.",
-    73  => BridgeReceiptInvalid             ~ "The operator quorum proof failed verification: bad structure, fewer distinct members than the threshold, or an invalid signature.",
-    74  => BridgeReceiptMismatch            ~ "The signed receipt does not bind to this withdrawal or deployment (id, owner, amount, destination, epoch or terminal state differs); the log names the field.",
+    // 73 and 74 were BridgeReceiptInvalid / BridgeReceiptMismatch, retired
+    // with the receipt actions in wire 12 (registry members vote
+    // VoteWithdrawalPaid / VoteDeposit instead of assembling a quorum
+    // proof); never reassigned.
     75  => WithdrawalBelowMinimum           ~ "The net withdrawal amount is below the effective minimum (the configured minimum, floored at the flat fee): the payout would be worth less than it costs to settle.",
     76  => WithdrawalTerminalGated          ~ "A retired legacy relayer terminal (ConfirmWithdrawal / FailWithdrawal) was submitted at or above the receipt cutover; rejected as a normal failed action.",
     77  => UnpricedNoVerdict                ~ "The oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed); mark-dependent actions are refused until a later block certifies a price.",
@@ -190,6 +192,13 @@ define_error_kinds! {
     132 => MarketStatusTransitionRefused ~ "SetMarketStatus or PauseMarket names a move the market cannot make: any market moves Trading to Halted and back; a perpetual also moves Trading or Halted to ReduceOnly and back, then ReduceOnly to Delisted.",
     133 => MarketBacksLiveEvent ~ "The perpetual backs a Conditional on an unresolved event and cannot wind down until the event resolves.",
     134 => MarketHalted ~ "The market is halted and takes no orders or fills; cancels still work.",
+    // Bridge vote model (wire 12): the quorum's halt flag, vote aggregation,
+    // the owner-roster gate, and the payout-report bindings.
+    135 => BridgePaused                ~ "The bridge is paused by the admin quorum; claims, payout reports and bridge votes refuse until UnpauseBridge clears the flag.",
+    136 => BridgeVoteConflict          ~ "A bridge vote conflicts with the votes already recorded for its item: a different registry epoch, or a different observation for a transfer that already has votes.",
+    137 => BridgeVoteInvalid           ~ "A bridge vote failed verification: bad signature, or a vote naming a non-current registry epoch.",
+    138 => BridgeUnauthorizedOperator  ~ "The submitter is not a member of the operator receipt registry's owner roster.",
+    139 => BridgePayoutReportInvalid   ~ "A payout report failed its binding checks: wrong vault, non-current epoch, or the lease does not name the submitter.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -528,6 +537,11 @@ mod exec_error_meaning_tests {
                 event_id: crate::types::EventId(0),
             },
             ExecError::MarketHalted { market: 1 },
+            ExecError::BridgePaused,
+            ExecError::BridgeVoteConflict("e".into()),
+            ExecError::BridgeVoteInvalid("e".into()),
+            ExecError::BridgeUnauthorizedOperator,
+            ExecError::BridgePayoutReportInvalid("e".into()),
         ]
     }
 
@@ -588,7 +602,8 @@ mod exec_error_meaning_tests {
     /// Every engine code must be covered by the public error manifest, with
     /// the holes the wire itself carries: 24, 25 and 31 (the retired
     /// impact-market family), 30, 36 and 41 (retired with OracleUpdate and
-    /// RunFundingTick), 78-81 (reserved for oracle errors), 90 (the retired
+    /// RunFundingTick), 73 and 74 (retired with the receipt actions in wire
+    /// 12), 78-81 (reserved for oracle errors), 90 (the retired
     /// sub-account switch), 101 (unassigned), 112 (the retired PLP
     /// configuration), 117-122 and 126-127 (claimed elsewhere, unassigned on the
     /// wire).
@@ -599,8 +614,8 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=134)
-            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127))
+        let expected: Vec<u32> = (1u32..=139)
+            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 73 | 74 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(

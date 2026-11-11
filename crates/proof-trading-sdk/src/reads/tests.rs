@@ -168,8 +168,11 @@ fn open_orders_reject_duplicate_ids_empty_orders_and_trailing_bytes() {
     );
 }
 
-/// One `MarketConfig` row as `rmp_serde::to_vec` writes it (no fee tiers).
-const MARKET: &str = "dc001801cd03e8cd01f40502ce0036ee8064a4506572700000c200cd7530906401c000aa4f7261636c654f6e6c79000005a3425443cfffffffffffffffff";
+/// One wire-12 `MarketConfig` row as `rmp_serde::to_vec` writes it (27
+/// fields, no fee tiers; `impact_notional` 1_000_000, a populated funding
+/// dead band and a negative interest leg, so the tail decodes as more than
+/// defaults).
+const MARKET: &str = "dc001b01cd03e8cd01f40502ce0036ee8064a4506572700000c200cd7530906401c000aa4f7261636c654f6e6c79000005a3425443cfffffffffffffffffce000f424014fb";
 /// `AccountInfo` with one position and every trailing field.
 const ACCOUNT: &str = "9acf0020000000000001919edc0014ccabccabccabccabccabccabccabccabccabccabccabccabccabccabccabccabccabccabccabccab07a453656c6ccf0000000f8a9c2b8003fbd1fc18cd07d0cd0fa0d1fc18000c00cf0020000000000001d0d6cd07d0cd0fa0009192cd02bca24e6ffdcfffffffffffffffff05";
 

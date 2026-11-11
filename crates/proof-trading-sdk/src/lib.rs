@@ -58,11 +58,12 @@
 
 pub use proof_wire::{
     abci_event, bridge, codec, crypto, liquidation_config, liquidation_progress,
-    liquidation_report, margin_offsets, triggers, types,
+    liquidation_report, margin_offsets, query_v2, triggers, types,
 };
 
 pub mod account_state;
 pub mod binary;
+pub mod bridge_votes;
 pub mod errors;
 pub mod finalized_account_reads;
 pub mod finalized_orderbook;

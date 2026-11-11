@@ -33,7 +33,10 @@ export enum TimeInForce {
 /**
  * Wire-format action type identifiers. Each value is a single byte.
  * Retired, never reassigned: 0x03 `OracleUpdate`, 0x12 `RunFundingTick`,
- * 0x14 `OracleUpdateComposite`.
+ * 0x14 `OracleUpdateComposite`, and 0x22 `ConfirmWithdrawalReceipt` /
+ * 0x23 `FailWithdrawalReceipt` / 0x24 `AuthorizeWithdrawal` — the
+ * receipt-era bridge actions that wire 12 replaced with the operator
+ * votes (`VoteWithdrawalPaid` / `VoteDeposit`).
  */
 export const ActionType = {
   /** Place a limit order on the order book. */
@@ -58,17 +61,6 @@ export const ActionType = {
   ConfirmWithdrawal: 0x0a,
   /** Relayer marks a withdrawal as permanently failed; refunds balance. */
   FailWithdrawal: 0x0b,
-  /** Receipt-gated confirmation: a finalized `Paid` bridge receipt + operator
-   *  ed25519 quorum proof. Replaces the trusted relayer assertion in
-   *  `ConfirmWithdrawal` (0x0a, still accepted). W28-20. */
-  ConfirmWithdrawalReceipt: 0x22,
-  /** Receipt-gated failure: a finalized `Cancelled` bridge receipt + operator
-   *  ed25519 quorum proof. Replaces the free-text `FailWithdrawal` (0x0b, still
-   *  accepted); refunds only against a positive on-chain cancellation. W28-20. */
-  FailWithdrawalReceipt: 0x23,
-  /** Records the operator-quorum-signed `WithdrawalAuthorizationV1` a terminal
-   *  receipt (0x22/0x23) must settle against. Permissionless to submit. W28-20. */
-  AuthorizeWithdrawal: 0x24,
   /** Atomically replace a whole-position stop-loss/take-profit bracket. */
   SetPositionTriggers: 0x25,
   /** Cancel the bracket attached to an exact position generation. */
@@ -86,10 +78,17 @@ export const ActionType = {
   /** Acquire the single-holder Solana payout lease on a pending withdrawal
    *  (0x2e). Custody-authorized watchers only. */
   ClaimWithdrawalPayout: 0x2e,
-  /** Record the payout-lease holder's Solana transfer signature on a
-   *  pending withdrawal before broadcasting it (0x31). Custody-authorized
-   *  watchers only. */
+  /** One operator-registry member's vote to settle a pending withdrawal as
+   *  `Paid` (0x30). Each member submits its own vote; the engine aggregates
+   *  distinct signatures and settles at the roster's threshold. */
+  VoteWithdrawalPaid: 0x30,
+  /** Record the Squads vault payout proposal a payout-lease holder created
+   *  for a pending withdrawal (0x31), while its lease is live.
+   *  Custody-authorized watchers only. */
   RecordWithdrawalPayout: 0x31,
+  /** One operator-registry member's vote to credit one observed Solana
+   *  deposit (0x32). Aggregated and settled like `VoteWithdrawalPaid`. */
+  VoteDeposit: 0x32,
   /** Update a subset of `MarketConfig` tunables on a live market (admin).
    *  Fee tiering, funding-rate cap tightening, position-limit updates
    *  without a chain rebase. */
@@ -433,6 +432,153 @@ export interface WithdrawalRecord {
   requestHeight: bigint;
 }
 
+// ---------------------------------------------------------------------------
+// Bridge custody reads (`/v2/bridge/*` — the wire-12 vote model views)
+// ---------------------------------------------------------------------------
+
+/** The bridge's governance state (`/v2/bridge/status`). Payout
+ *  configuration fields are absent while unset. */
+export interface BridgeStatus {
+  /** True while the admin quorum's halt flag is set: claims, payout
+   *  reports and bridge votes refuse until it clears. */
+  halted: boolean;
+  /** The Squads v4 vault withdrawals pay from (32 bytes), once governed. */
+  payoutMultisig?: Uint8Array;
+  /** The vault's rent-refund collector (32 bytes), once governed. */
+  opsWallet?: Uint8Array;
+  /** The current operator-registry epoch, once a registry exists. */
+  registryEpoch?: bigint;
+  /** *m* — distinct operator members required, once a registry exists. */
+  registryThreshold?: number;
+  /** *n* — the roster's operator count, once a registry exists. */
+  operatorCount?: number;
+}
+
+/** One operator-registry member: its ed25519 verification key and the
+ *  engine address it controls. `owner` is absent on a roster stored before
+ *  wire 12 (that roster fails closed at the payout gates). */
+export interface OperatorMember {
+  /** The member's 32-byte ed25519 verification key. */
+  key: Uint8Array;
+  /** The 20-byte engine signer address this key controls. */
+  owner?: Address;
+}
+
+/** The operator receipt registry at one epoch
+ *  (`/v2/bridge/registry[/{epoch}]`): the roster every payout gate and
+ *  vote verifies against. */
+export interface OperatorRegistry {
+  /** The deployment every vote and payout report must match (32 bytes). */
+  deploymentId: Uint8Array;
+  /** The epoch this roster was pinned to. */
+  epoch: bigint;
+  /** *m* — distinct operator members required. */
+  threshold: number;
+  /** The roster, in registry index order. */
+  members: OperatorMember[];
+}
+
+/** One member's vote on a pending bridge item: the verifying key that
+ *  produced it and the signature itself, so a reader can re-verify without
+ *  trusting the aggregation. */
+export interface BridgeVote {
+  /** The member's 32-byte ed25519 verification key. */
+  voter: Uint8Array;
+  /** The member's 64-byte signature over the canonical vote message. */
+  signature: Uint8Array;
+}
+
+/** The Paid votes on one pending withdrawal: the binding epoch and one
+ *  entry per distinct member. */
+export interface WithdrawalVotes {
+  /** The epoch every vote in `votes` is bound to. */
+  registryEpoch: bigint;
+  /** One entry per distinct member that voted. */
+  votes: BridgeVote[];
+}
+
+/** The Squads payout a lease holder reported for a pending withdrawal. */
+export interface WithdrawalPayoutReport {
+  /** The reporting watcher's owner address (20 bytes). */
+  holder: Address;
+  /** The Squads vault the payout pays from (32 bytes). */
+  vault: Uint8Array;
+  /** The recorded Squads vault-transaction index. */
+  squadsTransactionIndex: number;
+  /** The registry epoch the report bound to. */
+  registryEpoch: bigint;
+}
+
+/** The payout lease on a pending withdrawal. */
+export interface WithdrawalPayoutLease {
+  /** The watcher that may sign the payout (20-byte owner address). */
+  holder: Address;
+  /** Height at which the claim was accepted. */
+  acquiredHeight: bigint;
+  /** Exclusive: the first height at which the lease no longer binds. */
+  expiresAtHeight: bigint;
+}
+
+/** A pending withdrawal with everything a peer member needs to act on it:
+ *  the record, the live lease, the reported payout proposals and the Paid
+ *  votes so far (`/v2/bridge/pending-withdrawals`). */
+export interface PendingWithdrawal {
+  withdrawal: WithdrawalRecord;
+  /** The live payout lease, if one is held. */
+  lease?: WithdrawalPayoutLease;
+  /** Every distinct (vault, index) payout report, retained until
+   *  settlement. */
+  payoutReports: WithdrawalPayoutReport[];
+  /** The aggregated Paid votes, if any member has voted. */
+  votes?: WithdrawalVotes;
+}
+
+/** One page of the pending-withdrawals read. `nextCursor` is the id to
+ *  resume after (the last row's withdrawal id); `null` once the read
+ *  walked past the last pending withdrawal. */
+export interface PendingWithdrawalPage {
+  rows: PendingWithdrawal[];
+  /** Pass back as the route's `cursor` to continue; `null` = exhausted. */
+  nextCursor: bigint | null;
+}
+
+/** One (owner, amount) reading of a pending deposit, with the distinct
+ *  member votes backing that reading. */
+export interface PendingDepositObservation {
+  /** The receiving engine account this reading credits (20 bytes). */
+  owner: Address;
+  /** The observed amount in micro-USDC. */
+  amountMicroUsdc: bigint;
+  /** The votes backing THIS reading, one per distinct member. */
+  votes: BridgeVote[];
+}
+
+/** A pending deposit: the voted readings of one transfer identity and the
+ *  aggregation so far (`/v2/bridge/pending-deposits`). Usually exactly one
+ *  observation; more means members currently disagree, and the first
+ *  reading to reach the roster threshold credits. */
+export interface PendingDeposit {
+  /** The transfer's Solana signature (64 bytes) — half of the dedup
+   *  identity; the other half rides the store key this row was read from. */
+  solanaTxSig: Uint8Array;
+  /** Always present: the identity rides the store key, so every row
+   *  carries one. The LEGACY reading decodes with no inner index. */
+  locator: DepositLocator;
+  /** The registry epoch the votes are bound to. */
+  registryEpoch: bigint;
+  /** One entry per distinct (owner, amount) reading, in first-vote order. */
+  observations: PendingDepositObservation[];
+}
+
+/** One page of the pending-deposits read. `nextCursor` is an opaque
+ *  resumption token (the route hex-encodes the raw store key); `null` once
+ *  exhausted. Never parse it — pass it back verbatim. */
+export interface PendingDepositPage {
+  rows: PendingDeposit[];
+  /** Pass back as the route's `cursor` to continue; `null` = exhausted. */
+  nextCursor: string | null;
+}
+
 /** Relayer marks a withdrawal as permanently failed; refunds the debited balance. */
 export interface FailWithdrawal {
   /** Engine-assigned withdrawal ID. */
@@ -441,106 +587,6 @@ export interface FailWithdrawal {
   reason: string;
   /** Authorized relayer signer address (20 bytes). */
   signer: Address;
-}
-
-/**
- * Wire mirror of the frozen `bridge_core::BridgeReceiptV1` (fixed 327-byte
- * form) carried by the receipt-gated terminal withdrawal actions. The engine
- * rebuilds the receipt, re-encodes, and verifies the operator quorum signed
- * exactly those bytes — every field is signed, so tampering fails closed.
- *
- * Field order matches the Rust struct → MessagePack wire layout; never reorder.
- */
-export interface BridgeWithdrawalReceipt {
-  /** `bridge_core::DeploymentId` — pins Proof/Solana genesis, program, mint (32 bytes). */
-  deploymentId: Uint8Array;
-  /** `SHA256(Borsh(WithdrawalAuthorizationV1))` (32 bytes). */
-  authorizationDigest: Uint8Array;
-  /** Engine-assigned withdrawal ID. */
-  withdrawalId: bigint;
-  /** Terminal state wire byte: `1 = Paid`, `2 = Cancelled`. */
-  terminalState: number;
-  /** `bridge_core::VaultTier` wire byte. */
-  vaultTier: number;
-  /** Internal account that owns the withdrawal (20 bytes). */
-  proofOwner: Address;
-  /** Solana destination owner pubkey (32 bytes). */
-  destinationOwner: Uint8Array;
-  /** Solana destination token account (32 bytes). */
-  destinationTokenAcct: Uint8Array;
-  /** Withdrawal amount in microUSDC (6 dp). */
-  amountMicroUsdc: bigint;
-  /** Bridge fee in microUSDC (6 dp). */
-  feeMicroUsdc: bigint;
-  /** Registry epoch the authorization signer set was pinned to. */
-  authorizationSignerEpoch: bigint;
-  /** Solana transaction signature (64 bytes). */
-  solanaTxSignature: Uint8Array;
-  /** Solana finalized slot the receipt was observed at. */
-  finalizedSlot: bigint;
-  /** Solana finalized blockhash (32 bytes). */
-  finalizedBlockhash: Uint8Array;
-  /** Receipt quorum kind wire byte: `1 = operator m-of-n`, `2 = validator stake`. */
-  receiptQuorumKind: number;
-  /** Registry epoch the receipt authority set was pinned to. */
-  receiptAuthorityEpoch: bigint;
-}
-
-/**
- * Operator ed25519 proof — mirror of
- * `bridge_core::ReceiptProofV1::OperatorEd25519`. A signer bitmap plus one
- * 64-byte signature per set bit, in ascending registry-index order.
- *
- * Never log the signatures.
- */
-export interface OperatorReceiptProof {
-  /** `ceil(registry_len / 8)` bytes; unused high bits zero. */
-  signerBitmap: Uint8Array;
-  /** One 64-byte ed25519 signature per set bit, ascending set-bit order. */
-  signatures: Uint8Array[];
-}
-
-/**
- * Receipt-gated confirmation of a paid withdrawal (action `0x22`). Carries a
- * finalized `Paid` {@link BridgeWithdrawalReceipt} and its
- * {@link OperatorReceiptProof}. Permissionless to submit — the operator quorum
- * in the receipt is the authority, not the envelope signer. Replaces the
- * trusted relayer assertion in {@link ConfirmWithdrawal}.
- */
-export interface ConfirmWithdrawalReceipt {
-  /** The finalized `Paid` bridge receipt. */
-  receipt: BridgeWithdrawalReceipt;
-  /** Operator ed25519 quorum proof over the receipt bytes. */
-  proof: OperatorReceiptProof;
-}
-
-/**
- * Receipt-gated failure of a cancelled withdrawal (action `0x23`). Carries a
- * finalized `Cancelled` {@link BridgeWithdrawalReceipt} and its
- * {@link OperatorReceiptProof}; refunds the debited balance only against a
- * positive on-chain cancellation proof, never a timeout. Replaces the free-text
- * {@link FailWithdrawal}.
- */
-export interface FailWithdrawalReceipt {
-  /** The finalized `Cancelled` bridge receipt. */
-  receipt: BridgeWithdrawalReceipt;
-  /** Operator ed25519 quorum proof over the receipt bytes. */
-  proof: OperatorReceiptProof;
-}
-
-/**
- * Records the operator-quorum-signed `WithdrawalAuthorizationV1` for a pending
- * withdrawal (action `0x24`), binding its digest to the record so a terminal
- * receipt (`0x22`/`0x23`) can only settle an authorization the quorum actually
- * issued. Permissionless to submit — the operator quorum in `proof` is the
- * authority, not the envelope signer.
- */
-export interface AuthorizeWithdrawal {
-  /** The canonical `WithdrawalAuthorizationV1` bytes the quorum signed
-   *  (`bridge_core::WithdrawalAuthorizationV1::encode`, fixed 221 bytes). */
-  authorization: Uint8Array;
-  /** Operator ed25519 quorum proof over the authorization bytes. */
-  proof: OperatorReceiptProof;
 }
 
 /** One optional limb of a whole-position protection bracket. */
@@ -671,6 +717,10 @@ export interface AttachConditional {
   /** Open-interest cap for each of the two conditional books, in the
    *  underlying's size scale; `undefined` or `0n` = uncapped (encodes as 0). */
   maxOpenInterest?: bigint;
+  /** Q, in microUSDC: each conditional book marks at the average of the
+   *  prices to buy and to sell this notional against its book (DEC-293);
+   *  `undefined` or `0n` marks at the underlying (encodes as 0). */
+  impactNotional?: bigint;
 }
 
 /** Create a derived sub-account under the signing master (0x28). */
@@ -700,22 +750,88 @@ export interface ClaimWithdrawalPayout {
   holder: Address;
 }
 
-/** Record the Solana signature of the payout-lease holder's transfer for a
- *  pending withdrawal (0x31), before the holder broadcasts it, while its
- *  lease is live. Stored as the withdrawal's payout record; peer watchers
- *  verify it against Solana before re-signing. */
+/** Record the Squads vault payout a payout-lease holder proposed for a
+ *  pending withdrawal (0x31), while its lease is live. Under the vote model
+ *  withdrawals pay from a Squads v4 vault the operator registry members
+ *  jointly control: the lease holder proposes the vault transaction, peer
+ *  members verify it against the engine's withdrawal record, approve and
+ *  execute. Every distinct (vault, index) report is retained until
+ *  settlement. */
 export interface RecordWithdrawalPayout {
   withdrawalId: bigint;
-  /** The reporting watcher's own address; must equal the envelope signer
-   *  and the withdrawal's payout lease holder. */
+  /** The reporting watcher's own address; must equal the envelope signer,
+   *  the withdrawal's payout lease holder, and an operator-registry
+   *  member's owner. */
   holder: Address;
-  /** The reported Solana transaction signature: exactly 64 raw bytes, or
-   *  the engine refuses the transaction. */
-  solanaSignature: Uint8Array;
-  /** The reported transfer's last valid block height (never zero — the
-   *  reporter signed the transfer, so the bound is always known); peer
-   *  watchers bound absence checks with it. */
-  lastValidBlockHeight: bigint;
+  /** The Squads vault the payout pays from (32 bytes); must equal the
+   *  governed `payoutMultisig`, so a report can never pin payout evidence to
+   *  a vault the quorum has not configured. */
+  vault: Uint8Array;
+  /** The Squads vault-transaction index of the recorded payout proposal,
+   *  stored byte-exact as reported. */
+  squadsTransactionIndex: number;
+  /** The registry epoch the report binds to; must be the current one — a
+   *  rotation is a full-vault migration, and a successor re-claims and
+   *  re-records under the new roster. */
+  registryEpoch: bigint;
+}
+
+/**
+ * One registry member's vote to settle one withdrawal as `Paid` (0x30).
+ * Individually submittable — no combined proof: the engine aggregates
+ * distinct member signatures and settles at the roster's threshold.
+ * `signature` is a 64-byte ed25519 signature over the canonical vote
+ * message (`PROOF_BRIDGE_VOTE_V1 || kind || …`, see `bridge_votes` in the
+ * Rust core and `voteWithdrawalPaidMessage` in the Python SDK) — NOT the
+ * envelope signing convention; the envelope signer is an untrusted
+ * courier. Build the signed payload with the `bridge_votes` helpers.
+ */
+export interface VoteWithdrawalPaid {
+  /** Engine-assigned withdrawal ID. */
+  withdrawalId: bigint;
+  /** The bridge deployment the withdrawal belongs to (32 bytes); rides the
+   *  signed message, so a captured vote cannot settle on another
+   *  deployment. */
+  deploymentId: Uint8Array;
+  /** The signing chain's id (32 bytes); rides the signed message, so a
+   *  captured vote cannot replay on a second chain. */
+  chainId: Uint8Array;
+  /** The registry epoch the vote is bound to; must be the current one, so
+   *  a rotation invalidates in-flight votes. */
+  registryEpoch: bigint;
+  /** 64-byte ed25519 signature over the canonical vote message; any other
+   *  length does not decode. */
+  signature: Uint8Array;
+}
+
+/**
+ * One registry member's vote to credit one observed Solana deposit (0x32),
+ * the vote-model replacement for the bare relayer `ConfirmDeposit`
+ * assertion. Aggregated and settled exactly like
+ * {@link VoteWithdrawalPaid}; the signature is over the canonical vote
+ * message carrying the full credit identity, so two members voting on the
+ * same observation sign identical bytes.
+ */
+export interface VoteDeposit {
+  /** The receiving engine account the credit pays (20 bytes). */
+  owner: Address;
+  /** The observed USDC amount in micro-USDC. */
+  amountMicroUsdc: bigint;
+  /** The observed Solana transfer signature — half of the deposit dedup
+   *  identity. Exactly 64 bytes. */
+  solanaTxSig: Uint8Array;
+  /** Instruction locator, the other half of the dedup identity; `null` is
+   *  the LEGACY reading (top-level instruction 0, no inner index). */
+  locator?: DepositLocator | null;
+  /** The bridge deployment the transfer belongs to (32 bytes); rides the
+   *  signed message. */
+  deploymentId: Uint8Array;
+  /** The signing chain's id (32 bytes); rides the signed message. */
+  chainId: Uint8Array;
+  /** The registry epoch the vote is bound to; must be the current one. */
+  registryEpoch: bigint;
+  /** 64-byte ed25519 signature over the canonical vote message. */
+  signature: Uint8Array;
 }
 
 /** Resolve a standalone event (0x27). YES/NO only — the engine rejects `Void`. */
@@ -882,6 +998,22 @@ export interface UpdateMarketFees {
    * 0 disables the cap.
    */
   maxOpenInterest?: bigint | null;
+  /**
+   * New impact notional Q in microUSDC for a conditional book (DEC-293).
+   * Omit to leave unchanged; 0 marks at the underlying.
+   */
+  impactNotional?: bigint | null;
+  /**
+   * New funding dead-band half-width in bps (at most 3,000). Omit to leave
+   * unchanged. Required on the wire (an older, shorter payload cannot
+   * decode), so omission encodes as nil rather than a shifted field.
+   */
+  fundingDeadBandBps?: number | null;
+  /**
+   * New funding interest leg per 8h, in units of 1e-8 (1 bps = 10,000;
+   * may be negative). Omit to leave unchanged.
+   */
+  fundingInterestRate?: number | null;
 }
 
 /** Lifecycle status of an event: `Trading` until its settlement time,
@@ -996,12 +1128,11 @@ export type OperatorAction =
   | { type: "ConfirmDeposit"; data: ConfirmDeposit }
   | { type: "ConfirmWithdrawal"; data: ConfirmWithdrawal }
   | { type: "FailWithdrawal"; data: FailWithdrawal }
-  | { type: "ConfirmWithdrawalReceipt"; data: ConfirmWithdrawalReceipt }
-  | { type: "FailWithdrawalReceipt"; data: FailWithdrawalReceipt }
-  | { type: "AuthorizeWithdrawal"; data: AuthorizeWithdrawal }
   | { type: "ResolveEvent"; data: ResolveEvent }
   | { type: "ClaimWithdrawalPayout"; data: ClaimWithdrawalPayout }
+  | { type: "VoteWithdrawalPaid"; data: VoteWithdrawalPaid }
   | { type: "RecordWithdrawalPayout"; data: RecordWithdrawalPayout }
+  | { type: "VoteDeposit"; data: VoteDeposit }
   | { type: "UpdateMarketFees"; data: UpdateMarketFees };
 
 /**
@@ -1120,21 +1251,26 @@ export interface SetWithdrawalLimit {
 }
 
 /**
- * The operator receipt registry (W28-20, inner tag 20, DEC-112): the
- * operator quorum every custody receipt terminal verifies against. The
- * epoch must strictly exceed the stored one — a rotation, never a rewrite
- * — and the roster is re-validated at the store seam on execution
+ * The operator receipt registry (inner tag 20, DEC-112): the epoch-pinned
+ * named operator set the vote-model payout gates and votes verify against.
+ * The epoch must strictly exceed the stored one — a rotation, never a
+ * rewrite — and the roster is re-validated at the store seam on execution
  * (ed25519 validity, duplicates, threshold range, cap 128).
  */
 export interface SetOperatorReceiptRegistry {
-  /** `bridge_core::DeploymentId` bytes every receipt must match. */
+  /** `bridge_core::DeploymentId` bytes every vote and payout report must match. */
   deploymentId: Uint8Array;
-  /** Registry epoch the receipts pin to; strictly increases per rotation. */
+  /** Registry epoch the votes pin to; strictly increases per rotation. */
   epoch: bigint;
   /** *m* — distinct operator members required; 1..=roster length. */
   threshold: number;
   /** The *n* operator ed25519 verification keys (32 bytes each). */
   operatorKeys: Uint8Array[];
+  /** The *n* operators' engine signer addresses (20 bytes each), in the
+   *  SAME registry index order as `operatorKeys`: `operatorOwners[i]` is
+   *  the chain account `operatorKeys[i]` controls. The payout-lease and
+   *  payout-record gates admit an address only from here. All non-zero. */
+  operatorOwners: Address[];
 }
 
 /** One insurance pool's share of a funding or withdrawal transfer. */

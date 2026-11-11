@@ -131,8 +131,10 @@ export enum ExecErrorCode {
   AdminActionRequiresProposal = 70,
   InvalidAdminRegistry = 71,
   BridgeReceiptRegistryInactive = 72,
-  BridgeReceiptInvalid = 73,
-  BridgeReceiptMismatch = 74,
+  // 73 and 74 were BridgeReceiptInvalid / BridgeReceiptMismatch, retired
+  // with the receipt actions in wire 12 (registry members vote
+  // VoteWithdrawalPaid / VoteDeposit instead of assembling a quorum
+  // proof); never reassigned.
   WithdrawalBelowMinimum = 75,
   WithdrawalTerminalGated = 76,
   /** The block has no certified oracle-policy verdict for the market, so a
@@ -195,6 +197,22 @@ export enum ExecErrorCode {
   MarketStatusTransitionRefused = 132,
   MarketBacksLiveEvent = 133,
   MarketHalted = 134,
+  /** The bridge is paused by the admin quorum; claims, payout reports and
+   *  bridge votes refuse until UnpauseBridge clears the flag. */
+  BridgePaused = 135,
+  /** A bridge vote conflicts with the votes already recorded for its item:
+   *  a different registry epoch, or a different observation for a transfer
+   *  that already has votes. */
+  BridgeVoteConflict = 136,
+  /** A bridge vote failed verification: bad signature, or a vote naming a
+   *  non-current registry epoch. */
+  BridgeVoteInvalid = 137,
+  /** The submitter is not a member of the operator receipt registry's
+   *  owner roster. */
+  BridgeUnauthorizedOperator = 138,
+  /** A payout report failed its binding checks: wrong vault, non-current
+   *  epoch, or the lease does not name the submitter. */
+  BridgePayoutReportInvalid = 139,
   InternalError = 255,
 }
 
@@ -462,16 +480,8 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "receipt-gated withdrawal action while no operator receipt registry exists; the path fails closed",
   },
-  73: {
-    name: "BridgeReceiptInvalid",
-    description:
-      "operator quorum proof failed verification (structure, member count or signature)",
-  },
-  74: {
-    name: "BridgeReceiptMismatch",
-    description:
-      "signed receipt does not bind to this withdrawal or deployment; the log names the field",
-  },
+  // 73 and 74 were BridgeReceiptInvalid / BridgeReceiptMismatch, retired
+  // with the receipt actions in wire 12; never reassigned.
   75: {
     name: "WithdrawalBelowMinimum",
     description:
@@ -675,6 +685,31 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "MarketHalted",
     description:
       "The market is halted and takes no orders or fills; cancels still work.",
+  },
+  135: {
+    name: "BridgePaused",
+    description:
+      "The bridge is paused by the admin quorum; claims, payout reports and bridge votes refuse until UnpauseBridge clears the flag.",
+  },
+  136: {
+    name: "BridgeVoteConflict",
+    description:
+      "A bridge vote conflicts with the votes already recorded for its item: a different registry epoch, or a different observation for a transfer that already has votes.",
+  },
+  137: {
+    name: "BridgeVoteInvalid",
+    description:
+      "A bridge vote failed verification: bad signature, or a vote naming a non-current registry epoch.",
+  },
+  138: {
+    name: "BridgeUnauthorizedOperator",
+    description:
+      "The submitter is not a member of the operator receipt registry's owner roster.",
+  },
+  139: {
+    name: "BridgePayoutReportInvalid",
+    description:
+      "A payout report failed its binding checks: wrong vault, non-current epoch, or the lease does not name the submitter.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
