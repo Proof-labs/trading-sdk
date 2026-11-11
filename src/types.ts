@@ -1958,15 +1958,33 @@ export type ExchangeEvent =
  * - `"ok"`        — CheckTx accepted the tx (`code === 0`).
  * - `"engine"`    — the engine rejected it with an `ExecError` (`code` 1..53/255);
  *                   see {@link TxResult.error} for the decoded name/description.
- * - `"transport"` — a gateway/HTTP-level failure (auth, rate-limit, body too
- *                   large, or a structured pre-admission refusal at HTTP
- *                   200/503). `code` is synthetic (1 for HTTP 200), not an
- *                   engine code. Unrecognized 5xx responses stay `timeout`.
+ * - `"transport"` — a gateway/HTTP-level failure, or a structured
+ *                   pre-admission refusal (`status: "refused"` at HTTP 200,
+ *                   400, 401, 411, 413, 429, 500 or 503). `code` is synthetic (1 for HTTP
+ *                   200), not an engine code; a refusal also carries the
+ *                   gateway's own `errorCode`. Unrecognized 5xx responses
+ *                   stay `timeout`.
  * - `"timeout"`   — no final chain verdict is available yet (`code === -1`):
  *                   either the gateway returned a hash-only ambiguous response
  *                   or inclusion polling expired. The tx may still land.
  */
 export type TxOutcome = "ok" | "engine" | "transport" | "timeout";
+
+/**
+ * The gateway's machine-readable `errorCode` on a refusal (`status:
+ * "refused"`). The names the gateway sends, plus any other string so a
+ * code the gateway adds later still types. `InvalidRequest` names a request
+ * to correct; `EncodingError` is a gateway-internal encoding failure.
+ */
+export type GatewayRefusalCode =
+  | "InvalidRequest"
+  | "EncodingError"
+  | "Unauthorized"
+  | "RateLimited"
+  | "Maintenance"
+  | "Overloaded"
+  | "Unavailable"
+  | (string & {});
 
 /** Result of submitting a transaction to the exchange. */
 export interface TxResult {
@@ -1993,6 +2011,17 @@ export interface TxResult {
    * transport/timeout failures, and unknown engine codes.
    */
   error: ExecErrorInfo | null;
+  /**
+   * The gateway's machine-readable `errorCode` when it refused the request
+   * before admitting it (`status: "refused"`): `InvalidRequest` means the
+   * request must be corrected; `EncodingError` is an internal failure.
+   * `Unauthorized`, `RateLimited`, `Maintenance`, `Overloaded` and `Unavailable` mean the
+   * gateway is not admitting writes right now. Present with
+   * `outcome === "transport"`; a refusal is terminal for this request and
+   * nothing was broadcast, so there is nothing to poll for and no hash to
+   * reconcile. Absent for an engine verdict or a plain transport failure.
+   */
+  errorCode?: GatewayRefusalCode;
   /** Transaction hash (hex-encoded). Empty string when the tx never got a hash. */
   hash: string;
   /** Block height at which the transaction was included. */

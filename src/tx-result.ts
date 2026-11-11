@@ -1,5 +1,5 @@
 import { decodeExecError } from "./errors.js";
-import type { TxEvent, TxResult } from "./types.js";
+import type { GatewayRefusalCode, TxEvent, TxResult } from "./types.js";
 
 /**
  * Constructors for {@link TxResult}. Centralising them keeps the `ok` /
@@ -74,6 +74,34 @@ export function txTransportError(
   hash = "",
 ): TxResult {
   return { ok: false, outcome: "transport", code, error: null, hash, log };
+}
+
+/**
+ * The gateway refused the request before admitting it (`status: "refused"`).
+ * Nothing was broadcast: the outcome is `"transport"` and terminal for this
+ * request — no engine code to decode, no hash to reconcile, no polling — and
+ * `errorCode` carries the gateway's own reason so a caller can tell "fix the
+ * request" (`InvalidRequest`) from an internal encoding failure (`EncodingError`)
+ * or "the gateway is not
+ * admitting writes" (`Unauthorized`, `RateLimited`, `Maintenance`,
+ * `Overloaded`, `Unavailable`), which a later resend may satisfy.
+ *
+ * A refusal describes this attempt only; it does not resolve earlier attempts.
+ */
+export function txRefusal(
+  status: number,
+  errorCode: GatewayRefusalCode,
+  log: string,
+): TxResult {
+  return {
+    ok: false,
+    outcome: "transport",
+    code: status,
+    error: null,
+    hash: "",
+    log,
+    errorCode,
+  };
 }
 
 /**
