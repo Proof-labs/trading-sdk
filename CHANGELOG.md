@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Rust `proof-sdk-rs` 1.0.0**, a new async (tokio) trading client over the gateway (#425), with a WebSocket feed (`ws` feature, on by default). The WASM build is unchanged.
+
 - Python chain-pinned transaction evidence and bounded block-result ranges/windows
   check exact transaction bytes, Merkle roots and H+1 app-hash continuity.
   Results remain trusted gateway observations, without validator verification.
@@ -87,6 +89,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   positive. Account auth retries and history recovery remain channel-specific.
   Reconnect logs omit exception text. These contracts target the next Python
   MAJOR release, not Python 4.0.0.
+
+- **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `gateway::CommittedReceipt` gains `log` and
+  `events` (`TxEvent`), read from the `POST /exchange` and `GET /v1/tx/{hash}` responses that already
+  carried them; `SubmissionOutcome::CheckTxRejected` gains `log`. `errors::ErrorKind` is
+  `#[non_exhaustive]` and gains `ErrorKind::from_code` (`None` for the version-dependent code 50).
+  New `sign_action` signs any `Action` through a custody `Signer`.
 
 - Document `SetUserMarketLeverage` admission limits, its governed insurance-fund
   path and initial-margin-only semantics. SDK APIs and wire support are unchanged.
