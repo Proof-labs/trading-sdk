@@ -73,7 +73,58 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   they now honour proxy environment variables such as `HTTPS_PROXY` and inherit
   the library's 20-second keepalive.
 
+
+- **The wire-12 vote actions and bridge reads.** `VoteWithdrawalPaid` (0x30)
+  and `VoteDeposit` (0x32) settle withdrawals and credit deposits by operator
+  quorum: each registry member signs the canonical vote preimage
+  (`PROOF_BRIDGE_VOTE_V1 || kind || …`) with its operator ed25519 key — a
+  vote carries its own signature, never the envelope signing convention — and
+  submits on its own; the engine aggregates distinct signatures to the
+  roster's threshold. The Rust core adds `bridge_votes::sign_vote_withdrawal_paid`
+  / `sign_vote_deposit` over the custody-neutral `Signer` seam; Python adds
+  `VoteWithdrawalPaid` / `VoteDeposit` builders with `Vote*.sign` and the
+  `vote_*_message` preimage helpers; TypeScript types the actions and submits
+  them through `submitTx`. Cross-language codec vectors pin the payloads, and
+  Rust unit tests pin the preimage bytes against the wire's own
+  `vote_message()`. The four `/v2/bridge` reads arrive beside
+  `queryWithdrawal` (`queryBridgeStatus`, `queryBridgeRegistry`,
+  `queryPendingWithdrawals`, `queryPendingDeposits` in TypeScript, `bridge_status`,
+  `bridge_registry`, `pending_withdrawals`, `pending_deposits` in Python);
+  the withdrawals cursor is a u64, the deposits cursor is the opaque
+  hex-encoded store key, and the views decode in the WASM core
+  (`ReadKind.BridgeStatus` / `BridgeRegistry` / `PendingWithdrawals` /
+  `PendingDeposits`).
+- Error codes 135-139: `BridgePaused`, `BridgeVoteConflict`,
+  `BridgeVoteInvalid`, `BridgeUnauthorizedOperator`, `BridgePayoutReportInvalid`.
+
+### Removed
+
+- **The receipt-era bridge actions** (`ConfirmWithdrawalReceipt` 0x22,
+  `FailWithdrawalReceipt` 0x23, `AuthorizeWithdrawal` 0x24), which wire 12
+  retires in favour of the votes. The TypeScript client methods
+  (`authorizeWithdrawal`, `confirmWithdrawalReceipt`, `failWithdrawalReceipt`),
+  the `BridgeWithdrawalReceipt` / `OperatorReceiptProof` types, the Python
+  dataclasses, and the `encodeBridgeReceipt` / `signOperatorReceipt` /
+  `encode_bridge_receipt` helpers are gone; the pure canonical
+  `WithdrawalAuthorizationV1` encoders stay. Breaking for code that names the
+  retired surfaces (MAJOR).
+- **`RecordWithdrawalPayout` is reshaped** (wire 12 repurposed 0x31): the
+  payload is now `{withdrawal_id, holder, vault (32 bytes),
+  squads_transaction_index, registry_epoch}` and no longer carries a Solana
+  signature or a block height. Pre-12 payloads no longer decode anywhere.
+- Error codes 73 and 74 (`BridgeReceiptInvalid`, `BridgeReceiptMismatch`)
+  are retired-never-produced and no longer classify in TypeScript or the Rust
+  manifest; the codes are never reassigned.
+
 ### Changed
+
+- **proof-wire 12 (exchange wire 12).** The Rust crate pins proof-wire to the
+  engine branch carrying wire 12 (commit `8ca683d3`) until the public wire.git
+  mirror publishes it, then moves to the mirror rev and the v12 tag. The
+  operator registry gains `operator_owners` (parallel to `operator_keys`;
+  pre-12 registry rows decode with an empty, fail-closed roster), and
+  `MarketConfig` / `AttachConditional` / `UpdateMarketFees` gain DEC-293's
+  impact notional and the funding dead-band/interest levers.
 
 - Python stream reconnect attempts and backoff reset after a matching subscription
   acknowledgment or data delivery. Handshakes and refusals alone do not reset them.
