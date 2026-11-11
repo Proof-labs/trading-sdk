@@ -34,7 +34,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `gateway::CommittedReceipt` gains `log` and
   `events` (`TxEvent`), read from the `POST /exchange` and `GET /v1/tx/{hash}` responses that already
-  carried them. `errors::ErrorKind` is `#[non_exhaustive]` and gains `ErrorKind::from_code`.
+  carried them; `SubmissionOutcome::CheckTxRejected` gains `log`. `errors::ErrorKind` is
+  `#[non_exhaustive]` and gains `ErrorKind::from_code` (`None` for the version-dependent code 50).
+  New `sign_action` signs any `Action` through a custody `Signer`.
 
 - Python account-stream reconnect backoff now defaults to a 10-second cap
   (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.

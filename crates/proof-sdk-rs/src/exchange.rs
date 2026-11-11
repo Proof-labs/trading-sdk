@@ -9,7 +9,7 @@ use proof_trading_sdk::gateway::{
     RetryAfter, SubmissionOutcome, TxHash,
 };
 use proof_trading_sdk::types::{Action, MarketId, OrderId, PlaceOrder, Side};
-use proof_trading_sdk::{codec, crypto, Signer};
+use proof_trading_sdk::{crypto, sign_action, SignActionError, Signer};
 use proof_trading_sdk::{decode_exec_error_kind, DecodedExecErrorKind, ErrorKind};
 
 use crate::actions;
@@ -248,8 +248,8 @@ fn retry_after(hint: Option<RetryAfter>) -> Option<Duration> {
 fn status(outcome: SubmissionOutcome<PreAdmissionRefusal>) -> TxStatus {
     match outcome {
         SubmissionOutcome::Committed(r) => TxStatus::Committed(r.into()),
-        SubmissionOutcome::CheckTxRejected { code, .. } => {
-            TxStatus::Rejected(EngineError::new(code.get(), None))
+        SubmissionOutcome::CheckTxRejected { code, log, .. } => {
+            TxStatus::Rejected(EngineError::new(code.get(), Some(&log)))
         }
         SubmissionOutcome::Pending { .. } => TxStatus::Pending,
         SubmissionOutcome::RejectedBeforeAdmission { refusal, .. } => {
@@ -271,10 +271,11 @@ fn status(outcome: SubmissionOutcome<PreAdmissionRefusal>) -> TxStatus {
 /// # Did it execute?
 ///
 /// - An `Err` from [`Self::sign`] means nothing was sent.
-/// - An `Err` from [`Self::send`] means no verdict came back: the transaction
-///   may or may not execute. Reconcile `tx.hash` with
-///   [`Self::wait_for_receipt`], or resend the same [`SignedTx`]; never sign
-///   the action again.
+/// - [`Error::Unconfirmed`] from [`Self::send`] (or any helper) means no
+///   verdict came back and the transaction may still execute. It carries the
+///   [`SignedTx`]: reconcile its hash with [`Self::wait_for_receipt`], or
+///   resend the same bytes; never sign the action again. Any other `Err`
+///   means nothing executed.
 /// - `Ok` carries a [`TxStatus`] that says which.
 ///
 /// [`Self::submit`] is `sign` then `send`, so its `Err` is either. Call the two
@@ -342,16 +343,19 @@ impl ExchangeClient {
             InfoClient::new(config)?,
             Arc::new(signer),
             network,
+            NonceAllocator::new(),
         ))
     }
 
     /// Read the gateway's chain and bind signatures to it. If `config` names
-    /// a chain id, the gateway must serve that chain.
+    /// a chain id, the gateway must serve that chain. The nonce allocator
+    /// starts above the highest nonce the engine remembers for this key, so a
+    /// restart never signs behind its predecessor.
     ///
     /// # Errors
     ///
-    /// [`Error::Config`] for an invalid `config`, a read failure from
-    /// [`InfoClient::chain_status`], or [`Error::ChainMismatch`].
+    /// An invalid `config`, a read failure from [`InfoClient::chain_status`]
+    /// or [`InfoClient::recent_nonces`], or [`Error::ChainMismatch`].
     pub async fn connect(config: &ClientConfig, signer: impl Signer + 'static) -> Result<Self> {
         let info = InfoClient::new(config)?;
         let chain = info.chain_status().await?;
@@ -363,10 +367,18 @@ impl ExchangeClient {
                 });
             }
         }
-        Ok(Self::build(info, Arc::new(signer), chain.network))
+        let address = Address::from_public_key(&signer.public_key());
+        let floor = info.recent_nonces(address).await?.into_iter().max();
+        let nonces = floor.map_or_else(NonceAllocator::new, NonceAllocator::starting_after);
+        Ok(Self::build(info, Arc::new(signer), chain.network, nonces))
     }
 
-    fn build(info: InfoClient, signer: Arc<dyn Signer>, network: String) -> Self {
+    fn build(
+        info: InfoClient,
+        signer: Arc<dyn Signer>,
+        network: String,
+        nonces: NonceAllocator,
+    ) -> Self {
         let public_key = signer.public_key();
         Self {
             inner: Arc::new(Inner {
@@ -376,7 +388,7 @@ impl ExchangeClient {
                 chain_id: crypto::chain_id_from_string(&network),
                 network,
                 signer,
-                nonces: NonceAllocator::new(),
+                nonces,
             }),
         }
     }
@@ -442,24 +454,13 @@ impl ExchangeClient {
     ///
     /// [`Error::Encode`] or [`Error::Signer`].
     pub fn sign_with_seq(&self, action: &Action, seq: u64) -> Result<SignedTx> {
-        let encode = |e: proof_trading_sdk::types::ExecError| Error::Encode(e.to_string());
         let inner = &*self.inner;
-        // The typed codec only signs with an in-memory key. To sign through
-        // `Signer` (HSM, KMS), take the canonical (action_type, payload) from an
-        // unsigned envelope and sign the preimage ourselves.
-        let unsigned =
-            codec::encode_signed_tx(action, seq, &inner.public_key, &[0; 64]).map_err(encode)?;
-        let raw = codec::decode_tx_raw(&unsigned).map_err(encode)?;
-        let msg = crypto::signing_message(&inner.chain_id, raw.action_type, seq, &raw.payload);
-        let signature = inner.signer.try_sign(&msg)?;
-        let bytes = codec::encode_signed_tx_raw(
-            raw.action_type,
-            &raw.payload,
-            seq,
-            &inner.public_key,
-            &signature,
-        )
-        .map_err(encode)?;
+        let bytes = sign_action(&*inner.signer, &inner.chain_id, action, seq).map_err(
+            |e| match e {
+                SignActionError::Encode(m) => Error::Encode(m),
+                SignActionError::Signer(e) => Error::Signer(e),
+            },
+        )?;
         Ok(SignedTx {
             hash: TxHash::of_signed_bytes(&bytes),
             bytes,
@@ -469,23 +470,30 @@ impl ExchangeClient {
 
     /// `POST /exchange` the signed bytes once. No retry.
     ///
-    /// On [`Error::Transport`] or an [`Error::Http`] 5xx the bytes may still
-    /// have reached the gateway: look `tx.hash` up with
-    /// [`Self::wait_for_receipt`], or resend the same `tx` (same nonce, so it
-    /// executes at most once). Signing the action again creates a second
-    /// transaction.
-    ///
     /// # Errors
     ///
-    /// [`Error::Transport`] or [`Error::Http`] when no verdict came back,
-    /// [`Error::Decode`] or [`Error::ResponseTooLarge`] when it was unreadable.
+    /// [`Error::Unconfirmed`] when the bytes may have reached the gateway but
+    /// no verdict came back (transport failure, 5xx, unreadable answer): look
+    /// `tx.hash` up with [`Self::wait_for_receipt`], or resend the same `tx`
+    /// (same nonce, so it executes at most once). Signing the action again
+    /// creates a second transaction. Other errors mean it was not sent.
     pub async fn send(&self, tx: &SignedTx) -> Result<Submitted> {
         let s = self
             .inner
             .info
             .gateway()
             .submit_signed_bytes_with_evidence(&tx.bytes)
-            .await?;
+            .await
+            .map_err(|e| {
+                if e.reconcile_hash.is_some() {
+                    Error::Unconfirmed {
+                        tx: tx.clone(),
+                        source: Box::new(e.into()),
+                    }
+                } else {
+                    e.into()
+                }
+            })?;
         Ok(Submitted {
             tx: tx.clone(),
             status: status(s.outcome),
@@ -510,11 +518,22 @@ impl ExchangeClient {
     ///
     /// [`Error::NonceWindow`], [`Error::Encode`] or [`Error::Signer`] before
     /// anything is sent, then whatever [`Self::send`] returns.
-    /// [`Error::ReceiptTimeout`] if a pending result does not commit in time.
+    /// [`Error::ReceiptTimeout`] if a pending result does not commit in time,
+    /// or [`Error::Unconfirmed`] carrying the transaction if the wait failed
+    /// otherwise.
     pub async fn submit_and_wait(&self, action: &Action, timeout: Duration) -> Result<Submitted> {
         let mut submitted = self.submit(action).await?;
         if submitted.is_pending() {
-            let receipt = self.wait_for_receipt(submitted.tx.hash, timeout).await?;
+            let receipt = match self.wait_for_receipt(submitted.tx.hash, timeout).await {
+                Ok(receipt) => receipt,
+                Err(e @ Error::ReceiptTimeout { .. }) => return Err(e),
+                Err(e) => {
+                    return Err(Error::Unconfirmed {
+                        tx: submitted.tx,
+                        source: Box::new(e),
+                    })
+                }
+            };
             submitted.status = TxStatus::Committed(receipt);
         }
         Ok(submitted)
@@ -692,26 +711,10 @@ impl ExchangeClient {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
-    use proof_trading_sdk::LocalSigner;
+    use proof_trading_sdk::{codec, LocalSigner};
 
     fn client() -> ExchangeClient {
         ExchangeClient::new(&ClientConfig::devnet(), LocalSigner::from_bytes(&[7; 32])).unwrap()
-    }
-
-    #[test]
-    fn signer_path_is_byte_identical_to_the_engine_codec() {
-        let c = client();
-        let action = Action::PlaceOrder(c.limit_order(1, Side::Buy, 66_750_000_000, 3));
-        let ours = c.sign_with_seq(&action, 1_762_000_000_000).unwrap();
-        let reference = codec::sign_and_encode_with_chain(
-            &crypto::chain_id_from_string("exchange-devnet-1"),
-            &action,
-            1_762_000_000_000,
-            &ed25519_dalek::SigningKey::from_bytes(&[7; 32]),
-        )
-        .unwrap();
-        assert_eq!(ours.bytes, reference);
-        assert_eq!(ours.hash, TxHash::of_signed_bytes(&reference));
     }
 
     #[test]

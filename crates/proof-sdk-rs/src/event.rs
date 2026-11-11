@@ -80,6 +80,7 @@ impl Fill {
 /// `order_placed`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrderPlaced {
+    pub owner: Address,
     pub order_id: OrderId,
     pub market: MarketId,
     pub side: Side,
@@ -94,6 +95,7 @@ pub struct OrderPlaced {
 /// `order_cancelled`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrderCancelled {
+    pub owner: Address,
     pub order_id: OrderId,
     pub market: MarketId,
     pub client_order_id: Option<u64>,
@@ -171,6 +173,7 @@ impl fmt::Display for CancelReason {
 /// `order_amended`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrderAmended {
+    pub owner: Address,
     pub order_id: OrderId,
     pub market: MarketId,
     pub side: Side,
@@ -188,6 +191,7 @@ pub struct OrderAmended {
 /// `order_rejected`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrderRejected {
+    pub owner: Address,
     pub market: MarketId,
     pub client_order_id: Option<u64>,
     pub error: EngineError,
@@ -196,6 +200,7 @@ pub struct OrderRejected {
 /// `market_order_processed`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MarketOrderProcessed {
+    pub owner: Address,
     pub order_id: OrderId,
     pub market: MarketId,
     pub side: Side,
@@ -209,6 +214,9 @@ pub struct MarketOrderProcessed {
 /// `position_updated`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PositionUpdated {
+    /// The account it happened to. One transaction can touch several (a
+    /// fill updates the maker's position as well as the taker's).
+    pub owner: Address,
     pub market: MarketId,
     pub side: Side,
     pub size: u64,
@@ -220,6 +228,7 @@ pub struct PositionUpdated {
 /// `position_closed`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PositionClosed {
+    pub owner: Address,
     pub market: MarketId,
     pub realized_pnl: i64,
 }
@@ -227,6 +236,7 @@ pub struct PositionClosed {
 /// `funding_settled`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FundingSettled {
+    pub owner: Address,
     pub market: MarketId,
     /// micro-USDC; positive is paid to this account.
     pub payment: i64,
@@ -235,6 +245,7 @@ pub struct FundingSettled {
 /// `deposited`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Deposited {
+    pub owner: Address,
     pub amount: u64,
     pub new_balance: u64,
 }
@@ -243,9 +254,10 @@ pub struct Deposited {
 
 /// Reads the engine's string attributes.
 ///
-/// A required attribute (`u64`, `side`, ...) must be present and parse. An
-/// optional one (`opt_*`) may be absent or `""`, but a value that is there
-/// must parse: `None` from either means the event is malformed.
+/// Every attribute the engine always writes is required: present and
+/// parsing, or the event is malformed. Only the ones it writes as `""` for
+/// none are optional (client order ids, `unfilled_reason`; an absent
+/// `time_in_force` reads as GTC), and a value that is there must still parse.
 struct Attrs<'a>(&'a [TxAttribute]);
 
 impl Attrs<'_> {
@@ -276,16 +288,6 @@ impl Attrs<'_> {
     }
     fn address(&self, key: &str) -> Option<Address> {
         self.parse(key)
-    }
-    /// Absent, `""` or `"0"` (the engine's "none") reads as `0`.
-    fn opt_u64(&self, key: &str) -> Option<u64> {
-        Some(self.opt(key)?.unwrap_or(0))
-    }
-    fn opt_i64(&self, key: &str) -> Option<i64> {
-        Some(self.opt(key)?.unwrap_or(0))
-    }
-    fn opt_bool(&self, key: &str) -> Option<bool> {
-        Some(self.opt(key)?.unwrap_or(false))
     }
     /// A client order id: absent, `""` and `"0"` all mean none.
     fn client_order_id(&self, key: &str) -> Option<Option<u64>> {
@@ -386,39 +388,42 @@ fn fill(a: &Attrs<'_>) -> Option<Fill> {
         taker_order_id: a.u64("taker_order_id")?,
         maker_client_order_id: a.client_order_id("maker_client_order_id")?,
         taker_client_order_id: a.client_order_id("taker_client_order_id")?,
-        maker_fee: a.opt_i64("maker_fee")?,
-        taker_fee: a.opt_i64("taker_fee")?,
+        maker_fee: a.parse("maker_fee")?,
+        taker_fee: a.parse("taker_fee")?,
     })
 }
 
 fn order_placed(a: &Attrs<'_>) -> Option<OrderPlaced> {
     Some(OrderPlaced {
+        owner: a.address("owner")?,
         order_id: a.u64("order_id")?,
         market: a.market("market")?,
         side: a.side("side")?,
         price: a.u64("price")?,
         quantity: a.u64("quantity")?,
         client_order_id: a.client_order_id("client_order_id")?,
-        post_only: a.opt_bool("post_only")?,
-        reduce_only: a.opt_bool("reduce_only")?,
+        post_only: a.parse("post_only")?,
+        reduce_only: a.parse("reduce_only")?,
         time_in_force: a.time_in_force("time_in_force")?,
     })
 }
 
 fn order_cancelled(a: &Attrs<'_>) -> Option<OrderCancelled> {
     Some(OrderCancelled {
+        owner: a.address("owner")?,
         order_id: a.u64("order_id")?,
         market: a.market("market")?,
         client_order_id: a.client_order_id("client_order_id")?,
-        original_quantity: a.opt_u64("original_quantity")?,
-        filled_quantity: a.opt_u64("filled_quantity")?,
-        remaining_quantity: a.opt_u64("remaining_quantity")?,
+        original_quantity: a.u64("original_quantity")?,
+        filled_quantity: a.u64("filled_quantity")?,
+        remaining_quantity: a.u64("remaining_quantity")?,
         reason: CancelReason::from(a.str("reason")?),
     })
 }
 
 fn order_amended(a: &Attrs<'_>) -> Option<OrderAmended> {
     Some(OrderAmended {
+        owner: a.address("owner")?,
         order_id: a.u64("order_id")?,
         market: a.market("market")?,
         side: a.side("side")?,
@@ -427,15 +432,16 @@ fn order_amended(a: &Attrs<'_>) -> Option<OrderAmended> {
         new_price: a.u64("new_price")?,
         old_quantity: a.u64("old_quantity")?,
         new_quantity: a.u64("new_quantity")?,
-        filled_quantity: a.opt_u64("filled_quantity")?,
-        remaining_quantity: a.opt_u64("remaining_quantity")?,
-        queue_priority_reset: a.opt_bool("queue_priority_reset")?,
+        filled_quantity: a.u64("filled_quantity")?,
+        remaining_quantity: a.u64("remaining_quantity")?,
+        queue_priority_reset: a.parse("queue_priority_reset")?,
     })
 }
 
 fn order_rejected(a: &Attrs<'_>) -> Option<OrderRejected> {
     let code: u32 = a.parse("code")?;
     Some(OrderRejected {
+        owner: a.address("owner")?,
         market: a.market("market")?,
         client_order_id: a.client_order_id("client_order_id")?,
         error: EngineError::new(code, None),
@@ -444,11 +450,12 @@ fn order_rejected(a: &Attrs<'_>) -> Option<OrderRejected> {
 
 fn market_order_processed(a: &Attrs<'_>) -> Option<MarketOrderProcessed> {
     Some(MarketOrderProcessed {
+        owner: a.address("owner")?,
         order_id: a.u64("order_id")?,
         market: a.market("market")?,
         side: a.side("side")?,
         requested_quantity: a.u64("requested_quantity")?,
-        filled_quantity: a.opt_u64("filled_quantity")?,
+        filled_quantity: a.u64("filled_quantity")?,
         client_order_id: a.client_order_id("client_order_id")?,
         unfilled_reason: a.text("unfilled_reason"),
     })
@@ -456,23 +463,26 @@ fn market_order_processed(a: &Attrs<'_>) -> Option<MarketOrderProcessed> {
 
 fn position_updated(a: &Attrs<'_>) -> Option<PositionUpdated> {
     Some(PositionUpdated {
+        owner: a.address("owner")?,
         market: a.market("market")?,
         side: a.side("side")?,
         size: a.u64("size")?,
         entry_price: a.u64("entry_price")?,
-        realized_pnl: a.opt_i64("realized_pnl")?,
+        realized_pnl: a.parse("realized_pnl")?,
     })
 }
 
 fn position_closed(a: &Attrs<'_>) -> Option<PositionClosed> {
     Some(PositionClosed {
+        owner: a.address("owner")?,
         market: a.market("market")?,
-        realized_pnl: a.opt_i64("realized_pnl")?,
+        realized_pnl: a.parse("realized_pnl")?,
     })
 }
 
 fn funding_settled(a: &Attrs<'_>) -> Option<FundingSettled> {
     Some(FundingSettled {
+        owner: a.address("owner")?,
         market: a.market("market")?,
         payment: a.parse("payment")?,
     })
@@ -480,6 +490,7 @@ fn funding_settled(a: &Attrs<'_>) -> Option<FundingSettled> {
 
 fn deposited(a: &Attrs<'_>) -> Option<Deposited> {
     Some(Deposited {
+        owner: a.address("owner")?,
         amount: a.u64("amount")?,
         new_balance: a.u64("new_balance")?,
     })
@@ -550,6 +561,7 @@ mod tests {
         assert_eq!(
             kind_of("order_rejected", &rejected),
             Event::OrderRejected(OrderRejected {
+                owner: TAKER.parse().unwrap(),
                 market: 104,
                 client_order_id: None,
                 error: EngineError::new(51, None),
@@ -561,19 +573,29 @@ mod tests {
             panic!()
         };
         assert_eq!(mo.unfilled_reason, None);
+
+        // An attribute the engine always writes is required, never a silent 0.
+        let mut renamed = market.clone();
+        renamed.as_object_mut().unwrap().remove("filled_quantity");
+        assert!(is_malformed(&kind_of("market_order_processed", &renamed)));
     }
 
     #[test]
     fn positions_funding_deposits() {
-        let up = json!({"entry_price": "86197870", "market": "105", "owner": MAKER, "realized_pnl": "0", "side": "sell", "size": "41"});
-        assert!(matches!(
-            kind_of("position_updated", &up),
-            Event::PositionUpdated(PositionUpdated {
-                size: 41,
-                side: Side::Sell,
-                ..
+        // A fill updates both accounts' positions in one receipt; the owner
+        // tells them apart.
+        let maker = json!({"entry_price": "86197870", "market": "105", "owner": MAKER, "realized_pnl": "0", "side": "sell", "size": "41"});
+        let taker = json!({"entry_price": "85700000", "market": "105", "owner": TAKER, "realized_pnl": "0", "side": "buy", "size": "1"});
+        let mine: Address = TAKER.parse().unwrap();
+        let receipt = [kind_of("position_updated", &maker), kind_of("position_updated", &taker)];
+        let ours: Vec<_> = receipt
+            .iter()
+            .filter_map(|e| match e {
+                Event::PositionUpdated(p) if p.owner == mine => Some((p.side, p.size)),
+                _ => None,
             })
-        ));
+            .collect();
+        assert_eq!(ours, [(Side::Buy, 1)]);
         let closed = json!({"market": "104", "owner": MAKER, "realized_pnl": "6300"});
         assert!(matches!(
             kind_of("position_closed", &closed),

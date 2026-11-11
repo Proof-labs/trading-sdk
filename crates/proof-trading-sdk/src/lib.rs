@@ -30,7 +30,7 @@
 //!     owner,
 //!     side: Side::Buy,
 //!     price: 66_750_000_000, // micro-USDC: $66,750
-//!     quantity: 1,           // integer contracts
+//!     quantity: 1,           // 1 unit = 10^-sz_decimals of the base asset
 //!     post_only: true,
 //!     ..Default::default()
 //! });
@@ -46,9 +46,13 @@
 //!
 //! # Units
 //!
-//! Prices, balances and fees are `u64` micro-USDC (6 dp, `1_000_000` = $1).
-//! Quantities are integer contracts and rates are basis points. Nothing on the
-//! wire is a float.
+//! Money is integer micro-USDC (6 dp, `1_000_000` = $1): `u64` for prices and
+//! deposits, `i64` where it can be negative (fee amounts, equity, funding
+//! index). `quantity` is an integer count of `10^-sz_decimals` base units (see
+//! `MarketConfig::sz_decimals`), a multiple of `lot_size`; `price` is a
+//! multiple of `tick_size`. Fee and margin rates are basis points. Nothing on
+//! the wire is a float.
+
 //!
 //! [`proof-wire`]: https://github.com/Proof-labs/wire
 
@@ -72,4 +76,4 @@ pub mod ticker;
 pub mod wire;
 
 pub use errors::{decode_exec_error_kind, error_code_manifest, DecodedExecErrorKind, ErrorKind};
-pub use signer::{LocalSigner, Signer, SignerError};
+pub use signer::{sign_action, LocalSigner, SignActionError, Signer, SignerError};

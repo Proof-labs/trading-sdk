@@ -216,33 +216,6 @@ pub struct AccountState {
     pub positions: Vec<Position>,
 }
 
-// -- record shapes the core does not name -----------------------------------
-
-const LEVEL: Shape = Shape::Record {
-    width: 3,
-    nested: &[],
-};
-/// `query::OrderbookSnapshot { bids, asks }`.
-const ORDERBOOK: Shape = Shape::Record {
-    width: 2,
-    nested: &[(0, Shape::List(&LEVEL)), (1, Shape::List(&LEVEL))],
-};
-/// `types::Position`.
-const POSITION: Shape = Shape::Record {
-    width: 7,
-    nested: &[],
-};
-/// `query::AccountStateInfo`; field 3 is `positions`.
-const ACCOUNT_STATE: Shape = Shape::Record {
-    width: 4,
-    nested: &[(3, Shape::List(&POSITION))],
-};
-/// `types::Order`, as `openOrders` returns it.
-const ORDER: Shape = Shape::Record {
-    width: 14,
-    nested: &[],
-};
-
 /// Typed reads over the gateway. Cheap to clone: clones share one connection
 /// pool.
 ///
@@ -270,7 +243,8 @@ impl InfoClient {
     ///
     /// # Errors
     ///
-    /// [`Error::Config`] for an invalid URL, API key or timeout.
+    /// [`Error::Gateway`] naming the rejected option (URL, API key or
+    /// timeout), or [`Error::Config`] for a URL that does not parse.
     pub fn new(config: &ClientConfig) -> Result<Self> {
         let gateway = GatewayClient::new(
             &config.gateway_url,
@@ -279,14 +253,7 @@ impl InfoClient {
                 api_key: config.api_key.clone(),
                 ..GatewayOptions::default()
             },
-        )
-        .map_err(|_| {
-            Error::Config(
-                "gateway_url must be https:// or http:// on a loopback IP with no path; \
-                 timeout 1ms..=60s; api key non-empty"
-                    .into(),
-            )
-        })?;
+        )?;
         let base = Url::parse(&config.gateway_url).map_err(|e| Error::Config(e.to_string()))?;
         Ok(Self {
             config: config.clone(),
@@ -370,7 +337,7 @@ impl InfoClient {
     pub async fn orderbook(&self, market: MarketId) -> Result<Orderbook> {
         let bytes = self.get_data(&format!("/v1/orderbook/{market}")).await?;
         let snap: proof_trading_sdk::query::OrderbookSnapshot =
-            decode(&bytes, &ORDERBOOK, "orderbook")?;
+            decode(&bytes, &reads::ORDERBOOK, "orderbook")?;
         let level = |l: proof_trading_sdk::query::LevelSummary| Level {
             price: l.price,
             quantity: l.total_quantity,
@@ -432,7 +399,8 @@ impl InfoClient {
     /// or [`Error::ResponseTooLarge`].
     pub async fn open_orders(&self, owner: Address) -> Result<Vec<Order>> {
         let bytes = self.post_info_data("openOrders", owner).await?;
-        decode(&bytes, &Shape::List(&ORDER), "open orders")
+        reads::decode_open_orders(&bytes, &owner.to_bytes())
+            .map_err(|e| Error::Decode(format!("open orders: {e}")))
     }
 
     /// `GET /v1/account/{owner}/recent-nonces`: the nonces the engine still
@@ -447,7 +415,6 @@ impl InfoClient {
     pub async fn recent_nonces(&self, owner: Address) -> Result<Vec<u64>> {
         #[derive(Deserialize)]
         struct Recent {
-            #[serde(default)]
             recent: Vec<Dec>,
         }
         let r: Recent = self
@@ -555,7 +522,7 @@ fn decode<T: DeserializeOwned>(bytes: &[u8], shape: &Shape, what: &str) -> Resul
 }
 
 fn account_state(bytes: &[u8], owner: Address) -> Result<AccountState> {
-    let s: AccountStateInfo = decode(bytes, &ACCOUNT_STATE, "account state")?;
+    let s: AccountStateInfo = decode(bytes, &reads::ACCOUNT_STATE, "account state")?;
     let got = Address::from(s.owner.0);
     if got != owner {
         return Err(Error::Decode(format!(
@@ -616,7 +583,7 @@ mod tests {
         )
         .unwrap();
         let snap: proof_trading_sdk::query::OrderbookSnapshot =
-            decode(&bytes, &ORDERBOOK, "orderbook").unwrap();
+            decode(&bytes, &reads::ORDERBOOK, "orderbook").unwrap();
         assert_eq!(snap.bids.len(), 4);
         assert_eq!(snap.asks.len(), 3);
         assert!(snap.bids[0].price > snap.bids[1].price, "bids best first");
@@ -629,7 +596,7 @@ mod tests {
         // [[ [price, qty, count, extra] ], []]
         let bytes = [0x92, 0x91, 0x94, 0x0a, 0x02, 0x01, 0x07, 0x90];
         let snap: proof_trading_sdk::query::OrderbookSnapshot =
-            decode(&bytes, &ORDERBOOK, "orderbook").unwrap();
+            decode(&bytes, &reads::ORDERBOOK, "orderbook").unwrap();
         assert_eq!(snap.bids[0].price, 10);
         assert_eq!(snap.bids[0].total_quantity, 2);
     }
@@ -642,7 +609,7 @@ mod tests {
         ];
         assert!(decode::<proof_trading_sdk::query::OrderbookSnapshot>(
             &bytes,
-            &ORDERBOOK,
+            &reads::ORDERBOOK,
             "orderbook"
         )
         .is_err());

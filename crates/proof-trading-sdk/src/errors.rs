@@ -1,7 +1,7 @@
 //! Engine result-code classification for clients (SDK representation).
 //!
 //! The wire *contract* (codec, action table, ExecError codes) lives in
-//! `exchange-wire`; this module is the client-side decode of a numeric result
+//! `proof-wire`; this module is the client-side decode of a numeric result
 //! code into a named, human-meaningful kind. Reconciling `ERROR_KINDS` with
 //! `proof_wire::types::ExecError::code()` (single-sourcing the table) is a
 //! follow-up.
@@ -18,10 +18,13 @@ macro_rules! define_error_kinds {
 
         impl ErrorKind {
             /// The kind with this numeric code, if this SDK knows it. Code 50
-            /// reads as `SlippageExceeded`; use [`decode_exec_error_kind`]
-            /// with the log when talking to an engine mid-upgrade.
+            /// is `None`: its meaning depends on the engine version, so read
+            /// it with [`decode_exec_error_kind`] and the log.
             #[must_use]
             pub fn from_code(code: u32) -> Option<Self> {
+                if code == 50 {
+                    return None;
+                }
                 match code {
                     $($code => Some(Self::$name),)+
                     _ => None,
@@ -108,7 +111,7 @@ define_error_kinds! {
     52  => AdminGovernanceInactive      ~ "Admin governance action was submitted while no admin signer registry exists on this chain; multisig administration is inactive and every governance path fails closed.",
     53  => NotAdminSigner               ~ "Tx signer does not match the action's declared proposer/approver/rejecter/signer field, or is not a member of the current admin signer registry.",
     // Proposal-lifecycle family (multisig governance). Mirrored from the
-    // engine's `ExecError` (exchange-wire/src/types.rs, codes 54-71) and the
+    // engine's `ExecError` (proof-wire/src/types.rs, codes 54-71) and the
     // frozen exchange/sdk reference table. Decode-only on the SDK side — the
     // client never constructs these, it classifies the result codes.
     54  => ProposalNotFound                 ~ "No admin proposal exists under this id (never created, or pruned from terminal retention).",

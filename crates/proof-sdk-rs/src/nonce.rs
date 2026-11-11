@@ -1,10 +1,20 @@
 //! Timestamp nonce allocation.
 //!
-//! The engine accepts any `seq` inside a sliding window around its block time
-//! and refuses one it has already seen (code 21, `InvalidNonce`). It does not
-//! require a strict sequence. A wall-clock-millisecond nonce, bumped past the
-//! last one this process handed out, is therefore unique without any round
-//! trip. This is the same rule the TypeScript and Python SDKs use.
+//! The engine's rule for `seq`, per key:
+//!
+//! - it must fall within `[block time - 2 days, block time + 1 day]`;
+//! - it must not repeat one the engine remembers (code 21, `InvalidNonce`);
+//! - the engine remembers the last 100. Once it holds 100, anything at or
+//!   below the oldest of them is refused (`NonceBelowOldest`).
+//!
+//! So nonces need no strict sequence, but only within the last 100. Send
+//! roughly in nonce order, and keep fewer than 100 signed-but-unsent
+//! transactions per key: a cancel signed first but delivered after 100 later
+//! quotes is refused, and the order it meant to cancel stays on the book.
+//!
+//! A wall-clock-millisecond nonce, bumped past the last one this process
+//! handed out, meets the rule without a round trip. This is the same rule the
+//! TypeScript and Python SDKs use.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -12,7 +22,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::error::{Error, Result};
 
 /// How far ahead of the wall clock an allocation may run before it is
-/// refused: past this, the engine's window would reject the nonce anyway.
+/// refused. The engine allows a day; this cap is the SDK's. It keeps nonces
+/// near the clock, so a burst cannot push them far ahead of where a restarted
+/// process (which starts from the clock) would sign.
 pub const MAX_CLOCK_LEAD_MS: u64 = 60_000;
 
 /// Lock-free, monotonic timestamp nonce allocator.
@@ -34,6 +46,16 @@ impl NonceAllocator {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An allocator whose nonces all exceed `floor`, e.g. the highest of
+    /// [`crate::InfoClient::recent_nonces`], so a restarted process stays
+    /// ahead of its predecessor. [`crate::ExchangeClient::connect`] does this.
+    #[must_use]
+    pub fn starting_after(floor: u64) -> Self {
+        Self {
+            last: AtomicU64::new(floor),
+        }
     }
 
     /// The next nonce.
