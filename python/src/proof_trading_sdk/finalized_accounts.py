@@ -129,9 +129,10 @@ def _witnessed(value: t.Any) -> tuple[bytes, FinalizedReadWitness]:
 def _decode(call: t.Callable[..., t.Any], *args: t.Any) -> t.Any:
     try:
         return call(*args)
+    except _native.FinalizedBindingError as err:
+        raise GatewayReadError("binding", "account payload") from err
     except (CodecError, ValueError) as err:
-        binding = "owner does not match" in str(err) or "binding mismatch" in str(err)
-        raise GatewayReadError("binding" if binding else "malformed", "account payload") from err
+        raise GatewayReadError("malformed", "account payload") from err
 
 
 def decode_finalized_account(value: t.Any, owner: bytes | str) -> FinalizedAccountInfo:

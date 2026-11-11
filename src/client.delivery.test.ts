@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { sha256 } from "@noble/hashes/sha2.js";
 import {
   ExchangeClient,
   Side,
   sign,
   getPublicKey,
   pubkeyToOwner,
+  bytesToHex,
   type Action,
 } from "./index.js";
 const key = new Uint8Array(32).fill(13);
@@ -41,15 +43,137 @@ afterEach(() => {
 
 describe("gateway finality", () => {
   it.each([
-    [200, "invalid action parameters", "InvalidRequest", 1],
-    [200, "internal encoding error", "EncodingError", 1],
-    [503, "service overloaded", "Overloaded", 503],
-    [503, "service unavailable", "Unavailable", 503],
+    { name: "foreign hash", fields: { txHash: "B".repeat(64) } },
+    { name: "snake-case hash", fields: { tx_hash: "B".repeat(64) } },
+    { name: "null hash", fields: { txHash: null } },
+    { name: "null code", fields: { code: null } },
+    { name: "height", fields: { height: 42 } },
+    { name: "null height", fields: { height: null } },
+    { name: "events", fields: { events: [] } },
+    { name: "execution log", fields: { log: null } },
+    { name: "execution info", fields: { info: "execution" } },
+    { name: "object code", fields: { errorCode: {} } },
+    { name: "empty code", fields: { errorCode: "" } },
+    { name: "blank code", fields: { errorCode: " " } },
+    { name: "array error", fields: { error: [] } },
+    { name: "null error", fields: { error: null } },
+  ])("reconciles malformed refusal: $name", async ({ fields }) => {
+    let submittedHash = "";
+    const fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      submittedHash = bytesToHex(
+        sha256(
+          Uint8Array.from(atob(body.action), (character) =>
+            character.charCodeAt(0),
+          ),
+        ),
+      ).toUpperCase();
+      return json(
+        {
+          status: "refused",
+          errorCode: "InvalidRequest",
+          error: "bad request",
+          ...fields,
+        },
+        400,
+      );
+    });
+    vi.stubGlobal("fetch", fetch);
+    const result = await external().submitTx(action);
+    expect(result.outcome).toBe("timeout");
+    expect(result.hash).toMatch(/^[0-9A-F]{64}$/);
+    expect(result.hash).toBe(submittedHash);
+    expect(result.hash).not.toBe("B".repeat(64));
+    expect(typeof result.log).toBe("string");
+    expect(result.errorCode).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([200, 400, 500, 503])(
+    "does not trust a missing refusal code at HTTP %i",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => json({ status: "refused" }, status)),
+      );
+      const result = await external().submitTx(action);
+      expect(result.outcome).toBe("timeout");
+      expect(result.hash).toMatch(/^[0-9A-F]{64}$/);
+    },
+  );
+
+  it("preserves the gateway's HTTP 500 encoding refusal", async () => {
+    const fetch = vi.fn(async () =>
+      json(
+        {
+          status: "refused",
+          errorCode: "EncodingError",
+          error: "internal encoding error",
+        },
+        500,
+      ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    expect(await external().submitTxCommit(action)).toMatchObject({
+      outcome: "transport",
+      code: 500,
+      errorCode: "EncodingError",
+      hash: "",
+      log: "internal encoding error",
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      status: 400,
+      reason: "non-canonical encoding",
+      errorCode: "InvalidRequest",
+      code: 400,
+    },
+    {
+      status: 400,
+      reason:
+        "action type 0x2f is proposer-only and cannot enter through the gateway",
+      errorCode: "InvalidRequest",
+      code: 400,
+    },
+    {
+      status: 200,
+      reason: "invalid action parameters",
+      errorCode: "InvalidRequest",
+      code: 1,
+    },
+    {
+      status: 400,
+      reason:
+        'invalid market ticker "btc": ticker must start with a capital letter A-Z',
+      errorCode: "InvalidRequest",
+      code: 400,
+    },
+    {
+      status: 200,
+      reason: "internal encoding error",
+      errorCode: "EncodingError",
+      code: 1,
+    },
+    {
+      status: 503,
+      reason: "service overloaded",
+      errorCode: "Overloaded",
+      code: 503,
+    },
+    {
+      status: 503,
+      reason: "service unavailable",
+      errorCode: "Unavailable",
+      code: 503,
+    },
   ])(
-    "keeps hashless HTTP %i refusal terminal (%s)",
-    async (status, reason, errorCode, code) => {
+    "keeps hashless HTTP $status refusal terminal ($errorCode)",
+    async ({ status, reason, errorCode, code }) => {
       const fetch = vi.fn(async (_url: string) =>
-        json({ status: "refused", error: reason, errorCode }, Number(status)),
+        json({ status: "refused", error: reason, errorCode }, status),
       );
       vi.stubGlobal("fetch", fetch);
       const client = external();
@@ -61,6 +185,7 @@ describe("gateway finality", () => {
         outcome: "transport",
         code,
         log: reason,
+        errorCode,
         hash: "",
         error: null,
       });
@@ -70,11 +195,51 @@ describe("gateway finality", () => {
         outcome: "transport",
         code,
         log: reason,
+        errorCode,
       });
-      expect(fetch).toHaveBeenCalledTimes(2);
+      const signed = await client.signTx(action);
+      expect(await client.submitSignedTx(signed)).toMatchObject({
+        outcome: "transport",
+        code,
+        errorCode,
+        hash: "",
+      });
+      expect(await client.submitSignedTxCommit(signed)).toMatchObject({
+        outcome: "transport",
+        code,
+        errorCode,
+        hash: "",
+      });
+      expect(await client.awaitPendingVerifies()).toEqual([]);
+      expect(fetch).toHaveBeenCalledTimes(4);
       expect(fetch.mock.calls.every(([url]) => url === "/exchange")).toBe(true);
     },
   );
+
+  it("keeps a rate-limit refusal's errorCode and status", async () => {
+    // A 429 that carries the refusal envelope is classified by the envelope,
+    // not by the status alone: the gateway's own errorCode survives.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        json(
+          {
+            status: "refused",
+            error: "rate limited",
+            errorCode: "RateLimited",
+            retryAfterMs: 250,
+          },
+          429,
+        ),
+      ),
+    );
+    expect(await external().submitTx(action)).toMatchObject({
+      outcome: "transport",
+      code: 429,
+      errorCode: "RateLimited",
+      log: "rate limited",
+    });
+  });
 
   it.each(["paused", "cancel-only"])(
     "keeps maintenance mode %s refusal terminal",

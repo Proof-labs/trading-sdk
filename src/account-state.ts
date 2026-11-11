@@ -20,18 +20,9 @@ export interface AccountState {
 function invalid(field: string): never {
   throw new Error(`account state decode: invalid ${field}`);
 }
-function tuple(
-  value: unknown,
-  length: number,
-  field: string,
-  maxLength = length,
-): unknown[] {
-  if (
-    !Array.isArray(value) ||
-    value.length < length ||
-    value.length > maxLength
-  )
-    return invalid(field);
+// Appended engine fields are ignored.
+function tuple(value: unknown, length: number, field: string): unknown[] {
+  if (!Array.isArray(value) || value.length < length) return invalid(field);
   return value;
 }
 function integer(value: unknown, field: string, signed = false): bigint {
@@ -70,7 +61,7 @@ export function decodeAccountState(
   let previous = -1n;
   const positions = fields[3].map((rawPosition): RawAccountPosition => {
     // Wire 8 appends `entry_remainder`, omitted when zero.
-    const p = tuple(rawPosition, 6, "position", 7);
+    const p = tuple(rawPosition, 6, "position");
     const positionOwner = owner(p[0]);
     const market = integer(p[1], "market");
     if (market > 0xffffffffn || market <= previous || positionOwner !== address)
@@ -79,7 +70,7 @@ export function decodeAccountState(
     const side = p[2];
     if (side !== "Buy" && side !== "Sell") return invalid("side");
     const size = integer(p[4], "size");
-    const remainder = p.length === 7 ? integer(p[6], "entry remainder") : 0n;
+    const remainder = p.length >= 7 ? integer(p[6], "entry remainder") : 0n;
     if (remainder !== 0n && remainder >= size)
       return invalid("entry remainder");
     return {
