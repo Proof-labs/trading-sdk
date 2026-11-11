@@ -536,6 +536,17 @@ Trading integrations use `TraderAction` and can type their calls against it to
 keep operator actions out of autocomplete. `submitTx` still accepts the full
 `Action` union.
 
+#### SetUserMarketLeverage availability
+
+SDK encoding support is retained, but ordinary-account submission is unsupported
+in exchange revision `5f172568`: [node admission rejects action `0x16`](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-node/check_tx.go#L466-L492).
+The separate governed [`ExecInsuranceFund` path](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/engine/governance/insurance_action.rs#L21-L70)
+permits it for the pool's insurance account.
+
+The setting affects **initial margin only**: `max(market.im_bps, user_im_bps)`,
+with `0` using the market default. [Maintenance margin and liquidation thresholds are unchanged](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/scenario_margin.rs#L168-L181).
+Ordinary-account support remains deferred in [#360](https://github.com/Proof-labs/trading-sdk/issues/360).
+
 #### Operator actions (privileged)
 
 `OperatorAction` covers oracle-feeder / relayer-admin actions — e.g.

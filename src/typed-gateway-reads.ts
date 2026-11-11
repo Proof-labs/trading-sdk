@@ -1,3 +1,4 @@
+import { chainPin } from "./read-values.js";
 import {
   readFinalizedOrderbook,
   type FinalizedOrderbook,
@@ -68,7 +69,7 @@ class ReadClient {
         "chainId",
         `${purpose} requires an explicit pinned chainId`,
       );
-    return Uint8Array.from(this.inventoryChainId);
+    return chainPin(this.inventoryChainId);
   }
 }
 /** Same-view facts. See FinalizedReadWitness for the trust and binding boundary. */
