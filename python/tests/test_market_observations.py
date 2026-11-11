@@ -46,7 +46,7 @@ def test_market_stats_absence_and_zero_remain_distinct():
     ("0000-01-01T00:00:00Z", "0000-01-02T00:00:00Z"),
     ("2026-11-08T09:00:00+09:00", "2026-11-09T00:00:00Z"),
 ])
-def test_js_date_parse_window_semantics(start, end):
+def test_valid_window_timestamps_match_ts(start, end):
     value=stats(); value.update(window_start=start,window_end=end,as_of=end)
     assert sdk.decode_market_stats_response(value).window_start == start
 
