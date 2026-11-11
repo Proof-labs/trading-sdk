@@ -93,8 +93,12 @@ def decode_oracle_health(value: t.Any) -> OracleHealth:
             stale = raw.get("stale_seconds")
             if stale is not None and (type(stale) not in (int, float) or stale < 0 or stale > 1.7976931348623157e308 or (type(stale) is float and not math.isfinite(stale))):
                 _fail("stale_seconds")
-            markets[market] = OracleMarketHealth(market, row_status, stale,
-                {k: v for k, v in raw.items() if k not in {"market", "status", "stale_seconds"}})
+            markets[market] = OracleMarketHealth(
+                market=market,
+                status=row_status,
+                stale_seconds=stale,
+                extra={k: v for k, v in raw.items() if k not in {"market", "status", "stale_seconds"}},
+            )
     journal = None
     if "journal_healthy" in value:
         raw = value["journal_healthy"]
@@ -111,6 +115,17 @@ def decode_oracle_health(value: t.Any) -> OracleHealth:
             if type(v) is not int or not 0 <= v <= (1 << 64)-1: _fail("divergence_bps")
             divergence[market] = v
     known = {"status", "embedded_feeder", "source", "ready", "submit_enabled", "note", "error", "updated_at_unix_ms", "markets", "journal_healthy", "divergence_bps"}
-    return OracleHealth(status, embedded, source, ready, submit,
-        _optional(value, "note", str), _optional(value, "error", str), updated,
-        markets, journal, divergence, {k:v for k,v in value.items() if k not in known})
+    return OracleHealth(
+        status=status,
+        embedded_feeder=embedded,
+        source=source,
+        ready=ready,
+        submit_enabled=submit,
+        note=_optional(value, "note", str),
+        error=_optional(value, "error", str),
+        updated_at_unix_ms=updated,
+        markets=markets,
+        journal_healthy=journal,
+        divergence_bps=divergence,
+        extra={k: v for k, v in value.items() if k not in known},
+    )

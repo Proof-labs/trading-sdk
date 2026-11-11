@@ -128,17 +128,35 @@ def decode_market_stats_response(value: t.Any) -> MarketStatsResponse:
             oi = row["open_interest"]
             if oi is not None:
                 oi = _object(oi)
-                oi = MarketStatsOpenInterest(_decimal(oi["long_contracts"], "long_contracts"), _decimal(oi["short_contracts"], "short_contracts"))
+                oi = MarketStatsOpenInterest(
+                    long_contracts=_decimal(oi["long_contracts"], "long_contracts"),
+                    short_contracts=_decimal(oi["short_contracts"], "short_contracts"),
+                )
             markets.append(MarketStats(
-                market, sz, _status(row["status"]), _reason(row["unavailable_reason"], "unavailable_reason"),
-                _nullable(row["volume_24h_contracts"], "volume_24h_contracts"),
-                _nullable(row["volume_24h_usdc"], "volume_24h_usdc", _USDC),
-                _nullable(row["reference_price"], "reference_price"), _nullable(row["last_price"], "last_price"),
-                _nullable(row["change_24h_bps"], "change_24h_bps", _BPS),
-                _nullable(row["high_price"], "high_price"), _nullable(row["low_price"], "low_price"), oi,
-                _reason(row["open_interest_unavailable_reason"], "open_interest_unavailable_reason"),
+                market=market,
+                sz_decimals=sz,
+                status=_status(row["status"]),
+                unavailable_reason=_reason(row["unavailable_reason"], "unavailable_reason"),
+                volume_24h_contracts=_nullable(row["volume_24h_contracts"], "volume_24h_contracts"),
+                volume_24h_usdc=_nullable(row["volume_24h_usdc"], "volume_24h_usdc", _USDC),
+                reference_price=_nullable(row["reference_price"], "reference_price"),
+                last_price=_nullable(row["last_price"], "last_price"),
+                change_24h_bps=_nullable(row["change_24h_bps"], "change_24h_bps", _BPS),
+                high_price=_nullable(row["high_price"], "high_price"),
+                low_price=_nullable(row["low_price"], "low_price"),
+                open_interest=oi,
+                open_interest_unavailable_reason=_reason(row["open_interest_unavailable_reason"], "open_interest_unavailable_reason"),
             ))
         if len({row.market for row in markets}) != len(markets): _fail("duplicate market")
-        return MarketStatsResponse(as_of, start, end, height, indexed, stale, _status(body["status"]), markets)
+        return MarketStatsResponse(
+            as_of=as_of,
+            window_start=start,
+            window_end=end,
+            indexed_height=height,
+            indexed_at=indexed,
+            stale_after_seconds=stale,
+            status=_status(body["status"]),
+            markets=markets,
+        )
     except KeyError as err:
         _fail(str(err))
