@@ -227,8 +227,9 @@ def _decoded_size(raw: t.Any) -> int:
 
 
 class _Read:
-    def __init__(self, client: t.Any, timeout: float, max_bytes: int | None = None):
-        self.client, self.timeout, self.max_bytes = client, timeout, max_bytes
+    def __init__(self, client: t.Any, timeout: float, max_bytes: int | None = None,
+                 mode: str = "range"):
+        self.client, self.timeout, self.max_bytes, self.mode = client, timeout, max_bytes, mode
         self.deadline = read_deadline(timeout)
         self.decoded_bytes = 0
 
@@ -245,7 +246,7 @@ class _Read:
         if self.max_bytes is not None:
             self.decoded_bytes += _decoded_size(raw)
             if self.decoded_bytes > self.max_bytes:
-                _fail("decoded byte budget", "limit")
+                _fail(f"{self.mode} byte budget", "limit")
         self.check()
         return raw
 
@@ -326,6 +327,9 @@ def _read_block_results(
     max_transactions: int = DEFAULT_MAX_TRANSACTIONS, max_events: int = DEFAULT_MAX_EVENTS,
     max_attributes: int = DEFAULT_MAX_ATTRIBUTES,
 ) -> _R:
+    window = from_height is None
+    # Field names match the TypeScript reader so (kind, field) is portable.
+    mode = "window" if window else "range"
     for value, ceiling, field in (
         (max_heights, _CEILING_MAX_HEIGHTS, "heights"),
         (max_decoded_bytes, _CEILING_MAX_DECODED_BYTES, "bytes"),
@@ -334,10 +338,9 @@ def _read_block_results(
         (max_attributes, _CEILING_MAX_ATTRIBUTES, "attributes"),
     ):
         if type(value) is not int or not 1 <= value <= ceiling:
-            _fail(field, "configuration")
-    read = _Read(client, timeout, max_decoded_bytes)
+            _fail(f"{mode} {field}", "configuration")
+    read = _Read(client, timeout, max_decoded_bytes, mode)
     chain = _chain_pin(chain_id)
-    window = from_height is None
     if window:
         if type(from_ms) is not int or type(to_ms) is not int or not 0 <= from_ms < to_ms <= _MAX_DATE_MS:
             _fail("fixed window", "configuration")
@@ -377,7 +380,7 @@ def _read_block_results(
         txs = txs or []
         transaction_count += len(txs)
         if transaction_count > max_transactions:
-            _fail("transaction budget", "limit")
+            _fail(f"{mode} transaction budget", "limit")
         transactions = [_bytes(tx, "block transaction bytes") for tx in txs]
         _bind_transactions(response, transactions)
         result = _rpc(read.get("/v1/block_results", {"height": str(height)}))

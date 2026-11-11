@@ -259,15 +259,27 @@ def test_source_must_reach_window_end(client):
     assert len(seen) == 2
 
 
-@pytest.mark.parametrize("kwargs", [
-    {"max_heights": 1}, {"max_decoded_bytes": 1}, {"max_transactions": 1},
-    {"max_events": 3}, {"max_attributes": 7},
+@pytest.mark.parametrize("kwargs,field", [
+    ({"max_heights": 1}, "height budget"), ({"max_decoded_bytes": 1}, "range byte budget"),
+    ({"max_transactions": 1}, "range transaction budget"),
+    ({"max_events": 3}, "event limit"), ({"max_attributes": 7}, "attribute limit"),
 ])
-def test_exhausted_aggregate_budgets_never_return_partial_range(client, kwargs):
+def test_exhausted_aggregate_budgets_never_return_partial_range(client, kwargs, field):
     mock(client)
     with pytest.raises(sdk.GatewayReadError) as err:
         read_range(client, **kwargs)
-    assert err.value.kind == "limit"
+    assert (err.value.kind, err.value.field) == ("limit", field)
+
+
+def test_window_budget_fields_name_the_window(client):
+    mock(client)
+    with pytest.raises(sdk.GatewayReadError) as err:
+        read_window(client, max_decoded_bytes=1)
+    assert (err.value.kind, err.value.field) == ("limit", "window byte budget")
+    seen = mock(client)
+    with pytest.raises(sdk.GatewayReadError) as err:
+        read_window(client, max_heights=0)
+    assert (err.value.kind, err.value.field) == ("configuration", "window heights") and seen == []
 
 
 def test_window_height_exhaustion_fails_without_partial_success(client):
@@ -277,16 +289,21 @@ def test_window_height_exhaustion_fails_without_partial_success(client):
     assert err.value.kind == "limit" and len(seen) == 5
 
 
-@pytest.mark.parametrize("kwargs", [
-    {"max_heights": 0}, {"max_heights": 129}, {"max_heights": True},
-    {"max_decoded_bytes": 8 * 1024 * 1024 + 1}, {"max_transactions": 10_001},
-    {"max_events": 16_385}, {"max_attributes": 65_537}, {"timeout": 0},
+@pytest.mark.parametrize("kwargs,field", [
+    ({"max_heights": 0}, "range heights"), ({"max_heights": 129}, "range heights"),
+    ({"max_heights": True}, "range heights"),
+    ({"max_decoded_bytes": 8 * 1024 * 1024 + 1}, "range bytes"),
+    ({"max_transactions": 10_001}, "range transactions"),
+    ({"max_events": 16_385}, "range events"), ({"max_attributes": 65_537}, "range attributes"),
+    ({"timeout": 0}, None),
 ])
-def test_invalid_limits_refused_before_transport(client, kwargs):
+def test_invalid_limits_refused_before_transport(client, kwargs, field):
     seen = mock(client)
     with pytest.raises(sdk.GatewayReadError) as err:
         read_range(client, **kwargs)
     assert err.value.kind == "configuration" and seen == []
+    if field is not None:
+        assert err.value.field == field
 
 
 @pytest.mark.parametrize("bounds", [(0, 1), (2, 1), (True, 2), (1, 1 << 63), (1, (1 << 63) - 1), ("1", 2)])
