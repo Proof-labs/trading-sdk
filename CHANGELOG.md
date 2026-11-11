@@ -61,6 +61,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **TypeScript `readTransactionEvidence` and block-results reads reclassify
+  `GatewayReadError.kind` (MINOR for npm).** Callers that branch on `kind`
+  should review these fields:
+  - `malformed` → `configuration` (caller input): `signed bytes` (empty or
+    not bytes), `requested hash`, `from height`, `through height`,
+    `fixed window`.
+  - `binding` → `configuration`: `requested hash/bytes mismatch`.
+  - `malformed` → `binding` (cross-response mismatch):
+    `parent hash continuity`, `block time continuity`,
+    `transaction result count`, `post-state/header binding`,
+    `returned transaction binding`, `block transaction binding`.
+  - `malformed` → `limit`: `signed bytes` above the bounded response's base64
+    capacity (about 767 KiB, previously 1 MiB), now refused before any HTTP
+    request; these reads could never succeed.
+
+  Field names are unchanged; every other field keeps its kind.
+
 - TypeScript `RawOpenOrder.market` widens from `MarketId` to `MarketId | 0`;
   code that assumes a branded `MarketId` must handle market zero.
 - Python account-stream reconnect backoff now defaults to a 10-second cap
@@ -92,8 +109,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Transaction evidence rejects signed bytes exceeding the bounded response's
-  base64 capacity before HTTP. Python and TypeScript distinguish caller
-  configuration and cross-response binding failures.
+  base64 capacity before HTTP.
 
 - **Preserve structured gateway refusals.** Valid `status: "refused"`
   responses retain their machine-readable reason. TypeScript adds
