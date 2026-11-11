@@ -215,7 +215,7 @@ async fn a_funded_account_trades_and_reconciles() {
     order.price -= tick;
     order.client_order_id = Some(78);
     let replaced = client
-        .submit(&actions::cancel_replace_client_order(77, order))
+        .submit(&actions::cancel_replace_order_by_client_id(77, order))
         .await
         .unwrap();
     let r = replaced.receipt().expect("replace did not commit");

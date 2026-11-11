@@ -617,13 +617,13 @@ impl ExchangeClient {
             .await
     }
 
-    /// Cancel by client order id ([`actions::cancel_client_order`]).
+    /// Cancel by client order id ([`actions::cancel_order_by_client_id`]).
     ///
     /// # Errors
     ///
     /// As [`Self::submit`].
-    pub async fn cancel_client_order(&self, client_order_id: u64) -> Result<Submitted> {
-        self.submit(&actions::cancel_client_order(
+    pub async fn cancel_order_by_client_id(&self, client_order_id: u64) -> Result<Submitted> {
+        self.submit(&actions::cancel_order_by_client_id(
             self.address(),
             client_order_id,
         ))
@@ -678,17 +678,17 @@ impl ExchangeClient {
     }
 
     /// Atomically cancel the order with `client_order_id` and place `order`
-    /// ([`actions::cancel_replace_client_order`]).
+    /// ([`actions::cancel_replace_order_by_client_id`]).
     ///
     /// # Errors
     ///
     /// As [`Self::submit`].
-    pub async fn cancel_replace_client_order(
+    pub async fn cancel_replace_order_by_client_id(
         &self,
         client_order_id: u64,
         order: PlaceOrder,
     ) -> Result<Submitted> {
-        self.submit(&actions::cancel_replace_client_order(
+        self.submit(&actions::cancel_replace_order_by_client_id(
             client_order_id,
             order,
         ))

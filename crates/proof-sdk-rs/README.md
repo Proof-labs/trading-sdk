@@ -64,7 +64,7 @@ async fn main() -> Result<(), proof_sdk_rs::Error> {
         Some(e) => eprintln!("refused: {e}"), // e.g. InsufficientMargin (12)
     }
 
-    client.cancel_client_order(42).await?;
+    client.cancel_order_by_client_id(42).await?;
     Ok(())
 }
 ```
@@ -85,28 +85,28 @@ On devnet, fund a new address with the faucet first:
 
 ### `ExchangeClient`: sign and submit
 
-| Method                                      | Action / route                                                            |
-| ------------------------------------------- | ------------------------------------------------------------------------- |
-| `connect(&config, signer)`                  | reads `GET /v1/status` and `recent-nonces`, binds signatures to the chain |
-| `new(&config, signer)`                      | no request; signs for the config's chain id                               |
-| `limit_order(market, side, price, qty)`     | builds a GTC `PlaceOrder` for this account                                |
-| `place_order(order)`                        | `PlaceOrder`                                                              |
-| `market_order(market, side, qty)`           | `MarketOrder` (IOC)                                                       |
-| `cancel_order(order_id)`                    | `CancelOrder`                                                             |
-| `cancel_client_order(client_order_id)`      | `CancelClientOrder`                                                       |
-| `cancel_all_orders(Option<market>)`         | `CancelAllOrders`                                                         |
-| `amend_order(order_id, new_price, new_qty)` | `AmendOrder` (same-price size cuts keep priority)                         |
-| `cancel_replace_order(order_id, order)`     | `CancelReplaceOrder`                                                      |
-| `cancel_replace_client_order(cid, order)`   | `CancelReplaceOrder`, cancelling by client id                             |
-| `close_position(market)`                    | `ClosePosition`                                                           |
-| `submit(&action)`                           | sign with the next nonce, `POST /exchange` once                           |
-| `submit_and_wait(&action, timeout)`         | `submit`, then wait if the verdict is pending                             |
-| `sign(&action)` / `send(&signed_tx)`        | the two halves, for pre-signing on a hot path                             |
-| `sign_with_seq(&action, seq)`               | sign under a nonce you allocated                                          |
-| `wait_for_receipt(hash, timeout)`           | polls `GET /v1/tx/{hash}`                                                 |
-| `address()` / `public_key()` / `network()`  | this signer's account, key and chain id                                   |
-| `nonces()` / `info()`                       | the shared nonce allocator; the read client                               |
-| `ws_config()`                               | a feed config with this account's signed auth                             |
+| Method                                          | Action / route                                                            |
+| ----------------------------------------------- | ------------------------------------------------------------------------- |
+| `connect(&config, signer)`                      | reads `GET /v1/status` and `recent-nonces`, binds signatures to the chain |
+| `new(&config, signer)`                          | no request; signs for the config's chain id                               |
+| `limit_order(market, side, price, qty)`         | builds a GTC `PlaceOrder` for this account                                |
+| `place_order(order)`                            | `PlaceOrder`                                                              |
+| `market_order(market, side, qty)`               | `MarketOrder` (IOC)                                                       |
+| `cancel_order(order_id)`                        | `CancelOrder`                                                             |
+| `cancel_order_by_client_id(client_order_id)`    | `CancelClientOrder`                                                       |
+| `cancel_all_orders(Option<market>)`             | `CancelAllOrders`                                                         |
+| `amend_order(order_id, new_price, new_qty)`     | `AmendOrder` (same-price size cuts keep priority)                         |
+| `cancel_replace_order(order_id, order)`         | `CancelReplaceOrder`                                                      |
+| `cancel_replace_order_by_client_id(cid, order)` | `CancelReplaceOrder`, cancelling by client id                             |
+| `close_position(market)`                        | `ClosePosition`                                                           |
+| `submit(&action)`                               | sign with the next nonce, `POST /exchange` once                           |
+| `submit_and_wait(&action, timeout)`             | `submit`, then wait if the verdict is pending                             |
+| `sign(&action)` / `send(&signed_tx)`            | the two halves, for pre-signing on a hot path                             |
+| `sign_with_seq(&action, seq)`                   | sign under a nonce you allocated                                          |
+| `wait_for_receipt(hash, timeout)`               | polls `GET /v1/tx/{hash}`                                                 |
+| `address()` / `public_key()` / `network()`      | this signer's account, key and chain id                                   |
+| `nonces()` / `info()`                           | the shared nonce allocator; the read client                               |
+| `ws_config()`                                   | a feed config with this account's signed auth                             |
 
 Every helper is a function in `proof_sdk_rs::actions` with this client's
 address, submitted at once. Call those directly to build an `Action` without
@@ -116,7 +116,7 @@ sending it: to gate submission yourself, batch, or trade for another owner.
 use proof_sdk_rs::actions;
 
 let order = client.limit_order(1, Side::Buy, price, 10);
-let action = actions::cancel_replace_client_order(old_cid, order); // keeps brackets
+let action = actions::cancel_replace_order_by_client_id(old_cid, order); // keeps brackets
 let tx = client.sign(&action)?;
 ```
 

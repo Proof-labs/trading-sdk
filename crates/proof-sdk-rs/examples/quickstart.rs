@@ -91,7 +91,7 @@ async fn main() -> AnyResult<()> {
     );
 
     if let Some(cid) = cid.filter(|_| placed.is_success()) {
-        let cancelled = client.cancel_client_order(cid).await?;
+        let cancelled = client.cancel_order_by_client_id(cid).await?;
         println!("cancelled {}: {:?}", cancelled.tx.hash, cancelled.error());
     }
     Ok(())

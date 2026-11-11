@@ -35,7 +35,7 @@
 //!     order.client_order_id = Some(7);
 //!     let placed = client.place_order(order).await?;
 //!     println!("{:?} error {:?}", placed.receipt().map(|r| &r.events), placed.error());
-//!     client.cancel_client_order(7).await?;
+//!     client.cancel_order_by_client_id(7).await?;
 //! }
 //! # Ok(())
 //! # }
