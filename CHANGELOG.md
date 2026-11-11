@@ -7,19 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-
-- Python `market_stats()` accepts non-string sequences such as `range`,
-  matching its declared input type, and distinguishes invalid containers
-  from invalid market counts.
-
-- Python market statistics use the shared calendar parser and reject impossible
-  dates and hour 24 instead of silently normalizing them.
-
 ### Added
 
 - Python typed `market_stats()` preserves exact indexed rolling metrics and
-  unavailable values; `oracle_health()` exposes optional operational feeder facts
+  unavailable values, accepts non-string sequences such as `range`, and uses the
+  shared calendar parser to reject impossible dates and hour 24.
+  `oracle_health()` exposes optional operational feeder facts
   across disabled, F16 relay and market-freshness responses without inferring
   trading authorization. Absent or null optional scalars decode to `None`;
   F16 readiness fields still require booleans.
