@@ -3,9 +3,11 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import inspect
 import json
 import logging
 import re
+import threading
 import time
 import typing as t
 from dataclasses import dataclass, field
@@ -24,8 +26,14 @@ from proof_trading_sdk._native import (
     generate_keypair,
     pubkey_to_owner,
     reject_floats,
+    sign_account_ws_auth,
     sign_and_encode,
+    signing_message,
+    account_ws_auth_message,
+    encode_signed_tx,
+    verify_raw_signature,
 )
+from proof_trading_sdk.external_signer import ExternalSigner
 from proof_trading_sdk.actions import (
     Action,
     CancelPositionTriggers,
@@ -37,6 +45,16 @@ from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.finalized_markets import (
     FinalizedOrderbook, FinalizedMarketsSnapshot, orderbook_request,
     decode_finalized_orderbook, decode_finalized_markets_snapshot,
+)
+from proof_trading_sdk.governance_reads import (
+    AuthoritiesSnapshot, LiquidationConfigInfo,
+    decode_authorities_snapshot, decode_liquidation_config_info,
+)
+from proof_trading_sdk.candle_history import (
+    CandleHistoryPage,
+    CandleHistoryTime,
+    candle_history_params,
+    decode_candle_history,
 )
 from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
 from proof_trading_sdk.evidence import (
@@ -56,6 +74,7 @@ from proof_trading_sdk.errors import (
     CodecError,
     EngineError,
     GatewayError,
+    PreAdmissionRefusal,
     ProofTradingSdkError,
     RateLimited,
     SigningError,
@@ -91,6 +110,7 @@ log = logging.getLogger("proof_trading_sdk")
 
 
 _LEADING_ERROR_CODE = re.compile(r"^(\d+):\s")
+_DEFAULT_RATE_LIMIT_BUCKET = "default"
 
 
 def _leading_error_code(text: str) -> int | None:
@@ -135,24 +155,13 @@ _NOT_SENT = (
 def _submission_may_have_been_admitted(exc: TransportError) -> bool:
     """Whether a failed ``/exchange`` request may still have been admitted.
 
-    A 5xx is ambiguous unless the gateway proves the refusal: a
-    ``status: refused`` body naming no ``txHash``, ``code`` or ``height`` means
-    the transaction never reached the broadcaster, as the TypeScript binding
-    reads it. An httpx failure is ambiguous unless it is in ``_NOT_SENT``. A
+    A 5xx reaching this check carries no refusal envelope, so it is ambiguous.
+    An httpx failure is ambiguous unless it is in ``_NOT_SENT``. A
     TransportError raised from an HTTP status (4xx, 3xx) was answered by the
     gateway without admission.
     """
     if isinstance(exc, GatewayError):
-        try:
-            body = json.loads(exc.body)
-        except ValueError:
-            return True
-        proven_refusal = (
-            isinstance(body, dict)
-            and body.get("status") == "refused"
-            and not any(k in body for k in ("txHash", "tx_hash", "code", "height"))
-        )
-        return not proven_refusal
+        return True
     cause = exc.__cause__
     return isinstance(cause, httpx.RequestError) and not isinstance(cause, _NOT_SENT)
 
@@ -316,6 +325,9 @@ class ExchangeClient:
             self._chain_id = UNBOUND_CHAIN_ID
         self._secret_key = secret_key
         self._key_handle = key_handle
+        self._external_signer: ExternalSigner | None = None
+        self._signer_revision = 0
+        self._signer_lock = threading.RLock()
 
         self._nonce = NonceAllocator()
         self._rate_limits: dict[str, RateLimitState] = {}
@@ -335,7 +347,7 @@ class ExchangeClient:
     # ── Rate-limit helpers ───────────────────────────────────────────────
 
     def _parse_rate_limits(self, resp: httpx.Response) -> None:
-        bucket = resp.headers.get("X-RateLimit-Bucket", "default")
+        bucket = resp.headers.get("X-RateLimit-Bucket", _DEFAULT_RATE_LIMIT_BUCKET)
         state = RateLimitState(
             limit=int(resp.headers.get("X-RateLimit-Limit", 0)),
             remaining=int(resp.headers.get("X-RateLimit-Remaining", 0)),
@@ -345,7 +357,7 @@ class ExchangeClient:
         )
         self._rate_limits[bucket] = state
 
-    def rate_limit_remaining(self, bucket: str = "orders") -> int:
+    def rate_limit_remaining(self, bucket: str = _DEFAULT_RATE_LIMIT_BUCKET) -> int:
         """Return the remaining rate-limit tokens for *bucket*.
 
         This is a synchronous, local check — the authoritative value is
@@ -354,7 +366,12 @@ class ExchangeClient:
         state = self._rate_limits.get(bucket)
         return state.remaining if state else 0
 
-    def rate_limit_state(self, bucket: str = "orders") -> RateLimitState:
+    def rate_limit_state(self, bucket: str = _DEFAULT_RATE_LIMIT_BUCKET) -> RateLimitState:
+        """Return cached response headers for *bucket*.
+
+        Responses without ``X-RateLimit-Bucket`` use ``"default"``. After a
+        429, pass ``RateLimited.bucket`` to retrieve that response's state.
+        """
         return self._rate_limits.get(bucket, RateLimitState())
 
     # ── HTTP helpers ─────────────────────────────────────────────────────
@@ -367,6 +384,7 @@ class ExchangeClient:
         content: bytes | None = None,
         params: dict[str, t.Any] | None = None,
         headers: dict[str, str] | None = None,
+        read_refusal_body: bool = False,
     ) -> httpx.Response:
         url = urljoin(self._gateway_url, path)
         try:
@@ -387,12 +405,24 @@ class ExchangeClient:
             raise TransportError(f"request failed: {e}") from e
 
         self._parse_rate_limits(resp)
-        return self._check_response(resp)
+        return self._check_response(resp, read_refusal_body=read_refusal_body)
 
-    def _check_response(self, resp: httpx.Response) -> httpx.Response:
+    def _check_response(
+        self, resp: httpx.Response, *, read_refusal_body: bool = False
+    ) -> httpx.Response:
+        if read_refusal_body:
+            # Submission envelopes are validated with the original bytes in
+            # submit_action; the HTTP status cannot prove their finality.
+            try:
+                body = resp.json()
+            except (ValueError, UnicodeError):
+                body = None
+            if isinstance(body, dict) and body.get("status") in ("refused", "pending"):
+                return resp
+
         if resp.status_code == 429:
             retry_after = float(resp.headers.get("Retry-After", "5"))
-            bucket = resp.headers.get("X-RateLimit-Bucket", "")
+            bucket = resp.headers.get("X-RateLimit-Bucket", _DEFAULT_RATE_LIMIT_BUCKET)
             raise RateLimited(retry_after_secs=retry_after, bucket=bucket)
 
         if resp.status_code == 401:
@@ -414,8 +444,8 @@ class ExchangeClient:
             raise GatewayError(resp.status_code, resp.text)
 
         # Anything else non-2xx (400, 402, 405-428, 431, 3xx, …) is NOT success.
-        # `GatewayError` specifically means "5xx — a read can retry with backoff,
-        # a submission's outcome is unknown"; a 3xx/4xx
+        # `GatewayError` specifically means "5xx — a read can retry with backoff";
+        # `submit_action` decides what a 5xx means for a submission. A 3xx/4xx
         # is a client-side error that must NOT be blind-retried, so it surfaces
         # as a plain TransportError carrying the status.
         if resp.status_code >= 300:
@@ -439,10 +469,74 @@ class ExchangeClient:
         content: bytes | None = None,
         *,
         headers: dict[str, str] | None = None,
+        read_refusal_body: bool = False,
     ) -> httpx.Response:
-        return self._request("POST", path, content=content, headers=headers)
+        return self._request(
+            "POST", path, content=content, headers=headers,
+            read_refusal_body=read_refusal_body,
+        )
 
     # ── Signing ──────────────────────────────────────────────────────────
+
+    def set_external_signer(self, signer: ExternalSigner) -> None:
+        """Connect a synchronous Ed25519 callback and discard existing keys.
+
+        The public key and callable are captured once; changing ``signer``
+        afterwards does not change this connection. Replacing the connection
+        while a callback is running invalidates its result. A blocking callback
+        cannot be forcibly cancelled; it owns its device/prompt timeout.
+        """
+        if not isinstance(signer, ExternalSigner):
+            raise SigningError("expected ExternalSigner")
+        if not isinstance(signer.public_key, (bytes, bytearray, memoryview)):
+            raise SigningError("external signer public key must be 32 bytes")
+        try:
+            public_key = bytes(signer.public_key)
+        except ValueError:
+            raise SigningError("external signer public key must be 32 bytes") from None
+        if len(public_key) != 32 or not callable(signer.sign_raw) or inspect.iscoroutinefunction(signer.sign_raw):
+            raise SigningError("invalid external signer connection")
+        snapshot = ExternalSigner(public_key, signer.sign_raw)
+        with self._signer_lock:
+            self._signer_revision += 1
+            self._secret_key = None
+            self._key_handle = None
+            self._external_signer = snapshot
+
+    def _check_signer_revision(self, revision: int) -> None:
+        with self._signer_lock:
+            if revision != self._signer_revision:
+                raise SigningError("signing connection changed")
+
+    def _sign_external(self, signer: ExternalSigner, revision: int, message: bytes) -> bytes:
+        self._check_signer_revision(revision)
+        callback_failed = False
+        try:
+            signature = signer.sign_raw(message)
+        except Exception:
+            # Wallet/device errors can contain key material. Do not chain them
+            # into SDK exceptions or log callback inputs or outputs.
+            callback_failed = True
+        if callback_failed:
+            # Raising outside except also removes __context__, which diagnostic
+            # loggers may inspect even when `raise ... from None` hides it.
+            raise SigningError("external signer callback failed")
+        self._check_signer_revision(revision)
+        if not isinstance(signature, (bytes, bytearray, memoryview)):
+            if inspect.iscoroutine(signature):
+                signature.close()
+            raise SigningError("external signer returned an invalid signature")
+        conversion_failed = False
+        try:
+            signature = bytes(signature)
+        except Exception:
+            conversion_failed = True
+        if conversion_failed:
+            raise SigningError("external signer returned an invalid signature")
+        if len(signature) != 64 or not verify_raw_signature(signer.public_key, signature, message):
+            raise SigningError("external signer returned an invalid signature")
+        self._check_signer_revision(revision)
+        return signature
 
     def sign_and_encode_action(
         self,
@@ -462,28 +556,57 @@ class ExchangeClient:
             CodecError: If encoding fails.
             SigningError: If signing fails.
         """
+        return self._sign_and_encode_action(action_type, action_payload)
+
+    def _sign_and_encode_action(
+        self, action_type: int, action_payload: bytes, *, expected_revision: int | None = None,
+    ) -> bytes:
+        with self._signer_lock:
+            if expected_revision is not None:
+                self._check_signer_revision(expected_revision)
+            signer, revision = self._external_signer, self._signer_revision
+            key_handle, secret_key = self._key_handle, self._secret_key
+            chain_id = self._chain_id
         seq = self._nonce.allocate()
         try:
-            if self._key_handle is not None:
+            if signer is not None:
+                # A zero-chain signature stays valid on any unbound chain, so a
+                # wallet is never asked for one.
+                if chain_id == UNBOUND_CHAIN_ID:
+                    raise SigningError("chain_id not configured for external signing")
+                if not isinstance(action_payload, (bytes, bytearray, memoryview)):
+                    raise CodecError("action payload must be bytes")
+                action_payload = bytes(action_payload)
+                # Whatever the encoder refuses never reaches the wallet. Discard
+                # this unsigned preflight envelope.
+                encode_signed_tx(action_type, action_payload, seq, signer.public_key, bytes(64))
+                message = signing_message(chain_id, action_type, seq, action_payload)
+                signature = self._sign_external(signer, revision, message)
+                return encode_signed_tx(action_type, action_payload, seq, signer.public_key, signature)
+            if key_handle is not None:
                 # Hardware-isolated path: the key never enters Python memory.
-                return self._key_handle.sign_and_encode(
-                    self._chain_id,
+                result = key_handle.sign_and_encode(
+                    chain_id,
                     action_type,
                     action_payload,
                     seq,
                 )
-            if self._secret_key is not None:
-                return sign_and_encode(
-                    self._chain_id,
+                self._check_signer_revision(revision)
+                return result
+            if secret_key is not None:
+                result = sign_and_encode(
+                    chain_id,
                     action_type,
                     action_payload,
                     seq,
-                    self._secret_key,
+                    secret_key,
                 )
+                self._check_signer_revision(revision)
+                return result
         except ValueError as e:
             raise CodecError(str(e)) from e
 
-        raise SigningError("no signing key set (pass secret_key or key_handle)")
+        raise SigningError("no signer set (pass secret_key/key_handle or call set_external_signer)")
 
     def sign_action(self, action: Action) -> bytes:
         """Encode a typed :class:`~proof_trading_sdk.actions.Action` through
@@ -498,6 +621,11 @@ class ExchangeClient:
     def submit(self, action: Action) -> dict[str, t.Any]:
         """Encode + sign + submit a typed action in one call."""
         return self.submit_action(self.sign_action(action))
+
+    def _submit_with_signer_revision(self, action: Action, revision: int) -> dict[str, t.Any]:
+        action_type, payload = encode_action(action)
+        envelope = self._sign_and_encode_action(action_type, payload, expected_revision=revision)
+        return self.submit_action(envelope)
 
     def set_position_triggers(
         self,
@@ -515,15 +643,19 @@ class ExchangeClient:
         pass the delegated owner explicitly; authorization remains an engine
         decision and is not guessed from stale client state.
         """
-        return self.submit(
+        with self._signer_lock:
+            revision = self._signer_revision
+            selected_owner = self._own_owner() if owner is None else owner
+        return self._submit_with_signer_revision(
             SetPositionTriggers(
                 market=market,
-                owner=self._own_owner() if owner is None else owner,
+                owner=selected_owner,
                 expected_position_epoch=expected_position_epoch,
                 stop_loss=stop_loss,
                 take_profit=take_profit,
                 client_group_id=client_group_id,
-            )
+            ),
+            revision,
         )
 
     def cancel_position_triggers(
@@ -534,12 +666,16 @@ class ExchangeClient:
         owner: bytes | None = None,
     ) -> dict[str, t.Any]:
         """Cancel one bracket, defaulting owner to the loaded signer."""
-        return self.submit(
+        with self._signer_lock:
+            revision = self._signer_revision
+            selected_owner = self._own_owner() if owner is None else owner
+        return self._submit_with_signer_revision(
             CancelPositionTriggers(
                 market=market,
-                owner=self._own_owner() if owner is None else owner,
+                owner=selected_owner,
                 expected_position_epoch=expected_position_epoch,
-            )
+            ),
+            revision,
         )
 
     # ── Write action ─────────────────────────────────────────────────────
@@ -554,11 +690,27 @@ class ExchangeClient:
         Returns:
             The engine's response dict with keys like ``code``,
             ``tx_hash``, etc.
+
+        Raises:
+            EngineError: the engine rejected the tx with an ``ExecError`` code.
+            SubmissionPending: the gateway broadcast it but could not report
+                the outcome; reconcile by ``tx_hash``.
+            PreAdmissionRefusal: the gateway refused the request before
+                admitting it; nothing was broadcast and there is nothing to
+                poll for.
+            AuthenticationError: HTTP 401 or 403.
+            RateLimited: HTTP 429.
+            GatewayError: a validated refusal at HTTP 5xx other than
+                ``EncodingError``, such as ``Overloaded``, ``Maintenance`` or
+                ``Unavailable``. An ambiguous 5xx is ``SubmissionPending``.
+            TransportError: a transport or HTTP failure with no refusal
+                envelope.
         """
         body = json.dumps({"action": base64.b64encode(envelope).decode("ascii")}).encode()
         try:
             resp = self._post(
-                "/exchange", content=body, headers={"Content-Type": "application/json"}
+                "/exchange", content=body, headers={"Content-Type": "application/json"},
+                read_refusal_body=True,
             )
         except TransportError as exc:
             # A write may have been partial, or the response may have been lost
@@ -590,27 +742,63 @@ class ExchangeClient:
             )
         data: dict[str, t.Any] = parsed
 
-        # The gateway's `/exchange` response has four distinct shapes. Which one
-        # arrived is decided by the body, never by defaulting a missing `code`
+        # Classify the gateway's envelope, never by defaulting a missing `code`
         # to 0 — and, just as importantly, never by treating "no code" as a
         # rejection. This mirrors the contract pinned by the TypeScript binding
         # (`submitViaGateway` in src/client.ts); the two must agree.
+        if data.get("status") == "refused":
+            # Even null/empty execution fields contradict a refusal. Never
+            # reconcile a response-supplied hash or coerce invalid fields.
+            error_code = data.get("errorCode")
+            if (
+                any(key in data for key in (
+                    "txHash", "tx_hash", "code", "height", "events", "log", "info",
+                ))
+                or not isinstance(error_code, str)
+                or not error_code.strip()
+                or ("error" in data and not isinstance(data["error"], str))
+            ):
+                raise SubmissionPending(
+                    hashlib.sha256(envelope).hexdigest().upper(),
+                    "malformed gateway refusal; reconcile by hash",
+                )
+            # Auth, rate-limit and 5xx refusals keep their existing exceptions.
+            # An EncodingError is different: the gateway explicitly failed before
+            # broadcast, including when it reports that refusal with HTTP 500.
+            # Every other status, such as the gateway's 413, is an admission
+            # refusal whose reason must survive.
+            if error_code != "EncodingError" and (
+                resp.status_code in (401, 403, 429) or resp.status_code >= 500
+            ):
+                self._check_response(resp)
+            raise PreAdmissionRefusal(
+                error_code=error_code,
+                message=data.get("error", ""),
+                status_code=resp.status_code,
+            )
+
+        if data.get("status") == "pending":
+            raise SubmissionPending(
+                hashlib.sha256(envelope).hexdigest().upper(),
+                data.get("error") if isinstance(data.get("error"), str) else "submission pending",
+            )
+
         code = data.get("code")
         if isinstance(code, int) and not isinstance(code, bool):
-            # 1. Structured chain verdict — the engine code is authoritative.
+            # Structured chain verdict — the engine code is authoritative.
             if code != 0:
                 msg = data.get("message") or data.get("log") or data.get("error") or ""
                 raise EngineError(code, msg)
             return data
 
         if data.get("status") == "ok":
-            # 2. Legacy gateway: CheckTx accepted, execution still unknown.
+            # Legacy gateway: CheckTx accepted, execution still unknown.
             #    A code-less `status: ok` is a SUCCESS, not a malformed body.
             return data
 
         tx_hash = data.get("txHash") or data.get("tx_hash")
         if tx_hash:
-            # 3. Broadcast but unresolved — NOT a rejection. The gateway pushed
+            # Broadcast but unresolved — NOT a rejection. The gateway pushed
             #    the tx and could not report the outcome in time (park deadline
             #    exceeded, a byte-identical tx already in flight, or a result it
             #    could not parse). It may still commit, so the caller reconciles
@@ -619,7 +807,7 @@ class ExchangeClient:
             #    trader would re-place it into a double fill.
             raise SubmissionPending(str(tx_hash), str(data.get("error") or ""))
 
-        # 4. No code and no hash: an error string is all the gateway gave us. It
+        # No code and no hash: an error string is all the gateway gave us. It
         #    still emits the "<code>: <message>" compatibility format, so an
         #    explicit non-zero code is a terminal engine verdict. Anything else
         #    proves nothing about admission, so reconcile by hash, as the TS
@@ -637,11 +825,14 @@ class ExchangeClient:
 
     def _own_owner(self) -> bytes:
         """Derive the 20-byte owner from whichever signing key is configured."""
-        if self._key_handle is not None:
-            return self._key_handle.owner
-        if self._secret_key is not None:
-            return pubkey_to_owner(generate_keypair(self._secret_key)["public_key"])
-        msg = "No signing key configured — pass an explicit `owner` or set `secret_key`/`key_handle`."
+        with self._signer_lock:
+            if self._external_signer is not None:
+                return pubkey_to_owner(self._external_signer.public_key)
+            if self._key_handle is not None:
+                return self._key_handle.owner
+            if self._secret_key is not None:
+                return pubkey_to_owner(generate_keypair(self._secret_key)["public_key"])
+        msg = "No signer configured — pass an explicit owner, secret_key/key_handle or set_external_signer."
         raise ValueError(msg)
 
     @staticmethod
@@ -874,6 +1065,22 @@ class ExchangeClient:
     def nonce_info(self, owner: bytes | str) -> dict[str, t.Any]:
         resp = self._get(f"/v1/nonce/{_to_hex(owner)}")
         return _response_object(resp)
+
+    def authorities(self) -> AuthoritiesSnapshot:
+        """Read the six operator-authority sets. HTTP/decode failures remain errors.
+
+        Addresses are 20-byte values. These are gateway-reported membership
+        facts, without a witness or proof of action authorization.
+        """
+        return decode_authorities_snapshot(_response_object(self._get("/v1/admin/authorities")))
+
+    def liquidation_config(self) -> LiquidationConfigInfo:
+        """Read the stored global liquidation configuration and exact sequence.
+
+        No default configuration is synthesized on a failed read. Retired
+        pacing fields are preserved as wire facts, not enforced limits.
+        """
+        return decode_liquidation_config_info(_response_object(self._get("/v1/liquidation-config")))
 
     def _get_data(self, path: str, params: dict[str, t.Any] | None = None) -> t.Any:
         """GET a ``/v1/*`` read endpoint and decode the ``{data: base64 msgpack}``
@@ -1339,7 +1546,32 @@ class ExchangeClient:
         resp = self._get(f"/v1/trades/{market}")
         return _response_json(resp)
 
-    # ── History (cursor-paginated) ───────────────────────────────────────
+    # ── History ─────────────────────────────────────────────────────────
+
+    def history_candles(
+        self,
+        market: int,
+        resolution: str = "1m",
+        *,
+        from_: CandleHistoryTime | None = None,
+        to: CandleHistoryTime | None = None,
+        limit: int = 1500,
+    ) -> CandleHistoryPage:
+        """Durable OHLCV history through ``GET /v1/history/candles``.
+
+        Times accept RFC3339 strings or integer epoch milliseconds. The newest
+        ``limit`` buckets in the window are returned oldest first; empty buckets
+        are omitted. Prices and volumes remain exact decimal strings. Read older
+        bars with ``to=page.candles[0].time`` when ``page.has_more`` is true.
+        An empty window can still have older history; use ``to=page.from_`` then.
+        Coarser boundary bars may be partial, including under the server's
+        default window; align ``from_`` and ``to`` for complete bars.
+        The server rejects windows wider than roughly 50,000 resolution widths.
+        This is an indexer read, not a witnessed finalized-state proof.
+        """
+        params = candle_history_params(market, resolution, from_, to, limit)
+        body = _response_json(self._get("/v1/history/candles", params))
+        return decode_candle_history(body, market=market, resolution=resolution, limit=limit)
 
     def history_fills(
         self,
@@ -1767,19 +1999,81 @@ class ExchangeClient:
 
     # ── Account event stream ─────────────────────────────────────────────
 
+    def account_auth(
+        self, owner: bytes | str | None = None, after_id: int = 0,
+    ) -> dict[str, t.Any]:
+        """Fresh signed authentication for the signer's account-events feed.
+
+        Uses the configured chain binding and the current timestamp. Only the
+        signer's own account is supported; trading-agent grants do not authorize
+        another owner's private feed. ``after_id`` is an integer from zero to
+        ``2**53 - 1``, matching TypeScript's JSON-safe cursor domain. Zero is
+        signed but omitted from the returned params. Default stream recovery
+        uses history reads and leaves this legacy cursor at zero.
+        """
+        try:
+            if type(after_id) is not int or not 0 <= after_id <= (1 << 53) - 1:
+                raise SigningError("invalid account auth cursor")
+            if self._chain_id == UNBOUND_CHAIN_ID:
+                raise SigningError("chain_id not configured for account authentication")
+            with self._signer_lock:
+                signer, revision = self._external_signer, self._signer_revision
+                key_handle, secret_key = self._key_handle, self._secret_key
+                chain_id = self._chain_id
+                signer_owner = self._own_owner()
+            if owner is not None and canonical_owner(owner) != signer_owner.hex():
+                raise SigningError("account auth owner does not match signer")
+            timestamp_ms = time.time_ns() // 1_000_000
+            if signer is not None:
+                public_key = signer.public_key
+                message = account_ws_auth_message(chain_id, public_key, timestamp_ms, after_id)
+                signature = self._sign_external(signer, revision, message)
+            elif key_handle is not None:
+                public_key = key_handle.public_key
+                signature = key_handle.sign_account_ws_auth(chain_id, timestamp_ms, after_id)
+            else:
+                public_key = generate_keypair(secret_key)["public_key"]
+                signature = sign_account_ws_auth(chain_id, timestamp_ms, secret_key, after_id)
+            self._check_signer_revision(revision)
+        except SigningError:
+            raise
+        except Exception as err:
+            raise SigningError("account-stream authentication signing failed") from err
+        return {
+            "public_key": public_key.hex(),
+            "signature": signature.hex(),
+            "timestamp_ms": timestamp_ms,
+            **({"after_id": after_id} if after_id > 0 else {}),
+        }
+
     def account_event_stream(
         self, owner: bytes | str, *, ws_url: str | None = None, **kwargs: t.Any
     ) -> AccountEventStream:
         """An :class:`~proof_trading_sdk.streams.AccountEventStream` for ``owner``.
 
-        Uses this client's API key, and its gateway URL for the history reads
+        Sends this client's API key when present. A configured secret key,
+        opaque handle or external signer also signs fresh auth on every attempt, matching
+        TypeScript even when an API key is configured.
+        Only the signer's own account can use this signed-auth path. Signing
+        failures yield error frames and retry within the stream's bounded
+        first-subscription retry budget, without an unsigned fallback.
+        Uses the client's gateway URL for the history reads
         that reconnect recovery makes, so recovery works when ``/ws`` is
         served on its own port (pass that as ``ws_url``). Other keyword
         arguments go to the stream.
         """
         from proof_trading_sdk.streams import AccountEventStream
 
+        def current_auth() -> dict[str, t.Any]:
+            with self._signer_lock:
+                has_signer = (
+                    self._secret_key is not None or self._key_handle is not None
+                    or self._external_signer is not None
+                )
+            return self.account_auth(owner) if has_signer else {}
+
         kwargs.setdefault("history_url", self._gateway_url)
+        kwargs.setdefault("auth", current_auth)
         return AccountEventStream(
             ws_url or self._gateway_url.replace("http", "ws", 1),
             owner,

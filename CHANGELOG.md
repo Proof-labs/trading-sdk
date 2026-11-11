@@ -18,11 +18,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Python `finalized_account_state(owner, timeout=5)` returns typed raw balance,
   positions and a height-bound witness through the canonical Rust wire decoder.
-  Exact integer ranges, owner bindings, strict field counts and bounded responses
+  Exact integer ranges, owner bindings, minimum field counts and bounded responses
   match the TS finalized account-state contract. Existing `account()` is unchanged;
   valuation, authorization, payload proofs and validator verification are excluded.
 
-- Python: add typed finalized valued-account, agent-authorization, recent-nonce and open-order reads with bounded witness transport and canonical Rust payload decoding. Existing account/order APIs are unchanged. Python and TypeScript finalized order reads accept market ID zero, matching positions and the wire u32 domain; invalid market values remain errors. TypeScript `RawOpenOrder.market` now includes the literal `0`.
+- Python: add typed finalized valued-account, agent-authorization, recent-nonce and open-order reads with bounded witness transport and canonical Rust payload decoding. Existing account/order APIs are unchanged. Python and TypeScript finalized order reads accept market ID zero, matching positions and the wire u32 domain; invalid market values remain errors.
 - Python chain-pinned `block_header`, typed header/witness decoders and
   `verify_witness` compare a finalized-read witness with an H+1 app hash.
   Byte, chunk and JSON-depth limits apply; synchronous HTTP cannot guarantee a
@@ -30,7 +30,50 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   heights/timestamps are preserved; validator signatures and payload proofs
   are not verified. Whole-block responses over 1 MiB remain unsupported.
 
+- `validateSetMarginOffsetPolicy` checks policy bounds before encoding and
+  through `decodeAdminAction`.
+  `decodeMarginOffsetEvent` reads the engine's `margin_offset_policy_set`
+  and `margin_offset_pair_configured` attributes against wire-generated vectors.
+  Rust re-exports the margin-offset types. Conformance vectors and content-hash
+  constants pin policy encoding across TypeScript, Rust and Python.
+- Python typed `authorities()` and `liquidation_config()` reads, backed by
+  canonical Rust wire types with strict record/address/range checks. Failed
+  reads raise rather than synthesize empty authorities or default configuration.
+
+- Python `history_candles` reads durable OHLCV history with typed pages, exact
+  decimal strings, and backward time-window pagination.
+
+- Python `ExternalSigner` and `ExchangeClient.set_external_signer` accept
+  synchronous Ed25519 callbacks for transactions and account-stream auth.
+  Rust prepares canonical messages and verifies returned signatures; replacing
+  the signing connection invalidates an in-flight callback result. TP/SL helpers
+  bind owner selection to that connection. Account streams use the current
+  signer on each authentication attempt, including a signer connected later.
+
+- Python account-event streams authenticate with the client's secret key or
+  opaque `SigningHandle`, alongside an API key when configured, renewing the signed
+  challenge on every retry and reconnect. `account_auth(owner, after_id=0)`
+  supports direct owner keys and JSON-safe nonnegative cursors.
+
 ### Changed
+
+- TypeScript `RawOpenOrder.market` widens from `MarketId` to `MarketId | 0`;
+  code that assumes a branded `MarketId` must handle market zero.
+- Python account-stream reconnect backoff now defaults to a 10-second cap
+  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
+- Python signed account authentication rejects an unconfigured chain ID before
+  signing. Configure the gateway's chain ID explicitly.
+- Python account streams match TypeScript's bounded first-subscription auth
+  retries: signing failures and 401/429/503 frames yield errors and retry up to
+  five times. Exhaustion and 403 frames leave the socket open without further
+  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
+  401/403 refusals raise `AuthenticationError` before the first successful
+  connection; on reconnect they use the configured retry budget and backoff
+  without discarding history recovery state.
+- A Python client with a signer now signs every account subscription, even with
+  an API key configured. Subscribing to another owner's feed, or to any feed
+  with an unconfigured chain ID, now fails with error frames instead of relying
+  on the API key. Use a client with only the API key for those feeds.
 
 - **Breaking (TypeScript MAJOR):** `queryOpenOrders` and Python `open_orders`
   preserve all 14 resting-order fields through the shared Rust decoder, including
@@ -44,8 +87,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Preserve structured gateway refusals.** Valid `status: "refused"`
+  responses retain their machine-readable reason. TypeScript adds
+  `TxResult.errorCode` and the open `GatewayRefusalCode` type (MINOR for npm).
+  Python raises `PreAdmissionRefusal` with `error_code`, `message` and
+  `status_code` for admission refusals, instead of treating legacy HTTP 200
+  refusals as unresolved or flattening HTTP 400, 411 and 413 refusals into
+  transport text. An internal `EncodingError` refusal is also preserved at
+  HTTP 500. Malformed or contradictory refusals remain unresolved against the
+  hash of the submitted bytes. Valid envelopes at HTTP 401, 403, 429 and other 5xx
+  responses keep their existing Python exceptions. A refusal
+  describes this attempt only; it cannot resolve an earlier ambiguous
+  attempt. Retry decisions depend on the refusal reason, not HTTP status
+  alone. Python callers must catch `PreAdmissionRefusal` for valid admission
+  refusals (MAJOR for Python).
+
+- Python `RateLimited.bucket` now uses `"default"`, matching the cached
+  `rate_limit_state` key, when the gateway omits `X-RateLimit-Bucket` (#395).
+
 - Python submits signed transactions to the gateway in its JSON/base64 envelope.
-- Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. A 5xx carrying the gateway's proven `status: refused` body still raises `GatewayError`.
+- Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. Proven refusals are handled separately from ambiguous failures.
 - Python raises `TransportError` for malformed or wrong-shaped read responses (a 200 with `null` or `[]` on an object-valued read such as `markets` or `ticker` no longer reads as empty), and raises `SubmissionPending` with the transaction hash when a submission response carries no verdict; only an explicit non-zero `"<code>: <message>"` stays a terminal `EngineError`.
 - Python account-event history supports explicit ordering and cursor pagination. The client validates owner addresses and page limits (1–5000) before sending a request. Passing the unsupported `after_id` filter now raises `ValueError`.
 - Python reads per-account funding payments and position history with cursor pagination. Passing the unsupported `after_height` filter now raises `ValueError`.

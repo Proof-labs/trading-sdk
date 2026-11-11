@@ -5,6 +5,28 @@ use std::collections::HashSet;
 use std::io::Cursor;
 
 const MAX_BYTES: usize = 512 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadErrorKind {
+    Binding,
+    Malformed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadError {
+    pub kind: ReadErrorKind,
+    pub message: &'static str,
+}
+
+impl From<&'static str> for ReadError {
+    fn from(message: &'static str) -> Self {
+        Self {
+            kind: ReadErrorKind::Malformed,
+            message,
+        }
+    }
+}
+
 fn raw(bytes: &[u8]) -> Result<Value, &'static str> {
     if bytes.len() > MAX_BYTES {
         return Err("account read exceeds byte limit");
@@ -21,7 +43,7 @@ fn address(value: &Value) -> bool {
     }
 }
 
-pub fn account(bytes: &[u8], owner: &[u8; 20]) -> Result<AccountInfo, &'static str> {
+pub fn account(bytes: &[u8], owner: &[u8; 20]) -> Result<AccountInfo, ReadError> {
     let value = raw(bytes)?;
     let rows = value
         .as_array()
@@ -31,11 +53,11 @@ pub fn account(bytes: &[u8], owner: &[u8; 20]) -> Result<AccountInfo, &'static s
     for row in rows {
         let fields = row.as_array().ok_or("invalid account position")?;
         if !fields.first().is_some_and(address) {
-            return Err("invalid account position owner bytes");
+            return Err("invalid account position owner bytes".into());
         }
         // Serde also accepts an enum by index or as a map; only the wire name is valid.
         if !matches!(fields.get(2).and_then(Value::as_str), Some("Buy" | "Sell")) {
-            return Err("invalid account position side");
+            return Err("invalid account position side".into());
         }
     }
     let scenarios = value
@@ -48,7 +70,7 @@ pub fn account(bytes: &[u8], owner: &[u8; 20]) -> Result<AccountInfo, &'static s
             .and_then(|v| v.get(1))
             .and_then(Value::as_str);
         if !matches!(branch, Some("Yes" | "No")) {
-            return Err("invalid account binding scenario branch");
+            return Err("invalid account binding scenario branch".into());
         }
     }
     let account: AccountInfo = crate::reads::decode(bytes, &crate::reads::ACCOUNT_INFO)
@@ -56,7 +78,10 @@ pub fn account(bytes: &[u8], owner: &[u8; 20]) -> Result<AccountInfo, &'static s
     let mut seen = HashSet::new();
     for position in &account.positions {
         if &position.owner != owner || !seen.insert(position.market) {
-            return Err("account position owner or market binding mismatch");
+            return Err(ReadError {
+                kind: ReadErrorKind::Binding,
+                message: "account position owner or market binding mismatch",
+            });
         }
     }
     Ok(account)
@@ -84,9 +109,9 @@ pub fn open_orders(
     bytes: &[u8],
     owner: &[u8; 20],
     limit: usize,
-) -> Result<Vec<crate::types::Order>, &'static str> {
+) -> Result<Vec<crate::types::Order>, ReadError> {
     if !(1..=101).contains(&limit) {
-        return Err("invalid finalized order limit");
+        return Err("invalid finalized order limit".into());
     }
     let value = raw(bytes)?;
     let rows = value
@@ -101,10 +126,17 @@ pub fn open_orders(
         if !matches!(fields[3].as_str(), Some("Buy" | "Sell"))
             || !matches!(fields[11].as_str(), Some("Gtc" | "Ioc" | "Fok"))
         {
-            return Err("invalid finalized order enum");
+            return Err("invalid finalized order enum".into());
         }
     }
-    crate::reads::decode_open_orders(bytes, owner)
+    crate::reads::decode_open_orders(bytes, owner).map_err(|message| ReadError {
+        kind: if message == crate::reads::OPEN_ORDERS_OWNER_MISMATCH {
+            ReadErrorKind::Binding
+        } else {
+            ReadErrorKind::Malformed
+        },
+        message,
+    })
 }
 
 #[cfg(test)]
@@ -143,7 +175,7 @@ mod tests {
                 false,
             );
             let bytes = rmp_serde::to_vec(&vec![row]).map_err(|e| e.to_string())?;
-            let orders = open_orders(&bytes, &[7; 20], 101)?;
+            let orders = open_orders(&bytes, &[7; 20], 101).map_err(|e| e.message.to_string())?;
             assert_eq!(orders[0].market, market);
         }
         Ok(())
@@ -158,5 +190,40 @@ mod tests {
         assert!(open_orders(&[0x90], &[7; 20], 101)
             .expect("an empty list decodes")
             .is_empty());
+    }
+
+    #[test]
+    fn finalized_order_errors_carry_their_kind() -> Result<(), String> {
+        let row = (
+            1u64,
+            3u32,
+            [7u8; 20],
+            "Buy",
+            1u64,
+            1u64,
+            None::<u64>,
+            1u64,
+            0u64,
+            0u64,
+            0u64,
+            "Gtc",
+            false,
+            false,
+        );
+        let bytes = rmp_serde::to_vec(&vec![row]).map_err(|e| e.to_string())?;
+        let kind = |owner| {
+            open_orders(&bytes, owner, 101)
+                .map(|_| ())
+                .map_err(|e| e.kind)
+        };
+        assert_eq!(kind(&[8; 20]), Err(ReadErrorKind::Binding));
+        assert_eq!(kind(&[7; 20]), Ok(()));
+        assert_eq!(
+            open_orders(&[0xc1], &[7; 20], 101)
+                .map_err(|e| e.kind)
+                .err(),
+            Some(ReadErrorKind::Malformed)
+        );
+        Ok(())
     }
 }
