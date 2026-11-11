@@ -2188,7 +2188,10 @@ export interface TriggerMarketConfigInfo {
   state: TriggerMarketConfigState;
 }
 
-/** Engine-defined label: the known names, or any later one. */
+/** Engine-defined label: the known names, or any later one.
+ * `ConfigurationMissing`, `MarketDisabled`, and `Deferred` are retained for
+ * historical decoding; the engine no longer emits them after trigger-policy retirement.
+ */
 export type TriggerEffectiveAvailabilityKind =
   | "Available"
   | "TriggerActionsInactive"
@@ -2225,6 +2228,9 @@ export interface PositionTriggerBracket {
 /** One owner/market row returned by `GET /v1/triggers/{owner}`. */
 export interface PositionTriggerInfo {
   bracket: PositionTriggerBracket;
+  /** @deprecated The engine returns null after trigger-policy retirement.
+   * Retained for historical decoding; do not use it to gate TP/SL placement.
+   */
   marketConfig: TriggerMarketConfig | null;
   availability: TriggerEffectiveAvailability;
 }

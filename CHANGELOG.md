@@ -9,12 +9,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
-- **Breaking (next TypeScript and Python MAJOR releases):** remove `queryTriggerMarketConfigs()`,
+- **Breaking (next TypeScript MAJOR and Python 5.0.0):** remove `queryTriggerMarketConfigs()`,
   Python `trigger_market_configs()`, the `SetTriggerMarketConfig` builder/type,
   and TypeScript `validateSetTriggerMarketConfig`. Low-level payload encoding,
   signing and historical decoding remain wire-compatible; the engine owns
   proposal/execution refusal for the retired action. Proposal hashes remain available.
-  Decoded TypeScript actions must be narrowed before resubmission.
+  Narrow decoded TypeScript actions with `isSubmittableAction()` before
+  resubmission; the guard excludes retired actions without asserting engine admission.
   Remove legacy-policy prechecks before placing TP/SL; no replacement lookup is needed.
 
 ### Changed

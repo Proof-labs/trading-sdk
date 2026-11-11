@@ -330,6 +330,7 @@ export {
   signAndEncode,
   signEnvelopeFromPayload,
   encodePayloadBytes,
+  isSubmittableAction,
   decodeTx,
   decodeSigningMessage,
   type DecodedSigningMessage,

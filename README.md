@@ -502,9 +502,11 @@ position epoch and an explicit per-limb IOC collar. The engine validates the
 request; successful placement does not guarantee a fill.
 
 Historical policy and proposal decoders remain available. `DecodedAdminAction`
-and `DecodedAction` include retired actions for inspection; narrow them before
-passing them to a typed submission API. Low-level encoding and signing retain
-the wire contract; the engine rejects retired proposals and approvals.
+and `DecodedAction` include retired actions for inspection. Use the exported
+`isSubmittableAction(decoded.action)` guard before passing a decoded transaction
+to a typed submission API. The guard excludes retired governance actions; it
+does not assert engine admission or signing authority. Low-level encoding and
+signing retain the wire contract; the engine rejects retired proposals and approvals.
 Proposal content hashes remain available for historical verification.
 
 Before upgrading, remove retired trigger-policy methods from capability probes

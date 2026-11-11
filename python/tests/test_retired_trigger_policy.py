@@ -9,9 +9,11 @@ import proof_trading_sdk as sdk
 from proof_trading_sdk import _native, actions
 from proof_trading_sdk.client import ExchangeClient
 
-VECTOR = next(json.loads(line) for line in
+VECTOR_CASE = 'propose_admin_action/set_trigger_market_config'
+VECTOR = next((value for line in
     (Path(__file__).parents[2] / 'conformance/codec.ndjson').read_text().splitlines()
-    if json.loads(line)['case'] == 'propose_admin_action/set_trigger_market_config')
+    if (value := json.loads(line))['case'] == VECTOR_CASE), None)
+assert VECTOR is not None, f'Missing conformance case: {VECTOR_CASE}'
 
 
 def retired_cases():

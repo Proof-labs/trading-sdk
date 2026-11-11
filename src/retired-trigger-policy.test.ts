@@ -6,6 +6,7 @@ import { getWasm } from "./wasm-loader.js";
 import { fromWasmFields } from "./codec-adapter.js";
 import type { Action, ActionTypeValue } from "./types.js";
 
+const vectorCase = "propose_admin_action/set_trigger_market_config";
 const vector = readFileSync(
   new URL("../conformance/codec.ndjson", import.meta.url),
   "utf8",
@@ -13,7 +14,8 @@ const vector = readFileSync(
   .trim()
   .split("\n")
   .map((line) => JSON.parse(line))
-  .find((v) => v.case === "propose_admin_action/set_trigger_market_config");
+  .find((v) => v.case === vectorCase);
+if (!vector) throw new Error(`Missing conformance case: ${vectorCase}`);
 const encoder = new Encoder({ useBigInt64: true });
 const proposal = Uint8Array.from(Buffer.from(vector.expect.payload_hex, "hex"));
 const retired = new Decoder({ useBigInt64: true }).decode(
@@ -33,13 +35,13 @@ const approvalFields = {
 };
 const approval = encoder.encode([
   approvalFields.approver,
-  42,
-  3,
-  2,
+  Number(approvalFields.proposal_id),
+  Number(approvalFields.registry_version),
+  approvalFields.threshold,
   approvalFields.proposer,
-  7,
-  1000,
-  259201000,
+  Number(approvalFields.created_height),
+  Number(approvalFields.created_ms),
+  Number(approvalFields.expiry_ms),
   retired[2],
   approvalFields.content_hash,
 ]);
@@ -71,6 +73,9 @@ describe("retired trigger policy", () => {
         new Uint8Array(64),
       ]);
       expect(sdk.decodeTx(envelope).action).toEqual(action);
+      expect(sdk.isSubmittableAction(action)).toBe(false);
+      // Deliberately exercise the low-level wire escape hatch for historical
+      // actions; typed resubmission must first use isSubmittableAction.
       expect(sdk.encodePayloadBytes(action as Action)).toEqual(payload);
       expect(wasm.encode_payload(tag, fields)).toEqual(payload);
       for (const encoded of [
@@ -104,6 +109,31 @@ describe("retired trigger policy", () => {
         payload,
       );
       expect(sdk.decodeSigningMessage(message).action).toEqual(action);
+      if (
+        action.type !== "ProposeAdminAction" &&
+        action.type !== "ApproveAdminAction"
+      ) {
+        throw new Error(`Unexpected governance action type: ${action.type}`);
+      }
+      const current: Action =
+        action.type === "ProposeAdminAction"
+          ? {
+              ...action,
+              data: { ...action.data, action: { kind: "UnpauseBridge" } },
+            }
+          : {
+              ...action,
+              data: { ...action.data, action: { kind: "UnpauseBridge" } },
+            };
+      expect(sdk.isSubmittableAction(current)).toBe(true);
     },
   );
+  it("allows ordinary current actions through the narrowing guard", () => {
+    expect(
+      sdk.isSubmittableAction({
+        type: "CancelOrder",
+        data: { orderId: 1n, owner: new Uint8Array(20) },
+      }),
+    ).toBe(true);
+  });
 });

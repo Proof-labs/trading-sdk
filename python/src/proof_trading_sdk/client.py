@@ -1234,6 +1234,10 @@ class ExchangeClient:
 
         Uses the public node/gateway ``GET /v1/triggers/{owner}`` route. This
         is current state only; no trigger-history endpoint is implied.
+        ``market_config`` is ``None`` after trigger-policy retirement. The key
+        and availability kinds ``ConfigurationMissing``, ``MarketDisabled`` and
+        ``Deferred`` remain decodable for historical compatibility, not as
+        current TP/SL placement gates.
         """
         if owner is None:
             owner = self._own_owner()

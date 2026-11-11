@@ -84,6 +84,18 @@ export function decodeStrict(bytes: Uint8Array): unknown {
 // Encoding + signing (via WASM)
 // ---------------------------------------------------------------------------
 
+/** Narrow a decoded transaction to the current typed submission surface.
+ * Excludes retired governance actions; it does not validate engine admission
+ * or the caller's authority. Historical decoding and hashing remain available.
+ */
+export function isSubmittableAction(action: DecodedAction): action is Action {
+  return !(
+    (action.type === "ProposeAdminAction" ||
+      action.type === "ApproveAdminAction") &&
+    action.data.action.kind === "SetTriggerMarketConfig"
+  );
+}
+
 /**
  * Encode just the payload bytes for an action (no signed envelope). The bytes
  * match `rmp-serde` — and therefore the engine — byte-for-byte.
@@ -364,7 +376,13 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
         getWasm().decode_payload(actionType, payloadBytes),
       );
       // Re-encoding also applies the adapter's structural validation.
-      const canonicalPayloadBytes = encodePayloadBytes(decodedAction as Action);
+      // Historical actions must still round-trip even when they cannot be
+      // narrowed to the current typed submission surface.
+      const canonical = toWasmFields(decodedAction);
+      const canonicalPayloadBytes = getWasm().encode_payload(
+        canonical.actionType,
+        canonical.fields,
+      );
       const isCanonical =
         canonicalPayloadBytes.length === payloadBytes.length &&
         canonicalPayloadBytes.every((byte, i) => byte === payloadBytes[i]);

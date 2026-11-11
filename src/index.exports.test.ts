@@ -12,6 +12,9 @@ import { describe, it, expect } from "vitest";
 
 import {
   ActionType,
+  isSubmittableAction,
+  type Action,
+  type DecodedAction,
   type GovernanceAction,
   type AdminAction,
   type EmergencyAction,
@@ -360,3 +363,18 @@ function retiredPolicyIsReadOnly(
   return submit;
 }
 void retiredPolicyIsReadOnly;
+
+function decodedActionsNeedNarrowing(decoded: DecodedAction): void {
+  // @ts-expect-error a decoded historical action is not necessarily submittable
+  const unchecked: Action = decoded;
+  void unchecked;
+  if (isSubmittableAction(decoded)) {
+    const current: Action = decoded;
+    void current;
+  } else {
+    // @ts-expect-error the rejected branch still includes retired actions
+    const retired: Action = decoded;
+    void retired;
+  }
+}
+void decodedActionsNeedNarrowing;

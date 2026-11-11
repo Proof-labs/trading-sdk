@@ -18,7 +18,6 @@ import {
   TimeInForce,
   type AccountInfo,
   type OpenOrder,
-  type Action,
   type ActionTypeValue,
   type AdminAction,
   type EmergencyAction,
@@ -306,7 +305,7 @@ function convertObject(data: Record<string, unknown>): Record<string, unknown> {
  * does not check either, so the hash of a proposal already on chain can still
  * be recomputed (for example to reject it).
  */
-function validateCreateMarketTickers(action: Action): void {
+function validateCreateMarketTickers(action: DecodedAction): void {
   if (action.type === "CreateMarket") {
     validateTicker(action.data.ticker ?? "");
   } else if (
@@ -322,9 +321,10 @@ function validateCreateMarketTickers(action: Action): void {
 }
 
 /**
- * Translate a TS `Action` into `(actionType, fields)` for `encode_payload`.
+ * Translate a current or historical action for canonical wire encoding.
+ * This internal adapter does not decide whether an action is submittable.
  */
-export function toWasmFields(action: Action): {
+export function toWasmFields(action: DecodedAction): {
   actionType: ActionTypeValue;
   fields: Record<string, unknown>;
 } {
@@ -369,7 +369,7 @@ export function toWasmFields(action: Action): {
 /** action_type byte → `Action["type"]` name (inverse of `ActionType`). */
 const ACTION_TYPE_NAMES = Object.fromEntries(
   Object.entries(ActionType).map(([name, byte]) => [byte, name]),
-) as Record<number, Action["type"]>;
+) as Record<number, DecodedAction["type"]>;
 
 /** snake_case override → camelCase (inverse of `FIELD_OVERRIDES`). */
 const FIELD_OVERRIDES_REVERSE: Record<string, string> = Object.fromEntries(
