@@ -12,8 +12,11 @@ pub use proof_wire::{
     liquidation_report, margin_offsets, triggers, types,
 };
 
+pub mod account_state;
 pub mod binary;
 pub mod errors;
+pub mod finalized_account_reads;
+pub mod finalized_orderbook;
 #[cfg(feature = "gateway")]
 pub mod gateway;
 pub mod governance;

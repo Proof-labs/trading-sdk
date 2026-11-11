@@ -238,6 +238,166 @@ rather than returning a shorter list, so a very large account gets an error. The
 read does not verify a finalized-state witness. The remaining Python API gaps are tracked in
 [#362](https://github.com/Proof-labs/trading-sdk/issues/362).
 
+## Block headers and witness comparison
+
+`client.block_header(height, chain_id=...)` reads a typed `BlockEvidenceHeader`
+through `/v1/block`. The chain pin is required on each call, as a chain name or
+32-byte binding; implicit client/environment defaults are not trust pins.
+Heights are exact Python integers and timestamps retain their nanoseconds.
+
+```python
+from proof_trading_sdk import decode_finalized_read_witness, verify_witness
+
+# witness_json is the witness object accompanying a gateway finalized read.
+witness = decode_finalized_read_witness(witness_json)
+header = client.block_header(witness.height + 1, chain_id="exchange-devnet-1")
+verify_witness(witness, header, chain_id="exchange-devnet-1")
+```
+
+When the read's payload supplies its own height/time, pass `expected_height`
+and `expected_time_ms` to `decode_finalized_read_witness` to bind those values.
+Parse `witness_json` with a parser that refuses duplicate keys: plain `json.loads`
+silently keeps the last value, and only `block_header` applies this check itself.
+`verify_witness` checks the pinned chain, H+1 height and app hash. It deliberately
+does not compare H's witness time with H+1's header time. Success against a
+header from the same gateway establishes consistency of that gateway's claims;
+it does not authenticate the state, verify validator signatures or the block
+hash, prove payload contents, or establish freshness or permission to trade.
+`decode_block_evidence_header` accepts a complete, already-parsed JSON-RPC
+envelope, not a bare `result` object. `get_block` keeps its raw response API.
+
+The full block response is fetched, even though only the header is retained.
+Responses over 1 MiB, over 4096 chunks, deeper than 32 JSON containers, duplicate
+keys at any depth, invalid UTF-8, and compressed bodies are refused. Large blocks
+therefore require a future header-only gateway route. No redirect, retry or
+alternate endpoint is used. HTTP refusals retain the SDK's existing exception
+types and their bodies are discarded.
+
+`timeout` is in seconds: default 5, minimum 0.001, maximum 60. Python bounds each
+network wait and checks elapsed time between body chunks; unlike the TS async
+deadline, this cannot interrupt slowly arriving headers or a custom transport
+that ignores timeouts. `GatewayReadError.kind` distinguishes `configuration`,
+`malformed`, `binding`, `limit`, and `deadline`; `field` identifies the failed
+check. Missing/pruned blocks remain errors, not empty evidence.
+The H+1 block may not exist yet when a fresh witness is received; wait for it
+to be committed before retrying the same height.
+
+## Finalized raw account state
+
+Owner arrays accept exact byte values (0–255) regardless of integer encoding width,
+matching TypeScript. Six-field position records default the omitted remainder to zero;
+that layout is not limited to historical records.
+
+`client.finalized_account_state(owner, timeout=5)` reads
+`/v1/account/{owner}/state?witness=1` and returns `FinalizedAccountState`.
+The existing `account()` method and its valued `AccountState` remain unchanged.
+
+```python
+state = client.finalized_account_state(owner)
+print(state.finalized_height, state.balance, state.positions)
+# Optional separate comparison; the H+1 block must already exist.
+header = client.block_header(state.finalized_height + 1, chain_id="exchange-devnet-1")
+verify_witness(state.witness, header, chain_id="exchange-devnet-1")
+```
+
+The result contains `owner`, `finalized_height`, `balance`, `positions`, and
+`witness`. Each `RawAccountPosition` contains `owner`, `market`, `side`,
+`entry_price`, `size`, signed `last_funding_index`, and `entry_remainder`.
+All numeric fields are exact Python integers. The remainder defaults to zero
+for legacy six-field positions; position cost is `entry_price * size + entry_remainder`.
+Owners are lowercase 40-character hex; inputs also accept 20-byte addresses,
+uppercase hex and an optional `0x` prefix.
+
+The canonical Rust wire decoder checks minimum account/position field counts (appended engine fields are ignored),
+20-byte owners, request/position owner bindings, strictly increasing market IDs,
+at most 2048 positions, integer ranges, and remainder bounds. The response must
+contain exactly `data` and `witness`; the witness must have its five defined
+fields and match the payload height. Canonical base64 is limited to 512 KiB of
+decoded MessagePack. Malformed or mismatched data raises `GatewayReadError`;
+missing witness support is an error with no legacy fallback.
+
+This read uses the block-header reader's bounded HTTP and synchronous timeout
+policy above. It makes one request and never fetches an H+1 header automatically.
+These are settled ledger facts, without current marks, accrued funding, PnL,
+equity, margin or withdrawal/trading authorization. The witness is a gateway
+assertion; decoding it does not prove payload contents or consensus authenticity.
+
+## Finalized market reads
+
+```python
+book = client.finalized_orderbook(3, depth=20)
+snapshot = client.finalized_markets_snapshot(chain_id="exchange-devnet-1")
+```
+
+`finalized_orderbook()` returns `FinalizedOrderbook` with market, requested
+depth, height, typed bids/asks (`price`, `total_qty`, `order_count`) and witness.
+Depth is 1, 20 or 100 (default 20); the result does not assert a complete book.
+The canonical Rust decoder validates exact two-side/three-field tuples,
+integer ranges, per-side depth and strictly descending bids/ascending asks.
+The gateway frame must match the requested market/depth and witness height.
+The optional legacy `data` field must match `bookMsgpackB64` when present.
+Its JSON numeric height must be a safe positive integer, as in TS;
+MessagePack level values retain the full u64 range. Decoded books are capped
+at 512 KiB. Extra frame/witness fields are tolerated.
+
+`finalized_markets_snapshot()` extends the existing `MarketsSnapshot` with its
+witness and reuses the canonical decoder. `chain_id` is mandatory on each call,
+as a chain name or 32-byte binding. Wrong chains and uncommitted snapshots are
+binding errors. Existing `markets_snapshot()`, `orderbook()` and WebSocket
+`orderbook_snapshot()` remain unchanged. Standalone decoders are exported as
+`decode_finalized_orderbook` and `decode_finalized_markets_snapshot`.
+
+Both use the bounded HTTP and synchronous timeout policy described above:
+1 MiB response, 4096 chunks, no redirect/retry/fallback. Defaults are 5 seconds
+for the book and 10 for markets. Neither fetches an H+1 header automatically;
+call `block_header` and `verify_witness` separately for that consistency check.
+Witnesses remain gateway assertions, without validator signatures, payload
+proofs, freshness guarantees or trading authorization.
+
+## Transaction and block-result evidence
+
+```python
+# exact_signed_bytes must be the original envelope, not reconstructed fields.
+tx = client.transaction_evidence(tx_hash, exact_signed_bytes, chain_id="exchange-devnet-1")
+blocks = client.block_results_range(100, 102, chain_id="exchange-devnet-1")
+window = client.block_results_window(from_ms, to_ms, through_height,
+                                     chain_id="exchange-devnet-1")
+```
+
+These reads return typed `TransactionEvidence`, `BlockResultsRange`, and
+`BlockResultsWindow` with `source="trusted-gateway"`. Transaction evidence binds
+the requested hash and exact signed bytes to the returned block index and
+Comet transaction Merkle root. Range/window evidence checks consecutive heights,
+parent hashes, nondecreasing nanosecond timestamps, transaction roots, and each
+post-state app hash against the next header. The retained H+1 `anchor` must exist.
+
+A range includes both requested heights. A window includes a block strictly
+before `from_ms` (or genesis) and the requested `through_height`, whose time must
+reach `to_ms`. Boundary blocks are retained: callers apply `[from_ms, to_ms)`
+themselves. No partial result is returned when coverage or a limit fails.
+
+Every call requires an explicit chain pin and uses one shared timeout across
+all requests, with the synchronous HTTP limitations described above. Each
+response has the same 1 MiB/4096-chunk/depth-32 bounds as `block_header`.
+Transaction inputs are limited to 785,664 bytes before HTTP, allowing for base64
+expansion and a 1 KiB envelope reserve. This is only a payload upper bound, not
+an assurance that either response fits. Transaction events, block headers,
+validator commit signatures and other transactions share the 1 MiB response
+budget; either the transaction or block response can exceed it.
+Range/window defaults are 32 heights, 8 MiB decoded JSON, 10,000 transactions,
+16,384 events and 65,536 attributes. `max_heights` may be raised to 128; other
+limits may only be reduced. JSON byte accounting conservatively allows for
+number formatting differences, so floating metadata may exhaust the byte
+budget earlier than in TypeScript. Numeric evidence fields never accept floats.
+
+Execution codes and raw event strings are gateway observations, not authenticated
+receipts or interpreted financial values. Execution codes are not checked against
+H+1 `last_results_hash`. These methods do not verify validator
+signatures, recompute block hashes, prove events or state payloads, establish
+freshness/finality, or prove that a transaction was never admitted. A returned
+replay refusal cannot exclude an earlier successful occurrence. Missing/pruned
+data remains an error. The raw `get_block`/`get_block_results` APIs are unchanged.
+
 ## Typed actions
 
 Every action has a typed builder in `proof_trading_sdk.actions`;
@@ -394,3 +554,40 @@ accepts out-of-order unique nonces within its window and rejects replays.
 - No sync call needed before the first transaction
 - Thread-safe allocation within one shared allocator instance
 - Wide engine window (+1 day / −2 days) tolerates NTP skew
+
+### Finalized account reads
+
+Positions and open orders preserve market ID zero; market IDs use the wire u32 domain.
+
+```python
+account = client.finalized_account(owner)
+authorization = client.finalized_agent_authorization(owner, agent)
+nonces = client.finalized_recent_nonces(owner)
+orders = client.finalized_open_orders(owner, limit=101)
+```
+
+These opt-in reads return typed values and a `FinalizedReadWitness`. Existing
+`account()` and `open_orders()` behavior is unchanged. Account values come from
+canonical Rust `AccountInfo`/`PositionBrief`; Python integers preserve u64/i64
+precision. `positions`, `binding_scenario`, and the fourteen order fields use
+snake_case. Position owners are 20-byte `bytes` (matching the existing valued
+position convention); result and order owners are canonical lowercase hex strings.
+`cashout_equity` is the engine's display estimate, not guaranteed
+execution proceeds. Funding, PnL and margin are returned without recomputation;
+they do not establish trading authorization or solvency.
+
+Each payload is limited to 512 KiB. The shared bounded transport caps the full
+JSON body at 1 MiB, 4096 nonempty chunks and depth 32. The envelope has exactly
+`data` and `witness`, and the witness exactly five fields. All methods default
+to a 5-second timeout (0.001–60); synchronous network waits and between-chunk
+elapsed checks do not guarantee a hard whole-call deadline for slow headers or
+custom transports. No retry, fallback, redirect or automatic H+1 header fetch.
+
+Valued positions and nonempty orders bind their owners. Empty accounts/orders,
+bare authorization booleans and nonce lists bind identities and height only by
+the request and gateway assertion. Call `verify_witness` with a separately
+chain-pinned H+1 header if needed; this checks consistency, not validator
+signatures, authenticity or freshness. Nonces are a prunable retained set, not
+a lifetime floor or absence proof. Orders require the current 14-field tuple
+and strictly increasing IDs; `complete` is false whenever the requested limit
+(1–101) is reached, even if that number happens to be exact.
