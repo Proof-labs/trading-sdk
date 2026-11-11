@@ -66,11 +66,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Preserve structured gateway refusals.** Valid `status: "refused"`
+  responses retain their machine-readable reason. TypeScript adds
+  `TxResult.errorCode` and the open `GatewayRefusalCode` type (MINOR for npm).
+  Python raises `PreAdmissionRefusal` with `error_code`, `message` and
+  `status_code` for admission refusals, instead of treating legacy HTTP 200
+  refusals as unresolved or flattening HTTP 400, 411 and 413 refusals into
+  transport text. An internal `EncodingError` refusal is also preserved at
+  HTTP 500. Malformed or contradictory refusals remain unresolved against the
+  hash of the submitted bytes. Valid envelopes at HTTP 401, 403, 429 and other 5xx
+  responses keep their existing Python exceptions. A refusal
+  describes this attempt only; it cannot resolve an earlier ambiguous
+  attempt. Retry decisions depend on the refusal reason, not HTTP status
+  alone. Python callers must catch `PreAdmissionRefusal` for valid admission
+  refusals (MAJOR for Python).
+
 - Python `RateLimited.bucket` now uses `"default"`, matching the cached
   `rate_limit_state` key, when the gateway omits `X-RateLimit-Bucket` (#395).
 
 - Python submits signed transactions to the gateway in its JSON/base64 envelope.
-- Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. A 5xx carrying the gateway's proven `status: refused` body still raises `GatewayError`.
+- Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. Proven refusals are handled separately from ambiguous failures.
 - Python raises `TransportError` for malformed or wrong-shaped read responses (a 200 with `null` or `[]` on an object-valued read such as `markets` or `ticker` no longer reads as empty), and raises `SubmissionPending` with the transaction hash when a submission response carries no verdict; only an explicit non-zero `"<code>: <message>"` stays a terminal `EngineError`.
 - Python account-event history supports explicit ordering and cursor pagination. The client validates owner addresses and page limits (1–5000) before sending a request. Passing the unsupported `after_id` filter now raises `ValueError`.
 - Python reads per-account funding payments and position history with cursor pagination. Passing the unsupported `after_height` filter now raises `ValueError`.
