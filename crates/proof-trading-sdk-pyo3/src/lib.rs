@@ -20,6 +20,7 @@ fn map_err(e: ExecError) -> PyErr {
 }
 
 pyo3::create_exception!(_native, FinalizedBindingError, PyValueError);
+pyo3::create_exception!(_native, FinalizedLimitError, PyValueError);
 
 fn map_read_err(e: core_sdk::finalized_account_reads::ReadError) -> PyErr {
     match e.kind {
@@ -262,8 +263,15 @@ fn decode_markets_snapshot<'py>(
         .map_err(|_| PyValueError::new_err("chain_id must be exactly 32 bytes"))?;
     let chain = market_snapshot::ChainBinding::new(chain_id)
         .ok_or_else(|| PyValueError::new_err("chain_id must name a chain, not the zero binding"))?;
-    let snapshot = market_snapshot::decode_snapshot(body, chain)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let snapshot = market_snapshot::decode_snapshot(body, chain).map_err(|e| match e {
+        // A well-formed snapshot for another chain or an uncommitted height is a
+        // binding refusal, not a malformed payload; keep that class typed.
+        market_snapshot::SnapshotError::WrongChain
+        | market_snapshot::SnapshotError::Uncommitted => {
+            FinalizedBindingError::new_err(e.to_string())
+        }
+        _ => PyValueError::new_err(e.to_string()),
+    })?;
     let dict = PyDict::new(py);
     dict.set_item("chain_id", PyBytes::new(py, &snapshot.chain_id))?;
     dict.set_item("height", snapshot.height)?;
@@ -351,8 +359,11 @@ fn decode_finalized_orderbook<'py>(
     bytes: &[u8],
     depth: usize,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let book =
-        core_sdk::finalized_orderbook::decode(bytes, depth).map_err(PyValueError::new_err)?;
+    use core_sdk::finalized_orderbook::OrderbookErrorKind;
+    let book = core_sdk::finalized_orderbook::decode(bytes, depth).map_err(|e| match e.kind() {
+        OrderbookErrorKind::Limit => FinalizedLimitError::new_err(e.to_string()),
+        OrderbookErrorKind::Malformed => PyValueError::new_err(e.to_string()),
+    })?;
     pythonize::pythonize(py, &book).map_err(map_pythonize_err)
 }
 
@@ -597,6 +608,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add(
         "FinalizedBindingError",
         m.py().get_type::<FinalizedBindingError>(),
+    )?;
+    m.add(
+        "FinalizedLimitError",
+        m.py().get_type::<FinalizedLimitError>(),
     )?;
     m.add_function(wrap_pyfunction!(sign_and_encode, m)?)?;
     m.add_function(wrap_pyfunction!(sign_account_ws_auth, m)?)?;
