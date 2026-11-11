@@ -400,7 +400,7 @@ accepts out-of-order unique nonces within its window and rejects replays.
 ```python
 snapshot = client.authorized_agents(owner)
 print(snapshot.agents)  # Immutable tuple of 40-digit lowercase hex addresses.
-print(snapshot.finalized_height)
+print(snapshot.witness.finalized_height)
 ```
 
 This reads explicit grants from `GET /v2/account/{owner}/agents?witness=1`.
@@ -411,9 +411,11 @@ mismatch raises an error; none becomes an empty list. A complete empty list
 is valid. Every call requests a new snapshot rather than reconstructing grants
 from history or probing individual agent pairs.
 
-`AuthorizedAgentsSnapshot` retains the owner, immutable agents, finalized height,
-block time, node ID and app hash. This metadata is an **unverified gateway
-assertion**, not proof of chain authenticity, freshness, or permission to sign.
+`AuthorizedAgentsSnapshot` retains the owner, immutable agents, and an immutable
+`witness` containing finalized height, block time, node ID and app hash. Complete
+snapshots and incomplete errors share the `AuthorizedAgentsWitness` shape. This
+metadata is an **unverified gateway assertion**, not proof of chain authenticity,
+freshness, or permission to sign.
 HTTP bodies are capped at 32 KiB and canonical MessagePack payloads at 16 KiB.
 
 `AuthorizedAgentsIncomplete(CodecError)` carries the validated but partial

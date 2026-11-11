@@ -70,7 +70,7 @@ def test_successive_fixture_snapshots_decode_independently():
     assert granted.agents == ("02" * 20, "03" * 20)
     assert one_left.agents == ("03" * 20,)
     assert revoked.agents == ()  # No owner-key or inherited authority invented.
-    assert [s.finalized_height for s in (granted, one_left, revoked)] == [HEIGHT, HEIGHT + 1, HEIGHT + 2]
+    assert [s.witness.finalized_height for s in (granted, one_left, revoked)] == [HEIGHT, HEIGHT + 1, HEIGHT + 2]
     assert granted.owner == one_left.owner == revoked.owner == HEX
     assert len(calls) == 3
     assert all(str(r.url) == f"https://gateway.example/v2/account/{HEX}/agents?witness=1" for r in calls)
@@ -81,7 +81,8 @@ def test_successive_fixture_snapshots_decode_independently():
 
 def test_exact_limit_complete_succeeds_but_partial_is_never_returned():
     agents = [n.to_bytes(20, "big") for n in range(100)]
-    assert len(_decode_snapshot(body(raw(agents=agents)), HEX).agents) == 100
+    snapshot = _decode_snapshot(body(raw(agents=agents)), HEX)
+    assert len(snapshot.agents) == 100
     response = body(raw(agents=agents, complete=False))
     with client_for(lambda _: httpx.Response(200, content=response)) as client:
         # Existing broad handlers still catch it; no partial snapshot is returned.
@@ -94,7 +95,9 @@ def test_exact_limit_complete_succeeds_but_partial_is_never_returned():
         error.complete = True
     assert error.owner == HEX
     assert error.agents == tuple(agent.hex() for agent in agents)
-    assert error.witness == AuthorizedAgentsWitness(HEIGHT, 123000, "ab" * 20, "CD" * 32)
+    assert snapshot.witness == error.witness == AuthorizedAgentsWitness(HEIGHT, 123000, "ab" * 20, "CD" * 32)
+    with pytest.raises(FrozenInstanceError):
+        snapshot.witness.finalized_height = 1
     with pytest.raises(FrozenInstanceError):
         error.witness.finalized_height = 1
 
@@ -280,7 +283,7 @@ def test_exact_payload_and_http_body_limits_are_accepted():
     with client_for(lambda _: httpx.Response(200, content=encoded)) as client:
         snapshot = client.authorized_agents(OWNER)
     assert snapshot.agents == ("02" * 20,)
-    assert snapshot.app_hash == "CD" * 32
+    assert snapshot.witness.app_hash == "CD" * 32
 
 
 class Chunks(httpx.SyncByteStream):

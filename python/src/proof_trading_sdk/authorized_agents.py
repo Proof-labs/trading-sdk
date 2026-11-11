@@ -37,7 +37,7 @@ _I64_MAX = (1 << 63) - 1
 
 @dataclass(frozen=True)
 class AuthorizedAgentsWitness:
-    """Unverified gateway finality metadata for a partial grant list."""
+    """Unverified gateway finality metadata for a complete or partial grant list."""
 
     finalized_height: int
     finalized_block_time_ms: int
@@ -51,10 +51,7 @@ class AuthorizedAgentsSnapshot:
 
     owner: str
     agents: tuple[str, ...]
-    finalized_height: int
-    finalized_block_time_ms: int
-    node_id: str
-    app_hash: str
+    witness: AuthorizedAgentsWitness
 
 
 def _owner_hex(owner: bytes | str) -> str:
@@ -128,14 +125,12 @@ def _decode_snapshot(body: bytes, owner: str) -> AuthorizedAgentsSnapshot:
         agents = tuple(bytes(agent).hex() for agent in decoded["agents"])
         if len(agents) > AUTHORIZED_AGENTS_LIMIT or any(a >= b for a, b in zip(agents, agents[1:])):
             raise ValueError(f"agent list must be sorted, unique and at most {AUTHORIZED_AGENTS_LIMIT} entries")
+        metadata = AuthorizedAgentsWitness(height, timestamp, node_id, app_hash.upper())
         if not decoded["complete"]:
             if len(agents) != AUTHORIZED_AGENTS_LIMIT:
                 raise ValueError("invalid incomplete list length")
-            raise AuthorizedAgentsIncomplete(
-                owner, agents,
-                AuthorizedAgentsWitness(height, timestamp, node_id, app_hash.upper()),
-            )
-        return AuthorizedAgentsSnapshot(owner, agents, height, timestamp, node_id, app_hash.upper())
+            raise AuthorizedAgentsIncomplete(owner, agents, metadata)
+        return AuthorizedAgentsSnapshot(owner=owner, agents=agents, witness=metadata)
     except (ValueError, TypeError, KeyError, RecursionError, binascii.Error) as error:
         raise CodecError(f"authorized agents: malformed response: {error}") from error
 

@@ -20,7 +20,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   distinguish incomplete grants from owner/height mismatches while preserving
   `CodecError` handlers. Incomplete errors carry partial grants, their owner,
   `complete=False` and immutable `AuthorizedAgentsWitness` metadata; the method
-  still returns only complete snapshots. Malformed responses retain `CodecError`.
+  still returns only complete snapshots. Complete snapshots and incomplete errors
+  expose metadata through `.witness: AuthorizedAgentsWitness`. Malformed responses
+  retain `CodecError`.
 
 - `reads().finalized.authorizedAgents(owner)` reads up to 100 current stored trading-agent grants with an atomic finalized-state witness and an explicit completeness flag. Grants have no stored expiry or per-action scope; this read does not authorize signing.
 
