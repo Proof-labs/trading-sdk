@@ -533,6 +533,17 @@ Trading integrations use `TraderAction` and can type their calls against it to
 keep operator actions out of autocomplete. `submitTx` still accepts the full
 `Action` union.
 
+#### SetUserMarketLeverage availability
+
+SDK encoding support is retained, but ordinary-account submission is unsupported
+in exchange revision `5f172568`: [node admission rejects action `0x16`](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-node/check_tx.go#L466-L492).
+The separate governed [`ExecInsuranceFund` path](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/engine/governance/insurance_action.rs#L21-L70)
+permits it for the pool's insurance account.
+
+The setting affects **initial margin only**: `max(market.im_bps, user_im_bps)`,
+with `0` using the market default. [Maintenance margin and liquidation thresholds are unchanged](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/scenario_margin.rs#L168-L181).
+Ordinary-account support remains deferred in [#360](https://github.com/Proof-labs/trading-sdk/issues/360).
+
 #### Operator actions (privileged)
 
 `OperatorAction` covers oracle-feeder / relayer-admin actions — e.g.
@@ -609,17 +620,26 @@ loop at 9 s+ under load.
 
 The SDK reads that shape and stops working for it:
 
-| Gateway answers                              | `TxResult`                                                                                          | Does the SDK poll?                                                                                                                                                                                                         |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status: ok` or `error`, with `height`       | `ok` / `engine`, with `height` + `events`                                                           | **No** — the tx executed; there is nothing to wait for                                                                                                                                                                     |
-| `status: error`, no `height`                 | `engine`                                                                                            | **No** — a CheckTx reject, or a tx the gateway refused before broadcast with the engine's code (`17` bad signature, `1` undecodable), never enters a block, so no DeliverTx will run                                       |
-| `status: pending`                            | `timeout`                                                                                           | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection |
-| `status: refused`                            | `transport` (code 1, or the HTTP status), original error reason                                     | **No** — the gateway did not admit it and nothing was broadcast                                                                                                                                                            |
-| Any other body: a pre-7.0.0 gateway, a proxy | as before 7.0.0: read from `code` / `height` / `txHash`; `{status:"ok"}` alone is `ok`, no `height` | **Yes** — a pre-#90 gateway acks CheckTx only, so inclusion is still unknown                                                                                                                                               |
+| Gateway answers                                               | `TxResult`                                                                               | Does the SDK poll?                                                                                                                                                                                                             |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| HTTP 200 engine verdict with `code` and `height`              | `ok` / `engine`, with `height` + `events`                                                | **No** — execution is known.                                                                                                                                                                                                   |
+| HTTP 200 `status: error`, nonzero numeric `code`, no `height` | `engine`                                                                                 | **No** — a terminal rejection.                                                                                                                                                                                                 |
+| `status: pending`                                             | `timeout`                                                                                | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection     |
+| Valid `status: refused` envelope                              | `transport` (code 1 for HTTP 200, else the HTTP status), gateway `errorCode` and message | **No** — this attempt was not admitted. Correct `InvalidRequest`; `EncodingError` is a gateway failure. Any later retry depends on the reason, not HTTP status alone. Earlier ambiguous attempts still require reconciliation. |
+| Malformed or contradictory refusal                            | `timeout`, local transaction hash                                                        | **Yes** — the response does not prove non-admission.                                                                                                                                                                           |
+| Other legacy or proxy response                                | Compatibility decoding or HTTP fallback                                                  | Only unresolved submissions are reconciled; an HTTP error is not an engine verdict.                                                                                                                                            |
 
-That last row is why upgrading the SDK is safe against a gateway that has not been
-upgraded yet: absence of `code`/`height` still means "execution unknown", and the old
-polling paths run exactly as before.
+A legacy HTTP 200 `{status:"ok"}` without `code` or `height` remains a CheckTx
+acknowledgement, not proof of execution, so inclusion is still polled.
+
+Python raises `PreAdmissionRefusal` for validated admission refusals and internal
+`EncodingError` refusals, including HTTP 500. Catch it for those responses rather
+than treating them as ambiguous submissions or unstructured transport errors;
+its `error_code`, `message` and
+`status_code` preserve the gateway reason. Refusals at HTTP 401, 403, 429 and other
+5xx responses, including `Maintenance` and `Unavailable`, keep their existing
+exceptions. `SubmissionPending.tx_hash` is the
+hash to reconcile when a refusal is malformed or contradictory.
 
 **Read `code` from the field, not from the message.** The gateway still sends the
 long-standing `"<code>: <message>"` format in `error` (so older clients that parse the

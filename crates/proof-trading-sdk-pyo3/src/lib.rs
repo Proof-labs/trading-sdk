@@ -19,6 +19,20 @@ fn map_err(e: ExecError) -> PyErr {
     PyValueError::new_err(format!("{e:?}"))
 }
 
+pyo3::create_exception!(_native, FinalizedBindingError, PyValueError);
+pyo3::create_exception!(_native, FinalizedLimitError, PyValueError);
+
+fn map_read_err(e: core_sdk::finalized_account_reads::ReadError) -> PyErr {
+    match e.kind {
+        core_sdk::finalized_account_reads::ReadErrorKind::Binding => {
+            FinalizedBindingError::new_err(e.message)
+        }
+        core_sdk::finalized_account_reads::ReadErrorKind::Malformed => {
+            PyValueError::new_err(e.message)
+        }
+    }
+}
+
 fn map_pythonize_err(e: pythonize::PythonizeError) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
@@ -249,8 +263,15 @@ fn decode_markets_snapshot<'py>(
         .map_err(|_| PyValueError::new_err("chain_id must be exactly 32 bytes"))?;
     let chain = market_snapshot::ChainBinding::new(chain_id)
         .ok_or_else(|| PyValueError::new_err("chain_id must name a chain, not the zero binding"))?;
-    let snapshot = market_snapshot::decode_snapshot(body, chain)
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let snapshot = market_snapshot::decode_snapshot(body, chain).map_err(|e| match e {
+        // A well-formed snapshot for another chain or an uncommitted height is a
+        // binding refusal, not a malformed payload; keep that class typed.
+        market_snapshot::SnapshotError::WrongChain
+        | market_snapshot::SnapshotError::Uncommitted => {
+            FinalizedBindingError::new_err(e.to_string())
+        }
+        _ => PyValueError::new_err(e.to_string()),
+    })?;
     let dict = PyDict::new(py);
     dict.set_item("chain_id", PyBytes::new(py, &snapshot.chain_id))?;
     dict.set_item("height", snapshot.height)?;
@@ -269,6 +290,55 @@ fn decode_markets_snapshot<'py>(
     Ok(dict)
 }
 
+/// Decode raw settled account facts through the shared wire AccountStateInfo.
+#[pyfunction]
+fn decode_account_state<'py>(
+    py: Python<'py>,
+    bytes: &[u8],
+    owner: &[u8],
+) -> PyResult<Bound<'py, PyAny>> {
+    let owner: &[u8; 20] = owner
+        .try_into()
+        .map_err(|_| PyValueError::new_err("owner must be exactly 20 bytes"))?;
+    let state = core_sdk::account_state::decode(bytes, owner).map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &state).map_err(map_pythonize_err)
+}
+
+#[pyfunction]
+fn decode_finalized_account<'py>(
+    py: Python<'py>,
+    bytes: &[u8],
+    owner: &[u8],
+) -> PyResult<Bound<'py, PyAny>> {
+    let owner: &[u8; 20] = owner
+        .try_into()
+        .map_err(|_| PyValueError::new_err("owner must be 20 bytes"))?;
+    let value = core_sdk::finalized_account_reads::account(bytes, owner).map_err(map_read_err)?;
+    pythonize::pythonize(py, &value).map_err(map_pythonize_err)
+}
+#[pyfunction]
+fn decode_finalized_agent_authorization(bytes: &[u8]) -> PyResult<bool> {
+    core_sdk::finalized_account_reads::agent_authorization(bytes).map_err(PyValueError::new_err)
+}
+#[pyfunction]
+fn decode_finalized_recent_nonces(bytes: &[u8]) -> PyResult<Vec<u64>> {
+    core_sdk::finalized_account_reads::recent_nonces(bytes).map_err(PyValueError::new_err)
+}
+#[pyfunction]
+fn decode_finalized_open_orders<'py>(
+    py: Python<'py>,
+    bytes: &[u8],
+    owner: &[u8],
+    limit: usize,
+) -> PyResult<Bound<'py, PyAny>> {
+    let owner: &[u8; 20] = owner
+        .try_into()
+        .map_err(|_| PyValueError::new_err("owner must be 20 bytes"))?;
+    let value = core_sdk::finalized_account_reads::open_orders(bytes, owner, limit)
+        .map_err(map_read_err)?;
+    pythonize::pythonize(py, &value).map_err(map_pythonize_err)
+}
+
 #[pyfunction]
 fn decode_authorities<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
     let value =
@@ -281,6 +351,20 @@ fn decode_liquidation_config<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<Bou
     let value = core_sdk::governance_reads::decode_liquidation_config(bytes)
         .map_err(PyValueError::new_err)?;
     pythonize::pythonize(py, &value).map_err(map_pythonize_err)
+}
+
+#[pyfunction]
+fn decode_finalized_orderbook<'py>(
+    py: Python<'py>,
+    bytes: &[u8],
+    depth: usize,
+) -> PyResult<Bound<'py, PyAny>> {
+    use core_sdk::finalized_orderbook::OrderbookErrorKind;
+    let book = core_sdk::finalized_orderbook::decode(bytes, depth).map_err(|e| match e.kind() {
+        OrderbookErrorKind::Limit => FinalizedLimitError::new_err(e.to_string()),
+        OrderbookErrorKind::Malformed => PyValueError::new_err(e.to_string()),
+    })?;
+    pythonize::pythonize(py, &book).map_err(map_pythonize_err)
 }
 
 /// Strict, type-preserving MessagePack preflight for gateway read payloads.
@@ -521,12 +605,26 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(callback_signer::verify_raw_signature, m)?)?;
     m.add_class::<SigningHandle>()?;
+    m.add(
+        "FinalizedBindingError",
+        m.py().get_type::<FinalizedBindingError>(),
+    )?;
+    m.add(
+        "FinalizedLimitError",
+        m.py().get_type::<FinalizedLimitError>(),
+    )?;
     m.add_function(wrap_pyfunction!(sign_and_encode, m)?)?;
     m.add_function(wrap_pyfunction!(sign_account_ws_auth, m)?)?;
     m.add_function(wrap_pyfunction!(encode_signed_tx, m)?)?;
     m.add_function(wrap_pyfunction!(encode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_tx, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_finalized_account, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_finalized_agent_authorization, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_finalized_recent_nonces, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_finalized_open_orders, m)?)?;
+
+    m.add_function(wrap_pyfunction!(decode_finalized_orderbook, m)?)?;
     m.add_function(wrap_pyfunction!(decode_authorities, m)?)?;
     m.add_function(wrap_pyfunction!(decode_liquidation_config, m)?)?;
     m.add(
@@ -534,6 +632,15 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
         core_sdk::governance_reads::MAX_GOVERNANCE_READ_BYTES,
     )?;
     m.add_function(wrap_pyfunction!(decode_markets_snapshot, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_account_state, m)?)?;
+    m.add(
+        "MAX_BOOK_BYTES",
+        core_sdk::finalized_orderbook::MAX_BOOK_BYTES,
+    )?;
+    m.add(
+        "MAX_ACCOUNT_STATE_BYTES",
+        core_sdk::account_state::MAX_ACCOUNT_STATE_BYTES,
+    )?;
     m.add(
         "MAX_MARKETS_SNAPSHOT_BYTES",
         market_snapshot::MAX_SNAPSHOT_BYTES,

@@ -42,6 +42,10 @@ from proof_trading_sdk.actions import (
     encode_action,
 )
 from proof_trading_sdk.config import SdkConfig, load_config
+from proof_trading_sdk.finalized_markets import (
+    FinalizedOrderbook, FinalizedMarketsSnapshot, orderbook_request,
+    decode_finalized_orderbook, decode_finalized_markets_snapshot,
+)
 from proof_trading_sdk.governance_reads import (
     AuthoritiesSnapshot, LiquidationConfigInfo,
     decode_authorities_snapshot, decode_liquidation_config_info,
@@ -53,11 +57,30 @@ from proof_trading_sdk.candle_history import (
     decode_candle_history,
 )
 from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
+from proof_trading_sdk.chain_evidence import (
+    BlockResultsRange, BlockResultsWindow, TransactionEvidence,
+    DEFAULT_MAX_ATTRIBUTES, DEFAULT_MAX_DECODED_BYTES, DEFAULT_MAX_EVENTS,
+    DEFAULT_MAX_HEIGHTS, DEFAULT_MAX_TRANSACTIONS,
+    read_block_results_range, read_block_results_window, read_transaction_evidence,
+)
+from proof_trading_sdk.evidence import (
+    BlockEvidenceHeader,
+    _chain_pin,
+    _requested_height,
+    decode_block_evidence_header,
+)
+from proof_trading_sdk.finalized_accounts import (
+    FinalizedAccountInfo, FinalizedAgentAuthorization, FinalizedRecentNonces,
+    FinalizedOpenOrders, _address, _limit, decode_finalized_account,
+    decode_finalized_agent_authorization, decode_finalized_recent_nonces,
+    decode_finalized_open_orders,
+)
 from proof_trading_sdk.errors import (
     AuthenticationError,
     CodecError,
     EngineError,
     GatewayError,
+    PreAdmissionRefusal,
     ProofTradingSdkError,
     RateLimited,
     SigningError,
@@ -78,6 +101,10 @@ from proof_trading_sdk.trigger_history import (
 from proof_trading_sdk.trigger_config import (
     TriggerMarketConfigInfo,
     decode_trigger_market_config_infos,
+)
+
+from proof_trading_sdk.finalized_account import (
+    FinalizedAccountState, account_state_owner, decode_finalized_account_state,
 )
 
 if t.TYPE_CHECKING:
@@ -134,24 +161,13 @@ _NOT_SENT = (
 def _submission_may_have_been_admitted(exc: TransportError) -> bool:
     """Whether a failed ``/exchange`` request may still have been admitted.
 
-    A 5xx is ambiguous unless the gateway proves the refusal: a
-    ``status: refused`` body naming no ``txHash``, ``code`` or ``height`` means
-    the transaction never reached the broadcaster, as the TypeScript binding
-    reads it. An httpx failure is ambiguous unless it is in ``_NOT_SENT``. A
+    A 5xx reaching this check carries no refusal envelope, so it is ambiguous.
+    An httpx failure is ambiguous unless it is in ``_NOT_SENT``. A
     TransportError raised from an HTTP status (4xx, 3xx) was answered by the
     gateway without admission.
     """
     if isinstance(exc, GatewayError):
-        try:
-            body = json.loads(exc.body)
-        except ValueError:
-            return True
-        proven_refusal = (
-            isinstance(body, dict)
-            and body.get("status") == "refused"
-            and not any(k in body for k in ("txHash", "tx_hash", "code", "height"))
-        )
-        return not proven_refusal
+        return True
     cause = exc.__cause__
     return isinstance(cause, httpx.RequestError) and not isinstance(cause, _NOT_SENT)
 
@@ -374,6 +390,7 @@ class ExchangeClient:
         content: bytes | None = None,
         params: dict[str, t.Any] | None = None,
         headers: dict[str, str] | None = None,
+        read_refusal_body: bool = False,
     ) -> httpx.Response:
         url = urljoin(self._gateway_url, path)
         try:
@@ -394,9 +411,21 @@ class ExchangeClient:
             raise TransportError(f"request failed: {e}") from e
 
         self._parse_rate_limits(resp)
-        return self._check_response(resp)
+        return self._check_response(resp, read_refusal_body=read_refusal_body)
 
-    def _check_response(self, resp: httpx.Response) -> httpx.Response:
+    def _check_response(
+        self, resp: httpx.Response, *, read_refusal_body: bool = False
+    ) -> httpx.Response:
+        if read_refusal_body:
+            # Submission envelopes are validated with the original bytes in
+            # submit_action; the HTTP status cannot prove their finality.
+            try:
+                body = resp.json()
+            except (ValueError, UnicodeError):
+                body = None
+            if isinstance(body, dict) and body.get("status") in ("refused", "pending"):
+                return resp
+
         if resp.status_code == 429:
             retry_after = float(resp.headers.get("Retry-After", "5"))
             bucket = resp.headers.get("X-RateLimit-Bucket", _DEFAULT_RATE_LIMIT_BUCKET)
@@ -421,8 +450,8 @@ class ExchangeClient:
             raise GatewayError(resp.status_code, resp.text)
 
         # Anything else non-2xx (400, 402, 405-428, 431, 3xx, …) is NOT success.
-        # `GatewayError` specifically means "5xx — a read can retry with backoff,
-        # a submission's outcome is unknown"; a 3xx/4xx
+        # `GatewayError` specifically means "5xx — a read can retry with backoff";
+        # `submit_action` decides what a 5xx means for a submission. A 3xx/4xx
         # is a client-side error that must NOT be blind-retried, so it surfaces
         # as a plain TransportError carrying the status.
         if resp.status_code >= 300:
@@ -446,8 +475,12 @@ class ExchangeClient:
         content: bytes | None = None,
         *,
         headers: dict[str, str] | None = None,
+        read_refusal_body: bool = False,
     ) -> httpx.Response:
-        return self._request("POST", path, content=content, headers=headers)
+        return self._request(
+            "POST", path, content=content, headers=headers,
+            read_refusal_body=read_refusal_body,
+        )
 
     # ── Signing ──────────────────────────────────────────────────────────
 
@@ -663,11 +696,27 @@ class ExchangeClient:
         Returns:
             The engine's response dict with keys like ``code``,
             ``tx_hash``, etc.
+
+        Raises:
+            EngineError: the engine rejected the tx with an ``ExecError`` code.
+            SubmissionPending: the gateway broadcast it but could not report
+                the outcome; reconcile by ``tx_hash``.
+            PreAdmissionRefusal: the gateway refused the request before
+                admitting it; nothing was broadcast and there is nothing to
+                poll for.
+            AuthenticationError: HTTP 401 or 403.
+            RateLimited: HTTP 429.
+            GatewayError: a validated refusal at HTTP 5xx other than
+                ``EncodingError``, such as ``Overloaded``, ``Maintenance`` or
+                ``Unavailable``. An ambiguous 5xx is ``SubmissionPending``.
+            TransportError: a transport or HTTP failure with no refusal
+                envelope.
         """
         body = json.dumps({"action": base64.b64encode(envelope).decode("ascii")}).encode()
         try:
             resp = self._post(
-                "/exchange", content=body, headers={"Content-Type": "application/json"}
+                "/exchange", content=body, headers={"Content-Type": "application/json"},
+                read_refusal_body=True,
             )
         except TransportError as exc:
             # A write may have been partial, or the response may have been lost
@@ -699,27 +748,63 @@ class ExchangeClient:
             )
         data: dict[str, t.Any] = parsed
 
-        # The gateway's `/exchange` response has four distinct shapes. Which one
-        # arrived is decided by the body, never by defaulting a missing `code`
+        # Classify the gateway's envelope, never by defaulting a missing `code`
         # to 0 — and, just as importantly, never by treating "no code" as a
         # rejection. This mirrors the contract pinned by the TypeScript binding
         # (`submitViaGateway` in src/client.ts); the two must agree.
+        if data.get("status") == "refused":
+            # Even null/empty execution fields contradict a refusal. Never
+            # reconcile a response-supplied hash or coerce invalid fields.
+            error_code = data.get("errorCode")
+            if (
+                any(key in data for key in (
+                    "txHash", "tx_hash", "code", "height", "events", "log", "info",
+                ))
+                or not isinstance(error_code, str)
+                or not error_code.strip()
+                or ("error" in data and not isinstance(data["error"], str))
+            ):
+                raise SubmissionPending(
+                    hashlib.sha256(envelope).hexdigest().upper(),
+                    "malformed gateway refusal; reconcile by hash",
+                )
+            # Auth, rate-limit and 5xx refusals keep their existing exceptions.
+            # An EncodingError is different: the gateway explicitly failed before
+            # broadcast, including when it reports that refusal with HTTP 500.
+            # Every other status, such as the gateway's 413, is an admission
+            # refusal whose reason must survive.
+            if error_code != "EncodingError" and (
+                resp.status_code in (401, 403, 429) or resp.status_code >= 500
+            ):
+                self._check_response(resp)
+            raise PreAdmissionRefusal(
+                error_code=error_code,
+                message=data.get("error", ""),
+                status_code=resp.status_code,
+            )
+
+        if data.get("status") == "pending":
+            raise SubmissionPending(
+                hashlib.sha256(envelope).hexdigest().upper(),
+                data.get("error") if isinstance(data.get("error"), str) else "submission pending",
+            )
+
         code = data.get("code")
         if isinstance(code, int) and not isinstance(code, bool):
-            # 1. Structured chain verdict — the engine code is authoritative.
+            # Structured chain verdict — the engine code is authoritative.
             if code != 0:
                 msg = data.get("message") or data.get("log") or data.get("error") or ""
                 raise EngineError(code, msg)
             return data
 
         if data.get("status") == "ok":
-            # 2. Legacy gateway: CheckTx accepted, execution still unknown.
+            # Legacy gateway: CheckTx accepted, execution still unknown.
             #    A code-less `status: ok` is a SUCCESS, not a malformed body.
             return data
 
         tx_hash = data.get("txHash") or data.get("tx_hash")
         if tx_hash:
-            # 3. Broadcast but unresolved — NOT a rejection. The gateway pushed
+            # Broadcast but unresolved — NOT a rejection. The gateway pushed
             #    the tx and could not report the outcome in time (park deadline
             #    exceeded, a byte-identical tx already in flight, or a result it
             #    could not parse). It may still commit, so the caller reconciles
@@ -728,7 +813,7 @@ class ExchangeClient:
             #    trader would re-place it into a double fill.
             raise SubmissionPending(str(tx_hash), str(data.get("error") or ""))
 
-        # 4. No code and no hash: an error string is all the gateway gave us. It
+        # No code and no hash: an error string is all the gateway gave us. It
         #    still emits the "<code>: <message>" compatibility format, so an
         #    explicit non-zero code is a terminal engine verdict. Anything else
         #    proves nothing about admission, so reconcile by hash, as the TS
@@ -1673,6 +1758,166 @@ class ExchangeClient:
         params = {"height": height} if height is not None else None
         resp = self._get("/v1/block", params=params)
         return _response_object(resp)
+
+    def finalized_account_state(
+        self, owner: bytes | str, *, timeout: float = 5.0,
+    ) -> FinalizedAccountState:
+        """Raw settled account facts with a height-bound gateway witness.
+
+        Reads only ``/v1/account/{owner}/state?witness=1``. No valuation,
+        fallback or automatic header request. To check H+1 consistency, call
+        ``block_header`` with an explicit chain pin and then ``verify_witness``.
+        The same gateway supplying both is not independent authentication.
+        HTTP bounds and synchronous timeout limitations match ``block_header``.
+        """
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+
+        bound_owner = account_state_owner(owner)
+        response = bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, f"/v1/account/{bound_owner}/state"),
+            {"witness": "1"}, timeout=timeout, on_response=self._parse_rate_limits,
+            check_response=self._check_response,
+        )
+        return decode_finalized_account_state(response, bound_owner)
+    def _finalized_account_read(self, path: str, params: dict[str, str], timeout: float) -> dict[str, t.Any]:
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+
+        return bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, path), params, timeout=timeout,
+            on_response=self._parse_rate_limits, check_response=self._check_response,
+        )
+
+    def finalized_account(self, owner: bytes | str, *, timeout: float = 5.0) -> FinalizedAccountInfo:
+        """Engine-valued account and gateway witness; no recomputation or authorization guarantee."""
+        owner = _address(owner)
+        return decode_finalized_account(self._finalized_account_read(
+            f"/v1/account/{owner}", {"witness": "1"}, timeout,
+        ), owner)
+
+    def finalized_agent_authorization(self, owner: bytes | str, agent: bytes | str, *, timeout: float = 5.0) -> FinalizedAgentAuthorization:
+        """Bare authorization fact; owner, agent and height rely on the gateway."""
+        owner, agent = _address(owner), _address(agent)
+        return decode_finalized_agent_authorization(self._finalized_account_read(
+            f"/v1/account/{owner}/agents/{agent}", {"witness": "1"}, timeout,
+        ), owner, agent)
+
+    def finalized_recent_nonces(self, signer: bytes | str, *, timeout: float = 5.0) -> FinalizedRecentNonces:
+        """Prunable retained nonces, never a lifetime floor or absence proof."""
+        signer = _address(signer)
+        return decode_finalized_recent_nonces(self._finalized_account_read(
+            f"/v1/account/{signer}/recent-nonces", {"witness": "1"}, timeout,
+        ), signer)
+
+    def finalized_open_orders(self, owner: bytes | str, *, limit: int = 101, timeout: float = 5.0) -> FinalizedOpenOrders:
+        """Owner-bound current 14-field orders; complete is false at the requested limit."""
+        owner, limit = _address(owner), _limit(limit)
+        return decode_finalized_open_orders(self._finalized_account_read(
+            f"/v1/orders/{owner}", {"limit": str(limit), "witness": "1"}, timeout,
+        ), owner, limit)
+
+    def finalized_orderbook(self, market: int, *, depth: int = 20, timeout: float = 5.0) -> FinalizedOrderbook:
+        """Height-bound book at depth 1, 20 or 100; never a full-book assertion."""
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+        orderbook_request(market, depth)
+        body = bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, f"/v1/orderbook-snapshot/{market}"),
+            {"depth": str(depth)}, timeout=timeout, on_response=self._parse_rate_limits,
+            check_response=self._check_response,
+        )
+        return decode_finalized_orderbook(body, market, depth)
+
+    def finalized_markets_snapshot(self, *, chain_id: str | bytes, timeout: float = 10.0) -> FinalizedMarketsSnapshot:
+        """Existing atomic snapshot plus witness; an explicit chain pin is required.
+
+        Uses bounded HTTP without fallback. Witness comparison does not prove
+        payload contents, validator signatures, freshness or action permission.
+        """
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+        chain = _chain_pin(chain_id)
+        body = bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, "/v1/markets-snapshot"), {},
+            timeout=timeout, on_response=self._parse_rate_limits, check_response=self._check_response,
+        )
+        return decode_finalized_markets_snapshot(body, chain_id=chain)
+
+    def block_header(
+        self, height: int, *, chain_id: str | bytes, timeout: float = 5.0,
+    ) -> BlockEvidenceHeader:
+        """Chain-pinned gateway header, without validator-signature verification.
+
+        ``chain_id`` must be supplied explicitly; constructor/env defaults are
+        not used as a trust pin. The full ``/v1/block`` response is fetched and
+        capped at 1 MiB, 4096 nonempty chunks and JSON depth 32. Duplicate keys
+        at any depth, malformed UTF-8 and compressed bodies are refused.
+
+        ``timeout`` is in seconds (default 5, minimum 0.001, maximum 60). It
+        bounds network waits and elapsed time between chunks, not the whole
+        call: slowly arriving headers or custom transports may run longer.
+        HTTP refusals retain existing exception types; their bodies are not
+        read. There is no retry, redirect, unheighted or direct-node fallback.
+        """
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+
+        chain = _chain_pin(chain_id)
+        _requested_height(height)
+        response = bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, "/v1/block"), {"height": str(height)},
+            timeout=timeout, on_response=self._parse_rate_limits,
+            check_response=self._check_response,
+        )
+        return decode_block_evidence_header(response, height=height, chain_id=chain)
+
+    def transaction_evidence(
+        self, tx_hash: str, signed_bytes: bytes, *, chain_id: str | bytes, timeout: float = 5.0,
+    ) -> TransactionEvidence:
+        """Read one exact transaction occurrence and bind it to its block.
+
+        Two bounded GETs share one timeout; no polling, signing or submission.
+        Checks SHA256, transaction index, block data hash and explicit chain pin.
+        Gateway execution codes/events remain trusted observations. Validator
+        signatures and the block header's own hash are not verified. A replay
+        rejection cannot rule out earlier admission of the same signed bytes.
+        """
+        return read_transaction_evidence(self, tx_hash, signed_bytes, chain_id=chain_id, timeout=timeout)
+
+    def block_results_range(
+        self, from_height: int, through_height: int, *, chain_id: str | bytes,
+        timeout: float = 5.0, max_heights: int = DEFAULT_MAX_HEIGHTS,
+        max_decoded_bytes: int = DEFAULT_MAX_DECODED_BYTES,
+        max_transactions: int = DEFAULT_MAX_TRANSACTIONS,
+        max_events: int = DEFAULT_MAX_EVENTS, max_attributes: int = DEFAULT_MAX_ATTRIBUTES,
+    ) -> BlockResultsRange:
+        """Read an exact inclusive height range, including rejected transactions.
+
+        Binds contiguous headers, transaction roots/counts and H+1 post-state.
+        All requests share one timeout and aggregate limits; no partial success.
+        Gateway trust and synchronous timeout limits match ``block_header``.
+        """
+        return read_block_results_range(
+            self, from_height, through_height, chain_id=chain_id, timeout=timeout,
+            max_heights=max_heights, max_decoded_bytes=max_decoded_bytes,
+            max_transactions=max_transactions, max_events=max_events, max_attributes=max_attributes,
+        )
+
+    def block_results_window(
+        self, from_ms: int, to_ms: int, through_height: int, *, chain_id: str | bytes,
+        timeout: float = 5.0, max_heights: int = DEFAULT_MAX_HEIGHTS,
+        max_decoded_bytes: int = DEFAULT_MAX_DECODED_BYTES,
+        max_transactions: int = DEFAULT_MAX_TRANSACTIONS,
+        max_events: int = DEFAULT_MAX_EVENTS, max_attributes: int = DEFAULT_MAX_ATTRIBUTES,
+    ) -> BlockResultsWindow:
+        """Scan backwards until before ``from_ms`` or genesis, retaining boundaries.
+
+        ``through_height`` must reach ``to_ms``. Results are ascending and may
+        include blocks outside [from_ms,to_ms); apply that filter explicitly.
+        Equal/sub-millisecond block times remain exact. No partial success when
+        a budget is exhausted; gateway trust remains essential.
+        """
+        return read_block_results_window(
+            self, from_ms, to_ms, through_height, chain_id=chain_id, timeout=timeout,
+            max_heights=max_heights, max_decoded_bytes=max_decoded_bytes,
+            max_transactions=max_transactions, max_events=max_events, max_attributes=max_attributes,
+        )
 
     def get_block_results(self, height: int) -> dict[str, t.Any]:
         """CometBFT block results at *height* via ``GET /v1/block_results``."""
