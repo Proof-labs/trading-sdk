@@ -587,7 +587,10 @@ mod tests {
         let maker = json!({"entry_price": "86197870", "market": "105", "owner": MAKER, "realized_pnl": "0", "side": "sell", "size": "41"});
         let taker = json!({"entry_price": "85700000", "market": "105", "owner": TAKER, "realized_pnl": "0", "side": "buy", "size": "1"});
         let mine: Address = TAKER.parse().unwrap();
-        let receipt = [kind_of("position_updated", &maker), kind_of("position_updated", &taker)];
+        let receipt = [
+            kind_of("position_updated", &maker),
+            kind_of("position_updated", &taker),
+        ];
         let ours: Vec<_> = receipt
             .iter()
             .filter_map(|e| match e {

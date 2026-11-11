@@ -431,7 +431,8 @@ impl InfoClient {
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidInput`] for a bad `path`, otherwise a read failure:
+    /// [`Error::InvalidInput`] for a bad `path`, or one that resolves to
+    /// another origin than the gateway, otherwise a read failure:
     /// [`Error::Transport`], [`Error::Http`], [`Error::Decode`] or
     /// [`Error::ResponseTooLarge`].
     pub async fn get_data(&self, path: &str) -> Result<Vec<u8>> {
@@ -472,10 +473,19 @@ impl InfoClient {
         unbase64(&env.data)
     }
 
+    /// `path` resolved against the gateway. Anything that resolves to another
+    /// origin is refused: the HTTP client carries the API key.
     fn url(&self, path: &str) -> Result<Url> {
-        self.base
+        let url = self
+            .base
             .join(path)
-            .map_err(|e| Error::InvalidInput(format!("path {path:?}: {e}")))
+            .map_err(|e| Error::InvalidInput(format!("path {path:?}: {e}")))?;
+        if url.origin() != self.base.origin() {
+            return Err(Error::InvalidInput(format!(
+                "path {path:?} leaves the gateway origin"
+            )));
+        }
+        Ok(url)
     }
 
     async fn json<T: DeserializeOwned>(&self, mut resp: reqwest::Response) -> Result<T> {
