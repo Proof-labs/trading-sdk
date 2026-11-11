@@ -47,6 +47,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- TypeScript `reads().finalized.authorizedAgents(owner)` now rejects MessagePack
+  text and integer-array addresses in responses. Canonical 20-byte binary
+  addresses remain supported.
+
 - Python account-stream reconnect backoff now defaults to a 10-second cap
   (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
 - Python signed account authentication rejects an unconfigured chain ID before
