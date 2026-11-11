@@ -7,7 +7,12 @@ from dataclasses import dataclass
 import json
 import typing as t
 
-from proof_trading_sdk._native import MAX_BOOK_BYTES, decode_finalized_orderbook as _decode_book
+from proof_trading_sdk._native import (
+    MAX_BOOK_BYTES,
+    FinalizedBindingError,
+    FinalizedLimitError,
+    decode_finalized_orderbook as _decode_book,
+)
 from proof_trading_sdk.errors import CodecError, GatewayReadError
 from proof_trading_sdk.evidence import FinalizedReadWitness, decode_finalized_read_witness, _chain_pin, _SAFE_INTEGER
 from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
@@ -68,6 +73,8 @@ def decode_finalized_orderbook(value: t.Any, market: int, depth: int = 20) -> Fi
         raise GatewayReadError("malformed", "orderbook.base64")
     try:
         book = _decode_book(payload, depth)
+    except FinalizedLimitError as err:
+        raise GatewayReadError("limit", "orderbook.msgpack", str(err)) from err
     except ValueError as err:
         raise GatewayReadError("malformed", "orderbook.msgpack") from err
     witness = decode_finalized_read_witness(value.get("witness"), expected_height=height)
@@ -85,10 +92,9 @@ def decode_finalized_markets_snapshot(value: t.Any, *, chain_id: str | bytes) ->
         body = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
         snapshot = decode_markets_snapshot(body, chain)
     except (TypeError, ValueError, UnicodeError, RecursionError, CodecError) as err:
-        binding = str(err) in {
-            "markets snapshot: market snapshot refused: WrongChain",
-            "markets snapshot: market snapshot refused: Uncommitted",
-        }
+        # The native decoder raises FinalizedBindingError for a wrong chain or an
+        # uncommitted height; classify by exception type, never by message text.
+        binding = isinstance(err.__cause__, FinalizedBindingError)
         raise GatewayReadError("binding" if binding else "malformed", "market snapshot", str(err)) from err
     witness = decode_finalized_read_witness(value.get("witness"), expected_height=snapshot.height)
     return FinalizedMarketsSnapshot(**vars(snapshot), witness=witness)

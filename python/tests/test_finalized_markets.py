@@ -66,6 +66,22 @@ def test_book_malformed_native_payload(raw):
     assert (err.value.kind, err.value.field) == ("malformed", "orderbook.msgpack")
 
 
+
+def test_native_book_errors_are_typed_not_text():
+    from proof_trading_sdk import _native
+    with pytest.raises(_native.FinalizedLimitError):
+        _native.decode_finalized_orderbook(b"\x00" * (_native.MAX_BOOK_BYTES + 1), 20)
+    with pytest.raises(ValueError) as err:
+        _native.decode_finalized_orderbook(msgpack.packb([1, []]), 20)
+    assert not isinstance(err.value, _native.FinalizedLimitError)
+    assert "side is not an array" in str(err.value)
+
+
+def test_native_snapshot_binding_is_typed():
+    from proof_trading_sdk import _native
+    with pytest.raises(_native.FinalizedBindingError):
+        _native.decode_markets_snapshot(json.dumps(snapshot()).encode(), bytes([8]) * 32)
+
 def test_book_depth_limit_and_extra_witness_fields():
     raw=[[[n,1,1] for n in range(100,0,-1)],[]]
     assert len(sdk.decode_finalized_orderbook(book(raw,100),3,100).bids) == 100
