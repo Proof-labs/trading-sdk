@@ -1,6 +1,25 @@
-//! Optional native gateway transport. No keys, nonce allocation, automatic retry,
-//! direct-node fallback or operational oracle-health read exists in this module.
-//! A committed execution receipt is not an oracle Fresh certificate.
+//! Optional native gateway transport (feature `gateway`).
+//!
+//! [`GatewayClient`] is a bounded HTTPS client for the public API gateway. Each
+//! method maps to one gateway route:
+//!
+//! | Method | Route |
+//! | --- | --- |
+//! | [`GatewayClient::chain_identity`] | `GET /v1/status` |
+//! | [`GatewayClient::oracle_permissions`] | `GET /v1/oracle/permissions/{market}` |
+//! | [`GatewayClient::account_valuation`] | `POST /info` (`clearinghouseState`) |
+//! | [`GatewayClient::submit_signed_bytes`] | `POST /exchange` |
+//! | [`GatewayClient::submit_signed_bytes_with_evidence`] | `POST /exchange`, refusal classified |
+//! | [`GatewayClient::committed_receipt`] | `GET /v1/tx/{hash}` |
+//!
+//! This module holds no keys. It does not allocate nonces, retry automatically,
+//! fall back to a node directly, or read operational oracle health. Every call
+//! is one request, and the caller owns signing, nonces and reconciliation.
+//!
+//! A [`GatewayError`] with `reconcile_hash` set means a POST may have reached
+//! the gateway. Keep the exact signed bytes and reconcile them by that hash.
+//! Do not re-sign under a new nonce. A committed execution receipt is not an
+//! oracle Fresh certificate.
 
 mod permissions;
 pub use permissions::*;
@@ -28,6 +47,7 @@ const MAX_RESPONSE_BYTES: usize = 1_048_576;
 // Fits below the gateway's default 8192-byte JSON body cap after base64 wrapping.
 const MAX_SIGNED_BYTES: usize = 4096;
 
+/// The gateway call a [`GatewayError`] came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Operation {
     Configuration,
@@ -37,24 +57,36 @@ pub enum Operation {
     Submit,
     Receipt,
 }
+/// Why a gateway call failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ErrorKind {
+    /// [`GatewayClient::new`] refused the URL or options.
     InvalidConfiguration,
+    /// A caller argument (address, hash, signed bytes) was malformed.
     InvalidInput,
+    /// The request failed below HTTP (connect, TLS, reset).
     Transport,
+    /// The total request deadline elapsed.
     Timeout,
+    /// The response exceeded `max_response_bytes`.
     BodyTooLarge,
     /// The account-valuation read found no usable required mark: the node's
     /// typed `503 errorCode=MissingMark` answer. Distinct from a transport
     /// failure so callers can fall back instead of misreading oracle
     /// unavailability as an error.
     MissingMark,
+    /// A non-success HTTP status.
     HttpStatus(u16),
+    /// The body was not the shape the route promises.
     InvalidResponse,
+    /// The gateway reported a transaction hash other than the one computed
+    /// locally over the submitted bytes.
     HashMismatch,
+    /// The gateway answered with a JSON-RPC error for an upstream read.
     RpcUnavailable,
 }
-/// `Invalid` must not be treated as permission to immediately retry.
+/// A `Retry-After` hint. `Invalid` must not be treated as permission to
+/// retry immediately.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetryAfter {
     DelaySeconds(u64),
@@ -93,9 +125,12 @@ impl fmt::Display for GatewayError {
 }
 impl std::error::Error for GatewayError {}
 
+/// A CometBFT transaction hash: SHA-256 of the signed wire bytes. Displays as
+/// 64 uppercase hex digits, the form `/v1/tx/{hash}` takes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct TxHash([u8; 32]);
 impl TxHash {
+    /// The hash the chain will assign to `bytes`, computed locally.
     pub fn of_signed_bytes(bytes: &[u8]) -> Self {
         Self(Sha256::digest(bytes).into())
     }
@@ -105,6 +140,7 @@ impl TxHash {
     pub fn bytes(self) -> [u8; 32] {
         self.0
     }
+    /// Parse 64 hex digits, with or without a `0x` prefix, in either case.
     pub fn from_hex(text: &str) -> Result<Self, GatewayError> {
         let text = text.strip_prefix("0x").unwrap_or(text);
         if text.len() != 64 {
@@ -144,6 +180,7 @@ impl fmt::Debug for TxHash {
     }
 }
 
+/// [`GatewayClient`] construction options.
 pub struct GatewayOptions {
     /// Total request deadline including response-body consumption (1ms..60s).
     pub timeout: Duration,
@@ -171,6 +208,9 @@ impl fmt::Debug for GatewayOptions {
     }
 }
 
+/// Bounded, gateway-only native transport. See the [module docs](self).
+///
+/// Cheap to clone: clones share one connection pool.
 #[derive(Clone)]
 pub struct GatewayClient {
     client: Client,
@@ -182,9 +222,12 @@ impl fmt::Debug for GatewayClient {
         f.write_str("GatewayClient { endpoint: [REDACTED] }")
     }
 }
+/// The chain the gateway's upstream node serves, from `GET /v1/status`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChainIdentity {
+    /// The CometBFT network name, e.g. `exchange-devnet-1`.
     pub network: String,
+    /// `chain_id_from_string(network)`: the 32 bytes every signature binds.
     pub chain_binding: ChainBinding,
     pub latest_height: BlockHeight,
     /// Provider capture must be checked against consensus time, never local time alone.
@@ -193,6 +236,9 @@ pub struct ChainIdentity {
     /// still catching up rather than reporting one.
     pub catching_up: bool,
 }
+/// A transaction's execution result once it is in a block. `code == 0` is
+/// execution success; any other value is an engine error code (see
+/// [`crate::errors`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommittedReceipt {
     pub hash: TxHash,
@@ -204,6 +250,7 @@ pub struct CommittedReceipt {
 /// `submit_signed_bytes_with_evidence`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SubmissionOutcome<R = ()> {
+    /// The gateway waited for the block and reports the execution result.
     Committed(CommittedReceipt),
     /// The engine's reject code; the tx will never enter a block. From
     /// CheckTx, or from the gateway before broadcast (bad signature, undecodable).
@@ -215,14 +262,23 @@ pub enum SubmissionOutcome<R = ()> {
     Pending {
         hash: TxHash,
     },
+    /// The gateway refused this attempt before admitting it.
+    ///
+    /// This covers this attempt only. It does not prove that an earlier
+    /// attempt of the same bytes did not land: reconcile by `hash` with
+    /// `committed_receipt` before re-signing. With
+    /// `submit_signed_bytes_with_evidence` the cause is a classified
+    /// [`PreAdmissionRefusal`].
     RejectedBeforeAdmission {
         hash: TxHash,
         refusal: R,
     },
 }
+/// The result of one `POST /exchange`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Submission<R = ()> {
     pub outcome: SubmissionOutcome<R>,
+    /// The gateway's `Retry-After` hint, if it sent one.
     pub retry_after: Option<RetryAfter>,
 }
 
@@ -498,6 +554,8 @@ impl GatewayClient {
         })
     }
 
+    /// `GET /v1/status`: the network name, its 32-byte chain binding (the
+    /// signing `chain_id`) and the latest committed height.
     pub async fn chain_identity(&self) -> Result<ChainIdentity, GatewayError> {
         let op = Operation::ChainIdentity;
         let body = self.request(op, Method::GET, "/v1/status", None).await?;
@@ -522,6 +580,8 @@ impl GatewayClient {
         })
     }
 
+    /// `GET /v1/oracle/permissions/{market}`: which actions the market's
+    /// oracle state currently permits.
     pub async fn oracle_permissions(
         &self,
         market: NonZeroU32,
@@ -676,8 +736,11 @@ impl GatewayClient {
         result.map_err(|e: GatewayError| e.submission(hash))
     }
 
-    /// No polling/retry is hidden here. An error (including 404/500/not indexed)
-    /// is nonterminal; retain the pending transaction and reconcile later.
+    /// `GET /v1/tx/{hash}`: the committed receipt for an exact hash.
+    ///
+    /// No polling or retry is hidden here. An error (including 404, 500 or not
+    /// yet indexed) is nonterminal: keep the transaction pending and reconcile
+    /// later. Not found never proves the transaction cannot still execute.
     pub async fn committed_receipt(&self, hash: TxHash) -> Result<CommittedReceipt, GatewayError> {
         let op = Operation::Receipt;
         let body = self
