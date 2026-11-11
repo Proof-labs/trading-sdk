@@ -246,11 +246,7 @@ Rust core, ready for `sign_and_encode`. `RawAction` remains only for an action
 newer than this package.
 
 `SetUserMarketLeverage` has a typed builder, but ordinary-account submission is
-not currently supported by the node admission path. The SDK retains its encoding
-support for the governed insurance-fund path. The setting affects initial margin,
-not maintenance margin or liquidation thresholds. See
-[availability and follow-up](../README.md#setusermarketleverage-availability)
-before using it.
+unsupported. See [availability](../README.md#setusermarketleverage-availability).
 
 - **Trading:** `PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder`,
   `CancelAllOrders`, `CancelReplaceOrder`, `AmendOrder`, `ClosePosition`,

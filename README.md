@@ -535,27 +535,14 @@ keep operator actions out of autocomplete. `submitTx` still accepts the full
 
 #### SetUserMarketLeverage availability
 
-`SetUserMarketLeverage` remains available in SDK types, builders and the wire
-codec. Encoding or signing it does **not** mean ordinary-account submission is
-supported. At exchange revision
-[`5f172568`](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-node/check_tx.go#L466-L492),
-node admission excludes action `0x16` and rejects it as an unknown action before
-execution. Do not treat it as a supported leverage-setting flow for traders or
-retry the same action with a different nonce to bypass that restriction.
+SDK encoding support is retained, but ordinary-account submission is unsupported
+in exchange revision `5f172568`: [node admission rejects action `0x16`](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-node/check_tx.go#L466-L492).
+The separate governed [`ExecInsuranceFund` path](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/engine/governance/insurance_action.rs#L21-L70)
+permits it for the pool's insurance account.
 
-The engine separately permits this action inside a governed
-[`ExecInsuranceFund`](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/engine/governance/insurance_action.rs#L21-L70)
-action for the pool's insurance account. That path does not enable direct
-ordinary-account submissions.
-
-The setting controls **initial margin only**: effective IM uses
-`max(market.im_bps, user_im_bps)`; `0` uses the market default. It does not change
-maintenance margin or the liquidation threshold. See the
-[margin calculation](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/scenario_margin.rs#L168-L181).
-
-Ordinary-account support is deferred and tracked in
-[#360](https://github.com/Proof-labs/trading-sdk/issues/360). These source-level
-constraints are not a live verification of every deployment.
+The setting affects **initial margin only**: `max(market.im_bps, user_im_bps)`,
+with `0` using the market default. [Maintenance margin and liquidation thresholds are unchanged](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/scenario_margin.rs#L168-L181).
+Ordinary-account support remains deferred in [#360](https://github.com/Proof-labs/trading-sdk/issues/360).
 
 #### Operator actions (privileged)
 
