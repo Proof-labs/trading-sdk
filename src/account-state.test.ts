@@ -28,10 +28,13 @@ describe("raw finalized account state", () => {
       expect(() => decodeAccountState(r, hex)).toThrow("entry remainder");
     },
   );
-  it("rejects unknown position extensions", () => {
+  it("ignores appended engine fields", () => {
     const r = raw();
-    (r[3] as unknown[][])[0].push(0n, 1n);
-    expect(() => decodeAccountState(r, hex)).toThrow("position");
+    (r[3] as unknown[][])[0].push(1n, 9n);
+    r.push(0);
+    const state = decodeAccountState(r, hex);
+    expect(state.balance).toBe((1n << 64n) - 1n);
+    expect(state.positions[0].entryRemainder).toBe(1n);
   });
   it("preserves full integer precision and exposes no fabricated valuation", () => {
     expect(decodeAccountState(raw(), hex)).toEqual({
@@ -62,7 +65,6 @@ describe("raw finalized account state", () => {
     });
   });
   it.each([
-    (r: unknown[]) => r.push(0),
     (r: unknown[]) => {
       r[1] = Number.MAX_SAFE_INTEGER + 1;
     },
@@ -87,14 +89,26 @@ describe("raw finalized account state", () => {
     (r: unknown[]) => {
       (r[3] as unknown[][])[0].push(-1);
     },
-    (r: unknown[]) => {
-      (r[3] as unknown[][])[0].push(0, 0);
-    },
   ])("rejects malformed or mismatched ledger facts", (change) => {
     const r = raw();
     change(r);
     expect(() => decodeAccountState(r, hex)).toThrow("account state decode");
   });
+  it.each([-1n, 256n, true, "4", 4.5])(
+    "rejects invalid owner byte %s",
+    (value) => {
+      for (const position of [false, true]) {
+        const r = raw();
+        const address = Array(20).fill(4);
+        address[0] = value;
+        if (position) (r[3] as unknown[][])[0][0] = address;
+        else r[0] = address;
+        expect(() => decodeAccountState(r, hex)).toThrow(
+          "account state decode",
+        );
+      }
+    },
+  );
   it("uses the canonical gateway route and checks returned owner", async () => {
     const data = Buffer.from(
       new Encoder({ useBigInt64: true }).encode(raw()),
