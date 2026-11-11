@@ -148,6 +148,30 @@ pub struct Orderbook {
 }
 
 impl Orderbook {
+    /// Apply one level change from the feed ([`crate::WsMessage::OrderbookUpdate`]):
+    /// replace the level at `level.price`, insert it in price order, or
+    /// remove it when `level.quantity` is 0.
+    pub fn apply(&mut self, side: Side, level: Level) {
+        let (levels, at) = match side {
+            Side::Buy => {
+                let at = self.bids.binary_search_by(|l| level.price.cmp(&l.price));
+                (&mut self.bids, at)
+            }
+            Side::Sell => {
+                let at = self.asks.binary_search_by(|l| l.price.cmp(&level.price));
+                (&mut self.asks, at)
+            }
+        };
+        match at {
+            Ok(i) if level.quantity == 0 => {
+                levels.remove(i);
+            }
+            Ok(i) => levels[i] = level,
+            Err(i) if level.quantity > 0 => levels.insert(i, level),
+            Err(_) => {}
+        }
+    }
+
     #[must_use]
     pub fn best_bid(&self) -> Option<Level> {
         self.bids.first().copied()
@@ -200,6 +224,7 @@ pub struct AccountState {
 /// does not break the read.
 #[derive(Clone)]
 pub struct InfoClient {
+    config: ClientConfig,
     base: Url,
     max_read_bytes: usize,
     gateway: GatewayClient,
@@ -231,10 +256,17 @@ impl InfoClient {
         )?;
         let base = Url::parse(&config.gateway_url).map_err(|e| Error::Config(e.to_string()))?;
         Ok(Self {
+            config: config.clone(),
             base,
             max_read_bytes: config.max_read_bytes,
             gateway,
         })
+    }
+
+    /// The configuration this client was built from.
+    #[must_use]
+    pub fn config(&self) -> &ClientConfig {
+        &self.config
     }
 
     /// The core transport this client submits through.
@@ -552,6 +584,35 @@ fn de_side<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Side, D::Erro
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn apply_keeps_both_sides_best_first() {
+        let l = |price, quantity| Level {
+            price,
+            quantity,
+            order_count: 1,
+        };
+        let prices = |levels: &[Level]| levels.iter().map(|l| l.price).collect::<Vec<_>>();
+        let mut book = Orderbook::default();
+        // (side, price, quantity, bids after, asks after)
+        let steps: [(Side, u64, u64, &[u64], &[u64]); 8] = [
+            (Side::Buy, 10, 1, &[10], &[]),          // into empty
+            (Side::Buy, 12, 1, &[12, 10], &[]),      // new best
+            (Side::Buy, 11, 1, &[12, 11, 10], &[]),  // between
+            (Side::Buy, 11, 5, &[12, 11, 10], &[]),  // replace
+            (Side::Buy, 12, 0, &[11, 10], &[]),      // remove
+            (Side::Buy, 99, 0, &[11, 10], &[]),      // remove a missing level
+            (Side::Sell, 14, 1, &[11, 10], &[14]),
+            (Side::Sell, 13, 1, &[11, 10], &[13, 14]),
+        ];
+        for (side, price, quantity, bids, asks) in steps {
+            book.apply(side, l(price, quantity));
+            assert_eq!((prices(&book.bids), prices(&book.asks)), (bids.to_vec(), asks.to_vec()));
+        }
+        assert_eq!(book.bids[0].quantity, 5, "a replace sets the quantity");
+        book.apply(Side::Sell, l(13, 0));
+        assert_eq!(book.best_ask().unwrap().price, 14);
+    }
 
     #[test]
     fn orderbook_bytes_from_devnet_decode() {

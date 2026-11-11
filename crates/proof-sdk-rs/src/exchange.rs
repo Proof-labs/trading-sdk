@@ -417,6 +417,16 @@ impl ExchangeClient {
         &self.inner.info
     }
 
+    /// The `/ws` feed of this client's gateway, with its API key and this
+    /// account's signed `accountEvents` auth. Adjust it with the `with_*`
+    /// setters before [`crate::WsClient::connect`].
+    #[cfg(feature = "ws")]
+    #[must_use]
+    pub fn ws_config(&self) -> crate::WsConfig {
+        let auth = crate::AccountAuth::new(Arc::clone(&self.inner.signer), &self.inner.network);
+        crate::WsConfig::for_gateway(self.inner.info.config()).with_account_auth(auth)
+    }
+
     /// The nonce allocator every [`Self::sign`] draws from.
     #[must_use]
     pub fn nonces(&self) -> &NonceAllocator {

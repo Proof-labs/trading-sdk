@@ -3,8 +3,8 @@
 An async (tokio) trading client for the Proof Exchange, built on the
 [`proof-trading-sdk`](../proof-trading-sdk) core. The core signs and encodes
 transactions exactly as the engine does. This crate adds what a trading bot
-needs on top: nonce allocation, submission, receipts, order helpers and typed
-reads.
+needs on top: nonce allocation, submission, receipts, order helpers, typed
+reads and the live WebSocket feed.
 
 - **Thin and fast.** Signing is pure CPU (no I/O, no locks). The nonce
   allocator is a single atomic. Clones share one keep-alive connection pool.
@@ -73,6 +73,7 @@ Run the bundled example (read-only unless `PROOF_LIVE=1`):
 
 ```sh
 cargo run -p proof-sdk-rs --example quickstart
+cargo run -p proof-sdk-rs --example stream      # book + trades + signed account feed
 PROOF_PRIVATE_KEY_HEX=<64 hex> PROOF_LIVE=1 cargo run -p proof-sdk-rs --example quickstart
 ```
 
@@ -105,6 +106,7 @@ On devnet, fund a new address with the faucet first:
 | `wait_for_receipt(hash, timeout)`               | polls `GET /v1/tx/{hash}`                                                 |
 | `address()` / `public_key()` / `network()`      | this signer's account, key and chain id                                   |
 | `nonces()` / `info()`                           | the shared nonce allocator; the read client                               |
+| `ws_config()`                                   | a feed config with this account's signed auth                             |
 
 Every helper is a function in `proof_sdk_rs::actions` with this client's
 address, submitted at once. Call those directly to build an `Action` without
@@ -190,6 +192,91 @@ from a `{"data": ...}` route), `get_json(path)` or `post_info(&body)`. A
 `path` that resolves outside the gateway origin is refused, since requests
 carry the API key.
 
+### `WsClient`: live feed (feature `ws`, default)
+
+One socket carries every subscription. A background task (spawned with
+`tokio::spawn`, so `connect` needs a tokio runtime) owns it, sends an
+app-level ping every 5 s, and reconnects with backoff when nothing at all
+arrives for 10 s after a ping, or the socket drops. Each failed attempt is a
+`Disconnected`. It then re-sends every subscription, paced to the gateway's
+budget (60 at once, then 15 a second).
+
+```rust,no_run
+use proof_sdk_rs::{Event, ExchangeClient, Orderbook, Subscription, WsClient, WsMessage};
+
+# async fn run(client: ExchangeClient) -> Result<(), proof_sdk_rs::Error> {
+// wss://…/ws, the client's API key, and signed accountEvents subscribes.
+let (ws, mut rx) = WsClient::connect(client.ws_config()).await?;
+ws.subscribe(Subscription::Orderbook(1))?;
+ws.subscribe(Subscription::Trades(1))?;
+ws.subscribe(Subscription::AccountEvents(client.address()))?;
+
+let mut book = Orderbook::default();
+while let Some(msg) = rx.recv().await {                      // or use it as a `Stream`
+    match msg {
+        WsMessage::OrderbookSnapshot { book: b, .. } => book = b,
+        WsMessage::OrderbookUpdate { side, level, .. } => book.apply(side, level),
+        WsMessage::Trade(t) => {}
+        WsMessage::AccountSnapshot { account, .. } => {}      // typed AccountInfo
+        WsMessage::AccountEvent(e) => match e.event {         // typed, as on a receipt
+            Event::Fill(f) => {
+                let (side, fee) = if f.maker_owner == client.address() {
+                    (f.maker_side, f.maker_fee)               // micro-USDC; negative = rebate
+                } else {
+                    (f.taker_side(), f.taker_fee)
+                };
+            }
+            Event::OrderPlaced(o) => {}                       // o.order_id, keyed by o.client_order_id
+            Event::OrderCancelled(c) => {}
+            Event::PositionUpdated(p) => {}
+            _ => {}                                           // `Other` / `Malformed`: raw attributes
+        },
+        WsMessage::Reconnected => {}                          // books re-snapshot next
+        WsMessage::Refused { subscription, code, .. } => {}   // no longer held; subscribe again to retry
+        WsMessage::Malformed { subscription, .. } => {}       // subscribe again for a fresh snapshot
+        _ => {}
+    }
+}
+# Ok(()) }
+```
+
+- **Account auth.** Gateways running with an API key, the public devnet among
+  them, refuse an unsigned `accountEvents` subscribe with 401.
+  `client.ws_config()` sets it up; for a read-only or external signer, use
+  `WsConfig::for_gateway(&config).with_account_auth(AccountAuth::new(signer, network))`.
+  `AccountAuth` signs
+  `"ProofExchange-account-events-v1" || chain_id || owner_hex || after_id || timestamp_ms`
+  afresh on every (re)subscribe, through any `Signer`.
+- **After a reconnect** each book re-sends its snapshot. Account events from
+  the gap are **not** replayed (the TypeScript SDK's history backfill is not
+  ported). Reconcile through `InfoClient::open_orders` / `account_state` (balance
+  and positions at a block height) if a missed fill matters.
+- **Account events are typed** with the same `Event` as receipts: `Fill`,
+  `OrderPlaced`, `OrderCancelled`, `OrderAmended`, `OrderRejected`,
+  `MarketOrderProcessed`, `PositionUpdated`, `PositionClosed`,
+  `FundingSettled`, `Deposited`. Any other kind is `Event::Other`, and a known
+  kind whose payload does not read is `Event::Malformed`; both carry the
+  engine event name and raw attributes. `tx_hash` is the causing
+  transaction's `TxHash`, `None` for block events (funding, expiry);
+  `tx_index` and `event_index` place the event in its block.
+- **Snapshot boundary.** An `AccountSnapshot` already includes every event at or
+  below its `height`; the client drops those if they arrive after it, so
+  applying events on top of the snapshot never counts one twice.
+- **Resync or retry** by subscribing again: the gateway answers a repeat
+  subscribe with a fresh snapshot, in order after the updates already
+  delivered. A refused subscription is dropped, so subscribing again retries
+  it. The feed has no sequence numbers, so a long-quiet book is worth
+  resyncing.
+- **Order ids.** Your own submission's receipt events carry them
+  (`Event::OrderPlaced`). `OrderPlaced` on the feed carries the same id, with your
+  `client_order_id`, for orders placed by another process.
+- **Backpressure.** Messages buffer up to `WsConfig::with_buffer` (default 4096). A
+  consumer that falls further behind pauses socket reads; frames queued behind
+  it still count as signs of life, so a slow consumer does not drop a busy
+  socket. Keep the receive loop fast and hand slow work to another task.
+- Turn the feature off with `default-features = false` to drop
+  `tokio-tungstenite`.
+
 ## Nonces
 
 `seq` is a millisecond timestamp. The engine accepts it within 2 days behind
@@ -238,8 +325,9 @@ three are on `MarketConfig`. Nothing is a float.
 ## Testing
 
 ```sh
-cargo test -p proof-sdk-rs                     # unit + loopback contract tests
-cargo test -p proof-sdk-rs --test devnet -- --ignored   # read-only devnet smoke
+cargo test -p proof-sdk-rs                              # unit + loopback contract tests
+cargo test -p proof-sdk-rs --test devnet -- --ignored   # end to end on devnet: reads and the feed
+PROOF_FAUCET_TOKEN=<token> cargo test -p proof-sdk-rs --test devnet -- --ignored  # also trades
 ```
 
 ## License

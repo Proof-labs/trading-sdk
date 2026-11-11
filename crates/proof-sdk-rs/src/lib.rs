@@ -11,6 +11,9 @@
 //!   send them themselves.
 //! - [`InfoClient`]: typed reads for markets, events, the order book, an
 //!   account, its open orders, the recent trade tape and recent nonces.
+//! - `WsClient` (feature `ws`, on by default): the gateway's `/ws` feed of
+//!   order books, trades and account events, with heartbeat, reconnect and
+//!   signed account subscriptions.
 //!
 //! Every request goes through the API gateway; there is no direct-node path.
 //! The core stays free of tokio and reqwest, so its wasm build is unaffected
@@ -43,6 +46,8 @@
 //! Prices and balances are `u64` micro-USDC (`1_000_000` = $1). Quantities are
 //! integer contracts. Nothing is a float.
 
+#[cfg(feature = "ws")]
+mod account_event;
 pub mod actions;
 mod address;
 mod error;
@@ -50,7 +55,11 @@ mod event;
 mod exchange;
 mod info;
 mod nonce;
+#[cfg(feature = "ws")]
+mod ws;
 
+#[cfg(feature = "ws")]
+pub use account_event::AccountEvent;
 pub use address::Address;
 pub use error::{Error, Result};
 pub use event::{
@@ -65,6 +74,10 @@ pub use info::{
     DEVNET_GATEWAY_URL,
 };
 pub use nonce::{NonceAllocator, MAX_CLOCK_LEAD_MS};
+#[cfg(feature = "ws")]
+pub use ws::{
+    AccountAuth, Subscription, WsAccount, WsClient, WsConfig, WsMessage, WsReceiver, WsTrade,
+};
 
 /// The core crate, re-exported so callers need one dependency.
 pub use proof_trading_sdk as core;
