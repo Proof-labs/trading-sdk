@@ -25,11 +25,11 @@ rmpv = { version = "1.3.1", features = ["with-serde"] }
 # The wire contract, one definition shared with the engine. `version` pins
 # the compatible proof-wire major. The rev stays a commit sha, never a tag
 # name, so the pin cannot move (#123).
-# TEMPORARY (wire 12): pinned to the engine branch carrying wire 12
-# (exchange#1450) because the public wire.git mirror has only v11.
-# Swap to the wire.git mirror rev once exchange#1450 merges, then to the
-# wire v12 tag when it publishes.
-proof-wire = { git = "https://github.com/Proof-labs/exchange", rev = "8ca683d3d1d5a51b866a068cfafe6fde14ed80df", features = ["bridge"] }
+# TEMPORARY (wire 12): pinned to the pre-merge mirror branch
+# `w32-02-wire12-premerge` on this repo (wire PR #41, carrying
+# exchange#1450's wire-12 tree). Swap to the mirror rev on `dev` once
+# wire#41 merges, then to the wire v12 tag when it publishes.
+proof-wire = { git = "https://github.com/Proof-labs/wire", rev = "d0ffd5d48ffd61237aea6975760a035d5a7dda8a", features = ["bridge"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 sha3 = "0.12"
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.
