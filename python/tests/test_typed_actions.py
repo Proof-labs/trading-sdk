@@ -33,44 +33,44 @@ def _b(v):
     return bytes(v)
 
 
-def _proof(p: dict) -> actions.OperatorReceiptProof:
-    return actions.OperatorReceiptProof(
-        signatures=[_b(s) for s in p["signatures"]],
-        signer_bitmap=_b(p["signer_bitmap"]),
-    )
-
-
-_BYTE_RECEIPT_FIELDS = {
-    "proof_owner",
-    "destination_owner",
-    "destination_token_acct",
-    "solana_tx_signature",
-    "finalized_blockhash",
-    "deployment_id",
-    "authorization_digest",
-}
-
-
-def _receipt(r: dict) -> actions.BridgeWithdrawalReceipt:
-    return actions.BridgeWithdrawalReceipt(
-        **{k: _b(v) if k in _BYTE_RECEIPT_FIELDS else v for k, v in r.items()}
-    )
-
-
 def _admin(i: dict, *byte_keys: str) -> dict:
     return {k: _b(v) if k in byte_keys else v for k, v in i.items()}
 
 
+def _locator(v: dict | None) -> actions.DepositLocator | None:
+    if v is None:
+        return None
+    return actions.DepositLocator(
+        top_index=v["top_index"],
+        inner_index=None if v["inner_index"] is None else v["inner_index"],
+    )
+
+
 BUILDERS = {
     "create_market/full": lambda i: actions.CreateMarket(**_admin(i, "signer")),
-    "authorize_withdrawal/operator": lambda i: actions.AuthorizeWithdrawal(
-        authorization=_b(i["authorization"]), proof=_proof(i["proof"])
+    "vote_withdrawal_paid/basic": lambda i: actions.VoteWithdrawalPaid(
+        **_admin(i, "deployment_id", "chain_id", "signature")
     ),
-    "confirm_withdrawal_receipt/paid": lambda i: actions.ConfirmWithdrawalReceipt(
-        receipt=_receipt(i["receipt"]), proof=_proof(i["proof"])
+    "vote_withdrawal_paid/u64_bounds": lambda i: actions.VoteWithdrawalPaid(
+        **_admin(i, "deployment_id", "chain_id", "signature")
     ),
-    "fail_withdrawal_receipt/cancelled": lambda i: actions.FailWithdrawalReceipt(
-        receipt=_receipt(i["receipt"]), proof=_proof(i["proof"])
+    "vote_deposit/basic": lambda i: actions.VoteDeposit(
+        **{
+            **_admin(i, "owner", "solana_tx_sig", "deployment_id", "chain_id", "signature"),
+            "locator": _locator(i["locator"]),
+        }
+    ),
+    "vote_deposit/legacy_locator": lambda i: actions.VoteDeposit(
+        **{
+            **_admin(i, "owner", "solana_tx_sig", "deployment_id", "chain_id", "signature"),
+            "locator": _locator(i["locator"]),
+        }
+    ),
+    "vote_deposit/u64_bounds": lambda i: actions.VoteDeposit(
+        **{
+            **_admin(i, "owner", "solana_tx_sig", "deployment_id", "chain_id", "signature"),
+            "locator": _locator(i["locator"]),
+        }
     ),
     "propose_admin_action/create_market": lambda i: actions.ProposeAdminAction(
         **_admin(i, "proposer")
@@ -85,7 +85,10 @@ BUILDERS = {
         **_admin(i, "signer")
     ),
     "record_withdrawal_payout/basic": lambda i: actions.RecordWithdrawalPayout(
-        **_admin(i, "holder", "solana_signature")
+        **_admin(i, "holder", "vault")
+    ),
+    "record_withdrawal_payout/u64_bounds": lambda i: actions.RecordWithdrawalPayout(
+        **_admin(i, "holder", "vault")
     ),
     "propose_admin_action/set_market_status": lambda i: actions.ProposeAdminAction(
         **_admin(i, "proposer")

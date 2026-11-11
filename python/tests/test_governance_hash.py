@@ -11,8 +11,8 @@ import proof_trading_sdk as pts
 GOLDEN_V3 = "a4de11bbe373974cae0de8f1116681cd7f08ecab07b007bea1067cbd0f19fb4f"
 GOLDEN_V4 = "da916970c56796acd6cc8a67bfba8430598c94dafaf5b1eb54f40479a380be9c"
 # Admin-actions v2 (engine's ``admin_proposal_content_hash_v2_golden_vectors``)
-GOLDEN_ATTACH = "3ffeb7f420cf9f4f50bade95919d885dfc590c7f8c92fb69eacc1704d4662be4"
-GOLDEN_BATCH = "66a35d72765b3554acc039d0747f177680c1a1b08247ece47daa4a3492b9d0f7"
+GOLDEN_ATTACH = "424729ae1b5fbbfd182d4e099ca565a06347fa68fb334fd325725d2a38eaa82a"
+GOLDEN_BATCH = "27b0091972e0da2193ba71736966457ccf2debbbf3b228fa9f3d263f93cbad1b"
 # The one admin action that is NOT a map: a fieldless unit variant, whose
 # canonical bytes are the bare fixstr "UnpauseBridge". exchange-core has no
 # frozen content-hash vector for this arm yet, so the value comes from the
@@ -84,8 +84,9 @@ def engine_default_create_market() -> dict:
 
 
 def engine_v2_attach() -> dict:
-    """Mirrors the engine's attach fixture: event 91's conditional on perp 15,
-    books from 9100, the open-interest trailer at its zero default."""
+    """Mirrors the engine's attach fixture (the wire's v2 golden vectors):
+    event 91's conditional on perp 15, books from 9100, the open-interest
+    trailer at its zero default and DEC-293's impact notional at 1e6 µUSDC."""
     return {
         "event_id": 91,
         "underlying_market": 15,
@@ -96,6 +97,7 @@ def engine_v2_attach() -> dict:
         "maker_fee_bps": 2,
         "signer": bytes(20),
         "max_open_interest": 0,
+        "impact_notional": 1_000_000_000,
     }
 
 

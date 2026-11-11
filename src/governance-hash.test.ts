@@ -41,9 +41,10 @@ function engineDefaultCreateMarket(): AdminAction {
   };
 }
 
-/** Mirrors the engine's attach fixture (`admin_action_attach_and_batch_wire_vectors_frozen`
- *  in `codec.rs`): event 91's conditional on perp 15, books from 9100, the
- *  open-interest trailer at its zero default. */
+/** Mirrors the engine's attach fixture (`admin_proposal_content_hash_v2_golden_vectors`
+ *  in the wire's codec.rs): event 91's conditional on perp 15, books from
+ *  9100, the open-interest trailer at its zero default and DEC-293's impact
+ *  notional at 1e6 µUSDC. */
 function engineV2Attach(): AdminAction {
   return {
     kind: "AttachConditional",
@@ -57,6 +58,7 @@ function engineV2Attach(): AdminAction {
       makerFeeBps: 2,
       signer: new Uint8Array(20),
       maxOpenInterest: 0n,
+      impactNotional: 1_000_000_000n,
     },
   };
 }
@@ -121,7 +123,7 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
       action: engineV2Attach(),
     });
     expect(bytesToHex(hash)).toBe(
-      "3ffeb7f420cf9f4f50bade95919d885dfc590c7f8c92fb69eacc1704d4662be4",
+      "424729ae1b5fbbfd182d4e099ca565a06347fa68fb334fd325725d2a38eaa82a",
     );
   });
 
@@ -133,7 +135,7 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
       action: engineV2Batch(),
     });
     expect(bytesToHex(hash)).toBe(
-      "66a35d72765b3554acc039d0747f177680c1a1b08247ece47daa4a3492b9d0f7",
+      "27b0091972e0da2193ba71736966457ccf2debbbf3b228fa9f3d263f93cbad1b",
     );
   });
 

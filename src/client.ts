@@ -65,6 +65,10 @@ import {
   openOrdersFromWasm,
   eventInfoFromWasm,
   marketConfigFromWasm,
+  bridgeStatusFromWasm,
+  bridgeRegistryFromWasm,
+  pendingWithdrawalsFromWasm,
+  pendingDepositsFromWasm,
   toWasmFields,
 } from "./codec-adapter.js";
 import {
@@ -136,9 +140,10 @@ import type {
   NodeVersion,
   UpgradesInfo,
   LiquidationConfigInfo,
-  AuthorizeWithdrawal,
-  ConfirmWithdrawalReceipt,
-  FailWithdrawalReceipt,
+  BridgeStatus,
+  OperatorRegistry,
+  PendingWithdrawalPage,
+  PendingDepositPage,
 } from "./types.js";
 import {
   decodeAdminSignerRegistryInfo,
@@ -1384,39 +1389,12 @@ export class ExchangeClient {
   }
 
   /**
-   * Submit the operator-quorum authorization for a pending withdrawal
-   * (action 0x24). Permissionless: the quorum proof inside is the authority,
-   * not the envelope signer. The canonical authorization bytes come from
-   * `encodeWithdrawalAuthorization` and the proof from operators signing
-   * those bytes — see the `bridge` module.
+   * Settle a withdrawal or credit a deposit under the vote model by
+   * submitting a member's vote — `submitTx({ type: "VoteWithdrawalPaid" |
+   * "VoteDeposit", data })` with the signed payload built by the core's
+   * `bridge_votes` helpers (Rust) or the `vote*` builders (Python). Each
+   * registry member submits its own vote; the engine aggregates.
    */
-  async authorizeWithdrawal(params: AuthorizeWithdrawal): Promise<TxResult> {
-    return this.submitTx({ type: "AuthorizeWithdrawal", data: params });
-  }
-
-  /**
-   * Settle a paid withdrawal through its finalized operator-quorum receipt
-   * (action 0x22). Permissionless: the quorum proof inside is the authority,
-   * not the envelope signer. The canonical message the proof signs comes
-   * from `encodeBridgeReceipt`.
-   */
-  async confirmWithdrawalReceipt(
-    params: ConfirmWithdrawalReceipt,
-  ): Promise<TxResult> {
-    return this.submitTx({ type: "ConfirmWithdrawalReceipt", data: params });
-  }
-
-  /**
-   * Refund a cancelled withdrawal through its finalized operator-quorum
-   * receipt (action 0x23). Permissionless: the quorum proof inside is the
-   * authority, not the envelope signer. Positive cancellation proof only —
-   * a timeout or RPC error is never failure evidence.
-   */
-  async failWithdrawalReceipt(
-    params: FailWithdrawalReceipt,
-  ): Promise<TxResult> {
-    return this.submitTx({ type: "FailWithdrawalReceipt", data: params });
-  }
 
   /**
    * Cancel all resting orders for the loaded signer. Pass a `market` to
@@ -1891,6 +1869,69 @@ export class ExchangeClient {
       status: raw[4] as WithdrawalStatus,
       requestHeight: BigInt(raw[5] as number | bigint),
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Bridge custody reads (`/v2/bridge/*` — the wire-12 vote model views).
+  // Responses decode in the WASM core (`query_v2` views); these methods only
+  // page the route and rename fields.
+  // -------------------------------------------------------------------------
+
+  /** The bridge's governance state: the quorum's halt flag, the governed
+   *  payout vault and the current operator-roster facts. */
+  async queryBridgeStatus(): Promise<BridgeStatus> {
+    const path = "/v2/bridge/status";
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return bridgeStatusFromWasm(await this.decodeRead("BridgeStatus", bytes));
+  }
+
+  /** The operator receipt registry — the roster every payout gate and vote
+   *  verifies against. Omit `epoch` for the current one. */
+  async queryBridgeRegistry(epoch?: bigint): Promise<OperatorRegistry> {
+    const path = epoch === undefined ? "/v2/bridge/registry" : `/v2/bridge/registry/${epoch}`;
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return bridgeRegistryFromWasm(await this.decodeRead("BridgeRegistry", bytes));
+  }
+
+  /** One page of pending withdrawals with their live leases, reported
+   *  payout proposals and Paid votes so far. `cursor` is the previous
+   *  page's `nextCursor` (the last row's withdrawal id); `limit` is
+   *  forwarded and clamped by the node. */
+  async queryPendingWithdrawals(opts?: {
+    cursor?: bigint;
+    limit?: number;
+  }): Promise<PendingWithdrawalPage> {
+    const params = new URLSearchParams();
+    if (opts?.cursor != null) params.set("cursor", String(opts.cursor));
+    if (opts?.limit != null) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    const path = `/v2/bridge/pending-withdrawals${qs ? `?${qs}` : ""}`;
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return pendingWithdrawalsFromWasm(
+      await this.decodeRead("PendingWithdrawals", bytes),
+    );
+  }
+
+  /** One page of pending deposits with their voted readings. `cursor` is
+   *  the previous page's `nextCursor` — an OPAQUE token the route hands
+   *  back; pass it verbatim, never parse or mint one. */
+  async queryPendingDeposits(opts?: {
+    cursor?: string;
+    limit?: number;
+  }): Promise<PendingDepositPage> {
+    const params = new URLSearchParams();
+    if (opts?.cursor != null) params.set("cursor", opts.cursor);
+    if (opts?.limit != null) params.set("limit", String(opts.limit));
+    const qs = params.toString();
+    const path = `/v2/bridge/pending-deposits${qs ? `?${qs}` : ""}`;
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return pendingDepositsFromWasm(
+      await this.decodeRead("PendingDeposits", bytes),
+    );
   }
 
   /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */

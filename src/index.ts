@@ -88,9 +88,8 @@ export {
   type DepositLocator,
   type ConfirmWithdrawal,
   type FailWithdrawal,
-  type ConfirmWithdrawalReceipt,
-  type FailWithdrawalReceipt,
-  type AuthorizeWithdrawal,
+  type VoteWithdrawalPaid,
+  type VoteDeposit,
   type TriggerLimb,
   type SetPositionTriggers,
   type CancelPositionTriggers,
@@ -110,8 +109,6 @@ export {
   type MarginOffsetPair,
   type ScheduleUpgrade,
   type CancelUpgrade,
-  type BridgeWithdrawalReceipt,
-  type OperatorReceiptProof,
   type ApproveAgent,
   type RevokeAgent,
   type EventOracleSource,
@@ -126,6 +123,18 @@ export {
   type SubAccountTransfer,
   type ClaimWithdrawalPayout,
   type RecordWithdrawalPayout,
+  type BridgeStatus,
+  type OperatorMember,
+  type OperatorRegistry,
+  type BridgeVote,
+  type WithdrawalVotes,
+  type WithdrawalPayoutReport,
+  type WithdrawalPayoutLease,
+  type PendingWithdrawal,
+  type PendingWithdrawalPage,
+  type PendingDepositObservation,
+  type PendingDeposit,
+  type PendingDepositPage,
   type UpdateMarketFees,
   type SetUserMarketLeverage,
   type GovernanceAction,
@@ -371,19 +380,16 @@ export {
 export { fetchChainId } from "./client.js";
 
 // Bridge custody: canonical bridge-core v1 payload encoders — the bytes the
-// engine's receipt path signs and verifies.
+// engine's withdrawal authorization binds. (The receipt-era surfaces
+// `encodeBridgeReceipt` / `signOperatorReceipt` and the terminal/quorum wire
+// bytes retired with wire 12; registry members now sign the canonical vote
+// message — see the `bridge_votes` helpers in the Rust core.)
 export {
-  BRIDGE_RECEIPT_LEN,
-  QUORUM_OPERATOR_M_OF_N,
-  TERMINAL_CANCELLED,
-  TERMINAL_PAID,
   VAULT_TIER_COLD,
   VAULT_TIER_HOT,
   VAULT_TIER_WARM,
   WITHDRAWAL_AUTHORIZATION_LEN,
-  encodeBridgeReceipt,
   encodeWithdrawalAuthorization,
-  signOperatorReceipt,
   withdrawalAuthorizationDigest,
   type WithdrawalAuthorizationV1,
 } from "./bridge.js";

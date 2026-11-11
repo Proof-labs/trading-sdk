@@ -535,25 +535,214 @@ class ClaimWithdrawalPayout(Action):
 
 @dataclass
 class RecordWithdrawalPayout(Action):
-    """**Operator-only.** Record the Solana signature of the payout-lease
-    holder's transfer for a pending withdrawal (0x31), before the holder
-    broadcasts it, while its lease is live; stored as the withdrawal's
-    payout record that peer watchers verify against Solana before
-    re-signing."""
+    """**Operator-only.** Record the Squads vault payout proposal the
+    payout-lease holder created for a pending withdrawal (0x31), while its
+    lease is live. Under the vote model withdrawals pay from a Squads v4
+    vault the operator registry members jointly control: the lease holder
+    proposes the vault transaction, peer members verify it against the
+    engine's withdrawal record, approve and execute. Every distinct
+    (vault, index) report is retained until settlement."""
 
     ACTION_NAME = "RecordWithdrawalPayout"
     withdrawal_id: int
     holder: bytes
-    solana_signature: bytes
-    last_valid_block_height: int
+    vault: bytes
+    squads_transaction_index: int
+    registry_epoch: int
 
     def fields(self) -> dict[str, Any]:
         return {
             "withdrawal_id": self.withdrawal_id,
             "holder": self.holder,
-            "solana_signature": self.solana_signature,
-            "last_valid_block_height": self.last_valid_block_height,
+            "vault": self.vault,
+            "squads_transaction_index": self.squads_transaction_index,
+            "registry_epoch": self.registry_epoch,
         }
+
+
+BRIDGE_VOTE_DOMAIN = b"PROOF_BRIDGE_VOTE_V1"
+"""Domain separator absorbed into every bridge vote message (wire 12)."""
+
+BRIDGE_VOTE_KIND_WITHDRAWAL_PAID = 1
+"""Vote-message kind byte: settle one withdrawal as ``Paid``."""
+
+BRIDGE_VOTE_KIND_DEPOSIT_CREDIT = 2
+"""Vote-message kind byte: credit one observed deposit."""
+
+
+def vote_withdrawal_paid_message(
+    withdrawal_id: int,
+    deployment_id: bytes,
+    chain_id: bytes,
+    registry_epoch: int,
+) -> bytes:
+    """The canonical bytes every registry member signs for one
+    :class:`VoteWithdrawalPaid` — domain, kind 0x01, withdrawal id (8 BE),
+    deployment id (32), chain id (32), registry epoch (8 BE). Byte-identical
+    to the wire contract's ``VoteWithdrawalPaid::vote_message``, which the
+    engine re-derives before verifying each member's signature. Sign these
+    raw bytes with the operator ed25519 key — a vote carries its own
+    signature and never uses the envelope signing convention."""
+    return (
+        BRIDGE_VOTE_DOMAIN
+        + bytes([BRIDGE_VOTE_KIND_WITHDRAWAL_PAID])
+        + int(withdrawal_id).to_bytes(8, "big")
+        + deployment_id
+        + chain_id
+        + int(registry_epoch).to_bytes(8, "big")
+    )
+
+
+def vote_deposit_message(
+    owner: bytes,
+    amount_micro_usdc: int,
+    solana_tx_sig: bytes,
+    locator: "DepositLocator | None",
+    deployment_id: bytes,
+    chain_id: bytes,
+    registry_epoch: int,
+) -> bytes:
+    """The canonical bytes every registry member signs for one
+    :class:`VoteDeposit` — domain, kind 0x02, and the full credit identity:
+    owner (20), amount (8 BE), Solana transaction signature (64), locator
+    suffix (4: top index BE, inner index BE or 0xFFFF when absent),
+    deployment id (32), chain id (32), epoch (8 BE). Two members voting on
+    the same observation sign identical bytes."""
+    if locator is None:
+        suffix = b"\x00\x00\xff\xff"
+    else:
+        suffix = int(locator.top_index).to_bytes(2, "big") + (
+            b"\xff\xff"
+            if locator.inner_index is None
+            else int(locator.inner_index).to_bytes(2, "big")
+        )
+    return (
+        BRIDGE_VOTE_DOMAIN
+        + bytes([BRIDGE_VOTE_KIND_DEPOSIT_CREDIT])
+        + owner
+        + int(amount_micro_usdc).to_bytes(8, "big")
+        + solana_tx_sig
+        + suffix
+        + deployment_id
+        + chain_id
+        + int(registry_epoch).to_bytes(8, "big")
+    )
+
+
+@dataclass
+class VoteWithdrawalPaid(Action):
+    """**Operator-registry member only.** One member's vote to settle one
+    withdrawal as ``Paid`` (0x30). Each member signs
+    :func:`vote_withdrawal_paid_message` with its operator ed25519 key and
+    submits its own vote — no combined proof; the engine aggregates distinct
+    member signatures and settles at the roster's threshold. Build with
+    :meth:`sign` (or an external signer over the message) so ``signature``
+    verifies against the ``registry_epoch`` roster."""
+
+    ACTION_NAME = "VoteWithdrawalPaid"
+    withdrawal_id: int
+    deployment_id: bytes
+    chain_id: bytes
+    registry_epoch: int
+    signature: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "withdrawal_id": self.withdrawal_id,
+            "deployment_id": self.deployment_id,
+            "chain_id": self.chain_id,
+            "registry_epoch": self.registry_epoch,
+            "signature": self.signature,
+        }
+
+    @classmethod
+    def sign(
+        cls,
+        signer: Any,
+        withdrawal_id: int,
+        deployment_id: bytes,
+        chain_id: bytes,
+        registry_epoch: int,
+    ) -> "VoteWithdrawalPaid":
+        """Build and sign one withdrawal vote. ``signer`` is any object with
+        a ``sign(message) -> bytes`` method (the SDK key handle qualifies);
+        the signature is over :func:`vote_withdrawal_paid_message` of the
+        same fields."""
+        message = vote_withdrawal_paid_message(
+            withdrawal_id, deployment_id, chain_id, registry_epoch
+        )
+        return cls(
+            withdrawal_id=withdrawal_id,
+            deployment_id=deployment_id,
+            chain_id=chain_id,
+            registry_epoch=registry_epoch,
+            signature=signer.sign(message),
+        )
+
+
+@dataclass
+class VoteDeposit(Action):
+    """**Operator-registry member only.** One member's vote to credit one
+    observed Solana deposit (0x32), the vote-model replacement for the bare
+    relayer :class:`ConfirmDeposit` assertion. Aggregated and settled exactly
+    like :class:`VoteWithdrawalPaid`. A ``locator`` of ``None`` is the
+    LEGACY reading (top-level instruction 0, no inner index)."""
+
+    ACTION_NAME = "VoteDeposit"
+    owner: bytes
+    amount_micro_usdc: int
+    solana_tx_sig: bytes
+    locator: "DepositLocator | None"
+    deployment_id: bytes
+    chain_id: bytes
+    registry_epoch: int
+    signature: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "owner": self.owner,
+            "amount_micro_usdc": self.amount_micro_usdc,
+            "solana_tx_sig": self.solana_tx_sig,
+            "locator": None if self.locator is None else self.locator.as_wire(),
+            "deployment_id": self.deployment_id,
+            "chain_id": self.chain_id,
+            "registry_epoch": self.registry_epoch,
+            "signature": self.signature,
+        }
+
+    @classmethod
+    def sign(
+        cls,
+        signer: Any,
+        owner: bytes,
+        amount_micro_usdc: int,
+        solana_tx_sig: bytes,
+        locator: "DepositLocator | None",
+        deployment_id: bytes,
+        chain_id: bytes,
+        registry_epoch: int,
+    ) -> "VoteDeposit":
+        """Build and sign one deposit vote over
+        :func:`vote_deposit_message` of the same fields."""
+        message = vote_deposit_message(
+            owner,
+            amount_micro_usdc,
+            solana_tx_sig,
+            locator,
+            deployment_id,
+            chain_id,
+            registry_epoch,
+        )
+        return cls(
+            owner=owner,
+            amount_micro_usdc=amount_micro_usdc,
+            solana_tx_sig=solana_tx_sig,
+            locator=locator,
+            deployment_id=deployment_id,
+            chain_id=chain_id,
+            registry_epoch=registry_epoch,
+            signature=signer.sign(message),
+        )
 
 
 @dataclass
@@ -744,102 +933,6 @@ class FailWithdrawal(Action):
             "reason": self.reason,
             "signer": self.signer,
         }
-
-
-@dataclass
-class OperatorReceiptProof:
-    """Operator ed25519 quorum proof over a bridge record: one 64-byte
-    signature per set bit of ``signer_bitmap``, in bit order. Not an action by
-    itself — carried by :class:`AuthorizeWithdrawal`,
-    :class:`ConfirmWithdrawalReceipt` and :class:`FailWithdrawalReceipt`."""
-
-    signatures: list[bytes]
-    signer_bitmap: bytes
-
-    def as_wire(self) -> dict[str, Any]:
-        return {"signatures": list(self.signatures), "signer_bitmap": self.signer_bitmap}
-
-
-@dataclass
-class BridgeWithdrawalReceipt:
-    """A finalized terminal bridge receipt (``Paid`` or ``Cancelled``) for one
-    withdrawal, as the bridge program wrote it on Solana."""
-
-    withdrawal_id: int
-    proof_owner: bytes
-    destination_owner: bytes
-    destination_token_acct: bytes
-    amount_micro_usdc: int
-    fee_micro_usdc: int
-    terminal_state: int
-    solana_tx_signature: bytes
-    finalized_slot: int
-    finalized_blockhash: bytes
-    deployment_id: bytes
-    vault_tier: int
-    authorization_digest: bytes
-    authorization_signer_epoch: int
-    receipt_authority_epoch: int
-    receipt_quorum_kind: int
-
-    def as_wire(self) -> dict[str, Any]:
-        return {
-            "withdrawal_id": self.withdrawal_id,
-            "proof_owner": self.proof_owner,
-            "destination_owner": self.destination_owner,
-            "destination_token_acct": self.destination_token_acct,
-            "amount_micro_usdc": self.amount_micro_usdc,
-            "fee_micro_usdc": self.fee_micro_usdc,
-            "terminal_state": self.terminal_state,
-            "solana_tx_signature": self.solana_tx_signature,
-            "finalized_slot": self.finalized_slot,
-            "finalized_blockhash": self.finalized_blockhash,
-            "deployment_id": self.deployment_id,
-            "vault_tier": self.vault_tier,
-            "authorization_digest": self.authorization_digest,
-            "authorization_signer_epoch": self.authorization_signer_epoch,
-            "receipt_authority_epoch": self.receipt_authority_epoch,
-            "receipt_quorum_kind": self.receipt_quorum_kind,
-        }
-
-
-@dataclass
-class AuthorizeWithdrawal(Action):
-    """Record the operator-quorum-signed ``WithdrawalAuthorizationV1`` that a
-    terminal receipt must settle against. Permissionless to submit."""
-
-    ACTION_NAME = "AuthorizeWithdrawal"
-    authorization: bytes
-    proof: OperatorReceiptProof
-
-    def fields(self) -> dict[str, Any]:
-        return {"authorization": self.authorization, "proof": self.proof.as_wire()}
-
-
-@dataclass
-class ConfirmWithdrawalReceipt(Action):
-    """Receipt-gated confirmation: a finalized ``Paid`` receipt plus the
-    operator quorum proof."""
-
-    ACTION_NAME = "ConfirmWithdrawalReceipt"
-    receipt: BridgeWithdrawalReceipt
-    proof: OperatorReceiptProof
-
-    def fields(self) -> dict[str, Any]:
-        return {"receipt": self.receipt.as_wire(), "proof": self.proof.as_wire()}
-
-
-@dataclass
-class FailWithdrawalReceipt(Action):
-    """Receipt-gated failure: a finalized ``Cancelled`` receipt plus the
-    operator quorum proof; refunds only against a positive cancellation."""
-
-    ACTION_NAME = "FailWithdrawalReceipt"
-    receipt: BridgeWithdrawalReceipt
-    proof: OperatorReceiptProof
-
-    def fields(self) -> dict[str, Any]:
-        return {"receipt": self.receipt.as_wire(), "proof": self.proof.as_wire()}
 
 
 @dataclass
@@ -1151,11 +1244,13 @@ __all__ = [
     "ConfirmDeposit",
     "ConfirmWithdrawal",
     "FailWithdrawal",
-    "OperatorReceiptProof",
-    "BridgeWithdrawalReceipt",
-    "AuthorizeWithdrawal",
-    "ConfirmWithdrawalReceipt",
-    "FailWithdrawalReceipt",
+    "VoteWithdrawalPaid",
+    "VoteDeposit",
+    "BRIDGE_VOTE_DOMAIN",
+    "BRIDGE_VOTE_KIND_WITHDRAWAL_PAID",
+    "BRIDGE_VOTE_KIND_DEPOSIT_CREDIT",
+    "vote_withdrawal_paid_message",
+    "vote_deposit_message",
     "CreateMarket",
     "SetUserMarketLeverage",
     "CreateSubAccount",

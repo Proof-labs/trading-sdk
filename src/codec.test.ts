@@ -35,38 +35,6 @@ import {
 const OWNER = new Uint8Array(20).fill(0xaa);
 const SIGNER = new Uint8Array(20).fill(0xff);
 
-// W28-20 receipt-gated withdrawal fixtures — the engine golden values
-// (exchange-core `codec::tests::golden_receipt` / `golden_proof`).
-const RECEIPT = (
-  terminalState: number,
-): import("./types.js").BridgeWithdrawalReceipt => ({
-  deploymentId: new Uint8Array(32).fill(0x11),
-  authorizationDigest: new Uint8Array(32).fill(0x22),
-  withdrawalId: 777n,
-  terminalState,
-  vaultTier: 1,
-  proofOwner: new Uint8Array(20).fill(0x05),
-  destinationOwner: new Uint8Array(32).fill(0x06),
-  destinationTokenAcct: new Uint8Array(32).fill(0x07),
-  amountMicroUsdc: 1_000_000n,
-  feeMicroUsdc: 1_000_000n,
-  authorizationSignerEpoch: 3n,
-  solanaTxSignature: new Uint8Array(64).fill(0x10),
-  finalizedSlot: 900n,
-  finalizedBlockhash: new Uint8Array(32).fill(0x33),
-  receiptQuorumKind: 1,
-  receiptAuthorityEpoch: 3n,
-});
-const OPERATOR_PROOF = (): import("./types.js").OperatorReceiptProof => ({
-  signerBitmap: new Uint8Array([0x0f]),
-  signatures: [
-    new Uint8Array(64).fill(0xab),
-    new Uint8Array(64).fill(0xcd),
-    new Uint8Array(64).fill(0xef),
-    new Uint8Array(64).fill(0x12),
-  ],
-});
-
 // Test helpers: there's only one wire format (signed envelope), but the
 // codec round-trip tests below don't care about signature validity —
 // they just exercise encode/decode symmetry. `encodeTx` produces an
@@ -402,15 +370,6 @@ describe("codec v1 all action types", () => {
       data: { withdrawalId: 777n, holder: new Uint8Array(20).fill(0x05) },
     },
     {
-      type: "RecordWithdrawalPayout",
-      data: {
-        withdrawalId: 777n,
-        holder: new Uint8Array(20).fill(0x05),
-        solanaSignature: new Uint8Array(64).fill(0x07),
-        lastValidBlockHeight: 500n,
-      },
-    },
-    {
       type: "ResolveEvent",
       data: { eventId: 700, outcome: Outcome.No, signer: SIGNER },
     },
@@ -452,24 +411,36 @@ describe("codec v1 all action types", () => {
       },
     },
     {
-      type: "ConfirmWithdrawalReceipt",
+      type: "VoteWithdrawalPaid",
       data: {
-        receipt: RECEIPT(1),
-        proof: OPERATOR_PROOF(),
+        withdrawalId: 777n,
+        deploymentId: new Uint8Array(32).fill(0xa1),
+        chainId: new Uint8Array(32).fill(0xc7),
+        registryEpoch: 3n,
+        signature: new Uint8Array(64).fill(0x5c),
       },
     },
     {
-      type: "FailWithdrawalReceipt",
+      type: "VoteDeposit",
       data: {
-        receipt: RECEIPT(2),
-        proof: OPERATOR_PROOF(),
+        owner: OWNER,
+        amountMicroUsdc: 1_000_000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        locator: { topIndex: 2, innerIndex: 5 },
+        deploymentId: new Uint8Array(32).fill(0xa1),
+        chainId: new Uint8Array(32).fill(0xc7),
+        registryEpoch: 9n,
+        signature: new Uint8Array(64).fill(0x5c),
       },
     },
     {
-      type: "AuthorizeWithdrawal",
+      type: "RecordWithdrawalPayout",
       data: {
-        authorization: new Uint8Array(221).fill(0x44),
-        proof: OPERATOR_PROOF(),
+        withdrawalId: 777n,
+        holder: new Uint8Array(20).fill(0x05),
+        vault: new Uint8Array(32).fill(0x08),
+        squadsTransactionIndex: 42,
+        registryEpoch: 3n,
       },
     },
   ];
@@ -484,22 +455,51 @@ describe("codec v1 all action types", () => {
     });
   }
 
-  it.each([
-    ["ConfirmWithdrawalReceipt", 1] as const,
-    ["FailWithdrawalReceipt", 2] as const,
-  ])(
-    "round-trips %s receipt + operator proof with full field fidelity",
-    (type, terminalState) => {
-      const action = {
-        type,
-        data: { receipt: RECEIPT(terminalState), proof: OPERATOR_PROOF() },
-      } as Action;
-      const { action: decoded } = decodeTx(encodeTx(action, 7n));
-      // The nested receipt (16 fields) and the proof (bitmap + Vec<Vec<u8>>)
-      // must survive encode→decode structurally identical.
-      expect(decoded).toEqual(action);
-    },
-  );
+  it("round-trips the vote actions with full field fidelity", () => {
+    const votes: Action[] = [
+      {
+        type: "VoteWithdrawalPaid",
+        data: {
+          withdrawalId: 777n,
+          deploymentId: new Uint8Array(32).fill(0xa1),
+          chainId: new Uint8Array(32).fill(0xc7),
+          registryEpoch: 3n,
+          signature: new Uint8Array(64).fill(0x5c),
+        },
+      },
+      {
+        type: "VoteDeposit",
+        data: {
+          owner: OWNER,
+          amountMicroUsdc: 1_000_000n,
+          solanaTxSig: new Uint8Array(64).fill(0xab),
+          locator: { topIndex: 2, innerIndex: 5 },
+          deploymentId: new Uint8Array(32).fill(0xa1),
+          chainId: new Uint8Array(32).fill(0xc7),
+          registryEpoch: 9n,
+          signature: new Uint8Array(64).fill(0x5c),
+        },
+      },
+      {
+        type: "VoteDeposit",
+        data: {
+          owner: OWNER,
+          amountMicroUsdc: 5n,
+          solanaTxSig: new Uint8Array(64).fill(0xab),
+          locator: null,
+          deploymentId: new Uint8Array(32).fill(0xa1),
+          chainId: new Uint8Array(32).fill(0xc7),
+          registryEpoch: 1n,
+          signature: new Uint8Array(64).fill(0x5c),
+        },
+      },
+    ];
+    for (const action of votes) {
+      // A vote carries its own preimage signature — every field must
+      // survive encode→decode structurally identical.
+      expect(decodeTx(encodeTx(action, 7n)).action).toEqual(action);
+    }
+  });
 
   it("round-trips ConfirmDeposit with a DepositLocator (full fidelity)", () => {
     const action: Action = {
@@ -590,20 +590,6 @@ describe("codec v1 all action types", () => {
       expect(decoded.data.amount).toBe(100000n);
       expect(decoded.data.locator).toBeNull();
     }
-  });
-
-  it("round-trips AuthorizeWithdrawal authorization bytes + operator proof", () => {
-    const action: Action = {
-      type: "AuthorizeWithdrawal",
-      data: {
-        authorization: new Uint8Array(221).fill(0x44),
-        proof: OPERATOR_PROOF(),
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 8n));
-    // The 221-byte authorization (a bare Vec<u8> on the wire) and the proof
-    // must survive encode→decode structurally identical.
-    expect(decoded).toEqual(action);
   });
 
   it("round-trips ProposeAdminAction with the UnpauseBridge unit variant", () => {
@@ -700,16 +686,33 @@ describe("codec v1 all action types", () => {
     }
   });
 
-  it("rejects a receipt whose fixed-width deploymentId is not 32 bytes", () => {
+  it("rejects a vote whose fixed-width deploymentId is not 32 bytes", () => {
     const action: Action = {
-      type: "ConfirmWithdrawalReceipt",
+      type: "VoteWithdrawalPaid",
       data: {
-        receipt: { ...RECEIPT(1), deploymentId: new Uint8Array(31).fill(0x11) },
-        proof: OPERATOR_PROOF(),
+        withdrawalId: 1n,
+        deploymentId: new Uint8Array(31).fill(0xa1),
+        chainId: new Uint8Array(32).fill(0xc7),
+        registryEpoch: 1n,
+        signature: new Uint8Array(64).fill(0x5c),
       },
     };
-    // The 32-byte Pubkey newtype in the Rust core rejects a 31-byte array, so
-    // encoding a malformed receipt fails loudly rather than emitting bad bytes.
+    // The 32-byte wire bound rejects a 31-byte array, so encoding a
+    // malformed vote fails loudly rather than emitting bad bytes.
+    expect(() => encodeTx(action, 1n)).toThrow();
+  });
+
+  it("rejects a vote whose signature is not exactly 64 bytes", () => {
+    const action: Action = {
+      type: "VoteWithdrawalPaid",
+      data: {
+        withdrawalId: 1n,
+        deploymentId: new Uint8Array(32).fill(0xa1),
+        chainId: new Uint8Array(32).fill(0xc7),
+        registryEpoch: 1n,
+        signature: new Uint8Array(63).fill(0x5c),
+      },
+    };
     expect(() => encodeTx(action, 1n)).toThrow();
   });
 
@@ -1071,12 +1074,12 @@ describe("codec v1 all action types", () => {
     },
   );
 
-  it("decodes the legacy 18-field UpdateMarketFees payload", () => {
+  it("decodes the wire-12 UpdateMarketFees payload width (23 fields)", () => {
     const encoder = new Encoder({ useBigInt64: true });
     const payload = encoder.encode([
       7,
       Array.from(SIGNER),
-      ...Array(16).fill(null),
+      ...Array(21).fill(null),
     ]);
     const wire = encoder.encode([
       ENVELOPE_VERSION,
@@ -1092,6 +1095,27 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.imBps).toBeNull();
     expect(decoded.data.mmBps).toBeNull();
     expect(decoded.data.maxOpenInterest).toBeNull();
+    expect(decoded.data.impactNotional).toBeNull();
+  });
+
+  it("refuses a pre-12 UpdateMarketFees payload shorter than the pinned width", () => {
+    // The positional decode is strict — the same bytes the engine refuses.
+    // Legacy (pre-default_ttl_ms) payloads no longer decode anywhere.
+    const encoder = new Encoder({ useBigInt64: true });
+    const payload = encoder.encode([
+      7,
+      Array.from(SIGNER),
+      ...Array(16).fill(null),
+    ]);
+    const wire = encoder.encode([
+      ENVELOPE_VERSION,
+      ActionType.UpdateMarketFees,
+      1n,
+      payload,
+      ZERO_PUBKEY,
+      ZERO_SIG,
+    ]);
+    expect(() => decodeTx(wire)).toThrow(/UpdateMarketFees/);
   });
 
   it("round-trips UpdateMarketFees with only defaultTtlMs set (operator-only path)", () => {
