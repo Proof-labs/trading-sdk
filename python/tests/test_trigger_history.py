@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 
 import httpx
+import msgpack
 import pytest
 
 from proof_trading_sdk import TriggerLimb, generate_keypair, pubkey_to_owner
@@ -231,11 +232,11 @@ def test_delegated_owner_conveniences_preserve_wire_owner(monkeypatch):
     assert delegated_owner != signer_owner
     submitted = []
 
-    def submit(action):
-        submitted.append(action)
+    def submit(envelope):
+        submitted.append(msgpack.unpackb(msgpack.unpackb(envelope)[3]))
         return {"code": 0}
 
-    monkeypatch.setattr(client, "submit", submit)
+    monkeypatch.setattr(client, "submit_action", submit)
     client.set_position_triggers(
         7,
         3,
@@ -244,8 +245,10 @@ def test_delegated_owner_conveniences_preserve_wire_owner(monkeypatch):
     )
     client.cancel_position_triggers(7, 3, owner=delegated_owner)
 
-    assert submitted[0].owner == delegated_owner
-    assert submitted[1].owner == delegated_owner
+    assert submitted[0][0] == submitted[1][0] == 7
+    assert bytes(submitted[0][1]) == delegated_owner
+    assert bytes(submitted[1][1]) == delegated_owner
+    client.close()
 
 
 def test_history_request_filters_fail_before_transport():
