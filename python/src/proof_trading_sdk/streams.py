@@ -161,6 +161,32 @@ class _SubscriptionRefused(TransportError):
     """Terminal refusal of this connection's only trade subscription."""
 
 
+def _startup_status(error: BaseException) -> int | None:
+    """HTTP status of a refused WebSocket upgrade, from the gateway or a proxy."""
+    from websockets import exceptions as ws_errors
+
+    statuses = (ws_errors.InvalidStatus, getattr(ws_errors, "InvalidProxyStatus", ()))
+    return error.response.status_code if isinstance(error, statuses) else None
+
+
+def _startup_failure_is_transient(error: BaseException) -> bool:
+    """Whether a failure before the first connection should be retried.
+
+    Network errors, timeouts, a peer that closes during the handshake (from the
+    gateway or a proxy), and HTTP 408, 429 or 5xx responses are transient.
+    Every other response or handshake fault is permanent.
+    """
+    from websockets import exceptions as ws_errors
+
+    if isinstance(error, (OSError, TimeoutError)):
+        return True
+    status = _startup_status(error)
+    if status is not None:
+        return status in (408, 429) or 500 <= status <= 599
+    messages = (ws_errors.InvalidMessage, getattr(ws_errors, "InvalidProxyMessage", ()))
+    return isinstance(error, messages) and isinstance(error.__cause__, (EOFError, OSError))
+
+
 class _WebSocketStream:
     """Shared connection ownership, startup errors and cancelable reconnects.
 
@@ -183,6 +209,10 @@ class _WebSocketStream:
         path = url.path.rstrip("/")
         if not path.endswith("/ws"):
             path += "/ws"
+        if reconnect_attempts is not None and (
+            type(reconnect_attempts) is not int or reconnect_attempts < 0
+        ):
+            raise ValueError("reconnect_attempts must be None or a non-negative int")
         self._ws_url = urlunsplit(url._replace(path=path))
         self._api_key = api_key
         self._backoff_cap = reconnect_backoff_max
@@ -206,7 +236,10 @@ class _WebSocketStream:
             socket.close()
 
     def close(self) -> None:
-        self._closed_by_user = True
+        # Closing an already failed or closed stream (for example on context
+        # manager exit after an error) keeps reuse an error, not an empty stream.
+        if not self._closed:
+            self._closed_by_user = True
         self._shutdown()
 
     def _shutdown(self) -> None:
@@ -228,7 +261,6 @@ class _WebSocketStream:
 
     def _run(self) -> t.Iterator[dict[str, t.Any]]:
         import websockets.sync.client as ws_client
-        from websockets.exceptions import InvalidStatus
 
         if self._closed:
             if not self._closed_by_user:
@@ -259,13 +291,13 @@ class _WebSocketStream:
                 except Exception as error:
                     if self._closed:
                         return
-                    if not connected_once:
-                        code = error.response.status_code if isinstance(error, InvalidStatus) else None
-                        permanent = code is not None and 400 <= code < 500 and code not in (408, 429)
-                        if code in (401, 403):
+                    if not connected_once and not _startup_failure_is_transient(error):
+                        from websockets.exceptions import InvalidStatus
+
+                        code = _startup_status(error)
+                        if isinstance(error, InvalidStatus) and code in (401, 403):
                             raise AuthenticationError("stream connection authentication refused") from error
-                        if permanent or not isinstance(error, (OSError, TimeoutError, InvalidStatus)):
-                            raise TransportError("stream connection failed", status_code=code) from error
+                        raise TransportError("stream connection failed", status_code=code) from error
                     # Never log exception messages: they may contain credentials.
                     reason = type(error).__name__
                 finally:

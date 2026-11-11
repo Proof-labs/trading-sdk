@@ -79,11 +79,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   acknowledgment or data delivery. Handshakes and refusals alone do not reset them.
 
 - **Breaking (Python MAJOR):** account, orderbook and public trade streams share
-  connection and cleanup handling. Permanent initial HTTP 4xx errors raise
-  (`AuthenticationError` for 401/403, `TransportError` otherwise); network errors,
-  timeouts, HTTP 408/429 and 5xx retry, including on startup. Reconnect budget
-  exhaustion raises `TransportError`. After failure or iterator closure, reuse
-  raises `RuntimeError`; explicit `close()` leaves iteration empty. Streams accept
+  connection and cleanup handling. At startup, HTTP 401/403 raise
+  `AuthenticationError` and any other non-transient response raises
+  `TransportError`; network errors, timeouts, a connection dropped during the
+  handshake, and HTTP 408/429/5xx from the gateway or a proxy retry. Exhausting
+  `AccountEventStream`'s `reconnect_attempts` budget raises `TransportError`;
+  orderbook and trade streams retry until closed. After a failure or iterator
+  closure, reuse raises `RuntimeError`, even after a later `close()`; `close()`
+  on an open stream leaves iteration empty. Streams accept
   base URLs or `/ws` endpoints, reject concurrent iterators, close sockets before
   reconnect waits and cancel waits on `close()`. Backoff caps must be finite and
   positive. Account auth retries and history recovery remain channel-specific.

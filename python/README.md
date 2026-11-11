@@ -223,19 +223,21 @@ cursor zero; its history-based reconnect recovery does not change this cursor.
 All three stream classes share connection, cleanup and reconnect handling in
 `streams.py`. Before the first successful connection, HTTP 401/403 raises
 `AuthenticationError`; other HTTP 4xx except 408/429 raises `TransportError`.
-Temporary connection failures (network errors, timeouts, HTTP 408/429 and 5xx)
-retry with cancelable exponential backoff, including on startup. Other startup
-errors raise `TransportError`. After connecting once, connection failures retry.
+Temporary connection failures (network errors, timeouts, a connection dropped
+during the handshake, and HTTP 408/429/5xx from the gateway or a proxy) retry
+with cancelable exponential backoff, including on startup. Other startup
+errors, including any other HTTP status, raise `TransportError`. After connecting once, connection failures retry.
 A matching subscription acknowledgment or non-error data frame resets attempts
 and backoff; a handshake, unrelated acknowledgment or refusal does not.
 
 Account streams retain their signed-subscription retries and history recovery.
-Exhausting a configured reconnect budget raises `TransportError` and closes the
-stream. Each stream accepts base URLs or `/ws` endpoints and permits one active
+Only `AccountEventStream` takes a reconnect budget (`reconnect_attempts`, a
+non-negative integer or `None`); exhausting it raises `TransportError` and
+closes the stream. Orderbook and trade streams retry until closed. Each stream accepts base URLs or `/ws` endpoints and permits one active
 iterator. Closing the iterator closes its stream; context managers and `close()`
-also release the socket and cancel waits. Iterating after explicit `close()` is
-empty; after failure or iterator closure it raises `RuntimeError`, requiring a
-new stream. `reconnect_backoff_max` must be finite and positive. These startup
+also release the socket and cancel waits. Iterating after `close()` on an open
+stream is empty; after a failure or iterator closure it raises `RuntimeError`,
+requiring a new stream, even if `close()` or a context-manager exit follows. `reconnect_backoff_max` must be finite and positive. These startup
 and iterator contract changes are for the next Python MAJOR release.
 
 ## Public trade stream

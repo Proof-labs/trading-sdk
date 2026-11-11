@@ -5,7 +5,7 @@ import threading
 import pytest
 import websockets.sync.client as ws_client
 from websockets.datastructures import Headers
-from websockets.exceptions import InvalidStatus
+from websockets.exceptions import InvalidMessage, InvalidProxyMessage, InvalidProxyStatus, InvalidStatus
 from websockets.http11 import Response
 
 from proof_trading_sdk import AccountEventStream, OrderbookDeltaStream, PublicTradeStream
@@ -361,3 +361,67 @@ def test_confirmed_quiet_account_does_not_exhaust_budget(monkeypatch):
     monkeypatch.setattr(stream._stop, "wait", wait)
     assert list(stream) == []
     assert len(sockets) == 4 and waits == [0.5] * 4
+
+
+def _dropped_handshake(kind):
+    error = kind("did not receive a valid HTTP response")
+    error.__cause__ = EOFError("connection closed while reading HTTP status line")
+    return error
+
+
+@pytest.mark.parametrize("error", [
+    _dropped_handshake(InvalidMessage),
+    _dropped_handshake(InvalidProxyMessage),
+    *[InvalidProxyStatus(Response(code, "Proxy", Headers())) for code in (429, 502, 503)],
+])
+def test_dropped_handshake_and_proxy_5xx_retry_at_startup(monkeypatch, channel, error):
+    stream = make_stream(channel)
+    socket = Socket(data_frame(channel))
+    results = iter([error, socket])
+    def connect(*args, **kwargs):
+        result = next(results)
+        if isinstance(result, Exception):
+            raise result
+        return result
+    waits = []
+    monkeypatch.setattr(ws_client, "connect", connect)
+    monkeypatch.setattr(stream._stop, "wait", lambda delay: waits.append(delay) or False)
+    with stream:
+        frames = iter(stream)
+        assert next(frames) == data_frame(channel)
+        assert waits == [0.5]
+    frames.close()
+
+
+@pytest.mark.parametrize("error", [
+    InvalidStatus(Response(200, "OK", Headers())),
+    InvalidStatus(Response(304, "Not Modified", Headers())),
+    InvalidProxyStatus(Response(407, "Proxy Authentication Required", Headers())),
+    InvalidMessage("malformed HTTP response"),
+])
+def test_non_transient_startup_responses_fail_fast(monkeypatch, channel, error):
+    monkeypatch.setattr(ws_client, "connect", lambda *a, **k: (_ for _ in ()).throw(error))
+    stream = make_stream(channel)
+    monkeypatch.setattr(stream._stop, "wait", lambda _: pytest.fail("permanent startup failure retried"))
+    with pytest.raises(TransportError) as exc:
+        next(iter(stream))
+    assert not isinstance(exc.value, AuthenticationError)
+    status = getattr(getattr(error, "response", None), "status_code", None)
+    assert exc.value.status_code == status
+
+
+def test_failure_inside_context_manager_still_forbids_reuse(monkeypatch, channel):
+    monkeypatch.setattr(ws_client, "connect", lambda *a, **k: (_ for _ in ()).throw(
+        InvalidStatus(Response(400, "Bad Request", Headers()))))
+    stream = make_stream(channel)
+    with pytest.raises(TransportError):
+        with stream:
+            list(stream)
+    with pytest.raises(RuntimeError, match="create a new stream"):
+        list(stream)
+
+
+@pytest.mark.parametrize("attempts", [-1, True, 1.5, "3"])
+def test_account_reconnect_attempts_are_validated(attempts):
+    with pytest.raises(ValueError, match="reconnect_attempts"):
+        AccountEventStream("ws://gateway", OWNER, reconnect_attempts=attempts)
