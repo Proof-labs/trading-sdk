@@ -135,9 +135,8 @@ async fn a_read_only_client_sees_devnet() {
     let mut book = book.unwrap();
     assert_sorted(&book);
 
-    // Frames on one socket are ordered, so a resubscribe's snapshot is the
-    // book after every update queued ahead of it.
-    ws.unsubscribe(Subscription::Orderbook(1)).unwrap();
+    // Subscribing again resends the snapshot. Frames on one socket are
+    // ordered, so it is the book after every update queued ahead of it.
     ws.subscribe(Subscription::Orderbook(1)).unwrap();
     let fresh = loop {
         match next(&mut rx).await {

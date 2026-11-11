@@ -4,13 +4,13 @@
 //! cloneable [`WsClient`] handle for subscribing, plus a [`WsReceiver`] that
 //! yields typed [`WsMessage`]s. A background task owns the socket. It sends an
 //! app-level ping on an interval and reconnects (with backoff) when a pong is
-//! missed or the socket drops, then re-sends every subscription. After a
-//! reconnect it yields [`WsMessage::Reconnected`]. Each order book then
-//! re-sends its full snapshot, but account events missed while disconnected
-//! are not replayed.
+//! missed or the socket drops, then re-sends every subscription, paced to the
+//! gateway's message budget. After a reconnect it yields
+//! [`WsMessage::Reconnected`]. Each order book then re-sends its full snapshot,
+//! but account events missed while disconnected are not replayed.
 
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -25,8 +25,8 @@ use proof_trading_sdk::types::{MarketId, Side};
 use proof_trading_sdk::Signer;
 use serde::{Deserialize, Deserializer};
 use serde_json::json;
-use tokio::sync::mpsc;
-use tokio::time::{sleep, sleep_until, Instant};
+use tokio::sync::{mpsc, Notify};
+use tokio::time::{sleep_until, Instant};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
@@ -43,6 +43,12 @@ type Socket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// Domain prefix of the gateway's account-stream auth message.
 const ACCOUNT_AUTH_DOMAIN: &[u8] = b"ProofExchange-account-events-v1";
+
+/// Subscriptions re-sent at once after a reconnect, then per second. The
+/// gateway charges 4 tokens per subscribe against a 256 burst refilled at 64
+/// per second, so this stays inside it with room for pings.
+const RESUBSCRIBE_BURST: usize = 60;
+const RESUBSCRIBE_PER_SECOND: usize = 15;
 
 // -- configuration -------------------------------------------------------------
 
@@ -110,9 +116,10 @@ pub struct WsConfig {
 
 impl WsConfig {
     /// Settings for the feed at `url` (e.g. `wss://api.dev.proof.trade/ws`)
-    /// with defaults: ping every 5s, reconnect after a 5s pong timeout with
-    /// backoff up to 10s, 4096-message buffer, no API key, no account auth.
-    /// A dead socket is noticed within 10s.
+    /// with defaults: ping every 5s, reconnect when nothing (no frame of any
+    /// kind) arrives for 10s after a ping, backoff up to 10s, 4096-message
+    /// buffer, no API key, no account auth. A dead socket is noticed within
+    /// 15s.
     #[must_use]
     pub fn new(url: impl Into<String>) -> Self {
         Self {
@@ -120,7 +127,7 @@ impl WsConfig {
             api_key: None,
             account_auth: None,
             ping_interval: Duration::from_secs(5),
-            pong_timeout: Duration::from_secs(5),
+            pong_timeout: Duration::from_secs(10),
             reconnect: true,
             max_backoff: Duration::from_secs(10),
             buffer: 4096,
@@ -166,7 +173,8 @@ impl WsConfig {
         self
     }
 
-    /// Reconnect if no pong arrives this long after a ping.
+    /// Reconnect if no frame (a pong or anything else) arrives this long
+    /// after a ping. Keep it at least two ping intervals.
     #[must_use]
     pub fn with_pong_timeout(mut self, timeout: Duration) -> Self {
         self.pong_timeout = timeout;
@@ -284,7 +292,8 @@ pub enum WsMessage {
     },
     /// A public fill.
     Trade(WsTrade),
-    /// An account's state at subscribe time.
+    /// An account's state at subscribe time. Account events at or below its
+    /// `height` are already in it, and the client drops any that follow it.
     AccountSnapshot {
         owner: Address,
         /// The height it was read at, when the gateway reports it.
@@ -293,8 +302,10 @@ pub enum WsMessage {
     },
     /// A live account event.
     AccountEvent(AccountEvent),
-    /// The gateway refused a subscription (named when known). A `code` of 401
-    /// on [`Subscription::AccountEvents`] means it needs auth.
+    /// The gateway refused a subscription (named when known), and the client
+    /// no longer holds it: [`WsClient::subscribe`] again to retry. A `code`
+    /// of 401 on [`Subscription::AccountEvents`] means it needs auth; 429 is
+    /// the gateway's rate limit or subscription cap.
     Refused {
         subscription: Option<Subscription>,
         code: Option<u16>,
@@ -304,10 +315,12 @@ pub enum WsMessage {
     /// re-sent. Books will re-snapshot. Account events from the gap are
     /// not replayed; reconcile through `InfoClient` if they matter.
     Reconnected,
-    /// The socket dropped. With `reconnect` on, a reconnect is under way.
+    /// The socket dropped, or a reconnect attempt failed. With `reconnect` on,
+    /// another attempt follows after the backoff.
     Disconnected { reason: String },
     /// A frame this client could not read, and the subscription it belongs
-    /// to when that much was readable. The connection carries on.
+    /// to when that much was readable. The connection carries on;
+    /// [`WsClient::subscribe`] to it again for a fresh snapshot.
     Malformed {
         subscription: Option<Subscription>,
         reason: String,
@@ -347,6 +360,8 @@ enum Command {
 #[derive(Clone, Debug)]
 pub struct WsClient {
     commands: mpsc::UnboundedSender<Command>,
+    /// Wakes the task wherever it waits (a full buffer, a reconnect).
+    close: Arc<Notify>,
 }
 
 /// The stream of [`WsMessage`]s. Ends (`None`) after [`WsClient::close`],
@@ -386,11 +401,22 @@ impl WsClient {
         let socket = open(&config).await?;
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (message_tx, messages) = mpsc::channel(config.buffer.max(1));
-        tokio::spawn(run(config, socket, command_rx, message_tx));
-        Ok((Self { commands }, WsReceiver { messages }))
+        let close = Arc::new(Notify::new());
+        let task = Task {
+            config,
+            commands: command_rx,
+            out: message_tx,
+            close: Arc::clone(&close),
+            subscriptions: BTreeSet::new(),
+            next_id: 1,
+        };
+        tokio::spawn(task.run(socket));
+        Ok((Self { commands, close }, WsReceiver { messages }))
     }
 
-    /// Subscribe. Idempotent; kept across reconnects.
+    /// Subscribe; kept across reconnects. Subscribing again to one already
+    /// held re-sends the request, and the gateway answers with a fresh
+    /// snapshot: use it to resync a book or retry a refusal.
     ///
     /// # Errors
     ///
@@ -408,9 +434,11 @@ impl WsClient {
         self.send(Command::Unsubscribe(subscription))
     }
 
-    /// Close the socket and end the receiver.
+    /// Close the socket and end the receiver, even while the task is waiting
+    /// on a full buffer or a reconnect.
     pub fn close(&self) {
         let _ = self.commands.send(Command::Close);
+        self.close.notify_one();
     }
 
     fn send(&self, command: Command) -> Result<()> {
@@ -448,190 +476,247 @@ enum End {
     Dropped(String),
 }
 
-async fn run(
+/// The connection task: owns the socket and every piece of feed state.
+struct Task {
     config: WsConfig,
-    first: Socket,
-    mut commands: mpsc::UnboundedReceiver<Command>,
+    commands: mpsc::UnboundedReceiver<Command>,
     out: mpsc::Sender<WsMessage>,
-) {
-    let mut subscriptions = BTreeSet::new();
-    let mut next_id: u64 = 1;
-    let mut socket = Some(first);
-    let mut backoff = Duration::from_millis(250);
-    let mut reconnected = false;
+    close: Arc<Notify>,
+    subscriptions: BTreeSet<Subscription>,
+    next_id: u64,
+}
 
-    loop {
-        let Some(mut ws) = socket.take() else { return };
-        if reconnected && out.send(WsMessage::Reconnected).await.is_err() {
-            return;
-        }
-        let end = session(
-            &config,
-            &mut ws,
-            &mut subscriptions,
-            &mut next_id,
-            &mut commands,
-            &out,
-        )
-        .await;
-        let _ = ws.close(None).await;
-        let End::Dropped(reason) = end else { return };
-        if out.send(WsMessage::Disconnected { reason }).await.is_err() || !config.reconnect {
-            return;
-        }
-        // Reconnect with doubling backoff; a closed handle ends the loop.
+impl Task {
+    async fn run(mut self, first: Socket) {
+        let mut socket = first;
         loop {
+            let end = self.session(&mut socket).await;
+            let _ = socket.close(None).await;
+            let End::Dropped(reason) = end else { return };
+            if !self.deliver(WsMessage::Disconnected { reason }).await || !self.config.reconnect {
+                return;
+            }
+            let Some(next) = self.reconnect().await else {
+                return;
+            };
+            socket = next;
+            if !self.deliver(WsMessage::Reconnected).await {
+                return;
+            }
+        }
+    }
+
+    /// Re-open the socket with doubling backoff, reporting each failed
+    /// attempt. `None` when the feed was closed meanwhile.
+    async fn reconnect(&mut self) -> Option<Socket> {
+        let mut backoff = Duration::from_millis(250);
+        loop {
+            let deadline = Instant::now() + backoff;
+            loop {
+                tokio::select! {
+                    () = sleep_until(deadline) => break,
+                    () = self.close.notified() => return None,
+                    cmd = self.commands.recv() => match cmd {
+                        None | Some(Command::Close) => return None,
+                        Some(Command::Subscribe(s)) => { self.subscriptions.insert(s); }
+                        Some(Command::Unsubscribe(s)) => { self.subscriptions.remove(&s); }
+                    },
+                }
+            }
+            let opened = tokio::select! {
+                () = self.close.notified() => return None,
+                opened = open(&self.config) => opened,
+            };
+            match opened {
+                Ok(socket) => return Some(socket),
+                Err(e) => {
+                    let reason = format!("reconnect failed: {e}");
+                    if !self.deliver(WsMessage::Disconnected { reason }).await {
+                        return None;
+                    }
+                }
+            }
+            backoff = (backoff * 2).min(self.config.max_backoff);
+        }
+    }
+
+    /// Hand a message to the receiver. `false` when the feed is closed or
+    /// nobody is listening.
+    async fn deliver(&self, message: WsMessage) -> bool {
+        tokio::select! {
+            biased;
+            () = self.close.notified() => false,
+            sent = self.out.send(message) => sent.is_ok(),
+        }
+    }
+
+    async fn session(&mut self, ws: &mut Socket) -> End {
+        // Requests awaiting an ack or a refusal, so a refusal can name its
+        // subscription. Cleared per session: ids from a dead socket never
+        // answer.
+        let mut requests: HashMap<u64, (Subscription, bool)> = HashMap::new();
+        // Each account's latest snapshot height: events at or below it are
+        // already in the snapshot.
+        let mut snapshot_heights: HashMap<Address, u64> = HashMap::new();
+        // Held subscriptions still to re-send, paced to the gateway's budget.
+        let mut resend: VecDeque<Subscription> = self.subscriptions.iter().copied().collect();
+        let mut allowance = RESUBSCRIBE_BURST;
+        let mut refill = Instant::now() + Duration::from_secs(1);
+        let mut next_ping = Instant::now() + self.config.ping_interval;
+        let mut pong_deadline: Option<Instant> = None;
+        loop {
+            while allowance > 0 {
+                let Some(s) = resend.pop_front() else { break };
+                allowance -= 1;
+                if let Err(e) = self.request(ws, s, true, &mut requests).await {
+                    return e;
+                }
+            }
+            // Biased: commands, then queued frames, then timers, so a backlog
+            // drains before a deadline can fire on it.
             tokio::select! {
-                () = sleep(backoff) => {}
-                cmd = commands.recv() => match cmd {
-                    None | Some(Command::Close) => return,
-                    Some(Command::Subscribe(s)) => { subscriptions.insert(s); continue; }
-                    Some(Command::Unsubscribe(s)) => { subscriptions.remove(&s); continue; }
+                biased;
+                cmd = self.commands.recv() => match cmd {
+                    None | Some(Command::Close) => return End::Closed,
+                    Some(Command::Subscribe(s)) => {
+                        self.subscriptions.insert(s);
+                        resend.retain(|&r| r != s);
+                        if let Err(e) = self.request(ws, s, true, &mut requests).await {
+                            return e;
+                        }
+                    }
+                    Some(Command::Unsubscribe(s)) => {
+                        resend.retain(|&r| r != s);
+                        if self.subscriptions.remove(&s) {
+                            if let Err(e) = self.request(ws, s, false, &mut requests).await {
+                                return e;
+                            }
+                        }
+                    }
+                },
+                frame = ws.next() => {
+                    // Any frame proves the socket is alive.
+                    if let Some(Ok(_)) = &frame {
+                        pong_deadline = None;
+                    }
+                    match frame {
+                        Some(Ok(Message::Text(text))) => {
+                            let message = match parse(text.as_str()) {
+                                Parsed::Message(m) => *m,
+                                Parsed::Refused { id, code, message } => {
+                                    let request = id.and_then(|id| requests.remove(&id));
+                                    if let Some((s, true)) = request {
+                                        self.subscriptions.remove(&s);
+                                    }
+                                    WsMessage::Refused {
+                                        subscription: request.map(|(s, _)| s),
+                                        code,
+                                        message,
+                                    }
+                                }
+                                Parsed::Ack(id) => {
+                                    if let Some(id) = id {
+                                        requests.remove(&id);
+                                    }
+                                    continue;
+                                }
+                                Parsed::Pong | Parsed::Ignore => continue,
+                            };
+                            match &message {
+                                WsMessage::AccountSnapshot { owner, height: Some(h), .. } => {
+                                    snapshot_heights.insert(*owner, *h);
+                                }
+                                WsMessage::AccountEvent(e)
+                                    if snapshot_heights.get(&e.owner).is_some_and(|&h| e.height <= h) =>
+                                {
+                                    continue;
+                                }
+                                _ => {}
+                            }
+                            if !self.deliver(message).await {
+                                return End::Closed;
+                            }
+                        }
+                        Some(Ok(Message::Close(frame))) => {
+                            return End::Dropped(frame.map_or_else(|| "closed by gateway".into(), |f| f.reason.to_string()));
+                        }
+                        Some(Ok(_)) => {} // binary / protocol ping-pong: tungstenite answers pings itself
+                        Some(Err(e)) => return End::Dropped(e.to_string()),
+                        None => return End::Dropped("socket ended".into()),
+                    }
+                },
+                () = sleep_until(refill), if !resend.is_empty() => {
+                    allowance = RESUBSCRIBE_PER_SECOND;
+                    refill = Instant::now() + Duration::from_secs(1);
+                },
+                () = sleep_until(next_ping) => {
+                    let ping = json!({ "method": "ping", "id": take_id(&mut self.next_id) }).to_string();
+                    if let Err(e) = ws.send(Message::Text(ping.into())).await {
+                        return End::Dropped(e.to_string());
+                    }
+                    next_ping = Instant::now() + self.config.ping_interval;
+                    pong_deadline.get_or_insert(Instant::now() + self.config.pong_timeout);
+                },
+                () = sleep_until(pong_deadline.unwrap_or(next_ping)), if pong_deadline.is_some() => {
+                    return End::Dropped("pong timeout".into());
                 },
             }
-            if let Ok(ws) = open(&config).await {
-                socket = Some(ws);
-                backoff = Duration::from_millis(250);
-                reconnected = true;
-                break;
-            }
-            backoff = (backoff * 2).min(config.max_backoff);
         }
     }
-}
 
-async fn session(
-    config: &WsConfig,
-    ws: &mut Socket,
-    subscriptions: &mut BTreeSet<Subscription>,
-    next_id: &mut u64,
-    commands: &mut mpsc::UnboundedReceiver<Command>,
-    out: &mpsc::Sender<WsMessage>,
-) -> End {
-    // Requests awaiting an ack or a refusal, so a refusal can name its
-    // subscription. Cleared per session: ids from a dead socket never answer.
-    let mut requests: HashMap<u64, Subscription> = HashMap::new();
-    for &s in subscriptions.iter() {
-        if let Err(e) = send_subscribe(config, ws, s, true, next_id, &mut requests, out).await {
-            return e;
-        }
-    }
-    let mut next_ping = Instant::now() + config.ping_interval;
-    let mut pong_deadline: Option<Instant> = None;
-    loop {
-        tokio::select! {
-            cmd = commands.recv() => match cmd {
-                None | Some(Command::Close) => return End::Closed,
-                Some(Command::Subscribe(s)) => {
-                    if subscriptions.insert(s) {
-                        if let Err(e) = send_subscribe(config, ws, s, true, next_id, &mut requests, out).await {
-                            return e;
-                        }
+    /// Send one subscribe or unsubscribe. A subscribe whose signing fails is
+    /// reported as [`WsMessage::Refused`] and dropped, never sent unsigned.
+    async fn request(
+        &mut self,
+        ws: &mut Socket,
+        subscription: Subscription,
+        subscribe: bool,
+        requests: &mut HashMap<u64, (Subscription, bool)>,
+    ) -> Result<(), End> {
+        let mut params = match subscription {
+            Subscription::Orderbook(market) => json!({ "channel": "orderbook", "market": market }),
+            Subscription::Trades(market) => json!({ "channel": "trades", "market": market }),
+            Subscription::AccountEvents(owner) => {
+                json!({ "channel": "accountEvents", "owner": owner.to_string() })
+            }
+        };
+        if let (true, Subscription::AccountEvents(owner), Some(auth)) =
+            (subscribe, subscription, &self.config.account_auth)
+        {
+            match auth.params(owner) {
+                Ok(serde_json::Value::Object(signed)) => {
+                    if let Some(p) = params.as_object_mut() {
+                        p.extend(signed);
                     }
                 }
-                Some(Command::Unsubscribe(s)) => {
-                    if subscriptions.remove(&s) {
-                        if let Err(e) = send_subscribe(config, ws, s, false, next_id, &mut requests, out).await {
-                            return e;
-                        }
-                    }
-                }
-            },
-            frame = ws.next() => match frame {
-                Some(Ok(Message::Text(text))) => {
-                    let message = match parse(text.as_str()) {
-                        Parsed::Message(m) => *m,
-                        Parsed::Refused { id, code, message } => WsMessage::Refused {
-                            subscription: id.and_then(|id| requests.remove(&id)),
-                            code,
-                            message,
-                        },
-                        Parsed::Ack(id) => {
-                            if let Some(id) = id {
-                                requests.remove(&id);
-                            }
-                            continue;
-                        }
-                        Parsed::Pong => {
-                            pong_deadline = None;
-                            continue;
-                        }
-                        Parsed::Ignore => continue,
+                Ok(_) => {}
+                Err(e) => {
+                    self.subscriptions.remove(&subscription);
+                    let refused = WsMessage::Refused {
+                        subscription: Some(subscription),
+                        code: None,
+                        message: format!("signing the subscription failed: {e}"),
                     };
-                    if out.send(message).await.is_err() {
-                        return End::Closed;
-                    }
-                }
-                Some(Ok(Message::Close(frame))) => {
-                    return End::Dropped(frame.map_or_else(|| "closed by gateway".into(), |f| f.reason.to_string()));
-                }
-                Some(Ok(_)) => {} // binary / protocol ping-pong: tungstenite answers pings itself
-                Some(Err(e)) => return End::Dropped(e.to_string()),
-                None => return End::Dropped("socket ended".into()),
-            },
-            () = sleep_until(next_ping) => {
-                let ping = json!({ "method": "ping", "id": take_id(next_id) }).to_string();
-                if let Err(e) = ws.send(Message::Text(ping.into())).await {
-                    return End::Dropped(e.to_string());
-                }
-                next_ping = Instant::now() + config.ping_interval;
-                pong_deadline.get_or_insert(Instant::now() + config.pong_timeout);
-            },
-            () = sleep_until(pong_deadline.unwrap_or(next_ping)), if pong_deadline.is_some() => {
-                return End::Dropped("pong timeout".into());
-            },
-        }
-    }
-}
-
-async fn send_subscribe(
-    config: &WsConfig,
-    ws: &mut Socket,
-    subscription: Subscription,
-    subscribe: bool,
-    next_id: &mut u64,
-    requests: &mut HashMap<u64, Subscription>,
-    out: &mpsc::Sender<WsMessage>,
-) -> Result<(), End> {
-    let id = take_id(next_id);
-    let mut params = match subscription {
-        Subscription::Orderbook(market) => json!({ "channel": "orderbook", "market": market }),
-        Subscription::Trades(market) => json!({ "channel": "trades", "market": market }),
-        Subscription::AccountEvents(owner) => {
-            json!({ "channel": "accountEvents", "owner": owner.to_string() })
-        }
-    };
-    if let (true, Subscription::AccountEvents(owner), Some(auth)) =
-        (subscribe, subscription, &config.account_auth)
-    {
-        match auth.params(owner) {
-            Ok(serde_json::Value::Object(signed)) => {
-                if let Some(p) = params.as_object_mut() {
-                    p.extend(signed);
+                    return if self.deliver(refused).await {
+                        Ok(())
+                    } else {
+                        Err(End::Closed)
+                    };
                 }
             }
-            Ok(_) => {}
-            Err(e) => {
-                // Never send an unsigned account subscribe in place of a signed one.
-                let refused = WsMessage::Refused {
-                    subscription: Some(subscription),
-                    code: None,
-                    message: format!("signing the subscription failed: {e}"),
-                };
-                return out.send(refused).await.map_err(|_| End::Closed);
-            }
         }
+        let method = if subscribe {
+            "subscribe"
+        } else {
+            "unsubscribe"
+        };
+        let id = take_id(&mut self.next_id);
+        let frame = json!({ "method": method, "id": id, "params": params }).to_string();
+        requests.insert(id, (subscription, subscribe));
+        ws.send(Message::Text(frame.into()))
+            .await
+            .map_err(|e| End::Dropped(e.to_string()))
     }
-    let method = if subscribe {
-        "subscribe"
-    } else {
-        "unsubscribe"
-    };
-    let frame = json!({ "method": method, "id": id, "params": params }).to_string();
-    requests.insert(id, subscription);
-    ws.send(Message::Text(frame.into()))
-        .await
-        .map_err(|e| End::Dropped(e.to_string()))
 }
 
 fn take_id(next: &mut u64) -> u64 {
@@ -706,6 +791,10 @@ struct Raw<'a> {
     #[serde(default, deserialize_with = "opt_u64")]
     height: Option<u64>,
     tx_hash: Option<String>,
+    #[serde(default, deserialize_with = "opt_u64")]
+    tx_index: Option<u64>,
+    #[serde(default, deserialize_with = "opt_u64")]
+    event_index: Option<u64>,
     payload: Option<serde_json::Value>,
     account: Option<RawAccount>,
     code: Option<u16>,
@@ -876,15 +965,24 @@ fn account(raw: Raw<'_>) -> Parsed {
             let (Some(event_type), Some(height)) = (raw.event_type, raw.height) else {
                 return malformed(this, "account event without an eventType or height");
             };
+            // A block event's key (`height-N-kind-block-event-I`) is not a
+            // hash; anything else must be one.
+            let tx_hash = match raw.tx_hash.as_deref() {
+                None => None,
+                Some(key) if key.starts_with("height-") => None,
+                Some(hash) => match TxHash::from_hex(hash) {
+                    Ok(hash) => Some(hash),
+                    Err(_) => return malformed(this, "account event txHash is not a hash"),
+                },
+            };
+            let index = |i: Option<u64>| i.and_then(|i| u32::try_from(i).ok());
             let payload = raw.payload.unwrap_or(serde_json::Value::Null);
             Parsed::message(WsMessage::AccountEvent(AccountEvent {
                 owner,
                 height,
-                // A block event's key (`height-N-kind-block-event-I`) is not a hash.
-                tx_hash: raw
-                    .tx_hash
-                    .as_deref()
-                    .and_then(|h| TxHash::from_hex(h).ok()),
+                tx_hash,
+                tx_index: index(raw.tx_index),
+                event_index: index(raw.event_index),
                 event: Event::from(raw_from_json(&event_type, &payload)),
             }))
         }

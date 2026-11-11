@@ -576,6 +576,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn apply_keeps_both_sides_best_first() {
+        let l = |price, quantity| Level {
+            price,
+            quantity,
+            order_count: 1,
+        };
+        let prices = |levels: &[Level]| levels.iter().map(|l| l.price).collect::<Vec<_>>();
+        let mut book = Orderbook::default();
+        // (side, price, quantity, bids after, asks after)
+        let steps: [(Side, u64, u64, &[u64], &[u64]); 8] = [
+            (Side::Buy, 10, 1, &[10], &[]),          // into empty
+            (Side::Buy, 12, 1, &[12, 10], &[]),      // new best
+            (Side::Buy, 11, 1, &[12, 11, 10], &[]),  // between
+            (Side::Buy, 11, 5, &[12, 11, 10], &[]),  // replace
+            (Side::Buy, 12, 0, &[11, 10], &[]),      // remove
+            (Side::Buy, 99, 0, &[11, 10], &[]),      // remove a missing level
+            (Side::Sell, 14, 1, &[11, 10], &[14]),
+            (Side::Sell, 13, 1, &[11, 10], &[13, 14]),
+        ];
+        for (side, price, quantity, bids, asks) in steps {
+            book.apply(side, l(price, quantity));
+            assert_eq!((prices(&book.bids), prices(&book.asks)), (bids.to_vec(), asks.to_vec()));
+        }
+        assert_eq!(book.bids[0].quantity, 5, "a replace sets the quantity");
+        book.apply(Side::Sell, l(13, 0));
+        assert_eq!(book.best_ask().unwrap().price, 14);
+    }
+
+    #[test]
     fn orderbook_bytes_from_devnet_decode() {
         // Captured from https://api.dev.proof.trade/v1/orderbook/1 (2026-11-10).
         let bytes = unbase64(

@@ -194,8 +194,10 @@ from a `{"data": ...}` route), `get_json(path)` or `post_info(&body)`.
 
 One socket carries every subscription. A background task (spawned with
 `tokio::spawn`, so `connect` needs a tokio runtime) owns it, sends an
-app-level ping every 5 s, and reconnects with backoff when a pong is 5 s late
-or the socket drops. It then re-sends every subscription.
+app-level ping every 5 s, and reconnects with backoff when nothing at all
+arrives for 10 s after a ping, or the socket drops. Each failed attempt is a
+`Disconnected`. It then re-sends every subscription, paced to the gateway's
+budget (60 at once, then 15 a second).
 
 ```rust,no_run
 use proof_sdk_rs::{Event, ExchangeClient, Orderbook, Subscription, WsClient, WsMessage};
@@ -228,8 +230,8 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
             _ => {}                                           // `Other` / `Malformed`: raw attributes
         },
         WsMessage::Reconnected => {}                          // books re-snapshot next
-        WsMessage::Refused { subscription, code, .. } => {}   // e.g. 401 on an unsigned account sub
-        WsMessage::Malformed { subscription, .. } => {}       // drop just that book, then resubscribe
+        WsMessage::Refused { subscription, code, .. } => {}   // no longer held; subscribe again to retry
+        WsMessage::Malformed { subscription, .. } => {}       // subscribe again for a fresh snapshot
         _ => {}
     }
 }
@@ -253,16 +255,23 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
   `FundingSettled`, `Deposited`. Any other kind is `Event::Other`, and a known
   kind whose payload does not read is `Event::Malformed`; both carry the
   engine event name and raw attributes. `tx_hash` is the causing
-  transaction's `TxHash`, `None` for block events (funding, expiry).
-- **Resync a book** by unsubscribing and subscribing again: the gateway sends
-  a fresh snapshot, in order after the updates already delivered. The feed
-  has no sequence numbers, so a long-quiet book is worth resyncing.
+  transaction's `TxHash`, `None` for block events (funding, expiry);
+  `tx_index` and `event_index` place the event in its block.
+- **Snapshot boundary.** An `AccountSnapshot` already includes every event at or
+  below its `height`; the client drops those if they arrive after it, so
+  applying events on top of the snapshot never counts one twice.
+- **Resync or retry** by subscribing again: the gateway answers a repeat
+  subscribe with a fresh snapshot, in order after the updates already
+  delivered. A refused subscription is dropped, so subscribing again retries
+  it. The feed has no sequence numbers, so a long-quiet book is worth
+  resyncing.
 - **Order ids.** Your own submission's receipt events carry them
   (`Event::OrderPlaced`). `OrderPlaced` on the feed carries the same id, with your
   `client_order_id`, for orders placed by another process.
 - **Backpressure.** Messages buffer up to `WsConfig::with_buffer` (default 4096). A
-  consumer that falls further behind pauses socket reads, and with them the
-  heartbeat. Keep the receive loop fast and hand slow work to another task.
+  consumer that falls further behind pauses socket reads; frames queued behind
+  it still count as signs of life, so a slow consumer does not drop a busy
+  socket. Keep the receive loop fast and hand slow work to another task.
 - Turn the feature off with `default-features = false` to drop
   `tokio-tungstenite`.
 
