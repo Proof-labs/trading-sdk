@@ -9,6 +9,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Python chain-pinned transaction evidence and bounded block-result ranges/windows
+  check exact transaction bytes, Merkle roots and H+1 app-hash continuity.
+  Results remain trusted gateway observations, without validator verification.
+
+- Python `finalized_orderbook()` and explicitly chain-pinned
+  `finalized_markets_snapshot()` return typed facts plus height-bound witnesses,
+  through bounded HTTP. Snapshot decoding uses canonical Rust; orderbooks use
+  Rust validation over `OrderbookSnapshot` and shared TS/Python vectors.
+  Existing snapshot APIs remain unchanged; witness consistency is not
+  validator or payload verification.
+
+- Python `finalized_account_state(owner, timeout=5)` returns typed raw balance,
+  positions and a height-bound witness through the canonical Rust wire decoder.
+  Exact integer ranges, owner bindings, minimum field counts and bounded responses
+  match the TS finalized account-state contract. Existing `account()` is unchanged;
+  valuation, authorization, payload proofs and validator verification are excluded.
+
+- Python: add typed finalized valued-account, agent-authorization, recent-nonce and open-order reads with bounded witness transport and canonical Rust payload decoding. Existing account/order APIs are unchanged. Python and TypeScript finalized order reads accept market ID zero, matching positions and the wire u32 domain; invalid market values remain errors.
+- Python chain-pinned `block_header`, typed header/witness decoders and
+  `verify_witness` compare a finalized-read witness with an H+1 app hash.
+  Byte, chunk and JSON-depth limits apply; synchronous HTTP cannot guarantee a
+  total elapsed-time deadline for slow headers or custom transports. Exact
+  heights/timestamps are preserved; validator signatures and payload proofs
+  are not verified. Whole-block responses over 1 MiB remain unsupported.
+
+- `validateSetMarginOffsetPolicy` checks policy bounds before encoding and
+  through `decodeAdminAction`.
+  `decodeMarginOffsetEvent` reads the engine's `margin_offset_policy_set`
+  and `margin_offset_pair_configured` attributes against wire-generated vectors.
+  Rust re-exports the margin-offset types. Conformance vectors and content-hash
+  constants pin policy encoding across TypeScript, Rust and Python.
 - Python typed `authorities()` and `liquidation_config()` reads, backed by
   canonical Rust wire types with strict record/address/range checks. Failed
   reads raise rather than synthesize empty authorities or default configuration.
@@ -33,6 +64,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Document `SetUserMarketLeverage` admission limits, its governed insurance-fund
   path and initial-margin-only semantics. SDK APIs and wire support are unchanged.
 
+- **TypeScript `readTransactionEvidence` and block-results reads reclassify
+  `GatewayReadError.kind` (MINOR for npm).** Callers that branch on `kind`
+  should review these fields:
+  - `malformed` → `configuration` (caller input): `signed bytes` (empty or
+    not bytes), `requested hash`, `from height`, `through height`,
+    `fixed window`.
+  - `binding` → `configuration`: `requested hash/bytes mismatch`.
+  - `malformed` → `binding` (cross-response mismatch):
+    `parent hash continuity`, `block time continuity`,
+    `transaction result count`, `post-state/header binding`,
+    `returned transaction binding`, `block transaction binding`.
+  - `malformed` → `limit`: `signed bytes` above the bounded response's base64
+    capacity (about 767 KiB, previously 1 MiB), now refused before any HTTP
+    request; these reads could never succeed.
+
+  Field names are unchanged; every other field keeps its kind.
+
+- TypeScript `RawOpenOrder.market` widens from `MarketId` to `MarketId | 0`;
+  code that assumes a branded `MarketId` must handle market zero.
 - Python account-stream reconnect backoff now defaults to a 10-second cap
   (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
 - Python signed account authentication rejects an unconfigured chain ID before
@@ -60,6 +110,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Ship this change in the next TypeScript MAJOR release; it is not part of 11.0.0.
 
 ### Fixed
+
+- Transaction evidence rejects signed bytes exceeding the bounded response's
+  base64 capacity before HTTP.
 
 - **Preserve structured gateway refusals.** Valid `status: "refused"`
   responses retain their machine-readable reason. TypeScript adds
