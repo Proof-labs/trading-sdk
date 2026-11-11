@@ -260,7 +260,7 @@ pub struct TxEvent {
     /// The engine's event name, e.g. `order_placed`.
     #[serde(rename = "type")]
     pub kind: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub attributes: Vec<TxAttribute>,
 }
 
@@ -268,7 +268,7 @@ pub struct TxEvent {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct TxAttribute {
     pub key: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub value: String,
 }
 
@@ -294,6 +294,9 @@ pub enum SubmissionOutcome<R = ()> {
     CheckTxRejected {
         hash: TxHash,
         code: NonZeroU32,
+        /// The engine's log, unchanged; [`crate::decode_exec_error_kind`]
+        /// needs it to read code 50. Empty when the gateway sent none.
+        log: String,
     },
     /// Broadcast or possibly in flight with no verdict yet; reconcile by hash.
     Pending {
@@ -393,10 +396,20 @@ struct SubmitRead {
     tx_hash: Option<String>,
     code: Option<u32>,
     height: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     log: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     events: Vec<TxEvent>,
+}
+
+/// The gateway forwards chain fields as it got them, so `null` and a missing
+/// key both mean empty.
+fn null_as_default<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(d)?.unwrap_or_default())
 }
 
 #[derive(Deserialize)]
@@ -408,9 +421,9 @@ struct TxRead {
 #[derive(Deserialize)]
 struct TxExecution {
     code: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     log: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     events: Vec<TxEvent>,
 }
 
@@ -781,6 +794,7 @@ impl GatewayClient {
                 ("error", Some(code), None) => SubmissionOutcome::CheckTxRejected {
                     hash,
                     code: NonZeroU32::new(code).ok_or_else(invalid)?,
+                    log,
                 },
                 ("pending", None, None) if has_hash => SubmissionOutcome::Pending { hash },
                 _ => return Err(invalid()),

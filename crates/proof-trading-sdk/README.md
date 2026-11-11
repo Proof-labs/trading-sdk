@@ -71,21 +71,14 @@ let wire = codec::sign_and_encode_with_chain(&chain_id, &action, seq, &key)
 ```
 
 To keep the key out of process memory, implement [`Signer`](src/signer.rs) for
-your HSM, KMS or remote signer. `LocalSigner` is the in-memory implementation and
-zeroizes its key on drop. Take the canonical action type and payload from the
-codec rather than serialising by hand:
+your HSM, KMS or remote signer and sign with `sign_action`, which takes the
+action type and payload from the engine's codec:
 
 ```rust,ignore
-// The codec signs only with an in-memory key, so encode an unsigned envelope
-// and lift (action_type, payload) out of it.
-let unsigned = codec::encode_signed_tx(&action, seq, &signer.public_key(), &[0; 64])?;
-let raw = codec::decode_tx_raw(&unsigned)?;
-let msg = crypto::signing_message(&chain_id, raw.action_type, seq, &raw.payload);
-let signature = signer.try_sign(&msg)?;
-let wire = codec::encode_signed_tx_raw(
-    raw.action_type, &raw.payload, seq, &signer.public_key(), &signature,
-)?;
+let wire = proof_trading_sdk::sign_action(&my_kms_signer, &chain_id, &action, seq)?;
 ```
+
+`LocalSigner` is the in-memory implementation and zeroizes its key on drop.
 
 ## Wire rules
 
@@ -112,12 +105,13 @@ let wire = codec::encode_signed_tx_raw(
 | Module                          | What it holds                                                                                                                                         |
 | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `types`, `codec`, `crypto`      | Re-exported from [`proof-wire`](https://github.com/Proof-labs/wire), the engine's own wire crate: `Action` and every payload, encode/decode, signing. |
-| `signer`                        | The `Signer` seam (`LocalSigner`, or bring your own custody backend).                                                                                 |
+| `signer`                        | The `Signer` seam (`LocalSigner`, or bring your own custody backend) and `sign_action`.                                                               |
 | `errors`                        | Engine result codes as a typed `ErrorKind` (`decode_exec_error_kind`, `error_code_manifest`).                                                         |
 | `query`, `reads`                | Read-model types and `reads::decode`, which tolerates fields a newer engine appends to a stored record.                                               |
 | `binary`                        | Trade an event's binary book in No terms (`yes_order`, `yes_limb`, `binary_position_view`).                                                           |
 | `ticker`                        | The market ticker rule, checked before signing a `CreateMarket`.                                                                                      |
 | `governance`                    | Admin-proposal types and the proposal content hash.                                                                                                   |
+| `governance_reads`              | Strict decoding of the governance read tuples.                                                                                                        |
 | `market_snapshot`               | The atomic committed markets snapshot and its witness (`MarketsSnapshotClient` needs feature `gateway`).                                              |
 | `msgpack`, `wire`               | Strict MessagePack preflight (`reject_floats`) and byte-field newtypes.                                                                               |
 | `gateway` _(feature `gateway`)_ | `GatewayClient`, documented below.                                                                                                                    |

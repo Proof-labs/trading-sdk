@@ -3,6 +3,8 @@
 use std::fmt;
 
 use proof_trading_sdk::gateway::{ErrorKind, GatewayError, TxHash};
+
+use crate::exchange::SignedTx;
 use proof_trading_sdk::SignerError;
 
 /// A client failure. Never carries a key, signature or API key in its text.
@@ -11,10 +13,11 @@ use proof_trading_sdk::SignerError;
 /// [`crate::TxStatus`]. An `Err` means the call did not get an answer, or the
 /// caller passed something unusable.
 ///
-/// The client keeps no state about a failed submission. A [`Error::Transport`]
-/// or [`Error::Http`] 5xx from [`crate::ExchangeClient::send`] can mean the
-/// bytes reached the gateway anyway; check the [`crate::SignedTx`] hash with
-/// [`crate::ExchangeClient::wait_for_receipt`] before signing a replacement.
+/// The client keeps no state about a failed submission. When a submission may
+/// have reached the gateway, the error is [`Error::Unconfirmed`] and carries
+/// the signed transaction: reconcile its hash with
+/// [`crate::ExchangeClient::wait_for_receipt`], or resend the same bytes,
+/// before signing a replacement.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
@@ -45,6 +48,12 @@ pub enum Error {
     ReceiptTimeout { hash: TxHash },
     /// The gateway's chain differs from the one the client was configured for.
     ChainMismatch { expected: String, actual: String },
+    /// A submission got no verdict and may have landed. `tx` is exactly what
+    /// was sent; `source` is why no verdict came back.
+    Unconfirmed { tx: SignedTx, source: Box<Error> },
+    /// A core transport failure with no closer match above (a missing mark
+    /// price, a hash mismatch, a rejected option), as the core reported it.
+    Gateway(GatewayError),
 }
 
 impl fmt::Display for Error {
@@ -66,6 +75,10 @@ impl fmt::Display for Error {
             Error::ChainMismatch { expected, actual } => {
                 write!(f, "gateway serves chain {actual:?}, expected {expected:?}")
             }
+            Error::Unconfirmed { tx, source } => {
+                write!(f, "{} may have landed: {source}", tx.hash)
+            }
+            Error::Gateway(e) => write!(f, "gateway: {e}"),
         }
     }
 }
@@ -75,19 +88,19 @@ impl std::error::Error for Error {
         match self {
             Error::Transport(e) => Some(&**e),
             Error::Signer(e) => Some(e),
+            Error::Unconfirmed { source, .. } => Some(&**source),
+            Error::Gateway(e) => Some(e),
             _ => None,
         }
     }
 }
 
-/// The core transport's failures, folded into the same variants the reads
-/// use, so one failure has one name whichever path the call took.
+/// The core transport's failures, folded into the variants the reads use
+/// where one fits exactly, so one failure has one name whichever path the
+/// call took. Anything else stays [`Error::Gateway`].
 impl From<GatewayError> for Error {
     fn from(e: GatewayError) -> Self {
-        let what = format!("{:?}", e.operation);
         match e.kind {
-            ErrorKind::InvalidConfiguration => Error::Config(what),
-            ErrorKind::InvalidInput => Error::InvalidInput(what),
             ErrorKind::Transport | ErrorKind::Timeout | ErrorKind::RpcUnavailable => {
                 Error::Transport(Box::new(e))
             }
@@ -96,13 +109,11 @@ impl From<GatewayError> for Error {
                 status,
                 body: String::new(),
             },
-            ErrorKind::MissingMark => Error::Http {
-                status: 503,
-                body: "MissingMark".into(),
-            },
-            ErrorKind::InvalidResponse | ErrorKind::HashMismatch => {
-                Error::Decode(format!("{what}: {:?}", e.kind))
-            }
+            ErrorKind::InvalidResponse => Error::Decode(format!("{:?}", e.operation)),
+            ErrorKind::InvalidConfiguration
+            | ErrorKind::InvalidInput
+            | ErrorKind::MissingMark
+            | ErrorKind::HashMismatch => Error::Gateway(e),
         }
     }
 }

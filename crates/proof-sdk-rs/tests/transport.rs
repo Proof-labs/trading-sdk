@@ -76,16 +76,19 @@ async fn place_order_posts_the_signed_bytes_and_reads_the_committed_events() {
     let c = client("http://127.0.0.1:1");
     let order = c.limit_order(1, Side::Buy, 66_000_000_000, 2);
     let tx = c.sign(&Action::PlaceOrder(order)).unwrap();
+    let owner = c.address().to_string();
     let (url, log) = fixture(vec![(
         200,
         // As devnet answers a resting order.
         json!({"status":"ok","txHash":tx.hash.to_string(),"code":0,"height":42,"log":"",
                "events":[{"type":"order_placed","attributes":[
                    {"index":false,"key":"order_id","value":"33514"},{"key":"market","value":"1"},
+                   {"key":"owner","value":owner},
                    {"key":"side","value":"buy"},{"key":"price","value":"66000000000"},
                    {"key":"quantity","value":"2"},{"key":"client_order_id","value":"0"},
-                   {"key":"post_only","value":"false"},{"key":"time_in_force","value":"gtc"}]},
-                   {"type":"fees_collected","attributes":[]}]}),
+                   {"key":"post_only","value":"false"},{"key":"reduce_only","value":"false"},
+                   {"key":"time_in_force","value":"gtc"}]},
+                   {"type":"fees_collected","attributes":null}]}),
     )])
     .await;
     let c = client(&url);
@@ -97,8 +100,8 @@ async fn place_order_posts_the_signed_bytes_and_reads_the_committed_events() {
         panic!("{:?}", receipt.events)
     };
     assert_eq!(
-        (o.order_id, o.price, o.client_order_id),
-        (33514, 66_000_000_000, None)
+        (o.owner, o.order_id, o.price, o.client_order_id),
+        (c.address(), 33514, 66_000_000_000, None)
     );
     assert!(matches!(&receipt.events[1], Event::Other(raw) if raw.kind == "fees_collected"));
 
@@ -115,12 +118,20 @@ async fn place_order_posts_the_signed_bytes_and_reads_the_committed_events() {
 async fn a_checktx_rejection_surfaces_a_typed_engine_error() {
     let c = client("http://127.0.0.1:1");
     let tx = c.sign(&cancel_all(&c)).unwrap();
-    let (url, _) = fixture(vec![(
-        200,
-        json!({"status":"error","txHash":tx.hash.to_string(),"code":12}),
-    )])
+    let (url, _) = fixture(vec![
+        (
+            200,
+            json!({"status":"error","txHash":tx.hash.to_string(),"code":12}),
+        ),
+        (
+            200,
+            json!({"status":"error","txHash":tx.hash.to_string(),"code":50,
+                   "log":"atomic basket aggregate slippage exceeded"}),
+        ),
+    ])
     .await;
-    let s = client(&url).send(&tx).await.unwrap();
+    let c = client(&url);
+    let s = c.send(&tx).await.unwrap();
     assert!(!s.is_success());
     assert_eq!(
         s.error(),
@@ -129,6 +140,11 @@ async fn a_checktx_rejection_surfaces_a_typed_engine_error() {
     assert_eq!(
         s.status,
         TxStatus::Rejected(EngineError::Known(ErrorKind::InsufficientMargin))
+    );
+    assert_eq!(
+        c.send(&tx).await.unwrap().error(),
+        Some(EngineError::Known(ErrorKind::SlippageExceeded)),
+        "code 50 at CheckTx reads from its log"
     );
 }
 
@@ -180,7 +196,10 @@ async fn a_pending_submission_reconciles_through_its_receipt() {
             200,
             json!({"result":{"hash":hash.to_string(),"height":"7","tx_result":{"code":0,"log":"",
                 "events":[{"type":"order_cancelled","attributes":[{"key":"order_id","value":"5"},
-                    {"key":"market","value":"1"},{"key":"reason","value":"user_requested"}]}]}}}),
+                    {"key":"market","value":"1"},{"key":"owner","value":c.address().to_string()},
+                    {"key":"reason","value":"user_requested"},{"key":"client_order_id","value":""},
+                    {"key":"original_quantity","value":"2"},{"key":"remaining_quantity","value":"2"},
+                    {"key":"filled_quantity","value":"0"}]}]}}}),
         ),
     ])
     .await;
@@ -198,25 +217,53 @@ async fn a_pending_submission_reconciles_through_its_receipt() {
     assert_eq!(targets[1], format!("GET /v1/tx/{hash}"));
 }
 
+/// A submit with no verdict hands back the exact transaction, through the
+/// helpers too, so the caller can reconcile instead of placing again.
 #[tokio::test]
-async fn a_5xx_on_submit_is_a_plain_http_error() {
-    let c = client("http://127.0.0.1:1");
-    let tx = c.sign(&cancel_all(&c)).unwrap();
+async fn a_submit_without_a_verdict_returns_the_transaction() {
     let (url, _) = fixture(vec![(502, json!({"oops": true}))]).await;
-    match client(&url).send(&tx).await {
-        Err(Error::Http { status: 502, .. }) => {}
-        other => panic!("expected Http 502, got {other:?}"),
+    match client(&url).cancel_all_orders(None).await {
+        Err(Error::Unconfirmed { tx, source }) => {
+            assert!(matches!(*source, Error::Http { status: 502, .. }));
+            assert_eq!(tx.hash, proof_sdk_rs::TxHash::of_signed_bytes(&tx.bytes));
+        }
+        other => panic!("expected Unconfirmed, got {other:?}"),
     }
-}
-
-#[tokio::test]
-async fn an_unreachable_gateway_is_a_transport_error() {
     let c = client("http://127.0.0.1:1");
     let tx = c.sign(&cancel_all(&c)).unwrap();
     match c.send(&tx).await {
-        Err(Error::Transport(_)) => {}
-        other => panic!("expected Transport, got {other:?}"),
+        Err(Error::Unconfirmed { tx: sent, source }) => {
+            assert_eq!(sent, tx);
+            assert!(matches!(*source, Error::Transport(_)));
+        }
+        other => panic!("expected Unconfirmed, got {other:?}"),
     }
+}
+
+/// The gateway forwards chain fields as it got them: `null` events and logs
+/// are empty, on both the submit answer and the receipt read.
+#[tokio::test]
+async fn null_events_and_logs_read_as_empty() {
+    let c = client("http://127.0.0.1:1");
+    let tx = c.sign(&cancel_all(&c)).unwrap();
+    let hash = tx.hash.to_string();
+    let (url, _) = fixture(vec![
+        (
+            200,
+            json!({"status":"error","code":44,"height":9,"txHash":hash,"log":null,"events":null}),
+        ),
+        (
+            200,
+            json!({"result":{"hash":hash,"height":"9","tx_result":{"code":44,"log":null,"events":null}}}),
+        ),
+    ])
+    .await;
+    let c = client(&url);
+    let r = c.send(&tx).await.unwrap();
+    assert!(r.error().unwrap().is_order_not_found());
+    assert!(r.receipt().unwrap().events.is_empty());
+    let r = c.wait_for_receipt(tx.hash, Duration::from_secs(1)).await.unwrap();
+    assert_eq!((r.height, r.events.len()), (9, 0));
 }
 
 #[tokio::test]

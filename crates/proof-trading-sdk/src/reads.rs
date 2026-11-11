@@ -61,6 +61,28 @@ pub const ACCOUNT_INFO: Shape = Shape::Record {
     ],
 };
 
+const LEVEL_SUMMARY: Shape = Shape::Record {
+    width: 3,
+    nested: &[],
+};
+/// `query::OrderbookSnapshot`; fields 0 and 1 are `bids` and `asks`.
+pub const ORDERBOOK: Shape = Shape::Record {
+    width: 2,
+    nested: &[
+        (0, Shape::List(&LEVEL_SUMMARY)),
+        (1, Shape::List(&LEVEL_SUMMARY)),
+    ],
+};
+const POSITION: Shape = Shape::Record {
+    width: 7,
+    nested: &[],
+};
+/// `query::AccountStateInfo`; field 3 is `positions`.
+pub const ACCOUNT_STATE: Shape = Shape::Record {
+    width: 4,
+    nested: &[(3, Shape::List(&POSITION))],
+};
+
 /// `proof_wire::types::Order`, including client id and resting-order metadata.
 pub const ORDER: Shape = Shape::Record {
     width: 14,

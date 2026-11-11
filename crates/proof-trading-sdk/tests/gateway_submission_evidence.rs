@@ -331,6 +331,7 @@ async fn exact_hash_execution_outcomes_keep_the_existing_contract() {
             SubmissionOutcome::CheckTxRejected {
                 hash,
                 code: 21.try_into().unwrap(),
+                log: String::new(),
             },
         ),
         (
@@ -343,6 +344,7 @@ async fn exact_hash_execution_outcomes_keep_the_existing_contract() {
             SubmissionOutcome::CheckTxRejected {
                 hash,
                 code: 17.try_into().unwrap(),
+                log: String::new(),
             },
         ),
     ] {

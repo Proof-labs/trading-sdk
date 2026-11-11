@@ -84,27 +84,27 @@ On devnet, fund a new address with the faucet first:
 
 ### `ExchangeClient`: sign and submit
 
-| Method                                      | Action / route                                    |
-| ------------------------------------------- | ------------------------------------------------- |
-| `connect(&config, signer)`                  | reads `GET /v1/status`, binds signatures to it    |
-| `new(&config, signer)`                      | no request; signs for the config's chain id       |
-| `limit_order(market, side, price, qty)`     | builds a GTC `PlaceOrder` for this account        |
-| `place_order(order)`                        | `PlaceOrder`                                      |
-| `market_order(market, side, qty)`           | `MarketOrder` (IOC)                               |
-| `cancel_order(order_id)`                    | `CancelOrder`                                     |
-| `cancel_client_order(client_order_id)`      | `CancelClientOrder`                               |
-| `cancel_all_orders(Option<market>)`         | `CancelAllOrders`                                 |
-| `amend_order(order_id, new_price, new_qty)` | `AmendOrder` (same-price size cuts keep priority) |
-| `cancel_replace_order(order_id, order)`     | `CancelReplaceOrder`                              |
-| `cancel_replace_client_order(cid, order)`   | `CancelReplaceOrder`, cancelling by client id     |
-| `close_position(market)`                    | `ClosePosition`                                   |
-| `submit(&action)`                           | sign with the next nonce, `POST /exchange` once   |
-| `submit_and_wait(&action, timeout)`         | `submit`, then wait if the verdict is pending     |
-| `sign(&action)` / `send(&signed_tx)`        | the two halves, for pre-signing on a hot path     |
-| `sign_with_seq(&action, seq)`               | sign under a nonce you allocated                  |
-| `wait_for_receipt(hash, timeout)`           | polls `GET /v1/tx/{hash}`                         |
-| `address()` / `public_key()` / `network()`  | this signer's account, key and chain id           |
-| `nonces()` / `info()`                       | the shared nonce allocator; the read client       |
+| Method                                      | Action / route                                                            |
+| ------------------------------------------- | ------------------------------------------------------------------------- |
+| `connect(&config, signer)`                  | reads `GET /v1/status` and `recent-nonces`, binds signatures to the chain |
+| `new(&config, signer)`                      | no request; signs for the config's chain id                               |
+| `limit_order(market, side, price, qty)`     | builds a GTC `PlaceOrder` for this account                                |
+| `place_order(order)`                        | `PlaceOrder`                                                              |
+| `market_order(market, side, qty)`           | `MarketOrder` (IOC)                                                       |
+| `cancel_order(order_id)`                    | `CancelOrder`                                                             |
+| `cancel_client_order(client_order_id)`      | `CancelClientOrder`                                                       |
+| `cancel_all_orders(Option<market>)`         | `CancelAllOrders`                                                         |
+| `amend_order(order_id, new_price, new_qty)` | `AmendOrder` (same-price size cuts keep priority)                         |
+| `cancel_replace_order(order_id, order)`     | `CancelReplaceOrder`                                                      |
+| `cancel_replace_client_order(cid, order)`   | `CancelReplaceOrder`, cancelling by client id                             |
+| `close_position(market)`                    | `ClosePosition`                                                           |
+| `submit(&action)`                           | sign with the next nonce, `POST /exchange` once                           |
+| `submit_and_wait(&action, timeout)`         | `submit`, then wait if the verdict is pending                             |
+| `sign(&action)` / `send(&signed_tx)`        | the two halves, for pre-signing on a hot path                             |
+| `sign_with_seq(&action, seq)`               | sign under a nonce you allocated                                          |
+| `wait_for_receipt(hash, timeout)`           | polls `GET /v1/tx/{hash}`                                                 |
+| `address()` / `public_key()` / `network()`  | this signer's account, key and chain id                                   |
+| `nonces()` / `info()`                       | the shared nonce allocator; the read client                               |
 
 Every helper is a function in `proof_sdk_rs::actions` with this client's
 address, submitted at once. Call those directly to build an `Action` without
@@ -140,21 +140,26 @@ The gateway answers once the transaction is in a block, so the receipt
 carries its events, typed, in emission order: `Event::OrderPlaced` carries
 the resting order's `order_id` (a basket or cancel-replace can emit several),
 and `Event::Fill` is each fill it took. An order that fully fills on arrival
-emits no `OrderPlaced`. A kind this SDK does not type stays raw in
+emits no `OrderPlaced`. Every account-level event carries the `owner` it
+happened to: a fill updates the maker's position as well as yours, in the same
+receipt. A kind this SDK does not type stays raw in
 `Event::Other`; a typed kind whose attributes do not read stays raw in
-`Event::Malformed`, so a bad fill is never mistaken for an unknown event.
+`Event::Malformed`, so a bad fill is never mistaken for an unknown event. An
+attribute the engine always writes is required, so a renamed one reads as
+`Malformed`, never as a silent 0.
 
 **Failed submissions.** The client posts once and keeps no state. Engine
-rejections and gateway refusals are `TxStatus`, not errors. An `Err` from
-`sign` means nothing was sent; an `Err` from `send` means no verdict came
-back, and the transaction may still execute. `submit` is the two together, so
-when the difference matters, call them separately:
+rejections and gateway refusals are `TxStatus`, not errors. When a
+submission may have landed without a verdict (transport failure, 5xx,
+unreadable answer), every submitting call, the order helpers included,
+returns `Error::Unconfirmed { tx, source }` with the exact signed transaction.
+Any other `Err` means nothing executed.
 
 ```rust,ignore
-let tx = client.sign(&action)?;
-match client.send(&tx).await {
+match client.place_order(order).await {
     Ok(s) => { /* verdict */ }
-    Err(_) => { /* look up tx.hash with wait_for_receipt, or resend &tx */ }
+    Err(Error::Unconfirmed { tx, .. }) => { /* wait_for_receipt(tx.hash), or send(&tx) again */ }
+    Err(e) => { /* not sent */ }
 }
 ```
 
@@ -185,15 +190,21 @@ from a `{"data": ...}` route), `get_json(path)` or `post_info(&body)`.
 
 ## Nonces
 
-`seq` is a millisecond timestamp. The engine accepts any unseen value inside a
-sliding window and does not require a strict sequence. `NonceAllocator` hands
-out `max(now_ms, last + 1)` with one atomic compare-and-swap, so tasks sharing a
-client never collide. It refuses to run more than 60 s ahead of the clock.
+`seq` is a millisecond timestamp. The engine accepts it within 2 days behind
+and 1 day ahead of block time, refuses one it remembers, and remembers the last
+100 per key: once it holds 100, anything at or below the oldest is refused. So
+order does not matter within the last 100. Send roughly in nonce order and keep
+fewer than 100 signed-but-unsent transactions per key, or a cancel signed early
+but delivered late is refused and its order stays on the book.
+
+`NonceAllocator` hands out `max(now_ms, last + 1)` with one atomic
+compare-and-swap, so tasks sharing a client never collide. It refuses to run
+more than 60 s ahead of the clock, keeping nonces near where a restarted process
+starts. `connect` starts it above the highest nonce the engine remembers for
+the key, so a restart never signs behind its predecessor.
 
 Two **processes** signing with one key can collide inside a millisecond. Give
-each process its own key, or trading agent. After a restart, pass
-`recent_nonces(owner).max()` to `nonces().next_after(..)` if the old process may
-still have nonces ahead of the clock.
+each process its own key, or trading agent.
 
 ## Custom signers
 

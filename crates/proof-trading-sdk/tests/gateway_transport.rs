@@ -166,6 +166,7 @@ async fn submit_classifies_checktx_ambiguous_and_pre_admission_without_retry() {
             SubmissionOutcome::CheckTxRejected {
                 hash,
                 code: 21.try_into().unwrap(),
+                log: String::new(),
             },
         ),
         (

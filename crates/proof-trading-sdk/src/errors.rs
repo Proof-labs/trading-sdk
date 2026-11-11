@@ -18,10 +18,13 @@ macro_rules! define_error_kinds {
 
         impl ErrorKind {
             /// The kind with this numeric code, if this SDK knows it. Code 50
-            /// reads as `SlippageExceeded`; use [`decode_exec_error_kind`]
-            /// with the log when talking to an engine mid-upgrade.
+            /// is `None`: its meaning depends on the engine version, so read
+            /// it with [`decode_exec_error_kind`] and the log.
             #[must_use]
             pub fn from_code(code: u32) -> Option<Self> {
+                if code == 50 {
+                    return None;
+                }
                 match code {
                     $($code => Some(Self::$name),)+
                     _ => None,

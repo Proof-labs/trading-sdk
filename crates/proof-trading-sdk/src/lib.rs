@@ -76,4 +76,4 @@ pub mod ticker;
 pub mod wire;
 
 pub use errors::{decode_exec_error_kind, error_code_manifest, DecodedExecErrorKind, ErrorKind};
-pub use signer::{LocalSigner, Signer, SignerError};
+pub use signer::{sign_action, LocalSigner, SignActionError, Signer, SignerError};
