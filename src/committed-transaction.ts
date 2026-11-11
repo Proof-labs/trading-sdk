@@ -1,5 +1,6 @@
+import { chainPin } from "./read-values.js";
 import {
-  MAX_TX_BYTES,
+  MAX_SIGNED_TX_BYTES,
   MAX_BLOCK_TXS,
   I64_MAX,
   invalid,
@@ -61,20 +62,24 @@ export async function readTransactionEvidence(
   transport: ExchangeHttpTransport,
 ): Promise<TransactionEvidence> {
   const { remaining } = readDeadline(options);
-  if (!(expectedChainId instanceof Uint8Array) || expectedChainId.length !== 32)
-    invalid("pinned chain");
   if (
     !(selection.signedBytes instanceof Uint8Array) ||
-    selection.signedBytes.length === 0 ||
-    selection.signedBytes.length > MAX_TX_BYTES
+    selection.signedBytes.length === 0
   )
-    invalid("signed bytes");
+    invalid("signed bytes", "configuration");
+  if (selection.signedBytes.length > MAX_SIGNED_TX_BYTES)
+    invalid("signed bytes", "limit");
   // Copy caller-owned mutable data before the first await.
   const signedBytes = Uint8Array.from(selection.signedBytes);
-  const chain = Uint8Array.from(expectedChainId);
-  const requestedHash = hash(selection.hash, "requested hash");
+  const chain = chainPin(expectedChainId);
+  let requestedHash: Hash32Hex;
+  try {
+    requestedHash = hash(selection.hash, "requested hash");
+  } catch {
+    invalid("requested hash", "configuration");
+  }
   if (bytesToHex(sha256(signedBytes)).toUpperCase() !== requestedHash)
-    invalid("requested hash/bytes mismatch", "binding");
+    invalid("requested hash/bytes mismatch", "configuration");
   const base = gatewayUrl.replace(/\/+$/, "");
   const tx = rpcResult(
     await boundedGatewayJson(
@@ -87,9 +92,9 @@ export async function readTransactionEvidence(
     hash(tx.hash, "transaction hash") !== requestedHash ||
     !same(bytes(tx.tx, "transaction bytes"), signedBytes)
   )
-    invalid("returned transaction binding");
+    invalid("returned transaction binding", "binding");
   const height = uint(tx.height, I64_MAX, "transaction height");
-  if (height === 0n) invalid("transaction height");
+  if (height === 0n) invalid("transaction height", "malformed");
   const index = Number(uint(tx.index, 0xffff_ffffn, "transaction index"));
   const result = object(tx.tx_result, "execution result");
   const code = Number(
@@ -115,12 +120,12 @@ export async function readTransactionEvidence(
     transactions.length > MAX_BLOCK_TXS ||
     index >= transactions.length
   )
-    invalid("block transaction index");
+    invalid("block transaction index", "malformed");
   const blockTransactions = transactions.map((value) =>
     bytes(value, "block transaction bytes"),
   );
   if (!same(blockTransactions[index], signedBytes))
-    invalid("block transaction binding");
+    invalid("block transaction binding", "binding");
   bindBlockTransactions(response, blockTransactions);
   remaining();
   return {

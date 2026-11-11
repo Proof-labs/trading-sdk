@@ -1,0 +1,111 @@
+[
+  {
+    "name": "exact uint bounds and zero",
+    "depth": 20,
+    "payload": "kpGTz///////////z///////////zv////+RkwAAAA==",
+    "data": "kpGTz///////////z///////////zv////+RkwAAAA==",
+    "bids": [
+      [
+        "18446744073709551615",
+        "18446744073709551615",
+        4294967295
+      ]
+    ],
+    "asks": [
+      [
+        "0",
+        "0",
+        0
+      ]
+    ]
+  },
+  {
+    "name": "no legacy data",
+    "depth": 20,
+    "payload": "kpGTAAEBkA==",
+    "bids": [
+      [
+        "0",
+        "1",
+        1
+      ]
+    ],
+    "asks": []
+  },
+  {
+    "name": "equal bids",
+    "depth": 20,
+    "payload": "kpKTAQEBkwECAZA=",
+    "data": "kpKTAQEBkwECAZA=",
+    "error": "malformed"
+  },
+  {
+    "name": "equal asks",
+    "depth": 20,
+    "payload": "kpCSkwEBAZMBAgE=",
+    "data": "kpCSkwEBAZMBAgE=",
+    "error": "malformed"
+  },
+  {
+    "name": "depth 1 overflow",
+    "depth": 1,
+    "payload": "kpKTAgEBkwEBAZA=",
+    "data": "kpKTAgEBkwEBAZA=",
+    "error": "malformed"
+  },
+  {
+    "name": "depth 20 overflow",
+    "depth": 20,
+    "payload": "ktwAFZMVAQGTFAEBkxMBAZMSAQGTEQEBkxABAZMPAQGTDgEBkw0BAZMMAQGTCwEBkwoBAZMJAQGTCAEBkwcBAZMGAQGTBQEBkwQBAZMDAQGTAgEBkwEBAZA=",
+    "data": "ktwAFZMVAQGTFAEBkxMBAZMSAQGTEQEBkxABAZMPAQGTDgEBkw0BAZMMAQGTCwEBkwoBAZMJAQGTCAEBkwcBAZMGAQGTBQEBkwQBAZMDAQGTAgEBkwEBAZA=",
+    "error": "malformed"
+  },
+  {
+    "name": "depth 100 overflow",
+    "depth": 100,
+    "payload": "ktwAZZNlAQGTZAEBk2MBAZNiAQGTYQEBk2ABAZNfAQGTXgEBk10BAZNcAQGTWwEBk1oBAZNZAQGTWAEBk1cBAZNWAQGTVQEBk1QBAZNTAQGTUgEBk1EBAZNQAQGTTwEBk04BAZNNAQGTTAEBk0sBAZNKAQGTSQEBk0gBAZNHAQGTRgEBk0UBAZNEAQGTQwEBk0IBAZNBAQGTQAEBkz8BAZM+AQGTPQEBkzwBAZM7AQGTOgEBkzkBAZM4AQGTNwEBkzYBAZM1AQGTNAEBkzMBAZMyAQGTMQEBkzABAZMvAQGTLgEBky0BAZMsAQGTKwEBkyoBAZMpAQGTKAEBkycBAZMmAQGTJQEBkyQBAZMjAQGTIgEBkyEBAZMgAQGTHwEBkx4BAZMdAQGTHAEBkxsBAZMaAQGTGQEBkxgBAZMXAQGTFgEBkxUBAZMUAQGTEwEBkxIBAZMRAQGTEAEBkw8BAZMOAQGTDQEBkwwBAZMLAQGTCgEBkwkBAZMIAQGTBwEBkwYBAZMFAQGTBAEBkwMBAZMCAQGTAQEBkA==",
+    "data": "ktwAZZNlAQGTZAEBk2MBAZNiAQGTYQEBk2ABAZNfAQGTXgEBk10BAZNcAQGTWwEBk1oBAZNZAQGTWAEBk1cBAZNWAQGTVQEBk1QBAZNTAQGTUgEBk1EBAZNQAQGTTwEBk04BAZNNAQGTTAEBk0sBAZNKAQGTSQEBk0gBAZNHAQGTRgEBk0UBAZNEAQGTQwEBk0IBAZNBAQGTQAEBkz8BAZM+AQGTPQEBkzwBAZM7AQGTOgEBkzkBAZM4AQGTNwEBkzYBAZM1AQGTNAEBkzMBAZMyAQGTMQEBkzABAZMvAQGTLgEBky0BAZMsAQGTKwEBkyoBAZMpAQGTKAEBkycBAZMmAQGTJQEBkyQBAZMjAQGTIgEBkyEBAZMgAQGTHwEBkx4BAZMdAQGTHAEBkxsBAZMaAQGTGQEBkxgBAZMXAQGTFgEBkxUBAZMUAQGTEwEBkxIBAZMRAQGTEAEBkw8BAZMOAQGTDQEBkwwBAZMLAQGTCgEBkwkBAZMIAQGTBwEBkwYBAZMFAQGTBAEBkwMBAZMCAQGTAQEBkA==",
+    "error": "malformed"
+  },
+  {
+    "name": "four field level",
+    "depth": 20,
+    "payload": "kpGUAQIDBJA=",
+    "data": "kpGUAQIDBJA=",
+    "error": "malformed"
+  },
+  {
+    "name": "trailing bytes",
+    "depth": 20,
+    "payload": "kpCQAA==",
+    "data": "kpCQAA==",
+    "error": "malformed"
+  },
+  {
+    "name": "float tag",
+    "depth": 20,
+    "payload": "kpGTyz/wAAAAAAAAAQGQ",
+    "data": "kpGTyz/wAAAAAAAAAQGQ",
+    "error": "malformed"
+  },
+  {
+    "name": "order count overflow",
+    "depth": 20,
+    "payload": "kpGTAQHPAAAAAQAAAACQ",
+    "data": "kpGTAQHPAAAAAQAAAACQ",
+    "error": "malformed"
+  },
+  {
+    "name": "legacy data mismatch",
+    "depth": 20,
+    "payload": "kpCQ",
+    "data": "kA==",
+    "error": "binding"
+  },
+  {
+    "name": "legacy-only frame",
+    "depth": 20,
+    "data": "kpCQ",
+    "error": "malformed"
+  }
+]

@@ -108,6 +108,8 @@ export {
   type LiquidationConfig,
   type LiquidationConfigInfo,
   type SetLiquidationConfig,
+  type SetMarginOffsetPolicy,
+  type MarginOffsetPair,
   type ScheduleUpgrade,
   type CancelUpgrade,
   type BridgeWithdrawalReceipt,
@@ -152,6 +154,7 @@ export {
   Outcome,
   type TxResult,
   type TxOutcome,
+  type GatewayRefusalCode,
   type TxEvent,
   type ExchangeEvent,
   type OrderPlacedEvent,
@@ -259,6 +262,15 @@ export {
   type TickerRefusal,
 } from "./ticker.js";
 export { validateScheduleUpgrade } from "./upgrade-plan.js";
+export {
+  MAX_MARGIN_OFFSET_PAIRS,
+  MAX_MARGIN_OFFSET_RATE_BPS,
+  decodeMarginOffsetEvent,
+  validateSetMarginOffsetPolicy,
+  type MarginOffsetEvent,
+  type MarginOffsetPairConfiguredEvent,
+  type MarginOffsetPolicySetEvent,
+} from "./margin-offsets.js";
 export {
   INITIAL_TAKEOVER_DISCOUNT_BPS,
   MAX_PARTIAL_PENALTY_BPS,

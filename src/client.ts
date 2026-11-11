@@ -86,6 +86,7 @@ import {
   txFromEngineCode,
   txFromQueryResponse,
   txOk,
+  txRefusal,
   txTimeout,
   txTransportError,
 } from "./tx-result.js";
@@ -862,11 +863,12 @@ export class ExchangeClient {
    *
    * The gateway response is an `ExchangeResponse`: a structured chain verdict
    * carries `code` and optionally `height`/`events`; an admitted-but-ambiguous
-   * submission carries `txHash` without `code` and must be reconciled. We map
-   * every shape to `TxResult`. Engine rejections retain the compatibility error
-   * string `"<code>: <message>"`, while the structured `code` is authoritative.
-   * For transport-level failures (rate limit, auth, etc.) we synthesize a code
-   * from the HTTP status.
+   * submission carries `txHash` without `code` and must be reconciled; a
+   * `status: "refused"` answer was never admitted, so it is terminal and keeps
+   * the gateway's `errorCode`. We map every shape to `TxResult`. Engine
+   * rejections retain the compatibility error string `"<code>: <message>"`,
+   * while the structured `code` is authoritative. For transport-level failures
+   * (rate limit, auth, etc.) we synthesize a code from the HTTP status.
    */
   private async submitViaGateway(
     txBytes: Uint8Array,
@@ -928,21 +930,26 @@ export class ExchangeClient {
           events: stated.events,
         });
       case "refused":
-        // A refusal naming a hash, code or height contradicts itself, so it
-        // proves nothing about whether the tx was broadcast.
+        // A malformed refusal is not evidence of non-admission. Presence of
+        // execution fields contradicts it, even when their value is null.
         if (
-          stated.txHash !== undefined ||
-          stated.code !== undefined ||
-          stated.height !== undefined
+          ["txHash", "tx_hash", "code", "height", "events", "log", "info"].some(
+            (key) => Object.prototype.hasOwnProperty.call(stated, key),
+          ) ||
+          typeof stated.errorCode !== "string" ||
+          !stated.errorCode.trim() ||
+          (Object.prototype.hasOwnProperty.call(stated, "error") &&
+            typeof stated.error !== "string")
         )
           return txTimeout(
             txHash,
-            "gateway refusal contradicts itself; reconcile by hash",
+            "malformed gateway refusal; reconcile by hash",
           );
-        // Nothing was broadcast, so there is nothing to reconcile.
-        return txTransportError(
+        // Only a validated envelope proves this attempt was not admitted.
+        return txRefusal(
           res.status === 200 ? 1 : res.status,
-          stated.error ?? stated.errorCode ?? "refused by gateway",
+          stated.errorCode,
+          stated.error ?? stated.errorCode,
         );
       case "pending":
         // Reconcile the hash of the bytes sent, never one the answer names.
