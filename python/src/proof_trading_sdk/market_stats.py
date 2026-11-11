@@ -1,6 +1,7 @@
 """Exact indexed market statistics; unavailable values remain absent."""
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import re
 import typing as t
@@ -66,8 +67,11 @@ def _integer(value: t.Any, minimum: int, maximum: int, field: str) -> int:
 
 
 def market_stats_markets(markets: t.Sequence[int]) -> str:
-    if not isinstance(markets, (list, tuple)) or not 1 <= len(markets) <= 50:
+    if isinstance(markets, (str, bytes, bytearray)) or not isinstance(markets, Sequence):
+        raise ValueError("market statistics markets must be a non-string sequence")
+    if not 1 <= len(markets) <= 50:
         raise ValueError("market statistics requires 1–50 markets")
+    markets = tuple(markets)
     if any(type(m) is not int or not 0 <= m <= 0x7fff_ffff for m in markets):
         raise ValueError("market statistics market must be an integer in 0..2147483647")
     if len(set(markets)) != len(markets): raise ValueError("duplicate market statistics market")

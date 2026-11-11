@@ -1,4 +1,5 @@
 import json
+from collections import UserList
 from dataclasses import asdict
 from pathlib import Path
 
@@ -159,6 +160,21 @@ def test_client_stats_route_and_exact_coverage(client):
     assert str(calls[0].url) == "https://gateway.example/v1/history/market-stats?markets=0"
     assert calls[0].headers["X-API-Key"] == "test-key" and client.rate_limit_remaining("default") == 13
     with pytest.raises(sdk.CodecError): client.market_stats([1])
+
+
+@pytest.mark.parametrize("markets", [[0], (0,), range(1), UserList([0])])
+def test_stats_accepts_declared_sequence_inputs(client, markets):
+    calls = serve(client, stats())
+    assert client.market_stats(markets).markets[0].market == 0
+    assert calls[0].url.params["markets"] == "0"
+
+
+@pytest.mark.parametrize("markets", ["0", b"0", bytearray(b"0"), {0}, {0: 0}, iter([0]), None])
+def test_stats_rejects_non_sequence_containers_before_http(client, markets):
+    calls = serve(client, stats())
+    with pytest.raises(ValueError, match="non-string sequence"):
+        client.market_stats(markets)
+    assert not calls
 
 
 @pytest.mark.parametrize("markets", [[],[1,1],[-1],[True],[1.0],[2**31],list(range(51)),"1"])

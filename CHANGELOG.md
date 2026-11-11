@@ -9,6 +9,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Python `market_stats()` accepts non-string sequences such as `range`,
+  matching its declared input type, and distinguishes invalid containers
+  from invalid market counts.
+
 - Python market statistics use the shared calendar parser and reject impossible
   dates and hour 24 instead of silently normalizing them.
 

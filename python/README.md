@@ -164,8 +164,9 @@ also accepts an already parsed gateway body.
 submission status, feeder presence, note/error and update time. It supports the
 node's disabled-feeder response, F16 relay health and gateway market-freshness
 rows. This follows the gateway/feeder JSON contract; TS exposes the raw response.
-Per-market requests accept positive u32 IDs. Missing fields remain `None`, an
-unreported requested market remains an empty map, and extra diagnostic fields
+Per-market requests accept positive u32 IDs. Missing fields, including a missing
+`markets` map, remain `None`. If the response contains a `markets` map but not
+the requested market, that map is empty. Extra diagnostic fields
 are preserved under `extra`. F16 journal/divergence maps may be absent from the
 per-market gateway projection. `decode_oracle_health` accepts a parsed body.
 
