@@ -101,7 +101,8 @@ def test_transaction_exact_route_bytes_and_documented_zero_defaults(client):
     assert result.source == "trusted-gateway" and result.hash == TX_HASH
     assert result.signed_bytes == TX and result.height == 10 and result.index == 0
     assert result.code == 0
-    assert result.events[0].attributes == EVENT["attributes"]
+    assert result.events[0].attributes == tuple(EVENT["attributes"])
+    assert isinstance(result.events, tuple)
     assert result.block.height == 10
     assert [str(r.url) for r in seen] == [f"https://gateway.example/v1/tx/{TX_HASH}", "https://gateway.example/v1/block?height=10"]
     assert all(r.headers["X-API-Key"] == "test-key" for r in seen)
@@ -111,10 +112,10 @@ def test_missing_protobuf_events_and_optional_attributes_are_preserved(client):
     tx = transaction()
     tx["result"]["tx_result"] = {}
     mock(client, [tx, block(10)])
-    assert read_tx(client).events == []
+    assert read_tx(client).events == ()
     tx["result"]["tx_result"]["events"] = [{"type": "a"}, {"type": "b", "attributes": []}]
     mock(client, [tx, block(10)])
-    assert [e.attributes for e in read_tx(client).events] == [None, []]
+    assert [e.attributes for e in read_tx(client).events] == [None, ()]
 
 
 @pytest.mark.parametrize("field,value", [
@@ -184,7 +185,9 @@ def test_range_is_complete_ordered_and_retains_rejections_system_events(client):
     assert result.from_height == 9 and result.through_height == 10 and result.anchor.height == 11
     assert [b.header.height for b in result.blocks] == [9, 10]
     assert [b.transactions[0].code for b in result.blocks] == [21, 21]
-    assert result.blocks[0].finalize_block_events[0].attributes == EVENT["attributes"]
+    assert result.blocks[0].finalize_block_events[0].attributes == tuple(EVENT["attributes"])
+    # Evidence is immutable after its bindings were checked.
+    assert all(isinstance(c, tuple) for c in (result.blocks, result.blocks[0].transactions, result.blocks[0].finalize_block_events))
     assert [r.url.path for r in seen] == ["/v1/block", "/v1/block", "/v1/block_results", "/v1/block", "/v1/block_results"]
     assert [r.url.params["height"] for r in seen] == ["11", "10", "10", "9", "9"]
 
@@ -208,7 +211,7 @@ def test_genesis_and_null_empty_slices(client):
     out = client.block_results_window(0, BASE_MS + 1000, 1, chain_id=CHAIN)
     assert out.from_height == 1
     assert out.blocks[0].header.parent_hash is out.blocks[0].header.app_hash is None
-    assert out.blocks[0].transactions == out.blocks[0].finalize_block_events == []
+    assert out.blocks[0].transactions == out.blocks[0].finalize_block_events == ()
 
 
 @pytest.mark.parametrize("field", ["txs_results", "finalize_block_events", "app_hash", "height"])

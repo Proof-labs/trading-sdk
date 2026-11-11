@@ -59,7 +59,9 @@ from proof_trading_sdk.candle_history import (
 from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
 from proof_trading_sdk.chain_evidence import (
     BlockResultsRange, BlockResultsWindow, TransactionEvidence,
-    read_block_results, read_transaction_evidence,
+    DEFAULT_MAX_ATTRIBUTES, DEFAULT_MAX_DECODED_BYTES, DEFAULT_MAX_EVENTS,
+    DEFAULT_MAX_HEIGHTS, DEFAULT_MAX_TRANSACTIONS,
+    read_block_results_range, read_block_results_window, read_transaction_evidence,
 )
 from proof_trading_sdk.evidence import (
     BlockEvidenceHeader,
@@ -1880,9 +1882,10 @@ class ExchangeClient:
 
     def block_results_range(
         self, from_height: int, through_height: int, *, chain_id: str | bytes,
-        timeout: float = 5.0, max_heights: int = 32,
-        max_decoded_bytes: int = 8 * 1024 * 1024, max_transactions: int = 10_000,
-        max_events: int = 16_384, max_attributes: int = 65_536,
+        timeout: float = 5.0, max_heights: int = DEFAULT_MAX_HEIGHTS,
+        max_decoded_bytes: int = DEFAULT_MAX_DECODED_BYTES,
+        max_transactions: int = DEFAULT_MAX_TRANSACTIONS,
+        max_events: int = DEFAULT_MAX_EVENTS, max_attributes: int = DEFAULT_MAX_ATTRIBUTES,
     ) -> BlockResultsRange:
         """Read an exact inclusive height range, including rejected transactions.
 
@@ -1890,17 +1893,18 @@ class ExchangeClient:
         All requests share one timeout and aggregate limits; no partial success.
         Gateway trust and synchronous timeout limits match ``block_header``.
         """
-        return read_block_results(
-            self, through_height, from_height=from_height, chain_id=chain_id, timeout=timeout,
+        return read_block_results_range(
+            self, from_height, through_height, chain_id=chain_id, timeout=timeout,
             max_heights=max_heights, max_decoded_bytes=max_decoded_bytes,
             max_transactions=max_transactions, max_events=max_events, max_attributes=max_attributes,
         )
 
     def block_results_window(
         self, from_ms: int, to_ms: int, through_height: int, *, chain_id: str | bytes,
-        timeout: float = 5.0, max_heights: int = 32,
-        max_decoded_bytes: int = 8 * 1024 * 1024, max_transactions: int = 10_000,
-        max_events: int = 16_384, max_attributes: int = 65_536,
+        timeout: float = 5.0, max_heights: int = DEFAULT_MAX_HEIGHTS,
+        max_decoded_bytes: int = DEFAULT_MAX_DECODED_BYTES,
+        max_transactions: int = DEFAULT_MAX_TRANSACTIONS,
+        max_events: int = DEFAULT_MAX_EVENTS, max_attributes: int = DEFAULT_MAX_ATTRIBUTES,
     ) -> BlockResultsWindow:
         """Scan backwards until before ``from_ms`` or genesis, retaining boundaries.
 
@@ -1909,13 +1913,11 @@ class ExchangeClient:
         Equal/sub-millisecond block times remain exact. No partial success when
         a budget is exhausted; gateway trust remains essential.
         """
-        result = read_block_results(
-            self, through_height, from_ms=from_ms, to_ms=to_ms, chain_id=chain_id, timeout=timeout,
+        return read_block_results_window(
+            self, from_ms, to_ms, through_height, chain_id=chain_id, timeout=timeout,
             max_heights=max_heights, max_decoded_bytes=max_decoded_bytes,
             max_transactions=max_transactions, max_events=max_events, max_attributes=max_attributes,
         )
-        assert isinstance(result, BlockResultsWindow)
-        return result
 
     def get_block_results(self, height: int) -> dict[str, t.Any]:
         """CometBFT block results at *height* via ``GET /v1/block_results``."""

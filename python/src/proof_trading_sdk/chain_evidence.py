@@ -13,7 +13,7 @@ from datetime import datetime
 from urllib.parse import urljoin
 
 from proof_trading_sdk._bounded_read import MAX_READ_BYTES, bounded_gateway_json, read_deadline
-from proof_trading_sdk.errors import GatewayReadError
+from proof_trading_sdk.errors import GatewayReadError, GatewayReadErrorKind
 from proof_trading_sdk.evidence import (
     BlockEvidenceHeader, _chain_pin, _hash, _object, _uint, _I64_MAX,
     decode_block_evidence_header,
@@ -24,6 +24,24 @@ _MAX_TX_BYTES = 1024 * 1024
 # Both responses also contain metadata/other txs and can still exceed the cap.
 _MAX_SIGNED_TX_BYTES = (MAX_READ_BYTES - 1024) * 3 // 4
 _MAX_DATE_MS = 8_640_000_000_000_000
+# Per-response bounds, matching the TypeScript exports in src/chain-evidence.ts.
+_MAX_BLOCK_TXS = 100_000
+_MAX_EVENTS = 4096
+_MAX_ATTRIBUTES = 4096
+_U32_MAX = 0xFFFF_FFFF
+
+# Aggregate block-results budgets: one place for the defaults the client
+# methods expose and the ceilings a caller may raise them to.
+DEFAULT_MAX_HEIGHTS = 32
+DEFAULT_MAX_DECODED_BYTES = 8 * 1024 * 1024
+DEFAULT_MAX_TRANSACTIONS = 10_000
+DEFAULT_MAX_EVENTS = 16_384
+DEFAULT_MAX_ATTRIBUTES = 65_536
+_CEILING_MAX_HEIGHTS = 128
+_CEILING_MAX_DECODED_BYTES = DEFAULT_MAX_DECODED_BYTES
+_CEILING_MAX_TRANSACTIONS = DEFAULT_MAX_TRANSACTIONS
+_CEILING_MAX_EVENTS = DEFAULT_MAX_EVENTS
+_CEILING_MAX_ATTRIBUTES = DEFAULT_MAX_ATTRIBUTES
 _MISSING = object()
 
 
@@ -37,7 +55,7 @@ class TransactionEvidenceAttribute(t.TypedDict, total=False):
 class TransactionEvidenceEvent:
     """Comet event strings, retained without economic interpretation."""
     type: str
-    attributes: list[TransactionEvidenceAttribute] | None = None
+    attributes: tuple[TransactionEvidenceAttribute, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -49,7 +67,7 @@ class TransactionEvidence:
     height: int
     index: int
     code: int
-    events: list[TransactionEvidenceEvent]
+    events: tuple[TransactionEvidenceEvent, ...]
     block: BlockEvidenceHeader
 
 
@@ -59,15 +77,15 @@ class BlockTransactionEvidence:
     hash: str
     signed_bytes: bytes
     code: int
-    events: list[TransactionEvidenceEvent]
+    events: tuple[TransactionEvidenceEvent, ...]
 
 
 @dataclass(frozen=True)
 class BlockResultsEvidence:
     header: BlockEvidenceHeader
     post_app_hash: str
-    transactions: list[BlockTransactionEvidence]
-    finalize_block_events: list[TransactionEvidenceEvent]
+    transactions: tuple[BlockTransactionEvidence, ...]
+    finalize_block_events: tuple[TransactionEvidenceEvent, ...]
 
 
 @dataclass(frozen=True)
@@ -76,7 +94,7 @@ class BlockResultsRange:
     from_height: int
     through_height: int
     anchor: BlockEvidenceHeader
-    blocks: list[BlockResultsEvidence]
+    blocks: tuple[BlockResultsEvidence, ...]
 
 
 @dataclass(frozen=True)
@@ -86,7 +104,7 @@ class BlockResultsWindow(BlockResultsRange):
     to_ms: int
 
 
-def _fail(field: str, kind: str) -> t.NoReturn:
+def _fail(field: str, kind: GatewayReadErrorKind) -> t.NoReturn:
     raise GatewayReadError(kind, field)
 
 
@@ -118,10 +136,10 @@ def _bytes(value: t.Any, field: str) -> bytes:
     return decoded
 
 
-def _events(value: t.Any = _MISSING, *, max_events: int = 4096,
-            max_attributes: int = 4096) -> list[TransactionEvidenceEvent]:
+def _events(value: t.Any = _MISSING, *, max_events: int = _MAX_EVENTS,
+            max_attributes: int = _MAX_ATTRIBUTES) -> tuple[TransactionEvidenceEvent, ...]:
     if value is _MISSING:
-        return []
+        return ()
     if not isinstance(value, list):
         _fail("events", "malformed")
     if len(value) > max_events:
@@ -150,8 +168,8 @@ def _events(value: t.Any = _MISSING, *, max_events: int = 4096,
                             _fail(f"attribute {key}", "malformed")
                         decoded[key] = a[key]
                 attributes.append(decoded)
-        result.append(TransactionEvidenceEvent(name, attributes))
-    return result
+        result.append(TransactionEvidenceEvent(name, None if attributes is None else tuple(attributes)))
+    return tuple(result)
 
 
 def _transactions_root(transactions: list[bytes]) -> str:
@@ -259,15 +277,15 @@ def read_transaction_evidence(client: t.Any, tx_hash: str, signed_bytes: bytes, 
     height = _number(tx.get("height"), _I64_MAX, "transaction height")
     if height == 0:
         _fail("transaction height", "malformed")
-    index = _number(tx.get("index"), 0xffffffff, "transaction index")
+    index = _number(tx.get("index"), _U32_MAX, "transaction index")
     result = _object(tx.get("tx_result"), "execution result")
-    code = _number(result.get("code", 0), 0xffffffff, "execution code")
+    code = _number(result.get("code", 0), _U32_MAX, "execution code")
     events = _events(result.get("events", _MISSING))
     raw = read.get("/v1/block", {"height": str(height)})
     response = _rpc(raw)
     header = decode_block_evidence_header(raw, height=height, chain_id=chain)
     transactions = _object(_object(response.get("block"), "block").get("data"), "block data").get("txs")
-    if not isinstance(transactions, list) or len(transactions) > 100_000 or index >= len(transactions):
+    if not isinstance(transactions, list) or len(transactions) > _MAX_BLOCK_TXS or index >= len(transactions):
         _fail("block transaction index", "malformed")
     transactions = [_bytes(tx, "block transaction bytes") for tx in transactions]
     if transactions[index] != signed_bytes:
@@ -277,16 +295,43 @@ def read_transaction_evidence(client: t.Any, tx_hash: str, signed_bytes: bytes, 
     return TransactionEvidence("trusted-gateway", requested_hash, signed_bytes, height, index, code, events, header)
 
 
-def read_block_results(
+_R = t.TypeVar("_R", bound=BlockResultsRange)
+
+
+def read_block_results_range(
+    client: t.Any, from_height: int, through_height: int, *, chain_id: str | bytes,
+    timeout: float, **budgets: int,
+) -> BlockResultsRange:
+    return _read_block_results(
+        client, through_height, chain_id=chain_id, timeout=timeout,
+        from_height=from_height, build=lambda common: BlockResultsRange(**common), **budgets,
+    )
+
+
+def read_block_results_window(
+    client: t.Any, from_ms: int, to_ms: int, through_height: int, *, chain_id: str | bytes,
+    timeout: float, **budgets: int,
+) -> BlockResultsWindow:
+    return _read_block_results(
+        client, through_height, chain_id=chain_id, timeout=timeout, from_ms=from_ms, to_ms=to_ms,
+        build=lambda common: BlockResultsWindow(**common, from_ms=from_ms, to_ms=to_ms), **budgets,
+    )
+
+
+def _read_block_results(
     client: t.Any, through_height: int, *, chain_id: str | bytes, timeout: float,
+    build: t.Callable[[dict[str, t.Any]], _R],
     from_height: int | None = None, from_ms: int | None = None, to_ms: int | None = None,
-    max_heights: int = 32, max_decoded_bytes: int = 8 * 1024 * 1024,
-    max_transactions: int = 10_000, max_events: int = 16_384, max_attributes: int = 65_536,
-) -> BlockResultsRange | BlockResultsWindow:
+    max_heights: int = DEFAULT_MAX_HEIGHTS, max_decoded_bytes: int = DEFAULT_MAX_DECODED_BYTES,
+    max_transactions: int = DEFAULT_MAX_TRANSACTIONS, max_events: int = DEFAULT_MAX_EVENTS,
+    max_attributes: int = DEFAULT_MAX_ATTRIBUTES,
+) -> _R:
     for value, ceiling, field in (
-        (max_heights, 128, "heights"), (max_decoded_bytes, 8 * 1024 * 1024, "bytes"),
-        (max_transactions, 10_000, "transactions"), (max_events, 16_384, "events"),
-        (max_attributes, 65_536, "attributes"),
+        (max_heights, _CEILING_MAX_HEIGHTS, "heights"),
+        (max_decoded_bytes, _CEILING_MAX_DECODED_BYTES, "bytes"),
+        (max_transactions, _CEILING_MAX_TRANSACTIONS, "transactions"),
+        (max_events, _CEILING_MAX_EVENTS, "events"),
+        (max_attributes, _CEILING_MAX_ATTRIBUTES, "attributes"),
     ):
         if type(value) is not int or not 1 <= value <= ceiling:
             _fail(field, "configuration")
@@ -308,7 +353,7 @@ def read_block_results(
     next_header, blocks = anchor, []
     transaction_count = event_count = attribute_count = 0
 
-    def decode_events(raw: t.Any) -> list[TransactionEvidenceEvent]:
+    def decode_events(raw: t.Any) -> tuple[TransactionEvidenceEvent, ...]:
         nonlocal event_count, attribute_count
         decoded = _events(raw, max_events=max_events - event_count,
                           max_attributes=max_attributes - attribute_count)
@@ -358,15 +403,14 @@ def read_block_results(
             execution = _object(tx_results[index], "transaction result")
             evidence.append(BlockTransactionEvidence(
                 index, hashlib.sha256(signed_bytes).hexdigest().upper(), signed_bytes,
-                _number(execution.get("code", 0), 0xffffffff, "execution code"),
+                _number(execution.get("code", 0), _U32_MAX, "execution code"),
                 decode_events(execution.get("events", _MISSING)),
             ))
-        blocks.append(BlockResultsEvidence(header, post_hash, evidence, decode_events(final_events or [])))
+        blocks.append(BlockResultsEvidence(header, post_hash, tuple(evidence), decode_events(final_events or [])))
         read.check()
         complete = (height == from_height) if not window else (_nanos(header.time) < from_ms * 1_000_000 or height == 1)
         if complete:
-            common = dict(source="trusted-gateway", from_height=height, through_height=through_height,
-                          anchor=anchor, blocks=list(reversed(blocks)))
-            return BlockResultsWindow(**common, from_ms=from_ms, to_ms=to_ms) if window else BlockResultsRange(**common)
+            return build(dict(source="trusted-gateway", from_height=height, through_height=through_height,
+                              anchor=anchor, blocks=tuple(reversed(blocks))))
         next_header = header
     _fail("height budget", "limit")
