@@ -226,7 +226,9 @@ cursor zero; its history-based reconnect recovery does not change this cursor.
 All three stream classes share connection, cleanup and reconnect handling in
 `streams.py`. Initial connection failures surface immediately (`AuthenticationError`
 for HTTP 401/403, `TransportError` otherwise), including for orderbook streams.
-After connecting once, they retry with cancelable exponential backoff. Account
+After connecting once, they retry with cancelable exponential backoff. A delivered
+non-error data frame resets reconnect attempts and backoff; a handshake or
+subscription refusal alone does not. Account
 streams retain their reconnect budget, signed-subscription retries and history
 recovery. Each stream accepts base URLs or `/ws` endpoints and permits only one
 active iterator. Closing the iterator closes its stream; context managers and
@@ -243,6 +245,7 @@ with client.trade_stream(7) as stream:
     for frame in stream:
         if frame["type"] == "error":
             print(frame["error"])
+            break
         else:
             print(frame["fillId"], frame["price"], frame["quantity"])
 ```

@@ -234,9 +234,12 @@ class _WebSocketStream:
                     connected_once = True
                     if self._closed:
                         return
-                    attempt = 0
-                    backoff = 0.5
-                    yield from self._session()
+                    for frame in self._session():
+                        # A handshake or refusal alone is not a recovered feed.
+                        if frame.get("type") != "error":
+                            attempt = 0
+                            backoff = 0.5
+                        yield frame
                 except Exception as error:
                     if self._closed:
                         return
@@ -315,7 +318,8 @@ class AccountEventStream(_WebSocketStream):
             Signing failures yield error frames without sending an unsigned
             subscription. Also used by the first-subscription retry loop.
         reconnect_backoff_max: Maximum backoff in seconds (default 10).
-        reconnect_attempts: Maximum reconnect attempts (``None`` = infinite).
+        reconnect_attempts: Maximum reconnect attempts without data delivery
+            (``None`` = infinite). Handshakes alone do not reset this budget.
         recover: Backfill missed events from history on reconnect.
         on_recovery: Called with the outcome of each reconnect's recovery.
         history_url: Gateway HTTP base URL for the history reads. Defaults to

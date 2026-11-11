@@ -42,6 +42,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Python stream reconnect attempts and backoff reset only after data delivery,
+  so connections that immediately close or only yield errors cannot bypass
+  the retry budget or keep reconnecting at the minimum delay.
+
 - **Breaking (Python MAJOR):** account, orderbook and public trade streams share one connection and
   reconnect loop in `streams.py`. All now raise on initial connection failure
   (`AuthenticationError` for HTTP 401/403, `TransportError` otherwise), accept

@@ -172,6 +172,72 @@ def test_close_cancels_reconnect_wait(monkeypatch, channel):
     assert delivered == [frame] and calls == [1] and socket.closed
 
 
+@pytest.mark.parametrize("response", [None, "subscribed", "error"])
+def test_empty_or_refused_sessions_keep_backoff(monkeypatch, channel, response):
+    stream = make_stream(channel, reconnect_backoff_max=1.5)
+    sockets, waits = [], []
+
+    def connect(*args, **kwargs):
+        frame = None if response is None else {
+            "type": response, "id": len(sockets) + 1,
+            "code": 403, "error": "refused",
+        }
+        socket = Socket(frame)
+        sockets.append(socket)
+        return socket
+
+    def wait(delay):
+        assert sockets[-1].closed
+        waits.append(delay)
+        if len(waits) == 3:
+            stream.close()
+            return True
+        return False
+
+    monkeypatch.setattr(ws_client, "connect", connect)
+    monkeypatch.setattr(stream._stop, "wait", wait)
+    list(stream)
+    assert len(sockets) == 3
+    assert waits == [0.5, 1.0, 1.5]
+
+
+def test_account_reconnect_budget_survives_successful_handshakes(monkeypatch):
+    stream = AccountEventStream("ws://gateway", OWNER, reconnect_attempts=2)
+    sockets, waits = [], []
+
+    def connect(*args, **kwargs):
+        assert len(sockets) < 3, "handshake reset the reconnect budget"
+        socket = Socket(None)
+        sockets.append(socket)
+        return socket
+
+    monkeypatch.setattr(ws_client, "connect", connect)
+    monkeypatch.setattr(stream._stop, "wait", lambda delay: waits.append(delay) or False)
+    assert list(stream) == []
+    assert len(sockets) == 3 and all(socket.closed for socket in sockets)
+    assert waits == [0.5, 1.0]
+    assert list(stream) == []
+
+
+def test_data_delivery_resets_account_reconnect_budget_and_backoff(monkeypatch):
+    stream = AccountEventStream("ws://gateway", OWNER, reconnect_attempts=2, recover=False)
+    frame = data_frame("account")
+    sockets = [Socket(None), Socket(frame), Socket(None), Socket(None)]
+    calls, waits = [], []
+
+    def connect(*args, **kwargs):
+        assert len(calls) < len(sockets), "reconnect budget was not exhausted"
+        socket = sockets[len(calls)]
+        calls.append(socket)
+        return socket
+
+    monkeypatch.setattr(ws_client, "connect", connect)
+    monkeypatch.setattr(stream._stop, "wait", lambda delay: waits.append(delay) or False)
+    assert list(stream) == [frame]
+    assert len(calls) == 4 and all(socket.closed for socket in sockets)
+    assert waits == [0.5, 0.5, 1.0]
+
+
 def test_account_history_uses_http_base_not_ws_path_or_query():
     with AccountEventStream("wss://gateway/prefix/ws/?region=test", OWNER) as stream:
         assert stream._history_url == "https://gateway/prefix"
