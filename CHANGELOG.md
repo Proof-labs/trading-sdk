@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
-- **Breaking (next TypeScript MAJOR):** remove `queryTriggerMarketConfigs()`,
+- **Breaking (next TypeScript and Python MAJOR releases):** remove `queryTriggerMarketConfigs()`,
   Python `trigger_market_configs()`, the `SetTriggerMarketConfig` builder/type,
   and TypeScript `validateSetTriggerMarketConfig`. Low-level payload encoding,
   signing and historical decoding remain wire-compatible; the engine owns

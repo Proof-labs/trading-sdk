@@ -507,6 +507,13 @@ passing them to a typed submission API. Low-level encoding and signing retain
 the wire contract; the engine rejects retired proposals and approvals.
 Proposal content hashes remain available for historical verification.
 
+Before upgrading, remove retired trigger-policy methods from capability probes
+and read tests. Governance consumers must handle historical
+`SetTriggerMarketConfig` proposals as read-only: retain their detail rendering,
+remove creation and approval paths, and narrow `proposal.action` before assigning
+it to `AdminAction`. The Python removals also require a Python major release;
+update callers of `trigger_market_configs()` and the retired builder together.
+
 `queryTriggerStatus()` is deprecated: `GET /v1/triggers/status` is deleted
 upstream (the node dropped it with its activation gates, exchange#619,
 genesis-first; the gateway drops it in gateway 4.0.0, api-gateway#175). Trigger
