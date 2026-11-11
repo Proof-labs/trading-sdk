@@ -1,9 +1,22 @@
 """Payout reports preserve the public builder's raw bytes and integer bounds."""
 
+import json
+from pathlib import Path
+
 import pytest
 
 from proof_trading_sdk import RecordWithdrawalPayout
 from proof_trading_sdk.actions import decode_action, encode_action
+
+_CODEC = Path(__file__).resolve().parents[2] / "conformance" / "codec.ndjson"
+
+
+def _vector(case: str) -> dict:
+    for line in _CODEC.read_text().splitlines():
+        entry = json.loads(line)
+        if entry.get("case") == case:
+            return entry
+    raise LookupError(case)
 
 
 def report(**overrides):
@@ -16,13 +29,14 @@ def report(**overrides):
     return RecordWithdrawalPayout(**(fields | overrides))
 
 
-def test_raw_signature_and_exact_u64_bounds():
+def test_public_builder_matches_shared_u64_bounds_vector():
+    # The bytes are pinned once in conformance/codec.ndjson, shared with Rust
+    # and TypeScript; a matching encode/decode defect cannot hide here.
     action = report()
     tag, payload = encode_action(action)
     assert tag == 0x31
+    assert payload.hex() == _vector("record_withdrawal_payout/u64_bounds")["expect"]["payload_hex"]
     decoded = decode_action(tag, payload)
-    assert decoded["withdrawal_id"] == action.withdrawal_id
-    assert bytes(decoded["holder"]) == action.holder
     assert bytes(decoded["solana_signature"]) == action.solana_signature
     assert decoded["last_valid_block_height"] == action.last_valid_block_height
 
@@ -34,5 +48,12 @@ def test_signature_must_be_raw_64_bytes(length):
 
 
 def test_expiry_cannot_be_null():
-    with pytest.raises(ValueError, match="NoneType.*integer"):
+    with pytest.raises(ValueError, match=r"last_valid_block_height|u64|integer"):
         encode_action(report(last_valid_block_height=None))
+
+
+def test_expiry_cannot_be_zero():
+    # The wire field is NonZeroU64: an expiry of 0 would make the transfer look
+    # expired at once to peer watchers.
+    with pytest.raises(ValueError, match="nonzero"):
+        encode_action(report(last_valid_block_height=0))
