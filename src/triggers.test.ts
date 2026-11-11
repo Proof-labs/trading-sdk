@@ -10,7 +10,6 @@ import { bytesToHex, hexToBytes } from "./crypto.js";
 import { ready } from "./wasm-loader.js";
 import {
   decodePositionTriggerInfos,
-  decodeTriggerMarketConfigInfos,
   decodeTriggerStatusJson,
   validateOrderTriggers,
   validateSetPositionTriggers,
@@ -134,75 +133,6 @@ describe("W32-10 position trigger wire contract", () => {
 });
 
 describe("W32-10 trigger read models", () => {
-  it("decodes sorted current/pending market policy without losing u64s", () => {
-    const encoder = new Encoder({ useBigInt64: true });
-    const decoded = new Decoder({ useBigInt64: true }).decode(
-      encoder.encode([
-        [
-          7,
-          [
-            [4n, true, 250, 5_000n, 1_000n, 32n],
-            [
-              [5n, true, 200, 4_000n, 900n, 64n],
-              9_007_199_254_740_992n,
-              9_007_199_254_740_993n,
-            ],
-          ],
-        ],
-      ]),
-    );
-    expect(decodeTriggerMarketConfigInfos(decoded)).toEqual([
-      {
-        market: 7,
-        state: {
-          current: {
-            version: 4n,
-            enabled: true,
-            maxTriggerSlippageBps: 250,
-            maxMarkAgeMs: 5_000n,
-            maxFuturePublishSkewMs: 1_000n,
-            maxActiveBrackets: 32n,
-          },
-          pending: {
-            config: {
-              version: 5n,
-              enabled: true,
-              maxTriggerSlippageBps: 200,
-              maxMarkAgeMs: 4_000n,
-              maxFuturePublishSkewMs: 900n,
-              maxActiveBrackets: 64n,
-            },
-            acceptedHeight: 9_007_199_254_740_992n,
-            effectiveHeight: 9_007_199_254_740_993n,
-          },
-        },
-      },
-    ]);
-  });
-
-  it("fails closed on empty, unsorted, or version-skipping market policy", () => {
-    expect(() => decodeTriggerMarketConfigInfos([[7, [null, null]]])).toThrow(
-      /empty trigger market config state/,
-    );
-    expect(() =>
-      decodeTriggerMarketConfigInfos([
-        [7, [[1n, false, 0, 0n, 0n, 0n], null]],
-        [7, [[1n, false, 0, 0n, 0n, 0n], null]],
-      ]),
-    ).toThrow(/strictly market-sorted/);
-    expect(() =>
-      decodeTriggerMarketConfigInfos([
-        [
-          7,
-          [
-            [1n, false, 0, 0n, 0n, 0n],
-            [[3n, true, 1, 1n, 1n, 1n], 10n, 11n],
-          ],
-        ],
-      ]),
-    ).toThrow(/version is not next/);
-  });
-
   it("decodes the engine's positional owner view with exact bigint ids", () => {
     const encoder = new Encoder({ useBigInt64: true });
     const raw = encoder.encode([

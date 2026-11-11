@@ -7,24 +7,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Removed
-
-- **Breaking (next TypeScript MAJOR and Python 5.0.0):** remove `queryTriggerMarketConfigs()`,
-  Python `trigger_market_configs()`, the `SetTriggerMarketConfig` builder/type,
-  and TypeScript `validateSetTriggerMarketConfig`. Low-level payload encoding,
-  signing and historical decoding remain wire-compatible; the engine owns
-  proposal/execution refusal for the retired action. Proposal hashes remain available.
-  Narrow decoded TypeScript actions with `isSubmittableAction()` before
-  resubmission; the guard excludes retired actions without asserting engine admission.
-  Remove legacy-policy prechecks before placing TP/SL; no replacement lookup is needed.
-
-### Changed
-
-- TP/SL placement uses the current position epoch and explicit per-limb slippage
-  (current engine ceiling: 1000 bps). Empty or disabled legacy policy rows do not
-  gate placement. Existing TP/SL placement, cancellation and history APIs remain.
-
 ### Added
+
+- TypeScript `isSubmittableAdminAction()` and the `RetiredAdminAction` type
+  narrow a bare `DecodedAdminAction` (for example `AdminProposalContext.action`)
+  to a submittable `AdminAction` without a cast. `ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`
+  (TypeScript and Python, `1_000`) mirrors the engine's per-limb TP/SL slippage
+  ceiling as an advisory clamp; encoding does not enforce it.
 
 - Python chain-pinned transaction evidence and bounded block-result ranges/windows
   check exact transaction bytes, Merkle roots and H+1 app-hash continuity.
@@ -78,6 +67,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking (TypeScript):** `decodeTx().action`, `decodeSigningMessage().action`,
+  `AdminProposalContext.action` and `ProposalDisplayInfo.action` are now
+  `DecodedAction` / `DecodedAdminAction`, because historical proposals may hold
+  the retired `SetTriggerMarketConfig`. Code that assigns a decoded action to
+  `Action` or `AdminAction`, even code that never touches triggers, stops
+  compiling. Narrow with `isSubmittableAction()` or `isSubmittableAdminAction()`
+  first.
+- Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
+  1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
+  still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
+  placement. Existing TP/SL placement, cancellation and history APIs remain.
+
 - Document `SetUserMarketLeverage` admission limits, its governed insurance-fund
   path and initial-margin-only semantics. SDK APIs and wire support are unchanged.
 
@@ -125,6 +126,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `queryOpenOrders("")` throws. Valid empty lists still return `[]`; legacy
   six-field records use wire defaults. Decoded payloads over 1 MiB are rejected.
   Ship this change in the next TypeScript MAJOR release; it is not part of 11.0.0.
+
+### Removed
+
+- **Breaking (next TypeScript MAJOR and Python 5.0.0):** remove `queryTriggerMarketConfigs()`,
+  Python `trigger_market_configs()`, the `SetTriggerMarketConfig` builder/type,
+  and TypeScript `validateSetTriggerMarketConfig`. Low-level payload encoding,
+  signing and historical decoding remain wire-compatible; the engine owns
+  proposal/execution refusal for the retired action. Proposal hashes remain available.
+  Remove legacy-policy prechecks before placing TP/SL; no replacement lookup is needed.
+- **Breaking (next TypeScript MAJOR and Python 5.0.0):** remove the legacy
+  trigger-policy registry decoders and their row types, which lost their only
+  caller with `queryTriggerMarketConfigs()`: TypeScript
+  `decodeTriggerMarketConfigInfos`, `TriggerMarketConfigInfo`,
+  `TriggerMarketConfigState` and `PendingTriggerMarketConfig`; Python
+  `proof_trading_sdk.trigger_config` (`decode_trigger_market_config_infos`,
+  `TriggerMarketConfigInfo`, `TriggerMarketConfigState`,
+  `PendingTriggerMarketConfig`, `TriggerMarketConfig`).
 
 ### Fixed
 

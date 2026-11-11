@@ -467,7 +467,8 @@ the engine verify authorization.
 `trigger_market_configs()` and the `SetTriggerMarketConfig` builder have been
 removed. Delete legacy-policy lookups and enabled checks before placing TP/SL;
 no replacement availability lookup is needed. Each limb requires explicit
-slippage in `1..=1000` bps under the current engine admission rule. The wire
+slippage in `1..=ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS` (currently 1000) basis
+points under the engine admission rule; clamp to that constant. The wire
 validator retains `1..=9999`; encoding does not guarantee admission or a fill.
 
 The engine rejects proposals and approvals for the retired configuration.

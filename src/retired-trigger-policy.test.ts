@@ -126,6 +126,10 @@ describe("retired trigger policy", () => {
               data: { ...action.data, action: { kind: "UnpauseBridge" } },
             };
       expect(sdk.isSubmittableAction(current)).toBe(true);
+      // The admin-level guard narrows a bare DecodedAdminAction (approval
+      // flows hold one) without a cast.
+      expect(sdk.isSubmittableAdminAction(action.data.action)).toBe(false);
+      expect(sdk.isSubmittableAdminAction(current.data.action)).toBe(true);
     },
   );
   it("allows ordinary current actions through the narrowing guard", () => {

@@ -96,6 +96,7 @@ export {
   type CancelPositionTriggers,
   type RetiredTriggerMarketConfig,
   type DecodedAdminAction,
+  type RetiredAdminAction,
   type DecodedAction,
   type SetOracleGuards,
   type FundInsuranceFund,
@@ -184,9 +185,6 @@ export {
   type TriggerEvaluation,
   type StoredTriggerLimb,
   type TriggerMarketConfig,
-  type PendingTriggerMarketConfig,
-  type TriggerMarketConfigState,
-  type TriggerMarketConfigInfo,
   type TriggerEffectiveAvailability,
   type TriggerEffectiveAvailabilityKind,
   type PositionTriggerBracket,
@@ -243,12 +241,12 @@ export {
 
 export {
   MAX_TRIGGER_SLIPPAGE_BPS,
+  ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS,
   validateSetPositionTriggers,
   validateCancelPositionTriggers,
   validateOrderTriggers,
   type OrderTriggerFields,
   decodePositionTriggerInfos,
-  decodeTriggerMarketConfigInfos,
   decodeTriggerStatusJson,
 } from "./triggers.js";
 
@@ -343,6 +341,7 @@ export {
   signEnvelopeFromPayload,
   encodePayloadBytes,
   isSubmittableAction,
+  isSubmittableAdminAction,
   decodeTx,
   decodeSigningMessage,
   type DecodedSigningMessage,

@@ -280,8 +280,14 @@ class ClosePosition(Action):
 _U64_MAX = (1 << 64) - 1
 _U32_MAX = (1 << 32) - 1
 _U16_MAX = (1 << 16) - 1
-# Structural wire bound; current engine admission separately caps limbs at 1000 bps.
+# Structural wire bound; engine admission separately caps each limb at
+# ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS.
 MAX_TRIGGER_SLIPPAGE_BPS = 9_999
+# Advisory: the engine's per-limb TP/SL slippage ceiling, mirroring
+# TRIGGER_SLIPPAGE_CEILING_BPS in exchange-core src/triggers.rs. Clamp to this
+# when building limbs. Encoding does not enforce it; the engine refuses a limb
+# above it at admission.
+ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS = 1_000
 
 
 def _trigger_uint(name: str, value: int, maximum: int, *, nonzero: bool = False) -> None:
@@ -1078,6 +1084,7 @@ __all__ = [
     "Side",
     "TimeInForce",
     "MAX_TRIGGER_SLIPPAGE_BPS",
+    "ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS",
     "PlaceOrder",
     "MarketOrder",
     "CancelOrder",

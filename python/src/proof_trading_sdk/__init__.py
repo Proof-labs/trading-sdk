@@ -53,6 +53,7 @@ from proof_trading_sdk.actions import (  # noqa: F401
     Side,
     TimeInForce,
     MAX_TRIGGER_SLIPPAGE_BPS,
+    ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS,
     PlaceOrder,
     MarketOrder,
     CancelOrder,
@@ -162,13 +163,6 @@ from proof_trading_sdk.evidence import (
     decode_finalized_read_witness,
     verify_witness,
 )
-from proof_trading_sdk.trigger_config import (
-    TriggerMarketConfig,
-    PendingTriggerMarketConfig,
-    TriggerMarketConfigState,
-    TriggerMarketConfigInfo,
-    decode_trigger_market_config_infos,
-)
 
 from proof_trading_sdk.finalized_accounts import (
     FinalizedAccountInfo,
@@ -224,6 +218,7 @@ __all__ = [
     "Side",
     "TimeInForce",
     "MAX_TRIGGER_SLIPPAGE_BPS",
+    "ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS",
     "PlaceOrder",
     "MarketOrder",
     "CancelOrder",
@@ -299,11 +294,6 @@ __all__ = [
     "TriggerMarketHistoryPage",
     "decode_position_trigger_history_page",
     "decode_trigger_market_history_page",
-    "TriggerMarketConfig",
-    "PendingTriggerMarketConfig",
-    "TriggerMarketConfigState",
-    "TriggerMarketConfigInfo",
-    "decode_trigger_market_config_infos",
     "MarketOpenInterest",
     "MarketsSnapshot",
     "decode_markets_snapshot",

@@ -3,8 +3,10 @@ import {
   type Action,
   ActionType,
   type ActionTypeValue,
+  type AdminAction,
   type DecodedAdminAction,
   type DecodedAction,
+  type RetiredAdminAction,
 } from "./types.js";
 import { getWasm } from "./wasm-loader.js";
 import {
@@ -84,6 +86,25 @@ export function decodeStrict(bytes: Uint8Array): unknown {
 // Encoding + signing (via WASM)
 // ---------------------------------------------------------------------------
 
+// Every retired admin kind must be listed: a `RetiredAdminAction` arm without
+// an entry here fails to compile, so the guards below cannot silently let a
+// newly retired kind through to `encodeSignedTx`.
+const RETIRED_ADMIN_KINDS: Record<RetiredAdminAction["kind"], true> = {
+  SetTriggerMarketConfig: true,
+};
+
+/** Narrow a decoded admin action (for example `AdminProposalContext.action`)
+ * to the current submittable `AdminAction`, excluding retired kinds. It does
+ * not validate engine admission or the caller's authority. */
+export function isSubmittableAdminAction(
+  action: DecodedAdminAction,
+): action is AdminAction {
+  return !Object.prototype.hasOwnProperty.call(
+    RETIRED_ADMIN_KINDS,
+    action.kind,
+  );
+}
+
 /** Narrow a decoded transaction to the current typed submission surface.
  * Excludes retired governance actions; it does not validate engine admission
  * or the caller's authority. Historical decoding and hashing remain available.
@@ -92,8 +113,16 @@ export function isSubmittableAction(action: DecodedAction): action is Action {
   return !(
     (action.type === "ProposeAdminAction" ||
       action.type === "ApproveAdminAction") &&
-    action.data.action.kind === "SetTriggerMarketConfig"
+    !isSubmittableAdminAction(action.data.action)
   );
+}
+
+// One encode path for current and historical actions, so the canonical-bytes
+// check in `decodeSigningMessage` always matches what `encodePayloadBytes`
+// emits. The public signature stays narrow (`Action`).
+function encodeAnyPayloadBytes(action: DecodedAction): Uint8Array {
+  const { actionType, fields } = toWasmFields(action);
+  return getWasm().encode_payload(actionType, fields);
 }
 
 /**
@@ -101,8 +130,7 @@ export function isSubmittableAction(action: DecodedAction): action is Action {
  * match `rmp-serde` — and therefore the engine — byte-for-byte.
  */
 export function encodePayloadBytes(action: Action): Uint8Array {
-  const { actionType, fields } = toWasmFields(action);
-  return getWasm().encode_payload(actionType, fields);
+  return encodeAnyPayloadBytes(action);
 }
 
 /**
@@ -378,11 +406,7 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
       // Re-encoding also applies the adapter's structural validation.
       // Historical actions must still round-trip even when they cannot be
       // narrowed to the current typed submission surface.
-      const canonical = toWasmFields(decodedAction);
-      const canonicalPayloadBytes = getWasm().encode_payload(
-        canonical.actionType,
-        canonical.fields,
-      );
+      const canonicalPayloadBytes = encodeAnyPayloadBytes(decodedAction);
       const isCanonical =
         canonicalPayloadBytes.length === payloadBytes.length &&
         canonicalPayloadBytes.every((byte, i) => byte === payloadBytes[i]);

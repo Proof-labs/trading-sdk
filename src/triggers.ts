@@ -10,15 +10,19 @@ import type {
   TriggerEvaluation,
   TriggerLimb,
   TriggerMarketConfig,
-  TriggerMarketConfigInfo,
-  TriggerMarketConfigState,
   TriggerStatus,
 } from "./types.js";
 
 const U64_MAX = (1n << 64n) - 1n;
 const U32_MAX = 0xffff_ffff;
-/** Structural wire bound; current engine admission separately caps limbs at 1000 bps. */
+/** Structural wire bound; engine admission separately caps each limb at
+ * `ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`. */
 export const MAX_TRIGGER_SLIPPAGE_BPS = 9_999;
+/** Advisory: the engine's per-limb TP/SL slippage ceiling, mirroring
+ * `TRIGGER_SLIPPAGE_CEILING_BPS` in exchange-core `src/triggers.rs`. Clamp to
+ * this when building limbs. Encoding does not enforce it; the engine refuses
+ * a limb above it at admission. */
+export const ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS = 1_000;
 
 function assertU64(name: string, value: bigint, nonzero = false): void {
   if (typeof value !== "bigint" || value < 0n || value > U64_MAX) {
@@ -296,58 +300,6 @@ function decodeConfig(value: unknown): TriggerMarketConfig | null {
     maxActiveBrackets: config.maxActiveBrackets,
   });
   return config;
-}
-
-function decodeConfigState(value: unknown): TriggerMarketConfigState {
-  const row = tuple(value, "TriggerMarketConfigState", 2);
-  const current = decodeConfig(row[0]);
-  let pending: TriggerMarketConfigState["pending"] = null;
-  if (row[1] != null) {
-    const pendingRow = tuple(row[1], "PendingTriggerMarketConfig", 3);
-    const config = decodeConfig(pendingRow[0]);
-    if (config === null) {
-      throw new Error("trigger decode: pending config is null");
-    }
-    const acceptedHeight = uint(pendingRow[1], "pending.accepted_height");
-    const effectiveHeight = uint(pendingRow[2], "pending.effective_height");
-    if (
-      acceptedHeight === 0n ||
-      acceptedHeight === U64_MAX ||
-      effectiveHeight !== acceptedHeight + 1n
-    ) {
-      throw new Error("trigger decode: invalid pending effective height");
-    }
-    const expectedVersion = current === null ? 1n : current.version + 1n;
-    if (config.version !== expectedVersion) {
-      throw new Error("trigger decode: pending config version is not next");
-    }
-    pending = { config, acceptedHeight, effectiveHeight };
-  }
-  if (current === null && pending === null) {
-    throw new Error("trigger decode: empty trigger market config state");
-  }
-  return { current, pending };
-}
-
-/** Decode the legacy stored trigger-policy registry, sorted by market. */
-export function decodeTriggerMarketConfigInfos(
-  value: unknown,
-): TriggerMarketConfigInfo[] {
-  if (!Array.isArray(value)) {
-    throw new Error("trigger decode: market configs response is not an array");
-  }
-  let previousMarket = -1;
-  return value.map((entry) => {
-    const row = tuple(entry, "TriggerMarketConfigInfo", 2);
-    const market = uint32(row[0], "market");
-    if (market <= previousMarket) {
-      throw new Error(
-        "trigger decode: market configs are not strictly market-sorted",
-      );
-    }
-    previousMarket = market;
-    return { market, state: decodeConfigState(row[1]) };
-  });
 }
 
 function decodeAvailability(value: unknown): TriggerEffectiveAvailability {

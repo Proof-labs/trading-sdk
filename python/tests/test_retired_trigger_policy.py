@@ -51,3 +51,9 @@ def test_low_level_codec_defers_policy_to_engine(tag, fields, payload):
     os.close(write_fd)
     handle = sdk.load_key_from_fd(read_fd)
     assert sdk.decode_tx(handle.sign_and_encode(bytes(32), tag, payload, 1))['payload'] == payload
+
+
+def test_engine_slippage_ceiling_is_advisory_and_within_wire_bound():
+    # Mirrors exchange-core TRIGGER_SLIPPAGE_CEILING_BPS; encoding does not enforce it.
+    assert sdk.ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS == 1_000
+    assert sdk.ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS < sdk.MAX_TRIGGER_SLIPPAGE_BPS == 9_999
