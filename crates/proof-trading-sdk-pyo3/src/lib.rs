@@ -3,17 +3,24 @@ extern crate proof_trading_sdk as core_sdk;
 use core_sdk::codec;
 use core_sdk::crypto;
 use core_sdk::governance;
+use core_sdk::market_snapshot;
 use core_sdk::types::ExecError;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
+mod account_auth;
+mod callback_signer;
 #[cfg(feature = "pkcs11")]
 mod pkcs11;
 
 fn map_err(e: ExecError) -> PyErr {
     PyValueError::new_err(format!("{e:?}"))
+}
+
+fn map_pythonize_err(e: pythonize::PythonizeError) -> PyErr {
+    PyValueError::new_err(e.to_string())
 }
 
 /// Map a signing-backend failure to a Python exception, without leaking any
@@ -47,6 +54,19 @@ impl SigningHandle {
     fn owner<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         let owner = crypto::pubkey_to_owner(&self.signer.public_key());
         PyBytes::new(py, &owner)
+    }
+
+    /// Sign this owner's account-stream authentication without exporting the key.
+    #[pyo3(signature = (chain_id, timestamp_ms, after_id=0))]
+    fn sign_account_ws_auth<'py>(
+        &self,
+        py: Python<'py>,
+        chain_id: &[u8],
+        timestamp_ms: u64,
+        after_id: i64,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let signature = account_auth::sign(self.signer.as_ref(), chain_id, timestamp_ms, after_id)?;
+        Ok(PyBytes::new(py, &signature))
     }
 
     /// Sign an action payload and encode it as a wire-ready envelope.
@@ -114,6 +134,25 @@ fn sign_and_encode<'py>(
     Ok(PyBytes::new(py, &encoded))
 }
 
+/// Sign the gateway's owner-bound account-stream challenge.
+#[pyfunction]
+#[pyo3(signature = (chain_id, timestamp_ms, secret_key, after_id=0))]
+fn sign_account_ws_auth<'py>(
+    py: Python<'py>,
+    chain_id: &[u8],
+    timestamp_ms: u64,
+    secret_key: &[u8],
+    after_id: i64,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let seed = zeroize::Zeroizing::new(
+        <[u8; 32]>::try_from(secret_key)
+            .map_err(|_| PyValueError::new_err("secret_key must be exactly 32 bytes"))?,
+    );
+    let signer = core_sdk::LocalSigner::from_bytes(&seed);
+    let signature = account_auth::sign(&signer, chain_id, timestamp_ms, after_id)?;
+    Ok(PyBytes::new(py, &signature))
+}
+
 /// Encode a pre-signed action into a wire envelope.
 #[pyfunction]
 fn encode_signed_tx<'py>(
@@ -150,6 +189,10 @@ fn encode_signed_tx<'py>(
 ///
 /// The returned bytes are the `action_payload` argument for
 /// [`sign_and_encode`].
+///
+/// A market creation (direct, or proposed or approved through governance,
+/// alone or in an admin `Batch`) whose ticker breaks the ticker rule raises
+/// `ValueError` with the engine's refusal text; see `core_sdk::ticker`.
 #[pyfunction]
 fn encode_action<'py>(
     py: Python<'py>,
@@ -158,6 +201,8 @@ fn encode_action<'py>(
 ) -> PyResult<Bound<'py, PyBytes>> {
     let mut de = pythonize::Depythonizer::from_object(fields);
     let payload = codec::encode_payload_dyn(action_type, &mut de).map_err(map_err)?;
+    core_sdk::ticker::check_payload_tickers(action_type, &payload)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
     Ok(PyBytes::new(py, &payload))
 }
 
@@ -188,6 +233,80 @@ fn decode_tx<'py>(py: Python<'py>, tx_bytes: &[u8]) -> PyResult<Bound<'py, PyDic
     dict.set_item("pubkey", PyBytes::new(py, &decoded.pubkey))?;
     dict.set_item("signature", PyBytes::new(py, &decoded.signature))?;
     Ok(dict)
+}
+
+/// Decode a complete `GET /v1/markets-snapshot` response body bound to
+/// `chain_id`, with the core decoder's refusal rules: any fault refuses the
+/// whole read, and nothing partial is returned.
+#[pyfunction]
+fn decode_markets_snapshot<'py>(
+    py: Python<'py>,
+    body: &[u8],
+    chain_id: &[u8],
+) -> PyResult<Bound<'py, PyDict>> {
+    let chain_id: [u8; 32] = chain_id
+        .try_into()
+        .map_err(|_| PyValueError::new_err("chain_id must be exactly 32 bytes"))?;
+    let chain = market_snapshot::ChainBinding::new(chain_id)
+        .ok_or_else(|| PyValueError::new_err("chain_id must name a chain, not the zero binding"))?;
+    let snapshot = market_snapshot::decode_snapshot(body, chain)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let dict = PyDict::new(py);
+    dict.set_item("chain_id", PyBytes::new(py, &snapshot.chain_id))?;
+    dict.set_item("height", snapshot.height)?;
+    dict.set_item(
+        "markets",
+        pythonize::pythonize(py, &snapshot.markets).map_err(map_pythonize_err)?,
+    )?;
+    dict.set_item(
+        "events",
+        pythonize::pythonize(py, &snapshot.events).map_err(map_pythonize_err)?,
+    )?;
+    dict.set_item(
+        "open_interest",
+        pythonize::pythonize(py, &snapshot.open_interest).map_err(map_pythonize_err)?,
+    )?;
+    Ok(dict)
+}
+
+#[pyfunction]
+fn decode_authorities<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+    let value =
+        core_sdk::governance_reads::decode_authorities(bytes).map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &value).map_err(map_pythonize_err)
+}
+
+#[pyfunction]
+fn decode_liquidation_config<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+    let value = core_sdk::governance_reads::decode_liquidation_config(bytes)
+        .map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &value).map_err(map_pythonize_err)
+}
+
+/// Strict, type-preserving MessagePack preflight for gateway read payloads.
+///
+/// Rejects the float families that Python would otherwise keep distinct from a
+/// wire integer — so `int(...)` coercions cannot truncate one — along with
+/// extensions, non-UTF-8 strings, duplicate map keys, over-deep nesting and
+/// trailing bytes. See `proof_trading_sdk::msgpack`.
+#[pyfunction]
+fn reject_floats(bytes: &[u8]) -> PyResult<()> {
+    core_sdk::msgpack::reject_floats(bytes).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Decode owner-bound resting orders with the shared proof-wire DTO.
+#[pyfunction]
+fn decode_open_orders<'py>(
+    py: Python<'py>,
+    bytes: &[u8],
+    owner: &[u8],
+) -> PyResult<Bound<'py, PyAny>> {
+    let owner: [u8; 20] = owner
+        .try_into()
+        .map_err(|_| PyValueError::new_err("owner must be exactly 20 bytes"))?;
+    let orders =
+        core_sdk::reads::decode_open_orders(bytes, &owner).map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &orders).map_err(map_pythonize_err)
 }
 
 /// Derive a 20-byte owner address from a 32-byte Ed25519 public key.
@@ -372,7 +491,7 @@ fn get_action_types<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
 #[pyfunction]
 fn get_error_code_table<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
     let list = PyList::empty(py);
-    for kind in core_sdk::types::error_code_manifest() {
+    for kind in core_sdk::error_code_manifest() {
         let d = PyDict::new(py);
         d.set_item("code", kind.code())?;
         d.set_item("name", kind.name())?;
@@ -389,18 +508,42 @@ fn get_error_code_table<'py>(py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
 #[pyfunction]
 #[pyo3(signature = (code, log=None))]
 fn classify_error_name(code: u32, log: Option<&str>) -> Option<&'static str> {
-    core_sdk::types::decode_exec_error_kind(code, log).map(|kind| kind.name())
+    core_sdk::decode_exec_error_kind(code, log).map(|kind| kind.name())
 }
 
 /// Native Python extension module for proof-trading-sdk (internal name: _native).
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(callback_signer::signing_message, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        callback_signer::account_ws_auth_message,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(callback_signer::verify_raw_signature, m)?)?;
     m.add_class::<SigningHandle>()?;
     m.add_function(wrap_pyfunction!(sign_and_encode, m)?)?;
+    m.add_function(wrap_pyfunction!(sign_account_ws_auth, m)?)?;
     m.add_function(wrap_pyfunction!(encode_signed_tx, m)?)?;
     m.add_function(wrap_pyfunction!(encode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_tx, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_authorities, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_liquidation_config, m)?)?;
+    m.add(
+        "MAX_GOVERNANCE_READ_BYTES",
+        core_sdk::governance_reads::MAX_GOVERNANCE_READ_BYTES,
+    )?;
+    m.add_function(wrap_pyfunction!(decode_markets_snapshot, m)?)?;
+    m.add(
+        "MAX_MARKETS_SNAPSHOT_BYTES",
+        market_snapshot::MAX_SNAPSHOT_BYTES,
+    )?;
+    m.add_function(wrap_pyfunction!(reject_floats, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_open_orders, m)?)?;
+    m.add(
+        "MAX_OPEN_ORDERS_BYTES",
+        core_sdk::reads::MAX_OPEN_ORDERS_BYTES,
+    )?;
     m.add_function(wrap_pyfunction!(pubkey_to_owner, m)?)?;
     m.add_function(wrap_pyfunction!(verify_signature, m)?)?;
     m.add_function(wrap_pyfunction!(chain_id_from_string, m)?)?;

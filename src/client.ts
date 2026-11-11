@@ -1,9 +1,92 @@
-import { signAndEncode } from "./codec.js";
-import { ready as initWasm } from "./wasm-loader.js";
+import {
+  GatewayFeed,
+  type GatewayFeedOptions,
+  type AccountFeedAuth,
+} from "./feed.js";
+import type {
+  AccountFrame,
+  FeedErrorFrame,
+  OrderbookFrame,
+  OrderbookSnapshotFrame,
+  TradeFrame,
+} from "./feed-types.js";
+import {
+  portfolioHistorySearchParams,
+  decodePortfolioHistoryPage,
+  type PortfolioHistoryOptions,
+  type PortfolioHistoryPage,
+} from "./portfolio-history.js";
+import {
+  queryOraclePriceHistoryPage,
+  type OraclePriceHistoryOptions,
+  type OraclePriceHistoryPage,
+} from "./oracle-price-history.js";
+import type { GatewayFetch } from "./gateway-reads.js";
+import { TypedGatewayReads } from "./typed-gateway-reads.js";
+import {
+  recoveringAccountHandler,
+  type AccountHistoryPage,
+  type AccountHistoryRow,
+  type AccountRecoveryStatus,
+} from "./account-recovery.js";
+import { FeedSubscriptionError, GatewayHttpError } from "./errors.js";
+import {
+  decodeCashFlowEvents,
+  decodeHistoryPositionsPage,
+  historyOwner,
+  historySearchParams,
+} from "./history.js";
+import {
+  ACCOUNT_EVENTS_MAX_BYTES,
+  accountEventsParams,
+  decodeAccountEventsPage,
+  decodeFundingPaymentsPage,
+  fundingPaymentsSearchParams,
+  type AccountEventsOptions,
+  type AccountEventsPage,
+  type FundingPaymentsOptions,
+  type FundingPaymentsPage,
+} from "./account-history.js";
+import {
+  decodeRecentTrades,
+  recentTradesLimit,
+  type RecentTrade,
+  type RecentTradesOptions,
+} from "./recent-trades.js";
+import { boundedGatewayJson } from "./bounded-read.js";
+import {
+  decodeLiquidationHistoryPage,
+  liquidationHistorySearchParams,
+  type LiquidationHistoryFilters,
+  type LiquidationHistoryPage,
+} from "./liquidation-history.js";
+import {
+  accountInfoFromWasm,
+  openOrdersFromWasm,
+  eventInfoFromWasm,
+  marketConfigFromWasm,
+  toWasmFields,
+} from "./codec-adapter.js";
+import {
+  signAndEncode,
+  encodePayloadBytes,
+  encodeSignedTx,
+  rejectFloats,
+} from "./codec.js";
+import { decodeAccountState, type AccountState } from "./account-state.js";
+import { decodeFundingInfo, type FundingInfo } from "./funding.js";
+import {
+  fetchFinancialState,
+  type FinancialState,
+  type FinancialStateSelection,
+} from "./financial-state.js";
+import { getWasm, ready as initWasm, type WasmCore } from "./wasm-loader.js";
 import {
   txEngineError,
   txFromEngineCode,
+  txFromQueryResponse,
   txOk,
+  txRefusal,
   txTimeout,
   txTransportError,
 } from "./tx-result.js";
@@ -13,6 +96,8 @@ import {
   ownerToHex,
   bytesToHex,
   sign,
+  verify,
+  signingMessage,
   UNBOUND_CHAIN_ID,
   chainIdFromString,
 } from "./crypto.js";
@@ -23,25 +108,23 @@ import type {
   PlaceOrder,
   MarketOrder,
   AccountInfo,
-  BindingScenarioEntry,
-  FeeTier,
   HistoryCashFlow,
+  HistoryFillsPage,
   HistoryPositionSnapshot,
+  HistoryPositionsPage,
   HistoryResolution,
   MarketConfig,
-  MarketKind,
-  MarkSourceMode,
   OpenOrder,
   AdlQueueEntry,
   Orderbook,
   OrderbookLevel,
   Ticker,
-  PositionInfo,
   WithdrawalRecord,
   WithdrawalStatus,
   AdminSignerRegistry,
+  AuthoritiesSnapshot,
   ProposalPage,
-  ImpactMarketInfo,
+  EventInfo,
   SetPositionTriggers,
   PositionTriggerInfo,
   TriggerStatus,
@@ -50,19 +133,42 @@ import type {
   TriggerMarketHistoryFilters,
   TriggerMarketHistoryPage,
   TriggerMarketConfigInfo,
+  NodeVersion,
+  UpgradesInfo,
+  LiquidationConfigInfo,
+  AuthorizeWithdrawal,
+  ConfirmWithdrawalReceipt,
+  FailWithdrawalReceipt,
 } from "./types.js";
 import {
   decodeAdminSignerRegistryInfo,
-  decodeImpactMarketInfo,
+  decodeAuthoritiesSnapshot,
+  decodeNodeVersion,
+  decodeUpgradesInfo,
+  decodeLiquidationConfigInfo,
   decodeProposalPage,
 } from "./governance-query.js";
 import { Decoder } from "@msgpack/msgpack";
+import { readMarketsSnapshot } from "./market-snapshot.js";
+import {
+  defaultExchangeHttpTransport,
+  exchangeHttpPriorityForAction,
+  gatewayReadContext,
+  readContext,
+  surfaceFor,
+  type ExchangeHttpRequestContext,
+  type ExchangeHttpTransport,
+} from "./http-transport.js";
+import { yesOrder, type NoOrder } from "./binary.js";
+import { Side } from "./types.js";
+import type { MarketsSnapshot } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import {
   decodePositionTriggerInfos,
   decodeTriggerMarketConfigInfos,
   decodeTriggerStatusJson,
   validateCancelPositionTriggers,
+  validateOrderTriggers,
   validateSetPositionTriggers,
 } from "./triggers.js";
 import {
@@ -74,6 +180,12 @@ import {
 } from "./trigger-history.js";
 
 const msgpackDecoder = new Decoder({ useBigInt64: true });
+const U64_MAX = 0xffff_ffff_ffff_ffffn;
+import {
+  decodeOraclePermissions,
+  validateOraclePermissionMarket,
+  type OraclePermissions,
+} from "./oracle-permissions.js";
 
 /**
  * Fetch the 32-byte chain_id binding from a CometBFT RPC's `/status`
@@ -84,8 +196,15 @@ const msgpackDecoder = new Decoder({ useBigInt64: true });
  * (raw `signAndEncode` callers, gateway-side helpers) that build wire
  * bytes without going through a client instance.
  */
-export async function fetchChainId(rpcUrl: string): Promise<Uint8Array> {
-  const res = await fetch(`${rpcUrl}/status`);
+export async function fetchChainId(
+  rpcUrl: string,
+  httpTransport: ExchangeHttpTransport = defaultExchangeHttpTransport,
+): Promise<Uint8Array> {
+  const res = await httpTransport(`${rpcUrl}/status`, undefined, {
+    purpose: "chain_id",
+    priority: "critical",
+    surface: "status_chain_id",
+  });
   if (!res.ok) throw new Error(`/status returned HTTP ${res.status}`);
   const json = (await res.json()) as {
     result?: { node_info?: { network?: string } };
@@ -95,6 +214,12 @@ export async function fetchChainId(rpcUrl: string): Promise<Uint8Array> {
     throw new Error("/status response missing result.node_info.network");
   }
   return chainIdFromString(network);
+}
+
+/** Vendor-neutral Ed25519 signer. The SDK owns domain, encoding and nonces. */
+export interface ExternalSigner {
+  publicKey: Uint8Array;
+  signRaw(message: Uint8Array): Promise<Uint8Array>;
 }
 
 export interface ExchangeClientOptions {
@@ -117,8 +242,7 @@ export interface ExchangeClientOptions {
    */
   apiUrl?: string;
   /**
-   * WebSocket base URL for the gateway streams (`/account-events`,
-   * `/orderbook-deltas`). Defaults to `gatewayUrl` (or `rpcUrl` on the
+   * WebSocket base URL for the gateway's multiplexed `/ws` feed. Defaults to `gatewayUrl` (or `rpcUrl` on the
    * direct-node path) with the scheme swapped to `ws`/`wss`. The gateway
    * serves its feed on a dedicated listener; for a local stack whose WS
    * port differs from the HTTP port, set this explicitly
@@ -178,7 +302,7 @@ export interface ExchangeClientOptions {
    *
    * - `false`: the legacy direct-node path — submission goes to CometBFT
    *   `broadcast_tx_sync` over `rpcUrl`, reads to `apiUrl`, and chain
-   *   queries to `rpcUrl`. Kept only for in-cluster tools (MMs, HLP,
+   *   queries to `rpcUrl`. Kept only for in-cluster tools (MMs, the PLP,
    *   oracle feeder, retail-flow taker) and the scenario harness that
    *   reach the node directly and don't need the gateway. Never expose
    *   this to external callers.
@@ -201,6 +325,14 @@ export interface ExchangeClientOptions {
    * concurrency-safe, so the SDK ignores this flag.
    */
   concurrentNonces?: boolean;
+  /**
+   * Transport for every HTTP request the client makes: reads, submission,
+   * confirmation polls and the chain-id lookup. Each call carries a context
+   * naming its purpose, priority and endpoint, so an embedding process can
+   * apply its own admission, pacing, deadlines and retries. Defaults to
+   * `globalThis.fetch`. Not used by the WebSocket feed.
+   */
+  httpTransport?: ExchangeHttpTransport;
 }
 
 export class ExchangeClient {
@@ -209,6 +341,7 @@ export class ExchangeClient {
   private gatewayUrl: string;
   private useGateway: boolean;
   private apiKey: string | null;
+  private httpTransport: ExchangeHttpTransport;
   private wsUrl: string;
   /**
    * 32-byte chain_id binding for v3 signatures (audit B4). `null` until
@@ -217,17 +350,26 @@ export class ExchangeClient {
    * `/v1/status`, or `${rpcUrl}/status` on the direct path) on first submit.
    */
   private chainId: Uint8Array | null;
+  /** Inventory reconciliation requires the caller's pin, not auto-discovery. */
+  private readonly inventoryChainId: Uint8Array | null;
   private allowUnbound: boolean;
   /** Single-flight guard so concurrent submits share one /status fetch. */
   private chainIdPromise: Promise<Uint8Array> | null = null;
   private privateKey: Uint8Array | null = null;
+  private externalSigner: ExternalSigner | null = null;
+  private signerRevision = 0;
+  private gatewayFeed: GatewayFeed | null = null;
+  /** Dedicated feeds behind pending `orderbookSnapshot` calls, so
+   *  `disconnect()` closes them too. */
+  private readonly snapshotFeeds = new Set<GatewayFeed>();
+  /** Reconnect recoveries of live `subscribeAccount` calls, closed with the feed. */
+  private readonly accountRecoveries = new Set<() => void>();
   private publicKey: Uint8Array | null = null;
   private address: Uint8Array | null = null;
   private addressHex: string | null = null;
   private lastTimestampNonce = 0n;
   /** Unsubscribe handles for every open WebSocket stream, so `disconnect()`
    *  can tear them all down at once. */
-  private activeStreams = new Set<() => void>();
   /**
    * In-flight DeliverTx verification promises spawned by submitTx. Awaiting
    * this set lets callers serialize against block inclusion when they need to;
@@ -268,10 +410,11 @@ export class ExchangeClient {
       opts.apiUrl ?? deriveNodeUrl(this.gatewayUrl, "8080"),
     );
     this.apiKey = opts.apiKey ?? null;
-    // WebSocket base URL (no path). Per-stream methods append the channel
-    // path (`/account-events`, `/orderbook-deltas`). Mirrors the Python SDK,
-    // which derives the WS base by swapping the gateway URL's scheme. Local
-    // stacks whose WS listener is on a different port must pass `wsUrl`.
+    this.httpTransport = opts.httpTransport ?? defaultExchangeHttpTransport;
+    // WebSocket base URL (no path); the feed appends `/ws`. Mirrors the
+    // Python SDK, which derives the WS base by swapping the gateway URL's
+    // scheme. Local stacks whose WS listener is on a different port must pass
+    // `wsUrl`.
     this.wsUrl = stripTrailingSlash(
       opts.wsUrl ??
         (this.useGateway ? this.gatewayUrl : this.rpcUrl).replace(
@@ -283,6 +426,7 @@ export class ExchangeClient {
     // path resolveChainId() fetches /status on first submit; on the gateway
     // path chainId must be pinned (the gateway does not serve /status).
     this.chainId = opts.chainId ? chainIdFromString(opts.chainId) : null;
+    this.inventoryChainId = this.chainId?.slice() ?? null;
     this.allowUnbound = opts.allowUnbound ?? false;
     void opts.concurrentNonces;
   }
@@ -344,7 +488,7 @@ export class ExchangeClient {
       try {
         // `fetchChainId` appends `/status`, so the gateway path resolves from
         // `${gatewayUrl}/v1/status` and the direct path from `${rpcUrl}/status`.
-        const bound = await fetchChainId(this.chainBase);
+        const bound = await fetchChainId(this.chainBase, this.httpTransport);
         this.chainId = bound;
         return bound;
       } catch (err) {
@@ -403,10 +547,130 @@ export class ExchangeClient {
 
   /** Set the private key for signing transactions. */
   setPrivateKey(key: Uint8Array): void {
+    this.externalSigner = null;
+    this.signerRevision++;
     this.privateKey = key;
     this.publicKey = getPublicKey(key);
     this.address = pubkeyToOwner(this.publicKey);
     this.addressHex = ownerToHex(this.address);
+  }
+
+  /** Replace the signing connection; no private key is retained. */
+  setExternalSigner(signer: ExternalSigner): void {
+    if (signer.publicKey.length !== 32)
+      throw new Error("External signer public key must be 32 bytes");
+    this.signerRevision++;
+    this.privateKey = null;
+    this.externalSigner = {
+      publicKey: signer.publicKey.slice(),
+      signRaw: signer.signRaw.bind(signer),
+    };
+    this.publicKey = this.externalSigner.publicKey.slice();
+    this.address = pubkeyToOwner(this.publicKey);
+    this.addressHex = ownerToHex(this.address);
+  }
+
+  /**
+   * Sign only. Cancellation or a replaced connection prevents submission.
+   *
+   * `minimumNonceExclusive` makes the allocated nonce strictly greater than a
+   * caller-held floor, for example the nonce of signed bytes a process stored
+   * durably before a restart. The floor must be an unsigned-64 value; a floor
+   * that would put the nonce more than 60 seconds ahead of the clock throws
+   * instead of signing.
+   */
+  async signTx(
+    action: Action,
+    opts: { signal?: AbortSignal; minimumNonceExclusive?: bigint } = {},
+  ): Promise<Uint8Array> {
+    opts.signal?.throwIfAborted();
+    const signer = this.externalSigner;
+    const key = this.privateKey?.slice();
+    const revision = this.signerRevision;
+    if (!signer && !key) throw new Error("No signer set");
+    const floor = opts.minimumNonceExclusive;
+    if (
+      floor !== undefined &&
+      (typeof floor !== "bigint" || floor < 0n || floor >= U64_MAX)
+    ) {
+      throw new Error(
+        "minimumNonceExclusive must be an unsigned-64 nonce floor",
+      );
+    }
+    // Freeze caller-owned inputs before any await (wallet prompts may be long).
+    const snapshot = cloneSigningInput(action);
+    const [chainId] = await Promise.all([this.resolveChainId(), initWasm()]);
+    opts.signal?.throwIfAborted();
+    if (revision !== this.signerRevision)
+      throw new Error("Signing connection changed");
+    const seq = this.nextTimestampNonce(floor);
+    if (!signer) return signAndEncode(chainId, snapshot, seq, key!);
+    const payload = encodePayloadBytes(snapshot);
+    const message = signingMessage(
+      chainId,
+      toWasmFields(snapshot).actionType,
+      seq,
+      payload,
+    );
+    const signature = cloneSigningInput(await signer.signRaw(message.slice()));
+    opts.signal?.throwIfAborted();
+    if (revision !== this.signerRevision)
+      throw new Error("Signing connection changed");
+    if (
+      !(signature instanceof Uint8Array) ||
+      signature.length !== 64 ||
+      !verify(signer.publicKey, signature, message)
+    ) {
+      throw new Error("External signer returned an invalid signature");
+    }
+    return encodeSignedTx(snapshot, seq, signer.publicKey, signature);
+  }
+
+  /** Sign the gateway's account-stream auth bytes for an `accountEvents`
+   * subscription on `/ws`; call again per reconnect.
+   * Direct owner keys only; no delegated-owner authorization is inferred.
+   */
+  async accountAuth(
+    owner = this.addressHex ?? "",
+    afterId = 0n,
+  ): Promise<AccountFeedAuth> {
+    const ownerHex = owner.replace(/^0x/i, "").toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(ownerHex) || ownerHex !== this.addressHex)
+      throw new Error("Account auth owner does not match signer");
+    if (afterId < 0n || afterId > BigInt(Number.MAX_SAFE_INTEGER))
+      throw new Error("Invalid account auth cursor");
+    const signer = this.externalSigner;
+    const key = this.privateKey?.slice();
+    const publicKey = this.publicKey?.slice();
+    const revision = this.signerRevision;
+    if (!publicKey || (!signer && !key)) throw new Error("No signer set");
+    const chainId = await this.resolveChainId();
+    if (revision !== this.signerRevision)
+      throw new Error("Signing connection changed");
+    const timestampMs = BigInt(Date.now());
+    const message = accountWsAuthMessage(
+      chainId,
+      ownerHex,
+      afterId,
+      timestampMs,
+    );
+    const signature = signer
+      ? cloneSigningInput(await signer.signRaw(message.slice()))
+      : sign(key!, message);
+    if (revision !== this.signerRevision)
+      throw new Error("Signing connection changed");
+    if (
+      !ArrayBuffer.isView(signature) ||
+      signature.byteLength !== 64 ||
+      !verify(publicKey, signature, message)
+    )
+      throw new Error("External signer returned an invalid signature");
+    return {
+      public_key: bytesToHex(publicKey),
+      signature: bytesToHex(signature),
+      timestamp_ms: Number(timestampMs),
+      ...(afterId > 0n ? { after_id: Number(afterId) } : {}),
+    };
   }
 
   getAddress(): Uint8Array | null {
@@ -439,8 +703,11 @@ export class ExchangeClient {
   async getRecentNonces(addressHex?: string): Promise<bigint[]> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) throw new Error("No address available");
-    const res = await fetch(
-      `${this.readBaseUrl}/v1/account/${hex}/recent-nonces`,
+    const url = `${this.readBaseUrl}/v1/account/${hex}/recent-nonces`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "account"),
     );
     const json = await res.json();
     if (json.error) throw new Error(json.error);
@@ -451,23 +718,31 @@ export class ExchangeClient {
   /**
    * Allocate the next timestamp nonce.
    *
-   * Algorithm: `max(now_ms, last_nonce + 1)` capped at `now_ms + 60s` to
-   * bound the growth if the clock stops ticking.
+   * Algorithm: `max(now_ms, last_nonce + 1, floor + 1)`. Refuse allocation
+   * above `now_ms + 60s` without rewinding or repeating the last nonce.
    *
    * Engine window: `[block_time - 2 days, block_time + 1 day]`. All four
    * rejection modes (too old, too far future, replay, below oldest) map to
    * code 21 `InvalidNonce`. Nonces are burned on success — no rewinding.
    *
-   * Thread-safe only through external serialization (caller's responsibility).
+   * Concurrent calls on this client reserve distinct nonces synchronously.
    */
-  private nextTimestampNonce(): bigint {
+  private nextTimestampNonce(minimumNonceExclusive?: bigint): bigint {
     const now = BigInt(Date.now());
     const max = now + 60_000n;
     let next =
       this.lastTimestampNonce >= now ? this.lastTimestampNonce + 1n : now;
-    if (next > max) next = max;
+    if (minimumNonceExclusive !== undefined && minimumNonceExclusive >= next)
+      next = minimumNonceExclusive + 1n;
+    if (next > max)
+      throw new Error("Timestamp nonce allocation exceeds clock safety window");
     this.lastTimestampNonce = next;
     return next;
+  }
+
+  /** Highest locally allocated nonce; never rewound after rejection. */
+  get currentNonce(): bigint {
+    return this.lastTimestampNonce;
   }
 
   // -----------------------------------------------------------------------
@@ -503,7 +778,7 @@ export class ExchangeClient {
     // the tx but could not report the outcome in time, so the SDK reconciles by
     // hash on the caller's behalf, exactly as before.
     if (this.autoVerifyDelivery && r.hash && !this.isFinalResult(r)) {
-      this.spawnDeliveryVerifier(r.hash);
+      this.spawnDeliveryVerifier(r.hash, action);
     }
     return r;
   }
@@ -528,11 +803,19 @@ export class ExchangeClient {
    * final and returns as-is; a hash-only ambiguous response spawns the same
    * fire-and-forget `/tx?hash=` reconciliation, awaitable via
    * `awaitPendingVerifies()`.
+   *
+   * `opts.action` is the action the bytes carry, when the caller knows it.
+   * It only labels the transport requests (the submission and its
+   * confirmation polls) so a cancellation keeps its `urgent` priority; it is
+   * never encoded, sent or checked against the bytes.
    */
-  async submitSignedTx(txBytes: Uint8Array): Promise<TxResult> {
-    const r = await this.broadcastSignedBytes(txBytes);
+  async submitSignedTx(
+    txBytes: Uint8Array,
+    opts: { action?: Action } = {},
+  ): Promise<TxResult> {
+    const r = await this.broadcastSignedBytes(txBytes, opts.action);
     if (this.autoVerifyDelivery && r.hash && !this.isFinalResult(r)) {
-      this.spawnDeliveryVerifier(r.hash);
+      this.spawnDeliveryVerifier(r.hash, opts.action);
     }
     return r;
   }
@@ -543,10 +826,13 @@ export class ExchangeClient {
    * the internal `useGateway: false` opt-out. Both submit identical bytes.
    * Shared by `submitSignedTx` and `submitSignedTxCommit`.
    */
-  private async broadcastSignedBytes(txBytes: Uint8Array): Promise<TxResult> {
+  private async broadcastSignedBytes(
+    txBytes: Uint8Array,
+    action?: Action,
+  ): Promise<TxResult> {
     return this.useGateway
-      ? this.submitViaGateway(txBytes)
-      : this.submitViaCometBFT(txBytes);
+      ? this.submitViaGateway(txBytes, action)
+      : this.submitViaCometBFT(txBytes, action);
   }
 
   /**
@@ -562,19 +848,7 @@ export class ExchangeClient {
    * Both paths submit identical signed wire bytes.
    */
   private async broadcastSigned(action: Action): Promise<TxResult> {
-    if (!this.privateKey) throw new Error("No private key set");
-
-    // Initialize the WASM codec/signing core and resolve the chain_id
-    // concurrently; both are cached, so only the first submit pays for either.
-    const [chainId] = await Promise.all([this.resolveChainId(), initWasm()]);
-    const seq = this.nextTimestampNonce();
-    const txBytes = signAndEncode(chainId, action, seq, this.privateKey);
-
-    const r = this.useGateway
-      ? await this.submitViaGateway(txBytes)
-      : await this.submitViaCometBFT(txBytes);
-
-    return r;
+    return this.broadcastSignedBytes(await this.signTx(action), action);
   }
 
   /**
@@ -591,13 +865,17 @@ export class ExchangeClient {
    *
    * The gateway response is an `ExchangeResponse`: a structured chain verdict
    * carries `code` and optionally `height`/`events`; an admitted-but-ambiguous
-   * submission carries `txHash` without `code` and must be reconciled. We map
-   * every shape to `TxResult`. Engine rejections retain the compatibility error
-   * string `"<code>: <message>"`, while the structured `code` is authoritative.
-   * For transport-level failures (rate limit, auth, etc.) we synthesize a code
-   * from the HTTP status.
+   * submission carries `txHash` without `code` and must be reconciled; a
+   * `status: "refused"` answer was never admitted, so it is terminal and keeps
+   * the gateway's `errorCode`. We map every shape to `TxResult`. Engine
+   * rejections retain the compatibility error string `"<code>: <message>"`,
+   * while the structured `code` is authoritative. For transport-level failures
+   * (rate limit, auth, etc.) we synthesize a code from the HTTP status.
    */
-  private async submitViaGateway(txBytes: Uint8Array): Promise<TxResult> {
+  private async submitViaGateway(
+    txBytes: Uint8Array,
+    action?: Action,
+  ): Promise<TxResult> {
     const txHash = computeCometTxHash(txBytes);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -605,12 +883,84 @@ export class ExchangeClient {
     if (this.apiKey) headers["X-Api-Key"] = this.apiKey;
 
     const body = JSON.stringify({ action: toBase64(txBytes) });
-    const res = await fetch(`${this.gatewayUrl}/exchange`, {
-      method: "POST",
-      headers,
-      body,
-    });
-    const gatewayBody = await readGatewayBody(res);
+    let res: Response;
+    let gatewayBody: Awaited<ReturnType<typeof readGatewayBody>>;
+    try {
+      res = await this.httpTransport(
+        `${this.gatewayUrl}/exchange`,
+        { method: "POST", headers, body },
+        {
+          purpose: "submit",
+          priority: action ? exchangeHttpPriorityForAction(action) : "critical",
+          surface: "gateway_exchange",
+          action,
+        },
+      );
+      gatewayBody = await readGatewayBody(res);
+    } catch {
+      // A dropped response does not prove the signed transaction was rejected.
+      return txTimeout(
+        txHash,
+        "gateway transport interrupted; reconcile by hash",
+      );
+    }
+
+    // The gateway's `status` states where the submission ended (api-gateway
+    // 7.0.0); nothing is inferred from which fields are present. Any other
+    // body falls through to the HTTP-status handling below.
+    const stated = gatewayBody.json as GatewayResponseBody | undefined;
+    // An answer naming another tx's hash says nothing about this one.
+    const foreignHash =
+      stated?.txHash !== undefined &&
+      String(stated.txHash).toUpperCase() !== txHash;
+    switch (stated?.status) {
+      case "ok":
+      case "error":
+        // An engine verdict always carries its code and arrives as a 200.
+        if (res.status !== 200 || typeof stated.code !== "number") break;
+        // `ok` with a non-zero code, or `error` with code 0, contradicts itself.
+        if ((stated.status === "ok") !== (stated.code === 0) || foreignHash)
+          return txTimeout(
+            txHash,
+            "gateway verdict contradicts itself; reconcile by hash",
+          );
+        return txFromEngineCode(stated.code, {
+          hash: txHash,
+          height: stated.height,
+          log: stated.log ?? stated.error,
+          info: stated.info,
+          events: stated.events,
+        });
+      case "refused":
+        // A malformed refusal is not evidence of non-admission. Presence of
+        // execution fields contradicts it, even when their value is null.
+        if (
+          ["txHash", "tx_hash", "code", "height", "events", "log", "info"].some(
+            (key) => Object.prototype.hasOwnProperty.call(stated, key),
+          ) ||
+          typeof stated.errorCode !== "string" ||
+          !stated.errorCode.trim() ||
+          (Object.prototype.hasOwnProperty.call(stated, "error") &&
+            typeof stated.error !== "string")
+        )
+          return txTimeout(
+            txHash,
+            "malformed gateway refusal; reconcile by hash",
+          );
+        // Only a validated envelope proves this attempt was not admitted.
+        return txRefusal(
+          res.status === 200 ? 1 : res.status,
+          stated.errorCode,
+          stated.error ?? stated.errorCode,
+        );
+      case "pending":
+        // Reconcile the hash of the bytes sent, never one the answer names.
+        return txTimeout(
+          txHash,
+          stated.error ??
+            "gateway returned no on-chain result; reconcile by hash",
+        );
+    }
 
     // Auth/rate-limit transport failures don't have a JSON body the
     // engine produced — synthesize an HTTP-status code and tag the result
@@ -636,13 +986,9 @@ export class ExchangeClient {
       );
     }
     if (res.status >= 500) {
-      return txTransportError(
-        500,
-        gatewayBody.error
-          ? `gateway error: ${gatewayBody.error}`
-          : gatewayBody.raw
-            ? `gateway error: ${res.status} ${res.statusText}: ${gatewayBody.raw}`
-            : `gateway error: ${res.status} ${res.statusText}`,
+      return txTimeout(
+        txHash,
+        `gateway HTTP ${res.status}; reconcile by hash${gatewayBody.error || gatewayBody.raw ? `: ${gatewayBody.error ?? gatewayBody.raw}` : ""}`,
       );
     }
 
@@ -656,17 +1002,7 @@ export class ExchangeClient {
       return txTransportError(1, errMsg);
     }
 
-    const json = gatewayBody.json as
-      | {
-          status?: string;
-          error?: string;
-          txHash?: string;
-          code?: number;
-          log?: string;
-          height?: number;
-          events?: TxEvent[];
-        }
-      | undefined;
+    const json = gatewayBody.json as GatewayResponseBody | undefined;
 
     // The gateway is synchronous on the on-chain result (api-gateway#90): it
     // parks the response on the tx hash and answers with the chain's own
@@ -690,6 +1026,7 @@ export class ExchangeClient {
         hash,
         height: json.height,
         log: json.log ?? json.error,
+        info: json.info,
         events: json.events,
       });
     }
@@ -716,10 +1053,10 @@ export class ExchangeClient {
     // Fallback: the code embedded in the string as "<engine_code>: <message>".
     // The gateway still emits this format for compatibility, so this path also
     // covers a pre-#90 gateway that sends ONLY the string. Parse the leading code;
-    // if missing, surface 1 (DecodeError) as the conservative default.
     const errMsg = json?.error ?? gatewayBody.raw ?? "unknown gateway error";
-    const code = parseLeadingErrorCode(errMsg) ?? 1;
-    return txEngineError(code, { log: errMsg });
+    const code = parseLeadingErrorCode(errMsg);
+    if (code !== null) return txEngineError(code, { log: errMsg });
+    return txTimeout(txHash, "gateway returned no verdict; reconcile by hash");
   }
 
   /**
@@ -744,18 +1081,30 @@ export class ExchangeClient {
    * when `useGateway` is false (internal-tools opt-out). Bypasses
    * gateway auth/rate-limit and goes directly to CometBFT.
    */
-  private async submitViaCometBFT(txBytes: Uint8Array): Promise<TxResult> {
+  private async submitViaCometBFT(
+    txBytes: Uint8Array,
+    action?: Action,
+  ): Promise<TxResult> {
     const b64 = toBase64(txBytes);
-    const res = await fetch(this.rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "broadcast_tx_sync",
-        params: { tx: b64 },
-      }),
-    });
+    const res = await this.httpTransport(
+      this.rpcUrl,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "broadcast_tx_sync",
+          params: { tx: b64 },
+        }),
+      },
+      {
+        purpose: "submit",
+        priority: action ? exchangeHttpPriorityForAction(action) : "critical",
+        surface: "rpc_broadcast_tx_sync",
+        action,
+      },
+    );
 
     const json = await res.json();
     if (json.error) {
@@ -777,42 +1126,16 @@ export class ExchangeClient {
    * block rather than via a chained .finally() so there's no microtask race
    * between p settling and the awaitPendingVerifies() loop seeing size==0.
    */
-  private spawnDeliveryVerifier(txHash: string): void {
+  private spawnDeliveryVerifier(txHash: string, action?: Action): void {
     let self: Promise<void>;
     const verify = async (): Promise<void> => {
       try {
-        // Poll up to 5 s — enough for normal block time (~1 s).
-        const deadline = Date.now() + 5_000;
-        let pollDelay = 250;
-        while (Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, pollDelay));
-          pollDelay = Math.min(pollDelay + 100, 600);
-          try {
-            const res = await fetch(this.txStatusUrl(txHash));
-            const json = await res.json();
-            const txResult = json.result?.tx_result;
-            if (txResult) {
-              const code = txResult.code ?? 0;
-              const height = json.result.height
-                ? Number(json.result.height)
-                : undefined;
-              this.deliveryResults.push(
-                txFromEngineCode(code, {
-                  hash: txHash,
-                  height,
-                  log: txResult.log ?? "",
-                  events: txResult.events,
-                }),
-              );
-              return;
-            }
-            // Tx not yet indexed — keep polling.
-          } catch {
-            // Network blip — retry.
-          }
-        }
-        // Timed out without seeing the result. The timestamp nonce may have
-        // landed or may be reusable only if never included; do not rewind.
+        const result = await this.pollDelivery(
+          txTimeout(txHash, "awaiting delivery"),
+          { timeoutMs: 5_000 },
+          action,
+        );
+        if (result.outcome !== "timeout") this.deliveryResults.push(result);
       } finally {
         this.pendingVerifies.delete(self);
       }
@@ -863,13 +1186,11 @@ export class ExchangeClient {
    * `broadcast_tx_commit` subscription.
    */
   async submitTxCommit(action: Action): Promise<TxResult> {
-    if (!this.privateKey) throw new Error("No private key set");
-
     // Step 1: broadcast via sync (returns after CheckTx). Use the internal
     // path so we don't double-spawn a background verifier — we're going to
     // do our own synchronous verification below.
     const sync = await this.broadcastSigned(action);
-    return this.awaitCommit(sync);
+    return this.awaitCommit(sync, action);
   }
 
   /**
@@ -883,10 +1204,14 @@ export class ExchangeClient {
    * draining the client-global `awaitPendingVerifies()` buffer. Use this
    * when the caller must know definitively whether the tx landed (an
    * operator action, a multisig proposal) rather than fire-and-forget.
+   * `opts.action` is the same transport priority hint as on `submitSignedTx`.
    */
-  async submitSignedTxCommit(txBytes: Uint8Array): Promise<TxResult> {
-    const sync = await this.broadcastSignedBytes(txBytes);
-    return this.awaitCommit(sync);
+  async submitSignedTxCommit(
+    txBytes: Uint8Array,
+    opts: { action?: Action } = {},
+  ): Promise<TxResult> {
+    const sync = await this.broadcastSignedBytes(txBytes, opts.action);
+    return this.awaitCommit(sync, opts.action);
   }
 
   /**
@@ -895,53 +1220,78 @@ export class ExchangeClient {
    * final chain verdict, polling `/tx?hash=` only when the outcome is still
    * unknown.
    */
-  private async awaitCommit(sync: TxResult): Promise<TxResult> {
-    if (this.isFinalResult(sync)) {
-      // Either the gateway already returned the on-chain result (the
-      // synchronous submit path — nothing to wait for), or the tx was rejected
-      // at CheckTx / never reached the chain, in which case no DeliverTx will
-      // ever run. This is the case H14 was filed about: a confirmed order used
-      // to cost a 9-second poll loop, and now costs one round-trip.
-      return sync;
-    }
-    if (!sync.ok && sync.outcome !== "timeout") {
-      return sync;
-    }
+  private async awaitCommit(
+    sync: TxResult,
+    action?: Action,
+  ): Promise<TxResult> {
+    return this.pollDelivery(sync, {}, action);
+  }
 
-    // Step 2: the outcome is still unknown (a pre-#90 gateway that only acks
-    // CheckTx, the direct-to-CometBFT path, or a gateway that broadcast the tx
-    // but could not report the result in time). Poll /tx?hash=... until found
-    // or timeout (~9 seconds).
-    const txHash = sync.hash;
-    if (!txHash) {
-      throw new Error("submitTx returned no tx hash");
-    }
-    const deadline = Date.now() + 9_000;
+  /** Per-submission finality. Timeout/cancellation retains the hash as unknown.
+   * Never resubmits writes. Use setUnsafeFastSubmit(true) to avoid a second poller.
+   * `opts.action` labels the confirmation polls with that action's transport
+   * priority, as on `submitSignedTx`; it is never checked against the hash.
+   */
+  async waitForDelivery(
+    sync: TxResult,
+    opts: { timeoutMs?: number; signal?: AbortSignal; action?: Action } = {},
+  ): Promise<TxResult> {
+    return this.pollDelivery(sync, opts, opts.action);
+  }
+
+  /** `waitForDelivery`, with the originating action (when the client signed
+   *  it) passed to the transport so its confirmation keeps the action's
+   *  priority. */
+  private async pollDelivery(
+    sync: TxResult,
+    opts: { timeoutMs?: number; signal?: AbortSignal },
+    action?: Action,
+  ): Promise<TxResult> {
+    if (this.isFinalResult(sync)) return sync;
+    if (!sync.hash) throw new Error("submitTx returned no tx hash");
+    const timeoutMs = opts.timeoutMs ?? 9_000;
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
+      throw new Error("Invalid delivery timeout");
+    const deadline = Date.now() + timeoutMs;
     let pollDelay = 200;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, pollDelay));
+    while (Date.now() < deadline && !opts.signal?.aborted) {
+      await abortableDelay(
+        Math.min(pollDelay, deadline - Date.now()),
+        opts.signal,
+      );
       pollDelay = Math.min(pollDelay + 100, 600);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0 || opts.signal?.aborted) break;
+      const request = readDeadline(Math.ceil(remaining), opts.signal);
       try {
-        const res = await fetch(this.txStatusUrl(txHash));
-        const json = await res.json();
-        const txResult = json.result?.tx_result;
-        if (txResult) {
-          const code = txResult.code ?? 0;
-          return txFromEngineCode(code, {
-            hash: txHash,
-            height: json.result.height ? Number(json.result.height) : undefined,
-            log: txResult.log,
-            events: txResult.events,
-          });
-        }
-        // tx not yet indexed → keep polling
+        const url = this.txStatusUrl(sync.hash);
+        const res = await this.httpTransport(
+          url,
+          { signal: request.signal },
+          {
+            purpose: "confirmation",
+            priority: action
+              ? exchangeHttpPriorityForAction(action)
+              : "critical",
+            surface: surfaceFor(url),
+            action,
+          },
+        );
+        if (!res.ok) continue;
+        const result = txFromQueryResponse(await res.json(), sync.hash);
+        if (!opts.signal?.aborted && result) return result;
       } catch {
-        // network blip — retry
+        /* Read failures leave the write outcome unknown. */
+      } finally {
+        request.dispose();
       }
     }
-    // Timed out waiting for inclusion. We don't know whether it landed, so
-    // do not reuse or rewind the timestamp nonce.
-    return txTimeout(txHash, "submitTxCommit: timed out polling /tx after 9s");
+    return txTimeout(
+      sync.hash,
+      opts.signal?.aborted
+        ? "delivery wait cancelled; reconcile by hash"
+        : "delivery wait timed out; reconcile by hash",
+    );
   }
 
   // -----------------------------------------------------------------------
@@ -971,20 +1321,50 @@ export class ExchangeClient {
    * Place a limit order for the loaded signer. `owner` is supplied
    * automatically. Equivalent to
    * `submitTx({ type: "PlaceOrder", data: { ...params, owner } })`.
+   * Optional `stopLoss`/`takeProfit` limbs attach a pre-fill bracket that
+   * installs on the order's first fill (validated client-side here and in
+   * the codec path; encoded as the proof-wire 2.1.0 trailing fields).
    */
   async placeOrder(params: Omit<PlaceOrder, "owner">): Promise<TxResult> {
+    validateOrderTriggers(params);
     return this.submitTx({
       type: "PlaceOrder",
       data: { ...params, owner: this.requireOwner() },
     });
   }
 
-  /** Place a market order (crosses immediately) for the loaded signer. */
+  /**
+   * Place a market order (crosses immediately) for the loaded signer.
+   * Optional `stopLoss`/`takeProfit` limbs are validated like
+   * {@link ExchangeClient.placeOrder}.
+   */
   async marketOrder(params: Omit<MarketOrder, "owner">): Promise<TxResult> {
+    validateOrderTriggers(params);
     return this.submitTx({
       type: "MarketOrder",
       data: { ...params, owner: this.requireOwner() },
     });
+  }
+
+  /**
+   * Buy No on an event's binary book: places the Yes sell at `$1 − price`.
+   * `market` is the event's book (`EventInfo.ebyMarket`); `price` and any
+   * `stopLoss`/`takeProfit` trigger prices are No prices. Reduce-only,
+   * post-only, client order id and time in force carry over unchanged.
+   * Throws {@link BinaryPriceError} for a No price with no Yes mirror (0 or
+   * `$1`).
+   */
+  async buyNo(params: Omit<NoOrder, "side">): Promise<TxResult> {
+    return this.placeOrder(yesOrder({ ...params, side: Side.Buy }));
+  }
+
+  /**
+   * Sell No on an event's binary book: places the Yes buy at `$1 − price`.
+   * Selling No that an account holds is a reduce-only Yes buy: pass
+   * `reduceOnly: true` to close without flipping. See {@link ExchangeClient.buyNo}.
+   */
+  async sellNo(params: Omit<NoOrder, "side">): Promise<TxResult> {
+    return this.placeOrder(yesOrder({ ...params, side: Side.Sell }));
   }
 
   /** Cancel a resting order by its engine-assigned order ID. */
@@ -1001,6 +1381,41 @@ export class ExchangeClient {
       type: "CancelClientOrder",
       data: { clientOrderId, owner: this.requireOwner() },
     });
+  }
+
+  /**
+   * Submit the operator-quorum authorization for a pending withdrawal
+   * (action 0x24). Permissionless: the quorum proof inside is the authority,
+   * not the envelope signer. The canonical authorization bytes come from
+   * `encodeWithdrawalAuthorization` and the proof from operators signing
+   * those bytes — see the `bridge` module.
+   */
+  async authorizeWithdrawal(params: AuthorizeWithdrawal): Promise<TxResult> {
+    return this.submitTx({ type: "AuthorizeWithdrawal", data: params });
+  }
+
+  /**
+   * Settle a paid withdrawal through its finalized operator-quorum receipt
+   * (action 0x22). Permissionless: the quorum proof inside is the authority,
+   * not the envelope signer. The canonical message the proof signs comes
+   * from `encodeBridgeReceipt`.
+   */
+  async confirmWithdrawalReceipt(
+    params: ConfirmWithdrawalReceipt,
+  ): Promise<TxResult> {
+    return this.submitTx({ type: "ConfirmWithdrawalReceipt", data: params });
+  }
+
+  /**
+   * Refund a cancelled withdrawal through its finalized operator-quorum
+   * receipt (action 0x23). Permissionless: the quorum proof inside is the
+   * authority, not the envelope signer. Positive cancellation proof only —
+   * a timeout or RPC error is never failure evidence.
+   */
+  async failWithdrawalReceipt(
+    params: FailWithdrawalReceipt,
+  ): Promise<TxResult> {
+    return this.submitTx({ type: "FailWithdrawalReceipt", data: params });
   }
 
   /**
@@ -1074,16 +1489,58 @@ export class ExchangeClient {
     nodePath: string,
   ): Promise<Record<string, unknown>> {
     return this.useGateway
-      ? postInfoJson(this.gatewayUrl, info)
-      : fetchApiJson(`${this.apiUrl}${nodePath}`);
+      ? postInfoJson(this.httpTransport, this.gatewayUrl, info, {
+          purpose: "account",
+          priority: "urgent",
+          surface: `api_info_${String(info.type)}`,
+        })
+      : this.apiJson(`${this.apiUrl}${nodePath}`, "account");
+  }
+
+  /** `fetchApiJson` through this client's transport. */
+  private apiJson(
+    url: string,
+    purpose: "account" | "query" = "query",
+  ): Promise<Record<string, unknown>> {
+    return fetchApiJson(this.httpTransport, url, readContext(url, purpose));
+  }
+
+  /** Decode gateway MessagePack bytes after the authoritative strict preflight
+   *  (`rejectFloats`). Reads now route through the WASM core, so this
+   *  initialises it on first use. Unlike `ready()` it does not resolve the
+   *  chain-id binding, which a read never needs. */
+  private async strictDecode(bytes: Uint8Array): Promise<unknown> {
+    await initWasm();
+    // Decode first, then preflight: a payload the decoder already refuses
+    // keeps its own message; the preflight only adds rejections for bytes that
+    // decode cleanly.
+    const value = msgpackDecoder.decode(bytes);
+    rejectFloats(bytes);
+    return value;
+  }
+
+  /** Strictly decode a wire-typed read response in the Rust core. */
+  private async decodeRead(
+    kind: keyof WasmCore["ReadKind"],
+    bytes: Uint8Array,
+  ): Promise<unknown> {
+    await initWasm();
+    const wasm = getWasm();
+    try {
+      return wasm.decode_read(wasm.ReadKind[kind], bytes);
+    } catch (e) {
+      throw new Error(
+        `${kind} decode: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   async queryOrderbook(market: number): Promise<Orderbook> {
-    const json = await fetchApiJson(
+    const json = await this.apiJson(
       `${this.readBaseUrl}/v1/orderbook/${market}`,
     );
     const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes) as [unknown[], unknown[]];
+    const raw = (await this.strictDecode(bytes)) as [unknown[], unknown[]];
     const parseLevel = (arr: unknown[]): OrderbookLevel => ({
       price: BigInt(arr[0] as number | bigint),
       totalQty: BigInt(arr[1] as number | bigint),
@@ -1095,31 +1552,75 @@ export class ExchangeClient {
     };
   }
 
-  /** List all registered market configs. */
-  async queryMarkets(): Promise<MarketConfig[]> {
-    const json = await fetchApiJson(`${this.readBaseUrl}/v1/markets`);
-    const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes) as unknown[][];
-    return raw.map((m) => decodeMarketConfig(m));
+  /** One market's funding state: rate, cumulative index, mark EWMA and
+   *  oracle price (`GET /v1/funding/{market}`). The engine answers an unknown
+   *  market with zeroed fields rather than an error. */
+  async queryFunding(market: number): Promise<FundingInfo> {
+    const path = `/v1/funding/${market}`;
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return decodeFundingInfo(await this.strictDecode(bytes));
   }
 
-  /** List all impact-market families (the 5-book event structures: an
-   *  underlying perp plus CPY/CPN/EBY/EBN children). Fail-closed like the
-   *  governance reads: a missing envelope or a malformed row is a refusal,
-   *  never a partially-rendered list (decoder pinned to engine golden bytes
-   *  in governance-query.test.ts). */
-  async queryImpactMarkets(): Promise<ImpactMarketInfo[]> {
-    const json = await fetchApiJson(`${this.readBaseUrl}/v1/impact_markets`);
+  /** One atomic committed inventory. Requires explicit chainId; never falls
+   * back to a node or synthesizes inventory from independent list reads. */
+  async queryMarketsSnapshot(): Promise<MarketsSnapshot> {
+    if (!this.inventoryChainId) {
+      throw new Error("market snapshot requires an explicit pinned chainId");
+    }
+    return readMarketsSnapshot(
+      this.gatewayUrl,
+      this.inventoryChainId,
+      this.httpTransport,
+    );
+  }
+
+  /** List all registered market configs. */
+  async queryMarkets(): Promise<MarketConfig[]> {
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/markets`);
+    const bytes = fromBase64(json.data as string);
+    const raw = (await this.decodeRead("Markets", bytes)) as unknown[];
+    return raw.map(marketConfigFromWasm);
+  }
+
+  /** All events: each is its binary book under one `EventInfo`, plus every
+   *  conditional attached to it. Fail-closed: a missing envelope or
+   *  malformed row is a refusal. */
+  async queryEvents(): Promise<EventInfo[]> {
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/events`);
     if (typeof json.data !== "string") {
       throw new Error(
-        "governance decode: impact-markets response has no encoded-data envelope",
+        "governance decode: events response has no encoded-data envelope",
       );
     }
-    const raw = msgpackDecoder.decode(fromBase64(json.data));
-    if (!Array.isArray(raw)) {
-      throw new Error("governance decode: impactMarkets is not an array");
+    const raw = await this.decodeRead("Events", fromBase64(json.data));
+    return (raw as unknown[]).map(eventInfoFromWasm);
+  }
+
+  /** A single event by id, or `null` if it does not exist. The node returns
+   *  404 for a missing event (the engine's msgpack-nil), so a raw fetch is used
+   *  here to map 404 -> null while still throwing on real transport / decode
+   *  failures. */
+  async queryEvent(eventId: number): Promise<EventInfo | null> {
+    const url = `${this.readBaseUrl}/v1/event/${eventId}`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
+    if (res.status === 404) return null;
+    const json = (await res.json()) as Record<string, unknown>;
+    if (!res.ok || json.error) {
+      const msg = (json.error as string) ?? `HTTP ${res.status}`;
+      throw new Error(`API error: ${msg}`);
     }
-    return raw.map((r, i) => decodeImpactMarketInfo(r, i));
+    if (typeof json.data !== "string") {
+      throw new Error(
+        "governance decode: event response has no encoded-data envelope",
+      );
+    }
+    const raw = await this.decodeRead("Event", fromBase64(json.data));
+    return raw == null ? null : eventInfoFromWasm(raw);
   }
 
   /** Current whole-position trigger brackets for one owner. Immutable
@@ -1133,25 +1634,37 @@ export class ExchangeClient {
       throw new Error("trigger owner must be a 40-character hex address");
     }
     const path = `/v1/triggers/${hex.toLowerCase()}`;
-    const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`, "account");
     const bytes = fromBase64(requireEncodedData(json, path));
-    return decodePositionTriggerInfos(msgpackDecoder.decode(bytes));
+    return decodePositionTriggerInfos(await this.strictDecode(bytes));
   }
 
   /** Read the complete governed trigger-market policy registry. Missing
    * markets are disabled; callers must never synthesize a default policy. */
   async queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]> {
     const path = "/v1/triggers/markets";
-    const json = await fetchApiJson(`${this.readBaseUrl}${path}`);
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
     const bytes = fromBase64(requireEncodedData(json, path));
-    return decodeTriggerMarketConfigInfos(msgpackDecoder.decode(bytes));
+    return decodeTriggerMarketConfigInfos(await this.strictDecode(bytes));
   }
 
   /** Read the fail-closed next-height trigger admission predicate. Heights
-   * are parsed from raw JSON into bigint without a lossy Number round-trip. */
+   * are parsed from raw JSON into bigint without a lossy Number round-trip.
+   *
+   * @deprecated `GET /v1/triggers/status` is deleted upstream: the node
+   * dropped it with its activation gates (exchange#619, genesis-first) and
+   * the gateway drops it in gateway 4.0.0 (api-gateway#175). Trigger actions
+   * are permanently active, so there is nothing to read. Against a gateway or
+   * node that no longer serves the route this rejects with an `API error`
+   * for the 404 response. It will be removed in the next major version. */
   async queryTriggerStatus(): Promise<TriggerStatus> {
     const path = "/v1/triggers/status";
-    const res = await fetch(`${this.readBaseUrl}${path}`);
+    const url = `${this.readBaseUrl}${path}`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     const text = await res.text();
     if (!res.ok) {
       let message = `HTTP ${res.status}`;
@@ -1164,6 +1677,15 @@ export class ExchangeClient {
       throw new Error(`API error: ${message}`);
     }
     return decodeTriggerStatusJson(text);
+  }
+
+  /** One committed oracle dependency, not provider health or action authorization. */
+  async queryOraclePermissions(market: number): Promise<OraclePermissions> {
+    validateOraclePermissionMarket(market);
+    const path = `/v1/oracle/permissions/${market}`;
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return decodeOraclePermissions(await this.strictDecode(bytes), market);
   }
 
   /** Immutable owner-bearing trigger lifecycle history. This always uses the
@@ -1183,14 +1705,35 @@ export class ExchangeClient {
     const canonicalOwner = hex.toLowerCase();
     const params = positionTriggerHistorySearchParams(filters);
     const qs = params.toString();
-    const json = await fetchApiJson(
+    const json = await this.apiJson(
       `${this.gatewayUrl}/v1/history/triggers/${canonicalOwner}${qs ? `?${qs}` : ""}`,
+      "account",
     );
     return decodePositionTriggerHistoryPage(
       json,
       canonicalOwner,
       filters.market,
     );
+  }
+
+  /** One page of an owner's `position_liquidated` and `liquidation_failed`
+   * events (`GET /v1/history/liquidations/{owner}`), newest first unless
+   * `order: "asc"`. Pass a non-empty `nextCursor` back as `filters.cursor`
+   * with the other filters unchanged; an empty one ends the history. Always
+   * uses the gateway: the indexer, not the node, serves history. */
+  async queryLiquidationHistory(
+    addressHex?: string,
+    filters: LiquidationHistoryFilters = {},
+  ): Promise<LiquidationHistoryPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) throw new Error("No address available");
+    const owner = historyOwner(hex);
+    const qs = liquidationHistorySearchParams(filters).toString();
+    const json = await this.apiJson(
+      `${this.gatewayUrl}/v1/history/liquidations/${owner}${qs ? `?${qs}` : ""}`,
+      "account",
+    );
+    return decodeLiquidationHistoryPage(json, owner);
   }
 
   /** Shared market-level deferred/resumed trigger transitions. These are not
@@ -1202,7 +1745,7 @@ export class ExchangeClient {
     validateTriggerHistoryMarket(market);
     const params = triggerMarketHistorySearchParams(filters);
     const qs = params.toString();
-    const json = await fetchApiJson(
+    const json = await this.apiJson(
       `${this.gatewayUrl}/v1/history/trigger-markets/${market}${qs ? `?${qs}` : ""}`,
     );
     return decodeTriggerMarketHistoryPage(json, market);
@@ -1218,13 +1761,58 @@ export class ExchangeClient {
    * differently.
    */
   async queryAdminSignerRegistry(): Promise<AdminSignerRegistry | null> {
-    const json = await fetchApiJson(
+    const json = await this.apiJson(
       `${this.readBaseUrl}/v1/admin/signer-registry`,
     );
     const bytes = fromBase64(
       requireEncodedData(json, "/v1/admin/signer-registry"),
     );
-    return decodeAdminSignerRegistryInfo(msgpackDecoder.decode(bytes));
+    return decodeAdminSignerRegistryInfo(await this.strictDecode(bytes));
+  }
+
+  /**
+   * Read the engine's privileged authorization sets via the gateway proxy
+   * (`GET /v1/admin/authorities`): relayer, oracle, CEX composite, custody,
+   * market parameters and scheduled operations. An empty set means no signer
+   * holds that authority; a failed read throws, so it can never render as an
+   * empty set.
+   */
+  async queryAuthorities(): Promise<AuthoritiesSnapshot> {
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/admin/authorities`);
+    const bytes = fromBase64(requireEncodedData(json, "/v1/admin/authorities"));
+    return decodeAuthoritiesSnapshot(await this.strictDecode(bytes));
+  }
+
+  /**
+   * Read the pending protocol-upgrade plan and the executed activation
+   * ledger via the gateway proxy (`GET /v1/upgrades`).
+   */
+  async queryUpgrades(): Promise<UpgradesInfo> {
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/upgrades`);
+    const bytes = fromBase64(requireEncodedData(json, "/v1/upgrades"));
+    return decodeUpgradesInfo(await this.strictDecode(bytes));
+  }
+
+  /**
+   * Read the global liquidation configuration every market shares and its
+   * sequence via the gateway proxy (`GET /v1/liquidation-config`). A chain
+   * always holds one; a failed read throws rather than returning a default.
+   */
+  async queryLiquidationConfig(): Promise<LiquidationConfigInfo> {
+    const path = "/v1/liquidation-config";
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
+    const bytes = fromBase64(requireEncodedData(json, path));
+    return decodeLiquidationConfigInfo(await this.strictDecode(bytes));
+  }
+
+  /**
+   * The answering node's binary and loaded engine release
+   * (`GET /v1/version`). Node-local: behind a load balancer it describes
+   * whichever node served the request.
+   */
+  async queryNodeVersion(): Promise<NodeVersion> {
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/version`);
+    return decodeNodeVersion(json);
   }
 
   /**
@@ -1249,41 +1837,40 @@ export class ExchangeClient {
     if (opts?.cursor != null) params.set("cursor", String(opts.cursor));
     if (opts?.limit != null) params.set("limit", String(opts.limit));
     const qs = params.toString();
-    const json = await fetchApiJson(
+    const json = await this.apiJson(
       `${this.readBaseUrl}/v1/proposals${qs ? `?${qs}` : ""}`,
     );
     const bytes = fromBase64(requireEncodedData(json, "/v1/proposals"));
-    return decodeProposalPage(msgpackDecoder.decode(bytes));
+    return decodeProposalPage(await this.strictDecode(bytes));
   }
 
-  /** Fetch open orders for an address. Returns an empty array if the
-   *  account has no open orders.
-   *  Each order is a 6-tuple `[id, market, owner, side, price, quantity]`
-   *  decoded from MessagePack. */
+  /** Resting orders with exact bigint metadata and canonical legacy defaults.
+   * Malformed responses, foreign owners, invalid ordering and payloads over
+   * 1 MiB are rejected. This read does not verify a finalized witness. */
   async queryOpenOrders(addressHex?: string): Promise<OpenOrder[]> {
-    const hex = addressHex ?? this.addressHex;
-    if (!hex) return [];
+    const address = addressHex ?? this.addressHex;
+    if (address == null) return [];
+    const hex = address.replace(/^0x/i, "").toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(hex))
+      throw new Error("Invalid open orders owner");
+    const owner = Uint8Array.from(hex.match(/../g)!, (byte) =>
+      parseInt(byte, 16),
+    );
     const json = await this.queryOwnerScoped(
       { type: "openOrders", user: hex },
       `/v1/orders/${hex}`,
     );
-    if (!json.data) return [];
-    const bytes = fromBase64(json.data as string);
-    let decoded: unknown;
-    try {
-      decoded = msgpackDecoder.decode(bytes);
-    } catch {
-      return [];
-    }
-    if (!Array.isArray(decoded)) return [];
-    return (decoded as unknown[][]).map((order) => ({
-      id: BigInt(order[0] as number | bigint),
-      market: Number(order[1]),
-      owner: toBytes(order[2]),
-      side: order[3] as "Buy" | "Sell",
-      price: BigInt(order[4] as number | bigint),
-      quantity: BigInt(order[5] as number | bigint),
-    }));
+    const encoded = requireEncodedData(json, "openOrders");
+    if (
+      encoded.length > 4 * Math.ceil((1024 * 1024) / 3) ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+        encoded,
+      )
+    )
+      throw new Error("Invalid open orders data envelope");
+    const bytes = fromBase64(encoded);
+    await initWasm();
+    return openOrdersFromWasm(getWasm().decode_open_orders(bytes, owner));
   }
 
   /** Fetch a withdrawal record by id. Returns `null` for unknown ids
@@ -1294,7 +1881,7 @@ export class ExchangeClient {
       `/v1/withdrawal/${id}`,
     );
     const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes) as unknown[] | null;
+    const raw = (await this.strictDecode(bytes)) as unknown[] | null;
     if (raw === null) return null;
     return {
       id: BigInt(raw[0] as number | bigint),
@@ -1306,6 +1893,28 @@ export class ExchangeClient {
     };
   }
 
+  /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */
+  async queryFinancialState(
+    selection: FinancialStateSelection,
+  ): Promise<FinancialState> {
+    return fetchFinancialState(this.gatewayUrl, selection, this.httpTransport);
+  }
+
+  /** Raw finalized ledger facts, independent of oracle valuation. Not authorization. */
+  async queryAccountState(addressHex?: string): Promise<AccountState> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex || !/^[0-9a-fA-F]{40}$/.test(hex)) {
+      throw new Error("account state owner must be a 40-character hex address");
+    }
+    const owner = hex.toLowerCase();
+    const path = `/v1/account/${owner}/state`;
+    const json = await this.apiJson(`${this.readBaseUrl}${path}`, "account");
+    return decodeAccountState(
+      await this.strictDecode(fromBase64(requireEncodedData(json, path))),
+      owner,
+    );
+  }
+
   async queryAccount(addressHex?: string): Promise<AccountInfo | null> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return null;
@@ -1313,83 +1922,9 @@ export class ExchangeClient {
       { type: "clearinghouseState", user: hex },
       `/v1/account/${hex}`,
     );
-    const bytes = fromBase64(json.data as string);
-    const raw = msgpackDecoder.decode(bytes) as unknown[];
-    const balance = BigInt(raw[0] as number | bigint);
-    const positions: PositionInfo[] = ((raw[1] ?? []) as unknown[][]).map(
-      (p) => {
-        // Optional enrichments (indices 6-13) shipped incrementally:
-        //   6-11: scenario-aware brief fields, 2026-04-24 (P1 #2).
-        //   12  : adlScore, 2026-04-25 (item 7 — ADL rank surface).
-        //   13  : persistent position epoch (first-attach trigger input).
-        // Older gateways return shorter tuples; missing fields are
-        // surfaced as `undefined` so the UI can show a "—" placeholder.
-        const optBig = (v: unknown): bigint | undefined =>
-          v === undefined || v === null
-            ? undefined
-            : BigInt(v as number | bigint);
-        return {
-          owner: toBytes(p[0]),
-          market: Number(p[1]),
-          side: p[2] as "Buy" | "Sell",
-          entryPrice: BigInt(p[3] as number | bigint),
-          size: BigInt(p[4] as number | bigint),
-          lastFundingIndex: BigInt((p[5] as number | bigint) ?? 0),
-          upnlNow: optBig(p[6]),
-          mmNow: optBig(p[7]),
-          imNow: optBig(p[8]),
-          pnlIfFires: optBig(p[9]),
-          pnlIfDies: optBig(p[10]),
-          fundingSince: optBig(p[11]),
-          adlScore: optBig(p[12]),
-          positionEpoch: optBig(p[13]),
-        };
-      },
+    return accountInfoFromWasm(
+      await this.decodeRead("Account", fromBase64(json.data as string)),
     );
-    const equity = BigInt((raw[2] as number | bigint) ?? 0);
-    const totalMm = BigInt((raw[3] as number | bigint) ?? 0);
-    const totalIm = BigInt((raw[4] as number | bigint) ?? 0);
-    const marginRatioBps = BigInt((raw[5] as number | bigint) ?? 0);
-    // Index [6] — shipped 2026-04-24 (Sprint 1 Day 2 / P1 #3). Older
-    // gateways omit this field; leave bindingScenario undefined rather
-    // than defaulting to [] so callers can tell "no data available"
-    // from "empty (perp-only account)".
-    let bindingScenario: BindingScenarioEntry[] | undefined;
-    if (raw[6] !== undefined) {
-      bindingScenario = ((raw[6] as unknown[]) ?? []).map((e) => {
-        const t = e as [number | bigint, string];
-        return {
-          impactMarketId: Number(t[0]),
-          branch: t[1] as "Yes" | "No",
-        };
-      });
-    }
-    // Index [7] — added 2026-05-03 (BE-45). Cumulative trading fees
-    // paid (positive) or rebates received (negative). Older gateways
-    // omit this field; leave feesAccrued undefined so callers can
-    // distinguish "no data" from "0 fees".
-    let feesAccrued: bigint | undefined;
-    if (raw[7] !== undefined) {
-      feesAccrued = BigInt((raw[7] as number | bigint) ?? 0);
-    }
-    // Index [8] — added 2026-05-17. Rolling 30-day taker volume in
-    // micro-USDC at the account's last volume update. Used by the
-    // fee-tier program; older gateways omit it.
-    let volume30dMicroUsdc: bigint | undefined;
-    if (raw[8] !== undefined) {
-      volume30dMicroUsdc = BigInt((raw[8] as number | bigint) ?? 0);
-    }
-    return {
-      balance,
-      positions,
-      equity,
-      totalMm,
-      totalIm,
-      marginRatioBps,
-      bindingScenario,
-      feesAccrued,
-      volume30dMicroUsdc,
-    };
   }
 
   /** Convenience: fetch just the USDC balance (microUSDC) for an address. */
@@ -1405,7 +1940,12 @@ export class ExchangeClient {
   }
 
   async queryHealth(): Promise<{ status: string; height: number }> {
-    const res = await fetch(`${this.readBaseUrl}/v1/health`);
+    const url = `${this.readBaseUrl}/v1/health`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     return res.json();
   }
 
@@ -1413,11 +1953,16 @@ export class ExchangeClient {
    *  ranked by `adlScore` desc (highest first). Empty array if the market has
    *  no profitable positions. Routes through the gateway's `/v1/adl/queue`. */
   async queryAdlQueue(market: number): Promise<AdlQueueEntry[]> {
-    const res = await fetch(`${this.readBaseUrl}/v1/adl/queue/${market}`);
+    const url = `${this.readBaseUrl}/v1/adl/queue/${market}`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     const json = await res.json();
     if (json.error) return [];
     const bytes = fromBase64(json.data);
-    const raw = msgpackDecoder.decode(bytes);
+    const raw = await this.strictDecode(bytes);
     if (!Array.isArray(raw)) return [];
     return (raw as unknown[][]).map((row) => ({
       owner: toBytes(row[0]),
@@ -1433,7 +1978,12 @@ export class ExchangeClient {
    *  and top-of-book blobs). Returns `null` if the market is unknown. Routes
    *  through the gateway's `/v1/ticker`. */
   async queryTicker(market: number): Promise<Ticker | null> {
-    const res = await fetch(`${this.readBaseUrl}/v1/ticker/${market}`);
+    const url = `${this.readBaseUrl}/v1/ticker/${market}`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     if (!res.ok) return null;
     const row = (await res.json()) as Record<string, unknown>;
     return {
@@ -1450,9 +2000,8 @@ export class ExchangeClient {
     };
   }
 
-  /** Per-user deposit log — every `deposit_confirmed` event for this
-   * owner, newest first. Feeds Portfolio EquityChart equity-over-time
-   * reconstruction (P2 #6). */
+  /** Direct relayer deposits and custody-confirmed deposits, newest first.
+   * Returns a bounded merged head, not a cursor over the complete history. */
   async queryHistoryDeposits(
     addressHex?: string,
     opts?: { fromMs?: number; toMs?: number; limit?: number },
@@ -1460,9 +2009,11 @@ export class ExchangeClient {
     return this.queryHistoryCashFlow("deposits", addressHex, opts);
   }
 
-  /** Per-user withdrawal lifecycle log — withdraw_requested /
-   * withdrawal_confirmed / withdrawal_failed, newest first. Filter by
-   * `kind` client-side if you want only pending requests. P2 #6. */
+  /** Direct relayer withdrawals and indexed custody events, newest first,
+   * capped after merging each kind's first page. This is not withdrawal status:
+   * ownerless confirmation events
+   * are not indexed for the account. Use queryWithdrawal(id) for status.
+   * Request/refund amounts exclude fees; unknown signedDelta stays empty. */
   async queryHistoryWithdrawals(
     addressHex?: string,
     opts?: { fromMs?: number; toMs?: number; limit?: number },
@@ -1470,48 +2021,59 @@ export class ExchangeClient {
     return this.queryHistoryCashFlow("withdrawals", addressHex, opts);
   }
 
-  /** Internal: shared decoder for the two cash-flow endpoints. They
-   * return identical row shapes (HistoryCashFlow); the difference is
-   * which kinds the server includes. */
+  /** Owner-filtered indexer events; never the removed node history routes. */
   private async queryHistoryCashFlow(
     path: "deposits" | "withdrawals",
     addressHex?: string,
-    opts?: { fromMs?: number; toMs?: number; limit?: number },
+    opts: { fromMs?: number; toMs?: number; limit?: number } = {},
   ): Promise<HistoryCashFlow[]> {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return [];
-    const params = new URLSearchParams();
-    if (opts?.fromMs !== undefined) params.set("from", String(opts.fromMs));
-    if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
-    if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
-    const qs = params.toString();
-    const url = `${this.readBaseUrl}/v1/history/${path}/${hex}${qs ? `?${qs}` : ""}`;
-    const json = await fetchApiArray(url);
-    return (json as Array<Record<string, unknown>>).map((row) => ({
-      kind: row.kind as HistoryCashFlow["kind"],
-      owner: String(row.owner ?? ""),
-      amount: String(row.amount ?? ""),
-      signedDelta: String(row.signed_delta ?? "0"),
-      newBalance: String(row.new_balance ?? ""),
-      withdrawalId: String(row.withdrawal_id ?? ""),
-      solanaTxSig: String(row.solana_tx_sig ?? ""),
-      solanaDestination: String(row.solana_destination ?? ""),
-      reason: String(row.reason ?? ""),
-      blockHeight: Number(row.block_height ?? 0),
-      timestamp: Number(row.timestamp ?? 0),
-    }));
+    const owner = historyOwner(hex);
+    const limit = opts.limit ?? 200;
+    const params = historySearchParams({ ...opts, limit });
+    params.set("owner", owner);
+    params.set("order", "desc");
+    const kinds: HistoryCashFlow["kind"][] =
+      path === "deposits"
+        ? ["deposited", "deposit_confirmed"]
+        : [
+            "withdrawn",
+            "withdraw_requested",
+            "withdrawal_confirmed",
+            "withdrawal_failed",
+          ];
+    const pages = await Promise.all(
+      kinds.map(async (kind) => {
+        const query = new URLSearchParams(params);
+        query.set("event_type", kind);
+        const json = await this.apiJson(
+          `${this.gatewayUrl}/v1/history/account-events?${query}`,
+          "account",
+        );
+        return decodeCashFlowEvents(json, owner, kind);
+      }),
+    );
+    return pages
+      .flat()
+      .sort((a, b) => {
+        if (a.nanos !== b.nanos) return a.nanos > b.nanos ? -1 : 1;
+        return a.eventId > b.eventId ? -1 : a.eventId < b.eventId ? 1 : 0;
+      })
+      .slice(0, limit)
+      .map((event) => event.cashFlow);
   }
 
   /** Per-user position-at-resolution log — each row is one settlement or
    * voided-conditional snapshot. Feeds the Portfolio "Resolved" tab
-   * (P2 #7). Optional `impactMarketId` filter scopes to one event family.
+   * (P2 #7). Optional `eventId` filter scopes to one event.
    *
    * `fromMs` / `toMs` are unix-ms timestamps; omit for unbounded.
    * `limit` caps at 1000 server-side. Results are newest-first. */
   async queryHistoryResolutions(
     addressHex?: string,
     opts?: {
-      impactMarketId?: number;
+      eventId?: number;
       fromMs?: number;
       toMs?: number;
       limit?: number;
@@ -1520,17 +2082,21 @@ export class ExchangeClient {
     const hex = addressHex ?? this.addressHex;
     if (!hex) return [];
     const params = new URLSearchParams();
-    if (opts?.impactMarketId !== undefined)
-      params.set("impact_market_id", String(opts.impactMarketId));
+    if (opts?.eventId !== undefined)
+      params.set("event_id", String(opts.eventId));
     if (opts?.fromMs !== undefined) params.set("from", String(opts.fromMs));
     if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
     if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
     const qs = params.toString();
     const url = `${this.readBaseUrl}/v1/history/resolutions/${hex}${qs ? `?${qs}` : ""}`;
-    const json = await fetchApiArray(url);
+    const json = await fetchApiArray(
+      this.httpTransport,
+      url,
+      readContext(url, "account"),
+    );
     return (json as Array<Record<string, unknown>>).map((row) => ({
       kind: row.kind as HistoryResolution["kind"],
-      impactMarketId: String(row.impact_market_id ?? ""),
+      eventId: String(row.event_id ?? ""),
       market: String(row.market ?? ""),
       owner: String(row.owner ?? ""),
       side: String(row.side ?? ""),
@@ -1538,18 +2104,70 @@ export class ExchangeClient {
       entryPrice: String(row.entry_price ?? ""),
       settlementPrice: String(row.settlement_price ?? ""),
       realizedPnl: String(row.realized_pnl ?? "0"),
+      convertedSize: String(row.converted_size || "0"),
+      fallbackReason: String(
+        row.fallback_reason ?? "",
+      ) as HistoryResolution["fallbackReason"],
       blockHeight: Number(row.block_height ?? 0),
       timestamp: Number(row.timestamp ?? 0),
     }));
   }
 
-  /** Per-user position-history snapshot log. Each row is one
-   * point-in-time snapshot persisted after a fill that changes the
-   * position. A `size === "0"` row is a CLOSE event; the immediately
-   * preceding non-zero snapshot for the same `(owner, market, side)`
-   * carries the entry price. Feeds the trading-UI Position History tab
-   * (FE-23). Optional `market` filter scopes to one book; `fromMs` /
-   * `toMs` window the timestamps; `limit` caps server-side at 5000. */
+  /** Named gateway responses for HTTP consumers that own body parsing, deadlines
+   * and scheduling. Prefer typed query methods when raw response metadata is unnecessary.
+   * Uses this client's gateway; never targets a node, even in internal node mode.
+   */
+  reads(opts: { fetch?: GatewayFetch } = {}): TypedGatewayReads {
+    return new TypedGatewayReads(
+      this.gatewayUrl,
+      opts.fetch ? (url, init) => opts.fetch!(url, init) : this.httpTransport,
+      this.inventoryChainId ?? undefined,
+    );
+  }
+
+  /** Gateway/indexer portfolio page, including in internal node mode.
+   * Keep bounds fixed across opaque cursors. */
+  async queryPortfolioHistory(
+    owner: string,
+    opts: PortfolioHistoryOptions,
+  ): Promise<PortfolioHistoryPage> {
+    const canonicalOwner = owner.replace(/^0x/i, "").toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(canonicalOwner))
+      throw new Error("Invalid portfolio owner");
+    const params = portfolioHistorySearchParams(opts);
+    opts.signal?.throwIfAborted();
+    const url = `${this.gatewayUrl}/v1/history/portfolio/${canonicalOwner}?${params}`;
+    const res = await this.httpTransport(
+      url,
+      { signal: opts.signal },
+      readContext(url, "account"),
+    );
+    if (!res.ok) throw new GatewayHttpError(res.status, res);
+    const page: unknown = await res.json();
+    opts.signal?.throwIfAborted();
+    return decodePortfolioHistoryPage(page, canonicalOwner, opts);
+  }
+
+  /** One newest-first gateway page of a market's indexed `price_updated`
+   * history. Keep market and bounds fixed across opaque cursors. */
+  async queryOraclePriceHistory(
+    market: number,
+    options: OraclePriceHistoryOptions,
+  ): Promise<OraclePriceHistoryPage> {
+    return queryOraclePriceHistoryPage(this.gatewayUrl, market, {
+      ...options,
+      fetch:
+        options.fetch ??
+        ((input, init) => {
+          const url = String(input instanceof Request ? input.url : input);
+          return this.httpTransport(url, init, readContext(url, "query"));
+        }),
+    });
+  }
+
+  /** Compatibility array of position snapshots. Absent close fields are empty
+   * strings and timestamps are milliseconds. Use queryHistoryPositionsPage for
+   * nullable fields, exact block times and opaque cursor continuation. */
   async queryHistoryPositions(
     addressHex?: string,
     opts?: {
@@ -1559,25 +2177,187 @@ export class ExchangeClient {
       limit?: number;
     },
   ): Promise<HistoryPositionSnapshot[]> {
+    const page = await this.queryHistoryPositionsPage(addressHex, opts);
+    return page.positions.map((row) => ({
+      owner: row.owner,
+      market: String(row.market),
+      side: row.side ?? "",
+      entryPrice: row.entryPrice ?? "",
+      size: row.size,
+      blockHeight: row.blockHeight,
+      timestamp: Date.parse(row.blockTime),
+    }));
+  }
+
+  /** Gateway/indexer snapshots, newest first. Preserve filters when passing an
+   * opaque nextCursor back in opts.cursor. Null close fields stay null. */
+  async queryHistoryPositionsPage(
+    addressHex?: string,
+    opts: {
+      market?: number;
+      fromMs?: number;
+      toMs?: number;
+      limit?: number;
+      cursor?: string;
+    } = {},
+  ): Promise<HistoryPositionsPage> {
     const hex = addressHex ?? this.addressHex;
-    if (!hex) return [];
+    if (!hex) return { positions: [], nextCursor: "" };
+    const owner = historyOwner(hex);
+    const params = historySearchParams(opts);
+    if (opts.market !== undefined) {
+      if (
+        !Number.isInteger(opts.market) ||
+        opts.market < 0 ||
+        opts.market > 0x7fffffff
+      )
+        throw new Error("Invalid history market");
+      params.set("market", String(opts.market));
+    }
+    const query = params.toString();
+    const json = await this.apiJson(
+      `${this.gatewayUrl}/v1/history/positions/${owner}${query ? `?${query}` : ""}`,
+      "account",
+    );
+    return decodeHistoryPositionsPage(json, owner, opts.market);
+  }
+
+  /**
+   * Executed fills for an owner, newest first, keyset-paged. The endpoint
+   * returns an envelope rather than a bare array: pass `opts.cursor` from a
+   * previous page's `nextCursor` to continue; an empty `nextCursor` is the
+   * last page. `fromMs` is inclusive, `toMs` exclusive (the API's uniform
+   * half-open window), both epoch milliseconds. Omitting `addressHex` with
+   * no bound key yields an empty page, matching the other history queries.
+   */
+  async queryHistoryFills(
+    addressHex?: string,
+    opts?: {
+      market?: number;
+      fromMs?: number;
+      toMs?: number;
+      limit?: number;
+      cursor?: string;
+    },
+  ): Promise<HistoryFillsPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return { fills: [], nextCursor: "" };
     const params = new URLSearchParams();
     if (opts?.market !== undefined) params.set("market", String(opts.market));
     if (opts?.fromMs !== undefined) params.set("from", String(opts.fromMs));
     if (opts?.toMs !== undefined) params.set("to", String(opts.toMs));
     if (opts?.limit !== undefined) params.set("limit", String(opts.limit));
+    if (opts?.cursor !== undefined && opts.cursor !== "") {
+      params.set("cursor", opts.cursor);
+    }
     const qs = params.toString();
-    const url = `${this.readBaseUrl}/v1/history/positions/${hex}${qs ? `?${qs}` : ""}`;
-    const json = await fetchApiArray(url);
-    return (json as Array<Record<string, unknown>>).map((row) => ({
-      owner: String(row.owner ?? ""),
-      market: String(row.market ?? ""),
-      side: String(row.side ?? ""),
-      entryPrice: String(row.entry_price ?? "0"),
-      size: String(row.size ?? "0"),
-      blockHeight: Number(row.block_height ?? 0),
-      timestamp: Number(row.timestamp ?? 0),
-    }));
+    const url = `${this.readBaseUrl}/v1/history/fills/${hex}${qs ? `?${qs}` : ""}`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "account"),
+    );
+    const json = (await res.json()) as unknown;
+    const body = (json ?? {}) as Record<string, unknown>;
+    if (!res.ok || "error" in body) {
+      const msg = (body.error as string) ?? `HTTP ${res.status}`;
+      throw new Error(`API error: ${msg}`);
+    }
+    const rows = Array.isArray(body.fills)
+      ? (body.fills as Array<Record<string, unknown>>)
+      : [];
+    return {
+      fills: rows.map((row) => ({
+        fillId: String(row.fill_id ?? "0"),
+        market: Number(row.market ?? 0),
+        blockHeight: Number(row.block_height ?? 0),
+        blockTime: String(row.block_time ?? ""),
+        price: String(row.price ?? "0"),
+        quantity: String(row.quantity ?? "0"),
+        makerOwner: String(row.maker_owner ?? ""),
+        takerOwner: String(row.taker_owner ?? ""),
+        makerSide: String(row.maker_side ?? ""),
+        takerFee: Number(row.taker_fee ?? 0),
+        makerFee: Number(row.maker_fee ?? 0),
+      })),
+      nextCursor: String(body.next_cursor ?? ""),
+    };
+  }
+
+  /** One market's recent trade tape, newest first (`GET /v1/trades/{market}`),
+   * from the serving node's in-memory buffer of its last 500 fills. The tape
+   * starts empty after a node restart and is not complete history; use
+   * `reads().tradeHistoryPage` for the indexed record. Times out after
+   * `opts.timeoutMs` (default 5 seconds); a bad market or limit throws
+   * `GatewayReadError` with kind `"configuration"`. */
+  async queryRecentTrades(
+    market: number,
+    opts: RecentTradesOptions = {},
+  ): Promise<RecentTrade[]> {
+    const captured = { ...opts };
+    const limit = recentTradesLimit(market, captured);
+    const body = await boundedGatewayJson(
+      `${this.readBaseUrl}/v1/trades/${market}?limit=${limit}`,
+      this.httpTransport,
+      captured,
+    );
+    return decodeRecentTrades(body, market, captured);
+  }
+
+  /** One newest-first page of an owner's funding payments
+   * (`GET /v1/history/funding-payments/{owner}`, the indexed
+   * `funding_settled` events). Keep filters fixed when passing `nextCursor`
+   * back as `opts.cursor`; an empty `nextCursor` is the last page, as for
+   * `queryHistoryFills`. Times out after `opts.timeoutMs` (default 5 seconds).
+   * A caller mistake in `opts` throws `GatewayReadError` with kind
+   * `"configuration"`. Omitting `addressHex` with no bound key yields an
+   * empty page, like the other history queries. */
+  async queryHistoryFundingPayments(
+    addressHex?: string,
+    opts: FundingPaymentsOptions = {},
+  ): Promise<FundingPaymentsPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return { payments: [], nextCursor: "" };
+    const owner = historyOwner(hex);
+    const captured = { ...opts };
+    const params = fundingPaymentsSearchParams(owner, captured);
+    const body = await boundedGatewayJson(
+      `${this.gatewayUrl}/v1/history/funding-payments/${owner}?${params}`,
+      this.httpTransport,
+      captured,
+      { purpose: "account" },
+    );
+    return decodeFundingPaymentsPage(body, owner, captured);
+  }
+
+  /** One page of an owner's indexed account events
+   * (`GET /v1/history/account-events`) in the stated order, optionally one
+   * event type. Keep filters fixed when passing `nextCursor` back as
+   * `opts.cursor`; an empty `nextCursor` is the last page, as for
+   * `queryHistoryFills`. Times out after `opts.timeoutMs` (default 5 seconds)
+   * and reads at most 16 MiB, enough for a full 5000-row page. A caller
+   * mistake in `opts` throws `GatewayReadError` with kind `"configuration"`.
+   * Omitting `addressHex` with no bound key yields an empty page. */
+  async queryHistoryAccountEventsPage(
+    addressHex: string | undefined,
+    opts: AccountEventsOptions,
+  ): Promise<AccountEventsPage> {
+    const hex = addressHex ?? this.addressHex;
+    if (!hex) return { events: [], nextCursor: "" };
+    const owner = historyOwner(hex);
+    const captured = { ...opts };
+    const query = new URLSearchParams();
+    for (const [name, value] of Object.entries(
+      accountEventsParams(owner, captured),
+    ))
+      if (value !== undefined) query.set(name, String(value));
+    const body = await boundedGatewayJson(
+      `${this.gatewayUrl}/v1/history/account-events?${query}`,
+      this.httpTransport,
+      captured,
+      { purpose: "account", maxBytes: ACCOUNT_EVENTS_MAX_BYTES },
+    );
+    return decodeAccountEventsPage(body, owner, captured);
   }
 
   // -----------------------------------------------------------------------
@@ -1585,7 +2365,12 @@ export class ExchangeClient {
   // -----------------------------------------------------------------------
 
   async status(): Promise<{ latestHeight: number; latestAppHash: string }> {
-    const res = await fetch(`${this.chainBase}/status`);
+    const url = `${this.chainBase}/status`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     const json = await res.json();
     const info = json.result.sync_info;
     return {
@@ -1596,7 +2381,12 @@ export class ExchangeClient {
 
   async getBlock(height?: number): Promise<Record<string, unknown>> {
     const params = height != null ? `?height=${height}` : "";
-    const res = await fetch(`${this.chainBase}/block${params}`);
+    const url = `${this.chainBase}/block${params}`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     const json = await res.json();
     if (json.error)
       throw new Error(json.error.message ?? JSON.stringify(json.error));
@@ -1604,7 +2394,12 @@ export class ExchangeClient {
   }
 
   async getBlockResults(height: number): Promise<Record<string, unknown>> {
-    const res = await fetch(`${this.chainBase}/block_results?height=${height}`);
+    const url = `${this.chainBase}/block_results?height=${height}`;
+    const res = await this.httpTransport(
+      url,
+      undefined,
+      readContext(url, "query"),
+    );
     const json = await res.json();
     if (json.error)
       throw new Error(json.error.message ?? JSON.stringify(json.error));
@@ -1612,200 +2407,208 @@ export class ExchangeClient {
   }
 
   // -----------------------------------------------------------------------
-  // WebSocket streams (gateway-native; mirror the Python SDK)
+  // WebSocket streams (the gateway's multiplexed /ws feed)
   // -----------------------------------------------------------------------
 
   /**
-   * Subscribe to the account-events stream (`/account-events`). Mirrors the
-   * Python SDK's `AccountEventStream`: the gateway sends an initial snapshot
-   * frame followed by incremental event frames. The SDK tracks the highest
-   * `event_id` seen and replays from it via `after_id` on reconnect, so no
-   * events are dropped across a disconnect.
-   *
-   * Auth: account streams require auth only when the gateway runs with
-   * `--api-key`. A browser `WebSocket` cannot send the `X-Api-Key` header, so
-   * the SDK uses the gateway's signed-query auth instead — when a private key
-   * is loaded (`setPrivateKey`) it signs the `ProofExchange-account-events-v1`
-   * message and appends `public_key` / `signature` / `timestamp_ms`. Against
-   * an unauthenticated gateway (e.g. devnet) the owner alone is enough.
-   *
-   * Returns an unsubscribe function; `disconnect()` closes all streams.
+   * One-shot orderbook snapshot from the gateway's `/ws` feed, read over a
+   * connection of its own: it never answers from a book an existing
+   * `subscribeOrderbook` built, so a stalled shared socket cannot serve stale
+   * prices. Resolves the first `snapshot` frame and closes the connection.
+   * Rejects with {@link FeedSubscriptionError} when the gateway refuses the
+   * subscription, or when no snapshot arrives within `timeoutMs`.
    */
-  subscribeAccountEvents(
-    owner: Uint8Array | string,
-    onEvent: (event: Record<string, unknown>) => void,
-    opts: WsStreamOptions = {},
-  ): () => void {
-    const ownerHex = (
-      owner instanceof Uint8Array ? bytesToHex(owner) : owner.replace(/^0x/, "")
-    ).toLowerCase();
-    // Tracked across reconnects for gap recovery. Signed into the auth
-    // message too, so the value we send and the value we sign always match.
-    let afterId = 0n;
-
-    const buildUrl = async (): Promise<string> => {
-      const params = new URLSearchParams({ owner: ownerHex });
-      if (afterId > 0n) params.set("after_id", afterId.toString());
-      if (this.privateKey && this.publicKey) {
-        const chainId = await this.resolveChainId();
-        const timestampMs = BigInt(Date.now());
-        const msg = accountWsAuthMessage(
-          chainId,
-          ownerHex,
-          afterId,
-          timestampMs,
-        );
-        params.set("public_key", bytesToHex(this.publicKey));
-        params.set("signature", bytesToHex(sign(this.privateKey, msg)));
-        params.set("timestamp_ms", timestampMs.toString());
-      }
-      return `${this.wsUrl}/account-events?${params.toString()}`;
-    };
-
-    return this.openStream(
-      buildUrl,
-      (frame) => {
-        const id = frame.event_id;
-        if (typeof id === "number" || typeof id === "bigint") {
-          const big = BigInt(id);
-          if (big > afterId) afterId = big;
-        }
-        onEvent(frame);
-      },
-      opts,
-    );
-  }
-
-  /**
-   * Subscribe to the L2 orderbook delta stream for a market
-   * (`/orderbook-deltas`). Mirrors the Python SDK's `OrderbookDeltaStream`:
-   * the first frame is a full `l2Book` snapshot, then incremental deltas.
-   * Returns an unsubscribe function.
-   */
-  subscribeOrderbookDeltas(
+  orderbookSnapshot(
     market: number,
-    onMessage: (msg: Record<string, unknown>) => void,
-    opts: WsStreamOptions = {},
-  ): () => void {
-    return this.openStream(
-      async () => `${this.wsUrl}/orderbook-deltas?market=${market}`,
-      onMessage,
-      opts,
-    );
-  }
-
-  /**
-   * One-shot L2 orderbook snapshot via a temporary delta-stream connection:
-   * opens the stream, resolves the first `l2Book` snapshot frame, and closes.
-   * Mirrors the Python SDK's `orderbook_snapshot`.
-   */
-  orderbookSnapshot(market: number): Promise<Record<string, unknown>> {
+    timeoutMs = 10_000,
+  ): Promise<OrderbookSnapshotFrame> {
+    const feed = this.createFeed({ pingIntervalMs: 0 });
+    this.snapshotFeeds.add(feed);
     return new Promise((resolve, reject) => {
-      const unsub = this.subscribeOrderbookDeltas(
-        market,
-        (msg) => {
-          if (msg.type === "l2Book") {
-            unsub();
-            resolve(msg);
-          }
-        },
-        {
-          onError: (err) => {
-            unsub();
-            reject(err instanceof Error ? err : new Error(String(err)));
-          },
-        },
-      );
+      let settled = false;
+      const finish = () => {
+        settled = true;
+        clearTimeout(timer);
+        this.snapshotFeeds.delete(feed);
+        feed.close();
+      };
+      const timer = setTimeout(() => {
+        finish();
+        reject(
+          new FeedSubscriptionError(
+            "orderbook",
+            `orderbook snapshot for market ${market} timed out after ${timeoutMs}ms`,
+          ),
+        );
+      }, timeoutMs);
+      feed.subscribeOrderbook(market, (frame) => {
+        if (settled) return;
+        const raw = frame as OrderbookFrame | FeedErrorFrame;
+        if (raw.type === "error") {
+          finish();
+          reject(new FeedSubscriptionError("orderbook", raw.error, raw.code));
+        } else if (raw.type === "snapshot") {
+          finish();
+          resolve(raw);
+        }
+      });
     });
   }
 
-  /**
-   * Internal: open one self-reconnecting WebSocket. `buildUrl` is re-invoked
-   * on every (re)connect so per-connect state (fresh auth timestamp, current
-   * `after_id`) is rebuilt each time. Reconnects with exponential backoff and
-   * jitter. Returns an unsubscribe that stops reconnecting and closes the
-   * socket.
+  /** A new `/ws` connection with this client's URL, auth and headers. */
+  private createFeed(opts: Partial<GatewayFeedOptions> = {}): GatewayFeed {
+    let base = this.wsUrl;
+    if (!base && typeof globalThis.location !== "undefined")
+      base = globalThis.location.origin.replace(/^http/, "ws");
+    return new GatewayFeed({
+      url: `${base}/ws`,
+      accountAuth: async (owner) =>
+        this.privateKey || this.externalSigner ? this.accountAuth(owner) : {},
+      headers: this.apiKey ? { "X-Api-Key": this.apiKey } : undefined,
+      ...opts,
+    });
+  }
+
+  /** Shared multiplexed /ws feed. Options apply on first creation only.
+   * Reconnect restores snapshots, not missed events. Default auth reads the current signer.
    */
-  private openStream(
-    buildUrl: () => Promise<string>,
-    onMessage: (msg: Record<string, unknown>) => void,
-    opts: WsStreamOptions,
+  feed(opts: Partial<GatewayFeedOptions> = {}): GatewayFeed {
+    if (!this.gatewayFeed) this.gatewayFeed = this.createFeed(opts);
+    return this.gatewayFeed;
+  }
+
+  /**
+   * Account snapshot plus live stream, with auth renewed per reconnect.
+   *
+   * By default a reconnect recovers the events missed while disconnected:
+   * the SDK reads `/v1/history/account-events` back to the last delivered
+   * event (or the previous snapshot's `height`), retrying while
+   * `/v1/history/status` shows history behind the new snapshot's `height`,
+   * delivers the newer rows in order (marked `backfilled`), buffers live
+   * frames meanwhile and drops those a backfilled row already delivered,
+   * then resumes live delivery. `onRecovery` reports each reconnect's
+   * outcome once: `unverified` when the snapshot has no `height`,
+   * `unsupported` when the gateway predates 7.9.0 and sends no history key.
+   * `recover: false` turns recovery off.
+   */
+  subscribeAccount(
+    onFrame: (frame: AccountFrame) => void,
+    opts: {
+      owner?: string;
+      auth?: false;
+      recover?: boolean;
+      onRecovery?: (status: AccountRecoveryStatus) => void;
+    } = {},
   ): () => void {
-    const backoffCapMs = opts.reconnectBackoffMaxMs ?? 30_000;
-    let closed = false;
-    let ws: WebSocket | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let backoff = 500;
-
-    const scheduleReconnect = () => {
-      if (closed) return;
-      const jitter = backoff * (0.75 + Math.random() * 0.5);
-      timer = setTimeout(() => void connect(), jitter);
-      backoff = Math.min(backoff * 2, backoffCapMs);
+    const owner = (opts.owner ?? this.addressHex)
+      ?.replace(/^0x/i, "")
+      .toLowerCase();
+    if (!owner) throw new Error("No account owner available");
+    const auth = async (address: string) =>
+      opts.auth !== false && (this.privateKey || this.externalSigner)
+        ? this.accountAuth(address)
+        : {};
+    if (opts.recover === false)
+      return this.feed().subscribeAccount(owner, onFrame, auth);
+    const recovery = recoveringAccountHandler({
+      owner,
+      onFrame,
+      onRecovery: opts.onRecovery,
+      fetchPage: (cursor, signal) =>
+        this.accountHistoryPage(owner, cursor, signal),
+      fetchIndexedHeight: (signal) => this.historyIndexedHeight(signal),
+    });
+    const unsubscribe = this.feed().subscribeAccount(
+      owner,
+      recovery.handle,
+      auth,
+    );
+    this.accountRecoveries.add(recovery.close);
+    return () => {
+      this.accountRecoveries.delete(recovery.close);
+      recovery.close();
+      unsubscribe();
     };
+  }
 
-    const connect = async (): Promise<void> => {
-      if (closed) return;
-      let url: string;
+  /** One newest-first `/v1/history/account-events` page for recovery. */
+  private async accountHistoryPage(
+    owner: string,
+    cursor: string | null,
+    signal?: AbortSignal,
+  ): Promise<AccountHistoryPage> {
+    const res = await this.reads().accountEvents(
+      {
+        owner,
+        order: "desc",
+        limit: 500,
+        ...(cursor ? { cursor } : {}),
+      },
+      { signal },
+    );
+    // Status before parse: a gateway error body need not be JSON, and a
+    // SyntaxError from `res.json()` would bury the intended message.
+    if (!res.ok) {
+      let error: unknown;
       try {
-        url = await buildUrl();
-      } catch (err) {
-        opts.onError?.(err);
-        scheduleReconnect();
-        return;
+        error = ((await res.json()) as { error?: string }).error;
+      } catch {
+        error = undefined;
       }
-      if (closed) return;
-      ws = new WebSocket(url);
-      ws.onopen = () => {
-        backoff = 500;
-      };
-      ws.onmessage = (ev) => {
-        try {
-          onMessage(JSON.parse(ev.data as string) as Record<string, unknown>);
-        } catch (err) {
-          opts.onError?.(err);
-        }
-      };
-      ws.onerror = (err) => {
-        opts.onError?.(err);
-      };
-      ws.onclose = () => {
-        ws = null;
-        if (!closed) scheduleReconnect();
-      };
+      throw new Error(
+        `account history read failed: ${error ?? `HTTP ${res.status}`}`,
+      );
+    }
+    const body = (await res.json()) as {
+      account_events?: AccountHistoryRow[];
+      next_cursor?: string | null;
+      error?: string;
     };
-
-    const unsubscribe = () => {
-      closed = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      if (ws) {
-        ws.close();
-        ws = null;
-      }
-      this.activeStreams.delete(unsubscribe);
-    };
-    this.activeStreams.add(unsubscribe);
-    void connect();
-    return unsubscribe;
+    if (!Array.isArray(body.account_events))
+      throw new Error(
+        `account history read failed: ${body.error ?? `HTTP ${res.status}`}`,
+      );
+    return { rows: body.account_events, nextCursor: body.next_cursor ?? null };
   }
 
-  /** Close every open WebSocket stream and stop their reconnect loops. */
+  /** The newest height history has indexed in full
+   *  (`/v1/history/status` → `ingest.newest_height`). */
+  private async historyIndexedHeight(signal?: AbortSignal): Promise<number> {
+    const res = await this.reads().historyStatus({ signal });
+    if (!res.ok)
+      throw new Error(`history status read failed: HTTP ${res.status}`);
+    const body = (await res.json()) as {
+      ingest?: { newest_height?: unknown };
+    };
+    const height = body.ingest?.newest_height;
+    if (typeof height !== "number")
+      throw new Error(`history status read failed: HTTP ${res.status}`);
+    return height;
+  }
+
+  subscribeOrderbook(
+    market: number,
+    onFrame: (frame: OrderbookFrame) => void,
+  ): () => void {
+    return this.feed().subscribeOrderbook(market, onFrame);
+  }
+
+  subscribeTrades(
+    market: number,
+    onFrame: (frame: TradeFrame) => void,
+  ): () => void {
+    return this.feed().subscribeTrades(market, onFrame);
+  }
+
+  /** Close the shared `/ws` feed, any pending `orderbookSnapshot` feed, any
+   *  account backfill in progress, and stop their reconnect loops. */
   disconnect() {
-    for (const unsub of [...this.activeStreams]) unsub();
+    for (const close of this.accountRecoveries) close();
+    this.accountRecoveries.clear();
+    for (const feed of this.snapshotFeeds) feed.close();
+    this.snapshotFeeds.clear();
+    this.gatewayFeed?.close();
   }
-}
-
-/** Options common to the WebSocket stream subscriptions. */
-export interface WsStreamOptions {
-  /** Called on connect/parse errors. The stream keeps reconnecting; use
-   *  this for logging or to surface terminal failures. */
-  onError?: (err: unknown) => void;
-  /** Max reconnect backoff in milliseconds (default 30000). Backoff starts
-   *  at 500ms and doubles with ±25% jitter up to this cap. */
-  reconnectBackoffMaxMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -1849,8 +2652,12 @@ function accountWsAuthMessage(
  * Fetch JSON from the API server and throw on non-2xx or `json.error`.
  * Returns the parsed JSON body on success.
  */
-async function fetchApiJson(url: string): Promise<Record<string, unknown>> {
-  const res = await fetch(url);
+async function fetchApiJson(
+  transport: ExchangeHttpTransport,
+  url: string,
+  context: ExchangeHttpRequestContext,
+): Promise<Record<string, unknown>> {
+  const res = await transport(url, undefined, context);
   const json = (await res.json()) as Record<string, unknown>;
   if (!res.ok || json.error) {
     const msg = (json.error as string) ?? `HTTP ${res.status}`;
@@ -1882,18 +2689,39 @@ function requireEncodedData(
  * does not expose as GETs (account, open orders, withdrawal).
  */
 async function postInfoJson(
+  transport: ExchangeHttpTransport,
   gatewayUrl: string,
   info: Record<string, unknown>,
+  context: ExchangeHttpRequestContext,
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(`${gatewayUrl}/info`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(info),
-  });
-  const json = (await res.json()) as Record<string, unknown>;
+  const res = await transport(
+    `${gatewayUrl}/info`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(info),
+    },
+    context,
+  );
+  // The error keeps an unread copy, so callers can still read the body.
+  const unread = res.clone();
+  let parsed: unknown;
+  try {
+    parsed = await res.json();
+  } catch (error) {
+    if (!res.ok) throw new GatewayHttpError(res.status, unread);
+    throw error;
+  }
+  // A JSON `null` or scalar body has no fields; it must not hide the status.
+  const json: Record<string, unknown> =
+    parsed !== null && typeof parsed === "object"
+      ? (parsed as Record<string, unknown>)
+      : {};
   if (!res.ok || json.error) {
-    const msg = (json.error as string) ?? `HTTP ${res.status}`;
-    throw new Error(`API error: ${msg}`);
+    const errorCode =
+      typeof json.errorCode === "string" ? json.errorCode : undefined;
+    const detail = typeof json.error === "string" ? json.error : undefined;
+    throw new GatewayHttpError(res.status, unread, errorCode, detail);
   }
   return json;
 }
@@ -1902,8 +2730,12 @@ async function postInfoJson(
  * Fetch a JSON array from the API server and throw on non-2xx or
  * `json.error`. Returns the parsed array on success.
  */
-async function fetchApiArray(url: string): Promise<unknown[]> {
-  const res = await fetch(url);
+async function fetchApiArray(
+  transport: ExchangeHttpTransport,
+  url: string,
+  context: ExchangeHttpRequestContext,
+): Promise<unknown[]> {
+  const res = await transport(url, undefined, context);
   const json = (await res.json()) as unknown;
   if (
     !res.ok ||
@@ -1976,6 +2808,21 @@ function computeCometTxHash(txBytes: Uint8Array): string {
   return bytesToHex(sha256(txBytes)).toUpperCase();
 }
 
+/** Shape of a gateway `/exchange` JSON response body. */
+interface GatewayResponseBody {
+  status?: string;
+  error?: string;
+  txHash?: string;
+  code?: number;
+  log?: string;
+  info?: string;
+  height?: number;
+  events?: TxEvent[];
+  errorCode?: string;
+  mode?: string;
+  retryAfterMs?: number;
+}
+
 async function readGatewayBody(res: Response): Promise<{
   json?: unknown;
   error?: string;
@@ -2021,80 +2868,53 @@ function parseLeadingErrorCode(s: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-// ---------------------------------------------------------------------------
-// MarketConfig decoder
-// ---------------------------------------------------------------------------
-
-/** Decode a single MarketConfig from its MessagePack positional array.
- *  Field order mirrors the Rust struct in exchange-core/src/types.rs.
- *  Null-safe reads on every optional field. */
-function decodeMarketConfig(raw: unknown[]): MarketConfig {
-  const optBig = (v: unknown): bigint | undefined =>
-    v == null ? undefined : BigInt(v as number | bigint);
-  const addr = (v: unknown): Uint8Array | undefined =>
-    v == null
-      ? undefined
-      : v instanceof Uint8Array
-        ? v
-        : Uint8Array.from(v as number[]);
-
-  let kind: MarketKind | undefined;
-  if (raw[7] != null) {
-    if (typeof raw[7] === "string") {
-      kind = raw[7] as MarketKind;
-    } else if (typeof raw[7] === "object" && raw[7] !== null) {
-      const obj = raw[7] as Record<string, unknown>;
-      if (Array.isArray(obj.ConditionalPerp))
-        kind = {
-          ConditionalPerp: [
-            Number((obj.ConditionalPerp as unknown[])[0]),
-            (obj.ConditionalPerp as unknown[])[1] as "Yes" | "No",
-          ],
-        };
-      else if (Array.isArray(obj.PredictionBinary))
-        kind = {
-          PredictionBinary: [
-            Number((obj.PredictionBinary as unknown[])[0]),
-            (obj.PredictionBinary as unknown[])[1] as "Yes" | "No",
-          ],
-        };
-    }
+/** Copy protocol inputs without structuredClone or cross-realm instanceof checks. */
+function cloneSigningInput<T>(value: T): T {
+  if (
+    ArrayBuffer.isView(value) &&
+    Object.prototype.toString.call(value) === "[object Uint8Array]"
+  ) {
+    const bytes = value as unknown as Uint8Array;
+    return new Uint8Array(bytes) as T;
   }
-
-  let feeTiers: FeeTier[] | undefined;
-  if (Array.isArray(raw[13])) {
-    feeTiers = (raw[13] as unknown[][]).map((t) => ({
-      min30dVolumeMicroUsdc: BigInt(t[0] as number | bigint),
-      makerFeeTenthBps: Number(t[1]),
-      takerFeeTenthBps: Number(t[2]),
-    }));
+  if (Array.isArray(value)) return value.map(cloneSigningInput) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, cloneSigningInput(v)]),
+    ) as T;
   }
+  return value;
+}
 
+/** Abort interrupts the sleep; callers inspect the signal for their own result policy. */
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+}
+
+/** Per-read deadline with explicit cleanup, without AbortSignal.any/timeout. */
+function readDeadline(
+  ms: number,
+  parent?: AbortSignal,
+): { signal: AbortSignal; dispose(): void } {
+  const controller = new AbortController();
+  const abort = () => controller.abort(parent?.reason);
+  if (parent?.aborted) abort();
+  else parent?.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(() => controller.abort(), ms);
   return {
-    market: Number(raw[0]),
-    imBps: Number(raw[1]),
-    mmBps: Number(raw[2]),
-    takerFeeBps: Number(raw[3]),
-    makerFeeBps: Number(raw[4]),
-    fundingIntervalMs: BigInt(raw[5] as number | bigint),
-    maxFundingRateBps: Number(raw[6]),
-    kind,
-    maxPositionSize: optBig(raw[8]),
-    defaultTtlMs: optBig(raw[9]),
-    netDeltaMargin: raw[10] == null ? undefined : Boolean(raw[10]),
-    poolId: raw[11] == null ? undefined : Number(raw[11]),
-    markPriceMaxOracleAgeMs: optBig(raw[12]),
-    feeTiers,
-    tickSize: optBig(raw[14]),
-    lotSize: optBig(raw[15]),
-    primaryOracleSigner: addr(raw[16]),
-    oracleStalenessMs: optBig(raw[17]),
-    markSourceMode: raw[18] == null ? undefined : (raw[18] as MarkSourceMode),
-    maxMarkSpreadBps: raw[19] == null ? undefined : Number(raw[19]),
-    cexCompositeStalenessMs: optBig(raw[20]),
-    partialLiquidationEnabled: raw[21] == null ? undefined : Boolean(raw[21]),
-    szDecimals: raw[22] == null ? undefined : Number(raw[22]),
-    ticker: raw[23] == null ? undefined : String(raw[23]),
-    maxOpenInterest: optBig(raw[24]),
+    signal: controller.signal,
+    dispose() {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", abort);
+    },
   };
 }

@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { ExecErrorCode, decodeExecError, execErrorName } from "./errors.js";
+import {
+  ExecErrorCode,
+  GatewayHttpError,
+  decodeExecError,
+  execErrorName,
+  isMissingMark,
+} from "./errors.js";
 
 describe("decodeExecError", () => {
   it("returns null for code 0 (success)", () => {
@@ -16,14 +22,74 @@ describe("decodeExecError", () => {
     expect(decodeExecError(255)?.name).toBe("InternalError");
   });
 
-  it("decodes the new variants added in the audit batch (31, 32)", () => {
-    const e31 = decodeExecError(31);
-    expect(e31?.name).toBe("TooManyActiveImpactMarkets");
-    expect(e31?.description).toContain("scenario margin engine");
+  it("names the proof-wire codes 102-116, 123-125 and 128-134", () => {
+    for (const [code, name] of [
+      [102, "InsuranceFundingReplayed"],
+      [103, "InsuranceWithdrawalReplayed"],
+      [104, "MarketlessInsurancePool"],
+      [105, "InsufficientInsuranceBalance"],
+      [106, "InsuranceTransferZeroAccount"],
+      [107, "InsuranceAllocationCount"],
+      [108, "InsuranceAllocationOrder"],
+      [109, "InsuranceAllocationZeroAmount"],
+      [110, "InsuranceAmountExceedsI64"],
+      [111, "LiquidationRefused"],
+      [113, "InsuranceAccountWithdrawal"],
+      [114, "InsuranceActionRefused"],
+      [115, "LiquidationBatchTooManyOwners"],
+      [116, "LiquidationBatchOverBudget"],
+      [123, "DepositLimitExceeded"],
+      [124, "EventPoolMismatch"],
+      [125, "ConditionalLotOffUnderlyingGrid"],
+      [128, "WithdrawalPayoutLeaseNotHeld"],
+      [129, "WithdrawalPayoutRecordLimitReached"],
+      [130, "MarketReduceOnly"],
+      [131, "MarketDelisted"],
+      [132, "MarketStatusTransitionRefused"],
+      [133, "MarketBacksLiveEvent"],
+      [134, "MarketHalted"],
+    ] as const) {
+      expect(decodeExecError(code)?.name).toBe(name);
+      expect(execErrorName(code)).toBe(name);
+      expect(ExecErrorCode[name]).toBe(code);
+    }
+  });
+
+  it("decodes the event cap and the settle-price mismatch (96, 32)", () => {
+    const e96 = decodeExecError(96);
+    expect(e96?.name).toBe("TooManyActiveEvents");
+    expect(e96?.description).toContain("scenario margin engine");
 
     const e32 = decodeExecError(32);
     expect(e32?.name).toBe("SettlementPriceMismatch");
     expect(e32?.description).toContain("net-delta margin grouping");
+  });
+
+  it("decodes the unavailable-mark rejection (97)", () => {
+    expect(ExecErrorCode.UnpricedNoMark).toBe(97);
+    const e97 = decodeExecError(97);
+    expect(e97?.name).toBe("UnpricedNoMark");
+    expect(e97?.description).toContain("no mark price");
+    expect(execErrorName(97)).toBe("UnpricedNoMark");
+  });
+
+  it("keeps each unpriced reason on its own code", () => {
+    expect([37, 77, 82, 97].map((code) => execErrorName(code))).toEqual([
+      "UnpricedStale",
+      "UnpricedNoVerdict",
+      "UnpricedGuardUnset",
+      "UnpricedNoMark",
+    ]);
+    expect(decodeExecError(37)?.description).toContain("stale");
+    expect(decodeExecError(82)?.description).toContain("max oracle age");
+  });
+
+  it("decodes the F2 trigger-order incompatibility (98)", () => {
+    expect(ExecErrorCode.TriggerOrderIncompatible).toBe(98);
+    const e98 = decodeExecError(98);
+    expect(e98?.name).toBe("TriggerOrderIncompatible");
+    expect(e98?.description).toContain("SL/TP");
+    expect(execErrorName(98)).toBe("TriggerOrderIncompatible");
   });
 
   it("decodes code 51 as open-interest-cap rejection without a log", () => {
@@ -72,7 +138,8 @@ describe("execErrorName", () => {
 
   it("returns variant name for known codes", () => {
     expect(execErrorName(12)).toBe("InsufficientMargin");
-    expect(execErrorName(31)).toBe("TooManyActiveImpactMarkets");
+    expect(execErrorName(96)).toBe("TooManyActiveEvents");
+    expect(execErrorName(31)).toBe("UnknownError");
     expect(execErrorName(32)).toBe("SettlementPriceMismatch");
   });
 
@@ -101,5 +168,86 @@ describe("ExecErrorCode enum", () => {
     expect(ExecErrorCode.SlippageExceeded).toBe(50);
     expect(ExecErrorCode.OpenInterestLimitExceeded).toBe(51);
     expect(ExecErrorCode.InternalError).toBe(255);
+  });
+
+  it("pins the newly mirrored engine codes (77, 99, 100)", () => {
+    expect(ExecErrorCode.UnpricedNoVerdict).toBe(77);
+    expect(ExecErrorCode.WithdrawalLimitExceeded).toBe(99);
+    expect(ExecErrorCode.AccountOrderCapReached).toBe(100);
+  });
+
+  it("leaves the retired PLP code and the unassigned code unknown", () => {
+    // 112 was InvalidPlpConfig, retired with the engine's backstop.
+    expect(decodeExecError(112)).toBeNull();
+    expect(execErrorName(112)).toBe("UnknownError");
+    // 90 was SubAccountsInactive, retired with the sub-account switch.
+    expect(decodeExecError(90)).toBeNull();
+    expect(execErrorName(90)).toBe("UnknownError");
+    // 101 is unassigned on the wire: unknown, never a PLP fault.
+    expect(decodeExecError(101)).toBeNull();
+    expect(execErrorName(101)).toBe("UnknownError");
+    expect(decodeExecError(100)?.name).toBe("AccountOrderCapReached");
+    expect(decodeExecError(99)?.name).toBe("WithdrawalLimitExceeded");
+  });
+
+  it("leaves the codes retired with OracleUpdate and RunFundingTick unknown", () => {
+    for (const code of [30, 36, 41]) {
+      expect(decodeExecError(code)).toBeNull();
+      expect(execErrorName(code)).toBe("UnknownError");
+    }
+  });
+});
+
+describe("GatewayHttpError", () => {
+  it("carries errorCode when provided", () => {
+    const res = new Response("", { status: 503 });
+    const err = new GatewayHttpError(503, res, "MissingMark");
+    expect(err.status).toBe(503);
+    expect(err.errorCode).toBe("MissingMark");
+    expect(err.message).toBe("Gateway request failed (503): MissingMark");
+    expect(err.name).toBe("GatewayHttpError");
+    expect(err.response).toBe(res);
+  });
+
+  it("omits errorCode from message when absent", () => {
+    const res = new Response("", { status: 429 });
+    const err = new GatewayHttpError(429, res);
+    expect(err.errorCode).toBeUndefined();
+    expect(err.message).toBe("Gateway request failed (429)");
+  });
+});
+
+describe("isMissingMark", () => {
+  it("returns true for a 503 GatewayHttpError with errorCode MissingMark", () => {
+    const err = new GatewayHttpError(
+      503,
+      new Response("", { status: 503 }),
+      "MissingMark",
+    );
+    expect(isMissingMark(err)).toBe(true);
+  });
+
+  it("returns false for a 503 without errorCode", () => {
+    const err = new GatewayHttpError(503, new Response("", { status: 503 }));
+    expect(isMissingMark(err)).toBe(false);
+  });
+
+  it("returns false for a non-503 with MissingMark errorCode", () => {
+    const err = new GatewayHttpError(
+      500,
+      new Response("", { status: 500 }),
+      "MissingMark",
+    );
+    expect(isMissingMark(err)).toBe(false);
+  });
+
+  it("returns false for a plain Error", () => {
+    expect(isMissingMark(new Error("something"))).toBe(false);
+  });
+
+  it("returns false for non-error values", () => {
+    expect(isMissingMark(null)).toBe(false);
+    expect(isMissingMark(undefined)).toBe(false);
+    expect(isMissingMark("MissingMark")).toBe(false);
   });
 });

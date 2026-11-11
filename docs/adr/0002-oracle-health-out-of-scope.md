@@ -1,9 +1,16 @@
-# ADR 0002 — Oracle health is out of scope for the SDK (do not implement)
+# ADR 0002 — Oracle health is out of scope for the SDK (superseded)
 
-- **Status:** Accepted — **prohibited feature**
+- **Status:** Superseded by [ADR 0003](0003-every-gateway-interaction-through-the-sdk.md) on 2026-09-16
 - **Date:** 2026-07-07
 - **Deciders:** Ramon van de Ven (`Ramon2000`), Aleksandr Petrosyan
 - **Applies to:** `src/client.ts` (`ExchangeClient` read methods), `src/types.ts`.
+
+> **Superseded.** On 2026-09-16 the decision was reversed: every gateway
+> interaction an application makes, the oracle health check and admin calls
+> included, goes through the SDK
+> ([ADR 0003](0003-every-gateway-interaction-through-the-sdk.md)). The
+> prohibition below no longer applies. It is kept as the historical record of
+> the 2026-07-06 decision.
 
 ## Prohibition
 

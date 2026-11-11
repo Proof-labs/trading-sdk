@@ -202,6 +202,13 @@ class TestErrors:
         assert pts.EngineError(52, "").name == "AdminGovernanceInactive"
         assert pts.EngineError(53, "").name == "NotAdminSigner"
 
+    def test_proposal_lifecycle_codes_54_71(self):
+        # Endpoints of the mirrored proposal-lifecycle family; the full range is
+        # pinned by the errors.ndjson conformance manifest.
+        assert pts.get_error_name(54) == "ProposalNotFound"
+        assert pts.get_error_name(71) == "InvalidAdminRegistry"
+        assert pts.EngineError(67, "").name == "EmergencyRateLimited"
+
     def test_transitional_code_50_uses_delivertx_log(self):
         oi = "open interest limit exceeded on market 7: would be 4, cap 3"
         slip = "atomic basket aggregate slippage 51 bps exceeds budget 50 bps"
@@ -269,6 +276,8 @@ class TestEngineParityActions:
                 "ticker": "BTC",
                 "pool_id": 9,
                 "max_open_interest": 1_000_000,
+                "tick_size": 1_000,
+                "lot_size": 100,
             },
         )
         action_type, payload = pts.encode_action(action)
@@ -278,6 +287,105 @@ class TestEngineParityActions:
         assert decoded["ticker"] == "BTC"
         assert decoded["pool_id"] == 9
         assert decoded["max_open_interest"] == 1_000_000
+        assert decoded["tick_size"] == 1_000
+        assert decoded["lot_size"] == 100
+
+    @staticmethod
+    def _market(ticker: str) -> dict:
+        return {
+            "market": 42,
+            "im_bps": 1000,
+            "mm_bps": 500,
+            "taker_fee_bps": 5,
+            "maker_fee_bps": 2,
+            "signer": bytes(20),
+            "funding_interval_ms": 60_000,
+            "max_funding_rate_bps": 100,
+            "sz_decimals": 0,
+            "ticker": ticker,
+            "pool_id": 0,
+            "max_open_interest": 0,
+            "tick_size": 1,
+            "lot_size": 1,
+        }
+
+    def _market_creations(self, ticker: str) -> list[tuple[str, int, dict]]:
+        single = {"CreateMarket": self._market(ticker)}
+        batch = {
+            "Batch": [
+                {"CreateMarket": self._market("BTC")},
+                {"CreateMarket": {**self._market(ticker), "market": 43}},
+            ]
+        }
+
+        def propose(action: dict) -> dict:
+            return {
+                "proposer": b"\x22" * 20,
+                "registry_version": 3,
+                "action": action,
+            }
+
+        def approve(action: dict) -> dict:
+            return {
+                "approver": b"\x23" * 20,
+                "proposal_id": 7,
+                "registry_version": 3,
+                "threshold": 2,
+                "proposer": b"\x22" * 20,
+                "created_height": 1,
+                "created_ms": 1,
+                "expiry_ms": 2,
+                "action": action,
+                "content_hash": bytes(32),
+            }
+
+        return [
+            ("direct", pts.ActionType["CreateMarket"], self._market(ticker)),
+            ("proposed", pts.ActionType["ProposeAdminAction"], propose(single)),
+            ("proposed batch", pts.ActionType["ProposeAdminAction"], propose(batch)),
+            ("approved", pts.ActionType["ApproveAdminAction"], approve(single)),
+            ("approved batch", pts.ActionType["ApproveAdminAction"], approve(batch)),
+        ]
+
+    def test_every_market_creation_refuses_a_bad_ticker(self):
+        """The ticker rule is a copy of proof_wire::ticker::validate_ticker
+        (Proof-labs/exchange#1351), refused with the engine's text."""
+        for name, action_type, fields in self._market_creations("TEST3."):
+            with pytest.raises(ValueError) as e:
+                pts.encode_action(pts.actions.RawAction(action_type, fields))
+            assert str(e.value) == (
+                "ticker may hold only A-Z, 0-9 and '-', found '.' at character 5"
+            ), name
+        for _name, action_type, fields in self._market_creations("TEST3"):
+            pts.encode_action(pts.actions.RawAction(action_type, fields))
+
+    @pytest.mark.parametrize(
+        "ticker,message",
+        [
+            ("", "ticker is empty"),
+            ("X" * 25, "ticker is 25 bytes, over the 24-byte limit"),
+            ("test3", "ticker must start with a capital letter A-Z, not 't'"),
+            ("Btc", "ticker may hold only A-Z, 0-9 and '-', found 't' at character 1"),
+            (
+                "BTCÉ",
+                "ticker may hold only A-Z, 0-9 and '-', found 'É' at character 3",
+            ),
+        ],
+    )
+    def test_create_market_refusal_text_matches_the_engine(self, ticker, message):
+        action = pts.actions.RawAction(pts.ActionType["CreateMarket"], self._market(ticker))
+        with pytest.raises(ValueError) as e:
+            pts.encode_action(action)
+        assert str(e.value) == message
+
+    def test_a_market_created_before_the_rule_still_decodes(self):
+        _, payload = pts.encode_action(
+            pts.actions.RawAction(pts.ActionType["CreateMarket"], self._market("TEST3X"))
+        )
+        at = payload.index(b"TEST3X")
+        patched = payload[: at + 5] + b"." + payload[at + 6 :]
+        decoded = pts.decode_action(pts.ActionType["CreateMarket"], patched)
+        assert decoded["ticker"] == "TEST3."
 
     def test_update_market_fees_max_open_interest_uses_slot_after_margin_ratios(self):
         action = pts.actions.UpdateMarketFees(
@@ -334,3 +442,93 @@ class TestEngineParityActions:
         decoded = pts.decode_action(action_type, payload)
         assert decoded["max_slippage_bps"] == 0
         assert decoded["legs"][0]["reduce_only"] is False
+
+
+class TestConfirmDepositLocator:
+    """The public ConfirmDeposit builder must produce the shared conformance
+    vectors' bytes — the vector runner calls the native codec directly, so it
+    never exercises this builder path."""
+
+    @staticmethod
+    def _vector(case_name):
+        import json
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[2] / "conformance" / "codec.ndjson"
+        with path.open() as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    c = json.loads(line)
+                    if c["case"] == case_name:
+                        return c
+        raise AssertionError(f"vector {case_name!r} not found")
+
+    def _action(self, locator):
+        return pts.actions.ConfirmDeposit(
+            owner=b"\x55" * 20,
+            amount=100_000,
+            solana_tx_sig=b"\xab" * 64,
+            signer=b"\x66" * 20,
+            locator=locator,
+        )
+
+    def test_builder_with_locator_matches_vector(self):
+        vector = self._vector("confirm_deposit/with_locator")
+        action = self._action(pts.DepositLocator(top_index=3, inner_index=1))
+        action_type, payload = pts.encode_action(action)
+        assert action_type == pts.ActionType["ConfirmDeposit"]
+        assert payload.hex() == vector["expect"]["payload_hex"]
+
+    def test_builder_no_locator_matches_vector(self):
+        vector = self._vector("confirm_deposit/no_locator")
+        action_type, payload = pts.encode_action(self._action(None))
+        assert payload.hex() == vector["expect"]["payload_hex"]
+        # The absent locator is a trailing nil, and it decodes back as None.
+        decoded = pts.decode_action(action_type, payload)
+        assert decoded["locator"] is None
+
+    def test_populated_locator_decodes_back(self):
+        # The encode direction is pinned by the vectors above; this pins the
+        # read direction, so a locator that is set cannot be silently dropped
+        # or come back under a different shape.
+        action_type, payload = pts.encode_action(
+            self._action(pts.DepositLocator(top_index=3, inner_index=1))
+        )
+        decoded = pts.decode_action(action_type, payload)
+        assert decoded["locator"] == {"top_index": 3, "inner_index": 1}
+
+    def test_top_level_transfer_locator_round_trips(self):
+        # A transfer that is itself the top-level instruction: the locator is
+        # PRESENT with no inner index. Distinct from an absent locator, and the
+        # shape a non-CPI deposit actually produces.
+        action_type, payload = pts.encode_action(
+            self._action(pts.DepositLocator(top_index=3))
+        )
+        assert payload.endswith(bytes([0x92, 0x03, 0xC0]))
+        decoded = pts.decode_action(action_type, payload)
+        assert decoded["locator"] == {"top_index": 3, "inner_index": None}
+
+    def test_rejects_bool_and_out_of_range_indices(self):
+        # bool is an int subclass, so an unguarded dataclass would encode
+        # True as instruction 1 — a wrong dedup key for a real transfer.
+        for kwargs in (
+            {"top_index": True},
+            {"top_index": 3, "inner_index": True},
+            {"top_index": -1},
+            {"top_index": 1 << 16},
+            {"top_index": 3, "inner_index": 1 << 16},
+        ):
+            with pytest.raises(ValueError, match="unsigned integer"):
+                pts.DepositLocator(**kwargs)
+
+    def test_legacy_pre_locator_bytes_still_decode(self):
+        # Pre-locator engines emitted a 4-element array with no locator slot
+        # at all; those bytes must keep decoding (the backward-decode half of
+        # the MINOR claim for this wire change).
+        action_type, payload = pts.encode_action(self._action(None))
+        assert payload[0] == 0x95 and payload[-1] == 0xC0
+        legacy = bytes([0x94]) + payload[1:-1]
+        decoded = pts.decode_action(action_type, legacy)
+        assert decoded["amount"] == 100_000
+        assert decoded["locator"] is None

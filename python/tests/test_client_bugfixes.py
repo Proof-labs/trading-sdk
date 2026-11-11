@@ -9,12 +9,16 @@ with the falsy constructor defaults (`gateway_url=""`, `timeout_secs=0`).
 
 from __future__ import annotations
 
+import hashlib
+
 import httpx
 import pytest
 
 from proof_trading_sdk.client import ExchangeClient
 from proof_trading_sdk.errors import (
     EngineError,
+    GatewayError,
+    PreAdmissionRefusal,
     SubmissionPending,
     TransportError,
 )
@@ -40,16 +44,117 @@ def test_submit_action_400_raises():
     assert exc.value.status_code == 400
 
 
-def test_submit_action_error_status_no_code_raises():
-    # 200 body carrying no `code` and no hash, but an explicit error status:
-    # NOT code-0 success. With no leading "<code>: " in the text the engine code
-    # falls back to 1 (DecodeError), matching the TypeScript binding.
+def test_submit_action_400_refusal_is_a_refusal_not_a_transport_error():
+    # Reading an HTTP 400 refusal envelope keeps the gateway's errorCode and
+    # message instead of flattening them into transport text.
     def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"status": "error", "message": "rejected"})
+        return httpx.Response(
+            400,
+            json={
+                "status": "refused",
+                "error": 'invalid market ticker "btc": ticker must start with a capital letter A-Z',
+                "errorCode": "InvalidRequest",
+            },
+        )
 
-    with pytest.raises(EngineError) as exc:
+    with pytest.raises(PreAdmissionRefusal) as exc:
         _client(handler).submit_action(b"\x00")
-    assert exc.value.code == 1
+    assert exc.value.error_code == "InvalidRequest"
+    assert exc.value.status_code == 400
+    assert "invalid market ticker" in exc.value.message
+    assert not isinstance(exc.value, (EngineError, TransportError))
+
+
+def test_submit_action_legacy_200_refusal_is_not_an_engine_rejection():
+    # Legacy HTTP 200 refusal envelopes carry no engine verdict.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "refused",
+                "error": "internal encoding error",
+                "errorCode": "EncodingError",
+            },
+        )
+
+    with pytest.raises(PreAdmissionRefusal) as exc:
+        _client(handler).submit_action(b"\x00")
+    assert exc.value.error_code == "EncodingError"
+    assert exc.value.status_code == 200
+    assert not isinstance(exc.value, EngineError)
+
+
+def test_submit_action_refusal_naming_a_hash_is_pending_not_refused():
+    # A refusal that names a hash contradicts itself, so it proves nothing
+    # about whether the tx was broadcast: reconcile rather than declare a
+    # refusal.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "status": "refused",
+                "error": "contradictory",
+                "errorCode": "InvalidRequest",
+                "txHash": "0xdead",
+            },
+        )
+
+    with pytest.raises(SubmissionPending) as exc:
+        _client(handler).submit_action(b"\x00")
+    assert exc.value.tx_hash == hashlib.sha256(b"\x00").hexdigest().upper()
+
+
+def test_submit_action_refusal_naming_a_code_is_pending_not_an_engine_reject():
+    # "Nothing was broadcast" plus an execution code proves neither. Reconcile
+    # the bytes actually sent — reporting the code would announce an engine
+    # rejection for a tx that may be in flight.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "refused",
+                "error": "contradictory",
+                "errorCode": "InvalidRequest",
+                "code": 12,
+            },
+        )
+
+    with pytest.raises(SubmissionPending) as exc:
+        _client(handler).submit_action(b"\x00")
+    assert exc.value.tx_hash == hashlib.sha256(b"\x00").hexdigest().upper()
+
+
+def test_submit_action_503_refusal_stays_a_gateway_error():
+    # Valid overload refusals keep their existing GatewayError classification.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            503,
+            json={
+                "status": "refused",
+                "error": "service overloaded",
+                "errorCode": "Overloaded",
+            },
+        )
+
+    with pytest.raises(GatewayError):
+        _client(handler).submit_action(b"\x00")
+
+
+@pytest.mark.parametrize("body", [
+    {"status": "error", "message": "rejected"},
+    {"status": "error"},
+    {"error": "park deadline exceeded"},
+    {"message": "upstream timeout"},
+    {"error": "0: not a rejection"},
+])
+def test_submit_action_error_without_engine_code_is_pending(body):
+    # An answer without an explicit non-zero engine code proves no rejection.
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    with pytest.raises(SubmissionPending) as exc:
+        _client(handler).submit_action(b"\x00")
+    assert exc.value.tx_hash == hashlib.sha256(b"\x00").hexdigest().upper()
 
 
 def test_submit_action_error_string_recovers_leading_engine_code():
@@ -167,37 +272,36 @@ def test_submit_action_json_string_body_does_not_crash():
     assert exc.value.code == 12
 
 
-def test_submit_action_bare_error_string_without_code_is_engine_error():
-    """No leading "<code>: " still means a rejection, not a transport failure.
-
-    Classifying a terminal engine rejection as transport would invite the caller
-    to retry a submit that will never succeed. Falls back to code 1, matching
-    the TypeScript binding.
-    """
+def test_submit_action_bare_error_string_without_code_is_pending():
+    """An unstructured string without a code does not establish a verdict."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, text="signature verification failed")
 
-    with pytest.raises(EngineError) as exc:
+    with pytest.raises(SubmissionPending) as exc:
         _client(handler).submit_action(b"\x00")
-    assert exc.value.code == 1
-    assert "signature verification failed" in str(exc.value)
+    assert "reconcile" in str(exc.value)
 
 
-def test_submit_action_json_string_without_code_is_engine_error():
+def test_submit_action_json_string_without_code_is_pending():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json="signature verification failed")
 
-    with pytest.raises(EngineError) as exc:
+    with pytest.raises(SubmissionPending) as exc:
         _client(handler).submit_action(b"\x00")
-    assert exc.value.code == 1
+    assert exc.value.tx_hash
 
 
 def test_submit_action_json_list_body_does_not_crash():
-    # Not an object: must not reach .get(). Classified like any other non-object
-    # 2xx body rather than raising AttributeError.
+    # A JSON list is not a verdict, and must not reach .get().
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[1, 2, 3])
 
-    with pytest.raises(EngineError):
+    with pytest.raises(SubmissionPending):
         _client(handler).submit_action(b"\x00")
+
+
+def test_pre_admission_refusal_is_exported_from_the_package():
+    import proof_trading_sdk as pts
+
+    assert pts.PreAdmissionRefusal is PreAdmissionRefusal

@@ -1,5 +1,33 @@
 # Proof Trading SDK
 
+### Atomic financial evidence (TypeScript 4.2)
+
+`client.queryFinancialState({ markets: [1], owners: [ownerHex] })` reads one
+finalized-store snapshot through the gateway only. Select 1–8 markets and 1–8
+owners; inputs are copied, sorted and canonicalized, with duplicates rejected.
+The response includes exact selected market fee/funding settings, raw account
+balances and positions, the fee pool, selected markets' insurance pools, and
+optional PLP configuration. The PLP account is automatically included once.
+All integers retain precision and absent stored values remain `null`; at most
+2048 positions total and a one-MiB HTTP response are accepted, within five seconds.
+A framing-only preflight also bounds nesting and aggregate value slots before
+the maintained MessagePack decoder allocates containers; values are not decoded
+by a second codec.
+
+This is not equity, accrued-funding valuation, solvency or trading/withdrawal
+authorization. `feesAccrued` is a lifetime fee/rebate counter, not cash.
+`plp.bootstrapBalance` is a historical baseline, not additional PLP funds;
+actual PLP cash is only its account balance. Do not double-count either field.
+Other endpoints must be bracketed at the same `finalizedHeight` for cross-read
+comparisons; the method does not claim a historical-height query parameter.
+
+`queryAccountState(ownerHex?)` reads exact finalized settled balance and raw
+positions through the gateway, without oracle valuation. Its bigint values are
+not equity, accrued funding, available collateral or authorization. When
+`queryAccount` fails closed during unsafe oracle conditions, show valuation as
+unavailable; do not substitute this raw cash balance as healthy equity. Match
+`finalizedHeight` across bracketed reads for a coherent economic snapshot.
+
 TypeScript SDK for the [Proof Exchange](https://proof.trade): Ed25519 signing,
 MessagePack codec, timestamp-nonce allocation, and gateway/CometBFT submission
 for every exchange action.
@@ -17,7 +45,7 @@ generate-key → fund → place-order → cancel flow.
 ## Install
 
 ```bash
-npm install @proof/trading-sdk
+npm install @proof-labs/trading-sdk
 ```
 
 ## Connect to the devnet
@@ -33,7 +61,11 @@ The SDK ships configured for the Proof devnet out of the box:
 **Key generation (no server needed):**
 
 ```typescript
-import { generateKeypair, pubkeyToOwner, ownerToHex } from "@proof/trading-sdk";
+import {
+  generateKeypair,
+  pubkeyToOwner,
+  ownerToHex,
+} from "@proof-labs/trading-sdk";
 
 const { publicKey, privateKey } = generateKeypair();
 const address = pubkeyToOwner(publicKey);
@@ -65,7 +97,7 @@ import {
   generateKeypair,
   pubkeyToOwner,
   ownerToHex,
-} from "@proof/trading-sdk";
+} from "@proof-labs/trading-sdk";
 
 const { publicKey, privateKey } = generateKeypair();
 const address = pubkeyToOwner(publicKey);
@@ -94,6 +126,11 @@ const result = await client.submitTx({
 
 console.log(result); // { code: 0, hash: "…" } on success
 ```
+
+> Reads decode MessagePack through the same WASM core as signing (a strict,
+> type-preserving preflight runs before the value decode), so even a read-only
+> client loads the WASM module on its first read. `await client.ready()`
+> remains optional and additionally pre-resolves the chain-id binding.
 
 ## Unit Conventions
 
@@ -144,16 +181,21 @@ class ExchangeClient {
 
   // Reads
   queryOrderbook(market: number): Promise<Orderbook>;
+  queryFunding(market: number): Promise<FundingInfo>;
   queryOpenOrders(addressHex?: string): Promise<OpenOrder[]>;
   queryMarkets(): Promise<MarketConfig[]>;
+  queryMarketsSnapshot(): Promise<MarketsSnapshot>;
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
   queryHealth(): Promise<{ status: string; height: number }>;
+  queryOraclePermissions(market: number): Promise<OraclePermissions>;
   queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null>;
   queryPositionTriggers(addressHex?: string): Promise<PositionTriggerInfo[]>;
   queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]>;
+  // Deprecated: GET /v1/triggers/status is deleted upstream; see below.
   queryTriggerStatus(): Promise<TriggerStatus>;
   queryPositionTriggerHistory(addressHex?: string, filters?: PositionTriggerHistoryFilters): Promise<PositionTriggerHistoryPage>;
   queryTriggerMarketHistory(market: number, filters?: TriggerMarketHistoryFilters): Promise<TriggerMarketHistoryPage>;
+  queryLiquidationConfig(): Promise<LiquidationConfigInfo>;
 
   // Owner defaults to signer; version-active agents pass delegated owner.
   setPositionTriggers(params: Omit<SetPositionTriggers, "owner"> & { owner?: Uint8Array }): Promise<TxResult>;
@@ -164,18 +206,284 @@ class ExchangeClient {
   queryHistoryWithdrawals(...): Promise<HistoryCashFlow[]>;
   queryHistoryResolutions(...): Promise<HistoryResolution[]>;
   queryHistoryPositions(...): Promise<HistoryPositionSnapshot[]>;
+  queryHistoryPositionsPage(...): Promise<HistoryPositionsPage>;
+  queryLiquidationHistory(addressHex?: string, filters?: LiquidationHistoryFilters): Promise<LiquidationHistoryPage>;
 
   // Blocks
   getBlock(height?: number): Promise<Record<string, unknown>>;
   getBlockResults(height: number): Promise<Record<string, unknown>>;
 
-  // Streams (gateway-native; mirror the Python SDK)
-  subscribeAccountEvents(owner: Uint8Array | string, onEvent: (e: Record<string, unknown>) => void, opts?: WsStreamOptions): () => void;
-  subscribeOrderbookDeltas(market: number, onMessage: (m: Record<string, unknown>) => void, opts?: WsStreamOptions): () => void;
-  orderbookSnapshot(market: number): Promise<Record<string, unknown>>;
+  // Streams (gateway-native)
+  subscribeAccount(onFrame: (f: AccountFrame) => void, opts?: { owner?: string; auth?: false; recover?: boolean; onRecovery?: (s: AccountRecoveryStatus) => void }): () => void;
+  subscribeOrderbook(market: number, onFrame: (f: OrderbookFrame) => void): () => void;
+  subscribeTrades(market: number, onFrame: (f: TradeFrame) => void): () => void;
+  orderbookSnapshot(market: number, timeoutMs?: number): Promise<OrderbookSnapshotFrame>;
   disconnect(): void;
 }
 ```
+
+For chain-pinned, atomic committed market inventory, see
+[the snapshot guide](docs/market-snapshot.md). The optional Rust `gateway`
+feature additionally provides committed-time and exact-hash receipt reads plus
+one-shot submission of already-signed bytes. It does not manage a caller's
+durable journal, nonce allocation, retries or cutover authority.
+
+`queryOraclePermissions(market)` reads one underlying perp's committed oracle
+policy, calendar epoch and verdict at an exact finalized height. It preserves
+u64 values as `bigint`; with no committed verdict the read is `Unavailable`
+with an `Unavailable` permission. `Satisfied` covers only this oracle dependency, not all
+portfolio dependencies or other trading checks. It never reads provider/observer
+health; feeder freshness is a separate operational read, described below.
+
+The verdict carries the `selected` slot (`"Primary"` or `"Fallback"`) and a
+`diagnostics` bitset (`diagnosticFlags`: `OnFallback`,
+`PrimaryRefusedDivergence`, `DivergenceUnchecked`, `FallbackUnusable`), which
+are monitoring signals rather than faults. `faults` follows
+`ORACLE_FAULT_BITS`, named in `faultReasons`; `Disagreement` and
+`PairTimeMismatch` keep their bits but are no longer produced.
+
+### Resting order fields
+
+`queryOpenOrders(owner)` and Python `open_orders(owner)` read the gateway's
+`POST /info` `openOrders` response through the same Rust decoder. TypeScript
+returns camelCase fields; Python returns snake_case fields.
+
+| TypeScript                           | Python                                 | Value                                                              |
+| ------------------------------------ | -------------------------------------- | ------------------------------------------------------------------ |
+| `id`, `price`, `quantity`            | same                                   | Exact `bigint` / `int`; quantity is remaining size                 |
+| `market`, `owner`, `side`            | same                                   | Market number, 20-byte `Uint8Array` / `bytes`, `Buy` or `Sell`     |
+| `clientOrderId`                      | `client_order_id`                      | Exact `bigint` / `int`, or `null` / `None`; stored zero stays zero |
+| `originalQuantity`, `filledQuantity` | `original_quantity`, `filled_quantity` | Exact `bigint` / `int`                                             |
+| `createdAtMs`, `queuePriority`       | `created_at_ms`, `queue_priority`      | Exact `bigint` / `int`                                             |
+| `timeInForce`                        | `time_in_force`                        | `Gtc`, `Ioc` or `Fok`; currently only `Gtc` rests                  |
+| `postOnly`, `reduceOnly`             | `post_only`, `reduce_only`             | Booleans                                                           |
+
+Legacy six-field records default to an absent client ID, zero metadata, `Gtc`,
+and false flags. Zero placement time means unrecorded; zero queue priority is
+legacy metadata whose effective priority falls back to `id`.
+
+Malformed or wrong-owner responses, duplicate/out-of-order IDs, zero remaining
+quantity, and decoded payloads over 1 MiB throw (`Error` in TypeScript,
+`CodecError` in Python). A valid empty list returns `[]`. This read sends no
+`limit`, and the gateway refuses a response body over 1 MiB rather than returning
+a shorter list, so a very large account gets an error. The read does not verify a
+finalized witness.
+
+### Open-order migration
+
+This change requires the next TypeScript MAJOR release. Code that constructs
+`OpenOrder` objects (including test fixtures) must supply these eight added fields.
+For fixtures representing legacy six-field records, use:
+
+```typescript
+const order: OpenOrder = {
+  ...legacyOrder, // id, market, owner, side, price, quantity
+  clientOrderId: null,
+  originalQuantity: 0n,
+  filledQuantity: 0n,
+  createdAtMs: 0n,
+  queuePriority: 0n,
+  timeInForce: "Gtc",
+  postOnly: false,
+  reduceOnly: false,
+};
+```
+
+Preserve actual metadata when it is available; these defaults describe legacy
+records, not newly placed orders.
+
+Handle read failures separately from an empty account in both SDKs. A valid
+empty response still returns `[]`, but malformed or wrong-owner data now raises
+an error. Remove fallbacks such as `.catch(() => [])` that disguise a failed read
+as an account with no orders. TypeScript callers must also stop passing an empty
+owner string: `queryOpenOrders("")` now throws.
+
+### Trading No on an event's binary book
+
+Each event has one binary book, priced in Yes (`EventInfo.ebyMarket`). Buying
+No at `q` is selling Yes at `$1 − q`, so the SDK places No orders as their Yes
+mirror:
+
+```typescript
+await client.buyNo({ market: event.ebyMarket, price: 400_000n, quantity: 10n }); // Yes sell at 0.60
+await client.sellNo({
+  market: event.ebyMarket,
+  price: 300_000n,
+  quantity: 10n,
+  reduceOnly: true,
+}); // reduce-only Yes buy at 0.70
+```
+
+`stopLoss`/`takeProfit` take No trigger prices and keep their role on the
+mirrored Yes position (a stop at No 0.30 becomes a stop at Yes 0.70); their
+`maxSlippageBps` applies to the Yes price. A No price of 0 or `$1` has no Yes
+mirror and throws `BinaryPriceError` before anything is sent. `yesOrder`,
+`yesLimb` and `binaryPositionView` expose the same translation, and the view
+reads a short Yes position as No at `$1 − entry`. All of it is pinned against
+the Rust core by `conformance/binary.ndjson`.
+
+### Oracle freshness for trading UIs
+
+```typescript
+const response = await client.reads().oracleHealth({ market: 3, signal });
+const health = await response.json();
+```
+
+With `market`, a 10.3.0+ gateway returns the same object cut to that market's
+row (~1 KB instead of the full feeder state); omit it for every market. Older
+gateways do not accept the query. The cut drops `failover` and `inventory`, and
+its `status` is the feeder's 60-second rule, not the engine's per-market age
+gate: use it for a UI freshness poll, and the bare path for monitoring and
+maker guards.
+
+This forwards `GET /v1/oracle/health` through the configured gateway, preserving
+the response body, HTTP errors and cancellation. The Web-UI uses feeder freshness
+for its existing delay warnings and order guards. Thresholds and display policy
+remain in the application; `status: "ok"` alone does not mean fresh data, and
+`embedded_feeder: false` must remain unavailable. This is operational evidence,
+not trading authorization. Like every other gateway interaction, admin calls
+included, it goes through the SDK
+([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md)).
+
+### Indexed Explorer history
+
+```typescript
+const reads = client.reads();
+const status = await (await reads.historyStatus({ signal })).json();
+const page = await (
+  await reads.historyBlocks({ limit: 20 }, { signal })
+).json();
+if (page.next_cursor) {
+  const nextPage = await (
+    await reads.historyBlocks(
+      { limit: 20, cursor: page.next_cursor },
+      { signal },
+    )
+  ).json();
+}
+const block = await (await reads.historyBlock("2244103", { signal })).json();
+if (block.transactions.length) {
+  const tx = await (
+    await reads.historyTransaction(block.transactions[0].hash, { signal })
+  ).json();
+}
+```
+
+These read `/v1/history/status`, `/v1/history/blocks`,
+`/v1/history/blocks/{height-or-hash}` and `/v1/history/txs/{hash}` through the
+configured gateway. They return unmodified `Response` objects and preserve
+HTTP errors and cancellation. Block pages contain `blocks` and opaque
+`next_cursor`; block details include ordered `transactions`. There is no global
+transaction list. Transaction detail preserves `code` (zero is success) and
+`raw_tx` (base64 committed signed bytes).
+
+Indexer backfill and freshness are distinct from chain progress.
+`historyStatus()` bypasses HTTP caches; check it before presenting an empty
+history as definitive, since an indexer that has not caught up returns empty
+pages too. Use the status response and block timestamps to present delay; a missing indexed record remains
+HTTP 404, and unavailable history remains an error. These reads never fabricate
+blocks or replace errors with empty results.
+
+### Candle and order-book mid history
+
+```typescript
+const reads = client.reads();
+const window = { market: 7400, resolution: "5m", limit: 1500 };
+const trades = await (await reads.candles(window, { signal })).json();
+const mid = await (await reads.bbo(window, { signal })).json();
+```
+
+`candles()` reads `/v1/history/candles` (trade-price OHLC); `bbo()` reads
+`/v1/history/bbo`, the same candles envelope built from the indexer's stored
+best-bid/offer samples: OHLC of `(bid + ask) / 2`, each bucket also carrying
+its closing `bid` and `ask`. A bucket with no two-sided sample is absent, so a
+mid series can have gaps a trade series does not. Both take
+`CandleHistoryParams` (`market`, `resolution`, optional ISO `from` / `to`,
+`limit`, opaque `cursor`), return unmodified `Response` objects and preserve
+HTTP errors and cancellation.
+
+### Loaded engine identity
+
+For operational artifact evidence, `await client.reads().version({ signal })`
+forwards `GET /v1/version` with `cache: "no-store"`. The raw response includes
+the upstream node's reported loaded engine version and library hash. A missing
+route, authentication failure or transport failure stays an error; there is no
+direct-node fallback. This identifies only the responding upstream, not every
+validator, and does not prove consensus compatibility or authorize a rollout. Use
+`queryNodeVersion()` for a decoded `NodeVersion`.
+
+### Optional native Rust gateway transport
+
+Rust `proof-trading-sdk` 3.2.0 exposes `gateway::GatewayClient` with the optional
+`gateway` feature. Default codec/WASM builds do not acquire an HTTP transport.
+The four explicit operations are `chain_identity`, `oracle_permissions`,
+`submit_signed_bytes` and `committed_receipt`; they use only the existing gateway
+routes, with no direct-node fallback, signing, nonce allocation or hidden retry.
+
+Configure an HTTPS origin (HTTP requires a URL-normalized loopback IP, not a DNS
+name; numeric IPv4 aliases that normalize to loopback are allowed), a
+1ms–60s total request deadline and a response cap no larger than 1MiB. Defaults
+are 10 seconds and 256KiB. Redirects, environment proxies and automatic retries
+are disabled. An optional API key is sent only in `X-Api-Key` and is redacted
+from diagnostics. Signed input is limited to 4096 bytes, fitting the gateway's
+default JSON body cap after base64 encoding. These are client resource bounds,
+not production admission policy.
+
+`SubmissionOutcome` distinguishes committed execution, CheckTx rejection,
+pending execution and explicit pre-admission rejection. A transport/error body
+or hash mismatch retains `GatewayError.reconcile_hash`: the transaction may
+have landed, so retain its exact bytes and reconcile rather than re-sign.
+`committed_receipt` requires the requested hash and a positive committed height;
+not-found/not-indexed errors never clear pending state. A code-zero receipt is
+execution success, **not** an oracle permission certificate. Retry-After remains
+an exact delay, an absolute HTTP date, or explicitly `Invalid`; callers must not
+discard an invalid header and retry immediately.
+
+`submit_signed_bytes_with_evidence` adds strict **per-attempt** refusal evidence
+without changing the original method's behaviour. It returns
+`SubmissionEvidence`, a `Submission<PreAdmissionRefusal>`: every outcome keeps
+the locally calculated hash, and only `RejectedBeforeAdmission` carries the
+typed `refusal`, so a refusal cannot disagree with its outcome. The original
+method returns `Submission`, whose `RejectedBeforeAdmission` carries
+`refusal: ()`. The gateway's `status` states where the submission ended
+(`ok`, `error`, `refused`, `pending`) and the SDK reads only that: a
+`refused` answer is a refusal, named by its `errorCode` (authorization, rate
+limiting, maintenance, admission overload/verifier disconnection, unreadable
+request). `error` text is never read, and nothing is inferred from which
+fields are present. A body that states none of the four, a `refused` answer
+with an `errorCode` this SDK does not know, or one that contradicts itself
+(a `txHash` or `code` on a refusal) remains unresolved. Maintenance requires
+the `paused` or `cancel-only` mode. These contracts are checked against
+api-gateway 7.0.0 ([api-gateway#220](https://github.com/Proof-labs/api-gateway/pull/220);
+`src/server.rs`, `src/exchange.rs`, `src/types/exchange_response.rs`). Qualify
+the actual deployed gateway image against that contract before using the
+evidence operationally; a loopback fixture is not deployment qualification.
+
+A refusal describes **this one request only**. The SDK does not know a
+journal's earlier attempts: preserve any previous ambiguity, and retire an
+entry on this evidence only after independently establishing the sole-attempt
+condition. Neither method retries, re-signs, allocates a nonce or changes live
+state beyond the caller-requested POST. Receipts remain exact-hash reads;
+not-found is never proof that the transaction cannot execute.
+
+The evidence method retains a `Retry-After` header even if it is invalid or
+duplicated. Only an absent header uses JSON `retryAfterMs`, rounding **up** to
+the existing whole-second representation without overflow or shortening. Null,
+negative, fractional, non-numeric, duplicate or overflowing JSON delay values
+are invalid, not an absent hint; invalid rate-limit bodies do not qualify as
+pre-admission evidence. The caller owns its quiet period and reconciliation;
+this SDK performs no sleep or automatic resubmission.
+
+For a deliberately read-only local contract probe, with no signing/key inputs:
+
+```sh
+cargo run -p proof-trading-sdk --features gateway --example gateway_oracle_probe -- \
+  http://127.0.0.1:9080 EXPECTED_CHAIN 1
+```
+
+It checks chain identity before the permission read and reports both heights;
+sequential reads are not a single atomic snapshot. Neither a successful probe
+nor a committed market permission authorizes a portfolio action or release.
 
 Position triggers are exact-position-generation brackets. For an existing
 bracket, `queryPositionTriggers()` returns its epoch; first attach must use the
@@ -192,9 +500,14 @@ absence means disabled. The optional pending policy is shown with its accepted
 and next-block effective heights. The SDK rejects malformed, empty, unsorted,
 or version-skipping policy state rather than inventing a default.
 
-`queryTriggerStatus()` reports the fail-closed next-height activation
-predicate. `queryPositionTriggerHistory()` returns immutable owner-bearing
-lifecycle events; `queryTriggerMarketHistory()` returns the shared market
+`queryTriggerStatus()` is deprecated: `GET /v1/triggers/status` is deleted
+upstream (the node dropped it with its activation gates, exchange#619,
+genesis-first; the gateway drops it in gateway 4.0.0, api-gateway#175). Trigger
+actions are permanently active, so there is nothing to read, and the call
+rejects with an `API error` once a gateway or node stops serving the route. It
+will be removed in the next major version.
+`queryPositionTriggerHistory()` returns immutable owner-bearing lifecycle
+events; `queryTriggerMarketHistory()` returns the shared market
 deferred/resumed stream. Both history methods always use the gateway, return an
 opaque filter-bound cursor, and preserve every coordinate/id as a decimal
 string—pass those strings and the cursor through unchanged.
@@ -204,7 +517,7 @@ string—pass those strings and the cursor through unchanged.
 The `Action` type is a discriminated union. Every action is:
 
 ```typescript
-type Action = TraderAction | OperatorAction;
+type Action = TraderAction | OperatorAction | GovernanceAction;
 
 type TraderAction =
   | { type: "PlaceOrder"; data: PlaceOrder }
@@ -222,13 +535,28 @@ keep operator actions out of autocomplete. `submitTx` still accepts the full
 
 #### Operator actions (privileged)
 
-`OperatorAction` covers oracle-relay / composite-CEX-feeder / relayer-admin
-actions — e.g. `OracleUpdate`, `OracleUpdateComposite`, `UpdateMarketFees`,
-`CreateMarket`. **A trading integration never needs these.** Each is gated by a
-dedicated engine allowlist, so codec availability grants nothing without an
-operator-provisioned key. See [AGENTS.md](AGENTS.md) → "Operator actions" for
-usage (e.g. driving the BE-31 multi-source mark via `OracleUpdateComposite` +
-`UpdateMarketFees` `markSourceMode`).
+`OperatorAction` covers oracle-feeder / relayer-admin actions — e.g.
+`SubmitOracleObservation`, `UpdateMarketFees`, `CreateMarket`. **A trading
+integration never needs these.** Each is gated by a dedicated engine allowlist
+or the market's oracle policy, so codec availability grants nothing without an
+operator-provisioned key. See [AGENTS.md](AGENTS.md) → "Operator actions".
+
+#### Governance actions (admin multisig)
+
+`GovernanceAction` covers the signer-registry multisig:
+
+```typescript
+type GovernanceAction =
+  | { type: "ProposeAdminAction"; data: ProposeAdminAction }
+  | { type: "ApproveAdminAction"; data: ApproveAdminAction }
+  | { type: "RejectAdminAction"; data: RejectAdminAction }
+  | { type: "EmergencyAdminAction"; data: EmergencyAdminAction };
+```
+
+`ProposeAdminAction` and `ApproveAdminAction` carry one `AdminAction` (create a
+market, attach a conditional, schedule an upgrade, and the rest);
+`EmergencyAdminAction` carries one single-signer `EmergencyAction`. Each is
+refused unless the signer is in the current admin signer registry.
 
 ### Options
 
@@ -281,16 +609,26 @@ loop at 9 s+ under load.
 
 The SDK reads that shape and stops working for it:
 
-| Gateway answers      | `TxResult`                                | Does the SDK poll?                                                                                                                                                                                                         |
-| -------------------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `code` + `height`    | `ok` / `engine`, with `height` + `events` | **No** — the tx executed; there is nothing to wait for                                                                                                                                                                     |
-| `code`, no `height`  | `engine`                                  | **No** — a CheckTx reject never enters a block, so no DeliverTx will run                                                                                                                                                   |
-| `txHash`, no `code`  | `timeout`                                 | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection |
-| `{status:"ok"}` only | `ok`, no `height`                         | **Yes** — a pre-#90 gateway acks CheckTx only, so inclusion is still unknown                                                                                                                                               |
+| Gateway answers                                               | `TxResult`                                                                               | Does the SDK poll?                                                                                                                                                                                                             |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| HTTP 200 engine verdict with `code` and `height`              | `ok` / `engine`, with `height` + `events`                                                | **No** — execution is known.                                                                                                                                                                                                   |
+| HTTP 200 `status: error`, nonzero numeric `code`, no `height` | `engine`                                                                                 | **No** — a terminal rejection.                                                                                                                                                                                                 |
+| `status: pending`                                             | `timeout`                                                                                | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection     |
+| Valid `status: refused` envelope                              | `transport` (code 1 for HTTP 200, else the HTTP status), gateway `errorCode` and message | **No** — this attempt was not admitted. Correct `InvalidRequest`; `EncodingError` is a gateway failure. Any later retry depends on the reason, not HTTP status alone. Earlier ambiguous attempts still require reconciliation. |
+| Malformed or contradictory refusal                            | `timeout`, local transaction hash                                                        | **Yes** — the response does not prove non-admission.                                                                                                                                                                           |
+| Other legacy or proxy response                                | Compatibility decoding or HTTP fallback                                                  | Only unresolved submissions are reconciled; an HTTP error is not an engine verdict.                                                                                                                                            |
 
-That last row is why upgrading the SDK is safe against a gateway that has not been
-upgraded yet: absence of `code`/`height` still means "execution unknown", and the old
-polling paths run exactly as before.
+A legacy HTTP 200 `{status:"ok"}` without `code` or `height` remains a CheckTx
+acknowledgement, not proof of execution, so inclusion is still polled.
+
+Python raises `PreAdmissionRefusal` for validated admission refusals and internal
+`EncodingError` refusals, including HTTP 500. Catch it for those responses rather
+than treating them as ambiguous submissions or unstructured transport errors;
+its `error_code`, `message` and
+`status_code` preserve the gateway reason. Refusals at HTTP 401, 403, 429 and other
+5xx responses, including `Maintenance` and `Unavailable`, keep their existing
+exceptions. `SubmissionPending.tx_hash` is the
+hash to reconcile when a refusal is malformed or contradictory.
 
 **Read `code` from the field, not from the message.** The gateway still sends the
 long-standing `"<code>: <message>"` format in `error` (so older clients that parse the
@@ -299,28 +637,33 @@ code should read the structured `code` field: it is authoritative and needs no p
 
 ## WebSocket streams
 
-The SDK exposes the gateway's native multiplexed feed — the same two streams
-as the Python SDK. Each subscription opens its own connection, auto-reconnects
-with exponential backoff (500ms → 30s, ±25% jitter), and returns an
-unsubscribe function. `disconnect()` tears down every open stream.
+The SDK exposes the gateway's native multiplexed feed on `/ws`. Account
+events, trades and the orderbook are channels on that one shared connection
+(`subscribeAccount`, `subscribeTrades`, `subscribeOrderbook`). The connection
+auto-reconnects and re-subscribes; every subscription returns an unsubscribe
+function, and `disconnect()` closes the feed.
 
 The WS base URL defaults to `gatewayUrl` with its scheme swapped to `ws`/`wss`.
 If your local stack serves WebSockets on a separate port, set `wsUrl`
 explicitly (e.g. `ws://localhost:9091`).
 
 ```typescript
-// Account events: snapshot frame, then incremental events. The SDK tracks
-// the highest event_id and replays via after_id on reconnect (no gaps).
-const unsub = client.subscribeAccountEvents(address, (event) => {
-  console.log(event.event_type, event);
+// Account events: a snapshot frame, then live event frames
+// (`orderUpdate`, `fill`, `positionUpdate`, liquidation events, ...).
+// Defaults to the connected signer's address; pass `owner` to watch another.
+const unsub = client.subscribeAccount((frame) => {
+  if (frame.type === "snapshot") return;
+  console.log(frame.type, frame.eventType, frame.payload);
 });
 
-// L2 orderbook: first frame is a full `l2Book` snapshot, then deltas.
-const unsubBook = client.subscribeOrderbookDeltas(1, (msg) => {
-  console.log(msg);
+// Orderbook: a `snapshot` frame (`bids` / `asks` levels), then one `update`
+// frame per changed level (a zero `totalQuantity` empties the level).
+const unsubBook = client.subscribeOrderbook(1, (frame) => {
+  console.log(frame);
 });
 
-// One-shot snapshot (opens, reads the first l2Book frame, closes):
+// One-shot snapshot over a connection of its own (never a cached book);
+// rejects with FeedSubscriptionError when the gateway refuses the market:
 const book = await client.orderbookSnapshot(1);
 
 // later:
@@ -329,14 +672,37 @@ unsubBook();
 client.disconnect(); // closes everything
 ```
 
-`WsStreamOptions` (third arg) takes `onError?: (err) => void` and
-`reconnectBackoffMaxMs?: number`.
+**Reconnect recovery.** A reconnect restores the account snapshot and, by
+default, the account events missed while disconnected: the SDK reads
+`/v1/history/account-events` back to the last event it delivered (or to the
+previous snapshot's `height` when none was delivered), delivers the newer rows
+in history order (marked `backfilled: true`), then the live frames that
+arrived meanwhile, skipping any that history already delivered. It retries
+while `/v1/history/status` shows history has not indexed up to the new
+snapshot's `height`. Events are matched on `height` + `txHash` +
+`eventIndex` + `eventType` + `txIndex`, a missing position matching any,
+since history serves `tx_position` only when one block carries the same
+transaction hash more than once. The settlement names
+`conditional_settled` /
+`conditional_voided` read as their canonical history names `condition_met` /
+`condition_not_met`. A snapshot marked `snapshot: "resent"` (sent because
+another listener joined) is not a reconnect. `onRecovery` reports each
+reconnect's outcome once: `backfilled`, `unverified` (the snapshot carries no
+`height`, so history's coverage cannot be checked), `unsupported` (a gateway
+older than 7.9.0 sends no `txHash` / `eventIndex`; live delivery carries on),
+`boundaryNotFound`, `historyBehind` or `failed`. Pass `recover: false` to turn
+it off. Python's `AccountEventStream` does the same (`recover`,
+`on_recovery`, `RecoveryStatus`); build it with
+`client.account_event_stream(owner)` so its history reads use the gateway URL
+even when `/ws` is on its own port.
 
-**Auth.** Account streams require auth only when the gateway runs with
+**Auth.** Account subscriptions require auth only when the gateway runs with
 `--api-key`. Because a browser `WebSocket` cannot send the `X-Api-Key` header,
-the SDK uses the gateway's signed-query auth: with a private key loaded
-(`setPrivateKey`) it signs the stream-auth message and appends `public_key` /
-`signature` / `timestamp_ms` to the URL automatically. Against an
+the SDK uses the gateway's signed subscription auth: with a private key or
+external signer connected it signs the stream-auth message and adds
+`public_key` / `signature` / `timestamp_ms` to the `accountEvents` subscribe
+message automatically, re-signing on every reconnect. Pass `auth: false` for an
+unsigned watch-only subscription. Against an
 unauthenticated gateway (e.g. devnet) the owner alone suffices.
 
 ## Wire Format
@@ -385,3 +751,30 @@ See [AGENTS.md](AGENTS.md) for guidance on using this SDK with AI agents
 ## License
 
 Apache-2.0.
+
+### Rolling market statistics (F23/UI18)
+
+```typescript
+import { queryMarketStats } from "@proof-labs/trading-sdk";
+
+const snapshot = await queryMarketStats(client.reads(), [1, 2], { signal });
+```
+
+The batch accepts 1–50 distinct market IDs (0–2147483647) and uses
+`GET /v1/history/market-stats` through the configured gateway. The raw
+`client.reads().marketStats({ markets: [1, 2] }, { signal })` read preserves the
+upstream `Response`; the helper validates the response and requested market
+coverage. It returns a true trailing 24-hour window, including the start and
+excluding the end, together with the indexer's committed frontier and freshness.
+
+All numeric quantities remain strings: prices are integer micro-USDC; volume
+is available both as raw contracts and exact decimal USDC **dollars** already
+adjusted for the market's `sz_decimals`. Open interest is raw contracts **per
+side**, so divide each side by `10 ** sz_decimals` for base units; adding long
+and short double-counts matched exposure. Price change is signed decimal basis
+points relative to the last trade at or before the window start. A missing
+baseline leaves change null, even when volume is available. Treat null as
+unavailable, never zero. Top-level status describes frontier freshness; inspect
+market status, `unavailable_reason` and `open_interest_unavailable_reason` too.
+The server freshness budget is `stale_after_seconds`; the application must age
+cached responses and label stale data. None of these reads authorize trading.

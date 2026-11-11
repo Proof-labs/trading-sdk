@@ -34,49 +34,46 @@ function engineDefaultCreateMarket(): AdminAction {
       poolId: 0,
       szDecimals: 0,
       ticker: "",
+      tickSize: 1n,
+      lotSize: 1n,
       maxOpenInterest: 0n,
     },
   };
 }
 
-/** Mirrors the engine's admin-actions-v2 golden fixture
- *  (`admin_proposal_content_hash_v2_golden_vectors` in `codec.rs`) — the
- *  omitted trailers (oracleSource, description, rules) encode as
- *  nil / "" / "", exactly what the engine's instance carries. */
-function engineV2Impact(): AdminAction {
+/** Mirrors the engine's attach fixture (`admin_action_attach_and_batch_wire_vectors_frozen`
+ *  in `codec.rs`): event 91's conditional on perp 15, books from 9100, the
+ *  open-interest trailer at its zero default. */
+function engineV2Attach(): AdminAction {
   return {
-    kind: "CreateImpactMarket",
+    kind: "AttachConditional",
     value: {
-      impactMarketId: 91,
+      eventId: 91,
       underlyingMarket: 15,
       childMarketBase: 9_100,
-      question: "does it land?",
-      deadlineMs: 1_000_000n,
-      resolutionWindowMs: 1_000n,
       imBps: 3334,
       mmBps: 1667,
       takerFeeBps: 5,
       makerFeeBps: 2,
-      fundingIntervalMs: 0n,
-      maxFundingRateBps: 3000,
       signer: new Uint8Array(20),
+      maxOpenInterest: 0n,
     },
   };
 }
 
 /** The engine's golden batch: the default perp re-pointed at market 15,
- *  then the impact family above — one proposal, two creations. */
+ *  then its attachment above — one proposal, a perp and its conditional. */
 function engineV2Batch(): AdminAction {
   const perp = engineDefaultCreateMarket();
-  const impact = engineV2Impact();
-  if (perp.kind !== "CreateMarket" || impact.kind !== "CreateImpactMarket") {
+  const attach = engineV2Attach();
+  if (perp.kind !== "CreateMarket" || attach.kind !== "AttachConditional") {
     throw new Error("unreachable: fixture kinds are fixed");
   }
   return {
     kind: "Batch",
     value: [
       { kind: "CreateMarket", value: { ...perp.value, market: 15 } },
-      { kind: "CreateImpactMarket", value: impact.value },
+      { kind: "AttachConditional", value: attach.value },
     ],
   };
 }
@@ -104,7 +101,7 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
     const hash = adminProposalContentHash(goldenContext());
     expect(hash).toBeInstanceOf(Uint8Array);
     expect(bytesToHex(hash)).toBe(
-      "6cdd8d6843bb4026d396b9e80c9599530b0ac4f14862af0204794219f8f8cbea",
+      "a4de11bbe373974cae0de8f1116681cd7f08ecab07b007bea1067cbd0f19fb4f",
     );
   });
 
@@ -114,29 +111,112 @@ describe("adminProposalContentHash (engine golden vectors)", () => {
       registryVersion: 4n,
     });
     expect(bytesToHex(hash)).toBe(
-      "5fe2dd718a4aea63492a5ab95eee27588cc861c504643bf68ce3fdd2c45dab99",
+      "da916970c56796acd6cc8a67bfba8430598c94dafaf5b1eb54f40479a380be9c",
     );
   });
 
-  it("reproduces the engine's v2 impact hash bit-for-bit", () => {
+  it("reproduces the engine's attach hash bit-for-bit", () => {
     const hash = adminProposalContentHash({
       ...goldenContext(),
-      action: engineV2Impact(),
+      action: engineV2Attach(),
     });
     expect(bytesToHex(hash)).toBe(
-      "d57a7faa3a17aac647a0256c38f125f6bd0913d70013e185aeb322efaab9629e",
+      "3ffeb7f420cf9f4f50bade95919d885dfc590c7f8c92fb69eacc1704d4662be4",
     );
   });
 
   it("reproduces the engine's v2 batch hash bit-for-bit", () => {
     // Exercises the whole nested-enum path: the Batch arm's list payload,
-    // both item variants, and the impact trailers' default encoding.
+    // both item variants, and the attachment trailer's default encoding.
     const hash = adminProposalContentHash({
       ...goldenContext(),
       action: engineV2Batch(),
     });
     expect(bytesToHex(hash)).toBe(
-      "f9a9b17a53b52ad72c1703b583a0ed4ac70295244cbf31f74518d5177dd86e36",
+      "66a35d72765b3554acc039d0747f177680c1a1b08247ece47daa4a3492b9d0f7",
+    );
+  });
+
+  it("reproduces the unit-variant (UnpauseBridge) hash bit-for-bit", () => {
+    // The one admin action that is NOT a `{ Variant: … }` map: a fieldless
+    // unit variant, whose canonical bytes are the bare fixstr
+    // `ad 556e7061757365427269646765` ("UnpauseBridge"). That makes it the
+    // only arm exercising the bare-string branch of `adminActionToWasm`, so
+    // without this an approving client could recompute a hash the engine
+    // never produces and refuse every legitimate UnpauseBridge approval.
+    //
+    // exchange-core has no frozen content-hash vector for this arm yet, so the
+    // expected value is taken from the authority itself: exchange-wire's own
+    // `codec::admin_proposal_content_hash` over `AdminAction::UnpauseBridge`
+    // at the revision pinned in crates/proof-trading-sdk/Cargo.toml.
+    const hash = adminProposalContentHash({
+      ...goldenContext(),
+      action: { kind: "UnpauseBridge" },
+    });
+    expect(bytesToHex(hash)).toBe(
+      "ffa74c9323512ffb8272eea55fc49baf047f55aa8979e56e06229b57d1350f56",
+    );
+  });
+
+  it("reproduces the CancelAllOrdersForAccount hash bit-for-bit", () => {
+    // Struct variant with a 20-byte newtype address and an Option market.
+    // The expected value comes from exchange-wire's own
+    // `codec::admin_proposal_content_hash` at the pinned revision; the
+    // Python suite pins the identical constant.
+    const hash = adminProposalContentHash({
+      ...goldenContext(),
+      action: {
+        kind: "CancelAllOrdersForAccount",
+        value: { owner: new Uint8Array(20).fill(0xc1), market: 7 },
+      },
+    });
+    expect(bytesToHex(hash)).toBe(
+      "39ededb641adc0e8b9c8f2f0c77fdeb2cc1880b7b882e6d91912535bfd27465e",
+    );
+    // The unscoped twin: the Option None path through the same hash.
+    const unscoped = adminProposalContentHash({
+      ...goldenContext(),
+      action: {
+        kind: "CancelAllOrdersForAccount",
+        value: { owner: new Uint8Array(20).fill(0xc1), market: null },
+      },
+    });
+    expect(bytesToHex(unscoped)).toBe(
+      "4b9e5c528f5bf4578427fcb42018f3df7ce3239e4a3392c8e087230d5bb3358c",
+    );
+  });
+
+  it("reproduces the UpdateAuthoritySet hash bit-for-bit", () => {
+    // Struct variant with an externally-tagged bare-string domain and two
+    // address-array fields — the shapes `CancelAllOrdersForAccount` above
+    // doesn't exercise (a plain enum-name string, and `Vec<Address>`).
+    const added = adminProposalContentHash({
+      ...goldenContext(),
+      action: {
+        kind: "UpdateAuthoritySet",
+        value: {
+          domain: "MarketParams",
+          add: [new Uint8Array(20).fill(0xb2)],
+          remove: [],
+        },
+      },
+    });
+    expect(bytesToHex(added)).toBe(
+      "9f344b099fd7771f04d62f186595a5d58165463dcc638adcef71be9c35ea889f",
+    );
+    const removed = adminProposalContentHash({
+      ...goldenContext(),
+      action: {
+        kind: "UpdateAuthoritySet",
+        value: {
+          domain: "Relayer",
+          add: [],
+          remove: [new Uint8Array(20).fill(0xc3)],
+        },
+      },
+    });
+    expect(bytesToHex(removed)).toBe(
+      "a4f4828d828c4e3e5f50ea883568e63b21d49c620f4848542dec498a292b847d",
     );
   });
 

@@ -16,6 +16,7 @@ extern crate proof_trading_sdk as core_sdk;
 use core_sdk::codec;
 use core_sdk::crypto;
 use core_sdk::governance;
+use core_sdk::reads::{self, Shape, ACCOUNT_INFO, EVENT_INFO, MARKET_CONFIG};
 use core_sdk::types::ExecError;
 use wasm_bindgen::prelude::*;
 
@@ -56,6 +57,107 @@ pub fn decode_payload(action_type: u8, payload: &[u8]) -> Result<JsValue, JsErro
     // `types.ts` field types (number vs bigint).
     let ser = serde_wasm_bindgen::Serializer::new().serialize_large_number_types_as_bigints(true);
     codec::decode_payload_dyn(action_type, payload, &ser).map_err(to_js)
+}
+
+/// Strict, type-preserving MessagePack preflight for gateway read payloads.
+///
+/// Rejects the float families (`0xca` f32 / `0xcb` f64) that the JS decoder
+/// would otherwise fold into a plain number — letting an integral float pass a
+/// `Number.isSafeInteger` check where Python keeps it distinct — along with
+/// extensions, non-UTF-8 strings, duplicate map keys, over-deep nesting and
+/// trailing bytes. See `proof_trading_sdk::msgpack`.
+#[wasm_bindgen]
+pub fn reject_floats(bytes: &[u8]) -> Result<(), JsError> {
+    core_sdk::msgpack::reject_floats(bytes).map_err(|e| JsError::new(&e.to_string()))
+}
+
+fn to_bigint_js<T: serde::Serialize>(value: &T) -> Result<JsValue, JsError> {
+    let ser = serde_wasm_bindgen::Serializer::new().serialize_large_number_types_as_bigints(true);
+    value
+        .serialize(&ser)
+        .map_err(|e| JsError::new(&e.to_string()))
+}
+
+/// Node read responses whose type is in the wire contract.
+#[wasm_bindgen]
+#[derive(Clone, Copy)]
+pub enum ReadKind {
+    /// `Vec<MarketConfig>` (`GET /v1/markets`).
+    Markets = 0,
+    /// `Vec<EventInfo>` (`GET /v1/events`).
+    Events = 1,
+    /// `Option<EventInfo>` (`GET /v1/event/{id}`).
+    Event = 2,
+    /// `AccountInfo` (`GET /v1/account/{owner}`).
+    Account = 3,
+    /// One `AdminAction`, as stored on a proposal.
+    AdminAction = 4,
+}
+
+fn decode_as<T: serde::de::DeserializeOwned + serde::Serialize>(
+    bytes: &[u8],
+) -> Result<JsValue, JsError> {
+    let value: T = rmp_serde::from_slice(bytes).map_err(|e| JsError::new(&e.to_string()))?;
+    to_bigint_js(&value)
+}
+
+fn decode_records<T: serde::de::DeserializeOwned + serde::Serialize>(
+    bytes: &[u8],
+    shape: &Shape,
+) -> Result<JsValue, JsError> {
+    let value: T = reads::decode(bytes, shape).map_err(|e| JsError::new(&e.to_string()))?;
+    to_bigint_js(&value)
+}
+
+/// Decode a node read response into serde-shaped JS (u64/i64 as BigInt).
+/// Floats, extensions, duplicate keys and trailing bytes are refused first.
+/// Fields an engine appends to a stored record after the pinned wire are
+/// ignored; an `AdminAction` is decoded exactly.
+#[wasm_bindgen]
+pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
+    core_sdk::msgpack::reject_floats(bytes).map_err(|e| JsError::new(&e.to_string()))?;
+    match kind {
+        ReadKind::Markets => decode_records::<Vec<core_sdk::types::MarketConfig>>(
+            bytes,
+            &Shape::List(&MARKET_CONFIG),
+        ),
+        ReadKind::Events => {
+            decode_records::<Vec<core_sdk::types::EventInfo>>(bytes, &Shape::List(&EVENT_INFO))
+        }
+        ReadKind::Event => decode_records::<Option<core_sdk::types::EventInfo>>(
+            bytes,
+            &Shape::Optional(&EVENT_INFO),
+        ),
+        ReadKind::Account => decode_records::<core_sdk::query::AccountInfo>(bytes, &ACCOUNT_INFO),
+        ReadKind::AdminAction => decode_as::<governance::AdminAction>(bytes),
+    }
+}
+
+/// Decode resting orders bound to the requested owner using the shared wire type.
+#[wasm_bindgen]
+pub fn decode_open_orders(bytes: &[u8], owner: &[u8]) -> Result<JsValue, JsError> {
+    let owner: &[u8; 20] = owner
+        .try_into()
+        .map_err(|_| JsError::new("owner must be exactly 20 bytes"))?;
+    let orders = reads::decode_open_orders(bytes, owner).map_err(JsError::new)?;
+    to_bigint_js(&orders)
+}
+
+/// Decode a complete `GET /v1/markets-snapshot` HTTP body bound to
+/// `chain_id`, via the core's `market_snapshot::decode_snapshot`.
+#[wasm_bindgen]
+pub fn decode_markets_snapshot(body: &[u8], chain_id: &[u8]) -> Result<JsValue, JsError> {
+    let chain = core_sdk::market_snapshot::ChainBinding::new(arr32(chain_id, "chain_id")?)
+        .ok_or_else(|| JsError::new("chain_id must name a chain, not the zero binding"))?;
+    let snapshot = core_sdk::market_snapshot::decode_snapshot(body, chain).map_err(|e| {
+        use core_sdk::market_snapshot::SnapshotError;
+        JsError::new(match e {
+            SnapshotError::WrongChain => "market snapshot: wrong chain",
+            SnapshotError::Uncommitted => "market snapshot: uncommitted height",
+            _ => "market snapshot: malformed complete response",
+        })
+    })?;
+    to_bigint_js(&snapshot)
 }
 
 /// Build the deterministic signing message
@@ -153,4 +255,173 @@ pub fn pubkey_to_owner(pubkey: &[u8]) -> Result<Vec<u8>, JsError> {
 #[wasm_bindgen]
 pub fn chain_id_from_string(chain_id: &str) -> Vec<u8> {
     crypto::chain_id_from_string(chain_id).to_vec()
+}
+
+// --- bridge canonical custody payloads --------------------------------------
+//
+// The deposit/withdrawal custody path signs fixed-layout payloads from the
+// wire contract's `bridge` module (`proof_wire::bridge`): a 221-byte
+// `WithdrawalAuthorizationV1` whose SHA-256 the engine binds to the
+// withdrawal, and a 327-byte `BridgeReceiptV1` the operator quorum signs and
+// the engine re-encodes before verifying that quorum. Calling its `encode()`
+// makes the bytes the engine's by construction; `src/bridge.test.ts` pins
+// the marshalling with frozen vectors.
+
+use proof_trading_sdk::bridge::{
+    BridgeReceiptV1, DeploymentId, MicroUsdc, ProofOwner, ReceiptQuorumKind, RegistryEpoch,
+    RustCrypto, Slot, SolanaPubkey, TerminalState, TxSignature, UnixSeconds, VaultTier,
+    WithdrawalAuthorizationV1, WithdrawalId,
+};
+use serde::Deserialize;
+
+fn arr20(bytes: &[u8], what: &str) -> Result<[u8; 20], JsError> {
+    bytes
+        .try_into()
+        .map_err(|_| JsError::new(&format!("{what} must be exactly 20 bytes")))
+}
+
+/// Fail closed on an unknown enum wire byte — a payload that decodes nowhere
+/// must not encode here.
+fn vault_tier(wire: u8) -> Result<VaultTier, JsError> {
+    VaultTier::from_wire(wire).map_err(|e| JsError::new(&format!("vaultTier: {e:?}")))
+}
+
+fn terminal_state(wire: u8) -> Result<TerminalState, JsError> {
+    TerminalState::from_wire(wire).map_err(|e| JsError::new(&format!("terminalState: {e:?}")))
+}
+
+fn receipt_quorum_kind(wire: u8) -> Result<ReceiptQuorumKind, JsError> {
+    ReceiptQuorumKind::from_wire(wire)
+        .map_err(|e| JsError::new(&format!("receiptQuorumKind: {e:?}")))
+}
+
+/// JS-side field names (camelCase) so an error names the field the caller
+/// wrote, not the Rust ident.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WithdrawalAuthorizationInput {
+    deployment_id: Vec<u8>,
+    vault_tier: u8,
+    withdrawal_id: u64,
+    proof_owner: Vec<u8>,
+    destination_owner: Vec<u8>,
+    destination_token_acct: Vec<u8>,
+    amount_micro_usdc: u64,
+    fee_micro_usdc: u64,
+    engine_height: u64,
+    signer_epoch: u64,
+    not_before_slot: u64,
+    expires_at_slot: u64,
+    not_before_unix_seconds: i64,
+    expires_at_unix_seconds: i64,
+}
+
+impl TryFrom<WithdrawalAuthorizationInput> for WithdrawalAuthorizationV1 {
+    type Error = JsError;
+
+    fn try_from(i: WithdrawalAuthorizationInput) -> Result<Self, Self::Error> {
+        Ok(Self {
+            deployment_id: DeploymentId::new(arr32(&i.deployment_id, "deploymentId")?),
+            vault_tier: vault_tier(i.vault_tier)?,
+            withdrawal_id: WithdrawalId::new(i.withdrawal_id),
+            proof_owner: ProofOwner::new(arr20(&i.proof_owner, "proofOwner")?),
+            destination_owner: SolanaPubkey::new(arr32(&i.destination_owner, "destinationOwner")?),
+            destination_token_acct: SolanaPubkey::new(arr32(
+                &i.destination_token_acct,
+                "destinationTokenAcct",
+            )?),
+            amount_micro_usdc: MicroUsdc::new(i.amount_micro_usdc),
+            fee_micro_usdc: MicroUsdc::new(i.fee_micro_usdc),
+            engine_height: i.engine_height,
+            signer_epoch: RegistryEpoch::new(i.signer_epoch),
+            not_before_slot: Slot::new(i.not_before_slot),
+            expires_at_slot: Slot::new(i.expires_at_slot),
+            not_before_unix_seconds: UnixSeconds::new(i.not_before_unix_seconds),
+            expires_at_unix_seconds: UnixSeconds::new(i.expires_at_unix_seconds),
+        })
+    }
+}
+
+/// The canonical 221-byte `WithdrawalAuthorizationV1` — byte-for-byte
+/// the wire contract's `encode()`. `fields` is a JS object with the camelCase
+/// field names of the TS `WithdrawalAuthorizationV1` interface.
+#[wasm_bindgen]
+pub fn encode_withdrawal_authorization(fields: JsValue) -> Result<Vec<u8>, JsError> {
+    let input: WithdrawalAuthorizationInput = serde_wasm_bindgen::from_value(fields)?;
+    let auth = WithdrawalAuthorizationV1::try_from(input)?;
+    Ok(auth.encode().to_vec())
+}
+
+/// `SHA256(canonical bytes)` — the authorization identity the engine binds
+/// to a withdrawal and every terminal receipt must repeat. Same input shape
+/// as [`encode_withdrawal_authorization`].
+#[wasm_bindgen]
+pub fn withdrawal_authorization_digest(fields: JsValue) -> Result<Vec<u8>, JsError> {
+    let input: WithdrawalAuthorizationInput = serde_wasm_bindgen::from_value(fields)?;
+    let auth = WithdrawalAuthorizationV1::try_from(input)?;
+    Ok(auth.digest::<RustCrypto>().to_vec())
+}
+
+/// JS-side mirror of the wire `BridgeWithdrawalReceipt` (camelCase).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BridgeReceiptInput {
+    deployment_id: Vec<u8>,
+    authorization_digest: Vec<u8>,
+    withdrawal_id: u64,
+    terminal_state: u8,
+    vault_tier: u8,
+    proof_owner: Vec<u8>,
+    destination_owner: Vec<u8>,
+    destination_token_acct: Vec<u8>,
+    amount_micro_usdc: u64,
+    fee_micro_usdc: u64,
+    authorization_signer_epoch: u64,
+    solana_tx_signature: Vec<u8>,
+    finalized_slot: u64,
+    finalized_blockhash: Vec<u8>,
+    receipt_quorum_kind: u8,
+    receipt_authority_epoch: u64,
+}
+
+impl TryFrom<BridgeReceiptInput> for BridgeReceiptV1 {
+    type Error = JsError;
+
+    fn try_from(i: BridgeReceiptInput) -> Result<Self, Self::Error> {
+        Ok(Self {
+            deployment_id: DeploymentId::new(arr32(&i.deployment_id, "deploymentId")?),
+            authorization_digest: arr32(&i.authorization_digest, "authorizationDigest")?,
+            withdrawal_id: WithdrawalId::new(i.withdrawal_id),
+            terminal_state: terminal_state(i.terminal_state)?,
+            vault_tier: vault_tier(i.vault_tier)?,
+            proof_owner: ProofOwner::new(arr20(&i.proof_owner, "proofOwner")?),
+            destination_owner: SolanaPubkey::new(arr32(&i.destination_owner, "destinationOwner")?),
+            destination_token_acct: SolanaPubkey::new(arr32(
+                &i.destination_token_acct,
+                "destinationTokenAcct",
+            )?),
+            amount_micro_usdc: MicroUsdc::new(i.amount_micro_usdc),
+            fee_micro_usdc: MicroUsdc::new(i.fee_micro_usdc),
+            authorization_signer_epoch: RegistryEpoch::new(i.authorization_signer_epoch),
+            solana_tx_signature: TxSignature::new(arr64(
+                &i.solana_tx_signature,
+                "solanaTxSignature",
+            )?),
+            finalized_slot: Slot::new(i.finalized_slot),
+            finalized_blockhash: arr32(&i.finalized_blockhash, "finalizedBlockhash")?,
+            receipt_quorum_kind: receipt_quorum_kind(i.receipt_quorum_kind)?,
+            receipt_authority_epoch: RegistryEpoch::new(i.receipt_authority_epoch),
+        })
+    }
+}
+
+/// The canonical 327-byte `BridgeReceiptV1` — the message the operator
+/// quorum signs and the engine re-encodes from the submitted fields before
+/// verifying that quorum. `fields` is a JS object with the camelCase field
+/// names of the TS `BridgeWithdrawalReceipt`.
+#[wasm_bindgen]
+pub fn encode_bridge_receipt(fields: JsValue) -> Result<Vec<u8>, JsError> {
+    let input: BridgeReceiptInput = serde_wasm_bindgen::from_value(fields)?;
+    let receipt = BridgeReceiptV1::try_from(input)?;
+    Ok(receipt.encode().to_vec())
 }

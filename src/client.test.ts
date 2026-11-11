@@ -12,6 +12,11 @@ import {
   pubkeyToOwner,
   verify,
 } from "./crypto.js";
+import {
+  FeedSubscriptionError,
+  GatewayHttpError,
+  isMissingMark,
+} from "./errors.js";
 import { Side, type Action } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 
@@ -57,6 +62,71 @@ function primeNextNonce(client: ExchangeClient, offsetMs = 1_000n): bigint {
     floor;
   return floor + 1n;
 }
+
+describe("ExchangeClient uncertain submission reconciliation", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function clientAndAction() {
+    const client = new ExchangeClient({
+      gatewayUrl: "https://gateway.example",
+      chainId: "test-chain",
+    });
+    client.setPrivateKey(generateKeypair().privateKey);
+    client.setUnsafeFastSubmit(true);
+    const action: Action = {
+      type: "CancelAllOrders",
+      data: { owner: client.getAddress()!, market: 1 },
+    };
+    return { client, action };
+  }
+
+  it.each(["network", "5xx", "malformed"])(
+    "retains the local transaction hash after %s without a second write",
+    async (kind) => {
+      const fetch = vi.fn(async () => {
+        if (kind === "network") throw new Error("connection lost");
+        return new Response("unavailable", {
+          status: kind === "5xx" ? 502 : 200,
+        });
+      });
+      vi.stubGlobal("fetch", fetch);
+      const { client, action } = clientAndAction();
+      const result = await client.submitTx(action);
+      expect(result).toMatchObject({ outcome: "timeout", code: -1 });
+      expect(result.hash).toMatch(/^[0-9A-F]{64}$/);
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([{}, { code: "0" }, { code: "12" }])(
+    "reconciles a lost response with %j after ignoring malformed status data",
+    async (exec) => {
+      const fetch = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("connection lost"))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ result: { tx_result: [] } })),
+        )
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ result: { height: "42", tx_result: exec } }),
+          ),
+        );
+      vi.stubGlobal("fetch", fetch);
+      const { client, action } = clientAndAction();
+      const result = await client.submitTxCommit(action);
+      expect(result.code).toBe(Number("code" in exec ? exec.code : 0));
+      expect(result.height).toBe(42);
+      expect(
+        fetch.mock.calls.filter(([, init]) => init?.method === "POST"),
+      ).toHaveLength(1);
+      expect(fetch.mock.calls[1][0]).toBe(
+        `https://gateway.example/v1/tx/${result.hash}`,
+      );
+      expect(fetch.mock.calls[2][0]).toBe(fetch.mock.calls[1][0]);
+    },
+  );
+});
 
 describe("ExchangeClient timestamp nonce submission", () => {
   const originalFetch = globalThis.fetch;
@@ -480,29 +550,30 @@ describe("ExchangeClient submitTx gateway path", () => {
   // ---------------------------------------------------------------------
 
   it("submitTxCommit returns the gateway's on-chain result without polling /tx", async () => {
+    let sent = "";
     const client = makeGatewayClient();
     primeNextNonce(client);
 
-    nextResponses.push(
-      () =>
-        new Response(
-          JSON.stringify({
-            status: "ok",
-            txHash: "ABCD",
-            code: 0,
-            height: 4821903,
-            events: [{ type: "order_placed", attributes: [] }],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-    );
+    nextResponses.push((req) => {
+      sent = expectedGatewayHash(req);
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          txHash: sent,
+          code: 0,
+          height: 4821903,
+          events: [{ type: "order_placed", attributes: [] }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
 
     const r = await client.submitTxCommit(placeOrder(client));
 
     expect(r.ok).toBe(true);
     expect(r.code).toBe(0);
     expect(r.height).toBe(4821903);
-    expect(r.hash).toBe("ABCD");
+    expect(r.hash).toBe(sent);
     expect(r.events?.length).toBe(1);
     // The point of the change: exactly one round-trip. Previously this cost a
     // /tx?hash= poll loop of up to 9 seconds (the H14 complaint).
@@ -512,23 +583,24 @@ describe("ExchangeClient submitTx gateway path", () => {
   });
 
   it("a committed engine rejection is returned as an engine error, with its height", async () => {
+    let sent = "";
     const client = makeGatewayClient();
     primeNextNonce(client);
 
-    nextResponses.push(
-      () =>
-        new Response(
-          JSON.stringify({
-            status: "error",
-            error: "insufficient margin",
-            txHash: "ABCD",
-            code: 12,
-            log: "insufficient margin",
-            height: 4821903,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-    );
+    nextResponses.push((req) => {
+      sent = expectedGatewayHash(req);
+      return new Response(
+        JSON.stringify({
+          status: "error",
+          error: "insufficient margin",
+          txHash: sent,
+          code: 12,
+          log: "insufficient margin",
+          height: 4821903,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
 
     const r = await client.submitTxCommit(placeOrder(client));
 
@@ -540,25 +612,26 @@ describe("ExchangeClient submitTx gateway path", () => {
   });
 
   it("reads the structured code, not the leading integer of the error string", async () => {
+    let sent = "";
     // The gateway keeps the legacy "<code>: <message>" error string for old
     // clients, but the structured `code` is authoritative. Deliberately make
     // the compatibility string disagree to prove this path does not parse it.
     const client = makeGatewayClient();
     primeNextNonce(client);
 
-    nextResponses.push(
-      () =>
-        new Response(
-          JSON.stringify({
-            status: "error",
-            error: "12: stale compatibility text",
-            log: "nonce too old: minimum accepted 1783771798253, got 0",
-            txHash: "ABCD",
-            code: 21,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-    );
+    nextResponses.push((req) => {
+      sent = expectedGatewayHash(req);
+      return new Response(
+        JSON.stringify({
+          status: "error",
+          error: "12: stale compatibility text",
+          log: "nonce too old: minimum accepted 1783771798253, got 0",
+          txHash: sent,
+          code: 21,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
 
     const r = await client.submitTx(placeOrder(client));
 
@@ -717,29 +790,30 @@ describe("ExchangeClient submitTx gateway path", () => {
   }
 
   it("submitSignedTx submits pre-signed bytes byte-exactly, with no key loaded", async () => {
+    let sent = "";
     const client = makeKeylessGatewayClient();
     const txBytes = externallySignedBytes();
 
-    nextResponses.push(
-      () =>
-        new Response(
-          JSON.stringify({
-            status: "ok",
-            txHash: "ABCD",
-            code: 0,
-            height: 4821903,
-            events: [],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-    );
+    nextResponses.push((req) => {
+      sent = expectedGatewayHash(req);
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          txHash: sent,
+          code: 0,
+          height: 4821903,
+          events: [],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
 
     const r = await client.submitSignedTx(txBytes);
 
     expect(r.ok).toBe(true);
     expect(r.code).toBe(0);
     expect(r.height).toBe(4821903);
-    expect(r.hash).toBe("ABCD");
+    expect(r.hash).toBe(sent);
 
     // Exactly one round-trip to POST /exchange, and the forwarded bytes are
     // the caller's bytes, bit for bit — the property co-signing relies on.
@@ -804,21 +878,22 @@ describe("ExchangeClient submitTx gateway path", () => {
   });
 
   it("submitSignedTxCommit returns a synchronous verdict without polling", async () => {
+    let sent = "";
     const client = makeKeylessGatewayClient();
 
-    nextResponses.push(
-      () =>
-        new Response(
-          JSON.stringify({
-            status: "ok",
-            txHash: "ABCD",
-            code: 0,
-            height: 4821903,
-            events: [],
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        ),
-    );
+    nextResponses.push((req) => {
+      sent = expectedGatewayHash(req);
+      return new Response(
+        JSON.stringify({
+          status: "ok",
+          txHash: sent,
+          code: 0,
+          height: 4821903,
+          events: [],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
 
     const r = await client.submitSignedTxCommit(externallySignedBytes());
 
@@ -1077,14 +1152,19 @@ describe("ExchangeClient submitTx gateway path", () => {
     ).toBe(firstNonce + 99n);
   });
 
-  it("nextTimestampNonce caps at now + 60_000ms even under heavy bursts", () => {
+  it("nextTimestampNonce refuses clock-window overflow without rewinding", () => {
     const client = makeGatewayClient();
+    const floor = BigInt(Date.now()) + 1_000_000n;
     (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce =
-      BigInt(Date.now()) + 1_000_000n;
-    const next = (
-      client as unknown as { nextTimestampNonce(): bigint }
-    ).nextTimestampNonce();
-    expect(next).toBeLessThanOrEqual(BigInt(Date.now()) + 60_000n);
+      floor;
+    expect(() =>
+      (
+        client as unknown as { nextTimestampNonce(): bigint }
+      ).nextTimestampNonce(),
+    ).toThrow("clock safety window");
+    expect(
+      (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
+    ).toBe(floor);
   });
 
   it("timestamp nonce rejection through gateway does not resync or rewind", async () => {
@@ -1467,7 +1547,7 @@ describe("ExchangeClient submitTx gateway path", () => {
     ).toBe(expectedNonce);
   });
 
-  it("HTTP 5xx from gateway maps to code 500 and keeps the allocated timestamp nonce", async () => {
+  it("HTTP 5xx from gateway remains uncertain and keeps the allocated timestamp nonce", async () => {
     const client = makeGatewayClient();
     client.setUnsafeFastSubmit(true);
     const expectedNonce = primeNextNonce(client);
@@ -1489,8 +1569,9 @@ describe("ExchangeClient submitTx gateway path", () => {
       },
     });
 
-    expect(r.code).toBe(500);
-    expect(r.log).toContain("bad gateway");
+    expect(r.outcome).toBe("timeout");
+    expect(r.hash).toMatch(/^[0-9A-F]{64}$/);
+    expect(r.log).toContain("502");
     expect(
       (client as unknown as { lastTimestampNonce: bigint }).lastTimestampNonce,
     ).toBe(expectedNonce);
@@ -1945,8 +2026,8 @@ describe("ExchangeClient owner-scoped reads via /info", () => {
           type === "clearinghouseState" ||
           url.toString().includes("/v1/account/");
         const payload = isAccount
-          ? // balance, positions[], equity, totalMm, totalIm, marginRatioBps
-            [1_000n, [], 0n, 0n, 0n, 0n]
+          ? // the wire AccountInfo, no positions
+            [1_000n, [], 0n, 0n, 0n, 0n, [], 0n, 0n, 0n]
           : []; // empty open-orders list
         const blob = b64(accountEncoder.encode(payload) as Uint8Array);
         return new Response(JSON.stringify({ data: blob }), { status: 200 });
@@ -2001,11 +2082,73 @@ describe("ExchangeClient owner-scoped reads via /info", () => {
   });
 });
 
+describe("gateway owner-read failures", () => {
+  const originalFetch = globalThis.fetch;
+  const answer = (body: string, status: number) => {
+    globalThis.fetch = vi.fn(
+      async () => new Response(body, { status }),
+    ) as unknown as typeof fetch;
+  };
+  const failedRead = (): Promise<unknown> =>
+    new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" })
+      .queryAccount("a".repeat(40))
+      .catch((error: unknown) => error);
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("keeps the gateway's reason and an unread body", async () => {
+    answer(JSON.stringify({ error: "owner: invalid" }), 400);
+    const error = await failedRead();
+    expect(error).toBeInstanceOf(GatewayHttpError);
+    const http = error as GatewayHttpError;
+    expect(http.status).toBe(400);
+    expect(http.message).toBe("Gateway request failed (400): owner: invalid");
+    expect(await http.response.json()).toEqual({ error: "owner: invalid" });
+    expect(isMissingMark(error)).toBe(false);
+  });
+
+  it("classifies the node's MissingMark envelope", async () => {
+    answer(
+      JSON.stringify({
+        error:
+          "query failed: MissingMark: required account valuation mark unavailable",
+        errorCode: "MissingMark",
+      }),
+      503,
+    );
+    const error = await failedRead();
+    expect(isMissingMark(error)).toBe(true);
+    expect((error as GatewayHttpError).message).toContain(
+      "required account valuation mark unavailable",
+    );
+  });
+
+  it("reports a non-JSON failure by status instead of a parse error", async () => {
+    answer("<html>bad gateway</html>", 502);
+    const error = await failedRead();
+    expect(error).toBeInstanceOf(GatewayHttpError);
+    expect((error as GatewayHttpError).status).toBe(502);
+    expect(await (error as GatewayHttpError).response.text()).toBe(
+      "<html>bad gateway</html>",
+    );
+  });
+
+  it("reports a JSON null failure by status", async () => {
+    answer("null", 503);
+    const error = await failedRead();
+    expect(error).toBeInstanceOf(GatewayHttpError);
+    expect((error as GatewayHttpError).status).toBe(503);
+    expect(isMissingMark(error)).toBe(false);
+  });
+});
+
 /**
- * Gateway-native WebSocket streams (mirror the Python SDK): per-stream
- * connections to `/account-events` and `/orderbook-deltas`, with the WS base
- * derived from the gateway URL (scheme swapped). The account stream signs its
- * auth params with the loaded key so it works against an authed gateway.
+ * Gateway WebSocket streams: the multiplexed `/ws` feed (account events and
+ * the orderbook ride its channels), with the WS base derived from the gateway
+ * URL (scheme swapped). An account subscription signs
+ * its auth params with the loaded key so it works against an authed gateway.
  */
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -2015,11 +2158,14 @@ class FakeWebSocket {
   onclose: (() => void) | null = null;
   onerror: ((err: unknown) => void) | null = null;
   closed = false;
+  sent: string[] = [];
   constructor(url: string) {
     this.url = url;
     FakeWebSocket.instances.push(this);
   }
-  send(): void {}
+  send(data: string): void {
+    this.sent.push(data);
+  }
   close(): void {
     this.closed = true;
   }
@@ -2064,22 +2210,133 @@ describe("ExchangeClient WebSocket streams", () => {
 
   const flush = () => new Promise((r) => setTimeout(r, 0));
 
-  it("orderbook-deltas connects to the gateway WS base with scheme swapped", async () => {
+  it("orderbookSnapshot subscribes on /ws and resolves the first snapshot", async () => {
     const client = new ExchangeClient({
       gatewayUrl: "http://test-gateway",
       chainId: "test-chain",
     });
-    const unsub = client.subscribeOrderbookDeltas(1, () => {});
+    const pending = client.orderbookSnapshot(1);
+    const socket = FakeWebSocket.instances[0];
+    expect(socket.url).toBe("ws://test-gateway/ws");
+    socket.onopen?.();
     await flush();
-    expect(FakeWebSocket.instances).toHaveLength(1);
-    expect(FakeWebSocket.instances[0].url).toBe(
-      "ws://test-gateway/orderbook-deltas?market=1",
-    );
-    unsub();
-    expect(FakeWebSocket.instances[0].closed).toBe(true);
+    expect(JSON.parse(socket.sent[0])).toMatchObject({
+      method: "subscribe",
+      params: { channel: "orderbook", market: 1 },
+    });
+    const snapshot = {
+      channel: "orderbook",
+      type: "snapshot",
+      market: 1,
+      bids: [{ price: 100, totalQuantity: 2, orderCount: 1 }],
+      asks: [],
+    };
+    socket.onmessage?.({ data: JSON.stringify(snapshot) });
+    await expect(pending).resolves.toMatchObject({
+      type: "snapshot",
+      market: 1,
+    });
+    // The snapshot's connection is its own, so it is closed, not unsubscribed.
+    expect(socket.closed).toBe(true);
+    client.disconnect();
   });
 
-  it("account-events signs auth params that verify against the gateway message", async () => {
+  it("orderbookSnapshot rejects when no snapshot arrives in time", async () => {
+    const client = new ExchangeClient({
+      gatewayUrl: "http://test-gateway",
+      chainId: "test-chain",
+    });
+    const pending = client.orderbookSnapshot(1, 5);
+    await expect(pending).rejects.toThrow(FeedSubscriptionError);
+    await expect(pending).rejects.toThrow(/timed out/);
+    client.disconnect();
+  });
+
+  it("orderbookSnapshot asks the gateway on its own socket instead of reading a stalled subscription's cached book", async () => {
+    const client = new ExchangeClient({
+      gatewayUrl: "http://test-gateway",
+      chainId: "test-chain",
+    });
+    const book = (price: number) =>
+      JSON.stringify({
+        channel: "orderbook",
+        type: "snapshot",
+        market: 1,
+        bids: [{ price, totalQuantity: 2, orderCount: 1 }],
+        asks: [],
+      });
+    // A live subscription has a cached book, then its socket stops receiving.
+    const live = vi.fn();
+    const unsub = client.subscribeOrderbook(1, live);
+    const shared = FakeWebSocket.instances[0];
+    shared.onopen?.();
+    await flush();
+    shared.onmessage?.({ data: book(100) });
+    expect(live).toHaveBeenCalledTimes(1);
+
+    let resolved = false;
+    const pending = client.orderbookSnapshot(1).then((frame) => {
+      resolved = true;
+      return frame;
+    });
+    await flush();
+    expect(resolved).toBe(false);
+    const own = FakeWebSocket.instances[1];
+    expect(own).toBeDefined();
+    own.onopen?.();
+    await flush();
+    expect(JSON.parse(own.sent[0])).toMatchObject({
+      method: "subscribe",
+      params: { channel: "orderbook", market: 1 },
+    });
+    own.onmessage?.({ data: book(105) });
+    const frame = await pending;
+    expect(frame.bids[0]).toMatchObject({ price: 105 });
+    expect(own.closed).toBe(true);
+    expect(shared.closed).toBe(false);
+    expect(live).toHaveBeenCalledTimes(1);
+    unsub();
+    client.disconnect();
+  });
+
+  it("orderbookSnapshot rejects at once with the gateway's code and message when the subscription is refused", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new ExchangeClient({
+        gatewayUrl: "http://test-gateway",
+        chainId: "test-chain",
+      });
+      const pending = client.orderbookSnapshot(99, 10_000);
+      const socket = FakeWebSocket.instances[0];
+      socket.onopen?.();
+      await vi.advanceTimersByTimeAsync(0);
+      const id = JSON.parse(socket.sent[0]).id;
+      socket.onmessage?.({
+        data: JSON.stringify({
+          type: "error",
+          id,
+          channel: "orderbook",
+          code: 404,
+          error: "unknown market 99",
+        }),
+      });
+      const err = await pending.catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FeedSubscriptionError);
+      expect(err).toMatchObject({
+        channel: "orderbook",
+        code: 404,
+        gatewayMessage: "unknown market 99",
+      });
+      expect((err as Error).message).toMatch(/unknown market 99/);
+      expect((err as Error).message).not.toMatch(/timed out/);
+      expect(socket.closed).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("subscribeAccount subscribes on /ws with auth params that verify against the gateway message", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const client = new ExchangeClient({
       gatewayUrl: "https://api.dev.proof.trade",
@@ -2089,21 +2346,18 @@ describe("ExchangeClient WebSocket streams", () => {
     client.setPrivateKey(kp.privateKey);
     const ownerHex = ownerToHex(pubkeyToOwner(kp.publicKey));
 
-    const unsub = client.subscribeAccountEvents(
-      pubkeyToOwner(kp.publicKey),
-      () => {},
-    );
+    const unsub = client.subscribeAccount(() => {});
+    const socket = FakeWebSocket.instances[0];
+    expect(socket.url).toBe("wss://api.dev.proof.trade/ws");
+    socket.onopen?.();
     await flush();
 
-    const url = new URL(FakeWebSocket.instances[0].url);
-    expect(url.protocol).toBe("wss:");
-    expect(url.host).toBe("api.dev.proof.trade");
-    expect(url.pathname).toBe("/account-events");
-    expect(url.searchParams.get("owner")).toBe(ownerHex);
-
-    const pub = hexToBytes(url.searchParams.get("public_key")!);
-    const sig = hexToBytes(url.searchParams.get("signature")!);
-    const ts = BigInt(url.searchParams.get("timestamp_ms")!);
+    const params = JSON.parse(socket.sent[0]).params;
+    expect(params.channel).toBe("accountEvents");
+    expect(params.owner).toBe(ownerHex);
+    const pub = hexToBytes(params.public_key);
+    const sig = hexToBytes(params.signature);
+    const ts = BigInt(params.timestamp_ms);
     expect(ts).toBe(1_700_000_000_000n);
     const msg = expectedAccountWsAuthMessage(
       chainIdFromString("test-chain"),
@@ -2113,19 +2367,35 @@ describe("ExchangeClient WebSocket streams", () => {
     );
     expect(verify(pub, sig, msg)).toBe(true);
     unsub();
+    client.disconnect();
   });
 
-  it("disconnect() closes all open streams", async () => {
+  it("disconnect() closes the shared feed", async () => {
     const client = new ExchangeClient({
       gatewayUrl: "http://test-gateway",
       chainId: "test-chain",
     });
-    client.subscribeOrderbookDeltas(1, () => {});
-    client.subscribeOrderbookDeltas(2, () => {});
-    await flush();
-    expect(FakeWebSocket.instances).toHaveLength(2);
+    client.subscribeOrderbook(1, () => {});
+    client.subscribeOrderbook(2, () => {});
+    expect(FakeWebSocket.instances).toHaveLength(1);
     client.disconnect();
-    expect(FakeWebSocket.instances.every((w) => w.closed)).toBe(true);
+    expect(FakeWebSocket.instances[0].closed).toBe(true);
+  });
+
+  it("disconnect() also closes a pending orderbookSnapshot connection", async () => {
+    const client = new ExchangeClient({
+      gatewayUrl: "http://test-gateway",
+      chainId: "test-chain",
+    });
+    const pending = client.orderbookSnapshot(1, 50);
+    const socket = FakeWebSocket.instances[0];
+    socket.onopen?.();
+    await flush();
+    // The gateway never answers; disconnect() must not leave the snapshot's
+    // own connection open until the timeout runs out.
+    client.disconnect();
+    expect(socket.closed, "the pending snapshot socket is closed").toBe(true);
+    await expect(pending).rejects.toThrow(/timed out/);
   });
 });
 
@@ -2209,7 +2479,9 @@ describe("ExchangeClient owner byte-coercion (serde array shape)", () => {
   const originalFetch = globalThis.fetch;
   const encoder = new Encoder({ useBigInt64: true });
   const ownerArr = Array.from({ length: 20 }, (_, i) => i + 1);
-  const hex = "ab".repeat(20);
+  const hex = ownerArr
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 
   function toB64(bytes: Uint8Array): string {
     let s = "";
@@ -2239,8 +2511,9 @@ describe("ExchangeClient owner byte-coercion (serde array shape)", () => {
 
   it("queryAccount coerces a number[] position owner to Uint8Array", async () => {
     const position = [ownerArr, 1, "Buy", 6_675_000n, 100n, 0n];
+    position.push(0n, 0n, 0n, 0n, 0n, 0n, 0n, null);
     globalThis.fetch = vi.fn(async () =>
-      infoResponse([1_000n, [position], 0n, 0n, 0n, 0n]),
+      infoResponse([1_000n, [position], 0n, 0n, 0n, 0n, [], 0n, 0n, 0n]),
     ) as unknown as typeof fetch;
     const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
     const acct = await client.queryAccount(hex);
@@ -2266,10 +2539,130 @@ describe("ExchangeClient owner byte-coercion (serde array shape)", () => {
       9_007_199_254_740_993n,
     ];
     globalThis.fetch = vi.fn(async () =>
-      infoResponse([1_000n, [position], 0n, 0n, 0n, 0n]),
+      infoResponse([1_000n, [position], 0n, 0n, 0n, 0n, [], 0n, 0n, 0n]),
     ) as unknown as typeof fetch;
     const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
     const acct = await client.queryAccount(hex);
     expect(acct?.positions[0].positionEpoch).toBe(9_007_199_254_740_993n);
+  });
+});
+
+/**
+ * queryHistoryFills — the fills-history envelope (`{fills, next_cursor}`),
+ * with an opaque keyset cursor. Prices and quantities must stay
+ * strings end to end: the indexer casts NUMERIC to text precisely so a price
+ * never rides through a float, and this client must not undo that.
+ */
+describe("ExchangeClient queryHistoryFills", () => {
+  const originalFetch = globalThis.fetch;
+  let calls: FetchCall[] = [];
+  let nextResponses: Array<(req: FetchCall) => Response> = [];
+
+  beforeEach(() => {
+    calls = [];
+    nextResponses = [];
+    globalThis.fetch = vi.fn(
+      async (url: RequestInfo | URL, init?: RequestInit) => {
+        const u = url.toString();
+        calls.push({ url: u, init });
+        if (nextResponses.length === 0) {
+          return new Response(
+            JSON.stringify({ error: "unexpected fetch in test" }),
+            {
+              status: 500,
+            },
+          );
+        }
+        const responder = nextResponses.shift()!;
+        return responder({ url: u, init });
+      },
+    ) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  const OWNER = "2b1e0a7543516c02e83bef3efa40376000e80d11";
+
+  const fillRow = {
+    fill_id: 41_000_777,
+    market: 41600,
+    block_height: 43_600_100,
+    block_time: "2026-08-24T10:19:03.123456789Z",
+    price: "3141.590000",
+    quantity: "2.500000",
+    maker_owner: OWNER,
+    taker_owner: "ef129186e4207c93723633729aca31d115e93b46",
+    maker_side: "Buy",
+    taker_fee: 3927,
+    maker_fee: 785,
+  };
+
+  it("builds the owner path with epoch-ms bounds and passes the cursor through", async () => {
+    nextResponses.push(
+      () =>
+        new Response(
+          JSON.stringify({ fills: [fillRow], next_cursor: "abc123" }),
+        ),
+    );
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    const page = await client.queryHistoryFills(OWNER, {
+      market: 41600,
+      fromMs: 1_787_400_000_000,
+      toMs: 1_787_650_000_000,
+      limit: 1000,
+      cursor: "prev-cursor",
+    });
+    expect(calls).toHaveLength(1);
+    const u = new URL(calls[0].url);
+    expect(u.pathname).toBe(`/v1/history/fills/${OWNER}`);
+    expect(u.searchParams.get("market")).toBe("41600");
+    expect(u.searchParams.get("from")).toBe("1787400000000");
+    expect(u.searchParams.get("to")).toBe("1787650000000");
+    expect(u.searchParams.get("limit")).toBe("1000");
+    expect(u.searchParams.get("cursor")).toBe("prev-cursor");
+    expect(page.nextCursor).toBe("abc123");
+  });
+
+  it("decodes rows keeping price and quantity as strings", async () => {
+    nextResponses.push(
+      () => new Response(JSON.stringify({ fills: [fillRow], next_cursor: "" })),
+    );
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    const page = await client.queryHistoryFills(OWNER);
+    expect(page.fills).toHaveLength(1);
+    const f = page.fills[0];
+    expect(f.fillId).toBe("41000777");
+    expect(f.market).toBe(41600);
+    expect(f.blockHeight).toBe(43_600_100);
+    expect(f.blockTime).toBe("2026-08-24T10:19:03.123456789Z");
+    expect(f.price).toBe("3141.590000");
+    expect(f.quantity).toBe("2.500000");
+    expect(f.makerOwner).toBe(OWNER);
+    expect(f.makerSide).toBe("Buy");
+    expect(f.takerFee).toBe(3927);
+    expect(f.makerFee).toBe(785);
+    expect(page.nextCursor).toBe("");
+  });
+
+  it("throws on an error envelope and on non-OK status", async () => {
+    nextResponses.push(
+      () =>
+        new Response(JSON.stringify({ error: "owner: invalid" }), {
+          status: 400,
+        }),
+    );
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    await expect(client.queryHistoryFills(OWNER)).rejects.toThrow(
+      "API error: owner: invalid",
+    );
+  });
+
+  it("returns an empty last page without fetching when no address is bound", async () => {
+    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
+    const page = await client.queryHistoryFills();
+    expect(page).toEqual({ fills: [], nextCursor: "" });
+    expect(calls).toHaveLength(0);
   });
 });

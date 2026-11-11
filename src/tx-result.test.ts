@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   txEngineError,
   txFromEngineCode,
+  txFromQueryResponse,
   txOk,
+  txRefusal,
   txTimeout,
   txTransportError,
 } from "./tx-result.js";
@@ -61,6 +63,25 @@ describe("tx-result builders", () => {
     );
   });
 
+  it("txRefusal keeps the gateway's errorCode and is terminal transport", () => {
+    const r = txRefusal(400, "InvalidRequest", "invalid market ticker");
+    expect(r.ok).toBe(false);
+    expect(r.outcome).toBe("transport");
+    expect(r.code).toBe(400);
+    expect(r.errorCode).toBe("InvalidRequest");
+    expect(r.error).toBeNull();
+    expect(r.log).toBe("invalid market ticker");
+    expect(r.hash).toBe("");
+  });
+
+  it("txRefusal keeps a code this SDK does not know yet verbatim", () => {
+    // The union names today's codes and stays open: a gateway that adds one
+    // must not have it dropped by the client.
+    expect(txRefusal(429, "SlowDown", "rate limited").errorCode).toBe(
+      "SlowDown",
+    );
+  });
+
   it("txTransportError tags 'transport' with null error and preserves code", () => {
     const r = txTransportError(429, "rate limited");
     expect(r.ok).toBe(false);
@@ -96,4 +117,51 @@ describe("tx-result builders", () => {
     expect(err.error?.name).toBe("InvalidNonce");
     expect(err.hash).toBe("Y");
   });
+});
+
+describe("CometBFT verdict decoding", () => {
+  it.each([
+    {},
+    { code: 0 },
+    { code: "0" },
+    { code: "12" },
+    { code: 4294967295 },
+  ])("accepts documented code shape %j", (exec) => {
+    const r = txFromQueryResponse(
+      { result: { height: "42", tx_result: { ...exec, info: "diagnostic" } } },
+      "HASH",
+    );
+    expect(r).toMatchObject({
+      hash: "HASH",
+      height: 42,
+      info: "diagnostic",
+      code: Number("code" in exec ? exec.code : 0),
+    });
+  });
+  it.each([
+    null,
+    [],
+    "bad",
+    false,
+    0,
+    { code: null },
+    { code: true },
+    { code: "" },
+    { code: "1x" },
+    { code: "-1" },
+    { code: 1.5 },
+    { code: -1 },
+    { code: "4294967296" },
+    { code: {} },
+  ])("rejects unreadable ExecTxResult %j", (exec) => {
+    expect(
+      txFromQueryResponse({ result: { tx_result: exec } }, "HASH"),
+    ).toBeNull();
+  });
+  it.each([null, [], {}, { result: [] }, { result: {} }, { result: null }])(
+    "rejects missing result objects %j",
+    (body) => {
+      expect(txFromQueryResponse(body, "HASH")).toBeNull();
+    },
+  );
 });

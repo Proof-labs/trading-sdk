@@ -1,5 +1,5 @@
 import { decodeExecError } from "./errors.js";
-import type { TxEvent, TxResult } from "./types.js";
+import type { GatewayRefusalCode, TxEvent, TxResult } from "./types.js";
 
 /**
  * Constructors for {@link TxResult}. Centralising them keeps the `ok` /
@@ -22,6 +22,8 @@ export interface TxResultBody {
   height?: number;
   /** Human-readable log line. */
   log?: string;
+  /** Optional ABCI diagnostic info; code/log remain authoritative. */
+  info?: string;
   /** ABCI events emitted by the tx. */
   events?: TxEvent[];
 }
@@ -36,6 +38,7 @@ export function txOk(body: TxResultBody = {}): TxResult {
     hash: body.hash ?? "",
     height: body.height,
     log: body.log,
+    ...(body.info !== undefined ? { info: body.info } : {}),
     events: body.events,
   };
 }
@@ -54,6 +57,7 @@ export function txEngineError(code: number, body: TxResultBody = {}): TxResult {
     hash: body.hash ?? "",
     height: body.height,
     log: body.log,
+    ...(body.info !== undefined ? { info: body.info } : {}),
     events: body.events,
   };
 }
@@ -70,6 +74,34 @@ export function txTransportError(
   hash = "",
 ): TxResult {
   return { ok: false, outcome: "transport", code, error: null, hash, log };
+}
+
+/**
+ * The gateway refused the request before admitting it (`status: "refused"`).
+ * Nothing was broadcast: the outcome is `"transport"` and terminal for this
+ * request — no engine code to decode, no hash to reconcile, no polling — and
+ * `errorCode` carries the gateway's own reason so a caller can tell "fix the
+ * request" (`InvalidRequest`) from an internal encoding failure (`EncodingError`)
+ * or "the gateway is not
+ * admitting writes" (`Unauthorized`, `RateLimited`, `Maintenance`,
+ * `Overloaded`, `Unavailable`), which a later resend may satisfy.
+ *
+ * A refusal describes this attempt only; it does not resolve earlier attempts.
+ */
+export function txRefusal(
+  status: number,
+  errorCode: GatewayRefusalCode,
+  log: string,
+): TxResult {
+  return {
+    ok: false,
+    outcome: "transport",
+    code: status,
+    error: null,
+    hash: "",
+    log,
+    errorCode,
+  };
 }
 
 /**
@@ -92,4 +124,43 @@ export function txFromEngineCode(
   body: TxResultBody = {},
 ): TxResult {
   return code === 0 ? txOk(body) : txEngineError(code, body);
+}
+
+/** Decode a present CometBFT ExecTxResult. Proto-JSON may omit zero code.
+ * Unreadable structures are not success; numeric strings follow the gateway decoder.
+ */
+export function txFromQueryResponse(
+  value: unknown,
+  hash: string,
+): TxResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const result = (value as Record<string, unknown>).result;
+  if (!result || typeof result !== "object" || Array.isArray(result))
+    return null;
+  const row = result as Record<string, unknown>;
+  const exec = row.tx_result;
+  if (!exec || typeof exec !== "object" || Array.isArray(exec)) return null;
+  const body = exec as Record<string, unknown>;
+  const raw = body.code;
+  let code: number;
+  if (!Object.prototype.hasOwnProperty.call(body, "code")) code = 0;
+  else if (typeof raw === "number") code = raw;
+  else if (typeof raw === "string" && /^\d+$/.test(raw)) code = Number(raw);
+  else return null;
+  if (!Number.isInteger(code) || code < 0 || code > 0xffff_ffff) return null;
+  const height =
+    typeof row.height === "number" ||
+    (typeof row.height === "string" && /^\d+$/.test(row.height))
+      ? Number(row.height)
+      : undefined;
+  return txFromEngineCode(code, {
+    hash,
+    height:
+      height !== undefined && Number.isSafeInteger(height) && height > 0
+        ? height
+        : undefined,
+    log: typeof body.log === "string" ? body.log : undefined,
+    info: typeof body.info === "string" ? body.info : undefined,
+    events: Array.isArray(body.events) ? (body.events as TxEvent[]) : undefined,
+  });
 }

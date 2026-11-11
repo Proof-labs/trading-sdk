@@ -23,6 +23,24 @@ export interface WasmCore {
   }) => Promise<unknown>;
   encode_payload(actionType: number, fields: unknown): Uint8Array;
   decode_payload(actionType: number, payload: Uint8Array): unknown;
+  /** Strict, type-preserving MessagePack preflight for gateway read payloads.
+   *  Throws when the bytes carry a float family or another shape no read DTO
+   *  may contain. */
+  reject_floats(bytes: Uint8Array): void;
+  /** Wire-typed node read responses `decode_read` accepts. */
+  ReadKind: {
+    readonly Markets: number;
+    readonly Events: number;
+    readonly Event: number;
+    readonly Account: number;
+    readonly AdminAction: number;
+  };
+  /** Strictly decode a node read response as its wire type (serde-shaped JS). */
+  decode_read(kind: number, bytes: Uint8Array): unknown;
+  /** Canonical resting orders, validated against the requested owner. */
+  decode_open_orders(bytes: Uint8Array, owner: Uint8Array): unknown;
+  /** Decode a complete `/v1/markets-snapshot` HTTP body bound to `chainId`. */
+  decode_markets_snapshot(body: Uint8Array, chainId: Uint8Array): unknown;
   signing_message(
     chainId: Uint8Array,
     actionType: number,
@@ -56,6 +74,12 @@ export interface WasmCore {
     expiryMs: bigint,
     action: unknown,
   ): Uint8Array;
+  /** Bridge v1 canonical 221-byte `WithdrawalAuthorizationV1` (camelCase fields in, bytes out). */
+  encode_withdrawal_authorization(fields: unknown): Uint8Array;
+  /** Bridge v1 `SHA256(canonical authorization)` — the identity the engine binds. */
+  withdrawal_authorization_digest(fields: unknown): Uint8Array;
+  /** Bridge v1 canonical 327-byte `BridgeReceiptV1` — the operator-quorum signed message. */
+  encode_bridge_receipt(fields: unknown): Uint8Array;
 }
 
 let cached: WasmCore | null = null;

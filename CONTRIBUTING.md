@@ -1,6 +1,6 @@
 # Contributing to the Proof Trading SDK
 
-Thanks for your interest in [`@proof/trading-sdk`](https://github.com/Proof-labs/trading-sdk) —
+Thanks for your interest in [`@proof-labs/trading-sdk`](https://github.com/Proof-labs/trading-sdk) —
 the developer kit for signing, encoding, querying, and submitting actions on the Proof
 Exchange. Contributions of all kinds are welcome: bug reports, fixes, tests, docs, and
 features.
@@ -10,11 +10,11 @@ features.
 This is a multi-language SDK. Build and run the test suite for the surface you touch
 before opening a PR.
 
-| Surface                                            | Path                | Build / test                                                 |
-| -------------------------------------------------- | ------------------- | ------------------------------------------------------------ |
-| **TypeScript** (published as `@proof/trading-sdk`) | repo root → `dist/` | `npm install && npm run build`, then `npm run test` (vitest) |
-| **Rust core**                                      | `crates/`           | standard `cargo build` / `cargo test` workflow               |
-| **Python bindings**                                | `python/` (PyO3)    | see `python/pyproject.toml`                                  |
+| Surface                                                 | Path                | Build / test                                                 |
+| ------------------------------------------------------- | ------------------- | ------------------------------------------------------------ |
+| **TypeScript** (published as `@proof-labs/trading-sdk`) | repo root → `dist/` | `npm install && npm run build`, then `npm run test` (vitest) |
+| **Rust core**                                           | `crates/`           | standard `cargo build` / `cargo test` workflow               |
+| **Python bindings**                                     | `python/` (PyO3)    | see `python/pyproject.toml`                                  |
 
 ## Reporting bugs & requesting features
 
@@ -46,15 +46,20 @@ without using "and," split it into separate PRs. (Distilled from
 
 ## Opening a pull request
 
-1. Fork the repository and create a branch from `main` (`<type>/<short-description>`).
+1. Fork the repository and create a branch from `dev`. Embed the GitHub issue
+   number when the work closes one: `GH<issue>/<type>/<slug>` (e.g.
+   `GH98/fix/oracle-source-vectors`); otherwise `<type>/<slug>`. `<type>` is one
+   of `chore`, `feat`, `fix`, `docs`, `hotfix`, `infra`, `refactor`. ProofOfBrain
+   cards use `GH<issue>/W##-NN/<slug>` or, without an issue, `W##-NN/<slug>`.
 2. Make your change with tests, and run the relevant build + test suite.
 3. Keep the public API stable where you can; call out any breaking change clearly in the
    PR description.
-4. Open a PR against `main` with a short summary of **what** changed and **why**.
+4. Open a PR against `dev` with a short summary of **what** changed and **why**, and
+   `Closes #<issue>` when there is one. `main` only advances by merging `dev`.
 
 ## Public API & versioning
 
-`@proof/trading-sdk` follows [semantic versioning](https://semver.org/). Breaking changes
+`@proof-labs/trading-sdk` follows [semantic versioning](https://semver.org/). Breaking changes
 to exported types or behaviour must be called out explicitly in the PR description. The
 published package surface is the TypeScript `dist/` build (see `exports` in
 `package.json`).

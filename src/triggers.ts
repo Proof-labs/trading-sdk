@@ -1,3 +1,4 @@
+import { ExecErrorCode } from "./errors.js";
 import type {
   CancelPositionTriggers,
   PositionTriggerBracket,
@@ -7,13 +8,10 @@ import type {
   StoredTriggerLimb,
   TriggerEffectiveAvailability,
   TriggerEvaluation,
-  TriggerKind,
   TriggerLimb,
-  TriggerLimbState,
   TriggerMarketConfig,
   TriggerMarketConfigInfo,
   TriggerMarketConfigState,
-  TriggerOutcomeReason,
   TriggerStatus,
 } from "./types.js";
 
@@ -48,6 +46,20 @@ function validateLimb(name: string, limb: TriggerLimb): void {
   }
 }
 
+/** The two limbs of one bracket must stay distinguishable by client id. */
+function assertDistinctLimbClientIds(
+  stopLoss: TriggerLimb | null | undefined,
+  takeProfit: TriggerLimb | null | undefined,
+): void {
+  const stopId = stopLoss?.clientTriggerId;
+  const takeId = takeProfit?.clientTriggerId;
+  if (stopId != null && takeId != null && stopId === takeId) {
+    throw new Error(
+      "stopLoss and takeProfit clientTriggerId values must differ",
+    );
+  }
+}
+
 /** Validate all state-independent invariants for action 0x25. */
 export function validateSetPositionTriggers(action: SetPositionTriggers): void {
   assertU32("market", action.market);
@@ -63,13 +75,7 @@ export function validateSetPositionTriggers(action: SetPositionTriggers): void {
   if (action.clientGroupId != null) {
     assertU64("clientGroupId", action.clientGroupId, true);
   }
-  const stopId = action.stopLoss?.clientTriggerId;
-  const takeId = action.takeProfit?.clientTriggerId;
-  if (stopId != null && takeId != null && stopId === takeId) {
-    throw new Error(
-      "stopLoss and takeProfit clientTriggerId values must differ",
-    );
-  }
+  assertDistinctLimbClientIds(action.stopLoss, action.takeProfit);
 }
 
 /** Validate all state-independent invariants for action 0x26. */
@@ -81,6 +87,38 @@ export function validateCancelPositionTriggers(
     throw new Error("owner must be exactly 20 bytes");
   }
   assertU64("expectedPositionEpoch", action.expectedPositionEpoch, true);
+}
+
+/**
+ * Order fields the placement-time SL/TP validation reads. `reduceOnly` is
+ * absent on `MarketOrder`: the wire struct carries no such field.
+ */
+export interface OrderTriggerFields {
+  stopLoss?: TriggerLimb | null;
+  takeProfit?: TriggerLimb | null;
+  reduceOnly?: boolean;
+}
+
+/**
+ * Validate the placement-time SL/TP limbs carried on an order action
+ * (`PlaceOrder` 0x01, `MarketOrder` 0x04, `CancelReplaceOrder` 0x1A).
+ * Mirrors `validateSetPositionTriggers`' limb parity (`triggerPrice > 0`,
+ * bps in `1..=9999`, distinct limb client ids) plus the engine's reduce-only
+ * incompatibility (`TriggerOrderIncompatible`): a reduce-only entry cannot
+ * open the exposure the limbs are meant to protect. Absent limbs mean "no
+ * bracket requested" and pass.
+ */
+export function validateOrderTriggers(action: OrderTriggerFields): void {
+  const { stopLoss, takeProfit } = action;
+  if (stopLoss == null && takeProfit == null) return;
+  if (action.reduceOnly === true) {
+    throw new Error(
+      `stopLoss/takeProfit cannot be attached to a reduceOnly order (TriggerOrderIncompatible, code ${ExecErrorCode.TriggerOrderIncompatible})`,
+    );
+  }
+  if (stopLoss != null) validateLimb("stopLoss", stopLoss);
+  if (takeProfit != null) validateLimb("takeProfit", takeProfit);
+  assertDistinctLimbClientIds(stopLoss, takeProfit);
 }
 
 /** Validate the state-independent portion of admin action tag 0x05. */
@@ -173,41 +211,11 @@ function bytes20(value: unknown, name: string): Uint8Array {
   return bytes;
 }
 
-const KINDS = new Set<TriggerKind>(["StopLoss", "TakeProfit"]);
-const STATES = new Set<TriggerLimbState>([
-  "Armed",
-  "Filled",
-  "Partial",
-  "NoFill",
-  "Rejected",
-  "Cancelled",
-  "Invalidated",
-]);
-const REASONS = new Set<TriggerOutcomeReason>([
-  "PositionClosed",
-  "PositionEpochChanged",
-  "PositionSideChanged",
-  "BelowMaintenance",
-  "IndeterminateAccount",
-  "MarketDisabled",
-  "MarkUnavailable",
-  "MarkStale",
-  "MarkFutureDated",
-  "NoEligibleLiquidity",
-  "SelfTradePrevention",
-  "WorkLimitReached",
-  "ExecutionRejected",
-]);
-
-function exactEnum<T extends string>(
-  value: unknown,
-  allowed: Set<T>,
-  name: string,
-): T {
-  if (typeof value !== "string" || !allowed.has(value as T)) {
-    throw new Error(`trigger decode: unknown ${name} ${String(value)}`);
+function label(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`trigger decode: ${name} must be a non-empty string`);
   }
-  return value as T;
+  return value;
 }
 
 function decodeEvaluation(value: unknown): TriggerEvaluation | null {
@@ -226,10 +234,7 @@ function decodeEvaluation(value: unknown): TriggerEvaluation | null {
     requestedQuantity,
     filledQuantity,
     residualQuantity,
-    reason:
-      row[6] == null
-        ? null
-        : exactEnum(row[6], REASONS, "TriggerOutcomeReason"),
+    reason: row[6] == null ? null : label(row[6], "TriggerOutcomeReason"),
   };
 }
 
@@ -254,11 +259,11 @@ function decodeStoredLimb(value: unknown): StoredTriggerLimb | null {
   }
   return {
     limbId,
-    kind: exactEnum(row[1], KINDS, "TriggerKind"),
+    kind: label(row[1], "TriggerKind"),
     triggerPrice,
     maxSlippageBps,
     clientTriggerId,
-    state: exactEnum(row[5], STATES, "TriggerLimbState"),
+    state: label(row[5], "TriggerLimbState"),
     lastEvaluation: decodeEvaluation(row[6]),
   };
 }
@@ -344,27 +349,20 @@ export function decodeTriggerMarketConfigInfos(
 }
 
 function decodeAvailability(value: unknown): TriggerEffectiveAvailability {
-  const simple = new Set([
-    "Available",
-    "TriggerActionsInactive",
-    "PendingActivation",
-    "MigrationIncomplete",
-    "ConfigurationMissing",
-    "MarketDisabled",
-  ] as const);
-  if (typeof value === "string" && simple.has(value as never)) {
-    return { kind: value } as TriggerEffectiveAvailability;
+  if (typeof value === "string") {
+    return { kind: label(value, "TriggerEffectiveAvailability") };
   }
   if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    const reason = (value as Record<string, unknown>).Deferred;
-    if (reason !== undefined) {
+    const entries = Object.entries(value);
+    if (entries.length === 1) {
+      const [kind, reason] = entries[0];
       return {
-        kind: "Deferred",
-        reason: exactEnum(reason, REASONS, "TriggerOutcomeReason"),
+        kind: label(kind, "TriggerEffectiveAvailability"),
+        reason: label(reason, "TriggerOutcomeReason"),
       };
     }
   }
-  throw new Error("trigger decode: unknown TriggerEffectiveAvailability");
+  throw new Error("trigger decode: malformed TriggerEffectiveAvailability");
 }
 
 function decodeBracket(value: unknown): PositionTriggerBracket {
@@ -388,10 +386,12 @@ function decodeBracket(value: unknown): PositionTriggerBracket {
   if (stopLoss === null && takeProfit === null) {
     throw new Error("trigger decode: bracket has no limbs");
   }
-  if (stopLoss !== null && stopLoss.kind !== "StopLoss") {
+  // A later kind passes through; a slot holding the other known kind is a
+  // corrupt row.
+  if (stopLoss !== null && stopLoss.kind === "TakeProfit") {
     throw new Error("trigger decode: stopLoss has wrong kind");
   }
-  if (takeProfit !== null && takeProfit.kind !== "TakeProfit") {
+  if (takeProfit !== null && takeProfit.kind === "StopLoss") {
     throw new Error("trigger decode: takeProfit has wrong kind");
   }
   if (
@@ -438,7 +438,12 @@ export function decodePositionTriggerInfos(
   });
 }
 
-/** Parse trigger-status JSON without routing 64-bit heights through Number. */
+/** Parse trigger-status JSON without routing 64-bit heights through Number.
+ *
+ * @deprecated Only `queryTriggerStatus()` used this, and the route it parses,
+ * `GET /v1/triggers/status`, is deleted upstream (exchange#619, genesis-first;
+ * api-gateway#175, gateway 4.0.0). Trigger actions are permanently active, so
+ * there is nothing to decode. It will be removed in the next major version. */
 export function decodeTriggerStatusJson(text: string): TriggerStatus {
   const protectedText = text.replace(
     /("(?:finalized_height|admission_height)"\s*:\s*)(-?\d+)/g,

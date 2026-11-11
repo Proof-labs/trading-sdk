@@ -16,6 +16,8 @@ PositionTriggerHistoryEventType: t.TypeAlias = t.Literal[
     "position_trigger_activated",
     "position_trigger_executed",
     "position_trigger_deferred",
+    "pending_triggers_attached",
+    "pending_triggers_discarded",
 ]
 TriggerMarketHistoryEventType: t.TypeAlias = t.Literal[
     "trigger_market_deferred",
@@ -24,6 +26,8 @@ TriggerMarketHistoryEventType: t.TypeAlias = t.Literal[
 TriggerHistoryEventType: t.TypeAlias = (
     PositionTriggerHistoryEventType | TriggerMarketHistoryEventType
 )
+# Engine-defined label, passed through.
+PendingTriggerDiscardReason: t.TypeAlias = str
 TriggerHistoryTime: t.TypeAlias = str | int
 
 _EventTypeT = t.TypeVar("_EventTypeT", bound=str)
@@ -69,48 +73,21 @@ _OWNER_TYPES = {
     "position_trigger_activated",
     "position_trigger_executed",
     "position_trigger_deferred",
+    "pending_triggers_attached",
+    "pending_triggers_discarded",
+}
+# Owner lifecycle types bound to a position: they carry `position_epoch` and
+# `group_id`. A pending bracket is bound to a not-yet-filled order and has no
+# position identity yet.
+_POSITION_TYPES = {
+    "position_triggers_set",
+    "position_triggers_cancelled",
+    "position_triggers_invalidated",
+    "position_trigger_activated",
+    "position_trigger_executed",
+    "position_trigger_deferred",
 }
 _MARKET_TYPES = {"trigger_market_deferred", "trigger_market_resumed"}
-_REASONS = {
-    "position_closed",
-    "position_epoch_changed",
-    "position_side_changed",
-    "below_maintenance",
-    "indeterminate_account",
-    "market_disabled",
-    "mark_unavailable",
-    "mark_stale",
-    "mark_future_dated",
-    "no_eligible_liquidity",
-    "self_trade_prevention",
-    "work_limit_reached",
-    "execution_rejected",
-}
-_RESULTS = {
-    "filled",
-    "partial",
-    "no_fill",
-    "rejected",
-    "invalidated",
-}
-_EXECUTION_STOP_REASONS = {
-    "no_eligible_liquidity",
-    "self_trade_prevention",
-    "work_limit_reached",
-}
-_POSITION_INVALIDATION_REASONS = {
-    "position_closed",
-    "position_epoch_changed",
-    "position_side_changed",
-}
-_ACCOUNT_DEFERRED_REASONS = {"below_maintenance", "indeterminate_account"}
-_MARKET_DEFERRED_REASONS = {
-    "market_disabled",
-    "mark_unavailable",
-    "mark_stale",
-    "mark_future_dated",
-}
-_LIMB_KINDS = {"stop_loss", "take_profit"}
 _EVENT_KEYS = {
     "event_key",
     "block_height",
@@ -125,6 +102,14 @@ _EVENT_KEYS = {
 _UINT_RE = re.compile(r"^(?:0|[1-9][0-9]*)$")
 _INT_RE = re.compile(r"^(?:0|-?[1-9][0-9]*)$")
 _OWNER_RE = re.compile(r"^[0-9a-f]{40}$")
+# The wire's limb render for one pending-bracket limb: present is
+# `trigger_price=<u64>,max_slippage_bps=<u64>,client_trigger_id=<u64|none>`
+# (that exact shape and order); absent is the key with an empty value.
+_LIMB_RENDER_RE = re.compile(
+    r"^trigger_price=(?:0|[1-9][0-9]*),"
+    r"max_slippage_bps=(?:0|[1-9][0-9]*),"
+    r"client_trigger_id=(?:none|(?:0|[1-9][0-9]*))$"
+)
 _RFC3339_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$"
 )
@@ -133,14 +118,14 @@ _RFC3339_RE = re.compile(
 def canonical_owner(value: bytes | str) -> str:
     if isinstance(value, bytes):
         if len(value) != 20:
-            raise ValueError("trigger history owner must be exactly 20 bytes")
+            raise ValueError("history owner must be exactly 20 bytes")
         text = value.hex()
     elif isinstance(value, str):
-        text = value.removeprefix("0x").lower()
+        text = value.lower().removeprefix("0x")
     else:
-        raise ValueError("trigger history owner must be bytes or hex")
+        raise ValueError("history owner must be bytes or hex")
     if not _OWNER_RE.fullmatch(text):
-        raise ValueError("trigger history owner must be a 40-character hex address")
+        raise ValueError("history owner must be a 40-character hex address")
     return text
 
 
@@ -188,12 +173,11 @@ def decode_position_trigger_history_page(
     events_raw = row["trigger_events"]
     if not isinstance(events_raw, list):
         raise _error("trigger_events must be an array")
+    decoded = (_decode_event(item, owner, market, "owner") for item in events_raw)
     events = [
-        t.cast(
-            TriggerHistoryEvent[PositionTriggerHistoryEventType],
-            _decode_event(item, owner, market, "owner"),
-        )
-        for item in events_raw
+        t.cast(TriggerHistoryEvent[PositionTriggerHistoryEventType], event)
+        for event in decoded
+        if event is not None
     ]
     _newest_first(events)
     return PositionTriggerHistoryPage(
@@ -212,12 +196,11 @@ def decode_trigger_market_history_page(
     events_raw = row["trigger_market_events"]
     if not isinstance(events_raw, list):
         raise _error("trigger_market_events must be an array")
+    decoded = (_decode_event(item, None, market, "market") for item in events_raw)
     events = [
-        t.cast(
-            TriggerHistoryEvent[TriggerMarketHistoryEventType],
-            _decode_event(item, None, market, "market"),
-        )
-        for item in events_raw
+        t.cast(TriggerHistoryEvent[TriggerMarketHistoryEventType], event)
+        for event in decoded
+        if event is not None
     ]
     _newest_first(events)
     return TriggerMarketHistoryPage(
@@ -283,13 +266,6 @@ def _rfc3339(value: t.Any, name: str) -> str:
     return text
 
 
-def _enum(value: t.Any, allowed: set[str], name: str, *, empty: bool = False) -> str:
-    text = _string(value, name, nonempty=not empty)
-    if text not in allowed and not (empty and text == ""):
-        raise _error(f"unknown {name} {text}")
-    return text
-
-
 def _payload(value: t.Any) -> dict[str, str]:
     row = _object(value, "payload")
     if not all(isinstance(item, str) for item in row.values()):
@@ -307,6 +283,14 @@ def _response_owner(value: t.Any, name: str) -> str:
 def _require_unsigned(payload: dict[str, str], keys: t.Iterable[str]) -> None:
     for key in keys:
         _unsigned(payload.get(key), f"payload.{key}")
+
+
+def _require_limb_render(value: str | None, name: str) -> None:
+    """The wire's limb render, or the empty string when the limb is absent."""
+    if value == "":
+        return
+    if value is None or _LIMB_RENDER_RE.match(value) is None:
+        raise _error(f"{name} is not the wire limb render")
 
 
 def _validate_payload(
@@ -338,7 +322,11 @@ def _validate_payload(
             or _response_owner(payload.get("owner"), "payload.owner") != event_owner
         ):
             raise _error("payload owner disagrees with event")
-        _require_unsigned(payload, ("position_epoch", "group_id"))
+        # A pending bracket is bound to a not-yet-filled order: it has no
+        # position identity yet, so it carries `order_id` instead of
+        # epoch/group.
+        if event_type in _POSITION_TYPES:
+            _require_unsigned(payload, ("position_epoch", "group_id"))
     elif "owner" in payload:
         raise _error("shared market payload carries owner")
 
@@ -360,8 +348,33 @@ def _validate_payload(
             raise _error("invalid active_from_height")
         if payload["stop_limb_id"] == "0" and payload["take_profit_limb_id"] == "0":
             raise _error("set event has no trigger limbs")
-    elif event_type in {"position_triggers_cancelled", "position_triggers_invalidated"}:
+        # Additive since schema 39: the placement order whose first fill
+        # installed the bracket. "0" is the engine's none-sentinel; absent on
+        # rows projected before the attribute existed.
+        if "source_order_id" in payload:
+            _unsigned(payload.get("source_order_id"), "payload.source_order_id")
+    elif event_type == "position_triggers_cancelled":
         pass
+    elif event_type == "position_triggers_invalidated":
+        # Additive since schema 39: the engine's u8 invalidation attribute,
+        # "0" = unspecified; absent on pre-upgrade rows.
+        if "invalidation_reason" in payload:
+            _unsigned(
+                payload.get("invalidation_reason"),
+                "payload.invalidation_reason",
+                255,
+            )
+    elif event_type == "pending_triggers_attached":
+        _require_limb_render(payload.get("stop_loss"), "payload.stop_loss")
+        _require_limb_render(payload.get("take_profit"), "payload.take_profit")
+        if payload.get("stop_loss") == "" and payload.get("take_profit") == "":
+            raise _error("pending attach carries no trigger limbs")
+        _unsigned(payload.get("order_id"), "payload.order_id", nonzero=True)
+        # "0" = the order carried no client order id.
+        _unsigned(payload.get("client_order_id"), "payload.client_order_id")
+    elif event_type == "pending_triggers_discarded":
+        _unsigned(payload.get("order_id"), "payload.order_id", nonzero=True)
+        _string(payload.get("reason"), "payload.reason")
     elif event_type == "position_trigger_activated":
         _require_unsigned(
             payload,
@@ -376,7 +389,7 @@ def _validate_payload(
                 "execution_order_id",
             ),
         )
-        _enum(payload.get("limb_kind"), _LIMB_KINDS, "payload.limb_kind")
+        _string(payload.get("limb_kind"), "payload.limb_kind")
     elif event_type == "position_trigger_executed":
         _require_unsigned(
             payload,
@@ -393,47 +406,14 @@ def _validate_payload(
                 "execution_order_id",
             ),
         )
-        _enum(payload.get("limb_kind"), _LIMB_KINDS, "payload.limb_kind")
-        _enum(payload.get("result"), _RESULTS, "payload.result")
+        _string(payload.get("limb_kind"), "payload.limb_kind")
+        _string(payload.get("result"), "payload.result")
         _signed_i64(payload.get("total_fee"), "payload.total_fee")
-        _enum(payload.get("reason"), _REASONS, "payload.reason", empty=True)
+        _string(payload.get("reason"), "payload.reason", nonempty=False)
         if int(payload["filled_quantity"]) + int(payload["residual_quantity"]) != int(
             payload["requested_quantity"]
         ):
             raise _error("executed quantities do not conserve")
-        requested = int(payload["requested_quantity"])
-        filled = int(payload["filled_quantity"])
-        residual = int(payload["residual_quantity"])
-        result = payload["result"]
-        reason = payload["reason"]
-        valid = (
-            result == "filled"
-            and filled == requested
-            and residual == 0
-            and reason == ""
-        ) or (
-            result == "partial"
-            and filled > 0
-            and residual > 0
-            and reason in _EXECUTION_STOP_REASONS
-        ) or (
-            result == "no_fill"
-            and filled == 0
-            and residual > 0
-            and reason in _EXECUTION_STOP_REASONS
-        ) or (
-            result == "rejected"
-            and filled == 0
-            and residual > 0
-            and reason == "execution_rejected"
-        ) or (
-            result == "invalidated"
-            and filled == 0
-            and residual > 0
-            and reason in _POSITION_INVALIDATION_REASONS
-        )
-        if not valid:
-            raise _error("result, quantities, and reason disagree")
     elif event_type == "position_trigger_deferred":
         _require_unsigned(
             payload,
@@ -446,16 +426,12 @@ def _validate_payload(
                 "requested_quantity",
             ),
         )
-        _enum(payload.get("limb_kind"), _LIMB_KINDS, "payload.limb_kind")
-        _enum(payload.get("reason"), _ACCOUNT_DEFERRED_REASONS, "payload.reason")
+        _string(payload.get("limb_kind"), "payload.limb_kind")
+        _string(payload.get("reason"), "payload.reason")
     elif event_type == "trigger_market_deferred":
-        _enum(payload.get("reason"), _MARKET_DEFERRED_REASONS, "payload.reason")
+        _string(payload.get("reason"), "payload.reason")
     elif event_type == "trigger_market_resumed":
-        _enum(
-            payload.get("previous_reason"),
-            _MARKET_DEFERRED_REASONS,
-            "payload.previous_reason",
-        )
+        _string(payload.get("previous_reason"), "payload.previous_reason")
 
 
 def _decode_event(
@@ -463,7 +439,7 @@ def _decode_event(
     expected_owner: str | None,
     expected_market: str | None,
     scope: t.Literal["owner", "market"],
-) -> TriggerHistoryEvent[str]:
+) -> TriggerHistoryEvent[str] | None:
     row = _object(value, "event")
     _exact_keys(row, _EVENT_KEYS, "event")
     event_key = _string(row["event_key"], "event_key")
@@ -474,6 +450,10 @@ def _decode_event(
         raise _error("event_key is not canonical")
     block_time = _rfc3339(row["block_time"], "block_time")
     event_type = _string(row["event_type"], "event_type")
+    # An event type added after this SDK version is skipped, not refused, so it
+    # cannot fail the whole page; a known type on the wrong route still fails.
+    if event_type not in _OWNER_TYPES and event_type not in _MARKET_TYPES:
+        return None
     allowed = _OWNER_TYPES if scope == "owner" else _MARKET_TYPES
     if event_type not in allowed:
         raise _error(f"{event_type} is invalid for {scope} history")
@@ -542,6 +522,7 @@ def _filter_time(value: TriggerHistoryTime, name: str) -> str:
 
 __all__ = [
     "PositionTriggerHistoryEventType",
+    "PendingTriggerDiscardReason",
     "TriggerMarketHistoryEventType",
     "TriggerHistoryEventType",
     "TriggerHistoryTime",

@@ -1,0 +1,108 @@
+/** Channels exposed by the gateway's multiplexed `/ws` feed. */
+export type FeedChannel = "orderbook" | "trades" | "accountEvents";
+
+/** One aggregated book level on the wire: `[price, totalQuantity, orderCount]`.
+ *  Price is micro-USDC, quantity integer lots. */
+export type FeedOrderbookLevel = [
+  price: number,
+  totalQuantity: number,
+  orderCount: number,
+];
+
+/** Full-book frame sent immediately on `orderbook` subscribe. */
+export interface OrderbookSnapshotFrame {
+  channel: "orderbook";
+  type: "snapshot";
+  market: number;
+  bids: FeedOrderbookLevel[];
+  asks: FeedOrderbookLevel[];
+}
+
+/** Single-level delta on the `orderbook` channel. `totalQuantity === 0`
+ *  (and `orderCount === 0`) means the level was emptied. */
+export interface OrderbookUpdateFrame {
+  channel: "orderbook";
+  type: "update";
+  market: number;
+  side: "buy" | "sell";
+  price: number;
+  totalQuantity: number;
+  orderCount: number;
+}
+
+export type OrderbookFrame = OrderbookSnapshotFrame | OrderbookUpdateFrame;
+
+/** A public fill on the `trades` channel. Price/quantity are decimal
+ *  strings (micro-USDC / lots); `payload` is the full fill record. */
+export interface TradeFrame {
+  channel: "trades";
+  type: "trade";
+  market: number;
+  fillId: string;
+  makerSide: "buy" | "sell";
+  price: string;
+  quantity: string;
+  payload: Record<string, string>;
+}
+
+/** Account state snapshot sent on `accountEvents` subscribe, proxied from
+ *  the node REST `GET /v1/account/{owner}`. `account.data` is the base64
+ *  msgpack envelope — decode with the same path as `queryAccount`. */
+export interface AccountSnapshotFrame {
+  channel: "accountEvents";
+  type: "snapshot";
+  owner: string;
+  account: unknown;
+  /** `"initial"` for a subscription's first snapshot, `"resent"` for one
+   *  resent to a listener that joined later. Absent before gateway 7.9.0. */
+  snapshot?: "initial" | "resent";
+  /** The block height the snapshot was read at. Absent from gateways and
+   *  nodes that do not report it. */
+  height?: number;
+}
+
+/** A live engine event for a subscribed owner. `type` is the gateway's
+ *  normalised frame type (`"orderUpdate"`, `"fill"`, …); `eventType` is the
+ *  original engine event name (`"order_placed"`, `"trade_executed"`, …). */
+export interface AccountEventFrame {
+  channel: "accountEvents";
+  type: string;
+  eventType: string;
+  owner: string;
+  height: number;
+  /** The event's `/v1/history/account-events` row key (gateway 7.9.0 and
+   *  later): the row's `tx_hash` (the uppercase transaction hash, or
+   *  `height-{h}-kind-block-event-{i}` for a block-level event). */
+  txHash?: string | null;
+  /** The transaction's position in its block. Live frames carry it (gateway
+   *  7.9.0 and later; read as 0 when the block omits it, `null` for a
+   *  block-level event). A backfilled event carries the history row's
+   *  `tx_position`, which history serves only when one block carries the
+   *  same transaction hash more than once, and `null` otherwise. */
+  txIndex?: number | null;
+  /** The row's `event_index`: the event's index among its transaction's (or
+   *  block's) events. */
+  eventIndex?: number;
+  /** True when the SDK delivered this event from history after a reconnect
+   *  rather than from the live feed. */
+  backfilled?: boolean;
+  payload: Record<string, unknown>;
+}
+
+export type AccountFrame = AccountSnapshotFrame | AccountEventFrame;
+
+/** Any channel-tagged data frame delivered to a subscriber. */
+export type FeedFrame = OrderbookFrame | TradeFrame | AccountFrame;
+
+/** Error frame for a rejected control message or channel subscription.
+ *  Correlates to the offending request via `id` when present. */
+export interface FeedErrorFrame {
+  type: "error";
+  id?: number;
+  channel?: string;
+  code?: number;
+  error: string;
+}
+
+/** Connection state of a {@link GatewayFeed}. */
+export type FeedState = "closed" | "connecting" | "open" | "reconnecting";

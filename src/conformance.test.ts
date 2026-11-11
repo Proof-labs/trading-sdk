@@ -8,11 +8,8 @@
 //   - codec vectors: PASS
 //   - signing vectors: PASS (signEnvelopeFromPayload + pubkeyToOwner/ownerToHex)
 //   - errors vectors:  PASS (ExecErrorCode manifest + execErrorName log decoder)
+//   - events vectors:  PASS (decodeLiquidationEvent / decodeVoidSettlementEvent over the engine's attributes)
 //   - nonce vectors:   SKIPPED — nonces are derived from timestamps, not a step function
-//
-// `OracleUpdateComposite` (0x14) is now wired (operator action — composite-CEX
-// feeder price submission). Its codec vectors are exercised here like any other
-// action; the toAction adapter below maps it.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -27,6 +24,9 @@ import {
 } from "./codec.js";
 import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
+import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
+import { decodeLiquidationEvent } from "./liquidation-events.js";
+import { decodeVoidSettlementEvent } from "./void-events.js";
 import {
   ActionType,
   Outcome,
@@ -35,6 +35,7 @@ import {
   TimeInForce,
   type Action,
   type ActionTypeValue,
+  type TriggerLimb,
 } from "./types.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -81,6 +82,17 @@ const PRICE_CMP: Record<string, PriceComparison> = {
   LessThanOrEqual: "LessThanOrEqual",
 };
 
+/** Vector limb dict (snake_case) → the SDK's camelCase `TriggerLimb`. */
+function limb(v: unknown): TriggerLimb | null {
+  if (v === null || v === undefined) return null;
+  const l = v as Record<string, unknown>;
+  return {
+    triggerPrice: big(l.trigger_price),
+    maxSlippageBps: l.max_slippage_bps as number,
+    clientTriggerId: bigOrNull(l.client_trigger_id),
+  };
+}
+
 /** u8-array (vector byte field) → Uint8Array. */
 function bytes(v: unknown): Uint8Array {
   return Uint8Array.from(v as number[]);
@@ -97,16 +109,26 @@ function bigOrNull(v: unknown): bigint | null {
   return BigInt(v as number | string);
 }
 
-/**
- * Adapter: core snake_case `input` dict → this SDK's `Action` union.
- * Wired for all action types including 0x14 OracleUpdateComposite (operator
- * action — composite-CEX feeder).
- */
+/** Adapter: core snake_case `input` dict → this SDK's `Action` union. */
 function toAction(
   actionType: ActionTypeValue,
   input: Record<string, unknown>,
 ): Action {
   switch (actionType) {
+    case ActionType.SubmitOracleObservation:
+      return {
+        type: "SubmitOracleObservation",
+        data: {
+          market: input.market as number,
+          policyVersion: big(input.policy_version),
+          sourceId: input.source_id as number,
+          publishTimeMs: big(input.publish_time_ms),
+          priceMicro: big(input.price_micro),
+          confidenceMicro: bigOrNull(input.confidence_micro),
+          evidenceDigest: bytes(input.evidence_digest),
+          signer: bytes(input.signer),
+        },
+      };
     case ActionType.PlaceOrder:
       return {
         type: "PlaceOrder",
@@ -120,6 +142,8 @@ function toAction(
           postOnly: input.post_only as boolean,
           reduceOnly: input.reduce_only as boolean,
           timeInForce: TIF[input.time_in_force as string],
+          stopLoss: limb(input.stop_loss),
+          takeProfit: limb(input.take_profit),
         },
       };
     case ActionType.CancelOrder:
@@ -158,6 +182,8 @@ function toAction(
           postOnly: input.post_only as boolean,
           reduceOnly: input.reduce_only as boolean,
           timeInForce: TIF[input.time_in_force as string],
+          stopLoss: limb(input.stop_loss),
+          takeProfit: limb(input.take_profit),
         },
       };
     case ActionType.AmendOrder:
@@ -170,28 +196,6 @@ function toAction(
           newQuantity: bigOrNull(input.new_quantity),
         },
       };
-    case ActionType.OracleUpdateComposite:
-      return {
-        type: "OracleUpdateComposite",
-        data: {
-          market: input.market as number,
-          price: big(input.price),
-          nSources: input.n_sources == null ? 0 : Number(big(input.n_sources)),
-          signer: bytes(input.signer),
-          publishTimeMs:
-            input.publish_time_ms == null ? 0n : big(input.publish_time_ms),
-        },
-      };
-    case ActionType.OracleUpdate:
-      return {
-        type: "OracleUpdate",
-        data: {
-          market: input.market as number,
-          price: big(input.price),
-          signer: bytes(input.signer),
-          publishTimeMs: big(input.publish_time_ms ?? 0),
-        },
-      };
     case ActionType.MarketOrder:
       return {
         type: "MarketOrder",
@@ -201,6 +205,8 @@ function toAction(
           side: SIDE[input.side as string],
           quantity: big(input.quantity),
           clientOrderId: bigOrNull(input.client_order_id),
+          stopLoss: limb(input.stop_loss),
+          takeProfit: limb(input.take_profit),
         },
       };
     case ActionType.Deposit:
@@ -236,6 +242,8 @@ function toAction(
           poolId: input.pool_id as number,
           szDecimals: input.sz_decimals as number,
           ticker: input.ticker as string,
+          tickSize: big(input.tick_size),
+          lotSize: big(input.lot_size),
           ...(input.max_open_interest === undefined
             ? {}
             : { maxOpenInterest: big(input.max_open_interest) }),
@@ -250,7 +258,8 @@ function toAction(
           solanaDestination: bytes(input.solana_destination),
         },
       };
-    case ActionType.ConfirmDeposit:
+    case ActionType.ConfirmDeposit: {
+      const loc = input.locator as Record<string, unknown> | undefined | null;
       return {
         type: "ConfirmDeposit",
         data: {
@@ -258,8 +267,18 @@ function toAction(
           amount: big(input.amount),
           solanaTxSig: bytes(input.solana_tx_sig),
           signer: bytes(input.signer),
+          ...(loc
+            ? {
+                locator: {
+                  topIndex: Number(loc.top_index),
+                  innerIndex:
+                    loc.inner_index == null ? null : Number(loc.inner_index),
+                },
+              }
+            : {}),
         },
       };
+    }
     case ActionType.ConfirmWithdrawal:
       return {
         type: "ConfirmWithdrawal",
@@ -294,16 +313,48 @@ function toAction(
           agentPubkey: bytes(input.agent_pubkey),
         },
       };
-    case ActionType.CreateImpactMarket:
+    case ActionType.CreateSubAccount:
       return {
-        type: "CreateImpactMarket",
-        data: toCreateImpactMarketValue(input),
+        type: "CreateSubAccount",
+        data: {
+          owner: bytes(input.owner),
+          subAccountId: input.sub_account_id as number,
+          name: bytes(input.name),
+        },
+      };
+    case ActionType.SubAccountTransfer:
+      return {
+        type: "SubAccountTransfer",
+        data: {
+          owner: bytes(input.owner),
+          from: bytes(input.from),
+          to: bytes(input.to),
+          amount: big(input.amount),
+        },
+      };
+    case ActionType.ClaimWithdrawalPayout:
+      return {
+        type: "ClaimWithdrawalPayout",
+        data: {
+          withdrawalId: big(input.withdrawal_id),
+          holder: bytes(input.holder),
+        },
+      };
+    case ActionType.RecordWithdrawalPayout:
+      return {
+        type: "RecordWithdrawalPayout",
+        data: {
+          withdrawalId: big(input.withdrawal_id),
+          holder: bytes(input.holder),
+          solanaSignature: bytes(input.solana_signature),
+          lastValidBlockHeight: big(input.last_valid_block_height),
+        },
       };
     case ActionType.ResolveEvent:
       return {
         type: "ResolveEvent",
         data: {
-          impactMarketId: input.impact_market_id as number,
+          eventId: input.event_id as number,
           outcome: OUTCOME[input.outcome as string],
           signer: bytes(input.signer),
         },
@@ -337,7 +388,6 @@ function toAction(
           markSourceMode: msMode === 0 || msMode === 1 ? msMode : null,
           maxMarkSpreadBps: optNum(input.max_mark_spread_bps),
           cexCompositeStalenessMs: optBig(input.cex_composite_staleness_ms),
-          partialLiquidationEnabled: optBool(input.partial_liquidation_enabled),
           feeTiers: input.fee_tiers == null ? null : (input.fee_tiers as any),
           imBps: optNum(input.im_bps),
           mmBps: optNum(input.mm_bps),
@@ -384,7 +434,7 @@ function toAction(
         data: {
           proposer: bytes(input.proposer),
           registryVersion: big(input.registry_version),
-          action: toAdminAction(input.action as Record<string, unknown>),
+          action: toAdminAction(input.action),
         },
       };
     case ActionType.ApproveAdminAction:
@@ -399,7 +449,7 @@ function toAction(
           createdHeight: big(input.created_height),
           createdMs: big(input.created_ms),
           expiryMs: big(input.expiry_ms),
-          action: toAdminAction(input.action as Record<string, unknown>),
+          action: toAdminAction(input.action),
           contentHash: bytes(input.content_hash),
         },
       };
@@ -534,32 +584,46 @@ function toCreateMarketValue(
     poolId: m.pool_id as number,
     szDecimals: m.sz_decimals as number,
     ticker: m.ticker as string,
+    tickSize: big(m.tick_size),
+    lotSize: big(m.lot_size),
     maxOpenInterest: big(m.max_open_interest),
   };
 }
 
-/** Reconstruct a TS `CreateImpactMarket` value from the vector's serde map
- *  form — shared by the relayer action (0x0e), the `AdminAction` arm, and
- *  `Batch` items. */
-function toCreateImpactMarketValue(
+/** Reconstruct a TS `AttachConditional` value from the vector's serde map
+ *  form — shared by the `AdminAction` arm and `Batch` items. */
+function toAttachConditionalValue(
   input: Record<string, unknown>,
-): import("./types.js").CreateImpactMarket {
-  const os = input.oracle_source;
-  const parsedOs =
-    os === null || os === undefined ? undefined : parseOracleSource(os);
+): import("./types.js").AttachConditional {
   return {
-    impactMarketId: input.impact_market_id as number,
+    eventId: input.event_id as number,
     underlyingMarket: input.underlying_market as number,
     childMarketBase: input.child_market_base as number,
-    question: input.question as string,
-    deadlineMs: big(input.deadline_ms),
-    resolutionWindowMs: big(input.resolution_window_ms),
     imBps: input.im_bps as number,
     mmBps: input.mm_bps as number,
     takerFeeBps: input.taker_fee_bps as number,
     makerFeeBps: input.maker_fee_bps as number,
-    fundingIntervalMs: big(input.funding_interval_ms),
-    maxFundingRateBps: input.max_funding_rate_bps as number,
+    signer: bytes(input.signer),
+    maxOpenInterest: big(input.max_open_interest),
+  };
+}
+
+/** Reconstruct a TS `CreateEvent` value from the vector's serde map form. */
+function toCreateEventValue(
+  input: Record<string, unknown>,
+): import("./types.js").CreateEvent {
+  const os = input.oracle_source;
+  const parsedOs =
+    os === null || os === undefined ? undefined : parseOracleSource(os);
+  return {
+    eventId: input.event_id as number,
+    childMarketBase: input.child_market_base as number,
+    poolId: input.pool_id as number,
+    question: input.question as string,
+    settlementMs: big(input.settlement_ms),
+    resolutionWindowMs: big(input.resolution_window_ms),
+    takerFeeBps: input.taker_fee_bps as number,
+    makerFeeBps: input.maker_fee_bps as number,
     signer: bytes(input.signer),
     oracleSource: parsedOs,
     description:
@@ -570,6 +634,7 @@ function toCreateImpactMarketValue(
       input.rules === "" || input.rules == null
         ? undefined
         : (input.rules as string),
+    maxOpenInterest: big(input.max_open_interest),
   };
 }
 
@@ -583,11 +648,11 @@ function toAdminBatchItem(
       value: toCreateMarketValue(v.CreateMarket as Record<string, unknown>),
     };
   }
-  if (v.CreateImpactMarket) {
+  if (v.AttachConditional) {
     return {
-      kind: "CreateImpactMarket",
-      value: toCreateImpactMarketValue(
-        v.CreateImpactMarket as Record<string, unknown>,
+      kind: "AttachConditional",
+      value: toAttachConditionalValue(
+        v.AttachConditional as Record<string, unknown>,
       ),
     };
   }
@@ -596,23 +661,103 @@ function toAdminBatchItem(
   );
 }
 
+/** Insurance transfer rows from the vector's serde map form. */
+function toInsuranceAllocations(
+  raw: unknown,
+): import("./types.js").InsuranceFundAllocation[] {
+  return (raw as Record<string, unknown>[]).map((a) => ({
+    poolId: a.pool_id as number,
+    amount: big(a.amount),
+  }));
+}
+
 /** Reconstruct a TS `AdminAction` from the vector's serde map form. Throws
  *  on an unknown variant rather than falling through — a vector this suite
  *  cannot name must fail the run, not mis-parse as a registry update. */
-function toAdminAction(
-  v: Record<string, unknown>,
-): import("./types.js").AdminAction {
+function toAdminAction(input: unknown): import("./types.js").AdminAction {
+  // A unit variant (no fields) is serde's bare variant-name string, not a map.
+  if (typeof input === "string") {
+    if (input === "UnpauseBridge") return { kind: "UnpauseBridge" };
+    throw new Error(`toAdminAction: unknown unit variant ${input}`);
+  }
+  const v = input as Record<string, unknown>;
+  if (v.SetOracleGuards) {
+    const guards = v.SetOracleGuards as Record<string, unknown>;
+    return {
+      kind: "SetOracleGuards",
+      value: {
+        market: guards.market as number,
+        markPriceMaxOracleAgeMs: bigOrNull(guards.mark_price_max_oracle_age_ms),
+        maxOracleDeviationBps: guards.max_oracle_deviation_bps as number | null,
+      },
+    };
+  }
+  if (v.ScheduleUpgrade) {
+    const plan = v.ScheduleUpgrade as Record<string, unknown>;
+    return {
+      kind: "ScheduleUpgrade",
+      value: {
+        targetHeight: big(plan.target_height),
+        major: plan.major as number,
+        minor: plan.minor as number,
+        successorSha256: bytes(plan.successor_sha256),
+      },
+    };
+  }
+  if (v.SetLiquidationConfig) {
+    const update = v.SetLiquidationConfig as Record<string, unknown>;
+    const c = update.config as Record<string, number> & {
+      full_close_threshold: { numerator: number; denominator: number };
+    };
+    return {
+      kind: "SetLiquidationConfig",
+      value: {
+        predecessor: big(update.predecessor),
+        sequence: big(update.sequence),
+        config: {
+          targetRatioBps: c.target_ratio_bps,
+          fullCloseThreshold: { ...c.full_close_threshold },
+          partialPenaltyBps: c.partial_penalty_bps,
+          maxBookOrders: c.max_book_orders,
+          maxCommittedFills: c.max_committed_fills,
+        },
+      },
+    };
+  }
+  if (v.CancelUpgrade) {
+    const cancel = v.CancelUpgrade as Record<string, unknown>;
+    return {
+      kind: "CancelUpgrade",
+      value: { targetHeight: big(cancel.target_height) },
+    };
+  }
+  if (v.ConfigureOraclePolicy) {
+    const policy = v.ConfigureOraclePolicy as Record<string, unknown>;
+    return {
+      kind: "ConfigureOraclePolicy",
+      value: {
+        effectiveHeight: big(policy.effective_height),
+        bundle: bytes(policy.bundle),
+      },
+    };
+  }
   if (v.CreateMarket) {
     return {
       kind: "CreateMarket",
       value: toCreateMarketValue(v.CreateMarket as Record<string, unknown>),
     };
   }
-  if (v.CreateImpactMarket) {
+  if (v.CreateEvent) {
     return {
-      kind: "CreateImpactMarket",
-      value: toCreateImpactMarketValue(
-        v.CreateImpactMarket as Record<string, unknown>,
+      kind: "CreateEvent",
+      value: toCreateEventValue(v.CreateEvent as Record<string, unknown>),
+    };
+  }
+  if (v.AttachConditional) {
+    return {
+      kind: "AttachConditional",
+      value: toAttachConditionalValue(
+        v.AttachConditional as Record<string, unknown>,
       ),
     };
   }
@@ -632,6 +777,16 @@ function toAdminAction(
       },
     };
   }
+  if (v.CancelAllOrdersForAccount) {
+    const c = v.CancelAllOrdersForAccount as Record<string, unknown>;
+    return {
+      kind: "CancelAllOrdersForAccount",
+      value: {
+        owner: bytes(c.owner),
+        market: c.market === null ? null : (c.market as number),
+      },
+    };
+  }
   if (v.SetTriggerMarketConfig) {
     const c = v.SetTriggerMarketConfig as Record<string, unknown>;
     return {
@@ -644,6 +799,66 @@ function toAdminAction(
         maxMarkAgeMs: big(c.max_mark_age_ms),
         maxFuturePublishSkewMs: big(c.max_future_publish_skew_ms),
         maxActiveBrackets: big(c.max_active_brackets),
+      },
+    };
+  }
+  if (v.UpdateAuthoritySet) {
+    const u = v.UpdateAuthoritySet as Record<string, unknown>;
+    return {
+      kind: "UpdateAuthoritySet",
+      value: {
+        domain: u.domain as import("./types.js").AuthorityDomain,
+        add: (u.add as unknown[]).map((a) => bytes(a)),
+        remove: (u.remove as unknown[]).map((a) => bytes(a)),
+      },
+    };
+  }
+  if (v.FundInsuranceFund) {
+    const f = v.FundInsuranceFund as Record<string, unknown>;
+    return {
+      kind: "FundInsuranceFund",
+      value: {
+        fundingId: big(f.funding_id),
+        source: bytes(f.source),
+        allocations: toInsuranceAllocations(f.allocations),
+      },
+    };
+  }
+  if (v.VoidEvent) {
+    const e = v.VoidEvent as Record<string, unknown>;
+    return {
+      kind: "VoidEvent",
+      value: { eventId: e.event_id as number, yesPrice: big(e.yes_price) },
+    };
+  }
+  if (v.SettleEvent) {
+    const e = v.SettleEvent as Record<string, unknown>;
+    return {
+      kind: "SettleEvent",
+      value: {
+        eventId: e.event_id as number,
+        outcome: Outcome[e.outcome as keyof typeof Outcome],
+      },
+    };
+  }
+  if (v.SetMarketStatus) {
+    const s = v.SetMarketStatus as Record<string, unknown>;
+    return {
+      kind: "SetMarketStatus",
+      value: {
+        market: s.market as number,
+        status: s.status as import("./types.js").MarketStatus,
+      },
+    };
+  }
+  if (v.WithdrawInsuranceFund) {
+    const w = v.WithdrawInsuranceFund as Record<string, unknown>;
+    return {
+      kind: "WithdrawInsuranceFund",
+      value: {
+        withdrawalId: big(w.withdrawal_id),
+        recipient: bytes(w.recipient),
+        allocations: toInsuranceAllocations(w.allocations),
       },
     };
   }
@@ -663,27 +878,24 @@ function toEmergencyAction(
       },
     };
   }
-  if (v.SetReduceOnly) {
-    return {
-      kind: "SetReduceOnly",
-      value: {
-        marketId: (v.SetReduceOnly as Record<string, unknown>)
-          .market_id as number,
-      },
-    };
-  }
-  return { kind: "HaltTrading" };
+  throw new Error(
+    `toEmergencyAction: unknown variant ${Object.keys(v).join(",")}`,
+  );
 }
 
 /**
  * Parse an `EventOracleSource` value from a vector's raw JSON structure
  * (Rust serde wire format) into the SDK's tagged-union shape.
  *
- * Wire format:
- *   - null / absent  → undefined (RelayerAttested default)
+ * Vector JSON (serde_json's externally-tagged form, the same shape the other
+ * nested enums such as `AdminAction` use — struct variants are a one-entry
+ * map of snake_case fields, NOT the positional array rmp-serde puts on the
+ * wire):
+ *   - null / absent  → undefined (encodes as nil; NOT the RelayerAttested
+ *     unit variant, which is the bare string on the wire)
  *   - "RelayerAttested"  → { kind: "RelayerAttested" }
- *   - {"UnderlyingPriceVsStrike": [strikePrice, comparisonStr]}
- *   - {"MarketOracle": [market, strikePrice, comparisonStr]}
+ *   - {"UnderlyingPriceVsStrike": { strike_price, comparison }}
+ *   - {"MarketOracle": { market, strike_price, comparison }}
  */
 function parseOracleSource(v: unknown): any {
   if (typeof v === "string") {
@@ -696,20 +908,26 @@ function parseOracleSource(v: unknown): any {
     if (keys.length !== 1)
       throw new Error(`expected single-key EventOracleSource map`);
     const variant = keys[0];
-    const fields = obj[variant] as unknown[];
+    const fields = obj[variant] as Record<string, unknown>;
+    const comparison = (name: unknown): PriceComparison => {
+      const cmp = PRICE_CMP[name as string];
+      if (cmp === undefined)
+        throw new Error(`unknown PriceComparison: ${String(name)}`);
+      return cmp;
+    };
     if (variant === "UnderlyingPriceVsStrike") {
       return {
         kind: "UnderlyingPriceVsStrike",
-        strikePrice: big(fields[0]),
-        comparison: PRICE_CMP[fields[1] as string],
+        strikePrice: big(fields.strike_price),
+        comparison: comparison(fields.comparison),
       };
     }
     if (variant === "MarketOracle") {
       return {
         kind: "MarketOracle",
-        market: Number(big(fields[0])),
-        strikePrice: big(fields[1]),
-        comparison: PRICE_CMP[fields[2] as string],
+        market: Number(big(fields.market)),
+        strikePrice: big(fields.strike_price),
+        comparison: comparison(fields.comparison),
       };
     }
     throw new Error(`unknown EventOracleSource variant: ${variant}`);
@@ -718,9 +936,8 @@ function parseOracleSource(v: unknown): any {
 }
 
 describe("conformance vectors (TypeScript)", () => {
-  // All action types wired, including OracleUpdateComposite (0x14) — the
-  // operator composite-CEX feeder action. Nonce is timestamp-derived, no
-  // standalone step function needed.
+  // All action types wired. Nonce is timestamp-derived, no standalone step
+  // function needed.
 
   it("signing: (payload,key) → envelope; pubkey → owner", () => {
     for (const c of cases("signing.ndjson")) {
@@ -766,6 +983,52 @@ describe("conformance vectors (TypeScript)", () => {
       expect(got).toBe(expected);
     }
   });
+  it("events: engine attributes decode back to the engine's event", () => {
+    // Both sides are normalised to one form: snake_case field names, integers
+    // as decimal strings, a 20-byte array as lowercase hex, and an enum
+    // variant name (`ReferenceUnavailable`) or attribute value
+    // (`reference_unavailable`, `Yes`) as lowercase snake_case.
+    const snake = (text: string) =>
+      text.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+    const normalise = (value: unknown): unknown => {
+      if (value === null) return null;
+      if (typeof value === "bigint" || typeof value === "number") {
+        return value.toString();
+      }
+      if (typeof value === "string") return snake(value);
+      if (Array.isArray(value)) {
+        if (value.length === 20 && value.every((b) => typeof b === "number")) {
+          return bytesToHex(Uint8Array.from(value as number[]));
+        }
+        return value.map(normalise);
+      }
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .filter(([key]) => key !== "type")
+          .map(([key, v]) => [snake(key), normalise(v)]),
+      );
+    };
+    const events = cases("events.ndjson");
+    expect(events.length).toBeGreaterThan(0);
+    for (const c of events) {
+      const want = c.expect as {
+        event_type: string;
+        attributes: [string, string][];
+      };
+      const input = {
+        type: want.event_type,
+        attributes: want.attributes.map(([key, value]) => ({ key, value })),
+      };
+      const decoded =
+        decodeLiquidationEvent(input) ?? decodeVoidSettlementEvent(input);
+      const [[variant, fields]] = Object.entries(
+        c.event as Record<string, unknown>,
+      );
+      expect(decoded?.type, c.case).toBe(variant);
+      expect(normalise(decoded), c.case).toEqual(normalise(fields));
+    }
+  });
+
   it("codec: action fields → payload bytes", () => {
     // No try/catch: every vector must build through toAction and encode
     // byte-exact. A vector whose action type is not wired here fails loudly —
@@ -779,6 +1042,40 @@ describe("conformance vectors (TypeScript)", () => {
       const payload = encodePayloadBytes(action);
       expect(bytesToHex(payload)).toBe(
         (c.expect as { payload_hex: string }).payload_hex,
+      );
+    }
+  });
+
+  it("codec: the vector's case name pins which action the encoder builds", () => {
+    // The byte-exactness test above feeds `c.action_type` INTO `toAction`, so
+    // it can only prove the payload, never the routing. Deposit/Withdraw and
+    // ApproveAgent/RevokeAgent encode IDENTICAL payload layouts, so swapping
+    // either pair's `ActionType` constants would build the opposite action,
+    // emit byte-identical payloads, keep `uncovered` empty — and still put the
+    // opposite operation byte in every signed envelope.
+    //
+    // The case name is authored on the Rust side (gen_vectors.rs), so checking
+    // it against the TypeScript `Action.type` crosses the language boundary
+    // and is not circular the way comparing action_type to itself would be.
+    const pascal = (snake: string) =>
+      snake
+        .split("_")
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join("");
+    // Case names normally mirror the action; `set_position_triggers_2_1`
+    // deliberately mirrors the engine's frozen-vector FILENAME instead
+    // (the proof-wire 2.1.0 era pin), so it gets one explicit override.
+    const caseNameActionOverrides: Record<string, string> = {
+      set_position_triggers_2_1: "SetPositionTriggers",
+    };
+    for (const c of cases("codec.ndjson")) {
+      const action = toAction(
+        c.action_type as ActionTypeValue,
+        c.input as Record<string, unknown>,
+      );
+      expect(action.type, `vector ${c.case as string}`).toBe(
+        caseNameActionOverrides[c.case as string] ??
+          pascal((c.case as string).split("/")[0]),
       );
     }
   });
@@ -800,30 +1097,45 @@ describe("conformance vectors (TypeScript)", () => {
     // ratchet — adding a new ActionType without a vector fails here. Prefer
     // adding a vector in crates/spec/src/bin/gen_vectors.rs; extending this
     // list instead is a conscious, reviewed decision. Remove names as vectors
-    // land; never re-add one.
+    // land; never re-add one. The list is empty (issue #69 burn-down): every
+    // ActionType now carries at least one cross-language codec vector.
     const uncovered = Object.entries(ActionType)
       .filter(([, byte]) => !vectorTypes.has(byte))
       .map(([name]) => name)
       .sort();
-    expect(uncovered).toEqual(
-      [
-        "AmendOrder",
-        "ApproveAgent",
-        "CancelAllOrders",
-        "CancelClientOrder",
-        "CancelReplaceOrder",
-        "ConfirmDeposit",
-        "ConfirmWithdrawal",
-        "CreateImpactMarket",
-        "Deposit",
-        "FailWithdrawal",
-        "ResolveEvent",
-        "RevokeAgent",
-        "SetUserMarketLeverage",
-        "Withdraw",
-        "WithdrawRequest",
-      ].sort(),
-    );
+    expect(uncovered).toEqual([]);
+  });
+
+  it("codec: every EventOracleSource variant and PriceComparison value is pinned", () => {
+    // Ratchet for the enum the adapter routes by hand
+    // (eventOracleSourceToWasm / eventOracleSourceFromWasm). An absent
+    // oracle_source encodes as nil, which is a different wire value from the
+    // RelayerAttested unit variant, so `null` fixtures prove nothing about
+    // any variant — each one needs an explicit vector (#98).
+    const seenKinds = new Set<string>();
+    const seenComparisons = new Set<string>();
+    for (const c of cases("codec.ndjson")) {
+      if (c.action_type !== ActionType.ProposeAdminAction) continue;
+      const action = (c.input as Record<string, unknown>).action as
+        Record<string, unknown> | undefined;
+      const event = action?.CreateEvent as Record<string, unknown> | undefined;
+      if (!event) continue;
+      const os = event.oracle_source;
+      if (os === null || os === undefined) continue;
+      const parsed = parseOracleSource(os) as {
+        kind: string;
+        comparison?: string;
+      };
+      seenKinds.add(parsed.kind);
+      if (parsed.comparison !== undefined)
+        seenComparisons.add(parsed.comparison);
+    }
+    expect([...seenKinds].sort()).toEqual([
+      "MarketOracle",
+      "RelayerAttested",
+      "UnderlyingPriceVsStrike",
+    ]);
+    expect([...seenComparisons].sort()).toEqual(Object.keys(PRICE_CMP).sort());
   });
 
   it("codec: all governance actions encode byte-exact (no silent skip)", () => {
@@ -832,9 +1144,16 @@ describe("conformance vectors (TypeScript)", () => {
       govTypes.has(c.action_type as number),
     );
     // Guard against the vector file drifting out from under this assertion:
-    // propose (create-market, v2 batch and trigger config), approve, reject,
-    // and all three emergency arms (PauseMarket, HaltTrading, SetReduceOnly).
-    expect(govCases.length).toBe(8);
+    // propose (create-market, the perp-plus-attach batch, the attach
+    // singleton, six create-event oracle-source shapes, trigger config,
+    // unpause-bridge, enable-sub-accounts, set-liquidation-config,
+    // update-authority-set add and
+    // remove, cancel-all-for
+    // -account scoped and unscoped, four set-oracle-guards shapes, and
+    // oracle policy, two schedule-upgrade shapes, cancel-upgrade, and
+    // insurance fund and withdraw, void-event, settle-event,
+    // set-market-status), approve, reject, and the PauseMarket emergency arm.
+    expect(govCases.length).toBe(32);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(
@@ -861,7 +1180,7 @@ describe("conformance vectors (TypeScript)", () => {
     expect((explicitZero.expect as { payload_hex: string }).payload_hex).toBe(
       expected,
     );
-    expect(expected.startsWith("9c")).toBe(true);
+    expect(expected.startsWith("9e")).toBe(true);
 
     const base = toAction(
       omitted.action_type as ActionTypeValue,
@@ -888,5 +1207,81 @@ describe("conformance vectors (TypeScript)", () => {
       if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
       expect(decoded.data.maxOpenInterest).toBe(0n);
     }
+  });
+});
+
+describe("binary vectors (TypeScript)", () => {
+  const binary = cases("binary.ndjson");
+
+  it("loads the binary family", () => {
+    expect(binary.length).toBeGreaterThan(0);
+  });
+
+  it("translates every No order to the core's Yes order, byte for byte", () => {
+    let seen = 0;
+    for (const c of binary.filter((c) => c.kind === "no_order")) {
+      const input = c.input as Record<string, unknown>;
+      const no = toAction(ActionType.PlaceOrder, input);
+      if (no.type !== "PlaceOrder") throw new Error("type narrowing");
+      const { owner, ...noOrder } = no.data;
+      const expected = c.expect as {
+        yes_order?: { fields: Record<string, unknown>; payload_hex: string };
+        error?: { name: string };
+      };
+      if (expected.error) {
+        let caught: unknown;
+        try {
+          yesOrder(noOrder);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught, c.case).toBeInstanceOf(BinaryPriceError);
+        expect((caught as BinaryPriceError).reason, c.case).toBe(
+          expected.error.name,
+        );
+      } else {
+        const yes = expected.yes_order!;
+        const action: Action = {
+          type: "PlaceOrder",
+          data: { ...yesOrder(noOrder), owner },
+        };
+        expect(action, c.case).toEqual(
+          toAction(ActionType.PlaceOrder, yes.fields),
+        );
+        expect(bytesToHex(encodePayloadBytes(action)), c.case).toBe(
+          yes.payload_hex,
+        );
+      }
+      seen++;
+    }
+    expect(seen).toBeGreaterThan(0);
+  });
+
+  it("reads every position as the core does", () => {
+    let seen = 0;
+    for (const c of binary.filter((c) => c.kind === "position_view")) {
+      const position = {
+        side: c.side as "Buy" | "Sell",
+        entryPrice: big(c.entry_price),
+        size: big(c.size),
+      };
+      const expected = c.expect as {
+        view?: { outcome: "Yes" | "No"; entry_price: number; size: number };
+        error?: { name: string };
+      };
+      if (expected.error) {
+        expect(() => binaryPositionView(position), c.case).toThrow(
+          BinaryPriceError,
+        );
+      } else {
+        expect(binaryPositionView(position), c.case).toEqual({
+          outcome: expected.view!.outcome,
+          entryPrice: big(expected.view!.entry_price),
+          size: big(expected.view!.size),
+        });
+      }
+      seen++;
+    }
+    expect(seen).toBeGreaterThan(0);
   });
 });

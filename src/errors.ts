@@ -1,7 +1,7 @@
 /**
  * Decoder for engine `ExecError` codes returned in `TxResult.code`.
  *
- * The Rust enum lives at `exchange-core/src/types.rs::ExecError`. Codes
+ * The Rust enum lives at `exchange-wire/src/types.rs::ExecError`. Codes
  * are stable wire-format identifiers — adding a new variant goes at the
  * end with the next free integer. **Keep this map in sync with that
  * `code()` impl** (CI flags drift in the audit `api-drift` lane).
@@ -12,6 +12,21 @@
  * success and returns `null` from this decoder — call sites should
  * branch on `code === 0` first.
  */
+
+/** Fail-closed bounded read failure. Caller cancellation retains the original
+ * AbortSignal reason; HTTP refusals remain GatewayHttpError. */
+export class GatewayReadError extends Error {
+  readonly name = "GatewayReadError";
+  constructor(
+    readonly kind:
+      "deadline" | "limit" | "malformed" | "binding" | "configuration",
+    readonly field: string,
+    message = `Invalid gateway read: ${field}`,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
+}
 
 export interface ExecErrorInfo {
   /** Rust variant name when the code is one-to-one, or a grouped wire-code name. Stable. */
@@ -54,24 +69,24 @@ export enum ExecErrorCode {
   InvalidNonce = 21,
   MarketAlreadyExists = 22,
   InvalidMarketConfig = 23,
-  ImpactMarketAlreadyExists = 24,
-  ImpactMarketNotFound = 25,
+  // 24 and 25 belonged to the retired impact-market family; never reassigned.
   MarketClosedForTrading = 26,
   BinaryPriceOutOfRange = 27,
   InvalidResolution = 28,
   PositionLimitExceeded = 29,
-  OracleTimestampNotMonotonic = 30,
-  TooManyActiveImpactMarkets = 31,
+  // 30 was OracleTimestampNotMonotonic, retired with OracleUpdate; never reassigned.
+  // 31 belonged to the retired impact-market family; never reassigned.
   SettlementPriceMismatch = 32,
   OracleNotApplicable = 33,
   PostOnlyWouldCross = 34,
   ReduceOnlyWouldIncrease = 35,
-  TestActionRejected = 36,
-  StaleOracle = 37,
+  // 36 was TestActionRejected, retired with RunFundingTick; never reassigned.
+  // 37, 77, 82 and 97 are the wire's `Unpriced`, one code per reason.
+  UnpricedStale = 37,
   UserLeverageBelowMarketIm = 38,
   TickSizeViolation = 39,
   LotSizeViolation = 40,
-  OracleStaleNotElapsed = 41,
+  // 41 was OracleStaleNotElapsed, retired with OracleUpdate; never reassigned.
   FeeBpsOutOfRange = 42,
   FeeOverrideStaleSeq = 43,
   ClientOrderIdNotFound = 44,
@@ -94,6 +109,92 @@ export enum ExecErrorCode {
   AdminGovernanceInactive = 52,
   /** Signer is not the declared admin actor / not in the signer registry. */
   NotAdminSigner = 53,
+  // Proposal-lifecycle family (multisig governance), mirrored from the engine
+  // ExecError codes 54-71. Decode-only: emitted by the propose/approve/reject
+  // and emergency admin paths.
+  ProposalNotFound = 54,
+  ProposalNotPending = 55,
+  ProposalExpired = 56,
+  DuplicateApproval = 57,
+  DuplicateRejection = 58,
+  ProposalRegistryVersionMismatch = 59,
+  ProposalContentMismatch = 60,
+  InvalidAdminAction = 61,
+  AdminActionTooLarge = 62,
+  TooManyPendingProposals = 63,
+  ProposalIdExhausted = 64,
+  ConflictingVote = 65,
+  MarketIdOutOfRange = 66,
+  EmergencyRateLimited = 67,
+  EmergencyGlobalRateLimited = 68,
+  EmergencyActionRetired = 69,
+  AdminActionRequiresProposal = 70,
+  InvalidAdminRegistry = 71,
+  BridgeReceiptRegistryInactive = 72,
+  BridgeReceiptInvalid = 73,
+  BridgeReceiptMismatch = 74,
+  WithdrawalBelowMinimum = 75,
+  WithdrawalTerminalGated = 76,
+  /** The block has no certified oracle-policy verdict for the market, so a
+   *  mark-dependent action is refused until a later block certifies a price
+   *  — the market is stale or unpriceable this block, not misconfigured. */
+  UnpricedNoVerdict = 77,
+  // 78-81 remain reserved on the wire for oracle-policy errors.
+  UnpricedGuardUnset = 82,
+  SubAccountNotFound = 83,
+  SubAccountAlreadyExists = 84,
+  SubAccountTransferSameAccount = 85,
+  SubAccountTransferBothChildren = 86,
+  SubAccountTransferInsufficientBalance = 87,
+  SubAccountIdZero = 88,
+  SubAccountTransferZeroAmount = 89,
+  // 90 was SubAccountsInactive, retired with the engine's sub-account switch
+  // (sub-accounts are always on); never reassigned.
+  WithdrawalPayoutLeaseActive = 91,
+  WithdrawalPayoutLeaseNotHeld = 128,
+  WithdrawalPayoutRecordLimitReached = 129,
+  EventAlreadyExists = 92,
+  EventNotFound = 93,
+  UnderlyingAlreadyAttached = 94,
+  TooManyAttachedConditionals = 95,
+  TooManyActiveEvents = 96,
+  /** No mark price exists for the market (no trade EWMA, no fallback). */
+  UnpricedNoMark = 97,
+  /** F2 trigger expansion: the order cannot carry attached SL/TP limbs. */
+  TriggerOrderIncompatible = 98,
+  /** The withdrawal would push the account's rolling-window outflow past
+   *  the configured per-account cap; capacity returns gradually as in-window
+   *  outflows age out. */
+  WithdrawalLimitExceeded = 99,
+  /** The account already holds the maximum number of resting orders. */
+  AccountOrderCapReached = 100,
+  // 101 is unassigned on the wire.
+  InsuranceFundingReplayed = 102,
+  InsuranceWithdrawalReplayed = 103,
+  MarketlessInsurancePool = 104,
+  InsufficientInsuranceBalance = 105,
+  InsuranceTransferZeroAccount = 106,
+  InsuranceAllocationCount = 107,
+  InsuranceAllocationOrder = 108,
+  InsuranceAllocationZeroAmount = 109,
+  InsuranceAmountExceedsI64 = 110,
+  /** A liquidation attempt was refused and kept no writes; the
+   *  `liquidation_failed` event's `refusal` names why. */
+  LiquidationRefused = 111,
+  // 112 was InvalidPlpConfig, retired with the engine's liquidity-provider
+  // backstop; never reassigned.
+  InsuranceAccountWithdrawal = 113,
+  InsuranceActionRefused = 114,
+  LiquidationBatchTooManyOwners = 115,
+  LiquidationBatchOverBudget = 116,
+  DepositLimitExceeded = 123,
+  EventPoolMismatch = 124,
+  ConditionalLotOffUnderlyingGrid = 125,
+  MarketReduceOnly = 130,
+  MarketDelisted = 131,
+  MarketStatusTransitionRefused = 132,
+  MarketBacksLiveEvent = 133,
+  MarketHalted = 134,
   InternalError = 255,
 }
 
@@ -161,15 +262,10 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "InvalidMarketConfig",
     description: "invalid market configuration",
   },
-  24: {
-    name: "ImpactMarketAlreadyExists",
-    description: "impact market already exists",
-  },
-  25: { name: "ImpactMarketNotFound", description: "impact market not found" },
   26: {
     name: "MarketClosedForTrading",
     description:
-      "order on a CP/binary book whose parent impact market is resolved or voided",
+      "order on a conditional or binary book whose event is past settlement or resolved",
   },
   27: {
     name: "BinaryPriceOutOfRange",
@@ -178,22 +274,13 @@ const TABLE: Record<number, ExecErrorInfo> = {
   },
   28: {
     name: "InvalidResolution",
-    description: "ResolveEvent rejected — invalid outcome for current state",
+    description:
+      "resolve rejected — already resolved, before settlement, attachments still open, or outcome contradicts the oracle source",
   },
   29: {
     name: "PositionLimitExceeded",
     description:
       "fill would push the taker's net position past MarketConfig.max_position_size",
-  },
-  30: {
-    name: "OracleTimestampNotMonotonic",
-    description:
-      "OracleUpdate publish_time_ms must be strictly greater than the last accepted update (audit B3)",
-  },
-  31: {
-    name: "TooManyActiveImpactMarkets",
-    description:
-      "account would touch more impact markets than the scenario margin engine can enumerate (cap = 4)",
   },
   32: {
     name: "SettlementPriceMismatch",
@@ -203,7 +290,7 @@ const TABLE: Record<number, ExecErrorInfo> = {
   33: {
     name: "OracleNotApplicable",
     description:
-      "OracleUpdate targets a market kind that doesn't take oracle prices (impact-family children mark off the book)",
+      "the oracle action targets a conditional or prediction-binary book, which marks off its own trades and has no oracle layer",
   },
   34: {
     name: "PostOnlyWouldCross",
@@ -215,13 +302,8 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "reduce-only order would have increased the position rather than reducing it",
   },
-  36: {
-    name: "TestActionRejected",
-    description:
-      "test/admin action rejected (unauthorized signer or engine not configured to accept them)",
-  },
   37: {
-    name: "StaleOracle",
+    name: "UnpricedStale",
     description:
       "oracle for this market is older than MarketConfig.mark_price_max_oracle_age_ms; order placement, margin, and liquidation refuse to use a stale oracle (BE-33)",
   },
@@ -239,11 +321,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "LotSizeViolation",
     description:
       "PlaceOrder/MarketOrder quantity is not a multiple of MarketConfig.lotSize (BE-48)",
-  },
-  41: {
-    name: "OracleStaleNotElapsed",
-    description:
-      "fallback oracle signer published before the primary's staleness window elapsed (BE-50)",
   },
   42: {
     name: "FeeBpsOutOfRange",
@@ -295,6 +372,310 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "tx signer does not match the action's declared proposer/approver/rejecter/signer field, or is not a member of the current admin signer registry",
   },
+  54: {
+    name: "ProposalNotFound",
+    description:
+      "no admin proposal exists under this id (never created, or pruned from terminal retention)",
+  },
+  55: {
+    name: "ProposalNotPending",
+    description:
+      "the admin proposal is already terminal — votes are only accepted while pending",
+  },
+  56: {
+    name: "ProposalExpired",
+    description:
+      "the admin proposal passed its TTL — re-propose and collect fresh approvals",
+  },
+  57: {
+    name: "DuplicateApproval",
+    description:
+      "this signer already approved the proposal (the proposer approves at creation)",
+  },
+  58: {
+    name: "DuplicateRejection",
+    description: "this signer already rejected the proposal",
+  },
+  59: {
+    name: "ProposalRegistryVersionMismatch",
+    description:
+      "registry version differs from the current signer registry — re-read and re-sign",
+  },
+  60: {
+    name: "ProposalContentMismatch",
+    description:
+      "approval context does not byte-match the stored proposal — rebuild from the proposals query",
+  },
+  61: {
+    name: "InvalidAdminAction",
+    description:
+      "inner admin/emergency action is invalid: unknown or not-admitted arm, non-zero inner signer, or out-of-bounds field",
+  },
+  62: {
+    name: "AdminActionTooLarge",
+    description: "canonical inner action bytes exceed MAX_ADMIN_ACTION_BYTES",
+  },
+  63: {
+    name: "TooManyPendingProposals",
+    description: "MAX_PENDING_PROPOSALS admin proposals are already pending",
+  },
+  64: {
+    name: "ProposalIdExhausted",
+    description: "a governance id counter is exhausted; ids never wrap",
+  },
+  65: {
+    name: "ConflictingVote",
+    description:
+      "the opposite vote already exists — votes are immutable and disjoint",
+  },
+  66: {
+    name: "MarketIdOutOfRange",
+    description:
+      "market id exceeds the signed-32-bit identity bound (i32::MAX)",
+  },
+  67: {
+    name: "EmergencyRateLimited",
+    description:
+      "per-signer emergency action bound reached within the rolling window",
+  },
+  68: {
+    name: "EmergencyGlobalRateLimited",
+    description:
+      "chain-wide emergency action bound reached within the rolling window",
+  },
+  69: {
+    name: "EmergencyActionRetired",
+    description: "this emergency arm was retired; new submissions fail closed",
+  },
+  70: {
+    name: "AdminActionRequiresProposal",
+    description:
+      "the signer registry exists — this admin action is proposal-only, even for an authorized relayer",
+  },
+  71: {
+    name: "InvalidAdminRegistry",
+    description:
+      "proposed signer roster violates the registry invariants (threshold bounds, sorted unique members, roster size, version headroom)",
+  },
+  72: {
+    name: "BridgeReceiptRegistryInactive",
+    description:
+      "receipt-gated withdrawal action while no operator receipt registry exists; the path fails closed",
+  },
+  73: {
+    name: "BridgeReceiptInvalid",
+    description:
+      "operator quorum proof failed verification (structure, member count or signature)",
+  },
+  74: {
+    name: "BridgeReceiptMismatch",
+    description:
+      "signed receipt does not bind to this withdrawal or deployment; the log names the field",
+  },
+  75: {
+    name: "WithdrawalBelowMinimum",
+    description:
+      "net withdrawal amount is below the effective minimum (dust-griefing gate)",
+  },
+  76: {
+    name: "WithdrawalTerminalGated",
+    description:
+      "retired legacy relayer terminal submitted at or above the receipt cutover",
+  },
+  77: {
+    name: "UnpricedNoVerdict",
+    description:
+      "the oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed) — mark-dependent actions are refused until a later block certifies a price",
+  },
+  82: {
+    name: "UnpricedGuardUnset",
+    description:
+      "the oracle-guard gate is active and the market's max oracle age is unset; every mark-dependent action is refused until governance sets one",
+  },
+  83: {
+    name: "SubAccountNotFound",
+    description: "no sub-account for this master and id",
+  },
+  84: {
+    name: "SubAccountAlreadyExists",
+    description: "a sub-account with this master and id already exists",
+  },
+  85: {
+    name: "SubAccountTransferSameAccount",
+    description: "sub-account transfer from and to are the same account",
+  },
+  86: {
+    name: "SubAccountTransferBothChildren",
+    description: "neither side of the sub-account transfer is the master",
+  },
+  87: {
+    name: "SubAccountTransferInsufficientBalance",
+    description: "source sub-account balance is below the transfer amount",
+  },
+  88: {
+    name: "SubAccountIdZero",
+    description: "sub-account id zero is not valid",
+  },
+  89: {
+    name: "SubAccountTransferZeroAmount",
+    description: "sub-account transfer amount must be greater than zero",
+  },
+  91: {
+    name: "WithdrawalPayoutLeaseActive",
+    description:
+      "a live payout lease on this withdrawal is held by a different watcher",
+  },
+  128: {
+    name: "WithdrawalPayoutLeaseNotHeld",
+    description:
+      "the withdrawal's payout lease is not held by the submitter, so the payout-signature report is rejected",
+  },
+  129: {
+    name: "WithdrawalPayoutRecordLimitReached",
+    description:
+      "the withdrawal's payout-signature record limit is reached; the rejected payout must not be broadcast",
+  },
+  92: { name: "EventAlreadyExists", description: "event id already exists" },
+  93: { name: "EventNotFound", description: "no event under this id" },
+  94: {
+    name: "UnderlyingAlreadyAttached",
+    description: "this underlying is already attached to the event",
+  },
+  95: {
+    name: "TooManyAttachedConditionals",
+    description: "the event's attachment cap is reached",
+  },
+  96: {
+    name: "TooManyActiveEvents",
+    description:
+      "account would touch more events than the scenario margin engine can enumerate (per-account cap)",
+  },
+  97: {
+    name: "UnpricedNoMark",
+    description:
+      "no mark price is available for the market: a conditional or prediction-binary book has no recent-trade EWMA and no oracle fallback value",
+  },
+  98: {
+    name: "TriggerOrderIncompatible",
+    description:
+      "order cannot carry attached SL/TP (reduce-only order, ineligible market, or inactive feature)",
+  },
+  99: {
+    name: "WithdrawalLimitExceeded",
+    description:
+      "the withdrawal would push the account's rolling-window outflow past the configured per-account cap — the attempted debit, the cap, and when the oldest in-window outflow expires are in the log; capacity returns as in-window outflows age out",
+  },
+  100: {
+    name: "AccountOrderCapReached",
+    description:
+      "the account already holds the maximum number of resting orders — cancel one before placing another",
+  },
+  102: {
+    name: "InsuranceFundingReplayed",
+    description:
+      "Insurance-fund funding id has already executed; each funding id executes at most once.",
+  },
+  103: {
+    name: "InsuranceWithdrawalReplayed",
+    description: "Insurance withdrawal id has already executed.",
+  },
+  104: {
+    name: "MarketlessInsurancePool",
+    description: "Insurance transfer pool has no registered market.",
+  },
+  105: {
+    name: "InsufficientInsuranceBalance",
+    description: "Insurance withdrawal would make the pool balance negative.",
+  },
+  106: {
+    name: "InsuranceTransferZeroAccount",
+    description:
+      "Insurance transfer names the zero account; a funding source or withdrawal recipient must be a real 20-byte address.",
+  },
+  107: {
+    name: "InsuranceAllocationCount",
+    description:
+      "Insurance transfer must carry between 1 and the per-transfer allocation cap (8) allocations.",
+  },
+  108: {
+    name: "InsuranceAllocationOrder",
+    description:
+      "Insurance transfer allocations must list each pool once, in strictly ascending pool order.",
+  },
+  109: {
+    name: "InsuranceAllocationZeroAmount",
+    description:
+      "An insurance transfer allocation is zero; every allocation moves a positive amount.",
+  },
+  110: {
+    name: "InsuranceAmountExceedsI64",
+    description:
+      "An insurance transfer amount, or their sum, exceeds the ledger's signed 64-bit bound.",
+  },
+  111: {
+    name: "LiquidationRefused",
+    description:
+      "A liquidation attempt was refused (a changed position, a malformed book or an unavailable reference) and kept no writes; the liquidation_failed event's refusal names why.",
+  },
+  113: {
+    name: "InsuranceAccountWithdrawal",
+    description:
+      "Direct withdrawal names an insurance account; insurance cash leaves only through a governed insurance withdrawal.",
+  },
+  114: {
+    name: "InsuranceActionRefused",
+    description:
+      "Governed insurance action is undecodable, not canonical, not permitted for an insurance account, or not owned by the pool's insurance account.",
+  },
+  115: {
+    name: "LiquidationBatchTooManyOwners",
+    description:
+      "LiquidateAccounts names more owners than one batch may; split the owners across batches.",
+  },
+  116: {
+    name: "LiquidationBatchOverBudget",
+    description:
+      "The owners a LiquidateAccounts batch names hold more positions together than its position budget; the batch is refused whole, so name fewer owners.",
+  },
+  123: {
+    name: "DepositLimitExceeded",
+    description:
+      "The ConfirmDeposit or Deposit would credit more than the governance-set deposit limits allow: either the per-deposit maximum, or the protocol-wide cap on deposits credited inside the rolling window.",
+  },
+  124: {
+    name: "EventPoolMismatch",
+    description:
+      "AttachConditional names an underlying whose insurance pool differs from the event's; an event and its conditionals share one pool.",
+  },
+  125: {
+    name: "ConditionalLotOffUnderlyingGrid",
+    description:
+      "A lot_size change would leave an unresolved event's conditional lot not a multiple of its underlying perpetual's lot.",
+  },
+  130: {
+    name: "MarketReduceOnly",
+    description:
+      "The market is reduce-only: an order or fill there must shrink its owner's position.",
+  },
+  131: {
+    name: "MarketDelisted",
+    description: "The market is delisted and takes no orders.",
+  },
+  132: {
+    name: "MarketStatusTransitionRefused",
+    description:
+      "SetMarketStatus or PauseMarket names a move the market cannot make: any market moves Trading to Halted and back; a perpetual also moves Trading or Halted to ReduceOnly and back, then ReduceOnly to Delisted.",
+  },
+  133: {
+    name: "MarketBacksLiveEvent",
+    description:
+      "The perpetual backs a Conditional on an unresolved event and cannot wind down until the event resolves.",
+  },
+  134: {
+    name: "MarketHalted",
+    description:
+      "The market is halted and takes no orders or fills; cancels still work.",
+  },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
 
@@ -344,4 +725,60 @@ export function decodeExecError(
 export function execErrorName(code: number, log?: string): string {
   if (code === 0) return "Ok";
   return decodeExecError(code, log)?.name ?? "UnknownError";
+}
+
+/**
+ * Non-success gateway HTTP response; its unconsumed body remains available to
+ * callers. `detail` is the gateway's own error text, when the caller already
+ * read it; the message carries it in place of the bare `errorCode`.
+ */
+export class GatewayHttpError extends Error {
+  public readonly errorCode: string | undefined;
+  constructor(
+    public readonly status: number,
+    public readonly response: Response,
+    errorCode?: string,
+    detail?: string,
+  ) {
+    const reason = detail ?? errorCode;
+    super(
+      reason
+        ? `Gateway request failed (${status}): ${reason}`
+        : `Gateway request failed (${status})`,
+    );
+    this.name = "GatewayHttpError";
+    this.errorCode = errorCode;
+  }
+}
+
+/**
+ * The gateway refused a `/ws` subscription with an `error` frame (for example
+ * an unknown market). `code` and `gatewayMessage` are the frame's own fields.
+ */
+export class FeedSubscriptionError extends Error {
+  constructor(
+    public readonly channel: string,
+    public readonly gatewayMessage: string,
+    public readonly code?: number,
+  ) {
+    super(
+      code === undefined
+        ? `Gateway refused the ${channel} subscription: ${gatewayMessage}`
+        : `Gateway refused the ${channel} subscription (${code}): ${gatewayMessage}`,
+    );
+    this.name = "FeedSubscriptionError";
+  }
+}
+
+/**
+ * Type guard: true when the error is a 503 `GatewayHttpError` whose
+ * `errorCode` is `"MissingMark"` — a required oracle mark was unavailable
+ * for account valuation. Callers should retry after the oracle recovers.
+ */
+export function isMissingMark(error: unknown): error is GatewayHttpError {
+  return (
+    error instanceof GatewayHttpError &&
+    error.status === 503 &&
+    error.errorCode === "MissingMark"
+  );
 }

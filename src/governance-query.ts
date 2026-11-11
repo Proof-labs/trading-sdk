@@ -1,27 +1,43 @@
+import { Encoder } from "@msgpack/msgpack";
 import type {
-  Address,
   AdminAction,
-  AdminBatchItem,
   AdminSignerRegistry,
-  CreateImpactMarket,
-  CreateMarket,
-  EventOracleSource,
   ExpiryReason,
-  ImpactMarketInfo,
-  ImpactMarketStatus,
-  PriceComparison,
   ProposalPage,
   ProposalDisplayInfo,
   ProposalStatus,
-  SetTriggerMarketConfig,
-  UpdateAdminSignerRegistry,
+  NodeVersion,
+  PendingUpgradePlan,
+  LiquidationConfig,
+  LiquidationConfigInfo,
+  AuthoritiesSnapshot,
+  UpgradesInfo,
 } from "./types.js";
-import { Outcome } from "./types.js";
+import { adminActionFromWasm } from "./codec-adapter.js";
+import { INITIAL_TAKEOVER_DISCOUNT_BPS } from "./liquidation-config.js";
+import { getWasm } from "./wasm-loader.js";
+
+const actionEncoder = new Encoder({ useBigInt64: true });
+
+/** Integers past 32 bits as bigint: the encoder writes such a number as a
+ *  float, which the wire refuses. */
+function integral(value: unknown): unknown {
+  if (typeof value === "number" && Number.isSafeInteger(value)) {
+    return Math.abs(value) > 0xffff_ffff ? BigInt(value) : value;
+  }
+  if (Array.isArray(value)) return value.map(integral);
+  if (value && typeof value === "object" && !ArrayBuffer.isView(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, integral(v)]),
+    );
+  }
+  return value;
+}
 
 /**
  * Typed decoders for the engine's governance READ model — the responses
- * behind `GET /v1/admin/signer-registry`, `GET /v1/proposals`, and
- * `GET /v1/impact_markets`.
+ * behind `GET /v1/admin/signer-registry` and `GET /v1/proposals`. The
+ * proposal's `AdminAction` is decoded as its wire type in the Rust core.
  *
  * These mirror engine structs (`exchange-core/src/query.rs`), they do not
  * define them. The engine serializes with `rmp_serde::to_vec` — the COMPACT
@@ -144,6 +160,33 @@ function toArray(value: unknown, field: string): unknown[] {
   throw new Error(`governance decode: ${field} is not an array`);
 }
 
+/// A `LiquidationConfig` as `[targetRatioBps, [numerator, denominator],
+/// partialPenaltyBps, maxBookOrders, maxCommittedFills, takeoverDiscountBps?]`.
+/// Every newtype is its bare integer; a record without the takeover discount
+/// decodes with the engine's initial value.
+function decodeLiquidationConfigTuple(
+  value: unknown,
+  name: string,
+): LiquidationConfig {
+  const c = toTupleBetween(value, name, 5, 6);
+  const threshold = toTuple(c[1], `${name}.fullCloseThreshold`, 2);
+  const field = (part: string) => `${name}.${part}`;
+  return {
+    targetRatioBps: toU32(c[0], field("targetRatioBps")),
+    fullCloseThreshold: {
+      numerator: toU32(threshold[0], field("fullCloseThreshold.numerator")),
+      denominator: toU32(threshold[1], field("fullCloseThreshold.denominator")),
+    },
+    partialPenaltyBps: toU32(c[2], field("partialPenaltyBps")),
+    maxBookOrders: toU32(c[3], field("maxBookOrders")),
+    maxCommittedFills: toU32(c[4], field("maxCommittedFills")),
+    takeoverDiscountBps:
+      c.length > 5
+        ? toU32(c[5], field("takeoverDiscountBps"))
+        : INITIAL_TAKEOVER_DISCOUNT_BPS,
+  };
+}
+
 function toTuple(
   value: unknown,
   field: string,
@@ -156,11 +199,6 @@ function toTuple(
     );
   }
   return fields;
-}
-
-function toString(value: unknown, field: string): string {
-  if (typeof value === "string") return value;
-  throw new Error(`governance decode: ${field} is not a string`);
 }
 
 /** The single entry of an externally-tagged enum map (encoding fact 3). */
@@ -181,27 +219,6 @@ function variantOf(
   return { name, payload };
 }
 
-/** `CreateMarket` as the engine's 12-field positional payload. Distinct from
- *  `decodeMarketConfig` in client.ts: that decodes the STORED market config,
- *  this decodes the proposed action. */
-function decodeCreateMarket(value: unknown): CreateMarket {
-  const raw = toTuple(value, "createMarket", 12);
-  return {
-    market: toU32(raw[0], "createMarket.market"),
-    imBps: toU32(raw[1], "createMarket.imBps"),
-    mmBps: toU32(raw[2], "createMarket.mmBps"),
-    takerFeeBps: toU32(raw[3], "createMarket.takerFeeBps"),
-    makerFeeBps: toU32(raw[4], "createMarket.makerFeeBps"),
-    signer: toBytes(raw[5], "createMarket.signer", ADDRESS_LEN),
-    fundingIntervalMs: toU64(raw[6], "createMarket.fundingIntervalMs"),
-    maxFundingRateBps: toU32(raw[7], "createMarket.maxFundingRateBps"),
-    poolId: toU8(raw[8], "createMarket.poolId"),
-    szDecimals: toU8(raw[9], "createMarket.szDecimals"),
-    ticker: toString(raw[10], "createMarket.ticker"),
-    maxOpenInterest: toU64(raw[11], "createMarket.maxOpenInterest"),
-  };
-}
-
 function toTupleBetween(
   value: unknown,
   field: string,
@@ -218,280 +235,57 @@ function toTupleBetween(
   return fields;
 }
 
-const PRICE_COMPARISONS: readonly PriceComparison[] = [
-  "GreaterThan",
-  "LessThan",
-  "GreaterThanOrEqual",
-  "LessThanOrEqual",
-];
-
-function toPriceComparison(value: unknown, field: string): PriceComparison {
-  if (
-    typeof value === "string" &&
-    (PRICE_COMPARISONS as readonly string[]).includes(value)
-  ) {
-    return value as PriceComparison;
-  }
-  throw new Error(`governance decode: ${field} is not a known PriceComparison`);
-}
-
-/** `Option<EventOracleSource>`: `None` is nil (fact 4), the unit variant is a
- *  bare string (fact 2), the struct variants are single-entry maps with
- *  positional payloads (fact 3). Fails closed on an unknown variant — a
- *  resolution mode this build cannot name must never render as one it can.
- *  Exported for the client's impact-market read, which carries the same
- *  enum in the same compact-rmp form. */
-export function decodeOracleSource(
-  value: unknown,
-  field: string,
-): EventOracleSource | undefined {
-  if (value === null || value === undefined) return undefined;
-  if (value === "RelayerAttested") return { kind: "RelayerAttested" };
-  const { name, payload } = variantOf(value, field);
-  switch (name) {
-    case "UnderlyingPriceVsStrike": {
-      const raw = toTuple(payload, field, 2);
-      return {
-        kind: "UnderlyingPriceVsStrike",
-        strikePrice: toU64(raw[0], `${field}.strikePrice`),
-        comparison: toPriceComparison(raw[1], `${field}.comparison`),
-      };
-    }
-    case "MarketOracle": {
-      const raw = toTuple(payload, field, 3);
-      return {
-        kind: "MarketOracle",
-        market: toU32(raw[0], `${field}.market`),
-        strikePrice: toU64(raw[1], `${field}.strikePrice`),
-        comparison: toPriceComparison(raw[2], `${field}.comparison`),
-      };
-    }
-    default:
-      throw new Error(
-        `governance decode: ${field} has unknown EventOracleSource variant "${name}"`,
-      );
-  }
-}
-
-const OUTCOMES: Record<string, Outcome> = {
-  Yes: Outcome.Yes,
-  No: Outcome.No,
-  Void: Outcome.Void,
-};
-
-/** Impact-market lifecycle status: unit variants are bare strings (fact 2);
- *  `Resolved(Outcome)` is a single-entry map whose newtype payload is the
- *  outcome's variant name — a bare string, no array wrapper (confirmed from
- *  engine bytes, not inferred). Fails closed: a status or outcome this build
- *  cannot name must never render as one it can — these drive settle/void
- *  displays. */
-function decodeImpactStatus(value: unknown, field: string): ImpactMarketStatus {
-  if (value === "Trading") return { kind: "Trading" };
-  if (value === "PreResolution") return { kind: "PreResolution" };
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    const { name, payload } = variantOf(value, field);
-    if (name !== "Resolved") {
-      throw new Error(
-        `governance decode: ${field} has unknown ImpactMarketStatus variant "${name}"`,
-      );
-    }
-    const outcome = typeof payload === "string" ? OUTCOMES[payload] : undefined;
-    if (outcome === undefined) {
-      throw new Error(
-        `governance decode: ${field} has unknown Outcome ${JSON.stringify(payload)}`,
-      );
-    }
-    return { kind: "Resolved", outcome };
-  }
-  throw new Error(
-    `governance decode: ${field} is not a known ImpactMarketStatus`,
-  );
-}
-
-/**
- * One `ImpactMarketDisplayInfo` row from `GET /v1/impact_markets` /
- * `/v1/impact_market/{id}` (exchange-core/src/query.rs), as the engine's
- * positional array: 12 required slots, plus trailers shipped incrementally —
- * [12] `oracleSource` (BE-54), [13] `description` and [14] `rules`
- * (admin-actions v2). Older gateways serve shorter tuples; missing trailers
- * stay `undefined` so callers can tell "not served" from "empty". Anything
- * outside the supported 12–15 shapes — including trailing fields — is a
- * refusal, same fail-closed posture as every decoder in this file.
- */
-export function decodeImpactMarketInfo(
-  value: unknown,
-  index?: number,
-): ImpactMarketInfo {
-  const f = index == null ? "impactMarket" : `impactMarket[${index}]`;
-  const raw = toTupleBetween(value, f, 12, 15);
-  const info: ImpactMarketInfo = {
-    impactMarketId: toU32(raw[0], `${f}.impactMarketId`),
-    underlyingMarket: toU32(raw[1], `${f}.underlyingMarket`),
-    cpyMarket: toU32(raw[2], `${f}.cpyMarket`),
-    cpnMarket: toU32(raw[3], `${f}.cpnMarket`),
-    ebyMarket: toU32(raw[4], `${f}.ebyMarket`),
-    ebnMarket: toU32(raw[5], `${f}.ebnMarket`),
-    question: toString(raw[6], `${f}.question`),
-    deadlineMs: toU64(raw[7], `${f}.deadlineMs`),
-    resolutionWindowMs: toU64(raw[8], `${f}.resolutionWindowMs`),
-    status: decodeImpactStatus(raw[9], `${f}.status`),
-    createdMs: toU64(raw[10], `${f}.createdMs`),
-    resolvedMs: toU64(raw[11], `${f}.resolvedMs`),
-  };
-  if (raw.length > 12) {
-    const oracleSource = decodeOracleSource(raw[12], `${f}.oracleSource`);
-    if (oracleSource) info.oracleSource = oracleSource;
-  }
-  if (raw.length > 13) info.description = toString(raw[13], `${f}.description`);
-  if (raw.length > 14) info.rules = toString(raw[14], `${f}.rules`);
-  return info;
-}
-
-/** `CreateImpactMarket` as the engine's positional payload: 13 required
- *  fields plus three `serde(default)` trailers (oracleSource, description,
- *  rules). The engine's decoder tolerates the trailers' absence, so this
- *  mirror does too — same tolerance, same defaults. */
-function decodeCreateImpactMarket(value: unknown): CreateImpactMarket {
-  const f = "createImpactMarket";
-  const raw = toTupleBetween(value, f, 13, 16);
-  const decoded: CreateImpactMarket = {
-    impactMarketId: toU32(raw[0], `${f}.impactMarketId`),
-    underlyingMarket: toU32(raw[1], `${f}.underlyingMarket`),
-    childMarketBase: toU32(raw[2], `${f}.childMarketBase`),
-    question: toString(raw[3], `${f}.question`),
-    deadlineMs: toU64(raw[4], `${f}.deadlineMs`),
-    resolutionWindowMs: toU64(raw[5], `${f}.resolutionWindowMs`),
-    imBps: toU32(raw[6], `${f}.imBps`),
-    mmBps: toU32(raw[7], `${f}.mmBps`),
-    takerFeeBps: toU32(raw[8], `${f}.takerFeeBps`),
-    makerFeeBps: toU32(raw[9], `${f}.makerFeeBps`),
-    fundingIntervalMs: toU64(raw[10], `${f}.fundingIntervalMs`),
-    maxFundingRateBps: toU32(raw[11], `${f}.maxFundingRateBps`),
-    signer: toBytes(raw[12], `${f}.signer`, ADDRESS_LEN),
-    description: raw.length > 14 ? toString(raw[14], `${f}.description`) : "",
-    rules: raw.length > 15 ? toString(raw[15], `${f}.rules`) : "",
-  };
-  const oracleSource =
-    raw.length > 13
-      ? decodeOracleSource(raw[13], `${f}.oracleSource`)
-      : undefined;
-  if (oracleSource) decoded.oracleSource = oracleSource;
-  return decoded;
-}
-
-/** One item of a governance `Batch` — the CLOSED market-creation subset.
- *  Fails closed on any other variant name: a batch item this build cannot
- *  decode must never let the batch around it render as understood. */
-function decodeBatchItem(value: unknown, field: string): AdminBatchItem {
-  const { name, payload } = variantOf(value, field);
-  switch (name) {
-    case "CreateMarket":
-      return { kind: "CreateMarket", value: decodeCreateMarket(payload) };
-    case "CreateImpactMarket":
-      return {
-        kind: "CreateImpactMarket",
-        value: decodeCreateImpactMarket(payload),
-      };
-    default:
-      throw new Error(
-        `governance decode: ${field} has unknown AdminBatchItem variant "${name}" — this SDK build cannot render it`,
-      );
-  }
-}
-
-function decodeUpdateRegistry(value: unknown): UpdateAdminSignerRegistry {
-  const raw = toTuple(value, "updateRegistry", 2);
-  return {
-    newThreshold: toU32(raw[0], "updateRegistry.newThreshold"),
-    newMembers: toArray(raw[1], "updateRegistry.newMembers").map((m, i) =>
-      toBytes(m, `updateRegistry.newMembers[${i}]`, ADDRESS_LEN),
-    ),
-  };
-}
-
-function decodeSetTriggerMarketConfig(value: unknown): SetTriggerMarketConfig {
-  const raw = toTuple(value, "setTriggerMarketConfig", 7);
-  if (typeof raw[2] !== "boolean") {
-    throw new Error(
-      "governance decode: setTriggerMarketConfig.enabled is not boolean",
-    );
-  }
-  return {
-    market: toU32(raw[0], "setTriggerMarketConfig.market"),
-    expectedCurrentVersion:
-      raw[1] == null
-        ? null
-        : toU64(raw[1], "setTriggerMarketConfig.expectedCurrentVersion"),
-    enabled: raw[2],
-    maxTriggerSlippageBps: toU32(
-      raw[3],
-      "setTriggerMarketConfig.maxTriggerSlippageBps",
-    ),
-    maxMarkAgeMs: toU64(raw[4], "setTriggerMarketConfig.maxMarkAgeMs"),
-    maxFuturePublishSkewMs: toU64(
-      raw[5],
-      "setTriggerMarketConfig.maxFuturePublishSkewMs",
-    ),
-    maxActiveBrackets: toU64(
-      raw[6],
-      "setTriggerMarketConfig.maxActiveBrackets",
-    ),
-  };
-}
-
 /** `kind` → the engine's `AdminActionType` tag, as a TABLE rather than
  *  arithmetic: a new arm added to `decodeAdminAction` without a row here is
  *  a compile error (`Record` over the closed union), never a silently
  *  inherited neighbour's tag. Mirrors `AdminActionType` in the engine and
  *  `action_type()` in the Rust core — 1/2 are v1, 3/4 are admin-actions v2. */
-const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
+export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   CreateMarket: 1,
   UpdateAdminSignerRegistry: 2,
-  CreateImpactMarket: 3,
+  CreateEvent: 9,
+  AttachConditional: 10,
   Batch: 4,
   SetTriggerMarketConfig: 5,
+  UnpauseBridge: 6,
+  UpdateAuthoritySet: 7,
+  CancelAllOrdersForAccount: 8,
+  ConfigureOraclePolicy: 12,
+  SetOracleGuards: 13,
+  FundInsuranceFund: 18,
+  WithdrawInsuranceFund: 25,
+  ExecInsuranceFund: 26,
+  SetMarginOffsetPolicy: 27,
+  VoidEvent: 29,
+  SettleEvent: 30,
+  SetMarketStatus: 31,
+  ScheduleUpgrade: 14,
+  CancelUpgrade: 15,
+  SetWithdrawalLimit: 19,
+  SetLiquidationConfig: 17,
+  SetOperatorReceiptRegistry: 20,
 };
 
-/** The typed inner operation a proposal carries. Fails closed on an unknown
- *  variant: an SDK build that does not know an operation must never let a
- *  caller render or approve it as though it did. */
+/** The typed inner operation a proposal carries, decoded as the wire's
+ *  `AdminAction` in the Rust core. Fails closed on an unknown variant: an SDK
+ *  build that does not know an operation must never let a caller render or
+ *  approve it as though it did. */
 export function decodeAdminAction(
   value: unknown,
   field = "action",
 ): AdminAction {
-  const { name, payload } = variantOf(value, field);
-  switch (name) {
-    case "CreateMarket":
-      return {
-        kind: "CreateMarket",
-        value: decodeCreateMarket(payload),
-      };
-    case "UpdateAdminSignerRegistry":
-      return {
-        kind: "UpdateAdminSignerRegistry",
-        value: decodeUpdateRegistry(payload),
-      };
-    case "CreateImpactMarket":
-      return {
-        kind: "CreateImpactMarket",
-        value: decodeCreateImpactMarket(payload),
-      };
-    case "Batch":
-      return {
-        kind: "Batch",
-        value: toArray(payload, `${field}.batch`).map((item, i) =>
-          decodeBatchItem(item, `${field}.batch[${i}]`),
-        ),
-      };
-    case "SetTriggerMarketConfig":
-      return {
-        kind: "SetTriggerMarketConfig",
-        value: decodeSetTriggerMarketConfig(payload),
-      };
-    default:
-      throw new Error(
-        `governance decode: ${field} has unknown AdminAction variant "${name}" — this SDK build cannot render it`,
-      );
+  try {
+    const wasm = getWasm();
+    return adminActionFromWasm(
+      wasm.decode_read(
+        wasm.ReadKind.AdminAction,
+        actionEncoder.encode(integral(value)),
+      ),
+    );
+  } catch (e) {
+    throw new Error(
+      `governance decode: ${field}: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 }
 
@@ -560,12 +354,15 @@ export function decodeProposalDisplayInfo(
   }
   const fields = toTuple(raw, at, 15);
   const actionTag = toU8(fields[11], `${at}.actionTag`);
-  const action = decodeAdminAction(fields[12], `${at}.action`);
-  const expectedActionTag = ACTION_TAG_BY_KIND[action.kind];
-  if (actionTag !== expectedActionTag) {
-    throw new Error(
-      `governance decode: ${at}.actionTag ${actionTag} does not match ${action.kind} tag ${expectedActionTag}`,
-    );
+  const action =
+    fields[12] == null ? null : decodeAdminAction(fields[12], `${at}.action`);
+  if (action !== null) {
+    const expectedActionTag = ACTION_TAG_BY_KIND[action.kind];
+    if (actionTag !== expectedActionTag) {
+      throw new Error(
+        `governance decode: ${at}.actionTag ${actionTag} does not match ${action.kind} tag ${expectedActionTag}`,
+      );
+    }
   }
   return {
     proposalId: toU64(fields[0], `${at}.proposalId`),
@@ -613,6 +410,31 @@ export function decodeAdminSignerRegistry(
   };
 }
 
+const AUTHORITIES_FIELDS = [
+  "relayer",
+  "oracle",
+  "cexComposite",
+  "custody",
+  "marketParams",
+  "scheduledOps",
+] as const;
+
+/**
+ * Decode the engine's six-field `AuthoritiesSnapshot`. Fails closed on any
+ * other shape: a partially decoded set would present a missing authority as
+ * an empty one.
+ */
+export function decodeAuthoritiesSnapshot(raw: unknown): AuthoritiesSnapshot {
+  const fields = toTuple(raw, "authorities", AUTHORITIES_FIELDS.length);
+  const out = {} as AuthoritiesSnapshot;
+  AUTHORITIES_FIELDS.forEach((name, i) => {
+    out[name] = toArray(fields[i], `authorities.${name}`).map((a, j) =>
+      toBytes(a, `authorities.${name}[${j}]`, ADDRESS_LEN),
+    );
+  });
+  return out;
+}
+
 /** Decode the engine's one-field `AdminSignerRegistryInfo` envelope. */
 export function decodeAdminSignerRegistryInfo(
   raw: unknown,
@@ -635,5 +457,67 @@ export function decodeProposalPage(raw: unknown): ProposalPage {
     proposals,
     nextCursor:
       fields[1] == null ? null : toU64(fields[1], "proposalPage.nextCursor"),
+  };
+}
+
+/** Decode the engine's `UpgradesInfo` (`GET /v1/upgrades`). */
+export function decodeUpgradesInfo(raw: unknown): UpgradesInfo {
+  const fields = toTuple(raw, "upgrades", 2);
+  let plan: PendingUpgradePlan | null = null;
+  if (fields[0] != null) {
+    const p = toTuple(fields[0], "upgrades.plan", 5);
+    plan = {
+      targetHeight: toU64(p[0], "upgrades.plan.targetHeight"),
+      major: toU32(p[1], "upgrades.plan.major"),
+      minor: toU32(p[2], "upgrades.plan.minor"),
+      successorSha256: toBytes(p[3], "upgrades.plan.successorSha256", HASH_LEN),
+      scheduledHeight: toU64(p[4], "upgrades.plan.scheduledHeight"),
+    };
+  }
+  const executed = toArray(fields[1], "upgrades.executed").map((e, i) => {
+    const x = toTuple(e, `upgrades.executed[${i}]`, 3);
+    return {
+      activatedHeight: toU64(x[0], `upgrades.executed[${i}].activatedHeight`),
+      major: toU32(x[1], `upgrades.executed[${i}].major`),
+      minor: toU32(x[2], `upgrades.executed[${i}].minor`),
+    };
+  });
+  return { plan, executed };
+}
+
+/** Decode `GET /v1/liquidation-config`: `[sequence, config]`. */
+export function decodeLiquidationConfigInfo(
+  raw: unknown,
+): LiquidationConfigInfo {
+  const fields = toTuple(raw, "liquidationConfig", 2);
+  return {
+    sequence: toU64(fields[0], "liquidationConfig.sequence"),
+    config: decodeLiquidationConfigTuple(fields[1], "liquidationConfig.config"),
+  };
+}
+
+/** Validate the node's JSON `GET /v1/version` body. */
+export function decodeNodeVersion(raw: unknown): NodeVersion {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("version decode: body is not an object");
+  }
+  const o = raw as Record<string, unknown>;
+  const str = (k: string): string => {
+    if (typeof o[k] !== "string") {
+      throw new Error(`version decode: ${k} is not a string`);
+    }
+    return o[k] as string;
+  };
+  const sha = str("engine_lib_sha256");
+  if (!/^[0-9a-f]{64}$/.test(sha)) {
+    throw new Error("version decode: engine_lib_sha256 is not 64 hex chars");
+  }
+  return {
+    node: str("node"),
+    engine: str("engine"),
+    engineAbiVersion: toU32(o.engine_abi_version, "version.engine_abi_version"),
+    engineMajor: toU32(o.engine_major, "version.engine_major"),
+    engineMinor: toU32(o.engine_minor, "version.engine_minor"),
+    engineLibSha256: sha,
   };
 }

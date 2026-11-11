@@ -96,6 +96,17 @@ fn errors_vectors() {
 }
 
 #[test]
+fn events_vectors() {
+    let cases = lines(cv::EVENTS_FILE);
+    assert!(!cases.is_empty(), "no events vectors");
+    for line in cases {
+        let c: cv::EventCase = serde_json::from_str(&line).expect("parse events case");
+        let got = cv::event_expect(&c.event).unwrap_or_else(|e| panic!("[{}] {e}", c.case));
+        assert_eq!(got, c.expect, "events mismatch for case {}", c.case);
+    }
+}
+
+#[test]
 fn nonce_vectors() {
     let cases = lines(cv::NONCE_FILE);
     assert!(!cases.is_empty(), "no nonce vectors");
@@ -107,5 +118,36 @@ fn nonce_vectors() {
             "nonce mismatch for case {}",
             c.case
         );
+    }
+}
+
+#[test]
+fn binary_vectors() {
+    let cases = lines(cv::BINARY_FILE);
+    assert!(!cases.is_empty(), "binary.ndjson is empty");
+    for line in &cases {
+        let case: cv::BinaryCase = serde_json::from_str(line).expect("binary line parses");
+        match case {
+            cv::BinaryCase::NoOrder {
+                case,
+                input,
+                expect,
+            } => assert_eq!(
+                cv::no_order_expect(&input).expect("no order translates"),
+                expect,
+                "binary case {case}"
+            ),
+            cv::BinaryCase::PositionView {
+                case,
+                side,
+                entry_price,
+                size,
+                expect,
+            } => assert_eq!(
+                cv::position_view_expect(&side, entry_price, size).expect("view reads"),
+                expect,
+                "binary case {case}"
+            ),
+        }
     }
 }

@@ -13,8 +13,8 @@ core's `wire` newtypes accept them directly and length-check on decode.
 
 Every action byte is pulled from the core via `get_action_types()`, so
 the `ActionType` map can never drift from the Rust `impl_action_encoding!`
-list. Actions without a dedicated builder (admin / relayer actions) are
-still fully reachable through :class:`RawAction`.
+list. Every action has a dedicated builder; :class:`RawAction` stays as the
+escape hatch for an action newer than this module.
 """
 
 from __future__ import annotations
@@ -95,6 +95,14 @@ class RawAction(Action):
 
 @dataclass
 class PlaceOrder(Action):
+    """Place a resting limit order.
+
+    ``stop_loss``/``take_profit`` attach a pre-fill (pending) SL/TP bracket:
+    installed on the position resulting from the order's first fill,
+    discarded if the order terminates without filling. Encoded as the
+    trailing wire fields added by proof-wire 2.1.0 (nil when absent).
+    """
+
     ACTION_NAME = "PlaceOrder"
     market: int
     owner: bytes
@@ -105,6 +113,13 @@ class PlaceOrder(Action):
     post_only: bool = False
     reduce_only: bool = False
     time_in_force: str = TimeInForce.Gtc
+    stop_loss: Optional[TriggerLimb] = None
+    take_profit: Optional[TriggerLimb] = None
+
+    def __post_init__(self) -> None:
+        _validate_order_triggers(
+            self.stop_loss, self.take_profit, reduce_only=self.reduce_only
+        )
 
     def fields(self) -> dict[str, Any]:
         return {
@@ -117,17 +132,33 @@ class PlaceOrder(Action):
             "post_only": self.post_only,
             "reduce_only": self.reduce_only,
             "time_in_force": self.time_in_force,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
         }
 
 
 @dataclass
 class MarketOrder(Action):
+    """Place a market order that crosses immediately against resting orders.
+
+    ``stop_loss``/``take_profit`` carry the same pre-fill bracket as
+    :class:`PlaceOrder` (a market order has no limit price, so the engine
+    validates the limbs against the current mark).
+    """
+
     ACTION_NAME = "MarketOrder"
     market: int
     owner: bytes
     side: str
     quantity: int
     client_order_id: Optional[int] = None
+    stop_loss: Optional[TriggerLimb] = None
+    take_profit: Optional[TriggerLimb] = None
+
+    def __post_init__(self) -> None:
+        _validate_order_triggers(
+            self.stop_loss, self.take_profit, reduce_only=False
+        )
 
     def fields(self) -> dict[str, Any]:
         return {
@@ -136,6 +167,8 @@ class MarketOrder(Action):
             "side": self.side,
             "quantity": self.quantity,
             "client_order_id": self.client_order_id,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
         }
 
 
@@ -171,6 +204,13 @@ class CancelAllOrders(Action):
 
 @dataclass
 class CancelReplaceOrder(Action):
+    """Atomically cancel a resting order and place its replacement.
+
+    ``stop_loss``/``take_profit`` attach the replacement order's pre-fill
+    bracket; the replaced order's pending payload is always discarded —
+    replacement is a full payload replacement.
+    """
+
     ACTION_NAME = "CancelReplaceOrder"
     owner: bytes
     market: int
@@ -183,6 +223,13 @@ class CancelReplaceOrder(Action):
     post_only: bool = False
     reduce_only: bool = False
     time_in_force: str = TimeInForce.Gtc
+    stop_loss: Optional[TriggerLimb] = None
+    take_profit: Optional[TriggerLimb] = None
+
+    def __post_init__(self) -> None:
+        _validate_order_triggers(
+            self.stop_loss, self.take_profit, reduce_only=self.reduce_only
+        )
 
     def fields(self) -> dict[str, Any]:
         return {
@@ -197,6 +244,8 @@ class CancelReplaceOrder(Action):
             "post_only": self.post_only,
             "reduce_only": self.reduce_only,
             "time_in_force": self.time_in_force,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
         }
 
 
@@ -229,6 +278,7 @@ class ClosePosition(Action):
 
 _U64_MAX = (1 << 64) - 1
 _U32_MAX = (1 << 32) - 1
+_U16_MAX = (1 << 16) - 1
 MAX_TRIGGER_SLIPPAGE_BPS = 9_999
 
 
@@ -237,6 +287,48 @@ def _trigger_uint(name: str, value: int, maximum: int, *, nonzero: bool = False)
         raise ValueError(f"{name} must be an unsigned integer <= {maximum}")
     if nonzero and value == 0:
         raise ValueError(f"{name} must be non-zero")
+
+
+# Engine code for an order that cannot carry attached SL/TP limbs; a test pins
+# it to the native error table so the message cannot drift from the engine.
+TRIGGER_ORDER_INCOMPATIBLE_CODE = 98
+
+
+def _limb_wire(limb: Optional[TriggerLimb]) -> Optional[dict[str, Any]]:
+    return limb.as_wire() if limb else None
+
+
+def _assert_distinct_limb_client_ids(
+    stop_loss: Optional[TriggerLimb], take_profit: Optional[TriggerLimb]
+) -> None:
+    stop_id = stop_loss.client_trigger_id if stop_loss else None
+    take_id = take_profit.client_trigger_id if take_profit else None
+    if stop_id is not None and stop_id == take_id:
+        raise ValueError("stop_loss and take_profit client_trigger_id values must differ")
+
+
+def _validate_order_triggers(
+    stop_loss: Optional[TriggerLimb],
+    take_profit: Optional[TriggerLimb],
+    *,
+    reduce_only: bool,
+) -> None:
+    """Shared placement-time SL/TP parity for the order actions (0x01/0x04/0x1A).
+
+    Per-limb bounds are enforced by :class:`TriggerLimb.__post_init__`; this
+    adds the order-level rules: a reduce-only order cannot carry limbs
+    (engine code :data:`TRIGGER_ORDER_INCOMPATIBLE_CODE`), and the two limbs'
+    client ids must differ. Both limbs absent means "no bracket requested"
+    and passes.
+    """
+    if stop_loss is None and take_profit is None:
+        return
+    if reduce_only:
+        raise ValueError(
+            "stop_loss/take_profit cannot be attached to a reduce_only order "
+            f"(TriggerOrderIncompatible, code {TRIGGER_ORDER_INCOMPATIBLE_CODE})"
+        )
+    _assert_distinct_limb_client_ids(stop_loss, take_profit)
 
 
 @dataclass
@@ -296,18 +388,15 @@ class SetPositionTriggers(Action):
             _trigger_uint(
                 "client_group_id", self.client_group_id, _U64_MAX, nonzero=True
             )
-        stop_id = self.stop_loss.client_trigger_id if self.stop_loss else None
-        take_id = self.take_profit.client_trigger_id if self.take_profit else None
-        if stop_id is not None and stop_id == take_id:
-            raise ValueError("stop_loss and take_profit client_trigger_id values must differ")
+        _assert_distinct_limb_client_ids(self.stop_loss, self.take_profit)
 
     def fields(self) -> dict[str, Any]:
         return {
             "market": self.market,
             "owner": self.owner,
             "expected_position_epoch": self.expected_position_epoch,
-            "stop_loss": self.stop_loss.as_wire() if self.stop_loss else None,
-            "take_profit": self.take_profit.as_wire() if self.take_profit else None,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
             "client_group_id": self.client_group_id,
         }
 
@@ -395,43 +484,93 @@ class SetTriggerMarketConfig:
 
 
 @dataclass
-class CreateImpactMarket(Action):
-    ACTION_NAME = "CreateImpactMarket"
-    impact_market_id: int
-    underlying_market: int
-    child_market_base: int
-    question: str
-    deadline_ms: int
-    resolution_window_ms: int
-    im_bps: int
-    mm_bps: int
-    taker_fee_bps: int
-    maker_fee_bps: int
-    funding_interval_ms: int
-    max_funding_rate_bps: int
-    signer: bytes
-    oracle_source: Optional[Any] = None
-    description: str = ""
-    rules: str = ""
+class CreateSubAccount(Action):
+    """Create a derived sub-account under the signing master (0x28)."""
+
+    ACTION_NAME = "CreateSubAccount"
+    owner: bytes
+    sub_account_id: int
+    name: bytes
 
     def fields(self) -> dict[str, Any]:
         return {
-            "impact_market_id": self.impact_market_id,
-            "underlying_market": self.underlying_market,
-            "child_market_base": self.child_market_base,
-            "question": self.question,
-            "deadline_ms": self.deadline_ms,
-            "resolution_window_ms": self.resolution_window_ms,
-            "im_bps": self.im_bps,
-            "mm_bps": self.mm_bps,
-            "taker_fee_bps": self.taker_fee_bps,
-            "maker_fee_bps": self.maker_fee_bps,
-            "funding_interval_ms": self.funding_interval_ms,
-            "max_funding_rate_bps": self.max_funding_rate_bps,
+            "owner": self.owner,
+            "sub_account_id": self.sub_account_id,
+            "name": self.name,
+        }
+
+
+@dataclass
+class SubAccountTransfer(Action):
+    """Move balance between a master and one of its sub-accounts (0x29)."""
+
+    ACTION_NAME = "SubAccountTransfer"
+    owner: bytes
+    from_account: bytes
+    to_account: bytes
+    amount: int
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "owner": self.owner,
+            "from": self.from_account,
+            "to": self.to_account,
+            "amount": self.amount,
+        }
+
+
+@dataclass
+class ClaimWithdrawalPayout(Action):
+    """**Operator-only.** Acquire the single-holder Solana payout lease on a
+    pending withdrawal (0x2e); ``holder`` is the claiming watcher's own
+    address."""
+
+    ACTION_NAME = "ClaimWithdrawalPayout"
+    withdrawal_id: int
+    holder: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {"withdrawal_id": self.withdrawal_id, "holder": self.holder}
+
+
+@dataclass
+class RecordWithdrawalPayout(Action):
+    """**Operator-only.** Record the Solana signature of the payout-lease
+    holder's transfer for a pending withdrawal (0x31), before the holder
+    broadcasts it, while its lease is live; stored as the withdrawal's
+    payout record that peer watchers verify against Solana before
+    re-signing."""
+
+    ACTION_NAME = "RecordWithdrawalPayout"
+    withdrawal_id: int
+    holder: bytes
+    solana_signature: bytes
+    last_valid_block_height: int
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "withdrawal_id": self.withdrawal_id,
+            "holder": self.holder,
+            "solana_signature": self.solana_signature,
+            "last_valid_block_height": self.last_valid_block_height,
+        }
+
+
+@dataclass
+class ResolveEvent(Action):
+    """Resolve an event (0x27) to YES or NO; the engine rejects ``Void`` and
+    refuses an event that still carries attached conditionals."""
+
+    ACTION_NAME = "ResolveEvent"
+    event_id: int
+    outcome: str
+    signer: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "event_id": self.event_id,
+            "outcome": self.outcome,
             "signer": self.signer,
-            "oracle_source": self.oracle_source,
-            "description": self.description,
-            "rules": self.rules,
         }
 
 
@@ -535,12 +674,37 @@ class WithdrawRequest(Action):
 
 
 @dataclass
+class DepositLocator:
+    """Position of a USDC transfer inside its Solana transaction: the
+    top-level instruction index plus, for a transfer nested under a CPI, the
+    inner instruction index (``None`` when the transfer is itself top-level).
+    Two transfers in one transaction share a signature and differ only here.
+    Not an action by itself — the optional trailing field of
+    :class:`ConfirmDeposit`."""
+
+    top_index: int
+    inner_index: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        _trigger_uint("top_index", self.top_index, _U16_MAX)
+        if self.inner_index is not None:
+            _trigger_uint("inner_index", self.inner_index, _U16_MAX)
+
+    def as_wire(self) -> dict[str, Any]:
+        return {
+            "top_index": self.top_index,
+            "inner_index": self.inner_index,
+        }
+
+
+@dataclass
 class ConfirmDeposit(Action):
     ACTION_NAME = "ConfirmDeposit"
     owner: bytes
     amount: int
     solana_tx_sig: bytes
     signer: bytes
+    locator: Optional[DepositLocator] = None
 
     def fields(self) -> dict[str, Any]:
         return {
@@ -548,6 +712,7 @@ class ConfirmDeposit(Action):
             "amount": self.amount,
             "solana_tx_sig": self.solana_tx_sig,
             "signer": self.signer,
+            "locator": self.locator.as_wire() if self.locator else None,
         }
 
 
@@ -582,6 +747,143 @@ class FailWithdrawal(Action):
 
 
 @dataclass
+class OperatorReceiptProof:
+    """Operator ed25519 quorum proof over a bridge record: one 64-byte
+    signature per set bit of ``signer_bitmap``, in bit order. Not an action by
+    itself — carried by :class:`AuthorizeWithdrawal`,
+    :class:`ConfirmWithdrawalReceipt` and :class:`FailWithdrawalReceipt`."""
+
+    signatures: list[bytes]
+    signer_bitmap: bytes
+
+    def as_wire(self) -> dict[str, Any]:
+        return {"signatures": list(self.signatures), "signer_bitmap": self.signer_bitmap}
+
+
+@dataclass
+class BridgeWithdrawalReceipt:
+    """A finalized terminal bridge receipt (``Paid`` or ``Cancelled``) for one
+    withdrawal, as the bridge program wrote it on Solana."""
+
+    withdrawal_id: int
+    proof_owner: bytes
+    destination_owner: bytes
+    destination_token_acct: bytes
+    amount_micro_usdc: int
+    fee_micro_usdc: int
+    terminal_state: int
+    solana_tx_signature: bytes
+    finalized_slot: int
+    finalized_blockhash: bytes
+    deployment_id: bytes
+    vault_tier: int
+    authorization_digest: bytes
+    authorization_signer_epoch: int
+    receipt_authority_epoch: int
+    receipt_quorum_kind: int
+
+    def as_wire(self) -> dict[str, Any]:
+        return {
+            "withdrawal_id": self.withdrawal_id,
+            "proof_owner": self.proof_owner,
+            "destination_owner": self.destination_owner,
+            "destination_token_acct": self.destination_token_acct,
+            "amount_micro_usdc": self.amount_micro_usdc,
+            "fee_micro_usdc": self.fee_micro_usdc,
+            "terminal_state": self.terminal_state,
+            "solana_tx_signature": self.solana_tx_signature,
+            "finalized_slot": self.finalized_slot,
+            "finalized_blockhash": self.finalized_blockhash,
+            "deployment_id": self.deployment_id,
+            "vault_tier": self.vault_tier,
+            "authorization_digest": self.authorization_digest,
+            "authorization_signer_epoch": self.authorization_signer_epoch,
+            "receipt_authority_epoch": self.receipt_authority_epoch,
+            "receipt_quorum_kind": self.receipt_quorum_kind,
+        }
+
+
+@dataclass
+class AuthorizeWithdrawal(Action):
+    """Record the operator-quorum-signed ``WithdrawalAuthorizationV1`` that a
+    terminal receipt must settle against. Permissionless to submit."""
+
+    ACTION_NAME = "AuthorizeWithdrawal"
+    authorization: bytes
+    proof: OperatorReceiptProof
+
+    def fields(self) -> dict[str, Any]:
+        return {"authorization": self.authorization, "proof": self.proof.as_wire()}
+
+
+@dataclass
+class ConfirmWithdrawalReceipt(Action):
+    """Receipt-gated confirmation: a finalized ``Paid`` receipt plus the
+    operator quorum proof."""
+
+    ACTION_NAME = "ConfirmWithdrawalReceipt"
+    receipt: BridgeWithdrawalReceipt
+    proof: OperatorReceiptProof
+
+    def fields(self) -> dict[str, Any]:
+        return {"receipt": self.receipt.as_wire(), "proof": self.proof.as_wire()}
+
+
+@dataclass
+class FailWithdrawalReceipt(Action):
+    """Receipt-gated failure: a finalized ``Cancelled`` receipt plus the
+    operator quorum proof; refunds only against a positive cancellation."""
+
+    ACTION_NAME = "FailWithdrawalReceipt"
+    receipt: BridgeWithdrawalReceipt
+    proof: OperatorReceiptProof
+
+    def fields(self) -> dict[str, Any]:
+        return {"receipt": self.receipt.as_wire(), "proof": self.proof.as_wire()}
+
+
+@dataclass
+class CreateMarket(Action):
+    """Register a perpetual market with its risk parameters (admin).
+    ``max_open_interest`` 0 means uncapped. ``tick_size`` and ``lot_size`` are
+    the price and quantity grids; the engine refuses creation with 0."""
+
+    ACTION_NAME = "CreateMarket"
+    market: int
+    im_bps: int
+    mm_bps: int
+    taker_fee_bps: int
+    maker_fee_bps: int
+    signer: bytes
+    funding_interval_ms: int
+    max_funding_rate_bps: int
+    pool_id: int
+    sz_decimals: int
+    ticker: str
+    tick_size: int
+    lot_size: int
+    max_open_interest: int = 0
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "im_bps": self.im_bps,
+            "mm_bps": self.mm_bps,
+            "taker_fee_bps": self.taker_fee_bps,
+            "maker_fee_bps": self.maker_fee_bps,
+            "signer": self.signer,
+            "funding_interval_ms": self.funding_interval_ms,
+            "max_funding_rate_bps": self.max_funding_rate_bps,
+            "pool_id": self.pool_id,
+            "sz_decimals": self.sz_decimals,
+            "ticker": self.ticker,
+            "max_open_interest": self.max_open_interest,
+            "tick_size": self.tick_size,
+            "lot_size": self.lot_size,
+        }
+
+
+@dataclass
 class SetUserMarketLeverage(Action):
     ACTION_NAME = "SetUserMarketLeverage"
     owner: bytes
@@ -595,46 +897,6 @@ class SetUserMarketLeverage(Action):
             "user_im_bps": self.user_im_bps,
         }
 
-
-@dataclass
-class CreateImpactMarket(Action):
-    ACTION_NAME = "CreateImpactMarket"
-    impact_market_id: int
-    underlying_market: int
-    child_market_base: int
-    question: str
-    deadline_ms: int
-    resolution_window_ms: int
-    im_bps: int
-    mm_bps: int
-    taker_fee_bps: int
-    maker_fee_bps: int
-    funding_interval_ms: int
-    max_funding_rate_bps: int
-    signer: bytes
-    oracle_source: Any = None
-    description: str = ""
-    rules: str = ""
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "impact_market_id": self.impact_market_id,
-            "underlying_market": self.underlying_market,
-            "child_market_base": self.child_market_base,
-            "question": self.question,
-            "deadline_ms": self.deadline_ms,
-            "resolution_window_ms": self.resolution_window_ms,
-            "im_bps": self.im_bps,
-            "mm_bps": self.mm_bps,
-            "taker_fee_bps": self.taker_fee_bps,
-            "maker_fee_bps": self.maker_fee_bps,
-            "funding_interval_ms": self.funding_interval_ms,
-            "max_funding_rate_bps": self.max_funding_rate_bps,
-            "signer": self.signer,
-            "oracle_source": self.oracle_source,
-            "description": self.description,
-            "rules": self.rules,
-        }
 
 
 @dataclass
@@ -656,7 +918,6 @@ class UpdateMarketFees(Action):
     mark_source_mode: Optional[int] = None
     max_mark_spread_bps: Optional[int] = None
     cex_composite_staleness_ms: Optional[int] = None
-    partial_liquidation_enabled: Optional[bool] = None
     fee_tiers: Optional[list[dict[str, Any]]] = None
     im_bps: Optional[int] = None
     mm_bps: Optional[int] = None
@@ -680,7 +941,6 @@ class UpdateMarketFees(Action):
             "mark_source_mode": self.mark_source_mode,
             "max_mark_spread_bps": self.max_mark_spread_bps,
             "cex_composite_staleness_ms": self.cex_composite_staleness_ms,
-            "partial_liquidation_enabled": self.partial_liquidation_enabled,
             "fee_tiers": self.fee_tiers,
             "im_bps": self.im_bps,
             "mm_bps": self.mm_bps,
@@ -691,57 +951,160 @@ class UpdateMarketFees(Action):
 # ── Operator actions (privileged — feeder / relayer infrastructure) ──────────
 #
 # These are NOT trading actions. A normal trading integration never builds
-# them — they are submitted by the operator's oracle relay / CEX-composite
-# feeder / relayer, each gated by a dedicated engine allowlist. They live in
-# the public SDK so operator tooling needs no second SDK, but a trading
-# consumer should ignore this section. Most operator actions (OracleUpdate,
-# CreateMarket, Confirm*/Fail*, ResolveEvent, …) are reachable via
-# :class:`RawAction`; OracleUpdateComposite gets a typed builder because Auros'
-# Python feeder requested first-class support.
-
-
-@dataclass
-class OracleUpdateComposite(Action):
-    """**Operator-only.** Submit a composite-CEX price for a market — BE-31
-    Phase B's third source for the multi-source mark-price median.
-
-    Not a trading action: the engine re-checks ``signer`` against a *separate*
-    CEX-composite feeder allowlist (a distinct trust domain from the
-    ``OracleUpdate`` relay), so a non-feeder signer is rejected regardless.
-    Markets ignore the composite entirely unless an operator has flipped them
-    to ``Median`` via :class:`UpdateMarketFees` (``mark_source_mode=1``).
-
-    Field order matches the engine struct: ``market, price, n_sources,
-    signer, publish_time_ms``. ``n_sources`` is observability-only (the engine
-    does not gate on it); ``publish_time_ms`` is a strictly-monotonic replay
-    guard, same as :class:`OracleUpdate`.
-    """
-
-    ACTION_NAME = "OracleUpdateComposite"
-    market: int
-    price: int
-    signer: bytes
-    # Required — NOT defaulted. `publish_time_ms` is the strictly-monotonic
-    # replay guard the engine enforces; a silent `0` default lets a feeder mint
-    # a first update at ts 0 and then have every later omitted update rejected,
-    # silently dropping the composite from the median. Matches the TS builder
-    # (`publishTimeMs` required) and Rust construction. The `serde(default)` on
-    # the Rust struct is decode-only (legacy payloads), not a mint-time default.
-    publish_time_ms: int
-    # Observability-only (the engine doesn't gate on it); safe to default.
-    n_sources: int = 0
-
-    def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "price": self.price,
-            "n_sources": self.n_sources,
-            "signer": self.signer,
-            "publish_time_ms": self.publish_time_ms,
-        }
+# them — they are submitted by the operator's oracle feeder or relayer, each
+# gated by a dedicated engine allowlist or oracle policy. They live in the
+# public SDK so operator tooling needs no second SDK, but a trading consumer
+# should ignore this section. Operator actions without a typed builder are
+# reachable via :class:`RawAction`.
 
 
 # ── Codec helpers (delegate to the shared Rust core) ─────────────────────────
+
+
+@dataclass
+class SubmitOracleObservation(Action):
+    """Operator-only relay attestation; not external-provider proof verification.
+
+    The engine enforces source-key/policy authorization and activation. Prices
+    and confidence are integer normalized micro units, never floating point.
+    """
+
+    ACTION_NAME = "SubmitOracleObservation"
+    market: int
+    policy_version: int
+    source_id: int
+    publish_time_ms: int
+    price_micro: int
+    confidence_micro: Optional[int]
+    evidence_digest: bytes
+    signer: bytes
+
+    def __post_init__(self) -> None:
+        _trigger_uint("market", self.market, _U32_MAX)
+        _trigger_uint("source_id", self.source_id, _U32_MAX)
+        for name in ("policy_version", "publish_time_ms", "price_micro"):
+            _trigger_uint(name, getattr(self, name), _U64_MAX)
+        if self.confidence_micro is not None:
+            _trigger_uint("confidence_micro", self.confidence_micro, _U64_MAX)
+        for name, size in (("evidence_digest", 32), ("signer", 20)):
+            if not isinstance(getattr(self, name), bytes) or len(getattr(self, name)) != size:
+                raise ValueError(f"{name} must contain exactly {size} bytes")
+
+    def fields(self) -> dict[str, Any]:
+        return {name: getattr(self, name) for name in (
+            "market", "policy_version", "source_id", "publish_time_ms", "price_micro",
+            "confidence_micro", "evidence_digest", "signer",
+        )}
+
+
+@dataclass
+class ConfigureOraclePolicy:
+    """Multisig policy bytes and activation height, not approval of their contents.
+
+    Independently decode and review the complete canonical policy before signing.
+    This wrapper deliberately does not invent market/source/calendar defaults.
+    """
+
+    effective_height: int
+    bundle: bytes
+
+    def __post_init__(self) -> None:
+        _trigger_uint("effective_height", self.effective_height, _U64_MAX)
+        if not isinstance(self.bundle, bytes):
+            raise ValueError("bundle must be canonical policy bytes")
+
+    def as_wire(self) -> dict[str, Any]:
+        return {"effective_height": self.effective_height, "bundle": self.bundle}
+
+
+# ── Admin-multisig governance ────────────────────────────────────────────────
+#
+# ``action`` is the inner admin action in its externally tagged wire form:
+# ``{"SetTriggerMarketConfig": config.as_wire()}``, ``{"PauseMarket":
+# {"market_id": 7}}``, or the bare string ``"UnpauseBridge"`` for the one
+# fieldless arm. The core validates it against the wire enum on encode.
+
+AdminActionWire = dict[str, Any] | str
+
+
+@dataclass
+class ProposeAdminAction(Action):
+    """Open a multisig proposal for one admin action."""
+
+    ACTION_NAME = "ProposeAdminAction"
+    proposer: bytes
+    registry_version: int
+    action: AdminActionWire
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "proposer": self.proposer,
+            "registry_version": self.registry_version,
+            "action": self.action,
+        }
+
+
+@dataclass
+class ApproveAdminAction(Action):
+    """Approve a proposal. Carries the proposal's full context, so the
+    approval is bound to exactly the content the approver reviewed
+    (``content_hash``)."""
+
+    ACTION_NAME = "ApproveAdminAction"
+    approver: bytes
+    proposal_id: int
+    registry_version: int
+    threshold: int
+    proposer: bytes
+    created_height: int
+    created_ms: int
+    expiry_ms: int
+    action: AdminActionWire
+    content_hash: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "approver": self.approver,
+            "proposal_id": self.proposal_id,
+            "registry_version": self.registry_version,
+            "threshold": self.threshold,
+            "proposer": self.proposer,
+            "created_height": self.created_height,
+            "created_ms": self.created_ms,
+            "expiry_ms": self.expiry_ms,
+            "action": self.action,
+            "content_hash": self.content_hash,
+        }
+
+
+@dataclass
+class RejectAdminAction(Action):
+    """Reject a proposal, bound to its ``content_hash``."""
+
+    ACTION_NAME = "RejectAdminAction"
+    rejecter: bytes
+    proposal_id: int
+    content_hash: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "rejecter": self.rejecter,
+            "proposal_id": self.proposal_id,
+            "content_hash": self.content_hash,
+        }
+
+
+@dataclass
+class EmergencyAdminAction(Action):
+    """Single-signer emergency action (pause, halt, reduce-only), in the
+    same externally tagged form as an admin action."""
+
+    ACTION_NAME = "EmergencyAdminAction"
+    signer: bytes
+    action: AdminActionWire
+
+    def fields(self) -> dict[str, Any]:
+        return {"signer": self.signer, "action": self.action}
 
 
 def encode_action(action: Action) -> tuple[int, bytes]:
@@ -784,13 +1147,29 @@ __all__ = [
     "Deposit",
     "Withdraw",
     "WithdrawRequest",
+    "DepositLocator",
     "ConfirmDeposit",
     "ConfirmWithdrawal",
     "FailWithdrawal",
+    "OperatorReceiptProof",
+    "BridgeWithdrawalReceipt",
+    "AuthorizeWithdrawal",
+    "ConfirmWithdrawalReceipt",
+    "FailWithdrawalReceipt",
+    "CreateMarket",
     "SetUserMarketLeverage",
-    "CreateImpactMarket",
+    "CreateSubAccount",
+    "SubAccountTransfer",
+    "ClaimWithdrawalPayout",
+    "RecordWithdrawalPayout",
     "UpdateMarketFees",
-    "OracleUpdateComposite",
+    "SubmitOracleObservation",
+    "ConfigureOraclePolicy",
+    "AdminActionWire",
+    "ProposeAdminAction",
+    "ApproveAdminAction",
+    "RejectAdminAction",
+    "EmergencyAdminAction",
     "encode_action",
     "decode_action",
 ]

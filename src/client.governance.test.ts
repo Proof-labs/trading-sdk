@@ -41,6 +41,40 @@ describe("ExchangeClient governance reads (W30-11)", () => {
     globalThis.fetch = originalFetch;
   });
 
+  it("queryAuthorities routes through the gateway and decodes all six sets", async () => {
+    // Captured from devnet on 2026-09-28: relayer and oracle each hold one
+    // signer; the other four sets are empty.
+    stubFetch(
+      "lpHcABTM98zOzIzM2cyaRV4jzIPM1czeS8yvKVFHDcyaZsy/kdwAFGYBzOgyzJU9MDHMi30fNjhqJBtZzLfM0szXkJCQkA==",
+    );
+    const got = await makeClient().queryAuthorities();
+    expect(calls).toEqual(["http://test-gateway/v1/admin/authorities"]);
+    expect(got.relayer.map((a) => Buffer.from(a).toString("hex"))).toEqual([
+      "f7ce8cd99a455e2383d5de4baf2951470d9a66bf",
+    ]);
+    expect(got.oracle.map((a) => Buffer.from(a).toString("hex"))).toEqual([
+      "6601e832953d30318b7d1f36386a241b59b7d2d7",
+    ]);
+    expect(got.cexComposite).toEqual([]);
+    expect(got.custody).toEqual([]);
+    expect(got.marketParams).toEqual([]);
+    expect(got.scheduledOps).toEqual([]);
+  });
+
+  it("queryAuthorities fails closed on a snapshot that is not six sets", async () => {
+    stubFetch(toB64(encoder.encode([[], [], []]) as Uint8Array));
+    await expect(makeClient().queryAuthorities()).rejects.toThrow(
+      /authorities has 3 fields, expected exactly 6/,
+    );
+    const short = Array.from({ length: 19 }, () => 1);
+    stubFetch(
+      toB64(encoder.encode([[short], [], [], [], [], []]) as Uint8Array),
+    );
+    await expect(makeClient().queryAuthorities()).rejects.toThrow(
+      /authorities\.relayer\[0\] is 19 bytes, expected 20/,
+    );
+  });
+
   it("queryAdminSignerRegistry routes through the gateway and decodes a present registry", async () => {
     // Proxy shape: msgpack `[registry|nil]`. serde encodes `[u8; 20]` as a
     // msgpack ARRAY of integers, so members arrive as number[][] and the
@@ -155,7 +189,7 @@ describe("ExchangeClient governance reads (W30-11)", () => {
     ];
     stubFetch(toB64(encoder.encode([[proposal], null]) as Uint8Array));
     await expect(makeClient().queryProposals()).rejects.toThrow(
-      /unknown AdminAction variant "DelistMarket"/,
+      /proposal\[0\]\.action: unknown variant `DelistMarket`/,
     );
   });
 
@@ -170,80 +204,6 @@ describe("ExchangeClient governance reads (W30-11)", () => {
     stubFetch(undefined);
     await expect(makeClient().queryProposals()).rejects.toThrow(
       /response is missing encoded data/,
-    );
-  });
-
-  it("queryImpactMarkets routes through the gateway and decodes an engine row", async () => {
-    // The engine-golden 15-slot row (see governance-query.test.ts for the
-    // full vector provenance), re-encoded here through the same msgpack
-    // encoder the stub uses elsewhere in this file.
-    const row = [
-      91,
-      15,
-      9_100,
-      9_101,
-      9_102,
-      9_103,
-      "does it land?",
-      1_000_000n,
-      1_000n,
-      { Resolved: "Yes" },
-      555n,
-      777n,
-      { MarketOracle: [3, 65_000_000_000n, "GreaterThanOrEqual"] },
-      "body",
-      "criteria",
-    ];
-    stubFetch(toB64(encoder.encode([row]) as Uint8Array));
-    const got = await makeClient().queryImpactMarkets();
-    expect(calls).toEqual(["http://test-gateway/v1/impact_markets"]);
-    expect(got).toHaveLength(1);
-    expect(got[0]!.impactMarketId).toBe(91);
-    expect(got[0]!.status).toEqual({ kind: "Resolved", outcome: 1 });
-    expect(got[0]!.oracleSource).toEqual({
-      kind: "MarketOracle",
-      market: 3,
-      strikePrice: 65_000_000_000n,
-      comparison: "GreaterThanOrEqual",
-    });
-    expect(got[0]!.rules).toBe("criteria");
-  });
-
-  it("queryImpactMarkets rejects a response without the encoded-data envelope", async () => {
-    stubFetch(undefined);
-    await expect(makeClient().queryImpactMarkets()).rejects.toThrow(
-      /no encoded-data envelope/,
-    );
-  });
-
-  it("queryImpactMarkets rejects a payload that is not a list", async () => {
-    stubFetch(toB64(encoder.encode({ rows: [] }) as Uint8Array));
-    await expect(makeClient().queryImpactMarkets()).rejects.toThrow(
-      /impactMarkets is not an array/,
-    );
-  });
-
-  it("queryImpactMarkets refuses the whole list when one row is malformed", async () => {
-    // Fail-closed, not filter: a partially-rendered market list would hide
-    // exactly the row an operator needed to see.
-    const good = [
-      91,
-      15,
-      9_100,
-      9_101,
-      9_102,
-      9_103,
-      "q",
-      1n,
-      1n,
-      "Trading",
-      0n,
-      0n,
-    ];
-    const bad = [...good.slice(0, 11)];
-    stubFetch(toB64(encoder.encode([good, bad]) as Uint8Array));
-    await expect(makeClient().queryImpactMarkets()).rejects.toThrow(
-      /impactMarket\[1\] has 11 fields, expected 12-15/,
     );
   });
 });

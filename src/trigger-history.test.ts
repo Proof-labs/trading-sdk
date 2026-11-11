@@ -72,6 +72,57 @@ function setEvent() {
       accepted_height: "100",
       active_from_height: "101",
       replaced_group_id: "0",
+      source_order_id: "840",
+    },
+  };
+}
+
+function pendingCoordinates(height: string, ordinal: string, event: string) {
+  return {
+    event_key: `${height}:${ordinal}:${event}`,
+    block_height: height,
+    execution_ordinal: ordinal,
+    event_ordinal: event,
+    block_time: "2026-04-19T20:05:00Z",
+    owner: OWNER,
+    market: "7",
+  };
+}
+
+function pendingAttachEvent() {
+  return {
+    ...pendingCoordinates("99", "7", "0"),
+    event_type: "pending_triggers_attached",
+    payload: {
+      event_key: "99:7:0",
+      block_height: "99",
+      execution_ordinal: "7",
+      event_ordinal: "0",
+      owner: OWNER,
+      market: "7",
+      order_id: "2001",
+      client_order_id: "77",
+      stop_loss: "trigger_price=50000,max_slippage_bps=100,client_trigger_id=5",
+      take_profit: "",
+    },
+  };
+}
+
+function pendingDiscardEvent(
+  reason: "install_rejected" | "order_cancelled" | "position_closed",
+) {
+  return {
+    ...pendingCoordinates("102", "9", "1"),
+    event_type: "pending_triggers_discarded",
+    payload: {
+      event_key: "102:9:1",
+      block_height: "102",
+      execution_ordinal: "9",
+      event_ordinal: "1",
+      owner: OWNER,
+      market: "7",
+      order_id: "2001",
+      reason,
     },
   };
 }
@@ -101,6 +152,151 @@ function marketEvent(
     },
   };
 }
+
+function deferredEvent(reason: string) {
+  return {
+    event_key: "103:2:0",
+    block_height: "103",
+    execution_ordinal: "2",
+    event_ordinal: "0",
+    block_time: "2026-04-19T20:30:00Z",
+    event_type: "position_trigger_deferred",
+    owner: OWNER,
+    market: "7",
+    payload: {
+      event_key: "103:2:0",
+      block_height: "103",
+      execution_ordinal: "2",
+      event_ordinal: "0",
+      owner: OWNER,
+      market: "7",
+      position_epoch: "3",
+      group_id: "9",
+      limb_id: "10",
+      client_group_id: "0",
+      client_trigger_id: "0",
+      limb_kind: "stop_loss",
+      trigger_price: "450000",
+      frozen_mark: "440000",
+      requested_quantity: "4",
+      reason,
+    },
+  };
+}
+
+function executedWith(result: string, reason: string) {
+  const event = executedEvent();
+  event.payload.result = result;
+  event.payload.reason = reason;
+  if (result !== "partial") {
+    event.payload.filled_quantity = "0";
+    event.payload.residual_quantity = "4";
+  }
+  return event;
+}
+
+// The regression case, and a label no SDK version has seen.
+const REASONS = ["no_two_sided_quote", "reason_from_a_newer_engine"];
+
+const ownerPage = (event: unknown) =>
+  decodePositionTriggerHistoryPage(
+    { trigger_events: [event], next_cursor: "" },
+    OWNER,
+    7,
+  );
+
+const marketPage = (event: unknown) =>
+  decodeTriggerMarketHistoryPage(
+    { trigger_market_events: [event], next_cursor: "" },
+    7,
+  );
+
+describe("trigger history reasons pass through", () => {
+  it("returns the reason verbatim on every reason field", () => {
+    for (const reason of REASONS) {
+      const deferred = marketEvent("trigger_market_deferred");
+      deferred.payload.reason = reason;
+      const resumed = marketEvent("trigger_market_resumed");
+      resumed.payload.previous_reason = reason;
+      const discarded = pendingDiscardEvent("order_cancelled");
+      (discarded.payload as { reason: string }).reason = reason;
+
+      expect(
+        ownerPage(deferredEvent(reason)).triggerEvents[0].payload.reason,
+      ).toBe(reason);
+      expect(
+        ownerPage(executedWith("no_fill", reason)).triggerEvents[0].payload
+          .reason,
+      ).toBe(reason);
+      expect(ownerPage(discarded).triggerEvents[0].payload.reason).toBe(reason);
+      expect(marketPage(deferred).triggerMarketEvents[0].payload.reason).toBe(
+        reason,
+      );
+      expect(
+        marketPage(resumed).triggerMarketEvents[0].payload.previous_reason,
+      ).toBe(reason);
+    }
+  });
+
+  it("refuses a missing, empty or non-string reason", () => {
+    for (const bad of ["", undefined, 7]) {
+      const deferred = deferredEvent("x") as { payload: object };
+      deferred.payload = { ...deferred.payload, reason: bad };
+      expect(() => ownerPage(deferred)).toThrow(/trigger history decode/);
+
+      const resumed = marketEvent("trigger_market_resumed") as {
+        payload: object;
+      };
+      resumed.payload = { ...resumed.payload, previous_reason: bad };
+      expect(() => marketPage(resumed)).toThrow(/trigger history decode/);
+    }
+  });
+
+  it("returns result and limb kind verbatim", () => {
+    const later = executedWith("snoozed", "x");
+    later.payload.limb_kind = "trailing_stop";
+    const payload = ownerPage(later).triggerEvents[0].payload as {
+      result: string;
+      limb_kind: string;
+    };
+    expect(payload.result).toBe("snoozed");
+    expect(payload.limb_kind).toBe("trailing_stop");
+    for (const key of ["result", "limb_kind"]) {
+      const empty = executedWith("no_fill", "x") as { payload: object };
+      empty.payload = { ...empty.payload, [key]: "" };
+      expect(() => ownerPage(empty)).toThrow(/must be a string/);
+    }
+  });
+
+  it("skips a later event type and keeps the rest of the page", () => {
+    const later = deferredEvent("x");
+    later.event_type = "position_trigger_snoozed";
+    expect(ownerPage(later).triggerEvents).toEqual([]);
+    const page = decodePositionTriggerHistoryPage(
+      { trigger_events: [executedEvent(), later, setEvent()], next_cursor: "" },
+      OWNER,
+      7,
+    );
+    expect(page.triggerEvents.map((event) => event.eventType)).toEqual([
+      "position_trigger_executed",
+      "position_triggers_set",
+    ]);
+    const shared: { event_type: string } = marketEvent(
+      "trigger_market_deferred",
+    );
+    shared.event_type = "trigger_market_snoozed";
+    expect(marketPage(shared).triggerMarketEvents).toEqual([]);
+  });
+
+  it("keeps route scope and quantities strict", () => {
+    const shared = marketEvent("trigger_market_deferred");
+    expect(() => ownerPage(shared)).toThrow(/invalid for owner history/);
+    const quantities = executedWith("no_fill", "x");
+    quantities.payload.filled_quantity = "1";
+    quantities.payload.residual_quantity = "4";
+    expect(() => ownerPage(quantities)).toThrow(/do not conserve/);
+  });
+});
 
 describe("TR-6 trigger history decoder", () => {
   it("decodes the exact owner envelope without rounding coordinates or ids", () => {
@@ -149,6 +345,9 @@ describe("TR-6 trigger history decoder", () => {
     ).toThrow(/unexpected or missing/);
 
     const numeric = executedEvent();
+    // Deliberately a NUMBER (not a string) to prove the decoder rejects it; the
+    // magnitude is illustrative (u64::MAX-shaped), so its precision is moot.
+    // eslint-disable-next-line no-loss-of-precision
     (numeric.payload as Record<string, unknown>).execution_order_id =
       18_446_744_073_709_551_615;
     expect(() =>
@@ -183,24 +382,124 @@ describe("TR-6 trigger history decoder", () => {
       ),
     ).toThrow(/owner does not match/);
 
-    const impossibleTerminal = executedEvent();
-    impossibleTerminal.payload.result = "filled";
-    impossibleTerminal.payload.reason = "";
-    expect(() =>
-      decodePositionTriggerHistoryPage(
-        { trigger_events: [impossibleTerminal], next_cursor: "" },
-        OWNER,
-      ),
-    ).toThrow(/result, quantities, and reason disagree/);
-
-    const wrongMarketReason = marketEvent("trigger_market_deferred");
-    wrongMarketReason.payload.reason = "below_maintenance";
+    const emptyMarketReason = marketEvent("trigger_market_deferred");
+    emptyMarketReason.payload.reason = "";
     expect(() =>
       decodeTriggerMarketHistoryPage(
-        { trigger_market_events: [wrongMarketReason], next_cursor: "" },
+        { trigger_market_events: [emptyMarketReason], next_cursor: "" },
         7,
       ),
-    ).toThrow(/unknown payload.reason/);
+    ).toThrow(/payload.reason must be a string/);
+  });
+
+  it("decodes the pending lifecycle, install_rejected included", () => {
+    const page = decodePositionTriggerHistoryPage(
+      {
+        trigger_events: [
+          pendingDiscardEvent("install_rejected"),
+          pendingAttachEvent(),
+        ],
+        next_cursor: "",
+      },
+      OWNER,
+      7,
+    );
+    expect(page.triggerEvents.map((event) => event.eventType)).toEqual([
+      "pending_triggers_discarded",
+      "pending_triggers_attached",
+    ]);
+    const attached = page.triggerEvents[1];
+    expect(attached.payload.order_id).toBe("2001");
+    expect(attached.payload.stop_loss).toContain("trigger_price=50000");
+    expect(attached.payload.take_profit).toBe("");
+
+    // The one silent protection-loss path: the fill stands, the bracket does
+    // not. The reason survives decoding verbatim.
+    const rejected = page.triggerEvents[0];
+    expect(rejected.payload.reason).toBe("install_rejected");
+  });
+
+  it("fails closed on impossible pending payloads", () => {
+    const noLimbs = pendingAttachEvent();
+    noLimbs.payload.stop_loss = "";
+    expect(() =>
+      decodePositionTriggerHistoryPage(
+        { trigger_events: [noLimbs], next_cursor: "" },
+        OWNER,
+        7,
+      ),
+    ).toThrow(/pending attach carries no trigger limbs/);
+
+    const mangledLimb = pendingAttachEvent();
+    mangledLimb.payload.stop_loss =
+      "trigger_price=50000,max_slippage_bps=100,client_trigger_id=";
+    expect(() =>
+      decodePositionTriggerHistoryPage(
+        { trigger_events: [mangledLimb], next_cursor: "" },
+        OWNER,
+        7,
+      ),
+    ).toThrow(/not the wire limb render/);
+
+    const zeroOrder = pendingAttachEvent();
+    zeroOrder.payload.order_id = "0";
+    expect(() =>
+      decodePositionTriggerHistoryPage(
+        { trigger_events: [zeroOrder], next_cursor: "" },
+        OWNER,
+        7,
+      ),
+    ).toThrow(/order_id is out of range/);
+
+    const emptyReason = pendingDiscardEvent("order_cancelled");
+    (emptyReason.payload as { reason: string }).reason = "";
+    expect(() =>
+      decodePositionTriggerHistoryPage(
+        { trigger_events: [emptyReason], next_cursor: "" },
+        OWNER,
+        7,
+      ),
+    ).toThrow(/payload.reason must be a string/);
+  });
+
+  it("surfaces the additive set/invalidated attributes and bounds them", () => {
+    const invalidated = (reason?: string) => ({
+      ...pendingCoordinates("103", "2", "0"),
+      event_type: "position_triggers_invalidated",
+      payload: {
+        event_key: "103:2:0",
+        block_height: "103",
+        execution_ordinal: "2",
+        event_ordinal: "0",
+        owner: OWNER,
+        market: "7",
+        position_epoch: "3",
+        group_id: "9",
+        ...(reason === undefined ? {} : { invalidation_reason: reason }),
+      },
+    });
+    const page = decodePositionTriggerHistoryPage(
+      {
+        trigger_events: [invalidated("3"), setEvent()],
+        next_cursor: "",
+      },
+      OWNER,
+      7,
+    );
+    expect(page.triggerEvents[0].payload.invalidation_reason).toBe("3");
+    expect(
+      (page.triggerEvents[1].payload as { source_order_id?: string })
+        .source_order_id,
+    ).toBe("840");
+
+    // The engine's u8 attribute domain: 256 cannot be an invalidation reason.
+    expect(() =>
+      decodePositionTriggerHistoryPage(
+        { trigger_events: [invalidated("256")], next_cursor: "" },
+        OWNER,
+        7,
+      ),
+    ).toThrow(/invalidation_reason is out of range/);
   });
 
   it("serializes every stable filter and treats cursor as opaque", () => {

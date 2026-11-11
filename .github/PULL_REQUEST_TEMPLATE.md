@@ -1,5 +1,5 @@
 <!--
-Thanks for contributing to @proof/trading-sdk!
+Thanks for contributing to @proof-labs/trading-sdk!
 Please keep each PR to one logical change (see CONTRIBUTING.md).
 -->
 

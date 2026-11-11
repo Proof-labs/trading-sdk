@@ -1,0 +1,438 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ExchangeClient, isMissingMark } from "./index.js";
+const owner = "03".repeat(20);
+const json = (value: unknown, status = 200) =>
+  new Response(JSON.stringify(value), { status });
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+describe("named gateway reads", () => {
+  it("reads loaded engine identity without caching or transforming the response", async () => {
+    const first = json({ engine_lib_sha256: "ab".repeat(32), engine_major: 3 });
+    const second = json({
+      engine_lib_sha256: "cd".repeat(32),
+      engine_major: 3,
+    });
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(second);
+    const reads = new ExchangeClient({
+      gatewayUrl: "https://gateway.example",
+    }).reads({ fetch });
+    const signal = new AbortController().signal;
+    expect(await reads.version({ signal })).toBe(first);
+    expect(await reads.version({ signal })).toBe(second);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenLastCalledWith(
+      "https://gateway.example/v1/version",
+      {
+        method: "GET",
+        cache: "no-store",
+        signal,
+      },
+    );
+  });
+  it.each([401, 404, 503])(
+    "preserves version HTTP %i without a fallback",
+    async (status) => {
+      const fetch = vi.fn(async () =>
+        json({ errorCode: "unavailable" }, status),
+      );
+      const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+      await expect(reads.version()).rejects.toMatchObject({
+        name: "GatewayHttpError",
+        status,
+      });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    },
+  );
+  it("preserves version cancellation and transport failures without retry", async () => {
+    const error = new Error("transport unavailable");
+    const fetch = vi.fn().mockRejectedValue(error);
+    const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+    await expect(
+      reads.version({ signal: AbortSignal.abort() }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetch).not.toHaveBeenCalled();
+    await expect(reads.version()).rejects.toBe(error);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("preserves exact info bodies, same-origin, envelopes, caller transport and cancellation", async () => {
+    const fetch = vi.fn(async () => json({ data: "raw-tuple-envelope" }));
+    const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+    const signal = new AbortController().signal;
+    const cases: [string, () => Promise<Response>, object][] = [
+      ["meta", () => reads.meta({ signal }), {}],
+      ["events", () => reads.events({ signal }), {}],
+      ["event", () => reads.event(43, { signal }), { id: 43 }],
+      ["l2Book", () => reads.l2Book(2, { signal }), { market: 2 }],
+      ["fundingRate", () => reads.fundingRate(2, { signal }), { market: 2 }],
+      [
+        "clearinghouseState",
+        () => reads.clearinghouseState(owner, { signal }),
+        { user: owner },
+      ],
+      [
+        "subAccountList",
+        () => reads.subAccountList(owner, { signal }),
+        { user: owner },
+      ],
+      [
+        "openOrders",
+        () => reads.openOrders(owner, { signal }),
+        { user: owner },
+      ],
+      [
+        "historyOrders",
+        () => reads.historyOrders({ user: owner, limit: 200 }, { signal }),
+        { user: owner, limit: 200 },
+      ],
+      [
+        "historyFills",
+        () => reads.historyFills({ user: owner, from: 1, to: 2 }, { signal }),
+        { user: owner, from: 1, to: 2 },
+      ],
+      [
+        "historyFills",
+        () => reads.historyFills({ user: owner, market: 2 }, { signal }),
+        { user: owner, market: 2 },
+      ],
+      [
+        "historyTrades",
+        () => reads.historyTrades({ market: 2, to: 100 }, { signal }),
+        { market: 2, to: 100 },
+      ],
+      [
+        "historyPositions",
+        () => reads.historyPositions({ user: owner, market: 2 }, { signal }),
+        { user: owner, market: 2 },
+      ],
+      [
+        "historyResolutions",
+        () =>
+          reads.historyResolutions({ user: owner, event_id: 43 }, { signal }),
+        { user: owner, event_id: 43 },
+      ],
+    ];
+    for (const [type, call, params] of cases) {
+      expect(await (await call()).json()).toEqual({
+        data: "raw-tuple-envelope",
+      });
+      const [url, init] = fetch.mock.calls.at(-1)! as unknown as [
+        string,
+        RequestInit,
+      ];
+      expect(url).toBe("/info");
+      expect(init.signal).toBe(signal);
+      expect(JSON.parse(init.body as string)).toEqual({ type, ...params });
+    }
+  });
+  it("preserves event resolution filters and the gateway's raw response", async () => {
+    const body = [{ event_id: "0", market: "101", kind: "prediction_settled" }];
+    const response = json(body);
+    const transport = vi.fn(
+      async (_url: string, _init?: RequestInit) => response,
+    );
+    const reads = new ExchangeClient({
+      gatewayUrl: "https://gateway.example",
+    }).reads({ fetch: transport });
+    const result = await reads.historyResolutions({
+      user: owner,
+      event_id: 0,
+      from: 10,
+      to: 20,
+      limit: 5,
+    });
+    expect(result).toBe(response);
+    expect(await result.json()).toEqual(body);
+    expect(transport.mock.calls[0][0]).toBe("https://gateway.example/info");
+    expect(JSON.parse(transport.mock.calls[0][1]!.body as string)).toEqual({
+      type: "historyResolutions",
+      user: owner,
+      event_id: 0,
+      from: 10,
+      to: 20,
+      limit: 5,
+    });
+  });
+  it("keeps a missing event and a cancelled event catalog observable", async () => {
+    const response = json({ error: "event not found" }, 404);
+    const transport = vi.fn(async () => response);
+    const reads = new ExchangeClient().reads({ fetch: transport });
+    await expect(reads.event(999)).rejects.toMatchObject({
+      name: "GatewayHttpError",
+      status: 404,
+      response,
+    });
+    await expect(
+      reads.events({ signal: AbortSignal.abort() }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(transport).toHaveBeenCalledTimes(1);
+  });
+  it("reads order-book mid candles with the candles param encoding", async () => {
+    const fetch = vi.fn(async () => json({ candles: [], next_cursor: null }));
+    const reads = new ExchangeClient({
+      gatewayUrl: "https://gateway.example/",
+    }).reads({ fetch });
+    const signal = new AbortController().signal;
+    const res = await reads.bbo(
+      {
+        market: 7400,
+        resolution: "5m",
+        from: "2026-01-01T00:00:00Z",
+        to: "2026-01-02T00:00:00Z",
+        limit: 1500,
+      },
+      { signal },
+    );
+    expect(res.status).toBe(200);
+    const [rawUrl, init] = fetch.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    const url = new URL(rawUrl);
+    expect(url.pathname).toBe("/v1/history/bbo");
+    expect(url.searchParams.get("market")).toBe("7400");
+    expect(url.searchParams.get("resolution")).toBe("5m");
+    expect(url.searchParams.get("from")).toBe("2026-01-01T00:00:00Z");
+    expect(url.searchParams.get("to")).toBe("2026-01-02T00:00:00Z");
+    expect(url.searchParams.get("limit")).toBe("1500");
+    expect(init).toMatchObject({ method: "GET", signal });
+  });
+  it("preserves REST query strings, opaque cursors and ISO candle windows", async () => {
+    const fetch = vi.fn(async () => json({ next_cursor: "opaque" }));
+    const reads = new ExchangeClient({
+      gatewayUrl: "https://gateway.example/",
+    }).reads({ fetch });
+    await reads.candles({
+      market: 2,
+      resolution: "1m",
+      from: "2026-01-01T00:00:00Z",
+      to: "2026-01-02T00:00:00Z",
+      limit: 1500,
+    });
+    const url = new URL((fetch.mock.calls[0] as unknown as [string])[0]);
+    expect(url.pathname).toBe("/v1/history/candles");
+    expect(url.searchParams.get("resolution")).toBe("1m");
+    await reads.accountEvents({
+      owner,
+      event_type: "funding_settled",
+      order: "desc",
+      cursor: "a+/=?",
+    });
+    const account = new URL((fetch.mock.calls[1] as unknown as [string])[0]);
+    expect(account.searchParams.get("cursor")).toBe("a+/=?");
+    expect(account.searchParams.get("order")).toBe("desc");
+    await reads.ticker(2);
+    await reads.health();
+    expect(
+      fetch.mock.calls.slice(2).map((call) => (call as unknown as [string])[0]),
+    ).toEqual([
+      "https://gateway.example/v1/ticker/2",
+      "https://gateway.example/v1/health",
+    ]);
+  });
+  it("keeps HTTP status errors and pre-aborted requests do not fetch", async () => {
+    const fetch = vi.fn(async () => json({}, 429));
+    const reads = new ExchangeClient().reads({ fetch });
+    await expect(reads.meta()).rejects.toMatchObject({
+      status: 429,
+      name: "GatewayHttpError",
+    });
+    await expect(
+      reads.health({ signal: AbortSignal.abort() }),
+    ).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    [
+      "fresh feeder",
+      {
+        status: "ok",
+        embedded_feeder: true,
+        markets: {
+          "1": { last_update_unix_ms: 1714678234000, stale_seconds: 0.5 },
+        },
+      },
+    ],
+    [
+      "stale feeder",
+      {
+        status: "ok",
+        embedded_feeder: true,
+        markets: {
+          "1": { last_update_unix_ms: 1714678234000, stale_seconds: 65 },
+        },
+      },
+    ],
+    [
+      "unavailable feeder",
+      { status: "ok", embedded_feeder: false, note: "feeder not enabled" },
+    ],
+  ])(
+    "preserves %s evidence without deriving a trading verdict",
+    async (_, payload) => {
+      const response = json(payload);
+      const fetch = vi.fn(async () => response);
+      const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+      const signal = new AbortController().signal;
+      const result = await reads.oracleHealth({ signal });
+      expect(fetch).toHaveBeenCalledExactlyOnceWith("/v1/oracle/health", {
+        method: "GET",
+        signal,
+      });
+      expect(result).toBe(response);
+      expect(result.bodyUsed).toBe(false);
+      expect(await result.json()).toEqual(payload);
+    },
+  );
+  it("asks for one market's oracle health when given a market", async () => {
+    const fetch = vi.fn(async () => json({ markets: {} }));
+    const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+    const signal = new AbortController().signal;
+    await reads.oracleHealth({ market: 3, signal });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "/v1/oracle/health?market=3",
+      {
+        method: "GET",
+        signal,
+      },
+    );
+  });
+  it("preserves oracle-health failures and cancellation instead of returning healthy data", async () => {
+    const response = json({ status: "error", embedded_feeder: false }, 503);
+    const fetch = vi.fn(async () => response);
+    const reads = new ExchangeClient().reads({ fetch });
+    await expect(reads.oracleHealth()).rejects.toMatchObject({
+      name: "GatewayHttpError",
+      status: 503,
+      response,
+    });
+    await expect(
+      reads.oracleHealth({ signal: AbortSignal.abort() }),
+    ).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const abort = new DOMException("cancelled", "AbortError");
+    fetch.mockRejectedValueOnce(abort);
+    await expect(reads.oracleHealth()).rejects.toBe(abort);
+  });
+});
+
+describe("history status read", () => {
+  it("forwards the indexer status uncached with its body unread", async () => {
+    const payload = {
+      ok: true,
+      reconciliation: { ok: true, watermarks: { block_progress: 87371 } },
+      ingest: { block_lag_seconds: 43, stale: false },
+    };
+    const response = json(payload);
+    const fetch = vi.fn(async () => response);
+    const reads = new ExchangeClient({ gatewayUrl: "" }).reads({ fetch });
+    const signal = new AbortController().signal;
+    const result = await reads.historyStatus({ signal });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith("/v1/history/status", {
+      method: "GET",
+      cache: "no-store",
+      signal,
+    });
+    expect(result).toBe(response);
+    expect(result.bodyUsed).toBe(false);
+    expect(await result.json()).toEqual(payload);
+  });
+
+  it("surfaces an unavailable history service instead of a status", async () => {
+    const response = json({ error: "history_status_timeout" }, 502);
+    const fetch = vi.fn(async () => response);
+    const reads = new ExchangeClient().reads({ fetch });
+    await expect(reads.historyStatus()).rejects.toMatchObject({
+      name: "GatewayHttpError",
+      status: 502,
+      response,
+    });
+    await expect(
+      reads.historyStatus({ signal: AbortSignal.abort() }),
+    ).rejects.toThrow();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+it("reads without URLSearchParams.size", async () => {
+  vi.spyOn(URLSearchParams.prototype, "size", "get").mockImplementation(() => {
+    throw new Error("not supported");
+  });
+  const fetch = vi.fn(async () => json({}));
+  await new ExchangeClient({ gatewayUrl: "" }).reads({ fetch }).ticker(1);
+  expect(fetch.mock.calls[0][0]).toBe("/v1/ticker/1");
+});
+
+it("keeps caller Response bodies, HTTP errors and aborts intact", async () => {
+  const body = new Response("upstream body", { status: 503 });
+  const transport = vi.fn(async () => body);
+  const reads = new ExchangeClient({
+    gatewayUrl: "https://gateway.example",
+  }).reads({ fetch: transport });
+  const error = (await reads.health().catch((error: unknown) => error)) as {
+    status: number;
+    response: Response;
+  };
+  expect(error.status).toBe(503);
+  expect(error.response).toBe(body);
+  expect(await error.response.text()).toBe("upstream body");
+  const abort = new DOMException("cancelled", "AbortError");
+  transport.mockRejectedValueOnce(abort);
+  await expect(reads.health()).rejects.toBe(abort);
+});
+
+it("extracts errorCode from 503 MissingMark on clearinghouseState", async () => {
+  const body = {
+    error: "MissingMark: required account valuation mark unavailable",
+    errorCode: "MissingMark",
+  };
+  const response = json(body, 503);
+  const transport = vi.fn(async () => response);
+  const reads = new ExchangeClient({ gatewayUrl: "" }).reads({
+    fetch: transport,
+  });
+  const err = await reads
+    .clearinghouseState("03".repeat(20))
+    .catch((e: unknown) => e);
+  expect(err).toMatchObject({
+    name: "GatewayHttpError",
+    status: 503,
+    errorCode: "MissingMark",
+  });
+  expect(isMissingMark(err)).toBe(true);
+});
+
+it("leaves errorCode undefined when 503 body has no errorCode field", async () => {
+  const response = new Response("upstream body", { status: 503 });
+  const transport = vi.fn(async () => response);
+  const reads = new ExchangeClient({ gatewayUrl: "" }).reads({
+    fetch: transport,
+  });
+  const err = await reads.health().catch((e: unknown) => e);
+  expect(err).toMatchObject({
+    name: "GatewayHttpError",
+    status: 503,
+  });
+  expect((err as { errorCode?: string }).errorCode).toBeUndefined();
+  expect(isMissingMark(err)).toBe(false);
+});
+
+it("uses the configured gateway for response reads even in internal node mode", async () => {
+  const fetch = vi.fn(async () => json({}));
+  const client = new ExchangeClient({
+    gatewayUrl: "https://gateway.example/",
+    useGateway: false,
+    apiUrl: "https://internal.example",
+  });
+  await client.reads({ fetch }).health();
+  expect(fetch.mock.calls[0][0]).toBe("https://gateway.example/v1/health");
+  await client.reads({ fetch }).oracleHealth();
+  expect(fetch.mock.calls[1][0]).toBe(
+    "https://gateway.example/v1/oracle/health",
+  );
+});

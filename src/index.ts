@@ -1,4 +1,64 @@
+export { verifyWitness } from "./bounded-read.js";
+export { GatewayReadError } from "./errors.js";
+export {
+  hexAddress,
+  hash32,
+  marketId,
+  type HexAddress,
+  type Hash32Hex,
+  type MarketId,
+} from "./read-values.js";
 // Types
+export {
+  type FinalizedAccountInfo,
+  type FinalizedAccountState,
+  type FinalizedAgentAuthorization,
+  type FinalizedRecentNonces,
+  type FinalizedOpenOrders,
+  type FinalizedOpenOrdersOptions,
+  type RawOpenOrder,
+} from "./finalized-account-reads.js";
+export type {
+  FinalizedMarketsSnapshot,
+  FinalizedFinancialState,
+} from "./finalized-state-reads.js";
+export type {
+  BoundedReadOptions,
+  FinalizedReadWitness,
+} from "./bounded-read.js";
+export type {
+  TransactionEvidence,
+  TransactionEvidenceEvent,
+  TransactionEvidenceSelection,
+} from "./committed-transaction.js";
+export type { BlockEvidenceHeader } from "./block-header.js";
+export type {
+  BlockResultsEvidence,
+  BlockResultsRange,
+  BlockResultsRangeSelection,
+  BlockResultsWindow,
+  BlockTransactionEvidence,
+  BlockResultsWindowSelection,
+} from "./block-results-window.js";
+export {
+  type FinalizedOrderbook,
+  type FinalizedOrderbookDepth,
+  type FinalizedOrderbookOptions,
+} from "./finalized-orderbook.js";
+export {
+  type ParticipantTrade,
+  type TradeHistoryOptions,
+  type TradeHistoryPage,
+} from "./trade-history.js";
+export { type RecentTrade, type RecentTradesOptions } from "./recent-trades.js";
+export {
+  type AccountEvent,
+  type AccountEventsOptions,
+  type AccountEventsPage,
+  type FundingPayment,
+  type FundingPaymentsOptions,
+  type FundingPaymentsPage,
+} from "./account-history.js";
 export {
   type Address,
   Side,
@@ -17,14 +77,15 @@ export {
   type AtomicBasketLeg,
   type AtomicBasketOrder,
   type ClosePosition,
-  type OracleUpdate,
-  type OracleUpdateComposite,
   type MarketOrder,
+  type MarketsSnapshot,
+  type MarketOpenInterest,
   type Deposit,
   type Withdraw,
   type CreateMarket,
   type WithdrawRequest,
   type ConfirmDeposit,
+  type DepositLocator,
   type ConfirmWithdrawal,
   type FailWithdrawal,
   type ConfirmWithdrawalReceipt,
@@ -34,14 +95,35 @@ export {
   type SetPositionTriggers,
   type CancelPositionTriggers,
   type SetTriggerMarketConfig,
+  type SetOracleGuards,
+  type FundInsuranceFund,
+  type InsuranceFundAllocation,
+  type WithdrawInsuranceFund,
+  type VoidEvent,
+  type SettleEvent,
+  type SetMarketStatus,
+  type MarketStatus,
+  type LiquidationConfig,
+  type LiquidationConfigInfo,
+  type SetLiquidationConfig,
+  type ScheduleUpgrade,
+  type CancelUpgrade,
   type BridgeWithdrawalReceipt,
   type OperatorReceiptProof,
   type ApproveAgent,
   type RevokeAgent,
-  type CreateImpactMarket,
   type EventOracleSource,
   type PriceComparison,
   type ResolveEvent,
+  type CreateEvent,
+  type AttachConditional,
+  type AttachedConditional,
+  type EventInfo,
+  type EventStatus,
+  type CreateSubAccount,
+  type SubAccountTransfer,
+  type ClaimWithdrawalPayout,
+  type RecordWithdrawalPayout,
   type UpdateMarketFees,
   type SetUserMarketLeverage,
   type GovernanceAction,
@@ -49,25 +131,33 @@ export {
   type AdminBatchItem,
   type EmergencyAction,
   type UpdateAdminSignerRegistry,
+  type CancelAllOrdersForAccount,
   type ProposeAdminAction,
   type ApproveAdminAction,
   type RejectAdminAction,
   type EmergencyAdminAction,
   type AdminSignerRegistry,
+  type AuthoritiesSnapshot,
+  type PendingUpgradePlan,
+  type ExecutedUpgrade,
+  type UpgradesInfo,
+  type NodeVersion,
   type ExpiryReason,
   type ProposalStatus,
   type ProposalDisplayInfo,
   type ProposalPage,
-  type ImpactMarketInfo,
-  type ImpactMarketStatus,
   Branch,
   Outcome,
   type TxResult,
   type TxOutcome,
+  type GatewayRefusalCode,
   type TxEvent,
   type ExchangeEvent,
   type OrderPlacedEvent,
   type OrderCancelledEvent,
+  type CancelReason,
+  type OrderMigratedEvent,
+  type PositionMigratedEvent,
   type TradeExecutedEvent,
   type PositionUpdatedEvent,
   type PositionClosedEvent,
@@ -75,6 +165,8 @@ export {
   type FundingAppliedEvent,
   type FundingSettledEvent,
   type AccountLiquidatedEvent,
+  type InsuranceFundUpdatedEvent,
+  type PositionAutoDeleveragedEvent,
   type MarketCreatedEvent,
   type AdlQueueEntry,
   type Ticker,
@@ -82,6 +174,7 @@ export {
   type OrderbookLevel,
   type OpenOrder,
   type TriggerKind,
+  type StoredTriggerKind,
   type TriggerLimbState,
   type TriggerOutcomeReason,
   type TriggerEvaluation,
@@ -91,6 +184,7 @@ export {
   type TriggerMarketConfigState,
   type TriggerMarketConfigInfo,
   type TriggerEffectiveAvailability,
+  type TriggerEffectiveAvailabilityKind,
   type PositionTriggerBracket,
   type PositionTriggerInfo,
   type TriggerStatus,
@@ -102,6 +196,12 @@ export {
   type TriggerHistoryEventType,
   type TriggerHistoryPayloadBase,
   type OwnerTriggerHistoryPayloadBase,
+  type PendingTriggerHistoryPayloadBase,
+  type PendingTriggersAttachedHistoryPayload,
+  type PendingTriggersDiscardedHistoryPayload,
+  type PendingTriggerDiscardReason,
+  type TriggerHistoryLimbKind,
+  type TriggerExecutionResult,
   type PositionTriggersSetHistoryPayload,
   type PositionTriggersCancelledHistoryPayload,
   type PositionTriggersInvalidatedHistoryPayload,
@@ -121,8 +221,13 @@ export {
   type MarkSourceMode,
   type BindingScenarioEntry,
   type HistoryCashFlow,
+  type HistoryFill,
+  type HistoryFillsPage,
   type HistoryResolution,
+  type ConversionFallbackReason,
   type HistoryPositionSnapshot,
+  type HistoryPosition,
+  type HistoryPositionsPage,
   type WithdrawalStatus,
   type WithdrawalRecord,
   type MarketKind,
@@ -136,11 +241,80 @@ export {
   MAX_TRIGGER_SLIPPAGE_BPS,
   validateSetPositionTriggers,
   validateCancelPositionTriggers,
+  validateOrderTriggers,
+  type OrderTriggerFields,
   validateSetTriggerMarketConfig,
   decodePositionTriggerInfos,
   decodeTriggerMarketConfigInfos,
   decodeTriggerStatusJson,
 } from "./triggers.js";
+
+export { validateSetOracleGuards } from "./oracle-guards.js";
+export {
+  MAX_TICKER_LEN,
+  InvalidTickerError,
+  checkTicker,
+  tickerRefusalMessage,
+  validateTicker,
+  type TickerRefusal,
+} from "./ticker.js";
+export { validateScheduleUpgrade } from "./upgrade-plan.js";
+export {
+  INITIAL_TAKEOVER_DISCOUNT_BPS,
+  MAX_PARTIAL_PENALTY_BPS,
+  MAX_TAKEOVER_DISCOUNT_BPS,
+  RATIO_ONE_BPS,
+  validateLiquidationConfig,
+  validateSetLiquidationConfig,
+} from "./liquidation-config.js";
+export {
+  ADL_SKIP_REASONS,
+  LIQUIDATION_MODES,
+  LIQUIDATION_PROGRESS_OUTCOMES,
+  LIQUIDATION_REFUSALS,
+  LIQUIDATION_REFUSED_CODE,
+  decodeLiquidationEvent,
+  type AdlCounterpartySkippedEvent,
+  type AdlSkipReason,
+  type LiquidationConfigSetEvent,
+  type LiquidationEvent,
+  type LiquidationEventInput,
+  type LiquidationFailedEvent,
+  type LiquidationMode,
+  type LiquidationProgress,
+  type LiquidationProgressReportedEvent,
+  type LiquidationRefusal,
+  type PartialLiquidationFeeEvent,
+  type PositionLiquidatedEvent,
+} from "./liquidation-events.js";
+export type { AbciEventInput } from "./abci-event.js";
+export {
+  decodeVoidSettlementEvent,
+  type ConditionalVoidSettledEvent,
+  type EventVoidedEvent,
+  type VoidSettlementEvent,
+} from "./void-events.js";
+export {
+  LIQUIDATION_HISTORY_EVENT_TYPES,
+  decodeLiquidationHistoryPage,
+  liquidationHistorySearchParams,
+  type LiquidationHistoryEventType,
+  type LiquidationHistoryFilters,
+  type LiquidationHistoryPage,
+  type LiquidationHistoryRow,
+} from "./liquidation-history.js";
+
+export {
+  BINARY_PRICE_MAX,
+  BinaryPriceError,
+  type BinaryErrorName,
+  type BinaryPositionView,
+  type NoOrder,
+  binaryPositionView,
+  yesLimb,
+  yesOrder,
+  yesSide,
+} from "./binary.js";
 
 export {
   decodePositionTriggerHistoryPage,
@@ -175,14 +349,39 @@ export {
   decodeAdminAction,
   decodeAdminSignerRegistry,
   decodeAdminSignerRegistryInfo,
+  decodeAuthoritiesSnapshot,
+  decodeUpgradesInfo,
+  decodeLiquidationConfigInfo,
+  decodeNodeVersion,
   decodeProposalPage,
   decodeProposalDisplayInfo,
   decodeProposalStatus,
 } from "./governance-query.js";
 export { fetchChainId } from "./client.js";
 
-// Error decoder
+// Bridge custody: canonical bridge-core v1 payload encoders — the bytes the
+// engine's receipt path signs and verifies.
 export {
+  BRIDGE_RECEIPT_LEN,
+  QUORUM_OPERATOR_M_OF_N,
+  TERMINAL_CANCELLED,
+  TERMINAL_PAID,
+  VAULT_TIER_COLD,
+  VAULT_TIER_HOT,
+  VAULT_TIER_WARM,
+  WITHDRAWAL_AUTHORIZATION_LEN,
+  encodeBridgeReceipt,
+  encodeWithdrawalAuthorization,
+  signOperatorReceipt,
+  withdrawalAuthorizationDigest,
+  type WithdrawalAuthorizationV1,
+} from "./bridge.js";
+
+// Errors
+export {
+  FeedSubscriptionError,
+  GatewayHttpError,
+  isMissingMark,
   type ExecErrorInfo,
   ExecErrorCode,
   decodeExecError,
@@ -194,6 +393,8 @@ export {
   generateKeypair,
   getPublicKey,
   pubkeyToOwner,
+  deriveSubAccount,
+  SUB_ACCOUNT_DERIVATION_DOMAIN,
   ownerToHex,
   hexToBytes,
   bytesToHex,
@@ -206,8 +407,101 @@ export {
 } from "./crypto.js";
 
 // Client
+export { ExchangeClient, type ExchangeClientOptions } from "./client.js";
 export {
-  ExchangeClient,
-  type ExchangeClientOptions,
-  type WsStreamOptions,
-} from "./client.js";
+  defaultExchangeHttpTransport,
+  exchangeHttpPriorityForAction,
+  type ExchangeHttpPriority,
+  type ExchangeHttpPurpose,
+  type ExchangeHttpRequestContext,
+  type ExchangeHttpTransport,
+} from "./http-transport.js";
+export {
+  decodeOraclePermissions,
+  ORACLE_DIAGNOSTIC_BITS,
+  ORACLE_FAULT_BITS,
+} from "./oracle-permissions.js";
+export {
+  decodeFinancialState,
+  type FinancialStateSelection,
+  type FinancialState,
+  type FinancialAccountState,
+  type FinancialMarketState,
+} from "./financial-state.js";
+export {
+  decodeAccountState,
+  type AccountState,
+  type RawAccountPosition,
+} from "./account-state.js";
+export { decodeFundingInfo, type FundingInfo } from "./funding.js";
+export type {
+  OraclePermissions,
+  OraclePolicyEpoch,
+  OraclePolicySource,
+  CommittedOracleVerdict,
+  OracleVerdictStatus,
+  OracleVerdictReason,
+  OracleSelectedSource,
+  OracleVerdictDiagnostic,
+} from "./oracle-permissions.js";
+export { type FinalizedOraclePermissions } from "./finalized-oracle-read.js";
+
+export {
+  GatewayFeed,
+  type GatewayFeedOptions,
+  type AccountFeedAuth,
+  type AccountAuthProvider,
+  type WebSocketLike,
+  type WebSocketFactory,
+} from "./feed.js";
+export type {
+  FeedChannel,
+  FeedOrderbookLevel,
+  OrderbookSnapshotFrame,
+  OrderbookUpdateFrame,
+  OrderbookFrame,
+  TradeFrame,
+  AccountSnapshotFrame,
+  AccountEventFrame,
+  AccountFrame,
+  FeedFrame,
+  FeedErrorFrame,
+  FeedState,
+} from "./feed-types.js";
+export type {
+  AccountEventKey,
+  AccountRecoveryStatus,
+} from "./account-recovery.js";
+export {
+  type GatewayReads,
+  type GatewayReadOptions,
+  type GatewayFetch,
+  type HistoryWindow,
+  type OwnerHistoryParams,
+  type CandleHistoryParams,
+  type AccountEventsParams,
+  type ExplorerBlocksParams,
+} from "./gateway-reads.js";
+export {
+  decodeSubAccountList,
+  type SubAccountListRow,
+} from "./sub-accounts.js";
+export type { ExternalSigner } from "./client.js";
+export type {
+  PortfolioHistoryOptions,
+  PortfolioHistoryPage,
+} from "./portfolio-history.js";
+export {
+  queryOraclePriceHistoryPage,
+  type OraclePriceHistoryPoint,
+  type OraclePriceHistoryPage,
+  type OraclePriceHistoryOptions,
+} from "./oracle-price-history.js";
+
+export {
+  queryMarketStats,
+  decodeMarketStatsResponse,
+  type MarketStatsResponse,
+  type MarketStats,
+  type MarketStatsStatus,
+} from "./market-stats.js";

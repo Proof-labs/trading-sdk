@@ -1,4 +1,4 @@
-// Guards that the public package barrel (`@proof/trading-sdk` → src/index.ts)
+// Guards that the public package barrel (`@proof-labs/trading-sdk` → src/index.ts)
 // actually surfaces the governance types and action-type values. The types are
 // erased at runtime, so importing them here is a COMPILE-TIME assertion: if a
 // governance type stops being re-exported from the barrel, `tsc` fails on this
@@ -20,6 +20,9 @@ import {
   type ApproveAdminAction,
   type RejectAdminAction,
   type EmergencyAdminAction,
+  type FundInsuranceFund,
+  type WithdrawInsuranceFund,
+  type InsuranceFundAllocation,
   type SetPositionTriggers,
   type CancelPositionTriggers,
   type TriggerStatus,
@@ -28,12 +31,73 @@ import {
   type PositionTriggerHistoryPage,
   type TriggerMarketHistoryPage,
   type TriggerMarketConfigInfo,
+  type ExchangeEvent,
+  type BlockResultsRange,
+  type BlockResultsRangeSelection,
+  type InsuranceFundUpdatedEvent,
+  type PositionAutoDeleveragedEvent,
   decodeTriggerMarketConfigInfos,
   decodePositionTriggerHistoryPage,
   decodeTriggerMarketHistoryPage,
+  type TriggerOutcomeReason,
+  type TriggerLimbState,
+  type TriggerEffectiveAvailabilityKind,
+  type PendingTriggerDiscardReason,
+  type TriggerHistoryLimbKind,
+  type TriggerExecutionResult,
 } from "./index.js";
+import type { OpenLabel } from "./types.js";
+
+it("exposes typed reads on the existing read surface", async () => {
+  const sdk = await import("./index.js");
+  const reads = new sdk.ExchangeClient().reads();
+  expect(reads.finalized.accountState).toBeTypeOf("function");
+  expect(reads.finalized.agentAuthorization).toBeTypeOf("function");
+  expect(reads.evidence.blockHeader).toBeTypeOf("function");
+  expect(reads.evidence.transaction).toBeTypeOf("function");
+  expect(reads.evidence.blockResultsWindow).toBeTypeOf("function");
+  expect(reads.evidence.blockResultsRange).toBeTypeOf("function");
+  const rangeSelection: BlockResultsRangeSelection = {
+    fromHeight: 1n,
+    throughHeight: 2n,
+    maxHeights: 2,
+  };
+  const rangeRead: (
+    selection: BlockResultsRangeSelection,
+  ) => Promise<BlockResultsRange> = reads.evidence.blockResultsRange.bind(
+    reads.evidence,
+  );
+  expect(rangeRead).toBeTypeOf("function");
+  expect(rangeSelection.fromHeight).toBe(1n);
+  expect(reads.finalized.orderbook).toBeTypeOf("function");
+  expect(reads.tradeHistoryPage).toBeTypeOf("function");
+  expect(sdk.verifyWitness).toBeTypeOf("function");
+});
 
 describe("public barrel: governance surface", () => {
+  it("exports the insurance types without exposing superseded executor APIs", async () => {
+    const allocations: InsuranceFundAllocation[] = [{ poolId: 0, amount: 1n }];
+    const fund: FundInsuranceFund = {
+      fundingId: 0n,
+      source: new Uint8Array(20).fill(1),
+      allocations,
+    };
+    const withdraw: WithdrawInsuranceFund = {
+      withdrawalId: 0n,
+      recipient: new Uint8Array(20).fill(2),
+      allocations,
+    };
+    const actions: AdminAction[] = [
+      { kind: "FundInsuranceFund", value: fund },
+      { kind: "WithdrawInsuranceFund", value: withdraw },
+    ];
+    expect(actions).toHaveLength(2);
+    const sdk = await import("./index.js");
+    expect("decodeLiquidationCashAudit" in sdk).toBe(false);
+    expect("decodeLiquidationPlan" in sdk).toBe(false);
+    expect("queryLiquidationPlan" in new sdk.ExchangeClient()).toBe(false);
+  });
+
   it("re-exports the governance action-type byte values", () => {
     expect(ActionType.ProposeAdminAction).toBe(0x1e);
     expect(ActionType.ApproveAdminAction).toBe(0x1f);
@@ -128,5 +192,161 @@ describe("public barrel: governance surface", () => {
     expect(decodePositionTriggerHistoryPage).toBeTypeOf("function");
     expect(decodeTriggerMarketHistoryPage).toBeTypeOf("function");
     expect(decodeTriggerMarketConfigInfos).toBeTypeOf("function");
+  });
+});
+
+describe("public barrel: bad-debt waterfall events", () => {
+  it("re-exports the waterfall event types as ExchangeEvent members", () => {
+    const insurance: InsuranceFundUpdatedEvent = {
+      type: "InsuranceFundUpdated",
+      poolId: "1",
+      balance: "-2500000",
+      delta: "-7500000",
+    };
+    const adl: PositionAutoDeleveragedEvent = {
+      type: "PositionAutoDeleveraged",
+      owner: "11".repeat(20),
+      market: "1",
+      side: "Buy",
+      size: "3",
+      closePrice: "65000000000",
+      closePriceSpec: "65000000000",
+      realizedPnl: "1200000",
+    };
+    const events: ExchangeEvent[] = [insurance, adl];
+
+    const fields = events.map((event) => {
+      switch (event.type) {
+        case "InsuranceFundUpdated":
+          return event.delta;
+        case "PositionAutoDeleveraged":
+          return event.closePriceSpec;
+        default:
+          return null;
+      }
+    });
+    expect(fields).toEqual(["-7500000", "65000000000"]);
+  });
+});
+
+it("keeps response reads on ExchangeClient and excludes redundant or obsolete APIs", async () => {
+  const sdk = await import("./index.js");
+  expect("GatewayReads" in sdk).toBe(false);
+  const client = new sdk.ExchangeClient();
+  expect("syncNonce" in client).toBe(false);
+  expect(client.reads().oracleHealth).toBeTypeOf("function");
+  expect("queryOracleHealth" in client).toBe(false);
+  expect(client.reads().meta).toBeTypeOf("function");
+  expect(client.reads().events).toBeTypeOf("function");
+  expect(client.reads().event).toBeTypeOf("function");
+  expect("impactMarkets" in client.reads()).toBe(false);
+  expect("impactMarket" in client.reads()).toBe(false);
+});
+
+import {
+  BinaryPriceError as BarrelBinaryPriceError,
+  yesOrder as barrelYesOrder,
+  type CancelReason,
+  type OrderMigratedEvent,
+  type PositionMigratedEvent,
+} from "./index.js";
+
+describe("public barrel: one-book events and No helpers", () => {
+  it("surfaces the upgrade's migration events in the event union", () => {
+    const moved: OrderMigratedEvent = {
+      type: "OrderMigrated",
+      orderId: "8",
+      owner: "aa",
+      fromMarket: "70001",
+      toMarket: "70000",
+      side: "Sell",
+      price: "550000",
+    };
+    const position: PositionMigratedEvent = {
+      type: "PositionMigrated",
+      owner: "aa",
+      fromMarket: "70001",
+      toMarket: "70000",
+      side: "Sell",
+      entryPrice: "600000",
+      size: "40",
+      cashDelta: "-12",
+    };
+    const events: ExchangeEvent[] = [moved, position];
+    const reason: CancelReason = "upgrade";
+    expect(events.map((e) => e.type)).toEqual([
+      "OrderMigrated",
+      "PositionMigrated",
+    ]);
+    expect(reason).toBe("upgrade");
+    const walked: CancelReason[] = [
+      "reduce_only",
+      "unfunded",
+      "insufficient_margin",
+      "maker_refused",
+    ];
+    expect(walked).toHaveLength(4);
+  });
+
+  it("re-exports the No helpers", () => {
+    expect(() =>
+      barrelYesOrder({ market: 1, side: 1, price: 0n, quantity: 1n }),
+    ).toThrow(BarrelBinaryPriceError);
+  });
+});
+
+// Trigger labels are open unions: the known names stay listed (so editors
+// suggest them) and any later engine name still type-checks. If a union
+// collapses to plain `string`, `Known<T>` becomes `never` and the first
+// assignment of each pair fails; if it loses the open member, the second does.
+type Known<T> = T extends OpenLabel ? (OpenLabel extends T ? never : T) : T;
+describe("public barrel: trigger labels", () => {
+  it("keeps the known names and accepts later ones", () => {
+    const known: [
+      Known<TriggerOutcomeReason>,
+      Known<TriggerLimbState>,
+      Known<TriggerEffectiveAvailabilityKind>,
+      Known<PendingTriggerDiscardReason>,
+      Known<TriggerHistoryLimbKind>,
+      Known<TriggerExecutionResult>,
+    ] = [
+      "NoTwoSidedQuote",
+      "Armed",
+      "Deferred",
+      "install_rejected",
+      "stop_loss",
+      "no_fill",
+    ];
+    const later: [
+      TriggerOutcomeReason,
+      TriggerLimbState,
+      TriggerEffectiveAvailabilityKind,
+      PendingTriggerDiscardReason,
+      TriggerHistoryLimbKind,
+      TriggerExecutionResult,
+    ] = ["a", "b", "c", "d", "e", "f"];
+    // @ts-expect-error an unknown name is not one of the known names
+    const notKnown: Known<TriggerOutcomeReason> = "ReasonFromANewerEngine";
+    expect([known, later, notKnown]).toHaveLength(3);
+  });
+});
+
+import * as barrel from "./index.js";
+
+describe("public barrel: ticker rule", () => {
+  it("re-exports the ticker validator and its error", () => {
+    expect(barrel.MAX_TICKER_LEN).toBe(24);
+    expect(barrel.validateTicker).toBeTypeOf("function");
+    expect(barrel.checkTicker("TEST3.")).toEqual({
+      kind: "BadChar",
+      char: ".",
+      index: 5,
+    } satisfies barrel.TickerRefusal);
+    expect(barrel.tickerRefusalMessage({ kind: "Empty" })).toBe(
+      "ticker is empty",
+    );
+    expect(() => barrel.validateTicker("test3")).toThrow(
+      barrel.InvalidTickerError,
+    );
   });
 });

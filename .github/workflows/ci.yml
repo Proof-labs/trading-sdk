@@ -46,6 +46,9 @@ jobs:
               - 'crates/**'
               - 'conformance/**'
               - 'Cargo.toml'
+              # `tests/action_type_map.rs` holds the hand-written TypeScript
+              # action maps to the core, so editing them runs the check.
+              - 'src/types.ts'
               # A workflow or gate-contract change exercises every suite. This
               # proves the wiring itself instead of letting CI changes take a
               # path that skips the jobs they govern.
@@ -72,6 +75,8 @@ jobs:
               - '.github/scripts/**'
             python:
               - 'python/**'
+              # `test_typed_actions.py` reads the TypeScript action map.
+              - 'src/types.ts'
               - 'crates/proof-trading-sdk/**'
               - 'crates/proof-trading-sdk-derive/**'
               - 'crates/proof-trading-sdk-pyo3/**'
@@ -169,6 +174,10 @@ jobs:
       # `--ignore-scripts` skips the `prepare` build so an install failure is
       # not confused with a compile failure; we build explicitly next.
       - run: npm ci --ignore-scripts
+      # eslint:recommended — a logic-bug gate tsc structurally is not (duplicate
+      # switch case / redeclared interface, unreachable code, dup object keys).
+      # No wasm/rust needed, so it runs before the build. See eslint.config.js.
+      - run: npm run lint
       # Post-cutover this builds the WASM core then tsc; pre-cutover it is tsc
       # only. Either way the toolchain above satisfies it.
       - run: npm run build
@@ -183,8 +192,10 @@ jobs:
       # Prove the registry artifact, not the source checkout: pack the SDK,
       # install it into a clean Vite consumer, require one emitted WASM asset,
       # then exercise the canonical codec path in a real browser.
+      # Headless launch only needs the shell; the runner image already has
+      # Chrome's system libraries.
       - name: Install Chromium for the packaged-browser smoke
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --only-shell chromium
       - name: Build a clean consumer from the packed SDK
         run: npm run smoke:browser:prepare
       - name: Exercise the packaged WASM codec in Chromium
@@ -214,6 +225,10 @@ jobs:
       # crate — it links libpython and is covered by the `python` job.
       - name: Test workspace (excl. PyO3)
         run: cargo test --workspace --exclude proof-trading-sdk-pyo3 --locked
+      # Optional native transport: only task-owned loopback contract fixtures;
+      # no real gateway, signing keys, or production network writes.
+      - name: Test optional Rust gateway transport
+        run: cargo test -p proof-trading-sdk --features gateway --locked
       # Guard against stale checked-in vectors: regenerating must be a no-op.
       - name: Conformance vectors are fresh
         run: |

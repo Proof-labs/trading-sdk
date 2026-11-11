@@ -10,6 +10,8 @@
 //! | `signing.ndjson`  | signing  | (payload,key)→envelope; pubkey→owner      |
 //! | `nonce.ndjson`    | nonce    | (last, now_ms…) → allocated nonce sequence|
 //! | `errors.ndjson`   | errors   | (code, log) → ExecError classification name|
+//! | `binary.ndjson`   | binary   | No order → Yes order; position → No view  |
+//! | `events.ndjson`   | events   | engine event → its ABCI type + attributes |
 //!
 //! NDJSON (not a single JSON array) is deliberate: it is the indexer's
 //! archive format (`indexer/pkg/envelope` — `<height>.ndjson`), so the same
@@ -36,6 +38,8 @@ pub const CODEC_FILE: &str = "codec.ndjson";
 pub const SIGNING_FILE: &str = "signing.ndjson";
 pub const NONCE_FILE: &str = "nonce.ndjson";
 pub const ERRORS_FILE: &str = "errors.ndjson";
+pub const BINARY_FILE: &str = "binary.ndjson";
+pub const EVENTS_FILE: &str = "events.ndjson";
 
 // ---------------------------------------------------------------------------
 // Vector schemas (the NDJSON line shapes)
@@ -108,6 +112,73 @@ pub struct ErrorExpect {
     pub name: String,
 }
 
+/// One event case: an engine `Event` (its serde JSON form, byte fields as
+/// arrays of u8) → the ABCI event type and the attributes, in write order,
+/// that the engine's encoder renders for it. Chain coordinates are not
+/// part of the case.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventCase {
+    pub case: String,
+    pub event: serde_json::Value,
+    pub expect: EventExpect,
+}
+
+/// The ABCI event type and its attributes, in write order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventExpect {
+    pub event_type: String,
+    pub attributes: Vec<(String, String)>,
+}
+
+/// One binary-book case: a No order and the Yes order it becomes, or a
+/// position and how it reads. `kind` discriminates the two.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BinaryCase {
+    /// `input` is a `PlaceOrder` field dict whose `side`, `price` and limb
+    /// trigger prices are in No terms. `expect` is either the Yes order's
+    /// field dict with its payload, or the refusal's name.
+    NoOrder {
+        case: String,
+        input: serde_json::Value,
+        expect: NoOrderExpect,
+    },
+    /// A position's `side` and `entry_price` on the event's book → how it
+    /// reads, or the refusal's name.
+    PositionView {
+        case: String,
+        side: String,
+        entry_price: u64,
+        size: u64,
+        expect: PositionViewExpect,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoOrderExpect {
+    YesOrder {
+        fields: serde_json::Value,
+        payload_hex: String,
+    },
+    Error {
+        name: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PositionViewExpect {
+    View {
+        outcome: String,
+        entry_price: u64,
+        size: u64,
+    },
+    Error {
+        name: String,
+    },
+}
+
 // ---------------------------------------------------------------------------
 // Reference implementations — the single source of truth
 // ---------------------------------------------------------------------------
@@ -116,6 +187,169 @@ pub struct ErrorExpect {
 pub fn codec_payload(action_type: u8, fields: &serde_json::Value) -> Result<Vec<u8>, String> {
     proof_trading_sdk::codec::encode_payload_dyn(action_type, fields.clone())
         .map_err(|e| format!("{e:?}"))
+}
+
+/// The ABCI event type and attributes the engine's encoder writes for
+/// `event` (its serde JSON form), read back from the length-prefixed bytes.
+pub fn event_expect(event: &serde_json::Value) -> Result<EventExpect, String> {
+    let event: proof_trading_sdk::types::Event =
+        serde_json::from_value(event.clone()).map_err(|e| format!("event: {e}"))?;
+    let mut writer = proof_trading_sdk::abci_event::AbciEventWriter::new();
+    event.encode_abci(&mut writer);
+    let mut reader = AbciReader {
+        bytes: &writer.into_vec(),
+        at: 0,
+    };
+    let event_type = reader.text()?;
+    let count = reader.length()?;
+    let attributes = (0..count)
+        .map(|_| Ok((reader.text()?, reader.text()?)))
+        .collect::<Result<Vec<_>, String>>()?;
+    if reader.at != reader.bytes.len() {
+        return Err(format!(
+            "{} bytes after the event",
+            reader.bytes.len() - reader.at
+        ));
+    }
+    Ok(EventExpect {
+        event_type,
+        attributes,
+    })
+}
+
+/// Reads the ABCI writer's `[len: u16 LE][bytes]` strings in order.
+struct AbciReader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl AbciReader<'_> {
+    fn take(&mut self, len: usize) -> Result<&[u8], String> {
+        let slice = self
+            .bytes
+            .get(self.at..self.at + len)
+            .ok_or_else(|| format!("encoded event ends at byte {}", self.at))?;
+        self.at += len;
+        Ok(slice)
+    }
+
+    fn length(&mut self) -> Result<usize, String> {
+        let raw = self.take(2)?;
+        Ok(usize::from(u16::from_le_bytes([raw[0], raw[1]])))
+    }
+
+    fn text(&mut self) -> Result<String, String> {
+        let len = self.length()?;
+        String::from_utf8(self.take(len)?.to_vec()).map_err(|e| e.to_string())
+    }
+}
+
+/// The refusal's stable name, shared by every binding.
+pub fn binary_error_name(error: &proof_trading_sdk::binary::BinaryError) -> &'static str {
+    use proof_trading_sdk::binary::BinaryError;
+    match error {
+        BinaryError::OrderPriceOutOfRange { .. } => "OrderPriceOutOfRange",
+        BinaryError::TriggerPriceOutOfRange { .. } => "TriggerPriceOutOfRange",
+        BinaryError::EntryAboveOneDollar { .. } => "EntryAboveOneDollar",
+    }
+}
+
+fn limb_from_json(
+    value: &serde_json::Value,
+) -> Result<Option<proof_trading_sdk::types::TriggerLimb>, String> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    serde_json::from_value(value.clone())
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+fn limb_to_json(limb: &Option<proof_trading_sdk::types::TriggerLimb>) -> serde_json::Value {
+    match limb {
+        None => serde_json::Value::Null,
+        Some(limb) => serde_json::json!({
+            "trigger_price": limb.trigger_price,
+            "max_slippage_bps": limb.max_slippage_bps.0,
+            "client_trigger_id": limb.client_trigger_id.map(|id| id.0),
+        }),
+    }
+}
+
+/// Translate a No order (a `PlaceOrder` field dict in No terms) through the
+/// core and encode the resulting Yes order.
+pub fn no_order_expect(input: &serde_json::Value) -> Result<NoOrderExpect, String> {
+    use proof_trading_sdk::binary::{yes_order, NoOrder};
+    let get = |key: &str| input.get(key).cloned().unwrap_or(serde_json::Value::Null);
+    let parse = |key: &str| -> Result<serde_json::Value, String> {
+        input.get(key).cloned().ok_or(format!("missing {key}"))
+    };
+    let no = NoOrder {
+        market: serde_json::from_value(parse("market")?).map_err(|e| e.to_string())?,
+        owner: serde_json::from_value(parse("owner")?).map_err(|e| e.to_string())?,
+        side: serde_json::from_value(parse("side")?).map_err(|e| e.to_string())?,
+        price: serde_json::from_value(parse("price")?).map_err(|e| e.to_string())?,
+        quantity: serde_json::from_value(parse("quantity")?).map_err(|e| e.to_string())?,
+        client_order_id: serde_json::from_value(get("client_order_id"))
+            .map_err(|e| e.to_string())?,
+        post_only: serde_json::from_value(parse("post_only")?).map_err(|e| e.to_string())?,
+        reduce_only: serde_json::from_value(parse("reduce_only")?).map_err(|e| e.to_string())?,
+        time_in_force: serde_json::from_value(parse("time_in_force")?)
+            .map_err(|e| e.to_string())?,
+        stop_loss: limb_from_json(&get("stop_loss"))?,
+        take_profit: limb_from_json(&get("take_profit"))?,
+    };
+    let yes = match yes_order(&no) {
+        Ok(yes) => yes,
+        Err(error) => {
+            return Ok(NoOrderExpect::Error {
+                name: binary_error_name(&error).to_string(),
+            })
+        }
+    };
+    let fields = serde_json::json!({
+        "market": yes.market,
+        "owner": yes.owner.to_vec(),
+        "side": serde_json::to_value(yes.side).map_err(|e| e.to_string())?,
+        "price": yes.price,
+        "quantity": yes.quantity,
+        "client_order_id": yes.client_order_id,
+        "post_only": yes.post_only,
+        "reduce_only": yes.reduce_only,
+        "time_in_force": serde_json::to_value(yes.time_in_force).map_err(|e| e.to_string())?,
+        "stop_loss": limb_to_json(&yes.stop_loss),
+        "take_profit": limb_to_json(&yes.take_profit),
+    });
+    let payload = codec_payload(1, &fields)?;
+    Ok(NoOrderExpect::YesOrder {
+        fields,
+        payload_hex: hex::encode(payload),
+    })
+}
+
+/// Read a position on an event's binary book through the core.
+pub fn position_view_expect(
+    side: &str,
+    entry_price: u64,
+    size: u64,
+) -> Result<PositionViewExpect, String> {
+    use proof_trading_sdk::binary::{binary_position_view, Outcome};
+    let side = serde_json::from_value(serde_json::Value::String(side.to_string()))
+        .map_err(|e| e.to_string())?;
+    Ok(match binary_position_view(side, entry_price, size) {
+        Ok(view) => PositionViewExpect::View {
+            outcome: match view.outcome {
+                Outcome::Yes => "Yes",
+                Outcome::No => "No",
+            }
+            .to_string(),
+            entry_price: view.entry_price,
+            size: view.size,
+        },
+        Err(error) => PositionViewExpect::Error {
+            name: binary_error_name(&error).to_string(),
+        },
+    })
 }
 
 /// Sign a payload into the full wire envelope via the core.
@@ -166,7 +400,7 @@ pub fn nonce_sequence(last: u64, now_ms: &[u64]) -> Vec<u64> {
 
 /// Canonical manifest name for a numeric code (the `ERROR_KINDS` table).
 pub fn error_manifest_name(code: u32) -> Option<&'static str> {
-    proof_trading_sdk::types::ERROR_KINDS
+    proof_trading_sdk::errors::ERROR_KINDS
         .iter()
         .find(|kind| kind.code() == code)
         .map(|kind| kind.name())
@@ -176,7 +410,7 @@ pub fn error_manifest_name(code: u32) -> Option<&'static str> {
 /// resolves to slippage/open-interest only via its canonical log; a bare or
 /// unrecognized code 50 stays `AmbiguousCode50`.
 pub fn error_classify_name(code: u32, log: Option<&str>) -> Option<&'static str> {
-    proof_trading_sdk::types::decode_exec_error_kind(code, log).map(|kind| kind.name())
+    proof_trading_sdk::errors::decode_exec_error_kind(code, log).map(|kind| kind.name())
 }
 
 /// The reference every runner asserts. A bare code (`log: None`) pins the

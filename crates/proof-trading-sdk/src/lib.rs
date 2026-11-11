@@ -1,16 +1,30 @@
 //! Rust core for the Proof trading SDK.
 //!
-//! Extracted from `exchange-core` (codec, signing, and wire types) so the same
-//! audited encoding/signing logic backs every binding. Engine-side modules
-//! (matching, margin, state store) were intentionally left behind.
+//! The wire contract (MessagePack codec, Ed25519 signing preimage, action +
+//! wire types, the admin content hash) lives in the shared `exchange-wire`
+//! crate and is re-exported here, so the SDK uses the *same* codec as the
+//! engine and cannot drift from it. The SDK owns only client representation:
+//! the `signer` seam and the `errors` result-code decode, plus the `wire`
+//! byte newtypes and `governance` re-exports.
 
-mod abci_event;
-pub mod codec;
-pub mod crypto;
+pub use proof_wire::{
+    abci_event, bridge, codec, crypto, liquidation_config, liquidation_progress,
+    liquidation_report, triggers, types,
+};
+
+pub mod binary;
+pub mod errors;
+#[cfg(feature = "gateway")]
+pub mod gateway;
 pub mod governance;
+pub mod governance_reads;
+pub mod market_snapshot;
+pub mod msgpack;
+pub mod query;
+pub mod reads;
 pub mod signer;
-mod state;
-pub mod types;
+pub mod ticker;
 pub mod wire;
 
+pub use errors::{decode_exec_error_kind, error_code_manifest, DecodedExecErrorKind, ErrorKind};
 pub use signer::{LocalSigner, Signer, SignerError};

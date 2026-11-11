@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import typing as t
 
+from proof_trading_sdk.external_signer import ExternalSigner
+
 from proof_trading_sdk._native import (
     SigningHandle,
     admin_proposal_content_hash,
@@ -29,6 +31,17 @@ def hex_to_owner(hex_str: str) -> bytes:
     return bytes.fromhex(hex_str.removeprefix("0x"))
 
 from proof_trading_sdk import actions
+from proof_trading_sdk.binary import (  # noqa: F401
+    BINARY_PRICE_MAX,
+    BinaryPositionView,
+    BinaryPriceError,
+    binary_position_view,
+    buy_no,
+    no_order,
+    sell_no,
+    yes_limb,
+    yes_side,
+)
 from proof_trading_sdk.actions import (  # noqa: F401
     Action,
     ActionType,
@@ -53,13 +66,30 @@ from proof_trading_sdk.actions import (  # noqa: F401
     Deposit,
     Withdraw,
     WithdrawRequest,
+    DepositLocator,
     ConfirmDeposit,
     ConfirmWithdrawal,
     FailWithdrawal,
     SetUserMarketLeverage,
-    CreateImpactMarket,
+    CreateSubAccount,
+    SubAccountTransfer,
+    ClaimWithdrawalPayout,
+    RecordWithdrawalPayout,
+    ResolveEvent,
     UpdateMarketFees,
-    OracleUpdateComposite,
+    SubmitOracleObservation,
+    ConfigureOraclePolicy,
+    OperatorReceiptProof,
+    BridgeWithdrawalReceipt,
+    AuthorizeWithdrawal,
+    ConfirmWithdrawalReceipt,
+    FailWithdrawalReceipt,
+    CreateMarket,
+    AdminActionWire,
+    ProposeAdminAction,
+    ApproveAdminAction,
+    RejectAdminAction,
+    EmergencyAdminAction,
     encode_action,
     decode_action,
 )
@@ -70,6 +100,7 @@ from proof_trading_sdk.errors import (
     EngineError,
     GatewayError,
     ProofTradingSdkError,
+    PreAdmissionRefusal,
     RateLimited,
     SigningError,
     SubmissionPending,
@@ -79,9 +110,23 @@ from proof_trading_sdk.errors import (
 )
 from proof_trading_sdk.nonce import NonceAllocator
 from proof_trading_sdk.config import SdkConfig, load_config
+from proof_trading_sdk.governance_reads import (
+    AuthoritiesSnapshot,
+    FullCloseThreshold,
+    LiquidationConfig,
+    LiquidationConfigInfo,
+    decode_authorities_snapshot,
+    decode_liquidation_config_info,
+)
 from proof_trading_sdk.client import ExchangeClient
-from proof_trading_sdk.streams import AccountEventStream, OrderbookDeltaStream
+from proof_trading_sdk.candle_history import CandleHistoryPage, CandleHistoryTime, HistoryCandle
+from proof_trading_sdk.streams import (
+    AccountEventStream,
+    OrderbookDeltaStream,
+    RecoveryStatus,
+)
 from proof_trading_sdk.trigger_history import (
+    PendingTriggerDiscardReason,
     PositionTriggerHistoryEventType,
     PositionTriggerHistoryPage,
     TriggerHistoryEvent,
@@ -92,6 +137,11 @@ from proof_trading_sdk.trigger_history import (
     decode_position_trigger_history_page,
     decode_trigger_market_history_page,
 )
+from proof_trading_sdk.markets_snapshot import (
+    MarketOpenInterest,
+    MarketsSnapshot,
+    decode_markets_snapshot,
+)
 from proof_trading_sdk.trigger_config import (
     TriggerMarketConfig,
     PendingTriggerMarketConfig,
@@ -101,6 +151,9 @@ from proof_trading_sdk.trigger_config import (
 )
 
 __all__ = [
+    "CandleHistoryPage",
+    "CandleHistoryTime",
+    "HistoryCandle",
     "admin_proposal_content_hash",
     "chain_id_from_string",
     "owner_to_hex",
@@ -111,6 +164,7 @@ __all__ = [
     "load_key_from_fd",
     "load_key_from_pkcs11",
     "SigningHandle",
+    "ExternalSigner",
     "pubkey_to_owner",
     "sign_and_encode",
     "verify_signature",
@@ -130,6 +184,15 @@ __all__ = [
     "AmendOrder",
     "ClosePosition",
     "TriggerLimb",
+    "BINARY_PRICE_MAX",
+    "BinaryPositionView",
+    "BinaryPriceError",
+    "binary_position_view",
+    "buy_no",
+    "no_order",
+    "sell_no",
+    "yes_limb",
+    "yes_side",
     "SetPositionTriggers",
     "CancelPositionTriggers",
     "SetTriggerMarketConfig",
@@ -138,18 +201,42 @@ __all__ = [
     "Deposit",
     "Withdraw",
     "WithdrawRequest",
+    "DepositLocator",
     "ConfirmDeposit",
     "ConfirmWithdrawal",
     "FailWithdrawal",
     "SetUserMarketLeverage",
-    "CreateImpactMarket",
+    "CreateSubAccount",
+    "SubAccountTransfer",
+    "ClaimWithdrawalPayout",
+    "RecordWithdrawalPayout",
+    "ResolveEvent",
     "UpdateMarketFees",
-    "OracleUpdateComposite",
+    "SubmitOracleObservation",
+    "ConfigureOraclePolicy",
+    "OperatorReceiptProof",
+    "BridgeWithdrawalReceipt",
+    "AuthorizeWithdrawal",
+    "ConfirmWithdrawalReceipt",
+    "FailWithdrawalReceipt",
+    "CreateMarket",
+    "AdminActionWire",
+    "ProposeAdminAction",
+    "ApproveAdminAction",
+    "RejectAdminAction",
+    "EmergencyAdminAction",
     "encode_action",
     "decode_action",
     "NonceAllocator",
     "ExchangeClient",
+    "AuthoritiesSnapshot",
+    "FullCloseThreshold",
+    "LiquidationConfig",
+    "LiquidationConfigInfo",
+    "decode_authorities_snapshot",
+    "decode_liquidation_config_info",
     "PositionTriggerHistoryEventType",
+    "PendingTriggerDiscardReason",
     "TriggerMarketHistoryEventType",
     "TriggerHistoryEventType",
     "TriggerHistoryTime",
@@ -163,15 +250,20 @@ __all__ = [
     "TriggerMarketConfigState",
     "TriggerMarketConfigInfo",
     "decode_trigger_market_config_infos",
+    "MarketOpenInterest",
+    "MarketsSnapshot",
+    "decode_markets_snapshot",
     "SdkConfig",
     "load_config",
     "AccountEventStream",
     "OrderbookDeltaStream",
+    "RecoveryStatus",
     "AuthenticationError",
     "CodecError",
     "EngineError",
     "GatewayError",
     "ProofTradingSdkError",
+    "PreAdmissionRefusal",
     "RateLimited",
     "SigningError",
     "SubmissionPending",

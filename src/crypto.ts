@@ -103,6 +103,61 @@ export function pubkeyToOwner(pubkey: Uint8Array): Uint8Array {
   return hash.slice(12, 32);
 }
 
+/**
+ * Domain separator for derived sub-account addresses. Matches Rust
+ * `SUB_ACCOUNT_DERIVATION_DOMAIN` byte-for-byte; the instantiation is frozen
+ * (wire#21 golden vectors) — changing it changes every derived address and
+ * requires a new domain string.
+ */
+export const SUB_ACCOUNT_DERIVATION_DOMAIN = new TextEncoder().encode(
+  "ProofExchange-sub-account-v1",
+);
+
+/**
+ * Derive a sub-account address from its master and client-chosen id:
+ * `keccak256(SUB_ACCOUNT_DERIVATION_DOMAIN || master(20) || sub_account_id(4,
+ * big-endian))[0..20]` — matches Rust `derive_sub_account` byte-for-byte.
+ *
+ * Pure: the master can always derive and sign for any id, even one the
+ * engine has not registered yet (registration is a separate, gated action).
+ * Derived addresses are not keypair addresses — no private key exists for
+ * them; the address space is disjoint from `pubkeyToOwner` by the domain
+ * prefix. The id must be an integer in `1..=0xFFFFFFFF`; 0 is not a valid
+ * sub-account id and the engine rejects it at `CreateSubAccount`.
+ */
+export function deriveSubAccount(
+  master: Uint8Array,
+  subAccountId: number,
+): Uint8Array {
+  if (master.length !== 20) {
+    throw new Error(`master must be 20 bytes, got ${master.length}`);
+  }
+  if (
+    !Number.isInteger(subAccountId) ||
+    subAccountId < 1 ||
+    subAccountId > 0xffffffff
+  ) {
+    throw new Error(
+      `subAccountId must be an integer in 1..=4294967295, got ${subAccountId}`,
+    );
+  }
+  const preimage = new Uint8Array(
+    SUB_ACCOUNT_DERIVATION_DOMAIN.length + 20 + 4,
+  );
+  preimage.set(SUB_ACCOUNT_DERIVATION_DOMAIN, 0);
+  preimage.set(master, SUB_ACCOUNT_DERIVATION_DOMAIN.length);
+  preimage.set(
+    new Uint8Array([
+      (subAccountId >>> 24) & 0xff,
+      (subAccountId >>> 16) & 0xff,
+      (subAccountId >>> 8) & 0xff,
+      subAccountId & 0xff,
+    ]),
+    SUB_ACCOUNT_DERIVATION_DOMAIN.length + 20,
+  );
+  return keccak_256(preimage).slice(0, 20);
+}
+
 /** Convert a 20-byte address to hex string. */
 export function ownerToHex(owner: Uint8Array): string {
   return bytesToHex(owner);

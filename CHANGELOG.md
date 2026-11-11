@@ -1,13 +1,1613 @@
 # Changelog
 
-All notable changes to `@proof/trading-sdk` (and the `proof-trading-sdk` Python
+All notable changes to `@proof-labs/trading-sdk` (and the `proof-trading-sdk` Python
 package) are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- Python typed `authorities()` and `liquidation_config()` reads, backed by
+  canonical Rust wire types with strict record/address/range checks. Failed
+  reads raise rather than synthesize empty authorities or default configuration.
+
+- Python `history_candles` reads durable OHLCV history with typed pages, exact
+  decimal strings, and backward time-window pagination.
+
+- Python `ExternalSigner` and `ExchangeClient.set_external_signer` accept
+  synchronous Ed25519 callbacks for transactions and account-stream auth.
+  Rust prepares canonical messages and verifies returned signatures; replacing
+  the signing connection invalidates an in-flight callback result. TP/SL helpers
+  bind owner selection to that connection. Account streams use the current
+  signer on each authentication attempt, including a signer connected later.
+
+- Python account-event streams authenticate with the client's secret key or
+  opaque `SigningHandle`, alongside an API key when configured, renewing the signed
+  challenge on every retry and reconnect. `account_auth(owner, after_id=0)`
+  supports direct owner keys and JSON-safe nonnegative cursors.
+
+### Changed
+
+- Python account-stream reconnect backoff now defaults to a 10-second cap
+  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
+- Python signed account authentication rejects an unconfigured chain ID before
+  signing. Configure the gateway's chain ID explicitly.
+- Python account streams match TypeScript's bounded first-subscription auth
+  retries: signing failures and 401/429/503 frames yield errors and retry up to
+  five times. Exhaustion and 403 frames leave the socket open without further
+  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
+  401/403 refusals raise `AuthenticationError` before the first successful
+  connection; on reconnect they use the configured retry budget and backoff
+  without discarding history recovery state.
+- A Python client with a signer now signs every account subscription, even with
+  an API key configured. Subscribing to another owner's feed, or to any feed
+  with an unconfigured chain ID, now fails with error frames instead of relying
+  on the API key. Use a client with only the API key for those feeds.
+
+- **Breaking (TypeScript MAJOR):** `queryOpenOrders` and Python `open_orders`
+  preserve all 14 resting-order fields through the shared Rust decoder, including
+  client order IDs and exact integer metadata. The eight added TypeScript
+  `OpenOrder` fields are required in manually constructed objects; see the
+  [migration guide](README.md#open-order-migration).
+  Invalid responses now throw instead of appearing empty, and
+  `queryOpenOrders("")` throws. Valid empty lists still return `[]`; legacy
+  six-field records use wire defaults. Decoded payloads over 1 MiB are rejected.
+  Ship this change in the next TypeScript MAJOR release; it is not part of 11.0.0.
+
+### Fixed
+
+- **Preserve structured gateway refusals.** Valid `status: "refused"`
+  responses retain their machine-readable reason. TypeScript adds
+  `TxResult.errorCode` and the open `GatewayRefusalCode` type (MINOR for npm).
+  Python raises `PreAdmissionRefusal` with `error_code`, `message` and
+  `status_code` for admission refusals, instead of treating legacy HTTP 200
+  refusals as unresolved or flattening HTTP 400, 411 and 413 refusals into
+  transport text. An internal `EncodingError` refusal is also preserved at
+  HTTP 500. Malformed or contradictory refusals remain unresolved against the
+  hash of the submitted bytes. Valid envelopes at HTTP 401, 403, 429 and other 5xx
+  responses keep their existing Python exceptions. A refusal
+  describes this attempt only; it cannot resolve an earlier ambiguous
+  attempt. Retry decisions depend on the refusal reason, not HTTP status
+  alone. Python callers must catch `PreAdmissionRefusal` for valid admission
+  refusals (MAJOR for Python).
+
+- Python `RateLimited.bucket` now uses `"default"`, matching the cached
+  `rate_limit_state` key, when the gateway omits `X-RateLimit-Bucket` (#395).
+
+- Python submits signed transactions to the gateway in its JSON/base64 envelope.
+- Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. Proven refusals are handled separately from ambiguous failures.
+- Python raises `TransportError` for malformed or wrong-shaped read responses (a 200 with `null` or `[]` on an object-valued read such as `markets` or `ticker` no longer reads as empty), and raises `SubmissionPending` with the transaction hash when a submission response carries no verdict; only an explicit non-zero `"<code>: <message>"` stays a terminal `EngineError`.
+- Python account-event history supports explicit ordering and cursor pagination. The client validates owner addresses and page limits (1–5000) before sending a request. Passing the unsupported `after_id` filter now raises `ValueError`.
+- Python reads per-account funding payments and position history with cursor pagination. Passing the unsupported `after_height` filter now raises `ValueError`.
+- Python reads deposit and withdrawal history from owner-scoped account events.
+
+## [11.0.0] — 2026-11-09
+
+TypeScript MAJOR release for exchange 2.24.0 (proof-wire 11.0.0, engine 12.0):
+the `VoidEvent`, `SettleEvent` and `SetMarketStatus` admin actions,
+`RecordWithdrawalPayout`, error codes 128-134, and the retired `HaltTrading` /
+`SetReduceOnly` arms. Rust and Python versions are unchanged.
+
+### Added
+
+- **`VoidEvent` admin action** (inner tag 29, DEC-232): a multisig proposal
+  that voids an event and settles every binary and conditional on it in cash
+  at `yesPrice` (micro-USDC per share, `0..=1_000_000`). The TypeScript
+  encoder refuses a price outside that range; the Rust and Python surfaces
+  leave the check to the engine. `decodeVoidSettlementEvent` decodes the
+  `event_voided` and `conditional_void_settled` events, and
+  `HistoryResolution.kind` gains `conditional_void_settled`, which
+  `queryHistoryResolutions` already returns for a Void. proof-wire moves to
+  mirror commit `eecafea4`, which adds only `VoidEvent` to 10.0.0. Additive (MINOR).
+- `AbciEventInput`, the input type of `decodeVoidSettlementEvent`.
+  `LiquidationEventInput` stays as an alias of it.
+- **`SettleEvent` admin action** (inner tag 30, DEC-244): a multisig proposal
+  that settles a price event whose resolution window closed unresolved, on
+  the `Yes` or `No` the quorum names. The TypeScript encoder refuses `Void`,
+  as the engine does. A pending `SettleEvent` proposal now lists in
+  `decodeProposalPage` instead of failing the whole page. proof-wire moves to
+  mirror commit `bbc3ff2d`, which adds `SettleEvent`. Additive (MINOR).
+- **proof-wire 11.0.0 (exchange 2.24.0).** The `SetMarketStatus` admin action
+  (inner tag 31) with `MarketStatus` (`Trading`, `ReduceOnly`, `Halted`,
+  `Delisted`); the `RecordWithdrawalPayout` operator action (`0x31`), which a
+  payout-lease holder sends to record its Solana transfer signature before
+  broadcasting it; error codes 128-134 (`WithdrawalPayoutLeaseNotHeld`,
+  `WithdrawalPayoutRecordLimitReached`, `MarketReduceOnly`, `MarketDelisted`,
+  `MarketStatusTransitionRefused`, `MarketBacksLiveEvent`, `MarketHalted`);
+  and the `MarketHalted` trigger outcome reason.
+
+### Removed
+
+- **The `HaltTrading` and `SetReduceOnly` emergency arms**, which the engine
+  never admitted and proof-wire 11.0.0 drops. `PauseMarket` is the one
+  emergency action: it halts one market, and `SetMarketStatus` lifts it.
+  Breaking for code that names the retired arms (MAJOR).
+
+## [10.1.0] — 2026-11-05
+
+TypeScript MINOR release: two optional client options for callers that sign,
+store and later send exact transaction bytes, and decoded reads for the trade
+tape, funding payments and account events. Rust and Python versions are
+unchanged.
+
+### Added
+
+- **Exact-byte callers: a nonce floor on `signTx` and the action on byte-level
+  sends** ([Proof-labs/proof-market-maker#666](https://github.com/Proof-labs/proof-market-maker/issues/666)).
+  `signTx(action, { minimumNonceExclusive })` signs with a nonce strictly
+  above a caller-held floor, such as bytes a process stored durably before a
+  restart, and refuses a floor more than 60 seconds ahead of the clock.
+  `submitSignedTx`, `submitSignedTxCommit` and `waitForDelivery` take an
+  optional `action`, used only to label the transport requests, so a
+  pre-signed cancellation and its confirmation polls keep their `urgent`
+  priority. Both are optional; existing calls are unchanged.
+
+- **Decoded reads for the trade tape, funding payments and account events**
+  ([Proof-labs/proof-market-maker#685](https://github.com/Proof-labs/proof-market-maker/issues/685)).
+  `queryRecentTrades(market, { limit })` reads the node's in-memory tape
+  (`GET /v1/trades/{market}`, newest first, at most 500);
+  `queryHistoryFundingPayments(owner?, { market, fromMs, toMs, limit, cursor })`
+  reads one page of indexed `funding_settled` payments; and
+  `queryHistoryAccountEventsPage(owner, { order, eventType, fromMs, toMs, limit, cursor })`
+  reads one page of indexed account events. Each validates every row and
+  keeps prices, quantities, fees and payments as `bigint`; owner reads use the
+  `urgent` account lane. All three are bounded reads with a `timeoutMs`
+  deadline (default 5 seconds); an account-events page may be up to 16 MiB,
+  enough for the indexer's 5000-row maximum. Both paged reads return
+  `nextCursor: ""` on the last page, like `queryHistoryFills`. An account
+  event's `txHash` is the uppercase transaction hash, or the indexer's
+  synthetic key kept verbatim (`height-{h}-kind-block-event-{i}` for a
+  block-level event such as a funding settlement or liquidation). A caller
+  mistake in the options (limit out of range, an empty or reversed window, a
+  bad `order`) throws `GatewayReadError` with kind `"configuration"`; a bad
+  response throws it with kind `"malformed"`, `"binding"`, `"limit"` or
+  `"deadline"`.
+
+## [10.0.0] — 2026-11-05
+
+TypeScript MAJOR release for proof-wire 10.0.0 (exchange 2.23.0 / protocol 11.0):
+F16 certified oracle prices, sub-accounts always on, and `CreateMarket` tick and
+lot size. Rust and Python versions are unchanged.
+
+### Breaking changes
+
+- **`CreateMarket` carries `tickSize` and `lotSize` (exchange#1327).** Both
+  are required `bigint`s in TypeScript (`tick_size`, `lot_size` in Python and
+  Rust), appended after `maxOpenInterest`, and the engine refuses creation when
+  either is 0. The action is now a 14-element array, in a direct
+  `CreateMarket` and inside `ProposeAdminAction`, `ApproveAdminAction` and
+  `Batch` items, so the admin-proposal content hashes change. A 12-element
+  payload from stored history still decodes, with both fields 0, but an older
+  SDK fails to decode a 14-element one (MAJOR). Pending `CreateMarket`
+  proposals must be drained or re-proposed before the engine upgrade.
+  In Python, `tick_size` and `lot_size` come before the defaulted
+  `max_open_interest`, so a positional `CreateMarket(...)` call that passed
+  `max_open_interest` by position must now name it.
+
+- **Sub-accounts are always on: `EnableSubAccounts` is removed (MAJOR).**
+  The engine dropped the sub-account switch
+  ([Proof-labs/exchange#1358](https://github.com/Proof-labs/exchange/pull/1358)),
+  so `CreateSubAccount` and `SubAccountTransfer` need no governance
+  enablement. The `{ kind: "EnableSubAccounts" }` admin action leaves the
+  `AdminAction` union and `ACTION_TAG_BY_KIND`, its inner tag 21 is retired
+  and never reassigned, and the Rust, Python and conformance mirrors drop it.
+  Error code 90 (`SubAccountsInactive`) no longer decodes in TypeScript,
+  Rust or Python and is never reassigned. The Rust crate pins proof-wire
+  10.0.0.
+
+- **proof-wire for exchange F16 activation** ([Proof-labs/exchange#1328](https://github.com/Proof-labs/exchange/pull/1328),
+  [Proof-labs/exchange#1345](https://github.com/Proof-labs/exchange/pull/1345)).
+  The Rust crate pins proof-wire 10.0.0. Every perp is priced by its certified
+  oracle verdict, so the single-signer price actions leave the wire:
+  `OracleUpdate` (0x03), `RunFundingTick` (0x12) and `OracleUpdateComposite`
+  (0x14) no longer encode or decode in TypeScript, Rust or Python. Their TS
+  types and Python builders are removed, and so is the
+  `@proof-labs/trading-sdk/testing` subpath, whose only action was
+  `RunFundingTick`. The bytes are never reassigned (MAJOR).
+
+- **The four unpriced error codes are renamed after the wire's one
+  `ExecError::Unpriced { market, reason }`.** Each reason keeps its own code
+  and meaning: 37 `StaleOracle` is `UnpricedStale`, 77
+  `OracleVerdictUnavailable` is `UnpricedNoVerdict`, 82 `OracleGuardUnset` is
+  `UnpricedGuardUnset` and 97 `MarkUnavailable` is `UnpricedNoMark`, in the
+  TS `ExecErrorCode` and decoder, the Rust `ErrorKind` and the Python
+  `get_error_name`. Code that matches on the old names must match on the new
+  ones; code that matches on the numbers is unaffected (MAJOR).
+
+- **Error codes 30, 36 and 41 are retired.** Only `OracleUpdate` and
+  `RunFundingTick` raised `OracleTimestampNotMonotonic` (30),
+  `TestActionRejected` (36) and `OracleStaleNotElapsed` (41), so they leave
+  the TS `ExecErrorCode` and decoder, the Rust `ErrorKind` and the Python
+  `get_error_name`, and decode as unknown. The numbers are never reassigned.
+  Code 33 `OracleNotApplicable` no longer names `OracleUpdate` (MAJOR).
+
+- **The oracle-permissions read is seven slots.** The engine drops
+  `activation_height` and `oracle_active` and the `Legacy` state, and the
+  permission is always present. `OraclePermissions` loses `activationHeight`
+  / `oracleActive` (Rust `activation_height` / `oracle_active`),
+  `oraclePermission` is no longer nullable, and `state` is `Unavailable` or
+  `Committed`. Only the fourteen-field verdict can arrive in that layout, so
+  the twelve-field format 2 is refused: `CommittedOracleVerdict.format` and
+  the Rust `VerdictFormat` are removed and `diagnostics` is no longer
+  nullable. Reads from engines before F16 activation no longer decode
+  (MAJOR).
+
+- **The `AnchorUnavailable` verdict reason is removed.** It was the
+  pre-rename name of `ReferenceUnavailable`, sent only by engines before
+  F16, whose reads no longer decode. It leaves the TS `OracleVerdictReason`
+  and the Rust `VerdictReason` (MAJOR).
+
+### Added
+
+- **Error codes 123-125.** `DepositLimitExceeded` (123), `EventPoolMismatch`
+  (124: `AttachConditional` names an underlying in another insurance pool than
+  the event) and `ConditionalLotOffUnderlyingGrid` (125: a lot-size change
+  would leave a conditional's lot off its underlying perpetual's lot grid).
+
+- `reads().evidence.blockResultsRange({ fromHeight, throughHeight })` reads an exact inclusive height range with the existing window decoder, caller-reducible byte, transaction, event and attribute budgets, and H+1 header binding. The span is capped by `maxHeights` (default 32; raise it up to 128 for wider ranges). Equal or sub-millisecond timestamps do not omit or add blocks; backwards timestamps still refuse. Gateway-only, trusted-gateway evidence rather than cryptographic event proof or non-admission authorization. Existing `blockResultsWindow` selection is unchanged. Additive (MINOR).
+
+## [9.2.0] — 2026-11-03
+
+### Added
+
+- `reads().finalized.orderbook(market, { depth })` returns a height-bearing,
+  witnessed book snapshot of 1, 20 (default) or 100 levels per side from
+  `GET /v1/orderbook-snapshot/{market}`. It is not a full-book assertion.
+- `reads().tradeHistoryPage(market, { fromMs, toMs, limit, cursor })` returns
+  one indexed, participant-attributed page from `GET /v1/history/trades/{market}` with an opaque cursor. A page does
+  not prove complete ingestion. See [generic reads design](docs/generic-finalized-reads.md)
+  for trust boundaries, pagination, resource limits, typed errors and timestamp units.
+- `reads().evidence.transaction` and `blockResultsWindow` bind exact signed bytes and complete bounded windows to the pinned chain, and check each block's full transaction list against its header `data_hash` (a dropped, added or reordered transaction fails with `GatewayReadError` `kind: "binding"`). Caller-reducible resource budgets (aggregate across the window, so a busy block may exceed the single-transaction 4,096-event/attribute caps) refuse partial coverage with `GatewayReadError` `kind: "limit"`. Trusted-gateway evidence, not cryptographic event proofs or non-admission permission.
+- `reads().finalized` returns account, authority, nonce, orders, financial, market and oracle facts with the gateway's finalized-state witness. The witness is the gateway's assertion: financial, account-state, market and oracle payloads are checked against its height, while account, authorization, nonce and open-order payloads carry no height (and sometimes no owner) and rely on the gateway's word. `reads().evidence.blockHeader` plus `verifyWitness` binds H to a chain-qualified H+1 header; a header fetched through the same gateway shows only that the gateway is self-consistent. Decode failures surface as `GatewayReadError`. Gateway-only, no direct-node fallback; route deployment is prerequisite. A witness is not a signature proof or execution authorization.
+- `reads().finalized.account(owner)` decodes the engine-valued account through the canonical Rust codec, preserving pending funding and equity with a same-state witness. It does not recalculate funding or authorize execution.
+- `GatewayReadError` (typed bounded-read failure with `kind` and `field`) and the `hexAddress`, `hash32` and `marketId` validators with their `HexAddress`, `Hash32Hex` and `MarketId` branded types are exported. Additive (MINOR).
+
+### Changed
+
+- Financial and market snapshot transports share a bounded reader: 1 MiB, 4,096 chunks, 5-second default/60-second maximum deadline, typed read errors and preserved abort reasons. Both markets-snapshot reads (`queryMarketsSnapshot` and `reads().finalized.marketsSnapshot`) default to the shared 10-second `MARKETS_SNAPSHOT_TIMEOUT_MS`. HTTP failure bodies remain readable within the same cap, and an oversized, fragmented or stalled failure body is truncated rather than hiding the status, waiting at most 250 ms for that body so an HTTP failure is reported promptly; duplicate JSON keys refuse.
+- `queryFinancialState` errors are typed: an HTTP failure throws `GatewayHttpError` (was `Error("financial state HTTP <status>")`), and size, deadline, JSON and base64 failures throw `GatewayReadError` with `kind` / `field` (were plain `Error`s with message text). Callers matching on the old messages must switch to the types.
+- The bounded reader newly refuses JSON nested deeper than 32 levels, zero-length body chunks, more than 4,096 chunks and a non-decimal `content-length`; the markets snapshot accepts any 2xx status, not only 200.
+
+## [9.1.0] — 2026-11-03
+
+### Added
+
+- **`reads().oracleHealth({ market })`** requests one market's oracle health
+  (`GET /v1/oracle/health?market={id}`, api-gateway 10.3.0+): the same object
+  with only that market's row, instead of the whole feeder state. Without
+  `market` the request is unchanged. The cut drops `failover` and `inventory`,
+  and the row's `status` is the feeder's 60-second rule, not the engine's
+  per-market age gate: it is for a UI freshness poll; monitoring and maker
+  guards read the bare path. Additive (MINOR).
+
+- **`historyFills` takes an optional `market`.** `GatewayReads.historyFills`
+  accepts `OwnerHistoryParams & { market?: number }` and sends `market` in the
+  `/info` body, so a caller gets one market's fills instead of the newest fills
+  across all markets. Needs api-gateway 10.1.0+ (first tagged in v10.4.0,
+  [Proof-labs/api-gateway#266](https://github.com/Proof-labs/api-gateway/pull/266));
+  an older gateway ignores `market` and returns every market's fills without
+  an error. No wire change; additive API, MINOR.
+
+### Fixed
+
+- **A market ticker is checked before a market creation is signed.** A
+  ticker is 1 to 24 bytes of capital letters A-Z, digits 0-9 and hyphens,
+  starting with a capital letter (`^[A-Z][A-Z0-9-]{0,23}$`); a market cannot
+  be renamed, and DevNet already has a `TEST3.` market from a typo. The
+  TypeScript SDK refuses a bad ticker with `InvalidTickerError` (new export,
+  with `validateTicker`, `checkTicker`, `tickerRefusalMessage`,
+  `TickerRefusal` and `MAX_TICKER_LEN`) on every encode path: a direct
+  `CreateMarket`, and a `CreateMarket` proposed or approved through
+  governance, alone or inside an admin `Batch`. The Python `encode_action`
+  raises `ValueError` for the same payloads, and the Rust crate gains
+  `proof_trading_sdk::ticker`. The refusal text matches the engine's. This is
+  a copy of `proof_wire::ticker::validate_ticker`
+  ([Proof-labs/exchange#1351](https://github.com/Proof-labs/exchange/pull/1351)),
+  to be replaced by it at the next proof-wire upgrade. Decoding never checks
+  the ticker, so markets created before the rule still read back, and
+  `adminProposalContentHash` still hashes a proposal already on chain. No
+  wire change; the new exports make this a MINOR change.
+
+## [9.0.0] — 2026-10-31
+
+### Breaking changes
+
+- **Financial reads (MAJOR for npm):** `FinancialState` is a format-discriminated union; format 3 has no retired PLP record. Narrow `state.format === 1` before accessing `state.plp`. `queryFinancialState` now accepts format 3.
+
+- **proof-wire 9.0.0, for exchange 2.21.0 (protocol 9.0).** The Rust crate
+  pins proof-wire 9 (tag v9.0.0, commit `8857f3d3`). The engine retired its
+  liquidity-provider backstop, so error code 112 (`InvalidPlpConfig`) no
+  longer decodes in TypeScript, Rust or Python and is never reassigned, and
+  the `PlpAbsorbedEvent` type leaves the `ExchangeEvent` union. The Rust
+  crate also loses `SetPlpConfig` with the wire. `PositionUpdatedEvent` gains
+  `realizedPnl`: PnL booked to cash without a fill, to pay a resolution
+  deficit, and "0" otherwise. Older SDKs fail to decode a `PositionUpdated`
+  from a 9.0 engine through the Rust crate (MAJOR).
+
+- **Account frame types are lowerCamel**, matching api-gateway 9.0.0
+  (canonical vocabulary rule N1, hard cutover). An `AccountEventFrame.type`
+  delivered live or backfilled from history after a reconnect is now
+  `orderUpdate`, `positionUpdate`, `triggerUpdate`, `marginUpdate` or
+  `accountEvent` (was `order_update`, `position_update`, `trigger_update`,
+  `margin_update`, `account_event`); `fill` and `funding` are unchanged.
+  Same in the Python `account_event_stream`. Code that switches on the old
+  strings must switch on the new ones, and needs gateway 9.0.0. The
+  settlement events keep arriving as `condition_met` / `condition_not_met`;
+  the legacy `conditional_settled` / `conditional_voided` from stored history
+  are still translated (MAJOR).
+
+- **Breaking in TypeScript types:** the trigger label types are open unions:
+  the names the engine knows today plus any other string, so a label added
+  later decodes and still type-checks. This covers `TriggerOutcomeReason` (now
+  with all 27 engine reasons, such as `NoTwoSidedQuote` and
+  `InsufficientMargin`), `TriggerLimbState`, `PendingTriggerDiscardReason`
+  (now with `upgrade_discarded`), and the new
+  `TriggerEffectiveAvailabilityKind` (`TriggerEffectiveAvailability.kind`),
+  `TriggerHistoryLimbKind` (history `limb_kind`) and `TriggerExecutionResult`
+  (history `result`). Editors still suggest the known names. Two patterns need
+  a change: a `Record` keyed by one of these types must list every known name
+  (the reason list grew to match the engine), and an exhaustive `switch` that
+  ends in a `never` check needs a default branch. MAJOR for npm on the type
+  surface only; decoded values and the wire are unchanged. In Python the
+  `PendingTriggerDiscardReason` alias becomes `str`.
+
+- **Wire-typed reads decode in the Rust core** (ADR 0001, now for reads).
+  `queryMarkets`, `queryEvents`, `queryEvent`, `queryAccount`,
+  `queryMarketsSnapshot` and the proposal's `AdminAction`
+  (`decodeAdminAction`, `decodeProposalDisplayInfo`, `decodeProposalPage`)
+  decode as their proof-wire 9 types through WASM instead of hand-written
+  positional decoders. The decode is as strict as the wire type, except that
+  fields a later engine appends to a market, event or account record (and to
+  their fee-tier, attachment, position and binding-scenario rows) are ignored,
+  as the markets snapshot already does. A legacy short `AccountInfo` /
+  position tuple is refused until the SDK re-pins the wire. `MarketConfig` and `AccountInfo` optional
+  fields are now always filled. Refusals carry the core's message, prefixed
+  `governance decode: <field>:` or `<Read> decode:`. The exported governance
+  decoders need `await ready()` first, like the codec (MAJOR).
+
+- **One binary book per event only** (#225). `EventInfo.ebnMarket` is removed
+  and the event reads and markets snapshot refuse a two-book event row, in
+  TypeScript, Rust and Python. Rust `market_snapshot::SnapshotEvent` is
+  removed; `MarketsSnapshot.events` is the wire `EventInfo` (MAJOR).
+
+### Added
+
+- **Open interest in the markets snapshot** (exchange#1273): long and short
+  open interest per market that has had positions, at the snapshot's height.
+  `MarketsSnapshot.openInterest` in TypeScript and `open_interest` in Rust are
+  absent (`undefined` / `None`) on a node that does not serve it, and an empty
+  list when no market has any. A repeated or out-of-order market refuses the
+  whole read; Rust reports the order fault as the new
+  `SnapshotError::UnorderedOpenInterest`. Additive on the wire (MINOR), but
+  code that builds the Rust `MarketsSnapshot` struct field by field must add
+  `open_interest`, and an exhaustive `match` on `SnapshotError` must handle the
+  new variant (MAJOR for the Rust crate).
+- **Python `ExchangeClient.markets_snapshot()`** reads `GET /v1/markets-snapshot`
+  bound to the client's chain and returns a `MarketsSnapshot` dataclass with
+  markets (in the `markets()` shape), events and open interest. It decodes
+  through the Rust core (`decode_markets_snapshot`), so it refuses exactly what
+  Rust refuses, as `CodecError`. The body is streamed and refused past
+  `MAX_MARKETS_SNAPSHOT_BYTES` (1 MiB) before it is buffered whole, and a
+  compressed body is refused unread. `timeout` (10 seconds by default) limits
+  each network wait and, between body chunks, the whole read; it is not a
+  whole-call deadline. Additive (MINOR).
+- **`queryFunding(market)`** reads one market's funding state at
+  `GET /v1/funding/{market}` (the gateway's `fundingRate` read): funding rate,
+  cumulative funding, last funding time, mark price EWMA, oracle price,
+  funding interval and maximum funding rate, as `FundingInfo`. The engine
+  serves the oracle price as the mark until the first trade, and zeroed
+  fields for an unknown market. A record of fewer than eight fields throws;
+  trailing fields are ignored. `decodeFundingInfo` decodes the raw
+  MessagePack. Additive (MINOR).
+- **`queryLiquidationConfig()`** reads the global liquidation configuration
+  every market shares and its sequence at `GET /v1/liquidation-config`
+  (api-gateway 7.12.0, served by the node from exchange's
+  `liquidation_config` engine query). It returns `LiquidationConfigInfo`:
+  `sequence` as a `bigint` (the `predecessor` a `SetLiquidationConfig`
+  names, and the `configSequence` liquidation events carry) and the
+  `LiquidationConfig`. A record of the wrong shape throws.
+  `decodeLiquidationConfigInfo` decodes the raw MessagePack. Additive (MINOR).
+- **`queryLiquidationHistory(addressHex?, filters?)`** reads one owner's
+  `position_liquidated` and `liquidation_failed` rows at
+  `GET /v1/history/liquidations/{owner}`, with `order`, `fromMs`, `toMs`,
+  `limit` and the opaque `cursor`. Each row keeps `eventId` (a `bigint`),
+  `blockHeight`, `blockTime` as served, `txHash`, `eventIndex` and
+  `eventKey`, and its payload decoded by `decodeLiquidationEvent`. A row for
+  another owner or of another event type throws. An empty `nextCursor` ends
+  the history. `decodeLiquidationHistoryPage` and
+  `liquidationHistorySearchParams` are exported. Additive (MINOR).
+
+- **`LiquidationConfig.takeoverDiscountBps`**, the discount at which the insurance fund
+  takes over an insolvent position, at most 100 bps (`MAX_TAKEOVER_DISCOUNT_BPS`). Optional
+  on input: omitted means the engine's 50 (`INITIAL_TAKEOVER_DISCOUNT_BPS`). Proposals
+  and `liquidation_config_set` events decode it; proposals written before it decode with 50. `SetLiquidationConfig` now encodes six config fields, so its content hash changes.
+  `LIQUIDATION_REFUSALS` gains `net_delta_grows`. proof-wire pins the v8.0.0 commit
+  (`81ed9018`).
+- **`ExecInsuranceFund` (tag 26) and `SetMarginOffsetPolicy` (tag 27)** in the
+  `AdminAction` union, the tag table and the proposal decoder, so a pending proposal of
+  either no longer fails a proposal page.
+- **`RawAccountPosition.entryRemainder`**: account and financial state accept the
+  seven-field position wire 8 writes when the entry price rounds (0 when omitted).
+- **Error codes 113-116** (`InsuranceAccountWithdrawal`, `InsuranceActionRefused`,
+  `LiquidationBatchTooManyOwners`, `LiquidationBatchOverBudget`).
+- **Typed liquidation event fields**: `PositionLiquidated` `fundCharged`, `fundBinaries`,
+  `fundReserve`, `fundRealized`, `fundAbsorbed`; `LiquidationProgressReported`
+  `remainderCode`, `remainderRefusal`.
+
+### Changed
+
+- An `order_rejected` event backfilled from history after a reconnect is
+  typed `orderUpdate`, not `accountEvent`, in TypeScript and Python. This
+  matches api-gateway 10.2.0, which types live rejections the same way
+  ([api-gateway #246](https://github.com/Proof-labs/api-gateway/pull/246)), so a
+  rejection gets one frame type whether it arrived live or from history.
+  Code that handles rejections under `accountEvent` should switch on
+  `eventType`. A rejection's payload need not carry an `order_id`. No wire
+  change.
+
+### Removed
+
+- **The per-market `partialLiquidationEnabled` flag** (`partial_liquidation_enabled` in
+  Python and Rust). Every market liquidates the same way, so `MarketConfig` and the
+  `UpdateMarketFees` input no longer carry it
+  ([exchange #1233](https://github.com/Proof-labs/exchange/pull/1233)). `MarketConfig` is a
+  positional array: `szDecimals`, `ticker` and `maxOpenInterest` move from positions
+  22–24 to 21–23. The markets snapshot accepts 24-field rows only. Breaking (MAJOR):
+  deploy together with exchange 2.20.0 (proof-wire 8.0.0); older engines' market rows no
+  longer decode.
+
+- **`GatewayPendingTriggerRow`, `GatewayTriggerPositionRow` and
+  `GatewayTriggerLimbJson`.** They described a `pending` section and a
+  `market_kind` field on `GET /v1/triggers/{owner}` that the node never
+  served: the route returns the bare `PositionTriggerInfo` list, which
+  `positionTriggers()` already decodes (api-gateway 10.6.0 corrects its
+  spec the same way). Breaking (MAJOR) for code that imports the types; no
+  runtime change.
+
+### Fixed
+
+- `SetOperatorReceiptRegistry` decodes in `decodeSigningMessage` and on
+  proposal reads: `operatorKeys` comes back as 32-byte `Uint8Array`s (#292).
+
+- Building a `SetOperatorReceiptRegistry` proposal now refuses a threshold outside
+  `1..=operatorKeys.length`, the same check proposal reads apply.
+
+- Account and financial position decoders now reject nonzero entry-cost remainders greater than or equal to position size. Legacy positions retain zero; this intentionally tightens existing reads.
+
+- Trigger reads no longer fail on an engine label this SDK version does not
+  know. A reason, limb state, availability kind, executed result and history
+  limb kind are engine-defined labels: each decodes as any non-empty string
+  and is returned verbatim, in TypeScript and Python. The SDK carries no list
+  of their names and no longer checks which row may carry which reason or
+  which result goes with which quantities. A stop-loss deferred on a binary
+  market with a one-sided book (`no_two_sided_quote`) used to fail the
+  owner-history decoder, which made the account's trigger history
+  unreadable; rows like it stay in history. Still refused: a missing, empty
+  or non-string label and executed quantities that do not add up. No wire
+  change.
+
+- A stored trigger limb kind and a trigger history event type this SDK
+  version does not know no longer fail the whole read. `StoredTriggerLimb.kind`
+  is now `StoredTriggerKind` (the known kinds or any later name, returned
+  verbatim); only a slot holding the other known kind (`TakeProfit` in the
+  stop-loss slot) is refused as corrupt. A history row with an unknown event
+  type is skipped and the rest of the page is returned; a known type on the
+  wrong route (a shared market event in owner history) is still refused.
+  Same in Python. No wire change.
+
+## [8.1.0] — 2026-10-26
+
+### Added
+
+- **`GatewayReads.bbo(params, opts)`** reads the indexer's order-book
+  mid-price candles at `GET /v1/history/bbo` with the same
+  `CandleHistoryParams` encoding as `candles()`: the candles envelope over
+  OHLC of `(bid + ask) / 2` per stored BBO sample, each bucket carrying its
+  closing `bid` and `ask`. Additive (MINOR).
+
+## [8.0.0] — 2026-10-22
+
+### Breaking changes
+
+- **`proof-wire` moves to v7.0.0** (`25f8972e`, tag `v7.0.0`), and the
+  manifest pins the proof-wire major (`version = "7"`). The wire drops three
+  liquidation work limits, so `LiquidationConfig` is now `targetRatioBps`,
+  `fullCloseThreshold`, `partialPenaltyBps`, `maxBookOrders` and
+  `maxCommittedFills`: `maxCandidatePrefixes`, `maxStateReads` and
+  `maxStateReadBytes` are gone from the TypeScript type, its validation, the
+  `SetLiquidationConfig` proposal decoder and the `LiquidationConfigSet`
+  event decoder, and `maxCommittedFills` no longer has an upper bound tied to
+  another field. A proposal or event in the proof-wire 6.x eight-field shape
+  is refused. The `propose_admin_action/set_liquidation_config` conformance
+  vector and its content hash are regenerated; every other codec vector is
+  unchanged. The liquidation configuration shapes have not shipped in a
+  release yet; the next release is still MAJOR for npm and Python (the
+  error-code move below changes a released value) and for the Rust core (it
+  re-exports the proof-wire 7 types).
+- **`ExecErrorCode.InvalidPlpConfig` moves from 101 to 112**, the code
+  proof-wire 7.0.0 assigns to a PLP shape fault, in TypeScript, Rust and
+  Python. Code 101 is unassigned on the wire and now decodes as unknown.
+  This supersedes the separate code-112 correction in
+  [#265](https://github.com/Proof-labs/trading-sdk/pull/265).
+- The `FullLiquidationFee` event is gone from proof-wire 7.0.0, so
+  `decodeLiquidationEvent` no longer decodes `full_liquidation_fee` (it
+  returns `null`, like any other event type) and `FullLiquidationFeeEvent`
+  is no longer exported.
+- **`subscribeAccountEvents` is removed from the TypeScript client.** It
+  connected to the gateway's legacy `/account-events` WebSocket path, which
+  DevNet's gateway now answers with 404. Use `subscribeAccount`: it carries the
+  same account events on the `accountEvents` channel of the multiplexed `/ws`
+  feed, with typed frames and auth re-signed on every reconnect. `/ws` does not
+  replay missed events after a reconnect (the old `after_id` cursor); read
+  `/v1/history/account-events` to fill that gap. The Python
+  `AccountEventStream` keeps its name and arguments but now subscribes on `/ws`
+  too: it yields the channel-tagged `accountEvents` frames (a snapshot, then
+  live events) instead of raw history rows, and no longer replays from
+  `after_id`.
+- **`subscribeOrderbookDeltas` and the `WsStreamOptions` type are removed
+  from the TypeScript client.** The method connected to the legacy
+  `/orderbook-deltas` WebSocket path, which DevNet's gateway also answers with 404. Use `subscribeOrderbook`, the `orderbook` channel of `/ws`: a `snapshot`
+  frame, then one `update` frame per changed level. `orderbookSnapshot` now
+  reads that channel too and resolves the `snapshot` frame (`bids` / `asks`)
+  instead of an `l2Book` frame, over a connection of its own so it never
+  answers from a book an existing subscription cached. It takes an optional
+  timeout (default 10 seconds), rejects when no snapshot arrives, and rejects
+  at once with the new `FeedSubscriptionError` (the gateway's `code` and
+  message) when the gateway refuses the subscription. `disconnect()` now closes
+  only the shared `/ws` feed. In Python, `OrderbookDeltaStream` keeps its name
+  and arguments but subscribes on `/ws` and yields the same `orderbook`
+  frames, and `orderbook_snapshot` returns the `snapshot` frame and raises
+  `TransportError` when the gateway refuses the subscription or no snapshot
+  arrives within its `timeout` (default 10 seconds).
+
+### Added
+
+- **Account streams recover the events missed during a reconnect.**
+  `subscribeAccount` (and Python's `AccountEventStream`) now, by default,
+  read `/v1/history/account-events` back to the last delivered event (or the
+  previous snapshot's `height` when none was delivered) after a reconnect,
+  once `/v1/history/status` shows history caught up to the new snapshot's
+  `height` (waiting up to about 30 seconds). A gap longer than the ten
+  500-row pages read reports `failed` and backfills nothing. They deliver the newer rows in history order (marked
+  `backfilled: true`), then the live frames that arrived meanwhile — every
+  event once across reconnects, also when the socket reconnects again during
+  a backfill (a live frame racing a backfill can admit one duplicate).
+  Events are matched on `height` + `txHash` + `eventIndex` +
+  `eventType` + `txIndex`, a missing position matching any, since history
+  serves `tx_position` only when one block carries the same transaction hash
+  more than once; the settlement names `conditional_settled` /
+  `conditional_voided` match their canonical history names `condition_met` /
+  `condition_not_met`. A `snapshot: "resent"` frame is not a reconnect.
+  `onRecovery` / `on_recovery` reports each reconnect's outcome once
+  (`AccountRecoveryStatus` / `RecoveryStatus`), with `unverified` when the
+  snapshot carries no `height`; `recover: false` / `recover=False` turns it
+  off. `AccountEventFrame` gains `txHash`, `txIndex`, `eventIndex` and
+  `backfilled`; `AccountSnapshotFrame` gains the optional `snapshot` and
+  `height`. Python adds `ExchangeClient.account_event_stream`, which reads
+  history from the gateway URL. Needs api-gateway 7.9.0, which puts the
+  history key on live frames; against an older gateway recovery reports
+  `unsupported` and live delivery carries on as before.
+
+- **`decodeLiquidationEvent` decodes three more engine events** from
+  exchange 2.18.0 (proof-wire 7.0.0):
+  - `position_liquidated` → `PositionLiquidatedEvent`: one per position an
+    owner's liquidation attempt reduced, with its `side`, `mode`
+    (`LIQUIDATION_MODES`: `partial`, `full`, `insolvent`), sizes before,
+    closed and after, the penalty collected and waived, the owner's signed
+    `equity`, `maintenance` and `bindingOutcome` (the `BindingScenarioEntry`
+    list, empty without event exposure) when the attempt was decided, and
+    the configuration sequence.
+  - `liquidation_failed` → `LiquidationFailedEvent`: the engine error `code`
+    and, when the attempt was refused (code 111, `LIQUIDATION_REFUSED_CODE`),
+    the `refusal` (`LIQUIDATION_REFUSALS`: `position_mismatch`,
+    `invalid_maker`, `reference_unavailable`); `null` for any other error.
+  - `adl_counterparty_skipped` → `AdlCounterpartySkippedEvent`: a profitable
+    position auto-deleveraging left out of a deficit's candidate set, with
+    its market, pool, size and `reason` (`ADL_SKIP_REASONS`:
+    `stale_oracle_dependency`).
+
+  Signed 64-bit values decode to `bigint`. The `mode`, `outcome`,
+  `refusal` and ADL `reason` values are passed through as non-empty strings
+  (the exported constants list the values the engine writes today), and the
+  decoder does not re-check the engine's arithmetic or its code-to-refusal
+  pairing, so an event a later engine writes differently still decodes; a
+  binding outcome that names one event twice throws. A new `events.ndjson`
+  conformance family, generated from proof-wire's own encoder, pins the
+  attributes for all three events; the Rust runner re-encodes it and the
+  TypeScript runner decodes it. Additive TypeScript API.
+
+- `FundInsuranceFund` (admin tag 18) and `WithdrawInsuranceFund` (admin
+  tag 25) proposals: TypeScript types, pre-signing shape validation,
+  proposal decoding and Rust governance re-exports. The shared Rust/WASM
+  codec is the only encoder. Transfer IDs keep the full `u64` range;
+  allocations require a non-zero account, 1–8 distinct ascending pools,
+  positive amounts and a total no greater than `i64::MAX`.
+  Insurance refusals 102–110 have named TypeScript, Rust and Python error
+  classifications.
+  Additive npm/Python API; no existing signed bytes change. Availability
+  requires the reviewed engine and gateway insurance actions and the
+  corresponding public proof-wire release. The SDK does not authorize a
+  source account, choose allocations or execute a transfer by itself.
+- Rust governance re-exports the canonical insurance action and identifier
+  types, including `InsuranceFundingId` and `InsuranceFundAllocation`.
+  The added `AdminAction`/`AdminActionType` variants affect exhaustive Rust
+  matches and belong to the next Rust MAJOR release.
+
+- **The `SetLiquidationConfig` governance action** (inner tag 17). An
+  `AdminAction` of kind `SetLiquidationConfig` carries `predecessor`,
+  `sequence` and the global `LiquidationConfig` (target ratio, exact
+  full-close threshold, partial penalty, book-order and committed-fill
+  caps). Proposals carrying it
+  encode, decode, content-hash and render like the engine's;
+  `validateSetLiquidationConfig` and `validateLiquidationConfig` mirror
+  proof-wire's bounds and run before encoding and after decoding. A
+  conformance vector pins the bytes in TypeScript, Rust and Python. MINOR:
+  one new inner tag, no existing bytes change.
+- **`decodeLiquidationEvent`** decodes the engine's liquidation events from
+  their ABCI attributes (a `TxEvent`, or the same attributes as a plain
+  object): `LiquidationConfigSet`, `PartialLiquidationFee` (one per partial
+  fill) and `LiquidationProgressReported` with its fourteen `LiquidationProgress`
+  outcomes. Amounts and identifiers decode to `bigint`; a malformed event
+  throws, and any other event type returns `null`.
+- The Rust crate re-exports `proof_wire::liquidation_config`,
+  `proof_wire::liquidation_progress` and `proof_wire::liquidation_report`
+  (the `LiquidationRefusal` that `ExecError::LiquidationRefused` carries), and `governance` re-exports
+  `LiquidationConfig` and `SetLiquidationConfig`.
+- **Python: typed builders for every published action.** `OracleUpdate`,
+  `CreateMarket`, `AuthorizeWithdrawal`, `ConfirmWithdrawalReceipt` and
+  `FailWithdrawalReceipt` (with `OperatorReceiptProof` and
+  `BridgeWithdrawalReceipt`), and the four governance actions
+  `ProposeAdminAction`, `ApproveAdminAction`, `RejectAdminAction` and
+  `EmergencyAdminAction`. Each encodes to its shared vector in
+  `conformance/codec.ndjson`, byte for byte. Previously these were reachable
+  only through `RawAction`. Additive (MINOR).
+- A Rust test, `action_type_map`, holds the hand-written TypeScript
+  `ActionType` and `TestActionType` maps to the core's
+  `codec::get_action_types()` in both directions. CI runs it when either map
+  changes.
+- **Rust: the bound-inventory bracket retry is client configuration.**
+  `MarketsSnapshotClient::with_bracket_retry(BracketRetry { attempts, delay })`
+  sets how many whole brackets `read_bound_inventory` reads after a lagging
+  read and how long it pauses between them. The defaults are the previous
+  fixed 3 attempts, 150 ms apart; zero attempts, more than 8, or a pause over
+  5 s is refused with `SnapshotError::InvalidBracketRetry` (#143).
+
+- Error codes from proof-wire 7.0.0, in TypeScript (`ExecErrorCode`,
+  `decodeExecError`), Rust and Python, with `manifest/106` to `manifest/112`
+  conformance cases: `InsuranceTransferZeroAccount` (106),
+  `InsuranceAllocationCount` (107), `InsuranceAllocationOrder` (108),
+  `InsuranceAllocationZeroAmount` (109), `InsuranceAmountExceedsI64` (110),
+  `LiquidationRefused` (111, a refused liquidation attempt that kept no
+  writes) and `InvalidPlpConfig` (112).
+- `CancelReason` gains `reduce_only`, `unfunded`, `insufficient_margin` and
+  `maker_refused`, the full proof-wire 7.0.0 list.
+
+### Fixed
+
+- **`HistoryResolution.kind` names the resolution kinds the indexer
+  serves**: `condition_met` and `condition_not_met`, not `conditional_settled`
+  and `conditional_voided`. The indexer's resolutions route only returns the
+  canonical names (its ingester renames the legacy engine names on the way in),
+  so the old literals never matched a returned row. TypeScript only; the Python
+  client returns resolution rows as plain dictionaries and is unchanged.
+- **A failed account-subscription signature no longer leaves the stream
+  silently unsubscribed.** When the stream-auth signature (or the chain id it
+  needs) fails, `subscribeAccount` listeners receive an `error` frame and the
+  subscribe is retried with the reconnect backoff on the same connection. A
+  gateway refusal with 401 (for example an expired signature), 429 or 503 is
+  retried the same way. After five consecutive failures the subscription
+  stops retrying and its listeners receive one final `error` frame; it stays
+  unconfirmed until the socket is replaced, which starts a fresh budget of
+  five.
+- **A snapshot resent for a late `subscribeAccount` listener reaches only
+  that listener**, so existing listeners no longer see a second snapshot
+  without a reconnect.
+- **`queryFinancialState` rejects malformed UTF-8 in MessagePack strings.**
+  The dependency decoder normalized an overlong encoding into a valid enum
+  (`c1 82 75 79` decoded as `Buy`); the response is now rejected before
+  decoding. Existing response size, depth and container limits are unchanged.
+- **A second `subscribeOrderbook` listener on an active market now starts
+  from a snapshot.** The gateway sends one snapshot per socket subscription,
+  so a listener that joined after it received only updates and built an
+  incomplete book. `GatewayFeed` now keeps each subscribed market's book and
+  gives a late listener a snapshot of it, best price first, with no update
+  before it. Before the first snapshot, or while reconnecting, the late
+  listener waits for the gateway's own snapshot. Existing listeners and the
+  wire traffic are unchanged.
+- **A second `subscribeAccount` listener for the same owner now starts from
+  the account snapshot** (#259). Account events cannot be rebuilt locally, so
+  `GatewayFeed` re-subscribes and the gateway (7.5.0 and later) resends the
+  snapshot, which every listener of that owner receives. The late listener
+  gets no event before it. Listeners that join while a resend is in flight
+  share it, so mounting several at once costs one resend, not one per
+  listener. Against an older gateway, or when the gateway reports the
+  snapshot unavailable, the late listener takes the live events as before.
+
+### Breaking changes (Rust)
+
+- proof-wire 6.4.0 keeps every existing wire byte but changes Rust types the
+  crate re-exports from `proof_wire::types`: `AdminActionType::ReservedRt01D`
+  becomes `SetLiquidationConfig`; `AdminAction` gains `SetLiquidationConfig`;
+  `Event` gains `OrderRejected`, `LiquidationConfigSet`,
+  `PartialLiquidationFee`, `FullLiquidationFee` and
+  `LiquidationProgressReported`; and `Event::TradeExecuted`
+  (`mark_price`, `oracle_price`) and `Event::MarketOrderProcessed`
+  (`time_in_force`, `limit_price`, `unfilled_reason`) gain fields. An
+  exhaustive `match`, or a struct pattern or literal without `..`, needs
+  updating. The Rust crate takes a MAJOR bump at its next release; npm and
+  Python are unaffected.
+- `SnapshotError` gains `InvalidBracketRetry`; an exhaustive `match` on it
+  needs a new arm.
+- The market-snapshot chain binding and the oracle signer are their own
+  types (#143). Every `expected_chain` parameter (`read`, `read_bound`,
+  `chain_identity`, `chain_identity_bound`, `read_bound_inventory`,
+  `read_bound_inventory_reporting`, `decode_snapshot`, `decode_bound_snapshot`,
+  `decode_bound_identity`) takes a `ChainBinding` instead of `[u8; 32]`, and
+  `ChainIdentity::chain_binding` is one; build it with
+  `ChainBinding::of_network(name)` or `ChainBinding::new(bytes)`, both of which
+  refuse the all-zero binding the decoders already refused.
+  `CommittedPriceUpdate::signer()` returns an `Address`; `.bytes()` reads the
+  20 bytes out. No wire change.
+- `receipt_observation` answers a 404 or 500 error that is not the exact
+  not-found shape for the requested hash with the new
+  `SnapshotError::UnrecognizedNotFound`, not `RpcUnavailable` (#143): the
+  backend answered, so it is not unavailable. It is still never not-found
+  evidence. A caller that retried on `RpcUnavailable` should decide whether it
+  retries on this too; an exhaustive `match` needs a new arm.
+
+### Documentation
+
+- Both READMEs describe the governance actions; the TypeScript one shows
+  `GovernanceAction` as the third member of `Action`.
+
+## [7.3.0] — 2026-10-15
+
+### Release notes
+
+A minor npm release: every TypeScript change below is an addition, and the
+signing and transaction wire format is unchanged from npm 7.2.0. Building the
+SDK from source no longer needs access to the private Proof-labs/bridge repo.
+
+### Included since npm 7.2.0
+
+- Bridge payload encoders from proof-wire's `bridge` module, dropping
+  `bridge-core` (#241).
+- An injectable HTTP transport for `ExchangeClient` (#239).
+- `InvalidPlpConfig` error code 101 (#242).
+
+### Added
+
+- The Rust crate re-exports `proof_wire::bridge` as `proof_trading_sdk::bridge`
+  (the withdrawal-authorization and bridge-receipt payload types).
+
+- **An injectable HTTP transport for `ExchangeClient`** (part of #220).
+  `new ExchangeClient({ httpTransport })` sends every HTTP request the client
+  makes through one function: typed reads, owner-scoped `/info` reads,
+  `reads()` when no `fetch` is given, submission, confirmation polls and the
+  chain-id lookup. Each call receives an `ExchangeHttpRequestContext`
+  (`purpose`, `priority`, `surface`, and the originating `action` for a
+  submission and its confirmations), so an embedding process can apply its own
+  admission, pacing, deadlines and retries. Owner-scoped reads are `urgent`,
+  other reads `critical`, including through `reads()`, where a read whose
+  `/info` body names a `user` or whose query names a `user` or `owner` is
+  owner-scoped; a submission takes its action's priority, with cancels
+  `urgent` (`exchangeHttpPriorityForAction`). `fetchChainId` takes an
+  optional transport as its second argument. The WebSocket feed is not
+  affected. Exported: `ExchangeHttpTransport`, `ExchangeHttpRequestContext`,
+  `ExchangeHttpPurpose`, `ExchangeHttpPriority`,
+  `defaultExchangeHttpTransport`, `exchangeHttpPriorityForAction`. MINOR:
+  without the option the client calls `globalThis.fetch` with the same
+  arguments as before; no wire change.
+
+### Changed
+
+- The bridge payload encoders (`encodeWithdrawalAuthorization`,
+  `withdrawalAuthorizationDigest`, `encodeBridgeReceipt`) now come from
+  proof-wire's `bridge` module instead of the private `bridge-core`, so
+  building the SDK from source no longer needs access to Proof-labs/bridge.
+  The bytes are unchanged; the frozen vectors still pass.
+
+### Fixed
+
+- Decode the proposed engine PLP shape-error code 101 as `InvalidPlpConfig`,
+  preserving code 100 for `AccountOrderCapReached` and 99 for withdrawal limits.
+  Requires the reviewed engine validation change before relying on this code.
+
+## [7.2.0] — 2026-10-15
+
+### Release notes
+
+A minor npm release: every TypeScript change below is an addition. The signing
+and transaction wire format is unchanged from npm 7.1.0; the new
+`EnableSubAccounts` admin action adds one inner tag (21) and changes no
+existing bytes. Rust and Python package versions remain on their independent
+release lines; the Rust-only breaking change below does not affect the npm
+version.
+
+### Included since npm 7.1.0
+
+- The `EnableSubAccounts` governance action (#244) and its conformance
+  vector (#246).
+- `GatewayReads.version()`, the uncached loaded-engine identity read (#219).
+- The bad-debt waterfall event types and the uncached history-status read
+  (#197).
+
+### TypeScript migration notes
+
+- `AdminAction` gains the `EnableSubAccounts` variant. An exhaustive `switch`
+  on `action.kind` (one that assigns the remainder to `never`) needs a new
+  case; nothing else changes.
+
+### Added
+
+- `GatewayReads.version()` forwards `GET /v1/version` without caching, preserving
+  the raw loaded-engine identity, HTTP errors and caller cancellation. It reports
+  one upstream node, not validator-wide compatibility or rollout qualification.
+- `AdminAction` gains the `EnableSubAccounts` unit variant (inner tag 21), the
+  governed one-way switch that admits `CreateSubAccount` and
+  `SubAccountTransfer`. Proposals carrying it encode, decode and content-hash
+  like the engine's. `proof-wire` moves to v6.1.0 (`37960d74`).
+- `InsuranceFundUpdatedEvent` (`poolId`, `balance`, `delta`),
+  `PositionAutoDeleveragedEvent` (`owner`, `market`, `side`, `size`,
+  `closePrice`, `closePriceSpec`, `realizedPnl`) and `PlpAbsorbedEvent`
+  (`poolId`, `amount`, `plpBalanceAfter`) join the `ExchangeEvent` union and
+  the package barrel. They type the bad-debt waterfall events the engine
+  already emits on proof-wire 4.1.0 (exchange dev `exchange-wire` `Event`), with
+  the same stringified-number convention as `AccountLiquidatedEvent`.
+  TypeScript types only: no codec, wire or Rust/Python change.
+- `reads().historyStatus()` bypasses HTTP caches (`cache: "no-store"`), so a
+  freshness read is never answered from a stale cached response.
+
+### Breaking changes (Rust)
+
+- proof-wire 6.1.0 keeps every wire byte but changes the Rust types the crate
+  re-exports from `proof_wire::types` and `proof_wire::crypto`: the address
+  fields of `CreateSubAccount`, `SubAccountTransfer`, the `SubAccount`
+  registry row (`master`, `address`) and the sub-account events are
+  `OwnerAddress` in place of `[u8; 20]` (build one with `OwnerAddress::new`,
+  read the bytes with `as_bytes`), and `derive_sub_account` takes and returns
+  `OwnerAddress`. `AdminAction` and `AdminActionType` gain
+  `EnableSubAccounts`, and `Event` gains `SubAccountsEnabled`, so an
+  exhaustive `match` on any of the three needs a new arm. The Rust crate
+  takes a MAJOR bump at its next release; npm and Python are unaffected.
+
+## [7.1.0] — 2026-10-13
+
+### Release notes
+
+A minor npm release: the TypeScript additions below are backward compatible,
+and the three TypeScript type or behaviour changes are fixes that each need at
+most a small migration. The signing and transaction wire format is unchanged
+from npm 7.0.0. Rust and Python package versions remain on their independent
+release lines; the Rust-only breaking changes below do not affect the npm
+version.
+
+### Included since npm 7.0.0
+
+- On-chain engine upgrades: `ScheduleUpgrade` and `CancelUpgrade` admin
+  actions, `validateScheduleUpgrade`, `queryUpgrades()` and
+  `queryNodeVersion()` (#204).
+- Trading No on an event's one binary book, and the one-book upgrade's
+  events (#230).
+- The F16 primary-with-fallback oracle verdict read and error code 77 (#196).
+- The gateway's stated `status` is read as stated (#223).
+- Event reads decode the one-book event record (#226).
+
+### TypeScript migration notes
+
+- `ProposalDisplayInfo.action` can be `null`. Under npm 7.0.0 a proposal whose
+  action the engine returns as nil failed the whole read; it now decodes with
+  `action: null`. Check for null before reading `action.kind`.
+- `EventInfo.ebnMarket` is optional and `undefined` on a one-book chain.
+- An invalid signature is an `engine` outcome with code `17`, where it used to
+  be a `transport` outcome with code 1.
+
+### Added
+
+- **Trading No on an event's one binary book.** An event has one book priced
+  in Yes; a long No at `q` is a short Yes at `$1 − q`. TypeScript:
+  `ExchangeClient.buyNo` and `sellNo` place the Yes order at `$1 − price`,
+  carrying reduce-only, post-only, client order id and time in force, with
+  No-priced `stopLoss`/`takeProfit` mirrored in the same role; `yesOrder`,
+  `yesLimb`, `yesSide`, `binaryPositionView`, `BINARY_PRICE_MAX` and
+  `BinaryPriceError` are exported. Python: `buy_no`, `sell_no`, `no_order`,
+  `yes_limb`, `yes_side`, `binary_position_view`. Rust: the `binary` module
+  (`yes_order`, `yes_limb`, `binary_position_view`). A No price of 0 or `$1`
+  is refused client-side. A new conformance family, `binary.ndjson`, pins the
+  translation in all three languages.
+- **The one-book upgrade's events.** `ExchangeEvent` gains `OrderMigrated`
+  and `PositionMigrated`, and the new `CancelReason` type names the engine's
+  cancel reasons, including `upgrade`. Event readers pass unknown event types
+  through, so further upgrade-journal events do not break a read.
+- `ScheduleUpgrade` (inner tag 14) and `CancelUpgrade` (inner tag 15) in the
+  `AdminAction` union, so a client can propose and approve an on-chain engine
+  upgrade (#185). `ScheduleUpgrade` carries the target height, the
+  successor's engine release `major`/`minor`, and the `successorSha256` pin;
+  `validateScheduleUpgrade` mirrors the engine's refusals (zero major,
+  all-zero pin) on encode and on proposal decode. Conformance vectors cover
+  both inside `ProposeAdminAction`. The Rust crate re-exports both types.
+- `queryUpgrades()` reads the pending upgrade plan and executed activation
+  ledger (`GET /v1/upgrades`), and `queryNodeVersion()` the answering node's
+  loaded engine release (`GET /v1/version`).
+
+### Breaking changes (Rust; TypeScript changes are covered by the migration notes above)
+
+- The Rust crate moves to proof-wire 6.0.0 (pinned to mirror commit
+  `ce8dd8bd` until the `v6.0.0` tag is cut), where `ScheduleUpgrade` names
+  the successor release as `major`/`minor` in place of `protocol_version`.
+  The re-exported `AdminAction::ScheduleUpgrade` changes shape, and a
+  `ScheduleUpgrade` that carries `protocol_version` no longer encodes.
+- `ProposalDisplayInfo.action` is `AdminAction | null`. The engine returns nil
+  for a proposal stored in a shape it no longer decodes; `actionTag`,
+  `actionCanonicalBytes` and `contentHash` are still returned.
+- The gateway's `status` is read as stated; nothing is inferred
+  from message text or field shape (api-gateway 7.0.0, api-gateway #215 and
+  #220). `POST /exchange` now answers `ok`, `error`, `refused` or
+  `pending`. The TypeScript client and the Rust submit methods switch on that
+  value; a `refused` answer is named by its `errorCode` (`Unauthorized`,
+  `RateLimited`, `Maintenance`, `Overloaded`, `Unavailable`, `InvalidRequest`,
+  `EncodingError`). An invalid signature is the engine's code `17` on an
+  `error` answer: `CheckTxRejected` in Rust and an `engine` outcome in
+  TypeScript, where it used to be a refusal and `transport` code 1. Rust
+  `PreAdmissionRefusal::ProposerOnly` and `::InvalidSignature` are removed.
+  The Rust methods no longer accept a pre-7.0.0 gateway's answers. The
+  TypeScript client still reads a pre-7.0.0 gateway's engine verdicts and
+  reconcile answers, but reconciles its refusals by hash instead of returning
+  them as transport errors.
+
+### Added
+
+- Oracle permission reads decode the committed verdict of exchange#831
+  (primary with fallback, DEC-219) in both layouts. The fourteen-field
+  format-3 read appends `selected` (`"Primary"` / `"Fallback"`, or null) and a
+  `diagnostics` u8 bitset: `OnFallback` (bit 0), `PrimaryRefusedDivergence`
+  (1), `DivergenceUnchecked` (2), `FallbackUnusable` (3). The twelve-field
+  format-2 read of earlier nodes still decodes, with `selected` null. The
+  TypeScript `CommittedOracleVerdict` gains `format`, `selected`,
+  `diagnostics`, `diagnosticFlags` and `faultReasons`, and exports
+  `ORACLE_FAULT_BITS` and `ORACLE_DIAGNOSTIC_BITS`. The Rust
+  `CommittedVerdict` gains `format`, `selected` and `diagnostics`, with
+  `fault_reasons()` and `diagnostic_flags()`. Both layouts share one
+  fault-bit layout; `Disagreement` (bit 7) and `PairTimeMismatch` (bit 13)
+  keep their bits but are no longer produced. A format-3 verdict is refused
+  when its selected slot, source mask, diagnostics and fault word contradict
+  the engine's selection rules. Vectors captured from the exchange encoding
+  are in `conformance/oracle-permissions-committed.ndjson`. Additive: every
+  read an earlier SDK accepted still decodes the same way, and the
+  proof-wire pin (v4.1.0), codec and signing bytes are unchanged.
+
+### Changed
+
+- Event reads decode both engine shapes of the stored event record: the
+  two-book record and the one-book record of an engine with one binary book
+  per event (exchange #974), told apart by the field after the Yes book (a
+  number is the No book, a string is the question). So a client follows a
+  chain across the upgrade that retires the No book. In TypeScript,
+  `EventInfo.ebnMarket` is optional and `undefined` on a one-book chain
+  (`decodeEventInfo`, `queryEvents`, `queryEvent` and the markets snapshot).
+  **Breaking in Rust:** `MarketsSnapshot.events` is a list of the new
+  `SnapshotEvent`, whose `ebn_market` is an `Option`. A two-book record with
+  no No book is refused, in both languages. The tolerance is temporary: a
+  later release decodes the one-book shape only.
+
+### Fixed
+
+- `ReferenceUnavailable`, the current exchange name of the old
+  `AnchorUnavailable` reason, is an accepted committed-verdict reason; a
+  verdict carrying it used to be refused. `AnchorUnavailable` is still
+  accepted from older nodes.
+
+## [7.0.0] — 2026-10-06
+
+### Breaking changes
+
+- Standalone MessagePack decoders, including `decodeSubAccountList` and
+  `decodeTx`, now require `await ready()` before use. `ExchangeClient` read
+  methods initialise WASM automatically. Read-only browser clients therefore
+  load the WASM module on their first MessagePack read. This public API
+  initialisation change requires a MAJOR npm version (#224).
+- The signing and transaction wire format is unchanged from npm 6.4.0;
+  the SDK continues to use `proof-wire` v4.1.0. Rust and Python package
+  versions remain on their independent release lines.
+
+### Included since npm 6.4.0
+
+- Indexed Explorer history status, block pagination and detail, and transaction
+  reads (#222), with HTTP failures and cancellation preserved.
+- Strict shared MessagePack validation for malformed gateway read payloads
+  (#224, superseding the narrower sub-account check in #216).
+- Error codes 77, 99 and 100, and updated local scenario instructions (#205).
+
+The accumulated notes below also describe changes shipped in npm 5.2–6.4;
+those existing behaviours are not new in 7.0.0.
+
+### Added
+
+- The error tables gain `OracleVerdictUnavailable` (code 77),
+  `WithdrawalLimitExceeded` (code 99) and `AccountOrderCapReached` (code
+  100, the per-account resting-order cap), matching the engine: in TypeScript
+  (`ExecErrorCode` and `decodeExecError`), in the Rust table, and therefore in
+  Python's `get_error_name`. The `errors.ndjson` conformance manifest gains
+  `manifest/77`, `manifest/99` and `manifest/100`. Codes 78-81 stay reserved.
+- TypeScript Explorer history reads: `ExchangeClient.reads()` gains
+  `historyStatus()`, `historyBlocks({ limit, cursor })`,
+  `historyBlock(heightOrHash)` and `historyTransaction(hash)`, forwarding
+  `GET /v1/history/status`, `/v1/history/blocks`, `/v1/history/blocks/{id}` and
+  `/v1/history/txs/{hash}` through the configured gateway. Responses stay raw,
+  with HTTP errors and cancellation intact: a block page carries `blocks` and an
+  opaque `next_cursor`, block detail carries its ordered `transactions`, and a
+  transaction carries its block coordinates, execution `code` (zero is success)
+  and base64 `raw_tx`. A missing or unindexed record stays an HTTP 404 and
+  unavailable history stays an error, never a fabricated or empty block.
+- `ExchangeClient.queryAuthorities()` reads the engine's privileged
+  authorization sets through the gateway proxy (`GET /v1/admin/authorities`,
+  api-gateway #135) and returns an `AuthoritiesSnapshot`: `relayer`, `oracle`,
+  `cexComposite`, `custody`, `marketParams` and `scheduledOps`, each a list of
+  20-byte addresses. `decodeAuthoritiesSnapshot` is exported for offline use.
+  An empty list is a real chain state; any other shape throws, so a missing
+  set never renders as an empty one. It is for the WebAdmin authorities view
+  (GV-06).
+- TypeScript 5.3.0 adds trigger-history decoding of the pending (pre-fill)
+  lifecycle (contract §7-I, indexer #247): `pending_triggers_attached` (order
+  id, client order id, and both limb renders — present as
+  `trigger_price=<u64>,max_slippage_bps=<u64>,client_trigger_id=<u64|none>`,
+  absent as the empty value, at least one limb required) and
+  `pending_triggers_discarded` (order id plus one of six reasons:
+  `order_cancelled`, `order_expired`, `order_replaced`, `unfilled_terminal`,
+  `install_rejected`, `position_closed`). The two rows previously failed the
+  owner-history decoder outright. `install_rejected` is the silent
+  protection-loss path — the fill stands but the bracket could not install —
+  and now survives decoding verbatim so clients can surface it. The additive
+  schema-39 attributes decode alongside: `source_order_id` on
+  `position_triggers_set` ("0" = none) and `invalidation_reason` on
+  `position_triggers_invalidated` (u8, "0" = unspecified), both optional on
+  rows projected before the upgrade. TypeScript and Python decoders move in
+  lockstep (TR-6 parity); the Python `PendingTriggerDiscardReason` alias is
+  exported alongside the TypeScript union. MINOR: this additive decoding
+  keeps the released npm 5.2.0 codec and proof-wire 2.1.0 contract; order
+  encoding is unchanged, and the Python and Rust packages stay on their own
+  release lines.
+- Sub-account registry read: `GatewayReads.subAccountList(user)` posts the
+  gateway's `subAccountList` /info query and `decodeSubAccountList` unwraps the
+  `{"data": "<base64 msgpack>"}` envelope into typed `SubAccountListRow`s. Rows
+  decode from the positional `proof-wire` `SubAccount` array
+  `[master, sub_account_id, address, name, created_height]` with strict,
+  fail-closed validation (exact 20/32-byte fields as bins or integer arrays,
+  id 1..=u32, u64 height, duplicate id/address rejection, 4096-row decode
+  budget). Python parity: `ExchangeClient.sub_account_list()`, which raises on
+  the same malformed input. An HTTP 501 from the node route means the registry
+  query is not available yet, never an empty registry.
+- TypeScript 5.2.0 adds `reads().marketStats({ markets })` and strict
+  `queryMarketStats(reads, markets, { signal })` decoding for F23/UI18's batched
+  rolling 24-hour statistics. Contract quantities, raw micro-USDC prices,
+  decimal USDC notional and signed decimal basis points stay exact strings;
+  freshness, partial coverage and unavailable open interest remain explicit.
+  Requests bypass HTTP caches. MINOR: this additive TypeScript read API keeps
+  the released npm 5.1.0 codec and proof-wire 2.1.0 contract (exchange v2.12.0 /
+  api-gateway 4.1.0). Rust and Python packages and order encoding are unchanged.
+- TypeScript 6.1.0: `HistoryResolution.convertedSize` and
+  `HistoryResolution.fallbackReason` (with the `ConversionFallbackReason` type)
+  for conditional-perp resolutions, as the exchange release after 2.14.0
+  (exchange #830) emits them on `conditional_settled` and the indexer's
+  `GET /v1/history/resolutions` serves them. A winning conditional converts at
+  resolution into a perpetual position on the underlying opened at the
+  settlement price, and its result is paid in cash exactly as a winner that
+  cannot convert is. `convertedSize` is the size that converted (the whole
+  `size`, or `"0"` when it did not); `fallbackReason` says why a winner did not
+  convert (`""` otherwise; the margin case is `"maintenance_margin"`).
+  `realizedPnl` is unchanged: it is the cash paid for every `conditional_settled`
+  row, converted or not. The Python `history_resolutions` returns the raw rows,
+  so it carries `converted_size` and `fallback_reason` as served. MINOR: the new
+  fields are additive on a read; no codec, order encoding, Rust or Python
+  package change.
+- `GatewayHttpError.errorCode` — optional typed error code extracted from the
+  gateway's JSON response body (e.g. `"MissingMark"`). The `GatewayReads`
+  path clones the response to parse the code while leaving the original body
+  unconsumed; the `postInfoJson` path (owner-scoped reads via `POST /info`)
+  now throws `GatewayHttpError` instead of a plain `Error`, preserving both
+  `status` and `errorCode`.
+- `isMissingMark(error)` — type guard that returns `true` when the error is a
+  503 `GatewayHttpError` with `errorCode === "MissingMark"`. Companion to the
+  DEC-175 contract in `exchange/docs/account-query-errors.md`.
+- `GatewayClient::account_valuation` — the typed account-valuation read
+  (`POST /info` → `clearinghouseState`). Oracle unavailability surfaces as the
+  new `gateway::ErrorKind::MissingMark` instead of a generic HTTP failure,
+  mirroring the engine's restored `503 errorCode=MissingMark` contract
+  (DEC-175; exchange#704). Additive: Rust crate 4.0.0 → 4.1.0.
+- **Rust crate 4.1.1 → 4.2.0** —
+  `MarketsSnapshotClient::read_bound_inventory_reporting` returns a
+  `BoundInventoryRead`: the same result as `read_bound_inventory`, the refusal
+  of every bracket attempt it discarded and read again (`retried`), and whether
+  the whole-call deadline ended it (`deadline_expired`), so the oracle feeder
+  can log or count discarded out-of-order attempts, which a faulty node can
+  cause as well as a lagging one (#194). Also new:
+  `WitnessError::HeaderBehind { node_height }` (see Fixed). MINOR: additive
+  API on a `#[non_exhaustive]` error; no wire change.
+
+### Changed
+
+- **Rust crate 4.0.0 → 4.1.0** — the market-snapshot witness bracket no longer
+  requires all three reads (pre-status, snapshot, post-status) to come from the
+  same CometBFT node, so it works behind a load balancer that fans reads across
+  several full nodes (api-gateway#185, trading-sdk#177). Chain id, height
+  ordering, clock monotonicity and the witness app hash against a committed
+  header are still checked. The legacy app hash is still not a registry root:
+  the bracket proves consistency, not authenticity, and every backend behind
+  the load balancer must run a qualified image.
+
+- `postInfoJson` (internal, used by `queryAccount` / `queryOpenOrders` /
+  `queryWithdrawals` under `useGateway: true`) now throws `GatewayHttpError`
+  instead of `Error`. The message changes from `API error: <reason>` to
+  `Gateway request failed (<status>): <reason>`, the error's `response` body
+  stays unread, and a non-JSON failure reports its status instead of a JSON
+  parse error. `GatewayHttpError` takes an optional fourth `detail` argument
+  for the gateway's own error text.
+
+### Removed
+
+- TypeScript 6.0.0 drops `RunLiquidationSweep` (0x11) from the
+  `@proof-labs/trading-sdk/testing` subpath: the `RunLiquidationSweep` type,
+  its `TestActionType` entry and its `TestAction` variant. The engine retired
+  the action and rejects it at decode (exchange#850). `RunFundingTick` (0x12)
+  is unchanged. MAJOR: a removed export breaks callers that name it; the main
+  entry and all other action bytes are unaffected.
+
+### Deprecated
+
+- `WitnessError::BackendMismatch` is never returned; the bracket does not
+  compare node ids.
+
+### Fixed
+
+- TypeScript and Python reads reject integral MessagePack floats wherever the
+  wire model has an integer (#189, #221). The float families (`0xca`/`0xcb`)
+  decode into the same JavaScript number as an integer, so a row packed with
+  `forceIntegerToFloat`-style settings decoded as if it were a wire uint; the
+  Python decoder keeps them distinct but its `int(...)` coercions truncated
+  them, so the two SDKs disagreed on the same bytes. Every gateway msgpack read
+  now runs one strict, type-preserving preflight in the Rust core
+  (`proof_trading_sdk::msgpack`, exposed to TypeScript as the WASM
+  `reject_floats` and to Python through the PyO3 native module). It refuses
+  float families, extensions, non-UTF-8 strings, duplicate map keys, over-deep
+  nesting and trailing bytes; bytes inside a bin stay data. The value decode
+  runs first, so a payload the decoder already refuses keeps its own
+  diagnostic. Reads now initialise the WASM core, so a read-only caller that
+  bypasses the client must `await ready()` first (the client does it on the
+  first read).
+
+- **Rust crate 4.1.0 → 4.1.1** — `MarketsSnapshotClient::read_bound_inventory`
+  now reads a whole new bracket, up to three attempts in all and 150 ms apart
+  inside the same whole-call deadline, when one is refused with
+  `WitnessError::BracketOutOfOrder` (#184). Behind a load-balanced gateway the
+  pre-status, snapshot and post-status reads (and the confirmation polls) can
+  land on full nodes a block apart, so honest, committed reads arrived out of
+  height order and fenced the DevNet oracle feeder every few minutes. Every
+  other refusal is still returned at once, no read is carried between attempts,
+  and each attempt passes the unchanged bracket validation; a persistent
+  out-of-order bracket still ends in `BracketOutOfOrder`. The exact `H+1`
+  header lookup on a lagging node was left unretried here; 4.2.0 below
+  retries it (#191). PATCH:
+  no wire or public API change.
+- **Rust crate 4.1.1 → 4.2.0** — the exact `/v1/block?height=H+1` header
+  lookup in `read_bound_inventory` is now retried like an out-of-order bracket
+  when it lands on a full node that has not committed `H+1` yet (#191). The
+  gateway forwards CometBFT's answer verbatim, and CometBFT refuses a height
+  above its own with HTTP 500 and JSON-RPC error `-32603` whose `data` is
+  `height H+1 must be less than or equal to the current blockchain height N`;
+  only that shape, for the requested height and `N < H+1`, becomes the new
+  `WitnessError::HeaderBehind { node_height: N }` and earns another attempt
+  within the same three attempts and whole-call deadline. Every other header
+  failure (a pruned height, another RPC error, a gateway 502, any other
+  status) is still `Snapshot(Http(status))` and final at once.
+- **Rust crate 4.1.1 → 4.2.0** — when the whole-call deadline ends
+  `read_bound_inventory` after an attempt was already discarded, the call now
+  returns that attempt's refusal (`BracketOutOfOrder` or `HeaderBehind`)
+  instead of a bare `Snapshot(Timeout)`, so the cause is not hidden (#194). A
+  deadline that ends the first attempt is still `Snapshot(Timeout)`. Deadline
+  guidance: one attempt with the default confirmation schedule (8 × 250 ms) can
+  take about 2 s, so the oracle feeder's current 2 s timeout usually leaves no
+  room for a retry. Give the inventory client at least
+  `3 × (polls × interval + 4 reads) + 2 × 150 ms` (about 7–8 s with the
+  defaults, still inside the feeder's ~10 s inventory refresh), or shorten the
+  schedule with `with_confirmation_polling`.
+
+## [5.1.0] — 2026-09-22
+
+npm `@proof-labs/trading-sdk` only; the Rust crates and the Python package keep
+their current versions until their own tags are cut. Compatible engine:
+exchange v2.12.0 (proof-wire 2.1.0: standalone events Phase 3 and the TR-02
+position triggers on the genesis-first node). Required by api-gateway 4.1.0,
+whose structured order ingress verifies a signature over the 2.1.0 order
+payload only and refuses a 5.0.0 signature as `invalid signature`. MINOR: the
+new order fields are optional and 5.0.0 order bytes still decode.
+
+- Pre-fill (pending) SL/TP limbs on the order actions and the F2 trigger
+  expansion's client surface (contract: ProofOfBrain
+  `delivery/epics/trigger-expansion-binary-conditional-prefill.md`, §7-T).
+  `PlaceOrder` (0x01), `MarketOrder` (0x04) and `CancelReplaceOrder` (0x1A)
+  gain optional `stopLoss` / `takeProfit` (`TriggerLimb`) fields in TypeScript,
+  Python and the Rust/WASM core's shared wire contract, validated client-side
+  with the same parity rules as `SetPositionTriggers` (at least one limb,
+  non-zero trigger price, bps `1..=9999`, distinct limb client ids) plus the
+  engine's new `TriggerOrderIncompatible` (code 98) for limbs on a reduce-only
+  order — the code is pinned in the TypeScript and Rust error tables and the
+  `errors.ndjson` conformance manifest. Gateway read types for the additive
+  `/v1/triggers/{owner}` `pending` section and `market_kind` on position rows
+  are added to the gateway reads module (§7-G). Encoding is pinned to the
+  published Proof-labs/wire release tag `v2.1.0`; the five contract §1.7
+  vectors are pinned byte-exactly in `conformance/` — payloads in
+  `codec.ndjson`, full signed envelopes in `signing.ndjson` — and the
+  pre-2.1.0 9-field PlaceOrder bytes are pinned (signing row + TS
+  decode-compat test) as decode-compat: they decode with absent limbs and
+  re-encode canonically with the two trailing nils.
+
+- The TypeScript error table gains `MarkUnavailable` (code 97), matching the
+  Rust table and the engine, and the checked-in `errors.ndjson` manifest gains
+  its `manifest/97` row. The new gateway trigger read types
+  (`GatewayPendingTriggerRow`, `GatewayTriggerPositionRow`,
+  `GatewayTriggerLimbJson`) are exported from the package entry point.
+
+- Adds the typed `SetOracleGuards` multisig action (inner tag 13), proposal
+  read decoding, and client-side engine-shape validation. Optional fields stay
+  unchanged; zero/unset guards are rejected. Wire-pinned codec/signing vectors
+  cover both fields and each field alone (trading-sdk#165).
+
+- Mirrors the `UpdateAuthoritySet` governance arm (inner tag `0x07`,
+  exchange#422 / DEC-87): addition/removal of members in one privileged
+  authority allowlist (`Oracle`, `CexComposite`, `Relayer`, `Custody`,
+  `MarketParams`, `ScheduledOps`). TypeScript decode (`governance-query.ts`)
+  and encode (`codec-adapter.ts`) both went through the generic struct path
+  already used by `UpdateAdminSignerRegistry`; `add`/`remove` needed one
+  addition to the decode-side byte-field allowlist to come back as
+  `Uint8Array[]` rather than plain objects. Content-hash golden vectors
+  pinned identically in the TypeScript (WASM) and Python (PyO3) suites.
+  Closes exchange#472 — the last gateway/SDK gap from the `CancelAllOrdersForAccount`
+  kill lever (exchange#467, DEC-151); the gateway side landed in api-gateway#150.
+
+### Deprecated
+
+- TypeScript `queryTriggerStatus()`, `decodeTriggerStatusJson` and the
+  `TriggerStatus` type, and Python `trigger_status()`. `GET /v1/triggers/status`
+  is deleted upstream: the node dropped it with its activation gates
+  (exchange#619, genesis-first) and the gateway drops it in gateway 4.0.0
+  (api-gateway#175). Trigger actions are permanently active, so there is
+  nothing left to read; once a gateway or node stops serving the route the
+  calls fail with the 404 response error. Behaviour is unchanged and they will
+  be removed in the next major version. The `proof-integration` scenario
+  `src/scenarios/trigger-surfaces.ts` lists `queryTriggerStatus` in its
+  required-method list; it must drop it only when that removal release lands,
+  not now. Refs #166.
+
+## [5.0.0] — 2026-09-18
+
+npm `@proof-labs/trading-sdk` 5.0.0 (tag `npm-v5.0.0`); the Rust core, PyO3 and
+Python packages move to 4.0.0 in the same commit. Compatible engine: the
+exchange `dev` merge of standalone events Phase 2 (proof-wire 2.0.0). MAJOR:
+the impact-market family is gone from every surface (see the first entry).
+
+- **BREAKING (MAJOR) — proof-wire 2.0.0: the impact-market family is gone and
+  every conditional belongs to an event.** The npm package moves to **5.0.0**,
+  the Rust core to **4.0.0**, the PyO3 and Python packages to **4.0.0**.
+  - Removed: `CreateImpactMarket` (0x0e) and `ResolveImpactMarket` (0x0f) in
+    every language, the `ImpactMarketInfo` / `ImpactMarketStatus` types, the
+    `CreateImpactMarket` governance arm and batch item, `queryImpactMarkets()`,
+    `GatewayReads.impactMarkets()` / `impactMarket(id)`, and error codes 24,
+    25 and 31. The retired bytes never decode again.
+  - Changed: `MarketKind` conditional and binary payloads carry the event id;
+    `EventInfo` gains `attachedConditionals` (`[underlying, cpy, cpn]`
+    triples) and its status type is `EventStatus`; `MarketsSnapshot.events`
+    replaces `impactMarkets`; `AccountInfo.bindingScenario` entries name
+    `eventId`; `CreateEvent` gains a per-book `maxOpenInterest` trailer;
+    `queryHistoryResolutions` / `history_resolutions` filter on `eventId` /
+    `event_id` and each row names its `eventId` (the indexer's route moved
+    with the wire); the raw read surface follows: `reads().events()` /
+    `reads().event(id)` replace `impactMarkets()` / `impactMarket(id)`, and
+    `reads().historyResolutions` filters on `event_id`.
+  - Added: the `AttachConditional` governance arm (inner tag 10) as a
+    singleton and as the second `Batch` item, with its own `maxOpenInterest`
+    trailer; typed `CreateSubAccount` (0x28), `SubAccountTransfer` (0x29) and
+    `ClaimWithdrawalPayout` (0x2e) actions absorbed from wire 1.9.0 and
+    1.10.0; error codes 72–76, 82 and 83–96 classified.
+    `GatewayReads.events()` / `event(id)` use the gateway's event queries.
+  - Conformance vectors regenerated: the family cases leave, the attach,
+    batch, create-event oracle-source and new outer-action cases arrive; the
+    engine snapshot fixture is `engine-349fa9b.hex`. The wire pin is the
+    `v2.0.0` tag.
+
+### Added
+
+- TypeScript 4.2.0 adds gateway-only `queryFinancialState({markets, owners})`:
+  one finalized snapshot of selected raw accounts, fee/funding market state,
+  fee pool, per-pool insurance and PLP configuration/account. Strict selector,
+  tuple, integer, exact-coverage and 2048-total-position validation; five-second
+  read deadline, one-MiB response limit and pre-decode nesting/allocation budgets.
+  Missing keys remain null. Bootstrap
+  baselines and lifetime fee counters are not additional cash. No valuation,
+  risk authorization, signing or new mutation; Rust/Python/WASM are unchanged.
+
+- Rust core 3.2.0 adds the optional `gateway` transport: bounded gateway-only
+  chain identity, committed oracle permissions, byte-exact externally signed
+  submission and hash-matched execution receipts. No signing, nonce allocation,
+  automatic retries or operational oracle-health API. Ambiguous submission,
+  CheckTx rejection, committed execution and oracle permission remain distinct;
+  response bodies, credentials and signed bytes are excluded from diagnostics.
+  Existing wire bytes and default codec/WASM dependencies are unchanged.
+
+- Retains current exchange `CreateEvent` governance tag 9 alongside F16 tag 12:
+  typed standalone-event proposals and strict proposal-read decoding (not a Batch
+  item). Binary market tuples name their event id; conditional perps retain their
+  family id. Existing action vectors and tag-8 cancel semantics remain unchanged.
+
+- TypeScript SDK 4.1.0 adds `queryAccountState(ownerHex?)`: finalized raw settled
+  balance and six-field positions, independent of oracle valuation. Strict
+  owner binding, integer precision and positional schema validation; no equity,
+  margin or trading/withdrawal permission is inferred. Rust/Python codecs unchanged.
+
+- TypeScript `queryOraclePriceHistoryPage` reads market-filtered `price_updated`
+  history through the gateway, preserving exact prices, opaque cursors,
+  cancellation and HTTP errors. Primary and composite updates share the
+  upstream event shape; the API does not distinguish their sources.
+  `ExchangeClient.queryOraclePriceHistory()` wraps it bound to the client's
+  own `gatewayUrl`, matching the trigger-history convention of an exported
+  low-level function plus a client method — direct callers no longer have to
+  thread a gateway URL themselves.
+
+- Rust native gateway `submit_signed_bytes_with_evidence` adds typed,
+  source-qualified per-attempt pre-admission refusal and maintenance evidence,
+  plus header-first JSON `retryAfterMs` fallback rounded up without overflow.
+  Unknown HTTP/body outcomes retain the local reconciliation hash; no earlier
+  attempt is declared absent. `SubmissionOutcome::RejectedBeforeAdmission`
+  carries the classified refusal (`()` from the original submission method), so
+  a refusal cannot disagree with its outcome. The original method's behaviour,
+  TypeScript/Python API and wire bytes are unchanged.
+  This additive native API requires a Rust MINOR release when published;
+  it authorizes no activation, retry or durable-journal retirement by itself.
+
+- Rust gateway `MarketsSnapshotClient::read_bound_inventory()` binds the
+  snapshot's own finalized clock and post-height app hash to the actual Comet
+  node identity across the read bracket. A bounded exact-H+1 header lookup
+  handles fast chains without comparing pre-H and post-H hashes. Missing or
+  mismatched witnesses fail closed; legacy snapshot/status APIs, receipt
+  handling, signing and wire bytes are unchanged. This additive API requires
+  a Rust MINOR release when published; exact qualified images and unique node
+  keys remain prerequisites because the legacy app hash is not a registry root.
+  `BoundMarketsSnapshot`, `BoundChainIdentity` and `BoundInventorySnapshot`
+  expose read-only getters; only the SDK decoders and `validate_bound_inventory`
+  construct them, so a caller cannot forge or alter a validated witness.
+  Node identities, app hashes, heights, market ids and micro-USDC amounts on
+  this surface are `NodeId`, `AppHash`, `BlockHeight`, `MarketId` and
+  `MicroUsdc` rather than bare integers and byte arrays, and receipt reads take
+  the existing `TxHash`. Each type carries the check its decoder performed.
+  `ChainIdentity` and `CommittedReceipt` have one definition, shared by the
+  gateway client and the snapshot client, with `BlockHeight` heights; the
+  snapshot reads report `catching_up: false`, having refused a catching-up node.
+  `read_bound_inventory()` takes its confirmation-poll schedule from the client:
+  `MarketsSnapshotClient::with_confirmation_polling` accepts a
+  `ConfirmationPolling { polls, interval }`, defaulting to the previous 8 polls
+  250 ms apart, with 64 polls and a five-second interval as the outer ceiling.
+  The whole-call deadline still ends the wait.
+  `WitnessError` names one fault per variant: an unsupported witness version
+  (carrying the version), a malformed witness field, a witness/snapshot height
+  disagreement, an out-of-order bracket, an inconsistent anchor height, a
+  header answered for the wrong height, an `H + 1` overflow, a clock mismatch,
+  an app-hash mismatch, a missing caller-supplied block body, and a height that
+  is simply not committed yet.
+
+- Rust gateway `MarketsSnapshotClient::receipt_observation()` distinguishes an
+  exact committed receipt from a canonical HTTP 404/500 not-found observation
+  naming only the requested hash. Calls and bodies are bounded; other statuses,
+  malformed/hashless/conflicting responses and transport failures stay errors.
+  Not-found is not non-inclusion, expiry or accepted-price-effect proof. Existing
+  `committed_receipt()` and signing/wire contracts are unchanged.
+  A single well-formed plaintext `price_updated` event in a code-zero receipt
+  is preserved as typed `CommittedPriceUpdate` evidence. Consumers must bind
+  it to their retained signed action before inferring a primary-oracle effect;
+  composite actions share this event. Missing, duplicate, mixed, malformed or
+  unsupported event evidence leaves only the committed receipt, never a proof
+  of price acceptance. When a `price_updated` event is present but fails a
+  structural check, the observation is `RejectedPriceEvidence` and names the
+  reason as a typed `PriceEvidenceRejection`, so a consumer can count or alert
+  on evidence it expected to be usable. `MalformedPriceEvent` identifies a
+  single `price_updated` event whose attributes cannot be decoded, including
+  missing fields, non-string values and duplicate JSON keys. A receipt with
+  no identifiable price event, or a non-zero execution code, stays `Committed`.
+  No extra HTTP or wire change is introduced.
+  `ReceiptObservation::CommittedPriceUpdate` carries a `CommittedPriceUpdate`
+  struct with read-only getters that only the receipt classifier constructs.
+
+- `ExchangeClient.reads().oracleHealth()` forwards gateway freshness responses
+  for existing Web-UI warnings and order guards, preserving unavailable-feeder
+  data, HTTP failures and caller cancellation. Thresholds remain in the frontend.
+  ADR 0003 supersedes ADR 0002: every gateway interaction, including oracle
+  health and admin calls, goes through the SDK.
+- `queryHistoryPositionsPage()` preserves nullable close fields, exact indexer
+  timestamps and opaque pagination cursors alongside the existing array API.
+- External async Ed25519 signers, per-transaction delivery waits and optional
+  DeliverTx `info`, preserving private-key compatibility and signed bytes.
+- Multiplexed `/ws` orderbook, trades and account subscriptions with refcounts,
+  reconnect authentication and cleanup. Snapshot plus live; no missed-event replay.
+- Named gateway responses through `ExchangeClient.reads()` and validated portfolio
+  history pages with opaque cursors, micro-USDC values and source provenance.
+
+- Atomic `queryMarketsSnapshot()` through the gateway, with an explicit chain
+  pin, complete typed registry decoding and bounded failure handling. The Rust
+  `market_snapshot` module shares canonical wire records and adds an optional
+  `gateway` feature for the snapshot, committed chain-time and exact-hash receipt
+  reads. Unknown or malformed evidence is an error, never an empty inventory or
+  proof that a pending transaction failed. No signing or action wire changes.
+  The Rust gateway client also submits already-signed bytes once, with bounded
+  request/response sizes, exact-hash verdicts and sanitized typed errors; it
+  never allocates a nonce or retries an ambiguous submission.
+  npm 4.1.0 and Rust core 3.1.0 are additive MINOR changes over current dev;
+  unchanged WASM/Python package versions and exchange-wire 1.4.0 pin are retained.
+- `ExchangeClient.queryHistoryFills()` — fills-history reads against the
+  gateway's history surface, keyset-paged (`HistoryFillsPage` carrying
+  `nextCursor`), filterable by market and time window, optional
+  `addressHex` override (#91).
+- `queryOraclePermissions(market)` reads committed single-dependency policy,
+  calendar, activation and frozen verdict state with exact integers. This is not
+  operational oracle health (`reads().oracleHealth()`), nor portfolio-wide
+  trading authorization.
+  npm 3.2 is additive; unchanged Rust/Python packages retain their versions.
+- Integrates the reviewed admin-tag-8 mirror and compatibility vectors from
+  trading-sdk #106 (`09cf55f`) alongside F16. Cancel-all scoped/unscoped bytes,
+  proposal reads, omitted/null scope semantics and content hashes stay pinned.
+  The independent tag-7 TypeScript mirror remains tracked in exchange #472.
+
+### Changed
+
+- Ambiguous submissions retain their hash and HTTP diagnostics for reconciliation.
+
+### Fixed
+
+- TypeScript submission treats a fixed, known set of structured, hashless
+  HTTP 200/503 gateway refusals as terminal transport errors with the
+  original reason, mirroring the Rust core's exact allowlist. Any other
+  hashless HTTP 200/503 body — an unrecognized message, in particular —
+  still reconciles by transaction hash without resubmission, same as
+  before, since an unfamiliar message is not proof the transaction never
+  reached the broadcaster.
+
+- Position-history reads decode the indexer's page envelope and `entry_px` /
+  `block_time` fields. The array API retains string fields, using empty strings
+  for absent close data; the paged API preserves nulls.
+- Deposit and withdrawal history use owner-filtered account events through the
+  gateway, including direct `deposited` / `withdrawn` events. Results are bounded
+  merged event lists, not final withdrawal status;
+  ownerless confirmations are absent from the current index. Unknown withdrawal
+  debit/refund deltas remain empty because event amounts exclude custody fees.
+- Delivery polling accepts omitted zero codes and numeric-string codes only in a
+  valid transaction result; malformed reads remain uncertain.
+- Timestamp allocation rejects clock-window exhaustion without reusing a nonce.
+
+## [4.0.0] — 2026-09-10
+
+npm `@proof-labs/trading-sdk` only; the Rust crates and the Python package keep
+their current versions until their own tags are cut. Compatible engine:
+exchange v2.9.0 (exchange-wire 1.4.0, the pinned `6a640c45`). MAJOR for the
+npm package because `ConfirmDeposit` payloads gain an unconditional fifth
+element (see Changed); everything else in this release is additive.
+
+### Added
+
+- `AdminAction` gains `CancelAllOrdersForAccount` (inner tag `0x08`,
+  exchange#467 / DEC-151): the multisig kill lever that cancels every resting
+  order of one wallet, optionally confined to one market. Typed on the
+  TypeScript side (`{ owner, market? }`), decoded from proposal reads, and
+  pinned by two conformance vectors (scoped and unscoped) plus a content-hash
+  golden shared with the Python suite. The `exchange-wire` pin moves to the
+  merged exchange#471 revision (wire 1.4.0), which also brings 1.3.0's
+  `UpdateAuthoritySet` (inner tag `0x07`) and `AuthorityDomain` into the Rust
+  and Python surfaces; the TypeScript mirror of tag `0x07` is tracked in
+  exchange#472. Additive (MINOR).
+
+- `@proof-labs/trading-sdk/testing` subpath: `registerTestActions()` makes the
+  engine-internal `RunLiquidationSweep` (0x11) and `RunFundingTick` (0x12)
+  actions encodable for dev-stack harnesses. Not exported from the main entry.
+- Operator `SubmitOracleObservation` (`0x2D`) and multisig
+  `ConfigureOraclePolicy` (inner tag `0x0C`) bindings, shared Rust codec vectors,
+  TypeScript byte-field round trips and typed Python builders. Requires an engine
+  built with `exchange-wire >= 1.5.0` and its separately governed oracle activation;
+  existing actions retain their bytes. Additive MINOR: npm/core/Python/PyO3 3.1.0,
+  WASM binding 2.2.0; unchanged helper crates are not bumped. Relay authentication
+  is not cryptographic provider-proof verification. Opaque policy bytes must be
+  independently decoded/reviewed before signing; no policy defaults, activation,
+  automatic approval or oracle-health read method is introduced (ADR-0002).
+  The draft development dependency pins the exact F16 reconciliation commit;
+  that exchange branch must be published before clean-checkout SDK CI can resolve
+  it. Before release, replace it with the independently reviewed immutable
+  exchange revision and rerun all binding/conformance checks. Local validation
+  against the feature worktree is not proof that this upstream branch or an
+  activated engine artifact has been published. New policy vectors prove only
+  the outer wire encoding, not policy validity or permission to activate it.
+
+- **Proposal-lifecycle error codes 54-71** - the multisig-governance error
+  family (`ProposalNotFound` ... `InvalidAdminRegistry`) is now mirrored across
+  all three bindings from the engine's `ExecError` and the frozen
+  `exchange/sdk` reference table. `decodeExecError` / `get_error_name`
+  previously returned `null`/unknown for any propose/approve/reject or
+  emergency-admin rejection in this range, so Web Admin and governance tooling
+  could not name those failures. Decode-only and additive (MINOR): no wire
+  change, and the client never constructs these errors, it classifies result
+  codes. The `no_code_holes_in_documented_range` gate now covers `1..=71` and
+  the `errors.ndjson` conformance manifest pins every new code to its name.
+- `AdminAction` gains an `UnpauseBridge` unit variant (inner tag `0x06`), a
+  multisig operation that lifts a bridge pause. It carries no fields and
+  serializes as the bare string `"UnpauseBridge"` (distinct from the
+  `{ Variant: {} }` map form a fieldless struct variant takes), so it is
+  additive (MINOR): every pre-existing admin-action payload still decodes
+  unchanged. Mirrors engine `exchange-wire` 1.2.0 (exchange#435, DEC-65). New
+  conformance vector `propose_admin_action/unpause_bridge` is byte-for-byte the
+  engine's frozen wire vector; `decodeAdminAction` renders it on the governance
+  read path.
+- `ConfirmDeposit` gains a trailing optional `DepositLocator`
+  (`{ topIndex, innerIndex? }`) identifying the USDC transfer's instruction
+  position within its Solana transaction, so two transfers sharing one Solana
+  transaction signature are no longer deduplicated into one credit. Mirrors
+  engine `exchange-wire` 1.1.0 (exchange#434). New conformance vectors
+  `confirm_deposit/with_locator` and `confirm_deposit/no_locator` pin the bytes.
+
+### Changed
+
+- **BREAKING (npm): the package is now `@proof-labs/trading-sdk`.** The
+  npm scope follows the `proof-labs` organisation that owns it on the
+  registry; `@proof/trading-sdk` was never published. Consumers that
+  install from git rename the dependency key and every import specifier
+  (`@proof-labs/trading-sdk`, `@proof-labs/trading-sdk/testing`). The Rust
+  crate and the Python package keep their names.
+
+- **BREAKING (MAJOR) — `ConfirmDeposit` payloads gain an unconditional fifth
+  element.** The locator is appended as a trailing `nil` even when the caller
+  supplies none, so every `ConfirmDeposit` this SDK emits changes from a
+  4-element positional array (`94 …`) to a 5-element one (`95 … c0`) — including
+  calls whose source code is unchanged. Backward decode holds in one direction
+  only: pre-locator bytes still decode on the new code, but a strict 4-field
+  `rmp-serde` decoder **rejects** what the new code emits, which
+  `exchange-wire`'s own `deposit_locator_is_backward_decodable` test asserts at
+  the pinned revision. Per CLAUDE.md ("if it breaks backward decode in either
+  direction it is a MAJOR bump") this is a MAJOR bump for every package that
+  encodes `ConfirmDeposit` — the same classification this changelog applied to
+  the `CreateMarket` open-interest cap, which grew a positional array by one
+  unconditional trailing element in exactly the same way.
+
+  Compatible engine: `exchange-core >= 2.6.0` **built against
+  `exchange-wire >= 1.1.0`** (exchange#434, rev `2a6d079`). Note `exchange-core`
+  reads 2.6.0 both with and without the locator, so it is the `exchange-wire`
+  floor — not the `exchange-core` version — that distinguishes an engine which
+  accepts these bytes. Pointing this SDK at an engine below that floor fails
+  every deposit confirmation, so upgrade the engine first.
+
+- The Python `admin_proposal_content_hash` stub now types `action` as
+  `dict[str, object] | str`, and its docstring names the unit-variant form. The
+  binding already accepted the bare string at runtime, but the declared type
+  rejected it — so a type-checked Python approver could not pass the only
+  canonical `UnpauseBridge` shape without suppressing the error.
+
+- Decoding a governance `action` that arrives as a bare string now throws
+  unless the string is a known unit variant, matching the allowlist the encode
+  direction already used and the fail-closed posture of `decodeAdminAction`. An
+  SDK build that does not know an operation must not hand callers a `kind`
+  outside the `AdminAction` union for them to render or approve.
+
+- The Rust core's `exchange-wire` pin moves from rev `2a6d079`
+  (exchange-wire 1.1.0) to rev `f4feefd3` (exchange-wire 1.2.0, exchange#435),
+  which is where `AdminAction::UnpauseBridge` is defined. The wire variant is
+  no longer mirrored in this repository — `crates/proof-trading-sdk` re-exports
+  it from the shared crate, so the SDK and the engine cannot disagree about it.
+
+### Fixed
+
+- **Python wheel ABI floor pinned to CPython 3.11** (`cp311-abi3`) via the
+  `pyo3/abi3-py311` feature in `python/pyproject.toml` and the PyO3 crate,
+  instead of bare `abi3`. Bare `abi3` takes the floor from whichever interpreter
+  runs the build, so a wheel built under Python 3.14 was tagged `cp314-abi3` and
+  would not install on 3.11–3.13 even though `requires-python = ">=3.11"`
+  promises them; those users silently fell back to building the sdist, which
+  needs a Rust toolchain. CI happened to build on 3.11, so published wheels were
+  correct by coincidence rather than by construction (#90). Packaging-only:
+  PATCH for the Python distribution, no wire or API change.
 
 ## [3.0.0] — 2026-08-24
 
@@ -509,7 +2109,22 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v11.0.0...HEAD
+[11.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.1.0...npm-v11.0.0
+[10.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.0.0...npm-v10.1.0
+[10.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.2.0...npm-v10.0.0
+[9.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.1.0...npm-v9.2.0
+[9.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.0.0...npm-v9.1.0
+[9.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.1.0...npm-v9.0.0
+[8.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v8.0.0...npm-v8.1.0
+[8.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.3.0...npm-v8.0.0
+[7.3.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.2.0...npm-v7.3.0
+[7.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.1.0...npm-v7.2.0
+[7.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v7.0.0...npm-v7.1.0
+[7.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v6.4.0...npm-v7.0.0
+[5.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v5.0.0...npm-v5.1.0
+[5.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v4.0.0...npm-v5.0.0
+[4.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v3.0.0...npm-v4.0.0
 [3.0.0]: https://github.com/Proof-labs/trading-sdk/releases/tag/npm-v3.0.0
 [1.1.0]: https://github.com/Proof-labs/trading-sdk/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Proof-labs/trading-sdk/compare/v0.1.0...v1.0.0

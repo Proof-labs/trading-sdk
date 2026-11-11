@@ -8,11 +8,51 @@ import pytest
 
 import proof_trading_sdk as pts
 
-GOLDEN_V3 = "6cdd8d6843bb4026d396b9e80c9599530b0ac4f14862af0204794219f8f8cbea"
-GOLDEN_V4 = "5fe2dd718a4aea63492a5ab95eee27588cc861c504643bf68ce3fdd2c45dab99"
+GOLDEN_V3 = "a4de11bbe373974cae0de8f1116681cd7f08ecab07b007bea1067cbd0f19fb4f"
+GOLDEN_V4 = "da916970c56796acd6cc8a67bfba8430598c94dafaf5b1eb54f40479a380be9c"
 # Admin-actions v2 (engine's ``admin_proposal_content_hash_v2_golden_vectors``)
-GOLDEN_IMPACT = "d57a7faa3a17aac647a0256c38f125f6bd0913d70013e185aeb322efaab9629e"
-GOLDEN_BATCH = "f9a9b17a53b52ad72c1703b583a0ed4ac70295244cbf31f74518d5177dd86e36"
+GOLDEN_ATTACH = "3ffeb7f420cf9f4f50bade95919d885dfc590c7f8c92fb69eacc1704d4662be4"
+GOLDEN_BATCH = "66a35d72765b3554acc039d0747f177680c1a1b08247ece47daa4a3492b9d0f7"
+# The one admin action that is NOT a map: a fieldless unit variant, whose
+# canonical bytes are the bare fixstr "UnpauseBridge". exchange-core has no
+# frozen content-hash vector for this arm yet, so the value comes from the
+# authority itself -- exchange-wire's own ``codec::admin_proposal_content_hash``
+# at the revision pinned in crates/proof-trading-sdk/Cargo.toml. The TypeScript
+# suite pins the identical constant, which is what makes the two bindings
+# provably agree on the unit-variant shape.
+GOLDEN_UNPAUSE_BRIDGE = (
+    "ffa74c9323512ffb8272eea55fc49baf047f55aa8979e56e06229b57d1350f56"
+)
+# CancelAllOrdersForAccount (inner tag 0x08): a struct variant carrying a
+# 20-byte newtype address and an Option market, over the same golden
+# context. Same authority as above; the TypeScript suite pins the identical
+# constant.
+GOLDEN_CANCEL_ALL_FOR_ACCOUNT = (
+    "39ededb641adc0e8b9c8f2f0c77fdeb2cc1880b7b882e6d91912535bfd27465e"
+)
+# The unscoped twin (market None), pinned in TypeScript too: covers the
+# pythonize None -> Option path.
+GOLDEN_CANCEL_ALL_FOR_ACCOUNT_UNSCOPED = (
+    "4b9e5c528f5bf4578427fcb42018f3df7ce3239e4a3392c8e087230d5bb3358c"
+)
+# UpdateAuthoritySet (inner tag 0x07): a struct variant carrying an
+# externally-tagged bare-string domain and two address-list fields, over the
+# same golden context. Same authority as above; the TypeScript suite pins
+# the identical constants.
+GOLDEN_UPDATE_AUTHORITY_SET_ADD = (
+    "9f344b099fd7771f04d62f186595a5d58165463dcc638adcef71be9c35ea889f"
+)
+GOLDEN_UPDATE_AUTHORITY_SET_REMOVE = (
+    "a4f4828d828c4e3e5f50ea883568e63b21d49c620f4848542dec498a292b847d"
+)
+# SetLiquidationConfig (inner tag 0x11): a struct variant whose newtypes are
+# bare integers and whose full-close threshold is a nested struct, carrying
+# the configuration exchange-wire freezes in its own vector. Same authority
+# as above; the TypeScript suite pins the identical constant.
+GOLDEN_SET_LIQUIDATION_CONFIG = (
+    "1759bbe56cdd4604699aa7fc464b04fa8e79f055a23b26c9b4f25d386943136c"
+)
+
 
 
 def engine_default_create_market() -> dict:
@@ -32,30 +72,24 @@ def engine_default_create_market() -> dict:
         "sz_decimals": 0,
         "ticker": "",
         "max_open_interest": 0,
+        "tick_size": 1,
+        "lot_size": 1,
     }
 
 
-def engine_v2_impact() -> dict:
-    """Mirrors the engine's admin-actions-v2 golden fixture — nil oracle
-    source and empty description/rules are the ``serde(default)`` trailers,
-    encoded exactly as the engine's instance carries them."""
+def engine_v2_attach() -> dict:
+    """Mirrors the engine's attach fixture: event 91's conditional on perp 15,
+    books from 9100, the open-interest trailer at its zero default."""
     return {
-        "impact_market_id": 91,
+        "event_id": 91,
         "underlying_market": 15,
         "child_market_base": 9_100,
-        "question": "does it land?",
-        "deadline_ms": 1_000_000,
-        "resolution_window_ms": 1_000,
         "im_bps": 3334,
         "mm_bps": 1667,
         "taker_fee_bps": 5,
         "maker_fee_bps": 2,
-        "funding_interval_ms": 0,
-        "max_funding_rate_bps": 3000,
         "signer": bytes(20),
-        "oracle_source": None,
-        "description": "",
-        "rules": "",
+        "max_open_interest": 0,
     }
 
 
@@ -82,15 +116,15 @@ class TestAdminProposalContentHash:
         h = pts.admin_proposal_content_hash(**golden_kwargs(registry_version=4))
         assert h.hex() == GOLDEN_V4
 
-    def test_reproduces_engine_v2_impact_hash(self):
+    def test_reproduces_engine_attach_hash(self):
         kwargs = golden_kwargs()
-        kwargs["action"] = {"CreateImpactMarket": engine_v2_impact()}
+        kwargs["action"] = {"AttachConditional": engine_v2_attach()}
         h = pts.admin_proposal_content_hash(**kwargs)
-        assert h.hex() == GOLDEN_IMPACT
+        assert h.hex() == GOLDEN_ATTACH
 
     def test_reproduces_engine_v2_batch_hash(self):
         # Exercises the whole nested-enum path: the Batch arm's list
-        # payload, both item variants, and the impact trailers.
+        # payload, both item variants, and the attachment trailer.
         kwargs = golden_kwargs()
         kwargs["action"] = {
             "Batch": [
@@ -100,11 +134,87 @@ class TestAdminProposalContentHash:
                         "market": 15,
                     }
                 },
-                {"CreateImpactMarket": engine_v2_impact()},
+                {"AttachConditional": engine_v2_attach()},
             ]
         }
         h = pts.admin_proposal_content_hash(**kwargs)
         assert h.hex() == GOLDEN_BATCH
+
+    def test_reproduces_unit_variant_hash(self):
+        # A unit variant is passed as the bare variant-name string, not a map.
+        # This is the only arm exercising that shape, and the content hash is
+        # what an approving client recomputes before signing -- if the bare
+        # string did not reach the core correctly, every legitimate
+        # UnpauseBridge approval would be refused.
+        kwargs = golden_kwargs()
+        kwargs["action"] = "UnpauseBridge"
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_UNPAUSE_BRIDGE
+
+    def test_cancel_all_orders_for_account_hash(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = {
+            "CancelAllOrdersForAccount": {"owner": bytes([0xC1] * 20), "market": 7}
+        }
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_CANCEL_ALL_FOR_ACCOUNT
+
+    def test_cancel_all_orders_for_account_unscoped_hash(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = {
+            "CancelAllOrdersForAccount": {"owner": bytes([0xC1] * 20), "market": None}
+        }
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_CANCEL_ALL_FOR_ACCOUNT_UNSCOPED
+
+    def test_update_authority_set_add_hash(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = {
+            "UpdateAuthoritySet": {
+                "domain": "MarketParams",
+                "add": [bytes([0xB2] * 20)],
+                "remove": [],
+            }
+        }
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_UPDATE_AUTHORITY_SET_ADD
+
+    def test_update_authority_set_remove_hash(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = {
+            "UpdateAuthoritySet": {
+                "domain": "Relayer",
+                "add": [],
+                "remove": [bytes([0xC3] * 20)],
+            }
+        }
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_UPDATE_AUTHORITY_SET_REMOVE
+
+    def test_set_liquidation_config_hash(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = {
+            "SetLiquidationConfig": {
+                "predecessor": 1,
+                "sequence": 2,
+                "config": {
+                    "target_ratio_bps": 10_500,
+                    "full_close_threshold": {"numerator": 2, "denominator": 3},
+                    "partial_penalty_bps": 100,
+                    "max_book_orders": 20,
+                    "max_committed_fills": 10,
+                    "takeover_discount_bps": 50,
+                },
+            }
+        }
+        h = pts.admin_proposal_content_hash(**kwargs)
+        assert h.hex() == GOLDEN_SET_LIQUIDATION_CONFIG
+
+    def test_rejects_unknown_unit_variant(self):
+        kwargs = golden_kwargs()
+        kwargs["action"] = "NotAnAdminAction"
+        with pytest.raises(ValueError, match="AdminAction"):
+            pts.admin_proposal_content_hash(**kwargs)
 
     def test_rejects_malformed_proposer(self):
         kwargs = golden_kwargs()

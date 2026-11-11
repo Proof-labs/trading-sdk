@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a defect in @proof/trading-sdk
+description: Report a defect in @proof-labs/trading-sdk
 labels: ["bug"]
 body:
   - type: markdown
@@ -12,7 +12,7 @@ body:
     id: version
     attributes:
       label: SDK version
-      description: e.g. `@proof/trading-sdk@0.1.0`, or a git rev.
+      description: e.g. `@proof-labs/trading-sdk@0.1.0`, or a git rev.
       placeholder: "0.1.0"
     validations:
       required: true

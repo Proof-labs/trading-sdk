@@ -1,0 +1,615 @@
+//! Engine result-code classification for clients (SDK representation).
+//!
+//! The wire *contract* (codec, action table, ExecError codes) lives in
+//! `exchange-wire`; this module is the client-side decode of a numeric result
+//! code into a named, human-meaningful kind. Reconciling `ERROR_KINDS` with
+//! `proof_wire::types::ExecError::code()` (single-sourcing the table) is a
+//! follow-up.
+
+macro_rules! define_error_kinds {
+    ($($code:literal => $name:ident ~ $meaning:literal),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum ErrorKind {
+            $($name,)+
+        }
+
+        impl ErrorKind {
+            pub fn code(self) -> u32 {
+                match self {
+                    $(Self::$name => $code,)+
+                }
+            }
+
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Self::$name => stringify!($name),)+
+                }
+            }
+
+            pub fn meaning(self) -> &'static str {
+                match self {
+                    $(Self::$name => $meaning,)+
+                }
+            }
+        }
+
+        /// The complete error-kind manifest — one entry per variant, in
+        /// definition order. Used by every language binding.
+        pub const ERROR_KINDS: &[ErrorKind] = &[$(ErrorKind::$name),+];
+    };
+}
+
+define_error_kinds! {
+    1   => DecodeError         ~ "Tx envelope or payload could not be decoded as MessagePack at the expected version. Indicates a malformed wire frame or a client/server version mismatch.",
+    2   => OrderNotFound       ~ "Order ID does not exist on the requested market, or has already been filled or cancelled.",
+    3   => NotOwner            ~ "Tx signer is not the owner of the referenced order; only the owner (or an approved agent) may cancel or amend it.",
+    4   => UnauthorizedOracle  ~ "Oracle update was signed by a key that is not registered as an oracle signer for the market.",
+    5   => Overflow            ~ "An arithmetic operation (price * quantity, fee accrual, position size) overflowed a u64. Almost always indicates a malformed input rather than legitimate volume.",
+    6   => InvalidPrice        ~ "Price is zero, exceeds the per-market max, or violates tick-size quantization.",
+    7   => InvalidQuantity     ~ "Quantity is zero, exceeds the per-market max, or violates lot-size quantization.",
+    8   => InvalidSide         ~ "Side byte is neither Buy (0) nor Sell (1).",
+    9   => UnknownMarket       ~ "Market ID is not registered. Either the market does not exist or it has been removed.",
+    10  => StateCorruption     ~ "Engine read state in an unexpected shape (e.g. missing required key, malformed value). Indicates a bug or data corruption — file an issue with the surrounding context.",
+    11  => InsufficientBalance ~ "Account's USDC balance cannot cover the requested debit (deposit, withdrawal, or fee).",
+    12  => InsufficientMargin  ~ "Post-trade equity would fall below the initial-margin requirement for the resulting portfolio. Reduce order size, add collateral, or close offsetting positions.",
+    13  => UnauthorizedRelayer ~ "Tx is a relayer-only action (oracle update, funding tick, deposit confirmation, etc.) but the signer is not registered as an authorized relayer.",
+    14  => WithdrawalNotFound            ~ "Withdrawal ID does not exist or has already been claimed/refunded.",
+    15  => WithdrawalAlreadyProcessed    ~ "Withdrawal was already settled (claim or refund); duplicate finalize call rejected.",
+    16  => DuplicateDeposit             ~ "On-chain deposit signature has already been credited; idempotency guard rejected the replay.",
+    17  => InvalidSignature             ~ "Ed25519 verification of the V2 envelope failed. Signature, pubkey, or signed bytes are wrong.",
+    18  => SignatureRequired            ~ "A signed (V2) transaction envelope is required. Unsigned (V1) envelopes are not accepted.",
+    19  => AgentNotAuthorized           ~ "Tx signer is neither the account owner nor on the owner's approved-agent list.",
+    20  => AgentCannotWithdraw          ~ "Agent wallets may place/cancel/market orders but are forbidden from initiating withdrawals.",
+    21  => InvalidNonce                 ~ "Timestamp nonce failed replay-window validation. Use a unique millisecond Unix timestamp within [block_time-2d, block_time+1d]; included failures burn their nonce.",
+    22  => MarketAlreadyExists          ~ "Attempted CreateMarket for a market ID already in the registry.",
+    23  => InvalidMarketConfig          ~ "MarketConfig fields fail validation (e.g. fee bps out of range, lot/tick zero, IM/MM ratio inverted).",
+    // 24 and 25 belonged to the retired impact-market family; never reassigned.
+    26  => MarketClosedForTrading       ~ "Order placement attempted on a conditional or binary book whose event is past its settlement time or already resolved.",
+    27  => BinaryPriceOutOfRange        ~ "Binary-book order price is outside the [0, BINARY_PRICE_MAX] range.",
+    28  => InvalidResolution            ~ "ResolveEvent refused: the event is already resolved, not yet at its settlement time, still carries attached conditionals, or the asserted outcome contradicts the oracle source.",
+    29  => PositionLimitExceeded        ~ "Fill would push absolute net position past MarketConfig.max_position_size. Engine cap enforced at placement time independent of margin.",
+    // 30 was OracleTimestampNotMonotonic, retired with OracleUpdate; never reassigned.
+    // 31 belonged to the retired impact-market family; never reassigned.
+    32  => SettlementPriceMismatch      ~ "Net-delta margin grouping found legs with disagreeing settle prices (data corruption across same underlying_market_id).",
+    33  => OracleNotApplicable          ~ "The oracle action targets a conditional or prediction-binary book, which marks off its own trades and has no oracle layer.",
+    34  => PostOnlyWouldCross           ~ "PlaceOrder with post_only=true would have crossed the book. Rejected so makers retain maker-side fills.",
+    35  => ReduceOnlyWouldIncrease      ~ "PlaceOrder/MarketOrder with reduce_only=true was same-side as the existing position (would increase exposure) or no position existed.",
+    // 36 was TestActionRejected, retired with RunFundingTick; never reassigned.
+    // 37, 77, 82 and 97 are `ExecError::Unpriced`, one code per reason.
+    37  => UnpricedStale                ~ "Oracle price is stale for this market; refresh the oracle before placing orders, reading margin, or liquidating.",
+    38  => UserLeverageBelowMarketIm    ~ "User-selected initial margin is below the market risk floor; only deleveraging above the market floor is allowed.",
+    39  => TickSizeViolation            ~ "Order price is not an exact multiple of the market tick size.",
+    40  => LotSizeViolation             ~ "Order quantity is not an exact multiple of the market lot size.",
+    // 41 was OracleStaleNotElapsed, retired with OracleUpdate; never reassigned.
+    42  => FeeBpsOutOfRange             ~ "Per-account fee override has a fee outside the legal basis-point range.",
+    43  => FeeOverrideStaleSeq          ~ "Per-account fee override sequence is stale or out of order.",
+    44  => ClientOrderIdNotFound        ~ "No active resting order exists for the requested client order id.",
+    45  => DuplicateClientOrderId       ~ "An active resting order already uses the requested client order id.",
+    46  => InvalidClientOrderId         ~ "Client order id zero is reserved and cannot be submitted.",
+    47  => FillOrKillWouldNotFill       ~ "Fill-or-kill order cannot be fully filled immediately at the submitted limit price.",
+    48  => InvalidCancelReplaceTarget   ~ "Cancel-replace must specify exactly one active order target: either orderId or clientOrderId.",
+    49  => AmendBelowFilled             ~ "AmendOrder new quantity is below the quantity already filled while the order rested.",
+    50  => SlippageExceeded             ~ "Atomic basket aggregate slippage exceeded the submitted max_slippage_bps budget.",
+    51  => OpenInterestLimitExceeded    ~ "Fill would push aggregate market open interest past MarketConfig.max_open_interest.",
+    52  => AdminGovernanceInactive      ~ "Admin governance action was submitted while no admin signer registry exists on this chain; multisig administration is inactive and every governance path fails closed.",
+    53  => NotAdminSigner               ~ "Tx signer does not match the action's declared proposer/approver/rejecter/signer field, or is not a member of the current admin signer registry.",
+    // Proposal-lifecycle family (multisig governance). Mirrored from the
+    // engine's `ExecError` (exchange-wire/src/types.rs, codes 54-71) and the
+    // frozen exchange/sdk reference table. Decode-only on the SDK side — the
+    // client never constructs these, it classifies the result codes.
+    54  => ProposalNotFound                 ~ "No admin proposal exists under this id (never created, or pruned from terminal retention).",
+    55  => ProposalNotPending               ~ "The admin proposal is already terminal — votes are only accepted while pending.",
+    56  => ProposalExpired                  ~ "The admin proposal passed its TTL — re-propose and collect fresh approvals.",
+    57  => DuplicateApproval                ~ "This signer already approved the proposal (the proposer approves at creation).",
+    58  => DuplicateRejection               ~ "This signer already rejected the proposal.",
+    59  => ProposalRegistryVersionMismatch  ~ "Registry version differs from the current signer registry — re-read and re-sign.",
+    60  => ProposalContentMismatch          ~ "Approval context does not byte-match the stored proposal — rebuild from the proposals query.",
+    61  => InvalidAdminAction               ~ "Inner admin/emergency action is invalid: unknown or not-admitted arm, non-zero inner signer, or out-of-bounds field.",
+    62  => AdminActionTooLarge              ~ "Canonical inner action bytes exceed MAX_ADMIN_ACTION_BYTES.",
+    63  => TooManyPendingProposals          ~ "MAX_PENDING_PROPOSALS admin proposals are already pending.",
+    64  => ProposalIdExhausted              ~ "A governance id counter is exhausted; ids never wrap.",
+    65  => ConflictingVote                  ~ "The opposite vote already exists — votes are immutable and disjoint.",
+    66  => MarketIdOutOfRange               ~ "Market id exceeds the signed-32-bit identity bound (i32::MAX).",
+    67  => EmergencyRateLimited             ~ "Per-signer emergency action bound reached within the rolling window.",
+    68  => EmergencyGlobalRateLimited       ~ "Chain-wide emergency action bound reached within the rolling window.",
+    69  => EmergencyActionRetired           ~ "This emergency arm was retired; new submissions fail closed.",
+    70  => AdminActionRequiresProposal      ~ "The signer registry exists — this admin action is proposal-only, even for an authorized relayer.",
+    71  => InvalidAdminRegistry             ~ "Proposed signer roster violates the registry invariants (threshold bounds, sorted unique members, roster size, version headroom).",
+    // Operator-custody withdrawals (receipt-gated terminals).
+    72  => BridgeReceiptRegistryInactive    ~ "A receipt-gated withdrawal action was submitted while no operator receipt registry exists on this chain; the operator custody phase is inactive and the path fails closed.",
+    73  => BridgeReceiptInvalid             ~ "The operator quorum proof failed verification: bad structure, fewer distinct members than the threshold, or an invalid signature.",
+    74  => BridgeReceiptMismatch            ~ "The signed receipt does not bind to this withdrawal or deployment (id, owner, amount, destination, epoch or terminal state differs); the log names the field.",
+    75  => WithdrawalBelowMinimum           ~ "The net withdrawal amount is below the effective minimum (the configured minimum, floored at the flat fee): the payout would be worth less than it costs to settle.",
+    76  => WithdrawalTerminalGated          ~ "A retired legacy relayer terminal (ConfirmWithdrawal / FailWithdrawal) was submitted at or above the receipt cutover; rejected as a normal failed action.",
+    77  => UnpricedNoVerdict                ~ "The oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed); mark-dependent actions are refused until a later block certifies a price.",
+    // 78-81 are reserved on the wire for oracle-policy errors.
+    82  => UnpricedGuardUnset               ~ "The oracle-guard gate is active and this market has no mark-price max oracle age set; every mark-dependent action is refused until governance sets one.",
+    // Sub-accounts.
+    83  => SubAccountNotFound               ~ "No sub-account exists for the given master and id.",
+    84  => SubAccountAlreadyExists          ~ "A sub-account with this master and id already exists.",
+    85  => SubAccountTransferSameAccount    ~ "Sub-account transfer with from equal to to is a no-op and is rejected.",
+    86  => SubAccountTransferBothChildren   ~ "Neither side of a sub-account transfer is the master owner; both are derived children.",
+    87  => SubAccountTransferInsufficientBalance ~ "The source sub-account balance is below the transfer amount.",
+    88  => SubAccountIdZero                 ~ "Sub-account id zero is not a valid id.",
+    89  => SubAccountTransferZeroAmount     ~ "A sub-account transfer amount must be greater than zero.",
+    // 90 was SubAccountsInactive, retired with the engine's sub-account switch
+    // (sub-accounts are always on); never reassigned.
+    91  => WithdrawalPayoutLeaseActive      ~ "A live Solana payout lease on this withdrawal is held by a different watcher, so this ClaimWithdrawalPayout is rejected; the rejected claimer must not sign a payout.",
+    128 => WithdrawalPayoutLeaseNotHeld     ~ "The withdrawal's payout lease is not held by the submitter, so the payout-signature report is rejected; acquire the lease with a payout claim first.",
+    129 => WithdrawalPayoutRecordLimitReached ~ "The withdrawal's payout-signature record limit is reached; the rejected payout must not be broadcast.",
+    // Events and attached conditionals.
+    92  => EventAlreadyExists               ~ "CreateEvent for an event id already in the registry.",
+    93  => EventNotFound                    ~ "No event exists under this id: nothing can attach to it, resolve it or read it.",
+    94  => UnderlyingAlreadyAttached        ~ "AttachConditional for an underlying that is already attached to this event.",
+    95  => TooManyAttachedConditionals      ~ "AttachConditional would exceed the event's attachment cap; the log names the count and the cap.",
+    96  => TooManyActiveEvents              ~ "Account would touch more events than the scenario margin engine can enumerate (the per-account event cap). Close a leg on another event before opening this one.",
+    97  => UnpricedNoMark                   ~ "No mark price is available for the market: a conditional or prediction-binary book has no recent-trade EWMA and no oracle fallback value. Fund or trade the market once a mark exists.",
+    98  => TriggerOrderIncompatible         ~ "Order cannot carry attached SL/TP (reduce-only order, ineligible market, or inactive feature).",
+    99  => WithdrawalLimitExceeded          ~ "The withdrawal would push the account's rolling-window outflow past the configured per-account cap. The attempted debit, the cap, and when the oldest in-window outflow expires are in the log; capacity returns as in-window outflows age out.",
+    100 => AccountOrderCapReached           ~ "The account already holds the maximum number of resting orders; cancel one before placing another.",
+    102 => InsuranceFundingReplayed ~ "Insurance-fund funding id has already executed; each funding id executes at most once.",
+    103 => InsuranceWithdrawalReplayed ~ "Insurance withdrawal id has already executed.",
+    104 => MarketlessInsurancePool ~ "Insurance transfer pool has no registered market.",
+    105 => InsufficientInsuranceBalance ~ "Insurance withdrawal would make the pool balance negative.",
+    106 => InsuranceTransferZeroAccount ~ "Insurance transfer names the zero account; a funding source or withdrawal recipient must be a real 20-byte address.",
+    107 => InsuranceAllocationCount ~ "Insurance transfer must carry between 1 and the per-transfer allocation cap (8) allocations.",
+    108 => InsuranceAllocationOrder ~ "Insurance transfer allocations must list each pool once, in strictly ascending pool order.",
+    109 => InsuranceAllocationZeroAmount ~ "An insurance transfer allocation is zero; every allocation moves a positive amount.",
+    110 => InsuranceAmountExceedsI64 ~ "An insurance transfer amount, or their sum, exceeds the ledger's signed 64-bit bound.",
+    111 => LiquidationRefused ~ "A liquidation attempt was refused (a changed position, a malformed book or an unavailable reference) and kept no writes; the liquidation_failed event's refusal names why.",
+    // Code 101 is unassigned on the wire.
+    // 112 was InvalidPlpConfig, retired with the engine's liquidity-provider
+    // backstop; never reassigned.
+    113 => InsuranceAccountWithdrawal ~ "Direct withdrawal names an insurance account; insurance cash leaves only through a governed insurance withdrawal.",
+    114 => InsuranceActionRefused ~ "Governed insurance action is undecodable, not canonical, not permitted for an insurance account, or not owned by the pool's insurance account.",
+    115 => LiquidationBatchTooManyOwners ~ "LiquidateAccounts names more owners than one batch may; split the owners across batches.",
+    116 => LiquidationBatchOverBudget ~ "The owners a LiquidateAccounts batch names hold more positions together than its position budget; the batch is refused whole, so name fewer owners.",
+    123 => DepositLimitExceeded ~ "The ConfirmDeposit or Deposit would credit more than the governance-set deposit limits allow: either the per-deposit maximum, or the protocol-wide cap on deposits credited inside the rolling window.",
+    124 => EventPoolMismatch ~ "AttachConditional names an underlying whose insurance pool differs from the event's; an event and its conditionals share one pool.",
+    125 => ConditionalLotOffUnderlyingGrid ~ "A lot_size change would leave an unresolved event's conditional lot not a multiple of its underlying perpetual's lot.",
+    // Market status.
+    130 => MarketReduceOnly ~ "The market is reduce-only: an order or fill there must shrink its owner's position.",
+    131 => MarketDelisted ~ "The market is delisted and takes no orders.",
+    132 => MarketStatusTransitionRefused ~ "SetMarketStatus or PauseMarket names a move the market cannot make: any market moves Trading to Halted and back; a perpetual also moves Trading or Halted to ReduceOnly and back, then ReduceOnly to Delisted.",
+    133 => MarketBacksLiveEvent ~ "The perpetual backs a Conditional on an unresolved event and cannot wind down until the event resolves.",
+    134 => MarketHalted ~ "The market is halted and takes no orders or fills; cancels still work.",
+    255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
+}
+
+/// Safe classification of an engine result code plus its canonical DeliverTx
+/// log. Upgraded engines use code 50 for slippage and 51 for open interest, but
+/// legacy engines may emit code 50 for open interest during a rolling upgrade.
+/// Callers must not infer the meaning of code 50 from the integer alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecodedExecErrorKind {
+    Known(ErrorKind),
+    /// Preserved for source compatibility with the original log-aware
+    /// code-50 decoder.
+    SlippageExceeded,
+    LegacyOpenInterestLimitExceeded,
+    AmbiguousCode50,
+}
+
+impl DecodedExecErrorKind {
+    pub fn code(self) -> u32 {
+        match self {
+            Self::Known(kind) => kind.code(),
+            Self::SlippageExceeded
+            | Self::LegacyOpenInterestLimitExceeded
+            | Self::AmbiguousCode50 => 50,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Known(kind) => kind.name(),
+            Self::SlippageExceeded => "SlippageExceeded",
+            Self::LegacyOpenInterestLimitExceeded => "OpenInterestLimitExceeded",
+            Self::AmbiguousCode50 => "AmbiguousCode50",
+        }
+    }
+
+    pub fn meaning(self) -> &'static str {
+        match self {
+            Self::Known(kind) => kind.meaning(),
+            Self::SlippageExceeded => {
+                "Atomic basket aggregate slippage exceeded the submitted max_slippage_bps budget."
+            }
+            Self::LegacyOpenInterestLimitExceeded => {
+                "A legacy engine reported that a fill would push aggregate market open interest past MarketConfig.max_open_interest."
+            }
+            Self::AmbiguousCode50 => {
+                "During the rolling upgrade, engine code 50 may mean legacy OpenInterestLimitExceeded or current SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely."
+            }
+        }
+    }
+}
+
+/// Decode an engine error without guessing the transitional meaning of code 50.
+pub fn decode_exec_error_kind(code: u32, log: Option<&str>) -> Option<DecodedExecErrorKind> {
+    if code == 0 {
+        return None;
+    }
+    if code == 50 {
+        return Some(match log {
+            Some(log) if log.starts_with("open interest limit exceeded on market ") => {
+                DecodedExecErrorKind::LegacyOpenInterestLimitExceeded
+            }
+            Some(log) if log.starts_with("atomic basket aggregate slippage ") => {
+                DecodedExecErrorKind::SlippageExceeded
+            }
+            _ => DecodedExecErrorKind::AmbiguousCode50,
+        });
+    }
+    ERROR_KINDS
+        .iter()
+        .copied()
+        .find(|kind| kind.code() == code)
+        .map(DecodedExecErrorKind::Known)
+}
+
+// Backward-compat alias for any callers still using `error_code_manifest()`.
+pub fn error_code_manifest() -> &'static [ErrorKind] {
+    ERROR_KINDS
+}
+
+#[cfg(test)]
+mod exec_error_meaning_tests {
+    use super::*;
+    use proof_wire::types::{ExecError, UnpricedReason};
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn current_code_51_decodes_without_a_log() {
+        let oi = decode_exec_error_kind(51, None).unwrap();
+        assert_eq!(oi.name(), "OpenInterestLimitExceeded");
+        assert_eq!(oi.code(), 51);
+        assert_eq!(
+            decode_exec_error_kind(51, Some("unrecognized")),
+            Some(DecodedExecErrorKind::Known(
+                ErrorKind::OpenInterestLimitExceeded
+            ))
+        );
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn governance_codes_52_53_decode_without_a_log() {
+        let inactive = decode_exec_error_kind(52, None).unwrap();
+        assert_eq!(inactive.name(), "AdminGovernanceInactive");
+        assert_eq!(inactive.code(), 52);
+        let not_signer = decode_exec_error_kind(53, None).unwrap();
+        assert_eq!(not_signer.name(), "NotAdminSigner");
+        assert_eq!(not_signer.code(), 53);
+        assert_eq!(ExecError::AdminGovernanceInactive.code(), 52);
+        assert_eq!(ExecError::NotAdminSigner.code(), 53);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn transitional_code_50_requires_the_canonical_log() {
+        let oi = decode_exec_error_kind(
+            50,
+            Some("open interest limit exceeded on market 7: would be 4, cap 3"),
+        )
+        .unwrap();
+        assert_eq!(oi.name(), "OpenInterestLimitExceeded");
+        assert_eq!(oi.code(), 50);
+
+        let slippage = decode_exec_error_kind(
+            50,
+            Some("atomic basket aggregate slippage 51 bps exceeds budget 50 bps"),
+        )
+        .unwrap();
+        assert_eq!(slippage, DecodedExecErrorKind::SlippageExceeded);
+        assert_eq!(slippage.name(), "SlippageExceeded");
+
+        for log in [None, Some(""), Some("unknown code 50 diagnostic")] {
+            assert_eq!(
+                decode_exec_error_kind(50, log).unwrap().name(),
+                "AmbiguousCode50"
+            );
+        }
+        assert_eq!(decode_exec_error_kind(0, None), None);
+        assert_eq!(
+            decode_exec_error_kind(12, None).unwrap().name(),
+            "InsufficientMargin"
+        );
+    }
+
+    /// Sample one constructed value per variant. New variants added to
+    /// `ExecError` must be added here, otherwise the test below fails
+    /// (which is the point — it forces docs to keep up with the wire).
+    fn one_of_each() -> Vec<ExecError> {
+        vec![
+            ExecError::DecodeError("e".into()),
+            ExecError::OrderNotFound(0),
+            ExecError::NotOwner(0),
+            ExecError::UnauthorizedOracle,
+            ExecError::Overflow,
+            ExecError::InvalidPrice,
+            ExecError::InvalidQuantity,
+            ExecError::InvalidSide,
+            ExecError::UnknownMarket(0),
+            ExecError::InsufficientBalance,
+            ExecError::InsufficientMargin,
+            ExecError::StateCorruption("e".into()),
+            ExecError::InternalError("e".into()),
+            ExecError::UnauthorizedRelayer,
+            ExecError::WithdrawalNotFound(0),
+            ExecError::WithdrawalAlreadyProcessed(0),
+            ExecError::DuplicateDeposit,
+            ExecError::InvalidSignature,
+            ExecError::SignatureRequired,
+            ExecError::AgentNotAuthorized,
+            ExecError::AgentCannotWithdraw,
+            ExecError::NonceTooOld {
+                min_accepted: 0,
+                got: 0,
+            },
+            ExecError::NonceTooFarFuture {
+                max_accepted: 0,
+                got: 0,
+            },
+            ExecError::NonceReplay { nonce: 0 },
+            ExecError::NonceBelowOldest { oldest: 0, got: 0 },
+            ExecError::MarketAlreadyExists(0),
+            ExecError::InvalidMarketConfig("e".into()),
+            ExecError::MarketClosedForTrading(0),
+            ExecError::BinaryPriceOutOfRange,
+            ExecError::InvalidResolution("e".into()),
+            ExecError::PositionLimitExceeded {
+                market: 0,
+                limit: 0,
+                would_be: 0,
+            },
+            ExecError::SettlementPriceMismatch {
+                market: 0,
+                expected: 0,
+                got: 0,
+            },
+            ExecError::OracleNotApplicable { market: 0 },
+            ExecError::PostOnlyWouldCross,
+            ExecError::ReduceOnlyWouldIncrease,
+            ExecError::FeeBpsOutOfRange { bps: 0 },
+            ExecError::FeeOverrideStaleSeq {
+                cmd_seq: 0,
+                stored_seq: 0,
+            },
+            ExecError::TickSizeViolation {
+                market: 0,
+                tick_size: 1,
+                price: 0,
+            },
+            ExecError::LotSizeViolation {
+                market: 0,
+                lot_size: 1,
+                quantity: 0,
+            },
+            ExecError::Unpriced {
+                market: 0,
+                reason: UnpricedReason::Stale {
+                    publish_time_ms: 0,
+                    block_time_ms: 0,
+                    max_staleness_ms: 1,
+                },
+            },
+            ExecError::Unpriced {
+                market: 0,
+                reason: UnpricedReason::NoVerdict(None),
+            },
+            ExecError::Unpriced {
+                market: 0,
+                reason: UnpricedReason::GuardUnset,
+            },
+            ExecError::Unpriced {
+                market: 0,
+                reason: UnpricedReason::NoMark,
+            },
+            ExecError::UserLeverageBelowMarketIm {
+                market: 0,
+                user_im_bps: 0,
+                market_im_bps: 1,
+            },
+            ExecError::ClientOrderIdNotFound { client_order_id: 0 },
+            ExecError::DuplicateClientOrderId { client_order_id: 0 },
+            ExecError::InvalidClientOrderId { client_order_id: 0 },
+            ExecError::FillOrKillWouldNotFill {
+                requested: 1,
+                available: 0,
+            },
+            ExecError::InvalidCancelReplaceTarget,
+            ExecError::AmendBelowFilled {
+                order_id: 0,
+                filled_quantity: 1,
+                requested_quantity: 0,
+            },
+            ExecError::SlippageExceeded {
+                aggregate_bps: 51,
+                max_slippage_bps: 50,
+            },
+            ExecError::OpenInterestLimitExceeded {
+                market: 0,
+                limit: 1,
+                would_be: 2,
+            },
+            ExecError::BridgeReceiptRegistryInactive,
+            ExecError::BridgeReceiptInvalid("e".into()),
+            ExecError::BridgeReceiptMismatch("e".into()),
+            ExecError::WithdrawalBelowMinimum { amount: 0, min: 1 },
+            ExecError::WithdrawalTerminalGated("e".into()),
+            ExecError::SubAccountNotFound,
+            ExecError::SubAccountAlreadyExists,
+            ExecError::SubAccountTransferSameAccount,
+            ExecError::SubAccountTransferBothChildren,
+            ExecError::SubAccountTransferInsufficientBalance,
+            ExecError::SubAccountIdZero,
+            ExecError::SubAccountTransferZeroAmount,
+            ExecError::WithdrawalPayoutLeaseActive,
+            ExecError::EventAlreadyExists(crate::types::EventId(0)),
+            ExecError::EventNotFound(crate::types::EventId(0)),
+            ExecError::UnderlyingAlreadyAttached {
+                event_id: crate::types::EventId(0),
+                underlying_market: 0,
+            },
+            ExecError::TooManyAttachedConditionals {
+                event_id: crate::types::EventId(0),
+                current: 0,
+                max: 0,
+            },
+            ExecError::TooManyActiveEvents { current: 0, max: 0 },
+            ExecError::InsuranceFundingReplayed {
+                funding_id: crate::types::InsuranceFundingId(1),
+            },
+            ExecError::InsuranceWithdrawalReplayed {
+                withdrawal_id: crate::types::InsuranceWithdrawalId(1),
+            },
+            ExecError::MarketlessInsurancePool {
+                pool_id: crate::types::InsurancePoolId(1),
+            },
+            ExecError::InsufficientInsuranceBalance {
+                pool_id: crate::types::InsurancePoolId(1),
+                balance: 1,
+                requested: 2,
+            },
+            ExecError::InsuranceTransferZeroAccount,
+            ExecError::InsuranceAllocationCount { got: 0 },
+            ExecError::InsuranceAllocationOrder {
+                previous: crate::types::InsurancePoolId(2),
+                next: crate::types::InsurancePoolId(1),
+            },
+            ExecError::InsuranceAllocationZeroAmount {
+                pool_id: crate::types::InsurancePoolId(1),
+            },
+            ExecError::InsuranceAmountExceedsI64 { amount: u64::MAX },
+            ExecError::LiquidationRefused(
+                crate::liquidation_report::LiquidationRefusal::PositionMismatch,
+            ),
+            ExecError::InsuranceAccountWithdrawal {
+                pool_id: crate::types::InsurancePoolId(1),
+            },
+            ExecError::InsuranceActionRefused {
+                pool_id: crate::types::InsurancePoolId(1),
+                reason: crate::types::InsuranceActionRefusal::WrongOwner,
+            },
+            ExecError::LiquidationBatchTooManyOwners { owners: 2, max: 1 },
+            ExecError::LiquidationBatchOverBudget {
+                positions: 2,
+                budget: 1,
+            },
+            ExecError::WithdrawalPayoutLeaseNotHeld,
+            ExecError::WithdrawalPayoutRecordLimitReached,
+            ExecError::MarketReduceOnly { market: 1 },
+            ExecError::MarketDelisted { market: 1 },
+            ExecError::MarketStatusTransitionRefused {
+                market: 1,
+                from: crate::types::MarketStatus::Delisted,
+                to: crate::types::MarketStatus::Trading,
+            },
+            ExecError::MarketBacksLiveEvent {
+                market: 1,
+                event_id: crate::types::EventId(0),
+            },
+            ExecError::MarketHalted { market: 1 },
+        ]
+    }
+
+    /// Each unpriced reason keeps its own code, name and the wire's meaning.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn unpriced_reasons_stay_distinct() {
+        let stale = UnpricedReason::Stale {
+            publish_time_ms: 0,
+            block_time_ms: 0,
+            max_staleness_ms: 1,
+        };
+        for (reason, kind) in [
+            (stale, ErrorKind::UnpricedStale),
+            (
+                UnpricedReason::NoVerdict(None),
+                ErrorKind::UnpricedNoVerdict,
+            ),
+            (UnpricedReason::GuardUnset, ErrorKind::UnpricedGuardUnset),
+            (UnpricedReason::NoMark, ErrorKind::UnpricedNoMark),
+        ] {
+            let e = ExecError::Unpriced { market: 1, reason };
+            assert_eq!(
+                decode_exec_error_kind(e.code(), None).expect("every Unpriced code decodes"),
+                DecodedExecErrorKind::Known(kind)
+            );
+            assert_eq!(kind.meaning(), e.meaning());
+        }
+    }
+
+    /// Every code returned by `code()` must have a non-empty `meaning()`.
+    /// This is the integration contract for the openapi-yaml `ExecErrorCode`
+    /// table — clients (Auros, etc.) read these to map raw codes to
+    /// actionable client-side errors.
+    #[test]
+    fn every_variant_has_non_empty_meaning() {
+        for e in one_of_each() {
+            let m = e.meaning();
+            assert!(
+                !m.is_empty(),
+                "ExecError code={} ({:?}) has empty meaning()",
+                e.code(),
+                e
+            );
+            // Heuristic: meanings should be at least one full sentence,
+            // not just the variant name. Catches future placeholder
+            // additions like `_ => "TODO"`.
+            assert!(
+                m.len() > 20,
+                "ExecError code={} ({:?}) meaning is too short to be useful: {:?}",
+                e.code(),
+                e,
+                m
+            );
+        }
+    }
+
+    /// Every engine code must be covered by the public error manifest, with
+    /// the holes the wire itself carries: 24, 25 and 31 (the retired
+    /// impact-market family), 30, 36 and 41 (retired with OracleUpdate and
+    /// RunFundingTick), 78-81 (reserved for oracle errors), 90 (the retired
+    /// sub-account switch), 101 (unassigned), 112 (the retired PLP
+    /// configuration), 117-122 and 126-127 (claimed elsewhere, unassigned on the
+    /// wire).
+    /// Catches the case where a code is reserved by the mirrored engine error
+    /// enum but no SDK classification maps to it.
+    #[test]
+    fn no_code_holes_in_documented_range() {
+        let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
+        codes.sort();
+        codes.dedup();
+        let expected: Vec<u32> = (1u32..=134)
+            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127))
+            .chain(std::iter::once(255))
+            .collect();
+        assert_eq!(
+            codes, expected,
+            "ExecError codes covered by variants: {:?}; expected: {:?}. \
+             A new variant was added without bumping the codes table, \
+             OR a code was reserved without a corresponding variant.",
+            codes, expected
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Prelude — commonly used types for internal imports
+// ---------------------------------------------------------------------------
+
+pub mod prelude {
+    pub use crate::types::{
+        AccountFeeOverride, Action, AmendOrder, ApproveAgent, AttachConditional,
+        AttachedConditional, Branch, CancelAllOrders, CancelClientOrder, CancelOrder, CancelReason,
+        CancelReplaceOrder, ClosePosition, ConfirmDeposit, ConfirmWithdrawal, CreateEvent,
+        CreateMarket, Deposit, Event, EventId, EventInfo, EventOracleSource, EventStatus,
+        ExecError, FailDepositReason, FailWithdrawal, FillId, MarkSourceMode, MarketConfig,
+        MarketId, MarketKind, MarketOrder, Order, OrderId, Outcome, PlaceOrder, Position,
+        ResolveEvent, RevokeAgent, SetUserMarketLeverage, Side, TimeInForce, UpdateMarketFees,
+        Withdraw, WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX,
+        DEFAULT_CEX_COMPOSITE_STALENESS_MS, DEFAULT_MAX_MARK_SPREAD_BPS,
+    };
+}

@@ -10,6 +10,9 @@ class SigningHandle:
     def public_key(self) -> bytes: ...
     @property
     def owner(self) -> bytes: ...
+    def sign_account_ws_auth(self, chain_id: bytes, timestamp_ms: int, after_id: int = 0) -> bytes:
+        """Sign owner-bound account-stream auth with a JSON-safe cursor."""
+        ...
     def sign_and_encode(
         self,
         chain_id: bytes,
@@ -52,6 +55,12 @@ def sign_and_encode(
 ) -> bytes:
     ...
 
+def sign_account_ws_auth(
+    chain_id: bytes, timestamp_ms: int, secret_key: bytes, after_id: int = 0,
+) -> bytes:
+    """Sign owner-bound account-stream auth with a JSON-safe cursor."""
+    ...
+
 def encode_signed_tx(
     action_type: int,
     action_payload: bytes,
@@ -61,6 +70,20 @@ def encode_signed_tx(
 ) -> bytes:
     ...
 
+def signing_message(chain_id: bytes, action_type: int, seq: int, payload: bytes) -> bytes:
+    """Canonical transaction message, owned by the shared Rust core."""
+    ...
+
+def account_ws_auth_message(
+    chain_id: bytes, public_key: bytes, timestamp_ms: int, after_id: int = 0,
+) -> bytes:
+    """Owner-bound account-stream authentication message."""
+    ...
+
+def verify_raw_signature(public_key: bytes, signature: bytes, message: bytes) -> bool:
+    """Strict Ed25519 verification for callback results."""
+    ...
+
 def encode_action(action_type: int, fields: dict[str, object]) -> bytes:
     ...
 
@@ -68,6 +91,21 @@ def decode_action(action_type: int, payload: bytes) -> dict[str, object]:
     ...
 
 def decode_tx(tx_bytes: bytes) -> dict[str, object]:
+    ...
+
+MAX_MARKETS_SNAPSHOT_BYTES: int
+"""Largest complete ``GET /v1/markets-snapshot`` body the decoder accepts."""
+
+MAX_OPEN_ORDERS_BYTES: int
+
+def decode_open_orders(body: bytes, owner: bytes) -> list[dict[str, object]]:
+    """Decode canonical resting orders; raises ValueError on malformed or foreign rows."""
+    ...
+
+def decode_markets_snapshot(body: bytes, chain_id: bytes) -> dict[str, object]:
+    """Decode a complete ``GET /v1/markets-snapshot`` response body bound to
+    ``chain_id``. Raises ``ValueError`` on any fault; nothing partial is
+    returned."""
     ...
 
 def verify_signature(
@@ -92,17 +130,28 @@ def admin_proposal_content_hash(
     created_height: int,
     created_ms: int,
     expiry_ms: int,
-    action: dict[str, object],
+    action: dict[str, object] | str,
 ) -> bytes:
     """Recompute the engine's §2.4 domain-separated admin-proposal content
     hash in the authoritative Rust core, so an approving client can verify a
     server-supplied ``content_hash`` locally. ``action`` is the serde map form
     (``{"Variant": {snake_case_fields}}``), as used by :func:`encode_action`
-    for the governance actions' ``action`` field."""
+    for the governance actions' ``action`` field — except for a fieldless UNIT
+    variant, which serde represents as the bare variant-name string (e.g.
+    ``"UnpauseBridge"``). A fieldless STRUCT variant (``Variant {}``) is NOT
+    one of those and keeps the ``{"Variant": {}}`` map form."""
     ...
 
 def get_action_types() -> list[dict[str, object]]:
     ...
 
 def get_error_code_table() -> list[dict[str, object]]:
+    ...
+
+MAX_GOVERNANCE_READ_BYTES: int
+
+def decode_authorities(data: bytes) -> dict:
+    ...
+
+def decode_liquidation_config(data: bytes) -> tuple:
     ...

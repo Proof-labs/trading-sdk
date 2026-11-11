@@ -1,0 +1,481 @@
+//! Atomic, chain-bound inventory read. This is registration, not oracle health.
+//! No partial result or transport failure is converted into an empty registry.
+
+use std::cmp::Ordering;
+use std::collections::BTreeSet;
+use std::fmt;
+use std::io::Cursor;
+
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use rmpv::Value;
+use serde::{Deserialize, Serialize};
+
+use crate::types::{EventInfo, MarketConfig};
+
+/// Whole HTTP response limit, before decoding its base64 envelope.
+pub const MAX_SNAPSHOT_BYTES: usize = 1024 * 1024;
+/// Resource bounds, not limits on which configured markets are eligible.
+pub const MAX_SNAPSHOT_ROWS: usize = 16_384;
+const MAX_DEPTH: usize = 32;
+
+/// Node `MarketsSnapshot` positional contract. Nested records use the canonical
+/// shared wire DTOs; no independently maintained market/config representation.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MarketsSnapshot {
+    pub chain_id: [u8; 32],
+    pub height: u64,
+    pub markets: Vec<MarketConfig>,
+    /// Every event with its binary book and its attached conditionals.
+    pub events: Vec<EventInfo>,
+    /// Long and short open interest per market that has had positions, in
+    /// ascending market order; a market missing from the list has none.
+    /// `None` when the node does not serve open interest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_interest: Option<Vec<MarketOpenInterest>>,
+}
+
+/// One market's open interest, in base-asset units per side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketOpenInterest {
+    pub market: crate::types::MarketId,
+    pub long: u64,
+    pub short: u64,
+}
+
+/// Position of the open-interest list in the snapshot tuple, the last field
+/// this decoder reads.
+const OPEN_INTEREST_FIELD: usize = 4;
+
+/// Event-row width: the stored `EventInfo` record.
+const EVENT_WIDTH: usize = 10;
+
+/// Deliberately excludes request URLs, response bodies and provider credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotError {
+    InvalidEndpoint,
+    InvalidTimeout,
+    Transport,
+    Timeout,
+    Http(u16),
+    TooLarge,
+    Malformed,
+    WrongChain,
+    Uncommitted,
+    DuplicateMarket,
+    /// The open-interest list is not in ascending market order.
+    UnorderedOpenInterest,
+    CatchingUp,
+    RpcUnavailable,
+    /// A receipt lookup answered 404 or 500 with an error that is not the
+    /// exact not-found shape for the requested hash. The backend did answer,
+    /// and the answer is never evidence that the transaction is absent.
+    UnrecognizedNotFound,
+    HashMismatch,
+    /// A confirmation-poll schedule outside the safety ceiling.
+    InvalidConfirmationPolling,
+    /// A bracket-retry setting with no attempt or outside the safety ceiling.
+    InvalidBracketRetry,
+}
+
+impl fmt::Display for SnapshotError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Http(status) => write!(f, "market snapshot returned HTTP {status}"),
+            other => write!(f, "market snapshot refused: {other:?}"),
+        }
+    }
+}
+
+impl std::error::Error for SnapshotError {}
+
+#[derive(Deserialize)]
+struct Envelope {
+    data: String,
+    error: Option<serde_json::Value>,
+}
+
+/// Decode a complete JSON/base64/MessagePack response. Duplicate JSON `data`
+/// keys, duplicate registry IDs, open interest out of market order, non-integer
+/// scalars, unknown enums, incomplete records and trailing MessagePack bytes all
+/// refuse the entire read. Appended tuple fields are permitted, but existing
+/// fields are never defaulted away.
+pub fn decode_snapshot(
+    body: &[u8],
+    expected_chain: ChainBinding,
+) -> Result<MarketsSnapshot, SnapshotError> {
+    if body.len() > MAX_SNAPSHOT_BYTES {
+        return Err(SnapshotError::TooLarge);
+    }
+    let envelope: Envelope = serde_json::from_slice(body).map_err(|_| SnapshotError::Malformed)?;
+    if envelope.error.is_some() {
+        return Err(SnapshotError::Malformed);
+    }
+    let bytes = STANDARD
+        .decode(envelope.data)
+        .map_err(|_| SnapshotError::Malformed)?;
+    let mut cursor = Cursor::new(bytes.as_slice());
+    // rmpv grows arrays from actual input elements, never from a declared
+    // attacker-controlled length. The bounded input and depth bound allocation.
+    let mut value = rmpv::decode::read_value_with_max_depth(&mut cursor, MAX_DEPTH)
+        .map_err(|_| SnapshotError::Malformed)?;
+    if usize::try_from(cursor.position()).ok() != Some(bytes.len()) {
+        return Err(SnapshotError::Malformed);
+    }
+    validate_value(&value)?;
+    let top = tuple(&mut value, 4)?;
+    top.truncate(OPEN_INTEREST_FIELD + 1);
+    for (slot, width) in [(2, 24), (3, EVENT_WIDTH), (OPEN_INTEREST_FIELD, 3)] {
+        let rows = match top.get_mut(slot) {
+            Some(Value::Array(rows)) => rows,
+            // A node from before open interest ends the tuple at the events.
+            None if slot == OPEN_INTEREST_FIELD => continue,
+            _ => return Err(SnapshotError::Malformed),
+        };
+        if rows.len() > MAX_SNAPSHOT_ROWS {
+            return Err(SnapshotError::TooLarge);
+        }
+        for row in rows {
+            let fields = tuple(row, width)?;
+            fields.truncate(width);
+            if slot == 3 {
+                // An event's attachment list: one `[underlying, cpy, cpn]`
+                // tuple per attachment, bounded like the rows themselves.
+                let attachments = tuple(&mut fields[9], 0)?;
+                if attachments.len() > MAX_SNAPSHOT_ROWS {
+                    return Err(SnapshotError::TooLarge);
+                }
+                for attachment in attachments {
+                    tuple(attachment, 3)?.truncate(3);
+                }
+            }
+        }
+    }
+    let mut canonical = Vec::new();
+    rmpv::encode::write_value(&mut canonical, &value).map_err(|_| SnapshotError::Malformed)?;
+    let snapshot: MarketsSnapshot =
+        rmp_serde::from_slice(&canonical).map_err(|_| SnapshotError::Malformed)?;
+    if snapshot.chain_id != expected_chain.bytes() {
+        return Err(SnapshotError::WrongChain);
+    }
+    if snapshot.height == 0 {
+        return Err(SnapshotError::Uncommitted);
+    }
+    let mut markets = BTreeSet::new();
+    for market in &snapshot.markets {
+        if !markets.insert(market.market) {
+            return Err(SnapshotError::DuplicateMarket);
+        }
+    }
+    let mut events = BTreeSet::new();
+    for event in &snapshot.events {
+        if !events.insert(event.event_id) {
+            return Err(SnapshotError::DuplicateMarket);
+        }
+    }
+    for pair in snapshot
+        .open_interest
+        .iter()
+        .flat_map(|rows| rows.windows(2))
+    {
+        match pair[0].market.cmp(&pair[1].market) {
+            Ordering::Less => {}
+            Ordering::Equal => return Err(SnapshotError::DuplicateMarket),
+            Ordering::Greater => return Err(SnapshotError::UnorderedOpenInterest),
+        }
+    }
+    Ok(snapshot)
+}
+
+fn tuple(value: &mut Value, minimum: usize) -> Result<&mut Vec<Value>, SnapshotError> {
+    match value {
+        Value::Array(values) if values.len() >= minimum => Ok(values),
+        _ => Err(SnapshotError::Malformed),
+    }
+}
+
+fn validate_value(value: &Value) -> Result<(), SnapshotError> {
+    match value {
+        Value::F32(_) | Value::F64(_) | Value::Ext(_, _) => Err(SnapshotError::Malformed),
+        Value::String(text) if text.as_str().is_none() => Err(SnapshotError::Malformed),
+        Value::Array(values) => values.iter().try_for_each(validate_value),
+        Value::Map(values) => {
+            let mut keys = BTreeSet::new();
+            for (key, value) in values {
+                let key = key.as_str().ok_or(SnapshotError::Malformed)?;
+                if !keys.insert(key) {
+                    return Err(SnapshotError::Malformed);
+                }
+                validate_value(value)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// How long `read_bound_inventory` waits for the header that commits a
+/// snapshot's app hash, per bracket attempt and inside the one whole-call
+/// deadline. The defaults are [`ConfirmationPolling::DEFAULT_POLLS`] polls,
+/// [`ConfirmationPolling::DEFAULT_INTERVAL`] apart; the constants below are the
+/// outer safety ceiling, not a policy.
+#[cfg(feature = "gateway")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConfirmationPolling {
+    pub polls: usize,
+    pub interval: std::time::Duration,
+}
+
+#[cfg(feature = "gateway")]
+impl ConfirmationPolling {
+    pub const DEFAULT_POLLS: usize = 8;
+    pub const DEFAULT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+    /// A caller that wants to wait longer waits through its own deadline, not
+    /// through an unbounded number of reads against one node.
+    pub const MAX_POLLS: usize = 64;
+    pub const MAX_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+}
+
+#[cfg(feature = "gateway")]
+impl Default for ConfirmationPolling {
+    fn default() -> Self {
+        Self {
+            polls: Self::DEFAULT_POLLS,
+            interval: Self::DEFAULT_INTERVAL,
+        }
+    }
+}
+
+/// How many whole brackets `read_bound_inventory` reads, counting the first,
+/// and how long it pauses before each fresh one, inside the one whole-call
+/// deadline. Only a lagging read earns another attempt:
+/// [`WitnessError::BracketOutOfOrder`] and [`WitnessError::HeaderBehind`].
+/// Behind a load balancer the status, snapshot and header reads can land on
+/// full nodes a block apart, so an honest, committed set of reads can arrive
+/// out of height order. Every other refusal is final at once.
+///
+/// The defaults are [`BracketRetry::DEFAULT_ATTEMPTS`] attempts,
+/// [`BracketRetry::DEFAULT_DELAY`] apart: long enough for a lagging full node
+/// to catch up by a block, short enough to leave most of the deadline. One
+/// attempt reads a single bracket and never retries.
+#[cfg(feature = "gateway")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BracketRetry {
+    pub attempts: usize,
+    pub delay: std::time::Duration,
+}
+
+#[cfg(feature = "gateway")]
+impl BracketRetry {
+    pub const DEFAULT_ATTEMPTS: usize = 3;
+    pub const DEFAULT_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
+    /// A node that stays out of order through this many brackets is reported,
+    /// not waited out.
+    pub const MAX_ATTEMPTS: usize = 8;
+    pub const MAX_DELAY: std::time::Duration = std::time::Duration::from_secs(5);
+}
+
+#[cfg(feature = "gateway")]
+impl Default for BracketRetry {
+    fn default() -> Self {
+        Self {
+            attempts: Self::DEFAULT_ATTEMPTS,
+            delay: Self::DEFAULT_DELAY,
+        }
+    }
+}
+
+/// Canonical gateway transport. Every HTTP read is one-shot: no signing, nonce
+/// allocation, request retry, node fallback, caching or partial inventory
+/// reconciliation lives here. The one bounded retry is `read_bound_inventory`
+/// reading a whole new bracket after one refused as a lagging read (out of
+/// height order, or an `H + 1` header lookup on a node without that block).
+#[cfg(feature = "gateway")]
+#[derive(Clone)]
+pub struct MarketsSnapshotClient {
+    client: reqwest::Client,
+    endpoint: reqwest::Url,
+    timeout: std::time::Duration,
+    confirmation: ConfirmationPolling,
+    bracket_retry: BracketRetry,
+}
+
+#[cfg(feature = "gateway")]
+impl MarketsSnapshotClient {
+    /// The default confirmation-poll schedule and bracket retry. Use
+    /// [`with_confirmation_polling`](Self::with_confirmation_polling) and
+    /// [`with_bracket_retry`](Self::with_bracket_retry) to choose others.
+    pub fn new(gateway_url: &str, timeout: std::time::Duration) -> Result<Self, SnapshotError> {
+        Self::with_confirmation_polling(gateway_url, timeout, ConfirmationPolling::default())
+    }
+
+    pub fn with_confirmation_polling(
+        gateway_url: &str,
+        timeout: std::time::Duration,
+        confirmation: ConfirmationPolling,
+    ) -> Result<Self, SnapshotError> {
+        let mut base =
+            reqwest::Url::parse(gateway_url).map_err(|_| SnapshotError::InvalidEndpoint)?;
+        if !matches!(base.scheme(), "http" | "https")
+            || base.host_str().is_none()
+            || !base.username().is_empty()
+            || base.password().is_some()
+            || base.query().is_some()
+            || base.fragment().is_some()
+            || base.path() != "/"
+        {
+            return Err(SnapshotError::InvalidEndpoint);
+        }
+        if timeout.is_zero() || timeout > std::time::Duration::from_secs(60) {
+            return Err(SnapshotError::InvalidTimeout);
+        }
+        base.set_path("/v1/markets-snapshot");
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .no_proxy()
+            .timeout(timeout)
+            .build()
+            .map_err(|_| SnapshotError::Transport)?;
+        // A schedule longer than the deadline is allowed: the whole-call
+        // deadline already ends the wait, and a caller may want the polls to
+        // run only as far as a short deadline reaches.
+        if confirmation.polls > ConfirmationPolling::MAX_POLLS
+            || confirmation.interval > ConfirmationPolling::MAX_INTERVAL
+        {
+            return Err(SnapshotError::InvalidConfirmationPolling);
+        }
+        Ok(Self {
+            client,
+            endpoint: base,
+            timeout,
+            confirmation,
+            bracket_retry: BracketRetry::default(),
+        })
+    }
+
+    /// The same client with another [`BracketRetry`].
+    pub fn with_bracket_retry(mut self, retry: BracketRetry) -> Result<Self, SnapshotError> {
+        if retry.attempts == 0
+            || retry.attempts > BracketRetry::MAX_ATTEMPTS
+            || retry.delay > BracketRetry::MAX_DELAY
+        {
+            return Err(SnapshotError::InvalidBracketRetry);
+        }
+        self.bracket_retry = retry;
+        Ok(self)
+    }
+
+    pub async fn read(
+        &self,
+        expected_chain: ChainBinding,
+    ) -> Result<MarketsSnapshot, SnapshotError> {
+        decode_snapshot(&self.get("/v1/markets-snapshot").await?, expected_chain)
+    }
+
+    async fn get(&self, path: &str) -> Result<Vec<u8>, SnapshotError> {
+        self.get_with_query(path, None).await
+    }
+
+    async fn get_with_query(
+        &self,
+        path: &str,
+        query: Option<&str>,
+    ) -> Result<Vec<u8>, SnapshotError> {
+        self.read_bounded(path, query, &[200])
+            .await
+            .map(|(_, body)| body)
+    }
+
+    /// One bounded GET under the whole-call deadline. `accepted` are the
+    /// statuses whose body is read and returned with it; every other status is
+    /// an error before the body is touched.
+    async fn read_bounded(
+        &self,
+        path: &str,
+        query: Option<&str>,
+        accepted: &[u16],
+    ) -> Result<(u16, Vec<u8>), SnapshotError> {
+        let mut endpoint = self.endpoint.clone();
+        endpoint.set_path(path);
+        endpoint.set_query(query);
+        let request = async {
+            let mut response = self.client.get(endpoint).send().await.map_err(|err| {
+                if err.is_timeout() {
+                    SnapshotError::Timeout
+                } else {
+                    SnapshotError::Transport
+                }
+            })?;
+            let status = response.status().as_u16();
+            if !accepted.contains(&status) {
+                return Err(SnapshotError::Http(status));
+            }
+            if response
+                .content_length()
+                .is_some_and(|n| n > MAX_SNAPSHOT_BYTES as u64)
+            {
+                return Err(SnapshotError::TooLarge);
+            }
+            let mut body = Vec::new();
+            while let Some(chunk) = response.chunk().await.map_err(|err| {
+                if err.is_timeout() {
+                    SnapshotError::Timeout
+                } else {
+                    SnapshotError::Transport
+                }
+            })? {
+                if body.len().saturating_add(chunk.len()) > MAX_SNAPSHOT_BYTES {
+                    return Err(SnapshotError::TooLarge);
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok((status, body))
+        };
+        tokio::time::timeout(self.timeout, request)
+            .await
+            .map_err(|_| SnapshotError::Timeout)?
+    }
+}
+
+mod values;
+pub use values::{Address, AppHash, BlockHeight, ChainBinding, MarketId, MicroUsdc, NodeId};
+
+#[cfg(feature = "gateway")]
+mod chain;
+#[cfg(feature = "gateway")]
+/// `ChainIdentity` and `CommittedReceipt` are the gateway module's types, not
+/// copies: one node answers both clients, so one shape describes its answer.
+///
+/// ```
+/// # use proof_trading_sdk::{gateway, market_snapshot};
+/// fn one_receipt_type(receipt: gateway::CommittedReceipt) -> market_snapshot::CommittedReceipt {
+///     receipt
+/// }
+/// fn one_identity_type(identity: market_snapshot::ChainIdentity) -> gateway::ChainIdentity {
+///     identity
+/// }
+/// ```
+pub use chain::ChainIdentity;
+#[cfg(feature = "gateway")]
+pub use chain::{
+    CommittedPriceUpdate, CommittedReceipt, PriceEvidenceRejection, ReceiptObservation,
+};
+
+#[cfg(feature = "gateway")]
+mod witness;
+#[cfg(feature = "gateway")]
+pub use witness::{
+    decode_bound_identity, decode_bound_snapshot, validate_bound_inventory, BoundChainIdentity,
+    BoundInventoryRead, BoundInventorySnapshot, BoundMarketsSnapshot, SnapshotWitness,
+    WitnessError,
+};
+
+#[cfg(feature = "gateway")]
+mod submission;
+#[cfg(feature = "gateway")]
+pub use submission::{
+    SubmissionError, SubmissionErrorKind, SubmissionVerdict, MAX_SIGNED_SUBMISSION_BYTES,
+};
+
+#[cfg(test)]
+mod tests;

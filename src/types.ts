@@ -30,17 +30,18 @@ export enum TimeInForce {
 // Action type constants (wire bytes 0x01–0x0D)
 // ---------------------------------------------------------------------------
 
-/** Wire-format action type identifiers. Each value is a single byte. */
+/**
+ * Wire-format action type identifiers. Each value is a single byte.
+ * Retired, never reassigned: 0x03 `OracleUpdate`, 0x12 `RunFundingTick`,
+ * 0x14 `OracleUpdateComposite`.
+ */
 export const ActionType = {
   /** Place a limit order on the order book. */
   PlaceOrder: 0x01,
   /** Cancel an existing resting order. */
   CancelOrder: 0x02,
-  /** Submit an oracle price update (relayer only). */
-  OracleUpdate: 0x03,
-  /** Operator-only: submit a composite-CEX price for the multi-source mark
-   *  median (BE-31 Phase B). Feeder infrastructure, not a trading action. */
-  OracleUpdateComposite: 0x14,
+  /** Oracle-policy source observation relayed by the feeder. */
+  SubmitOracleObservation: 0x2d,
   /** Place a market order that crosses immediately. */
   MarketOrder: 0x04,
   /** Credit USDC to an account (legacy, prefer ConfirmDeposit). */
@@ -76,10 +77,19 @@ export const ActionType = {
   ApproveAgent: 0x0c,
   /** Revoke a previously approved agent wallet. */
   RevokeAgent: 0x0d,
-  /** Create a 5-book impact-market family (admin). */
-  CreateImpactMarket: 0x0e,
-  /** Resolve an impact-market event with an outcome (admin). */
-  ResolveEvent: 0x0f,
+  /** Resolve an event with a YES/NO outcome (0x27). */
+  ResolveEvent: 0x27,
+  /** Create a derived sub-account under the signing master (0x28). */
+  CreateSubAccount: 0x28,
+  /** Move balance between a master and one of its sub-accounts (0x29). */
+  SubAccountTransfer: 0x29,
+  /** Acquire the single-holder Solana payout lease on a pending withdrawal
+   *  (0x2e). Custody-authorized watchers only. */
+  ClaimWithdrawalPayout: 0x2e,
+  /** Record the payout-lease holder's Solana transfer signature on a
+   *  pending withdrawal before broadcasting it (0x31). Custody-authorized
+   *  watchers only. */
+  RecordWithdrawalPayout: 0x31,
   /** Update a subset of `MarketConfig` tunables on a live market (admin).
    *  Fee tiering, funding-rate cap tightening, position-limit updates
    *  without a chain rebase. */
@@ -149,6 +159,16 @@ export interface PlaceOrder {
    * visible crossing book can fill the whole order immediately.
    */
   timeInForce?: TimeInForce;
+  /**
+   * Optional whole-position SL/TP bracket attached at placement time
+   * (pre-fill trigger). Installed on the position resulting from this
+   * order's first fill; discarded if the order terminates without filling.
+   * Encodes as the trailing `stop_loss`/`take_profit` wire fields (nil
+   * when absent) added by proof-wire 2.1.0.
+   */
+  stopLoss?: TriggerLimb | null;
+  /** Optional take-profit limb; see {@link PlaceOrder.stopLoss}. */
+  takeProfit?: TriggerLimb | null;
 }
 
 /** Cancel an existing resting order by its engine-assigned ID. */
@@ -199,6 +219,15 @@ export interface CancelReplaceOrder {
   reduceOnly?: boolean;
   /** Replacement time-in-force policy. Defaults to GTC. */
   timeInForce?: TimeInForce;
+  /**
+   * Optional whole-position SL/TP bracket for the replacement order
+   * (pre-fill trigger; see {@link PlaceOrder.stopLoss}). The replaced
+   * order's pending payload is always discarded — replacement is a full
+   * payload replacement.
+   */
+  stopLoss?: TriggerLimb | null;
+  /** Optional take-profit limb; see {@link CancelReplaceOrder.stopLoss}. */
+  takeProfit?: TriggerLimb | null;
 }
 
 /** Amend a resting order without changing its exchange order ID. */
@@ -213,55 +242,6 @@ export interface AmendOrder {
   newQuantity?: bigint | null;
 }
 
-/** Submit an oracle price update for a market (relayer only). */
-export interface OracleUpdate {
-  /** Market identifier to update. */
-  market: number;
-  /** New oracle price in micro-USDC (6 decimal places, e.g., 66752340000 = $66,752.34). */
-  price: bigint;
-  /** Authorized oracle signer address (20 bytes). */
-  signer: Address;
-  /**
-   * Oracle publish timestamp in ms since Unix epoch. Must be strictly
-   * greater than the last accepted update on this market (engine
-   * rejects with code 30 `OracleTimestampNotMonotonic` otherwise).
-   * Added 2026-04-23 per audit B3 as replay protection for the
-   * relayer-signed oracle feed.
-   */
-  publishTimeMs: bigint;
-}
-
-/**
- * **Operator action — not for trading integrations.** Submit a composite-CEX
- * price for a market: BE-31 Phase B's third source for the multi-source
- * mark-price median (oracle + book-mid + composite CEX index).
- *
- * A normal trading integration never submits this — it is feeder
- * infrastructure run by the operator. The engine re-checks the signer against
- * a **separate CEX-composite feeder allowlist** (a distinct trust domain from
- * the {@link OracleUpdate} relay), so a non-feeder signer is rejected
- * regardless. Markets ignore the composite entirely unless an operator has
- * flipped them to `Median` via {@link UpdateMarketFees} (`markSourceMode = 1`).
- *
- * @remarks Operator-only. Requires a signer on the engine's CEX-composite
- * feeder allowlist; not needed for trading integrations.
- */
-export interface OracleUpdateComposite {
-  /** Market identifier to update. */
-  market: number;
-  /** Composite price in micro-USDC (median/VWAP of `nSources` CEX feeds). */
-  price: bigint;
-  /** Number of CEX feeds that went into the composite. Observability only —
-   *  the engine does not gate on it. Encodes as 0 when absent. */
-  nSources: number;
-  /** Authorized feeder signer (20 bytes), on the CEX-composite allowlist. */
-  signer: Address;
-  /** Feeder publish timestamp in ms since Unix epoch. Must be strictly
-   *  greater than the last accepted composite on this market (replay guard,
-   *  same semantics as {@link OracleUpdate.publishTimeMs}). */
-  publishTimeMs: bigint;
-}
-
 /** Place a market order that crosses immediately against resting orders. */
 export interface MarketOrder {
   /** Market identifier. */
@@ -274,6 +254,15 @@ export interface MarketOrder {
   quantity: bigint;
   /** Optional client-assigned order ID for tracking. */
   clientOrderId?: bigint | null;
+  /**
+   * Optional whole-position SL/TP bracket attached at placement time
+   * (pre-fill trigger; see {@link PlaceOrder.stopLoss}). A market order
+   * has no limit price, so the bracket's placement mark is the current
+   * mark. Encodes as the trailing wire fields added by proof-wire 2.1.0.
+   */
+  stopLoss?: TriggerLimb | null;
+  /** Optional take-profit limb; see {@link MarketOrder.stopLoss}. */
+  takeProfit?: TriggerLimb | null;
 }
 
 /**
@@ -347,17 +336,28 @@ export interface CreateMarket {
   szDecimals: number;
   /**
    * Human-readable ticker / short symbol (e.g. `BTC`). Display/metadata only
-   * — the engine never reads it. MANDATORY on the wire (no serde(default)),
-   * though an empty string is accepted; capped at 24 bytes by the engine.
+   * — the engine never reads it. MANDATORY on the wire (no serde(default)).
+   * 1 to 24 bytes of A-Z, 0-9 and '-', starting with A-Z (see
+   * `validateTicker`); the SDK refuses any other value before signing.
    * Fixed at creation and immutable thereafter.
    */
   ticker: string;
   /**
    * Aggregate market open-interest cap in contracts. Omitted, null, and 0 all
-   * mean uncapped and encode identically as the canonical 12-field payload
-   * with an explicit 0 tail. Legacy 11-field payloads still decode as 0n.
+   * mean uncapped and encode identically as the canonical 14-field payload
+   * with an explicit 0 cap. Legacy 11-field payloads still decode as 0n.
    */
   maxOpenInterest?: bigint | null;
+  /**
+   * Price grid in micro-USDC: order prices must be multiples of it. MANDATORY
+   * and non-zero; the engine refuses creation with 0.
+   */
+  tickSize: bigint;
+  /**
+   * Quantity grid in contracts: order quantities must be multiples of it.
+   * MANDATORY and non-zero; the engine refuses creation with 0.
+   */
+  lotSize: bigint;
 }
 
 /** User requests a USDC withdrawal to a Solana address. Debits balance immediately. */
@@ -370,6 +370,18 @@ export interface WithdrawRequest {
   solanaDestination: Uint8Array; // 32 bytes
 }
 
+/**
+ * Position of a USDC transfer inside its Solana transaction: the top-level
+ * instruction index plus, for a transfer nested under a CPI, the inner
+ * instruction index (`null`/omitted when the transfer is the top-level
+ * instruction). Two transfers in one transaction share a signature and differ
+ * only here. Encodes as a positional 2-element array `[topIndex, innerIndex]`.
+ */
+export interface DepositLocator {
+  topIndex: number;
+  innerIndex?: number | null;
+}
+
 /** Relayer confirms an on-chain USDC deposit from Solana. Credits the account. */
 export interface ConfirmDeposit {
   /** Account address to credit (20 bytes). */
@@ -380,6 +392,14 @@ export interface ConfirmDeposit {
   solanaTxSig: Uint8Array;
   /** Authorized relayer signer address (20 bytes). */
   signer: Address;
+  /**
+   * Instruction locator within the signature. Omitted/`null` on pre-locator
+   * txs (the engine reads that as top-level instruction 0, no inner). Trailing
+   * optional field: absent still encodes as a trailing `nil`, so the payload is
+   * a 5-element array either way — an engine predating the locator rejects it.
+   * See the MAJOR-bump entry in CHANGELOG.md for the engine floor.
+   */
+  locator?: DepositLocator | null;
 }
 
 /** Relayer confirms a USDC withdrawal was sent on Solana. */
@@ -588,7 +608,7 @@ export enum Branch {
   No = 2,
 }
 
-/** Outcome of an impact-market event. */
+/** Outcome of an event. */
 export enum Outcome {
   Yes = 1,
   No = 2,
@@ -607,8 +627,8 @@ export type PriceComparison =
   "GreaterThan" | "LessThan" | "GreaterThanOrEqual" | "LessThanOrEqual";
 
 /**
- * BE-54: how an impact-market event's YES/NO outcome is determined at
- * deadline. Carried optionally on `CreateImpactMarket`; `undefined`
+ * How an event's YES/NO outcome is determined at settlement. Carried
+ * optionally on `CreateEvent`; `undefined`
  * (the wire `nil`) means `RelayerAttested` — the legacy default where
  * the resolver supplies the outcome and the engine trusts it. The two
  * auto-resolve modes derive YES/NO from an on-chain oracle reading and
@@ -630,46 +650,132 @@ export type EventOracleSource =
     }
   | { kind: "RelayerAttested" };
 
-/** Create an impact-market family with 4 child books (CPY/CPN/EBY/EBN). */
-export interface CreateImpactMarket {
-  impactMarketId: number;
+/**
+ * Attach a conditional to an existing event (admin-actions inner tag `0x0a`):
+ * the YES conditional book at `childMarketBase` and the NO book at +1, on
+ * `underlyingMarket`, recorded on the event's attachment list and settling
+ * through the event's two binaries. Governance-only: the embedded `signer`
+ * must be zero.
+ */
+export interface AttachConditional {
+  eventId: number;
+  /** An existing perpetual, not yet attached to this event. */
   underlyingMarket: number;
+  /** `childMarketBase` = CPY, +1 = CPN; both ids must be free. */
   childMarketBase: number;
-  question: string;
-  deadlineMs: bigint;
-  resolutionWindowMs: bigint;
   imBps: number;
   mmBps: number;
   takerFeeBps: number;
   makerFeeBps: number;
-  fundingIntervalMs: bigint;
-  maxFundingRateBps: number;
   signer: Address;
-  /**
-   * BE-54: how this event's YES/NO outcome is determined at deadline.
-   * Optional — `undefined` (the wire `nil`) means `RelayerAttested`,
-   * which preserves the legacy behavior where the resolver supplies the
-   * outcome and the engine trusts it. Setting `UnderlyingPriceVsStrike`
-   * or `MarketOracle` makes the resolution self-verifying: the engine
-   * derives YES/NO from the named oracle's reading and rejects any
-   * `ResolveEvent` whose `outcome` doesn't match. `Outcome.Void`
-   * overrides the auto-derivation in either auto-resolve mode (operator
-   * escape hatch for unresolvable events).
-   */
-  oracleSource?: EventOracleSource;
-  /** Optional event body text for frontend detail pages. Encodes as "" when
-   *  absent (matches the engine's `serde(default)`). */
-  description?: string;
-  /** Optional resolution criteria text. Encodes as "" when absent (matches
-   *  the engine's `serde(default)`). */
-  rules?: string;
+  /** Open-interest cap for each of the two conditional books, in the
+   *  underlying's size scale; `undefined` or `0n` = uncapped (encodes as 0). */
+  maxOpenInterest?: bigint;
 }
 
-/** Resolve an impact-market event. */
+/** Create a derived sub-account under the signing master (0x28). */
+export interface CreateSubAccount {
+  /** The master account (20-byte address). */
+  owner: Address;
+  /** Non-zero id, unique per master. */
+  subAccountId: number;
+  /** 32-byte display name, zero-padded. */
+  name: Uint8Array;
+}
+
+/** Move balance between a master and one of its sub-accounts (0x29). One
+ *  side must be the master; the other a derived child. */
+export interface SubAccountTransfer {
+  owner: Address;
+  from: Address;
+  to: Address;
+  /** Micro-USDC, greater than zero. */
+  amount: bigint;
+}
+
+/** Acquire the single-holder Solana payout lease on a pending withdrawal
+ *  (0x2e). `holder` is the claiming watcher's own address. */
+export interface ClaimWithdrawalPayout {
+  withdrawalId: bigint;
+  holder: Address;
+}
+
+/** Record the Solana signature of the payout-lease holder's transfer for a
+ *  pending withdrawal (0x31), before the holder broadcasts it, while its
+ *  lease is live. Stored as the withdrawal's payout record; peer watchers
+ *  verify it against Solana before re-signing. */
+export interface RecordWithdrawalPayout {
+  withdrawalId: bigint;
+  /** The reporting watcher's own address; must equal the envelope signer
+   *  and the withdrawal's payout lease holder. */
+  holder: Address;
+  /** The reported Solana transaction signature: exactly 64 raw bytes, or
+   *  the engine refuses the transaction. */
+  solanaSignature: Uint8Array;
+  /** The reported transfer's last valid block height (never zero — the
+   *  reporter signed the transfer, so the bound is always known); peer
+   *  watchers bound absence checks with it. */
+  lastValidBlockHeight: bigint;
+}
+
+/** Resolve a standalone event (0x27). YES/NO only — the engine rejects `Void`. */
 export interface ResolveEvent {
-  impactMarketId: number;
+  eventId: number;
   outcome: Outcome;
   signer: Address;
+}
+
+/**
+ * Create a standalone event (admin-actions v2 inner tag `0x09`): one
+ * prediction-binary book (EBY at `childMarketBase`) under one
+ * `EventInfo`, no underlying perp and no conditional legs. The embedded
+ * `signer` must be zero — governance supplies the authorization.
+ */
+export interface CreateEvent {
+  eventId: number;
+  childMarketBase: number;
+  poolId: number;
+  question: string;
+  settlementMs: bigint;
+  resolutionWindowMs: bigint;
+  takerFeeBps: number;
+  makerFeeBps: number;
+  signer: Address;
+  /** How YES/NO is determined; `undefined` (wire `nil`) = `RelayerAttested`. */
+  oracleSource?: EventOracleSource;
+  /** Optional body text; encodes as "" when absent (`serde(default)`). */
+  description?: string;
+  /** Optional resolution criteria; encodes as "" when absent. */
+  rules?: string;
+  /** Open-interest cap for the event's binary book, in
+   *  contracts; `undefined` or `0n` = uncapped (encodes as 0). */
+  maxOpenInterest?: bigint;
+}
+
+/** One conditional attached to an event: the underlying perpetual and the
+ *  YES/NO conditional books that settle against it. */
+export interface AttachedConditional {
+  underlyingMarket: number;
+  cpyMarket: number;
+  cpnMarket: number;
+}
+
+/** Stored record for an event — the `get_event` read model: its binary book
+ *  and every conditional attached to it. */
+export interface EventInfo {
+  eventId: number;
+  /** The event's binary book, priced in Yes. */
+  ebyMarket: number;
+  question: string;
+  settlementMs: bigint;
+  resolutionWindowMs: bigint;
+  status: EventStatus;
+  createdMs: bigint;
+  resolvedMs: bigint;
+  /** `undefined` (wire `nil`) means `RelayerAttested`. */
+  oracleSource?: EventOracleSource;
+  /** Every attachment, in attachment order; empty for a binary-only event. */
+  attachedConditionals: AttachedConditional[];
 }
 
 /**
@@ -741,30 +847,20 @@ export interface UpdateMarketFees {
    */
   oracleStalenessMs?: bigint | null;
   /**
-   * BE-31 Phase A: mark-price source mode. Omit to leave unchanged.
-   * 0 = OracleOnly (legacy); 1 = Median (oracle + book-mid).
-   * Has no effect on impact-family child markets - those always
-   * mark off the EWMA per the no-oracle-MTM redesign.
+   * Mark-price source mode (0 = OracleOnly, 1 = Median). Omit to leave
+   * unchanged. Stored on the market config; the engine no longer reads it.
    */
   markSourceMode?: 0 | 1 | null;
   /**
-   * BE-31 Phase A: thin-book spread cap in bps for the median guard.
-   * Omit to leave unchanged. 0 resets to the engine default
-   * (DEFAULT_MAX_MARK_SPREAD_BPS = 100). Ignored unless
-   * `markSourceMode === 1`.
+   * Thin-book spread cap in bps for the Median mark mode. Omit to leave
+   * unchanged. Stored on the market config; the engine no longer reads it.
    */
   maxMarkSpreadBps?: number | null;
   /**
-   * BE-31 Phase B: max age in ms for the composite-CEX price source.
-   * Omit to leave unchanged. 0 resets to the engine default
-   * (DEFAULT_CEX_COMPOSITE_STALENESS_MS = 30s).
+   * Max age in ms of the retired composite price source. Omit to leave
+   * unchanged. Stored on the market config; the engine no longer reads it.
    */
   cexCompositeStalenessMs?: bigint | null;
-  /**
-   * BE-26: enable partial liquidation for this market. Omit to leave
-   * unchanged. true closes one position at a time and rechecks MM.
-   */
-  partialLiquidationEnabled?: boolean | null;
   /**
    * Replace the rolling-volume fee-tier table. Omit to leave unchanged;
    * [] clears volume tiers and falls back to flat taker/maker bps.
@@ -788,35 +884,12 @@ export interface UpdateMarketFees {
   maxOpenInterest?: bigint | null;
 }
 
-/** Lifecycle status of an impact-market family. */
-export type ImpactMarketStatus =
+/** Lifecycle status of an event: `Trading` until its settlement time,
+ *  `Resolved(outcome)` once settled. */
+export type EventStatus =
   | { kind: "Trading" }
   | { kind: "PreResolution" }
   | { kind: "Resolved"; outcome: Outcome };
-
-/** On-chain info for an impact-market family. */
-export interface ImpactMarketInfo {
-  impactMarketId: number;
-  underlyingMarket: number;
-  cpyMarket: number;
-  cpnMarket: number;
-  ebyMarket: number;
-  ebnMarket: number;
-  question: string;
-  deadlineMs: bigint;
-  resolutionWindowMs: bigint;
-  status: ImpactMarketStatus;
-  createdMs: bigint;
-  resolvedMs: bigint;
-  /** BE-54: how the YES/NO outcome is determined at deadline. `undefined`
-   *  (older gateways / pre-BE-54 records) means `RelayerAttested`. */
-  oracleSource?: EventOracleSource;
-  /** Event body text; `""` when the record has none. `undefined` only on
-   *  gateways older than admin-actions v2 (field not served). */
-  description?: string;
-  /** Resolution criteria text; same shipping note as `description`. */
-  rules?: string;
-}
 
 // ---------------------------------------------------------------------------
 // Action union type
@@ -902,20 +975,21 @@ export type TraderAction =
   | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage }
   | { type: "ClosePosition"; data: ClosePosition }
   | { type: "SetPositionTriggers"; data: SetPositionTriggers }
-  | { type: "CancelPositionTriggers"; data: CancelPositionTriggers };
+  | { type: "CancelPositionTriggers"; data: CancelPositionTriggers }
+  | { type: "CreateSubAccount"; data: CreateSubAccount }
+  | { type: "SubAccountTransfer"; data: SubAccountTransfer };
 
 /**
  * Operator actions — privileged infrastructure submitted by the operator's
- * relayer / oracle relay / CEX-composite feeder, **not** by a trading
- * integration. Each is gated by a dedicated engine allowlist (relayer, oracle,
- * or composite-feeder); a normal trader's signer is rejected. They are part of
+ * relayer or oracle feeder, **not** by a trading integration. Each is gated
+ * by a dedicated engine allowlist or the market's oracle policy; a normal
+ * trader's signer is rejected. They are part of
  * the public wire contract (so operator tooling has one SDK), but a trading
  * consumer should never need them. See the "Operator actions" section in
  * AGENTS.md / README.md.
  */
 export type OperatorAction =
-  | { type: "OracleUpdate"; data: OracleUpdate }
-  | { type: "OracleUpdateComposite"; data: OracleUpdateComposite }
+  | { type: "SubmitOracleObservation"; data: SubmitOracleObservation }
   | { type: "Deposit"; data: Deposit }
   | { type: "Withdraw"; data: Withdraw }
   | { type: "CreateMarket"; data: CreateMarket }
@@ -925,8 +999,9 @@ export type OperatorAction =
   | { type: "ConfirmWithdrawalReceipt"; data: ConfirmWithdrawalReceipt }
   | { type: "FailWithdrawalReceipt"; data: FailWithdrawalReceipt }
   | { type: "AuthorizeWithdrawal"; data: AuthorizeWithdrawal }
-  | { type: "CreateImpactMarket"; data: CreateImpactMarket }
   | { type: "ResolveEvent"; data: ResolveEvent }
+  | { type: "ClaimWithdrawalPayout"; data: ClaimWithdrawalPayout }
+  | { type: "RecordWithdrawalPayout"; data: RecordWithdrawalPayout }
   | { type: "UpdateMarketFees"; data: UpdateMarketFees };
 
 /**
@@ -960,34 +1035,302 @@ export interface UpdateAdminSignerRegistry {
  */
 export type AdminBatchItem =
   | { kind: "CreateMarket"; value: CreateMarket }
-  | { kind: "CreateImpactMarket"; value: CreateImpactMarket };
+  | { kind: "AttachConditional"; value: AttachConditional };
+
+/**
+ * Governance cancel of every resting order one account holds, optionally
+ * confined to one market (inner tag `0x08`). A one-shot sweep at quorum,
+ * not a freeze: the engine emits one `OrderCancelled` per order with reason
+ * `admin_force`. A zero `owner` is refused at propose; a `market` that does
+ * not exist fails the proposal at execution.
+ */
+export interface CancelAllOrdersForAccount {
+  /** The account whose resting orders are cancelled (20-byte address). */
+  owner: Address;
+  /** Confine the cancel to one market; omit to sweep every market. */
+  market?: number | null;
+}
+
+/** One operator-authority allowlist an `UpdateAuthoritySet` action targets.
+ *  Externally tagged on the wire, so the domain arrives as this bare
+ *  string, never a numeric discriminant. `Custody`/`MarketParams`/
+ *  `ScheduledOps` are the capability-split sets; `Oracle`/`CexComposite`/
+ *  `Relayer` are the genesis-seeded presence sets. */
+export type AuthorityDomain =
+  | "Oracle"
+  | "CexComposite"
+  | "Relayer"
+  | "Custody"
+  | "MarketParams"
+  | "ScheduledOps";
+
+/**
+ * Governance addition/removal of members in one privileged authorization
+ * set (inner tag `0x07`). `add` and `remove` are each canonically sorted,
+ * duplicate-free, and disjoint; the engine refuses a proposal that would
+ * leave the domain's net set empty.
+ */
+export interface UpdateAuthoritySet {
+  domain: AuthorityDomain;
+  /** Addresses to add to the domain (each a 20-byte address). */
+  add: Address[];
+  /** Addresses to remove from the domain (each a 20-byte address). */
+  remove: Address[];
+}
+
+/** Update oracle safety bounds through multisig governance (inner tag 13).
+ * Omitted/null fields stay unchanged; clearing either guard is not permitted. */
+export interface SetOracleGuards {
+  market: number;
+  /** Positive u64 milliseconds; omit to leave unchanged. */
+  markPriceMaxOracleAgeMs?: bigint | null;
+  /** Integer basis points in 1..=10_000; omit to leave unchanged. */
+  maxOracleDeviationBps?: number | null;
+}
+
+/** Schedule a coordinated engine upgrade through multisig governance (inner
+ * tag 14). `major`/`minor` is the successor's engine release, which must
+ * exceed the running one; `successorSha256` pins the library bytes. */
+export interface ScheduleUpgrade {
+  /** First height the successor engine runs. */
+  targetHeight: bigint;
+  major: number;
+  minor: number;
+  /** SHA-256 of the successor engine library (32 bytes). */
+  successorSha256: Uint8Array;
+}
+
+/** Cancel the pending upgrade plan, named by its target height (inner tag 15). */
+export interface CancelUpgrade {
+  targetHeight: bigint;
+}
+
+/**
+ * Per-account fixed withdrawal window (CU-06, inner tag 19). A cap of 0 is
+ * the deliberate off-switch; `window_secs >= 1` (production 86_400). The
+ * window anchors at the account's own first withdrawal after the previous
+ * one expires, so the cap cannot be doubled by timing across a calendar
+ * edge. Enforcement lives in the engine's withdrawal path (S39).
+ */
+export interface SetWithdrawalLimit {
+  /** Max aggregate (amount + fee) per account per window, microUSDC; 0 disables. */
+  perAccountCapMicroUsdc: bigint;
+  /** Fixed window length in seconds; >= 1. */
+  windowSecs: number;
+}
+
+/**
+ * The operator receipt registry (W28-20, inner tag 20, DEC-112): the
+ * operator quorum every custody receipt terminal verifies against. The
+ * epoch must strictly exceed the stored one — a rotation, never a rewrite
+ * — and the roster is re-validated at the store seam on execution
+ * (ed25519 validity, duplicates, threshold range, cap 128).
+ */
+export interface SetOperatorReceiptRegistry {
+  /** `bridge_core::DeploymentId` bytes every receipt must match. */
+  deploymentId: Uint8Array;
+  /** Registry epoch the receipts pin to; strictly increases per rotation. */
+  epoch: bigint;
+  /** *m* — distinct operator members required; 1..=roster length. */
+  threshold: number;
+  /** The *n* operator ed25519 verification keys (32 bytes each). */
+  operatorKeys: Uint8Array[];
+}
+
+/** One insurance pool's share of a funding or withdrawal transfer. */
+export interface InsuranceFundAllocation {
+  /** Insurance pool id (`u8`). */
+  poolId: number;
+  /** Micro-USDC moved for this pool; positive, and the transfer total stays within `i64::MAX`. */
+  amount: bigint;
+}
+
+/** Moves cash from an account into insurance pools. */
+export interface FundInsuranceFund {
+  /** Engine replay key: a funding id executes at most once. */
+  fundingId: bigint;
+  /** Account debited; non-zero. */
+  source: Address;
+  /** 1..=8 pool allocations in strictly ascending `poolId` order. */
+  allocations: InsuranceFundAllocation[];
+}
+
+/** Moves cash out of insurance pools to a recipient account. */
+export interface WithdrawInsuranceFund {
+  /** Engine replay key: a withdrawal id executes at most once. */
+  withdrawalId: bigint;
+  /** Account credited; non-zero. */
+  recipient: Address;
+  /** 1..=8 pool allocations in strictly ascending `poolId` order. */
+  allocations: InsuranceFundAllocation[];
+}
+
+/** An action the admin quorum executes as the insurance account of
+ *  `poolId` (inner tag 26). */
+export interface ExecInsuranceFund {
+  poolId: number;
+  /** Canonical MessagePack encoding of one `Action`. */
+  action: Uint8Array;
+}
+
+/** One perpetual/conditional pair a margin offset credits. */
+export interface MarginOffsetPair {
+  perpetual: number;
+  conditional: number;
+  /** The pair's own perpetual. */
+  settlementReference: number;
+  /** Basis points of the legs' combined charge credited; 1..=9_999. */
+  rate: number;
+  resolution: "RemoveOnResolution";
+}
+
+/** Replaces the stored margin-offset policy (inner tag 27). Pairs ascend by
+ *  `conditional`; the engine assigns the new sequence. */
+export interface SetMarginOffsetPolicy {
+  /** Sequence being replaced; `null` when no policy is stored yet. */
+  predecessor: bigint | null;
+  pairs: MarginOffsetPair[];
+}
+
+/** Settles a price event whose resolution window closed unresolved
+ *  (inner tag 30), on the outcome the quorum names. `Yes` or `No` only:
+ *  the encoder and the engine refuse `Void`. */
+export interface SettleEvent {
+  eventId: number;
+  outcome: Outcome;
+}
+
+/** A market's governed status. */
+export type MarketStatus = "Trading" | "ReduceOnly" | "Halted" | "Delisted";
+
+/** Moves a market's status (inner tag 31); also lifts a `PauseMarket`
+ *  halt. Delisting settles every open position at the last certified
+ *  price. */
+export interface SetMarketStatus {
+  market: number;
+  status: MarketStatus;
+}
+
+/** Voids an event (inner tag 29): every binary and conditional on it
+ *  settles in cash at `yesPrice`. */
+export interface VoidEvent {
+  eventId: number;
+  /** Yes price in micro-USDC per share, `0..=1_000_000`. */
+  yesPrice: bigint;
+}
+
+/**
+ * The liquidation settings shared by every market. Collar width is not a
+ * field: it is each market's maintenance margin fraction.
+ */
+export interface LiquidationConfig {
+  /** Equity-to-maintenance ratio a partial liquidation sizes toward, in
+   *  basis points of maintenance margin; above 10_000. */
+  targetRatioBps: number;
+  /** Exact equity-to-maintenance ratio `numerator / denominator` below
+   *  which an account is closed in full; strictly between 0 and 1. */
+  fullCloseThreshold: { numerator: number; denominator: number };
+  /** Penalty on each partial-liquidation fill, in basis points of the
+   *  fill's notional; at most 100. */
+  partialPenaltyBps: number;
+  /** Book orders one owner's liquidation may walk per leg in a block;
+   *  non-zero. */
+  maxBookOrders: number;
+  /** Fills one owner's liquidation may commit in a block; non-zero. */
+  maxCommittedFills: number;
+  /** Discount the insurance fund takes over an insolvent position at, in
+   *  basis points; at most 100. Omitted means the engine's 50. */
+  takeoverDiscountBps?: number;
+}
+
+/**
+ * Replaces the global liquidation configuration (inner tag 17). Executes
+ * only when `predecessor` is the stored configuration's sequence, and
+ * `sequence` must exceed it.
+ */
+export interface SetLiquidationConfig {
+  /** Sequence of the configuration this update replaces. */
+  predecessor: bigint;
+  /** Sequence of the new configuration. */
+  sequence: bigint;
+  config: LiquidationConfig;
+}
+
+/** `GET /v1/liquidation-config`: the stored global liquidation configuration. */
+export interface LiquidationConfigInfo {
+  /** Position of the configuration in its update sequence: the
+   *  `predecessor` a `SetLiquidationConfig` names to replace it, and the
+   *  `configSequence` liquidation events carry. */
+  sequence: bigint;
+  config: LiquidationConfig;
+}
 
 /**
  * Closed, typed set of operations executable through the multisig. The
- * embedded `CreateMarket.signer` / `CreateImpactMarket.signer` must be
+ * embedded `CreateMarket.signer` / `AttachConditional.signer` must be
  * zero — governance supplies the authorization, not the embedded address.
  *
  * `Batch` executes its items atomically in order against one overlay:
  * all succeed or the proposal fails with no partial state. Admitted on
- * chain only once admin-actions v2 activates (`CreateImpactMarket`
- * likewise); the engine refuses the tags below the activation height.
+ * chain only once admin-actions v2 activates; `CreateEvent` and
+ * `AttachConditional` ride the standalone-events activation. The engine
+ * refuses every tag below its activation height.
  */
 export type AdminAction =
+  | { kind: "FundInsuranceFund"; value: FundInsuranceFund }
+  | { kind: "WithdrawInsuranceFund"; value: WithdrawInsuranceFund }
+  | { kind: "ExecInsuranceFund"; value: ExecInsuranceFund }
+  | { kind: "SetMarginOffsetPolicy"; value: SetMarginOffsetPolicy }
+  | { kind: "VoidEvent"; value: VoidEvent }
+  | { kind: "SettleEvent"; value: SettleEvent }
+  | { kind: "SetMarketStatus"; value: SetMarketStatus }
+  | { kind: "SetOracleGuards"; value: SetOracleGuards }
+  | { kind: "CancelAllOrdersForAccount"; value: CancelAllOrdersForAccount }
+  | { kind: "ConfigureOraclePolicy"; value: ConfigureOraclePolicy }
   | { kind: "CreateMarket"; value: CreateMarket }
   | { kind: "UpdateAdminSignerRegistry"; value: UpdateAdminSignerRegistry }
-  | { kind: "CreateImpactMarket"; value: CreateImpactMarket }
+  | { kind: "CreateEvent"; value: CreateEvent }
+  | { kind: "AttachConditional"; value: AttachConditional }
   | { kind: "Batch"; value: AdminBatchItem[] }
-  | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig };
+  | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig }
+  | { kind: "SetWithdrawalLimit"; value: SetWithdrawalLimit }
+  | { kind: "SetOperatorReceiptRegistry"; value: SetOperatorReceiptRegistry }
+  | { kind: "SetLiquidationConfig"; value: SetLiquidationConfig }
+  // Unit variant — no fields; lifts a bridge pause under multisig
+  // authorization. Serializes as the bare string `"UnpauseBridge"`.
+  | { kind: "UnpauseBridge" }
+  | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet }
+  | { kind: "ScheduleUpgrade"; value: ScheduleUpgrade }
+  | { kind: "CancelUpgrade"; value: CancelUpgrade };
+
+/** Authenticated relay attestation, not a cryptographic provider-proof verifier.
+ * Price and confidence are integers in the policy's normalized micro unit. */
+export interface SubmitOracleObservation {
+  market: number;
+  policyVersion: bigint;
+  sourceId: number;
+  publishTimeMs: bigint;
+  priceMicro: bigint;
+  confidenceMicro: bigint | null;
+  evidenceDigest: Uint8Array;
+  signer: Address;
+}
+
+/** The complete canonical policy must be independently decoded and reviewed
+ * before signing. A digest alone is not permission to approve opaque bytes. */
+export interface ConfigureOraclePolicy {
+  effectiveHeight: bigint;
+  bundle: Uint8Array;
+}
 
 /**
- * Closed set of immediate, loss-reducing single-signer actions. Reverse
- * transitions (unpause/resume) are intentionally absent — they require a
- * multisig `AdminAction`.
+ * Immediate single-signer action. `PauseMarket` halts one market; a
+ * multisig `SetMarketStatus` lifts it.
  */
-export type EmergencyAction =
-  | { kind: "PauseMarket"; value: { marketId: number } }
-  | { kind: "HaltTrading"; value?: Record<string, never> }
-  | { kind: "SetReduceOnly"; value: { marketId: number } };
+export type EmergencyAction = {
+  kind: "PauseMarket";
+  value: { marketId: number };
+};
 
 /** Signed governance proposal (action 0x1e). */
 export interface ProposeAdminAction {
@@ -1067,6 +1410,41 @@ export type Action = TraderAction | OperatorAction | GovernanceAction;
 // shapes depend on.
 // ---------------------------------------------------------------------------
 
+/** The pending protocol-upgrade plan (`GET /v1/upgrades`). */
+export interface PendingUpgradePlan {
+  targetHeight: bigint;
+  /** `major` and `minor` are both 0 for a plan an earlier engine stored,
+   *  which named no release. A plan scheduled now always has `major > 0`. */
+  major: number;
+  minor: number;
+  successorSha256: Uint8Array;
+  scheduledHeight: bigint;
+}
+
+/** One executed activation from the append-only ledger. */
+export interface ExecutedUpgrade {
+  activatedHeight: bigint;
+  major: number;
+  minor: number;
+}
+
+/** `GET /v1/upgrades`: the one pending plan, if any, and every activation. */
+export interface UpgradesInfo {
+  plan: PendingUpgradePlan | null;
+  executed: ExecutedUpgrade[];
+}
+
+/** `GET /v1/version`: the answering node's binary and loaded engine. Node-local,
+ *  not consensus. */
+export interface NodeVersion {
+  node: string;
+  engine: string;
+  engineAbiVersion: number;
+  engineMajor: number;
+  engineMinor: number;
+  engineLibSha256: string;
+}
+
 /** The installed admin signer roster. Absent (a `null` read) means multisig
  *  administration is INACTIVE — never an empty roster. */
 export interface AdminSignerRegistry {
@@ -1076,6 +1454,22 @@ export interface AdminSignerRegistry {
   threshold: number;
   /** Canonically sorted, duplicate-free roster (each a 20-byte address). */
   members: Address[];
+}
+
+/**
+ * The engine's privileged authorization sets, as read from
+ * `GET /v1/admin/authorities` (engine `AuthoritiesSnapshot`, field order
+ * relayer, oracle, cex_composite, custody, market_params, scheduled_ops).
+ * Each is a list of 20-byte addresses. An empty list is a real chain state:
+ * no signer holds that authority.
+ */
+export interface AuthoritiesSnapshot {
+  relayer: Address[];
+  oracle: Address[];
+  cexComposite: Address[];
+  custody: Address[];
+  marketParams: Address[];
+  scheduledOps: Address[];
 }
 
 /** Why a pending proposal expired. */
@@ -1128,8 +1522,9 @@ export interface ProposalDisplayInfo {
   expiryMs: bigint;
   /** Engine-owned discriminant of `action`, committed by the content hash. */
   actionTag: number;
-  /** Typed decode of the proposed operation. */
-  action: AdminAction;
+  /** Typed decode of the proposed operation. `null` when the stored bytes
+   *  predate a breaking change to that action's shape. */
+  action: AdminAction | null;
   /** The EXACT stored engine-canonical bytes the content hash covers. */
   actionCanonicalBytes: Uint8Array;
   /** Domain-separated commitment to the immutable proposal context. */
@@ -1175,7 +1570,9 @@ export interface OrderCancelledEvent {
   market: string;
   /** Hex-encoded owner address. */
   owner: string;
-  /** Cancellation reason (e.g., "user_requested", "liquidation"). */
+  /** Cancellation reason; one of {@link CancelReason}. `"upgrade"` means an
+   *  engine upgrade moved the order to another book and its converted
+   *  order would have crossed it. */
   reason: string;
   /** Client-assigned order ID, or "0" when absent. */
   clientOrderId: string;
@@ -1185,6 +1582,76 @@ export interface OrderCancelledEvent {
   remainingQuantity: string;
   /** Cumulative maker quantity filled before cancellation. */
   filledQuantity: string;
+}
+
+/** Why the engine cancelled an order (`OrderCancelledEvent.reason`).
+ *  `"reduce_only"`: a resting reduce-only order had no position left to
+ *  reduce. The last three cancel a resting maker order a fill could not
+ *  use: `"unfunded"`, the maker could not pay its side;
+ *  `"insufficient_margin"`, the fill would leave the maker below
+ *  maintenance; `"maker_refused"`, the maker's own position cap refused it. */
+export type CancelReason =
+  | "user_requested"
+  | "expired"
+  | "admin_force"
+  | "liquidation"
+  | "upgrade"
+  | "reduce_only"
+  | "unfunded"
+  | "insufficient_margin"
+  | "maker_refused";
+
+// ── Engine-upgrade journal events ──────────────────────────────────────────
+// An upgrade's migration reports its effects as one group of events in the
+// first block after activation; each carries the ABCI attribute
+// `phase=upgrade`, which tells it apart from the block's own events
+// (`phase=system`). Readers must ignore event types they do not know.
+
+/**
+ * Emitted in the first block after an engine upgrade that moved a resting
+ * order to another book, keeping its id, owner, unfilled quantity and queue
+ * place. On the move to one binary book per event, a No order at `q` becomes
+ * the opposite Yes order at `$1 − q` on the event's book.
+ */
+export interface OrderMigratedEvent {
+  type: "OrderMigrated";
+  /** Engine-assigned order ID, unchanged by the move. */
+  orderId: string;
+  /** Hex-encoded owner address. */
+  owner: string;
+  /** The book the order left. */
+  fromMarket: string;
+  /** The book the order now rests on. */
+  toMarket: string;
+  /** Side on the new book ("Buy" or "Sell"). */
+  side: string;
+  /** Limit price on the new book in micro-USDC. */
+  price: string;
+}
+
+/**
+ * Emitted in the first block after an engine upgrade that moved a position
+ * to another book. A No position at entry `e` is the opposite Yes position at
+ * `$1 − e` (`side`, `entryPrice`, `size`); when it nets against the account's
+ * Yes position, that position reports its own `PositionUpdated` or
+ * `PositionClosed`.
+ */
+export interface PositionMigratedEvent {
+  type: "PositionMigrated";
+  /** Hex-encoded owner address. */
+  owner: string;
+  /** The book the position left. */
+  fromMarket: string;
+  /** The book the position moved to. */
+  toMarket: string;
+  /** Side of the moved position on the new book ("Buy" or "Sell"). */
+  side: string;
+  /** Entry price of the moved position in micro-USDC. */
+  entryPrice: string;
+  /** Size of the moved position in contracts. */
+  size: string;
+  /** Cash the netting credited (positive) or debited (negative), in micro-USDC. */
+  cashDelta: string;
 }
 
 /** Emitted when a trade (fill) is executed between a maker and taker. */
@@ -1266,6 +1733,10 @@ export interface PositionUpdatedEvent {
   entryPrice: string;
   /** Absolute position size in contracts (integer lots). */
   size: string;
+  /** PnL this update booked to cash without a fill, in microUSDC (signed):
+   *  a gain realized in place to pay a resolution deficit. "0" for every
+   *  other update. */
+  realizedPnl: string;
 }
 
 /** Emitted when a position is fully closed. */
@@ -1321,6 +1792,43 @@ export interface AccountLiquidatedEvent {
   /** Mark price at liquidation in micro-USDC (6 dp). */
   markPrice: string;
   /** Realized PnL from liquidation in microUSDC (signed). */
+  realizedPnl: string;
+}
+
+/**
+ * Emitted when an insurance fund pool's balance changes (liquidation surplus
+ * or deficit, Tier 1 of the bad-debt waterfall).
+ */
+export interface InsuranceFundUpdatedEvent {
+  type: "InsuranceFundUpdated";
+  /** Insurance pool id: "0" for the legacy/majors pool, "1"+ for newer pools. */
+  poolId: string;
+  /** Pool balance after the change in microUSDC (signed; negative when depleted). */
+  balance: string;
+  /** Change in microUSDC (signed; positive = inflow, negative = outflow). */
+  delta: string;
+}
+
+/**
+ * Emitted when a position is auto-deleveraged (Tier 3 of the bad-debt
+ * waterfall): a profitable counterparty is force-closed at the liquidated
+ * trader's bankruptcy price. One event per ADL'd position leg.
+ */
+export interface PositionAutoDeleveragedEvent {
+  type: "PositionAutoDeleveraged";
+  /** Hex-encoded address of the owner whose position was force-closed. */
+  owner: string;
+  /** Market identifier. */
+  market: string;
+  /** Side of the force-closed position ("Buy" or "Sell"). */
+  side: string;
+  /** Contracts force-closed in this leg; may be less than the full position. */
+  size: string;
+  /** Price the leg was closed at in micro-USDC (6 dp). */
+  closePrice: string;
+  /** Bankruptcy price the spec prescribes in micro-USDC (6 dp); currently equal to `closePrice`. */
+  closePriceSpec: string;
+  /** Realized PnL credited to the deleveraged owner in microUSDC (signed). */
   realizedPnl: string;
 }
 
@@ -1427,12 +1935,16 @@ export type ExchangeEvent =
   | PriceUpdatedEvent
   | MarketCreatedEvent
   | AccountLiquidatedEvent
+  | InsuranceFundUpdatedEvent
+  | PositionAutoDeleveragedEvent
   | FundingAppliedEvent
   | FundingSettledEvent
   | AgentApprovedEvent
   | AgentRevokedEvent
   | MarketOrderProcessedEvent
-  | OrderbookLevelUpdatedEvent;
+  | OrderbookLevelUpdatedEvent
+  | OrderMigratedEvent
+  | PositionMigratedEvent;
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -1446,14 +1958,33 @@ export type ExchangeEvent =
  * - `"ok"`        — CheckTx accepted the tx (`code === 0`).
  * - `"engine"`    — the engine rejected it with an `ExecError` (`code` 1..53/255);
  *                   see {@link TxResult.error} for the decoded name/description.
- * - `"transport"` — a gateway/HTTP-level failure (auth, rate-limit, body too
- *                   large, 5xx, non-JSON body). `code` is the synthesized HTTP
- *                   status, not an engine code.
+ * - `"transport"` — a gateway/HTTP-level failure, or a structured
+ *                   pre-admission refusal (`status: "refused"` at HTTP 200,
+ *                   400, 401, 411, 413, 429, 500 or 503). `code` is synthetic (1 for HTTP
+ *                   200), not an engine code; a refusal also carries the
+ *                   gateway's own `errorCode`. Unrecognized 5xx responses
+ *                   stay `timeout`.
  * - `"timeout"`   — no final chain verdict is available yet (`code === -1`):
  *                   either the gateway returned a hash-only ambiguous response
  *                   or inclusion polling expired. The tx may still land.
  */
 export type TxOutcome = "ok" | "engine" | "transport" | "timeout";
+
+/**
+ * The gateway's machine-readable `errorCode` on a refusal (`status:
+ * "refused"`). The names the gateway sends, plus any other string so a
+ * code the gateway adds later still types. `InvalidRequest` names a request
+ * to correct; `EncodingError` is a gateway-internal encoding failure.
+ */
+export type GatewayRefusalCode =
+  | "InvalidRequest"
+  | "EncodingError"
+  | "Unauthorized"
+  | "RateLimited"
+  | "Maintenance"
+  | "Overloaded"
+  | "Unavailable"
+  | (string & {});
 
 /** Result of submitting a transaction to the exchange. */
 export interface TxResult {
@@ -1480,12 +2011,25 @@ export interface TxResult {
    * transport/timeout failures, and unknown engine codes.
    */
   error: ExecErrorInfo | null;
+  /**
+   * The gateway's machine-readable `errorCode` when it refused the request
+   * before admitting it (`status: "refused"`): `InvalidRequest` means the
+   * request must be corrected; `EncodingError` is an internal failure.
+   * `Unauthorized`, `RateLimited`, `Maintenance`, `Overloaded` and `Unavailable` mean the
+   * gateway is not admitting writes right now. Present with
+   * `outcome === "transport"`; a refusal is terminal for this request and
+   * nothing was broadcast, so there is nothing to poll for and no hash to
+   * reconcile. Absent for an engine verdict or a plain transport failure.
+   */
+  errorCode?: GatewayRefusalCode;
   /** Transaction hash (hex-encoded). Empty string when the tx never got a hash. */
   hash: string;
   /** Block height at which the transaction was included. */
   height?: number;
   /** Human-readable log message (populated on error). */
   log?: string;
+  /** Optional ABCI diagnostic info, preserved without interpretation. */
+  info?: string;
   /** ABCI events emitted by the transaction. */
   events?: TxEvent[];
 }
@@ -1520,10 +2064,9 @@ export interface Orderbook {
   asks: OrderbookLevel[];
 }
 
-/** A resting order on the book. Returned by `GET /v1/orders/{addr}`.
- *  Wire shape: 6-tuple `[id, market, owner, side, price, quantity]`. */
+/** A canonical resting order from the gateway openOrders read. */
 export interface OpenOrder {
-  /** Engine-assigned order ID (monotonic within the market). */
+  /** Engine-assigned order ID (globally monotonic). */
   id: bigint;
   /** Market ID. */
   market: number;
@@ -1535,9 +2078,31 @@ export interface OpenOrder {
   price: bigint;
   /** Resting quantity in contracts. */
   quantity: bigint;
+  /** Client-assigned ID, or null when absent. Zero remains a stored ID. */
+  clientOrderId: bigint | null;
+  /** Quantity originally accepted; zero for legacy records. */
+  originalQuantity: bigint;
+  /** Cumulative quantity filled while resting as maker. */
+  filledQuantity: bigint;
+  /** Placement block timestamp in milliseconds; zero if unrecorded. */
+  createdAtMs: bigint;
+  /** FIFO priority; zero means legacy readers fall back to id. */
+  queuePriority: bigint;
+  /** Placement time in force; currently only Gtc orders rest. */
+  timeInForce: "Gtc" | "Ioc" | "Fok";
+  postOnly: boolean;
+  reduceOnly: boolean;
 }
 
 export type TriggerKind = "StopLoss" | "TakeProfit";
+
+/**
+ * Any other string decodes too: names the engine adds later pass through
+ * verbatim, so code that switches on these keeps a default branch.
+ */
+export type OpenLabel = string & {};
+
+/** Engine-defined label: the known names, or any later one. */
 export type TriggerLimbState =
   | "Armed"
   | "Filled"
@@ -1545,7 +2110,10 @@ export type TriggerLimbState =
   | "NoFill"
   | "Rejected"
   | "Cancelled"
-  | "Invalidated";
+  | "Invalidated"
+  | OpenLabel;
+
+/** Engine-defined label: the known names, or any later one. */
 export type TriggerOutcomeReason =
   | "PositionClosed"
   | "PositionEpochChanged"
@@ -1559,7 +2127,21 @@ export type TriggerOutcomeReason =
   | "NoEligibleLiquidity"
   | "SelfTradePrevention"
   | "WorkLimitReached"
-  | "ExecutionRejected";
+  | "ExecutionRejected"
+  | "OracleSessionClosed"
+  | "OracleDisagreement"
+  | "OracleExpiredSource"
+  | "OraclePolicyMissing"
+  | "NoTwoSidedQuote"
+  | "InsufficientMargin"
+  | "InsufficientBalance"
+  | "ReduceOnlyWouldIncrease"
+  | "PositionLimitExceeded"
+  | "OpenInterestLimitExceeded"
+  | "MarketClosed"
+  | "EngineFault"
+  | "MarketHalted"
+  | OpenLabel;
 
 /** Last deterministic evaluation of one stored trigger limb. */
 export interface TriggerEvaluation {
@@ -1572,10 +2154,13 @@ export interface TriggerEvaluation {
   reason: TriggerOutcomeReason | null;
 }
 
+/** Engine-defined label: the known kinds, or any later one. */
+export type StoredTriggerKind = TriggerKind | OpenLabel;
+
 /** Engine-owned state for one stop-loss/take-profit limb. */
 export interface StoredTriggerLimb {
   limbId: bigint;
-  kind: TriggerKind;
+  kind: StoredTriggerKind;
   triggerPrice: bigint;
   maxSlippageBps: number;
   clientTriggerId: bigint | null;
@@ -1612,15 +2197,25 @@ export interface TriggerMarketConfigInfo {
   state: TriggerMarketConfigState;
 }
 
-/** Why a stored bracket is or is not eligible at the finalized height. */
-export type TriggerEffectiveAvailability =
-  | { kind: "Available" }
-  | { kind: "TriggerActionsInactive" }
-  | { kind: "PendingActivation" }
-  | { kind: "MigrationIncomplete" }
-  | { kind: "ConfigurationMissing" }
-  | { kind: "MarketDisabled" }
-  | { kind: "Deferred"; reason: TriggerOutcomeReason };
+/** Engine-defined label: the known names, or any later one. */
+export type TriggerEffectiveAvailabilityKind =
+  | "Available"
+  | "TriggerActionsInactive"
+  | "PendingActivation"
+  | "MigrationIncomplete"
+  | "ConfigurationMissing"
+  | "MarketDisabled"
+  | "Deferred"
+  | OpenLabel;
+
+/**
+ * Why a stored bracket is or is not eligible at the finalized height.
+ * `reason` is set when the engine attaches one to the kind (`Deferred`).
+ */
+export interface TriggerEffectiveAvailability {
+  kind: TriggerEffectiveAvailabilityKind;
+  reason?: TriggerOutcomeReason;
+}
 
 /** Current protected position generation and both optional limbs. */
 export interface PositionTriggerBracket {
@@ -1643,7 +2238,12 @@ export interface PositionTriggerInfo {
   availability: TriggerEffectiveAvailability;
 }
 
-/** Next-height admission predicate returned by `GET /v1/triggers/status`. */
+/** Next-height admission predicate returned by `GET /v1/triggers/status`.
+ *
+ * @deprecated `GET /v1/triggers/status` is deleted upstream (exchange#619,
+ * genesis-first; api-gateway#175, gateway 4.0.0). Trigger actions are
+ * permanently active, so there is nothing to read. It will be removed in the
+ * next major version. */
 export interface TriggerStatus {
   finalizedHeight: bigint;
   admissionHeight: bigint;
@@ -1678,7 +2278,32 @@ export type PositionTriggerHistoryEventType =
   | "position_triggers_invalidated"
   | "position_trigger_activated"
   | "position_trigger_executed"
-  | "position_trigger_deferred";
+  | "position_trigger_deferred"
+  | "pending_triggers_attached"
+  | "pending_triggers_discarded";
+
+/**
+ * Why a pending (pre-fill) bracket left the live set without installing:
+ * an engine-defined label, the known names or any later one.
+ * `install_rejected` is the silent protection-loss path: the fill stands but
+ * the bracket could not install.
+ */
+export type PendingTriggerDiscardReason =
+  | "order_cancelled"
+  | "order_expired"
+  | "order_replaced"
+  | "unfilled_terminal"
+  | "install_rejected"
+  | "position_closed"
+  | "upgrade_discarded"
+  | OpenLabel;
+
+/** Engine-defined label: the known names, or any later one. */
+export type TriggerHistoryLimbKind = "stop_loss" | "take_profit" | OpenLabel;
+
+/** Engine-defined label: the known names, or any later one. */
+export type TriggerExecutionResult =
+  "filled" | "partial" | "no_fill" | "rejected" | "invalidated" | OpenLabel;
 
 export type TriggerMarketHistoryEventType =
   "trigger_market_deferred" | "trigger_market_resumed";
@@ -1702,27 +2327,70 @@ export interface OwnerTriggerHistoryPayloadBase extends TriggerHistoryPayloadBas
   group_id: string;
 }
 
-export interface PositionTriggersSetHistoryPayload extends OwnerTriggerHistoryPayloadBase {
-  client_group_id: string;
-  stop_limb_id: string;
-  stop_client_trigger_id: string;
-  take_profit_limb_id: string;
-  take_profit_client_trigger_id: string;
-  accepted_height: string;
-  active_from_height: string;
-  replaced_group_id: string;
+/**
+ * The pending (pre-fill) lifecycle's own owner base: coordinates and owner as
+ * usual, but the bracket is bound to a not-yet-filled order, so it carries
+ * `order_id` and no position identity — an attach has no position yet.
+ */
+export interface PendingTriggerHistoryPayloadBase extends TriggerHistoryPayloadBase {
+  owner: string;
+  /** The live, unfilled order the bracket is bound to; never "0". */
+  order_id: string;
 }
+
+export interface PendingTriggersAttachedHistoryPayload extends PendingTriggerHistoryPayloadBase {
+  /** "0" = the order carried no client order id (the engine's flatten). */
+  client_order_id: string;
+  /**
+   * The wire's limb render — `trigger_price=<u64>,max_slippage_bps=<u64>,
+   * client_trigger_id=<u64|none>` — or the empty string when the limb is
+   * absent. At least one limb is present on every attach.
+   */
+  stop_loss: string;
+  /** See {@link PendingTriggersAttachedHistoryPayload.stop_loss}. */
+  take_profit: string;
+}
+
+export interface PendingTriggersDiscardedHistoryPayload extends PendingTriggerHistoryPayloadBase {
+  reason: PendingTriggerDiscardReason;
+}
+
+/**
+ * Additive since schema 39: `source_order_id` — the placement order whose
+ * first fill installed this bracket, "0" = none (the engine's sentinel).
+ * Optional because rows projected before the attribute existed lack it.
+ */
+export type PositionTriggersSetHistoryPayload =
+  OwnerTriggerHistoryPayloadBase & {
+    client_group_id: string;
+    stop_limb_id: string;
+    stop_client_trigger_id: string;
+    take_profit_limb_id: string;
+    take_profit_client_trigger_id: string;
+    accepted_height: string;
+    active_from_height: string;
+    replaced_group_id: string;
+    source_order_id?: string;
+  };
 
 export type PositionTriggersCancelledHistoryPayload =
   OwnerTriggerHistoryPayloadBase;
+
+/**
+ * Additive since schema 39: `invalidation_reason` — the engine's u8
+ * attribute, "0" = unspecified. Optional because rows projected before the
+ * attribute existed lack it.
+ */
 export type PositionTriggersInvalidatedHistoryPayload =
-  OwnerTriggerHistoryPayloadBase;
+  OwnerTriggerHistoryPayloadBase & {
+    invalidation_reason?: string;
+  };
 
 export interface PositionTriggerActivatedHistoryPayload extends OwnerTriggerHistoryPayloadBase {
   limb_id: string;
   client_group_id: string;
   client_trigger_id: string;
-  limb_kind: "stop_loss" | "take_profit";
+  limb_kind: TriggerHistoryLimbKind;
   trigger_price: string;
   frozen_mark: string;
   limit_price: string;
@@ -1735,7 +2403,7 @@ export interface PositionTriggerExecutedHistoryPayload extends PositionTriggerAc
   residual_quantity: string;
   /** Signed aggregate fee; kept as a decimal string. */
   total_fee: string;
-  result: "filled" | "partial" | "no_fill" | "rejected" | "invalidated";
+  result: TriggerExecutionResult;
   /** Empty when the terminal outcome has no additional reason. */
   reason: string;
 }
@@ -1744,18 +2412,21 @@ export interface PositionTriggerDeferredHistoryPayload extends OwnerTriggerHisto
   limb_id: string;
   client_group_id: string;
   client_trigger_id: string;
-  limb_kind: "stop_loss" | "take_profit";
+  limb_kind: TriggerHistoryLimbKind;
   trigger_price: string;
   frozen_mark: string;
   requested_quantity: string;
+  /** Engine-defined label, passed through. */
   reason: string;
 }
 
 export interface TriggerMarketDeferredHistoryPayload extends TriggerHistoryPayloadBase {
+  /** Engine-defined label, passed through. */
   reason: string;
 }
 
 export interface TriggerMarketResumedHistoryPayload extends TriggerHistoryPayloadBase {
+  /** Engine-defined label, passed through. */
   previous_reason: string;
 }
 
@@ -1806,6 +2477,16 @@ export type PositionTriggerHistoryEvent =
       "position_trigger_deferred",
       string,
       PositionTriggerDeferredHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "pending_triggers_attached",
+      string,
+      PendingTriggersAttachedHistoryPayload
+    >
+  | TriggerHistoryEvent<
+      "pending_triggers_discarded",
+      string,
+      PendingTriggersDiscardedHistoryPayload
     >;
 
 export type TriggerMarketHistoryEvent =
@@ -1943,45 +2624,40 @@ export interface PositionInfo {
   positionEpoch?: bigint;
 }
 
-/** One entry per active impact market the account touches. Tuple of
- * (impactMarketId, branch) where branch is "Yes" or "No". Ordering is
- * ascending by impactMarketId (deterministic across nodes).
+/** One entry per active event the account touches through a conditional.
+ * Tuple of (eventId, branch) where branch is "Yes" or "No". Ordering is
+ * ascending by eventId (deterministic across nodes).
  *
  * See AccountInfo.bindingScenario for semantics. */
 export interface BindingScenarioEntry {
-  impactMarketId: number;
+  eventId: number;
   branch: "Yes" | "No";
 }
 
-/** One row of the per-user deposit/withdraw cash-flow log. Covers four
- * event kinds — see the `kind` field. Feeds the Portfolio EquityChart
- * "equity over time" reconstruction (Jesse's P2 #6).
- *
- * Returned by `GET /v1/history/deposits/{address}` and `GET
- * /v1/history/withdrawals/{address}`, and by the `historyDeposits` /
- * `historyWithdrawals` InfoRequests. Shipped 2026-04-24. */
+/** One deposit/withdrawal event from owner- and event-filtered
+ * `/v1/history/account-events` pages. */
 export interface HistoryCashFlow {
-  /** One of the four Rust event kinds. */
+  /** Original engine event kind, including direct relayer credits/debits. */
   kind:
+    | "deposited"
+    | "withdrawn"
     | "deposit_confirmed"
     | "withdraw_requested"
     | "withdrawal_confirmed"
     | "withdrawal_failed";
   /** 20-byte owner address as hex. */
   owner: string;
-  /** Amount in µUSDC (always positive). Use `signedDelta` for signed
-   * balance-change reconstruction. May be empty for
-   * `withdrawal_confirmed` (engine doesn't emit amount on ack). */
+  /** Principal amount in micro-USDC. Custody requests/refunds omit fees.
+   * Empty on owner-scoped confirmations from compatible deployments; the
+   * current indexer omits ownerless withdrawal_confirmed events entirely. */
   amount: string;
-  /** Signed balance delta for this event:
-   *   +amount for deposit_confirmed + withdrawal_failed (credit)
-   *   -amount for withdraw_requested                    (debit)
-   *   "0"     for withdrawal_confirmed                  (no change) */
+  /** Exact event balance delta: deposit amount, negated direct withdrawal
+   * amount, or "0" on confirmation. Empty on withdrawal request/failure:
+   * their payloads omit the custody fee included in the actual debit/refund. */
   signedDelta: string;
-  /** Post-event balance. Available for deposit/request/failed;
-   * empty for confirmed (no balance change on that event). */
+  /** Post-event balance when emitted; empty when absent from the event. */
   newBalance: string;
-  /** Present on withdrawal events (request, confirmed, failed). */
+  /** Present on custody withdrawal events (request, confirmed, failed). */
   withdrawalId: string;
   /** Present on deposit_confirmed + withdrawal_confirmed. */
   solanaTxSig: string;
@@ -1995,7 +2671,17 @@ export interface HistoryCashFlow {
   timestamp: number;
 }
 
-/** One row of the per-user position-at-resolution log. Covers three
+/** Why a winning conditional-perp position did not convert into a
+ * perpetual position on its underlying, as the engine names it on
+ * `condition_met`. The result is paid in cash either way. */
+export type ConversionFallbackReason =
+  | "maintenance_margin"
+  | "position_size_cap"
+  | "open_interest_cap"
+  | "cannot_price_or_margin"
+  | "insufficient_balance";
+
+/** One row of the per-user position-at-resolution log. Covers four
  * kinds — see `kind` field. Feeds Portfolio Resolved tab + Impact /
  * Prediction resolved-state "your outcome" block.
  *
@@ -2003,10 +2689,16 @@ export interface HistoryCashFlow {
  * `historyResolutions` InfoRequest. Shipped 2026-04-24 (see Jesse's
  * P2 #7 in docs/api-scope.md). */
 export interface HistoryResolution {
-  /** One of "conditional_settled" | "conditional_voided" | "prediction_settled". */
-  kind: "conditional_settled" | "conditional_voided" | "prediction_settled";
-  /** Impact-market family ID the resolved position belonged to. */
-  impactMarketId: string;
+  /** One of "condition_met" | "condition_not_met" | "prediction_settled" |
+   *  "conditional_void_settled", the names the indexer serves resolution
+   *  history under. */
+  kind:
+    | "condition_met"
+    | "condition_not_met"
+    | "prediction_settled"
+    | "conditional_void_settled";
+  /** Event the resolved position belonged to, as a decimal string. */
+  eventId: string;
   /** Child market ID (CPY/CPN or EBY/EBN). */
   market: string;
   /** 20-byte owner address as hex. */
@@ -2017,36 +2709,50 @@ export interface HistoryResolution {
   size: string;
   /** Weighted-average entry price of the resolved position. */
   entryPrice: string;
-  /** Settlement price. conditional_settled → mark_price;
-   *  prediction_settled → payoff_per_share (BINARY_PRICE_MAX winner, 0 loser);
-   *  conditional_voided → "" (no mark; void path returns margin, no cash movement). */
+  /** Settlement price. condition_met → the underlying's oracle price
+   *  at or after the event's settlement time;
+   *  prediction_settled → payoff_per_share (BINARY_PRICE_MAX winner, 0 loser;
+   *  on a `VoidEvent`, its Yes price);
+   *  conditional_void_settled → the underlying's oracle price at the Void;
+   *  condition_not_met → "" (no mark; void path returns margin, no cash movement). */
   settlementPrice: string;
-  /** Signed realized PnL in µUSDC. conditional_voided → "0". */
+  /** Signed µUSDC paid to the owner's balance at resolution.
+   *  condition_met → (settlementPrice − entryPrice) × size signed by
+   *  side, for a converted winner and a winner that fell back alike: a
+   *  converted winner's perpetual opens at the settlement price and its
+   *  result is paid in cash, exactly as a fallback's is;
+   *  prediction_settled → the cash paid;
+   *  conditional_void_settled → the payoff at settlementPrice, weighted by
+   *  the Void's Yes price (its complement on a No book);
+   *  condition_not_met → "0". */
   realizedPnl: string;
+  /** Quantity, in integer lots, that became a perpetual position on the
+   *  underlying, opened at the settlement price (`settlementPrice`): the
+   *  whole `size` when a winner converted, "0" when it did not, and "0" on
+   *  every other kind. Either way the result is paid in cash (`realizedPnl`). */
+  convertedSize: string;
+  /** Why a condition_met winner did not convert into a perpetual; ""
+   *  when it converted and on every other kind. */
+  fallbackReason: ConversionFallbackReason | "";
   /** Block height at which the resolution landed. */
   blockHeight: number;
   /** Unix milliseconds. */
   timestamp: number;
 }
 
-/** One row of the per-user position-history snapshot log. Each entry is
- * a point-in-time snapshot of a position written after each fill that
- * changes its state (open → grow → reduce → close). When `size` is "0"
- * the snapshot represents a CLOSE event; the immediately preceding
- * non-zero snapshot for the same `(owner, market, side)` carries the
- * weighted-average entry price.
- *
- * Returned by `GET /v1/history/positions/{address}` and the
- * `historyPositions` InfoRequest. The HTTP endpoint accepts optional
- * `?market=&from=&to=&limit=` filters; results are newest-first. */
+/** Compatibility row from queryHistoryPositions(). A zero size is a closed
+ * position; absent side/entry price become empty strings and block time is
+ * projected to milliseconds. Use queryHistoryPositionsPage() for exact times,
+ * nullable fields and pagination. */
 export interface HistoryPositionSnapshot {
   /** 20-byte owner address as hex. */
   owner: string;
   /** Market ID as a decimal string. */
   market: string;
-  /** Position side: "Buy" = long, "Sell" = short. */
+  /** Position side as served; empty when a closed position has no side.
+   * Use HistoryPosition for the nullable representation. */
   side: string;
-  /** Weighted-average entry price in µUSDC at the time of the snapshot. */
+  /** Entry price in micro-USDC, or empty when absent on a close. */
   entryPrice: string;
   /** Absolute position size in contracts. "0" = closed. */
   size: string;
@@ -2054,6 +2760,58 @@ export interface HistoryPositionSnapshot {
   blockHeight: number;
   /** Unix milliseconds. */
   timestamp: number;
+}
+
+/** Indexer position snapshot with exact timestamp and absent close fields retained. */
+export interface HistoryPosition {
+  owner: string;
+  market: number;
+  side: string | null;
+  /** Micro-USDC decimal text; null when the closed position has no entry price. */
+  entryPrice: string | null;
+  /** Integer contracts as decimal text; zero denotes a closed position. */
+  size: string;
+  blockHeight: number;
+  /** RFC 3339 timestamp, retaining the indexer's fractional-second precision. */
+  blockTime: string;
+}
+
+/** One newest-first page. An empty nextCursor means there are no further rows. */
+export interface HistoryPositionsPage {
+  positions: HistoryPosition[];
+  nextCursor: string;
+}
+
+/** One executed fill from `/v1/history/fills/{owner}` (or `/v1/fills`). */
+export interface HistoryFill {
+  /** Unsigned 64-bit fill identifier as a decimal string. NOTE: the indexer
+   * currently emits it as a JSON number, so values beyond 2^53 would already
+   * be rounded by JSON.parse before this client sees them — the string shape
+   * here avoids adding a second rounding and is ready for a server-side
+   * string cast (the same treatment price already gets). */
+  fillId: string;
+  market: number;
+  blockHeight: number;
+  /** RFC 3339 with nanoseconds, exactly as the indexer renders it. */
+  blockTime: string;
+  /** Price in µUSDC as a decimal string — never a float. */
+  price: string;
+  /** Quantity in contracts as a decimal string — never a float. */
+  quantity: string;
+  /** 20-byte maker address as hex. */
+  makerOwner: string;
+  /** 20-byte taker address as hex. */
+  takerOwner: string;
+  /** The maker's side: "Buy" or "Sell"; the taker took the other side. */
+  makerSide: string;
+  takerFee: number;
+  makerFee: number;
+}
+
+/** One page of fills, newest first. An empty `nextCursor` means last page. */
+export interface HistoryFillsPage {
+  fills: HistoryFill[];
+  nextCursor: string;
 }
 
 /** Full account information including balance, positions, and margin state. */
@@ -2073,7 +2831,7 @@ export interface AccountInfo {
   /** [5] Margin ratio in basis points (equity / total notional * 10000). */
   marginRatioBps: bigint;
   /** [6] Resolution scenario that maximizes totalMm — the "binding" outcome.
-   * One entry per active impact market, ascending by impactMarketId.
+   * One entry per active event, ascending by eventId.
    * Empty for perp-only accounts. Undefined on responses from gateways
    * older than 2026-04-24 (backward compat — the SDK decoder reads
    * msgpack arrays by index). See Jesse's P1 #3 in docs/api-scope.md. */
@@ -2092,8 +2850,8 @@ export interface AccountInfo {
 
 /** Market kind discriminator. Wire shape mirrors the Rust `MarketKind`
  *  enum exactly: `"Perp"` is a bare string, the parameterised variants
- *  are `{ ConditionalPerp: [impactId, branch] }` /
- *  `{ PredictionBinary: [impactId, branch] }`. */
+ *  are `{ ConditionalPerp: [eventId, branch] }` /
+ *  `{ PredictionBinary: [eventId, branch] }` — both keyed by the event. */
 export type MarketKind =
   | "Perp"
   | { ConditionalPerp: [number, "Yes" | "No"] }
@@ -2107,6 +2865,25 @@ export type MarkSourceMode = "OracleOnly" | "Median";
  *  field order in exchange-core/src/types.rs.
  *  Fields after index 7 use `#[serde(default)]` so older on-chain records
  *  decode cleanly. */
+export interface MarketsSnapshot {
+  chainId: Uint8Array;
+  height: bigint;
+  markets: MarketConfig[];
+  /** Every event with its binaries and attached conditionals. */
+  events: EventInfo[];
+  /** Long and short open interest per market that has had positions, in
+   *  ascending market order; a market missing from the list has none.
+   *  `undefined` when the node does not serve open interest. */
+  openInterest?: MarketOpenInterest[];
+}
+
+/** One market's open interest, in base-asset units per side. */
+export interface MarketOpenInterest {
+  market: number;
+  long: bigint;
+  short: bigint;
+}
+
 export interface MarketConfig {
   /** [0] Market identifier (unique integer). */
   market: number;
@@ -2151,13 +2928,11 @@ export interface MarketConfig {
   maxMarkSpreadBps?: number;
   /** [20] Max age (ms) for composite-CEX price in Median mode. */
   cexCompositeStalenessMs?: bigint;
-  /** [21] Enable partial liquidation (close per-market rather than all-or-nothing). */
-  partialLiquidationEnabled?: boolean;
-  /** [22] Published size scale: quantity is in units of 10^-szDecimals. */
+  /** [21] Published size scale: quantity is in units of 10^-szDecimals. */
   szDecimals?: number;
-  /** [23] Human-readable ticker / short symbol (e.g. "BTC"). */
+  /** [22] Human-readable ticker / short symbol (e.g. "BTC"). */
   ticker?: string;
-  /** [24] Aggregate market open-interest cap in contracts. 0 = no cap. */
+  /** [23] Aggregate market open-interest cap in contracts. 0 = no cap. */
   maxOpenInterest?: bigint;
 }
 

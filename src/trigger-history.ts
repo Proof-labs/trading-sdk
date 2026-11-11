@@ -25,56 +25,23 @@ const OWNER_EVENT_TYPES = new Set<PositionTriggerHistoryEventType>([
   "position_trigger_activated",
   "position_trigger_executed",
   "position_trigger_deferred",
+  "pending_triggers_attached",
+  "pending_triggers_discarded",
+]);
+
+/** Owner lifecycle types bound to a position: they carry `position_epoch` and `group_id`. */
+const POSITION_EVENT_TYPES = new Set<PositionTriggerHistoryEventType>([
+  "position_triggers_set",
+  "position_triggers_cancelled",
+  "position_triggers_invalidated",
+  "position_trigger_activated",
+  "position_trigger_executed",
+  "position_trigger_deferred",
 ]);
 
 const MARKET_EVENT_TYPES = new Set<TriggerMarketHistoryEventType>([
   "trigger_market_deferred",
   "trigger_market_resumed",
-]);
-
-const TRIGGER_REASONS = new Set([
-  "position_closed",
-  "position_epoch_changed",
-  "position_side_changed",
-  "below_maintenance",
-  "indeterminate_account",
-  "market_disabled",
-  "mark_unavailable",
-  "mark_stale",
-  "mark_future_dated",
-  "no_eligible_liquidity",
-  "self_trade_prevention",
-  "work_limit_reached",
-  "execution_rejected",
-]);
-
-const EXECUTION_RESULTS = new Set([
-  "filled",
-  "partial",
-  "no_fill",
-  "rejected",
-  "invalidated",
-]);
-
-const EXECUTION_STOP_REASONS = new Set([
-  "no_eligible_liquidity",
-  "self_trade_prevention",
-  "work_limit_reached",
-]);
-const POSITION_INVALIDATION_REASONS = new Set([
-  "position_closed",
-  "position_epoch_changed",
-  "position_side_changed",
-]);
-const ACCOUNT_DEFERRED_REASONS = new Set([
-  "below_maintenance",
-  "indeterminate_account",
-]);
-const MARKET_DEFERRED_REASONS = new Set([
-  "market_disabled",
-  "mark_unavailable",
-  "mark_stale",
-  "mark_future_dated",
 ]);
 
 const EVENT_KEYS = [
@@ -174,18 +141,6 @@ function rfc3339(value: unknown, name: string): string {
   return text;
 }
 
-function enumString<T extends string>(
-  value: unknown,
-  allowed: Set<T>,
-  name: string,
-): T {
-  const text = string(value, name);
-  if (!allowed.has(text as T)) {
-    throw new Error(`trigger history decode: unknown ${name} ${text}`);
-  }
-  return text as T;
-}
-
 function payloadRecord(value: unknown): Record<string, string> {
   const row = object(value, "payload");
   for (const [key, item] of Object.entries(row)) {
@@ -210,6 +165,23 @@ function requireNonemptyPayload(
   key: string,
 ): string {
   return string(payload[key], `payload.${key}`);
+}
+
+/**
+ * The wire's limb render for one pending-bracket limb: present is
+ * `trigger_price=<u64>,max_slippage_bps=<u64>,client_trigger_id=<u64|none>`
+ * (that exact shape and order); absent is the key with an empty value.
+ */
+const LIMB_RENDER =
+  /^trigger_price=(?:0|[1-9][0-9]*),max_slippage_bps=(?:0|[1-9][0-9]*),client_trigger_id=(?:none|(?:0|[1-9][0-9]*))$/;
+
+function requireLimbRender(value: string, name: string): void {
+  if (value === "") return;
+  if (!LIMB_RENDER.test(value)) {
+    throw new Error(
+      `trigger history decode: ${name} is not the wire limb render`,
+    );
+  }
 }
 
 function validatePayload(
@@ -247,7 +219,13 @@ function validatePayload(
         "trigger history decode: payload owner disagrees with event",
       );
     }
-    requireUnsignedPayload(payload, ["position_epoch", "group_id"]);
+    // A pending bracket is bound to a not-yet-filled order: it has no position
+    // identity yet, so it carries `order_id` instead of epoch/group.
+    if (
+      POSITION_EVENT_TYPES.has(eventType as PositionTriggerHistoryEventType)
+    ) {
+      requireUnsignedPayload(payload, ["position_epoch", "group_id"]);
+    }
   } else if ("owner" in payload) {
     throw new Error(
       "trigger history decode: shared market payload carries owner",
@@ -277,10 +255,43 @@ function validatePayload(
           "trigger history decode: set event has no trigger limbs",
         );
       }
+      // Additive since schema 39: the placement order whose first fill
+      // installed the bracket. "0" is the engine's none-sentinel; absent on
+      // rows projected before the attribute existed.
+      if (payload.source_order_id !== undefined) {
+        unsigned(payload.source_order_id, "payload.source_order_id");
+      }
       break;
     }
     case "position_triggers_cancelled":
+      break;
     case "position_triggers_invalidated":
+      // Additive since schema 39: the engine's u8 invalidation attribute,
+      // "0" = unspecified; absent on pre-upgrade rows.
+      if (payload.invalidation_reason !== undefined) {
+        unsigned(
+          payload.invalidation_reason,
+          "payload.invalidation_reason",
+          255n,
+        );
+      }
+      break;
+    case "pending_triggers_attached": {
+      requireLimbRender(payload.stop_loss, "payload.stop_loss");
+      requireLimbRender(payload.take_profit, "payload.take_profit");
+      if (payload.stop_loss === "" && payload.take_profit === "") {
+        throw new Error(
+          "trigger history decode: pending attach carries no trigger limbs",
+        );
+      }
+      unsigned(payload.order_id, "payload.order_id", U64_MAX, true);
+      // "0" = the order carried no client order id.
+      unsigned(payload.client_order_id, "payload.client_order_id");
+      break;
+    }
+    case "pending_triggers_discarded":
+      unsigned(payload.order_id, "payload.order_id", U64_MAX, true);
+      requireNonemptyPayload(payload, "reason");
       break;
     case "position_trigger_activated":
       requireUnsignedPayload(payload, [
@@ -293,11 +304,7 @@ function validatePayload(
         "requested_quantity",
         "execution_order_id",
       ]);
-      enumString(
-        payload.limb_kind,
-        new Set(["stop_loss", "take_profit"] as const),
-        "payload.limb_kind",
-      );
+      requireNonemptyPayload(payload, "limb_kind");
       break;
     case "position_trigger_executed":
       requireUnsignedPayload(payload, [
@@ -312,19 +319,10 @@ function validatePayload(
         "residual_quantity",
         "execution_order_id",
       ]);
-      enumString(
-        payload.limb_kind,
-        new Set(["stop_loss", "take_profit"] as const),
-        "payload.limb_kind",
-      );
-      enumString(payload.result, EXECUTION_RESULTS, "payload.result");
+      requireNonemptyPayload(payload, "limb_kind");
+      requireNonemptyPayload(payload, "result");
       signedI64(payload.total_fee, "payload.total_fee");
       string(payload.reason, "payload.reason", false);
-      if (payload.reason !== "" && !TRIGGER_REASONS.has(payload.reason)) {
-        throw new Error(
-          `trigger history decode: unknown payload.reason ${payload.reason}`,
-        );
-      }
       if (
         BigInt(payload.filled_quantity) + BigInt(payload.residual_quantity) !==
         BigInt(payload.requested_quantity)
@@ -332,38 +330,6 @@ function validatePayload(
         throw new Error(
           "trigger history decode: executed quantities do not conserve",
         );
-      }
-      {
-        const requested = BigInt(payload.requested_quantity);
-        const filled = BigInt(payload.filled_quantity);
-        const residual = BigInt(payload.residual_quantity);
-        const reason = payload.reason;
-        const valid =
-          (payload.result === "filled" &&
-            filled === requested &&
-            residual === 0n &&
-            reason === "") ||
-          (payload.result === "partial" &&
-            filled > 0n &&
-            residual > 0n &&
-            EXECUTION_STOP_REASONS.has(reason)) ||
-          (payload.result === "no_fill" &&
-            filled === 0n &&
-            residual > 0n &&
-            EXECUTION_STOP_REASONS.has(reason)) ||
-          (payload.result === "rejected" &&
-            filled === 0n &&
-            residual > 0n &&
-            reason === "execution_rejected") ||
-          (payload.result === "invalidated" &&
-            filled === 0n &&
-            residual > 0n &&
-            POSITION_INVALIDATION_REASONS.has(reason));
-        if (!valid) {
-          throw new Error(
-            "trigger history decode: result, quantities, and reason disagree",
-          );
-        }
       }
       break;
     case "position_trigger_deferred":
@@ -375,22 +341,14 @@ function validatePayload(
         "frozen_mark",
         "requested_quantity",
       ]);
-      enumString(
-        payload.limb_kind,
-        new Set(["stop_loss", "take_profit"] as const),
-        "payload.limb_kind",
-      );
-      enumString(payload.reason, ACCOUNT_DEFERRED_REASONS, "payload.reason");
+      requireNonemptyPayload(payload, "limb_kind");
+      requireNonemptyPayload(payload, "reason");
       break;
     case "trigger_market_deferred":
-      enumString(payload.reason, MARKET_DEFERRED_REASONS, "payload.reason");
+      requireNonemptyPayload(payload, "reason");
       break;
     case "trigger_market_resumed":
-      enumString(
-        payload.previous_reason,
-        MARKET_DEFERRED_REASONS,
-        "payload.previous_reason",
-      );
+      requireNonemptyPayload(payload, "previous_reason");
       break;
   }
 
@@ -404,7 +362,7 @@ function decodeEvent(
   expectedOwner: string | null,
   expectedMarket: string | null,
   scope: "owner" | "market",
-): PositionTriggerHistoryEvent | TriggerMarketHistoryEvent {
+): PositionTriggerHistoryEvent | TriggerMarketHistoryEvent | null {
   const row = object(value, "event");
   exactKeys(row, EVENT_KEYS, "event");
   const eventKey = string(row.event_key, "event_key");
@@ -419,6 +377,14 @@ function decodeEvent(
     row.event_type,
     "event_type",
   ) as TriggerHistoryEventType;
+  // An event type added after this SDK version is skipped, not refused, so it
+  // cannot fail the whole page; a known type on the wrong route still fails.
+  if (
+    !OWNER_EVENT_TYPES.has(eventType as PositionTriggerHistoryEventType) &&
+    !MARKET_EVENT_TYPES.has(eventType as TriggerMarketHistoryEventType)
+  ) {
+    return null;
+  }
   if (
     (scope === "owner" &&
       !OWNER_EVENT_TYPES.has(eventType as PositionTriggerHistoryEventType)) ||
@@ -511,9 +477,9 @@ export function decodePositionTriggerHistoryPage(
   if (!Array.isArray(row.trigger_events)) {
     throw new Error("trigger history decode: trigger_events must be an array");
   }
-  const events = row.trigger_events.map((event) =>
-    decodeEvent(event, canonicalOwner, market, "owner"),
-  ) as PositionTriggerHistoryEvent[];
+  const events = row.trigger_events
+    .map((event) => decodeEvent(event, canonicalOwner, market, "owner"))
+    .filter((event) => event !== null) as PositionTriggerHistoryEvent[];
   assertNewestFirst(events);
   return {
     triggerEvents: events,
@@ -534,9 +500,9 @@ export function decodeTriggerMarketHistoryPage(
       "trigger history decode: trigger_market_events must be an array",
     );
   }
-  const events = row.trigger_market_events.map((event) =>
-    decodeEvent(event, null, market, "market"),
-  ) as TriggerMarketHistoryEvent[];
+  const events = row.trigger_market_events
+    .map((event) => decodeEvent(event, null, market, "market"))
+    .filter((event) => event !== null) as TriggerMarketHistoryEvent[];
   assertNewestFirst(events);
   return {
     triggerMarketEvents: events,

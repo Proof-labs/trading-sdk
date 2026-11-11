@@ -4,6 +4,7 @@ import {
   encodeSignedTx,
   encodePayloadBytes,
   decodeTx,
+  signEnvelopeFromPayload,
   decodeSigningMessage,
   peekActionType,
   signAndEncode,
@@ -227,23 +228,30 @@ describe("codec v1", () => {
     }
   });
 
-  it("round-trips OracleUpdate", () => {
-    const action: Action = {
-      type: "OracleUpdate",
-      data: {
-        market: 1,
-        price: 5000n,
-        signer: SIGNER,
-        publishTimeMs: 1_000_000n,
-      },
-    };
-    const bytes = encodeTx(action, 7n);
-    const { action: decoded } = decodeTx(bytes);
-    expect(decoded.type).toBe("OracleUpdate");
-    if (decoded.type === "OracleUpdate") {
-      expect(decoded.data.market).toBe(1);
-      expect(decoded.data.price).toBe(5000n);
-      expect(decoded.data.publishTimeMs).toBe(1_000_000n);
+  it("refuses retired action bytes in both directions", () => {
+    for (const [name, byte] of [
+      ["OracleUpdate", 0x03],
+      ["RunLiquidationSweep", 0x11],
+      ["RunFundingTick", 0x12],
+      ["OracleUpdateComposite", 0x14],
+    ] as const) {
+      expect(name in ActionType).toBe(false);
+      expect(() =>
+        encodePayloadBytes({
+          type: name,
+          data: { market: 1, price: 1n, signer: SIGNER },
+        } as unknown as Action),
+      ).toThrow();
+      // A well-formed envelope must fail on its retired tag alone.
+      const wire = new Encoder().encode([
+        2,
+        byte,
+        1,
+        new Encoder().encode([1, 1, Array.from(SIGNER), 0]),
+        new Uint8Array(32),
+        new Uint8Array(64),
+      ]);
+      expect(() => decodeTx(wire)).toThrow();
     }
   });
 
@@ -314,15 +322,6 @@ describe("codec v1 all action types", () => {
     },
     { type: "CancelOrder", data: { orderId: 42n, owner: OWNER } },
     {
-      type: "OracleUpdate",
-      data: {
-        market: 1,
-        price: 50000n,
-        signer: SIGNER,
-        publishTimeMs: 100n,
-      },
-    },
-    {
       type: "MarketOrder",
       data: { market: 1, owner: OWNER, side: Side.Sell, quantity: 5n },
     },
@@ -344,6 +343,8 @@ describe("codec v1 all action types", () => {
         maxFundingRateBps: 100,
         szDecimals: 4,
         ticker: "ETH",
+        tickSize: 1n,
+        lotSize: 1n,
       },
     },
     {
@@ -384,26 +385,34 @@ describe("codec v1 all action types", () => {
       data: { owner: OWNER, agentPubkey: new Uint8Array(32).fill(0x02) },
     },
     {
-      type: "CreateImpactMarket",
+      type: "CreateSubAccount",
+      data: { owner: OWNER, subAccountId: 1, name: new Uint8Array(32) },
+    },
+    {
+      type: "SubAccountTransfer",
       data: {
-        impactMarketId: 42,
-        underlyingMarket: 1,
-        childMarketBase: 100,
-        question: "BTC above $100k on Apr 30",
-        deadlineMs: 4_000_000_000_000n,
-        resolutionWindowMs: 3_600_000n,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        fundingIntervalMs: 60_000n,
-        maxFundingRateBps: 3000,
-        signer: SIGNER,
+        owner: OWNER,
+        from: OWNER,
+        to: new Uint8Array(20).fill(0x02),
+        amount: 1_000_000n,
+      },
+    },
+    {
+      type: "ClaimWithdrawalPayout",
+      data: { withdrawalId: 777n, holder: new Uint8Array(20).fill(0x05) },
+    },
+    {
+      type: "RecordWithdrawalPayout",
+      data: {
+        withdrawalId: 777n,
+        holder: new Uint8Array(20).fill(0x05),
+        solanaSignature: new Uint8Array(64).fill(0x07),
+        lastValidBlockHeight: 500n,
       },
     },
     {
       type: "ResolveEvent",
-      data: { impactMarketId: 42, outcome: Outcome.Yes, signer: SIGNER },
+      data: { eventId: 700, outcome: Outcome.No, signer: SIGNER },
     },
     {
       // All fields set — the common "tighten everything" admin call.
@@ -492,6 +501,97 @@ describe("codec v1 all action types", () => {
     },
   );
 
+  it("round-trips ConfirmDeposit with a DepositLocator (full fidelity)", () => {
+    const action: Action = {
+      type: "ConfirmDeposit",
+      data: {
+        owner: OWNER,
+        amount: 100000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        signer: SIGNER,
+        locator: { topIndex: 3, innerIndex: 1 },
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 9n));
+    // The trailing optional locator must survive encode→decode structurally.
+    expect(decoded).toEqual(action);
+  });
+
+  it("round-trips ConfirmDeposit without a locator (trailing nil → null)", () => {
+    const action: Action = {
+      type: "ConfirmDeposit",
+      data: {
+        owner: OWNER,
+        amount: 100000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        signer: SIGNER,
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 9n));
+    expect(decoded.type).toBe("ConfirmDeposit");
+    if (decoded.type === "ConfirmDeposit") {
+      // Absent on the wire (trailing nil) decodes back as null.
+      expect(decoded.data.locator).toBeNull();
+    }
+  });
+
+  it("round-trips a top-level-transfer locator (present, no inner index)", () => {
+    // A non-CPI transfer: the locator is PRESENT with no inner index, which is
+    // a different wire shape from an absent locator (`92 03 c0` vs `c0`).
+    const action: Action = {
+      type: "ConfirmDeposit",
+      data: {
+        owner: OWNER,
+        amount: 100000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        signer: SIGNER,
+        locator: { topIndex: 3 },
+      },
+    };
+    const payload = encodePayloadBytes(action);
+    expect(Array.from(payload.slice(-3))).toEqual([0x92, 0x03, 0xc0]);
+    const decoded = decodeTx(encodeTx(action, 9n)).action;
+    expect(decoded.type).toBe("ConfirmDeposit");
+    if (decoded.type === "ConfirmDeposit") {
+      expect(decoded.data.locator).toEqual({ topIndex: 3, innerIndex: null });
+    }
+  });
+
+  it("decodes legacy pre-locator ConfirmDeposit bytes (4-element array)", () => {
+    const action: Action = {
+      type: "ConfirmDeposit",
+      data: {
+        owner: OWNER,
+        amount: 100000n,
+        solanaTxSig: new Uint8Array(64).fill(0xab),
+        signer: SIGNER,
+      },
+    };
+    const modern = encodePayloadBytes(action);
+    // New encoder: a 5-element array whose absent locator is a trailing nil.
+    expect(modern[0]).toBe(0x95);
+    expect(modern[modern.length - 1]).toBe(0xc0);
+    // Pre-locator engines emitted the same payload as a 4-element array with
+    // no locator slot at all. Those bytes must keep decoding — the
+    // backward-decode half of the MINOR claim for this wire change.
+    const legacy = modern.slice(0, modern.length - 1);
+    legacy[0] = 0x94;
+    const { privateKey } = generateKeypair();
+    const envelope = signEnvelopeFromPayload(
+      UNBOUND_CHAIN_ID,
+      ActionType.ConfirmDeposit,
+      9n,
+      legacy,
+      privateKey,
+    );
+    const decoded = decodeTx(envelope).action;
+    expect(decoded.type).toBe("ConfirmDeposit");
+    if (decoded.type === "ConfirmDeposit") {
+      expect(decoded.data.amount).toBe(100000n);
+      expect(decoded.data.locator).toBeNull();
+    }
+  });
+
   it("round-trips AuthorizeWithdrawal authorization bytes + operator proof", () => {
     const action: Action = {
       type: "AuthorizeWithdrawal",
@@ -504,6 +604,100 @@ describe("codec v1 all action types", () => {
     // The 221-byte authorization (a bare Vec<u8> on the wire) and the proof
     // must survive encode→decode structurally identical.
     expect(decoded).toEqual(action);
+  });
+
+  it("round-trips ProposeAdminAction with the UnpauseBridge unit variant", () => {
+    const action: Action = {
+      type: "ProposeAdminAction",
+      data: {
+        proposer: new Uint8Array(20).fill(0xa1),
+        registryVersion: 1n,
+        action: { kind: "UnpauseBridge" },
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 12n));
+    // The unit variant serializes as a bare string, not a `{ Variant: {} }`
+    // map; it must survive encode→decode structurally identical.
+    expect(decoded).toEqual(action);
+  });
+
+  it("encodes an omitted, undefined, or null market identically (serde None)", () => {
+    // The Rust side reads a missing Option field as None without a serde
+    // default, so the adapter needs no special case: all three spellings
+    // must produce one wire encoding.
+    const owner = new Uint8Array(20).fill(0xc1);
+    const encodings = [
+      { owner },
+      { owner, market: undefined },
+      { owner, market: null },
+    ].map((value) =>
+      encodeTx(
+        {
+          type: "ProposeAdminAction",
+          data: {
+            proposer: new Uint8Array(20).fill(0xa1),
+            registryVersion: 1n,
+            action: { kind: "CancelAllOrdersForAccount", value },
+          },
+        },
+        12n,
+      ),
+    );
+    expect(encodings[1]).toEqual(encodings[0]);
+    expect(encodings[2]).toEqual(encodings[0]);
+    const { action } = decodeTx(encodings[0]);
+    expect(
+      action.type === "ProposeAdminAction" &&
+        action.data.action.kind === "CancelAllOrdersForAccount" &&
+        action.data.action.value.market,
+    ).toBeNull();
+  });
+
+  it("round-trips ProposeAdminAction with CancelAllOrdersForAccount, scoped and unscoped", () => {
+    for (const market of [7, null]) {
+      const action: Action = {
+        type: "ProposeAdminAction",
+        data: {
+          proposer: new Uint8Array(20).fill(0xa1),
+          registryVersion: 1n,
+          action: {
+            kind: "CancelAllOrdersForAccount",
+            value: { owner: new Uint8Array(20).fill(0xc1), market },
+          },
+        },
+      };
+      const { action: decoded } = decodeTx(encodeTx(action, 12n));
+      // An omitted market must encode as nil and decode back as null; the
+      // adapter injects the explicit None the engine's plain `Option` needs.
+      expect(decoded).toEqual(action);
+    }
+  });
+
+  it("round-trips ProposeAdminAction with UpdateAuthoritySet, add and remove", () => {
+    const cases: Array<{
+      domain: "MarketParams" | "Relayer";
+      add: Uint8Array[];
+      remove: Uint8Array[];
+    }> = [
+      {
+        domain: "MarketParams",
+        add: [new Uint8Array(20).fill(0xb2)],
+        remove: [],
+      },
+      { domain: "Relayer", add: [], remove: [new Uint8Array(20).fill(0xc3)] },
+    ];
+    for (const value of cases) {
+      const action: Action = {
+        type: "ProposeAdminAction",
+        data: {
+          proposer: new Uint8Array(20).fill(0xa1),
+          registryVersion: 1n,
+          action: { kind: "UpdateAuthoritySet", value },
+        },
+      };
+      const { action: decoded } = decodeTx(encodeTx(action, 12n));
+      expect(decoded).toEqual(action);
+    }
   });
 
   it("rejects a receipt whose fixed-width deploymentId is not 32 bytes", () => {
@@ -534,6 +728,8 @@ describe("codec v1 all action types", () => {
         poolId: 9,
         szDecimals: 4,
         ticker: "BTC",
+        tickSize: 1n,
+        lotSize: 1n,
       },
     };
 
@@ -559,6 +755,8 @@ describe("codec v1 all action types", () => {
         poolId: 9,
         szDecimals: 5,
         ticker: "BTC",
+        tickSize: 1n,
+        lotSize: 1n,
         maxOpenInterest: 1_000_000n,
       },
     };
@@ -567,7 +765,7 @@ describe("codec v1 all action types", () => {
     expect(decoded).toEqual(action);
   });
 
-  it("encodes CreateMarket to a 12-element array whatever the cap's value", () => {
+  it("encodes CreateMarket to a 14-element array whatever the cap's value", () => {
     const base: Action = {
       type: "CreateMarket",
       data: {
@@ -582,6 +780,8 @@ describe("codec v1 all action types", () => {
         poolId: 9,
         szDecimals: 5,
         ticker: "BTC",
+        tickSize: 1n,
+        lotSize: 1n,
       },
     };
     const withCap = (maxOpenInterest?: bigint | null): Action => ({
@@ -597,10 +797,10 @@ describe("codec v1 all action types", () => {
     // which re-encodes the payload from JSON before the engine verifies the
     // signature over those bytes — could produce a different length than the
     // client signed, and every such tx would fail verification. Pin the msgpack
-    // fixarray header (0x90 | n): 0x9c is a 12-element array.
+    // fixarray header (0x90 | n): 0x9e is a 14-element array.
     for (const cap of [undefined, null, 0n, 1_000_000n]) {
       const bytes = encodePayloadBytes(withCap(cap));
-      expect(bytes[0]).toBe(0x9c);
+      expect(bytes[0]).toBe(0x9e);
     }
 
     // Omission, JSON-style null, and explicit zero are the same market and
@@ -632,6 +832,8 @@ describe("codec v1 all action types", () => {
           poolId: 9,
           szDecimals: 5,
           ticker: "BTC",
+          tickSize: 1n,
+          lotSize: 1n,
           maxOpenInterest,
         },
       };
@@ -717,7 +919,6 @@ describe("codec v1 all action types", () => {
         markSourceMode: 1,
         maxMarkSpreadBps: 75,
         cexCompositeStalenessMs: 15_000n,
-        partialLiquidationEnabled: true,
         feeTiers: [
           {
             min30dVolumeMicroUsdc: 0n,
@@ -753,7 +954,6 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.markSourceMode).toBe(1);
     expect(decoded.data.maxMarkSpreadBps).toBe(75);
     expect(decoded.data.cexCompositeStalenessMs).toBe(15_000n);
-    expect(decoded.data.partialLiquidationEnabled).toBe(true);
     expect(decoded.data.feeTiers).toEqual(action.data.feeTiers);
     expect(decoded.data.imBps).toBe(3334);
     expect(decoded.data.mmBps).toBe(1667);
@@ -912,131 +1112,6 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.takerFeeBps).toBeNull();
     expect(decoded.data.maxPositionSize).toBeNull();
   });
-
-  // BE-54: oracleSource round-trip — three flavors. Default (undefined)
-  // omits the field on the wire (length-tolerant decode preserves
-  // pre-BE-54 SDK output); explicit RelayerAttested and the two
-  // auto-resolve modes carry the full enum payload.
-  it("BE-54: round-trips CreateImpactMarket without oracleSource (default)", () => {
-    const action: Action = {
-      type: "CreateImpactMarket",
-      data: {
-        impactMarketId: 42,
-        underlyingMarket: 1,
-        childMarketBase: 100,
-        question: "BTC above $100k on Apr 30",
-        deadlineMs: 4_000_000_000_000n,
-        resolutionWindowMs: 3_600_000n,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        fundingIntervalMs: 60_000n,
-        maxFundingRateBps: 3000,
-        signer: SIGNER,
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "CreateImpactMarket")
-      throw new Error("type narrowing");
-    expect(decoded.data.oracleSource).toBeUndefined();
-  });
-
-  it("BE-54: round-trips CreateImpactMarket with UnderlyingPriceVsStrike oracleSource", () => {
-    const action: Action = {
-      type: "CreateImpactMarket",
-      data: {
-        impactMarketId: 42,
-        underlyingMarket: 1,
-        childMarketBase: 100,
-        question: "BTC above $100k on Apr 30",
-        deadlineMs: 4_000_000_000_000n,
-        resolutionWindowMs: 3_600_000n,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        fundingIntervalMs: 60_000n,
-        maxFundingRateBps: 3000,
-        signer: SIGNER,
-        oracleSource: {
-          kind: "UnderlyingPriceVsStrike",
-          strikePrice: 10_000_000n,
-          comparison: "GreaterThan",
-        },
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "CreateImpactMarket")
-      throw new Error("type narrowing");
-    expect(decoded.data.oracleSource).toEqual({
-      kind: "UnderlyingPriceVsStrike",
-      strikePrice: 10_000_000n,
-      comparison: "GreaterThan",
-    });
-  });
-
-  it("BE-54: round-trips CreateImpactMarket with MarketOracle oracleSource", () => {
-    const action: Action = {
-      type: "CreateImpactMarket",
-      data: {
-        impactMarketId: 42,
-        underlyingMarket: 1,
-        childMarketBase: 100,
-        question: "ETH above $4k at expiry",
-        deadlineMs: 4_000_000_000_000n,
-        resolutionWindowMs: 3_600_000n,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        fundingIntervalMs: 60_000n,
-        maxFundingRateBps: 3000,
-        signer: SIGNER,
-        oracleSource: {
-          kind: "MarketOracle",
-          market: 7,
-          strikePrice: 4_000_000n,
-          comparison: "GreaterThanOrEqual",
-        },
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "CreateImpactMarket")
-      throw new Error("type narrowing");
-    expect(decoded.data.oracleSource).toEqual({
-      kind: "MarketOracle",
-      market: 7,
-      strikePrice: 4_000_000n,
-      comparison: "GreaterThanOrEqual",
-    });
-  });
-
-  it("BE-54: round-trips CreateImpactMarket with RelayerAttested oracleSource", () => {
-    const action: Action = {
-      type: "CreateImpactMarket",
-      data: {
-        impactMarketId: 42,
-        underlyingMarket: 1,
-        childMarketBase: 100,
-        question: "Did Apple announce X?",
-        deadlineMs: 4_000_000_000_000n,
-        resolutionWindowMs: 3_600_000n,
-        imBps: 1000,
-        mmBps: 500,
-        takerFeeBps: 5,
-        makerFeeBps: 2,
-        fundingIntervalMs: 60_000n,
-        maxFundingRateBps: 3000,
-        signer: SIGNER,
-        oracleSource: { kind: "RelayerAttested" },
-      },
-    };
-    const { action: decoded } = decodeTx(encodeTx(action, 1n));
-    if (decoded.type !== "CreateImpactMarket")
-      throw new Error("type narrowing");
-    expect(decoded.data.oracleSource).toEqual({ kind: "RelayerAttested" });
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1111,15 +1186,6 @@ describe("codec v2 signing", () => {
       },
       { type: "CancelOrder", data: { orderId: 42n, owner: OWNER } },
       {
-        type: "OracleUpdate",
-        data: {
-          market: 1,
-          price: 50000n,
-          signer: SIGNER,
-          publishTimeMs: 200n,
-        },
-      },
-      {
         type: "MarketOrder",
         data: { market: 1, owner: OWNER, side: Side.Sell, quantity: 5n },
       },
@@ -1144,6 +1210,8 @@ describe("codec v2 signing", () => {
           maxFundingRateBps: 100,
           szDecimals: 4,
           ticker: "ETH",
+          tickSize: 1n,
+          lotSize: 1n,
         },
       },
       {
@@ -1453,6 +1521,8 @@ describe("decodeSigningMessage", () => {
       maxFundingRateBps: 100,
       szDecimals: 2,
       ticker: "XYZ-PERP",
+      tickSize: 1n,
+      lotSize: 1n,
     },
   };
 
@@ -1765,6 +1835,34 @@ describe("legacy short-payload decode compatibility", () => {
       expect(action.data.postOnly).toBe(false);
       expect(action.data.reduceOnly).toBe(false);
       expect(action.data.timeInForce).toBe(TimeInForce.Gtc);
+    }
+  });
+
+  it("decodes a 12-field CreateMarket from before the grid, tick and lot 0", () => {
+    // [market, im_bps, mm_bps, taker_fee_bps, maker_fee_bps, signer,
+    //  funding_interval_ms, max_funding_rate_bps, pool_id, sz_decimals,
+    //  ticker, max_open_interest] — no tick_size / lot_size.
+    const bytes = envelope(ActionType.CreateMarket, [
+      42,
+      1000,
+      500,
+      5,
+      2,
+      OWNER,
+      60_000n,
+      100,
+      9,
+      4,
+      "BTC",
+      1_000_000n,
+    ]);
+    const { action } = decodeTx(bytes);
+    expect(action.type).toBe("CreateMarket");
+    if (action.type === "CreateMarket") {
+      expect(action.data.ticker).toBe("BTC");
+      expect(action.data.maxOpenInterest).toBe(1_000_000n);
+      expect(action.data.tickSize).toBe(0n);
+      expect(action.data.lotSize).toBe(0n);
     }
   });
 

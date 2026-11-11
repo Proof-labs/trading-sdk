@@ -31,15 +31,16 @@
 import { describe, it, expect } from "vitest";
 import { Decoder } from "@msgpack/msgpack";
 import {
+  ACTION_TAG_BY_KIND,
   decodeAdminAction,
   decodeAdminSignerRegistry,
   decodeAdminSignerRegistryInfo,
-  decodeImpactMarketInfo,
+  decodeNodeVersion,
   decodeProposalPage,
   decodeProposalDisplayInfo,
   decodeProposalStatus,
+  decodeUpgradesInfo,
 } from "./governance-query.js";
-import { Outcome } from "./types.js";
 
 // Matches the client's decoder options: only 64-bit msgpack ints become
 // bigint, so small values arrive as `number` — the case the decoders
@@ -93,30 +94,6 @@ const PAGE_STATUS_EXPIRED_REGISTRY_CHANGED =
 
 /** `ProposalPage { items: [], next_cursor: None }` */
 const PAGE_EMPTY = "9290c0";
-
-/**
- * `GET /v1/impact_markets` rows — `Vec<ImpactMarketDisplayInfo>` from
- * exchange-core's own serializer (same harvest recipe as above), one vector
- * per shape the read has ever had:
- *  - IMPACT_ROW_CURRENT15: today's 15-slot row — status `Resolved(Yes)`,
- *    `Some(MarketOracle)` with a >u32 strike (arrives as bigint), and
- *    non-empty description/rules.
- *  - IMPACT_ROW_LEGACY13: the BE-54-era 13-slot row (oracle trailer only,
- *    `None`), status `Trading`.
- *  - IMPACT_ROW_LEGACY12: the pre-BE-54 12-slot row, status `PreResolution`.
- */
-const IMPACT_ROW_CURRENT15 =
-  "919f5b0fcd238ccd238dcd238ecd238fad646f6573206974206c616e643fce000f4240cd03e881a85265736f6c766564a3596573cd022bcd030981ac4d61726b65744f7261636c659303cf0000000f224d4a00b2477265617465725468616e4f72457175616ca4626f6479a86372697465726961";
-const IMPACT_ROW_LEGACY13 =
-  "919d5b0fcd238ccd238dcd238ecd238fad646f6573206974206c616e643fce000f4240cd03e8a754726164696e67cd022b00c0";
-const IMPACT_ROW_LEGACY12 =
-  "919c5b0fcd238ccd238dcd238ecd238fad646f6573206974206c616e643fce000f4240cd03e8ad5072655265736f6c7574696f6ecd022b00";
-
-/** Pull the single row out of a one-row impact-markets vector. */
-function firstImpactRow(hex: string): unknown {
-  const rows = decodeVector(hex) as unknown[];
-  return rows[0];
-}
 
 /** Pull the single proposal out of a one-item page vector. */
 function firstProposal(hex: string) {
@@ -196,6 +173,9 @@ describe("decodeProposalDisplayInfo", () => {
       szDecimals: 4,
       ticker: "GOLD",
       maxOpenInterest: 123_456_789n,
+      // A stored 12-element payload predates the grid and decodes with both 0.
+      tickSize: 0n,
+      lotSize: 0n,
     });
   });
 
@@ -278,10 +258,28 @@ describe("decodeProposalStatus — every variant shape", () => {
 // Engine-frozen admin-actions-v2 wire bytes (exchange-core codec.rs,
 // `admin_action_v2_wire_vectors_frozen`) — the exact canonical bytes the
 // engine serializes for the two new arms, byte for byte.
-const ACTION_IMPACT =
-  "81b2437265617465496d706163744d61726b6574dc00105b0fcd238cad646f6573206974206c616e643fce000f4240cd03e8cd0d06cd0683050200cd0bb8dc00140000000000000000000000000000000000000000c0a0a0";
+/** `AdminAction::CancelAllOrdersForAccount { owner: C1×20, market: Some(7) }`
+ *  and the `None` twin — exchange-wire's frozen tag-8 vectors. */
+const ACTION_CANCEL_ALL_SCOPED =
+  "81b943616e63656c416c6c4f7264657273466f724163636f756e7492dc0014ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc107";
+const ACTION_CANCEL_ALL_UNSCOPED =
+  "81b943616e63656c416c6c4f7264657273466f724163636f756e7492dc0014ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1ccc1c0";
+
+/** `AdminAction::UpdateAuthoritySet { domain: MarketParams, add: [B2×20], remove: [] }`
+ *  and the `{ domain: Relayer, add: [], remove: [C3×20] }` twin — the
+ *  SDK's own `conformance/codec.ndjson` frozen tag-7 vectors
+ *  (`propose_admin_action/update_authority_set_add` and `_remove`),
+ *  generated from the real Rust core via `cargo run -p
+ *  proof-trading-sdk-conformance --bin gen-vectors`. */
+const ACTION_UPDATE_AUTHORITY_SET_ADD =
+  "81b2557064617465417574686f7269747953657493ac4d61726b6574506172616d7391dc0014ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb2ccb290";
+const ACTION_UPDATE_AUTHORITY_SET_REMOVE =
+  "81b2557064617465417574686f7269747953657493a752656c617965729091dc0014ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3ccc3";
+
+const ACTION_ATTACH =
+  "81b1417474616368436f6e646974696f6e616c995b0fcd238ccd0d06cd06830502dc0014000000000000000000000000000000000000000000";
 const ACTION_BATCH =
-  "81a542617463689281ac4372656174654d61726b65749c0fcd0d06cd06830502dc00140000000000000000000000000000000000000000cdea60cd0bb80000a00081b2437265617465496d706163744d61726b6574dc00105b0fcd238cad646f6573206974206c616e643fce000f4240cd03e8cd0d06cd0683050200cd0bb8dc00140000000000000000000000000000000000000000c0a0a0";
+  "81a542617463689281ac4372656174654d61726b65749c0fcd0d06cd06830502dc00140000000000000000000000000000000000000000cdea60cd0bb80000a00081b1417474616368436f6e646974696f6e616c995b0fcd238ccd0d06cd06830502dc0014000000000000000000000000000000000000000000";
 const ACTION_TRIGGER_CONFIG =
   "81b6536574547269676765724d61726b6574436f6e666967970703c3ccfacd1388cd03e820";
 
@@ -294,31 +292,78 @@ describe("decodeAdminAction", () => {
 
   it("rejects a non-enum value", () => {
     expect(() => decodeAdminAction("CreateMarket")).toThrow(
-      /not an enum variant/,
+      /governance decode: action: invalid type: unit variant/,
     );
   });
 
-  it("decodes the engine's frozen v2 impact bytes", () => {
-    expect(decodeAdminAction(decodeVector(ACTION_IMPACT))).toEqual({
-      kind: "CreateImpactMarket",
+  it("decodes the UnpauseBridge unit variant carried as a bare string", () => {
+    // A fieldless admin action serializes as the bare variant name, not a
+    // `{ Variant: {} }` map — the same shape decodeProposalStatus handles.
+    expect(decodeAdminAction("UnpauseBridge")).toEqual({
+      kind: "UnpauseBridge",
+    });
+  });
+
+  it("refuses the retired EnableSubAccounts unit variant", () => {
+    expect(() => decodeAdminAction("EnableSubAccounts")).toThrow(
+      /unknown variant `EnableSubAccounts`/,
+    );
+    expect(Object.values(ACTION_TAG_BY_KIND)).not.toContain(21);
+  });
+
+  it("decodes the engine's frozen CancelAllOrdersForAccount bytes, scoped and unscoped", () => {
+    // exchange-wire `cancel_all_orders_for_account_wire_vectors_frozen`: the
+    // `AccountAddress` newtype is transparent, so the payload is a flat
+    // 2-tuple of a 20-element owner array and an Option market.
+    expect(decodeAdminAction(decodeVector(ACTION_CANCEL_ALL_SCOPED))).toEqual({
+      kind: "CancelAllOrdersForAccount",
+      value: { owner: addrOf(0xc1), market: 7 },
+    });
+    expect(decodeAdminAction(decodeVector(ACTION_CANCEL_ALL_UNSCOPED))).toEqual(
+      {
+        kind: "CancelAllOrdersForAccount",
+        value: { owner: addrOf(0xc1), market: null },
+      },
+    );
+    const short = Array.from({ length: 19 }, () => 0xc1);
+    expect(() =>
+      decodeAdminAction({ CancelAllOrdersForAccount: [short, 7] }),
+    ).toThrow(/invalid length 19, expected 20 bytes/);
+  });
+
+  it("decodes the engine's frozen UpdateAuthoritySet bytes, add and remove", () => {
+    // `domain` is externally tagged as its bare variant name, so the
+    // positional payload is [domain: string, add: Address[], remove: Address[]].
+    expect(
+      decodeAdminAction(decodeVector(ACTION_UPDATE_AUTHORITY_SET_ADD)),
+    ).toEqual({
+      kind: "UpdateAuthoritySet",
+      value: { domain: "MarketParams", add: [addrOf(0xb2)], remove: [] },
+    });
+    expect(
+      decodeAdminAction(decodeVector(ACTION_UPDATE_AUTHORITY_SET_REMOVE)),
+    ).toEqual({
+      kind: "UpdateAuthoritySet",
+      value: { domain: "Relayer", add: [], remove: [addrOf(0xc3)] },
+    });
+    expect(() =>
+      decodeAdminAction({ UpdateAuthoritySet: ["NotADomain", [], []] }),
+    ).toThrow(/unknown variant `NotADomain`/);
+  });
+
+  it("decodes the engine's frozen attach bytes (admin tag 10)", () => {
+    expect(decodeAdminAction(decodeVector(ACTION_ATTACH))).toEqual({
+      kind: "AttachConditional",
       value: {
-        impactMarketId: 91,
+        eventId: 91,
         underlyingMarket: 15,
         childMarketBase: 9_100,
-        question: "does it land?",
-        deadlineMs: 1_000_000n,
-        resolutionWindowMs: 1_000n,
         imBps: 3334,
         mmBps: 1667,
         takerFeeBps: 5,
         makerFeeBps: 2,
-        fundingIntervalMs: 0n,
-        maxFundingRateBps: 3000,
         signer: new Uint8Array(20),
-        // The nil oracle source stays ABSENT (not `undefined`-assigned);
-        // the empty text trailers decode as "".
-        description: "",
-        rules: "",
+        maxOpenInterest: 0n,
       },
     });
   });
@@ -327,17 +372,17 @@ describe("decodeAdminAction", () => {
     const action = decodeAdminAction(decodeVector(ACTION_BATCH));
     if (action.kind !== "Batch") throw new Error("expected Batch");
     expect(action.value).toHaveLength(2);
-    const [perp, impact] = action.value;
+    const [perp, attach] = action.value;
     if (perp!.kind !== "CreateMarket") throw new Error("expected CreateMarket");
     expect(perp!.value.market).toBe(15);
     expect(perp!.value.imBps).toBe(3334);
     expect(perp!.value.fundingIntervalMs).toBe(60_000n);
-    if (impact!.kind !== "CreateImpactMarket") {
-      throw new Error("expected CreateImpactMarket");
+    if (attach!.kind !== "AttachConditional") {
+      throw new Error("expected AttachConditional");
     }
-    expect(impact!.value.impactMarketId).toBe(91);
-    expect(impact!.value.underlyingMarket).toBe(15);
-    expect(impact!.value.childMarketBase).toBe(9_100);
+    expect(attach!.value.eventId).toBe(91);
+    expect(attach!.value.underlyingMarket).toBe(15);
+    expect(attach!.value.childMarketBase).toBe(9_100);
   });
 
   it("decodes the engine's frozen trigger-config bytes (admin tag 5)", () => {
@@ -356,33 +401,44 @@ describe("decodeAdminAction", () => {
   });
 
   it("tolerates the serde(default) trailers' absence, like the engine", () => {
-    // 13 slots — a payload written before the oracle-source/description/
-    // rules trailers existed. The engine's decoder defaults them; the
-    // mirror must too, not refuse the whole proposal list.
-    const bare = {
-      CreateImpactMarket: [
+    // 8 slots — an attachment written before the open-interest trailer
+    // existed, and 9 slots — an event written before its trailers. The
+    // engine's decoder defaults them; the mirror must too, not refuse the
+    // whole proposal list.
+    const attach = decodeAdminAction({
+      AttachConditional: [
         91,
         15,
         9_100,
-        "does it land?",
-        1_000_000,
-        1_000,
         3334,
         1667,
         5,
         2,
-        0,
-        3000,
         new Array(20).fill(0),
       ],
-    };
-    const action = decodeAdminAction(bare);
-    if (action.kind !== "CreateImpactMarket") {
-      throw new Error("expected CreateImpactMarket");
+    });
+    if (attach.kind !== "AttachConditional") {
+      throw new Error("expected AttachConditional");
     }
-    expect(action.value.oracleSource).toBeUndefined();
-    expect(action.value.description).toBe("");
-    expect(action.value.rules).toBe("");
+    expect(attach.value.maxOpenInterest).toBe(0n);
+    const event = decodeAdminAction({
+      CreateEvent: [
+        700,
+        70_000,
+        0,
+        "Will the Fed cut rates?",
+        1_778_000_000_000,
+        1_000,
+        5,
+        2,
+        new Array(20).fill(0),
+      ],
+    });
+    if (event.kind !== "CreateEvent") throw new Error("expected CreateEvent");
+    expect(event.value.oracleSource).toBeUndefined();
+    expect(event.value.description).toBe("");
+    expect(event.value.rules).toBe("");
+    expect(event.value.maxOpenInterest).toBe(0n);
   });
 
   it("fails closed on a batch item outside the closed market-creation set", () => {
@@ -391,9 +447,9 @@ describe("decodeAdminAction", () => {
     // proposal the chain would never execute.
     expect(() =>
       decodeAdminAction({ Batch: [{ UpdateAdminSignerRegistry: [2, []] }] }),
-    ).toThrow(/AdminBatchItem/);
+    ).toThrow(/expected `CreateMarket` or `AttachConditional`/);
     expect(() => decodeAdminAction({ Batch: [{ Batch: [] }] })).toThrow(
-      /AdminBatchItem/,
+      /expected `CreateMarket` or `AttachConditional`/,
     );
   });
 });
@@ -432,139 +488,6 @@ describe("page envelope", () => {
     );
     expect(() => decodeProposalPage([[], null, "trailing"])).toThrow(
       /proposalPage has 3 fields, expected exactly 2/,
-    );
-  });
-});
-
-describe("decodeImpactMarketInfo (engine golden vectors)", () => {
-  /** The 12 base fields every shape shares, decoded. */
-  const base = {
-    impactMarketId: 91,
-    underlyingMarket: 15,
-    cpyMarket: 9_100,
-    cpnMarket: 9_101,
-    ebyMarket: 9_102,
-    ebnMarket: 9_103,
-    question: "does it land?",
-    deadlineMs: 1_000_000n,
-    resolutionWindowMs: 1_000n,
-    createdMs: 555n,
-  };
-
-  it("decodes the current 15-slot row — trailers, resolved status, bigint strike", () => {
-    expect(
-      decodeImpactMarketInfo(firstImpactRow(IMPACT_ROW_CURRENT15)),
-    ).toEqual({
-      ...base,
-      status: { kind: "Resolved", outcome: Outcome.Yes },
-      resolvedMs: 777n,
-      oracleSource: {
-        kind: "MarketOracle",
-        market: 3,
-        strikePrice: 65_000_000_000n,
-        comparison: "GreaterThanOrEqual",
-      },
-      description: "body",
-      rules: "criteria",
-    });
-  });
-
-  it("decodes the BE-54-era 13-slot row — nil oracle, no text trailers", () => {
-    // `oracleSource` present-but-nil stays ABSENT; description/rules were
-    // not served, so they stay `undefined` (not ""), letting callers tell
-    // "not served" from "empty".
-    expect(decodeImpactMarketInfo(firstImpactRow(IMPACT_ROW_LEGACY13))).toEqual(
-      {
-        ...base,
-        status: { kind: "Trading" },
-        resolvedMs: 0n,
-      },
-    );
-  });
-
-  it("decodes the pre-BE-54 12-slot row", () => {
-    expect(decodeImpactMarketInfo(firstImpactRow(IMPACT_ROW_LEGACY12))).toEqual(
-      {
-        ...base,
-        status: { kind: "PreResolution" },
-        resolvedMs: 0n,
-      },
-    );
-  });
-
-  /** The current row as a mutable decoded array, for negative variants. */
-  function currentRow(): unknown[] {
-    return [...(firstImpactRow(IMPACT_ROW_CURRENT15) as unknown[])];
-  }
-
-  it("rejects tuple lengths outside the supported 12-15 shapes", () => {
-    expect(() => decodeImpactMarketInfo(currentRow().slice(0, 11))).toThrow(
-      /expected 12-15/,
-    );
-    expect(() => decodeImpactMarketInfo([...currentRow(), "trailing"])).toThrow(
-      /expected 12-15/,
-    );
-    expect(() => decodeImpactMarketInfo("not a row")).toThrow(/not an array/);
-  });
-
-  it("fails closed on a status or outcome this build does not know", () => {
-    const unknownStatus = currentRow();
-    unknownStatus[9] = "Superseded";
-    expect(() => decodeImpactMarketInfo(unknownStatus)).toThrow(
-      /not a known ImpactMarketStatus/,
-    );
-    const unknownVariant = currentRow();
-    unknownVariant[9] = { Vetoed: [1] };
-    expect(() => decodeImpactMarketInfo(unknownVariant)).toThrow(
-      /unknown ImpactMarketStatus variant "Vetoed"/,
-    );
-    const unknownOutcome = currentRow();
-    unknownOutcome[9] = { Resolved: "Maybe" };
-    expect(() => decodeImpactMarketInfo(unknownOutcome)).toThrow(
-      /unknown Outcome/,
-    );
-    const numericOutcome = currentRow();
-    numericOutcome[9] = { Resolved: 1 };
-    expect(() => decodeImpactMarketInfo(numericOutcome)).toThrow(
-      /unknown Outcome/,
-    );
-  });
-
-  it("rejects malformed integer and text fields instead of coercing", () => {
-    // The old permissive decoder turned these into NaN / 0n / stringified
-    // garbage; each is now a named refusal.
-    const stringId = currentRow();
-    stringId[0] = "91";
-    expect(() => decodeImpactMarketInfo(stringId)).toThrow(
-      /impactMarketId is not a safe unsigned integer/,
-    );
-    const overflowId = currentRow();
-    overflowId[0] = 2 ** 32;
-    expect(() => decodeImpactMarketInfo(overflowId)).toThrow(
-      /impactMarketId is outside/,
-    );
-    const numericQuestion = currentRow();
-    numericQuestion[6] = 7;
-    expect(() => decodeImpactMarketInfo(numericQuestion)).toThrow(
-      /question is not a string/,
-    );
-    const nilDeadline = currentRow();
-    nilDeadline[7] = null;
-    expect(() => decodeImpactMarketInfo(nilDeadline)).toThrow(
-      /deadlineMs is not a safe unsigned integer/,
-    );
-    const numericDescription = currentRow();
-    numericDescription[13] = 42;
-    expect(() => decodeImpactMarketInfo(numericDescription)).toThrow(
-      /description is not a string/,
-    );
-  });
-
-  it("fails closed on an oracle-source variant this build does not know", () => {
-    const row = currentRow();
-    row[12] = { PriceAtDeadline: [1, 2] };
-    expect(() => decodeImpactMarketInfo(row)).toThrow(
-      /unknown EventOracleSource variant "PriceAtDeadline"/,
     );
   });
 });
@@ -608,6 +531,8 @@ describe("byte-field validation", () => {
           4,
           "T",
           0n,
+          1n,
+          1n,
         ],
       },
       [0xde, 0xad],
@@ -621,6 +546,99 @@ describe("byte-field validation", () => {
     raw[index] = value;
     return () => decodeProposalDisplayInfo(raw);
   }
+
+  it("reads a SetOracleGuards proposal only under its tag 13", () => {
+    const raw = validProposalRaw();
+    raw[11] = 13;
+    raw[12] = { SetOracleGuards: [10, 30_000, 2_000] };
+    expect(decodeProposalDisplayInfo(raw).action).toEqual({
+      kind: "SetOracleGuards",
+      value: {
+        market: 10,
+        markPriceMaxOracleAgeMs: 30_000n,
+        maxOracleDeviationBps: 2_000,
+      },
+    });
+    raw[11] = 12;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(
+      /does not match SetOracleGuards tag 13/,
+    );
+  });
+
+  it("reads ScheduleUpgrade and CancelUpgrade proposals under tags 14 and 15", () => {
+    const raw = validProposalRaw();
+    raw[11] = 14;
+    raw[12] = { ScheduleUpgrade: [50_780_000, 2, 1, new Array(32).fill(0xab)] };
+    expect(decodeProposalDisplayInfo(raw).action).toEqual({
+      kind: "ScheduleUpgrade",
+      value: {
+        targetHeight: 50_780_000n,
+        major: 2,
+        minor: 1,
+        successorSha256: new Uint8Array(32).fill(0xab),
+      },
+    });
+    raw[11] = 15;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(
+      /does not match ScheduleUpgrade tag 14/,
+    );
+    raw[12] = { ScheduleUpgrade: [50_780_000, 2, 1, new Array(32).fill(0)] };
+    raw[11] = 14;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(/all-zero/);
+    raw[11] = 15;
+    raw[12] = { CancelUpgrade: [50_780_000] };
+    expect(decodeProposalDisplayInfo(raw).action).toEqual({
+      kind: "CancelUpgrade",
+      value: { targetHeight: 50_780_000n },
+    });
+  });
+
+  it("keeps the tag, bytes and hash of a proposal whose action is nil", () => {
+    const raw = validProposalRaw();
+    raw[11] = 14;
+    raw[12] = null;
+    const info = decodeProposalDisplayInfo(raw);
+    expect(info.action).toBeNull();
+    expect(info.actionTag).toBe(14);
+    expect(info.actionCanonicalBytes).toEqual(new Uint8Array([0xde, 0xad]));
+    expect(info.contentHash).toEqual(new Uint8Array(32).fill(0x5a));
+  });
+
+  it("reads a CancelAllOrdersForAccount proposal under its tag 8", () => {
+    // The kind→tag table row is only exercised through a proposal read: a
+    // wrong tag here would refuse every real tag-8 proposal as a mismatch.
+    const raw = validProposalRaw();
+    raw[11] = 8;
+    raw[12] = { CancelAllOrdersForAccount: [new Array(20).fill(0xc1), 7] };
+    const info = decodeProposalDisplayInfo(raw);
+    expect(info.actionTag).toBe(8);
+    expect(info.action).toEqual({
+      kind: "CancelAllOrdersForAccount",
+      value: { owner: addrOf(0xc1), market: 7 },
+    });
+    raw[11] = 7;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(
+      /actionTag 7 does not match CancelAllOrdersForAccount tag 8/,
+    );
+  });
+
+  it("reads an UpdateAuthoritySet proposal under its tag 7", () => {
+    const raw = validProposalRaw();
+    raw[11] = 7;
+    raw[12] = {
+      UpdateAuthoritySet: ["Oracle", [new Array(20).fill(0xb2)], []],
+    };
+    const info = decodeProposalDisplayInfo(raw);
+    expect(info.actionTag).toBe(7);
+    expect(info.action).toEqual({
+      kind: "UpdateAuthoritySet",
+      value: { domain: "Oracle", add: [addrOf(0xb2)], remove: [] },
+    });
+    raw[11] = 8;
+    expect(() => decodeProposalDisplayInfo(raw)).toThrow(
+      /actionTag 8 does not match UpdateAuthoritySet tag 7/,
+    );
+  });
 
   it("accepts the uncorrupted baseline", () => {
     // Guards the negative cases below: if the baseline itself threw, every
@@ -649,6 +667,13 @@ describe("byte-field validation", () => {
     );
   });
 
+  it("decodes a 14-element CreateMarket with its tick and lot size", () => {
+    const p = decodeProposalDisplayInfo(validProposalRaw());
+    if (p.action.kind !== "CreateMarket") throw new Error("unreachable");
+    expect(p.action.value.tickSize).toBe(1n);
+    expect(p.action.value.lotSize).toBe(1n);
+  });
+
   it("rejects an action tag that does not match the decoded action", () => {
     expect(withField(11, 2)).toThrow(
       /actionTag 2 does not match CreateMarket tag 1/,
@@ -660,14 +685,14 @@ describe("byte-field validation", () => {
     const action = raw[12] as { CreateMarket: unknown[] };
     action.CreateMarket.push("trailing");
     expect(() => decodeProposalDisplayInfo(raw)).toThrow(
-      /createMarket has 13 fields, expected exactly 12/,
+      /proposal\.action: array had incorrect length, expected 14/,
     );
 
     const nonString = validProposalRaw();
     const nonStringAction = nonString[12] as { CreateMarket: unknown[] };
     nonStringAction.CreateMarket[10] = null;
     expect(() => decodeProposalDisplayInfo(nonString)).toThrow(
-      /createMarket\.ticker is not a string/,
+      /proposal\.action: invalid type: unit value, expected a string/,
     );
   });
 
@@ -739,10 +764,12 @@ describe("byte-field validation", () => {
         4,
         "T",
         0n,
+        1n,
+        1n,
       ],
     };
     expect(withField(12, action)).toThrow(
-      /createMarket\.signer is 19 bytes, expected 20/,
+      /proposal\.action: invalid length 19, expected 20 bytes/,
     );
   });
 
@@ -772,5 +799,72 @@ describe("byte-field validation", () => {
     expect(() =>
       decodeProposalStatus({ Rejected: [new Array(21).fill(1)] }),
     ).toThrow(/Rejected\.by is 21 bytes, expected 20/);
+  });
+});
+
+describe("decodeUpgradesInfo (engine golden vector)", () => {
+  // rmp_serde of UpgradesInfo from exchange-core/src/query.rs.
+  it("decodes a pending plan and an executed activation", () => {
+    const info = decodeUpgradesInfo(
+      decodeVector(
+        "9295ce0306d7600201dc0020" +
+          "ccab".repeat(32) +
+          "cf000000012a05f2009193210200",
+      ),
+    );
+    expect(info.plan).toEqual({
+      targetHeight: 50_780_000n,
+      major: 2,
+      minor: 1,
+      successorSha256: new Uint8Array(32).fill(0xab),
+      scheduledHeight: 5_000_000_000n,
+    });
+    expect(info.executed).toEqual([
+      { activatedHeight: 33n, major: 2, minor: 0 },
+    ]);
+  });
+
+  it("decodes absence as a null plan and an empty ledger", () => {
+    expect(decodeUpgradesInfo(decodeVector("92c090"))).toEqual({
+      plan: null,
+      executed: [],
+    });
+  });
+
+  it("refuses a short sha256", () => {
+    expect(() => decodeUpgradesInfo([[1, 2, 1, [0xab], 1], []])).toThrow(
+      /successorSha256/,
+    );
+  });
+});
+
+describe("decodeNodeVersion", () => {
+  const body = {
+    node: "2.13.0",
+    engine: "2.1-1",
+    engine_abi_version: 1,
+    engine_major: 2,
+    engine_minor: 1,
+    engine_lib_path: "/data/engines/libexchange_ffi.2.1.so",
+    engine_lib_sha256: "ab".repeat(32),
+  };
+
+  it("reads the loaded release", () => {
+    expect(decodeNodeVersion(body)).toEqual({
+      node: "2.13.0",
+      engine: "2.1-1",
+      engineAbiVersion: 1,
+      engineMajor: 2,
+      engineMinor: 1,
+      engineLibSha256: "ab".repeat(32),
+    });
+  });
+
+  it("refuses a malformed body", () => {
+    expect(() => decodeNodeVersion({ ...body, engine_major: -1 })).toThrow();
+    expect(() =>
+      decodeNodeVersion({ ...body, engine_lib_sha256: "x" }),
+    ).toThrow();
+    expect(() => decodeNodeVersion(null)).toThrow();
   });
 });

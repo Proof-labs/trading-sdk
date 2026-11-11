@@ -16,7 +16,7 @@ import msgpack
 import pytest
 
 from proof_trading_sdk.client import ExchangeClient
-from proof_trading_sdk.errors import GatewayError, ProofTradingSdkError
+from proof_trading_sdk.errors import CodecError, GatewayError, ProofTradingSdkError
 
 
 def _client(handler) -> ExchangeClient:
@@ -84,7 +84,7 @@ def test_open_orders_posts_info():
         captured["method"] = request.method
         captured["path"] = request.url.path
         captured["body"] = json.loads(request.read())
-        orders = [[7, 1, list(b"\x01" * 20), "Buy", 6_675_000, 100]]
+        orders = [[7, 1, list(b"\xbb" * 20), "Buy", 6_675_000, 100]]
         return _info_response(orders)
 
     orders = _client(handler).open_orders("bb" * 20)
@@ -94,7 +94,130 @@ def test_open_orders_posts_info():
     assert captured["body"] == {"type": "openOrders", "user": "bb" * 20}
     assert orders[0]["id"] == 7
     assert orders[0]["price"] == 6_675_000
-    assert orders[0]["owner"] == b"\x01" * 20
+    assert orders[0]["owner"] == b"\xbb" * 20
+
+
+def _sub_account_row(
+    *,
+    master: object = b"\xaa" * 20,
+    sub_account_id: object = 1,
+    address: object = b"\x11" * 20,
+    name: object = b"grid" + b"\x00" * 28,
+    created_height: object = 947727,
+) -> list[object]:
+    """A registry row exactly as rmp-serde encodes `proof-wire` `SubAccount`:
+    positional `[master, sub_account_id, address, name, created_height]`, fixed
+    byte fields as arrays of integers."""
+
+    def as_array(v: object) -> object:
+        return list(v) if isinstance(v, bytes) else v
+
+    return [as_array(master), sub_account_id, as_array(address), as_array(name), created_height]
+
+
+def test_sub_account_list_posts_info_and_decodes_registry_rows():
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["method"] = request.method
+        captured["path"] = request.url.path
+        captured["body"] = json.loads(request.read())
+        second = _sub_account_row(
+            sub_account_id=2, address=b"\x22" * 20, name=b"basis" + b"\x00" * 27,
+            created_height=947800,
+        )
+        second[2] = b"\x22" * 20  # a bin byte field decodes too
+        return _info_response([_sub_account_row(), second])
+
+    rows = _client(handler).sub_account_list("aa" * 20)
+
+    assert captured["method"] == "POST"
+    assert captured["path"] == "/info"
+    assert captured["body"] == {"type": "subAccountList", "user": "aa" * 20}
+    assert rows == [
+        {
+            "address": b"\x11" * 20,
+            "master": b"\xaa" * 20,
+            "id": 1,
+            "name": "grid",
+            "created_height": 947727,
+        },
+        {
+            "address": b"\x22" * 20,
+            "master": b"\xaa" * 20,
+            "id": 2,
+            "name": "basis",
+            "created_height": 947800,
+        },
+    ]
+
+
+def test_sub_account_list_accepts_empty_registry_and_trailing_fields():
+    assert _client(lambda r: _info_response([])).sub_account_list("aa" * 20) == []
+    rows = _client(
+        lambda r: _info_response([_sub_account_row() + [None]])
+    ).sub_account_list("aa" * 20)
+    assert [row["id"] for row in rows] == [1]
+
+
+@pytest.mark.parametrize(
+    "payload, match",
+    [
+        (None, "expected an array"),
+        ({"not": "a list"}, "expected an array"),
+        ([{"not": "a row"}], "positional array"),
+        ([_sub_account_row()[:4]], "expected 5 fields"),
+        ([_sub_account_row(sub_account_id=0)], "id"),
+        ([_sub_account_row(sub_account_id=1.9)], "msgpack float"),
+        ([_sub_account_row(sub_account_id=True)], "id"),
+        ([_sub_account_row(sub_account_id=2**32)], "id"),
+        ([_sub_account_row(created_height=-1)], "created_height"),
+        ([_sub_account_row(address="bad")], "address encoding"),
+        ([_sub_account_row(master=[])], "master length"),
+        ([_sub_account_row(address=[1.5] * 20)], "msgpack float"),
+        # Integral floats in integer positions: the wire has no float field,
+        # so 1.0 packed as msgpack float64 (0xcb) is malformed bytes, not an id.
+        # The shared Rust preflight refuses the float before any coercion.
+        ([_sub_account_row(sub_account_id=1.0)], "msgpack float"),
+        ([_sub_account_row(created_height=947727.0)], "msgpack float"),
+        ([_sub_account_row(address=[17.0] * 20)], "msgpack float"),
+        ([_sub_account_row(name=b"\xff" + b"\x00" * 31)], "invalid UTF-8"),
+        ([_sub_account_row(), _sub_account_row(address=b"\x22" * 20)], "duplicate id 1"),
+        ([_sub_account_row(), _sub_account_row(sub_account_id=2)], "duplicate address"),
+        # A valid row next to a malformed one must not yield a partial registry.
+        ([_sub_account_row(), {"not": "a row"}], "positional array"),
+    ],
+)
+def test_sub_account_list_raises_on_malformed_payload(payload, match):
+    with pytest.raises(CodecError, match=match):
+        _client(lambda r: _info_response(payload)).sub_account_list("aa" * 20)
+
+
+def test_sub_account_list_rejects_single_precision_floats():
+    """The same defect at the other width: float32 (0xca) integral values in
+    integer fields. use_single_float makes the bytes genuinely msgpack
+    float32, matching what a hostile encoder can produce."""
+    payload = msgpack.packb(
+        [_sub_account_row(sub_account_id=1.0)], use_single_float=True
+    )
+    data = base64.b64encode(payload).decode()
+    with pytest.raises(CodecError, match="msgpack float"):
+        _client(
+            lambda r: httpx.Response(200, json={"data": data})
+        ).sub_account_list("aa" * 20)
+
+
+def test_gateway_reads_reject_integral_floats_outside_sub_accounts():
+    """#221: the preflight is not sub-account-specific. An integral float in a
+    balance or an orderbook level is malformed bytes, not a value to truncate
+    with ``int(...)``."""
+    account = [1.0, [], 0, 0, 0, 0]  # balance: float64 1.0
+    with pytest.raises(CodecError, match="msgpack float"):
+        _client(lambda r: _info_response(account)).account("aa" * 20)
+
+    orderbook = [[[100.0, 10, 1]], []]  # a bid price: float64 100.0
+    with pytest.raises(CodecError, match="msgpack float"):
+        _client(lambda r: _info_response(orderbook)).orderbook(1)
 
 
 def test_withdrawal_status_none_when_nil():
@@ -199,11 +322,11 @@ def test_markets_decodes_msgpack_config():
     assert mkts[0]["max_open_interest"] is None
 
 
-def test_markets_decodes_max_open_interest_slot_24():
+def test_markets_decodes_max_open_interest_slot_23():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v1/markets"
         cfg = [1, 1_000, 500, 5, 2, 3_600_000, 100, "Perp"]
-        cfg.extend([None] * (23 - len(cfg)))
+        cfg.extend([None] * (22 - len(cfg)))
         cfg.extend(["BTC", 1_000_000])
         return _info_response([cfg])
 
@@ -278,6 +401,99 @@ def test_position_triggers_use_public_gateway_route_and_preserve_ids():
     assert rows[0]["bracket"]["owner"] == b"\xA5" * 20
     assert rows[0]["bracket"]["stop_loss"]["client_trigger_id"] == 11
     assert rows[0]["availability"] == {"kind": "Deferred", "reason": "MarkStale"}
+
+
+def _trigger_row_with_reason(reason) -> list:
+    return [
+        [
+            1,
+            list(b"\xA5" * 20),
+            7,
+            3,
+            "Buy",
+            100,
+            101,
+            None,
+            [
+                11,
+                "StopLoss",
+                95_000,
+                75,
+                None,
+                "Armed",
+                [102, 94_000, None, 4, 0, 4, reason],
+            ],
+            None,
+        ],
+        [4, True, 250, 5_000, 1_000, 32],
+        {"Deferred": reason},
+    ]
+
+
+@pytest.mark.parametrize("reason", ["NoTwoSidedQuote", "ReasonFromANewerEngine"])
+def test_position_triggers_return_the_outcome_reason_verbatim(reason):
+    owner = "ab" * 20
+    rows = _client(
+        lambda _request: _info_response([_trigger_row_with_reason(reason)])
+    ).position_triggers(owner)
+    assert rows[0]["bracket"]["stop_loss"]["last_evaluation"]["reason"] == reason
+    assert rows[0]["availability"] == {"kind": "Deferred", "reason": reason}
+
+
+# rmp-serde names a unit variant by string; anything else is malformed.
+@pytest.mark.parametrize("bad", ["", 17, ["NoTwoSidedQuote"]])
+def test_position_triggers_refuse_a_malformed_outcome_reason(bad):
+    owner = "ab" * 20
+    with pytest.raises(
+        ProofTradingSdkError, match="TriggerOutcomeReason must be a non-empty string"
+    ):
+        _client(
+            lambda _request: _info_response([_trigger_row_with_reason(bad)])
+        ).position_triggers(owner)
+
+
+def test_position_triggers_return_state_and_availability_verbatim():
+    row = _trigger_row_with_reason("X")
+    row[0][8][5] = "Snoozed"
+    row[2] = "Snoozed"
+    rows = _client(lambda _request: _info_response([row])).position_triggers(
+        "ab" * 20
+    )
+    assert rows[0]["bracket"]["stop_loss"]["state"] == "Snoozed"
+    assert rows[0]["availability"] == {"kind": "Snoozed"}
+
+
+def test_position_triggers_return_a_later_limb_kind_verbatim():
+    row = _trigger_row_with_reason("X")
+    row[0][8][1] = "TrailingStop"
+    rows = _client(lambda _request: _info_response([row])).position_triggers(
+        "ab" * 20
+    )
+    assert rows[0]["bracket"]["stop_loss"]["kind"] == "TrailingStop"
+
+
+# The stop-loss slot holding the other known kind is a corrupt row.
+@pytest.mark.parametrize(
+    ("kind", "match"),
+    [
+        ("TakeProfit", "stop_loss has wrong kind"),
+        ("", "TriggerKind must be a non-empty string"),
+        (17, "TriggerKind must be a non-empty string"),
+    ],
+)
+def test_position_triggers_refuse_a_swapped_or_malformed_limb_kind(kind, match):
+    row = _trigger_row_with_reason("X")
+    row[0][8][1] = kind
+    with pytest.raises(ProofTradingSdkError, match=match):
+        _client(lambda _request: _info_response([row])).position_triggers("ab" * 20)
+
+
+@pytest.mark.parametrize("bad", ["", 17, {"A": "x", "B": "y"}, {"A": 17}])
+def test_position_triggers_refuse_a_malformed_availability(bad):
+    row = _trigger_row_with_reason("X")
+    row[2] = bad
+    with pytest.raises(ProofTradingSdkError, match="trigger decode"):
+        _client(lambda _request: _info_response([row])).position_triggers("ab" * 20)
 
 
 def test_trigger_status_preserves_large_json_heights_and_503_fails_closed():

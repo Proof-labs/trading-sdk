@@ -1,0 +1,356 @@
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { encode } from "@msgpack/msgpack";
+import { readFileSync } from "node:fs";
+import { ExchangeClient } from "./client.js";
+import { chainIdFromString } from "./crypto.js";
+import {
+  decodeMarketsSnapshot,
+  MAX_SNAPSHOT_BYTES,
+} from "./market-snapshot.js";
+
+const chain = new Uint8Array(32).fill(7);
+const market = (): unknown[] => [
+  1,
+  1000,
+  500,
+  5,
+  2,
+  3_600_000,
+  100,
+  "Perp",
+  0,
+  0,
+  false,
+  0,
+  30_000,
+  [],
+  100,
+  1,
+  null,
+  0,
+  "OracleOnly",
+  0,
+  0,
+  5,
+  "BTC",
+  18_446_744_073_709_551_615n,
+];
+const snapshot = (): unknown[] => [
+  Array.from(chain),
+  9_007_199_254_740_993n,
+  [market()],
+  [],
+];
+const envelope = (value: unknown) => ({
+  data: Buffer.from(encode(value, { useBigInt64: true })).toString("base64"),
+});
+const json = (body: unknown) =>
+  new TextEncoder().encode(JSON.stringify(body) ?? "");
+const fixture = (name: string) =>
+  readFileSync(
+    new URL(
+      `../crates/proof-trading-sdk/src/market_snapshot/${name}`,
+      import.meta.url,
+    ),
+    "utf8",
+  ).trim();
+
+afterEach(() => vi.unstubAllGlobals());
+
+describe("atomic market snapshot", () => {
+  it("rejects duplicate escaped JSON envelope keys and explicit upstream errors", () => {
+    const data = envelope(snapshot()).data;
+    for (const body of [
+      `{"data":"${data}","data":"${data}"}`,
+      `{"data":"${data}","d\\u0061ta":"${data}"}`,
+    ]) {
+      expect(() =>
+        decodeMarketsSnapshot(new TextEncoder().encode(body), chain),
+      ).toThrow("malformed");
+    }
+    expect(
+      decodeMarketsSnapshot(
+        json({ data, future: { data: "one", key: "two" } }),
+        chain,
+      ).height,
+    ).toBe(9_007_199_254_740_993n);
+    expect(() =>
+      decodeMarketsSnapshot(
+        json({ ...envelope(snapshot()), error: "unavailable" }),
+        chain,
+      ),
+    ).toThrow("malformed");
+  });
+
+  it("reads the engine snapshot, one binary book per event", () => {
+    const decoded = decodeMarketsSnapshot(
+      json({
+        data: Buffer.from(fixture("engine-c3253d0c.hex"), "hex").toString(
+          "base64",
+        ),
+      }),
+      chain,
+    );
+    expect(decoded.height).toBe(9_007_199_254_740_993n);
+    expect(decoded.markets.map((m) => m.market)).toEqual([
+      1, 2, 70000, 70100, 70101,
+    ]);
+    expect(decoded.markets[2].kind).toEqual({ PredictionBinary: [700, "Yes"] });
+    expect(decoded.markets[4].kind).toEqual({ ConditionalPerp: [700, "No"] });
+    expect(decoded.events[0]).toEqual({
+      eventId: 700,
+      ebyMarket: 70000,
+      question: "Will the Fed cut rates?",
+      settlementMs: 1_777_201_000_000n,
+      resolutionWindowMs: 1000n,
+      status: { kind: "Trading" },
+      createdMs: 1_777_200_000_000n,
+      resolvedMs: 0n,
+      attachedConditionals: [
+        { underlyingMarket: 2, cpyMarket: 70100, cpnMarket: 70101 },
+      ],
+    });
+  });
+
+  it("refuses a two-book event row", () => {
+    const event = [700, 70000, 70001, "q", 1n, 1n, "Trading", 1n, 0n, null, []];
+    expect(() =>
+      decodeMarketsSnapshot(
+        json(envelope([...snapshot().slice(0, 3), [event]])),
+        chain,
+      ),
+    ).toThrow("malformed");
+    expect(
+      decodeMarketsSnapshot(
+        json(
+          envelope([
+            ...snapshot().slice(0, 3),
+            [event.filter((_, i) => i !== 2)],
+          ]),
+        ),
+        chain,
+      ).events[0].eventId,
+    ).toBe(700);
+  });
+
+  it("reads the open interest a current engine serves", () => {
+    const decoded = decodeMarketsSnapshot(
+      json({
+        data: Buffer.from(fixture("engine-66d50df7.hex"), "hex").toString(
+          "base64",
+        ),
+      }),
+      chain,
+    );
+    expect(decoded.openInterest).toEqual([
+      {
+        market: 1,
+        long: 9_007_199_254_740_993n,
+        short: 9_007_199_254_740_993n,
+      },
+      { market: 2, long: 0n, short: 0n },
+    ]);
+  });
+
+  it("tells no open interest apart from none served", () => {
+    expect(
+      decodeMarketsSnapshot(json(envelope(snapshot())), chain).openInterest,
+    ).toBeUndefined();
+    expect(
+      decodeMarketsSnapshot(json(envelope([...snapshot(), []])), chain)
+        .openInterest,
+    ).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a repeated market",
+      [
+        [1, 3, 3],
+        [1, 3, 3],
+      ],
+    ],
+    [
+      "descending markets",
+      [
+        [2, 0, 0],
+        [1, 3, 3],
+      ],
+    ],
+    ["a negative side", [[1, -1, 3]]],
+    ["a short row", [[1, 3]]],
+    ["a nil row", [null]],
+    ["a nil list", null],
+  ])("rejects open interest with %s", (_name, rows) => {
+    expect(() =>
+      decodeMarketsSnapshot(json(envelope([...snapshot(), rows])), chain),
+    ).toThrow();
+  });
+
+  it("decodes a Rust-produced shared-wire vector losslessly", () => {
+    const hex =
+      "94dc00200707070707070707070707070707070707070707070707070707070707070707cfffffffffffffffff91dc001801cd03e8cd01f40502ce0036ee8064a4506572700000c200cd7530906401c000aa4f7261636c654f6e6c79000005a3425443cfffffffffffffffff90";
+    const result = decodeMarketsSnapshot(
+      json({ data: Buffer.from(hex, "hex").toString("base64") }),
+      chain,
+    );
+    expect(result.height).toBe(18_446_744_073_709_551_615n);
+    expect(result.markets[0].maxOpenInterest).toBe(result.height);
+    expect(result.markets[0].kind).toBe("Perp");
+  });
+
+  it("accepts appended fields and explicit empty registries", () => {
+    const value = snapshot();
+    (value[2] as unknown[][])[0].push("future field");
+    value.push([[1, 3, 3, "future field"]], { future: "metadata" });
+    const decoded = decodeMarketsSnapshot(json(envelope(value)), chain);
+    expect(decoded.markets).toHaveLength(1);
+    expect(decoded.openInterest).toEqual([{ market: 1, long: 3n, short: 3n }]);
+    value[2] = [];
+    expect(decodeMarketsSnapshot(json(envelope(value)), chain).markets).toEqual(
+      [],
+    );
+  });
+
+  it.each([
+    undefined,
+    null,
+    [],
+    {},
+    { data: null },
+    { data: "!" },
+    { data: "kB==" },
+  ])("rejects missing or malformed envelopes: %j", (value) => {
+    expect(() => decodeMarketsSnapshot(json(value), chain)).toThrow();
+  });
+
+  it.each([
+    [0, -1],
+    [1, 1.5],
+    [7, "UnknownKind"],
+    [10, 0],
+    [16, [1, 2]],
+    [18, "UnknownMode"],
+    [23, -1n],
+  ])("rejects malformed known field %j", (slot, value) => {
+    const input = snapshot();
+    (input[2] as unknown[][])[0][slot as number] = value;
+    expect(() => decodeMarketsSnapshot(json(envelope(input)), chain)).toThrow();
+  });
+
+  it("rejects wrong chain, zero height, incomplete and duplicate records", () => {
+    expect(() =>
+      decodeMarketsSnapshot(
+        json(envelope(snapshot())),
+        new Uint8Array(32).fill(8),
+      ),
+    ).toThrow("wrong chain");
+    const zero = snapshot();
+    zero[1] = 0;
+    expect(() => decodeMarketsSnapshot(json(envelope(zero)), chain)).toThrow(
+      "uncommitted",
+    );
+    const duplicate = snapshot();
+    duplicate[2] = [market(), market()];
+    expect(() =>
+      decodeMarketsSnapshot(json(envelope(duplicate)), chain),
+    ).toThrow();
+    const incomplete = snapshot();
+    incomplete[2] = [market().slice(0, 7)];
+    expect(() =>
+      decodeMarketsSnapshot(json(envelope(incomplete)), chain),
+    ).toThrow();
+  });
+
+  it("rejects integral floats, trailing bytes and declared oversized containers", () => {
+    const packed = encode(snapshot(), { useBigInt64: true });
+    const trailing = Buffer.concat([packed, Buffer.from([0])]);
+    for (const bytes of [
+      trailing,
+      Buffer.from([0xdd, 255, 255, 255, 255]),
+      Buffer.from([0xcb, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0]),
+    ]) {
+      expect(() =>
+        decodeMarketsSnapshot(json({ data: bytes.toString("base64") }), chain),
+      ).toThrow();
+    }
+  });
+
+  it("uses exactly one gateway read with the explicitly pinned chain", async () => {
+    const pinned = chainIdFromString("proof-test");
+    const value = snapshot();
+    value[0] = Array.from(pinned);
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify(envelope(value)), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    const client = new ExchangeClient({
+      gatewayUrl: "http://127.0.0.1:9080",
+      apiUrl: "http://127.0.0.1:8080",
+      rpcUrl: "http://127.0.0.1:26657",
+      chainId: "proof-test",
+    });
+    expect((await client.queryMarketsSnapshot()).height).toBe(
+      9_007_199_254_740_993n,
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:9080/v1/markets-snapshot",
+    );
+    expect(fetcher.mock.calls[0][1].redirect).toBe("error");
+  });
+
+  it("requires a pin and never returns inventory for HTTP or streaming errors", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    await expect(
+      new ExchangeClient({
+        gatewayUrl: "http://127.0.0.1:9080",
+      }).queryMarketsSnapshot(),
+    ).rejects.toThrow("pinned chainId");
+    expect(fetcher).not.toHaveBeenCalled();
+    const client = new ExchangeClient({
+      gatewayUrl: "http://127.0.0.1:9080",
+      chainId: "proof-test",
+    });
+    fetcher.mockResolvedValueOnce(
+      new Response("secret provider URL", { status: 503 }),
+    );
+    await expect(client.queryMarketsSnapshot()).rejects.toThrow("HTTP 503");
+    // An oversized proxy error page still reports the outage, not "malformed".
+    fetcher.mockResolvedValueOnce(
+      new Response("x".repeat(MAX_SNAPSHOT_BYTES + 1), { status: 502 }),
+    );
+    await expect(client.queryMarketsSnapshot()).rejects.toThrow(
+      "market snapshot returned HTTP 502",
+    );
+    fetcher.mockResolvedValueOnce(
+      new Response("x".repeat(MAX_SNAPSHOT_BYTES + 1), { status: 200 }),
+    );
+    await expect(client.queryMarketsSnapshot()).rejects.toThrow("malformed");
+    fetcher.mockRejectedValueOnce(new Error("secret credential URL"));
+    await expect(client.queryMarketsSnapshot()).rejects.toThrow(
+      "transport or response unavailable",
+    );
+  });
+
+  it("auto-discovered signer chain identity is not an inventory authority pin", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ result: { node_info: { network: "proof-test" } } }),
+          { status: 200 },
+        ),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    const client = new ExchangeClient({ gatewayUrl: "http://127.0.0.1:9080" });
+    await client.ready();
+    await expect(client.queryMarketsSnapshot()).rejects.toThrow(
+      "explicit pinned chainId",
+    );
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+});

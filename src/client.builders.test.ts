@@ -47,6 +47,46 @@ describe("convenience action builders", () => {
     expect(action.data.owner).toEqual(owner);
   });
 
+  it("buyNo places the Yes sell at $1 - price on the event's book", async () => {
+    const { client, owner } = clientWithKey();
+    const spy = captureSubmit(client);
+    await client.buyNo({ market: 70_000, price: 400_000n, quantity: 3n });
+    const action = spy.mock.calls[0][0];
+    expect(action.type).toBe("PlaceOrder");
+    expect(action.data).toMatchObject({
+      market: 70_000,
+      side: Side.Sell,
+      price: 600_000n,
+      quantity: 3n,
+    });
+    expect(action.data.owner).toEqual(owner);
+  });
+
+  it("sellNo with reduceOnly places a reduce-only Yes buy", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+    await client.sellNo({
+      market: 70_000,
+      price: 300_000n,
+      quantity: 3n,
+      reduceOnly: true,
+    });
+    expect(spy.mock.calls[0][0].data).toMatchObject({
+      side: Side.Buy,
+      price: 700_000n,
+      reduceOnly: true,
+    });
+  });
+
+  it("buyNo at $1 is refused before anything is sent", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+    await expect(
+      client.buyNo({ market: 70_000, price: 1_000_000n, quantity: 1n }),
+    ).rejects.toThrow(/Yes price of 0/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("marketOrder maps to MarketOrder with owner", async () => {
     const { client, owner } = clientWithKey();
     const spy = captureSubmit(client);
@@ -114,5 +154,150 @@ describe("convenience action builders", () => {
     await expect(
       client.placeOrder({ market: 1, side: Side.Buy, price: 1n, quantity: 1n }),
     ).rejects.toThrow(/No signer key loaded/);
+  });
+});
+
+describe("pre-fill SL/TP limbs on order builders", () => {
+  it("placeOrder passes valid limbs through to the action", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+
+    await client.placeOrder({
+      market: 1,
+      side: Side.Buy,
+      price: 100_000n,
+      quantity: 2n,
+      stopLoss: {
+        triggerPrice: 90_000n,
+        maxSlippageBps: 50,
+        clientTriggerId: 1n,
+      },
+      takeProfit: {
+        triggerPrice: 120_000n,
+        maxSlippageBps: 50,
+        clientTriggerId: 2n,
+      },
+    });
+
+    const action = spy.mock.calls[0][0];
+    expect(action.data).toMatchObject({
+      stopLoss: { triggerPrice: 90_000n },
+      takeProfit: { triggerPrice: 120_000n },
+    });
+  });
+
+  it("marketOrder passes a single limb through to the action", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+
+    await client.marketOrder({
+      market: 1,
+      side: Side.Sell,
+      quantity: 2n,
+      stopLoss: { triggerPrice: 90_000n, maxSlippageBps: 50 },
+    });
+
+    const action = spy.mock.calls[0][0];
+    expect(action.type).toBe("MarketOrder");
+    expect(action.data).toMatchObject({
+      stopLoss: { triggerPrice: 90_000n, maxSlippageBps: 50 },
+    });
+  });
+
+  it("placeOrder rejects invalid limbs before any submission", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+
+    await expect(
+      client.placeOrder({
+        market: 1,
+        side: Side.Buy,
+        price: 100_000n,
+        quantity: 2n,
+        stopLoss: { triggerPrice: 0n, maxSlippageBps: 50 },
+      }),
+    ).rejects.toThrow(/stopLoss\.triggerPrice must be non-zero/);
+    await expect(
+      client.placeOrder({
+        market: 1,
+        side: Side.Buy,
+        price: 100_000n,
+        quantity: 2n,
+        stopLoss: { triggerPrice: 90_000n, maxSlippageBps: 50 },
+        reduceOnly: true,
+      }),
+    ).rejects.toThrow(/TriggerOrderIncompatible, code 98/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("marketOrder rejects invalid limbs before any submission", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+
+    await expect(
+      client.marketOrder({
+        market: 1,
+        side: Side.Sell,
+        quantity: 2n,
+        stopLoss: { triggerPrice: 90_000n, maxSlippageBps: 0 },
+      }),
+    ).rejects.toThrow(/maxSlippageBps must be in 1..=9999/);
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe("operator-receipt submission methods", () => {
+  it("authorizeWithdrawal maps to the 0x24 action, proof intact", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+
+    const params = {
+      authorization: new Uint8Array(221).fill(1),
+      proof: {
+        signerBitmap: new Uint8Array([0b1]),
+        signatures: [new Uint8Array(64)],
+      },
+    };
+    await client.authorizeWithdrawal(params);
+
+    const action = spy.mock.calls[0][0];
+    expect(action.type).toBe("AuthorizeWithdrawal");
+    expect(action.data).toBe(params);
+  });
+
+  it("confirmWithdrawalReceipt / failWithdrawalReceipt map to 0x22 / 0x23", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+
+    const params = {
+      receipt: {
+        deploymentId: new Uint8Array(32),
+        authorizationDigest: new Uint8Array(32),
+        withdrawalId: 1n,
+        terminalState: 1,
+        vaultTier: 1,
+        proofOwner: new Uint8Array(20),
+        destinationOwner: new Uint8Array(32),
+        destinationTokenAcct: new Uint8Array(32),
+        amountMicroUsdc: 1n,
+        feeMicroUsdc: 0n,
+        authorizationSignerEpoch: 1n,
+        solanaTxSignature: new Uint8Array(64),
+        finalizedSlot: 1n,
+        finalizedBlockhash: new Uint8Array(32),
+        receiptQuorumKind: 1,
+        receiptAuthorityEpoch: 1n,
+      },
+      proof: {
+        signerBitmap: new Uint8Array([0b1]),
+        signatures: [new Uint8Array(64)],
+      },
+    };
+    await client.confirmWithdrawalReceipt(params);
+    await client.failWithdrawalReceipt(params);
+
+    expect(spy.mock.calls[0][0].type).toBe("ConfirmWithdrawalReceipt");
+    expect(spy.mock.calls[1][0].type).toBe("FailWithdrawalReceipt");
+    expect(spy.mock.calls[0][0].data).toBe(params);
   });
 });
