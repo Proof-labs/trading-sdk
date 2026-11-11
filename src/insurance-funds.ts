@@ -23,14 +23,24 @@ export interface InsuranceFundLedger {
   storedLedger: boolean;
   cash: bigint;
   debt: bigint;
-  /** Cash minus debt, not marked equity or historical profit. */
+  /**
+   * Cash minus debt, not marked equity or historical profit. Funding the fund
+   * still owes on its positions is not included, so this is not the amount a
+   * withdrawal can take.
+   */
   netCash: bigint;
 }
 export type InsurancePositionNotional =
   | { status: "priced"; referencePrice: bigint; notionalMicroUsdc: bigint }
   | {
       status: "unpriced";
-      reason: "stale" | "guard_unset" | "no_verdict" | "no_mark" | "unknown";
+      reason:
+        | "stale"
+        | "guard_unset"
+        | "no_verdict"
+        | "no_mark"
+        | "thin_book"
+        | "unknown";
     }
   | { status: "unsupported_binary" }
   | { status: "unknown" };
@@ -146,6 +156,7 @@ function position(value: unknown): InsuranceFundPosition {
       reason !== "guard_unset" &&
       reason !== "no_verdict" &&
       reason !== "no_mark" &&
+      reason !== "thin_book" &&
       reason !== "unknown"
     )
       invalidRead("insurance unpriced reason");

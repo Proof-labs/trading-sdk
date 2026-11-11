@@ -118,7 +118,12 @@ describe("witnessed insurance fund directory and positions", () => {
 
   it("keeps unpriced and unsupported positions distinct from an empty fund", () => {
     for (const notional of [
-      { status: "unpriced", reason: "stale" },
+      // TODO: add "thin_book" once the proof-wire pin carries ThinBook; the
+      // pinned decoder reads it as "unknown" until then.
+      ...["stale", "guard_unset", "no_verdict", "no_mark"].map((reason) => ({
+        status: "unpriced",
+        reason,
+      })),
       { status: "unsupported_binary" },
     ]) {
       const result = decodeFinalizedInsuranceFund(
