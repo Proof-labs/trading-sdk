@@ -899,6 +899,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "solana_signature": vec![0x07u8; 64],
                     "last_valid_block_height": 500u64 }),
         ),
+        // Both integers at u64::MAX and a non-uniform signature (bytes 0..63),
+        // so every binding asserts the same integer width and the signature's
+        // array-of-u8 encoding, not just its own round trip.
+        codec_case(
+            "record_withdrawal_payout/u64_bounds",
+            RECORD_WITHDRAWAL_PAYOUT,
+            json!({ "withdrawal_id": u64::MAX, "holder": vec![0x05u8; 20],
+                    "solana_signature": (0u8..64).collect::<Vec<u8>>(),
+                    "last_valid_block_height": u64::MAX }),
+        ),
         // `outcome` is a NUMERIC_ENUM_FIELDS entry in codec-adapter.ts (the
         // integer-vs-name class the markSourceMode regression belonged to);
         // both outcomes an event can take are pinned (Void is refused).
