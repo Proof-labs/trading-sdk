@@ -73,7 +73,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   they now honour proxy environment variables such as `HTTPS_PROXY` and inherit
   the library's 20-second keepalive.
 
-
 - **The wire-12 vote actions and bridge reads.** `VoteWithdrawalPaid` (0x30)
   and `VoteDeposit` (0x32) settle withdrawals and credit deposits by operator
   quorum: each registry member signs the canonical vote preimage
@@ -110,7 +109,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   retired surfaces (MAJOR).
 - **`RecordWithdrawalPayout` is reshaped** (wire 12 repurposed 0x31): the
   payload is now `{withdrawal_id, holder, vault (32 bytes),
-  squads_transaction_index, registry_epoch}` and no longer carries a Solana
+squads_transaction_index, registry_epoch}` and no longer carries a Solana
   signature or a block height. Pre-12 payloads no longer decode anywhere.
 - Error codes 73 and 74 (`BridgeReceiptInvalid`, `BridgeReceiptMismatch`)
   are retired-never-produced and no longer classify in TypeScript or the Rust

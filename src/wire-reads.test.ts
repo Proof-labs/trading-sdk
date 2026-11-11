@@ -278,8 +278,7 @@ const PENDING_WITHDRAWALS_EXHAUSTED =
 const PENDING_DEPOSITS =
   "82a4726f77739184ad736f6c616e615f74785f736967c44099999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999a76c6f6361746f7282a9746f705f696e64657802ab696e6e65725f696e64657805ae72656769737472795f65706f636803ac6f62736572766174696f6e739183a56f776e6572c4146666666666666666666666666666666666666666b1616d6f756e745f6d6963726f5f75736463ce000f4240a5766f7465739182a5766f746572c4201111111111111111111111111111111111111111111111111111111111111111a97369676e6174757265c44077777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777ab6e6578745f637572736f7294ccdeccadccbeccef";
 /** The exhausted deposits page. */
-const PENDING_DEPOSITS_EXHAUSTED =
-  "82a4726f777390ab6e6578745f637572736f72c0";
+const PENDING_DEPOSITS_EXHAUSTED = "82a4726f777390ab6e6578745f637572736f72c0";
 
 describe("queryBridgeStatus", () => {
   it("decodes the governance view", async () => {
@@ -315,7 +314,10 @@ describe("queryBridgeRegistry", () => {
       epoch: 3n,
       threshold: 2,
       members: [
-        { key: new Uint8Array(32).fill(0x11), owner: new Uint8Array(20).fill(0x55) },
+        {
+          key: new Uint8Array(32).fill(0x11),
+          owner: new Uint8Array(20).fill(0x55),
+        },
         { key: new Uint8Array(32).fill(0x22), owner: undefined },
       ],
     });
@@ -352,8 +354,14 @@ describe("queryPendingWithdrawals", () => {
           votes: {
             registryEpoch: 3n,
             votes: [
-              { voter: new Uint8Array(32).fill(0x11), signature: new Uint8Array(64).fill(0x77) },
-              { voter: new Uint8Array(32).fill(0x22), signature: new Uint8Array(64).fill(0x88) },
+              {
+                voter: new Uint8Array(32).fill(0x11),
+                signature: new Uint8Array(64).fill(0x77),
+              },
+              {
+                voter: new Uint8Array(32).fill(0x22),
+                signature: new Uint8Array(64).fill(0x88),
+              },
             ],
           },
         },

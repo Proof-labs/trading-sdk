@@ -500,8 +500,8 @@ function toAction(
                   topIndex: (input.locator as Record<string, unknown>)
                     .top_index as number,
                   innerIndex:
-                    ((input.locator as Record<string, unknown>)
-                      .inner_index as number | undefined) ?? null,
+                    ((input.locator as Record<string, unknown>).inner_index as
+                      number | undefined) ?? null,
                 },
           deploymentId: bytes(input.deployment_id),
           chainId: bytes(input.chain_id),

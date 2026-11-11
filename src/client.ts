@@ -1889,10 +1889,15 @@ export class ExchangeClient {
   /** The operator receipt registry — the roster every payout gate and vote
    *  verifies against. Omit `epoch` for the current one. */
   async queryBridgeRegistry(epoch?: bigint): Promise<OperatorRegistry> {
-    const path = epoch === undefined ? "/v2/bridge/registry" : `/v2/bridge/registry/${epoch}`;
+    const path =
+      epoch === undefined
+        ? "/v2/bridge/registry"
+        : `/v2/bridge/registry/${epoch}`;
     const json = await this.apiJson(`${this.readBaseUrl}${path}`);
     const bytes = fromBase64(requireEncodedData(json, path));
-    return bridgeRegistryFromWasm(await this.decodeRead("BridgeRegistry", bytes));
+    return bridgeRegistryFromWasm(
+      await this.decodeRead("BridgeRegistry", bytes),
+    );
   }
 
   /** One page of pending withdrawals with their live leases, reported
