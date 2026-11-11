@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { sha256 } from "@noble/hashes/sha2.js";
+import { bytesToHex } from "./crypto.js";
 import { describe, expect, it, vi } from "vitest";
 import { ExchangeClient } from "./client.js";
 import { signAndEncode } from "./codec.js";
@@ -841,8 +844,8 @@ describe("exact inclusive trusted-gateway block/results ranges", () => {
         .reads()
         .evidence.blockResultsRange(selection),
     ).rejects.toThrow("pinned chainId");
-    const fromHeight = { kind: "malformed", field: "from height" };
-    const throughHeight = { kind: "malformed", field: "through height" };
+    const fromHeight = { kind: "configuration", field: "from height" };
+    const throughHeight = { kind: "configuration", field: "through height" };
     const span = { kind: "limit", field: "height budget" };
     const budget = (name: string) => ({
       kind: "configuration",
@@ -937,4 +940,59 @@ describe("exact inclusive trusted-gateway block/results ranges", () => {
     ).rejects.toThrow("cancelled");
     expect(f.transport).toHaveBeenCalledTimes(before);
   });
+});
+
+it.each([false, true])(
+  "range pairs independent multi-tx vector (tamper=%s)",
+  async (tamper) => {
+    const vectors = JSON.parse(
+      readFileSync(
+        new URL("../conformance/comet-transaction-roots.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { txs: string[]; dataHash: string }[];
+    const vector = vectors.find((v) => v.txs.length === 3)!;
+    const f = fixture();
+    const b = f.blocks.get(102)!;
+    b.result.block.data.txs = vector.txs;
+    Object.assign(b.result.block.header, {
+      data_hash: tamper ? "0".repeat(64) : vector.dataHash,
+    });
+    f.executions.get(102)!.result.txs_results = [0, 21, 7].map((code) => ({
+      code,
+      events: [],
+    }));
+    const pending = f.client
+      .reads()
+      .evidence.blockResultsRange({ fromHeight: 102n, throughHeight: 102n });
+    if (tamper)
+      await expect(pending).rejects.toMatchObject({
+        kind: "binding",
+        field: "block transactions root",
+      });
+    else {
+      const txs = (await pending).blocks[0].transactions;
+      expect(txs.map((tx) => tx.code)).toEqual([0, 21, 7]);
+      expect(txs.map((tx) => tx.hash)).toEqual(
+        vector.txs.map((tx) =>
+          bytesToHex(sha256(Buffer.from(tx, "base64"))).toUpperCase(),
+        ),
+      );
+    }
+  },
+);
+
+it.each([
+  ["parent hash continuity", "parent"],
+  ["post-state/header binding", "post"],
+] as const)("classifies %s as binding", async (field, mutation) => {
+  const f = fixture();
+  const header = f.blocks.get(103)!.result.block.header;
+  if (mutation === "parent") header.last_block_id.hash = "F".repeat(64);
+  else header.app_hash = "F".repeat(64);
+  await expect(
+    f.client
+      .reads()
+      .evidence.blockResultsRange({ fromHeight: 102n, throughHeight: 102n }),
+  ).rejects.toMatchObject({ kind: "binding", field });
 });
