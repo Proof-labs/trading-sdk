@@ -966,7 +966,10 @@ it.each([false, true])(
       .reads()
       .evidence.blockResultsRange({ fromHeight: 102n, throughHeight: 102n });
     if (tamper)
-      await expect(pending).rejects.toMatchObject({ kind: "binding" });
+      await expect(pending).rejects.toMatchObject({
+        kind: "binding",
+        field: "block transactions root",
+      });
     else {
       const txs = (await pending).blocks[0].transactions;
       expect(txs.map((tx) => tx.code)).toEqual([0, 21, 7]);
