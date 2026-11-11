@@ -62,6 +62,7 @@ import {
 } from "./liquidation-history.js";
 import {
   accountInfoFromWasm,
+  openOrdersFromWasm,
   eventInfoFromWasm,
   marketConfigFromWasm,
   toWasmFields,
@@ -85,6 +86,7 @@ import {
   txFromEngineCode,
   txFromQueryResponse,
   txOk,
+  txRefusal,
   txTimeout,
   txTransportError,
 } from "./tx-result.js";
@@ -863,11 +865,12 @@ export class ExchangeClient {
    *
    * The gateway response is an `ExchangeResponse`: a structured chain verdict
    * carries `code` and optionally `height`/`events`; an admitted-but-ambiguous
-   * submission carries `txHash` without `code` and must be reconciled. We map
-   * every shape to `TxResult`. Engine rejections retain the compatibility error
-   * string `"<code>: <message>"`, while the structured `code` is authoritative.
-   * For transport-level failures (rate limit, auth, etc.) we synthesize a code
-   * from the HTTP status.
+   * submission carries `txHash` without `code` and must be reconciled; a
+   * `status: "refused"` answer was never admitted, so it is terminal and keeps
+   * the gateway's `errorCode`. We map every shape to `TxResult`. Engine
+   * rejections retain the compatibility error string `"<code>: <message>"`,
+   * while the structured `code` is authoritative. For transport-level failures
+   * (rate limit, auth, etc.) we synthesize a code from the HTTP status.
    */
   private async submitViaGateway(
     txBytes: Uint8Array,
@@ -929,21 +932,26 @@ export class ExchangeClient {
           events: stated.events,
         });
       case "refused":
-        // A refusal naming a hash, code or height contradicts itself, so it
-        // proves nothing about whether the tx was broadcast.
+        // A malformed refusal is not evidence of non-admission. Presence of
+        // execution fields contradicts it, even when their value is null.
         if (
-          stated.txHash !== undefined ||
-          stated.code !== undefined ||
-          stated.height !== undefined
+          ["txHash", "tx_hash", "code", "height", "events", "log", "info"].some(
+            (key) => Object.prototype.hasOwnProperty.call(stated, key),
+          ) ||
+          typeof stated.errorCode !== "string" ||
+          !stated.errorCode.trim() ||
+          (Object.prototype.hasOwnProperty.call(stated, "error") &&
+            typeof stated.error !== "string")
         )
           return txTimeout(
             txHash,
-            "gateway refusal contradicts itself; reconcile by hash",
+            "malformed gateway refusal; reconcile by hash",
           );
-        // Nothing was broadcast, so there is nothing to reconcile.
-        return txTransportError(
+        // Only a validated envelope proves this attempt was not admitted.
+        return txRefusal(
           res.status === 200 ? 1 : res.status,
-          stated.error ?? stated.errorCode ?? "refused by gateway",
+          stated.errorCode,
+          stated.error ?? stated.errorCode,
         );
       case "pending":
         // Reconcile the hash of the bytes sent, never one the answer names.
@@ -1836,36 +1844,33 @@ export class ExchangeClient {
     return decodeProposalPage(await this.strictDecode(bytes));
   }
 
-  /** Fetch open orders for an address. Returns an empty array if the
-   *  account has no open orders.
-   *  Each order is a 6-tuple `[id, market, owner, side, price, quantity]`
-   *  decoded from MessagePack. */
+  /** Resting orders with exact bigint metadata and canonical legacy defaults.
+   * Malformed responses, foreign owners, invalid ordering and payloads over
+   * 1 MiB are rejected. This read does not verify a finalized witness. */
   async queryOpenOrders(addressHex?: string): Promise<OpenOrder[]> {
-    const hex = addressHex ?? this.addressHex;
-    if (!hex) return [];
+    const address = addressHex ?? this.addressHex;
+    if (address == null) return [];
+    const hex = address.replace(/^0x/i, "").toLowerCase();
+    if (!/^[0-9a-f]{40}$/.test(hex))
+      throw new Error("Invalid open orders owner");
+    const owner = Uint8Array.from(hex.match(/../g)!, (byte) =>
+      parseInt(byte, 16),
+    );
     const json = await this.queryOwnerScoped(
       { type: "openOrders", user: hex },
       `/v1/orders/${hex}`,
     );
-    if (!json.data) return [];
-    const bytes = fromBase64(json.data as string);
+    const encoded = requireEncodedData(json, "openOrders");
+    if (
+      encoded.length > 4 * Math.ceil((1024 * 1024) / 3) ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+        encoded,
+      )
+    )
+      throw new Error("Invalid open orders data envelope");
+    const bytes = fromBase64(encoded);
     await initWasm();
-    let decoded: unknown;
-    try {
-      decoded = msgpackDecoder.decode(bytes);
-    } catch {
-      return [];
-    }
-    rejectFloats(bytes);
-    if (!Array.isArray(decoded)) return [];
-    return (decoded as unknown[][]).map((order) => ({
-      id: BigInt(order[0] as number | bigint),
-      market: Number(order[1]),
-      owner: toBytes(order[2]),
-      side: order[3] as "Buy" | "Sell",
-      price: BigInt(order[4] as number | bigint),
-      quantity: BigInt(order[5] as number | bigint),
-    }));
+    return openOrdersFromWasm(getWasm().decode_open_orders(bytes, owner));
   }
 
   /** Fetch a withdrawal record by id. Returns `null` for unknown ids

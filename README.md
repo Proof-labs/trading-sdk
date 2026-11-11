@@ -242,6 +242,62 @@ are monitoring signals rather than faults. `faults` follows
 `ORACLE_FAULT_BITS`, named in `faultReasons`; `Disagreement` and
 `PairTimeMismatch` keep their bits but are no longer produced.
 
+### Resting order fields
+
+`queryOpenOrders(owner)` and Python `open_orders(owner)` read the gateway's
+`POST /info` `openOrders` response through the same Rust decoder. TypeScript
+returns camelCase fields; Python returns snake_case fields.
+
+| TypeScript                           | Python                                 | Value                                                              |
+| ------------------------------------ | -------------------------------------- | ------------------------------------------------------------------ |
+| `id`, `price`, `quantity`            | same                                   | Exact `bigint` / `int`; quantity is remaining size                 |
+| `market`, `owner`, `side`            | same                                   | Market number, 20-byte `Uint8Array` / `bytes`, `Buy` or `Sell`     |
+| `clientOrderId`                      | `client_order_id`                      | Exact `bigint` / `int`, or `null` / `None`; stored zero stays zero |
+| `originalQuantity`, `filledQuantity` | `original_quantity`, `filled_quantity` | Exact `bigint` / `int`                                             |
+| `createdAtMs`, `queuePriority`       | `created_at_ms`, `queue_priority`      | Exact `bigint` / `int`                                             |
+| `timeInForce`                        | `time_in_force`                        | `Gtc`, `Ioc` or `Fok`; currently only `Gtc` rests                  |
+| `postOnly`, `reduceOnly`             | `post_only`, `reduce_only`             | Booleans                                                           |
+
+Legacy six-field records default to an absent client ID, zero metadata, `Gtc`,
+and false flags. Zero placement time means unrecorded; zero queue priority is
+legacy metadata whose effective priority falls back to `id`.
+
+Malformed or wrong-owner responses, duplicate/out-of-order IDs, zero remaining
+quantity, and decoded payloads over 1 MiB throw (`Error` in TypeScript,
+`CodecError` in Python). A valid empty list returns `[]`. This read sends no
+`limit`, and the gateway refuses a response body over 1 MiB rather than returning
+a shorter list, so a very large account gets an error. The read does not verify a
+finalized witness.
+
+### Open-order migration
+
+This change requires the next TypeScript MAJOR release. Code that constructs
+`OpenOrder` objects (including test fixtures) must supply these eight added fields.
+For fixtures representing legacy six-field records, use:
+
+```typescript
+const order: OpenOrder = {
+  ...legacyOrder, // id, market, owner, side, price, quantity
+  clientOrderId: null,
+  originalQuantity: 0n,
+  filledQuantity: 0n,
+  createdAtMs: 0n,
+  queuePriority: 0n,
+  timeInForce: "Gtc",
+  postOnly: false,
+  reduceOnly: false,
+};
+```
+
+Preserve actual metadata when it is available; these defaults describe legacy
+records, not newly placed orders.
+
+Handle read failures separately from an empty account in both SDKs. A valid
+empty response still returns `[]`, but malformed or wrong-owner data now raises
+an error. Remove fallbacks such as `.catch(() => [])` that disguise a failed read
+as an account with no orders. TypeScript callers must also stop passing an empty
+owner string: `queryOpenOrders("")` now throws.
+
 ### Trading No on an event's binary book
 
 Each event has one binary book, priced in Yes (`EventInfo.ebyMarket`). Buying
@@ -477,6 +533,30 @@ Trading integrations use `TraderAction` and can type their calls against it to
 keep operator actions out of autocomplete. `submitTx` still accepts the full
 `Action` union.
 
+#### SetUserMarketLeverage availability
+
+`SetUserMarketLeverage` remains available in SDK types, builders and the wire
+codec. Encoding or signing it does **not** mean ordinary-account submission is
+supported. At exchange revision
+[`5f172568`](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-node/check_tx.go#L466-L492),
+node admission excludes action `0x16` and rejects it as an unknown action before
+execution. Do not treat it as a supported leverage-setting flow for traders or
+retry the same action with a different nonce to bypass that restriction.
+
+The engine separately permits this action inside a governed
+[`ExecInsuranceFund`](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/engine/governance/insurance_action.rs#L21-L70)
+action for the pool's insurance account. That path does not enable direct
+ordinary-account submissions.
+
+The setting controls **initial margin only**: effective IM uses
+`max(market.im_bps, user_im_bps)`; `0` uses the market default. It does not change
+maintenance margin or the liquidation threshold. See the
+[margin calculation](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/scenario_margin.rs#L168-L181).
+
+Ordinary-account support is deferred and tracked in
+[#360](https://github.com/Proof-labs/trading-sdk/issues/360). These source-level
+constraints are not a live verification of every deployment.
+
 #### Operator actions (privileged)
 
 `OperatorAction` covers oracle-feeder / relayer-admin actions — e.g.
@@ -553,17 +633,26 @@ loop at 9 s+ under load.
 
 The SDK reads that shape and stops working for it:
 
-| Gateway answers                              | `TxResult`                                                                                          | Does the SDK poll?                                                                                                                                                                                                         |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status: ok` or `error`, with `height`       | `ok` / `engine`, with `height` + `events`                                                           | **No** — the tx executed; there is nothing to wait for                                                                                                                                                                     |
-| `status: error`, no `height`                 | `engine`                                                                                            | **No** — a CheckTx reject, or a tx the gateway refused before broadcast with the engine's code (`17` bad signature, `1` undecodable), never enters a block, so no DeliverTx will run                                       |
-| `status: pending`                            | `timeout`                                                                                           | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection |
-| `status: refused`                            | `transport` (code 1, or the HTTP status), original error reason                                     | **No** — the gateway did not admit it and nothing was broadcast                                                                                                                                                            |
-| Any other body: a pre-7.0.0 gateway, a proxy | as before 7.0.0: read from `code` / `height` / `txHash`; `{status:"ok"}` alone is `ok`, no `height` | **Yes** — a pre-#90 gateway acks CheckTx only, so inclusion is still unknown                                                                                                                                               |
+| Gateway answers                                               | `TxResult`                                                                               | Does the SDK poll?                                                                                                                                                                                                             |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| HTTP 200 engine verdict with `code` and `height`              | `ok` / `engine`, with `height` + `events`                                                | **No** — execution is known.                                                                                                                                                                                                   |
+| HTTP 200 `status: error`, nonzero numeric `code`, no `height` | `engine`                                                                                 | **No** — a terminal rejection.                                                                                                                                                                                                 |
+| `status: pending`                                             | `timeout`                                                                                | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection     |
+| Valid `status: refused` envelope                              | `transport` (code 1 for HTTP 200, else the HTTP status), gateway `errorCode` and message | **No** — this attempt was not admitted. Correct `InvalidRequest`; `EncodingError` is a gateway failure. Any later retry depends on the reason, not HTTP status alone. Earlier ambiguous attempts still require reconciliation. |
+| Malformed or contradictory refusal                            | `timeout`, local transaction hash                                                        | **Yes** — the response does not prove non-admission.                                                                                                                                                                           |
+| Other legacy or proxy response                                | Compatibility decoding or HTTP fallback                                                  | Only unresolved submissions are reconciled; an HTTP error is not an engine verdict.                                                                                                                                            |
 
-That last row is why upgrading the SDK is safe against a gateway that has not been
-upgraded yet: absence of `code`/`height` still means "execution unknown", and the old
-polling paths run exactly as before.
+A legacy HTTP 200 `{status:"ok"}` without `code` or `height` remains a CheckTx
+acknowledgement, not proof of execution, so inclusion is still polled.
+
+Python raises `PreAdmissionRefusal` for validated admission refusals and internal
+`EncodingError` refusals, including HTTP 500. Catch it for those responses rather
+than treating them as ambiguous submissions or unstructured transport errors;
+its `error_code`, `message` and
+`status_code` preserve the gateway reason. Refusals at HTTP 401, 403, 429 and other
+5xx responses, including `Maintenance` and `Unavailable`, keep their existing
+exceptions. `SubmissionPending.tx_hash` is the
+hash to reconcile when a refusal is malformed or contradictory.
 
 **Read `code` from the field, not from the message.** The gateway still sends the
 long-standing `"<code>: <message>"` format in `error` (so older clients that parse the
@@ -713,13 +802,3 @@ unavailable, never zero. Top-level status describes frontier freshness; inspect
 market status, `unavailable_reason` and `open_interest_unavailable_reason` too.
 The server freshness budget is `stale_after_seconds`; the application must age
 cached responses and label stale data. None of these reads authorize trading.
-
-### Unsupported leverage action
-
-`SetUserMarketLeverage` (`0x16`) is not supported for creation or signing.
-The SDK rejects it even through raw action/payload encoding entrypoints.
-Historical payload and transaction decoding remains available. The shared
-proof-wire types, low-level cryptography and already-signed byte transport
-remain wire-compatible; they do not imply SDK support for this action.
-The refusal checks the outer action only: bytes nested in
-`ExecInsuranceFund.action` are not checked.

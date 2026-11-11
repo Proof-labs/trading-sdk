@@ -395,6 +395,15 @@ function toAction(
         },
       };
     }
+    case ActionType.SetUserMarketLeverage:
+      return {
+        type: "SetUserMarketLeverage",
+        data: {
+          owner: bytes(input.owner),
+          market: input.market as number,
+          userImBps: input.user_im_bps as number,
+        },
+      };
     case ActionType.ClosePosition:
       return {
         type: "ClosePosition",

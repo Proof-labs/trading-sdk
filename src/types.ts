@@ -95,6 +95,11 @@ export const ActionType = {
    *  without a chain rebase. */
   UpdateMarketFees: 0x10,
 
+  /** User picks a per-market initial-margin override capped by the
+   *  market's risk floor. `user_im_bps == 0` clears the override.
+   *  Engine takes max(market.im_bps, user_im_bps) on every IM check.
+   *  BE-16. */
+  SetUserMarketLeverage: 0x16,
   /** Close an entire position by placing an opposite-side IOC order at
    *  oracle±spread. Idempotent on already-closed positions. User-signed. */
   ClosePosition: 0x17,
@@ -890,6 +895,22 @@ export type EventStatus =
 // Action union type
 // ---------------------------------------------------------------------------
 
+/** Pick a per-account override on the initial-margin ratio for one
+ *  market. Engine takes max(market.imBps, userImBps), so users can
+ *  deleverage but not exceed the market's risk floor. `userImBps == 0`
+ *  clears the override. User-signed (signer == owner). BE-16. */
+export interface SetUserMarketLeverage {
+  /** Account address picking the override (20 bytes). Must equal the
+   *  envelope signer's derived address. */
+  owner: Address;
+  /** Market identifier the override applies to. */
+  market: number;
+  /** Initial margin in basis points. `0` clears the override;
+   *  otherwise must be `>= market.imBps` (engine rejects with
+   *  `UserLeverageBelowMarketIm`, code 38). */
+  userImBps: number;
+}
+
 /** Close an entire position on a market by placing an opposite-side IOC
  *  order at oracle±spread. Idempotent: returns code=0 without events if
  *  no position exists. User-signed (signer == owner). S49. */
@@ -951,6 +972,7 @@ export type TraderAction =
   | { type: "WithdrawRequest"; data: WithdrawRequest }
   | { type: "ApproveAgent"; data: ApproveAgent }
   | { type: "RevokeAgent"; data: RevokeAgent }
+  | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage }
   | { type: "ClosePosition"; data: ClosePosition }
   | { type: "SetPositionTriggers"; data: SetPositionTriggers }
   | { type: "CancelPositionTriggers"; data: CancelPositionTriggers }
@@ -1378,15 +1400,6 @@ export type GovernanceAction =
   | { type: "EmergencyAdminAction"; data: EmergencyAdminAction };
 
 export type Action = TraderAction | OperatorAction | GovernanceAction;
-
-/** Decoded wire history, including actions this SDK no longer creates.
- * This union is not accepted by signing or submission APIs. */
-export type DecodedAction =
-  | Action
-  | {
-      type: "SetUserMarketLeverage";
-      data: { owner: Address; market: number; userImBps: number };
-    };
 
 // ---------------------------------------------------------------------------
 // Governance read model (GET /v1/admin/signer-registry, GET /v1/proposals)
@@ -1945,15 +1958,33 @@ export type ExchangeEvent =
  * - `"ok"`        — CheckTx accepted the tx (`code === 0`).
  * - `"engine"`    — the engine rejected it with an `ExecError` (`code` 1..53/255);
  *                   see {@link TxResult.error} for the decoded name/description.
- * - `"transport"` — a gateway/HTTP-level failure (auth, rate-limit, body too
- *                   large, or a structured pre-admission refusal at HTTP
- *                   200/503). `code` is synthetic (1 for HTTP 200), not an
- *                   engine code. Unrecognized 5xx responses stay `timeout`.
+ * - `"transport"` — a gateway/HTTP-level failure, or a structured
+ *                   pre-admission refusal (`status: "refused"` at HTTP 200,
+ *                   400, 401, 411, 413, 429, 500 or 503). `code` is synthetic (1 for HTTP
+ *                   200), not an engine code; a refusal also carries the
+ *                   gateway's own `errorCode`. Unrecognized 5xx responses
+ *                   stay `timeout`.
  * - `"timeout"`   — no final chain verdict is available yet (`code === -1`):
  *                   either the gateway returned a hash-only ambiguous response
  *                   or inclusion polling expired. The tx may still land.
  */
 export type TxOutcome = "ok" | "engine" | "transport" | "timeout";
+
+/**
+ * The gateway's machine-readable `errorCode` on a refusal (`status:
+ * "refused"`). The names the gateway sends, plus any other string so a
+ * code the gateway adds later still types. `InvalidRequest` names a request
+ * to correct; `EncodingError` is a gateway-internal encoding failure.
+ */
+export type GatewayRefusalCode =
+  | "InvalidRequest"
+  | "EncodingError"
+  | "Unauthorized"
+  | "RateLimited"
+  | "Maintenance"
+  | "Overloaded"
+  | "Unavailable"
+  | (string & {});
 
 /** Result of submitting a transaction to the exchange. */
 export interface TxResult {
@@ -1980,6 +2011,17 @@ export interface TxResult {
    * transport/timeout failures, and unknown engine codes.
    */
   error: ExecErrorInfo | null;
+  /**
+   * The gateway's machine-readable `errorCode` when it refused the request
+   * before admitting it (`status: "refused"`): `InvalidRequest` means the
+   * request must be corrected; `EncodingError` is an internal failure.
+   * `Unauthorized`, `RateLimited`, `Maintenance`, `Overloaded` and `Unavailable` mean the
+   * gateway is not admitting writes right now. Present with
+   * `outcome === "transport"`; a refusal is terminal for this request and
+   * nothing was broadcast, so there is nothing to poll for and no hash to
+   * reconcile. Absent for an engine verdict or a plain transport failure.
+   */
+  errorCode?: GatewayRefusalCode;
   /** Transaction hash (hex-encoded). Empty string when the tx never got a hash. */
   hash: string;
   /** Block height at which the transaction was included. */
@@ -2022,10 +2064,9 @@ export interface Orderbook {
   asks: OrderbookLevel[];
 }
 
-/** A resting order on the book. Returned by `GET /v1/orders/{addr}`.
- *  Wire shape: 6-tuple `[id, market, owner, side, price, quantity]`. */
+/** A canonical resting order from the gateway openOrders read. */
 export interface OpenOrder {
-  /** Engine-assigned order ID (monotonic within the market). */
+  /** Engine-assigned order ID (globally monotonic). */
   id: bigint;
   /** Market ID. */
   market: number;
@@ -2037,6 +2078,20 @@ export interface OpenOrder {
   price: bigint;
   /** Resting quantity in contracts. */
   quantity: bigint;
+  /** Client-assigned ID, or null when absent. Zero remains a stored ID. */
+  clientOrderId: bigint | null;
+  /** Quantity originally accepted; zero for legacy records. */
+  originalQuantity: bigint;
+  /** Cumulative quantity filled while resting as maker. */
+  filledQuantity: bigint;
+  /** Placement block timestamp in milliseconds; zero if unrecorded. */
+  createdAtMs: bigint;
+  /** FIFO priority; zero means legacy readers fall back to id. */
+  queuePriority: bigint;
+  /** Placement time in force; currently only Gtc orders rest. */
+  timeInForce: "Gtc" | "Ioc" | "Fok";
+  postOnly: boolean;
+  reduceOnly: boolean;
 }
 
 export type TriggerKind = "StopLoss" | "TakeProfit";

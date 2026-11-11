@@ -17,8 +17,8 @@ import {
   Side,
   TimeInForce,
   type AccountInfo,
+  type OpenOrder,
   type Action,
-  type DecodedAction,
   type ActionTypeValue,
   type AdminAction,
   type EmergencyAction,
@@ -319,9 +319,6 @@ function validateCreateMarketTickers(action: Action): void {
   }
 }
 
-/** Wire byte of `SetUserMarketLeverage`, kept for decoding only. */
-export const SET_USER_MARKET_LEVERAGE_BYTE = 0x16;
-
 /**
  * Translate a TS `Action` into `(actionType, fields)` for `encode_payload`.
  */
@@ -329,12 +326,6 @@ export function toWasmFields(action: Action): {
   actionType: ActionTypeValue;
   fields: Record<string, unknown>;
 } {
-  // Runtime callers can bypass TypeScript's Action union.
-  if ((action.type as string) === "SetUserMarketLeverage") {
-    throw new Error(
-      "SetUserMarketLeverage (0x16) is not supported by this SDK",
-    );
-  }
   if (action.type === "SetPositionTriggers") {
     validateSetPositionTriggers(action.data);
   } else if (action.type === "CancelPositionTriggers") {
@@ -595,21 +586,18 @@ function fromWasmObject(
 }
 
 /**
- * Translate `decode_payload`'s output into supported or historical action data.
+ * Translate `decode_payload`'s output back into a TS `Action`.
  */
 export function fromWasmFields(
-  actionType: number,
+  actionType: ActionTypeValue,
   fields: unknown,
-): DecodedAction {
-  const type =
-    actionType === SET_USER_MARKET_LEVERAGE_BYTE
-      ? "SetUserMarketLeverage"
-      : ACTION_TYPE_NAMES[actionType];
+): Action {
+  const type = ACTION_TYPE_NAMES[actionType];
   if (!type) throw new Error(`unknown action_type: ${actionType}`);
   return {
     type,
     data: fromWasmObject(fields as Record<string, unknown>),
-  } as unknown as DecodedAction;
+  } as unknown as Action;
 }
 
 // ---------------------------------------------------------------------------
@@ -737,6 +725,26 @@ export function accountInfoFromWasm(v: unknown): AccountInfo {
     feesAccrued: a.fees_accrued as bigint,
     volume30dMicroUsdc: a.volume_30d_micro_usdc as bigint,
   };
+}
+
+/** Canonical resting orders; Rust owns validation and legacy defaults. */
+export function openOrdersFromWasm(value: unknown): OpenOrder[] {
+  return (value as WasmRecord[]).map((o) => ({
+    id: o.id as bigint,
+    market: o.market as number,
+    owner: bytesOf(o.owner),
+    side: o.side as OpenOrder["side"],
+    price: o.price as bigint,
+    quantity: o.quantity as bigint,
+    clientOrderId: (o.client_order_id ?? null) as bigint | null,
+    originalQuantity: o.original_quantity as bigint,
+    filledQuantity: o.filled_quantity as bigint,
+    createdAtMs: o.created_at_ms as bigint,
+    queuePriority: o.queue_priority as bigint,
+    timeInForce: o.time_in_force as OpenOrder["timeInForce"],
+    postOnly: o.post_only as boolean,
+    reduceOnly: o.reduce_only as boolean,
+  }));
 }
 
 /** One stored `AdminAction`, with the same client-side checks as encoding. */
