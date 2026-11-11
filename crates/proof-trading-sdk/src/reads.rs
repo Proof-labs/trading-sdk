@@ -89,16 +89,7 @@ pub fn decode_open_orders(
         let raw_owner = row.as_array().and_then(|fields| fields.get(2));
         // wire_bytes' tuple visitor may accept a longer bin and consume only
         // its first 20 bytes. Validate the raw owner before typed decoding.
-        let valid = match raw_owner {
-            Some(Value::Binary(bytes)) => bytes.len() == 20,
-            Some(Value::Array(bytes)) => {
-                bytes.len() == 20
-                    && bytes
-                        .iter()
-                        .all(|value| value.as_u64().is_some_and(|b| b <= 255))
-            }
-            _ => false,
-        };
+        let valid = raw_owner.is_some_and(valid_owner);
         if !valid {
             return Err("invalid open orders owner bytes");
         }
@@ -119,6 +110,20 @@ pub fn decode_open_orders(
         previous = Some(order.id);
     }
     Ok(orders)
+}
+
+/// Whether a raw owner is exactly 20 bytes, as bin or byte array.
+pub(crate) fn valid_owner(value: &Value) -> bool {
+    match value {
+        Value::Binary(bytes) => bytes.len() == 20,
+        Value::Array(bytes) => {
+            bytes.len() == 20
+                && bytes
+                    .iter()
+                    .all(|value| value.as_u64().is_some_and(|byte| byte <= 255))
+        }
+        _ => false,
+    }
 }
 
 /// Decode `bytes` as `T`, first cutting every record `shape` names to its

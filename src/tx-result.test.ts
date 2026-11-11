@@ -4,6 +4,7 @@ import {
   txFromEngineCode,
   txFromQueryResponse,
   txOk,
+  txRefusal,
   txTimeout,
   txTransportError,
 } from "./tx-result.js";
@@ -59,6 +60,25 @@ describe("tx-result builders", () => {
     expect(txEngineError(50).error?.name).toBe("AmbiguousCode50");
     expect(txEngineError(50, { log: "unrecognized" }).error?.name).toBe(
       "AmbiguousCode50",
+    );
+  });
+
+  it("txRefusal keeps the gateway's errorCode and is terminal transport", () => {
+    const r = txRefusal(400, "InvalidRequest", "invalid market ticker");
+    expect(r.ok).toBe(false);
+    expect(r.outcome).toBe("transport");
+    expect(r.code).toBe(400);
+    expect(r.errorCode).toBe("InvalidRequest");
+    expect(r.error).toBeNull();
+    expect(r.log).toBe("invalid market ticker");
+    expect(r.hash).toBe("");
+  });
+
+  it("txRefusal keeps a code this SDK does not know yet verbatim", () => {
+    // The union names today's codes and stays open: a gateway that adds one
+    // must not have it dropped by the client.
+    expect(txRefusal(429, "SlowDown", "rate limited").errorCode).toBe(
+      "SlowDown",
     );
   });
 

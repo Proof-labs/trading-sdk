@@ -10,6 +10,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
+mod account_auth;
+mod callback_signer;
 #[cfg(feature = "pkcs11")]
 mod pkcs11;
 
@@ -65,6 +67,19 @@ impl SigningHandle {
     fn owner<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         let owner = crypto::pubkey_to_owner(&self.signer.public_key());
         PyBytes::new(py, &owner)
+    }
+
+    /// Sign this owner's account-stream authentication without exporting the key.
+    #[pyo3(signature = (chain_id, timestamp_ms, after_id=0))]
+    fn sign_account_ws_auth<'py>(
+        &self,
+        py: Python<'py>,
+        chain_id: &[u8],
+        timestamp_ms: u64,
+        after_id: i64,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let signature = account_auth::sign(self.signer.as_ref(), chain_id, timestamp_ms, after_id)?;
+        Ok(PyBytes::new(py, &signature))
     }
 
     /// Sign an action payload and encode it as a wire-ready envelope.
@@ -130,6 +145,25 @@ fn sign_and_encode<'py>(
     .map_err(map_err)?;
 
     Ok(PyBytes::new(py, &encoded))
+}
+
+/// Sign the gateway's owner-bound account-stream challenge.
+#[pyfunction]
+#[pyo3(signature = (chain_id, timestamp_ms, secret_key, after_id=0))]
+fn sign_account_ws_auth<'py>(
+    py: Python<'py>,
+    chain_id: &[u8],
+    timestamp_ms: u64,
+    secret_key: &[u8],
+    after_id: i64,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let seed = zeroize::Zeroizing::new(
+        <[u8; 32]>::try_from(secret_key)
+            .map_err(|_| PyValueError::new_err("secret_key must be exactly 32 bytes"))?,
+    );
+    let signer = core_sdk::LocalSigner::from_bytes(&seed);
+    let signature = account_auth::sign(&signer, chain_id, timestamp_ms, after_id)?;
+    Ok(PyBytes::new(py, &signature))
 }
 
 /// Encode a pre-signed action into a wire envelope.
@@ -294,6 +328,20 @@ fn decode_finalized_open_orders<'py>(
         .map_err(|_| PyValueError::new_err("owner must be 20 bytes"))?;
     let value = core_sdk::finalized_account_reads::open_orders(bytes, owner, limit)
         .map_err(map_read_err)?;
+    pythonize::pythonize(py, &value).map_err(map_pythonize_err)
+}
+
+#[pyfunction]
+fn decode_authorities<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+    let value =
+        core_sdk::governance_reads::decode_authorities(bytes).map_err(PyValueError::new_err)?;
+    pythonize::pythonize(py, &value).map_err(map_pythonize_err)
+}
+
+#[pyfunction]
+fn decode_liquidation_config<'py>(py: Python<'py>, bytes: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+    let value = core_sdk::governance_reads::decode_liquidation_config(bytes)
+        .map_err(PyValueError::new_err)?;
     pythonize::pythonize(py, &value).map_err(map_pythonize_err)
 }
 
@@ -528,12 +576,19 @@ fn classify_error_name(code: u32, log: Option<&str>) -> Option<&'static str> {
 /// Native Python extension module for proof-trading-sdk (internal name: _native).
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(callback_signer::signing_message, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        callback_signer::account_ws_auth_message,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(callback_signer::verify_raw_signature, m)?)?;
     m.add_class::<SigningHandle>()?;
     m.add(
         "FinalizedBindingError",
         m.py().get_type::<FinalizedBindingError>(),
     )?;
     m.add_function(wrap_pyfunction!(sign_and_encode, m)?)?;
+    m.add_function(wrap_pyfunction!(sign_account_ws_auth, m)?)?;
     m.add_function(wrap_pyfunction!(encode_signed_tx, m)?)?;
     m.add_function(wrap_pyfunction!(encode_action, m)?)?;
     m.add_function(wrap_pyfunction!(decode_action, m)?)?;
@@ -542,6 +597,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(decode_finalized_agent_authorization, m)?)?;
     m.add_function(wrap_pyfunction!(decode_finalized_recent_nonces, m)?)?;
     m.add_function(wrap_pyfunction!(decode_finalized_open_orders, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_authorities, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_liquidation_config, m)?)?;
+    m.add(
+        "MAX_GOVERNANCE_READ_BYTES",
+        core_sdk::governance_reads::MAX_GOVERNANCE_READ_BYTES,
+    )?;
     m.add_function(wrap_pyfunction!(decode_markets_snapshot, m)?)?;
     m.add_function(wrap_pyfunction!(decode_account_state, m)?)?;
     m.add(
