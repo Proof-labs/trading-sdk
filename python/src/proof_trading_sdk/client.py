@@ -42,6 +42,10 @@ from proof_trading_sdk.actions import (
     encode_action,
 )
 from proof_trading_sdk.config import SdkConfig, load_config
+from proof_trading_sdk.finalized_markets import (
+    FinalizedOrderbook, FinalizedMarketsSnapshot, orderbook_request,
+    decode_finalized_orderbook, decode_finalized_markets_snapshot,
+)
 from proof_trading_sdk.governance_reads import (
     AuthoritiesSnapshot, LiquidationConfigInfo,
     decode_authorities_snapshot, decode_liquidation_config_info,
@@ -56,6 +60,24 @@ from proof_trading_sdk.candle_history import (
 from proof_trading_sdk.market_stats import MarketStatsResponse, decode_market_stats_response, market_stats_markets
 from proof_trading_sdk.oracle_health import OracleHealth, decode_oracle_health, oracle_health_market
 from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
+from proof_trading_sdk.chain_evidence import (
+    BlockResultsRange, BlockResultsWindow, TransactionEvidence,
+    DEFAULT_MAX_ATTRIBUTES, DEFAULT_MAX_DECODED_BYTES, DEFAULT_MAX_EVENTS,
+    DEFAULT_MAX_HEIGHTS, DEFAULT_MAX_TRANSACTIONS,
+    read_block_results_range, read_block_results_window, read_transaction_evidence,
+)
+from proof_trading_sdk.evidence import (
+    BlockEvidenceHeader,
+    _chain_pin,
+    _requested_height,
+    decode_block_evidence_header,
+)
+from proof_trading_sdk.finalized_accounts import (
+    FinalizedAccountInfo, FinalizedAgentAuthorization, FinalizedRecentNonces,
+    FinalizedOpenOrders, _address, _limit, decode_finalized_account,
+    decode_finalized_agent_authorization, decode_finalized_recent_nonces,
+    decode_finalized_open_orders,
+)
 from proof_trading_sdk.errors import (
     AuthenticationError,
     CodecError,
@@ -82,6 +104,10 @@ from proof_trading_sdk.trigger_history import (
 from proof_trading_sdk.trigger_config import (
     TriggerMarketConfigInfo,
     decode_trigger_market_config_infos,
+)
+
+from proof_trading_sdk.finalized_account import (
+    FinalizedAccountState, account_state_owner, decode_finalized_account_state,
 )
 
 if t.TYPE_CHECKING:
@@ -1755,6 +1781,166 @@ class ExchangeClient:
         params = {"height": height} if height is not None else None
         resp = self._get("/v1/block", params=params)
         return _response_object(resp)
+
+    def finalized_account_state(
+        self, owner: bytes | str, *, timeout: float = 5.0,
+    ) -> FinalizedAccountState:
+        """Raw settled account facts with a height-bound gateway witness.
+
+        Reads only ``/v1/account/{owner}/state?witness=1``. No valuation,
+        fallback or automatic header request. To check H+1 consistency, call
+        ``block_header`` with an explicit chain pin and then ``verify_witness``.
+        The same gateway supplying both is not independent authentication.
+        HTTP bounds and synchronous timeout limitations match ``block_header``.
+        """
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+
+        bound_owner = account_state_owner(owner)
+        response = bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, f"/v1/account/{bound_owner}/state"),
+            {"witness": "1"}, timeout=timeout, on_response=self._parse_rate_limits,
+            check_response=self._check_response,
+        )
+        return decode_finalized_account_state(response, bound_owner)
+    def _finalized_account_read(self, path: str, params: dict[str, str], timeout: float) -> dict[str, t.Any]:
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+
+        return bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, path), params, timeout=timeout,
+            on_response=self._parse_rate_limits, check_response=self._check_response,
+        )
+
+    def finalized_account(self, owner: bytes | str, *, timeout: float = 5.0) -> FinalizedAccountInfo:
+        """Engine-valued account and gateway witness; no recomputation or authorization guarantee."""
+        owner = _address(owner)
+        return decode_finalized_account(self._finalized_account_read(
+            f"/v1/account/{owner}", {"witness": "1"}, timeout,
+        ), owner)
+
+    def finalized_agent_authorization(self, owner: bytes | str, agent: bytes | str, *, timeout: float = 5.0) -> FinalizedAgentAuthorization:
+        """Bare authorization fact; owner, agent and height rely on the gateway."""
+        owner, agent = _address(owner), _address(agent)
+        return decode_finalized_agent_authorization(self._finalized_account_read(
+            f"/v1/account/{owner}/agents/{agent}", {"witness": "1"}, timeout,
+        ), owner, agent)
+
+    def finalized_recent_nonces(self, signer: bytes | str, *, timeout: float = 5.0) -> FinalizedRecentNonces:
+        """Prunable retained nonces, never a lifetime floor or absence proof."""
+        signer = _address(signer)
+        return decode_finalized_recent_nonces(self._finalized_account_read(
+            f"/v1/account/{signer}/recent-nonces", {"witness": "1"}, timeout,
+        ), signer)
+
+    def finalized_open_orders(self, owner: bytes | str, *, limit: int = 101, timeout: float = 5.0) -> FinalizedOpenOrders:
+        """Owner-bound current 14-field orders; complete is false at the requested limit."""
+        owner, limit = _address(owner), _limit(limit)
+        return decode_finalized_open_orders(self._finalized_account_read(
+            f"/v1/orders/{owner}", {"limit": str(limit), "witness": "1"}, timeout,
+        ), owner, limit)
+
+    def finalized_orderbook(self, market: int, *, depth: int = 20, timeout: float = 5.0) -> FinalizedOrderbook:
+        """Height-bound book at depth 1, 20 or 100; never a full-book assertion."""
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+        orderbook_request(market, depth)
+        body = bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, f"/v1/orderbook-snapshot/{market}"),
+            {"depth": str(depth)}, timeout=timeout, on_response=self._parse_rate_limits,
+            check_response=self._check_response,
+        )
+        return decode_finalized_orderbook(body, market, depth)
+
+    def finalized_markets_snapshot(self, *, chain_id: str | bytes, timeout: float = 10.0) -> FinalizedMarketsSnapshot:
+        """Existing atomic snapshot plus witness; an explicit chain pin is required.
+
+        Uses bounded HTTP without fallback. Witness comparison does not prove
+        payload contents, validator signatures, freshness or action permission.
+        """
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+        chain = _chain_pin(chain_id)
+        body = bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, "/v1/markets-snapshot"), {},
+            timeout=timeout, on_response=self._parse_rate_limits, check_response=self._check_response,
+        )
+        return decode_finalized_markets_snapshot(body, chain_id=chain)
+
+    def block_header(
+        self, height: int, *, chain_id: str | bytes, timeout: float = 5.0,
+    ) -> BlockEvidenceHeader:
+        """Chain-pinned gateway header, without validator-signature verification.
+
+        ``chain_id`` must be supplied explicitly; constructor/env defaults are
+        not used as a trust pin. The full ``/v1/block`` response is fetched and
+        capped at 1 MiB, 4096 nonempty chunks and JSON depth 32. Duplicate keys
+        at any depth, malformed UTF-8 and compressed bodies are refused.
+
+        ``timeout`` is in seconds (default 5, minimum 0.001, maximum 60). It
+        bounds network waits and elapsed time between chunks, not the whole
+        call: slowly arriving headers or custom transports may run longer.
+        HTTP refusals retain existing exception types; their bodies are not
+        read. There is no retry, redirect, unheighted or direct-node fallback.
+        """
+        from proof_trading_sdk._bounded_read import bounded_gateway_json
+
+        chain = _chain_pin(chain_id)
+        _requested_height(height)
+        response = bounded_gateway_json(
+            self._http, urljoin(self._gateway_url, "/v1/block"), {"height": str(height)},
+            timeout=timeout, on_response=self._parse_rate_limits,
+            check_response=self._check_response,
+        )
+        return decode_block_evidence_header(response, height=height, chain_id=chain)
+
+    def transaction_evidence(
+        self, tx_hash: str, signed_bytes: bytes, *, chain_id: str | bytes, timeout: float = 5.0,
+    ) -> TransactionEvidence:
+        """Read one exact transaction occurrence and bind it to its block.
+
+        Two bounded GETs share one timeout; no polling, signing or submission.
+        Checks SHA256, transaction index, block data hash and explicit chain pin.
+        Gateway execution codes/events remain trusted observations. Validator
+        signatures and the block header's own hash are not verified. A replay
+        rejection cannot rule out earlier admission of the same signed bytes.
+        """
+        return read_transaction_evidence(self, tx_hash, signed_bytes, chain_id=chain_id, timeout=timeout)
+
+    def block_results_range(
+        self, from_height: int, through_height: int, *, chain_id: str | bytes,
+        timeout: float = 5.0, max_heights: int = DEFAULT_MAX_HEIGHTS,
+        max_decoded_bytes: int = DEFAULT_MAX_DECODED_BYTES,
+        max_transactions: int = DEFAULT_MAX_TRANSACTIONS,
+        max_events: int = DEFAULT_MAX_EVENTS, max_attributes: int = DEFAULT_MAX_ATTRIBUTES,
+    ) -> BlockResultsRange:
+        """Read an exact inclusive height range, including rejected transactions.
+
+        Binds contiguous headers, transaction roots/counts and H+1 post-state.
+        All requests share one timeout and aggregate limits; no partial success.
+        Gateway trust and synchronous timeout limits match ``block_header``.
+        """
+        return read_block_results_range(
+            self, from_height, through_height, chain_id=chain_id, timeout=timeout,
+            max_heights=max_heights, max_decoded_bytes=max_decoded_bytes,
+            max_transactions=max_transactions, max_events=max_events, max_attributes=max_attributes,
+        )
+
+    def block_results_window(
+        self, from_ms: int, to_ms: int, through_height: int, *, chain_id: str | bytes,
+        timeout: float = 5.0, max_heights: int = DEFAULT_MAX_HEIGHTS,
+        max_decoded_bytes: int = DEFAULT_MAX_DECODED_BYTES,
+        max_transactions: int = DEFAULT_MAX_TRANSACTIONS,
+        max_events: int = DEFAULT_MAX_EVENTS, max_attributes: int = DEFAULT_MAX_ATTRIBUTES,
+    ) -> BlockResultsWindow:
+        """Scan backwards until before ``from_ms`` or genesis, retaining boundaries.
+
+        ``through_height`` must reach ``to_ms``. Results are ascending and may
+        include blocks outside [from_ms,to_ms); apply that filter explicitly.
+        Equal/sub-millisecond block times remain exact. No partial success when
+        a budget is exhausted; gateway trust remains essential.
+        """
+        return read_block_results_window(
+            self, from_ms, to_ms, through_height, chain_id=chain_id, timeout=timeout,
+            max_heights=max_heights, max_decoded_bytes=max_decoded_bytes,
+            max_transactions=max_transactions, max_events=max_events, max_attributes=max_attributes,
+        )
 
     def get_block_results(self, height: int) -> dict[str, t.Any]:
         """CometBFT block results at *height* via ``GET /v1/block_results``."""

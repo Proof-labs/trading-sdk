@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 # Delay imports to avoid circular access during proof_trading_sdk init
 _ERROR_CODES: list[dict[str, object]] = []
@@ -56,6 +56,22 @@ class ProofTradingSdkError(Exception):
 
 class CodecError(ProofTradingSdkError):
     """MessagePack codec encoding or decoding failure."""
+
+
+GatewayReadErrorKind = Literal["configuration", "malformed", "binding", "limit", "deadline"]
+
+
+class GatewayReadError(ProofTradingSdkError):
+    """Bounded read failure, with TypeScript-compatible ``kind`` and ``field``.
+
+    Kinds: ``configuration``, ``malformed``, ``binding``, ``limit``, ``deadline``.
+    HTTP refusals retain the existing SDK transport/auth/rate-limit exceptions.
+    """
+
+    def __init__(self, kind: GatewayReadErrorKind, field: str, message: str | None = None) -> None:
+        self.kind = kind
+        self.field = field
+        super().__init__(message or f"invalid gateway read: {field}")
 
 
 class SigningError(ProofTradingSdkError):

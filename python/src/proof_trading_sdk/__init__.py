@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import typing as t
 
+from proof_trading_sdk.chain_evidence import (
+    TransactionEvidenceAttribute, TransactionEvidenceEvent, TransactionEvidence,
+    BlockTransactionEvidence, BlockResultsEvidence, BlockResultsRange, BlockResultsWindow,
+)
 from proof_trading_sdk.external_signer import ExternalSigner
 
 from proof_trading_sdk._native import (
@@ -20,11 +24,9 @@ from proof_trading_sdk._native import (
 
 # ── Convenience aliases (match the TS SDK naming) ────────────────────────────
 
-
 def owner_to_hex(owner: bytes) -> str:
     """20-byte owner bytes → 40-char hex string (no ``0x``)."""
     return owner.hex()
-
 
 def hex_to_owner(hex_str: str) -> bytes:
     """Hex string (with or without ``0x``) → 20-byte owner bytes."""
@@ -99,6 +101,7 @@ from proof_trading_sdk.errors import (
     CodecError,
     EngineError,
     GatewayError,
+    GatewayReadError,
     ProofTradingSdkError,
     PreAdmissionRefusal,
     RateLimited,
@@ -115,6 +118,15 @@ from proof_trading_sdk.market_stats import (
 )
 from proof_trading_sdk.oracle_health import OracleMarketHealth, OracleHealth, decode_oracle_health
 
+from proof_trading_sdk.finalized_account import (
+    FinalizedAccountState,
+    RawAccountPosition,
+    decode_finalized_account_state,
+)
+from proof_trading_sdk.finalized_markets import (
+    FinalizedOrderbookLevel, FinalizedOrderbook, FinalizedMarketsSnapshot,
+    decode_finalized_orderbook, decode_finalized_markets_snapshot,
+)
 from proof_trading_sdk.governance_reads import (
     AuthoritiesSnapshot,
     FullCloseThreshold,
@@ -147,6 +159,13 @@ from proof_trading_sdk.markets_snapshot import (
     MarketsSnapshot,
     decode_markets_snapshot,
 )
+from proof_trading_sdk.evidence import (
+    BlockEvidenceHeader,
+    FinalizedReadWitness,
+    decode_block_evidence_header,
+    decode_finalized_read_witness,
+    verify_witness,
+)
 from proof_trading_sdk.trigger_config import (
     TriggerMarketConfig,
     PendingTriggerMarketConfig,
@@ -155,7 +174,35 @@ from proof_trading_sdk.trigger_config import (
     decode_trigger_market_config_infos,
 )
 
+from proof_trading_sdk.finalized_accounts import (
+    FinalizedAccountInfo,
+    FinalizedPositionBrief,
+    FinalizedBindingScenario,
+    FinalizedAgentAuthorization,
+    FinalizedRecentNonces,
+    FinalizedOpenOrder,
+    FinalizedOpenOrders,
+    decode_finalized_account,
+    decode_finalized_agent_authorization,
+    decode_finalized_recent_nonces,
+    decode_finalized_open_orders,
+)
+
 __all__ = [
+    "FinalizedAccountInfo",
+    "FinalizedPositionBrief",
+    "FinalizedBindingScenario",
+    "FinalizedAgentAuthorization",
+    "FinalizedRecentNonces",
+    "FinalizedOpenOrder",
+    "FinalizedOpenOrders",
+    "decode_finalized_account",
+    "decode_finalized_agent_authorization",
+    "decode_finalized_recent_nonces",
+    "decode_finalized_open_orders",
+
+    "TransactionEvidenceAttribute", "TransactionEvidenceEvent", "TransactionEvidence",
+    "BlockTransactionEvidence", "BlockResultsEvidence", "BlockResultsRange", "BlockResultsWindow",
     "CandleHistoryPage",
     "CandleHistoryTime",
     "HistoryCandle",
@@ -237,6 +284,12 @@ __all__ = [
     "MarketStatsStatus", "MarketStatsOpenInterest", "MarketStats", "MarketStatsResponse",
     "decode_market_stats_response", "OracleMarketHealth", "OracleHealth", "decode_oracle_health",
 
+    "FinalizedAccountState",
+    "RawAccountPosition",
+    "decode_finalized_account_state",
+
+    "FinalizedOrderbookLevel", "FinalizedOrderbook", "FinalizedMarketsSnapshot",
+    "decode_finalized_orderbook", "decode_finalized_markets_snapshot",
     "AuthoritiesSnapshot",
     "FullCloseThreshold",
     "LiquidationConfig",
@@ -270,6 +323,12 @@ __all__ = [
     "CodecError",
     "EngineError",
     "GatewayError",
+    "GatewayReadError",
+    "BlockEvidenceHeader",
+    "FinalizedReadWitness",
+    "decode_block_evidence_header",
+    "decode_finalized_read_witness",
+    "verify_witness",
     "ProofTradingSdkError",
     "PreAdmissionRefusal",
     "RateLimited",
