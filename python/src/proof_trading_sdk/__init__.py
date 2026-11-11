@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import typing as t
 
+from proof_trading_sdk.external_signer import ExternalSigner
+
 from proof_trading_sdk._native import (
     SigningHandle,
     admin_proposal_content_hash,
@@ -99,6 +101,7 @@ from proof_trading_sdk.errors import (
     GatewayError,
     GatewayReadError,
     ProofTradingSdkError,
+    PreAdmissionRefusal,
     RateLimited,
     SigningError,
     SubmissionPending,
@@ -113,7 +116,16 @@ from proof_trading_sdk.finalized_account import (
     RawAccountPosition,
     decode_finalized_account_state,
 )
+from proof_trading_sdk.governance_reads import (
+    AuthoritiesSnapshot,
+    FullCloseThreshold,
+    LiquidationConfig,
+    LiquidationConfigInfo,
+    decode_authorities_snapshot,
+    decode_liquidation_config_info,
+)
 from proof_trading_sdk.client import ExchangeClient
+from proof_trading_sdk.candle_history import CandleHistoryPage, CandleHistoryTime, HistoryCandle
 from proof_trading_sdk.streams import (
     AccountEventStream,
     OrderbookDeltaStream,
@@ -152,6 +164,9 @@ from proof_trading_sdk.trigger_config import (
 )
 
 __all__ = [
+    "CandleHistoryPage",
+    "CandleHistoryTime",
+    "HistoryCandle",
     "admin_proposal_content_hash",
     "chain_id_from_string",
     "owner_to_hex",
@@ -162,6 +177,7 @@ __all__ = [
     "load_key_from_fd",
     "load_key_from_pkcs11",
     "SigningHandle",
+    "ExternalSigner",
     "pubkey_to_owner",
     "sign_and_encode",
     "verify_signature",
@@ -229,6 +245,12 @@ __all__ = [
     "FinalizedAccountState",
     "RawAccountPosition",
     "decode_finalized_account_state",
+    "AuthoritiesSnapshot",
+    "FullCloseThreshold",
+    "LiquidationConfig",
+    "LiquidationConfigInfo",
+    "decode_authorities_snapshot",
+    "decode_liquidation_config_info",
     "PositionTriggerHistoryEventType",
     "PendingTriggerDiscardReason",
     "TriggerMarketHistoryEventType",
@@ -263,6 +285,7 @@ __all__ = [
     "decode_finalized_read_witness",
     "verify_witness",
     "ProofTradingSdkError",
+    "PreAdmissionRefusal",
     "RateLimited",
     "SigningError",
     "SubmissionPending",

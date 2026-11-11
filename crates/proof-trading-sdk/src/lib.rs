@@ -9,7 +9,7 @@
 
 pub use proof_wire::{
     abci_event, bridge, codec, crypto, liquidation_config, liquidation_progress,
-    liquidation_report, triggers, types,
+    liquidation_report, margin_offsets, triggers, types,
 };
 
 pub mod account_state;
@@ -18,6 +18,7 @@ pub mod errors;
 #[cfg(feature = "gateway")]
 pub mod gateway;
 pub mod governance;
+pub mod governance_reads;
 pub mod market_snapshot;
 pub mod msgpack;
 pub mod query;

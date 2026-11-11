@@ -10,6 +10,9 @@ class SigningHandle:
     def public_key(self) -> bytes: ...
     @property
     def owner(self) -> bytes: ...
+    def sign_account_ws_auth(self, chain_id: bytes, timestamp_ms: int, after_id: int = 0) -> bytes:
+        """Sign owner-bound account-stream auth with a JSON-safe cursor."""
+        ...
     def sign_and_encode(
         self,
         chain_id: bytes,
@@ -52,6 +55,12 @@ def sign_and_encode(
 ) -> bytes:
     ...
 
+def sign_account_ws_auth(
+    chain_id: bytes, timestamp_ms: int, secret_key: bytes, after_id: int = 0,
+) -> bytes:
+    """Sign owner-bound account-stream auth with a JSON-safe cursor."""
+    ...
+
 def encode_signed_tx(
     action_type: int,
     action_payload: bytes,
@@ -59,6 +68,20 @@ def encode_signed_tx(
     pubkey: bytes,
     signature: bytes,
 ) -> bytes:
+    ...
+
+def signing_message(chain_id: bytes, action_type: int, seq: int, payload: bytes) -> bytes:
+    """Canonical transaction message, owned by the shared Rust core."""
+    ...
+
+def account_ws_auth_message(
+    chain_id: bytes, public_key: bytes, timestamp_ms: int, after_id: int = 0,
+) -> bytes:
+    """Owner-bound account-stream authentication message."""
+    ...
+
+def verify_raw_signature(public_key: bytes, signature: bytes, message: bytes) -> bool:
+    """Strict Ed25519 verification for callback results."""
     ...
 
 def encode_action(action_type: int, fields: dict[str, object]) -> bytes:
@@ -129,4 +152,12 @@ MAX_ACCOUNT_STATE_BYTES: int
 
 def decode_account_state(data: bytes, owner: bytes) -> dict:
     """Canonical raw account state with owner binding and strict record widths."""
+    ...
+
+MAX_GOVERNANCE_READ_BYTES: int
+
+def decode_authorities(data: bytes) -> dict:
+    ...
+
+def decode_liquidation_config(data: bytes) -> tuple:
     ...
