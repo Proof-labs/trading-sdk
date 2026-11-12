@@ -23,7 +23,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decode error, when the row names a non-zero market id no other row names. A
   row that cannot be tied to a market of its own (not an array, no valid id,
   an id another row names) refuses the whole listing, so a market is never
-  lost without being named (#447).
+  lost without being named. In Rust the refusal is a typed `ListingError`
+  (`ListingFault`: the preflight's `MsgpackError`, not a list, a non-array
+  row, no id, an id named twice) (#447).
 
 - Export the `SubmitOracleObservation` and `ConfigureOraclePolicy` payload
   types from the TypeScript package root for typed operator integrations

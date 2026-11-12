@@ -374,11 +374,19 @@ fn a_market_listing_row_that_names_no_market_or_a_named_one_is_refused_whole() {
         refused_with(Value::from(9)),
         refused_with(Value::from(9)),
     ]);
-    let error = decode_market_listing(&bytes(&twice)).unwrap_err();
-    assert!(error.contains("market 9"), "{error}");
+    let error = decode_market_listing(&bytes(&twice))
+        .expect_err("two refused rows naming one market refuse the listing");
+    assert_eq!(error.fault, ListingFault::DuplicateId { index: 2, id: 9 });
     let named = decode_market_listing(&bytes(&Value::Array(vec![good.clone(), Value::from("x")])))
-        .unwrap_err();
-    assert_eq!(named, "market listing row 1 is not an array");
+        .expect_err("a non-array row refuses the listing");
+    assert_eq!(named.fault, ListingFault::RowNotArray { index: 1 });
+    assert_eq!(named.to_string(), "market listing row 1 is not an array");
+    let float = decode_market_listing(&bytes(&Value::Array(vec![Value::F64(1.5)])))
+        .expect_err("a float refuses the listing");
+    assert_eq!(
+        float.fault,
+        ListingFault::Payload(crate::msgpack::MsgpackError::Float)
+    );
 }
 
 #[test]

@@ -160,7 +160,7 @@ pub fn decode_order_status(bytes: &[u8], order_id: u64) -> Result<JsValue, JsErr
 /// whole listing, as does a payload that is not a list or fails the preflight.
 #[wasm_bindgen]
 pub fn decode_market_listing(bytes: &[u8]) -> Result<JsValue, JsError> {
-    let listing = reads::decode_market_listing(bytes).map_err(|e| JsError::new(&e))?;
+    let listing = reads::decode_market_listing(bytes).map_err(|e| JsError::new(&e.to_string()))?;
     to_bigint_js(&listing)
 }
 

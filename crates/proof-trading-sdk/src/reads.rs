@@ -208,12 +208,11 @@ pub struct MarketListingRows {
 /// whole listing, as does a payload that is not a list or that fails the
 /// strict MessagePack preflight anywhere (including in appended fields): a
 /// caller can then never lose a market without knowing which one.
-pub fn decode_market_listing(bytes: &[u8]) -> Result<MarketListingRows, String> {
+pub fn decode_market_listing(bytes: &[u8]) -> Result<MarketListingRows, ListingError> {
     let rows = decode_rows::<crate::types::MarketConfig>(
         bytes,
         &MARKET_CONFIG,
-        "market listing",
-        "market",
+        Listing::Markets,
         |config| config.market,
     )?;
     Ok(MarketListingRows {
@@ -231,6 +230,67 @@ pub fn decode_market_listing(bytes: &[u8]) -> Result<MarketListingRows, String> 
             .collect(),
     })
 }
+
+/// Which listing a [`ListingError`] refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Listing {
+    /// The market listing (`GET /v1/markets`).
+    Markets,
+}
+
+impl Listing {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Markets => "market listing",
+        }
+    }
+
+    fn entity(self) -> &'static str {
+        match self {
+            Self::Markets => "market",
+        }
+    }
+}
+
+/// Why a whole listing was refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListingFault {
+    /// The payload failed the strict MessagePack preflight.
+    Payload(crate::msgpack::MsgpackError),
+    /// The payload is not a list.
+    NotAList,
+    /// Row `index` is not an array.
+    RowNotArray { index: u32 },
+    /// Row `index` does not decode and its first field is no non-zero id.
+    NoId { index: u32 },
+    /// Row `index` does not decode and names `id`, which another row names.
+    DuplicateId { index: u32, id: u32 },
+}
+
+/// A listing refused whole: which listing, and why.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListingError {
+    pub listing: Listing,
+    pub fault: ListingFault,
+}
+
+impl std::fmt::Display for ListingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (name, entity) = (self.listing.name(), self.listing.entity());
+        match self.fault {
+            ListingFault::Payload(error) => write!(f, "invalid {name} payload: {error}"),
+            ListingFault::NotAList => write!(f, "{name} is not a list"),
+            ListingFault::RowNotArray { index } => write!(f, "{name} row {index} is not an array"),
+            ListingFault::NoId { index } => write!(f, "{name} row {index} names no {entity}"),
+            ListingFault::DuplicateId { index, id } => write!(
+                f,
+                "{name} row {index} names {entity} {id}, which another row also names"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ListingError {}
 
 /// A refused row: its index, the id in its first field, its field count, why.
 struct RefusedRow {
@@ -253,20 +313,24 @@ struct ListingRows<T> {
 /// malformed value in a field the cut drops is still refused. A row that does
 /// not decode is kept only when its first field is a non-zero `u32` id that
 /// no decoded row (`id_of`) and no other refused row has; otherwise the whole
-/// listing is refused. `listing` and `entity` name it in errors.
+/// listing is refused; the error names `listing` and the fault.
 fn decode_rows<T: DeserializeOwned>(
     bytes: &[u8],
     shape: &Shape,
-    listing: &str,
-    entity: &str,
+    listing: Listing,
     id_of: impl Fn(&T) -> u32,
-) -> Result<ListingRows<T>, String> {
-    crate::msgpack::reject_floats(bytes).map_err(|_| format!("invalid {listing} payload"))?;
+) -> Result<ListingRows<T>, ListingError> {
+    let refuse = |fault| ListingError { listing, fault };
+    crate::msgpack::reject_floats(bytes).map_err(|e| refuse(ListingFault::Payload(e)))?;
     let raw =
         rmpv::decode::read_value_with_max_depth(&mut Cursor::new(bytes), crate::msgpack::MAX_DEPTH)
-            .map_err(|_| format!("invalid {listing} payload"))?;
+            .map_err(|_| {
+                refuse(ListingFault::Payload(
+                    crate::msgpack::MsgpackError::Malformed,
+                ))
+            })?;
     let Value::Array(rows) = raw else {
-        return Err(format!("{listing} is not a list"));
+        return Err(refuse(ListingFault::NotAList));
     };
     let mut listing_rows = ListingRows {
         decoded: Vec::with_capacity(rows.len()),
@@ -276,7 +340,7 @@ fn decode_rows<T: DeserializeOwned>(
     for (index, row) in rows.into_iter().enumerate() {
         let index = u32::try_from(index).unwrap_or(u32::MAX);
         let Value::Array(fields) = &row else {
-            return Err(format!("{listing} row {index} is not an array"));
+            return Err(refuse(ListingFault::RowNotArray { index }));
         };
         let field_count = u32::try_from(fields.len()).unwrap_or(u32::MAX);
         let id = fields
@@ -291,7 +355,7 @@ fn decode_rows<T: DeserializeOwned>(
             }
             Err(error) => {
                 let Some(id) = id else {
-                    return Err(format!("{listing} row {index} names no {entity}"));
+                    return Err(refuse(ListingFault::NoId { index }));
                 };
                 listing_rows.refused.push(RefusedRow {
                     index,
@@ -306,10 +370,10 @@ fn decode_rows<T: DeserializeOwned>(
     let mut refused_ids = HashSet::new();
     for row in &listing_rows.refused {
         if decoded_ids.contains(&row.id) || !refused_ids.insert(row.id) {
-            return Err(format!(
-                "{listing} row {} names {entity} {}, which another row also names",
-                row.index, row.id
-            ));
+            return Err(refuse(ListingFault::DuplicateId {
+                index: row.index,
+                id: row.id,
+            }));
         }
     }
     Ok(listing_rows)
