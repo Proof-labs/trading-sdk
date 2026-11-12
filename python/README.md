@@ -252,17 +252,90 @@ observable without restarting live delivery. A new connection resets the retry
 budget. The synchronous iterator performs retries while it is being consumed;
 `stream.close()` cancels pending retries. Synthetic error frames carry the SDK's
 fixed `SigningError` text and omit other exception text, which could expose
-sensitive diagnostics. HTTP 401/403
-refusals during the WebSocket upgrade raise `AuthenticationError` before the
-first successful connection. On reconnect, they follow `reconnect_attempts`
-and the normal backoff (`None` retries indefinitely), preserving recovery state.
-`close()` cancels the wait. This is separate from subscription-error frames.
+sensitive diagnostics. Connection failures follow the shared retry policy below,
+separately from subscription-error frames. Account reconnects preserve recovery
+state and follow `reconnect_attempts` (`None` retries indefinitely).
 
 `client.account_auth(owner, after_id=0)` returns signed subscription parameters.
 The optional cursor must be a Python integer in `0..2**53 - 1`, matching the TS
 SDK's JSON-safe domain. Zero is signed but omitted from the returned parameters.
 Direct helper failures raise `SigningError`. The default account stream signs
 cursor zero; its history-based reconnect recovery does not change this cursor.
+
+All three stream classes share connection, cleanup and reconnect handling in
+`streams.py`. Before the first successful connection, HTTP 401/403 raises
+`AuthenticationError`; other HTTP 4xx except 408/429 raises `TransportError`.
+Temporary connection failures (network errors, timeouts, a connection dropped
+during the handshake, and HTTP 408/429/5xx from the gateway or a proxy) retry
+with cancelable exponential backoff, including on startup. Other startup
+errors, including any other HTTP status, raise `TransportError`. After connecting once, connection failures retry.
+A matching subscription acknowledgment or non-error data frame resets attempts
+and backoff; a handshake, unrelated acknowledgment or refusal does not.
+
+Account streams retain their signed-subscription retries and history recovery.
+Only `AccountEventStream` takes a reconnect budget (`reconnect_attempts`, a
+non-negative integer or `None`); exhausting it raises `TransportError` and
+closes the stream. Orderbook and trade streams retry until closed. Each stream accepts base URLs or `/ws` endpoints and permits one active
+iterator. Closing the iterator closes its stream; context managers and `close()`
+also release the socket and cancel waits. Iterating after `close()` on an open
+stream is empty; after a failure or iterator closure it raises `RuntimeError`,
+requiring a new stream, even if `close()` or a context-manager exit follows. `reconnect_backoff_max` must be finite and positive. These startup
+and iterator contract changes are for the next Python MAJOR release.
+
+## Public trade stream
+
+```python
+with client.trade_stream(7) as stream:
+    for frame in stream:
+        if frame["type"] == "error":
+            print(frame["error"])
+            break
+        else:
+            print(frame["fillId"], frame["price"], frame["quantity"])
+```
+
+`PublicTradeStream(ws_url, market, api_key="")` is also exported. `trade_stream`
+uses the client's gateway URL and optional API key; `ws_url=` overrides the
+WebSocket base URL or an endpoint already ending in `/ws`; it never adds a
+second `/ws` suffix. No account signer is called. Each stream owns one socket;
+`close()` or its context manager releases it, independently of `client.close()`.
+
+The first public data is a live `trade`, not a snapshot. Frames retain the
+TypeScript feed's gateway keys: `channel`, `type`, `market`, `fillId`,
+`makerSide`, `price`, `quantity`, and `payload`. Numeric strings remain strings,
+and gateway `null` values remain `None`;
+`price` is integer micro-USDC and `quantity` is the raw integer size. Divide
+quantity by `10**sz_decimals` from the market configuration for base units;
+the stream performs no conversion. Only the requested
+channel/market and matching subscription errors are delivered. Control ACKs
+are consumed internally. A matching subscription refusal is yielded once; the
+next iteration raises `TransportError` with its code and closes the socket.
+It does not leave an unsubscribed iterator waiting indefinitely or retry the
+refusal automatically. Call `close()` or exit the context manager after handling
+an error frame if you do not need the exception.
+
+Connections follow the shared retry policy above. Reconnects resubscribe with
+0.5-second exponential backoff, capped at 10 seconds by default
+(`reconnect_backoff_max` overrides the cap).
+Only one iterator may consume a stream, and reconnect work proceeds as it is
+consumed. There is no replay, deduplication or HTTP backfill: disconnected or
+slow consumers can miss fills, including gateway queue drops that have no
+client-visible gap notification. A stalled consumer can also fill receive queues
+and lose the socket; reconnecting does not recover those missed fills.
+
+Python now requires `websockets>=15` for synchronous keepalive; installations
+pinned to version 14 must upgrade. The stream explicitly sends protocol-level
+Ping frames every 15 seconds and closes an unresponsive socket after a
+10-second Pong timeout. TypeScript uses JSON ping/pong frames with those
+intervals instead. Both detect half-open connections, but Python's keepalive
+runs in the library thread while reconnection waits for iterator consumption.
+Closing cancels receive and backoff waits; a connection handshake already in
+progress completes or reaches the library's connection timeout before cleanup.
+Against a peer that has stopped responding, `close()` itself can block for the
+library's 10-second close timeout.
+
+`websockets` 15 connects through proxies named by environment variables such as
+`HTTPS_PROXY` by default, and this applies to every WebSocket in this package.
 
 ## Resting orders
 

@@ -11,7 +11,7 @@ license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28",
-    "websockets>=14",
+    "websockets>=15",
     "msgpack>=1.1",
 ]
 
