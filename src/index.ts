@@ -83,6 +83,8 @@ export {
   type Deposit,
   type Withdraw,
   type CreateMarket,
+  type SubmitOracleObservation,
+  type ConfigureOraclePolicy,
   type WithdrawRequest,
   type ConfirmDeposit,
   type DepositLocator,

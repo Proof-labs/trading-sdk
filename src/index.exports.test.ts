@@ -20,6 +20,9 @@ import {
   type DecodedAction,
   type DecodedAdminAction,
   type RetiredAdminAction,
+  type CreateMarket,
+  type SubmitOracleObservation,
+  type ConfigureOraclePolicy,
   type GovernanceAction,
   type AdminAction,
   type EmergencyAction,
@@ -53,6 +56,55 @@ import {
   type TriggerExecutionResult,
 } from "./index.js";
 import type { OpenLabel } from "./types.js";
+
+it("exports current market-grid and oracle payload types for operator harnesses", () => {
+  const signer = new Uint8Array(20).fill(3);
+  const market: CreateMarket = {
+    market: 7,
+    imBps: 1_000,
+    mmBps: 500,
+    takerFeeBps: 5,
+    makerFeeBps: 0,
+    signer,
+    fundingIntervalMs: 0n,
+    maxFundingRateBps: 100,
+    szDecimals: 5,
+    ticker: "TEST",
+    tickSize: 10n,
+    lotSize: 100n,
+  };
+  const observation: SubmitOracleObservation = {
+    market: market.market,
+    policyVersion: 1n,
+    sourceId: 1,
+    publishTimeMs: 1_700_000_000_123n,
+    priceMicro: 67_000_000_000n,
+    confidenceMicro: null,
+    evidenceDigest: new Uint8Array(32).fill(0x5a),
+    signer,
+  };
+  const policy: ConfigureOraclePolicy = {
+    effectiveHeight: 1n,
+    bundle: new Uint8Array([1, 2, 3]),
+  };
+  const actions: Action[] = [
+    { type: "CreateMarket", data: market },
+    { type: "SubmitOracleObservation", data: observation },
+    {
+      type: "ProposeAdminAction",
+      data: {
+        proposer: signer,
+        registryVersion: 1n,
+        action: { kind: "ConfigureOraclePolicy", value: policy },
+      },
+    },
+  ];
+  expect(actions.map((action) => action.type)).toEqual([
+    "CreateMarket",
+    "SubmitOracleObservation",
+    "ProposeAdminAction",
+  ]);
+});
 
 it("exposes typed reads on the existing read surface", async () => {
   const sdk = await import("./index.js");

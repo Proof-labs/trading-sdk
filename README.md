@@ -581,6 +581,9 @@ Ordinary-account support remains deferred in [#360](https://github.com/Proof-lab
 integration never needs these.** Each is gated by a dedicated engine allowlist
 or the market's oracle policy, so codec availability grants nothing without an
 operator-provisioned key. See [AGENTS.md](AGENTS.md) → "Operator actions".
+Porting a harness off the retired `OracleUpdate`, `OracleUpdateComposite`,
+`RunFundingTick` or `/testing` surfaces: see the
+[operator harness migration guide](docs/operator-harness-migration.md).
 
 #### Governance actions (admin multisig)
 
