@@ -183,6 +183,7 @@ class ExchangeClient {
   queryOrderbook(market: number): Promise<Orderbook>;
   queryFunding(market: number): Promise<FundingInfo>;
   queryOpenOrders(addressHex?: string): Promise<OpenOrder[]>;
+  queryOrderStatus(orderId: bigint): Promise<OpenOrder | null>;
   queryMarkets(): Promise<MarketConfig[]>;
   queryMarketsSnapshot(): Promise<MarketsSnapshot>;
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
@@ -245,7 +246,10 @@ are monitoring signals rather than faults. `faults` follows
 ### Resting order fields
 
 `queryOpenOrders(owner)` and Python `open_orders(owner)` read the gateway's
-`POST /info` `openOrders` response through the same Rust decoder. TypeScript
+`POST /info` `openOrders` response through the same Rust decoder.
+`queryOrderStatus(orderId)` reads one order by id (`POST /info` `orderStatus`)
+with the same fields, or `null` when the engine no longer holds it; the
+request names no owner, so the order's owner is returned, not checked. TypeScript
 returns camelCase fields; Python returns snake_case fields.
 
 | TypeScript                           | Python                                 | Value                                                              |

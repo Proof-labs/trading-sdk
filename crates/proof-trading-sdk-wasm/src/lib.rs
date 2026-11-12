@@ -143,6 +143,16 @@ pub fn decode_open_orders(bytes: &[u8], owner: &[u8]) -> Result<JsValue, JsError
     to_bigint_js(&orders)
 }
 
+/// Decode one order looked up by id (`/info` `orderStatus`): `null` when the
+/// engine holds no such order, else the order. Its owner is not bound here.
+#[wasm_bindgen]
+pub fn decode_order_status(bytes: &[u8]) -> Result<JsValue, JsError> {
+    match reads::decode_order_status(bytes).map_err(JsError::new)? {
+        Some(order) => to_bigint_js(&order),
+        None => Ok(JsValue::NULL),
+    }
+}
+
 /// Decode a complete `GET /v1/markets-snapshot` HTTP body bound to
 /// `chain_id`, via the core's `market_snapshot::decode_snapshot`.
 #[wasm_bindgen]

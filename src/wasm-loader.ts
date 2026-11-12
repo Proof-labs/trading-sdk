@@ -39,6 +39,8 @@ export interface WasmCore {
   decode_read(kind: number, bytes: Uint8Array): unknown;
   /** Canonical resting orders, validated against the requested owner. */
   decode_open_orders(bytes: Uint8Array, owner: Uint8Array): unknown;
+  /** One order by id (`orderStatus`), or null; its owner is not bound. */
+  decode_order_status(bytes: Uint8Array): unknown;
   /** Decode a complete `/v1/markets-snapshot` HTTP body bound to `chainId`. */
   decode_markets_snapshot(body: Uint8Array, chainId: Uint8Array): unknown;
   signing_message(
