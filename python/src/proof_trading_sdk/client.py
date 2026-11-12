@@ -1249,15 +1249,6 @@ class ExchangeClient:
                 raise ProofTradingSdkError(
                     "trigger decode: config slippage exceeds 9999"
                 )
-            if config["enabled"] and (
-                config["max_trigger_slippage_bps"] == 0
-                or config["max_mark_age_ms"] == 0
-                or config["max_future_publish_skew_ms"] == 0
-                or config["max_active_brackets"] == 0
-            ):
-                raise ProofTradingSdkError(
-                    "trigger decode: enabled config has a zero bound"
-                )
         availability: dict[str, t.Any]
         if isinstance(row[2], str):
             availability = {
