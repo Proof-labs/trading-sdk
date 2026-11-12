@@ -51,7 +51,8 @@ describe("market listing with row field counts", () => {
   it("decodes as queryMarkets does and counts each row's fields", async () => {
     const { client, transport } = clientFor([row(), row()]);
     const listing = await client.queryMarketListing();
-    expect(listing.pinnedFieldCount).toBe(24);
+    // Canonical wire includes the three margin-offset fields; historical rows remain 24.
+    expect(listing.pinnedFieldCount).toBe(27);
     expect(listing.rowFieldCounts).toEqual([24, 24]);
     expect(listing.markets).toEqual(
       await clientFor([row(), row()]).client.queryMarkets(),

@@ -670,9 +670,12 @@ export interface AttachConditional {
   takerFeeBps: number;
   makerFeeBps: number;
   signer: Address;
-  /** Open-interest cap for each of the two conditional books, in the
-   *  underlying's size scale; `undefined` or `0n` = uncapped (encodes as 0). */
+  /** Open-interest cap for each conditional book, in the underlying's size
+   * scale. The current engine requires a nonzero value. */
   maxOpenInterest?: bigint;
+  /** Impact notional for each conditional book, in micro-USDC. The current
+   * engine requires a nonzero value; omission encodes the wire default 0. */
+  impactNotional?: bigint;
 }
 
 /** Create a derived sub-account under the signing master (0x28). */
@@ -910,6 +913,12 @@ export interface UpdateMarketFees {
    * 0 disables the cap.
    */
   maxOpenInterest?: bigint | null;
+  /** Impact notional in micro-USDC. Omit to leave unchanged. */
+  impactNotional?: bigint | null;
+  /** Funding dead-band half-width in basis points (at most 3,000). */
+  fundingDeadBandBps?: number | null;
+  /** Signed funding interest rate per 8h in units of 1e-8 (1 bps = 10,000). */
+  fundingInterestRate?: number | null;
 }
 
 /** Lifecycle status of an event: `Trading` until its settlement time,
