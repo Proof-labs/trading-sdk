@@ -114,6 +114,7 @@ import type {
   HistoryPositionsPage,
   HistoryResolution,
   MarketConfig,
+  MarketListing,
   OpenOrder,
   AdlQueueEntry,
   Orderbook,
@@ -1581,6 +1582,22 @@ export class ExchangeClient {
     const bytes = fromBase64(json.data as string);
     const raw = (await this.decodeRead("Markets", bytes)) as unknown[];
     return raw.map(marketConfigFromWasm);
+  }
+
+  /** The market listing with each row's field count (`MarketListing`): the
+   *  same decode as `queryMarkets`, plus what that decode tolerates at the
+   *  end of a row, so a caller can refuse a layout the pinned wire does not
+   *  have. A missing envelope or a malformed row is a refusal. */
+  async queryMarketListing(): Promise<MarketListing> {
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/markets`);
+    const bytes = fromBase64(requireEncodedData(json, "/v1/markets"));
+    const raw = (await this.decodeRead("Markets", bytes)) as unknown[];
+    const rows = msgpackDecoder.decode(bytes) as unknown[][];
+    return {
+      markets: raw.map(marketConfigFromWasm),
+      rowFieldCounts: rows.map((row) => row.length),
+      pinnedFieldCount: getWasm().market_config_fields(),
+    };
   }
 
   /** All events: each is its binary book under one `EventInfo`, plus every

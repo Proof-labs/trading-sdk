@@ -154,6 +154,16 @@ pub fn decode_order_status(bytes: &[u8], order_id: u64) -> Result<JsValue, JsErr
     }
 }
 
+/// How many fields the pinned wire `MarketConfig` has: the record width the
+/// listing decode reads (later fields are ignored, missing ones default).
+#[wasm_bindgen]
+pub fn market_config_fields() -> u32 {
+    match MARKET_CONFIG {
+        Shape::Record { width, .. } => u32::try_from(width).unwrap_or(u32::MAX),
+        _ => 0,
+    }
+}
+
 /// Decode a complete `GET /v1/markets-snapshot` HTTP body bound to
 /// `chain_id`, via the core's `market_snapshot::decode_snapshot`.
 #[wasm_bindgen]

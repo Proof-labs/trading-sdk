@@ -9,6 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **TypeScript `queryMarketListing()`**: the market listing (`GET /v1/markets`) with each row's field count and the pinned `MarketConfig` width (`MarketListing`), decoded as `queryMarkets` decodes it. The decode ignores fields appended after the pinned width and fills missing trailing fields with their defaults; the counts let a caller refuse a layout the pinned wire does not have (the market maker's listing guard). WASM `market_config_fields()` reports the pinned width. Additive (MINOR).
 - **TypeScript `queryOrderStatus(orderId)`**: one order by id (`POST /info` `orderStatus`; the node route `GET /v1/order/{id}` with `useGateway: false`), decoded by the Rust core's new `decode_order_status` with the same fields as `queryOpenOrders`, or `null` when the engine no longer holds the order. An answer naming another order is refused. The request names no owner, so the owner is returned, not checked. Refuses an id above `Number.MAX_SAFE_INTEGER`, floats and payloads over 4 KiB. Additive (MINOR).
 - **Rust `proof-sdk-rs` 1.0.0**, a new async (tokio) trading client over the gateway (#425), with a WebSocket feed (`ws` feature, on by default). The WASM build is unchanged.
 
