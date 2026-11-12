@@ -7,8 +7,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Fund directory and position checks are shared in Rust before WASM adaptation;
+  invalid caller pool IDs report configuration errors, future display variants
+  remain explicitly unknown, and fund reads use the query transport budget.
+
+### Changed
+
+- **Wire compatibility boundary:** pin canonical wire `2a707bc` (engine
+  `23ee1f0`). Conditional attachment proposal bytes/hashes now include impact
+  notional; fee updates require the funding dead-band and interest-rate tail.
+  Older fee-update payloads are rejected, matching the engine. Rebuild and
+  reapprove affected governance proposals against the matching engine; do not
+  reuse old signatures. This source change does not publish or authorize a release.
+
 ### Added
 
+- Fund reads retain balances and positions when future wire variants are unknown, explicitly reporting unknown sides or valuations; known priced values still require exact validation.
+- `reads().finalized.insuranceFunds()` lists every registered or stored-ledger pool, including marketless funds, with cash, debt and net cash at one witnessed state. `insuranceFund(poolId)` adds bounded positions and engine-settlement notionals, explicitly reporting incomplete lists, unpriced references and unsupported prediction binaries. These display values are not equity, historical profit or execution quotes.
+- `reads().insuranceFundHistory({ poolId, stream, limit, cursor })` reads one bounded page of indexed insurance balances or activity through the gateway. Amounts and chain coordinates remain exact integers; coverage explicitly describes retained observations, never complete history, equity or a finalized-state witness.
+- `reads().finalized.authorizedAgents(owner)` reads up to 100 current stored trading-agent grants with an atomic finalized-state witness and an explicit completeness flag. Grants have no stored expiry or per-action scope; this read does not authorize signing.
 - Python `ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS` (`1_000`) mirrors the engine's
   per-limb TP/SL slippage ceiling as an advisory clamp; encoding does not
   enforce it.
@@ -47,6 +64,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   heights/timestamps are preserved; validator signatures and payload proofs
   are not verified. Whole-block responses over 1 MiB remain unsupported.
 
+- `validateSetMarginOffsetPolicy` checks policy bounds before encoding and
+  through `decodeAdminAction`.
+  `decodeMarginOffsetEvent` reads the engine's `margin_offset_policy_set`
+  and `margin_offset_pair_configured` attributes against wire-generated vectors.
+  Rust re-exports the margin-offset types. Conformance vectors and content-hash
+  constants pin policy encoding across TypeScript, Rust and Python.
 - Python typed `authorities()` and `liquidation_config()` reads, backed by
   canonical Rust wire types with strict record/address/range checks. Failed
   reads raise rather than synthesize empty authorities or default configuration.

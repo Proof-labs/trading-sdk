@@ -351,6 +351,28 @@ not trading authorization. Like every other gateway interaction, admin calls
 included, it goes through the SDK
 ([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md)).
 
+### Insurance fund observations
+
+```typescript
+const page = await client
+  .reads()
+  .insuranceFundHistory(
+    { poolId: 2, stream: "balances", limit: 50 },
+    { timeoutMs: 5000 },
+  );
+// Pass page.nextCursor unchanged to fetch an older page. "" means no next page.
+```
+
+Use `stream: "activity"` for funding, withdrawal and takeover event attributes.
+Every request goes through the configured gateway transport, with a bounded
+body and deadline. Values are exact `bigint`s. Balance history is **net cash
+(cash minus debt), not equity or profit**. The coverage bounds name the first
+and last retained observations; they do not prove continuous ingestion, a
+complete lifetime history, or a finalized same-state view. Missing history
+remains an error, and an empty observed page must not be presented as zero
+lifetime activity. This requires the indexer insurance-history projection and
+the gateway history proxy.
+
 ### Indexed Explorer history
 
 ```typescript

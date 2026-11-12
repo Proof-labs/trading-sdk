@@ -1071,28 +1071,47 @@ describe("codec v1 all action types", () => {
     },
   );
 
-  it("decodes the legacy 18-field UpdateMarketFees payload", () => {
-    const encoder = new Encoder({ useBigInt64: true });
-    const payload = encoder.encode([
-      7,
-      Array.from(SIGNER),
-      ...Array(16).fill(null),
-    ]);
-    const wire = encoder.encode([
-      ENVELOPE_VERSION,
-      ActionType.UpdateMarketFees,
-      1n,
-      payload,
-      ZERO_PUBKEY,
-      ZERO_SIG,
-    ]);
-
-    const { action: decoded } = decodeTx(wire);
+  it("round-trips the canonical funding and impact-notional fields", () => {
+    const action: Action = {
+      type: "UpdateMarketFees",
+      data: {
+        market: 7,
+        signer: SIGNER,
+        impactNotional: 1_000_000_000n,
+        fundingDeadBandBps: 10,
+        fundingInterestRate: -12_500,
+      },
+    };
+    const { action: decoded } = decodeTx(encodeTx(action, 1n));
     if (decoded.type !== "UpdateMarketFees") throw new Error("type narrowing");
-    expect(decoded.data.imBps).toBeNull();
-    expect(decoded.data.mmBps).toBeNull();
-    expect(decoded.data.maxOpenInterest).toBeNull();
+    expect(decoded.data.impactNotional).toBe(1_000_000_000n);
+    expect(decoded.data.fundingDeadBandBps).toBe(10);
+    expect(decoded.data.fundingInterestRate).toBe(-12_500);
   });
+
+  it.each([18, 20, 21, 22])(
+    "rejects the %i-field UpdateMarketFees payload without the required funding tail",
+    (width) => {
+      const encoder = new Encoder({ useBigInt64: true });
+      const payload = encoder.encode([
+        7,
+        Array.from(SIGNER),
+        ...Array(width - 2).fill(null),
+      ]);
+      const wire = encoder.encode([
+        ENVELOPE_VERSION,
+        ActionType.UpdateMarketFees,
+        1n,
+        payload,
+        ZERO_PUBKEY,
+        ZERO_SIG,
+      ]);
+
+      // Canonical engine update_market_fees_requires_the_funding_terms_tail
+      // deliberately refuses the previous shape rather than shifting fields.
+      expect(() => decodeTx(wire)).toThrow();
+    },
+  );
 
   it("round-trips UpdateMarketFees with only defaultTtlMs set (operator-only path)", () => {
     // Operator flipping TTL on its own, leaving everything else alone.

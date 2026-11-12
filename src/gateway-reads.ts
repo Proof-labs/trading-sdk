@@ -1,8 +1,14 @@
 import { GatewayHttpError } from "./errors.js";
 import { marketStatsMarketIds } from "./market-stats.js";
+import {
+  readInsuranceFundHistory,
+  type InsuranceFundHistoryParams,
+} from "./insurance-fund-history.js";
+import type { BoundedReadOptions } from "./bounded-read.js";
 
 /** Named gateway reads for consumers that retain their own decoders and caches.
- * Responses are unmodified, including msgpack envelopes and pagination keys.
+ * Raw responses are unmodified, including msgpack envelopes and pagination keys.
+ * `insuranceFundHistory` is explicitly decoded and bounded instead.
  * Inject fetch to retain application deadlines, scheduling and error policy.
  */
 export interface GatewayReadOptions {
@@ -49,6 +55,13 @@ export class GatewayReads {
     private readonly base: string,
     private readonly transport: GatewayFetch,
   ) {}
+  /** Decoded, bounded observed insurance history. Net cash is not equity. */
+  insuranceFundHistory(
+    params: InsuranceFundHistoryParams,
+    opts: BoundedReadOptions = {},
+  ) {
+    return readInsuranceFundHistory(this.base, this.transport, params, opts);
+  }
   private async request(
     path: string,
     init: RequestInit,

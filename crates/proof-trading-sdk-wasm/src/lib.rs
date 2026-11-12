@@ -92,6 +92,12 @@ pub enum ReadKind {
     Account = 3,
     /// One `AdminAction`, as stored on a proposal.
     AdminAction = 4,
+    /// `query_v2::AuthorizedAgents`, a current bounded map-encoded grant list.
+    AuthorizedAgents = 5,
+    /// `query_v2::InsuranceFundDirectory` (`GET /v2/insurance-funds?witness=1`).
+    InsuranceFundDirectory = 6,
+    /// `query_v2::InsuranceFundState` (`GET /v2/insurance-fund/{pool}?witness=1`).
+    InsuranceFundState = 7,
 }
 
 fn decode_as<T: serde::de::DeserializeOwned + serde::Serialize>(
@@ -140,6 +146,34 @@ pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
         ),
         ReadKind::Account => decode_records::<core_sdk::query::AccountInfo>(bytes, &ACCOUNT_INFO),
         ReadKind::AdminAction => decode_as::<governance::AdminAction>(bytes),
+        ReadKind::AuthorizedAgents => {
+            if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+                return Err(JsError::new("authorized agents must be a MessagePack map"));
+            }
+            decode_as::<core_sdk::query::AuthorizedAgents>(bytes)
+        }
+        ReadKind::InsuranceFundDirectory => {
+            if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+                return Err(JsError::new(
+                    "insurance fund directory must be a MessagePack map",
+                ));
+            }
+            let view: core_sdk::query::InsuranceFundDirectory =
+                rmp_serde::from_slice(bytes).map_err(|error| JsError::new(&error.to_string()))?;
+            core_sdk::query::validate_insurance_fund_directory(&view).map_err(JsError::new)?;
+            to_bigint_js(&view)
+        }
+        ReadKind::InsuranceFundState => {
+            if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+                return Err(JsError::new(
+                    "insurance fund state must be a MessagePack map",
+                ));
+            }
+            let view: core_sdk::query::InsuranceFundState =
+                rmp_serde::from_slice(bytes).map_err(|error| JsError::new(&error.to_string()))?;
+            core_sdk::query::validate_insurance_fund_state(&view).map_err(JsError::new)?;
+            to_bigint_js(&view)
+        }
     }
 }
 

@@ -45,6 +45,8 @@ import {
   validateFundInsuranceFund,
   validateWithdrawInsuranceFund,
 } from "./insurance-funding.js";
+import type { AuthorizedAgentsView } from "./authorized-agents.js";
+import { bytesToHex } from "./crypto.js";
 import { validateSetLiquidationConfig } from "./liquidation-config.js";
 import { validateSetMarginOffsetPolicy } from "./margin-offsets.js";
 import type { SetMarginOffsetPolicy } from "./types.js";
@@ -731,6 +733,17 @@ export function accountInfoFromWasm(v: unknown): AccountInfo {
     })),
     feesAccrued: a.fees_accrued as bigint,
     volume30dMicroUsdc: a.volume_30d_micro_usdc as bigint,
+  };
+}
+
+/** The `/v2/account/{owner}/agents` grant list. */
+export function authorizedAgentsFromWasm(v: unknown): AuthorizedAgentsView {
+  const a = v as WasmRecord;
+  return {
+    owner: bytesToHex(bytesOf(a.owner)),
+    finalizedHeight: a.finalized_height as bigint,
+    agents: (a.agents as unknown[]).map((agent) => bytesToHex(bytesOf(agent))),
+    complete: a.complete as boolean,
   };
 }
 
