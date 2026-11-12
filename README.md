@@ -183,14 +183,16 @@ class ExchangeClient {
   queryOrderbook(market: number): Promise<Orderbook>;
   queryFunding(market: number): Promise<FundingInfo>;
   queryOpenOrders(addressHex?: string): Promise<OpenOrder[]>;
+  queryOrderStatus(orderId: bigint): Promise<OpenOrder | null>;
   queryMarkets(): Promise<MarketConfig[]>;
+  queryMarketListing(): Promise<MarketListing>; // markets row by row: field counts and refused rows
+  queryEventListing(): Promise<EventListing>; // events row by row, with refused rows
   queryMarketsSnapshot(): Promise<MarketsSnapshot>;
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
   queryHealth(): Promise<{ status: string; height: number }>;
   queryOraclePermissions(market: number): Promise<OraclePermissions>;
   queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null>;
   queryPositionTriggers(addressHex?: string): Promise<PositionTriggerInfo[]>;
-  queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]>;
   // Deprecated: GET /v1/triggers/status is deleted upstream; see below.
   queryTriggerStatus(): Promise<TriggerStatus>;
   queryPositionTriggerHistory(addressHex?: string, filters?: PositionTriggerHistoryFilters): Promise<PositionTriggerHistoryPage>;
@@ -245,7 +247,11 @@ are monitoring signals rather than faults. `faults` follows
 ### Resting order fields
 
 `queryOpenOrders(owner)` and Python `open_orders(owner)` read the gateway's
-`POST /info` `openOrders` response through the same Rust decoder. TypeScript
+`POST /info` `openOrders` response through the same Rust decoder.
+`queryOrderStatus(orderId)` reads one order by id (`POST /info` `orderStatus`)
+with the same fields, or `null` when the engine no longer holds it. An
+answer naming another order is refused; the request names no owner, so the
+order's owner is returned, not checked. TypeScript
 returns camelCase fields; Python returns snake_case fields.
 
 | TypeScript                           | Python                                 | Value                                                              |
@@ -517,15 +523,35 @@ bracket, `queryPositionTriggers()` returns its epoch; first attach must use the
 epoch on the canonical account position read and must never guess `1`. Submit
 action `0x25` (`SetPositionTriggers`) or `0x26`
 (`CancelPositionTriggers`). A set replaces the whole bracket atomically,
-requires at least one limb, and each limb carries an explicit `1..=9999` bps
-IOC collar. Owner defaults to the loaded signer; a version-active trading agent
+requires at least one limb, and each limb carries an explicit IOC collar of
+`1..=ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS` (currently 1000) basis points under
+the engine admission rule; clamp to that constant. The SDK wire validators
+retain the wider `1..=9999` range for compatibility; encoding does not guarantee
+engine admission. Owner defaults to the loaded signer; a version-active trading agent
 passes the delegated owner explicitly and the engine verifies the grant.
 
-Before setting a bracket, read `queryTriggerMarketConfigs()`. The current
-policy is the only valid source for `enabled` and the maximum IOC slippage;
-absence means disabled. The optional pending policy is shown with its accepted
-and next-block effective heights. The SDK rejects malformed, empty, unsorted,
-or version-skipping policy state rather than inventing a default.
+The legacy `queryTriggerMarketConfigs()` read and `SetTriggerMarketConfig`
+submission API have been removed. Delete policy lookups and enabled checks before
+placing TP/SL; no replacement availability lookup is needed. Use the current
+position epoch and an explicit per-limb IOC collar. The engine validates the
+request; successful placement does not guarantee a fill.
+
+Historical retired-action (`SetTriggerMarketConfig`) proposal decoding and
+content hashes remain available; the policy-registry decoders for
+`/v1/triggers/markets` are removed. `DecodedAdminAction`
+and `DecodedAction` include retired actions for inspection. Use the exported
+`isSubmittableAction(decoded.action)` guard before passing a decoded transaction
+to a typed submission API. The guard excludes retired governance actions; it
+does not assert engine admission or signing authority. Low-level encoding and
+signing retain the wire contract; the engine rejects retired proposals and approvals.
+Proposal content hashes remain available for historical verification.
+
+Before upgrading, remove retired trigger-policy methods from capability probes
+and read tests. Governance consumers must handle historical
+`SetTriggerMarketConfig` proposals as read-only: retain their detail rendering,
+remove creation and approval paths, and narrow `proposal.action` before assigning
+it to `AdminAction`. The Python removals also require a Python major release;
+update callers of `trigger_market_configs()` and the retired builder together.
 
 `queryTriggerStatus()` is deprecated: `GET /v1/triggers/status` is deleted
 upstream (the node dropped it with its activation gates, exchange#619,
@@ -578,6 +604,9 @@ Ordinary-account support remains deferred in [#360](https://github.com/Proof-lab
 integration never needs these.** Each is gated by a dedicated engine allowlist
 or the market's oracle policy, so codec availability grants nothing without an
 operator-provisioned key. See [AGENTS.md](AGENTS.md) → "Operator actions".
+Porting a harness off the retired `OracleUpdate`, `OracleUpdateComposite`,
+`RunFundingTick` or `/testing` surfaces: see the
+[operator harness migration guide](docs/operator-harness-migration.md).
 
 #### Governance actions (admin multisig)
 

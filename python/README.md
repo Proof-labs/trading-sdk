@@ -141,8 +141,52 @@ or malformed read raises an SDK error, rather than becoming an empty page.
 
 Track the remaining Python capabilities and their PRs in
 [#362](https://github.com/Proof-labs/trading-sdk/issues/362).
-This change covers candle history; capabilities in other open PRs become
+Candle history and market observations are covered here; other capabilities become
 available when those changes are merged and released.
+
+## Market observations
+
+```python
+stats = client.market_stats([3, 4])
+health = client.oracle_health(market=3)  # omit market for the full feeder snapshot
+```
+
+`market_stats()` returns typed `MarketStatsResponse` from the indexer's rolling
+24-hour snapshot. Select 1–50 distinct market IDs in `0..2147483647`; every
+requested market must appear exactly once. Contract quantities, raw micro-USDC
+prices, USDC dollar volume and signed basis-point changes retain their exact
+numeric strings. `None`, zero, stale and unavailable remain distinct. Timestamps
+retain their original precision/offset; window comparisons use milliseconds,
+matching TS. Unknown additive fields are ignored. `decode_market_stats_response`
+also accepts an already parsed gateway body.
+
+`oracle_health()` returns `OracleHealth`, with typed optional source, readiness,
+submission status, feeder presence, note/error and update time. It supports the
+node's disabled-feeder response, F16 relay health and gateway market-freshness
+rows. This follows the gateway/feeder JSON contract; TS exposes the raw response.
+Optional scalar fields may be absent or JSON `null`; both decode to `None`.
+F16 `ready` and `submit_enabled` remain required booleans.
+Per-market requests accept positive u32 IDs and require api-gateway 10.3.0 or
+later: an older gateway ignores the filter, and the response then fails with
+`CodecError` (requested market mismatch). Omit `market` on older gateways. Missing fields, including a missing
+`markets` map, remain `None`. If the response contains a `markets` map but not
+the requested market, that map is empty. Extra diagnostic fields
+are preserved under `extra`. F16 journal/divergence maps may be absent from the
+per-market gateway projection. `decode_oracle_health` accepts a parsed body.
+
+`status="ok"` with `embedded_feeder=False` does not imply a ready oracle. Feeder
+readiness and market freshness do not grant trading permission; thresholds stay
+with the caller. HTTP failures raise existing SDK errors and malformed known
+fields raise `CodecError`, without synthesizing healthy or zero-valued results.
+Both methods use the existing buffered HTTP transport and configured timeout;
+these methods do not add a streaming response-size limit or a whole-call deadline.
+
+These JSON routes are decoded in Python; canonical MessagePack wire records
+use the shared Rust decoders through PyO3. Market statistics and candles share strict calendar validation. Python rejects
+invalid dates and `24:00:00` even where TypeScript `Date.parse` normalizes them.
+Market-statistics window comparisons use milliseconds; candles preserve nanoseconds.
+The shared Python parser accepts extended years that TypeScript may reject.
+The parsers intentionally enforce different contracts.
 
 ## Callback signer
 
@@ -497,13 +541,9 @@ unsupported. See [availability](../README.md#setusermarketleverage-availability)
 ```python
 from proof_trading_sdk import actions
 
-policy = actions.SetTriggerMarketConfig(
-    market=7, enabled=True, max_trigger_slippage_bps=500,
-    max_mark_age_ms=5_000, max_future_publish_skew_ms=1_000, max_active_brackets=4,
-)
 propose = actions.ProposeAdminAction(
     proposer=owner, registry_version=3,
-    action={"SetTriggerMarketConfig": policy.as_wire()},
+    action={"SetMarketStatus": {"market": 7, "status": "ReduceOnly"}},
 )
 action_type, payload = actions.encode_action(propose)
 ```
@@ -517,9 +557,6 @@ position = next(p for p in client.account(owner).positions if p["market"] == 7)
 epoch = position["position_epoch"]
 if epoch is None:
     raise RuntimeError("position epoch is not backfilled; trigger placement is unavailable")
-policy = next(p for p in client.trigger_market_configs() if p.market == 7)
-if policy.state.current is None or not policy.state.current.enabled:
-    raise RuntimeError("position triggers are disabled for this market")
 client.set_position_triggers(
     market=7,
     owner=owner,
@@ -544,8 +581,22 @@ removed in the next major version. For a first attach, take the epoch from the
 canonical account position read; never guess `1`. `owner` defaults to the
 signer, but a version-active trading agent may pass its delegated owner and let
 the engine verify authorization.
-`trigger_market_configs()` is the strict source for the current and scheduled
-market policy; absence means disabled and no client default is substituted.
+`trigger_market_configs()` and the `SetTriggerMarketConfig` builder have been
+removed. Delete legacy-policy lookups and enabled checks before placing TP/SL;
+no replacement availability lookup is needed. Each limb requires explicit
+slippage in `1..=ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS` (currently 1000) basis
+points under the engine admission rule; clamp to that constant. The wire
+validator retains `1..=9999`; encoding does not guarantee admission or a fill.
+
+`ProposeAdminAction` and `ApproveAdminAction` reject retired actions with
+`ValueError` at construction and before encoding, including actions read from
+history. Use `is_submittable_admin_action()` to check the kind before building
+a request; it does not validate the payload or guarantee engine admission.
+`RawAction` and pre-encoded signing retain the wire contract; the engine rejects
+retired proposals and approvals. Historical retired-action (`SetTriggerMarketConfig`)
+proposal decoding and content hashes remain available; the policy-registry
+decoders for `/v1/triggers/markets` are removed. Current TP/SL placement,
+cancellation and history APIs are unchanged.
 
 `history_triggers()` and `history_trigger_markets()` use only the public gateway
 history routes. Their dataclass pages preserve chain coordinates, market ids,

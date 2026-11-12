@@ -228,15 +228,9 @@ class TestEncodeDecodeRoundTrip:
         assert pts.get_error_name(code) == "TriggerOrderIncompatible"
 
     def test_trigger_market_config_admin_hash_matches_engine(self):
-        config = actions.SetTriggerMarketConfig(
-            market=7,
-            expected_current_version=3,
-            enabled=True,
-            max_trigger_slippage_bps=250,
-            max_mark_age_ms=5_000,
-            max_future_publish_skew_ms=1_000,
-            max_active_brackets=32,
-        )
+        config = dict(market=7, expected_current_version=3, enabled=True,
+            max_trigger_slippage_bps=250, max_mark_age_ms=5000,
+            max_future_publish_skew_ms=1000, max_active_brackets=32)
         digest = pts.admin_proposal_content_hash(
             bytes([0x11] * 32),
             42,
@@ -246,22 +240,12 @@ class TestEncodeDecodeRoundTrip:
             7,
             1_000,
             259_201_000,
-            {"SetTriggerMarketConfig": config.as_wire()},
+            {"SetTriggerMarketConfig": config},
         )
         assert (
             digest.hex()
             == "c707537e8d050389a705df1ce0aa2ad1cf873e67d1c45d10a955dde9b50e933c"
         )
-
-        with pytest.raises(ValueError, match="enabled must be boolean"):
-            actions.SetTriggerMarketConfig(
-                market=7,
-                enabled=1,  # type: ignore[arg-type]
-                max_trigger_slippage_bps=250,
-                max_mark_age_ms=5_000,
-                max_future_publish_skew_ms=1_000,
-                max_active_brackets=32,
-            )
 
     def test_place_order_round_trip(self):
         act = actions.PlaceOrder(

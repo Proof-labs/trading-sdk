@@ -1,0 +1,29 @@
+{
+  "as_of": "2026-09-21T12:34:56.123456789Z",
+  "window_start": "2026-09-20T12:34:56.123456789Z",
+  "window_end": "2026-09-21T12:34:56.123456789Z",
+  "indexed_height": "9007199254740993",
+  "indexed_at": "2026-09-21T12:34:54Z",
+  "stale_after_seconds": 60,
+  "status": "ready",
+  "markets": [
+    {
+      "market": 0,
+      "sz_decimals": 18,
+      "status": "ready",
+      "unavailable_reason": null,
+      "volume_24h_contracts": "1844674407370955161500",
+      "volume_24h_usdc": "12345678901234567890.000000000000000000000001",
+      "reference_price": "999999999999999999",
+      "last_price": "999999999999999998",
+      "change_24h_bps": "-0.000001",
+      "high_price": "999999999999999999",
+      "low_price": "999999999999999998",
+      "open_interest": {
+        "long_contracts": "9007199254740993",
+        "short_contracts": "9007199254740993"
+      },
+      "open_interest_unavailable_reason": null
+    }
+  ]
+}

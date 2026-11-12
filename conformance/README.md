@@ -239,3 +239,6 @@ against production traffic, for free.
 - **Vectors reflect the core at generation time.** They are only as correct as
   the core. They guard *cross-language agreement*, not spec-correctness — a
   shared bug across all three bindings would pass. Pair with the spec review.
+
+`market-stats.json` pins the exact JSON strings and nullable fields consumed by
+both the TypeScript and Python market-statistics decoders.
