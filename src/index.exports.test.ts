@@ -18,6 +18,8 @@ import {
   MAX_TRIGGER_SLIPPAGE_BPS,
   type Action,
   type DecodedAction,
+  type DecodedAdminAction,
+  type RetiredAdminAction,
   type GovernanceAction,
   type AdminAction,
   type EmergencyAction,
@@ -356,9 +358,7 @@ describe("public barrel: ticker rule", () => {
 });
 
 // Historical policy records remain readable, but not assignable to a new action.
-function retiredPolicyIsReadOnly(
-  action: import("./index.js").DecodedAdminAction,
-) {
+function retiredPolicyIsReadOnly(action: DecodedAdminAction) {
   // @ts-expect-error retired historical actions are not submit-capable
   const submit: AdminAction = action;
   return submit;
@@ -381,13 +381,13 @@ function decodedActionsNeedNarrowing(decoded: DecodedAction): void {
 void decodedActionsNeedNarrowing;
 
 function decodedAdminActionsNarrowWithoutCasts(
-  decoded: import("./index.js").DecodedAdminAction,
+  decoded: DecodedAdminAction,
 ): void {
   if (isSubmittableAdminAction(decoded)) {
     const current: AdminAction = decoded;
     void current;
   } else {
-    const retired: import("./index.js").RetiredAdminAction = decoded;
+    const retired: RetiredAdminAction = decoded;
     // @ts-expect-error the rejected branch is a retired action
     const submit: AdminAction = decoded;
     void retired;

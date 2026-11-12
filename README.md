@@ -507,7 +507,9 @@ placing TP/SL; no replacement availability lookup is needed. Use the current
 position epoch and an explicit per-limb IOC collar. The engine validates the
 request; successful placement does not guarantee a fill.
 
-Historical policy and proposal decoders remain available. `DecodedAdminAction`
+Historical retired-action (`SetTriggerMarketConfig`) proposal decoding and
+content hashes remain available; the policy-registry decoders for
+`/v1/triggers/markets` are removed. `DecodedAdminAction`
 and `DecodedAction` include retired actions for inspection. Use the exported
 `isSubmittableAction(decoded.action)` guard before passing a decoded transaction
 to a typed submission API. The guard excludes retired governance actions; it

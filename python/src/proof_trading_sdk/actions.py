@@ -980,6 +980,36 @@ class ConfigureOraclePolicy:
 
 AdminActionWire = dict[str, Any] | str
 
+RETIRED_ADMIN_KINDS = frozenset({"SetTriggerMarketConfig"})
+
+
+def _admin_action_kind(action: AdminActionWire) -> str | None:
+    if isinstance(action, str):
+        kind = action
+    elif isinstance(action, dict) and len(action) == 1:
+        kind = next(iter(action))
+    else:
+        return None
+    return kind if isinstance(kind, str) and kind else None
+
+
+def is_submittable_admin_action(action: AdminActionWire) -> bool:
+    """Exclude retired kinds from typed proposals and approvals.
+
+    This checks the enum tag only, not payload validity or engine admission.
+    Historical decoding and low-level encoding/signing remain available.
+    """
+    kind = _admin_action_kind(action)
+    return kind is not None and kind not in RETIRED_ADMIN_KINDS
+
+
+def _require_submittable_admin_action(action: AdminActionWire) -> None:
+    kind = _admin_action_kind(action)
+    if kind is None:
+        raise ValueError("admin action must be a non-empty kind string or a single-key dict")
+    if kind in RETIRED_ADMIN_KINDS:
+        raise ValueError("retired admin actions cannot be proposed or approved")
+
 
 @dataclass
 class ProposeAdminAction(Action):
@@ -990,7 +1020,12 @@ class ProposeAdminAction(Action):
     registry_version: int
     action: AdminActionWire
 
+    def __post_init__(self) -> None:
+        _require_submittable_admin_action(self.action)
+
     def fields(self) -> dict[str, Any]:
+        # Recheck because builders and their nested dictionaries are mutable.
+        _require_submittable_admin_action(self.action)
         return {
             "proposer": self.proposer,
             "registry_version": self.registry_version,
@@ -1016,7 +1051,12 @@ class ApproveAdminAction(Action):
     action: AdminActionWire
     content_hash: bytes
 
+    def __post_init__(self) -> None:
+        _require_submittable_admin_action(self.action)
+
     def fields(self) -> dict[str, Any]:
+        # Recheck because builders and their nested dictionaries are mutable.
+        _require_submittable_admin_action(self.action)
         return {
             "approver": self.approver,
             "proposal_id": self.proposal_id,
@@ -1120,6 +1160,7 @@ __all__ = [
     "SubmitOracleObservation",
     "ConfigureOraclePolicy",
     "AdminActionWire",
+    "is_submittable_admin_action",
     "ProposeAdminAction",
     "ApproveAdminAction",
     "RejectAdminAction",

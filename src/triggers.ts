@@ -148,17 +148,6 @@ export function validateLegacyTriggerConfig(
   assertU64("maxMarkAgeMs", config.maxMarkAgeMs);
   assertU64("maxFuturePublishSkewMs", config.maxFuturePublishSkewMs);
   assertU64("maxActiveBrackets", config.maxActiveBrackets);
-  if (
-    config.enabled &&
-    (config.maxTriggerSlippageBps === 0 ||
-      config.maxMarkAgeMs === 0n ||
-      config.maxFuturePublishSkewMs === 0n ||
-      config.maxActiveBrackets === 0n)
-  ) {
-    throw new Error(
-      "enabled trigger config requires non-zero slippage, mark-age, future-skew and bracket bounds",
-    );
-  }
 }
 
 function tuple(value: unknown, name: string, size: number): unknown[] {

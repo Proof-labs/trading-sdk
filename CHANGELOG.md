@@ -89,6 +89,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking (Python MAJOR):** typed `ProposeAdminAction` and
+  `ApproveAdminAction` reject retired admin actions at construction and before
+  encoding. `is_submittable_admin_action()` checks the kind without enforcing
+  engine admission policy. Raw encoding/signing and historical decoding remain.
+- Historical `SetTriggerMarketConfig` decoding and legacy policy fields in
+  position-trigger reads validate wire fields without enforcing the retired
+  enabled-policy nonzero bounds.
+
 - **Breaking (TypeScript):** `decodeTx().action`, `decodeSigningMessage().action`,
   `AdminProposalContext.action` and `ProposalDisplayInfo.action` are now
   `DecodedAction` / `DecodedAdminAction`, because historical proposals may hold

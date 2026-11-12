@@ -588,9 +588,14 @@ slippage in `1..=ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS` (currently 1000) basis
 points under the engine admission rule; clamp to that constant. The wire
 validator retains `1..=9999`; encoding does not guarantee admission or a fill.
 
-The engine rejects proposals and approvals for the retired configuration.
-`RawAction` and pre-encoded signing retain the wire contract. Historical action/policy
-decoding and proposal content hashes remain supported. Current TP/SL placement,
+`ProposeAdminAction` and `ApproveAdminAction` reject retired actions with
+`ValueError` at construction and before encoding, including actions read from
+history. Use `is_submittable_admin_action()` to check the kind before building
+a request; it does not validate the payload or guarantee engine admission.
+`RawAction` and pre-encoded signing retain the wire contract; the engine rejects
+retired proposals and approvals. Historical retired-action (`SetTriggerMarketConfig`)
+proposal decoding and content hashes remain available; the policy-registry
+decoders for `/v1/triggers/markets` are removed. Current TP/SL placement,
 cancellation and history APIs are unchanged.
 
 `history_triggers()` and `history_trigger_markets()` use only the public gateway

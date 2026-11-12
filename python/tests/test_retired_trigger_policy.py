@@ -57,3 +57,56 @@ def test_engine_slippage_ceiling_is_advisory_and_within_wire_bound():
     # Mirrors exchange-core TRIGGER_SLIPPAGE_CEILING_BPS; encoding does not enforce it.
     assert sdk.ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS == 1_000
     assert sdk.ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS < sdk.MAX_TRIGGER_SLIPPAGE_BPS == 9_999
+
+
+@pytest.mark.parametrize('tag,fields,payload', retired_cases())
+def test_typed_builders_refuse_decoded_retired_actions(tag, fields, payload):
+    builder = sdk.ProposeAdminAction if tag == 30 else sdk.ApproveAdminAction
+    decoded = _native.decode_action(tag, payload)
+    with pytest.raises(ValueError, match='retired'):
+        builder(**decoded)
+
+
+@pytest.mark.parametrize('tag,fields,payload', retired_cases())
+@pytest.mark.parametrize('in_place', [False, True])
+def test_typed_builders_recheck_mutated_actions_before_encoding(tag, fields, payload, in_place):
+    builder = sdk.ProposeAdminAction if tag == 30 else sdk.ApproveAdminAction
+    action = builder(**{**fields, 'action': {'SetMarketStatus': {'market': 7, 'status': 'ReduceOnly'}}})
+    if in_place:
+        action.action.clear()
+        action.action.update(fields['action'])
+    else:
+        action.action = fields['action']
+    with pytest.raises(ValueError, match='retired'):
+        actions.encode_action(action)
+
+
+@pytest.mark.parametrize('action,expected', [
+    ('UnpauseBridge', True),
+    ({'SetMarketStatus': {'market': 7, 'status': 'ReduceOnly'}}, True),
+    ({'SetTriggerMarketConfig': {}}, False),
+    ('SetTriggerMarketConfig', False),
+    ({}, False),
+    ({'UnpauseBridge': {}, 'SetTriggerMarketConfig': {}}, False),
+    ({1: {}}, False),
+    (None, False),
+])
+def test_public_admin_guard(action, expected):
+    assert sdk.is_submittable_admin_action(action) is expected
+
+
+@pytest.mark.parametrize('tag,fields,payload', retired_cases())
+@pytest.mark.parametrize('admin_action', ['UnpauseBridge', {'SetMarketStatus': {'market': 7, 'status': 'ReduceOnly'}}])
+def test_typed_current_admin_actions_still_encode(tag, fields, payload, admin_action):
+    builder = sdk.ProposeAdminAction if tag == 30 else sdk.ApproveAdminAction
+    encoded_tag, encoded = actions.encode_action(builder(**{**fields, 'action': admin_action}))
+    assert encoded_tag == tag
+    assert _native.decode_action(tag, bytes(encoded))['action'] == admin_action
+
+
+@pytest.mark.parametrize('tag,fields,payload', retired_cases())
+@pytest.mark.parametrize('malformed', [None, {}, {'kind': 'SetMarketStatus', 'value': {}}, {1: {}}])
+def test_typed_builders_distinguish_malformed_from_retired(tag, fields, payload, malformed):
+    builder = sdk.ProposeAdminAction if tag == 30 else sdk.ApproveAdminAction
+    with pytest.raises(ValueError, match='kind string or a single-key dict'):
+        builder(**{**fields, 'action': malformed})

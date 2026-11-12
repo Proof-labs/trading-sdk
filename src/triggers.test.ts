@@ -133,7 +133,10 @@ describe("W32-10 position trigger wire contract", () => {
 });
 
 describe("W32-10 trigger read models", () => {
-  it("decodes the engine's positional owner view with exact bigint ids", () => {
+  it.each([
+    [4n, true, 250, 5_000n, 1_000n, 32n],
+    [4n, true, 0, 0n, 0n, 0n],
+  ])("decodes the owner view with legacy policy case %#", (...config) => {
     const encoder = new Encoder({ useBigInt64: true });
     const raw = encoder.encode([
       [
@@ -149,13 +152,21 @@ describe("W32-10 trigger read models", () => {
           [11n, "StopLoss", 95_000n, 75, 11n, "Armed", null],
           null,
         ],
-        [4n, true, 250, 5_000n, 1_000n, 32n],
+        config,
         { Deferred: "MarkStale" },
       ],
     ]);
     // Decode once through msgpack to reproduce the client's number/bigint mix.
     const decoded = new Decoder({ useBigInt64: true }).decode(raw);
     const rows = decodePositionTriggerInfos(decoded);
+    expect(rows[0].marketConfig).toEqual({
+      version: config[0],
+      enabled: config[1],
+      maxTriggerSlippageBps: config[2],
+      maxMarkAgeMs: config[3],
+      maxFuturePublishSkewMs: config[4],
+      maxActiveBrackets: config[5],
+    });
     expect(rows[0].bracket.groupId).toBe(9_007_199_254_740_993n);
     expect(rows[0].bracket.stopLoss?.clientTriggerId).toBe(11n);
     expect(rows[0].availability).toEqual({

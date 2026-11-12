@@ -115,16 +115,15 @@ describe("retired trigger policy", () => {
       ) {
         throw new Error(`Unexpected governance action type: ${action.type}`);
       }
-      const current: Action =
-        action.type === "ProposeAdminAction"
-          ? {
-              ...action,
-              data: { ...action.data, action: { kind: "UnpauseBridge" } },
-            }
-          : {
-              ...action,
-              data: { ...action.data, action: { kind: "UnpauseBridge" } },
-            };
+      // Replacing the retired inner kind makes both governance arms submittable;
+      // TypeScript cannot preserve that correlation across the object spread.
+      const current = {
+        ...action,
+        data: { ...action.data, action: { kind: "UnpauseBridge" } },
+      } as Extract<
+        Action,
+        { type: "ProposeAdminAction" | "ApproveAdminAction" }
+      >;
       expect(sdk.isSubmittableAction(current)).toBe(true);
       // The admin-level guard narrows a bare DecodedAdminAction (approval
       // flows hold one) without a cast.
@@ -132,6 +131,43 @@ describe("retired trigger policy", () => {
       expect(sdk.isSubmittableAdminAction(current.data.action)).toBe(true);
     },
   );
+  describe.each([30, 31])("historical action %i", (tag) => {
+    it.each([
+      "max_trigger_slippage_bps",
+      "max_mark_age_ms",
+      "max_future_publish_skew_ms",
+      "max_active_brackets",
+    ])("decodes enabled policy with zero %s", (field) => {
+      const wasm = getWasm();
+      const fields = {
+        ...(tag === 30 ? vector.input : approvalFields),
+        action: {
+          SetTriggerMarketConfig: {
+            ...vector.input.action.SetTriggerMarketConfig,
+            [field]: 0,
+          },
+        },
+      };
+      const payload = wasm.encode_payload(tag, fields);
+      const message = wasm.signing_message(
+        new Uint8Array(32),
+        tag,
+        1n,
+        payload,
+      );
+      const decoded = sdk.decodeSigningMessage(message);
+      expect(decoded.decodeError).toBeNull();
+      expect(decoded.action).not.toBeNull();
+      expect(decoded.payloadBytes).toEqual(payload);
+      expect(decoded.action).toEqual(
+        fromWasmFields(
+          tag as ActionTypeValue,
+          wasm.decode_payload(tag, payload),
+        ),
+      );
+      expect(sdk.isSubmittableAction(decoded.action!)).toBe(false);
+    });
+  });
   it("allows ordinary current actions through the narrowing guard", () => {
     expect(
       sdk.isSubmittableAction({
