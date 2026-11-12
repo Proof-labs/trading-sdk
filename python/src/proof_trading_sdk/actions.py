@@ -13,8 +13,9 @@ core's `wire` newtypes accept them directly and length-check on decode.
 
 Every action byte is pulled from the core via `get_action_types()`, so
 the `ActionType` map can never drift from the Rust `impl_action_encoding!`
-list. Every action has a dedicated builder; :class:`RawAction` stays as the
-escape hatch for an action newer than this module.
+list. Supported actions have dedicated builders; :class:`RawAction` stays as the
+escape hatch for an action newer than this module. The engine decides whether
+a decoded action is currently admissible.
 """
 
 from __future__ import annotations
@@ -279,7 +280,14 @@ class ClosePosition(Action):
 _U64_MAX = (1 << 64) - 1
 _U32_MAX = (1 << 32) - 1
 _U16_MAX = (1 << 16) - 1
+# Structural wire bound; engine admission separately caps each limb at
+# ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS.
 MAX_TRIGGER_SLIPPAGE_BPS = 9_999
+# Advisory: the engine's per-limb TP/SL slippage ceiling, mirroring
+# TRIGGER_SLIPPAGE_CEILING_BPS in exchange-core src/triggers.rs. Clamp to this
+# when building limbs. Encoding does not enforce it; the engine refuses a limb
+# above it at admission.
+ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS = 1_000
 
 
 def _trigger_uint(name: str, value: int, maximum: int, *, nonzero: bool = False) -> None:
@@ -426,60 +434,6 @@ class CancelPositionTriggers(Action):
             "market": self.market,
             "owner": self.owner,
             "expected_position_epoch": self.expected_position_epoch,
-        }
-
-
-@dataclass
-class SetTriggerMarketConfig:
-    """Typed value for multisig ``AdminAction::SetTriggerMarketConfig`` (tag 5)."""
-
-    market: int
-    enabled: bool
-    max_trigger_slippage_bps: int
-    max_mark_age_ms: int
-    max_future_publish_skew_ms: int
-    max_active_brackets: int
-    expected_current_version: Optional[int] = None
-
-    def __post_init__(self) -> None:
-        _trigger_uint("market", self.market, _U32_MAX)
-        if not isinstance(self.enabled, bool):
-            raise ValueError("enabled must be boolean")
-        if self.expected_current_version is not None:
-            _trigger_uint(
-                "expected_current_version", self.expected_current_version, _U64_MAX
-            )
-        _trigger_uint(
-            "max_trigger_slippage_bps",
-            self.max_trigger_slippage_bps,
-            MAX_TRIGGER_SLIPPAGE_BPS,
-        )
-        for name in (
-            "max_mark_age_ms",
-            "max_future_publish_skew_ms",
-            "max_active_brackets",
-        ):
-            _trigger_uint(name, getattr(self, name), _U64_MAX)
-        if self.enabled and (
-            self.max_trigger_slippage_bps == 0
-            or self.max_mark_age_ms == 0
-            or self.max_future_publish_skew_ms == 0
-            or self.max_active_brackets == 0
-        ):
-            raise ValueError(
-                "enabled trigger config requires non-zero slippage, mark-age, "
-                "future-skew and bracket bounds"
-            )
-
-    def as_wire(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "expected_current_version": self.expected_current_version,
-            "enabled": self.enabled,
-            "max_trigger_slippage_bps": self.max_trigger_slippage_bps,
-            "max_mark_age_ms": self.max_mark_age_ms,
-            "max_future_publish_skew_ms": self.max_future_publish_skew_ms,
-            "max_active_brackets": self.max_active_brackets,
         }
 
 
@@ -1113,11 +1067,41 @@ class ConfigureOraclePolicy:
 # ── Admin-multisig governance ────────────────────────────────────────────────
 #
 # ``action`` is the inner admin action in its externally tagged wire form:
-# ``{"SetTriggerMarketConfig": config.as_wire()}``, ``{"PauseMarket":
+# ``{"SetMarketStatus": {"market": 7, "status": "ReduceOnly"}}``, ``{"PauseMarket":
 # {"market_id": 7}}``, or the bare string ``"UnpauseBridge"`` for the one
 # fieldless arm. The core validates it against the wire enum on encode.
 
 AdminActionWire = dict[str, Any] | str
+
+RETIRED_ADMIN_KINDS = frozenset({"SetTriggerMarketConfig"})
+
+
+def _admin_action_kind(action: AdminActionWire) -> str | None:
+    if isinstance(action, str):
+        kind = action
+    elif isinstance(action, dict) and len(action) == 1:
+        kind = next(iter(action))
+    else:
+        return None
+    return kind if isinstance(kind, str) and kind else None
+
+
+def is_submittable_admin_action(action: AdminActionWire) -> bool:
+    """Exclude retired kinds from typed proposals and approvals.
+
+    This checks the enum tag only, not payload validity or engine admission.
+    Historical decoding and low-level encoding/signing remain available.
+    """
+    kind = _admin_action_kind(action)
+    return kind is not None and kind not in RETIRED_ADMIN_KINDS
+
+
+def _require_submittable_admin_action(action: AdminActionWire) -> None:
+    kind = _admin_action_kind(action)
+    if kind is None:
+        raise ValueError("admin action must be a non-empty kind string or a single-key dict")
+    if kind in RETIRED_ADMIN_KINDS:
+        raise ValueError("retired admin actions cannot be proposed or approved")
 
 
 @dataclass
@@ -1129,7 +1113,12 @@ class ProposeAdminAction(Action):
     registry_version: int
     action: AdminActionWire
 
+    def __post_init__(self) -> None:
+        _require_submittable_admin_action(self.action)
+
     def fields(self) -> dict[str, Any]:
+        # Recheck because builders and their nested dictionaries are mutable.
+        _require_submittable_admin_action(self.action)
         return {
             "proposer": self.proposer,
             "registry_version": self.registry_version,
@@ -1155,7 +1144,12 @@ class ApproveAdminAction(Action):
     action: AdminActionWire
     content_hash: bytes
 
+    def __post_init__(self) -> None:
+        _require_submittable_admin_action(self.action)
+
     def fields(self) -> dict[str, Any]:
+        # Recheck because builders and their nested dictionaries are mutable.
+        _require_submittable_admin_action(self.action)
         return {
             "approver": self.approver,
             "proposal_id": self.proposal_id,
@@ -1223,6 +1217,7 @@ __all__ = [
     "Side",
     "TimeInForce",
     "MAX_TRIGGER_SLIPPAGE_BPS",
+    "ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS",
     "PlaceOrder",
     "MarketOrder",
     "CancelOrder",
@@ -1234,7 +1229,6 @@ __all__ = [
     "TriggerLimb",
     "SetPositionTriggers",
     "CancelPositionTriggers",
-    "SetTriggerMarketConfig",
     "ApproveAgent",
     "RevokeAgent",
     "Deposit",
@@ -1261,6 +1255,7 @@ __all__ = [
     "SubmitOracleObservation",
     "ConfigureOraclePolicy",
     "AdminActionWire",
+    "is_submittable_admin_action",
     "ProposeAdminAction",
     "ApproveAdminAction",
     "RejectAdminAction",

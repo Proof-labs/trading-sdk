@@ -53,6 +53,7 @@ from proof_trading_sdk.actions import (  # noqa: F401
     Side,
     TimeInForce,
     MAX_TRIGGER_SLIPPAGE_BPS,
+    ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS,
     PlaceOrder,
     MarketOrder,
     CancelOrder,
@@ -64,7 +65,6 @@ from proof_trading_sdk.actions import (  # noqa: F401
     TriggerLimb,
     SetPositionTriggers,
     CancelPositionTriggers,
-    SetTriggerMarketConfig,
     ApproveAgent,
     RevokeAgent,
     Deposit,
@@ -92,6 +92,7 @@ from proof_trading_sdk.actions import (  # noqa: F401
     vote_deposit_message,
     CreateMarket,
     AdminActionWire,
+    is_submittable_admin_action,
     ProposeAdminAction,
     ApproveAdminAction,
     RejectAdminAction,
@@ -117,6 +118,10 @@ from proof_trading_sdk.errors import (
 )
 from proof_trading_sdk.nonce import NonceAllocator
 from proof_trading_sdk.config import SdkConfig, load_config
+from proof_trading_sdk.market_stats import (
+    MarketStatsStatus, MarketStatsOpenInterest, MarketStats, MarketStatsResponse, decode_market_stats_response,
+)
+from proof_trading_sdk.oracle_health import OracleMarketHealth, OracleHealth, decode_oracle_health
 from proof_trading_sdk.finalized_account import (
     FinalizedAccountState,
     RawAccountPosition,
@@ -165,13 +170,6 @@ from proof_trading_sdk.evidence import (
     decode_block_evidence_header,
     decode_finalized_read_witness,
     verify_witness,
-)
-from proof_trading_sdk.trigger_config import (
-    TriggerMarketConfig,
-    PendingTriggerMarketConfig,
-    TriggerMarketConfigState,
-    TriggerMarketConfigInfo,
-    decode_trigger_market_config_infos,
 )
 
 from proof_trading_sdk.finalized_accounts import (
@@ -228,6 +226,7 @@ __all__ = [
     "Side",
     "TimeInForce",
     "MAX_TRIGGER_SLIPPAGE_BPS",
+    "ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS",
     "PlaceOrder",
     "MarketOrder",
     "CancelOrder",
@@ -248,7 +247,6 @@ __all__ = [
     "yes_side",
     "SetPositionTriggers",
     "CancelPositionTriggers",
-    "SetTriggerMarketConfig",
     "ApproveAgent",
     "RevokeAgent",
     "Deposit",
@@ -276,6 +274,7 @@ __all__ = [
     "vote_deposit_message",
     "CreateMarket",
     "AdminActionWire",
+    "is_submittable_admin_action",
     "ProposeAdminAction",
     "ApproveAdminAction",
     "RejectAdminAction",
@@ -284,6 +283,8 @@ __all__ = [
     "decode_action",
     "NonceAllocator",
     "ExchangeClient",
+    "MarketStatsStatus", "MarketStatsOpenInterest", "MarketStats", "MarketStatsResponse",
+    "decode_market_stats_response", "OracleMarketHealth", "OracleHealth", "decode_oracle_health",
     "FinalizedAccountState",
     "RawAccountPosition",
     "decode_finalized_account_state",
@@ -306,11 +307,6 @@ __all__ = [
     "TriggerMarketHistoryPage",
     "decode_position_trigger_history_page",
     "decode_trigger_market_history_page",
-    "TriggerMarketConfig",
-    "PendingTriggerMarketConfig",
-    "TriggerMarketConfigState",
-    "TriggerMarketConfigInfo",
-    "decode_trigger_market_config_infos",
     "MarketOpenInterest",
     "MarketsSnapshot",
     "decode_markets_snapshot",
