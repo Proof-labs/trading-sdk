@@ -1087,7 +1087,13 @@ class ExchangeClient:
         return result
 
     def oracle_health(self, market: int | None = None) -> OracleHealth:
-        """Operational feeder facts; absent readiness and market rows remain absent."""
+        """Operational feeder facts; absent readiness and market rows remain absent.
+
+        ``market`` requires api-gateway 10.3.0 or later. An older gateway
+        ignores the filter and returns every market, which raises
+        ``CodecError("oracle health requested market mismatch")``; call
+        without ``market`` against such a gateway.
+        """
         selected = oracle_health_market(market)
         params = None if selected is None else {"market": selected}
         result = decode_oracle_health(_response_object(self._get("/v1/oracle/health", params)))
