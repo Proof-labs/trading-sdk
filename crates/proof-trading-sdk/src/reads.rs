@@ -6,6 +6,7 @@
 //! record is cut to the pinned width before the typed decode. A record
 //! shorter than its struct is left for serde (missing defaults fill in).
 
+use std::collections::HashSet;
 use std::io::Cursor;
 
 use rmpv::Value;
@@ -171,17 +172,18 @@ pub fn decode_order_status(
     Ok(Some(order))
 }
 
-/// A row of the market listing the decoder refused.
+/// A row of the market listing the decoder refused, named by its market id.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefusedMarketRow {
     /// Position of the row in the listing.
     pub index: u32,
-    /// The row's market id, when its first field is one.
-    pub market: Option<u32>,
-    /// Fields in the row (0 when the row is not an array).
+    /// The market the row names (its first field): non-zero, and named by no
+    /// other row of the listing.
+    pub market: u32,
+    /// Fields in the row.
     pub field_count: u32,
-    /// Why the row was refused.
+    /// Why the row was refused (the wire decoder's message).
     pub error: String,
 }
 
@@ -200,61 +202,117 @@ pub struct MarketListingRows {
 /// Decode the market listing one row at a time, as `decode` reads each
 /// row (appended fields ignored, missing trailing fields defaulted). A row
 /// that does not decode (a market kind or mark-source mode this wire does not
-/// know, a value out of range) is reported in `refused_rows` instead of
-/// refusing the whole listing. A payload that is not a list, or that fails the
-/// strict MessagePack preflight anywhere (including in appended fields), is
-/// refused whole.
-pub fn decode_market_listing(bytes: &[u8]) -> Result<MarketListingRows, &'static str> {
-    // The strict preflight every read takes (floats, extensions, duplicate
-    // keys, nesting depth, trailing bytes) runs on the whole payload before
-    // any row is cut, so a malformed value in a field the cut drops is still
-    // refused.
-    crate::msgpack::reject_floats(bytes).map_err(|_| "invalid market listing payload")?;
+/// know, a value out of range) is reported in `refused_rows`, but only when
+/// the market it belongs to is certain: the row is an array whose first field
+/// is a non-zero market id that no other row names. Anything else refuses the
+/// whole listing, as does a payload that is not a list or that fails the
+/// strict MessagePack preflight anywhere (including in appended fields): a
+/// caller can then never lose a market without knowing which one.
+pub fn decode_market_listing(bytes: &[u8]) -> Result<MarketListingRows, String> {
+    let rows = decode_rows::<crate::types::MarketConfig>(
+        bytes,
+        &MARKET_CONFIG,
+        "market listing",
+        "market",
+        |config| config.market,
+    )?;
+    Ok(MarketListingRows {
+        markets: rows.decoded,
+        row_field_counts: rows.field_counts,
+        refused_rows: rows
+            .refused
+            .into_iter()
+            .map(|row| RefusedMarketRow {
+                index: row.index,
+                market: row.id,
+                field_count: row.field_count,
+                error: row.error,
+            })
+            .collect(),
+    })
+}
+
+/// A refused row: its index, the id in its first field, its field count, why.
+struct RefusedRow {
+    index: u32,
+    id: u32,
+    field_count: u32,
+    error: String,
+}
+
+/// A listing decoded row by row.
+struct ListingRows<T> {
+    decoded: Vec<T>,
+    field_counts: Vec<u32>,
+    refused: Vec<RefusedRow>,
+}
+
+/// Decode a list of `shape` records one row at a time. The strict preflight
+/// every read takes (floats, extensions, duplicate keys, nesting depth,
+/// trailing bytes) runs on the whole payload before any row is cut, so a
+/// malformed value in a field the cut drops is still refused. A row that does
+/// not decode is kept only when its first field is a non-zero `u32` id that
+/// no decoded row (`id_of`) and no other refused row has; otherwise the whole
+/// listing is refused. `listing` and `entity` name it in errors.
+fn decode_rows<T: DeserializeOwned>(
+    bytes: &[u8],
+    shape: &Shape,
+    listing: &str,
+    entity: &str,
+    id_of: impl Fn(&T) -> u32,
+) -> Result<ListingRows<T>, String> {
+    crate::msgpack::reject_floats(bytes).map_err(|_| format!("invalid {listing} payload"))?;
     let raw =
         rmpv::decode::read_value_with_max_depth(&mut Cursor::new(bytes), crate::msgpack::MAX_DEPTH)
-            .map_err(|_| "invalid market listing payload")?;
+            .map_err(|_| format!("invalid {listing} payload"))?;
     let Value::Array(rows) = raw else {
-        return Err("market listing is not a list");
+        return Err(format!("{listing} is not a list"));
     };
-    let mut listing = MarketListingRows {
-        markets: Vec::with_capacity(rows.len()),
-        row_field_counts: Vec::with_capacity(rows.len()),
-        refused_rows: Vec::new(),
+    let mut listing_rows = ListingRows {
+        decoded: Vec::with_capacity(rows.len()),
+        field_counts: Vec::with_capacity(rows.len()),
+        refused: Vec::new(),
     };
-    for (index, mut row) in rows.into_iter().enumerate() {
-        let field_count = row.as_array().map_or(0, Vec::len);
-        let field_count = u32::try_from(field_count).unwrap_or(u32::MAX);
-        let market = row
-            .as_array()
-            .and_then(|fields| fields.first())
-            .and_then(Value::as_u64)
-            .and_then(|id| u32::try_from(id).ok());
-        let decoded = if row.is_array() {
-            cut(&mut row, &MARKET_CONFIG);
-            let mut row_bytes = Vec::new();
-            rmpv::encode::write_value(&mut row_bytes, &row)
-                .map_err(|e| e.to_string())
-                .and_then(|()| {
-                    rmp_serde::from_slice::<crate::types::MarketConfig>(&row_bytes)
-                        .map_err(|e| e.to_string())
-                })
-        } else {
-            Err("row is not an array".to_owned())
+    for (index, row) in rows.into_iter().enumerate() {
+        let index = u32::try_from(index).unwrap_or(u32::MAX);
+        let Value::Array(fields) = &row else {
+            return Err(format!("{listing} row {index} is not an array"));
         };
-        match decoded {
-            Ok(config) => {
-                listing.markets.push(config);
-                listing.row_field_counts.push(field_count);
+        let field_count = u32::try_from(fields.len()).unwrap_or(u32::MAX);
+        let id = fields
+            .first()
+            .and_then(Value::as_u64)
+            .and_then(|id| u32::try_from(id).ok())
+            .filter(|id| *id != 0);
+        match decode_value::<T>(row, shape) {
+            Ok(value) => {
+                listing_rows.decoded.push(value);
+                listing_rows.field_counts.push(field_count);
             }
-            Err(error) => listing.refused_rows.push(RefusedMarketRow {
-                index: u32::try_from(index).unwrap_or(u32::MAX),
-                market,
-                field_count,
-                error,
-            }),
+            Err(error) => {
+                let Some(id) = id else {
+                    return Err(format!("{listing} row {index} names no {entity}"));
+                };
+                listing_rows.refused.push(RefusedRow {
+                    index,
+                    id,
+                    field_count,
+                    error: error.to_string(),
+                });
+            }
         }
     }
-    Ok(listing)
+    let decoded_ids: HashSet<u32> = listing_rows.decoded.iter().map(&id_of).collect();
+    let mut refused_ids = HashSet::new();
+    for row in &listing_rows.refused {
+        if decoded_ids.contains(&row.id) || !refused_ids.insert(row.id) {
+            return Err(format!(
+                "{listing} row {} names {entity} {}, which another row also names",
+                row.index, row.id
+            ));
+        }
+    }
+    Ok(listing_rows)
 }
 
 /// Whether a raw owner is exactly 20 bytes, as bin or byte array.
@@ -278,10 +336,19 @@ pub fn decode<T: DeserializeOwned>(
     bytes: &[u8],
     shape: &Shape,
 ) -> Result<T, rmp_serde::decode::Error> {
-    let mut value = rmpv::decode::read_value(&mut Cursor::new(bytes))
+    let value = rmpv::decode::read_value(&mut Cursor::new(bytes))
         .map_err(|e| rmp_serde::decode::Error::Uncategorized(e.to_string()))?;
+    decode_value(value, shape)
+}
+
+/// Decode one MessagePack `value` as `T`, first cutting every record `shape`
+/// names to its pinned width (`decode` for a value already read).
+fn decode_value<T: DeserializeOwned>(
+    mut value: Value,
+    shape: &Shape,
+) -> Result<T, rmp_serde::decode::Error> {
     cut(&mut value, shape);
-    let mut cut_bytes = Vec::with_capacity(bytes.len());
+    let mut cut_bytes = Vec::new();
     rmpv::encode::write_value(&mut cut_bytes, &value)
         .map_err(|e| rmp_serde::decode::Error::Uncategorized(e.to_string()))?;
     rmp_serde::from_slice(&cut_bytes)

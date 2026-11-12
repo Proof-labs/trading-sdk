@@ -82,6 +82,7 @@ describe("market listing with row field counts", () => {
 
   it("reports a row it cannot decode and keeps the others", async () => {
     const shifted = row().filter((_, index) => index !== 12);
+    shifted[0] = 5;
     const spot = row();
     spot[0] = 7;
     spot[7] = "Spot";
@@ -98,11 +99,31 @@ describe("market listing with row field counts", () => {
         market,
         fieldCount,
       })),
-    ).toEqual([
-      { index: 0, market: 1, fieldCount: 23 },
+    ).toStrictEqual([
+      { index: 0, market: 5, fieldCount: 23 },
       { index: 2, market: 7, fieldCount: 24 },
     ]);
     expect(listing.refusedRows[1].error).toContain("Spot");
+  });
+
+  it("refuses the whole listing for a row it cannot tie to a market of its own", async () => {
+    const spotAs = (market: unknown): unknown[] => {
+      const spot = row();
+      spot[0] = market;
+      spot[7] = "Spot";
+      return spot;
+    };
+    for (const refused of [
+      { market: 9 },
+      "x",
+      spotAs(0),
+      spotAs("9"),
+      spotAs(1),
+    ]) {
+      await expect(
+        clientFor([row(), refused]).client.queryMarketListing(),
+      ).rejects.toThrow("Markets decode: market listing row 1");
+    }
   });
 
   it("refuses a missing envelope and a payload that is not a list", async () => {
@@ -119,30 +140,5 @@ describe("market listing with row field counts", () => {
       ),
     });
     await expect(client.queryMarketListing()).rejects.toThrow("Markets decode");
-  });
-
-  it.each([
-    ["an object row", {}],
-    ["an object row with a matching length property", { length: 24 }],
-  ])("reports %s as refused instead of decoding it", async (_label, extra) => {
-    // The Rust decoder would accept named fields and default the missing tail.
-    const namedRow = {
-      market: 1,
-      im_bps: 3334,
-      mm_bps: 1667,
-      taker_fee_bps: 5,
-      maker_fee_bps: 2,
-      funding_interval_ms: 3_600_000,
-      max_funding_rate_bps: 400,
-      ...extra,
-    };
-    const listing = await clientFor([
-      row(),
-      namedRow,
-    ]).client.queryMarketListing();
-    expect(listing.markets).toHaveLength(1);
-    expect(listing.refusedRows).toEqual([
-      { index: 1, fieldCount: 0, error: "row is not an array" },
-    ]);
   });
 });

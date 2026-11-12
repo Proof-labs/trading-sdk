@@ -115,6 +115,7 @@ import type {
   HistoryResolution,
   MarketConfig,
   MarketListing,
+  RefusedMarketRow,
   OpenOrder,
   AdlQueueEntry,
   Orderbook,
@@ -1585,8 +1586,10 @@ export class ExchangeClient {
   /** The market listing decoded row by row (`MarketListing`): the rows that
    *  decode as `queryMarkets` decodes them, each one's field count (so a
    *  caller can refuse a layout the pinned wire does not have), and the rows
-   *  that do not decode, reported instead of refusing the whole listing. A
-   *  missing envelope or a payload that is not a list is a refusal. */
+   *  that do not decode, each named by its market, reported instead of
+   *  refusing the whole listing. A row that cannot be tied to a market of its
+   *  own, a missing envelope, or a payload that is not a list or fails the
+   *  strict preflight is a refusal. */
   async queryMarketListing(): Promise<MarketListing> {
     const json = await this.apiJson(`${this.readBaseUrl}/v1/markets`);
     const bytes = fromBase64(requireEncodedData(json, "/v1/markets"));
@@ -1595,12 +1598,7 @@ export class ExchangeClient {
     let decoded: {
       markets: unknown[];
       rowFieldCounts: number[];
-      refusedRows: {
-        index: number;
-        market?: number;
-        fieldCount: number;
-        error: string;
-      }[];
+      refusedRows: RefusedMarketRow[];
     };
     try {
       decoded = wasm.decode_market_listing(bytes) as typeof decoded;
@@ -1615,9 +1613,7 @@ export class ExchangeClient {
       pinnedFieldCount: wasm.market_config_fields(),
       refusedRows: decoded.refusedRows.map((row) => ({
         index: row.index,
-        ...(row.market === undefined || row.market === null
-          ? {}
-          : { market: row.market }),
+        market: row.market,
         fieldCount: row.fieldCount,
         error: row.error,
       })),

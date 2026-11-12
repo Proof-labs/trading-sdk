@@ -2876,7 +2876,8 @@ export type MarkSourceMode = "OracleOnly" | "Median";
  *  after the pinned width and fills missing trailing fields with their
  *  defaults, so a layout change at the end of a row decodes; only its field
  *  count shows it. A row that does not decode is reported in `refusedRows`
- *  instead of refusing the whole listing. */
+ *  instead of refusing the whole listing, when it names a market of its own;
+ *  any other undecodable row refuses the whole listing. */
 export interface MarketListing {
   /** The rows that decode as the pinned `MarketConfig`, in listing order. */
   markets: MarketConfig[];
@@ -2885,7 +2886,8 @@ export interface MarketListing {
   /** Fields in the pinned wire `MarketConfig`. */
   pinnedFieldCount: number;
   /** The rows that do not decode (a market kind or mark-source mode the
-   *  pinned wire does not know, a value out of range), in listing order. */
+   *  pinned wire does not know, a value out of range), in listing order,
+   *  each named by its market. */
   refusedRows: RefusedMarketRow[];
 }
 
@@ -2893,11 +2895,13 @@ export interface MarketListing {
 export interface RefusedMarketRow {
   /** Position of the row in the listing. */
   index: number;
-  /** The row's market id, when its first field is one. */
-  market?: number;
-  /** Fields in the row (0 when the row is not an array). */
+  /** The market the row names (its first field): non-zero, and named by no
+   *  other row. A row that cannot be tied to a market refuses the whole
+   *  listing instead, so a market is never lost without being named here. */
+  market: number;
+  /** Fields in the row. */
   fieldCount: number;
-  /** Why the row was refused. */
+  /** Why the row was refused (the wire decoder's message). */
   error: string;
 }
 

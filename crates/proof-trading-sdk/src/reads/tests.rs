@@ -315,13 +315,7 @@ fn a_market_listing_keeps_the_rows_it_decodes_and_reports_the_rest() {
     fields(&mut wrong_type)[0] = Value::from(8);
     fields(&mut wrong_type)[1] = Value::from("3334");
     let longer = appended(&good);
-    let listing = Value::Array(vec![
-        good.clone(),
-        unknown_kind,
-        Value::from("not a row"),
-        longer,
-        wrong_type,
-    ]);
+    let listing = Value::Array(vec![good.clone(), unknown_kind, longer, wrong_type]);
 
     let decoded = decode_market_listing(&bytes(&listing)).unwrap();
     let expected: MarketConfig = rmp_serde::from_slice(&bytes(&good)).unwrap();
@@ -333,16 +327,58 @@ fn a_market_listing_keeps_the_rows_it_decodes_and_reports_the_rest() {
         );
     }
     assert_eq!(decoded.row_field_counts, vec![24, 25]);
-    let refused: Vec<(u32, Option<u32>, u32)> = decoded
+    let refused: Vec<(u32, u32, u32)> = decoded
         .refused_rows
         .iter()
         .map(|row| (row.index, row.market, row.field_count))
         .collect();
-    assert_eq!(
-        refused,
-        vec![(1, Some(7), 24), (2, None, 0), (4, Some(8), 24)]
-    );
+    assert_eq!(refused, vec![(1, 7, 24), (3, 8, 24)]);
     assert!(decoded.refused_rows[0].error.contains("Spot"));
+}
+
+#[test]
+fn a_market_listing_row_that_names_no_market_or_a_named_one_is_refused_whole() {
+    // Each listing pairs a good row (market 1) with a row the decoder refuses
+    // that cannot be tied to one market of its own: reporting it would let a
+    // caller lose a market without knowing which.
+    let good = value(MARKET);
+    let refused_with = |first: Value| {
+        let mut row = good.clone();
+        fields(&mut row)[0] = first;
+        fields(&mut row)[7] = Value::from("Spot");
+        row
+    };
+    let cases = [
+        ("not an array", Value::from("not a row")),
+        (
+            "an object row",
+            Value::Map(vec![(Value::from("market"), Value::from(9))]),
+        ),
+        ("market zero", refused_with(Value::from(0))),
+        ("a string id", refused_with(Value::from("9"))),
+        (
+            "an id above u32",
+            refused_with(Value::from(u64::from(u32::MAX) + 1)),
+        ),
+        ("a decoded market's id", refused_with(Value::from(1))),
+    ];
+    for (label, row) in cases {
+        let listing = Value::Array(vec![good.clone(), row]);
+        assert!(
+            decode_market_listing(&bytes(&listing)).is_err(),
+            "{label} must refuse the listing"
+        );
+    }
+    let twice = Value::Array(vec![
+        good.clone(),
+        refused_with(Value::from(9)),
+        refused_with(Value::from(9)),
+    ]);
+    let error = decode_market_listing(&bytes(&twice)).unwrap_err();
+    assert!(error.contains("market 9"), "{error}");
+    let named = decode_market_listing(&bytes(&Value::Array(vec![good.clone(), Value::from("x")])))
+        .unwrap_err();
+    assert_eq!(named, "market listing row 1 is not an array");
 }
 
 #[test]

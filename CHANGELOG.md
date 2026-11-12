@@ -18,9 +18,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **TypeScript `MarketListing.refusedRows`** and the Rust core's
   `reads::decode_market_listing` (WASM `decode_market_listing`): the market
   listing decoded row by row. Each row the decoder refuses (a market kind or
-  mark-source mode the pinned wire does not know, a value out of range, a row
-  that is not an array) is reported with its listing index, its market id when
-  the first field is one, its field count and the decode error (#447).
+  mark-source mode the pinned wire does not know, a value out of range) is
+  reported with its listing index, its market id, its field count and the
+  decode error, when the row names a non-zero market id no other row names. A
+  row that cannot be tied to a market of its own (not an array, no valid id,
+  an id another row names) refuses the whole listing, so a market is never
+  lost without being named (#447).
 
 - Export the `SubmitOracleObservation` and `ConfigureOraclePolicy` payload
   types from the TypeScript package root for typed operator integrations
@@ -117,10 +120,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
   placement. Existing TP/SL placement, cancellation and history APIs remain.
 
-- **TypeScript `queryMarketListing()` no longer refuses the whole listing for
-  one row it cannot decode** (#447). It returns the rows that decode in
-  `markets` and the others in `refusedRows`; `rowFieldCounts` has one entry
-  per decoded market. A caller that relied on the throw to stop on an unknown
+- **Breaking (TypeScript): `queryMarketListing()` no longer refuses the whole
+  listing for one row it cannot decode** (#447). It returns the rows that
+  decode in `markets` and the others, each named by its market, in
+  `refusedRows`; `rowFieldCounts` has one entry per decoded market.
+  `MarketListing` gains the required `refusedRows`, so a hand-built
+  `MarketListing` (a mock or fixture) must add it. A caller that relied on the throw to stop on an unknown
   market must now check `refusedRows`. A missing envelope or a payload that is
   not a list still throws, as does a payload that fails the strict
   MessagePack preflight anywhere, appended fields included (floats,

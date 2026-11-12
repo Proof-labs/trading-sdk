@@ -156,10 +156,11 @@ pub fn decode_order_status(bytes: &[u8], order_id: u64) -> Result<JsValue, JsErr
 
 /// Decode the market listing row by row: the rows that decode, each one's
 /// field count, and the rows that do not (index, market id, field count,
-/// error). A payload that is not a list is refused.
+/// error). A row that names no market, or one another row names, refuses the
+/// whole listing, as does a payload that is not a list or fails the preflight.
 #[wasm_bindgen]
 pub fn decode_market_listing(bytes: &[u8]) -> Result<JsValue, JsError> {
-    let listing = reads::decode_market_listing(bytes).map_err(JsError::new)?;
+    let listing = reads::decode_market_listing(bytes).map_err(|e| JsError::new(&e))?;
     to_bigint_js(&listing)
 }
 
