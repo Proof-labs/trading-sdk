@@ -118,12 +118,12 @@ describe("witnessed insurance fund directory and positions", () => {
 
   it("keeps unpriced and unsupported positions distinct from an empty fund", () => {
     for (const notional of [
-      // TODO: add "thin_book" once the proof-wire pin carries ThinBook; the
-      // pinned decoder reads it as "unknown" until then.
-      ...["stale", "guard_unset", "no_verdict", "no_mark"].map((reason) => ({
-        status: "unpriced",
-        reason,
-      })),
+      ...["stale", "guard_unset", "no_verdict", "no_mark", "thin_book"].map(
+        (reason) => ({
+          status: "unpriced",
+          reason,
+        }),
+      ),
       { status: "unsupported_binary" },
     ]) {
       const result = decodeFinalizedInsuranceFund(
@@ -136,6 +136,32 @@ describe("witnessed insurance fund directory and positions", () => {
       decodeFinalizedInsuranceFund(envelope({ ...state(), positions: [] }), 7)
         .positions,
     ).toEqual([]);
+  });
+
+  it("identifies pool and witness binding failures precisely", () => {
+    for (const [value, field] of [
+      [{ ...state(), fund: fund(8) }, "insurance pool binding"],
+      [
+        { ...state(), finalized_height: height - 1n },
+        "insurance fund witness mismatch",
+      ],
+      [
+        { ...state(), finalized_time_ms: time + 1n },
+        "insurance fund witness mismatch",
+      ],
+    ] as const) {
+      expect(() =>
+        decodeFinalizedInsuranceFund(envelope(value), 7),
+      ).toThrowError(expect.objectContaining({ kind: "binding", field }));
+    }
+    expect(() =>
+      decodeFinalizedInsuranceFund(envelope(state()), 256),
+    ).toThrowError(
+      expect.objectContaining({
+        kind: "configuration",
+        field: "insurance pool",
+      }),
+    );
   });
 
   it("retains balances and positions across future wire variants without inventing valuations", () => {
@@ -294,7 +320,10 @@ describe("witnessed insurance fund directory and positions", () => {
     for (const pool of [-1, 256, 0.5, NaN])
       await expect(
         client.reads().finalized.insuranceFund(pool),
-      ).rejects.toThrow();
+      ).rejects.toMatchObject({
+        kind: "configuration",
+        field: "insurance pool",
+      });
     const controller = new AbortController();
     controller.abort();
     await expect(

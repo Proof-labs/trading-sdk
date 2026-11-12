@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- Fund directory and position checks are shared in Rust before WASM adaptation;
+  invalid caller pool IDs report configuration errors, future display variants
+  remain explicitly unknown, and fund reads use the query transport budget.
+
 ### Changed
 
 - **Wire compatibility boundary:** pin canonical wire `2a707bc` (engine

@@ -12,7 +12,9 @@ import {
   marketId,
   readObject,
   type HexAddress,
+  type MarketId,
 } from "./read-values.js";
+import { bytesToHex } from "./crypto.js";
 import { getWasm, ready } from "./wasm-loader.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 
@@ -45,7 +47,7 @@ export type InsurancePositionNotional =
   | { status: "unsupported_binary" }
   | { status: "unknown" };
 export interface InsuranceFundPosition {
-  market: number;
+  market: MarketId;
   side: "buy" | "sell" | "unknown";
   size: bigint;
   szDecimals: number;
@@ -69,14 +71,17 @@ export interface FinalizedInsuranceFund {
   witness: FinalizedReadWitness;
 }
 
-function poolId(value: unknown): number {
+/** Mirrors proof_wire::query_v2::INSURANCE_FUND_POSITIONS_LIMIT. Display preview only. */
+const INSURANCE_FUND_POSITIONS_LIMIT = 100;
+
+function poolId(value: unknown, callerInput = false): number {
   if (
     typeof value !== "number" ||
     !Number.isInteger(value) ||
     value < 0 ||
     value > 255
   )
-    invalidRead("insurance pool");
+    invalidRead("insurance pool", callerInput ? "configuration" : "malformed");
   return value;
 }
 
@@ -95,11 +100,7 @@ function ledger(value: unknown): InsuranceFundLedger {
     invalidRead("insurance net cash", "binding");
   return {
     poolId: poolId(raw.pool_id),
-    owner: hexAddress(
-      Array.from(raw.owner, (byte) => byte.toString(16).padStart(2, "0")).join(
-        "",
-      ),
-    ),
+    owner: hexAddress(bytesToHex(raw.owner)),
     registered: raw.registered,
     storedLedger: raw.stored_ledger,
     cash: raw.cash,
@@ -121,11 +122,7 @@ function position(value: unknown): InsuranceFundPosition {
       reason?: string;
     };
   };
-  if (
-    (raw.side !== "buy" && raw.side !== "sell" && raw.side !== "unknown") ||
-    raw.size === 0n ||
-    raw.sz_decimals > 37
-  )
+  if (typeof raw.side !== "string" || raw.size === 0n || raw.sz_decimals > 37)
     invalidRead("insurance position");
   let notional: InsurancePositionNotional;
   if (raw.notional.status === "priced") {
@@ -151,24 +148,26 @@ function position(value: unknown): InsuranceFundPosition {
     };
   } else if (raw.notional.status === "unpriced") {
     const reason = raw.notional.reason;
-    if (
-      reason !== "stale" &&
-      reason !== "guard_unset" &&
-      reason !== "no_verdict" &&
-      reason !== "no_mark" &&
-      reason !== "thin_book" &&
-      reason !== "unknown"
-    )
-      invalidRead("insurance unpriced reason");
-    notional = { status: "unpriced", reason };
+    if (typeof reason !== "string") invalidRead("insurance unpriced reason");
+    notional = {
+      status: "unpriced",
+      reason:
+        reason === "stale" ||
+        reason === "guard_unset" ||
+        reason === "no_verdict" ||
+        reason === "no_mark" ||
+        reason === "thin_book"
+          ? reason
+          : "unknown",
+    };
   } else if (raw.notional.status === "unsupported_binary") {
     notional = { status: "unsupported_binary" };
-  } else if (raw.notional.status === "unknown") {
+  } else if (typeof raw.notional.status === "string") {
     notional = { status: "unknown" };
   } else invalidRead("insurance notional status");
   return {
     market: marketId(raw.market),
-    side: raw.side,
+    side: raw.side === "buy" || raw.side === "sell" ? raw.side : "unknown",
     size: raw.size,
     szDecimals: raw.sz_decimals,
     notional,
@@ -229,7 +228,7 @@ export function decodeFinalizedInsuranceFund(
   value: unknown,
   pool: number,
 ): FinalizedInsuranceFund {
-  poolId(pool);
+  poolId(pool, true);
   const { raw, ...bound } = decoded(
     value,
     getWasm().ReadKind.InsuranceFundState,
@@ -238,9 +237,10 @@ export function decodeFinalizedInsuranceFund(
   if (fund.poolId !== pool) invalidRead("insurance pool binding", "binding");
   if (
     !Array.isArray(raw.positions) ||
-    raw.positions.length > 100 ||
+    raw.positions.length > INSURANCE_FUND_POSITIONS_LIMIT ||
     typeof raw.positions_complete !== "boolean" ||
-    (!raw.positions_complete && raw.positions.length !== 100)
+    (!raw.positions_complete &&
+      raw.positions.length !== INSURANCE_FUND_POSITIONS_LIMIT)
   )
     invalidRead("insurance positions completeness");
   let previous = 0;
@@ -268,7 +268,7 @@ export async function readFinalizedInsuranceFunds(
       `${gateway.replace(/\/+$/, "")}/v2/insurance-funds?witness=1`,
       transport,
       { ...options },
-      { purpose: "account", prepare: ready, maxBytes: 512 * 1024 },
+      { purpose: "query", prepare: ready, maxBytes: 512 * 1024 },
     ),
   );
 }
@@ -279,13 +279,13 @@ export async function readFinalizedInsuranceFund(
   options: BoundedReadOptions,
   transport: ExchangeHttpTransport,
 ): Promise<FinalizedInsuranceFund> {
-  poolId(pool);
+  poolId(pool, true);
   return decodeFinalizedInsuranceFund(
     await boundedGatewayJson(
       `${gateway.replace(/\/+$/, "")}/v2/insurance-fund/${pool}?witness=1`,
       transport,
       { ...options },
-      { purpose: "account", prepare: ready, maxBytes: 512 * 1024 },
+      { purpose: "query", prepare: ready, maxBytes: 512 * 1024 },
     ),
     pool,
   );

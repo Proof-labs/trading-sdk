@@ -323,7 +323,12 @@ fn a_market_listing_keeps_the_rows_it_decodes_and_reports_the_rest() {
     let mut wrong_type = good.clone();
     fields(&mut wrong_type)[0] = Value::from(8);
     fields(&mut wrong_type)[1] = Value::from("3334");
-    let longer = appended(&good);
+    // Append beyond the current canonical shape, not into a newly added field
+    // of the historical 24-field fixture.
+    let current: MarketConfig = rmp_serde::from_slice(&bytes(&good)).unwrap();
+    let current =
+        rmpv::decode::read_value(&mut Cursor::new(rmp_serde::to_vec(&current).unwrap())).unwrap();
+    let longer = appended(&current);
     let listing = Value::Array(vec![good.clone(), unknown_kind, longer, wrong_type]);
 
     let decoded = decode_market_listing(&bytes(&listing)).unwrap();
@@ -335,7 +340,7 @@ fn a_market_listing_keeps_the_rows_it_decodes_and_reports_the_rest() {
             rmp_serde::to_vec(&expected).unwrap()
         );
     }
-    assert_eq!(decoded.row_field_counts, vec![24, 25]);
+    assert_eq!(decoded.row_field_counts, vec![24, 28]);
     let refused: Vec<(u32, u32, u32)> = decoded
         .refused_rows
         .iter()
