@@ -24,9 +24,11 @@ from proof_trading_sdk._native import (
 
 # ── Convenience aliases (match the TS SDK naming) ────────────────────────────
 
+
 def owner_to_hex(owner: bytes) -> str:
     """20-byte owner bytes → 40-char hex string (no ``0x``)."""
     return owner.hex()
+
 
 def hex_to_owner(hex_str: str) -> bytes:
     """Hex string (with or without ``0x``) → 20-byte owner bytes."""
@@ -117,7 +119,6 @@ from proof_trading_sdk.market_stats import (
     MarketStatsStatus, MarketStatsOpenInterest, MarketStats, MarketStatsResponse, decode_market_stats_response,
 )
 from proof_trading_sdk.oracle_health import OracleMarketHealth, OracleHealth, decode_oracle_health
-
 from proof_trading_sdk.finalized_account import (
     FinalizedAccountState,
     RawAccountPosition,
@@ -202,6 +203,7 @@ __all__ = [
     "decode_finalized_recent_nonces",
     "decode_finalized_open_orders",
 
+
     "TransactionEvidenceAttribute", "TransactionEvidenceEvent", "TransactionEvidence",
     "BlockTransactionEvidence", "BlockResultsEvidence", "BlockResultsRange", "BlockResultsWindow",
     "CandleHistoryPage",
@@ -284,7 +286,6 @@ __all__ = [
     "ExchangeClient",
     "MarketStatsStatus", "MarketStatsOpenInterest", "MarketStats", "MarketStatsResponse",
     "decode_market_stats_response", "OracleMarketHealth", "OracleHealth", "decode_oracle_health",
-
     "FinalizedAccountState",
     "RawAccountPosition",
     "decode_finalized_account_state",

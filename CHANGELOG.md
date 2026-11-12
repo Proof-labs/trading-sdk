@@ -50,7 +50,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `margin_offset_pair_configured` attributes against wire-generated vectors.
   Rust re-exports the margin-offset types. Conformance vectors and content-hash
   constants pin policy encoding across TypeScript, Rust and Python.
-
 - Python typed `authorities()` and `liquidation_config()` reads, backed by
   canonical Rust wire types with strict record/address/range checks. Failed
   reads raise rather than synthesize empty authorities or default configuration.
