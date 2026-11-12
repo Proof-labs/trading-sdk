@@ -122,7 +122,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `markets` and the others in `refusedRows`; `rowFieldCounts` has one entry
   per decoded market. A caller that relied on the throw to stop on an unknown
   market must now check `refusedRows`. A missing envelope or a payload that is
-  not a list still throws. `queryMarkets()` is unchanged.
+  not a list still throws, as does a payload that fails the strict
+  MessagePack preflight anywhere, appended fields included (floats,
+  extensions, duplicate keys, nesting deeper than 32, trailing bytes).
+  `queryMarkets()` is unchanged.
 
 - **Python `open_orders`** preserves all 14 resting-order fields through the
   shared Rust decoder (released for TypeScript in 12.0.0).

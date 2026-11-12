@@ -201,14 +201,18 @@ pub struct MarketListingRows {
 /// row (appended fields ignored, missing trailing fields defaulted). A row
 /// that does not decode (a market kind or mark-source mode this wire does not
 /// know, a value out of range) is reported in `refused_rows` instead of
-/// refusing the whole listing. A payload that is not a list is refused.
+/// refusing the whole listing. A payload that is not a list, or that fails the
+/// strict MessagePack preflight anywhere (including in appended fields), is
+/// refused whole.
 pub fn decode_market_listing(bytes: &[u8]) -> Result<MarketListingRows, &'static str> {
-    let mut cursor = Cursor::new(bytes);
+    // The strict preflight every read takes (floats, extensions, duplicate
+    // keys, nesting depth, trailing bytes) runs on the whole payload before
+    // any row is cut, so a malformed value in a field the cut drops is still
+    // refused.
+    crate::msgpack::reject_floats(bytes).map_err(|_| "invalid market listing payload")?;
     let raw =
-        rmpv::decode::read_value(&mut cursor).map_err(|_| "invalid market listing payload")?;
-    if usize::try_from(cursor.position()).ok() != Some(bytes.len()) {
-        return Err("invalid market listing payload");
-    }
+        rmpv::decode::read_value_with_max_depth(&mut Cursor::new(bytes), crate::msgpack::MAX_DEPTH)
+            .map_err(|_| "invalid market listing payload")?;
     let Value::Array(rows) = raw else {
         return Err("market listing is not a list");
     };

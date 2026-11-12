@@ -355,3 +355,37 @@ fn a_market_listing_that_is_not_a_list_is_refused_whole() {
     let empty = decode_market_listing(&bytes(&Value::Array(vec![]))).unwrap();
     assert!(empty.markets.is_empty() && empty.refused_rows.is_empty());
 }
+
+#[test]
+fn a_market_listing_refuses_malformed_values_even_in_appended_fields() {
+    // A float or a duplicate-key map past the pinned width would be cut away
+    // by the row decode; the strict preflight refuses the listing first.
+    let mut float_row = appended(&value(MARKET));
+    fields(&mut float_row).push(Value::F64(1.5));
+    assert!(decode_market_listing(&bytes(&Value::Array(vec![float_row]))).is_err());
+
+    let mut tier_row = value(MARKET);
+    let tier = vec![
+        Value::from(0),
+        Value::from(-7),
+        Value::from(5),
+        Value::F32(0.5),
+    ];
+    fields(&mut tier_row)[13] = Value::Array(vec![Value::Array(tier)]);
+    assert!(decode_market_listing(&bytes(&Value::Array(vec![tier_row]))).is_err());
+
+    let mut map_row = appended(&value(MARKET));
+    fields(&mut map_row).push(Value::Map(vec![
+        (Value::from("k"), Value::from(1)),
+        (Value::from("k"), Value::from(2)),
+    ]));
+    assert!(decode_market_listing(&bytes(&Value::Array(vec![map_row]))).is_err());
+
+    let mut deep = Value::from(0);
+    for _ in 0..=crate::msgpack::MAX_DEPTH {
+        deep = Value::Array(vec![deep]);
+    }
+    let mut deep_row = appended(&value(MARKET));
+    fields(&mut deep_row).push(deep);
+    assert!(decode_market_listing(&bytes(&Value::Array(vec![deep_row]))).is_err());
+}
