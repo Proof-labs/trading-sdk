@@ -134,6 +134,43 @@ pub fn decode_open_orders(
     Ok(orders)
 }
 
+pub const ORDER_STATUS_ID_MISMATCH: &str = "order status answered another order";
+
+/// The most bytes one order-status reply may hold: one order row.
+pub const MAX_ORDER_STATUS_BYTES: usize = 4 * 1024;
+
+/// Decode one order looked up by id (`/info` `orderStatus`) using the canonical
+/// wire type: `None` when the engine answers nil (it holds no such order),
+/// else the order as it rests, bound to the requested `order_id` (an answer
+/// naming another order is refused). Legacy trailing fields use the wire's
+/// serde defaults; appended future fields are ignored. The order's owner is
+/// validated as 20 bytes but bound to no one: the request names an order id,
+/// not an owner, so the caller checks whose order it is.
+pub fn decode_order_status(
+    bytes: &[u8],
+    order_id: u64,
+) -> Result<Option<crate::types::Order>, &'static str> {
+    if bytes.len() > MAX_ORDER_STATUS_BYTES {
+        return Err("order status payload is too large");
+    }
+    crate::msgpack::reject_floats(bytes).map_err(|_| "invalid order status payload")?;
+    let raw = rmpv::decode::read_value(&mut Cursor::new(bytes))
+        .map_err(|_| "invalid order status payload")?;
+    if raw.is_nil() {
+        return Ok(None);
+    }
+    let raw_owner = raw.as_array().and_then(|fields| fields.get(2));
+    if !raw_owner.is_some_and(valid_owner) {
+        return Err("invalid order status owner bytes");
+    }
+    let order: crate::types::Order =
+        decode(bytes, &ORDER).map_err(|_| "invalid order status payload")?;
+    if order.id != order_id {
+        return Err(ORDER_STATUS_ID_MISMATCH);
+    }
+    Ok(Some(order))
+}
+
 /// Whether a raw owner is exactly 20 bytes, as bin or byte array.
 pub(crate) fn valid_owner(value: &Value) -> bool {
     match value {
