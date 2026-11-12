@@ -452,6 +452,20 @@ def test_position_triggers_refuse_a_malformed_outcome_reason(bad):
         ).position_triggers(owner)
 
 
+@pytest.mark.parametrize("zero_index", [2, 3, 4, 5])
+def test_position_triggers_decode_an_enabled_legacy_config_with_a_zero_bound(
+    zero_index,
+):
+    row = _trigger_row_with_reason("X")
+    row[1][zero_index] = 0
+    rows = _client(lambda _request: _info_response([row])).position_triggers(
+        "ab" * 20
+    )
+    config = rows[0]["market_config"]
+    assert config["enabled"] is True
+    assert list(config.values())[zero_index] == 0
+
+
 def test_position_triggers_return_state_and_availability_verbatim():
     row = _trigger_row_with_reason("X")
     row[0][8][5] = "Snoozed"

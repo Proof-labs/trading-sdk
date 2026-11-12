@@ -5,6 +5,7 @@ edition = "2021"
 license = "Apache-2.0"
 description = "Rust core for the Proof trading SDK: MessagePack codec, Ed25519 signing, and wire types. Hub of the wheel-and-spokes SDK."
 repository = "https://github.com/Proof-labs/trading-sdk"
+readme = "README.md"
 
 [features]
 default = []

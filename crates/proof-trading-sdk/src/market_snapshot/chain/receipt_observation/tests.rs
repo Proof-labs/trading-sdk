@@ -46,7 +46,9 @@ fn positive_plaintext_event_preserves_effect_metadata_not_primary_action_identit
             receipt: CommittedReceipt {
                 hash: hash(),
                 height: height(42),
-                code: 0
+                code: 0,
+                log: String::new(),
+                events: Vec::new(),
             },
             market: market(15),
             price: MicroUsdc::new(120),
@@ -58,7 +60,9 @@ fn positive_plaintext_event_preserves_effect_metadata_not_primary_action_identit
         CommittedReceipt {
             hash: hash(),
             height: height(42),
-            code: 0
+            code: 0,
+            log: String::new(),
+            events: Vec::new(),
         }
     );
     // The accepted price can be clamped, so this transport infers no equality
@@ -79,12 +83,16 @@ fn absent_duplicate_rejected_mixed_or_malformed_events_are_never_effect_proof() 
         hash: hash(),
         height: height(42),
         code: 0,
+        log: String::new(),
+        events: Vec::new(),
     });
     let refused = |rejection| ReceiptObservation::RejectedPriceEvidence {
         receipt: CommittedReceipt {
             hash: hash(),
             height: height(42),
             code: 0,
+            log: String::new(),
+            events: Vec::new(),
         },
         rejection,
     };
@@ -239,7 +247,9 @@ fn absent_duplicate_rejected_mixed_or_malformed_events_are_never_effect_proof() 
         ReceiptObservation::Committed(CommittedReceipt {
             hash: hash(),
             height: height(42),
-            code: 21
+            code: 21,
+            log: String::new(),
+            events: Vec::new(),
         })
     );
     // Duplicate JSON keys must never become accepted evidence after a
@@ -283,7 +293,9 @@ fn malformed_price_event_attributes_preserve_the_committed_receipt() {
                 receipt: CommittedReceipt {
                     hash: hash(),
                     height: height(42),
-                    code: 0
+                    code: 0,
+                    log: String::new(),
+                    events: Vec::new(),
                 },
                 rejection: PriceEvidenceRejection::MalformedPriceEvent,
             },
@@ -295,7 +307,9 @@ fn malformed_price_event_attributes_preserve_the_committed_receipt() {
             ReceiptObservation::Committed(CommittedReceipt {
                 hash: hash(),
                 height: height(42),
-                code: 21
+                code: 21,
+                log: String::new(),
+                events: Vec::new(),
             }),
         );
     }
@@ -307,6 +321,8 @@ fn missing_or_unrecognized_price_events_do_not_report_a_rejection() {
         hash: hash(),
         height: height(42),
         code: 0,
+        log: String::new(),
+        events: Vec::new(),
     });
     let mut missing = accepted_body();
     missing["result"]["tx_result"]
@@ -365,7 +381,9 @@ fn committed_receipts_still_require_exact_hash_height_and_code() {
             ReceiptObservation::Committed(CommittedReceipt {
                 hash: hash(),
                 height: height(42),
-                code
+                code,
+                log: String::new(),
+                events: Vec::new(),
             })
         );
         for status in [404, 500, 503] {
@@ -559,6 +577,8 @@ async fn malformed_price_event_is_reported_through_the_gateway_client() {
         hash: hash(),
         height: height(42),
         code: 0,
+        log: String::new(),
+        events: Vec::new(),
     };
     for observe in [true, false] {
         let (url, task) = serve_once(200, body.clone(), body.len(), Duration::ZERO).await;

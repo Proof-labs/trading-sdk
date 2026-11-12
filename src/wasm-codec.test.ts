@@ -72,6 +72,7 @@ describe.skipIf(!built)("wasm codec ↔ authoritative vectors", () => {
     for (const v of vectors) {
       const payload = Uint8Array.from(Buffer.from(v.expect.payload_hex, "hex"));
       const decoded = wasm.decode_payload(v.action_type, payload);
+      expect(decoded).toBeDefined();
       const reencoded = Buffer.from(
         wasm.encode_payload(v.action_type, decoded),
       ).toString("hex");

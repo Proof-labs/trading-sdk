@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import typing as t
 
+from proof_trading_sdk.chain_evidence import (
+    TransactionEvidenceAttribute, TransactionEvidenceEvent, TransactionEvidence,
+    BlockTransactionEvidence, BlockResultsEvidence, BlockResultsRange, BlockResultsWindow,
+)
 from proof_trading_sdk.external_signer import ExternalSigner
 
 from proof_trading_sdk._native import (
@@ -49,6 +53,7 @@ from proof_trading_sdk.actions import (  # noqa: F401
     Side,
     TimeInForce,
     MAX_TRIGGER_SLIPPAGE_BPS,
+    ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS,
     PlaceOrder,
     MarketOrder,
     CancelOrder,
@@ -60,7 +65,6 @@ from proof_trading_sdk.actions import (  # noqa: F401
     TriggerLimb,
     SetPositionTriggers,
     CancelPositionTriggers,
-    SetTriggerMarketConfig,
     ApproveAgent,
     RevokeAgent,
     Deposit,
@@ -86,6 +90,7 @@ from proof_trading_sdk.actions import (  # noqa: F401
     FailWithdrawalReceipt,
     CreateMarket,
     AdminActionWire,
+    is_submittable_admin_action,
     ProposeAdminAction,
     ApproveAdminAction,
     RejectAdminAction,
@@ -99,7 +104,9 @@ from proof_trading_sdk.errors import (
     CodecError,
     EngineError,
     GatewayError,
+    GatewayReadError,
     ProofTradingSdkError,
+    PreAdmissionRefusal,
     RateLimited,
     SigningError,
     SubmissionPending,
@@ -109,6 +116,19 @@ from proof_trading_sdk.errors import (
 )
 from proof_trading_sdk.nonce import NonceAllocator
 from proof_trading_sdk.config import SdkConfig, load_config
+from proof_trading_sdk.market_stats import (
+    MarketStatsStatus, MarketStatsOpenInterest, MarketStats, MarketStatsResponse, decode_market_stats_response,
+)
+from proof_trading_sdk.oracle_health import OracleMarketHealth, OracleHealth, decode_oracle_health
+from proof_trading_sdk.finalized_account import (
+    FinalizedAccountState,
+    RawAccountPosition,
+    decode_finalized_account_state,
+)
+from proof_trading_sdk.finalized_markets import (
+    FinalizedOrderbookLevel, FinalizedOrderbook, FinalizedMarketsSnapshot,
+    decode_finalized_orderbook, decode_finalized_markets_snapshot,
+)
 from proof_trading_sdk.governance_reads import (
     AuthoritiesSnapshot,
     FullCloseThreshold,
@@ -122,6 +142,7 @@ from proof_trading_sdk.candle_history import CandleHistoryPage, CandleHistoryTim
 from proof_trading_sdk.streams import (
     AccountEventStream,
     OrderbookDeltaStream,
+    PublicTradeStream,
     RecoveryStatus,
 )
 from proof_trading_sdk.trigger_history import (
@@ -141,15 +162,44 @@ from proof_trading_sdk.markets_snapshot import (
     MarketsSnapshot,
     decode_markets_snapshot,
 )
-from proof_trading_sdk.trigger_config import (
-    TriggerMarketConfig,
-    PendingTriggerMarketConfig,
-    TriggerMarketConfigState,
-    TriggerMarketConfigInfo,
-    decode_trigger_market_config_infos,
+from proof_trading_sdk.evidence import (
+    BlockEvidenceHeader,
+    FinalizedReadWitness,
+    decode_block_evidence_header,
+    decode_finalized_read_witness,
+    verify_witness,
+)
+
+from proof_trading_sdk.finalized_accounts import (
+    FinalizedAccountInfo,
+    FinalizedPositionBrief,
+    FinalizedBindingScenario,
+    FinalizedAgentAuthorization,
+    FinalizedRecentNonces,
+    FinalizedOpenOrder,
+    FinalizedOpenOrders,
+    decode_finalized_account,
+    decode_finalized_agent_authorization,
+    decode_finalized_recent_nonces,
+    decode_finalized_open_orders,
 )
 
 __all__ = [
+    "FinalizedAccountInfo",
+    "FinalizedPositionBrief",
+    "FinalizedBindingScenario",
+    "FinalizedAgentAuthorization",
+    "FinalizedRecentNonces",
+    "FinalizedOpenOrder",
+    "FinalizedOpenOrders",
+    "decode_finalized_account",
+    "decode_finalized_agent_authorization",
+    "decode_finalized_recent_nonces",
+    "decode_finalized_open_orders",
+
+
+    "TransactionEvidenceAttribute", "TransactionEvidenceEvent", "TransactionEvidence",
+    "BlockTransactionEvidence", "BlockResultsEvidence", "BlockResultsRange", "BlockResultsWindow",
     "CandleHistoryPage",
     "CandleHistoryTime",
     "HistoryCandle",
@@ -174,6 +224,7 @@ __all__ = [
     "Side",
     "TimeInForce",
     "MAX_TRIGGER_SLIPPAGE_BPS",
+    "ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS",
     "PlaceOrder",
     "MarketOrder",
     "CancelOrder",
@@ -194,7 +245,6 @@ __all__ = [
     "yes_side",
     "SetPositionTriggers",
     "CancelPositionTriggers",
-    "SetTriggerMarketConfig",
     "ApproveAgent",
     "RevokeAgent",
     "Deposit",
@@ -220,6 +270,7 @@ __all__ = [
     "FailWithdrawalReceipt",
     "CreateMarket",
     "AdminActionWire",
+    "is_submittable_admin_action",
     "ProposeAdminAction",
     "ApproveAdminAction",
     "RejectAdminAction",
@@ -228,6 +279,14 @@ __all__ = [
     "decode_action",
     "NonceAllocator",
     "ExchangeClient",
+    "MarketStatsStatus", "MarketStatsOpenInterest", "MarketStats", "MarketStatsResponse",
+    "decode_market_stats_response", "OracleMarketHealth", "OracleHealth", "decode_oracle_health",
+    "FinalizedAccountState",
+    "RawAccountPosition",
+    "decode_finalized_account_state",
+
+    "FinalizedOrderbookLevel", "FinalizedOrderbook", "FinalizedMarketsSnapshot",
+    "decode_finalized_orderbook", "decode_finalized_markets_snapshot",
     "AuthoritiesSnapshot",
     "FullCloseThreshold",
     "LiquidationConfig",
@@ -244,16 +303,12 @@ __all__ = [
     "TriggerMarketHistoryPage",
     "decode_position_trigger_history_page",
     "decode_trigger_market_history_page",
-    "TriggerMarketConfig",
-    "PendingTriggerMarketConfig",
-    "TriggerMarketConfigState",
-    "TriggerMarketConfigInfo",
-    "decode_trigger_market_config_infos",
     "MarketOpenInterest",
     "MarketsSnapshot",
     "decode_markets_snapshot",
     "SdkConfig",
     "load_config",
+    "PublicTradeStream",
     "AccountEventStream",
     "OrderbookDeltaStream",
     "RecoveryStatus",
@@ -261,7 +316,14 @@ __all__ = [
     "CodecError",
     "EngineError",
     "GatewayError",
+    "GatewayReadError",
+    "BlockEvidenceHeader",
+    "FinalizedReadWitness",
+    "decode_block_evidence_header",
+    "decode_finalized_read_witness",
+    "verify_witness",
     "ProofTradingSdkError",
+    "PreAdmissionRefusal",
     "RateLimited",
     "SigningError",
     "SubmissionPending",

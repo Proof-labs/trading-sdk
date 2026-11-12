@@ -183,14 +183,16 @@ class ExchangeClient {
   queryOrderbook(market: number): Promise<Orderbook>;
   queryFunding(market: number): Promise<FundingInfo>;
   queryOpenOrders(addressHex?: string): Promise<OpenOrder[]>;
+  queryOrderStatus(orderId: bigint): Promise<OpenOrder | null>;
   queryMarkets(): Promise<MarketConfig[]>;
+  queryMarketListing(): Promise<MarketListing>; // markets row by row: field counts and refused rows
+  queryEventListing(): Promise<EventListing>; // events row by row, with refused rows
   queryMarketsSnapshot(): Promise<MarketsSnapshot>;
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
   queryHealth(): Promise<{ status: string; height: number }>;
   queryOraclePermissions(market: number): Promise<OraclePermissions>;
   queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null>;
   queryPositionTriggers(addressHex?: string): Promise<PositionTriggerInfo[]>;
-  queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]>;
   // Deprecated: GET /v1/triggers/status is deleted upstream; see below.
   queryTriggerStatus(): Promise<TriggerStatus>;
   queryPositionTriggerHistory(addressHex?: string, filters?: PositionTriggerHistoryFilters): Promise<PositionTriggerHistoryPage>;
@@ -245,7 +247,11 @@ are monitoring signals rather than faults. `faults` follows
 ### Resting order fields
 
 `queryOpenOrders(owner)` and Python `open_orders(owner)` read the gateway's
-`POST /info` `openOrders` response through the same Rust decoder. TypeScript
+`POST /info` `openOrders` response through the same Rust decoder.
+`queryOrderStatus(orderId)` reads one order by id (`POST /info` `orderStatus`)
+with the same fields, or `null` when the engine no longer holds it. An
+answer naming another order is refused; the request names no owner, so the
+order's owner is returned, not checked. TypeScript
 returns camelCase fields; Python returns snake_case fields.
 
 | TypeScript                           | Python                                 | Value                                                              |
@@ -436,11 +442,16 @@ validator, and does not prove consensus compatibility or authorize a rollout. Us
 
 ### Optional native Rust gateway transport
 
-Rust `proof-trading-sdk` 3.2.0 exposes `gateway::GatewayClient` with the optional
+Rust `proof-trading-sdk` 4.2.0 exposes `gateway::GatewayClient` with the optional
 `gateway` feature. Default codec/WASM builds do not acquire an HTTP transport.
-The four explicit operations are `chain_identity`, `oracle_permissions`,
-`submit_signed_bytes` and `committed_receipt`; they use only the existing gateway
-routes, with no direct-node fallback, signing, nonce allocation or hidden retry.
+Its six explicit operations are `chain_identity`, `oracle_permissions`,
+`account_valuation`, `submit_signed_bytes`, `submit_signed_bytes_with_evidence`
+and `committed_receipt`. They use only the existing gateway routes, with no
+direct-node fallback, signing, nonce allocation or hidden retry. The crate's own
+[README](crates/proof-trading-sdk/README.md) covers the codec, signing and read
+decoding for Rust integrators. For a trading bot, use the async
+[`proof-sdk-rs`](crates/proof-sdk-rs/README.md) crate on
+top of it: nonces, order helpers, receipts and typed reads.
 
 Configure an HTTPS origin (HTTP requires a URL-normalized loopback IP, not a DNS
 name; numeric IPv4 aliases that normalize to loopback are allowed), a
@@ -512,15 +523,35 @@ bracket, `queryPositionTriggers()` returns its epoch; first attach must use the
 epoch on the canonical account position read and must never guess `1`. Submit
 action `0x25` (`SetPositionTriggers`) or `0x26`
 (`CancelPositionTriggers`). A set replaces the whole bracket atomically,
-requires at least one limb, and each limb carries an explicit `1..=9999` bps
-IOC collar. Owner defaults to the loaded signer; a version-active trading agent
+requires at least one limb, and each limb carries an explicit IOC collar of
+`1..=ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS` (currently 1000) basis points under
+the engine admission rule; clamp to that constant. The SDK wire validators
+retain the wider `1..=9999` range for compatibility; encoding does not guarantee
+engine admission. Owner defaults to the loaded signer; a version-active trading agent
 passes the delegated owner explicitly and the engine verifies the grant.
 
-Before setting a bracket, read `queryTriggerMarketConfigs()`. The current
-policy is the only valid source for `enabled` and the maximum IOC slippage;
-absence means disabled. The optional pending policy is shown with its accepted
-and next-block effective heights. The SDK rejects malformed, empty, unsorted,
-or version-skipping policy state rather than inventing a default.
+The legacy `queryTriggerMarketConfigs()` read and `SetTriggerMarketConfig`
+submission API have been removed. Delete policy lookups and enabled checks before
+placing TP/SL; no replacement availability lookup is needed. Use the current
+position epoch and an explicit per-limb IOC collar. The engine validates the
+request; successful placement does not guarantee a fill.
+
+Historical retired-action (`SetTriggerMarketConfig`) proposal decoding and
+content hashes remain available; the policy-registry decoders for
+`/v1/triggers/markets` are removed. `DecodedAdminAction`
+and `DecodedAction` include retired actions for inspection. Use the exported
+`isSubmittableAction(decoded.action)` guard before passing a decoded transaction
+to a typed submission API. The guard excludes retired governance actions; it
+does not assert engine admission or signing authority. Low-level encoding and
+signing retain the wire contract; the engine rejects retired proposals and approvals.
+Proposal content hashes remain available for historical verification.
+
+Before upgrading, remove retired trigger-policy methods from capability probes
+and read tests. Governance consumers must handle historical
+`SetTriggerMarketConfig` proposals as read-only: retain their detail rendering,
+remove creation and approval paths, and narrow `proposal.action` before assigning
+it to `AdminAction`. The Python removals also require a Python major release;
+update callers of `trigger_market_configs()` and the retired builder together.
 
 `queryTriggerStatus()` is deprecated: `GET /v1/triggers/status` is deleted
 upstream (the node dropped it with its activation gates, exchange#619,
@@ -555,6 +586,17 @@ Trading integrations use `TraderAction` and can type their calls against it to
 keep operator actions out of autocomplete. `submitTx` still accepts the full
 `Action` union.
 
+#### SetUserMarketLeverage availability
+
+SDK encoding support is retained, but ordinary-account submission is unsupported
+in exchange revision `5f172568`: [node admission rejects action `0x16`](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-node/check_tx.go#L466-L492).
+The separate governed [`ExecInsuranceFund` path](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/engine/governance/insurance_action.rs#L21-L70)
+permits it for the pool's insurance account.
+
+The setting affects **initial margin only**: `max(market.im_bps, user_im_bps)`,
+with `0` using the market default. [Maintenance margin and liquidation thresholds are unchanged](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/scenario_margin.rs#L168-L181).
+Ordinary-account support remains deferred in [#360](https://github.com/Proof-labs/trading-sdk/issues/360).
+
 #### Operator actions (privileged)
 
 `OperatorAction` covers oracle-feeder / relayer-admin actions — e.g.
@@ -562,6 +604,9 @@ keep operator actions out of autocomplete. `submitTx` still accepts the full
 integration never needs these.** Each is gated by a dedicated engine allowlist
 or the market's oracle policy, so codec availability grants nothing without an
 operator-provisioned key. See [AGENTS.md](AGENTS.md) → "Operator actions".
+Porting a harness off the retired `OracleUpdate`, `OracleUpdateComposite`,
+`RunFundingTick` or `/testing` surfaces: see the
+[operator harness migration guide](docs/operator-harness-migration.md).
 
 #### Governance actions (admin multisig)
 
@@ -631,17 +676,26 @@ loop at 9 s+ under load.
 
 The SDK reads that shape and stops working for it:
 
-| Gateway answers                              | `TxResult`                                                                                          | Does the SDK poll?                                                                                                                                                                                                         |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `status: ok` or `error`, with `height`       | `ok` / `engine`, with `height` + `events`                                                           | **No** — the tx executed; there is nothing to wait for                                                                                                                                                                     |
-| `status: error`, no `height`                 | `engine`                                                                                            | **No** — a CheckTx reject, or a tx the gateway refused before broadcast with the engine's code (`17` bad signature, `1` undecodable), never enters a block, so no DeliverTx will run                                       |
-| `status: pending`                            | `timeout`                                                                                           | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection |
-| `status: refused`                            | `transport` (code 1, or the HTTP status), original error reason                                     | **No** — the gateway did not admit it and nothing was broadcast                                                                                                                                                            |
-| Any other body: a pre-7.0.0 gateway, a proxy | as before 7.0.0: read from `code` / `height` / `txHash`; `{status:"ok"}` alone is `ok`, no `height` | **Yes** — a pre-#90 gateway acks CheckTx only, so inclusion is still unknown                                                                                                                                               |
+| Gateway answers                                               | `TxResult`                                                                               | Does the SDK poll?                                                                                                                                                                                                             |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| HTTP 200 engine verdict with `code` and `height`              | `ok` / `engine`, with `height` + `events`                                                | **No** — execution is known.                                                                                                                                                                                                   |
+| HTTP 200 `status: error`, nonzero numeric `code`, no `height` | `engine`                                                                                 | **No** — a terminal rejection.                                                                                                                                                                                                 |
+| `status: pending`                                             | `timeout`                                                                                | **Yes** — the gateway broadcast it but couldn't report the outcome in time (park deadline, duplicate in flight, unreadable result). The tx may still commit, so it is reconciled by hash — **not** reported as a rejection     |
+| Valid `status: refused` envelope                              | `transport` (code 1 for HTTP 200, else the HTTP status), gateway `errorCode` and message | **No** — this attempt was not admitted. Correct `InvalidRequest`; `EncodingError` is a gateway failure. Any later retry depends on the reason, not HTTP status alone. Earlier ambiguous attempts still require reconciliation. |
+| Malformed or contradictory refusal                            | `timeout`, local transaction hash                                                        | **Yes** — the response does not prove non-admission.                                                                                                                                                                           |
+| Other legacy or proxy response                                | Compatibility decoding or HTTP fallback                                                  | Only unresolved submissions are reconciled; an HTTP error is not an engine verdict.                                                                                                                                            |
 
-That last row is why upgrading the SDK is safe against a gateway that has not been
-upgraded yet: absence of `code`/`height` still means "execution unknown", and the old
-polling paths run exactly as before.
+A legacy HTTP 200 `{status:"ok"}` without `code` or `height` remains a CheckTx
+acknowledgement, not proof of execution, so inclusion is still polled.
+
+Python raises `PreAdmissionRefusal` for validated admission refusals and internal
+`EncodingError` refusals, including HTTP 500. Catch it for those responses rather
+than treating them as ambiguous submissions or unstructured transport errors;
+its `error_code`, `message` and
+`status_code` preserve the gateway reason. Refusals at HTTP 401, 403, 429 and other
+5xx responses, including `Maintenance` and `Unavailable`, keep their existing
+exceptions. `SubmissionPending.tx_hash` is the
+hash to reconcile when a refusal is malformed or contradictory.
 
 **Read `code` from the field, not from the message.** The gateway still sends the
 long-standing `"<code>: <message>"` format in `error` (so older clients that parse the

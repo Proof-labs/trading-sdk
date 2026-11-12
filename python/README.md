@@ -141,8 +141,52 @@ or malformed read raises an SDK error, rather than becoming an empty page.
 
 Track the remaining Python capabilities and their PRs in
 [#362](https://github.com/Proof-labs/trading-sdk/issues/362).
-This change covers candle history; capabilities in other open PRs become
+Candle history and market observations are covered here; other capabilities become
 available when those changes are merged and released.
+
+## Market observations
+
+```python
+stats = client.market_stats([3, 4])
+health = client.oracle_health(market=3)  # omit market for the full feeder snapshot
+```
+
+`market_stats()` returns typed `MarketStatsResponse` from the indexer's rolling
+24-hour snapshot. Select 1–50 distinct market IDs in `0..2147483647`; every
+requested market must appear exactly once. Contract quantities, raw micro-USDC
+prices, USDC dollar volume and signed basis-point changes retain their exact
+numeric strings. `None`, zero, stale and unavailable remain distinct. Timestamps
+retain their original precision/offset; window comparisons use milliseconds,
+matching TS. Unknown additive fields are ignored. `decode_market_stats_response`
+also accepts an already parsed gateway body.
+
+`oracle_health()` returns `OracleHealth`, with typed optional source, readiness,
+submission status, feeder presence, note/error and update time. It supports the
+node's disabled-feeder response, F16 relay health and gateway market-freshness
+rows. This follows the gateway/feeder JSON contract; TS exposes the raw response.
+Optional scalar fields may be absent or JSON `null`; both decode to `None`.
+F16 `ready` and `submit_enabled` remain required booleans.
+Per-market requests accept positive u32 IDs and require api-gateway 10.3.0 or
+later: an older gateway ignores the filter, and the response then fails with
+`CodecError` (requested market mismatch). Omit `market` on older gateways. Missing fields, including a missing
+`markets` map, remain `None`. If the response contains a `markets` map but not
+the requested market, that map is empty. Extra diagnostic fields
+are preserved under `extra`. F16 journal/divergence maps may be absent from the
+per-market gateway projection. `decode_oracle_health` accepts a parsed body.
+
+`status="ok"` with `embedded_feeder=False` does not imply a ready oracle. Feeder
+readiness and market freshness do not grant trading permission; thresholds stay
+with the caller. HTTP failures raise existing SDK errors and malformed known
+fields raise `CodecError`, without synthesizing healthy or zero-valued results.
+Both methods use the existing buffered HTTP transport and configured timeout;
+these methods do not add a streaming response-size limit or a whole-call deadline.
+
+These JSON routes are decoded in Python; canonical MessagePack wire records
+use the shared Rust decoders through PyO3. Market statistics and candles share strict calendar validation. Python rejects
+invalid dates and `24:00:00` even where TypeScript `Date.parse` normalizes them.
+Market-statistics window comparisons use milliseconds; candles preserve nanoseconds.
+The shared Python parser accepts extended years that TypeScript may reject.
+The parsers intentionally enforce different contracts.
 
 ## Callback signer
 
@@ -210,17 +254,90 @@ observable without restarting live delivery. A new connection resets the retry
 budget. The synchronous iterator performs retries while it is being consumed;
 `stream.close()` cancels pending retries. Synthetic error frames carry the SDK's
 fixed `SigningError` text and omit other exception text, which could expose
-sensitive diagnostics. HTTP 401/403
-refusals during the WebSocket upgrade raise `AuthenticationError` before the
-first successful connection. On reconnect, they follow `reconnect_attempts`
-and the normal backoff (`None` retries indefinitely), preserving recovery state.
-`close()` cancels the wait. This is separate from subscription-error frames.
+sensitive diagnostics. Connection failures follow the shared retry policy below,
+separately from subscription-error frames. Account reconnects preserve recovery
+state and follow `reconnect_attempts` (`None` retries indefinitely).
 
 `client.account_auth(owner, after_id=0)` returns signed subscription parameters.
 The optional cursor must be a Python integer in `0..2**53 - 1`, matching the TS
 SDK's JSON-safe domain. Zero is signed but omitted from the returned parameters.
 Direct helper failures raise `SigningError`. The default account stream signs
 cursor zero; its history-based reconnect recovery does not change this cursor.
+
+All three stream classes share connection, cleanup and reconnect handling in
+`streams.py`. Before the first successful connection, HTTP 401/403 raises
+`AuthenticationError`; other HTTP 4xx except 408/429 raises `TransportError`.
+Temporary connection failures (network errors, timeouts, a connection dropped
+during the handshake, and HTTP 408/429/5xx from the gateway or a proxy) retry
+with cancelable exponential backoff, including on startup. Other startup
+errors, including any other HTTP status, raise `TransportError`. After connecting once, connection failures retry.
+A matching subscription acknowledgment or non-error data frame resets attempts
+and backoff; a handshake, unrelated acknowledgment or refusal does not.
+
+Account streams retain their signed-subscription retries and history recovery.
+Only `AccountEventStream` takes a reconnect budget (`reconnect_attempts`, a
+non-negative integer or `None`); exhausting it raises `TransportError` and
+closes the stream. Orderbook and trade streams retry until closed. Each stream accepts base URLs or `/ws` endpoints and permits one active
+iterator. Closing the iterator closes its stream; context managers and `close()`
+also release the socket and cancel waits. Iterating after `close()` on an open
+stream is empty; after a failure or iterator closure it raises `RuntimeError`,
+requiring a new stream, even if `close()` or a context-manager exit follows. `reconnect_backoff_max` must be finite and positive. These startup
+and iterator contract changes are for the next Python MAJOR release.
+
+## Public trade stream
+
+```python
+with client.trade_stream(7) as stream:
+    for frame in stream:
+        if frame["type"] == "error":
+            print(frame["error"])
+            break
+        else:
+            print(frame["fillId"], frame["price"], frame["quantity"])
+```
+
+`PublicTradeStream(ws_url, market, api_key="")` is also exported. `trade_stream`
+uses the client's gateway URL and optional API key; `ws_url=` overrides the
+WebSocket base URL or an endpoint already ending in `/ws`; it never adds a
+second `/ws` suffix. No account signer is called. Each stream owns one socket;
+`close()` or its context manager releases it, independently of `client.close()`.
+
+The first public data is a live `trade`, not a snapshot. Frames retain the
+TypeScript feed's gateway keys: `channel`, `type`, `market`, `fillId`,
+`makerSide`, `price`, `quantity`, and `payload`. Numeric strings remain strings,
+and gateway `null` values remain `None`;
+`price` is integer micro-USDC and `quantity` is the raw integer size. Divide
+quantity by `10**sz_decimals` from the market configuration for base units;
+the stream performs no conversion. Only the requested
+channel/market and matching subscription errors are delivered. Control ACKs
+are consumed internally. A matching subscription refusal is yielded once; the
+next iteration raises `TransportError` with its code and closes the socket.
+It does not leave an unsubscribed iterator waiting indefinitely or retry the
+refusal automatically. Call `close()` or exit the context manager after handling
+an error frame if you do not need the exception.
+
+Connections follow the shared retry policy above. Reconnects resubscribe with
+0.5-second exponential backoff, capped at 10 seconds by default
+(`reconnect_backoff_max` overrides the cap).
+Only one iterator may consume a stream, and reconnect work proceeds as it is
+consumed. There is no replay, deduplication or HTTP backfill: disconnected or
+slow consumers can miss fills, including gateway queue drops that have no
+client-visible gap notification. A stalled consumer can also fill receive queues
+and lose the socket; reconnecting does not recover those missed fills.
+
+Python now requires `websockets>=15` for synchronous keepalive; installations
+pinned to version 14 must upgrade. The stream explicitly sends protocol-level
+Ping frames every 15 seconds and closes an unresponsive socket after a
+10-second Pong timeout. TypeScript uses JSON ping/pong frames with those
+intervals instead. Both detect half-open connections, but Python's keepalive
+runs in the library thread while reconnection waits for iterator consumption.
+Closing cancels receive and backoff waits; a connection handshake already in
+progress completes or reaches the library's connection timeout before cleanup.
+Against a peer that has stopped responding, `close()` itself can block for the
+library's 10-second close timeout.
+
+`websockets` 15 connects through proxies named by environment variables such as
+`HTTPS_PROXY` by default, and this applies to every WebSocket in this package.
 
 ## Resting orders
 
@@ -238,12 +355,175 @@ rather than returning a shorter list, so a very large account gets an error. The
 read does not verify a finalized-state witness. The remaining Python API gaps are tracked in
 [#362](https://github.com/Proof-labs/trading-sdk/issues/362).
 
+## Block headers and witness comparison
+
+`client.block_header(height, chain_id=...)` reads a typed `BlockEvidenceHeader`
+through `/v1/block`. The chain pin is required on each call, as a chain name or
+32-byte binding; implicit client/environment defaults are not trust pins.
+Heights are exact Python integers and timestamps retain their nanoseconds.
+
+```python
+from proof_trading_sdk import decode_finalized_read_witness, verify_witness
+
+# witness_json is the witness object accompanying a gateway finalized read.
+witness = decode_finalized_read_witness(witness_json)
+header = client.block_header(witness.height + 1, chain_id="exchange-devnet-1")
+verify_witness(witness, header, chain_id="exchange-devnet-1")
+```
+
+When the read's payload supplies its own height/time, pass `expected_height`
+and `expected_time_ms` to `decode_finalized_read_witness` to bind those values.
+Parse `witness_json` with a parser that refuses duplicate keys: plain `json.loads`
+silently keeps the last value, and only `block_header` applies this check itself.
+`verify_witness` checks the pinned chain, H+1 height and app hash. It deliberately
+does not compare H's witness time with H+1's header time. Success against a
+header from the same gateway establishes consistency of that gateway's claims;
+it does not authenticate the state, verify validator signatures or the block
+hash, prove payload contents, or establish freshness or permission to trade.
+`decode_block_evidence_header` accepts a complete, already-parsed JSON-RPC
+envelope, not a bare `result` object. `get_block` keeps its raw response API.
+
+The full block response is fetched, even though only the header is retained.
+Responses over 1 MiB, over 4096 chunks, deeper than 32 JSON containers, duplicate
+keys at any depth, invalid UTF-8, and compressed bodies are refused. Large blocks
+therefore require a future header-only gateway route. No redirect, retry or
+alternate endpoint is used. HTTP refusals retain the SDK's existing exception
+types and their bodies are discarded.
+
+`timeout` is in seconds: default 5, minimum 0.001, maximum 60. Python bounds each
+network wait and checks elapsed time between body chunks; unlike the TS async
+deadline, this cannot interrupt slowly arriving headers or a custom transport
+that ignores timeouts. `GatewayReadError.kind` distinguishes `configuration`,
+`malformed`, `binding`, `limit`, and `deadline`; `field` identifies the failed
+check. Missing/pruned blocks remain errors, not empty evidence.
+The H+1 block may not exist yet when a fresh witness is received; wait for it
+to be committed before retrying the same height.
+
+## Finalized raw account state
+
+Owner arrays accept exact byte values (0–255) regardless of integer encoding width,
+matching TypeScript. Six-field position records default the omitted remainder to zero;
+that layout is not limited to historical records.
+
+`client.finalized_account_state(owner, timeout=5)` reads
+`/v1/account/{owner}/state?witness=1` and returns `FinalizedAccountState`.
+The existing `account()` method and its valued `AccountState` remain unchanged.
+
+```python
+state = client.finalized_account_state(owner)
+print(state.finalized_height, state.balance, state.positions)
+# Optional separate comparison; the H+1 block must already exist.
+header = client.block_header(state.finalized_height + 1, chain_id="exchange-devnet-1")
+verify_witness(state.witness, header, chain_id="exchange-devnet-1")
+```
+
+The result contains `owner`, `finalized_height`, `balance`, `positions`, and
+`witness`. Each `RawAccountPosition` contains `owner`, `market`, `side`,
+`entry_price`, `size`, signed `last_funding_index`, and `entry_remainder`.
+All numeric fields are exact Python integers. The remainder defaults to zero
+for legacy six-field positions; position cost is `entry_price * size + entry_remainder`.
+Owners are lowercase 40-character hex; inputs also accept 20-byte addresses,
+uppercase hex and an optional `0x` prefix.
+
+The canonical Rust wire decoder checks minimum account/position field counts (appended engine fields are ignored),
+20-byte owners, request/position owner bindings, strictly increasing market IDs,
+at most 2048 positions, integer ranges, and remainder bounds. The response must
+contain exactly `data` and `witness`; the witness must have its five defined
+fields and match the payload height. Canonical base64 is limited to 512 KiB of
+decoded MessagePack. Malformed or mismatched data raises `GatewayReadError`;
+missing witness support is an error with no legacy fallback.
+
+This read uses the block-header reader's bounded HTTP and synchronous timeout
+policy above. It makes one request and never fetches an H+1 header automatically.
+These are settled ledger facts, without current marks, accrued funding, PnL,
+equity, margin or withdrawal/trading authorization. The witness is a gateway
+assertion; decoding it does not prove payload contents or consensus authenticity.
+
+## Finalized market reads
+
+```python
+book = client.finalized_orderbook(3, depth=20)
+snapshot = client.finalized_markets_snapshot(chain_id="exchange-devnet-1")
+```
+
+`finalized_orderbook()` returns `FinalizedOrderbook` with market, requested
+depth, height, typed bids/asks (`price`, `total_qty`, `order_count`) and witness.
+Depth is 1, 20 or 100 (default 20); the result does not assert a complete book.
+The canonical Rust decoder validates exact two-side/three-field tuples,
+integer ranges, per-side depth and strictly descending bids/ascending asks.
+The gateway frame must match the requested market/depth and witness height.
+The optional legacy `data` field must match `bookMsgpackB64` when present.
+Its JSON numeric height must be a safe positive integer, as in TS;
+MessagePack level values retain the full u64 range. Decoded books are capped
+at 512 KiB. Extra frame/witness fields are tolerated.
+
+`finalized_markets_snapshot()` extends the existing `MarketsSnapshot` with its
+witness and reuses the canonical decoder. `chain_id` is mandatory on each call,
+as a chain name or 32-byte binding. Wrong chains and uncommitted snapshots are
+binding errors. Existing `markets_snapshot()`, `orderbook()` and WebSocket
+`orderbook_snapshot()` remain unchanged. Standalone decoders are exported as
+`decode_finalized_orderbook` and `decode_finalized_markets_snapshot`.
+
+Both use the bounded HTTP and synchronous timeout policy described above:
+1 MiB response, 4096 chunks, no redirect/retry/fallback. Defaults are 5 seconds
+for the book and 10 for markets. Neither fetches an H+1 header automatically;
+call `block_header` and `verify_witness` separately for that consistency check.
+Witnesses remain gateway assertions, without validator signatures, payload
+proofs, freshness guarantees or trading authorization.
+
+## Transaction and block-result evidence
+
+```python
+# exact_signed_bytes must be the original envelope, not reconstructed fields.
+tx = client.transaction_evidence(tx_hash, exact_signed_bytes, chain_id="exchange-devnet-1")
+blocks = client.block_results_range(100, 102, chain_id="exchange-devnet-1")
+window = client.block_results_window(from_ms, to_ms, through_height,
+                                     chain_id="exchange-devnet-1")
+```
+
+These reads return typed `TransactionEvidence`, `BlockResultsRange`, and
+`BlockResultsWindow` with `source="trusted-gateway"`. Transaction evidence binds
+the requested hash and exact signed bytes to the returned block index and
+Comet transaction Merkle root. Range/window evidence checks consecutive heights,
+parent hashes, nondecreasing nanosecond timestamps, transaction roots, and each
+post-state app hash against the next header. The retained H+1 `anchor` must exist.
+
+A range includes both requested heights. A window includes a block strictly
+before `from_ms` (or genesis) and the requested `through_height`, whose time must
+reach `to_ms`. Boundary blocks are retained: callers apply `[from_ms, to_ms)`
+themselves. No partial result is returned when coverage or a limit fails.
+
+Every call requires an explicit chain pin and uses one shared timeout across
+all requests, with the synchronous HTTP limitations described above. Each
+response has the same 1 MiB/4096-chunk/depth-32 bounds as `block_header`.
+Transaction inputs are limited to 785,664 bytes before HTTP, allowing for base64
+expansion and a 1 KiB envelope reserve. This is only a payload upper bound, not
+an assurance that either response fits. Transaction events, block headers,
+validator commit signatures and other transactions share the 1 MiB response
+budget; either the transaction or block response can exceed it.
+Range/window defaults are 32 heights, 8 MiB decoded JSON, 10,000 transactions,
+16,384 events and 65,536 attributes. `max_heights` may be raised to 128; other
+limits may only be reduced. JSON byte accounting conservatively allows for
+number formatting differences, so floating metadata may exhaust the byte
+budget earlier than in TypeScript. Numeric evidence fields never accept floats.
+
+Execution codes and raw event strings are gateway observations, not authenticated
+receipts or interpreted financial values. Execution codes are not checked against
+H+1 `last_results_hash`. These methods do not verify validator
+signatures, recompute block hashes, prove events or state payloads, establish
+freshness/finality, or prove that a transaction was never admitted. A returned
+replay refusal cannot exclude an earlier successful occurrence. Missing/pruned
+data remains an error. The raw `get_block`/`get_block_results` APIs are unchanged.
+
 ## Typed actions
 
 Every action has a typed builder in `proof_trading_sdk.actions`;
 `encode_action` turns it into the action byte and canonical payload through the
 Rust core, ready for `sign_and_encode`. `RawAction` remains only for an action
 newer than this package.
+
+`SetUserMarketLeverage` has a typed builder, but ordinary-account submission is
+unsupported. See [availability](../README.md#setusermarketleverage-availability).
 
 - **Trading:** `PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder`,
   `CancelAllOrders`, `CancelReplaceOrder`, `AmendOrder`, `ClosePosition`,
@@ -261,13 +541,9 @@ newer than this package.
 ```python
 from proof_trading_sdk import actions
 
-policy = actions.SetTriggerMarketConfig(
-    market=7, enabled=True, max_trigger_slippage_bps=500,
-    max_mark_age_ms=5_000, max_future_publish_skew_ms=1_000, max_active_brackets=4,
-)
 propose = actions.ProposeAdminAction(
     proposer=owner, registry_version=3,
-    action={"SetTriggerMarketConfig": policy.as_wire()},
+    action={"SetMarketStatus": {"market": 7, "status": "ReduceOnly"}},
 )
 action_type, payload = actions.encode_action(propose)
 ```
@@ -281,9 +557,6 @@ position = next(p for p in client.account(owner).positions if p["market"] == 7)
 epoch = position["position_epoch"]
 if epoch is None:
     raise RuntimeError("position epoch is not backfilled; trigger placement is unavailable")
-policy = next(p for p in client.trigger_market_configs() if p.market == 7)
-if policy.state.current is None or not policy.state.current.enabled:
-    raise RuntimeError("position triggers are disabled for this market")
 client.set_position_triggers(
     market=7,
     owner=owner,
@@ -308,8 +581,22 @@ removed in the next major version. For a first attach, take the epoch from the
 canonical account position read; never guess `1`. `owner` defaults to the
 signer, but a version-active trading agent may pass its delegated owner and let
 the engine verify authorization.
-`trigger_market_configs()` is the strict source for the current and scheduled
-market policy; absence means disabled and no client default is substituted.
+`trigger_market_configs()` and the `SetTriggerMarketConfig` builder have been
+removed. Delete legacy-policy lookups and enabled checks before placing TP/SL;
+no replacement availability lookup is needed. Each limb requires explicit
+slippage in `1..=ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS` (currently 1000) basis
+points under the engine admission rule; clamp to that constant. The wire
+validator retains `1..=9999`; encoding does not guarantee admission or a fill.
+
+`ProposeAdminAction` and `ApproveAdminAction` reject retired actions with
+`ValueError` at construction and before encoding, including actions read from
+history. Use `is_submittable_admin_action()` to check the kind before building
+a request; it does not validate the payload or guarantee engine admission.
+`RawAction` and pre-encoded signing retain the wire contract; the engine rejects
+retired proposals and approvals. Historical retired-action (`SetTriggerMarketConfig`)
+proposal decoding and content hashes remain available; the policy-registry
+decoders for `/v1/triggers/markets` are removed. Current TP/SL placement,
+cancellation and history APIs are unchanged.
 
 `history_triggers()` and `history_trigger_markets()` use only the public gateway
 history routes. Their dataclass pages preserve chain coordinates, market ids,
@@ -394,3 +681,40 @@ accepts out-of-order unique nonces within its window and rejects replays.
 - No sync call needed before the first transaction
 - Thread-safe allocation within one shared allocator instance
 - Wide engine window (+1 day / −2 days) tolerates NTP skew
+
+### Finalized account reads
+
+Positions and open orders preserve market ID zero; market IDs use the wire u32 domain.
+
+```python
+account = client.finalized_account(owner)
+authorization = client.finalized_agent_authorization(owner, agent)
+nonces = client.finalized_recent_nonces(owner)
+orders = client.finalized_open_orders(owner, limit=101)
+```
+
+These opt-in reads return typed values and a `FinalizedReadWitness`. Existing
+`account()` and `open_orders()` behavior is unchanged. Account values come from
+canonical Rust `AccountInfo`/`PositionBrief`; Python integers preserve u64/i64
+precision. `positions`, `binding_scenario`, and the fourteen order fields use
+snake_case. Position owners are 20-byte `bytes` (matching the existing valued
+position convention); result and order owners are canonical lowercase hex strings.
+`cashout_equity` is the engine's display estimate, not guaranteed
+execution proceeds. Funding, PnL and margin are returned without recomputation;
+they do not establish trading authorization or solvency.
+
+Each payload is limited to 512 KiB. The shared bounded transport caps the full
+JSON body at 1 MiB, 4096 nonempty chunks and depth 32. The envelope has exactly
+`data` and `witness`, and the witness exactly five fields. All methods default
+to a 5-second timeout (0.001–60); synchronous network waits and between-chunk
+elapsed checks do not guarantee a hard whole-call deadline for slow headers or
+custom transports. No retry, fallback, redirect or automatic H+1 header fetch.
+
+Valued positions and nonempty orders bind their owners. Empty accounts/orders,
+bare authorization booleans and nonce lists bind identities and height only by
+the request and gateway assertion. Call `verify_witness` with a separately
+chain-pinned H+1 header if needed; this checks consistency, not validator
+signatures, authenticity or freshness. Nonces are a prunable retained set, not
+a lifetime floor or absence proof. Orders require the current 14-field tuple
+and strictly increasing IDs; `complete` is false whenever the requested limit
+(1–101) is reached, even if that number happens to be exact.

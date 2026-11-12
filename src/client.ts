@@ -86,6 +86,7 @@ import {
   txFromEngineCode,
   txFromQueryResponse,
   txOk,
+  txRefusal,
   txTimeout,
   txTransportError,
 } from "./tx-result.js";
@@ -113,6 +114,8 @@ import type {
   HistoryPositionsPage,
   HistoryResolution,
   MarketConfig,
+  MarketListing,
+  RefusedMarketRow,
   OpenOrder,
   AdlQueueEntry,
   Orderbook,
@@ -124,6 +127,8 @@ import type {
   AuthoritiesSnapshot,
   ProposalPage,
   EventInfo,
+  EventListing,
+  RefusedEventRow,
   SetPositionTriggers,
   PositionTriggerInfo,
   TriggerStatus,
@@ -131,7 +136,6 @@ import type {
   PositionTriggerHistoryPage,
   TriggerMarketHistoryFilters,
   TriggerMarketHistoryPage,
-  TriggerMarketConfigInfo,
   NodeVersion,
   UpgradesInfo,
   LiquidationConfigInfo,
@@ -164,7 +168,6 @@ import type { MarketsSnapshot } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import {
   decodePositionTriggerInfos,
-  decodeTriggerMarketConfigInfos,
   decodeTriggerStatusJson,
   validateCancelPositionTriggers,
   validateOrderTriggers,
@@ -864,11 +867,12 @@ export class ExchangeClient {
    *
    * The gateway response is an `ExchangeResponse`: a structured chain verdict
    * carries `code` and optionally `height`/`events`; an admitted-but-ambiguous
-   * submission carries `txHash` without `code` and must be reconciled. We map
-   * every shape to `TxResult`. Engine rejections retain the compatibility error
-   * string `"<code>: <message>"`, while the structured `code` is authoritative.
-   * For transport-level failures (rate limit, auth, etc.) we synthesize a code
-   * from the HTTP status.
+   * submission carries `txHash` without `code` and must be reconciled; a
+   * `status: "refused"` answer was never admitted, so it is terminal and keeps
+   * the gateway's `errorCode`. We map every shape to `TxResult`. Engine
+   * rejections retain the compatibility error string `"<code>: <message>"`,
+   * while the structured `code` is authoritative. For transport-level failures
+   * (rate limit, auth, etc.) we synthesize a code from the HTTP status.
    */
   private async submitViaGateway(
     txBytes: Uint8Array,
@@ -930,21 +934,26 @@ export class ExchangeClient {
           events: stated.events,
         });
       case "refused":
-        // A refusal naming a hash, code or height contradicts itself, so it
-        // proves nothing about whether the tx was broadcast.
+        // A malformed refusal is not evidence of non-admission. Presence of
+        // execution fields contradicts it, even when their value is null.
         if (
-          stated.txHash !== undefined ||
-          stated.code !== undefined ||
-          stated.height !== undefined
+          ["txHash", "tx_hash", "code", "height", "events", "log", "info"].some(
+            (key) => Object.prototype.hasOwnProperty.call(stated, key),
+          ) ||
+          typeof stated.errorCode !== "string" ||
+          !stated.errorCode.trim() ||
+          (Object.prototype.hasOwnProperty.call(stated, "error") &&
+            typeof stated.error !== "string")
         )
           return txTimeout(
             txHash,
-            "gateway refusal contradicts itself; reconcile by hash",
+            "malformed gateway refusal; reconcile by hash",
           );
-        // Nothing was broadcast, so there is nothing to reconcile.
-        return txTransportError(
+        // Only a validated envelope proves this attempt was not admitted.
+        return txRefusal(
           res.status === 200 ? 1 : res.status,
-          stated.error ?? stated.errorCode ?? "refused by gateway",
+          stated.errorCode,
+          stated.error ?? stated.errorCode,
         );
       case "pending":
         // Reconcile the hash of the bytes sent, never one the answer names.
@@ -1576,17 +1585,79 @@ export class ExchangeClient {
     return raw.map(marketConfigFromWasm);
   }
 
+  /** The market listing decoded row by row (`MarketListing`): the rows that
+   *  decode as `queryMarkets` decodes them, each one's field count (so a
+   *  caller can refuse a layout the pinned wire does not have), and the rows
+   *  that do not decode, each named by its market, reported instead of
+   *  refusing the whole listing. A row that cannot be tied to a market of its
+   *  own, a missing envelope, or a payload that is not a list or fails the
+   *  strict preflight is a refusal. */
+  async queryMarketListing(): Promise<MarketListing> {
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/markets`);
+    const bytes = fromBase64(requireEncodedData(json, "/v1/markets"));
+    await initWasm();
+    const wasm = getWasm();
+    let decoded: {
+      markets: unknown[];
+      rowFieldCounts: number[];
+      refusedRows: RefusedMarketRow[];
+    };
+    try {
+      decoded = wasm.decode_market_listing(bytes) as typeof decoded;
+    } catch (e) {
+      throw new Error(
+        `Markets decode: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    return {
+      markets: decoded.markets.map(marketConfigFromWasm),
+      rowFieldCounts: decoded.rowFieldCounts,
+      pinnedFieldCount: wasm.market_config_fields(),
+      refusedRows: decoded.refusedRows.map((row) => ({
+        index: row.index,
+        market: row.market,
+        fieldCount: row.fieldCount,
+        error: row.error,
+      })),
+    };
+  }
+
+  /** The events listing decoded row by row (`EventListing`): the events that
+   *  decode as `queryEvents` decodes them (rows must be arrays, as the engine
+   *  writes them), and the rows that do not, reported
+   *  instead of refusing every event. A missing envelope, a payload that is
+   *  not a list, or one that fails the strict MessagePack preflight is a
+   *  refusal. */
+  async queryEventListing(): Promise<EventListing> {
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/events`);
+    const bytes = fromBase64(requireEncodedData(json, "/v1/events"));
+    await initWasm();
+    let decoded: {
+      events: unknown[];
+      refusedRows: RefusedEventRow[];
+    };
+    try {
+      decoded = getWasm().decode_event_listing(bytes) as typeof decoded;
+    } catch (e) {
+      throw new Error(
+        `Events decode: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    return {
+      events: decoded.events.map(eventInfoFromWasm),
+      refusedRows: decoded.refusedRows,
+    };
+  }
+
   /** All events: each is its binary book under one `EventInfo`, plus every
    *  conditional attached to it. Fail-closed: a missing envelope or
    *  malformed row is a refusal. */
   async queryEvents(): Promise<EventInfo[]> {
     const json = await this.apiJson(`${this.readBaseUrl}/v1/events`);
-    if (typeof json.data !== "string") {
-      throw new Error(
-        "governance decode: events response has no encoded-data envelope",
-      );
-    }
-    const raw = await this.decodeRead("Events", fromBase64(json.data));
+    const raw = await this.decodeRead(
+      "Events",
+      fromBase64(requireEncodedData(json, "/v1/events")),
+    );
     return (raw as unknown[]).map(eventInfoFromWasm);
   }
 
@@ -1607,12 +1678,10 @@ export class ExchangeClient {
       const msg = (json.error as string) ?? `HTTP ${res.status}`;
       throw new Error(`API error: ${msg}`);
     }
-    if (typeof json.data !== "string") {
-      throw new Error(
-        "governance decode: event response has no encoded-data envelope",
-      );
-    }
-    const raw = await this.decodeRead("Event", fromBase64(json.data));
+    const raw = await this.decodeRead(
+      "Event",
+      fromBase64(requireEncodedData(json, `/v1/event/${eventId}`)),
+    );
     return raw == null ? null : eventInfoFromWasm(raw);
   }
 
@@ -1630,15 +1699,6 @@ export class ExchangeClient {
     const json = await this.apiJson(`${this.readBaseUrl}${path}`, "account");
     const bytes = fromBase64(requireEncodedData(json, path));
     return decodePositionTriggerInfos(await this.strictDecode(bytes));
-  }
-
-  /** Read the complete governed trigger-market policy registry. Missing
-   * markets are disabled; callers must never synthesize a default policy. */
-  async queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]> {
-    const path = "/v1/triggers/markets";
-    const json = await this.apiJson(`${this.readBaseUrl}${path}`);
-    const bytes = fromBase64(requireEncodedData(json, path));
-    return decodeTriggerMarketConfigInfos(await this.strictDecode(bytes));
   }
 
   /** Read the fail-closed next-height trigger admission predicate. Heights
@@ -1835,6 +1895,37 @@ export class ExchangeClient {
     );
     const bytes = fromBase64(requireEncodedData(json, "/v1/proposals"));
     return decodeProposalPage(await this.strictDecode(bytes));
+  }
+
+  /** One order by id (`POST /info` `orderStatus`), with exact bigint
+   * metadata and canonical legacy defaults; null when the engine holds no
+   * such order (filled, cancelled or never placed). An answer naming another
+   * order is rejected. The request names an order id, not an owner: the
+   * order's owner is returned, not checked. A
+   * malformed or float-bearing response, or one over 4 KiB, is rejected.
+   * This read does not verify a finalized witness. */
+  async queryOrderStatus(orderId: bigint): Promise<OpenOrder | null> {
+    if (
+      typeof orderId !== "bigint" ||
+      orderId < 0n ||
+      orderId > BigInt(Number.MAX_SAFE_INTEGER)
+    )
+      throw new Error("Invalid order id");
+    const json = await this.queryOwnerScoped(
+      { type: "orderStatus", oid: Number(orderId) },
+      `/v1/order/${orderId}`,
+    );
+    const encoded = requireEncodedData(json, "orderStatus");
+    if (
+      encoded.length > 4 * Math.ceil(4096 / 3) ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+        encoded,
+      )
+    )
+      throw new Error("Invalid order status data envelope");
+    await initWasm();
+    const order = getWasm().decode_order_status(fromBase64(encoded), orderId);
+    return order === null ? null : openOrdersFromWasm([order])[0];
   }
 
   /** Resting orders with exact bigint metadata and canonical legacy defaults.

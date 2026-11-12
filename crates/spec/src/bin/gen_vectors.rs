@@ -608,6 +608,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }}
             }),
         ),
+        // SetMarginOffsetPolicy (inner tag 0x1B): a complete policy replacement.
+        // The predecessor is `Option`, so the first write carries nil; pairs are
+        // positional with a bare-string resolution treatment.
+        codec_case(
+            "propose_admin_action/set_margin_offset_policy",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetMarginOffsetPolicy": {
+                    "predecessor": null,
+                    "pairs": [{
+                        "perpetual": 1u32,
+                        "conditional": 2u32,
+                        "settlement_reference": 1u32,
+                        "rate": 5_000u16,
+                        "resolution": "RemoveOnResolution"
+                    }]
+                }}
+            }),
+        ),
         // UpdateAuthoritySet (inner tag 0x07, exchange#422 / DEC-87,
         // exchange#472): addition/removal of members in one privileged
         // authority allowlist. `domain` is externally tagged as its bare
@@ -877,6 +898,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({ "withdrawal_id": 777u64, "holder": vec![0x05u8; 20],
                     "solana_signature": vec![0x07u8; 64],
                     "last_valid_block_height": 500u64 }),
+        ),
+        // Both integers at u64::MAX and a non-uniform signature (bytes 0..63),
+        // so every binding asserts the same integer width and the signature's
+        // array-of-u8 encoding, not just its own round trip.
+        codec_case(
+            "record_withdrawal_payout/u64_bounds",
+            RECORD_WITHDRAWAL_PAYOUT,
+            json!({ "withdrawal_id": u64::MAX, "holder": vec![0x05u8; 20],
+                    "solana_signature": (0u8..64).collect::<Vec<u8>>(),
+                    "last_valid_block_height": u64::MAX }),
         ),
         // `outcome` is a NUMERIC_ENUM_FIELDS entry in codec-adapter.ts (the
         // integer-vs-name class the markSourceMode regression belonged to);
@@ -1401,6 +1432,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         }})
     };
     let event_inputs = vec![
+        (
+            "margin_offset_policy_set/basic",
+            json!({"MarginOffsetPolicySet": {
+                "sequence": 1u64,
+                "pair_count": 1,
+                "proposal_id": 42u64,
+            }}),
+        ),
+        (
+            "margin_offset_pair_configured/basic",
+            json!({"MarginOffsetPairConfigured": {
+                "sequence": 1u64,
+                "index": 0,
+                "conditional_market": 2,
+                "perpetual_market": 1,
+                "settlement_reference_market": 1,
+                "rate_bps": 5_000,
+                "resolution": "RemoveOnResolution",
+            }}),
+        ),
         (
             "position_liquidated/partial",
             position_liquidated(

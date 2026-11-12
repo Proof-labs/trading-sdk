@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 # Delay imports to avoid circular access during proof_trading_sdk init
 _ERROR_CODES: list[dict[str, object]] = []
@@ -56,6 +56,22 @@ class ProofTradingSdkError(Exception):
 
 class CodecError(ProofTradingSdkError):
     """MessagePack codec encoding or decoding failure."""
+
+
+GatewayReadErrorKind = Literal["configuration", "malformed", "binding", "limit", "deadline"]
+
+
+class GatewayReadError(ProofTradingSdkError):
+    """Bounded read failure, with TypeScript-compatible ``kind`` and ``field``.
+
+    Kinds: ``configuration``, ``malformed``, ``binding``, ``limit``, ``deadline``.
+    HTTP refusals retain the existing SDK transport/auth/rate-limit exceptions.
+    """
+
+    def __init__(self, kind: GatewayReadErrorKind, field: str, message: str | None = None) -> None:
+        self.kind = kind
+        self.field = field
+        super().__init__(message or f"invalid gateway read: {field}")
 
 
 class SigningError(ProofTradingSdkError):
@@ -129,6 +145,35 @@ class EngineError(ProofTradingSdkError):
 
     def reopens_at(self) -> int | None:
         return None
+
+
+class PreAdmissionRefusal(ProofTradingSdkError):
+    """The gateway refused the request before admitting it (``status: refused``).
+
+    Nothing was broadcast: there is no transaction hash to reconcile, no
+    engine verdict, and no on-chain outcome to wait for. The gateway's
+    ``error_code`` names why — ``InvalidRequest`` means the request must be
+    corrected and ``EncodingError`` is a gateway-internal encoding failure.
+
+    Refusals at HTTP 401, 403, 429 and 5xx other than ``EncodingError`` keep
+    their own exceptions: :class:`AuthenticationError`, :class:`RateLimited` and
+    :class:`GatewayError`. ``Unauthorized``, ``RateLimited``, ``Maintenance``,
+    ``Overloaded`` and ``Unavailable`` therefore reach this class only on a
+    legacy HTTP 200.
+
+    Attributes:
+        error_code: The gateway's machine-readable ``errorCode``, never empty.
+        message: The gateway's own explanation, if it gave one.
+        status_code: The HTTP status the refusal arrived with, such as legacy
+            200, admission 400 or 413, and internal encoding failure 500.
+    """
+
+    def __init__(self, error_code: str, message: str, status_code: int) -> None:
+        self.error_code = error_code
+        self.message = message
+        self.status_code = status_code
+        detail = message or error_code
+        super().__init__(f"gateway refused the request: {detail}")
 
 
 class RateLimited(ProofTradingSdkError):

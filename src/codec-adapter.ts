@@ -18,7 +18,6 @@ import {
   TimeInForce,
   type AccountInfo,
   type OpenOrder,
-  type Action,
   type ActionTypeValue,
   type AdminAction,
   type EmergencyAction,
@@ -30,7 +29,9 @@ import {
   type MarketsSnapshot,
   type PositionInfo,
   type PriceComparison,
-  type SetTriggerMarketConfig,
+  type RetiredTriggerMarketConfig,
+  type DecodedAdminAction,
+  type DecodedAction,
   type SetOracleGuards,
   type FundInsuranceFund,
   type WithdrawInsuranceFund,
@@ -47,15 +48,17 @@ import {
 import type { AuthorizedAgentsView } from "./authorized-agents.js";
 import { bytesToHex } from "./crypto.js";
 import { validateSetLiquidationConfig } from "./liquidation-config.js";
+import { validateSetMarginOffsetPolicy } from "./margin-offsets.js";
+import type { SetMarginOffsetPolicy } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import { validateTicker } from "./ticker.js";
 import { BINARY_PRICE_MAX } from "./binary.js";
 import {
+  validateLegacyTriggerConfig,
   validateCancelPositionTriggers,
   validateOrderTriggers,
   validateSetPositionTriggers,
-  validateSetTriggerMarketConfig,
 } from "./triggers.js";
 
 /** camelCase → snake_case for field names (matches Rust serde field idents). */
@@ -169,7 +172,7 @@ function governanceActionToWasm(value: unknown): unknown {
 /** Client-side parity checks shared by the encode and read directions. */
 function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   if (v.kind === "SetTriggerMarketConfig") {
-    validateSetTriggerMarketConfig(v.value as SetTriggerMarketConfig);
+    validateLegacyTriggerConfig(v.value as RetiredTriggerMarketConfig);
   }
   if (v.kind === "SetOracleGuards") {
     validateSetOracleGuards(v.value as SetOracleGuards);
@@ -188,6 +191,9 @@ function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   }
   if (v.kind === "SetOperatorReceiptRegistry") {
     validateSetOperatorReceiptRegistry(v.value as SetOperatorReceiptRegistry);
+  }
+  if (v.kind === "SetMarginOffsetPolicy") {
+    validateSetMarginOffsetPolicy(v.value as SetMarginOffsetPolicy);
   }
   if (v.kind === "VoidEvent") {
     validateVoidEvent(v.value as VoidEvent);
@@ -231,7 +237,7 @@ function validateSetOperatorReceiptRegistry(
  * content-hash binding in `codec.ts`).
  */
 export function adminActionToWasm(
-  action: AdminAction | EmergencyAction,
+  action: DecodedAdminAction | EmergencyAction,
 ): unknown {
   return governanceActionToWasm(action);
 }
@@ -306,7 +312,7 @@ function convertObject(data: Record<string, unknown>): Record<string, unknown> {
  * does not check either, so the hash of a proposal already on chain can still
  * be recomputed (for example to reject it).
  */
-function validateCreateMarketTickers(action: Action): void {
+function validateCreateMarketTickers(action: DecodedAction): void {
   if (action.type === "CreateMarket") {
     validateTicker(action.data.ticker ?? "");
   } else if (
@@ -322,9 +328,10 @@ function validateCreateMarketTickers(action: Action): void {
 }
 
 /**
- * Translate a TS `Action` into `(actionType, fields)` for `encode_payload`.
+ * Translate a current or historical action for canonical wire encoding.
+ * This internal adapter does not decide whether an action is submittable.
  */
-export function toWasmFields(action: Action): {
+export function toWasmFields(action: DecodedAction): {
   actionType: ActionTypeValue;
   fields: Record<string, unknown>;
 } {
@@ -369,7 +376,7 @@ export function toWasmFields(action: Action): {
 /** action_type byte → `Action["type"]` name (inverse of `ActionType`). */
 const ACTION_TYPE_NAMES = Object.fromEntries(
   Object.entries(ActionType).map(([name, byte]) => [byte, name]),
-) as Record<number, Action["type"]>;
+) as Record<number, DecodedAction["type"]>;
 
 /** snake_case override → camelCase (inverse of `FIELD_OVERRIDES`). */
 const FIELD_OVERRIDES_REVERSE: Record<string, string> = Object.fromEntries(
@@ -593,13 +600,13 @@ function fromWasmObject(
 export function fromWasmFields(
   actionType: ActionTypeValue,
   fields: unknown,
-): Action {
+): DecodedAction {
   const type = ACTION_TYPE_NAMES[actionType];
   if (!type) throw new Error(`unknown action_type: ${actionType}`);
   return {
     type,
     data: fromWasmObject(fields as Record<string, unknown>),
-  } as unknown as Action;
+  } as unknown as DecodedAction;
 }
 
 // ---------------------------------------------------------------------------
@@ -761,8 +768,8 @@ export function openOrdersFromWasm(value: unknown): OpenOrder[] {
 }
 
 /** One stored `AdminAction`, with the same client-side checks as encoding. */
-export function adminActionFromWasm(v: unknown): AdminAction {
-  const action = governanceActionFromWasm(v) as AdminAction;
+export function adminActionFromWasm(v: unknown): DecodedAdminAction {
+  const action = governanceActionFromWasm(v) as DecodedAdminAction;
   validateGovernanceAction(action);
   return action;
 }
