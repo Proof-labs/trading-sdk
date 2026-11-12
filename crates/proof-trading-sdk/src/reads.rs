@@ -233,6 +233,11 @@ pub fn decode_market_listing(bytes: &[u8]) -> Result<MarketListingRows, ListingE
     })
 }
 
+/// The most bytes a listing payload (`GET /v1/markets`, `GET /v1/events`) may
+/// hold, as for open orders: far above any real listing, low enough that a
+/// broken or hostile gateway cannot make a read hold unbounded memory.
+pub const MAX_LISTING_BYTES: usize = 1024 * 1024;
+
 /// Which listing a [`ListingError`] refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Listing {
@@ -261,6 +266,8 @@ impl Listing {
 /// Why a whole listing was refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ListingFault {
+    /// The payload is larger than [`MAX_LISTING_BYTES`].
+    TooLarge { bytes: usize },
     /// The payload failed the strict MessagePack preflight.
     Payload(crate::msgpack::MsgpackError),
     /// The payload is not a list.
@@ -284,6 +291,10 @@ impl std::fmt::Display for ListingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (name, entity) = (self.listing.name(), self.listing.entity());
         match self.fault {
+            ListingFault::TooLarge { bytes } => write!(
+                f,
+                "{name} payload is too large: {bytes} bytes, at most {MAX_LISTING_BYTES}"
+            ),
             ListingFault::Payload(error) => write!(f, "invalid {name} payload: {error}"),
             ListingFault::NotAList => write!(f, "{name} is not a list"),
             ListingFault::RowNotArray { index } => write!(f, "{name} row {index} is not an array"),
@@ -380,6 +391,9 @@ fn decode_rows<T: DeserializeOwned>(
     id_of: impl Fn(&T) -> u32,
 ) -> Result<ListingRows<T>, ListingError> {
     let refuse = |fault| ListingError { listing, fault };
+    if bytes.len() > MAX_LISTING_BYTES {
+        return Err(refuse(ListingFault::TooLarge { bytes: bytes.len() }));
+    }
     crate::msgpack::reject_floats(bytes).map_err(|e| refuse(ListingFault::Payload(e)))?;
     let raw =
         rmpv::decode::read_value_with_max_depth(&mut Cursor::new(bytes), crate::msgpack::MAX_DEPTH)

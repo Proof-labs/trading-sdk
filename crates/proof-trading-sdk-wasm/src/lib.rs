@@ -110,11 +110,21 @@ fn decode_records<T: serde::de::DeserializeOwned + serde::Serialize>(
 }
 
 /// Decode a node read response into serde-shaped JS (u64/i64 as BigInt).
-/// Floats, extensions, duplicate keys and trailing bytes are refused first.
+/// A market or events listing over `reads::MAX_LISTING_BYTES` is refused, then
+/// floats, extensions, duplicate keys and trailing bytes are refused.
 /// Fields an engine appends to a stored record after the pinned wire are
 /// ignored; an `AdminAction` is decoded exactly.
 #[wasm_bindgen]
 pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
+    if matches!(kind, ReadKind::Markets | ReadKind::Events)
+        && bytes.len() > reads::MAX_LISTING_BYTES
+    {
+        return Err(JsError::new(&format!(
+            "listing payload is too large: {} bytes, at most {}",
+            bytes.len(),
+            reads::MAX_LISTING_BYTES
+        )));
+    }
     core_sdk::msgpack::reject_floats(bytes).map_err(|e| JsError::new(&e.to_string()))?;
     match kind {
         ReadKind::Markets => decode_records::<Vec<core_sdk::types::MarketConfig>>(

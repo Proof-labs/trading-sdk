@@ -115,6 +115,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **TypeScript and Rust listing reads refuse a payload over 1 MiB**
+  (`reads::MAX_LISTING_BYTES`, the open-orders bound): `queryMarkets()`,
+  `queryMarketListing()`, `queryEvents()` and `queryEventListing()`, and the
+  Rust `decode_market_listing` / `decode_event_listing`
+  (`ListingFault::TooLarge`). Real listings are a few kilobytes (#455).
+
 - **Breaking (Python MAJOR):** typed `ProposeAdminAction` and
   `ApproveAdminAction` reject retired admin actions at construction and before
   encoding. `is_submittable_admin_action()` checks the kind without enforcing

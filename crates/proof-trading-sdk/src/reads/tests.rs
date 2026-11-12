@@ -528,3 +528,19 @@ fn an_events_listing_is_refused_whole_when_malformed_or_not_a_list() {
         decode_event_listing(&bytes(&Value::Array(vec![]))).expect("an empty listing decodes");
     assert!(empty.events.is_empty() && empty.refused_rows.is_empty());
 }
+
+#[test]
+fn a_listing_over_the_size_bound_is_refused_before_it_is_read() {
+    let mut row = value(MARKET);
+    fields(&mut row)[22] = Value::from("X".repeat(MAX_LISTING_BYTES));
+    let listing = bytes(&Value::Array(vec![row]));
+    let error = decode_market_listing(&listing).expect_err("an oversized listing is refused");
+    assert_eq!(
+        error.fault,
+        ListingFault::TooLarge {
+            bytes: listing.len()
+        }
+    );
+    let error = decode_event_listing(&listing).expect_err("an oversized listing is refused");
+    assert!(matches!(error.fault, ListingFault::TooLarge { .. }));
+}
