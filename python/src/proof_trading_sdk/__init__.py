@@ -115,6 +115,10 @@ from proof_trading_sdk.errors import (
 )
 from proof_trading_sdk.nonce import NonceAllocator
 from proof_trading_sdk.config import SdkConfig, load_config
+from proof_trading_sdk.market_stats import (
+    MarketStatsStatus, MarketStatsOpenInterest, MarketStats, MarketStatsResponse, decode_market_stats_response,
+)
+from proof_trading_sdk.oracle_health import OracleMarketHealth, OracleHealth, decode_oracle_health
 from proof_trading_sdk.finalized_account import (
     FinalizedAccountState,
     RawAccountPosition,
@@ -273,6 +277,8 @@ __all__ = [
     "decode_action",
     "NonceAllocator",
     "ExchangeClient",
+    "MarketStatsStatus", "MarketStatsOpenInterest", "MarketStats", "MarketStatsResponse",
+    "decode_market_stats_response", "OracleMarketHealth", "OracleHealth", "decode_oracle_health",
     "FinalizedAccountState",
     "RawAccountPosition",
     "decode_finalized_account_state",
