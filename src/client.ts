@@ -1846,8 +1846,9 @@ export class ExchangeClient {
 
   /** One order by id (`POST /info` `orderStatus`), with exact bigint
    * metadata and canonical legacy defaults; null when the engine holds no
-   * such order (filled, cancelled or never placed). The request names an
-   * order id, not an owner: the order's owner is returned, not checked. A
+   * such order (filled, cancelled or never placed). An answer naming another
+   * order is rejected. The request names an order id, not an owner: the
+   * order's owner is returned, not checked. A
    * malformed or float-bearing response, or one over 4 KiB, is rejected.
    * This read does not verify a finalized witness. */
   async queryOrderStatus(orderId: bigint): Promise<OpenOrder | null> {
@@ -1870,7 +1871,7 @@ export class ExchangeClient {
     )
       throw new Error("Invalid order status data envelope");
     await initWasm();
-    const order = getWasm().decode_order_status(fromBase64(encoded));
+    const order = getWasm().decode_order_status(fromBase64(encoded), orderId);
     return order === null ? null : openOrdersFromWasm([order])[0];
   }
 

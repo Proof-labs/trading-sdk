@@ -6,7 +6,7 @@ const owner = new Uint8Array(20).fill(0xab);
 const max = (1n << 64n) - 1n;
 const encoder = new Encoder({ useBigInt64: true });
 const row = (): unknown[] => [
-  9007199254740993n,
+  42n,
   7,
   owner,
   "Sell",
@@ -44,7 +44,7 @@ describe("order status", () => {
   it("posts /info orderStatus and decodes the full order", async () => {
     const { client, transport } = packed(row());
     expect(await client.queryOrderStatus(42n)).toEqual({
-      id: 9007199254740993n,
+      id: 42n,
       market: 7,
       owner,
       side: "Sell",
@@ -66,12 +66,18 @@ describe("order status", () => {
     });
   });
 
+  it("rejects an answer naming another order", async () => {
+    await expect(packed(row()).client.queryOrderStatus(43n)).rejects.toThrow(
+      "order status answered another order",
+    );
+  });
+
   it("is null when the engine holds no such order", async () => {
     expect(await packed(null).client.queryOrderStatus(42n)).toBeNull();
   });
 
   it("uses wire defaults for a legacy six-field row", async () => {
-    const order = await packed(row().slice(0, 6)).client.queryOrderStatus(1n);
+    const order = await packed(row().slice(0, 6)).client.queryOrderStatus(42n);
     expect(order?.createdAtMs).toBe(0n);
     expect(order?.reduceOnly).toBe(false);
   });
@@ -92,7 +98,7 @@ describe("order status", () => {
     ["an unknown side", (r: unknown[]) => ((r[3] = "Hold"), r)],
   ])("rejects %s", async (_label, mutate) => {
     await expect(
-      packed(mutate(row())).client.queryOrderStatus(1n),
+      packed(mutate(row())).client.queryOrderStatus(42n),
     ).rejects.toThrow();
   });
 

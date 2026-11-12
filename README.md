@@ -248,8 +248,9 @@ are monitoring signals rather than faults. `faults` follows
 `queryOpenOrders(owner)` and Python `open_orders(owner)` read the gateway's
 `POST /info` `openOrders` response through the same Rust decoder.
 `queryOrderStatus(orderId)` reads one order by id (`POST /info` `orderStatus`)
-with the same fields, or `null` when the engine no longer holds it; the
-request names no owner, so the order's owner is returned, not checked. TypeScript
+with the same fields, or `null` when the engine no longer holds it. An
+answer naming another order is refused; the request names no owner, so the
+order's owner is returned, not checked. TypeScript
 returns camelCase fields; Python returns snake_case fields.
 
 | TypeScript                           | Python                                 | Value                                                              |

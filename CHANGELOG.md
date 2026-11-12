@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **TypeScript `queryOrderStatus(orderId)`**: one order by id (`POST /info` `orderStatus`; the node route `GET /v1/order/{id}` with `useGateway: false`), decoded by the Rust core's new `decode_order_status` with the same fields as `queryOpenOrders`, or `null` when the engine no longer holds the order. The request names no owner, so the owner is returned, not checked. Refuses an id above `Number.MAX_SAFE_INTEGER`, floats and payloads over 4 KiB. Additive (MINOR).
+- **TypeScript `queryOrderStatus(orderId)`**: one order by id (`POST /info` `orderStatus`; the node route `GET /v1/order/{id}` with `useGateway: false`), decoded by the Rust core's new `decode_order_status` with the same fields as `queryOpenOrders`, or `null` when the engine no longer holds the order. An answer naming another order is refused. The request names no owner, so the owner is returned, not checked. Refuses an id above `Number.MAX_SAFE_INTEGER`, floats and payloads over 4 KiB. Additive (MINOR).
 - **Rust `proof-sdk-rs` 1.0.0**, a new async (tokio) trading client over the gateway (#425), with a WebSocket feed (`ws` feature, on by default). The WASM build is unchanged.
 
 - Python chain-pinned transaction evidence and bounded block-result ranges/windows

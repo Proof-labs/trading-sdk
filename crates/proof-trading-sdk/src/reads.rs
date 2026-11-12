@@ -134,16 +134,22 @@ pub fn decode_open_orders(
     Ok(orders)
 }
 
+pub const ORDER_STATUS_ID_MISMATCH: &str = "order status answered another order";
+
 /// The most bytes one order-status reply may hold: one order row.
 pub const MAX_ORDER_STATUS_BYTES: usize = 4 * 1024;
 
 /// Decode one order looked up by id (`/info` `orderStatus`) using the canonical
 /// wire type: `None` when the engine answers nil (it holds no such order),
-/// else the order as it rests. Legacy trailing fields use the wire's serde
-/// defaults; appended future fields are ignored. The order's owner is
+/// else the order as it rests, bound to the requested `order_id` (an answer
+/// naming another order is refused). Legacy trailing fields use the wire's
+/// serde defaults; appended future fields are ignored. The order's owner is
 /// validated as 20 bytes but bound to no one: the request names an order id,
 /// not an owner, so the caller checks whose order it is.
-pub fn decode_order_status(bytes: &[u8]) -> Result<Option<crate::types::Order>, &'static str> {
+pub fn decode_order_status(
+    bytes: &[u8],
+    order_id: u64,
+) -> Result<Option<crate::types::Order>, &'static str> {
     if bytes.len() > MAX_ORDER_STATUS_BYTES {
         return Err("order status payload is too large");
     }
@@ -159,6 +165,9 @@ pub fn decode_order_status(bytes: &[u8]) -> Result<Option<crate::types::Order>, 
     }
     let order: crate::types::Order =
         decode(bytes, &ORDER).map_err(|_| "invalid order status payload")?;
+    if order.id != order_id {
+        return Err(ORDER_STATUS_ID_MISMATCH);
+    }
     Ok(Some(order))
 }
 
