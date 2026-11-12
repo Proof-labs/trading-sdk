@@ -43,6 +43,8 @@ export interface WasmCore {
   decode_order_status(bytes: Uint8Array, orderId: bigint): unknown;
   /** The market listing decoded row by row: decoded rows, their field counts, refused rows. */
   decode_market_listing(bytes: Uint8Array): unknown;
+  /** The events listing decoded row by row: decoded events and refused rows. */
+  decode_event_listing(bytes: Uint8Array): unknown;
   /** The pinned wire `MarketConfig`'s field count. */
   market_config_fields(): number;
   /** Decode a complete `/v1/markets-snapshot` HTTP body bound to `chainId`. */

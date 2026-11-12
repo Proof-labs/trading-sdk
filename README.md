@@ -186,6 +186,7 @@ class ExchangeClient {
   queryOrderStatus(orderId: bigint): Promise<OpenOrder | null>;
   queryMarkets(): Promise<MarketConfig[]>;
   queryMarketListing(): Promise<MarketListing>; // markets row by row: field counts and refused rows
+  queryEventListing(): Promise<EventListing>; // events row by row, with refused rows
   queryMarketsSnapshot(): Promise<MarketsSnapshot>;
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
   queryHealth(): Promise<{ status: string; height: number }>;

@@ -236,18 +236,22 @@ pub fn decode_market_listing(bytes: &[u8]) -> Result<MarketListingRows, ListingE
 pub enum Listing {
     /// The market listing (`GET /v1/markets`).
     Markets,
+    /// The events listing (`GET /v1/events`).
+    Events,
 }
 
 impl Listing {
     fn name(self) -> &'static str {
         match self {
             Self::Markets => "market listing",
+            Self::Events => "events listing",
         }
     }
 
     fn entity(self) -> &'static str {
         match self {
             Self::Markets => "market",
+            Self::Events => "event",
         }
     }
 }
@@ -291,6 +295,59 @@ impl std::fmt::Display for ListingError {
 }
 
 impl std::error::Error for ListingError {}
+
+/// A row of the events listing the decoder refused, named by its event id.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefusedEventRow {
+    /// Position of the row in the listing.
+    pub index: u32,
+    /// The event the row names (its first field): non-zero, and named by no
+    /// other row of the listing.
+    pub event_id: u32,
+    /// Fields in the row.
+    pub field_count: u32,
+    /// Why the row was refused (the wire decoder's message).
+    pub error: String,
+}
+
+/// The events listing decoded row by row (`GET /v1/events`).
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventListingRows {
+    /// The rows that decode as the pinned `EventInfo`, in listing order.
+    pub events: Vec<crate::types::EventInfo>,
+    /// The rows that do not decode, in listing order.
+    pub refused_rows: Vec<RefusedEventRow>,
+}
+
+/// Decode the events listing one row at a time, as `decode` reads each row
+/// (appended fields ignored, missing trailing fields defaulted). A row that
+/// does not decode (an oracle source kind or event status this wire does not
+/// know, a value out of range) is reported in `refused_rows`, but only when
+/// the event it belongs to is certain: the row is an array whose first field
+/// is a non-zero event id that no other row names. Anything else refuses the
+/// whole listing, as does a payload that is not a list or that fails the
+/// strict MessagePack preflight anywhere.
+pub fn decode_event_listing(bytes: &[u8]) -> Result<EventListingRows, ListingError> {
+    let rows =
+        decode_rows::<crate::types::EventInfo>(bytes, &EVENT_INFO, Listing::Events, |event| {
+            event.event_id.0
+        })?;
+    Ok(EventListingRows {
+        events: rows.decoded,
+        refused_rows: rows
+            .refused
+            .into_iter()
+            .map(|row| RefusedEventRow {
+                index: row.index,
+                event_id: row.id,
+                field_count: row.field_count,
+                error: row.error,
+            })
+            .collect(),
+    })
+}
 
 /// A refused row: its index, the id in its first field, its field count, why.
 struct RefusedRow {

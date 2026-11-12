@@ -127,6 +127,8 @@ import type {
   AuthoritiesSnapshot,
   ProposalPage,
   EventInfo,
+  EventListing,
+  RefusedEventRow,
   SetPositionTriggers,
   PositionTriggerInfo,
   TriggerStatus,
@@ -1614,6 +1616,37 @@ export class ExchangeClient {
       refusedRows: decoded.refusedRows.map((row) => ({
         index: row.index,
         market: row.market,
+        fieldCount: row.fieldCount,
+        error: row.error,
+      })),
+    };
+  }
+
+  /** The events listing decoded row by row (`EventListing`): the events that
+   *  decode as `queryEvents` decodes them, and the rows that do not, reported
+   *  instead of refusing every event. A missing envelope, a payload that is
+   *  not a list, or one that fails the strict MessagePack preflight is a
+   *  refusal. */
+  async queryEventListing(): Promise<EventListing> {
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/events`);
+    const bytes = fromBase64(requireEncodedData(json, "/v1/events"));
+    await initWasm();
+    let decoded: {
+      events: unknown[];
+      refusedRows: RefusedEventRow[];
+    };
+    try {
+      decoded = getWasm().decode_event_listing(bytes) as typeof decoded;
+    } catch (e) {
+      throw new Error(
+        `Events decode: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    return {
+      events: decoded.events.map(eventInfoFromWasm),
+      refusedRows: decoded.refusedRows.map((row) => ({
+        index: row.index,
+        eventId: row.eventId,
         fieldCount: row.fieldCount,
         error: row.error,
       })),

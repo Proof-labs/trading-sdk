@@ -224,6 +224,8 @@ export {
   type MarketConfig,
   type MarketListing,
   type RefusedMarketRow,
+  type EventListing,
+  type RefusedEventRow,
   type MarkSourceMode,
   type BindingScenarioEntry,
   type HistoryCashFlow,

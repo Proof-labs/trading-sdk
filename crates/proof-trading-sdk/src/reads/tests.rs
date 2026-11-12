@@ -433,3 +433,80 @@ fn a_market_listing_refuses_malformed_values_even_in_appended_fields() {
     fields(&mut deep_row).push(deep);
     assert!(decode_market_listing(&bytes(&Value::Array(vec![deep_row]))).is_err());
 }
+
+/// A DevNet `/v1/events` row (2026-11-12): event 4, a resolved one-book event
+/// with a `MarketOracle` source and one attached conditional.
+const EVENT: &str = "9a04cd0190d97657696c6c204254432062652061626f7665202438332c3433382e3738352028697473204f63746f6265722031322c20323032362c2031313a30302055544320707269636529206174207265736f6c7574696f6e206166746572204f63746f6265722031332c20323032362c2031313a3030205554433fcf000001a134eb5380ce0036ee8081a85265736f6c766564a24e6fcf000001a12fd93886cf000001a134eb579681ac4d61726b65744f7261636c659301cf000000136d56d1e8ab477265617465725468616e919303cd0192cd0193";
+
+#[test]
+fn an_events_listing_keeps_the_events_it_decodes_and_reports_the_rest() {
+    let good = value(EVENT);
+    let mut unknown_oracle = good.clone();
+    fields(&mut unknown_oracle)[0] = Value::from(7);
+    fields(&mut unknown_oracle)[8] = Value::Map(vec![(
+        Value::from("FutureOracle"),
+        Value::Array(vec![Value::from(1)]),
+    )]);
+    let mut unknown_status = good.clone();
+    fields(&mut unknown_status)[0] = Value::from(8);
+    fields(&mut unknown_status)[5] = Value::from("Paused");
+    let listing = Value::Array(vec![
+        unknown_oracle,
+        good.clone(),
+        appended(&good),
+        unknown_status,
+    ]);
+
+    let decoded = decode_event_listing(&bytes(&listing)).unwrap();
+    let expected: EventInfo = rmp_serde::from_slice(&bytes(&good)).unwrap();
+    assert_eq!(decoded.events.len(), 2);
+    for event in &decoded.events {
+        assert_eq!(
+            rmp_serde::to_vec(event).unwrap(),
+            rmp_serde::to_vec(&expected).unwrap()
+        );
+    }
+    let refused: Vec<(u32, u32, u32)> = decoded
+        .refused_rows
+        .iter()
+        .map(|row| (row.index, row.event_id, row.field_count))
+        .collect();
+    assert_eq!(refused, vec![(0, 7, 10), (3, 8, 10)]);
+    assert!(decoded.refused_rows[0].error.contains("FutureOracle"));
+}
+
+#[test]
+fn an_events_listing_row_that_names_no_event_or_a_named_one_is_refused_whole() {
+    let good = value(EVENT);
+    let refused_with = |first: Value| {
+        let mut row = good.clone();
+        fields(&mut row)[0] = first;
+        fields(&mut row)[5] = Value::from("Paused");
+        row
+    };
+    for (label, row) in [
+        ("not an array", Value::from(3)),
+        ("event zero", refused_with(Value::from(0))),
+        ("a string id", refused_with(Value::from("9"))),
+        ("a decoded event's id", refused_with(Value::from(4))),
+    ] {
+        let listing = Value::Array(vec![good.clone(), row]);
+        assert!(
+            decode_event_listing(&bytes(&listing)).is_err(),
+            "{label} must refuse the listing"
+        );
+    }
+    let error = decode_event_listing(&bytes(&Value::Array(vec![good.clone(), Value::from(3)])))
+        .unwrap_err();
+    assert_eq!(error.to_string(), "events listing row 1 is not an array");
+}
+
+#[test]
+fn an_events_listing_is_refused_whole_when_malformed_or_not_a_list() {
+    assert!(decode_event_listing(&bytes(&Value::from(5))).is_err());
+    let mut float_row = appended(&value(EVENT));
+    fields(&mut float_row).push(Value::F64(1.5));
+    assert!(decode_event_listing(&bytes(&Value::Array(vec![float_row]))).is_err());
+    let empty = decode_event_listing(&bytes(&Value::Array(vec![]))).unwrap();
+    assert!(empty.events.is_empty() && empty.refused_rows.is_empty());
+}

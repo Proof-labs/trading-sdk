@@ -762,6 +762,32 @@ export interface AttachedConditional {
   cpnMarket: number;
 }
 
+/** The events listing (`GET /v1/events`) decoded row by row. A row that does
+ *  not decode is reported in `refusedRows` instead of refusing every event,
+ *  when it names an event of its own; any other undecodable row refuses the
+ *  whole listing. */
+export interface EventListing {
+  /** The rows that decode as the pinned `EventInfo`, in listing order. */
+  events: EventInfo[];
+  /** The rows that do not decode (an oracle source kind or event status the
+   *  pinned wire does not know, a value out of range), in listing order. */
+  refusedRows: RefusedEventRow[];
+}
+
+/** A row of the events listing the decoder refused. */
+export interface RefusedEventRow {
+  /** Position of the row in the listing. */
+  index: number;
+  /** The event the row names (its first field): non-zero, and named by no
+   *  other row. A row that cannot be tied to an event refuses the whole
+   *  listing instead, so an event is never lost without being named here. */
+  eventId: number;
+  /** Fields in the row. */
+  fieldCount: number;
+  /** Why the row was refused (the wire decoder's message). */
+  error: string;
+}
+
 /** Stored record for an event — the `get_event` read model: its binary book
  *  and every conditional attached to it. */
 export interface EventInfo {

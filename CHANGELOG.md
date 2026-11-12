@@ -15,6 +15,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (TypeScript and Python, `1_000`) mirrors the engine's per-limb TP/SL slippage
   ceiling as an advisory clamp; encoding does not enforce it.
 
+- **TypeScript `queryEventListing()`** (`EventListing`, `RefusedEventRow`)
+  and the Rust core's `reads::decode_event_listing` (WASM
+  `decode_event_listing`): the events listing (`GET /v1/events`) decoded row by
+  row. Each row the decoder refuses (an oracle source kind or event status the
+  pinned wire does not know, a value out of range) is reported with its
+  listing index, its event id, its field count and the decode error, instead
+  of refusing every event, when the row names a non-zero event id no other row
+  names. A row that cannot be tied to an event of its own refuses the whole
+  listing.
+  A missing envelope, a payload that is not a list, or one that fails the
+  strict MessagePack preflight is still refused. `queryEvents()` is unchanged
+  (#451).
+
 - **TypeScript `MarketListing.refusedRows`** and the Rust core's
   `reads::decode_market_listing` (WASM `decode_market_listing`): the market
   listing decoded row by row. Each row the decoder refuses (a market kind or
