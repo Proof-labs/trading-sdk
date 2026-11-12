@@ -135,6 +135,17 @@ git diff --exit-code conformance/      # nonzero ⇒ vectors drifted from core
 This makes the vectors a tracked artifact of the core — they cannot silently
 fall out of sync.
 
+### Captured CometBFT vectors
+
+`comet-transaction-roots.json` is not generated from the Rust core. It holds
+real exchange-devnet-1 blocks (CometBFT 0.39), copied verbatim from
+`GET https://api.dev.proof.trade/v1/block?height=<height>`: `block.data.txs`
+and `block.header.data_hash`, for blocks with 0, 1, 3 and 5 transactions
+(3 and 5 exercise the uneven power-of-two split). To regenerate, fetch such
+blocks and replace the file. `src/transactions-root.test.ts`,
+`src/block-results-window.test.ts` and `python/tests/test_chain_evidence.py`
+all load this one file.
+
 ## Running the runners
 
 ```bash

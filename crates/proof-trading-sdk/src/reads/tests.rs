@@ -8,8 +8,10 @@
 use serde::de::{self, Deserializer, Visitor};
 
 use super::*;
-use crate::query::{AccountInfo, BindingScenario, PositionBrief};
-use crate::types::{AttachedConditional, EventInfo, FeeTier, MarketConfig};
+use crate::query::{
+    AccountInfo, AccountStateInfo, BindingScenario, LevelSummary, OrderbookSnapshot, PositionBrief,
+};
+use crate::types::{AttachedConditional, EventInfo, FeeTier, MarketConfig, Position};
 
 /// A deserializer that only records the field list serde derives for a struct.
 struct FieldProbe<'a>(&'a mut &'static [&'static str]);
@@ -79,6 +81,10 @@ fn widths_and_nested_fields_follow_the_pinned_wire_types() {
     assert_shape::<AccountInfo>(&ACCOUNT_INFO, &["positions", "binding_scenario"]);
     assert_shape::<PositionBrief>(inner(&ACCOUNT_INFO, 0), &[]);
     assert_shape::<BindingScenario>(inner(&ACCOUNT_INFO, 1), &[]);
+    assert_shape::<OrderbookSnapshot>(&ORDERBOOK, &["bids", "asks"]);
+    assert_shape::<LevelSummary>(inner(&ORDERBOOK, 0), &[]);
+    assert_shape::<AccountStateInfo>(&ACCOUNT_STATE, &["positions"]);
+    assert_shape::<Position>(inner(&ACCOUNT_STATE, 0), &[]);
 }
 
 fn resting_order() -> crate::types::Order {
@@ -193,6 +199,12 @@ fn appended(value: &Value) -> Value {
 #[test]
 fn a_market_list_with_appended_fields_decodes_as_the_pinned_rows() {
     let mut row = value(MARKET);
+    // Retain all three current tail fields before trimming only future data.
+    fields(&mut row).extend([
+        Value::from(1_000_000_000u64),
+        Value::from(10),
+        Value::from(-12_500),
+    ]);
     fields(&mut row)[13] = Value::Array(vec![Value::Array(vec![
         Value::from(0),
         Value::from(-7),
@@ -207,6 +219,9 @@ fn a_market_list_with_appended_fields_decodes_as_the_pinned_rows() {
 
     let expected: Vec<MarketConfig> = rmp_serde::from_slice(&bytes(&pinned)).unwrap();
     let decoded: Vec<MarketConfig> = decode(&bytes(&later), &Shape::List(&MARKET_CONFIG)).unwrap();
+    assert_eq!(decoded[0].impact_notional, 1_000_000_000);
+    assert_eq!(decoded[0].funding_dead_band_bps.unwrap().0, 10);
+    assert_eq!(decoded[0].funding_interest_rate.unwrap().0, -12_500);
     assert_eq!(
         rmp_serde::to_vec(&decoded).unwrap(),
         rmp_serde::to_vec(&expected).unwrap()

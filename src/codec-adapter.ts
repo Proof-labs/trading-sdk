@@ -47,6 +47,8 @@ import {
 import type { AuthorizedAgentsView } from "./authorized-agents.js";
 import { bytesToHex } from "./crypto.js";
 import { validateSetLiquidationConfig } from "./liquidation-config.js";
+import { validateSetMarginOffsetPolicy } from "./margin-offsets.js";
+import type { SetMarginOffsetPolicy } from "./types.js";
 import { validateSetOracleGuards } from "./oracle-guards.js";
 import { validateScheduleUpgrade } from "./upgrade-plan.js";
 import { validateTicker } from "./ticker.js";
@@ -188,6 +190,9 @@ function validateGovernanceAction(v: { kind: string; value?: unknown }): void {
   }
   if (v.kind === "SetOperatorReceiptRegistry") {
     validateSetOperatorReceiptRegistry(v.value as SetOperatorReceiptRegistry);
+  }
+  if (v.kind === "SetMarginOffsetPolicy") {
+    validateSetMarginOffsetPolicy(v.value as SetMarginOffsetPolicy);
   }
   if (v.kind === "VoidEvent") {
     validateVoidEvent(v.value as VoidEvent);
