@@ -63,12 +63,14 @@ fn event_fields(oracle_source: serde_json::Value) -> serde_json::Value {
 }
 
 /// The shared `AttachConditional` fixture: the perp on market 15 attached to
-/// event 700 with its conditional books from 9100.
+/// event 700 with its conditional books from 9100, and DEC-293's impact
+/// notional — the field wire 12 appended, pinned at a non-default value.
 fn attach_fields() -> serde_json::Value {
     json!({
         "event_id": 700, "underlying_market": 15, "child_market_base": 9100,
         "im_bps": 3334, "mm_bps": 1667, "taker_fee_bps": 5, "maker_fee_bps": 2,
-        "signer": vec![0u8; 20], "max_open_interest": 0u64
+        "signer": vec![0u8; 20], "max_open_interest": 0u64,
+        "impact_notional": 1_000_000_000u64
     })
 }
 
@@ -83,45 +85,6 @@ fn codec_case(case: &str, action_type: u8, input: serde_json::Value) -> cv::Code
             payload_hex: hex::encode(payload),
         },
     }
-}
-
-/// The engine golden `BridgeWithdrawalReceipt` fixture (mirrors exchange-core
-/// `codec::tests::golden_receipt`). `terminal_state` is `1 = Paid` for a
-/// confirm, `2 = Cancelled` for a fail; every other field is fixed.
-fn receipt_json(terminal_state: u8) -> serde_json::Value {
-    json!({
-        "deployment_id": vec![0x11u8; 32],
-        "authorization_digest": vec![0x22u8; 32],
-        "withdrawal_id": 777u64,
-        "terminal_state": terminal_state,
-        "vault_tier": 1,
-        "proof_owner": vec![0x05u8; 20],
-        "destination_owner": vec![0x06u8; 32],
-        "destination_token_acct": vec![0x07u8; 32],
-        "amount_micro_usdc": 1_000_000u64,
-        "fee_micro_usdc": 1_000_000u64,
-        "authorization_signer_epoch": 3u64,
-        "solana_tx_signature": vec![0x10u8; 64],
-        "finalized_slot": 900u64,
-        "finalized_blockhash": vec![0x33u8; 32],
-        "receipt_quorum_kind": 1,
-        "receipt_authority_epoch": 3u64,
-    })
-}
-
-/// The engine golden `OperatorReceiptProof` fixture (mirrors exchange-core
-/// `codec::tests::golden_proof`): a 4-of-n bitmap and four 64-byte ed25519
-/// signatures.
-fn operator_proof_json() -> serde_json::Value {
-    json!({
-        "signer_bitmap": vec![0x0Fu8],
-        "signatures": vec![
-            vec![0xABu8; 64],
-            vec![0xCDu8; 64],
-            vec![0xEFu8; 64],
-            vec![0x12u8; 64],
-        ],
-    })
 }
 
 fn error_case(case: &str, code: u32, log: Option<&str>) -> cv::ErrorCase {
@@ -155,11 +118,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     const APPROVE_ADMIN_ACTION: u8 = 0x1F;
     const REJECT_ADMIN_ACTION: u8 = 0x20;
     const EMERGENCY_ADMIN_ACTION: u8 = 0x21;
-    const CONFIRM_WITHDRAWAL_RECEIPT: u8 = 0x22;
-    const FAIL_WITHDRAWAL_RECEIPT: u8 = 0x23;
-    const AUTHORIZE_WITHDRAWAL: u8 = 0x24;
     // Coverage burn-down (issue #69): the 15 previously-unpinned action types.
-    // (CONFIRM_DEPOSIT is already declared above.)
+    // (CONFIRM_DEPOSIT is already declared above.) The receipt-era actions
+    // (0x22 / 0x23 / 0x24) retired with wire 12; their vectors left with them.
     const DEPOSIT: u8 = 0x05;
     const WITHDRAW: u8 = 0x06;
     const WITHDRAW_REQUEST: u8 = 0x08;
@@ -172,6 +133,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     const SUB_ACCOUNT_TRANSFER: u8 = 0x29;
     const CLAIM_WITHDRAWAL_PAYOUT: u8 = 0x2e;
     const RECORD_WITHDRAWAL_PAYOUT: u8 = 0x31;
+    const VOTE_WITHDRAWAL_PAID: u8 = 0x30;
+    const VOTE_DEPOSIT: u8 = 0x32;
     const SET_USER_MARKET_LEVERAGE: u8 = 0x16;
     const CANCEL_CLIENT_ORDER: u8 = 0x18;
     const CANCEL_ALL_ORDERS: u8 = 0x19;
@@ -328,15 +291,17 @@ fn main() -> Result<(), Box<dyn Error>> {
             }),
         ),
         // UpdateMarketFees appends the existing live-risk ratio levers at
-        // slots 18/19 before the S40 OI cap at slot 20. Null placeholders are
-        // intentional and prevent the cap from being decoded as im_bps.
+        // slots 18/19 before the S40 OI cap at slot 20, and wire 12's
+        // impact-notional lever last. Null placeholders are intentional and
+        // prevent the cap from being decoded as im_bps.
         codec_case(
             "update_market_fees/max_open_interest_only",
             UPDATE_MARKET_FEES,
             json!({
                 "market": 43, "signer": signer,
                 "im_bps": null, "mm_bps": null,
-                "max_open_interest": 500_000u64
+                "max_open_interest": 500_000u64,
+                "impact_notional": null
             }),
         ),
         // Pin the three adjacent risk tails together across Rust, TypeScript,
@@ -347,7 +312,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({
                 "market": 44, "signer": signer,
                 "im_bps": 3334, "mm_bps": 1667,
-                "max_open_interest": 750_000u64
+                "max_open_interest": 750_000u64,
+                "impact_notional": 250_000_000u64
             }),
         ),
         // AtomicBasketOrder (0x1c) — multi-leg, mixed leg optionals; pins the
@@ -788,40 +754,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": { "PauseMarket": { "market_id": 7 } }
             }),
         ),
-        // W28-20 receipt-gated terminal withdrawals (0x22 / 0x23). The receipt
-        // + operator-ed25519 proof fixtures mirror the engine golden vectors
-        // (exchange-core `codec::tests::golden_receipt` / `golden_proof`); the
-        // generated payload_hex must equal the engine's committed
-        // docs/spec/golden-vectors/{confirm,fail}_withdrawal_receipt.hex.
-        codec_case(
-            "confirm_withdrawal_receipt/paid",
-            CONFIRM_WITHDRAWAL_RECEIPT,
-            json!({
-                "receipt": receipt_json(1),
-                "proof": operator_proof_json(),
-            }),
-        ),
-        codec_case(
-            "fail_withdrawal_receipt/cancelled",
-            FAIL_WITHDRAWAL_RECEIPT,
-            json!({
-                "receipt": receipt_json(2),
-                "proof": operator_proof_json(),
-            }),
-        ),
-        // The authorization leg (0x24): the fixed 221-byte
-        // `WithdrawalAuthorizationV1` bytes + the operator proof. The engine
-        // commits no golden .hex for this action; the engine-derived pin is
-        // crates/spec/golden-vectors/authorize_withdrawal.hex (see the core
-        // golden test), and this case carries it to all three runners.
-        codec_case(
-            "authorize_withdrawal/operator",
-            AUTHORIZE_WITHDRAWAL,
-            json!({
-                "authorization": vec![0x44u8; 221],
-                "proof": operator_proof_json(),
-            }),
-        ),
         // ── coverage burn-down (issue #69) ───────────────────────────────
         // The 15 action types the coverage ratchet carried as debt. Each is
         // already exercised by round-trip tests but had no cross-language byte
@@ -891,23 +823,85 @@ fn main() -> Result<(), Box<dyn Error>> {
             CLAIM_WITHDRAWAL_PAYOUT,
             json!({ "withdrawal_id": 777u64, "holder": vec![0x05u8; 20] }),
         ),
-        // The wire's vectors/record_withdrawal_payout.hex fixture.
+        // The wire-12 payout record: the lease holder pins the Squads vault
+        // (32 bytes) and vault-transaction index it proposed, bound to the
+        // current registry epoch.
         codec_case(
             "record_withdrawal_payout/basic",
             RECORD_WITHDRAWAL_PAYOUT,
             json!({ "withdrawal_id": 777u64, "holder": vec![0x05u8; 20],
-                    "solana_signature": vec![0x07u8; 64],
-                    "last_valid_block_height": 500u64 }),
+                    "vault": vec![0x08u8; 32],
+                    "squads_transaction_index": 42u32,
+                    "registry_epoch": 3u64 }),
         ),
-        // Both integers at u64::MAX and a non-uniform signature (bytes 0..63),
-        // so every binding asserts the same integer width and the signature's
-        // array-of-u8 encoding, not just its own round trip.
+        // Every u64 at u64::MAX and the u32 index at its own bound, so every
+        // binding asserts the same integer widths, not just its own round
+        // trip.
         codec_case(
             "record_withdrawal_payout/u64_bounds",
             RECORD_WITHDRAWAL_PAYOUT,
             json!({ "withdrawal_id": u64::MAX, "holder": vec![0x05u8; 20],
-                    "solana_signature": (0u8..64).collect::<Vec<u8>>(),
-                    "last_valid_block_height": u64::MAX }),
+                    "vault": (0u8..32).collect::<Vec<u8>>(),
+                    "squads_transaction_index": u32::MAX,
+                    "registry_epoch": u64::MAX }),
+        ),
+        // Wire-12 operator votes (0x30 / 0x32): one registry member's
+        // signature over the canonical vote preimage, carried as a 64-byte
+        // array. Two items per action: a plain vote and a u64-bounds vote
+        // with a non-uniform signature, so every binding pins the widths and
+        // the signature's array-of-u8 encoding.
+        codec_case(
+            "vote_withdrawal_paid/basic",
+            VOTE_WITHDRAWAL_PAID,
+            json!({ "withdrawal_id": 777u64,
+                    "deployment_id": vec![0xA1u8; 32],
+                    "chain_id": vec![0xC7u8; 32],
+                    "registry_epoch": 3u64,
+                    "signature": vec![0x5Cu8; 64] }),
+        ),
+        codec_case(
+            "vote_withdrawal_paid/u64_bounds",
+            VOTE_WITHDRAWAL_PAID,
+            json!({ "withdrawal_id": u64::MAX,
+                    "deployment_id": (1u8..33).collect::<Vec<u8>>(),
+                    "chain_id": (2u8..34).collect::<Vec<u8>>(),
+                    "registry_epoch": u64::MAX,
+                    "signature": (0u8..64).collect::<Vec<u8>>() }),
+        ),
+        codec_case(
+            "vote_deposit/basic",
+            VOTE_DEPOSIT,
+            json!({ "owner": vec![0x01u8; 20], "amount_micro_usdc": 1_000_000u64,
+                    "solana_tx_sig": vec![0xABu8; 64],
+                    "locator": { "top_index": 2, "inner_index": 5 },
+                    "deployment_id": vec![0xA1u8; 32],
+                    "chain_id": vec![0xC7u8; 32],
+                    "registry_epoch": 9u64,
+                    "signature": vec![0x5Cu8; 64] }),
+        ),
+        // The LEGACY reading: an absent locator rides the vote preimage as
+        // the top-0 / inner-0xFFFF suffix, so the nil branch is pinned too.
+        codec_case(
+            "vote_deposit/legacy_locator",
+            VOTE_DEPOSIT,
+            json!({ "owner": vec![0x01u8; 20], "amount_micro_usdc": 5u64,
+                    "solana_tx_sig": vec![0xABu8; 64],
+                    "locator": null,
+                    "deployment_id": vec![0xA1u8; 32],
+                    "chain_id": vec![0xC7u8; 32],
+                    "registry_epoch": 1u64,
+                    "signature": vec![0x5Cu8; 64] }),
+        ),
+        codec_case(
+            "vote_deposit/u64_bounds",
+            VOTE_DEPOSIT,
+            json!({ "owner": vec![0xFFu8; 20], "amount_micro_usdc": u64::MAX,
+                    "solana_tx_sig": (0u8..64).collect::<Vec<u8>>(),
+                    "locator": { "top_index": u16::MAX, "inner_index": null },
+                    "deployment_id": (1u8..33).collect::<Vec<u8>>(),
+                    "chain_id": (2u8..34).collect::<Vec<u8>>(),
+                    "registry_epoch": u64::MAX,
+                    "signature": (64u8..128).collect::<Vec<u8>>() }),
         ),
         // `outcome` is a NUMERIC_ENUM_FIELDS entry in codec-adapter.ts (the
         // integer-vs-name class the markSourceMode regression belonged to);

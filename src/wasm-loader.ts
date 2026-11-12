@@ -34,6 +34,10 @@ export interface WasmCore {
     readonly Event: number;
     readonly Account: number;
     readonly AdminAction: number;
+    readonly BridgeStatus: number;
+    readonly BridgeRegistry: number;
+    readonly PendingWithdrawals: number;
+    readonly PendingDeposits: number;
   };
   /** Strictly decode a node read response as its wire type (serde-shaped JS). */
   decode_read(kind: number, bytes: Uint8Array): unknown;
@@ -86,8 +90,6 @@ export interface WasmCore {
   encode_withdrawal_authorization(fields: unknown): Uint8Array;
   /** Bridge v1 `SHA256(canonical authorization)` — the identity the engine binds. */
   withdrawal_authorization_digest(fields: unknown): Uint8Array;
-  /** Bridge v1 canonical 327-byte `BridgeReceiptV1` — the operator-quorum signed message. */
-  encode_bridge_receipt(fields: unknown): Uint8Array;
 }
 
 let cached: WasmCore | null = null;

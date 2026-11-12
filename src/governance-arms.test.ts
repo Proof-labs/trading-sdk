@@ -35,6 +35,7 @@ describe("withdrawal-limit + receipt-registry governance arms", () => {
   it("translates the registry rotation with byte-array fields passed through", () => {
     const deployment = new Uint8Array(32).fill(0x11);
     const key = new Uint8Array(32).fill(0x22);
+    const owner = new Uint8Array(20).fill(0x33);
     const wasm = adminActionToWasm({
       kind: "SetOperatorReceiptRegistry",
       value: {
@@ -42,6 +43,7 @@ describe("withdrawal-limit + receipt-registry governance arms", () => {
         epoch: 2n,
         threshold: 1,
         operatorKeys: [key],
+        operatorOwners: [owner],
       },
     }) as Record<string, Record<string, unknown>>;
     expect(wasm).toEqual({
@@ -50,6 +52,7 @@ describe("withdrawal-limit + receipt-registry governance arms", () => {
         epoch: 2n,
         threshold: 1,
         operator_keys: [key],
+        operator_owners: [owner],
       },
     });
   });
@@ -77,6 +80,7 @@ describe("decode side of the two arms", () => {
         2n,
         1,
         [Array(32).fill(0x01)],
+        [Array(20).fill(0x03)],
       ],
     });
     expect(decoded).toEqual({
@@ -86,8 +90,37 @@ describe("decode side of the two arms", () => {
         epoch: 2n,
         threshold: 1,
         operatorKeys: [new Uint8Array(32).fill(0x01)],
+        operatorOwners: [new Uint8Array(20).fill(0x03)],
       },
     });
+  });
+
+  it("refuses an owner roster that does not match the keys", () => {
+    expect(() =>
+      decodeAdminAction({
+        SetOperatorReceiptRegistry: [
+          Array(32).fill(0x11),
+          2n,
+          1,
+          [Array(32).fill(0x01)],
+          [],
+        ],
+      }),
+    ).toThrow(/operatorOwners length 0 must equal operatorKeys length 1/);
+  });
+
+  it("refuses a zero owner in the roster", () => {
+    expect(() =>
+      decodeAdminAction({
+        SetOperatorReceiptRegistry: [
+          Array(32).fill(0x11),
+          2n,
+          1,
+          [Array(32).fill(0x01)],
+          [Array(20).fill(0)],
+        ],
+      }),
+    ).toThrow(/operatorOwners\[0\] is the zero address/);
   });
 
   it("fails closed on a malformed rotation tuple", () => {

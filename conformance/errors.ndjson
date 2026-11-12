@@ -64,8 +64,6 @@
 {"case":"manifest/70","code":70,"log":null,"expect":{"name":"AdminActionRequiresProposal"}}
 {"case":"manifest/71","code":71,"log":null,"expect":{"name":"InvalidAdminRegistry"}}
 {"case":"manifest/72","code":72,"log":null,"expect":{"name":"BridgeReceiptRegistryInactive"}}
-{"case":"manifest/73","code":73,"log":null,"expect":{"name":"BridgeReceiptInvalid"}}
-{"case":"manifest/74","code":74,"log":null,"expect":{"name":"BridgeReceiptMismatch"}}
 {"case":"manifest/75","code":75,"log":null,"expect":{"name":"WithdrawalBelowMinimum"}}
 {"case":"manifest/76","code":76,"log":null,"expect":{"name":"WithdrawalTerminalGated"}}
 {"case":"manifest/77","code":77,"log":null,"expect":{"name":"UnpricedNoVerdict"}}
@@ -111,6 +109,11 @@
 {"case":"manifest/132","code":132,"log":null,"expect":{"name":"MarketStatusTransitionRefused"}}
 {"case":"manifest/133","code":133,"log":null,"expect":{"name":"MarketBacksLiveEvent"}}
 {"case":"manifest/134","code":134,"log":null,"expect":{"name":"MarketHalted"}}
+{"case":"manifest/135","code":135,"log":null,"expect":{"name":"BridgePaused"}}
+{"case":"manifest/136","code":136,"log":null,"expect":{"name":"BridgeVoteConflict"}}
+{"case":"manifest/137","code":137,"log":null,"expect":{"name":"BridgeVoteInvalid"}}
+{"case":"manifest/138","code":138,"log":null,"expect":{"name":"BridgeUnauthorizedOperator"}}
+{"case":"manifest/139","code":139,"log":null,"expect":{"name":"BridgePayoutReportInvalid"}}
 {"case":"manifest/255","code":255,"log":null,"expect":{"name":"InternalError"}}
 {"case":"code50/oi_log","code":50,"log":"open interest limit exceeded on market 7: would be 4, cap 3","expect":{"name":"OpenInterestLimitExceeded"}}
 {"case":"code50/slippage_log","code":50,"log":"atomic basket aggregate slippage 51 bps exceeds budget 50 bps","expect":{"name":"SlippageExceeded"}}

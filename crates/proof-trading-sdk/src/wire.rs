@@ -268,10 +268,8 @@ impl<'de> Deserialize<'de> for SolanaSignature {
 }
 
 /// Pre-allocation hint cap for the untrusted variable-length sequences in
-/// `OperatorReceiptProof` (bitmap bytes, signature list, signature bytes).
-/// A hint cap only — the Vec still grows to fit any real elements that
-/// follow, so the accepted payload set is identical to the engine's bare
-/// `Vec<u8>` / `Vec<Vec<u8>>`.
+/// the retired receipt-proof decode path. Kept as the generic bound for any
+/// future untrusted byte-sequence field.
 const PROOF_SEQ_HINT_CAP: usize = 64;
 
 /// Decode a `Vec<u8>` wire field without trusting the declared msgpack
@@ -279,6 +277,9 @@ const PROOF_SEQ_HINT_CAP: usize = 64;
 /// rationale as `SolanaSignature::deserialize`. Dual-form like the byte
 /// newtypes: msgpack seq-of-u8 or a byte scalar. Length is *not* validated;
 /// strictness stays identical to the engine's bare `Vec<u8>`.
+/// #[allow(dead_code)] — the receipt actions that decoded through it retired
+/// with wire 12; the helper stays for the next untrusted-sequence field.
+#[allow(dead_code)]
 pub(crate) fn hint_capped_bytes<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
     struct V;
     impl<'de> Visitor<'de> for V {
@@ -310,6 +311,7 @@ pub(crate) fn hint_capped_bytes<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u
 
 /// Decode a `Vec<Vec<u8>>` signature list with the same hint-capped
 /// discipline at both nesting levels.
+#[allow(dead_code)]
 pub(crate) fn hint_capped_byte_seqs<'de, D: Deserializer<'de>>(
     d: D,
 ) -> Result<Vec<Vec<u8>>, D::Error> {

@@ -347,8 +347,9 @@ function toAction(
         data: {
           withdrawalId: big(input.withdrawal_id),
           holder: bytes(input.holder),
-          solanaSignature: bytes(input.solana_signature),
-          lastValidBlockHeight: big(input.last_valid_block_height),
+          vault: bytes(input.vault),
+          squadsTransactionIndex: input.squads_transaction_index as number,
+          registryEpoch: big(input.registry_epoch),
         },
       };
     case ActionType.ResolveEvent:
@@ -393,6 +394,9 @@ function toAction(
           imBps: optNum(input.im_bps),
           mmBps: optNum(input.mm_bps),
           maxOpenInterest: optBig(input.max_open_interest),
+          impactNotional: optBig(input.impact_notional),
+          fundingDeadBandBps: optNum(input.funding_dead_band_bps),
+          fundingInterestRate: optNum(input.funding_interest_rate),
         },
       };
     }
@@ -471,28 +475,38 @@ function toAction(
           action: toEmergencyAction(input.action as Record<string, unknown>),
         },
       };
-    case ActionType.ConfirmWithdrawalReceipt:
+    case ActionType.VoteWithdrawalPaid:
       return {
-        type: "ConfirmWithdrawalReceipt",
+        type: "VoteWithdrawalPaid",
         data: {
-          receipt: toBridgeReceipt(input.receipt as Record<string, unknown>),
-          proof: toOperatorProof(input.proof as Record<string, unknown>),
+          withdrawalId: big(input.withdrawal_id),
+          deploymentId: bytes(input.deployment_id),
+          chainId: bytes(input.chain_id),
+          registryEpoch: big(input.registry_epoch),
+          signature: bytes(input.signature),
         },
       };
-    case ActionType.FailWithdrawalReceipt:
+    case ActionType.VoteDeposit:
       return {
-        type: "FailWithdrawalReceipt",
+        type: "VoteDeposit",
         data: {
-          receipt: toBridgeReceipt(input.receipt as Record<string, unknown>),
-          proof: toOperatorProof(input.proof as Record<string, unknown>),
-        },
-      };
-    case ActionType.AuthorizeWithdrawal:
-      return {
-        type: "AuthorizeWithdrawal",
-        data: {
-          authorization: bytes(input.authorization),
-          proof: toOperatorProof(input.proof as Record<string, unknown>),
+          owner: bytes(input.owner),
+          amountMicroUsdc: big(input.amount_micro_usdc),
+          solanaTxSig: bytes(input.solana_tx_sig),
+          locator:
+            input.locator == null
+              ? null
+              : {
+                  topIndex: (input.locator as Record<string, unknown>)
+                    .top_index as number,
+                  innerIndex:
+                    ((input.locator as Record<string, unknown>).inner_index as
+                      number | undefined) ?? null,
+                },
+          deploymentId: bytes(input.deployment_id),
+          chainId: bytes(input.chain_id),
+          registryEpoch: big(input.registry_epoch),
+          signature: bytes(input.signature),
         },
       };
     case ActionType.SetPositionTriggers: {
@@ -534,40 +548,6 @@ function toAction(
   }
 }
 
-/** Reconstruct a TS `BridgeWithdrawalReceipt` from the vector's snake_case map. */
-function toBridgeReceipt(
-  r: Record<string, unknown>,
-): import("./types.js").BridgeWithdrawalReceipt {
-  return {
-    deploymentId: bytes(r.deployment_id),
-    authorizationDigest: bytes(r.authorization_digest),
-    withdrawalId: big(r.withdrawal_id),
-    terminalState: r.terminal_state as number,
-    vaultTier: r.vault_tier as number,
-    proofOwner: bytes(r.proof_owner),
-    destinationOwner: bytes(r.destination_owner),
-    destinationTokenAcct: bytes(r.destination_token_acct),
-    amountMicroUsdc: big(r.amount_micro_usdc),
-    feeMicroUsdc: big(r.fee_micro_usdc),
-    authorizationSignerEpoch: big(r.authorization_signer_epoch),
-    solanaTxSignature: bytes(r.solana_tx_signature),
-    finalizedSlot: big(r.finalized_slot),
-    finalizedBlockhash: bytes(r.finalized_blockhash),
-    receiptQuorumKind: r.receipt_quorum_kind as number,
-    receiptAuthorityEpoch: big(r.receipt_authority_epoch),
-  };
-}
-
-/** Reconstruct a TS `OperatorReceiptProof` from the vector's snake_case map. */
-function toOperatorProof(
-  p: Record<string, unknown>,
-): import("./types.js").OperatorReceiptProof {
-  return {
-    signerBitmap: bytes(p.signer_bitmap),
-    signatures: (p.signatures as unknown[]).map((s) => bytes(s)),
-  };
-}
-
 /** Reconstruct a TS `CreateMarket` value from the vector's serde map form —
  *  shared by the `AdminAction` arm and `Batch` items. */
 function toCreateMarketValue(
@@ -606,6 +586,7 @@ function toAttachConditionalValue(
     makerFeeBps: input.maker_fee_bps as number,
     signer: bytes(input.signer),
     maxOpenInterest: big(input.max_open_interest),
+    impactNotional: big(input.impact_notional ?? 0),
   };
 }
 
