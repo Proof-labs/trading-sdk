@@ -1592,7 +1592,10 @@ export class ExchangeClient {
     const json = await this.apiJson(`${this.readBaseUrl}/v1/markets`);
     const bytes = fromBase64(requireEncodedData(json, "/v1/markets"));
     const raw = (await this.decodeRead("Markets", bytes)) as unknown[];
-    const rows = msgpackDecoder.decode(bytes) as unknown[][];
+    const rows: unknown = msgpackDecoder.decode(bytes);
+    if (!Array.isArray(rows) || !rows.every(Array.isArray)) {
+      throw new Error("Invalid market listing rows: expected arrays");
+    }
     return {
       markets: raw.map(marketConfigFromWasm),
       rowFieldCounts: rows.map((row) => row.length),

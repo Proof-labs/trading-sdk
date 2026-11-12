@@ -30,7 +30,7 @@ const row = (): unknown[] => [
   "BTC",
   30_000,
 ];
-function clientFor(rows: unknown[][] | undefined) {
+function clientFor(rows: unknown[] | undefined) {
   const body =
     rows === undefined
       ? {}
@@ -88,5 +88,25 @@ describe("market listing with row field counts", () => {
     await expect(
       clientFor(undefined).client.queryMarketListing(),
     ).rejects.toThrow();
+  });
+
+  it.each([
+    ["an object row", {}],
+    ["an object row with a matching length property", { length: 24 }],
+  ])("refuses %s instead of reporting its length", async (_label, extra) => {
+    // The Rust decoder accepts named fields and defaults the missing tail.
+    const namedRow = {
+      market: 1,
+      im_bps: 3334,
+      mm_bps: 1667,
+      taker_fee_bps: 5,
+      maker_fee_bps: 2,
+      funding_interval_ms: 3_600_000,
+      max_funding_rate_bps: 400,
+      ...extra,
+    };
+    await expect(
+      clientFor([row(), namedRow]).client.queryMarketListing(),
+    ).rejects.toThrow("Invalid market listing rows: expected arrays");
   });
 });
