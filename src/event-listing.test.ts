@@ -85,6 +85,17 @@ describe("events listing decoded row by row", () => {
     }
   });
 
+  it("words a missing envelope the same in queryEvents and queryEventListing", async () => {
+    for (const read of [
+      () => clientFor(undefined).client.queryEvents(),
+      () => clientFor(undefined).client.queryEventListing(),
+    ]) {
+      await expect(read()).rejects.toThrow(
+        "API error: /v1/events response is missing encoded data",
+      );
+    }
+  });
+
   it("refuses a missing envelope and a payload that is not a list", async () => {
     await expect(
       clientFor(undefined).client.queryEventListing(),

@@ -1654,12 +1654,10 @@ export class ExchangeClient {
    *  malformed row is a refusal. */
   async queryEvents(): Promise<EventInfo[]> {
     const json = await this.apiJson(`${this.readBaseUrl}/v1/events`);
-    if (typeof json.data !== "string") {
-      throw new Error(
-        "governance decode: events response has no encoded-data envelope",
-      );
-    }
-    const raw = await this.decodeRead("Events", fromBase64(json.data));
+    const raw = await this.decodeRead(
+      "Events",
+      fromBase64(requireEncodedData(json, "/v1/events")),
+    );
     return (raw as unknown[]).map(eventInfoFromWasm);
   }
 
@@ -1680,12 +1678,10 @@ export class ExchangeClient {
       const msg = (json.error as string) ?? `HTTP ${res.status}`;
       throw new Error(`API error: ${msg}`);
     }
-    if (typeof json.data !== "string") {
-      throw new Error(
-        "governance decode: event response has no encoded-data envelope",
-      );
-    }
-    const raw = await this.decodeRead("Event", fromBase64(json.data));
+    const raw = await this.decodeRead(
+      "Event",
+      fromBase64(requireEncodedData(json, `/v1/event/${eventId}`)),
+    );
     return raw == null ? null : eventInfoFromWasm(raw);
   }
 

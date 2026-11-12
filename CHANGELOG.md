@@ -215,6 +215,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- TypeScript `queryEvents()` and `queryEvent()` word a missing or empty
+  encoded-data envelope as every other read does (`API error: /v1/events
+response is missing encoded data`), so `queryEvents()` and
+  `queryEventListing()` refuse it with the same message (#455).
+
 - **Preserve structured gateway refusals (Python).** Python raises
   `PreAdmissionRefusal` with `error_code`, `message` and `status_code` for
   admission refusals, instead of treating legacy HTTP 200 refusals as
