@@ -547,7 +547,9 @@ export interface AuthorizeWithdrawal {
 export interface TriggerLimb {
   /** Trigger threshold in micro-USDC; must be non-zero. */
   triggerPrice: bigint;
-  /** IOC execution collar in basis points; must be in `1..=9999`. */
+  /** IOC execution collar in basis points. Engine admission accepts
+   * `1..=ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`; wire validation retains
+   * `1..=9999` for compatibility. */
   maxSlippageBps: number;
   /** Optional non-zero client correlation id for this limb. */
   clientTriggerId?: bigint | null;
@@ -572,8 +574,8 @@ export interface CancelPositionTriggers {
   expectedPositionEpoch: bigint;
 }
 
-/** Complete multisig-controlled trigger policy for one market (admin tag 5). */
-export interface SetTriggerMarketConfig {
+/** Legacy admin tag 5 value; the current engine rejects this retired action. */
+export interface RetiredTriggerMarketConfig {
   market: number;
   expectedCurrentVersion?: bigint | null;
   enabled: boolean;
@@ -1292,7 +1294,6 @@ export type AdminAction =
   | { kind: "CreateEvent"; value: CreateEvent }
   | { kind: "AttachConditional"; value: AttachConditional }
   | { kind: "Batch"; value: AdminBatchItem[] }
-  | { kind: "SetTriggerMarketConfig"; value: SetTriggerMarketConfig }
   | { kind: "SetWithdrawalLimit"; value: SetWithdrawalLimit }
   | { kind: "SetOperatorReceiptRegistry"; value: SetOperatorReceiptRegistry }
   | { kind: "SetLiquidationConfig"; value: SetLiquidationConfig }
@@ -1302,6 +1303,16 @@ export type AdminAction =
   | { kind: "UpdateAuthoritySet"; value: UpdateAuthoritySet }
   | { kind: "ScheduleUpgrade"; value: ScheduleUpgrade }
   | { kind: "CancelUpgrade"; value: CancelUpgrade };
+
+/** A retired governance action: still decodable from historical proposals,
+ * never submittable. Narrow with `isSubmittableAdminAction()`. */
+export type RetiredAdminAction = {
+  kind: "SetTriggerMarketConfig";
+  value: RetiredTriggerMarketConfig;
+};
+
+/** Historical proposals may contain retired actions; these cannot be submitted. */
+export type DecodedAdminAction = AdminAction | RetiredAdminAction;
 
 /** Authenticated relay attestation, not a cryptographic provider-proof verifier.
  * Price and confidence are integers in the policy's normalized micro unit. */
@@ -1400,6 +1411,18 @@ export type GovernanceAction =
   | { type: "EmergencyAdminAction"; data: EmergencyAdminAction };
 
 export type Action = TraderAction | OperatorAction | GovernanceAction;
+
+/** Read-only transaction shape, including retired governance actions. */
+export type DecodedAction =
+  | Exclude<Action, { type: "ProposeAdminAction" | "ApproveAdminAction" }>
+  | {
+      type: "ProposeAdminAction";
+      data: Omit<ProposeAdminAction, "action"> & { action: DecodedAdminAction };
+    }
+  | {
+      type: "ApproveAdminAction";
+      data: Omit<ApproveAdminAction, "action"> & { action: DecodedAdminAction };
+    };
 
 // ---------------------------------------------------------------------------
 // Governance read model (GET /v1/admin/signer-registry, GET /v1/proposals)
@@ -1524,7 +1547,7 @@ export interface ProposalDisplayInfo {
   actionTag: number;
   /** Typed decode of the proposed operation. `null` when the stored bytes
    *  predate a breaking change to that action's shape. */
-  action: AdminAction | null;
+  action: DecodedAdminAction | null;
   /** The EXACT stored engine-canonical bytes the content hash covers. */
   actionCanonicalBytes: Uint8Array;
   /** Domain-separated commitment to the immutable proposal context. */
@@ -2168,7 +2191,7 @@ export interface StoredTriggerLimb {
   lastEvaluation: TriggerEvaluation | null;
 }
 
-/** Effective trigger policy returned alongside each bracket. */
+/** Legacy stored trigger policy; not a current placement-availability check. */
 export interface TriggerMarketConfig {
   version: bigint;
   enabled: boolean;
@@ -2178,26 +2201,10 @@ export interface TriggerMarketConfig {
   maxActiveBrackets: bigint;
 }
 
-/** A governed trigger policy accepted in one block and effective next block. */
-export interface PendingTriggerMarketConfig {
-  config: TriggerMarketConfig;
-  acceptedHeight: bigint;
-  effectiveHeight: bigint;
-}
-
-/** Current and scheduled policy for one trigger-enabled market. */
-export interface TriggerMarketConfigState {
-  current: TriggerMarketConfig | null;
-  pending: PendingTriggerMarketConfig | null;
-}
-
-/** One row returned by `GET /v1/triggers/markets`. */
-export interface TriggerMarketConfigInfo {
-  market: number;
-  state: TriggerMarketConfigState;
-}
-
-/** Engine-defined label: the known names, or any later one. */
+/** Engine-defined label: the known names, or any later one.
+ * `ConfigurationMissing`, `MarketDisabled`, and `Deferred` are retained for
+ * historical decoding; the engine no longer emits them after trigger-policy retirement.
+ */
 export type TriggerEffectiveAvailabilityKind =
   | "Available"
   | "TriggerActionsInactive"
@@ -2234,6 +2241,9 @@ export interface PositionTriggerBracket {
 /** One owner/market row returned by `GET /v1/triggers/{owner}`. */
 export interface PositionTriggerInfo {
   bracket: PositionTriggerBracket;
+  /** @deprecated The engine returns null after trigger-policy retirement.
+   * Retained for historical decoding; do not use it to gate TP/SL placement.
+   */
   marketConfig: TriggerMarketConfig | null;
   availability: TriggerEffectiveAvailability;
 }

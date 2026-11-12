@@ -541,13 +541,9 @@ unsupported. See [availability](../README.md#setusermarketleverage-availability)
 ```python
 from proof_trading_sdk import actions
 
-policy = actions.SetTriggerMarketConfig(
-    market=7, enabled=True, max_trigger_slippage_bps=500,
-    max_mark_age_ms=5_000, max_future_publish_skew_ms=1_000, max_active_brackets=4,
-)
 propose = actions.ProposeAdminAction(
     proposer=owner, registry_version=3,
-    action={"SetTriggerMarketConfig": policy.as_wire()},
+    action={"SetMarketStatus": {"market": 7, "status": "ReduceOnly"}},
 )
 action_type, payload = actions.encode_action(propose)
 ```
@@ -561,9 +557,6 @@ position = next(p for p in client.account(owner).positions if p["market"] == 7)
 epoch = position["position_epoch"]
 if epoch is None:
     raise RuntimeError("position epoch is not backfilled; trigger placement is unavailable")
-policy = next(p for p in client.trigger_market_configs() if p.market == 7)
-if policy.state.current is None or not policy.state.current.enabled:
-    raise RuntimeError("position triggers are disabled for this market")
 client.set_position_triggers(
     market=7,
     owner=owner,
@@ -588,8 +581,22 @@ removed in the next major version. For a first attach, take the epoch from the
 canonical account position read; never guess `1`. `owner` defaults to the
 signer, but a version-active trading agent may pass its delegated owner and let
 the engine verify authorization.
-`trigger_market_configs()` is the strict source for the current and scheduled
-market policy; absence means disabled and no client default is substituted.
+`trigger_market_configs()` and the `SetTriggerMarketConfig` builder have been
+removed. Delete legacy-policy lookups and enabled checks before placing TP/SL;
+no replacement availability lookup is needed. Each limb requires explicit
+slippage in `1..=ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS` (currently 1000) basis
+points under the engine admission rule; clamp to that constant. The wire
+validator retains `1..=9999`; encoding does not guarantee admission or a fill.
+
+`ProposeAdminAction` and `ApproveAdminAction` reject retired actions with
+`ValueError` at construction and before encoding, including actions read from
+history. Use `is_submittable_admin_action()` to check the kind before building
+a request; it does not validate the payload or guarantee engine admission.
+`RawAction` and pre-encoded signing retain the wire contract; the engine rejects
+retired proposals and approvals. Historical retired-action (`SetTriggerMarketConfig`)
+proposal decoding and content hashes remain available; the policy-registry
+decoders for `/v1/triggers/markets` are removed. Current TP/SL placement,
+cancellation and history APIs are unchanged.
 
 `history_triggers()` and `history_trigger_markets()` use only the public gateway
 history routes. Their dataclass pages preserve chain coordinates, market ids,

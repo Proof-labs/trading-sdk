@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- TypeScript `isSubmittableAdminAction()` and the `RetiredAdminAction` type
+  narrow a bare `DecodedAdminAction` (for example `AdminProposalContext.action`)
+  to a submittable `AdminAction` without a cast. `ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`
+  (TypeScript and Python, `1_000`) mirrors the engine's per-limb TP/SL slippage
+  ceiling as an advisory clamp; encoding does not enforce it.
 - Export the `SubmitOracleObservation` and `ConfigureOraclePolicy` payload
   types from the TypeScript package root for typed operator integrations
   (MINOR for npm; types only). The
@@ -84,6 +89,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking (Python MAJOR):** typed `ProposeAdminAction` and
+  `ApproveAdminAction` reject retired admin actions at construction and before
+  encoding. `is_submittable_admin_action()` checks the kind without enforcing
+  engine admission policy. Raw encoding/signing and historical decoding remain.
+- Historical `SetTriggerMarketConfig` decoding and legacy policy fields in
+  position-trigger reads validate wire fields without enforcing the retired
+  enabled-policy nonzero bounds.
+
+- **Breaking (TypeScript):** `decodeTx().action`, `decodeSigningMessage().action`,
+  `AdminProposalContext.action` and `ProposalDisplayInfo.action` are now
+  `DecodedAction` / `DecodedAdminAction`, because historical proposals may hold
+  the retired `SetTriggerMarketConfig`. Code that assigns a decoded action to
+  `Action` or `AdminAction`, even code that never touches triggers, stops
+  compiling. Narrow with `isSubmittableAction()` or `isSubmittableAdminAction()`
+  first.
+- Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
+  1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
+  still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
+  placement. Existing TP/SL placement, cancellation and history APIs remain.
 - **Python `open_orders`** preserves all 14 resting-order fields through the
   shared Rust decoder (released for TypeScript in 12.0.0).
 
@@ -126,6 +150,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an API key configured. Subscribing to another owner's feed, or to any feed
   with an unconfigured chain ID, now fails with error frames instead of relying
   on the API key. Use a client with only the API key for those feeds.
+
+### Removed
+
+- **Breaking (next TypeScript MAJOR and Python 5.0.0):** remove `queryTriggerMarketConfigs()`,
+  Python `trigger_market_configs()`, the `SetTriggerMarketConfig` builder/type,
+  and TypeScript `validateSetTriggerMarketConfig`. Low-level payload encoding,
+  signing and historical decoding remain wire-compatible; the engine owns
+  proposal/execution refusal for the retired action. Proposal hashes remain available.
+  Remove legacy-policy prechecks before placing TP/SL; no replacement lookup is needed.
+- **Breaking (next TypeScript MAJOR and Python 5.0.0):** remove the legacy
+  trigger-policy registry decoders and their row types, which lost their only
+  caller with `queryTriggerMarketConfigs()`: TypeScript
+  `decodeTriggerMarketConfigInfos`, `TriggerMarketConfigInfo`,
+  `TriggerMarketConfigState` and `PendingTriggerMarketConfig`; Python
+  `proof_trading_sdk.trigger_config` (`decode_trigger_market_config_infos`,
+  `TriggerMarketConfigInfo`, `TriggerMarketConfigState`,
+  `PendingTriggerMarketConfig`, `TriggerMarketConfig`).
 
 ### Fixed
 

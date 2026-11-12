@@ -93,43 +93,6 @@ describe("ExchangeClient trigger contract", () => {
     },
   );
 
-  it.each([
-    [undefined, "http://gateway/v1/triggers/markets"],
-    [false, "http://node/v1/triggers/markets"],
-  ] as const)(
-    "reads trigger-market policy through the configured strict proxy",
-    async (useGateway, expectedUrl) => {
-      const payload = new Encoder({ useBigInt64: true }).encode([
-        [7, [[1n, true, 250, 5_000n, 1_000n, 32n], null]],
-      ]);
-      const calls: string[] = [];
-      globalThis.fetch = vi.fn(async (url: RequestInfo | URL) => {
-        calls.push(url.toString());
-        return new Response(JSON.stringify({ data: base64(payload) }));
-      }) as unknown as typeof fetch;
-      const client = new ExchangeClient({
-        gatewayUrl: "http://gateway",
-        apiUrl: "http://node",
-        useGateway,
-        chainId: "c",
-      });
-      await expect(client.queryTriggerMarketConfigs()).resolves.toMatchObject([
-        { market: 7, state: { current: { maxTriggerSlippageBps: 250 } } },
-      ]);
-      expect(calls).toEqual([expectedUrl]);
-    },
-  );
-
-  it("fails closed when trigger-market policy lacks the encoded envelope", async () => {
-    globalThis.fetch = vi.fn(
-      async () => new Response("{}"),
-    ) as unknown as typeof fetch;
-    const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
-    await expect(client.queryTriggerMarketConfigs()).rejects.toThrow(
-      /missing encoded data/,
-    );
-  });
-
   it("parses trigger status heights losslessly and propagates fail-closed 503", async () => {
     const client = new ExchangeClient({ gatewayUrl: "http://g", chainId: "c" });
     globalThis.fetch = vi.fn(

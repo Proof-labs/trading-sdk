@@ -102,7 +102,8 @@ try {
   signAndEncode,
   TimeInForce,
   bytesToHex,
-  decodeTriggerMarketConfigInfos,
+  ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS,
+  isSubmittableAdminAction,
   decodeTriggerMarketHistoryPage,
   encodePayloadBytes,
   ready,
@@ -155,11 +156,14 @@ try {
   if (history.nextCursor !== "" || history.triggerMarketEvents.length !== 0) {
     throw new Error("trigger history package export returned malformed empty page");
   }
-  const configs = decodeTriggerMarketConfigInfos([
-    [7, [[1n, true, 250, 5000n, 1000n, 32n], null]],
-  ]);
-  if (configs.length !== 1 || configs[0].state.current?.maxTriggerSlippageBps !== 250) {
-    throw new Error("trigger market config package export returned malformed policy");
+  if (ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS !== 1000) {
+    throw new Error("engine trigger slippage ceiling package export changed");
+  }
+  if (
+    isSubmittableAdminAction({ kind: "SetTriggerMarketConfig", value: {} }) ||
+    !isSubmittableAdminAction({ kind: "UnpauseBridge" })
+  ) {
+    throw new Error("retired admin action guard package export misclassified");
   }
   const client = new ExchangeClient({ gatewayUrl: "", chainId: "exchange-devnet-1" });
   const seed = new Uint8Array(32).fill(13);

@@ -12,7 +12,14 @@ import { describe, it, expect } from "vitest";
 
 import {
   ActionType,
+  isSubmittableAction,
+  isSubmittableAdminAction,
+  ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS,
+  MAX_TRIGGER_SLIPPAGE_BPS,
   type Action,
+  type DecodedAction,
+  type DecodedAdminAction,
+  type RetiredAdminAction,
   type CreateMarket,
   type SubmitOracleObservation,
   type ConfigureOraclePolicy,
@@ -34,13 +41,11 @@ import {
   type TriggerMarketHistoryEvent,
   type PositionTriggerHistoryPage,
   type TriggerMarketHistoryPage,
-  type TriggerMarketConfigInfo,
   type ExchangeEvent,
   type BlockResultsRange,
   type BlockResultsRangeSelection,
   type InsuranceFundUpdatedEvent,
   type PositionAutoDeleveragedEvent,
-  decodeTriggerMarketConfigInfos,
   decodePositionTriggerHistoryPage,
   decodeTriggerMarketHistoryPage,
   type TriggerOutcomeReason,
@@ -231,7 +236,6 @@ describe("public barrel: governance surface", () => {
     const marketEvent = null as TriggerMarketHistoryEvent | null;
     const ownerPage = null as PositionTriggerHistoryPage | null;
     const marketPage = null as TriggerMarketHistoryPage | null;
-    const configInfo = null as TriggerMarketConfigInfo | null;
     expect([
       set,
       cancel,
@@ -240,11 +244,12 @@ describe("public barrel: governance surface", () => {
       marketEvent,
       ownerPage,
       marketPage,
-      configInfo,
-    ]).toHaveLength(8);
+    ]).toHaveLength(7);
     expect(decodePositionTriggerHistoryPage).toBeTypeOf("function");
+    // Advisory engine ceiling, distinct from the wider wire bound.
+    expect(ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS).toBe(1_000);
+    expect(MAX_TRIGGER_SLIPPAGE_BPS).toBe(9_999);
     expect(decodeTriggerMarketHistoryPage).toBeTypeOf("function");
-    expect(decodeTriggerMarketConfigInfos).toBeTypeOf("function");
   });
 });
 
@@ -403,3 +408,42 @@ describe("public barrel: ticker rule", () => {
     );
   });
 });
+
+// Historical policy records remain readable, but not assignable to a new action.
+function retiredPolicyIsReadOnly(action: DecodedAdminAction) {
+  // @ts-expect-error retired historical actions are not submit-capable
+  const submit: AdminAction = action;
+  return submit;
+}
+void retiredPolicyIsReadOnly;
+
+function decodedActionsNeedNarrowing(decoded: DecodedAction): void {
+  // @ts-expect-error a decoded historical action is not necessarily submittable
+  const unchecked: Action = decoded;
+  void unchecked;
+  if (isSubmittableAction(decoded)) {
+    const current: Action = decoded;
+    void current;
+  } else {
+    // @ts-expect-error the rejected branch still includes retired actions
+    const retired: Action = decoded;
+    void retired;
+  }
+}
+void decodedActionsNeedNarrowing;
+
+function decodedAdminActionsNarrowWithoutCasts(
+  decoded: DecodedAdminAction,
+): void {
+  if (isSubmittableAdminAction(decoded)) {
+    const current: AdminAction = decoded;
+    void current;
+  } else {
+    const retired: RetiredAdminAction = decoded;
+    // @ts-expect-error the rejected branch is a retired action
+    const submit: AdminAction = decoded;
+    void retired;
+    void submit;
+  }
+}
+void decodedAdminActionsNarrowWithoutCasts;

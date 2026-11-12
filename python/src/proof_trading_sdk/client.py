@@ -101,10 +101,6 @@ from proof_trading_sdk.trigger_history import (
     history_params,
     validate_market,
 )
-from proof_trading_sdk.trigger_config import (
-    TriggerMarketConfigInfo,
-    decode_trigger_market_config_infos,
-)
 
 from proof_trading_sdk.finalized_account import (
     FinalizedAccountState, account_state_owner, decode_finalized_account_state,
@@ -1253,15 +1249,6 @@ class ExchangeClient:
                 raise ProofTradingSdkError(
                     "trigger decode: config slippage exceeds 9999"
                 )
-            if config["enabled"] and (
-                config["max_trigger_slippage_bps"] == 0
-                or config["max_mark_age_ms"] == 0
-                or config["max_future_publish_skew_ms"] == 0
-                or config["max_active_brackets"] == 0
-            ):
-                raise ProofTradingSdkError(
-                    "trigger decode: enabled config has a zero bound"
-                )
         availability: dict[str, t.Any]
         if isinstance(row[2], str):
             availability = {
@@ -1352,6 +1339,10 @@ class ExchangeClient:
 
         Uses the public node/gateway ``GET /v1/triggers/{owner}`` route. This
         is current state only; no trigger-history endpoint is implied.
+        ``market_config`` is ``None`` after trigger-policy retirement. The key
+        and availability kinds ``ConfigurationMissing``, ``MarketDisabled`` and
+        ``Deferred`` remain decodable for historical compatibility, not as
+        current TP/SL placement gates.
         """
         if owner is None:
             owner = self._own_owner()
@@ -1406,18 +1397,6 @@ class ExchangeClient:
             "admission_height": admission,
             "actions_active": active,
         }
-
-    def trigger_market_configs(self) -> list[TriggerMarketConfigInfo]:
-        """Complete governed trigger policy, sorted by market id.
-
-        Missing markets are disabled. A malformed/missing envelope is an error;
-        this method never substitutes a permissive client-side default.
-        """
-        path = "/v1/triggers/markets"
-        raw = self._decode_envelope(
-            _response_object(self._get(path)), source=path, require_data=True
-        )
-        return decode_trigger_market_config_infos(raw)
 
     @staticmethod
     def _decode_market_config(raw: t.Sequence[t.Any]) -> dict[str, t.Any]:
