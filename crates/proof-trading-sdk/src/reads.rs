@@ -12,6 +12,8 @@ use std::io::Cursor;
 use rmpv::Value;
 use serde::de::DeserializeOwned;
 
+use crate::types::{EventId, EventInfo};
+
 /// Where a read's records sit in the MessagePack value.
 #[derive(Clone, Copy, Debug)]
 pub enum Shape {
@@ -304,7 +306,7 @@ pub struct RefusedEventRow {
     pub index: u32,
     /// The event the row names (its first field): non-zero, and named by no
     /// other row of the listing.
-    pub event_id: u32,
+    pub event_id: EventId,
     /// Fields in the row.
     pub field_count: u32,
     /// Why the row was refused (the wire decoder's message).
@@ -316,7 +318,7 @@ pub struct RefusedEventRow {
 #[serde(rename_all = "camelCase")]
 pub struct EventListingRows {
     /// The rows that decode as the pinned `EventInfo`, in listing order.
-    pub events: Vec<crate::types::EventInfo>,
+    pub events: Vec<EventInfo>,
     /// The rows that do not decode, in listing order.
     pub refused_rows: Vec<RefusedEventRow>,
 }
@@ -328,12 +330,12 @@ pub struct EventListingRows {
 /// the event it belongs to is certain: the row is an array whose first field
 /// is a non-zero event id that no other row names. Anything else refuses the
 /// whole listing, as does a payload that is not a list or that fails the
-/// strict MessagePack preflight anywhere.
+/// strict MessagePack preflight anywhere. Rows must be arrays: a row encoded
+/// as a map, which `decode` would accept, refuses the listing.
 pub fn decode_event_listing(bytes: &[u8]) -> Result<EventListingRows, ListingError> {
-    let rows =
-        decode_rows::<crate::types::EventInfo>(bytes, &EVENT_INFO, Listing::Events, |event| {
-            event.event_id.0
-        })?;
+    let rows = decode_rows::<EventInfo>(bytes, &EVENT_INFO, Listing::Events, |event| {
+        event.event_id.0
+    })?;
     Ok(EventListingRows {
         events: rows.decoded,
         refused_rows: rows
@@ -341,7 +343,7 @@ pub fn decode_event_listing(bytes: &[u8]) -> Result<EventListingRows, ListingErr
             .into_iter()
             .map(|row| RefusedEventRow {
                 index: row.index,
-                event_id: row.id,
+                event_id: EventId(row.id),
                 field_count: row.field_count,
                 error: row.error,
             })

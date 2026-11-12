@@ -1623,7 +1623,8 @@ export class ExchangeClient {
   }
 
   /** The events listing decoded row by row (`EventListing`): the events that
-   *  decode as `queryEvents` decodes them, and the rows that do not, reported
+   *  decode as `queryEvents` decodes them (rows must be arrays, as the engine
+   *  writes them), and the rows that do not, reported
    *  instead of refusing every event. A missing envelope, a payload that is
    *  not a list, or one that fails the strict MessagePack preflight is a
    *  refusal. */
@@ -1644,12 +1645,7 @@ export class ExchangeClient {
     }
     return {
       events: decoded.events.map(eventInfoFromWasm),
-      refusedRows: decoded.refusedRows.map((row) => ({
-        index: row.index,
-        eventId: row.eventId,
-        fieldCount: row.fieldCount,
-        error: row.error,
-      })),
+      refusedRows: decoded.refusedRows,
     };
   }
 
