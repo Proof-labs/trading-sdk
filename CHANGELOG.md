@@ -9,18 +9,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- TypeScript `isSubmittableAdminAction()` and the `RetiredAdminAction` type
-  narrow a bare `DecodedAdminAction` (for example `AdminProposalContext.action`)
-  to a submittable `AdminAction` without a cast. `ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`
-  (TypeScript and Python, `1_000`) mirrors the engine's per-limb TP/SL slippage
-  ceiling as an advisory clamp; encoding does not enforce it.
-- Export the `SubmitOracleObservation` and `ConfigureOraclePolicy` payload
-  types from the TypeScript package root for typed operator integrations
-  (MINOR for npm; types only). The
-  [operator harness migration guide](docs/operator-harness-migration.md) maps
-  the retired `OracleUpdate`, `OracleUpdateComposite`, `RunFundingTick` and
-  `/testing` surfaces onto the current contract.
-
+- Python `ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS` (`1_000`) mirrors the engine's
+  per-limb TP/SL slippage ceiling as an advisory clamp; encoding does not
+  enforce it.
 - Python typed `market_stats()` preserves exact indexed rolling metrics and
   unavailable values, accepts non-string sequences such as `range`, and uses the
   shared calendar parser to reject impossible dates and hour 24.
@@ -97,17 +88,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   position-trigger reads validate wire fields without enforcing the retired
   enabled-policy nonzero bounds.
 
-- **Breaking (TypeScript):** `decodeTx().action`, `decodeSigningMessage().action`,
-  `AdminProposalContext.action` and `ProposalDisplayInfo.action` are now
-  `DecodedAction` / `DecodedAdminAction`, because historical proposals may hold
-  the retired `SetTriggerMarketConfig`. Code that assigns a decoded action to
-  `Action` or `AdminAction`, even code that never touches triggers, stops
-  compiling. Narrow with `isSubmittableAction()` or `isSubmittableAdminAction()`
-  first.
 - Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
   1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
   still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
   placement. Existing TP/SL placement, cancellation and history APIs remain.
+
 - **Python `open_orders`** preserves all 14 resting-order fields through the
   shared Rust decoder (released for TypeScript in 12.0.0).
 
@@ -153,20 +138,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
-- **Breaking (next TypeScript MAJOR and Python 5.0.0):** remove `queryTriggerMarketConfigs()`,
-  Python `trigger_market_configs()`, the `SetTriggerMarketConfig` builder/type,
-  and TypeScript `validateSetTriggerMarketConfig`. Low-level payload encoding,
-  signing and historical decoding remain wire-compatible; the engine owns
-  proposal/execution refusal for the retired action. Proposal hashes remain available.
-  Remove legacy-policy prechecks before placing TP/SL; no replacement lookup is needed.
-- **Breaking (next TypeScript MAJOR and Python 5.0.0):** remove the legacy
-  trigger-policy registry decoders and their row types, which lost their only
-  caller with `queryTriggerMarketConfigs()`: TypeScript
-  `decodeTriggerMarketConfigInfos`, `TriggerMarketConfigInfo`,
-  `TriggerMarketConfigState` and `PendingTriggerMarketConfig`; Python
-  `proof_trading_sdk.trigger_config` (`decode_trigger_market_config_infos`,
-  `TriggerMarketConfigInfo`, `TriggerMarketConfigState`,
-  `PendingTriggerMarketConfig`, `TriggerMarketConfig`).
+- **Breaking (Python 5.0.0):** remove `trigger_market_configs()` and the
+  `SetTriggerMarketConfig` builder. Low-level payload encoding, signing and
+  historical decoding remain wire-compatible; the engine owns proposal and
+  execution refusal for the retired action. Remove legacy-policy prechecks
+  before placing TP/SL; no replacement lookup is needed.
+- **Breaking (Python 5.0.0):** remove the legacy trigger-policy registry
+  decoders: `proof_trading_sdk.trigger_config`
+  (`decode_trigger_market_config_infos`, `TriggerMarketConfigInfo`,
+  `TriggerMarketConfigState`, `PendingTriggerMarketConfig`,
+  `TriggerMarketConfig`).
 
 ### Fixed
 
@@ -188,6 +169,111 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Python account-event history supports explicit ordering and cursor pagination. The client validates owner addresses and page limits (1–5000) before sending a request. Passing the unsupported `after_id` filter now raises `ValueError`.
 - Python reads per-account funding payments and position history with cursor pagination. Passing the unsupported `after_height` filter now raises `ValueError`.
 - Python reads deposit and withdrawal history from owner-scoped account events.
+
+## [12.1.0] — 2026-11-12
+
+TypeScript release on the same wire as 12.0.0 (proof-wire 11.0.0): the
+market and events listings decoded per row and bounded at 1 MiB, the oracle
+operator payload types exported, and the retired trigger-policy APIs
+removed (#409). Removing
+those APIs, and the change to `queryMarketListing()`, break code that relies
+on them; they ship in 12.1.0 by decision rather than in a MAJOR. Rust and
+Python versions are unchanged.
+
+### Added
+
+- **TypeScript `MarketListing.refusedRows`** and the Rust core's
+  `reads::decode_market_listing` (WASM `decode_market_listing`): the market
+  listing decoded row by row. Each row the decoder refuses (a market kind or
+  mark-source mode the pinned wire does not know, a value out of range) is
+  reported with its listing index, its market id, its field count and the
+  decode error, when the row names a non-zero market id no other row names. A
+  row that cannot be tied to a market of its own (not an array, no valid id,
+  an id another row names) refuses the whole listing, so a market is never
+  lost without being named. In Rust the refusal is a typed `ListingError`
+  (`ListingFault`: the preflight's `MsgpackError`, not a list, a non-array
+  row, no id, an id named twice) (#447).
+
+- **TypeScript `queryEventListing()`** (`EventListing`, `RefusedEventRow`)
+  and the Rust core's `reads::decode_event_listing` (WASM
+  `decode_event_listing`): the events listing (`GET /v1/events`) decoded row by
+  row. Each row the decoder refuses (an oracle source kind or event status the
+  pinned wire does not know, a value out of range) is reported with its
+  listing index, its event id, its field count and the decode error, instead
+  of refusing every event, when the row names a non-zero event id no other row
+  names. A row that cannot be tied to an event of its own refuses the whole
+  listing.
+  A missing envelope, a payload that is not a list, or one that fails the
+  strict MessagePack preflight is still refused. `queryEvents()` is unchanged
+  (#451).
+
+- Export the `SubmitOracleObservation` and `ConfigureOraclePolicy` payload
+  types from the TypeScript package root for typed operator integrations
+  (MINOR for npm; types only). The
+  [operator harness migration guide](docs/operator-harness-migration.md) maps
+  the retired `OracleUpdate`, `OracleUpdateComposite`, `RunFundingTick` and
+  `/testing` surfaces onto the current contract.
+
+- TypeScript `isSubmittableAdminAction()` and the `RetiredAdminAction` type
+  narrow a bare `DecodedAdminAction` (for example `AdminProposalContext.action`)
+  to a submittable `AdminAction` without a cast. `ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`
+  (`1_000`) mirrors the engine's per-limb TP/SL slippage ceiling as an advisory
+  clamp; encoding does not enforce it (#388).
+
+### Changed
+
+- **TypeScript and Rust listing reads refuse a payload over 1 MiB**
+  (`reads::MAX_LISTING_BYTES`, the open-orders bound): `queryMarkets()`,
+  `queryMarketListing()`, `queryEvents()` and `queryEventListing()`, and the
+  Rust `decode_market_listing` / `decode_event_listing`
+  (`ListingFault::TooLarge`). Real listings are a few kilobytes (#455).
+
+- **Breaking (TypeScript): `queryMarketListing()` no longer refuses the whole
+  listing for one row it cannot decode** (#447). It returns the rows that
+  decode in `markets` and the others, each named by its market, in
+  `refusedRows`; `rowFieldCounts` has one entry per decoded market.
+  `MarketListing` gains the required `refusedRows`, so a hand-built
+  `MarketListing` (a mock or fixture) must add it. A caller that relied on the throw to stop on an unknown
+  market must now check `refusedRows`. A missing envelope or a payload that is
+  not a list still throws, as does a payload that fails the strict
+  MessagePack preflight anywhere, appended fields included (floats,
+  extensions, duplicate keys, nesting deeper than 32, trailing bytes).
+  `queryMarkets()` is unchanged.
+
+- **Breaking (TypeScript):** `decodeTx().action`, `decodeSigningMessage().action`,
+  `AdminProposalContext.action` and `ProposalDisplayInfo.action` are now
+  `DecodedAction` / `DecodedAdminAction`, because historical proposals may hold
+  the retired `SetTriggerMarketConfig`. Code that assigns a decoded action to
+  `Action` or `AdminAction`, even code that never touches triggers, stops
+  compiling. Narrow with `isSubmittableAction()` or `isSubmittableAdminAction()`
+  first.
+
+- Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
+  1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
+  still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
+  placement. Existing TP/SL placement, cancellation and history APIs remain.
+
+### Removed
+
+- **Breaking (TypeScript):** remove `queryTriggerMarketConfigs()`, the
+  `SetTriggerMarketConfig` builder/type and `validateSetTriggerMarketConfig`.
+  Low-level payload encoding, signing and historical decoding remain
+  wire-compatible; the engine owns proposal/execution refusal for the retired
+  action. Proposal hashes remain available. Remove legacy-policy prechecks
+  before placing TP/SL; no replacement lookup is needed (#388).
+
+- **Breaking (TypeScript):** remove the legacy trigger-policy registry
+  decoders and their row types, which lost their only caller with
+  `queryTriggerMarketConfigs()`: `decodeTriggerMarketConfigInfos`,
+  `TriggerMarketConfigInfo`, `TriggerMarketConfigState` and
+  `PendingTriggerMarketConfig` (#388).
+
+### Fixed
+
+- TypeScript `queryEvents()` and `queryEvent()` word a missing or empty
+  encoded-data envelope as every other read does (`API error: /v1/events
+response is missing encoded data`), so `queryEvents()` and
+  `queryEventListing()` refuse it with the same message (#455).
 
 ## [12.0.0] — 2026-11-12
 
@@ -2282,7 +2368,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.1.0...HEAD
+[12.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.0.0...npm-v12.1.0
 [12.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v11.0.0...npm-v12.0.0
 [11.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.1.0...npm-v11.0.0
 [10.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.0.0...npm-v10.1.0

@@ -110,11 +110,21 @@ fn decode_records<T: serde::de::DeserializeOwned + serde::Serialize>(
 }
 
 /// Decode a node read response into serde-shaped JS (u64/i64 as BigInt).
-/// Floats, extensions, duplicate keys and trailing bytes are refused first.
+/// A market or events listing over `reads::MAX_LISTING_BYTES` is refused, then
+/// floats, extensions, duplicate keys and trailing bytes are refused.
 /// Fields an engine appends to a stored record after the pinned wire are
 /// ignored; an `AdminAction` is decoded exactly.
 #[wasm_bindgen]
 pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
+    if matches!(kind, ReadKind::Markets | ReadKind::Events)
+        && bytes.len() > reads::MAX_LISTING_BYTES
+    {
+        return Err(JsError::new(&format!(
+            "listing payload is too large: {} bytes, at most {}",
+            bytes.len(),
+            reads::MAX_LISTING_BYTES
+        )));
+    }
     core_sdk::msgpack::reject_floats(bytes).map_err(|e| JsError::new(&e.to_string()))?;
     match kind {
         ReadKind::Markets => decode_records::<Vec<core_sdk::types::MarketConfig>>(
@@ -152,6 +162,26 @@ pub fn decode_order_status(bytes: &[u8], order_id: u64) -> Result<JsValue, JsErr
         Some(order) => to_bigint_js(&order),
         None => Ok(JsValue::NULL),
     }
+}
+
+/// Decode the market listing row by row: the rows that decode, each one's
+/// field count, and the rows that do not (index, market id, field count,
+/// error). A row that names no market, or one another row names, refuses the
+/// whole listing, as does a payload that is not a list or fails the preflight.
+#[wasm_bindgen]
+pub fn decode_market_listing(bytes: &[u8]) -> Result<JsValue, JsError> {
+    let listing = reads::decode_market_listing(bytes).map_err(|e| JsError::new(&e.to_string()))?;
+    to_bigint_js(&listing)
+}
+
+/// Decode the events listing row by row: the events that decode and the rows
+/// that do not (index, event id, field count, error). A row that names no
+/// event, or one another row names, refuses the whole listing, as does a
+/// payload that is not a list or fails the strict MessagePack preflight.
+#[wasm_bindgen]
+pub fn decode_event_listing(bytes: &[u8]) -> Result<JsValue, JsError> {
+    let listing = reads::decode_event_listing(bytes).map_err(|e| JsError::new(&e.to_string()))?;
+    to_bigint_js(&listing)
 }
 
 /// How many fields the pinned wire `MarketConfig` has: the record width the
