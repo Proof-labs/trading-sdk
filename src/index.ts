@@ -220,6 +220,7 @@ export {
   type AccountInfo,
   type PositionInfo,
   type MarketConfig,
+  type MarketListing,
   type MarkSourceMode,
   type BindingScenarioEntry,
   type HistoryCashFlow,
