@@ -56,6 +56,9 @@ from proof_trading_sdk.candle_history import (
     candle_history_params,
     decode_candle_history,
 )
+
+from proof_trading_sdk.market_stats import MarketStatsResponse, decode_market_stats_response, market_stats_markets
+from proof_trading_sdk.oracle_health import OracleHealth, decode_oracle_health, oracle_health_market
 from proof_trading_sdk.markets_snapshot import MarketsSnapshot, decode_markets_snapshot
 from proof_trading_sdk.chain_evidence import (
     BlockResultsRange, BlockResultsWindow, TransactionEvidence,
@@ -1071,6 +1074,32 @@ class ExchangeClient:
     def nonce_info(self, owner: bytes | str) -> dict[str, t.Any]:
         resp = self._get(f"/v1/nonce/{_to_hex(owner)}")
         return _response_object(resp)
+
+    def market_stats(self, markets: t.Sequence[int]) -> MarketStatsResponse:
+        """Indexed rolling 24-hour statistics; numeric strings/nulls retain exact meaning."""
+        selected = market_stats_markets(markets)
+        response = self._request("GET", "/v1/history/market-stats", params={"markets": selected},
+                                 headers={"Cache-Control": "no-store"})
+        result = decode_market_stats_response(_response_object(response))
+        expected = {int(m) for m in selected.split(",")}
+        if {row.market for row in result.markets} != expected:
+            raise CodecError("market statistics requested market coverage mismatch")
+        return result
+
+    def oracle_health(self, market: int | None = None) -> OracleHealth:
+        """Operational feeder facts; absent readiness and market rows remain absent.
+
+        ``market`` requires api-gateway 10.3.0 or later. An older gateway
+        ignores the filter and returns every market, which raises
+        ``CodecError("oracle health requested market mismatch")``; call
+        without ``market`` against such a gateway.
+        """
+        selected = oracle_health_market(market)
+        params = None if selected is None else {"market": selected}
+        result = decode_oracle_health(_response_object(self._get("/v1/oracle/health", params)))
+        if selected is not None and result.markets is not None and any(m != selected for m in result.markets):
+            raise CodecError("oracle health requested market mismatch")
+        return result
 
     def authorities(self) -> AuthoritiesSnapshot:
         """Read the six operator-authority sets. HTTP/decode failures remain errors.

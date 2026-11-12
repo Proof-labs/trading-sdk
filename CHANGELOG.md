@@ -9,6 +9,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Python typed `market_stats()` preserves exact indexed rolling metrics and
+  unavailable values, accepts non-string sequences such as `range`, and uses the
+  shared calendar parser to reject impossible dates and hour 24.
+  `oracle_health()` exposes optional operational feeder facts
+  across disabled, F16 relay and market-freshness responses without inferring
+  trading authorization. Absent or null optional scalars decode to `None`;
+  F16 readiness fields still require booleans.
+
 - **Rust `proof-sdk-rs` 1.0.0**, a new async (tokio) trading client over the gateway (#425), with a WebSocket feed (`ws` feature, on by default). The WASM build is unchanged.
 
 - Python chain-pinned transaction evidence and bounded block-result ranges/windows
