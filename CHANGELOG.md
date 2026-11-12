@@ -9,6 +9,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Export the `SubmitOracleObservation` and `ConfigureOraclePolicy` payload
+  types from the TypeScript package root for typed operator integrations
+  (MINOR for npm; types only). The
+  [operator harness migration guide](docs/operator-harness-migration.md) maps
+  the retired `OracleUpdate`, `OracleUpdateComposite`, `RunFundingTick` and
+  `/testing` surfaces onto the current contract.
+
 - Python typed `market_stats()` preserves exact indexed rolling metrics and
   unavailable values, accepts non-string sequences such as `range`, and uses the
   shared calendar parser to reject impossible dates and hour 24.
