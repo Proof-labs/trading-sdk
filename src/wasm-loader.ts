@@ -41,6 +41,8 @@ export interface WasmCore {
   decode_open_orders(bytes: Uint8Array, owner: Uint8Array): unknown;
   /** One order by id (`orderStatus`), bound to `orderId`, or null; its owner is not bound. */
   decode_order_status(bytes: Uint8Array, orderId: bigint): unknown;
+  /** The market listing decoded row by row: decoded rows, their field counts, refused rows. */
+  decode_market_listing(bytes: Uint8Array): unknown;
   /** The pinned wire `MarketConfig`'s field count. */
   market_config_fields(): number;
   /** Decode a complete `/v1/markets-snapshot` HTTP body bound to `chainId`. */

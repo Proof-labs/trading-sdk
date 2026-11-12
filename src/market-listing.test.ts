@@ -80,21 +80,52 @@ describe("market listing with row field counts", () => {
     expect(short.markets[0].maxOpenInterest).toBe(0n);
   });
 
-  it("refuses a row missing a middle field and a missing envelope", async () => {
+  it("reports a row it cannot decode and keeps the others", async () => {
     const shifted = row().filter((_, index) => index !== 12);
-    await expect(
-      clientFor([shifted]).client.queryMarketListing(),
-    ).rejects.toThrow();
+    const spot = row();
+    spot[0] = 7;
+    spot[7] = "Spot";
+    const listing = await clientFor([
+      shifted,
+      row(),
+      spot,
+    ]).client.queryMarketListing();
+    expect(listing.markets.map((market) => market.market)).toEqual([1]);
+    expect(listing.rowFieldCounts).toEqual([24]);
+    expect(
+      listing.refusedRows.map(({ index, market, fieldCount }) => ({
+        index,
+        market,
+        fieldCount,
+      })),
+    ).toEqual([
+      { index: 0, market: 1, fieldCount: 23 },
+      { index: 2, market: 7, fieldCount: 24 },
+    ]);
+    expect(listing.refusedRows[1].error).toContain("Spot");
+  });
+
+  it("refuses a missing envelope and a payload that is not a list", async () => {
     await expect(
       clientFor(undefined).client.queryMarketListing(),
     ).rejects.toThrow();
+    const notAList = {
+      data: Buffer.from(encoder.encode(5)).toString("base64"),
+    };
+    const client = new ExchangeClient({
+      gatewayUrl: "https://gateway.example",
+      httpTransport: vi.fn(
+        async () => new Response(JSON.stringify(notAList), { status: 200 }),
+      ),
+    });
+    await expect(client.queryMarketListing()).rejects.toThrow("Markets decode");
   });
 
   it.each([
     ["an object row", {}],
     ["an object row with a matching length property", { length: 24 }],
-  ])("refuses %s instead of reporting its length", async (_label, extra) => {
-    // The Rust decoder accepts named fields and defaults the missing tail.
+  ])("reports %s as refused instead of decoding it", async (_label, extra) => {
+    // The Rust decoder would accept named fields and default the missing tail.
     const namedRow = {
       market: 1,
       im_bps: 3334,
@@ -105,8 +136,13 @@ describe("market listing with row field counts", () => {
       max_funding_rate_bps: 400,
       ...extra,
     };
-    await expect(
-      clientFor([row(), namedRow]).client.queryMarketListing(),
-    ).rejects.toThrow("Invalid market listing rows: expected arrays");
+    const listing = await clientFor([
+      row(),
+      namedRow,
+    ]).client.queryMarketListing();
+    expect(listing.markets).toHaveLength(1);
+    expect(listing.refusedRows).toEqual([
+      { index: 1, fieldCount: 0, error: "row is not an array" },
+    ]);
   });
 });

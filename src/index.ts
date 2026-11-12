@@ -223,6 +223,7 @@ export {
   type PositionInfo,
   type MarketConfig,
   type MarketListing,
+  type RefusedMarketRow,
   type MarkSourceMode,
   type BindingScenarioEntry,
   type HistoryCashFlow,

@@ -185,7 +185,7 @@ class ExchangeClient {
   queryOpenOrders(addressHex?: string): Promise<OpenOrder[]>;
   queryOrderStatus(orderId: bigint): Promise<OpenOrder | null>;
   queryMarkets(): Promise<MarketConfig[]>;
-  queryMarketListing(): Promise<MarketListing>; // markets plus each row's field count
+  queryMarketListing(): Promise<MarketListing>; // markets row by row: field counts and refused rows
   queryMarketsSnapshot(): Promise<MarketsSnapshot>;
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
   queryHealth(): Promise<{ status: string; height: number }>;

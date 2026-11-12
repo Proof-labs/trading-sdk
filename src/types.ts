@@ -2870,17 +2870,35 @@ export type MarketKind =
 /** Mark-price source mode. Mirrors the engine's `MarkSourceMode` enum. */
 export type MarkSourceMode = "OracleOnly" | "Median";
 
-/** The market listing (`GET /v1/markets`) with each row's field count, for a
- *  caller that refuses a listing whose layout differs from the wire this SDK
- *  pins. The decode itself ignores fields appended after the pinned width and
- *  fills missing trailing fields with their defaults, so a layout change at
- *  the end of a row decodes; only its field count shows it. */
+/** The market listing (`GET /v1/markets`) decoded row by row, with each
+ *  decoded row's field count, for a caller that refuses a row whose layout
+ *  differs from the wire this SDK pins. The decode ignores fields appended
+ *  after the pinned width and fills missing trailing fields with their
+ *  defaults, so a layout change at the end of a row decodes; only its field
+ *  count shows it. A row that does not decode is reported in `refusedRows`
+ *  instead of refusing the whole listing. */
 export interface MarketListing {
+  /** The rows that decode as the pinned `MarketConfig`, in listing order. */
   markets: MarketConfig[];
-  /** Fields in each listed row, in listing order (one per market). */
+  /** Fields in each decoded row, one per entry of `markets`. */
   rowFieldCounts: number[];
   /** Fields in the pinned wire `MarketConfig`. */
   pinnedFieldCount: number;
+  /** The rows that do not decode (a market kind or mark-source mode the
+   *  pinned wire does not know, a value out of range), in listing order. */
+  refusedRows: RefusedMarketRow[];
+}
+
+/** A row of the market listing the decoder refused. */
+export interface RefusedMarketRow {
+  /** Position of the row in the listing. */
+  index: number;
+  /** The row's market id, when its first field is one. */
+  market?: number;
+  /** Fields in the row (0 when the row is not an array). */
+  fieldCount: number;
+  /** Why the row was refused. */
+  error: string;
 }
 
 /** Configuration for a perpetual / conditional / binary market. The wire

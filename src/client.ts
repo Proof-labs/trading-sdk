@@ -1582,22 +1582,45 @@ export class ExchangeClient {
     return raw.map(marketConfigFromWasm);
   }
 
-  /** The market listing with each row's field count (`MarketListing`): the
-   *  same decode as `queryMarkets`, plus what that decode tolerates at the
-   *  end of a row, so a caller can refuse a layout the pinned wire does not
-   *  have. A missing envelope or a malformed row is a refusal. */
+  /** The market listing decoded row by row (`MarketListing`): the rows that
+   *  decode as `queryMarkets` decodes them, each one's field count (so a
+   *  caller can refuse a layout the pinned wire does not have), and the rows
+   *  that do not decode, reported instead of refusing the whole listing. A
+   *  missing envelope or a payload that is not a list is a refusal. */
   async queryMarketListing(): Promise<MarketListing> {
     const json = await this.apiJson(`${this.readBaseUrl}/v1/markets`);
     const bytes = fromBase64(requireEncodedData(json, "/v1/markets"));
-    const raw = (await this.decodeRead("Markets", bytes)) as unknown[];
-    const rows: unknown = msgpackDecoder.decode(bytes);
-    if (!Array.isArray(rows) || !rows.every(Array.isArray)) {
-      throw new Error("Invalid market listing rows: expected arrays");
+    await initWasm();
+    const wasm = getWasm();
+    let decoded: {
+      markets: unknown[];
+      rowFieldCounts: number[];
+      refusedRows: {
+        index: number;
+        market?: number;
+        fieldCount: number;
+        error: string;
+      }[];
+    };
+    try {
+      decoded = wasm.decode_market_listing(bytes) as typeof decoded;
+    } catch (e) {
+      throw new Error(
+        `Markets decode: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
     return {
-      markets: raw.map(marketConfigFromWasm),
-      rowFieldCounts: rows.map((row) => row.length),
-      pinnedFieldCount: getWasm().market_config_fields(),
+      markets: decoded.markets.map(marketConfigFromWasm),
+      rowFieldCounts: decoded.rowFieldCounts,
+      pinnedFieldCount: wasm.market_config_fields(),
+      refusedRows: decoded.refusedRows.map((row) => ({
+        index: row.index,
+        ...(row.market === undefined || row.market === null
+          ? {}
+          : { market: row.market }),
+        fieldCount: row.fieldCount,
+        error: row.error,
+      })),
     };
   }
 

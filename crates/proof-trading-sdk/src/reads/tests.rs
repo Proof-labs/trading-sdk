@@ -304,3 +304,54 @@ fn order_status_rejects_malformed_owner_rows_floats_and_oversize() {
         "order status payload is too large"
     );
 }
+
+#[test]
+fn a_market_listing_keeps_the_rows_it_decodes_and_reports_the_rest() {
+    let good = value(MARKET);
+    let mut unknown_kind = good.clone();
+    fields(&mut unknown_kind)[0] = Value::from(7);
+    fields(&mut unknown_kind)[7] = Value::from("Spot");
+    let mut wrong_type = good.clone();
+    fields(&mut wrong_type)[0] = Value::from(8);
+    fields(&mut wrong_type)[1] = Value::from("3334");
+    let longer = appended(&good);
+    let listing = Value::Array(vec![
+        good.clone(),
+        unknown_kind,
+        Value::from("not a row"),
+        longer,
+        wrong_type,
+    ]);
+
+    let decoded = decode_market_listing(&bytes(&listing)).unwrap();
+    let expected: MarketConfig = rmp_serde::from_slice(&bytes(&good)).unwrap();
+    assert_eq!(decoded.markets.len(), 2);
+    for market in &decoded.markets {
+        assert_eq!(
+            rmp_serde::to_vec(market).unwrap(),
+            rmp_serde::to_vec(&expected).unwrap()
+        );
+    }
+    assert_eq!(decoded.row_field_counts, vec![24, 25]);
+    let refused: Vec<(u32, Option<u32>, u32)> = decoded
+        .refused_rows
+        .iter()
+        .map(|row| (row.index, row.market, row.field_count))
+        .collect();
+    assert_eq!(
+        refused,
+        vec![(1, Some(7), 24), (2, None, 0), (4, Some(8), 24)]
+    );
+    assert!(decoded.refused_rows[0].error.contains("Spot"));
+}
+
+#[test]
+fn a_market_listing_that_is_not_a_list_is_refused_whole() {
+    assert!(decode_market_listing(&bytes(&Value::from(5))).is_err());
+    assert!(decode_market_listing(&[0xc1]).is_err());
+    let mut trailing = bytes(&Value::Array(vec![value(MARKET)]));
+    trailing.push(0xc0);
+    assert!(decode_market_listing(&trailing).is_err());
+    let empty = decode_market_listing(&bytes(&Value::Array(vec![]))).unwrap();
+    assert!(empty.markets.is_empty() && empty.refused_rows.is_empty());
+}

@@ -14,6 +14,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   to a submittable `AdminAction` without a cast. `ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`
   (TypeScript and Python, `1_000`) mirrors the engine's per-limb TP/SL slippage
   ceiling as an advisory clamp; encoding does not enforce it.
+
+- **TypeScript `MarketListing.refusedRows`** and the Rust core's
+  `reads::decode_market_listing` (WASM `decode_market_listing`): the market
+  listing decoded row by row. Each row the decoder refuses (a market kind or
+  mark-source mode the pinned wire does not know, a value out of range, a row
+  that is not an array) is reported with its listing index, its market id when
+  the first field is one, its field count and the decode error (#447).
+
 - Export the `SubmitOracleObservation` and `ConfigureOraclePolicy` payload
   types from the TypeScript package root for typed operator integrations
   (MINOR for npm; types only). The
@@ -108,6 +116,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
   still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
   placement. Existing TP/SL placement, cancellation and history APIs remain.
+
+- **TypeScript `queryMarketListing()` no longer refuses the whole listing for
+  one row it cannot decode** (#447). It returns the rows that decode in
+  `markets` and the others in `refusedRows`; `rowFieldCounts` has one entry
+  per decoded market. A caller that relied on the throw to stop on an unknown
+  market must now check `refusedRows`. A missing envelope or a payload that is
+  not a list still throws. `queryMarkets()` is unchanged.
+
 - **Python `open_orders`** preserves all 14 resting-order fields through the
   shared Rust decoder (released for TypeScript in 12.0.0).
 

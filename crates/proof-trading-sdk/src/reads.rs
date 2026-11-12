@@ -171,6 +171,88 @@ pub fn decode_order_status(
     Ok(Some(order))
 }
 
+/// A row of the market listing the decoder refused.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefusedMarketRow {
+    /// Position of the row in the listing.
+    pub index: u32,
+    /// The row's market id, when its first field is one.
+    pub market: Option<u32>,
+    /// Fields in the row (0 when the row is not an array).
+    pub field_count: u32,
+    /// Why the row was refused.
+    pub error: String,
+}
+
+/// The market listing decoded row by row (`GET /v1/markets`).
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketListingRows {
+    /// The rows that decode as the pinned `MarketConfig`, in listing order.
+    pub markets: Vec<crate::types::MarketConfig>,
+    /// Fields in each decoded row, one per entry of `markets`.
+    pub row_field_counts: Vec<u32>,
+    /// The rows that do not decode, in listing order.
+    pub refused_rows: Vec<RefusedMarketRow>,
+}
+
+/// Decode the market listing one row at a time, as `decode` reads each
+/// row (appended fields ignored, missing trailing fields defaulted). A row
+/// that does not decode (a market kind or mark-source mode this wire does not
+/// know, a value out of range) is reported in `refused_rows` instead of
+/// refusing the whole listing. A payload that is not a list is refused.
+pub fn decode_market_listing(bytes: &[u8]) -> Result<MarketListingRows, &'static str> {
+    let mut cursor = Cursor::new(bytes);
+    let raw =
+        rmpv::decode::read_value(&mut cursor).map_err(|_| "invalid market listing payload")?;
+    if usize::try_from(cursor.position()).ok() != Some(bytes.len()) {
+        return Err("invalid market listing payload");
+    }
+    let Value::Array(rows) = raw else {
+        return Err("market listing is not a list");
+    };
+    let mut listing = MarketListingRows {
+        markets: Vec::with_capacity(rows.len()),
+        row_field_counts: Vec::with_capacity(rows.len()),
+        refused_rows: Vec::new(),
+    };
+    for (index, mut row) in rows.into_iter().enumerate() {
+        let field_count = row.as_array().map_or(0, Vec::len);
+        let field_count = u32::try_from(field_count).unwrap_or(u32::MAX);
+        let market = row
+            .as_array()
+            .and_then(|fields| fields.first())
+            .and_then(Value::as_u64)
+            .and_then(|id| u32::try_from(id).ok());
+        let decoded = if row.is_array() {
+            cut(&mut row, &MARKET_CONFIG);
+            let mut row_bytes = Vec::new();
+            rmpv::encode::write_value(&mut row_bytes, &row)
+                .map_err(|e| e.to_string())
+                .and_then(|()| {
+                    rmp_serde::from_slice::<crate::types::MarketConfig>(&row_bytes)
+                        .map_err(|e| e.to_string())
+                })
+        } else {
+            Err("row is not an array".to_owned())
+        };
+        match decoded {
+            Ok(config) => {
+                listing.markets.push(config);
+                listing.row_field_counts.push(field_count);
+            }
+            Err(error) => listing.refused_rows.push(RefusedMarketRow {
+                index: u32::try_from(index).unwrap_or(u32::MAX),
+                market,
+                field_count,
+                error,
+            }),
+        }
+    }
+    Ok(listing)
+}
+
 /// Whether a raw owner is exactly 20 bytes, as bin or byte array.
 pub(crate) fn valid_owner(value: &Value) -> bool {
     match value {
