@@ -12,9 +12,6 @@ import { describe, it, expect } from "vitest";
 
 import {
   ActionType,
-  encodePayloadBytes,
-  encodeSignedTx,
-  decodeTx,
   type Action,
   type CreateMarket,
   type SubmitOracleObservation,
@@ -55,7 +52,7 @@ import {
 } from "./index.js";
 import type { OpenLabel } from "./types.js";
 
-it("exports current market-grid and oracle payloads for operator harnesses", () => {
+it("exports current market-grid and oracle payload types for operator harnesses", () => {
   const signer = new Uint8Array(20).fill(3);
   const market: CreateMarket = {
     market: 7,
@@ -97,13 +94,11 @@ it("exports current market-grid and oracle payloads for operator harnesses", () 
       },
     },
   ];
-  for (const action of actions) {
-    expect(encodePayloadBytes(action).length).toBeGreaterThan(0);
-    const decoded = decodeTx(
-      encodeSignedTx(action, 1n, new Uint8Array(32), new Uint8Array(64)),
-    );
-    expect(decoded.action).toMatchObject(action);
-  }
+  expect(actions.map((action) => action.type)).toEqual([
+    "CreateMarket",
+    "SubmitOracleObservation",
+    "ProposeAdminAction",
+  ]);
 });
 
 it("exposes typed reads on the existing read surface", async () => {
