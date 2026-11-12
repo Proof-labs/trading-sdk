@@ -75,6 +75,49 @@ impl Signer for LocalSigner {
     }
 }
 
+/// Failure from [`sign_action`].
+#[derive(Debug, derive_more::Display)]
+pub enum SignActionError {
+    /// The action did not encode.
+    #[display("encode: {_0}")]
+    Encode(String),
+    /// The signing backend failed.
+    #[display("{_0}")]
+    Signer(SignerError),
+}
+
+impl std::error::Error for SignActionError {}
+
+/// Sign `action` through any [`Signer`] and return the engine-ready envelope.
+///
+/// This is the custody-backend path: the key stays behind `signer` (HSM, KMS,
+/// remote), and the action type and payload come from the same codec the
+/// engine uses. `seq` is a wall-clock-millisecond timestamp nonce, unique per
+/// signature for this key.
+///
+/// # Errors
+///
+/// [`SignActionError::Encode`] if the action does not encode,
+/// [`SignActionError::Signer`] if the backend fails.
+pub fn sign_action(
+    signer: &dyn Signer,
+    chain_id: &[u8; 32],
+    action: &crate::types::Action,
+    seq: u64,
+) -> Result<Vec<u8>, SignActionError> {
+    use crate::{codec, crypto};
+    let encode = |e: crate::types::ExecError| SignActionError::Encode(e.to_string());
+    let public_key = signer.public_key();
+    // The typed codec only signs with an in-memory key, so take the canonical
+    // (action_type, payload) from an unsigned envelope and sign the preimage.
+    let unsigned = codec::encode_signed_tx(action, seq, &public_key, &[0; 64]).map_err(encode)?;
+    let raw = codec::decode_tx_raw(&unsigned).map_err(encode)?;
+    let msg = crypto::signing_message(chain_id, raw.action_type, seq, &raw.payload);
+    let signature = signer.try_sign(&msg).map_err(SignActionError::Signer)?;
+    codec::encode_signed_tx_raw(raw.action_type, &raw.payload, seq, &public_key, &signature)
+        .map_err(encode)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -103,5 +146,27 @@ mod tests {
             b"payload",
         )
         .is_ok());
+    }
+
+    #[test]
+    fn sign_action_matches_the_in_memory_codec() {
+        let seed = [0x42u8; 32];
+        let chain_id = crypto::chain_id_from_string("exchange-devnet-1");
+        let action = crate::types::Action::PlaceOrder(crate::types::PlaceOrder {
+            market: 1,
+            price: 5,
+            quantity: 1,
+            ..Default::default()
+        });
+        let via_signer =
+            sign_action(&LocalSigner::from_bytes(&seed), &chain_id, &action, 9).unwrap();
+        let via_codec = crate::codec::sign_and_encode_with_chain(
+            &chain_id,
+            &action,
+            9,
+            &SigningKey::from_bytes(&seed),
+        )
+        .unwrap();
+        assert_eq!(via_signer, via_codec);
     }
 }

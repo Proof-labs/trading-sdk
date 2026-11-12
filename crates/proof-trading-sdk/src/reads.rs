@@ -61,6 +61,28 @@ pub const ACCOUNT_INFO: Shape = Shape::Record {
     ],
 };
 
+const LEVEL_SUMMARY: Shape = Shape::Record {
+    width: 3,
+    nested: &[],
+};
+/// `query::OrderbookSnapshot`; fields 0 and 1 are `bids` and `asks`.
+pub const ORDERBOOK: Shape = Shape::Record {
+    width: 2,
+    nested: &[
+        (0, Shape::List(&LEVEL_SUMMARY)),
+        (1, Shape::List(&LEVEL_SUMMARY)),
+    ],
+};
+const POSITION: Shape = Shape::Record {
+    width: 7,
+    nested: &[],
+};
+/// `query::AccountStateInfo`; field 3 is `positions`.
+pub const ACCOUNT_STATE: Shape = Shape::Record {
+    width: 4,
+    nested: &[(3, Shape::List(&POSITION))],
+};
+
 /// `proof_wire::types::Order`, including client id and resting-order metadata.
 pub const ORDER: Shape = Shape::Record {
     width: 14,
@@ -68,6 +90,7 @@ pub const ORDER: Shape = Shape::Record {
 };
 
 pub const MAX_OPEN_ORDERS_BYTES: usize = 1024 * 1024;
+pub const OPEN_ORDERS_OWNER_MISMATCH: &str = "open orders owner does not match request";
 
 /// Decode the owner's resting orders using the canonical wire type. Legacy
 /// trailing fields use its serde defaults; appended future fields are ignored.
@@ -88,16 +111,7 @@ pub fn decode_open_orders(
         let raw_owner = row.as_array().and_then(|fields| fields.get(2));
         // wire_bytes' tuple visitor may accept a longer bin and consume only
         // its first 20 bytes. Validate the raw owner before typed decoding.
-        let valid = match raw_owner {
-            Some(Value::Binary(bytes)) => bytes.len() == 20,
-            Some(Value::Array(bytes)) => {
-                bytes.len() == 20
-                    && bytes
-                        .iter()
-                        .all(|value| value.as_u64().is_some_and(|b| b <= 255))
-            }
-            _ => false,
-        };
+        let valid = raw_owner.is_some_and(valid_owner);
         if !valid {
             return Err("invalid open orders owner bytes");
         }
@@ -107,7 +121,7 @@ pub fn decode_open_orders(
     let mut previous = None;
     for order in &orders {
         if &order.owner != owner {
-            return Err("open orders owner does not match request");
+            return Err(OPEN_ORDERS_OWNER_MISMATCH);
         }
         if previous.is_some_and(|id| order.id <= id) {
             return Err("open orders are not strictly ordered by id");
@@ -118,6 +132,57 @@ pub fn decode_open_orders(
         previous = Some(order.id);
     }
     Ok(orders)
+}
+
+pub const ORDER_STATUS_ID_MISMATCH: &str = "order status answered another order";
+
+/// The most bytes one order-status reply may hold: one order row.
+pub const MAX_ORDER_STATUS_BYTES: usize = 4 * 1024;
+
+/// Decode one order looked up by id (`/info` `orderStatus`) using the canonical
+/// wire type: `None` when the engine answers nil (it holds no such order),
+/// else the order as it rests, bound to the requested `order_id` (an answer
+/// naming another order is refused). Legacy trailing fields use the wire's
+/// serde defaults; appended future fields are ignored. The order's owner is
+/// validated as 20 bytes but bound to no one: the request names an order id,
+/// not an owner, so the caller checks whose order it is.
+pub fn decode_order_status(
+    bytes: &[u8],
+    order_id: u64,
+) -> Result<Option<crate::types::Order>, &'static str> {
+    if bytes.len() > MAX_ORDER_STATUS_BYTES {
+        return Err("order status payload is too large");
+    }
+    crate::msgpack::reject_floats(bytes).map_err(|_| "invalid order status payload")?;
+    let raw = rmpv::decode::read_value(&mut Cursor::new(bytes))
+        .map_err(|_| "invalid order status payload")?;
+    if raw.is_nil() {
+        return Ok(None);
+    }
+    let raw_owner = raw.as_array().and_then(|fields| fields.get(2));
+    if !raw_owner.is_some_and(valid_owner) {
+        return Err("invalid order status owner bytes");
+    }
+    let order: crate::types::Order =
+        decode(bytes, &ORDER).map_err(|_| "invalid order status payload")?;
+    if order.id != order_id {
+        return Err(ORDER_STATUS_ID_MISMATCH);
+    }
+    Ok(Some(order))
+}
+
+/// Whether a raw owner is exactly 20 bytes, as bin or byte array.
+pub(crate) fn valid_owner(value: &Value) -> bool {
+    match value {
+        Value::Binary(bytes) => bytes.len() == 20,
+        Value::Array(bytes) => {
+            bytes.len() == 20
+                && bytes
+                    .iter()
+                    .all(|value| value.as_u64().is_some_and(|byte| byte <= 255))
+        }
+        _ => false,
+    }
 }
 
 /// Decode `bytes` as `T`, first cutting every record `shape` names to its

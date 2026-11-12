@@ -183,7 +183,9 @@ class ExchangeClient {
   queryOrderbook(market: number): Promise<Orderbook>;
   queryFunding(market: number): Promise<FundingInfo>;
   queryOpenOrders(addressHex?: string): Promise<OpenOrder[]>;
+  queryOrderStatus(orderId: bigint): Promise<OpenOrder | null>;
   queryMarkets(): Promise<MarketConfig[]>;
+  queryMarketListing(): Promise<MarketListing>; // markets plus each row's field count
   queryMarketsSnapshot(): Promise<MarketsSnapshot>;
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
   queryHealth(): Promise<{ status: string; height: number }>;
@@ -245,7 +247,11 @@ are monitoring signals rather than faults. `faults` follows
 ### Resting order fields
 
 `queryOpenOrders(owner)` and Python `open_orders(owner)` read the gateway's
-`POST /info` `openOrders` response through the same Rust decoder. TypeScript
+`POST /info` `openOrders` response through the same Rust decoder.
+`queryOrderStatus(orderId)` reads one order by id (`POST /info` `orderStatus`)
+with the same fields, or `null` when the engine no longer holds it. An
+answer naming another order is refused; the request names no owner, so the
+order's owner is returned, not checked. TypeScript
 returns camelCase fields; Python returns snake_case fields.
 
 | TypeScript                           | Python                                 | Value                                                              |
@@ -414,11 +420,16 @@ validator, and does not prove consensus compatibility or authorize a rollout. Us
 
 ### Optional native Rust gateway transport
 
-Rust `proof-trading-sdk` 3.2.0 exposes `gateway::GatewayClient` with the optional
+Rust `proof-trading-sdk` 4.2.0 exposes `gateway::GatewayClient` with the optional
 `gateway` feature. Default codec/WASM builds do not acquire an HTTP transport.
-The four explicit operations are `chain_identity`, `oracle_permissions`,
-`submit_signed_bytes` and `committed_receipt`; they use only the existing gateway
-routes, with no direct-node fallback, signing, nonce allocation or hidden retry.
+Its six explicit operations are `chain_identity`, `oracle_permissions`,
+`account_valuation`, `submit_signed_bytes`, `submit_signed_bytes_with_evidence`
+and `committed_receipt`. They use only the existing gateway routes, with no
+direct-node fallback, signing, nonce allocation or hidden retry. The crate's own
+[README](crates/proof-trading-sdk/README.md) covers the codec, signing and read
+decoding for Rust integrators. For a trading bot, use the async
+[`proof-sdk-rs`](crates/proof-sdk-rs/README.md) crate on
+top of it: nonces, order helpers, receipts and typed reads.
 
 Configure an HTTPS origin (HTTP requires a URL-normalized loopback IP, not a DNS
 name; numeric IPv4 aliases that normalize to loopback are allowed), a
@@ -532,6 +543,17 @@ type TraderAction =
 Trading integrations use `TraderAction` and can type their calls against it to
 keep operator actions out of autocomplete. `submitTx` still accepts the full
 `Action` union.
+
+#### SetUserMarketLeverage availability
+
+SDK encoding support is retained, but ordinary-account submission is unsupported
+in exchange revision `5f172568`: [node admission rejects action `0x16`](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-node/check_tx.go#L466-L492).
+The separate governed [`ExecInsuranceFund` path](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/engine/governance/insurance_action.rs#L21-L70)
+permits it for the pool's insurance account.
+
+The setting affects **initial margin only**: `max(market.im_bps, user_im_bps)`,
+with `0` using the market default. [Maintenance margin and liquidation thresholds are unchanged](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/scenario_margin.rs#L168-L181).
+Ordinary-account support remains deferred in [#360](https://github.com/Proof-labs/trading-sdk/issues/360).
 
 #### Operator actions (privileged)
 

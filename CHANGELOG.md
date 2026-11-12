@@ -9,12 +9,48 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `validateSetMarginOffsetPolicy` checks policy bounds before encoding and
-  through `decodeAdminAction`.
-  `decodeMarginOffsetEvent` reads the engine's `margin_offset_policy_set`
-  and `margin_offset_pair_configured` attributes against wire-generated vectors.
-  Rust re-exports the margin-offset types. Conformance vectors and content-hash
-  constants pin policy encoding across TypeScript, Rust and Python.
+- Export the `SubmitOracleObservation` and `ConfigureOraclePolicy` payload
+  types from the TypeScript package root for typed operator integrations
+  (MINOR for npm; types only). The
+  [operator harness migration guide](docs/operator-harness-migration.md) maps
+  the retired `OracleUpdate`, `OracleUpdateComposite`, `RunFundingTick` and
+  `/testing` surfaces onto the current contract.
+
+- Python typed `market_stats()` preserves exact indexed rolling metrics and
+  unavailable values, accepts non-string sequences such as `range`, and uses the
+  shared calendar parser to reject impossible dates and hour 24.
+  `oracle_health()` exposes optional operational feeder facts
+  across disabled, F16 relay and market-freshness responses without inferring
+  trading authorization. Absent or null optional scalars decode to `None`;
+  F16 readiness fields still require booleans.
+
+- **Rust `proof-sdk-rs` 1.0.0**, a new async (tokio) trading client over the gateway (#425), with a WebSocket feed (`ws` feature, on by default). The WASM build is unchanged.
+
+- Python chain-pinned transaction evidence and bounded block-result ranges/windows
+  check exact transaction bytes, Merkle roots and H+1 app-hash continuity.
+  Results remain trusted gateway observations, without validator verification.
+
+- Python `finalized_orderbook()` and explicitly chain-pinned
+  `finalized_markets_snapshot()` return typed facts plus height-bound witnesses,
+  through bounded HTTP. Snapshot decoding uses canonical Rust; orderbooks use
+  Rust validation over `OrderbookSnapshot` and shared TS/Python vectors.
+  Existing snapshot APIs remain unchanged; witness consistency is not
+  validator or payload verification.
+
+- Python `finalized_account_state(owner, timeout=5)` returns typed raw balance,
+  positions and a height-bound witness through the canonical Rust wire decoder.
+  Exact integer ranges, owner bindings, minimum field counts and bounded responses
+  match the TS finalized account-state contract. Existing `account()` is unchanged;
+  valuation, authorization, payload proofs and validator verification are excluded.
+
+- Python: add typed finalized valued-account, agent-authorization, recent-nonce and open-order reads with bounded witness transport and canonical Rust payload decoding. Existing account/order APIs are unchanged. Python and TypeScript finalized order reads accept market ID zero, matching positions and the wire u32 domain; invalid market values remain errors.
+- Python chain-pinned `block_header`, typed header/witness decoders and
+  `verify_witness` compare a finalized-read witness with an H+1 app hash.
+  Byte, chunk and JSON-depth limits apply; synchronous HTTP cannot guarantee a
+  total elapsed-time deadline for slow headers or custom transports. Exact
+  heights/timestamps are preserved; validator signatures and payload proofs
+  are not verified. Whole-block responses over 1 MiB remain unsupported.
+
 - Python typed `authorities()` and `liquidation_config()` reads, backed by
   canonical Rust wire types with strict record/address/range checks. Failed
   reads raise rather than synthesize empty authorities or default configuration.
@@ -34,7 +70,46 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   challenge on every retry and reconnect. `account_auth(owner, after_id=0)`
   supports direct owner keys and JSON-safe nonnegative cursors.
 
+- Python `PublicTradeStream` and `ExchangeClient.trade_stream` expose the public
+  `trades` WebSocket channel with exact gateway frames, subscription errors,
+  cancellation and automatic resubscription. No snapshot or missed-fill recovery.
+  Matching subscription refusals are yielded once, then raise `TransportError`
+  and close the socket on the next iteration.
+  Both base URLs and endpoints already ending in `/ws` are accepted.
+  Requires `websockets>=15` (previously >=14); callers pinning version 14 must
+  upgrade. Protocol Ping/Pong uses explicit 15-second/10-second timings. Version
+  15 also changes the account and orderbook streams and the `client.py` socket:
+  they now honour proxy environment variables such as `HTTPS_PROXY` and inherit
+  the library's 20-second keepalive.
+
 ### Changed
+
+- **Python `open_orders`** preserves all 14 resting-order fields through the
+  shared Rust decoder (released for TypeScript in 12.0.0).
+
+- Python stream reconnect attempts and backoff reset after a matching subscription
+  acknowledgment or data delivery. Handshakes and refusals alone do not reset them.
+
+- **Breaking (Python MAJOR):** account, orderbook and public trade streams share
+  connection and cleanup handling. At startup, HTTP 401/403 raise
+  `AuthenticationError` and any other non-transient response raises
+  `TransportError`; network errors, timeouts, a connection dropped during the
+  handshake, and HTTP 408/429/5xx from the gateway or a proxy retry. Exhausting
+  `AccountEventStream`'s `reconnect_attempts` budget raises `TransportError`;
+  orderbook and trade streams retry until closed. After a failure or iterator
+  closure, reuse raises `RuntimeError`, even after a later `close()`; `close()`
+  on an open stream leaves iteration empty. Streams accept
+  base URLs or `/ws` endpoints, reject concurrent iterators, close sockets before
+  reconnect waits and cancel waits on `close()`. Backoff caps must be finite and
+  positive. Account auth retries and history recovery remain channel-specific.
+  Reconnect logs omit exception text. These contracts target the next Python
+  MAJOR release, not Python 4.0.0.
+
+- **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `gateway::CommittedReceipt` gains `log` and
+  `events` (`TxEvent`), read from the `POST /exchange` and `GET /v1/tx/{hash}` responses that already
+  carried them; `SubmissionOutcome::CheckTxRejected` gains `log`. `errors::ErrorKind` is
+  `#[non_exhaustive]` and gains `ErrorKind::from_code` (`None` for the version-dependent code 50).
+  New `sign_action` signs any `Action` through a custody `Signer`.
 
 - Python account-stream reconnect backoff now defaults to a 10-second cap
   (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
@@ -52,35 +127,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with an unconfigured chain ID, now fails with error frames instead of relying
   on the API key. Use a client with only the API key for those feeds.
 
-- **Breaking (TypeScript MAJOR):** `queryOpenOrders` and Python `open_orders`
-  preserve all 14 resting-order fields through the shared Rust decoder, including
-  client order IDs and exact integer metadata. The eight added TypeScript
-  `OpenOrder` fields are required in manually constructed objects; see the
-  [migration guide](README.md#open-order-migration).
-  Invalid responses now throw instead of appearing empty, and
-  `queryOpenOrders("")` throws. Valid empty lists still return `[]`; legacy
-  six-field records use wire defaults. Decoded payloads over 1 MiB are rejected.
-  Ship this change in the next TypeScript MAJOR release; it is not part of 11.0.0.
-
 ### Fixed
 
-- Export `SubmitOracleObservation` and `ConfigureOraclePolicy` payload types
-  from the TypeScript package root for typed operator integrations.
-
-- **Preserve structured gateway refusals.** Valid `status: "refused"`
-  responses retain their machine-readable reason. TypeScript adds
-  `TxResult.errorCode` and the open `GatewayRefusalCode` type (MINOR for npm).
-  Python raises `PreAdmissionRefusal` with `error_code`, `message` and
-  `status_code` for admission refusals, instead of treating legacy HTTP 200
-  refusals as unresolved or flattening HTTP 400, 411 and 413 refusals into
-  transport text. An internal `EncodingError` refusal is also preserved at
-  HTTP 500. Malformed or contradictory refusals remain unresolved against the
-  hash of the submitted bytes. Valid envelopes at HTTP 401, 403, 429 and other 5xx
-  responses keep their existing Python exceptions. A refusal
-  describes this attempt only; it cannot resolve an earlier ambiguous
-  attempt. Retry decisions depend on the refusal reason, not HTTP status
-  alone. Python callers must catch `PreAdmissionRefusal` for valid admission
-  refusals (MAJOR for Python).
+- **Preserve structured gateway refusals (Python).** Python raises
+  `PreAdmissionRefusal` with `error_code`, `message` and `status_code` for
+  admission refusals, instead of treating legacy HTTP 200 refusals as
+  unresolved or flattening HTTP 400, 411 and 413 refusals into transport text.
+  An internal `EncodingError` refusal is also preserved at HTTP 500. Valid
+  envelopes at HTTP 401, 403, 429 and other 5xx responses keep their existing
+  Python exceptions. Python callers must catch `PreAdmissionRefusal` for valid
+  admission refusals (MAJOR for Python). The TypeScript half shipped in 12.0.0.
 
 - Python `RateLimited.bucket` now uses `"default"`, matching the cached
   `rate_limit_state` key, when the gateway omits `X-RateLimit-Bucket` (#395).
@@ -91,6 +147,73 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Python account-event history supports explicit ordering and cursor pagination. The client validates owner addresses and page limits (1–5000) before sending a request. Passing the unsupported `after_id` filter now raises `ValueError`.
 - Python reads per-account funding payments and position history with cursor pagination. Passing the unsupported `after_height` filter now raises `ValueError`.
 - Python reads deposit and withdrawal history from owner-scoped account events.
+
+## [12.0.0] — 2026-11-12
+
+TypeScript MAJOR release, on the same wire as 11.0.0 (proof-wire 11.0.0,
+exchange 2.24.0): `queryOpenOrders` returns all 14 resting-order fields
+(breaking for code that builds an `OpenOrder` by hand), the new
+`queryOrderStatus` and `queryMarketListing` reads, the margin-offset policy,
+reclassified transaction-evidence error kinds and structured gateway refusals.
+Rust and Python versions are unchanged.
+
+### Added
+
+- **TypeScript `queryMarketListing()`**: the market listing (`GET /v1/markets`) with each row's field count and the pinned `MarketConfig` width (`MarketListing`), decoded as `queryMarkets` decodes it. The decode ignores fields appended after the pinned width and fills missing trailing fields with their defaults; the counts let a caller refuse a layout the pinned wire does not have (the market maker's listing guard). WASM `market_config_fields()` reports the pinned width. Additive (MINOR).
+- **TypeScript `queryOrderStatus(orderId)`**: one order by id (`POST /info` `orderStatus`; the node route `GET /v1/order/{id}` with `useGateway: false`), decoded by the Rust core's new `decode_order_status` with the same fields as `queryOpenOrders`, or `null` when the engine no longer holds the order. An answer naming another order is refused. The request names no owner, so the owner is returned, not checked. Refuses an id above `Number.MAX_SAFE_INTEGER`, floats and payloads over 4 KiB. Additive (MINOR).
+- `validateSetMarginOffsetPolicy` checks policy bounds before encoding and
+  through `decodeAdminAction`.
+  `decodeMarginOffsetEvent` reads the engine's `margin_offset_policy_set`
+  and `margin_offset_pair_configured` attributes against wire-generated vectors.
+  Rust re-exports the margin-offset types. Conformance vectors and content-hash
+  constants pin policy encoding across TypeScript, Rust and Python.
+
+### Changed
+
+- **Breaking (TypeScript MAJOR):** `queryOpenOrders` preserves all 14
+  resting-order fields through the shared Rust decoder, including client order
+  IDs and exact integer metadata. The eight added `OpenOrder` fields are required
+  in manually constructed objects; see the
+  [migration guide](README.md#open-order-migration). Invalid responses now throw
+  instead of appearing empty, and `queryOpenOrders("")` throws. Valid empty
+  lists still return `[]`; legacy six-field records use wire defaults. Decoded
+  payloads over 1 MiB are rejected.
+
+- **TypeScript `readTransactionEvidence` and block-results reads reclassify
+  `GatewayReadError.kind` (MINOR for npm).** Callers that branch on `kind`
+  should review these fields:
+  - `malformed` → `configuration` (caller input): `signed bytes` (empty or
+    not bytes), `requested hash`, `from height`, `through height`,
+    `fixed window`.
+  - `binding` → `configuration`: `requested hash/bytes mismatch`.
+  - `malformed` → `binding` (cross-response mismatch):
+    `parent hash continuity`, `block time continuity`,
+    `transaction result count`, `post-state/header binding`,
+    `returned transaction binding`, `block transaction binding`.
+  - `malformed` → `limit`: `signed bytes` above the bounded response's base64
+    capacity (about 767 KiB, previously 1 MiB), now refused before any HTTP
+    request; these reads could never succeed.
+
+  Field names are unchanged; every other field keeps its kind.
+
+- TypeScript `RawOpenOrder.market` widens from `MarketId` to `MarketId | 0`;
+  code that assumes a branded `MarketId` must handle market zero.
+
+- Document `SetUserMarketLeverage` admission limits, its governed insurance-fund
+  path and initial-margin-only semantics. SDK APIs and wire support are unchanged.
+
+### Fixed
+
+- Transaction evidence rejects signed bytes exceeding the bounded response's
+  base64 capacity before HTTP.
+
+- **Preserve structured gateway refusals.** Valid `status: "refused"`
+  responses retain their machine-readable reason: TypeScript adds
+  `TxResult.errorCode` and the open `GatewayRefusalCode` type. Malformed or
+  contradictory refusals remain unresolved against the hash of the submitted
+  bytes. A refusal describes this attempt only; it cannot resolve an earlier
+  ambiguous attempt. Retry decisions depend on the refusal reason, not HTTP
+  status alone.
 
 ## [11.0.0] — 2026-11-09
 
@@ -2118,7 +2241,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v11.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.0.0...HEAD
+[12.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v11.0.0...npm-v12.0.0
 [11.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.1.0...npm-v11.0.0
 [10.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.0.0...npm-v10.1.0
 [10.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v9.2.0...npm-v10.0.0

@@ -8,8 +8,10 @@
 use serde::de::{self, Deserializer, Visitor};
 
 use super::*;
-use crate::query::{AccountInfo, BindingScenario, PositionBrief};
-use crate::types::{AttachedConditional, EventInfo, FeeTier, MarketConfig};
+use crate::query::{
+    AccountInfo, AccountStateInfo, BindingScenario, LevelSummary, OrderbookSnapshot, PositionBrief,
+};
+use crate::types::{AttachedConditional, EventInfo, FeeTier, MarketConfig, Position};
 
 /// A deserializer that only records the field list serde derives for a struct.
 struct FieldProbe<'a>(&'a mut &'static [&'static str]);
@@ -79,6 +81,10 @@ fn widths_and_nested_fields_follow_the_pinned_wire_types() {
     assert_shape::<AccountInfo>(&ACCOUNT_INFO, &["positions", "binding_scenario"]);
     assert_shape::<PositionBrief>(inner(&ACCOUNT_INFO, 0), &[]);
     assert_shape::<BindingScenario>(inner(&ACCOUNT_INFO, 1), &[]);
+    assert_shape::<OrderbookSnapshot>(&ORDERBOOK, &["bids", "asks"]);
+    assert_shape::<LevelSummary>(inner(&ORDERBOOK, 0), &[]);
+    assert_shape::<AccountStateInfo>(&ACCOUNT_STATE, &["positions"]);
+    assert_shape::<Position>(inner(&ACCOUNT_STATE, 0), &[]);
 }
 
 fn resting_order() -> crate::types::Order {
@@ -240,4 +246,61 @@ fn an_absent_event_decodes_and_a_wrong_field_type_is_still_refused() {
     let mut row = value(MARKET);
     fields(&mut row)[0] = Value::from("1");
     assert!(decode::<MarketConfig>(&bytes(&row), &MARKET_CONFIG).is_err());
+}
+
+#[test]
+fn order_status_decodes_an_order_or_nil() {
+    let encoded = rmp_serde::to_vec(&resting_order()).unwrap();
+    let decoded = decode_order_status(&encoded, 9_007_199_254_740_993)
+        .unwrap()
+        .expect("an order");
+    assert_eq!(decoded.id, 9_007_199_254_740_993);
+    assert_eq!(decoded.owner, [0xab; 20]);
+    assert_eq!(decoded.filled_quantity, 3);
+    assert!(decoded.post_only);
+    assert!(decode_order_status(&bytes(&Value::Nil), 1)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        decode_order_status(&encoded, 42).expect_err("another order's answer is refused"),
+        ORDER_STATUS_ID_MISMATCH
+    );
+}
+
+#[test]
+fn order_status_legacy_rows_use_wire_defaults() {
+    let encoded = rmp_serde::to_vec(&resting_order()).unwrap();
+    let mut row = rmpv::decode::read_value(&mut Cursor::new(encoded)).unwrap();
+    fields(&mut row).truncate(6);
+    let decoded = decode_order_status(&bytes(&row), 9_007_199_254_740_993)
+        .unwrap()
+        .expect("an order");
+    assert_eq!(decoded.client_order_id, None);
+    assert_eq!(decoded.created_at_ms, 0);
+}
+
+#[test]
+fn order_status_rejects_malformed_owner_rows_floats_and_oversize() {
+    let encoded = rmp_serde::to_vec(&resting_order()).unwrap();
+    let row = rmpv::decode::read_value(&mut Cursor::new(encoded)).unwrap();
+    for owner in [
+        Value::Binary(vec![0xab; 21]),
+        Value::Array(vec![Value::from(256); 20]),
+    ] {
+        let mut malformed = row.clone();
+        fields(&mut malformed)[2] = owner;
+        assert!(decode_order_status(&bytes(&malformed), 9_007_199_254_740_993).is_err());
+    }
+    let mut floated = row.clone();
+    fields(&mut floated)[4] = Value::F64(1.5);
+    assert!(decode_order_status(&bytes(&floated), 9_007_199_254_740_993).is_err());
+    let mut short = row;
+    fields(&mut short).truncate(3);
+    assert!(decode_order_status(&bytes(&short), 9_007_199_254_740_993).is_err());
+    assert!(decode_order_status(&bytes(&Value::Array(vec![])), 9_007_199_254_740_993).is_err());
+    assert_eq!(
+        decode_order_status(&vec![0; MAX_ORDER_STATUS_BYTES + 1], 1)
+            .expect_err("a payload over the cap is refused"),
+        "order status payload is too large"
+    );
 }

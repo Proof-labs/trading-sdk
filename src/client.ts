@@ -114,6 +114,7 @@ import type {
   HistoryPositionsPage,
   HistoryResolution,
   MarketConfig,
+  MarketListing,
   OpenOrder,
   AdlQueueEntry,
   Orderbook,
@@ -1583,6 +1584,25 @@ export class ExchangeClient {
     return raw.map(marketConfigFromWasm);
   }
 
+  /** The market listing with each row's field count (`MarketListing`): the
+   *  same decode as `queryMarkets`, plus what that decode tolerates at the
+   *  end of a row, so a caller can refuse a layout the pinned wire does not
+   *  have. A missing envelope or a malformed row is a refusal. */
+  async queryMarketListing(): Promise<MarketListing> {
+    const json = await this.apiJson(`${this.readBaseUrl}/v1/markets`);
+    const bytes = fromBase64(requireEncodedData(json, "/v1/markets"));
+    const raw = (await this.decodeRead("Markets", bytes)) as unknown[];
+    const rows: unknown = msgpackDecoder.decode(bytes);
+    if (!Array.isArray(rows) || !rows.every(Array.isArray)) {
+      throw new Error("Invalid market listing rows: expected arrays");
+    }
+    return {
+      markets: raw.map(marketConfigFromWasm),
+      rowFieldCounts: rows.map((row) => row.length),
+      pinnedFieldCount: getWasm().market_config_fields(),
+    };
+  }
+
   /** All events: each is its binary book under one `EventInfo`, plus every
    *  conditional attached to it. Fail-closed: a missing envelope or
    *  malformed row is a refusal. */
@@ -1842,6 +1862,37 @@ export class ExchangeClient {
     );
     const bytes = fromBase64(requireEncodedData(json, "/v1/proposals"));
     return decodeProposalPage(await this.strictDecode(bytes));
+  }
+
+  /** One order by id (`POST /info` `orderStatus`), with exact bigint
+   * metadata and canonical legacy defaults; null when the engine holds no
+   * such order (filled, cancelled or never placed). An answer naming another
+   * order is rejected. The request names an order id, not an owner: the
+   * order's owner is returned, not checked. A
+   * malformed or float-bearing response, or one over 4 KiB, is rejected.
+   * This read does not verify a finalized witness. */
+  async queryOrderStatus(orderId: bigint): Promise<OpenOrder | null> {
+    if (
+      typeof orderId !== "bigint" ||
+      orderId < 0n ||
+      orderId > BigInt(Number.MAX_SAFE_INTEGER)
+    )
+      throw new Error("Invalid order id");
+    const json = await this.queryOwnerScoped(
+      { type: "orderStatus", oid: Number(orderId) },
+      `/v1/order/${orderId}`,
+    );
+    const encoded = requireEncodedData(json, "orderStatus");
+    if (
+      encoded.length > 4 * Math.ceil(4096 / 3) ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+        encoded,
+      )
+    )
+      throw new Error("Invalid order status data envelope");
+    await initWasm();
+    const order = getWasm().decode_order_status(fromBase64(encoded), orderId);
+    return order === null ? null : openOrdersFromWasm([order])[0];
   }
 
   /** Resting orders with exact bigint metadata and canonical legacy defaults.

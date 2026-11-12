@@ -2860,6 +2860,19 @@ export type MarketKind =
 /** Mark-price source mode. Mirrors the engine's `MarkSourceMode` enum. */
 export type MarkSourceMode = "OracleOnly" | "Median";
 
+/** The market listing (`GET /v1/markets`) with each row's field count, for a
+ *  caller that refuses a listing whose layout differs from the wire this SDK
+ *  pins. The decode itself ignores fields appended after the pinned width and
+ *  fills missing trailing fields with their defaults, so a layout change at
+ *  the end of a row decodes; only its field count shows it. */
+export interface MarketListing {
+  markets: MarketConfig[];
+  /** Fields in each listed row, in listing order (one per market). */
+  rowFieldCounts: number[];
+  /** Fields in the pinned wire `MarketConfig`. */
+  pinnedFieldCount: number;
+}
+
 /** Configuration for a perpetual / conditional / binary market. The wire
  *  form is a MessagePack positional array; indices mirror the Rust struct
  *  field order in exchange-core/src/types.rs.
