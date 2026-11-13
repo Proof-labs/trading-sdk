@@ -27,4 +27,5 @@ serde = { version = "1", default-features = false, features = ["derive"] }
 # Deterministic Ed25519 signing only (SigningKey::from_bytes + sign) — no
 # `rand_core` feature, so nothing pulls `getrandom`, which would fail to build
 # on wasm32-unknown-unknown without the `js` backend.
-ed25519-dalek = { version = "2", default-features = false }
+ed25519-dalek = { version = "2", default-features = false, features = ["zeroize"] }
+zeroize = "1"

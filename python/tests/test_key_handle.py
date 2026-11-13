@@ -22,7 +22,10 @@ def _load_handle(seed: bytes) -> pts.SigningHandle:
     r, w = os.pipe()
     os.write(w, seed)
     os.close(w)
-    return pts.load_key_from_fd(r)
+    try:
+        return pts.load_key_from_fd(r)
+    finally:
+        os.close(r)
 
 
 class TestLoadKeyFromFd:
@@ -42,6 +45,19 @@ class TestLoadKeyFromFd:
         os.close(w)
         with pytest.raises(ValueError):
             pts.load_key_from_fd(r)
+        os.close(r)
+
+    def test_leaves_the_callers_fd_open(self):
+        r, w = os.pipe()
+        os.write(w, _SEED)
+        os.close(w)
+        pts.load_key_from_fd(r)
+        os.fstat(r)  # raises EBADF if the SDK closed it
+        os.close(r)
+
+    def test_negative_fd_is_a_value_error(self):
+        with pytest.raises(ValueError):
+            pts.load_key_from_fd(-1)
 
 
 class TestNoSecretLeak:

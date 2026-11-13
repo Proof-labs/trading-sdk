@@ -131,9 +131,11 @@ fn sign_and_encode<'py>(
     let chain_id_arr: [u8; 32] = chain_id
         .try_into()
         .map_err(|_| PyValueError::new_err("chain_id must be exactly 32 bytes"))?;
-    let sk_bytes: [u8; 32] = secret_key
-        .try_into()
-        .map_err(|_| PyValueError::new_err("secret_key must be exactly 32 bytes"))?;
+    let sk_bytes: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+        secret_key
+            .try_into()
+            .map_err(|_| PyValueError::new_err("secret_key must be exactly 32 bytes"))?,
+    );
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&sk_bytes);
 
     let encoded = codec::sign_and_encode_payload(
@@ -471,9 +473,15 @@ fn generate_keypair<'py>(py: Python<'py>, seed: Option<&[u8]>) -> PyResult<Bound
 #[pyfunction]
 fn load_key_from_fd(fd: i32) -> PyResult<SigningHandle> {
     use std::io::Read;
-    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::fd::BorrowedFd;
 
-    let owned = unsafe { OwnedFd::from_raw_fd(fd) };
+    if fd < 0 {
+        return Err(PyValueError::new_err("fd must be a non-negative file descriptor"));
+    }
+    // The caller owns `fd`: read through a duplicate so dropping ours leaves theirs open.
+    let owned = unsafe { BorrowedFd::borrow_raw(fd) }
+        .try_clone_to_owned()
+        .map_err(|e| PyValueError::new_err(format!("invalid fd: {e}")))?;
     let mut buf = [0u8; 32];
     let mut file = std::fs::File::from(owned);
     file.read_exact(&mut buf)

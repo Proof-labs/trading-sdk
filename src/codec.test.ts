@@ -592,6 +592,28 @@ describe("codec v1 all action types", () => {
     }
   });
 
+  it("refuses a seq or action type the wire cannot carry instead of wrapping it", () => {
+    const { privateKey } = generateKeypair();
+    const payload = new Uint8Array([0x90]);
+    for (const [actionType, seq] of [
+      [257, 1n],
+      [1.5, 1n],
+      [-1, 1n],
+      [ActionType.ConfirmDeposit, -1n],
+      [ActionType.ConfirmDeposit, 2n ** 64n + 7n],
+    ] as const) {
+      expect(() =>
+        signEnvelopeFromPayload(
+          UNBOUND_CHAIN_ID,
+          actionType,
+          seq,
+          payload,
+          privateKey,
+        ),
+      ).toThrow(RangeError);
+    }
+  });
+
   it("round-trips AuthorizeWithdrawal authorization bytes + operator proof", () => {
     const action: Action = {
       type: "AuthorizeWithdrawal",

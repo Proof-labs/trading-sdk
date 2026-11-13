@@ -28,7 +28,10 @@ def handle():
     read_fd, write_fd = os.pipe()
     os.write(write_fd, SEED)
     os.close(write_fd)
-    return pts.load_key_from_fd(read_fd)
+    try:
+        return pts.load_key_from_fd(read_fd)
+    finally:
+        os.close(read_fd)
 
 
 def client(**kwargs):
