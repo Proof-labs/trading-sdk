@@ -21,7 +21,7 @@ default = ["ws"]
 ws = ["dep:tokio-tungstenite", "dep:futures-util", "tokio/sync", "tokio/rt", "tokio/macros"]
 
 [dependencies]
-proof-trading-sdk = { path = "../proof-trading-sdk", version = "4.2", features = ["gateway"] }
+proof-trading-sdk = { path = "../proof-trading-sdk", version = "5", features = ["gateway"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "json"] }
 tokio = { version = "1", features = ["time"] }
 serde = { version = "1", features = ["derive"] }
