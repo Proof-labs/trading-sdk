@@ -7,6 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [13.0.0] (Python 5.0.0; Rust core 5.0.0) — 2026-11-13
+
+Prepared for exchange 2.25.0 / proof-wire 12.0.0. npm 13.0.0 is a
+MAJOR over published 12.1.0: governance action bytes and proposal hashes change,
+and old fee-update payloads are rejected. Rebuild affected proposals and obtain
+new signatures. Python 5.0.0 includes the breaking refusal and read contracts.
+Rust core 5.0.0 is git-only, not a crates.io publication; its source API and
+re-exported wire enums break compatibility with core 4.x. The Python binding
+crate is also 5.0.0; unchanged helper and WASM package versions are retained.
+These are independent publication gates, not authorization to release.
+If the release date changes, update this heading through dev before promotion.
+
 - Fund directory and position checks are shared in Rust before WASM adaptation;
   invalid caller pool IDs report configuration errors, future display variants
   remain explicitly unknown, and fund reads use the query transport budget.
@@ -154,8 +166,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   base URLs or `/ws` endpoints, reject concurrent iterators, close sockets before
   reconnect waits and cancel waits on `close()`. Backoff caps must be finite and
   positive. Account auth retries and history recovery remain channel-specific.
-  Reconnect logs omit exception text. These contracts target the next Python
-  MAJOR release, not Python 4.0.0.
+  Reconnect logs omit exception text. These contracts are breaking in Python 5.0.0.
 
 - **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `gateway::CommittedReceipt` gains `log` and
   `events` (`TxEvent`), read from the `POST /exchange` and `GET /v1/tx/{hash}` responses that already
@@ -2411,7 +2422,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.0.0...HEAD
+[13.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.1.0...npm-v13.0.0
 [12.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.0.0...npm-v12.1.0
 [12.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v11.0.0...npm-v12.0.0
 [11.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.1.0...npm-v11.0.0
