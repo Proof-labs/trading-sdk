@@ -597,18 +597,21 @@ mod tests {
         // (side, price, quantity, bids after, asks after)
         type Step = (Side, u64, u64, &'static [u64], &'static [u64]);
         let steps: [Step; 8] = [
-            (Side::Buy, 10, 1, &[10], &[]),          // into empty
-            (Side::Buy, 12, 1, &[12, 10], &[]),      // new best
-            (Side::Buy, 11, 1, &[12, 11, 10], &[]),  // between
-            (Side::Buy, 11, 5, &[12, 11, 10], &[]),  // replace
-            (Side::Buy, 12, 0, &[11, 10], &[]),      // remove
-            (Side::Buy, 99, 0, &[11, 10], &[]),      // remove a missing level
+            (Side::Buy, 10, 1, &[10], &[]),         // into empty
+            (Side::Buy, 12, 1, &[12, 10], &[]),     // new best
+            (Side::Buy, 11, 1, &[12, 11, 10], &[]), // between
+            (Side::Buy, 11, 5, &[12, 11, 10], &[]), // replace
+            (Side::Buy, 12, 0, &[11, 10], &[]),     // remove
+            (Side::Buy, 99, 0, &[11, 10], &[]),     // remove a missing level
             (Side::Sell, 14, 1, &[11, 10], &[14]),
             (Side::Sell, 13, 1, &[11, 10], &[13, 14]),
         ];
         for (side, price, quantity, bids, asks) in steps {
             book.apply(side, l(price, quantity));
-            assert_eq!((prices(&book.bids), prices(&book.asks)), (bids.to_vec(), asks.to_vec()));
+            assert_eq!(
+                (prices(&book.bids), prices(&book.asks)),
+                (bids.to_vec(), asks.to_vec())
+            );
         }
         assert_eq!(book.bids[0].quantity, 5, "a replace sets the quantity");
         book.apply(Side::Sell, l(13, 0));

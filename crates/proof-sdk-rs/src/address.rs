@@ -110,7 +110,14 @@ mod tests {
 
     #[test]
     fn rejects_bad_input() {
-        for s in ["", "0x12", &"g".repeat(40), &"a".repeat(41), "éé", &"+f".repeat(20)] {
+        for s in [
+            "",
+            "0x12",
+            &"g".repeat(40),
+            &"a".repeat(41),
+            "éé",
+            &"+f".repeat(20),
+        ] {
             assert!(s.parse::<Address>().is_err(), "{s:?}");
         }
     }

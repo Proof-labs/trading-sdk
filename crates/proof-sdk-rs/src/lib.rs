@@ -63,8 +63,10 @@ pub use account_event::AccountEvent;
 pub use address::Address;
 pub use error::{Error, Result};
 pub use event::{
-    CancelReason, Deposited, Event, Fill, FundingSettled, MarketOrderProcessed, OrderAmended,
-    OrderCancelled, OrderPlaced, OrderRejected, PositionClosed, PositionUpdated,
+    CancelReason, ConditionMet, ConditionNotMet, Deposited, Event, EventResolved, Fill,
+    FundingSettled, MarketOrderProcessed, OrderAmended, OrderCancelled, OrderPlaced, OrderRejected,
+    PositionClosed, PositionTriggersInvalidated, PositionUpdated, PredictionSettled,
+    TriggerInvalidation,
 };
 pub use exchange::{
     EngineError, ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted, TxStatus,
@@ -85,7 +87,7 @@ pub use proof_trading_sdk::gateway::{TxAttribute, TxEvent, TxHash};
 pub use proof_trading_sdk::query::{AccountInfo, PositionBrief};
 pub use proof_trading_sdk::types::{
     Action, CancelReplaceOrder, EventId, EventInfo, MarketConfig, MarketId, MarketOrder, Order,
-    OrderId, PlaceOrder, Position, Side, TimeInForce,
+    OrderId, Outcome, PlaceOrder, Position, Side, TimeInForce,
 };
 pub use proof_trading_sdk::ErrorKind;
 pub use proof_trading_sdk::{LocalSigner, Signer, SignerError};

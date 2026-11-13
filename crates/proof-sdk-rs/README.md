@@ -254,7 +254,9 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
 - **Account events are typed** with the same `Event` as receipts: `Fill`,
   `OrderPlaced`, `OrderCancelled`, `OrderAmended`, `OrderRejected`,
   `MarketOrderProcessed`, `PositionUpdated`, `PositionClosed`,
-  `FundingSettled`, `Deposited`. Any other kind is `Event::Other`, and a known
+  `FundingSettled`, `Deposited`, and at resolution `EventResolved`,
+  `PredictionSettled`, `ConditionMet`, `ConditionNotMet` and
+  `PositionTriggersInvalidated`. Any other kind is `Event::Other`, and a known
   kind whose payload does not read is `Event::Malformed`; both carry the
   engine event name and raw attributes. `tx_hash` is the causing
   transaction's `TxHash`, `None` for block events (funding, expiry);

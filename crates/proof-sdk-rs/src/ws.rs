@@ -535,7 +535,11 @@ impl Task {
             match opened {
                 Ok(socket) => return Some(socket),
                 // Retrying cannot change an auth refusal: end the feed.
-                Err(e @ Error::Http { status: 401 | 403, .. }) => {
+                Err(
+                    e @ Error::Http {
+                        status: 401 | 403, ..
+                    },
+                ) => {
                     let reason = format!("reconnect refused, not retrying: {e}");
                     let _ = self.deliver(WsMessage::Disconnected { reason }).await;
                     return None;

@@ -249,12 +249,10 @@ fn retry_after(hint: Option<RetryAfter>) -> Option<Duration> {
 fn status(outcome: SubmissionOutcome<PreAdmissionRefusal>) -> TxStatus {
     match outcome {
         SubmissionOutcome::Committed(r) => TxStatus::Committed(r.into()),
-        SubmissionOutcome::CheckTxRejected { code, log, .. } => {
-            TxStatus::Rejected {
-                error: EngineError::new(code.get(), Some(&log)),
-                log,
-            }
-        }
+        SubmissionOutcome::CheckTxRejected { code, log, .. } => TxStatus::Rejected {
+            error: EngineError::new(code.get(), Some(&log)),
+            log,
+        },
         SubmissionOutcome::Pending { .. } => TxStatus::Pending,
         SubmissionOutcome::RejectedBeforeAdmission { refusal, .. } => {
             TxStatus::Refused(refusal.into())
