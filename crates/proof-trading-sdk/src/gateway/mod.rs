@@ -158,7 +158,7 @@ impl TxHash {
             ));
         }
         let mut bytes = [0u8; 32];
-        for (pair, byte) in text.as_bytes().chunks_exact(2).zip(&mut bytes) {
+        for (pair, byte) in text.as_bytes().as_chunks::<2>().0.iter().zip(&mut bytes) {
             let digit = |c: u8| match c {
                 b'0'..=b'9' => Some(c.wrapping_sub(b'0')),
                 b'a'..=b'f' => Some(c.wrapping_sub(b'a').wrapping_add(10)),

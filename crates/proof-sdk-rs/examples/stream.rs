@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(hex) => {
             let mut seed = zeroize::Zeroizing::new([0u8; 32]);
             let hex = hex.trim().trim_start_matches("0x");
-            for (b, pair) in seed.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+            for (b, pair) in seed.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0) {
                 *b = u8::from_str_radix(std::str::from_utf8(pair)?, 16)?;
             }
             seed
