@@ -6,10 +6,9 @@ generates the vectors, and each binding (Rust, Python, TypeScript) must
 reproduce every `expect` byte-for-byte. A divergence is a release blocker — it
 means two SDKs would sign or encode the same logical action differently.
 
-> **Status: codec + signing green in all 3 runners.** The generator emits 7 codec
-> vectors, 3 signing vectors, and 4 nonce vectors. The Rust, Python, and TS
-> runners all pass their active tests. The TS runner skips the nonce family
-> (nonces are timestamp-derived; no standalone step function is needed).
+> **Status:** the Rust, Python and TS runners pass every family they run. The
+> TS runner skips the nonce family (nonces are timestamp-derived; no standalone
+> step function is needed).
 
 ---
 
@@ -22,14 +21,16 @@ conformance/
   signing.ndjson    ← (payload, key) → wire envelope; pubkey → owner address
   nonce.ndjson      ← (last, now_ms…) → allocated nonce sequence
   events.ndjson     ← engine event → its ABCI type and attributes
+  errors.ndjson     ← (code, log) → engine error name
+  binary.ndjson     ← Yes/No book orders and reads in No terms
 
 crates/spec/        ← the vector machinery (Rust)
   src/lib.rs            schemas + reference impls (the single source of truth)
-  src/bin/gen_vectors.rs  generator: writes the three NDJSON files
+  src/bin/gen_vectors.rs  generator: writes the NDJSON files above
   tests/runner.rs       Rust runner (regression guard)
 
 python/tests/test_conformance_vectors.py   Python runner
-src/conformance.test.ts                     TS runner (codec + signing green)
+src/conformance.test.ts                     TS runner
 ```
 
 ### Authority model

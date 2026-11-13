@@ -13,6 +13,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking (Rust, `proof-sdk-rs` / `proof-trading-sdk`):**
+  `TxStatus::Rejected` is now `Rejected { error, log }`;
+  `DecodedExecErrorKind::AmbiguousCode50` is removed; `GatewayError` gains a
+  `log` field; `EventResolved`, `PredictionSettled`, `ConditionMet`,
+  `ConditionNotMet` and `PositionTriggersInvalidated` are typed, so code
+  matching them as `Event::Other` stops matching; a WebSocket handshake answered
+  with an HTTP error is `Error::Http`, and a 401 on reconnect ends the feed.
+- **Python:** `load_key_from_fd` no longer closes the caller's fd; close it
+  yourself. A negative fd raises `ValueError`.
+- **TypeScript:** `signAndEncode`, `encodeSignedTx` and
+  `signEnvelopeFromPayload` throw `RangeError` for a `seq` outside u64 or an
+  action type outside a byte, instead of signing a wrapped value.
+- **Code 50 is `SlippageExceeded`.** A code-50 result without a recognised
+  log no longer decodes as `AmbiguousCode50`; only a log naming an open-interest
+  refusal (receipts from before the renumbering) still reads as
+  `OpenInterestLimitExceeded`. Applies to TypeScript, Python and Rust.
 - **Wire compatibility boundary:** pin canonical wire `2a707bc` (engine
   `23ee1f0`). Conditional attachment proposal bytes/hashes now include impact
   notional; fee updates require the funding dead-band and interest-rate tail.

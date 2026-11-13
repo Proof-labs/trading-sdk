@@ -101,6 +101,49 @@ async fn reconnects_and_resubscribes_after_a_drop() {
 }
 
 #[tokio::test]
+async fn a_401_at_reconnect_ends_the_feed() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        ws.close(None).await.unwrap();
+        // Every later handshake is refused; count them.
+        let mut refused = 0;
+        while let Ok(Ok((mut tcp, _))) =
+            timeout(Duration::from_millis(500), listener.accept()).await
+        {
+            let mut buf = [0u8; 1024];
+            let _ = tcp.read(&mut buf).await;
+            tcp.write_all(b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            refused += 1;
+        }
+        refused
+    });
+
+    let config = WsConfig::new(url).with_max_backoff(Duration::from_millis(20));
+    let (_client, mut rx) = WsClient::connect(config).await.unwrap();
+
+    assert!(matches!(
+        next(&mut rx).await,
+        WsMessage::Disconnected { .. }
+    ));
+    let WsMessage::Disconnected { reason } = next(&mut rx).await else {
+        panic!("expected the refused reconnect")
+    };
+    assert!(reason.contains("401"), "{reason}");
+    assert!(timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(server.await.unwrap(), 1, "no retry after a 401");
+}
+
+#[tokio::test]
 async fn account_subscriptions_carry_a_verifiable_signature() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/ws", listener.local_addr().unwrap());
@@ -152,9 +195,13 @@ async fn a_refused_subscription_retries_and_the_snapshot_boundary_holds() {
         let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
         let first = read_json(&mut ws).await;
         let refuse = serde_json::json!({"type":"error","id":first["id"],"channel":"accountEvents","code":429,"error":"rate limited"});
-        ws.send(Message::Text(refuse.to_string().into())).await.unwrap();
+        ws.send(Message::Text(refuse.to_string().into()))
+            .await
+            .unwrap();
         let second = read_json(&mut ws).await;
-        let event = |height: u64| serde_json::json!({"channel":"accountEvents","type":"fill","eventType":"deposited","owner":OWNER,"height":height,"txHash":format!("height-{height}-kind-block-event-0"),"txIndex":null,"eventIndex":0,"payload":{"owner":OWNER,"amount":"5","new_balance":"5"}}).to_string();
+        let event = |height: u64| {
+            serde_json::json!({"channel":"accountEvents","type":"fill","eventType":"deposited","owner":OWNER,"height":height,"txHash":format!("height-{height}-kind-block-event-0"),"txIndex":null,"eventIndex":0,"payload":{"owner":OWNER,"amount":"5","new_balance":"5"}}).to_string()
+        };
         for frame in [
             serde_json::json!({"type":"subscribed","id":second["id"],"channel":"accountEvents"}).to_string(),
             serde_json::json!({"channel":"accountEvents","type":"snapshot","owner":OWNER,"account":{"data":"mgCQAAAAAJAAAAA="},"height":10,"snapshot":"initial"}).to_string(),
@@ -172,18 +219,31 @@ async fn a_refused_subscription_retries_and_the_snapshot_boundary_holds() {
 
     let owner: Address = OWNER.parse().unwrap();
     let (client, mut rx) = WsClient::connect(WsConfig::new(url)).await.unwrap();
-    client.subscribe(Subscription::AccountEvents(owner)).unwrap();
+    client
+        .subscribe(Subscription::AccountEvents(owner))
+        .unwrap();
     let m = next(&mut rx).await;
     assert!(
         matches!(m, WsMessage::Refused { subscription: Some(Subscription::AccountEvents(o)), code: Some(429), .. } if o == owner),
         "{m:?}"
     );
-    client.subscribe(Subscription::AccountEvents(owner)).unwrap();
-    assert!(matches!(next(&mut rx).await, WsMessage::AccountSnapshot { height: Some(10), .. }));
+    client
+        .subscribe(Subscription::AccountEvents(owner))
+        .unwrap();
+    assert!(matches!(
+        next(&mut rx).await,
+        WsMessage::AccountSnapshot {
+            height: Some(10),
+            ..
+        }
+    ));
     let WsMessage::AccountEvent(e) = next(&mut rx).await else {
         panic!("expected the event after the snapshot")
     };
-    assert_eq!((e.height, e.tx_hash, e.tx_index, e.event_index), (11, None, None, Some(0)));
+    assert_eq!(
+        (e.height, e.tx_hash, e.tx_index, e.event_index),
+        (11, None, None, Some(0))
+    );
     client.close();
     server.await.unwrap();
 }
@@ -213,7 +273,10 @@ async fn a_slow_consumer_keeps_a_busy_socket() {
     tokio::time::sleep(Duration::from_millis(400)).await;
     for i in 0..40 {
         let m = next(&mut rx).await;
-        assert!(matches!(m, WsMessage::OrderbookSnapshot { .. }), "message {i}: {m:?}");
+        assert!(
+            matches!(m, WsMessage::OrderbookSnapshot { .. }),
+            "message {i}: {m:?}"
+        );
     }
     client.close();
 }

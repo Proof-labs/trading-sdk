@@ -109,7 +109,7 @@ fn classify(
         if returned.len() != 64 || !returned.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(SubmissionErrorKind::HashMismatch);
         }
-        for (pair, expected) in returned.as_bytes().chunks_exact(2).zip(hash) {
+        for (pair, expected) in returned.as_bytes().as_chunks::<2>().0.iter().zip(hash) {
             let pair = std::str::from_utf8(pair).map_err(|_| SubmissionErrorKind::HashMismatch)?;
             if u8::from_str_radix(pair, 16).ok() != Some(expected) {
                 return Err(SubmissionErrorKind::HashMismatch);
