@@ -328,6 +328,10 @@ export {
   type VoidSettlementEvent,
 } from "./void-events.js";
 export {
+  decodeResolutionBalanceSnapshotEvent,
+  type ResolutionBalanceSnapshotEvent,
+} from "./resolution-balance-events.js";
+export {
   LIQUIDATION_HISTORY_EVENT_TYPES,
   decodeLiquidationHistoryPage,
   liquidationHistorySearchParams,
