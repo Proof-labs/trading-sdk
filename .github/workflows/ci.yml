@@ -266,7 +266,11 @@ jobs:
         run: pip install ./python --no-build-isolation
       # pytest — includes python/tests/test_conformance_vectors.py (Python ↔
       # authoritative vectors) and the bridge/codec conformance tests.
-      - run: pytest python/tests -q
+      - name: Python tests and native boundary checks
+        env:
+          PYTHONMALLOC: debug
+          PYTHONFAULTHANDLER: "1"
+        run: pytest python/tests -q
 
   format:
     name: prettier
