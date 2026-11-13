@@ -296,7 +296,7 @@ read endpoints as follows:
 
 | Endpoint                                                                                                                                                 | Gateway            | Notes                                         |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | --------------------------------------------- |
-| `/v1/markets`, `/v1/orderbook/*`, `/v1/candles/*`, `/v1/trades/*`, `/v1/funding/*`, `/v1/fee-tiers/*`, `/v1/events`, `/v1/event/*`, `/v1/health`, `/v1/oracle/health` | ✅ Proxied to node | Public, no auth                               |
+| `/v1/markets`, `/v1/orderbook/*`, `/v1/history/candles/*`, `/v1/trades/*`, `/v1/funding/*`, `/v1/fee-tiers/*`, `/v1/events`, `/v1/event/*`, `/v1/health`, `/v1/oracle/health` | ✅ Proxied to node | Public, no auth                               |
 | `POST /info`                                                                                                                                             | ✅ Routed          | Structured queries (clearinghouseState, etc.) |
 | `/v1/account/{hex}`                                                                                                                                      | ❌ **Not routed**  | 404s on gateway                               |
 | `/v1/account/{hex}/recent-nonces`, `/v1/nonce/{hex}`                                                                                                     | ✅ Routed          | Diagnostic                                    |

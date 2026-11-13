@@ -90,16 +90,18 @@ Each address receives ~10,000 USDC (10,000,000,000 µUSDC) with a 24 h cooldown.
 
 ## Quick Start
 
+Use the key you funded above: a fresh key has no balance, and every order
+from it is refused with `InsufficientBalance` (11).
+
 ```typescript
 import {
   ExchangeClient,
   Side,
-  generateKeypair,
   pubkeyToOwner,
   ownerToHex,
 } from "@proof-labs/trading-sdk";
 
-const { publicKey, privateKey } = generateKeypair();
+// `publicKey` / `privateKey` from "Connect to the devnet", after the faucet drip.
 const address = pubkeyToOwner(publicKey);
 const addressHex = ownerToHex(address);
 
@@ -124,7 +126,37 @@ const result = await client.submitTx({
   },
 });
 
-console.log(result); // { code: 0, hash: "…" } on success
+if (result.ok) {
+  console.log(`placed in ${result.hash}`);
+} else {
+  // outcome: "engine" (refused, `code`/`error` say why), "transport", ...
+  console.log(result.outcome, result.code, result.error?.name ?? result.log);
+}
+```
+
+### Withdraw
+
+A withdrawal is requested on chain, then paid out on Solana by the bridge.
+The request's `withdraw_requested` event carries the id to follow:
+
+```typescript
+const req = await client.submitTxCommit({
+  type: "WithdrawRequest",
+  data: {
+    owner: address,
+    amount: 100_000_000n, // $100
+    solanaDestination, // 32-byte Solana wallet public key
+  },
+});
+const id = BigInt(
+  req.events
+    ?.find((e) => e.type === "withdraw_requested")
+    ?.attributes.find((a) => a.key === "withdrawal_id")?.value ?? "0",
+);
+
+// "Pending" until the payout lands, then "Completed" (or "Failed", refunded).
+const record = await client.queryWithdrawal(id);
+console.log(record?.status);
 ```
 
 > Reads decode MessagePack through the same WASM core as signing (a strict,
@@ -769,8 +801,8 @@ the SDK uses the gateway's signed subscription auth: with a private key or
 external signer connected it signs the stream-auth message and adds
 `public_key` / `signature` / `timestamp_ms` to the `accountEvents` subscribe
 message automatically, re-signing on every reconnect. Pass `auth: false` for an
-unsigned watch-only subscription. Against an
-unauthenticated gateway (e.g. devnet) the owner alone suffices.
+unsigned watch-only subscription; devnet refuses an unsigned `accountEvents`
+subscribe with 401.
 
 ## Wire Format
 
