@@ -194,10 +194,9 @@ define_error_kinds! {
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
-/// Safe classification of an engine result code plus its canonical DeliverTx
-/// log. Upgraded engines use code 50 for slippage and 51 for open interest, but
-/// legacy engines may emit code 50 for open interest during a rolling upgrade.
-/// Callers must not infer the meaning of code 50 from the integer alone.
+/// Classification of an engine result code plus its DeliverTx log. Code 50 is
+/// slippage; only receipts from before the renumbering carry 50 for open
+/// interest, and their log names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodedExecErrorKind {
     Known(ErrorKind),
@@ -205,16 +204,13 @@ pub enum DecodedExecErrorKind {
     /// code-50 decoder.
     SlippageExceeded,
     LegacyOpenInterestLimitExceeded,
-    AmbiguousCode50,
 }
 
 impl DecodedExecErrorKind {
     pub fn code(self) -> u32 {
         match self {
             Self::Known(kind) => kind.code(),
-            Self::SlippageExceeded
-            | Self::LegacyOpenInterestLimitExceeded
-            | Self::AmbiguousCode50 => 50,
+            Self::SlippageExceeded | Self::LegacyOpenInterestLimitExceeded => 50,
         }
     }
 
@@ -223,7 +219,6 @@ impl DecodedExecErrorKind {
             Self::Known(kind) => kind.name(),
             Self::SlippageExceeded => "SlippageExceeded",
             Self::LegacyOpenInterestLimitExceeded => "OpenInterestLimitExceeded",
-            Self::AmbiguousCode50 => "AmbiguousCode50",
         }
     }
 
@@ -236,14 +231,11 @@ impl DecodedExecErrorKind {
             Self::LegacyOpenInterestLimitExceeded => {
                 "A legacy engine reported that a fill would push aggregate market open interest past MarketConfig.max_open_interest."
             }
-            Self::AmbiguousCode50 => {
-                "During the rolling upgrade, engine code 50 may mean legacy OpenInterestLimitExceeded or current SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely."
-            }
         }
     }
 }
 
-/// Decode an engine error without guessing the transitional meaning of code 50.
+/// Decode an engine error; a pre-renumbering code 50 is recognised by its log.
 pub fn decode_exec_error_kind(code: u32, log: Option<&str>) -> Option<DecodedExecErrorKind> {
     if code == 0 {
         return None;
@@ -253,10 +245,7 @@ pub fn decode_exec_error_kind(code: u32, log: Option<&str>) -> Option<DecodedExe
             Some(log) if log.starts_with("open interest limit exceeded on market ") => {
                 DecodedExecErrorKind::LegacyOpenInterestLimitExceeded
             }
-            Some(log) if log.starts_with("atomic basket aggregate slippage ") => {
-                DecodedExecErrorKind::SlippageExceeded
-            }
-            _ => DecodedExecErrorKind::AmbiguousCode50,
+            _ => DecodedExecErrorKind::SlippageExceeded,
         });
     }
     ERROR_KINDS
@@ -324,8 +313,8 @@ mod exec_error_meaning_tests {
 
         for log in [None, Some(""), Some("unknown code 50 diagnostic")] {
             assert_eq!(
-                decode_exec_error_kind(50, log).unwrap().name(),
-                "AmbiguousCode50"
+                decode_exec_error_kind(50, log),
+                Some(DecodedExecErrorKind::SlippageExceeded)
             );
         }
         assert_eq!(decode_exec_error_kind(0, None), None);

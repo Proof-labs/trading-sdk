@@ -57,9 +57,9 @@ describe("tx-result builders", () => {
         log: "atomic basket aggregate slippage 51 bps exceeds budget 50 bps",
       }).error?.name,
     ).toBe("SlippageExceeded");
-    expect(txEngineError(50).error?.name).toBe("AmbiguousCode50");
+    expect(txEngineError(50).error?.name).toBe("SlippageExceeded");
     expect(txEngineError(50, { log: "unrecognized" }).error?.name).toBe(
-      "AmbiguousCode50",
+      "SlippageExceeded",
     );
   });
 

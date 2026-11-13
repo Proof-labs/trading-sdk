@@ -96,11 +96,9 @@ export enum ExecErrorCode {
   InvalidCancelReplaceTarget = 48,
   AmendBelowFilled = 49,
   /**
-   * New engines use code 50 for AtomicBasketOrder `SlippageExceeded`. During
-   * the rolling upgrade, legacy engines may still emit code 50 for
-   * `OpenInterestLimitExceeded`, so pass the canonical DeliverTx log to
-   * {@link decodeExecError}. Without a recognized log the decoder returns
-   * `AmbiguousCode50`, never a guessed classification.
+   * AtomicBasketOrder `SlippageExceeded`. Receipts from before the
+   * renumbering used 50 for `OpenInterestLimitExceeded`; pass the DeliverTx
+   * log to {@link decodeExecError} to read those correctly.
    */
   SlippageExceeded = 50,
   /** Distinct open-interest-cap rejection emitted by upgraded engines. */
@@ -698,13 +696,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
  *   }
  */
 const OPEN_INTEREST_LOG_PREFIX = "open interest limit exceeded on market ";
-const SLIPPAGE_LOG_PREFIX = "atomic basket aggregate slippage ";
-
-const AMBIGUOUS_CODE_50: ExecErrorInfo = {
-  name: "AmbiguousCode50",
-  description:
-    "during the rolling upgrade, engine code 50 may mean legacy OpenInterestLimitExceeded or current SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely",
-};
 
 export function decodeExecError(
   code: number,
@@ -715,10 +706,7 @@ export function decodeExecError(
     if (log?.startsWith(OPEN_INTEREST_LOG_PREFIX)) {
       return OPEN_INTEREST_LIMIT_EXCEEDED;
     }
-    if (log?.startsWith(SLIPPAGE_LOG_PREFIX)) {
-      return SLIPPAGE_EXCEEDED;
-    }
-    return AMBIGUOUS_CODE_50;
+    return SLIPPAGE_EXCEEDED;
   }
   return TABLE[code] ?? null;
 }

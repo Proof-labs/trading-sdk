@@ -68,7 +68,8 @@ impl FromStr for Address {
             .or_else(|| s.strip_prefix("0X"))
             .unwrap_or(s);
         let invalid = || Error::InvalidInput(format!("address must be 40 hex digits, got {s:?}"));
-        if hex.len() != 40 {
+        // `from_str_radix` alone would take "+f" as a byte.
+        if hex.len() != 40 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(invalid());
         }
         let mut out = [0u8; 20];
@@ -109,7 +110,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_input() {
-        for s in ["", "0x12", &"g".repeat(40), &"a".repeat(41), "éé"] {
+        for s in ["", "0x12", &"g".repeat(40), &"a".repeat(41), "éé", &"+f".repeat(20)] {
             assert!(s.parse::<Address>().is_err(), "{s:?}");
         }
     }

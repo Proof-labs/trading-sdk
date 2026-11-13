@@ -52,8 +52,8 @@ pub enum EngineError {
 }
 
 impl EngineError {
-    /// Classify a nonzero engine `code`, reading `log` where the code alone
-    /// is ambiguous (50 during the open-interest/slippage renumbering).
+    /// Classify a nonzero engine `code`. `log` tells a pre-renumbering
+    /// open-interest 50 from slippage.
     #[must_use]
     pub fn new(code: u32, log: Option<&str>) -> Self {
         match decode_exec_error_kind(code, log) {
@@ -64,7 +64,7 @@ impl EngineError {
             Some(DecodedExecErrorKind::LegacyOpenInterestLimitExceeded) => {
                 Self::Known(ErrorKind::OpenInterestLimitExceeded)
             }
-            Some(DecodedExecErrorKind::AmbiguousCode50) | None => Self::Unknown(code),
+            None => Self::Unknown(code),
         }
     }
 

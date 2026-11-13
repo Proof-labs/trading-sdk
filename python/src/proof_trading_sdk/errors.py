@@ -22,11 +22,9 @@ def get_error_name(code: int, message: str | None = None) -> Optional[str]:
 
     E.g. ``get_error_name(21)`` returns ``"InvalidNonce"``.
 
-    Upgraded engines use code 50 for ``SlippageExceeded`` and code 51 for
-    ``OpenInterestLimitExceeded``. During a rolling upgrade, a legacy engine
-    may still emit code 50 for open interest; the canonical non-empty DeliverTx
-    log distinguishes it. Missing or unknown code-50 text returns
-    ``AmbiguousCode50`` rather than guessing. Code 51 never relies on the log.
+    Code 50 is ``SlippageExceeded`` and code 51 ``OpenInterestLimitExceeded``.
+    Receipts from before the renumbering carry 50 for open interest; pass the
+    DeliverTx log and its text classifies them. Code 51 never reads the log.
     """
     _ensure_loaded()
     return _native_error_name(code, message)
