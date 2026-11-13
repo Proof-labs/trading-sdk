@@ -29,7 +29,7 @@ use tokio::sync::{mpsc, Notify};
 use tokio::time::{sleep_until, Instant};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::account_event::AccountEvent;
@@ -316,7 +316,8 @@ pub enum WsMessage {
     /// not replayed; reconcile through `InfoClient` if they matter.
     Reconnected,
     /// The socket dropped, or a reconnect attempt failed. With `reconnect` on,
-    /// another attempt follows after the backoff.
+    /// another attempt follows after the backoff, except after a 401 or 403
+    /// at the handshake, which ends the feed.
     Disconnected { reason: String },
     /// A frame this client could not read, and the subscription it belongs
     /// to when that much was readable. The connection carries on;
@@ -463,6 +464,10 @@ async fn open(config: &WsConfig) -> Result<Socket> {
     let connect = tokio_tungstenite::connect_async(request);
     match tokio::time::timeout(Duration::from_secs(10), connect).await {
         Ok(Ok((socket, _))) => Ok(socket),
+        Ok(Err(WsError::Http(response))) => Err(Error::Http {
+            status: response.status().as_u16(),
+            body: String::from_utf8_lossy(response.body().as_deref().unwrap_or_default()).into(),
+        }),
         Ok(Err(e)) => Err(Error::WsConnect(e.to_string())),
         Err(_) => Err(Error::WsConnect("timed out".into())),
     }
@@ -529,6 +534,12 @@ impl Task {
             };
             match opened {
                 Ok(socket) => return Some(socket),
+                // Retrying cannot change an auth refusal: end the feed.
+                Err(e @ Error::Http { status: 401 | 403, .. }) => {
+                    let reason = format!("reconnect refused, not retrying: {e}");
+                    let _ = self.deliver(WsMessage::Disconnected { reason }).await;
+                    return None;
+                }
                 Err(e) => {
                     let reason = format!("reconnect failed: {e}");
                     if !self.deliver(WsMessage::Disconnected { reason }).await {

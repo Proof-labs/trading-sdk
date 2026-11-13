@@ -139,7 +139,10 @@ async fn a_checktx_rejection_surfaces_a_typed_engine_error() {
     );
     assert_eq!(
         s.status,
-        TxStatus::Rejected(EngineError::Known(ErrorKind::InsufficientMargin))
+        TxStatus::Rejected {
+            error: EngineError::Known(ErrorKind::InsufficientMargin),
+            log: String::new(),
+        }
     );
     assert_eq!(
         c.send(&tx).await.unwrap().error(),
@@ -227,6 +230,19 @@ async fn a_submit_without_a_verdict_returns_the_transaction() {
             assert!(matches!(*source, Error::Http { status: 502, .. }));
             assert_eq!(tx.hash, proof_sdk_rs::TxHash::of_signed_bytes(&tx.bytes));
         }
+        other => panic!("expected Unconfirmed, got {other:?}"),
+    }
+    // The gateway's own reason survives a non-success answer.
+    let (url, _) = fixture(vec![(
+        500,
+        json!({"status":"error","code":1,"log":"internal encoding error"}),
+    )])
+    .await;
+    match client(&url).cancel_all_orders(None).await {
+        Err(Error::Unconfirmed { source, .. }) => assert!(
+            matches!(&*source, Error::Http { status: 500, body } if body == "internal encoding error"),
+            "{source:?}"
+        ),
         other => panic!("expected Unconfirmed, got {other:?}"),
     }
     let c = client("http://127.0.0.1:1");

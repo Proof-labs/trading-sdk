@@ -126,7 +126,7 @@ computed hash, a `TxStatus`, and `retry_after: Option<Duration>`:
 | `TxStatus`           | Meaning                                                                                                              |
 | -------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `Committed(receipt)` | In a block. `receipt.error` is `None` on success. `receipt.events` says what it did.                                 |
-| `Rejected(error)`    | Refused at `CheckTx`; it will never execute.                                                                         |
+| `Rejected { error, log }` | Refused at `CheckTx`; it will never execute. `log` is the engine's reason as text.                         |
 | `Pending`            | Admitted without a verdict yet; call `wait_for_receipt`.                                                             |
 | `Refused(reason)`    | Turned away by the gateway (`Unauthorized`, `RateLimited`, `Paused`, `CancelOnly`, `Unavailable`, `InvalidRequest`). |
 

@@ -101,6 +101,46 @@ async fn reconnects_and_resubscribes_after_a_drop() {
 }
 
 #[tokio::test]
+async fn a_401_at_reconnect_ends_the_feed() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        ws.close(None).await.unwrap();
+        // Every later handshake is refused; count them.
+        let mut refused = 0;
+        while let Ok(Ok((mut tcp, _))) =
+            timeout(Duration::from_millis(500), listener.accept()).await
+        {
+            let mut buf = [0u8; 1024];
+            let _ = tcp.read(&mut buf).await;
+            tcp.write_all(b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n")
+                .await
+                .unwrap();
+            refused += 1;
+        }
+        refused
+    });
+
+    let config = WsConfig::new(url).with_max_backoff(Duration::from_millis(20));
+    let (_client, mut rx) = WsClient::connect(config).await.unwrap();
+
+    assert!(matches!(next(&mut rx).await, WsMessage::Disconnected { .. }));
+    let WsMessage::Disconnected { reason } = next(&mut rx).await else {
+        panic!("expected the refused reconnect")
+    };
+    assert!(reason.contains("401"), "{reason}");
+    assert!(timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(server.await.unwrap(), 1, "no retry after a 401");
+}
+
+#[tokio::test]
 async fn account_subscriptions_carry_a_verifiable_signature() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/ws", listener.local_addr().unwrap());

@@ -6,6 +6,8 @@
 //! The TypeScript source is read as text: there is no other way to see a
 //! hand-written TypeScript object from Rust.
 
+#![allow(clippy::panic, clippy::expect_used)]
+
 use std::collections::BTreeMap;
 use std::path::Path;
 

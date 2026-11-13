@@ -179,8 +179,9 @@ impl From<PreAdmissionRefusal> for RefusalReason {
 pub enum TxStatus {
     /// Executed in a block. Check [`Receipt::error`]: `None` is success.
     Committed(Receipt),
-    /// Refused at `CheckTx`. It will never execute.
-    Rejected(EngineError),
+    /// Refused at `CheckTx`. It will never execute. `log` is the engine's
+    /// reason as text, which can name what the code alone does not.
+    Rejected { error: EngineError, log: String },
     /// Admitted with no verdict yet. Reconcile with
     /// [`ExchangeClient::wait_for_receipt`]; never re-sign.
     Pending,
@@ -217,7 +218,7 @@ impl Submitted {
     pub fn error(&self) -> Option<EngineError> {
         match &self.status {
             TxStatus::Committed(r) => r.error,
-            TxStatus::Rejected(e) => Some(*e),
+            TxStatus::Rejected { error, .. } => Some(*error),
             _ => None,
         }
     }
@@ -249,7 +250,10 @@ fn status(outcome: SubmissionOutcome<PreAdmissionRefusal>) -> TxStatus {
     match outcome {
         SubmissionOutcome::Committed(r) => TxStatus::Committed(r.into()),
         SubmissionOutcome::CheckTxRejected { code, log, .. } => {
-            TxStatus::Rejected(EngineError::new(code.get(), Some(&log)))
+            TxStatus::Rejected {
+                error: EngineError::new(code.get(), Some(&log)),
+                log,
+            }
         }
         SubmissionOutcome::Pending { .. } => TxStatus::Pending,
         SubmissionOutcome::RejectedBeforeAdmission { refusal, .. } => {

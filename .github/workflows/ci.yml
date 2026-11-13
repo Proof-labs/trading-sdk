@@ -223,6 +223,8 @@ jobs:
         run: cargo generate-lockfile # Cargo.lock is gitignored (library workspace)
       # Core + derive + the conformance runner (crates/spec). Exclude the PyO3
       # crate — it links libpython and is covered by the `python` job.
+      - name: Clippy (excl. PyO3)
+        run: cargo clippy --workspace --exclude proof-trading-sdk-pyo3 --all-features --all-targets --locked -- -D warnings
       - name: Test workspace (excl. PyO3)
         run: cargo test --workspace --exclude proof-trading-sdk-pyo3 --locked
       # Optional native transport: only task-owned loopback contract fixtures;

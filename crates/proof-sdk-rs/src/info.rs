@@ -595,7 +595,8 @@ mod tests {
         let prices = |levels: &[Level]| levels.iter().map(|l| l.price).collect::<Vec<_>>();
         let mut book = Orderbook::default();
         // (side, price, quantity, bids after, asks after)
-        let steps: [(Side, u64, u64, &[u64], &[u64]); 8] = [
+        type Step = (Side, u64, u64, &'static [u64], &'static [u64]);
+        let steps: [Step; 8] = [
             (Side::Buy, 10, 1, &[10], &[]),          // into empty
             (Side::Buy, 12, 1, &[12, 10], &[]),      // new best
             (Side::Buy, 11, 1, &[12, 11, 10], &[]),  // between

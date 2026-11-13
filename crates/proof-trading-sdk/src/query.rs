@@ -18,7 +18,7 @@ fn validate_insurance_fund_ledger(fund: &InsuranceFundLedger) -> Result<(), &'st
     if !insurance_fund_owner_matches(fund) {
         return Err("insurance fund owner does not match pool");
     }
-    if i128::from(fund.cash) - i128::from(fund.debt) != i128::from(fund.net_cash) {
+    if i128::from(fund.cash).checked_sub(i128::from(fund.debt)) != Some(i128::from(fund.net_cash)) {
         return Err("insurance net cash does not match cash minus debt");
     }
     Ok(())
@@ -64,9 +64,11 @@ pub fn validate_insurance_fund_state(view: &InsuranceFundState) -> Result<(), &'
             notional_micro_usdc,
         } = &position.notional
         {
-            let expected = u128::from(*reference_price) * u128::from(position.size)
-                / 10u128.pow(u32::from(position.sz_decimals));
-            if *reference_price == 0 || notional_micro_usdc.0 != expected.to_string() {
+            let expected = u128::from(*reference_price)
+                .checked_mul(u128::from(position.size))
+                .zip(10u128.checked_pow(u32::from(position.sz_decimals)))
+                .and_then(|(product, scale)| product.checked_div(scale));
+            if *reference_price == 0 || expected.map(|e| e.to_string()).as_ref() != Some(&notional_micro_usdc.0) {
                 return Err("insurance notional is not the exact canonical floor amount");
             }
         }

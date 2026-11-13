@@ -103,6 +103,9 @@ pub struct GatewayError {
     /// A POST may have reached the gateway. Preserve and reconcile these exact
     /// bytes by this locally computed hash; do not allocate a replacement nonce.
     pub reconcile_hash: Option<TxHash>,
+    /// The `log` the gateway put on a non-success submit answer, if any:
+    /// its own statement of why, e.g. `internal encoding error`.
+    pub log: Option<String>,
 }
 impl GatewayError {
     fn new(operation: Operation, kind: ErrorKind) -> Self {
@@ -111,6 +114,7 @@ impl GatewayError {
             kind,
             retry_after: None,
             reconcile_hash: None,
+            log: None,
         }
     }
     fn submission(mut self, hash: TxHash) -> Self {
@@ -120,7 +124,11 @@ impl GatewayError {
 }
 impl fmt::Display for GatewayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "gateway {:?}: {:?}", self.operation, self.kind)
+        write!(f, "gateway {:?}: {:?}", self.operation, self.kind)?;
+        match &self.log {
+            Some(log) => write!(f, " ({log})"),
+            None => Ok(()),
+        }
     }
 }
 impl std::error::Error for GatewayError {}
@@ -763,8 +771,10 @@ impl GatewayClient {
             }
             // `status` is the gateway's statement of where the submission
             // ended; any other body did not come from its exchange handler.
+            let gateway_log = Some(read.log.clone()).filter(|l| !l.is_empty());
             let http_error = || GatewayError {
                 retry_after: body.retry_after,
+                log: gateway_log.clone(),
                 ..GatewayError::new(op, ErrorKind::HttpStatus(body.status.as_u16()))
             };
             let has_hash = read.tx_hash.is_some();
