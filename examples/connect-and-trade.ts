@@ -19,7 +19,6 @@ import {
   generateKeypair,
   pubkeyToOwner,
   ownerToHex,
-  bytesToHex,
 } from "../src/index.js";
 
 const GATEWAY_URL =
@@ -69,7 +68,6 @@ const { publicKey, privateKey } = generateKeypair();
 const address = pubkeyToOwner(publicKey);
 const addressHex = ownerToHex(address);
 info(`Address: 0x${addressHex}`);
-info(`Privkey: ${bytesToHex(privateKey)}  (save for future sessions)`);
 info("");
 
 // Step 4 — Fund via faucet
