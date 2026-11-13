@@ -19,9 +19,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Older fee-update payloads are rejected, matching the engine. Rebuild and
   reapprove affected governance proposals against the matching engine; do not
   reuse old signatures. This source change does not publish or authorize a release.
+- **proof-wire 12.0.0 (exchange 2.25.0, protocol 13.0).** The pin moves from
+  canonical wire `2a707bc` to the `v12.0.0` release commit `27ac6ac`, still
+  pinned by commit, never by tag. Over `2a707bc` the release adds the
+  `Resolution` liquidation mode, the `ResolutionBalanceSnapshot` engine event
+  and error code 135; no action bytes change, and `conformance/codec.ndjson`
+  regenerates unchanged. The Rust crate re-exports proof-wire 12 types, whose
+  `Event`, `LiquidationMode` and `ExecError` gain variants an older decoder
+  rejects: the next `proof-trading-sdk` crate release is MAJOR. The npm
+  package and the Python distribution only add names, so this change alone
+  is MINOR for them.
 
 ### Added
 
+- Error code 135 `OffCurveWithdrawalDestination` (proof-wire 12.0.0): the
+  withdrawal destination is not an on-curve Solana wallet owner, and no funds
+  were debited. Named in Rust, TypeScript and Python.
+- The `resolution` liquidation mode in `LIQUIDATION_MODES`: the funds take
+  an account's prediction binaries when no positive equity is left after a
+  resolution's fund paid (proof-wire 12.0.0).
+- `decodeResolutionBalanceSnapshotEvent()` decodes the engine's
+  `resolution_balance_snapshot` event: one account's exact cash at the ends
+  of the blocks immediately before and after an event's resolution, with the
+  settlement balances that isolate the resolution (proof-wire 12.0.0).
 - Fund reads retain balances and positions when future wire variants are unknown, explicitly reporting unknown sides or valuations; known priced values still require exact validation.
 - `reads().finalized.insuranceFunds()` lists every registered or stored-ledger pool, including marketless funds, with cash, debt and net cash at one witnessed state. `insuranceFund(poolId)` adds bounded positions and engine-settlement notionals, explicitly reporting incomplete lists, unpriced references and unsupported prediction binaries. These display values are not equity, historical profit or execution quotes.
 - `reads().insuranceFundHistory({ poolId, stream, limit, cursor })` reads one bounded page of indexed insurance balances or activity through the gateway. Amounts and chain coordinates remain exact integers; coverage explicitly describes retained observations, never complete history, equity or a finalized-state witness.

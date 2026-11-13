@@ -190,6 +190,7 @@ define_error_kinds! {
     132 => MarketStatusTransitionRefused ~ "SetMarketStatus or PauseMarket names a move the market cannot make: any market moves Trading to Halted and back; a perpetual also moves Trading or Halted to ReduceOnly and back, then ReduceOnly to Delisted.",
     133 => MarketBacksLiveEvent ~ "The perpetual backs a Conditional on an unresolved event and cannot wind down until the event resolves.",
     134 => MarketHalted ~ "The market is halted and takes no orders or fills; cancels still work.",
+    135 => OffCurveWithdrawalDestination ~ "Withdrawal destination must be an on-curve Solana wallet owner; no funds were debited.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -528,6 +529,7 @@ mod exec_error_meaning_tests {
                 event_id: crate::types::EventId(0),
             },
             ExecError::MarketHalted { market: 1 },
+            ExecError::OffCurveWithdrawalDestination,
         ]
     }
 
@@ -599,7 +601,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=134)
+        let expected: Vec<u32> = (1u32..=135)
             .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127))
             .chain(std::iter::once(255))
             .collect();

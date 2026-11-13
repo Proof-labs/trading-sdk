@@ -39,10 +39,17 @@ export type LiquidationProgress =
 
 /** Which path liquidated a position, as the `mode` attribute names it:
  *  `partial` is a step through the book toward the target ratio, `full` a
- *  close through the book below the full-close threshold, and `insolvent` a
- *  close at mark because equity is negative in some outcome. A later engine
+ *  close through the book below the full-close threshold, `insolvent` a
+ *  close at mark because equity is negative in some outcome, and
+ *  `resolution` the funds taking an account's prediction binaries when no
+ *  positive equity is left after a resolution's fund paid. A later engine
  *  may add a mode; the decoder passes it through. */
-export const LIQUIDATION_MODES = ["partial", "full", "insolvent"] as const;
+export const LIQUIDATION_MODES = [
+  "partial",
+  "full",
+  "insolvent",
+  "resolution",
+] as const;
 
 export type LiquidationMode =
   (typeof LIQUIDATION_MODES)[number] | (string & {});
