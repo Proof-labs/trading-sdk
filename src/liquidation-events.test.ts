@@ -215,7 +215,12 @@ describe("decodeLiquidationEvent", () => {
   });
 
   it("decodes every PositionLiquidated mode and an empty binding outcome", () => {
-    expect(LIQUIDATION_MODES).toEqual(["partial", "full", "insolvent"]);
+    expect(LIQUIDATION_MODES).toEqual([
+      "partial",
+      "full",
+      "insolvent",
+      "resolution",
+    ]);
     for (const mode of LIQUIDATION_MODES) {
       expect(
         decodeLiquidationEvent(

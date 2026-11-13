@@ -1,5 +1,22 @@
 export { verifyWitness } from "./bounded-read.js";
+export {
+  decodeInsuranceFundHistory,
+  type InsuranceFundHistoryParams,
+  type InsuranceFundHistoryPage,
+  type InsuranceHistoryCoordinate,
+  type InsuranceHistoryEvent,
+  type InsuranceHistoryPhase,
+  type InsuranceHistoryStream,
+} from "./insurance-fund-history.js";
 export { GatewayReadError } from "./errors.js";
+export type { FinalizedAuthorizedAgents } from "./authorized-agents.js";
+export type {
+  FinalizedInsuranceFunds,
+  FinalizedInsuranceFund,
+  InsuranceFundLedger,
+  InsuranceFundPosition,
+  InsurancePositionNotional,
+} from "./insurance-funds.js";
 export {
   hexAddress,
   hash32,
@@ -83,6 +100,8 @@ export {
   type Deposit,
   type Withdraw,
   type CreateMarket,
+  type SubmitOracleObservation,
+  type ConfigureOraclePolicy,
   type WithdrawRequest,
   type ConfirmDeposit,
   type DepositLocator,
@@ -94,7 +113,10 @@ export {
   type TriggerLimb,
   type SetPositionTriggers,
   type CancelPositionTriggers,
-  type SetTriggerMarketConfig,
+  type RetiredTriggerMarketConfig,
+  type DecodedAdminAction,
+  type RetiredAdminAction,
+  type DecodedAction,
   type SetOracleGuards,
   type FundInsuranceFund,
   type InsuranceFundAllocation,
@@ -182,9 +204,6 @@ export {
   type TriggerEvaluation,
   type StoredTriggerLimb,
   type TriggerMarketConfig,
-  type PendingTriggerMarketConfig,
-  type TriggerMarketConfigState,
-  type TriggerMarketConfigInfo,
   type TriggerEffectiveAvailability,
   type TriggerEffectiveAvailabilityKind,
   type PositionTriggerBracket,
@@ -220,6 +239,10 @@ export {
   type AccountInfo,
   type PositionInfo,
   type MarketConfig,
+  type MarketListing,
+  type RefusedMarketRow,
+  type EventListing,
+  type RefusedEventRow,
   type MarkSourceMode,
   type BindingScenarioEntry,
   type HistoryCashFlow,
@@ -241,13 +264,12 @@ export {
 
 export {
   MAX_TRIGGER_SLIPPAGE_BPS,
+  ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS,
   validateSetPositionTriggers,
   validateCancelPositionTriggers,
   validateOrderTriggers,
   type OrderTriggerFields,
-  validateSetTriggerMarketConfig,
   decodePositionTriggerInfos,
-  decodeTriggerMarketConfigInfos,
   decodeTriggerStatusJson,
 } from "./triggers.js";
 
@@ -306,6 +328,10 @@ export {
   type VoidSettlementEvent,
 } from "./void-events.js";
 export {
+  decodeResolutionBalanceSnapshotEvent,
+  type ResolutionBalanceSnapshotEvent,
+} from "./resolution-balance-events.js";
+export {
   LIQUIDATION_HISTORY_EVENT_TYPES,
   decodeLiquidationHistoryPage,
   liquidationHistorySearchParams,
@@ -341,6 +367,8 @@ export {
   signAndEncode,
   signEnvelopeFromPayload,
   encodePayloadBytes,
+  isSubmittableAction,
+  isSubmittableAdminAction,
   decodeTx,
   decodeSigningMessage,
   type DecodedSigningMessage,

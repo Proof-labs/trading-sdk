@@ -92,6 +92,12 @@ pub enum ReadKind {
     Account = 3,
     /// One `AdminAction`, as stored on a proposal.
     AdminAction = 4,
+    /// `query_v2::AuthorizedAgents`, a current bounded map-encoded grant list.
+    AuthorizedAgents = 5,
+    /// `query_v2::InsuranceFundDirectory` (`GET /v2/insurance-funds?witness=1`).
+    InsuranceFundDirectory = 6,
+    /// `query_v2::InsuranceFundState` (`GET /v2/insurance-fund/{pool}?witness=1`).
+    InsuranceFundState = 7,
 }
 
 fn decode_as<T: serde::de::DeserializeOwned + serde::Serialize>(
@@ -110,11 +116,21 @@ fn decode_records<T: serde::de::DeserializeOwned + serde::Serialize>(
 }
 
 /// Decode a node read response into serde-shaped JS (u64/i64 as BigInt).
-/// Floats, extensions, duplicate keys and trailing bytes are refused first.
+/// A market or events listing over `reads::MAX_LISTING_BYTES` is refused, then
+/// floats, extensions, duplicate keys and trailing bytes are refused.
 /// Fields an engine appends to a stored record after the pinned wire are
 /// ignored; an `AdminAction` is decoded exactly.
 #[wasm_bindgen]
 pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
+    if matches!(kind, ReadKind::Markets | ReadKind::Events)
+        && bytes.len() > reads::MAX_LISTING_BYTES
+    {
+        return Err(JsError::new(&format!(
+            "listing payload is too large: {} bytes, at most {}",
+            bytes.len(),
+            reads::MAX_LISTING_BYTES
+        )));
+    }
     core_sdk::msgpack::reject_floats(bytes).map_err(|e| JsError::new(&e.to_string()))?;
     match kind {
         ReadKind::Markets => decode_records::<Vec<core_sdk::types::MarketConfig>>(
@@ -130,6 +146,34 @@ pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
         ),
         ReadKind::Account => decode_records::<core_sdk::query::AccountInfo>(bytes, &ACCOUNT_INFO),
         ReadKind::AdminAction => decode_as::<governance::AdminAction>(bytes),
+        ReadKind::AuthorizedAgents => {
+            if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+                return Err(JsError::new("authorized agents must be a MessagePack map"));
+            }
+            decode_as::<core_sdk::query::AuthorizedAgents>(bytes)
+        }
+        ReadKind::InsuranceFundDirectory => {
+            if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+                return Err(JsError::new(
+                    "insurance fund directory must be a MessagePack map",
+                ));
+            }
+            let view: core_sdk::query::InsuranceFundDirectory =
+                rmp_serde::from_slice(bytes).map_err(|error| JsError::new(&error.to_string()))?;
+            core_sdk::query::validate_insurance_fund_directory(&view).map_err(JsError::new)?;
+            to_bigint_js(&view)
+        }
+        ReadKind::InsuranceFundState => {
+            if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+                return Err(JsError::new(
+                    "insurance fund state must be a MessagePack map",
+                ));
+            }
+            let view: core_sdk::query::InsuranceFundState =
+                rmp_serde::from_slice(bytes).map_err(|error| JsError::new(&error.to_string()))?;
+            core_sdk::query::validate_insurance_fund_state(&view).map_err(JsError::new)?;
+            to_bigint_js(&view)
+        }
     }
 }
 
@@ -141,6 +185,47 @@ pub fn decode_open_orders(bytes: &[u8], owner: &[u8]) -> Result<JsValue, JsError
         .map_err(|_| JsError::new("owner must be exactly 20 bytes"))?;
     let orders = reads::decode_open_orders(bytes, owner).map_err(JsError::new)?;
     to_bigint_js(&orders)
+}
+
+/// Decode one order looked up by id (`/info` `orderStatus`): `null` when the
+/// engine holds no such order, else the order, which must be `order_id`. Its
+/// owner is not bound here.
+#[wasm_bindgen]
+pub fn decode_order_status(bytes: &[u8], order_id: u64) -> Result<JsValue, JsError> {
+    match reads::decode_order_status(bytes, order_id).map_err(JsError::new)? {
+        Some(order) => to_bigint_js(&order),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// Decode the market listing row by row: the rows that decode, each one's
+/// field count, and the rows that do not (index, market id, field count,
+/// error). A row that names no market, or one another row names, refuses the
+/// whole listing, as does a payload that is not a list or fails the preflight.
+#[wasm_bindgen]
+pub fn decode_market_listing(bytes: &[u8]) -> Result<JsValue, JsError> {
+    let listing = reads::decode_market_listing(bytes).map_err(|e| JsError::new(&e.to_string()))?;
+    to_bigint_js(&listing)
+}
+
+/// Decode the events listing row by row: the events that decode and the rows
+/// that do not (index, event id, field count, error). A row that names no
+/// event, or one another row names, refuses the whole listing, as does a
+/// payload that is not a list or fails the strict MessagePack preflight.
+#[wasm_bindgen]
+pub fn decode_event_listing(bytes: &[u8]) -> Result<JsValue, JsError> {
+    let listing = reads::decode_event_listing(bytes).map_err(|e| JsError::new(&e.to_string()))?;
+    to_bigint_js(&listing)
+}
+
+/// How many fields the pinned wire `MarketConfig` has: the record width the
+/// listing decode reads (later fields are ignored, missing ones default).
+#[wasm_bindgen]
+pub fn market_config_fields() -> u32 {
+    match MARKET_CONFIG {
+        Shape::Record { width, .. } => u32::try_from(width).unwrap_or(u32::MAX),
+        _ => 0,
+    }
 }
 
 /// Decode a complete `GET /v1/markets-snapshot` HTTP body bound to

@@ -7,13 +7,55 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [12.0.0]
+- Fund directory and position checks are shared in Rust before WASM adaptation;
+  invalid caller pool IDs report configuration errors, future display variants
+  remain explicitly unknown, and fund reads use the query transport budget.
 
-npm 12.0.0 and Python 5.0.0 require exchange 2.24.0 (proof-wire 11.0.0).
-TypeScript open-order read contracts and Python refusal exceptions are breaking
-changes. Rust crate versions are unchanged.
+### Changed
+
+- **Wire compatibility boundary:** pin canonical wire `2a707bc` (engine
+  `23ee1f0`). Conditional attachment proposal bytes/hashes now include impact
+  notional; fee updates require the funding dead-band and interest-rate tail.
+  Older fee-update payloads are rejected, matching the engine. Rebuild and
+  reapprove affected governance proposals against the matching engine; do not
+  reuse old signatures. This source change does not publish or authorize a release.
+- **proof-wire 12.0.0 (exchange 2.25.0, protocol 13.0).** The pin moves from
+  canonical wire `2a707bc` to the `v12.0.0` release commit `27ac6ac`, still
+  pinned by commit, never by tag. Over `2a707bc` the release adds the
+  `Resolution` liquidation mode, the `ResolutionBalanceSnapshot` engine event
+  and error code 135; no action bytes change, and `conformance/codec.ndjson`
+  regenerates unchanged. The Rust crate re-exports proof-wire 12 types, whose
+  `Event`, `LiquidationMode` and `ExecError` gain variants an older decoder
+  rejects: the next `proof-trading-sdk` crate release is MAJOR. The npm
+  package and the Python distribution only add names, so this change alone
+  is MINOR for them.
 
 ### Added
+
+- Error code 135 `OffCurveWithdrawalDestination` (proof-wire 12.0.0): the
+  withdrawal destination is not an on-curve Solana wallet owner, and no funds
+  were debited. Named in Rust, TypeScript and Python.
+- The `resolution` liquidation mode in `LIQUIDATION_MODES`: the funds take
+  an account's prediction binaries when no positive equity is left after a
+  resolution's fund paid (proof-wire 12.0.0).
+- `decodeResolutionBalanceSnapshotEvent()` decodes the engine's
+  `resolution_balance_snapshot` event: one account's exact cash at the ends
+  of the blocks immediately before and after an event's resolution, with the
+  settlement balances that isolate the resolution (proof-wire 12.0.0).
+- Fund reads retain balances and positions when future wire variants are unknown, explicitly reporting unknown sides or valuations; known priced values still require exact validation.
+- `reads().finalized.insuranceFunds()` lists every registered or stored-ledger pool, including marketless funds, with cash, debt and net cash at one witnessed state. `insuranceFund(poolId)` adds bounded positions and engine-settlement notionals, explicitly reporting incomplete lists, unpriced references and unsupported prediction binaries. These display values are not equity, historical profit or execution quotes.
+- `reads().insuranceFundHistory({ poolId, stream, limit, cursor })` reads one bounded page of indexed insurance balances or activity through the gateway. Amounts and chain coordinates remain exact integers; coverage explicitly describes retained observations, never complete history, equity or a finalized-state witness.
+- `reads().finalized.authorizedAgents(owner)` reads up to 100 current stored trading-agent grants with an atomic finalized-state witness and an explicit completeness flag. Grants have no stored expiry or per-action scope; this read does not authorize signing.
+- Python `ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS` (`1_000`) mirrors the engine's
+  per-limb TP/SL slippage ceiling as an advisory clamp; encoding does not
+  enforce it.
+- Python typed `market_stats()` preserves exact indexed rolling metrics and
+  unavailable values, accepts non-string sequences such as `range`, and uses the
+  shared calendar parser to reject impossible dates and hour 24.
+  `oracle_health()` exposes optional operational feeder facts
+  across disabled, F16 relay and market-freshness responses without inferring
+  trading authorization. Absent or null optional scalars decode to `None`;
+  F16 readiness fields still require booleans.
 
 - **Rust `proof-sdk-rs` 1.0.0**, a new async (tokio) trading client over the gateway (#425), with a WebSocket feed (`ws` feature, on by default). The WASM build is unchanged.
 
@@ -81,6 +123,22 @@ changes. Rust crate versions are unchanged.
 
 ### Changed
 
+- **Breaking (Python MAJOR):** typed `ProposeAdminAction` and
+  `ApproveAdminAction` reject retired admin actions at construction and before
+  encoding. `is_submittable_admin_action()` checks the kind without enforcing
+  engine admission policy. Raw encoding/signing and historical decoding remain.
+- Historical `SetTriggerMarketConfig` decoding and legacy policy fields in
+  position-trigger reads validate wire fields without enforcing the retired
+  enabled-policy nonzero bounds.
+
+- Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
+  1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
+  still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
+  placement. Existing TP/SL placement, cancellation and history APIs remain.
+
+- **Python `open_orders`** preserves all 14 resting-order fields through the
+  shared Rust decoder (released for TypeScript in 12.0.0).
+
 - Python stream reconnect attempts and backoff reset after a matching subscription
   acknowledgment or data delivery. Handshakes and refusals alone do not reset them.
 
@@ -105,8 +163,191 @@ changes. Rust crate versions are unchanged.
   `#[non_exhaustive]` and gains `ErrorKind::from_code` (`None` for the version-dependent code 50).
   New `sign_action` signs any `Action` through a custody `Signer`.
 
-- Document `SetUserMarketLeverage` admission limits, its governed insurance-fund
-  path and initial-margin-only semantics. SDK APIs and wire support are unchanged.
+- Python account-stream reconnect backoff now defaults to a 10-second cap
+  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
+- Python signed account authentication rejects an unconfigured chain ID before
+  signing. Configure the gateway's chain ID explicitly.
+- Python account streams match TypeScript's bounded first-subscription auth
+  retries: signing failures and 401/429/503 frames yield errors and retry up to
+  five times. Exhaustion and 403 frames leave the socket open without further
+  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
+  401/403 refusals raise `AuthenticationError` before the first successful
+  connection; on reconnect they use the configured retry budget and backoff
+  without discarding history recovery state.
+- A Python client with a signer now signs every account subscription, even with
+  an API key configured. Subscribing to another owner's feed, or to any feed
+  with an unconfigured chain ID, now fails with error frames instead of relying
+  on the API key. Use a client with only the API key for those feeds.
+
+### Removed
+
+- **Breaking (Python 5.0.0):** remove `trigger_market_configs()` and the
+  `SetTriggerMarketConfig` builder. Low-level payload encoding, signing and
+  historical decoding remain wire-compatible; the engine owns proposal and
+  execution refusal for the retired action. Remove legacy-policy prechecks
+  before placing TP/SL; no replacement lookup is needed.
+- **Breaking (Python 5.0.0):** remove the legacy trigger-policy registry
+  decoders: `proof_trading_sdk.trigger_config`
+  (`decode_trigger_market_config_infos`, `TriggerMarketConfigInfo`,
+  `TriggerMarketConfigState`, `PendingTriggerMarketConfig`,
+  `TriggerMarketConfig`).
+
+### Fixed
+
+- **Preserve structured gateway refusals (Python).** Python raises
+  `PreAdmissionRefusal` with `error_code`, `message` and `status_code` for
+  admission refusals, instead of treating legacy HTTP 200 refusals as
+  unresolved or flattening HTTP 400, 411 and 413 refusals into transport text.
+  An internal `EncodingError` refusal is also preserved at HTTP 500. Valid
+  envelopes at HTTP 401, 403, 429 and other 5xx responses keep their existing
+  Python exceptions. Python callers must catch `PreAdmissionRefusal` for valid
+  admission refusals (MAJOR for Python). The TypeScript half shipped in 12.0.0.
+
+- Python `RateLimited.bucket` now uses `"default"`, matching the cached
+  `rate_limit_state` key, when the gateway omits `X-RateLimit-Bucket` (#395).
+
+- Python submits signed transactions to the gateway in its JSON/base64 envelope.
+- Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. Proven refusals are handled separately from ambiguous failures.
+- Python raises `TransportError` for malformed or wrong-shaped read responses (a 200 with `null` or `[]` on an object-valued read such as `markets` or `ticker` no longer reads as empty), and raises `SubmissionPending` with the transaction hash when a submission response carries no verdict; only an explicit non-zero `"<code>: <message>"` stays a terminal `EngineError`.
+- Python account-event history supports explicit ordering and cursor pagination. The client validates owner addresses and page limits (1–5000) before sending a request. Passing the unsupported `after_id` filter now raises `ValueError`.
+- Python reads per-account funding payments and position history with cursor pagination. Passing the unsupported `after_height` filter now raises `ValueError`.
+- Python reads deposit and withdrawal history from owner-scoped account events.
+
+## [12.1.0] — 2026-11-12
+
+TypeScript release on the same wire as 12.0.0 (proof-wire 11.0.0): the
+market and events listings decoded per row and bounded at 1 MiB, the oracle
+operator payload types exported, and the retired trigger-policy APIs
+removed (#409). Removing
+those APIs, and the change to `queryMarketListing()`, break code that relies
+on them; they ship in 12.1.0 by decision rather than in a MAJOR. Rust and
+Python versions are unchanged.
+
+### Added
+
+- **TypeScript `MarketListing.refusedRows`** and the Rust core's
+  `reads::decode_market_listing` (WASM `decode_market_listing`): the market
+  listing decoded row by row. Each row the decoder refuses (a market kind or
+  mark-source mode the pinned wire does not know, a value out of range) is
+  reported with its listing index, its market id, its field count and the
+  decode error, when the row names a non-zero market id no other row names. A
+  row that cannot be tied to a market of its own (not an array, no valid id,
+  an id another row names) refuses the whole listing, so a market is never
+  lost without being named. In Rust the refusal is a typed `ListingError`
+  (`ListingFault`: the preflight's `MsgpackError`, not a list, a non-array
+  row, no id, an id named twice) (#447).
+
+- **TypeScript `queryEventListing()`** (`EventListing`, `RefusedEventRow`)
+  and the Rust core's `reads::decode_event_listing` (WASM
+  `decode_event_listing`): the events listing (`GET /v1/events`) decoded row by
+  row. Each row the decoder refuses (an oracle source kind or event status the
+  pinned wire does not know, a value out of range) is reported with its
+  listing index, its event id, its field count and the decode error, instead
+  of refusing every event, when the row names a non-zero event id no other row
+  names. A row that cannot be tied to an event of its own refuses the whole
+  listing.
+  A missing envelope, a payload that is not a list, or one that fails the
+  strict MessagePack preflight is still refused. `queryEvents()` is unchanged
+  (#451).
+
+- Export the `SubmitOracleObservation` and `ConfigureOraclePolicy` payload
+  types from the TypeScript package root for typed operator integrations
+  (MINOR for npm; types only). The
+  [operator harness migration guide](docs/operator-harness-migration.md) maps
+  the retired `OracleUpdate`, `OracleUpdateComposite`, `RunFundingTick` and
+  `/testing` surfaces onto the current contract.
+
+- TypeScript `isSubmittableAdminAction()` and the `RetiredAdminAction` type
+  narrow a bare `DecodedAdminAction` (for example `AdminProposalContext.action`)
+  to a submittable `AdminAction` without a cast. `ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`
+  (`1_000`) mirrors the engine's per-limb TP/SL slippage ceiling as an advisory
+  clamp; encoding does not enforce it (#388).
+
+### Changed
+
+- **TypeScript and Rust listing reads refuse a payload over 1 MiB**
+  (`reads::MAX_LISTING_BYTES`, the open-orders bound): `queryMarkets()`,
+  `queryMarketListing()`, `queryEvents()` and `queryEventListing()`, and the
+  Rust `decode_market_listing` / `decode_event_listing`
+  (`ListingFault::TooLarge`). Real listings are a few kilobytes (#455).
+
+- **Breaking (TypeScript): `queryMarketListing()` no longer refuses the whole
+  listing for one row it cannot decode** (#447). It returns the rows that
+  decode in `markets` and the others, each named by its market, in
+  `refusedRows`; `rowFieldCounts` has one entry per decoded market.
+  `MarketListing` gains the required `refusedRows`, so a hand-built
+  `MarketListing` (a mock or fixture) must add it. A caller that relied on the throw to stop on an unknown
+  market must now check `refusedRows`. A missing envelope or a payload that is
+  not a list still throws, as does a payload that fails the strict
+  MessagePack preflight anywhere, appended fields included (floats,
+  extensions, duplicate keys, nesting deeper than 32, trailing bytes).
+  `queryMarkets()` is unchanged.
+
+- **Breaking (TypeScript):** `decodeTx().action`, `decodeSigningMessage().action`,
+  `AdminProposalContext.action` and `ProposalDisplayInfo.action` are now
+  `DecodedAction` / `DecodedAdminAction`, because historical proposals may hold
+  the retired `SetTriggerMarketConfig`. Code that assigns a decoded action to
+  `Action` or `AdminAction`, even code that never touches triggers, stops
+  compiling. Narrow with `isSubmittableAction()` or `isSubmittableAdminAction()`
+  first.
+
+- Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
+  1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
+  still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
+  placement. Existing TP/SL placement, cancellation and history APIs remain.
+
+### Removed
+
+- **Breaking (TypeScript):** remove `queryTriggerMarketConfigs()`, the
+  `SetTriggerMarketConfig` builder/type and `validateSetTriggerMarketConfig`.
+  Low-level payload encoding, signing and historical decoding remain
+  wire-compatible; the engine owns proposal/execution refusal for the retired
+  action. Proposal hashes remain available. Remove legacy-policy prechecks
+  before placing TP/SL; no replacement lookup is needed (#388).
+
+- **Breaking (TypeScript):** remove the legacy trigger-policy registry
+  decoders and their row types, which lost their only caller with
+  `queryTriggerMarketConfigs()`: `decodeTriggerMarketConfigInfos`,
+  `TriggerMarketConfigInfo`, `TriggerMarketConfigState` and
+  `PendingTriggerMarketConfig` (#388).
+
+### Fixed
+
+- TypeScript `queryEvents()` and `queryEvent()` word a missing or empty
+  encoded-data envelope as every other read does (`API error: /v1/events
+response is missing encoded data`), so `queryEvents()` and
+  `queryEventListing()` refuse it with the same message (#455).
+
+## [12.0.0] — 2026-11-12
+
+TypeScript MAJOR release, on the same wire as 11.0.0 (proof-wire 11.0.0,
+exchange 2.24.0): `queryOpenOrders` returns all 14 resting-order fields
+(breaking for code that builds an `OpenOrder` by hand), the new
+`queryOrderStatus` and `queryMarketListing` reads, the margin-offset policy,
+reclassified transaction-evidence error kinds and structured gateway refusals.
+Rust and Python versions are unchanged.
+
+### Added
+
+- **TypeScript `queryMarketListing()`**: the market listing (`GET /v1/markets`) with each row's field count and the pinned `MarketConfig` width (`MarketListing`), decoded as `queryMarkets` decodes it. The decode ignores fields appended after the pinned width and fills missing trailing fields with their defaults; the counts let a caller refuse a layout the pinned wire does not have (the market maker's listing guard). WASM `market_config_fields()` reports the pinned width. Additive (MINOR).
+- **TypeScript `queryOrderStatus(orderId)`**: one order by id (`POST /info` `orderStatus`; the node route `GET /v1/order/{id}` with `useGateway: false`), decoded by the Rust core's new `decode_order_status` with the same fields as `queryOpenOrders`, or `null` when the engine no longer holds the order. An answer naming another order is refused. The request names no owner, so the owner is returned, not checked. Refuses an id above `Number.MAX_SAFE_INTEGER`, floats and payloads over 4 KiB. Additive (MINOR).
+- `validateSetMarginOffsetPolicy` checks policy bounds before encoding and
+  through `decodeAdminAction`.
+  `decodeMarginOffsetEvent` reads the engine's `margin_offset_policy_set`
+  and `margin_offset_pair_configured` attributes against wire-generated vectors.
+  Rust re-exports the margin-offset types. Conformance vectors and content-hash
+  constants pin policy encoding across TypeScript, Rust and Python.
+
+### Changed
+
+- **Breaking (TypeScript MAJOR):** `queryOpenOrders` preserves all 14
+  resting-order fields through the shared Rust decoder, including client order
+  IDs and exact integer metadata. The eight added `OpenOrder` fields are required
+  in manually constructed objects; see the
+  [migration guide](README.md#open-order-migration). Invalid responses now throw
+  instead of appearing empty, and `queryOpenOrders("")` throws. Valid empty
+  lists still return `[]`; legacy six-field records use wire defaults. Decoded
+  payloads over 1 MiB are rejected.
 
 - **TypeScript `readTransactionEvidence` and block-results reads reclassify
   `GatewayReadError.kind` (MINOR for npm).** Callers that branch on `kind`
@@ -127,31 +368,9 @@ changes. Rust crate versions are unchanged.
 
 - TypeScript `RawOpenOrder.market` widens from `MarketId` to `MarketId | 0`;
   code that assumes a branded `MarketId` must handle market zero.
-- Python account-stream reconnect backoff now defaults to a 10-second cap
-  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
-- Python signed account authentication rejects an unconfigured chain ID before
-  signing. Configure the gateway's chain ID explicitly.
-- Python account streams match TypeScript's bounded first-subscription auth
-  retries: signing failures and 401/429/503 frames yield errors and retry up to
-  five times. Exhaustion and 403 frames leave the socket open without further
-  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
-  401/403 refusals raise `AuthenticationError` before the first successful
-  connection; on reconnect they use the configured retry budget and backoff
-  without discarding history recovery state.
-- A Python client with a signer now signs every account subscription, even with
-  an API key configured. Subscribing to another owner's feed, or to any feed
-  with an unconfigured chain ID, now fails with error frames instead of relying
-  on the API key. Use a client with only the API key for those feeds.
 
-- **Breaking (TypeScript MAJOR):** `queryOpenOrders` and Python `open_orders`
-  preserve all 14 resting-order fields through the shared Rust decoder, including
-  client order IDs and exact integer metadata. The eight added TypeScript
-  `OpenOrder` fields are required in manually constructed objects; see the
-  [migration guide](README.md#open-order-migration).
-  Invalid responses now throw instead of appearing empty, and
-  `queryOpenOrders("")` throws. Valid empty lists still return `[]`; legacy
-  six-field records use wire defaults. Decoded payloads over 1 MiB are rejected.
-  Ship this change in the next TypeScript MAJOR release; it is not part of 11.0.0.
+- Document `SetUserMarketLeverage` admission limits, its governed insurance-fund
+  path and initial-margin-only semantics. SDK APIs and wire support are unchanged.
 
 ### Fixed
 
@@ -159,29 +378,12 @@ changes. Rust crate versions are unchanged.
   base64 capacity before HTTP.
 
 - **Preserve structured gateway refusals.** Valid `status: "refused"`
-  responses retain their machine-readable reason. TypeScript adds
-  `TxResult.errorCode` and the open `GatewayRefusalCode` type (MINOR for npm).
-  Python raises `PreAdmissionRefusal` with `error_code`, `message` and
-  `status_code` for admission refusals, instead of treating legacy HTTP 200
-  refusals as unresolved or flattening HTTP 400, 411 and 413 refusals into
-  transport text. An internal `EncodingError` refusal is also preserved at
-  HTTP 500. Malformed or contradictory refusals remain unresolved against the
-  hash of the submitted bytes. Valid envelopes at HTTP 401, 403, 429 and other 5xx
-  responses keep their existing Python exceptions. A refusal
-  describes this attempt only; it cannot resolve an earlier ambiguous
-  attempt. Retry decisions depend on the refusal reason, not HTTP status
-  alone. Python callers must catch `PreAdmissionRefusal` for valid admission
-  refusals (MAJOR for Python).
-
-- Python `RateLimited.bucket` now uses `"default"`, matching the cached
-  `rate_limit_state` key, when the gateway omits `X-RateLimit-Bucket` (#395).
-
-- Python submits signed transactions to the gateway in its JSON/base64 envelope.
-- Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. Proven refusals are handled separately from ambiguous failures.
-- Python raises `TransportError` for malformed or wrong-shaped read responses (a 200 with `null` or `[]` on an object-valued read such as `markets` or `ticker` no longer reads as empty), and raises `SubmissionPending` with the transaction hash when a submission response carries no verdict; only an explicit non-zero `"<code>: <message>"` stays a terminal `EngineError`.
-- Python account-event history supports explicit ordering and cursor pagination. The client validates owner addresses and page limits (1–5000) before sending a request. Passing the unsupported `after_id` filter now raises `ValueError`.
-- Python reads per-account funding payments and position history with cursor pagination. Passing the unsupported `after_height` filter now raises `ValueError`.
-- Python reads deposit and withdrawal history from owner-scoped account events.
+  responses retain their machine-readable reason: TypeScript adds
+  `TxResult.errorCode` and the open `GatewayRefusalCode` type. Malformed or
+  contradictory refusals remain unresolved against the hash of the submitted
+  bytes. A refusal describes this attempt only; it cannot resolve an earlier
+  ambiguous attempt. Retry decisions depend on the refusal reason, not HTTP
+  status alone.
 
 ## [11.0.0] — 2026-11-09
 
@@ -2209,7 +2411,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.1.0...HEAD
+[12.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.0.0...npm-v12.1.0
 [12.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v11.0.0...npm-v12.0.0
 [11.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.1.0...npm-v11.0.0
 [10.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.0.0...npm-v10.1.0

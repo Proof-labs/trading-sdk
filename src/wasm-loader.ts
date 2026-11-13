@@ -34,11 +34,22 @@ export interface WasmCore {
     readonly Event: number;
     readonly Account: number;
     readonly AdminAction: number;
+    readonly AuthorizedAgents: number;
+    readonly InsuranceFundDirectory: number;
+    readonly InsuranceFundState: number;
   };
   /** Strictly decode a node read response as its wire type (serde-shaped JS). */
   decode_read(kind: number, bytes: Uint8Array): unknown;
   /** Canonical resting orders, validated against the requested owner. */
   decode_open_orders(bytes: Uint8Array, owner: Uint8Array): unknown;
+  /** One order by id (`orderStatus`), bound to `orderId`, or null; its owner is not bound. */
+  decode_order_status(bytes: Uint8Array, orderId: bigint): unknown;
+  /** The market listing decoded row by row: decoded rows, their field counts, refused rows. */
+  decode_market_listing(bytes: Uint8Array): unknown;
+  /** The events listing decoded row by row: decoded events and refused rows. */
+  decode_event_listing(bytes: Uint8Array): unknown;
+  /** The pinned wire `MarketConfig`'s field count. */
+  market_config_fields(): number;
   /** Decode a complete `/v1/markets-snapshot` HTTP body bound to `chainId`. */
   decode_markets_snapshot(body: Uint8Array, chainId: Uint8Array): unknown;
   signing_message(
