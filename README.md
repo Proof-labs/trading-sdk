@@ -90,6 +90,9 @@ Each address receives ~10,000 USDC (10,000,000,000 µUSDC) with a 24 h cooldown.
 
 ## Quick Start
 
+Fund the account on DevNet or Mainnet through the separate deposit process
+before placing an order.
+
 ```typescript
 import {
   ExchangeClient,

@@ -15,7 +15,8 @@ pip install proof-trading-sdk
 
 ## Quick Start
 
-The generated owner must have DevNet test funds before placing an order. Use
+Fund the account on DevNet or Mainnet through the separate deposit process
+before placing an order. Use
 an active market and adjust the example price/quantity to its tick/lot sizes.
 The example's quantities and prices are integers; prices use micro-USDC.
 
