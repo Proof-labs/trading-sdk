@@ -13,6 +13,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Code 50 is `SlippageExceeded`.** A code-50 result without a recognised
+  log no longer decodes as `AmbiguousCode50`; only a log naming an open-interest
+  refusal (receipts from before the renumbering) still reads as
+  `OpenInterestLimitExceeded`. Applies to TypeScript, Python and Rust.
 - **Wire compatibility boundary:** pin canonical wire `2a707bc` (engine
   `23ee1f0`). Conditional attachment proposal bytes/hashes now include impact
   notional; fee updates require the funding dead-band and interest-rate tail.
