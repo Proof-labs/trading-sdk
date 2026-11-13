@@ -26,6 +26,7 @@ def generate_keypair(seed: Optional[bytes] = None) -> dict[str, bytes]:
     ...
 
 def load_key_from_fd(fd: int) -> SigningHandle:
+    """Read a 32-byte key from ``fd``. The fd stays open; the caller closes it."""
     ...
 
 def load_key_from_pkcs11(

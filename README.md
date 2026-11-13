@@ -94,15 +94,10 @@ Use the key you funded above: a fresh key has no balance, and every order
 from it is refused with `InsufficientBalance` (11).
 
 ```typescript
-import {
-  ExchangeClient,
-  Side,
-  pubkeyToOwner,
-  ownerToHex,
-} from "@proof-labs/trading-sdk";
+import { ExchangeClient, Side } from "@proof-labs/trading-sdk";
 
-// `publicKey` / `privateKey` from "Connect to the devnet", after the faucet drip.
-const address = pubkeyToOwner(publicKey);
+// Continues "Connect to the devnet": `address` and `privateKey` are the
+// funded key's.
 const addressHex = ownerToHex(address);
 
 const client = new ExchangeClient({
@@ -148,11 +143,12 @@ const req = await client.submitTxCommit({
     solanaDestination, // 32-byte Solana wallet public key
   },
 });
-const id = BigInt(
-  req.events
-    ?.find((e) => e.type === "withdraw_requested")
-    ?.attributes.find((a) => a.key === "withdrawal_id")?.value ?? "0",
-);
+const idText = req.events
+  ?.find((e) => e.type === "withdraw_requested")
+  ?.attributes.find((a) => a.key === "withdrawal_id")?.value;
+if (!req.ok || idText === undefined)
+  throw new Error(`not requested: ${req.log}`);
+const id = BigInt(idText);
 
 // "Pending" until the payout lands, then "Completed" (or "Failed", refunded).
 const record = await client.queryWithdrawal(id);

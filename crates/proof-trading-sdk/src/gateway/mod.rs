@@ -94,7 +94,8 @@ pub enum RetryAfter {
     Invalid,
 }
 
-/// Deliberately contains no URL, API key, raw response, signature or signed bytes.
+/// Deliberately contains no URL, API key, raw response, signature or signed bytes;
+/// `log` is only the gateway's own stated reason.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GatewayError {
     pub operation: Operation,

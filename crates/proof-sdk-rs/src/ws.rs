@@ -316,7 +316,7 @@ pub enum WsMessage {
     /// not replayed; reconcile through `InfoClient` if they matter.
     Reconnected,
     /// The socket dropped, or a reconnect attempt failed. With `reconnect` on,
-    /// another attempt follows after the backoff, except after a 401 or 403
+    /// another attempt follows after the backoff, except after a 401
     /// at the handshake, which ends the feed.
     Disconnected { reason: String },
     /// A frame this client could not read, and the subscription it belongs
@@ -396,8 +396,9 @@ impl WsClient {
     ///
     /// # Errors
     ///
-    /// [`Error::Config`] for a bad URL or API key, [`Error::WsConnect`] if the
-    /// handshake fails or times out.
+    /// [`Error::Config`] for a bad URL or API key, [`Error::Http`] if the
+    /// gateway answers the handshake with an HTTP error status, and
+    /// [`Error::WsConnect`] if it fails otherwise or times out.
     pub async fn connect(config: WsConfig) -> Result<(Self, WsReceiver)> {
         let socket = open(&config).await?;
         let (commands, command_rx) = mpsc::unbounded_channel();
@@ -535,11 +536,7 @@ impl Task {
             match opened {
                 Ok(socket) => return Some(socket),
                 // Retrying cannot change an auth refusal: end the feed.
-                Err(
-                    e @ Error::Http {
-                        status: 401 | 403, ..
-                    },
-                ) => {
+                Err(e @ Error::Http { status: 401, .. }) => {
                     let reason = format!("reconnect refused, not retrying: {e}");
                     let _ = self.deliver(WsMessage::Disconnected { reason }).await;
                     return None;

@@ -208,7 +208,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned so a new clippy lint on `stable` cannot break dev; bump deliberately.
+      - uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: clippy
       # One shared Rust cache namespace across the `rust` and `python` jobs:
       # maturin builds the PyO3 crate into the same `./target`, so Python reuses
       # this job's compiled deps (serde, rmp-serde, the core) instead of
