@@ -534,17 +534,17 @@ fn missing_mark(body: &[u8]) -> Option<String> {
 }
 
 #[derive(Deserialize)]
-struct DataEnvelope {
-    data: String,
+pub(crate) struct DataEnvelope {
+    pub(crate) data: String,
 }
 
-fn unbase64(data: &str) -> Result<Vec<u8>> {
+pub(crate) fn unbase64(data: &str) -> Result<Vec<u8>> {
     STANDARD
         .decode(data)
         .map_err(|e| Error::Decode(format!("base64: {e}")))
 }
 
-fn decode<T: DeserializeOwned>(bytes: &[u8], shape: &Shape, what: &str) -> Result<T> {
+pub(crate) fn decode<T: DeserializeOwned>(bytes: &[u8], shape: &Shape, what: &str) -> Result<T> {
     proof_trading_sdk::msgpack::reject_floats(bytes)
         .map_err(|e| Error::Decode(format!("{what}: {e}")))?;
     reads::decode(bytes, shape).map_err(|e| Error::Decode(format!("{what}: {e}")))
@@ -574,7 +574,7 @@ impl<'de> Deserialize<'de> for Dec {
     }
 }
 
-fn de_u64<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error> {
+pub(crate) fn de_u64<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Raw {
@@ -587,11 +587,13 @@ fn de_u64<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error>
     }
 }
 
-fn de_market<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<MarketId, D::Error> {
+pub(crate) fn de_market<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<MarketId, D::Error> {
     MarketId::try_from(de_u64(d)?).map_err(serde::de::Error::custom)
 }
 
-fn de_side<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Side, D::Error> {
+pub(crate) fn de_side<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Side, D::Error> {
     match String::deserialize(d)?.as_str() {
         "buy" | "Buy" => Ok(Side::Buy),
         "sell" | "Sell" => Ok(Side::Sell),

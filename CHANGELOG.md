@@ -56,6 +56,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Rust (`proof-sdk-rs`):** typed reads for funding and mark, position
+  triggers, sub-accounts, withdrawal status, authorized agents and the
+  `/v1/history/*` routes (fills, orders, positions, funding payments, account
+  events, resolutions, triggers, candles, BBO), each strictly decoded with
+  cursor paging; and helpers for buying and selling No, position triggers,
+  agents, sub-accounts, withdrawal requests and atomic baskets (#464).
 - Error code 135 `OffCurveWithdrawalDestination` (proof-wire 12.0.0): the
   withdrawal destination is not an on-curve Solana wallet owner, and no funds
   were debited. Named in Rust, TypeScript and Python.
