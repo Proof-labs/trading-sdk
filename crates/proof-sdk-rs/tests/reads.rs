@@ -206,14 +206,16 @@ async fn position_triggers_decode_strictly_for_the_asked_owner() {
 #[tokio::test]
 async fn sub_accounts_post_the_master_and_decode_its_rows() {
     let master: Address = "aa".repeat(20).parse().unwrap();
-    let child: Address = "11".repeat(20).parse().unwrap();
+    let child = proof_sdk_rs::actions::sub_account_address(master, 1);
     let mut name = [0u8; 32];
     name[..4].copy_from_slice(b"grid");
-    let row = |m: Address| json!([m.to_bytes(), 1, child.to_bytes(), name, 4_242]);
+    let row = |m: Address, a: Address| json!([m.to_bytes(), 1, a.to_bytes(), name, 4_242]);
+    let underived: Address = "11".repeat(20).parse().unwrap();
     let (info, log) = fixture(vec![
-        (200, data(&json!([row(master)]))),
+        (200, data(&json!([row(master, child)]))),
         (200, json!({"data":"kA=="})),
-        (200, data(&json!([row(child)]))),
+        (200, data(&json!([row(child, child)]))),
+        (200, data(&json!([row(master, underived)]))),
         (501, json!({"status":"error","error":"not implemented"})),
     ])
     .await;
@@ -233,6 +235,11 @@ async fn sub_accounts_post_the_master_and_decode_its_rows() {
         info.sub_accounts(master).await,
         Err(Error::Decode(_))
     ));
+    let err = info.sub_accounts(master).await.unwrap_err();
+    assert!(
+        matches!(&err, Error::Decode(m) if m.contains("derived")),
+        "{err:?}"
+    );
     assert!(matches!(
         info.sub_accounts(master).await,
         Err(Error::Http { status: 501, .. })
@@ -324,14 +331,29 @@ async fn fill_history_sends_the_filters_and_reads_one_page() {
         "next_cursor":"MXwxNzk0NTY4NzY0MTc0ODAyfDQxODEwMnwxNDMxNDU0ODI3Mzc2NjU4MTc3OQ"});
     let mut foreign = page.clone();
     foreign["fills"][0]["maker_owner"] = json!("4f19b63a2067a0164c658858b981312aedb00c77");
-    let (info, log) = fixture(vec![(200, page), (200, foreign)]).await;
-    let q = HistoryQuery {
+    let mut broken = page.clone();
+    broken["fills"][1]["price"] = json!("not a price");
+    let (info, log) = fixture(vec![
+        (200, page.clone()),
+        (200, page),
+        (200, foreign),
+        (200, broken),
+    ])
+    .await;
+    let mut q = HistoryQuery {
         market: Some(1),
         from_ms: Some(1_794_568_000_000),
         to_ms: Some(1_794_569_000_000),
         limit: Some(2),
         cursor: None,
     };
+    // The page holds a market-3 fill: not what a market-1 query asked for.
+    let err = info.fill_history(mm(), &q).await.unwrap_err();
+    assert!(
+        matches!(&err, Error::Decode(m) if m.contains("asked for 1")),
+        "{err:?}"
+    );
+    q.market = None;
     let p = info.fill_history(mm(), &q).await.unwrap();
     assert_eq!(p.rows.len(), 2);
     let f = p.rows[1];
@@ -355,6 +377,14 @@ async fn fill_history_sends_the_filters_and_reads_one_page() {
         info.fill_history(mm(), &q).await,
         Err(Error::Decode(_))
     ));
+    // A row that does not decode keeps the page's cursor.
+    let Err(Error::HistoryRow { next_cursor, .. }) = info.fill_history(mm(), &q).await else {
+        panic!("expected HistoryRow")
+    };
+    assert_eq!(
+        next_cursor.as_deref(),
+        Some("MXwxNzk0NTY4NzY0MTc0ODAyfDQxODEwMnwxNDMxNDU0ODI3Mzc2NjU4MTc3OQ")
+    );
     assert_eq!(
         requests(&log)[0].0,
         format!("GET /v1/history/fills/{MM}?market=1&from=1794568000000&to=1794569000000&limit=2")
@@ -400,17 +430,29 @@ fn account_events() -> Value {
 async fn account_event_history_requires_an_order_and_types_each_event() {
     let mut broken = account_events();
     broken[2]["payload"]["price"] = json!("not a price");
+    // A kind this version does not type keeps structured attributes.
+    let mut future = account_events();
+    future[4]["event_type"] = json!("something_new");
+    future[4]["payload"] = json!({"legs": [1, 2], "owner": MM});
+    let page = |rows: Value| json!({"account_events": rows, "next_cursor": ""});
     let (info, log) = fixture(vec![
-        (
-            200,
-            json!({"account_events": account_events(), "next_cursor": ""}),
-        ),
-        (200, json!({"account_events": broken, "next_cursor": ""})),
+        (200, page(account_events())),
+        (200, page(account_events())),
+        (200, page(broken)),
+        (200, page(future)),
+        (200, page(account_events())),
     ])
     .await;
     let mut q = AccountEventsQuery::new(SortOrder::Desc);
     q.event_type = Some("trade_executed".into());
     q.limit = Some(5);
+    // The page holds other kinds than the one asked for.
+    let err = info.account_event_history(mm(), &q).await.unwrap_err();
+    assert!(
+        matches!(&err, Error::Decode(m) if m.contains("asked for trade_executed")),
+        "{err:?}"
+    );
+    q.event_type = None;
     let p = info.account_event_history(mm(), &q).await.unwrap();
     assert_eq!(p.next_cursor, None, "an empty cursor is the last page");
     let rows = &p.rows;
@@ -430,7 +472,19 @@ async fn account_event_history_requires_an_order_and_types_each_event() {
     );
 
     let err = info.account_event_history(mm(), &q).await.unwrap_err();
-    assert!(matches!(err, Error::Decode(m) if m.contains("trade_executed")));
+    assert!(
+        matches!(&err, Error::HistoryRow { message, next_cursor: None } if message.contains("trade_executed")),
+        "{err:?}"
+    );
+    let p = info.account_event_history(mm(), &q).await.unwrap();
+    assert!(matches!(&p.rows[4].event, Event::Other(raw) if raw.kind == "something_new"));
+    // Every row is before this window.
+    q.from_ms = Some(1_800_000_000_000);
+    let err = info.account_event_history(mm(), &q).await.unwrap_err();
+    assert!(
+        matches!(&err, Error::Decode(m) if m.contains("window")),
+        "{err:?}"
+    );
     assert_eq!(
         requests(&log)[0].0,
         format!("GET /v1/history/account-events?owner={MM}&order=desc&event_type=trade_executed&limit=5")
@@ -491,7 +545,10 @@ async fn position_history_reads_open_and_flat_snapshots() {
     assert_eq!(p.rows[1].position, SnapshotPosition::Closed);
     assert!(matches!(
         info.position_history(mm(), &q).await,
-        Err(Error::Decode(_))
+        Err(Error::HistoryRow {
+            next_cursor: None,
+            ..
+        })
     ));
     assert_eq!(
         requests(&log)[0].0,
@@ -549,10 +606,12 @@ async fn resolution_history_types_each_outcome() {
     legacy[1]["converted_size"] = json!("0");
     legacy[1]["fallback_reason"] = json!("");
     let (info, log) = fixture(vec![
-        (200, rows),
+        (200, rows.clone()),
         (200, fallback),
         (200, unknown),
         (200, legacy),
+        (200, rows.clone()),
+        (200, rows),
     ])
     .await;
     let owner: Address = owner.parse().unwrap();
@@ -604,6 +663,29 @@ async fn resolution_history_types_each_outcome() {
             ..
         }
     ));
+    // Rows for event 35 answer neither a query for event 36 nor a window
+    // after them.
+    let other_event = ResolutionsQuery {
+        event_id: Some(EventId(36)),
+        ..q.clone()
+    };
+    let err = info
+        .resolution_history(owner, &other_event)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Decode(m) if m.contains("another event")),
+        "{err:?}"
+    );
+    let later = ResolutionsQuery {
+        from_ms: Some(1_800_000_000_000),
+        ..q.clone()
+    };
+    let err = info.resolution_history(owner, &later).await.unwrap_err();
+    assert!(
+        matches!(&err, Error::Decode(m) if m.contains("window")),
+        "{err:?}"
+    );
     assert_eq!(
         requests(&log)[0].0,
         format!("GET /v1/history/resolutions/{owner}?event_id=35&limit=3")

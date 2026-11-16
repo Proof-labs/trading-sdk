@@ -367,6 +367,9 @@ fn sub_accounts(bytes: &[u8], master: Address) -> Result<Vec<SubAccount>> {
                 return Err(bad("a row for another master"));
             }
             let address = Address::from(row.address.into_bytes());
+            if address != crate::actions::sub_account_address(master, row.sub_account_id) {
+                return Err(bad("an address that is not derived from the master and id"));
+            }
             if row.sub_account_id == 0
                 || !ids.insert(row.sub_account_id)
                 || !addresses.insert(address)

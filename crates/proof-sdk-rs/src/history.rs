@@ -4,6 +4,14 @@
 //! the query's `cursor`, with the other filters unchanged, until it is
 //! `None`. History is indexed from committed blocks and can lag the chain by
 //! tens of seconds; receipts and the live feed are the low-latency path.
+//!
+//! Every row is checked against what the query asked for: the owner, and the
+//! market, event or event-type filter when one is set; on the orders,
+//! account-events, funding-payments and resolutions routes also the
+//! `[from_ms, to_ms)` window, which the indexer applies to block time. A row
+//! outside them is [`Error::Decode`]. A row that does not decode is
+//! [`Error::HistoryRow`], which carries the page's cursor so a caller can
+//! continue past it.
 
 use std::fmt;
 
@@ -690,28 +698,81 @@ fn candle_page<C: Bar>(raw: RawCandlePage<C>, q: &CandleQuery) -> Result<CandleP
 // -- reads --------------------------------------------------------------------
 
 /// An owner page as the indexer serves it: rows under `key`, a cursor that
-/// is `""` on the last page. Every row must involve `owner`.
+/// is `""` on the last page. `check` refuses a row the query did not ask for
+/// (another owner, market or window), naming why.
+///
+/// A row that does not decode is [`Error::HistoryRow`], which keeps the
+/// page's cursor so a caller can continue past it.
 fn page<R: DeserializeOwned, T>(
     mut body: Json,
     key: &str,
-    owner: Address,
     convert: impl Fn(R) -> Result<T>,
-    involves: impl Fn(&T) -> bool,
+    check: impl Fn(&T) -> std::result::Result<(), String>,
 ) -> Result<HistoryPage<T>> {
     let bad = |what: String| Error::Decode(format!("{key} history: {what}"));
-    let rows = body
-        .remove(key)
-        .ok_or_else(|| bad(format!("no {key:?} rows")))?;
-    let rows: Vec<R> = serde_json::from_value(rows).map_err(|e| bad(e.to_string()))?;
     let next_cursor = match body.remove("next_cursor") {
         Some(serde_json::Value::String(c)) => (!c.is_empty()).then_some(c),
         _ => return Err(bad("no next_cursor".into())),
     };
-    let rows = rows.into_iter().map(convert).collect::<Result<Vec<T>>>()?;
-    if !rows.iter().all(involves) {
-        return Err(bad(format!("a row that does not involve {owner}")));
+    let rows = match body.remove(key) {
+        Some(serde_json::Value::Array(rows)) => rows,
+        _ => return Err(bad(format!("no {key:?} rows"))),
+    };
+    let rows = rows
+        .into_iter()
+        .map(|row| {
+            serde_json::from_value::<R>(row)
+                .map_err(|e| Error::Decode(e.to_string()))
+                .and_then(&convert)
+                .map_err(|e| Error::HistoryRow {
+                    message: format!("{key} history: {e}"),
+                    next_cursor: next_cursor.clone(),
+                })
+        })
+        .collect::<Result<Vec<T>>>()?;
+    if let Some(why) = rows.iter().find_map(|row| check(row).err()) {
+        return Err(bad(why));
     }
     Ok(HistoryPage { rows, next_cursor })
+}
+
+/// `Err` naming the filter a row is outside of.
+fn within(
+    what: &str,
+    owner_ok: bool,
+    market: Option<MarketId>,
+    row_market: MarketId,
+) -> std::result::Result<(), String> {
+    if !owner_ok {
+        return Err(format!("a {what} that is not the owner's"));
+    }
+    match market {
+        Some(m) if m != row_market => {
+            Err(format!("a {what} for market {row_market}, asked for {m}"))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Whether a block time in ns lies in the half-open `[from_ms, to_ms)`
+/// window the indexer filters on.
+fn in_window_ns(t_ns: u64, from_ms: Option<u64>, to_ms: Option<u64>) -> bool {
+    let ns = |ms: u64| u128::from(ms) * 1_000_000;
+    let t = u128::from(t_ns);
+    from_ms.is_none_or(|f| t >= ns(f)) && to_ms.is_none_or(|e| t < ns(e))
+}
+
+fn window_check(
+    what: &str,
+    t_ns: u64,
+    from_ms: Option<u64>,
+    to_ms: Option<u64>,
+) -> std::result::Result<(), String> {
+    if in_window_ns(t_ns, from_ms, to_ms) {
+        Ok(())
+    } else {
+        Err(format!("a {what} outside the window asked for"))
+    }
 }
 
 fn query(path: &str, pairs: &[(&str, Option<String>)]) -> String {
@@ -774,8 +835,13 @@ impl InfoClient {
         let body: Json = self
             .get_json(&q.path(&format!("/v1/history/fills/{owner}")))
             .await?;
-        page(body, "fills", owner, Ok, |f: &HistoryFill| {
-            f.maker_owner == owner || f.taker_owner == owner
+        page(body, "fills", Ok, |f: &HistoryFill| {
+            within(
+                "fill",
+                f.maker_owner == owner || f.taker_owner == owner,
+                q.market,
+                f.market,
+            )
         })
     }
 
@@ -801,9 +867,13 @@ impl InfoClient {
         page(
             body,
             "orders",
-            owner,
             <HistoryEvent as TryFrom<RawEvent>>::try_from,
-            |e| e.owner == owner,
+            |e| {
+                if e.owner != owner {
+                    return Err("an event that is not the owner's".into());
+                }
+                window_check("event", e.block_time_ns, q.from_ms, q.to_ms)
+            },
         )
     }
 
@@ -826,9 +896,8 @@ impl InfoClient {
         page(
             body,
             "positions",
-            owner,
             <PositionSnapshot as TryFrom<RawSnapshot>>::try_from,
-            |p| p.owner == owner,
+            |p| within("position", p.owner == owner, q.market, p.market),
         )
     }
 
@@ -847,8 +916,9 @@ impl InfoClient {
         let body: Json = self
             .get_json(&q.path(&format!("/v1/history/funding-payments/{owner}")))
             .await?;
-        page(body, "funding_payments", owner, Ok, |p: &FundingPayment| {
-            p.owner == owner
+        page(body, "funding_payments", Ok, |p: &FundingPayment| {
+            within("payment", p.owner == owner, q.market, p.market)?;
+            window_check("payment", p.block_time_ns, q.from_ms, q.to_ms)
         })
     }
 
@@ -883,12 +953,29 @@ impl InfoClient {
             ],
         );
         let body: Json = self.get_json(&path).await?;
+        if let Some(kind) = &q.event_type {
+            let rows = body.get("account_events").and_then(|r| r.as_array());
+            let other = rows.into_iter().flatten().find_map(|r| {
+                r.get("event_type")
+                    .and_then(|t| t.as_str())
+                    .filter(|t| t != kind)
+            });
+            if let Some(other) = other {
+                return Err(Error::Decode(format!(
+                    "account_events history: a {other} event, asked for {kind}"
+                )));
+            }
+        }
         page(
             body,
             "account_events",
-            owner,
             <HistoryEvent as TryFrom<RawEvent>>::try_from,
-            |e| e.owner == owner,
+            |e| {
+                if e.owner != owner {
+                    return Err("an event that is not the owner's".into());
+                }
+                window_check("event", e.block_time_ns, q.from_ms, q.to_ms)
+            },
         )
     }
 
@@ -920,10 +1007,19 @@ impl InfoClient {
             .into_iter()
             .map(Resolution::try_from)
             .collect::<Result<Vec<_>>>()?;
-        if rows.iter().any(|r| r.owner != owner) {
-            return Err(Error::Decode(format!(
-                "resolution history: a row that is not {owner}'s"
-            )));
+        let bad = |what: &str| Error::Decode(format!("resolution history: {what}"));
+        for r in &rows {
+            if r.owner != owner {
+                return Err(bad("a row that is not the owner's"));
+            }
+            if q.event_id.is_some_and(|id| id != r.event_id) {
+                return Err(bad("a row for another event"));
+            }
+            let ms = |t: Option<u64>| t.map(u128::from);
+            let t = u128::from(r.timestamp_ms);
+            if ms(q.from_ms).is_some_and(|f| t < f) || ms(q.to_ms).is_some_and(|e| t >= e) {
+                return Err(bad("a row outside the window asked for"));
+            }
         }
         Ok(rows)
     }
@@ -947,9 +1043,8 @@ impl InfoClient {
         page(
             body,
             "trigger_events",
-            owner,
             <TriggerHistoryEvent as TryFrom<RawTriggerEvent>>::try_from,
-            |e| e.owner == owner,
+            |e| within("trigger event", e.owner == owner, q.market, e.market),
         )
     }
 
@@ -1007,19 +1102,26 @@ fn tx_hash(key: &str) -> Result<Option<TxHash>> {
 }
 
 /// The payload as a receipt event; one whose kind is typed but whose
-/// attributes do not read is refused.
+/// attributes do not read, or are not all scalars, is refused. A kind this
+/// version does not type is [`Event::Other`], structured attributes and all
+/// (as JSON text).
 fn typed_event(kind: &str, payload: serde_json::Map<String, serde_json::Value>) -> Result<Event> {
-    if let Some((key, _)) = payload.iter().find(|(_, v)| v.is_object() || v.is_array()) {
-        return Err(Error::Decode(format!(
-            "history: {kind} attribute {key:?} is not a scalar"
-        )));
-    }
+    let structured = payload
+        .iter()
+        .find(|(_, v)| v.is_object() || v.is_array())
+        .map(|(key, _)| key.clone());
     match Event::from(raw_from_json(kind, &serde_json::Value::Object(payload))) {
         Event::Malformed(raw) => Err(Error::Decode(format!(
             "history: {} attributes do not read",
             raw.kind
         ))),
-        event => Ok(event),
+        event @ Event::Other(_) => Ok(event),
+        event => match structured {
+            Some(key) => Err(Error::Decode(format!(
+                "history: {kind} attribute {key:?} is not a scalar"
+            ))),
+            None => Ok(event),
+        },
     }
 }
 

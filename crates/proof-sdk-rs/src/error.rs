@@ -33,6 +33,14 @@ pub enum Error {
     Http { status: u16, body: String },
     /// The response did not decode as the type the route promises.
     Decode(String),
+    /// A row of a history page did not decode, so the page is refused.
+    /// `next_cursor` is the page's own cursor: pass it back to continue after
+    /// this page (losing its other rows), or narrow `limit` and the window to
+    /// isolate the row. `None` on the last page.
+    HistoryRow {
+        message: String,
+        next_cursor: Option<String>,
+    },
     /// An account read needs a mark price the engine doesn't have (gateway
     /// `503 errorCode=MissingMark`), for example a held market left unpriced
     /// after a resolution. Retry once the market is priced.
@@ -72,6 +80,7 @@ impl fmt::Display for Error {
             Error::Transport(e) => write!(f, "transport: {e}"),
             Error::Http { status, body } => write!(f, "HTTP {status}: {body}"),
             Error::Decode(m) => write!(f, "decode: {m}"),
+            Error::HistoryRow { message, .. } => write!(f, "decode: {message}"),
             Error::MissingMark { message } => write!(f, "mark price unavailable: {message}"),
             Error::ResponseTooLarge => f.write_str("response exceeds max_read_bytes"),
             Error::Encode(m) => write!(f, "encode: {m}"),
