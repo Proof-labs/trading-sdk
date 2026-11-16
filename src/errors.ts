@@ -195,6 +195,7 @@ export enum ExecErrorCode {
   MarketStatusTransitionRefused = 132,
   MarketBacksLiveEvent = 133,
   MarketHalted = 134,
+  OffCurveWithdrawalDestination = 135,
   InternalError = 255,
 }
 
@@ -675,6 +676,11 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "MarketHalted",
     description:
       "The market is halted and takes no orders or fills; cancels still work.",
+  },
+  135: {
+    name: "OffCurveWithdrawalDestination",
+    description:
+      "Withdrawal destination must be an on-curve Solana wallet owner; no funds were debited.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };

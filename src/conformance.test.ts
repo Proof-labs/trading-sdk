@@ -8,7 +8,7 @@
 //   - codec vectors: PASS
 //   - signing vectors: PASS (signEnvelopeFromPayload + pubkeyToOwner/ownerToHex)
 //   - errors vectors:  PASS (ExecErrorCode manifest + execErrorName log decoder)
-//   - events vectors:  PASS (decodeLiquidationEvent / decodeVoidSettlementEvent over the engine's attributes)
+//   - events vectors:  PASS (decodeLiquidationEvent / decodeVoidSettlementEvent / decodeResolutionBalanceSnapshotEvent over the engine's attributes)
 //   - nonce vectors:   SKIPPED — nonces are derived from timestamps, not a step function
 
 import { readFileSync } from "node:fs";
@@ -28,6 +28,7 @@ import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
 import { decodeLiquidationEvent } from "./liquidation-events.js";
 import { decodeMarginOffsetEvent } from "./margin-offsets.js";
 import { decodeVoidSettlementEvent } from "./void-events.js";
+import { decodeResolutionBalanceSnapshotEvent } from "./resolution-balance-events.js";
 import {
   ActionType,
   Outcome,
@@ -1039,6 +1040,7 @@ describe("conformance vectors (TypeScript)", () => {
       const decoded =
         decodeLiquidationEvent(input) ??
         decodeVoidSettlementEvent(input) ??
+        decodeResolutionBalanceSnapshotEvent(input) ??
         decodeMarginOffsetEvent(input);
       const [[variant, fields]] = Object.entries(
         c.event as Record<string, unknown>,

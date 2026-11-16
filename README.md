@@ -90,6 +90,9 @@ Each address receives ~10,000 USDC (10,000,000,000 µUSDC) with a 24 h cooldown.
 
 ## Quick Start
 
+Fund the address first: on DevNet through the faucet above, or as a
+competition participant with the key from [PAPER-TRADING.md](PAPER-TRADING.md).
+
 ```typescript
 import {
   ExchangeClient,
