@@ -239,6 +239,9 @@ fn decode_action<'py>(
 /// Decode a wire envelope into its components.
 #[pyfunction]
 fn decode_tx<'py>(py: Python<'py>, tx_bytes: &[u8]) -> PyResult<Bound<'py, PyDict>> {
+    // One envelope and nothing after it: trailing bytes would give one action two hashes.
+    core_sdk::msgpack::reject_floats(tx_bytes)
+        .map_err(|e| PyValueError::new_err(format!("DecodeError(\"{e}\")")))?;
     let decoded = codec::decode_tx_raw(tx_bytes).map_err(map_err)?;
 
     let dict = PyDict::new(py);
