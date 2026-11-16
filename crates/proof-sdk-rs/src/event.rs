@@ -206,6 +206,9 @@ pub struct OrderRejected {
     pub owner: Address,
     pub market: MarketId,
     pub client_order_id: Option<u64>,
+    /// Read from the code alone: the event carries no log, so a code 50 is
+    /// always `SlippageExceeded`, including one an engine from before the
+    /// open-interest renumbering wrote.
     pub error: EngineError,
 }
 
@@ -797,6 +800,16 @@ mod tests {
                 client_order_id: None,
                 error: EngineError::new(51, None),
             })
+        );
+
+        let slipped = json!({"client_order_id": "", "code": "50", "market": "104", "owner": TAKER});
+        let Event::OrderRejected(r) = kind_of("order_rejected", &slipped) else {
+            panic!()
+        };
+        assert_eq!(
+            r.error,
+            EngineError::Known(proof_trading_sdk::ErrorKind::SlippageExceeded),
+            "a code 50 without a log is slippage"
         );
 
         let market = json!({"client_order_id": "0", "filled_quantity": "1", "limit_price": "", "market": "1", "order_id": "3211411", "owner": TAKER, "requested_quantity": "1", "side": "sell", "time_in_force": "ioc", "unfilled_reason": ""});
