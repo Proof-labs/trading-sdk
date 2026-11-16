@@ -13,22 +13,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Breaking (Rust, `proof-sdk-rs` / `proof-trading-sdk`):**
-  `TxStatus::Rejected` is now `Rejected { error, log }`;
-  `DecodedExecErrorKind::AmbiguousCode50` is removed; `GatewayError` gains a
-  `log` field; `EventResolved`, `PredictionSettled`, `ConditionMet`,
+- **Breaking (Rust `proof-sdk-rs`, MAJOR):** `TxStatus::Rejected` is now
+  `Rejected { error, log: Option<String> }` (`None` when the engine gave no
+  log); `TxStatus` is not `#[non_exhaustive]`, so the next `proof-sdk-rs`
+  release is MAJOR. `EventResolved`, `PredictionSettled`, `ConditionMet`,
   `ConditionNotMet` and `PositionTriggersInvalidated` are typed, so code
-  matching them as `Event::Other` stops matching; a WebSocket handshake answered
-  with an HTTP error is `Error::Http`, and a 401 on reconnect ends the feed.
-- **Python:** `load_key_from_fd` no longer closes the caller's fd; close it
-  yourself. A negative fd raises `ValueError`.
-- **TypeScript:** `signAndEncode`, `encodeSignedTx` and
+  matching them as `Event::Other` stops matching (compile-compatible: `Event`
+  is `#[non_exhaustive]`). A WebSocket handshake answered with any HTTP error
+  is `Error::Http`, not `Error::WsConnect`, on the first `connect` too; a 401
+  on reconnect ends the feed, other statuses keep retrying.
+- **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `GatewayError` gains a
+  public `log` field, so struct literals stop compiling. The crate is already
+  MAJOR for proof-wire 12.
+- **Rust minimum version 1.88** for `proof-trading-sdk` and `proof-sdk-rs`,
+  now declared as `rust-version` (`<[T]>::as_chunks`).
+- **Breaking (Python MAJOR):** `load_key_from_fd` no longer closes the
+  caller's fd; close it yourself, or it leaks. A negative fd raises
+  `ValueError`.
+- **Breaking (TypeScript, npm MAJOR):** `signAndEncode`, `encodeSignedTx` and
   `signEnvelopeFromPayload` throw `RangeError` for a `seq` outside u64 or an
   action type outside a byte, instead of signing a wrapped value.
-- **Code 50 is `SlippageExceeded`.** A code-50 result without a recognised
-  log no longer decodes as `AmbiguousCode50`; only a log naming an open-interest
-  refusal (receipts from before the renumbering) still reads as
-  `OpenInterestLimitExceeded`. Applies to TypeScript, Python and Rust.
+- **Code 50 is `SlippageExceeded`** in TypeScript, Python and Rust. Only a log
+  naming an open-interest refusal (receipts from before the renumbering) still
+  reads as `OpenInterestLimitExceeded`. An `order_rejected` event carries no
+  log, so a code 50 there is always slippage.
 - **Wire compatibility boundary:** pin canonical wire `2a707bc` (engine
   `23ee1f0`). Conditional attachment proposal bytes/hashes now include impact
   notional; fee updates require the funding dead-band and interest-rate tail.
@@ -48,6 +56,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Rust `proof-sdk-rs`:** typed resolution events `EventResolved`,
+  `PredictionSettled`, `ConditionMet` (with `ConversionFallbackReason`),
+  `ConditionNotMet` and `PositionTriggersInvalidated` (with an optional
+  `TriggerInvalidation`), on receipts and the account stream.
 - Error code 135 `OffCurveWithdrawalDestination` (proof-wire 12.0.0): the
   withdrawal destination is not an on-curve Solana wallet owner, and no funds
   were debited. Named in Rust, TypeScript and Python.
@@ -197,6 +209,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **Breaking (TypeScript npm MAJOR, Python MAJOR, Rust core MAJOR):** the
+  `AmbiguousCode50` classification. `decodeExecError` / `get_error_name` and
+  Rust `DecodedExecErrorKind` return `SlippageExceeded` for a code 50 without
+  an open-interest log; callers that matched the name `AmbiguousCode50` stop
+  matching.
 - **Breaking (Python 5.0.0):** remove `trigger_market_configs()` and the
   `SetTriggerMarketConfig` builder. Low-level payload encoding, signing and
   historical decoding remain wire-compatible; the engine owns proposal and
