@@ -300,8 +300,63 @@ pub struct ConditionMet {
     /// The size that became a perpetual position at `settlement_price`:
     /// all of `size`, or 0.
     pub converted_size: u64,
-    /// Why a winner was paid in cash instead of converting.
-    pub fallback_reason: Option<String>,
+    /// Why a winner was paid in cash instead of converting; `None` when it
+    /// converted or lost.
+    pub fallback_reason: Option<ConversionFallbackReason>,
+}
+
+/// Why a winning conditional position was paid in cash instead of
+/// converting into a perpetual position.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ConversionFallbackReason {
+    /// The account would not meet maintenance margin holding the perpetual.
+    MaintenanceMargin,
+    /// The perpetual would exceed the underlying's `max_position_size`.
+    PositionSizeCap,
+    /// The perpetual would push the underlying's open interest past its cap.
+    OpenInterestCap,
+    /// A price the margin check needs could not be read.
+    CannotPriceOrMargin,
+    /// Netting into the existing perpetual would realize a loss larger than
+    /// the balance.
+    InsufficientBalance,
+    /// A reason this version does not name, as the engine wrote it.
+    Other(String),
+}
+
+impl ConversionFallbackReason {
+    /// The engine's name for the reason, e.g. `maintenance_margin`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::MaintenanceMargin => "maintenance_margin",
+            Self::PositionSizeCap => "position_size_cap",
+            Self::OpenInterestCap => "open_interest_cap",
+            Self::CannotPriceOrMargin => "cannot_price_or_margin",
+            Self::InsufficientBalance => "insufficient_balance",
+            Self::Other(s) => s,
+        }
+    }
+}
+
+impl From<&str> for ConversionFallbackReason {
+    fn from(s: &str) -> Self {
+        match s {
+            "maintenance_margin" => Self::MaintenanceMargin,
+            "position_size_cap" => Self::PositionSizeCap,
+            "open_interest_cap" => Self::OpenInterestCap,
+            "cannot_price_or_margin" => Self::CannotPriceOrMargin,
+            "insufficient_balance" => Self::InsufficientBalance,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+}
+
+impl fmt::Display for ConversionFallbackReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// `condition_not_met`.
@@ -321,7 +376,8 @@ pub struct PositionTriggersInvalidated {
     pub market: MarketId,
     pub position_epoch: u64,
     pub group_id: u64,
-    pub reason: TriggerInvalidation,
+    /// `None` when the engine did not state one (code 0, or older events).
+    pub reason: Option<TriggerInvalidation>,
 }
 
 /// Why a position's triggers were dropped.
@@ -334,17 +390,21 @@ pub enum TriggerInvalidation {
     SideFlip,
     /// The position's event resolved.
     EventResolution,
-    /// Not stated (older events) or a code this version does not know.
+    /// A nonzero code this version does not know.
     Other(u8),
 }
 
-impl From<u8> for TriggerInvalidation {
-    fn from(code: u8) -> Self {
+impl TriggerInvalidation {
+    /// The reason for an engine `invalidation_reason` code; `None` for 0,
+    /// which the engine writes when it states no reason.
+    #[must_use]
+    pub fn from_code(code: u8) -> Option<Self> {
         match code {
-            1 => Self::PositionFlat,
-            2 => Self::SideFlip,
-            3 => Self::EventResolution,
-            other => Self::Other(other),
+            0 => None,
+            1 => Some(Self::PositionFlat),
+            2 => Some(Self::SideFlip),
+            3 => Some(Self::EventResolution),
+            other => Some(Self::Other(other)),
         }
     }
 }
@@ -641,7 +701,9 @@ fn condition_met(a: &Attrs<'_>) -> Option<ConditionMet> {
         settlement_price: a.u64("settlement_price")?,
         realized_pnl: a.parse("realized_pnl")?,
         converted_size: a.opt("converted_size")?.unwrap_or(0),
-        fallback_reason: a.text("fallback_reason"),
+        fallback_reason: a
+            .text("fallback_reason")
+            .map(|r| ConversionFallbackReason::from(r.as_str())),
     })
 }
 
@@ -661,7 +723,7 @@ fn position_triggers_invalidated(a: &Attrs<'_>) -> Option<PositionTriggersInvali
         market: a.market("market")?,
         position_epoch: a.u64("position_epoch")?,
         group_id: a.u64("group_id")?,
-        reason: a.opt::<u8>("invalidation_reason")?.unwrap_or(0).into(),
+        reason: TriggerInvalidation::from_code(a.opt("invalidation_reason")?.unwrap_or(0)),
     })
 }
 
@@ -817,7 +879,10 @@ mod tests {
             panic!()
         };
         assert_eq!((m.realized_pnl, m.converted_size), (4_000_000, 0));
-        assert_eq!(m.fallback_reason.as_deref(), Some("maintenance_margin"));
+        assert_eq!(
+            m.fallback_reason,
+            Some(ConversionFallbackReason::MaintenanceMargin)
+        );
 
         let not_met =
             json!({"event_id": "33", "market": "3301", "owner": TAKER, "side": "buy", "size": "4"});
@@ -832,7 +897,25 @@ mod tests {
         else {
             panic!()
         };
-        assert_eq!(t.reason, TriggerInvalidation::EventResolution);
+        assert_eq!(t.reason, Some(TriggerInvalidation::EventResolution));
+
+        for (code, reason) in [("0", None), ("9", Some(TriggerInvalidation::Other(9)))] {
+            let dropped = json!({"owner": MAKER, "market": "3302", "position_epoch": "7", "group_id": "2", "invalidation_reason": code});
+            let Event::PositionTriggersInvalidated(t) =
+                kind_of("position_triggers_invalidated", &dropped)
+            else {
+                panic!()
+            };
+            assert_eq!(t.reason, reason, "code {code}");
+        }
+        let unstated =
+            json!({"owner": MAKER, "market": "3302", "position_epoch": "7", "group_id": "2"});
+        let Event::PositionTriggersInvalidated(t) =
+            kind_of("position_triggers_invalidated", &unstated)
+        else {
+            panic!()
+        };
+        assert_eq!(t.reason, None, "an older event without the field");
     }
 
     #[test]

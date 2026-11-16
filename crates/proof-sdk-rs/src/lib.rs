@@ -63,10 +63,10 @@ pub use account_event::AccountEvent;
 pub use address::Address;
 pub use error::{Error, Result};
 pub use event::{
-    CancelReason, ConditionMet, ConditionNotMet, Deposited, Event, EventResolved, Fill,
-    FundingSettled, MarketOrderProcessed, OrderAmended, OrderCancelled, OrderPlaced, OrderRejected,
-    PositionClosed, PositionTriggersInvalidated, PositionUpdated, PredictionSettled,
-    TriggerInvalidation,
+    CancelReason, ConditionMet, ConditionNotMet, ConversionFallbackReason, Deposited, Event,
+    EventResolved, Fill, FundingSettled, MarketOrderProcessed, OrderAmended, OrderCancelled,
+    OrderPlaced, OrderRejected, PositionClosed, PositionTriggersInvalidated, PositionUpdated,
+    PredictionSettled, TriggerInvalidation,
 };
 pub use exchange::{
     EngineError, ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted, TxStatus,
