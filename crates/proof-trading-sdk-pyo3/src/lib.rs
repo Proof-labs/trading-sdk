@@ -482,6 +482,8 @@ fn load_key_from_fd(fd: i32) -> PyResult<SigningHandle> {
         return Err(PyValueError::new_err("fd must be a non-negative file descriptor"));
     }
     // The caller owns `fd`: read through a duplicate so dropping ours leaves theirs open.
+    // SAFETY: the borrow lives only for the `try_clone_to_owned` call, during which
+    // the caller holds `fd` open; a closed or invalid fd fails the dup with EBADF.
     let owned = unsafe { BorrowedFd::borrow_raw(fd) }
         .try_clone_to_owned()
         .map_err(|e| PyValueError::new_err(format!("invalid fd: {e}")))?;

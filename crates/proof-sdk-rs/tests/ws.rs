@@ -144,6 +144,56 @@ async fn a_401_at_reconnect_ends_the_feed() {
 }
 
 #[tokio::test]
+async fn another_http_error_at_reconnect_keeps_retrying() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        ws.close(None).await.unwrap();
+        // Refuse two handshakes, then let the third through.
+        for _ in 0..2 {
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = tcp.read(&mut buf).await;
+            tcp.write_all(b"HTTP/1.1 503 Service Unavailable\r\ncontent-length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        }
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        while let Some(Ok(m)) = ws.next().await {
+            if m.is_close() {
+                break;
+            }
+        }
+    });
+
+    let config = WsConfig::new(url).with_max_backoff(Duration::from_millis(20));
+    let (client, mut rx) = WsClient::connect(config).await.unwrap();
+
+    assert!(matches!(
+        next(&mut rx).await,
+        WsMessage::Disconnected { .. }
+    ));
+    for _ in 0..2 {
+        let WsMessage::Disconnected { reason } = next(&mut rx).await else {
+            panic!("expected a failed reconnect")
+        };
+        assert!(reason.contains("503"), "{reason}");
+    }
+    assert!(matches!(next(&mut rx).await, WsMessage::Reconnected));
+
+    client.close();
+    timeout(Duration::from_secs(5), server)
+        .await
+        .expect("server finished")
+        .unwrap();
+}
+
+#[tokio::test]
 async fn an_unanswered_subscribe_reconnects_and_resends() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/ws", listener.local_addr().unwrap());

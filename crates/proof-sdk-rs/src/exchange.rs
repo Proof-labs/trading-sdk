@@ -182,8 +182,12 @@ pub enum TxStatus {
     /// Executed in a block. Check [`Receipt::error`]: `None` is success.
     Committed(Receipt),
     /// Refused at `CheckTx`. It will never execute. `log` is the engine's
-    /// reason as text, which can name what the code alone does not.
-    Rejected { error: EngineError, log: String },
+    /// reason as text, which can name what the code alone does not; `None`
+    /// when the engine gave none.
+    Rejected {
+        error: EngineError,
+        log: Option<String>,
+    },
     /// Admitted with no verdict yet. Reconcile with
     /// [`ExchangeClient::wait_for_receipt`]; never re-sign.
     Pending,
@@ -253,7 +257,7 @@ fn status(outcome: SubmissionOutcome<PreAdmissionRefusal>) -> TxStatus {
         SubmissionOutcome::Committed(r) => TxStatus::Committed(r.into()),
         SubmissionOutcome::CheckTxRejected { code, log, .. } => TxStatus::Rejected {
             error: EngineError::new(code.get(), Some(&log)),
-            log,
+            log: Some(log).filter(|l| !l.is_empty()),
         },
         SubmissionOutcome::Pending { .. } => TxStatus::Pending,
         SubmissionOutcome::RejectedBeforeAdmission { refusal, .. } => {

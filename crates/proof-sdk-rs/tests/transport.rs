@@ -141,7 +141,7 @@ async fn a_checktx_rejection_surfaces_a_typed_engine_error() {
         s.status,
         TxStatus::Rejected {
             error: EngineError::Known(ErrorKind::InsufficientMargin),
-            log: String::new(),
+            log: None,
         }
     );
     assert_eq!(
