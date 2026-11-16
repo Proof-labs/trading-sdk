@@ -108,6 +108,18 @@ On devnet, fund a new address with the faucet first:
 | `nonces()` / `info()`                           | the shared nonce allocator; the read client                               |
 | `ws_config()`                                   | a feed config with this account's signed auth                             |
 
+Beyond orders:
+
+| Helper                                               | Action                                                                          |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `buy_no` / `sell_no(market, price, qty)`             | `PlaceOrder` on the Yes book at `$1 - price`, opposite side; refuses 0 and `$1` |
+| `set_position_triggers` / `cancel_position_triggers` | `SetPositionTriggers` / `CancelPositionTriggers` for one position epoch         |
+| `approve_agent` / `revoke_agent(agent_key)`          | `ApproveAgent` / `RevokeAgent`                                                  |
+| `create_sub_account(id, name)`                       | `CreateSubAccount` (address: `actions::sub_account_address`)                    |
+| `sub_account_transfer(from, to, amount)`             | `SubAccountTransfer`                                                            |
+| `withdraw_request(amount, solana_destination)`       | `WithdrawRequest`; track it with `info().withdrawal(id)`                        |
+| `atomic_basket_order(legs, max_slippage_bps)`        | `AtomicBasketOrder` (legs from `actions::basket_leg`)                           |
+
 Every helper is a function in `proof_sdk_rs::actions` with this client's
 address, submitted at once. Call those directly to build an `Action` without
 sending it: to gate submission yourself, batch, or trade for another owner.
@@ -184,6 +196,29 @@ Resending the same `tx` is safe (same nonce, executes at most once).
 | `account_state(owner)`     | `GET /v1/account/{owner}/state`         | `AccountState` (at height) |
 | `open_orders(owner)`       | `POST /info` `openOrders`               | `Vec<Order>`               |
 | `recent_nonces(owner)`     | `GET /v1/account/{owner}/recent-nonces` | `Vec<u64>`                 |
+| `funding(market)`          | `GET /v1/funding/{market}`              | `Funding` (rate, mark)     |
+| `position_triggers(owner)` | `GET /v1/triggers/{owner}`              | `Vec<PositionTriggers>`    |
+| `sub_accounts(master)`     | `POST /info` `subAccountList`           | `Vec<SubAccount>`          |
+| `withdrawal(id)`           | `POST /info` `withdrawalStatus`         | `Option<Withdrawal>`       |
+| `authorized_agents(owner)` | `GET /v2/account/{owner}/agents`        | `AuthorizedAgents`         |
+
+History, from the indexer. Owner routes return a `HistoryPage` of rows and a
+`next_cursor`; pass it back as the query's `cursor` with the same filters
+until it is `None`:
+
+| Method                             | Route                                      | Rows                       |
+| ---------------------------------- | ------------------------------------------ | -------------------------- |
+| `fill_history(owner, &q)`          | `GET /v1/history/fills/{owner}`            | `HistoryFill`              |
+| `order_history(owner, &q)`         | `GET /v1/history/orders/{owner}`           | `HistoryEvent` (typed)     |
+| `position_history(owner, &q)`      | `GET /v1/history/positions/{owner}`        | `PositionSnapshot`         |
+| `funding_history(owner, &q)`       | `GET /v1/history/funding-payments/{owner}` | `FundingPayment`           |
+| `account_event_history(owner, &q)` | `GET /v1/history/account-events`           | `HistoryEvent` (typed)     |
+| `trigger_history(owner, &q)`       | `GET /v1/history/triggers/{owner}`         | `TriggerHistoryEvent`      |
+| `resolution_history(owner, &q)`    | `GET /v1/history/resolutions/{owner}`      | `Vec<Resolution>`, unpaged |
+| `candles(&q)` / `bbo_candles(&q)`  | `GET /v1/history/candles`, `/bbo`          | `CandlePage`, by window    |
+
+A row that does not decode, or names another owner, fails the read with
+`Error::Decode` rather than being skipped.
 
 Records decode as the engine's own `proof-wire` types through the core's
 `reads::decode`, so a field appended by a newer engine does not break a read.
