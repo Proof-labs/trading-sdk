@@ -765,9 +765,8 @@ code should read the structured `code` field: it is authoritative and needs no p
 Every cancel (`CancelOrder`, `CancelClientOrder`, `CancelAllOrders`) in a
 block runs before every order-placing action (`PlaceOrder`, `MarketOrder`,
 `AmendOrder`, `CancelReplaceOrder`, `AtomicBasketOrder`, `ClosePosition`),
-whatever their
-`seq`. A cancel sent in the same block as the order it targets finds nothing
-to cancel; send it after the order lands.
+whatever their `seq`. A cancel sent in the same block as the order it targets
+finds nothing to cancel; send it after the order lands.
 
 ### Basket slippage
 
