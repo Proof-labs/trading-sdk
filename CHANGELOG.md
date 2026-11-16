@@ -13,16 +13,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Rust (`proof-sdk-rs`):** an account read while a held market has no mark
-  is `Error::MissingMark` instead of a bare `Error::Http { status: 503 }`. A
-  WebSocket book update with `orderCount` missing or over u32 is `Malformed`
-  instead of a level with 0 orders, and a subscribe with no ack, refusal or
-  data within the pong timeout reconnects and re-sends it.
+- **Rust (`proof-sdk-rs`), changed results for existing calls:** an account
+  read while a held market has no mark is `Error::MissingMark` instead of a
+  bare `Error::Http { status: 503 }`, and a core `GatewayError` of kind
+  `MissingMark` converts to `Error::MissingMark` instead of `Error::Gateway`.
+  Callers that matched the old variants stop matching; both still compile
+  (`Error` is `#[non_exhaustive]`).
 - **TypeScript:** `CandleHistoryParams` drops `cursor`. The candles and BBO
   routes page by time window and never read it; the indexer now refuses it.
-- **Python:** `decode_tx` refuses bytes after the envelope. `_native.pyi`
-  adds `reject_floats` and `classify_error_name`, and nine decode stubs name
-  their first parameter `bytes`, as the native module does.
+- **Python:** `_native.pyi` adds `reject_floats` and `classify_error_name`,
+  and nine decode stubs name their first parameter `bytes`, as the native
+  module does.
 - **Breaking (Rust `proof-sdk-rs`, MAJOR):** `TxStatus::Rejected` is now
   `Rejected { error, log: Option<String> }` (`None` when the engine gave no
   log); `TxStatus` is not `#[non_exhaustive]`, so the next `proof-sdk-rs`
@@ -243,6 +244,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Rust (`proof-sdk-rs`) WebSocket:** a book update with `orderCount`
+  missing or over u32 is `Malformed` instead of a level with 0 orders, and a
+  subscribe with no ack, refusal or data within the pong timeout reconnects
+  and re-sends it instead of leaving the feed silently empty.
+- **Python:** `decode_tx` refuses bytes after the envelope. It now runs the
+  strict MessagePack preflight first, so it also refuses floats, extension
+  types and duplicate map keys, and a malformed transaction reports
+  `malformed MessagePack` instead of the decoder's own message.
 - **Preserve structured gateway refusals (Python).** Python raises
   `PreAdmissionRefusal` with `error_code`, `message` and `status_code` for
   admission refusals, instead of treating legacy HTTP 200 refusals as
