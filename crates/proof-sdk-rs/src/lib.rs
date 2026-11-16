@@ -5,8 +5,10 @@
 //! what a trading loop needs on top:
 //!
 //! - [`ExchangeClient`]: timestamp-nonce allocation, signing through any
-//!   [`Signer`], one-shot submission, receipt waiting, and order helpers
-//!   (place, cancel, amend, cancel-replace, market, close).
+//!   [`Signer`], one-shot submission, receipt waiting, and helpers for
+//!   orders (place, cancel, amend, cancel-replace, market, close, No on a
+//!   binary book), position triggers, agents, sub-accounts, withdrawals and
+//!   baskets.
 //! - [`actions`]: the same actions as plain values, for callers that sign and
 //!   send them themselves.
 //! - [`InfoClient`]: typed reads for markets, events, the order book, an
@@ -100,9 +102,10 @@ pub use proof_trading_sdk as core;
 pub use proof_trading_sdk::gateway::{TxAttribute, TxEvent, TxHash};
 pub use proof_trading_sdk::query::{AccountInfo, PositionBrief};
 pub use proof_trading_sdk::types::{
-    Action, CancelReplaceOrder, ClientTriggerGroupId, ClientTriggerId, EventId, EventInfo,
-    FundingRate, MarketConfig, MarketId, MarketOrder, Order, OrderId, Outcome, PlaceOrder,
-    Position, PositionEpoch, Side, TimeInForce, TriggerSlippageBps, WithdrawalStatus,
+    Action, AtomicBasketLeg, CancelReplaceOrder, ClientTriggerGroupId, ClientTriggerId, EventId,
+    EventInfo, FundingRate, MarketConfig, MarketId, MarketOrder, Order, OrderId, Outcome,
+    PlaceOrder, Position, PositionEpoch, Side, TimeInForce, TriggerLimb, TriggerSlippageBps,
+    WithdrawalStatus,
 };
 pub use proof_trading_sdk::ErrorKind;
 pub use proof_trading_sdk::{LocalSigner, Signer, SignerError};
