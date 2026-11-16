@@ -9,8 +9,8 @@ use proof_trading_sdk::gateway::{
     RetryAfter, SubmissionOutcome, TxHash,
 };
 use proof_trading_sdk::types::{
-    Action, AtomicBasketLeg, MarketConfig, MarketId, OrderId, PlaceOrder, PositionEpoch, Side,
-    TriggerLimb,
+    Action, AtomicBasketLeg, BatchedOrder, MarketConfig, MarketId, OrderId, PlaceOrder,
+    PositionEpoch, Side, TriggerLimb,
 };
 use proof_trading_sdk::{crypto, sign_action, SignActionError, Signer};
 use proof_trading_sdk::{decode_exec_error_kind, DecodedExecErrorKind, ErrorKind};
@@ -893,6 +893,18 @@ impl ExchangeClient {
             max_slippage_bps,
         ))
         .await
+    }
+
+    /// Place up to 50 limit orders under one signature, each placed or
+    /// refused on its own ([`actions::batch_place_orders`]).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for no orders or more than 50, else as
+    /// [`Self::submit`].
+    pub async fn batch_place_orders(&self, orders: Vec<BatchedOrder>) -> Result<Submitted> {
+        self.submit(&actions::batch_place_orders(self.address(), orders)?)
+            .await
     }
 }
 

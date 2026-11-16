@@ -151,6 +151,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     const CREATE_MARKET: u8 = 0x07;
     const UPDATE_MARKET_FEES: u8 = 0x10;
     const ATOMIC_BASKET_ORDER: u8 = 0x1C;
+    const BATCH_PLACE_ORDERS: u8 = 0x35;
     const PROPOSE_ADMIN_ACTION: u8 = 0x1E;
     const APPROVE_ADMIN_ACTION: u8 = 0x1F;
     const REJECT_ADMIN_ACTION: u8 = 0x20;
@@ -365,6 +366,23 @@ fn main() -> Result<(), Box<dyn Error>> {
                       "quantity": 5, "client_order_id": null, "reduce_only": true }
                 ],
                 "max_slippage_bps": 50
+            }),
+        ),
+        // BatchPlaceOrders (0x35) — two orders with every field varied, so
+        // each binding's per-order field order is pinned.
+        codec_case(
+            "batch_place_orders/two_orders",
+            BATCH_PLACE_ORDERS,
+            json!({
+                "owner": owner,
+                "orders": [
+                    { "market": 1, "side": "Buy", "price": 6675000u64, "quantity": 3,
+                      "client_order_id": 77u64, "post_only": true, "reduce_only": false,
+                      "time_in_force": "Gtc" },
+                    { "market": 2, "side": "Sell", "price": 250000u64, "quantity": 5,
+                      "client_order_id": null, "post_only": false, "reduce_only": true,
+                      "time_in_force": "Ioc" }
+                ]
             }),
         ),
         // Admin-multisig governance (tags 0x1E–0x21). The nested

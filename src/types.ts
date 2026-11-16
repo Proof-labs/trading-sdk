@@ -113,6 +113,9 @@ export const ActionType = {
   AmendOrder: 0x1b,
   /** Native all-or-revert multi-leg basket order. */
   AtomicBasketOrder: 0x1c,
+  /** Up to 50 limit orders for one account under one signature; each
+   *  places or is refused on its own (0x35). */
+  BatchPlaceOrders: 0x35,
   /** Signed admin-multisig governance proposal. */
   ProposeAdminAction: 0x1e,
   /** Signed admin-multisig governance approval (carries full proposal context). */
@@ -992,6 +995,39 @@ export interface AtomicBasketOrder {
   maxSlippageBps?: number;
 }
 
+/** One order of a {@link BatchPlaceOrders}: a {@link PlaceOrder} whose owner
+ *  is the batch's, without stop-loss / take-profit limbs. */
+export interface BatchedOrder {
+  /** Market identifier. */
+  market: number;
+  /** Order side: Buy or Sell. */
+  side: Side;
+  /** Limit price in micro-USDC. */
+  price: bigint;
+  /** Order quantity in contracts (integer lots). */
+  quantity: bigint;
+  /** Optional client-assigned order ID; how a refused order is matched to
+   *  its `order_rejected` event. */
+  clientOrderId?: bigint | null;
+  /** Reject instead of taking if the order would cross. Defaults to false. */
+  postOnly?: boolean;
+  /** Only reduce an existing position. Defaults to false. */
+  reduceOnly?: boolean;
+  /** Time-in-force policy. Defaults to `TimeInForce.Gtc`. */
+  timeInForce?: TimeInForce;
+}
+
+/** Up to 50 limit orders for one account under one signature and nonce
+ *  (action `0x35`), so a market maker requotes in one round trip. Orders run
+ *  in sequence, each exactly as its own `PlaceOrder` would: a refused order
+ *  emits `order_rejected` with its code and the rest still place. */
+export interface BatchPlaceOrders {
+  /** Account every order is placed for (20 bytes). */
+  owner: Address;
+  /** 1 to 50 orders, run in this order. */
+  orders: BatchedOrder[];
+}
+
 /**
  * Trading actions — the surface a normal integration (market maker, bot,
  * trader) uses. User-signed: each is authorized by the account that owns the
@@ -1005,6 +1041,7 @@ export type TraderAction =
   | { type: "CancelReplaceOrder"; data: CancelReplaceOrder }
   | { type: "AmendOrder"; data: AmendOrder }
   | { type: "AtomicBasketOrder"; data: AtomicBasketOrder }
+  | { type: "BatchPlaceOrders"; data: BatchPlaceOrders }
   | { type: "MarketOrder"; data: MarketOrder }
   | { type: "WithdrawRequest"; data: WithdrawRequest }
   | { type: "ApproveAgent"; data: ApproveAgent }

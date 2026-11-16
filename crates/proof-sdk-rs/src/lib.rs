@@ -105,10 +105,10 @@ pub use proof_trading_sdk::bridge::WithdrawalId;
 pub use proof_trading_sdk::gateway::{TxAttribute, TxEvent, TxHash};
 pub use proof_trading_sdk::query::{AccountInfo, PositionBrief};
 pub use proof_trading_sdk::types::{
-    Action, AtomicBasketLeg, CancelReplaceOrder, ClientTriggerGroupId, ClientTriggerId, EventId,
-    EventInfo, FundingRate, MarketConfig, MarketId, MarketOrder, Order, OrderId, Outcome,
-    PlaceOrder, Position, PositionEpoch, Side, TimeInForce, TriggerLimb, TriggerSlippageBps,
-    WithdrawalStatus,
+    Action, AtomicBasketLeg, BatchedOrder, CancelReplaceOrder, ClientTriggerGroupId,
+    ClientTriggerId, EventId, EventInfo, FundingRate, MarketConfig, MarketId, MarketOrder, Order,
+    OrderId, Outcome, PlaceOrder, Position, PositionEpoch, Side, TimeInForce, TriggerLimb,
+    TriggerSlippageBps, WithdrawalStatus,
 };
 pub use proof_trading_sdk::ErrorKind;
 pub use proof_trading_sdk::{LocalSigner, Signer, SignerError};

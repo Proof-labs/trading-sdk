@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `BatchPlaceOrders` (0x35): up to 50 limit orders for one account under one
+  signature, each placed or refused on its own, so a market maker requotes in
+  one round trip. TypeScript `{ type: "BatchPlaceOrders" }` with `BatchedOrder`;
+  Python `BatchPlaceOrders` / `BatchedOrder`; Rust (`proof-sdk-rs`)
+  `actions::batch_place_orders` / `batched_order` and
+  `ExchangeClient::batch_place_orders`. Needs the wire of exchange#1508.
+
 ## [13.0.0] (Python 5.0.0; Rust core 5.0.0) — 2026-11-17
 
 Compatible with exchange 2.25.0 / proof-wire 12.0.0. npm 13.0.0 is a

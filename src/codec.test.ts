@@ -914,6 +914,31 @@ describe("codec v1 all action types", () => {
     expect(decoded.data.legs[0].reduceOnly).toBe(false);
   });
 
+  it("round-trips BatchPlaceOrders and refuses a batch out of range", () => {
+    const order = (price: bigint) => ({
+      market: 1,
+      side: Side.Buy,
+      price,
+      quantity: 2n,
+      clientOrderId: price,
+      postOnly: true,
+      reduceOnly: false,
+      timeInForce: TimeInForce.Gtc,
+    });
+    const batch = (n: number): Action => ({
+      type: "BatchPlaceOrders",
+      data: {
+        owner: SIGNER,
+        orders: Array.from({ length: n }, (_, i) => order(100n + BigInt(i))),
+      },
+    });
+
+    const action = batch(50);
+    expect(decodeTx(encodeTx(action, 1n)).action).toEqual(action);
+    expect(() => encodeTx(batch(0), 1n)).toThrow();
+    expect(() => encodeTx(batch(51), 1n)).toThrow();
+  });
+
   // Deeper round-trip: field-by-field equality for UpdateMarketFees
   // (the shape the shallow type-name check doesn't cover). Catches
   // silent serialization drift in the Option<T> fields.

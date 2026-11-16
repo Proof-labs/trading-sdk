@@ -93,6 +93,8 @@ export {
   type AmendOrder,
   type AtomicBasketLeg,
   type AtomicBasketOrder,
+  type BatchedOrder,
+  type BatchPlaceOrders,
   type ClosePosition,
   type MarketOrder,
   type MarketsSnapshot,

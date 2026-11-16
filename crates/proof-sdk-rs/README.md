@@ -119,6 +119,7 @@ Beyond orders:
 | `sub_account_transfer(from, to, amount)`             | `SubAccountTransfer`                                                            |
 | `withdraw_request(amount, solana_destination)`       | `WithdrawRequest`; track it with `info().withdrawal(id)`                        |
 | `atomic_basket_order(legs, max_slippage_bps)`        | `AtomicBasketOrder` (legs from `actions::basket_leg`)                           |
+| `batch_place_orders(orders)`                         | `BatchPlaceOrders`: up to 50 orders, one signature (orders from `actions::batched_order`) |
 
 Every helper is a function in `proof_sdk_rs::actions` with this client's
 address, submitted at once. Call those directly to build an `Action` without

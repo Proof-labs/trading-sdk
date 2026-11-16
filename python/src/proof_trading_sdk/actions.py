@@ -568,6 +568,52 @@ class AtomicBasketOrder(Action):
 
 
 @dataclass
+class BatchedOrder:
+    """One order of a :class:`BatchPlaceOrders`: a :class:`PlaceOrder` whose
+    owner is the batch's, without stop-loss / take-profit limbs. Not an
+    action on its own."""
+
+    market: int
+    side: str
+    price: int
+    quantity: int
+    client_order_id: Optional[int] = None
+    post_only: bool = False
+    reduce_only: bool = False
+    time_in_force: str = TimeInForce.Gtc
+
+    def as_wire(self) -> dict[str, Any]:
+        return {
+            "market": self.market,
+            "side": self.side,
+            "price": self.price,
+            "quantity": self.quantity,
+            "client_order_id": self.client_order_id,
+            "post_only": self.post_only,
+            "reduce_only": self.reduce_only,
+            "time_in_force": self.time_in_force,
+        }
+
+
+@dataclass
+class BatchPlaceOrders(Action):
+    """Up to 50 limit orders for one account under one signature and nonce,
+    so a market maker requotes in one round trip. Orders run in sequence,
+    each exactly as its own :class:`PlaceOrder` would: a refused order emits
+    ``order_rejected`` with its code and the rest still place."""
+
+    ACTION_NAME = "BatchPlaceOrders"
+    owner: bytes
+    orders: list[BatchedOrder]
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "owner": self.owner,
+            "orders": [order.as_wire() for order in self.orders],
+        }
+
+
+@dataclass
 class ApproveAgent(Action):
     ACTION_NAME = "ApproveAgent"
     owner: bytes

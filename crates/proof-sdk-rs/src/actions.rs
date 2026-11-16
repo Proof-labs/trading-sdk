@@ -7,11 +7,12 @@
 
 use proof_trading_sdk::binary::{self, NoOrder};
 use proof_trading_sdk::types::{
-    Action, AmendOrder, ApproveAgent, AtomicBasketLeg, AtomicBasketOrder, CancelAllOrders,
-    CancelClientOrder, CancelOrder, CancelPositionTriggers, CancelReplaceOrder,
-    ClientTriggerGroupId, ClosePosition, CreateSubAccount, MarketConfig, MarketId, MarketKind,
-    MarketOrder, OrderId, OwnerAddress, PlaceOrder, PositionEpoch, RevokeAgent,
-    SetPositionTriggers, Side, SubAccountTransfer, TimeInForce, TriggerLimb, WithdrawRequest,
+    Action, AmendOrder, ApproveAgent, AtomicBasketLeg, AtomicBasketOrder, BatchPlaceOrders,
+    BatchedOrder, BatchedOrders, CancelAllOrders, CancelClientOrder, CancelOrder,
+    CancelPositionTriggers, CancelReplaceOrder, ClientTriggerGroupId, ClosePosition,
+    CreateSubAccount, MarketConfig, MarketId, MarketKind, MarketOrder, OrderId, OwnerAddress,
+    PlaceOrder, PositionEpoch, RevokeAgent, SetPositionTriggers, Side, SubAccountTransfer,
+    TimeInForce, TriggerLimb, WithdrawRequest,
 };
 
 use crate::address::Address;
@@ -333,6 +334,34 @@ pub fn atomic_basket_order(
     })
 }
 
+/// One resting limit order of a [`batch_place_orders`]. Set
+/// `client_order_id`, `post_only`, `reduce_only` or `time_in_force` on it as
+/// needed.
+#[must_use]
+pub fn batched_order(market: MarketId, side: Side, price: u64, quantity: u64) -> BatchedOrder {
+    BatchedOrder {
+        market,
+        side,
+        price,
+        quantity,
+        ..BatchedOrder::default()
+    }
+}
+
+/// `BatchPlaceOrders`: up to 50 limit orders under one signature, each placed
+/// or refused on its own, in order.
+///
+/// # Errors
+///
+/// [`Error::InvalidInput`] for no orders or more than 50.
+pub fn batch_place_orders(owner: Address, orders: Vec<BatchedOrder>) -> Result<Action> {
+    let orders = BatchedOrders::try_from(orders).map_err(|e| Error::InvalidInput(e.to_string()))?;
+    Ok(Action::BatchPlaceOrders(BatchPlaceOrders {
+        owner: owner.to_bytes(),
+        orders,
+    }))
+}
+
 fn replace(
     cancel_order_id: Option<OrderId>,
     cancel_client_order_id: Option<u64>,
@@ -592,6 +621,40 @@ mod tests {
             (w.owner, w.amount, w.solana_destination),
             (OWNER.to_bytes(), 5_000_000, [9; 32])
         );
+    }
+
+    #[test]
+    fn a_batch_carries_every_order_and_refuses_a_bad_size() {
+        let mut ask = batched_order(3303, Side::Sell, 75_000_000, 2);
+        ask.client_order_id = Some(8);
+        ask.post_only = true;
+        let orders = vec![batched_order(3302, Side::Buy, 80_000_000, 2), ask];
+        let Action::BatchPlaceOrders(b) =
+            on_the_wire(&batch_place_orders(OWNER, orders).expect("two orders are in range"))
+        else {
+            panic!()
+        };
+        assert_eq!(b.owner, OWNER.to_bytes());
+        let ask = &b.orders.as_slice()[1];
+        assert_eq!(
+            (
+                ask.market,
+                ask.side,
+                ask.price,
+                ask.client_order_id,
+                ask.post_only
+            ),
+            (3303, Side::Sell, 75_000_000, Some(8), true)
+        );
+        assert!(matches!(
+            batch_place_orders(OWNER, Vec::new()),
+            Err(Error::InvalidInput(_))
+        ));
+        let too_many = vec![batched_order(1, Side::Buy, 1, 1); 51];
+        assert!(matches!(
+            batch_place_orders(OWNER, too_many),
+            Err(Error::InvalidInput(_))
+        ));
     }
 
     #[test]

@@ -93,6 +93,10 @@ BUILDERS = {
     "propose_admin_action/set_market_status": lambda i: actions.ProposeAdminAction(
         **_admin(i, "proposer")
     ),
+    "batch_place_orders/two_orders": lambda i: actions.BatchPlaceOrders(
+        owner=_b(i["owner"]),
+        orders=[actions.BatchedOrder(**order) for order in i["orders"]],
+    ),
 }
 
 

@@ -430,6 +430,23 @@ function toAction(
               : Number(big(input.max_slippage_bps)),
         },
       };
+    case ActionType.BatchPlaceOrders:
+      return {
+        type: "BatchPlaceOrders",
+        data: {
+          owner: bytes(input.owner),
+          orders: (input.orders as unknown[]).map((order: any) => ({
+            market: order.market as number,
+            side: SIDE[order.side as string],
+            price: big(order.price),
+            quantity: big(order.quantity),
+            clientOrderId: bigOrNull(order.client_order_id),
+            postOnly: order.post_only === true,
+            reduceOnly: order.reduce_only === true,
+            timeInForce: TIF[order.time_in_force as string],
+          })),
+        },
+      };
     case ActionType.ProposeAdminAction:
       return {
         type: "ProposeAdminAction",
