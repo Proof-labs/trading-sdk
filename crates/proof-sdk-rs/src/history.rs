@@ -437,6 +437,9 @@ pub enum Conversion {
     Converted { size: u64 },
     /// It stayed cash, for this reason.
     Fallback(FallbackReason),
+    /// It stayed cash under an engine from before conversion existed, which
+    /// recorded no reason.
+    PreConversion,
 }
 
 /// Why a winning conditional did not convert into a perpetual.
@@ -492,6 +495,7 @@ impl TryFrom<RawResolution> for Resolution {
             "condition_met" => {
                 let converted = num(&r.converted_size, "converted_size")?;
                 let conversion = match (converted, r.fallback_reason.as_str()) {
+                    (0, "") => Conversion::PreConversion,
                     (0, reason) => Conversion::Fallback(
                         serde_json::from_value(serde_json::Value::String(reason.to_owned()))
                             .map_err(|_| bad("fallback_reason"))?,

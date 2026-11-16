@@ -544,7 +544,17 @@ async fn resolution_history_types_each_outcome() {
     fallback[1]["fallback_reason"] = json!("open_interest_cap");
     let mut unknown = rows.clone();
     unknown[0]["kind"] = json!("something_new");
-    let (info, log) = fixture(vec![(200, rows), (200, fallback), (200, unknown)]).await;
+    // A row written before conversion existed: "0" and no reason.
+    let mut legacy = rows.clone();
+    legacy[1]["converted_size"] = json!("0");
+    legacy[1]["fallback_reason"] = json!("");
+    let (info, log) = fixture(vec![
+        (200, rows),
+        (200, fallback),
+        (200, unknown),
+        (200, legacy),
+    ])
+    .await;
     let owner: Address = owner.parse().unwrap();
     let q = ResolutionsQuery {
         event_id: Some(EventId(35)),
@@ -585,6 +595,14 @@ async fn resolution_history_types_each_outcome() {
     assert!(matches!(
         info.resolution_history(owner, &q).await,
         Err(Error::Decode(_))
+    ));
+    let r = info.resolution_history(owner, &q).await.unwrap();
+    assert!(matches!(
+        r[1].outcome,
+        ResolutionOutcome::ConditionMet {
+            conversion: Conversion::PreConversion,
+            ..
+        }
     ));
     assert_eq!(
         requests(&log)[0].0,
