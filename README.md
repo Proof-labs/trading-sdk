@@ -90,8 +90,9 @@ Each address receives ~10,000 USDC (10,000,000,000 µUSDC) with a 24 h cooldown.
 
 ## Quick Start
 
-Use the key you funded above: a fresh key has no balance, and every order
-from it is refused with `InsufficientBalance` (11).
+Use the key you funded above, or as a competition participant the key from
+[PAPER-TRADING.md](PAPER-TRADING.md): a fresh key has no balance, and every
+order from it is refused with `InsufficientBalance` (11).
 
 ```typescript
 import { ExchangeClient, Side } from "@proof-labs/trading-sdk";

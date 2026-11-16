@@ -18,8 +18,9 @@ pip install "git+https://github.com/Proof-labs/trading-sdk#subdirectory=python"
 
 ## Quick Start
 
-The generated owner must have DevNet test funds before placing an order. Use
-an active market and adjust the example price/quantity to its tick/lot sizes.
+Fund the address on DevNet through the faucet
+([Connect to the devnet](../README.md#connect-to-the-devnet)) before placing an
+order. Use an active market and adjust the example price/quantity to its tick/lot sizes.
 The example's quantities and prices are integers; prices use micro-USDC.
 
 ```python

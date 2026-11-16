@@ -263,6 +263,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   strict MessagePack preflight first, so it also refuses floats, extension
   types and duplicate map keys, and a malformed transaction reports
   `malformed MessagePack` instead of the decoder's own message.
+- The connect-and-trade example no longer prints its generated private key.
 - **Preserve structured gateway refusals (Python).** Python raises
   `PreAdmissionRefusal` with `error_code`, `message` and `status_code` for
   admission refusals, instead of treating legacy HTTP 200 refusals as
