@@ -327,8 +327,8 @@ export interface CreateMarket {
   poolId?: number;
   /**
    * Published size scale: order/position `quantity` is in units of
-   * 10^-szDecimals of the base asset (display/metadata only — the engine
-   * never reads it). MANDATORY: the engine struct has no `serde(default)`
+   * 10^-szDecimals of the base asset; the engine divides notional, fees and
+   * margin by 10^szDecimals. MANDATORY: the engine struct has no `serde(default)`
    * for this field, so a payload that omits it is rejected at decode. The
    * scale is fixed at creation and immutable thereafter. Use 0 for
    * integer-unit sizing.

@@ -356,6 +356,32 @@ mirror and throws `BinaryPriceError` before anything is sent. `yesOrder`,
 reads a short Yes position as No at `$1 − entry`. All of it is pinned against
 the Rust core by `conformance/binary.ndjson`.
 
+### How event positions are valued and booked
+
+Read this before setting risk limits or reconciling cash on an account that
+holds event positions.
+
+- **Equity is per outcome.** Each event the account holds is a Yes/No branch,
+  and margin must hold in every combination. `equity`, `totalMm` and `totalIm`
+  come from the binding outcome (lowest equity to maintenance), named in
+  `bindingScenario`. When the binding outcome changes, equity can step with no
+  trade.
+- **Conditional marks** are the book's impact mid, the median of the last
+  three end-of-block samples. A book too thin or too wide to sample holds its
+  mark and only lets takers reduce until three samples stand again.
+- **Binary positions count in equity, not cash.** A buy moves `balance` by the
+  fee only; the payoff or maximum loss sits in each outcome's equity. At
+  resolution the payoff is booked to cash (`prediction_settled`).
+- **Closing a conditional pays no cash.** The realized P&L is issued as a
+  position on the event's binary book (`binary_issued_from_mtm`), which you
+  hold to resolution or sell. A close can leave a small binary position.
+- **At resolution** the branch that fires converts into the underlying perp at
+  the settlement price (`condition_met`) and the other is removed
+  (`condition_not_met`). Both name each position's branch, not the outcome.
+
+Fills alone don't reconcile an event account: also read the
+`binary_issued_from_mtm` and settlement events from the transaction receipts.
+
 ### Oracle freshness for trading UIs
 
 ```typescript
