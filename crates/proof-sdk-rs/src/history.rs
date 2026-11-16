@@ -22,7 +22,8 @@ use serde::{Deserialize, Deserializer};
 
 use crate::address::Address;
 use crate::error::{Error, Result};
-use crate::event::{raw_from_json, Event};
+use crate::event::{raw_from_json, ConversionFallbackReason, Event};
+use crate::ids::IndexerEventId;
 use crate::info::{de_market, de_side, de_u64, InfoClient};
 
 type Json = serde_json::Map<String, serde_json::Value>;
@@ -102,12 +103,12 @@ pub struct ResolutionsQuery {
     pub limit: Option<u32>,
 }
 
-/// A candle width: `count` of `unit`, e.g. 5 minutes.
+/// A candle width: `count` of `unit`, e.g. 5 minutes. Build it with
+/// [`CandleResolution::new`], which refuses a count outside 1..=9999.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CandleResolution {
-    /// 1..=9999.
-    pub count: u16,
-    pub unit: CandleUnit,
+    count: u16,
+    unit: CandleUnit,
 }
 
 /// The unit of a [`CandleResolution`].
@@ -123,16 +124,48 @@ pub enum CandleUnit {
 
 impl CandleResolution {
     /// `1m`.
-    pub const ONE_MINUTE: Self = Self::new(1, CandleUnit::Minute);
+    pub const ONE_MINUTE: Self = Self {
+        count: 1,
+        unit: CandleUnit::Minute,
+    };
     /// `1h`.
-    pub const ONE_HOUR: Self = Self::new(1, CandleUnit::Hour);
+    pub const ONE_HOUR: Self = Self {
+        count: 1,
+        unit: CandleUnit::Hour,
+    };
     /// `1d`.
-    pub const ONE_DAY: Self = Self::new(1, CandleUnit::Day);
+    pub const ONE_DAY: Self = Self {
+        count: 1,
+        unit: CandleUnit::Day,
+    };
 
-    /// `count` of `unit`; the gateway takes counts 1..=9999.
+    /// The largest count the gateway takes.
+    pub const MAX_COUNT: u16 = 9_999;
+
+    /// `count` of `unit`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for a count outside 1..=9999, which the
+    /// gateway refuses.
+    pub fn new(count: u16, unit: CandleUnit) -> Result<Self> {
+        if !(1..=Self::MAX_COUNT).contains(&count) {
+            return Err(Error::InvalidInput(format!(
+                "candle count {count} is outside 1..={}",
+                Self::MAX_COUNT
+            )));
+        }
+        Ok(Self { count, unit })
+    }
+
     #[must_use]
-    pub const fn new(count: u16, unit: CandleUnit) -> Self {
-        Self { count, unit }
+    pub const fn count(self) -> u16 {
+        self.count
+    }
+
+    #[must_use]
+    pub const fn unit(self) -> CandleUnit {
+        self.unit
     }
 }
 
@@ -212,7 +245,7 @@ pub struct HistoryFill {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HistoryEvent {
     /// The indexer's id; unique and increasing in commit order.
-    pub event_id: u64,
+    pub event_id: IndexerEventId,
     pub owner: Address,
     pub block_height: u64,
     /// Block time, ns since the epoch.
@@ -247,7 +280,7 @@ impl TryFrom<RawEvent> for HistoryEvent {
 
     fn try_from(r: RawEvent) -> Result<Self> {
         Ok(Self {
-            event_id: r.event_id,
+            event_id: IndexerEventId(r.event_id),
             owner: r.owner,
             block_height: r.block_height,
             block_time_ns: r.block_time,
@@ -394,7 +427,7 @@ impl TryFrom<RawTriggerEvent> for TriggerHistoryEvent {
 
 /// How one position ended when its event resolved, from
 /// `GET /v1/history/resolutions/{owner}`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Resolution {
     pub event_id: EventId,
     /// The binary or conditional market the position was on.
@@ -409,7 +442,7 @@ pub struct Resolution {
 }
 
 /// What resolution did to a position.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolutionOutcome {
     /// A Yes/No position paid out in cash.
     PredictionSettled {
@@ -439,27 +472,16 @@ pub enum ResolutionOutcome {
 }
 
 /// Whether a winning conditional became a perpetual position.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Conversion {
     /// `size` opened on the underlying perpetual at the settlement price.
     Converted { size: u64 },
-    /// It stayed cash, for this reason.
-    Fallback(FallbackReason),
+    /// It stayed cash, for this reason (the same type the `condition_met`
+    /// receipt event carries).
+    Fallback(ConversionFallbackReason),
     /// It stayed cash under an engine from before conversion existed, which
     /// recorded no reason.
     PreConversion,
-}
-
-/// Why a winning conditional did not convert into a perpetual.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum FallbackReason {
-    MaintenanceMargin,
-    PositionSizeCap,
-    OpenInterestCap,
-    CannotPriceOrMargin,
-    InsufficientBalance,
 }
 
 #[derive(Deserialize)]
@@ -504,10 +526,7 @@ impl TryFrom<RawResolution> for Resolution {
                 let converted = num(&r.converted_size, "converted_size")?;
                 let conversion = match (converted, r.fallback_reason.as_str()) {
                     (0, "") => Conversion::PreConversion,
-                    (0, reason) => Conversion::Fallback(
-                        serde_json::from_value(serde_json::Value::String(reason.to_owned()))
-                            .map_err(|_| bad("fallback_reason"))?,
-                    ),
+                    (0, reason) => Conversion::Fallback(ConversionFallbackReason::from(reason)),
                     (size, "") => Conversion::Converted { size },
                     _ => return Err(bad("both converted and fell back")),
                 };
@@ -1302,8 +1321,16 @@ mod tests {
     fn candle_resolution_renders_as_the_gateway_names_it() {
         assert_eq!(CandleResolution::ONE_MINUTE.to_string(), "1m");
         assert_eq!(
-            CandleResolution::new(4, CandleUnit::Month).to_string(),
+            CandleResolution::new(4, CandleUnit::Month)
+                .unwrap()
+                .to_string(),
             "4M"
         );
+        for count in [0, 10_000] {
+            assert!(matches!(
+                CandleResolution::new(count, CandleUnit::Minute),
+                Err(Error::InvalidInput(_))
+            ));
+        }
     }
 }

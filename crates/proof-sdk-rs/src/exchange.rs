@@ -824,7 +824,11 @@ impl ExchangeClient {
     ///
     /// [`Error::InvalidInput`] for a name over 32 bytes, before anything is
     /// signed; then as [`Self::submit`].
-    pub async fn create_sub_account(&self, sub_account_id: u32, name: &str) -> Result<Submitted> {
+    pub async fn create_sub_account(
+        &self,
+        sub_account_id: crate::SubAccountId,
+        name: &str,
+    ) -> Result<Submitted> {
         self.submit(&actions::create_sub_account(
             self.address(),
             sub_account_id,

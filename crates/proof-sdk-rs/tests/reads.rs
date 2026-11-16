@@ -167,7 +167,12 @@ async fn position_triggers_decode_strictly_for_the_asked_owner() {
     let t = &rows[0];
     assert_eq!(
         (t.group_id, t.market, t.position_epoch, t.position_side),
-        (9_007_199_254_740_993, 7, PositionEpoch(3), Side::Buy)
+        (
+            proof_sdk_rs::TriggerGroupId(9_007_199_254_740_993),
+            7,
+            PositionEpoch(3),
+            Side::Buy
+        )
     );
     assert_eq!(
         t.availability,
@@ -206,7 +211,8 @@ async fn position_triggers_decode_strictly_for_the_asked_owner() {
 #[tokio::test]
 async fn sub_accounts_post_the_master_and_decode_its_rows() {
     let master: Address = "aa".repeat(20).parse().unwrap();
-    let child = proof_sdk_rs::actions::sub_account_address(master, 1);
+    let id = proof_sdk_rs::SubAccountId::new(1).unwrap();
+    let child = proof_sdk_rs::actions::sub_account_address(master, id);
     let mut name = [0u8; 32];
     name[..4].copy_from_slice(b"grid");
     let row = |m: Address, a: Address| json!([m.to_bytes(), 1, a.to_bytes(), name, 4_242]);
@@ -228,7 +234,7 @@ async fn sub_accounts_post_the_master_and_decode_its_rows() {
             subs[0].name.as_str(),
             subs[0].created_height
         ),
-        (1, child, "grid", 4_242)
+        (id, child, "grid", 4_242)
     );
     assert!(info.sub_accounts(master).await.unwrap().is_empty());
     assert!(matches!(
@@ -266,16 +272,30 @@ async fn withdrawal_status_reads_the_record_or_none() {
         (200, json!({"data":"wA=="})),
     ])
     .await;
-    let w = info.withdrawal(1).await.unwrap().unwrap();
+    let w = info
+        .withdrawal(proof_sdk_rs::WithdrawalId::new(1))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(
         (w.id, w.amount, w.status, w.request_height),
-        (1, 9_957_897_752, WithdrawalStatus::Pending, 6_336_456)
+        (
+            proof_sdk_rs::WithdrawalId::new(1),
+            9_957_897_752,
+            WithdrawalStatus::Pending,
+            6_336_456
+        )
     );
     assert_eq!(
         w.owner,
         "bd0e11d003efc8a53e4286b41d70abfb65e5f186".parse().unwrap()
     );
-    assert_eq!(info.withdrawal(999_999_999).await.unwrap(), None);
+    assert_eq!(
+        info.withdrawal(proof_sdk_rs::WithdrawalId::new(999_999_999))
+            .await
+            .unwrap(),
+        None
+    );
 
     let log = requests(&log);
     assert_eq!(log[0].0, "POST /info");
@@ -468,7 +488,7 @@ async fn account_event_history_requires_an_order_and_types_each_event() {
     assert!(matches!(&rows[4].event, Event::Other(raw) if raw.kind == "fees_collected"));
     assert_eq!(
         (rows[2].event_id, rows[2].block_height),
-        (12_532_512, 11_676_065)
+        (proof_sdk_rs::IndexerEventId(12_532_512), 11_676_065)
     );
 
     let err = info.account_event_history(mm(), &q).await.unwrap_err();
@@ -647,7 +667,9 @@ async fn resolution_history_types_each_outcome() {
     assert!(matches!(
         r[1].outcome,
         ResolutionOutcome::ConditionMet {
-            conversion: Conversion::Fallback(proof_sdk_rs::FallbackReason::OpenInterestCap),
+            conversion: Conversion::Fallback(
+                proof_sdk_rs::ConversionFallbackReason::OpenInterestCap
+            ),
             ..
         }
     ));

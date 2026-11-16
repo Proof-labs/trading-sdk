@@ -16,6 +16,7 @@ use proof_trading_sdk::types::{
 
 use crate::address::Address;
 use crate::error::{Error, Result};
+use crate::ids::SubAccountId;
 
 /// A GTC limit order. Adjust the fields (`post_only`, `client_order_id`,
 /// `time_in_force`, brackets) before wrapping it in [`Action::PlaceOrder`].
@@ -243,10 +244,10 @@ pub fn revoke_agent(owner: Address, agent_public_key: [u8; 32]) -> Action {
 /// The address of `master`'s sub-account `sub_account_id`, as
 /// `CreateSubAccount` derives it.
 #[must_use]
-pub fn sub_account_address(master: Address, sub_account_id: u32) -> Address {
+pub fn sub_account_address(master: Address, sub_account_id: SubAccountId) -> Address {
     let derived = proof_trading_sdk::crypto::derive_sub_account(
         &OwnerAddress::new(master.to_bytes()),
-        sub_account_id,
+        sub_account_id.get(),
     );
     Address::from(derived.into_bytes())
 }
@@ -256,8 +257,18 @@ pub fn sub_account_address(master: Address, sub_account_id: u32) -> Address {
 ///
 /// # Errors
 ///
-/// [`Error::InvalidInput`] for a name over 32 bytes of UTF-8.
-pub fn create_sub_account(owner: Address, sub_account_id: u32, name: &str) -> Result<Action> {
+/// [`Error::InvalidInput`] for a name over 32 bytes of UTF-8, or one with a
+/// NUL byte, which the zero padding would cut it at.
+pub fn create_sub_account(
+    owner: Address,
+    sub_account_id: SubAccountId,
+    name: &str,
+) -> Result<Action> {
+    if name.contains('\0') {
+        return Err(Error::InvalidInput(format!(
+            "sub-account name {name:?} contains a NUL byte"
+        )));
+    }
     let mut padded = [0u8; 32];
     padded
         .get_mut(..name.len())
@@ -265,7 +276,7 @@ pub fn create_sub_account(owner: Address, sub_account_id: u32, name: &str) -> Re
         .copy_from_slice(name.as_bytes());
     Ok(Action::CreateSubAccount(CreateSubAccount {
         owner: OwnerAddress::new(owner.to_bytes()),
-        sub_account_id,
+        sub_account_id: sub_account_id.get(),
         name: padded,
     }))
 }
@@ -516,10 +527,22 @@ mod tests {
         assert_eq!((r.owner, r.agent_pubkey), (OWNER.to_bytes(), [7; 32]));
     }
 
+    fn id(n: u32) -> SubAccountId {
+        SubAccountId::new(n).expect("a nonzero test id")
+    }
+
+    #[test]
+    fn create_sub_account_refuses_a_nul_in_the_name() {
+        assert!(matches!(
+            create_sub_account(OWNER, id(2), "gr\0id"),
+            Err(Error::InvalidInput(_))
+        ));
+    }
+
     #[test]
     fn sub_account_helpers_pad_the_name_and_derive_the_address() {
         let Action::CreateSubAccount(c) =
-            on_the_wire(&create_sub_account(OWNER, 2, "grid").unwrap())
+            on_the_wire(&create_sub_account(OWNER, id(2), "grid").unwrap())
         else {
             panic!()
         };
@@ -529,15 +552,15 @@ mod tests {
         );
         assert_eq!(&c.name[..4], b"grid");
         assert!(c.name[4..].iter().all(|&b| b == 0));
-        assert!(create_sub_account(OWNER, 2, &"x".repeat(32)).is_ok());
+        assert!(create_sub_account(OWNER, id(2), &"x".repeat(32)).is_ok());
         assert!(matches!(
-            create_sub_account(OWNER, 2, &"x".repeat(33)),
+            create_sub_account(OWNER, id(2), &"x".repeat(33)),
             Err(Error::InvalidInput(_))
         ));
 
-        let sub = sub_account_address(OWNER, 2);
-        assert_ne!(sub, sub_account_address(OWNER, 3));
-        assert_ne!(sub, sub_account_address(OTHER, 2));
+        let sub = sub_account_address(OWNER, id(2));
+        assert_ne!(sub, sub_account_address(OWNER, id(3)));
+        assert_ne!(sub, sub_account_address(OTHER, id(2)));
         let Action::SubAccountTransfer(t) =
             on_the_wire(&sub_account_transfer(OWNER, OWNER, sub, 1_000_000))
         else {

@@ -378,7 +378,7 @@ pub struct PositionTriggersInvalidated {
     pub owner: Address,
     pub market: MarketId,
     pub position_epoch: u64,
-    pub group_id: u64,
+    pub group_id: crate::TriggerGroupId,
     /// `None` when the engine did not state one (code 0, or older events).
     pub reason: Option<TriggerInvalidation>,
 }
@@ -725,7 +725,7 @@ fn position_triggers_invalidated(a: &Attrs<'_>) -> Option<PositionTriggersInvali
         owner: a.address("owner")?,
         market: a.market("market")?,
         position_epoch: a.u64("position_epoch")?,
-        group_id: a.u64("group_id")?,
+        group_id: crate::TriggerGroupId(a.u64("group_id")?),
         reason: TriggerInvalidation::from_code(a.opt("invalidation_reason")?.unwrap_or(0)),
     })
 }

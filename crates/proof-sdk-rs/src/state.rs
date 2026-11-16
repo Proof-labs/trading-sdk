@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 
+use proof_trading_sdk::bridge::WithdrawalId;
 use proof_trading_sdk::query::{
     AuthorizedAgents as WireAgents, FundingInfo, AUTHORIZED_AGENTS_LIMIT,
 };
@@ -16,6 +17,7 @@ use serde::Deserialize;
 
 use crate::address::Address;
 use crate::error::{Error, Result};
+use crate::ids::{SubAccountId, TriggerGroupId, TriggerLimbId};
 use crate::info::{de_u64, decode, unbase64, DataEnvelope, InfoClient};
 
 /// A market's funding state and mark, from `GET /v1/funding/{market}`.
@@ -77,7 +79,7 @@ fn funding(bytes: &[u8], market: MarketId) -> Result<Funding> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PositionTriggers {
     /// The engine's id for this bracket.
-    pub group_id: u64,
+    pub group_id: TriggerGroupId,
     pub market: MarketId,
     /// The position generation the bracket protects. Pass it to
     /// [`crate::actions::set_position_triggers`] and
@@ -96,7 +98,7 @@ pub struct PositionTriggers {
 /// One limb of a [`PositionTriggers`] bracket, as the engine holds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TriggerLimbStatus {
-    pub limb_id: u64,
+    pub limb_id: TriggerLimbId,
     /// micro-USDC.
     pub trigger_price: u64,
     pub max_slippage_bps: TriggerSlippageBps,
@@ -278,7 +280,7 @@ fn position_triggers(bytes: &[u8], owner: Address) -> Result<Vec<PositionTrigger
                 }
             }
             Ok(PositionTriggers {
-                group_id,
+                group_id: TriggerGroupId(group_id),
                 market,
                 position_epoch: epoch,
                 position_side: side,
@@ -330,7 +332,7 @@ fn limb(l: RawLimb, slot: &LimbKind) -> Result<TriggerLimbStatus> {
         )
         .transpose()?;
     Ok(TriggerLimbStatus {
-        limb_id,
+        limb_id: TriggerLimbId(limb_id),
         trigger_price,
         max_slippage_bps: slippage,
         client_trigger_id: client_id,
@@ -345,7 +347,7 @@ fn limb(l: RawLimb, slot: &LimbKind) -> Result<TriggerLimbStatus> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SubAccount {
     /// The id the master created it under.
-    pub id: u32,
+    pub id: SubAccountId,
     pub address: Address,
     /// Its label, without the zero padding.
     pub name: String,
@@ -367,14 +369,12 @@ fn sub_accounts(bytes: &[u8], master: Address) -> Result<Vec<SubAccount>> {
                 return Err(bad("a row for another master"));
             }
             let address = Address::from(row.address.into_bytes());
-            if address != crate::actions::sub_account_address(master, row.sub_account_id) {
+            let id = SubAccountId::new(row.sub_account_id).map_err(|_| bad("a zero id"))?;
+            if address != crate::actions::sub_account_address(master, id) {
                 return Err(bad("an address that is not derived from the master and id"));
             }
-            if row.sub_account_id == 0
-                || !ids.insert(row.sub_account_id)
-                || !addresses.insert(address)
-            {
-                return Err(bad("a zero or repeated id or address"));
+            if !ids.insert(id) || !addresses.insert(address) {
+                return Err(bad("a repeated id or address"));
             }
             let end = row
                 .name
@@ -385,7 +385,7 @@ fn sub_accounts(bytes: &[u8], master: Address) -> Result<Vec<SubAccount>> {
                 .map_err(|_| bad("a name that is not UTF-8"))?
                 .to_owned();
             Ok(SubAccount {
-                id: row.sub_account_id,
+                id,
                 address,
                 name,
                 created_height: row.created_height,
@@ -400,7 +400,7 @@ fn sub_accounts(bytes: &[u8], master: Address) -> Result<Vec<SubAccount>> {
 /// `POST /info {withdrawalStatus}`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Withdrawal {
-    pub id: u64,
+    pub id: WithdrawalId,
     pub owner: Address,
     /// micro-USDC, before custody fees.
     pub amount: u64,
@@ -416,7 +416,7 @@ const WITHDRAWAL_RECORD: Shape = Shape::Record {
     nested: &[],
 };
 
-fn withdrawal(bytes: &[u8], id: u64) -> Result<Option<Withdrawal>> {
+fn withdrawal(bytes: &[u8], id: WithdrawalId) -> Result<Option<Withdrawal>> {
     let record: Option<WithdrawalRecord> = decode(
         bytes,
         &Shape::Optional(&WITHDRAWAL_RECORD),
@@ -424,14 +424,15 @@ fn withdrawal(bytes: &[u8], id: u64) -> Result<Option<Withdrawal>> {
     )?;
     record
         .map(|r| {
-            if r.id != id {
+            if r.id != id.to_u64() {
                 return Err(Error::Decode(format!(
-                    "withdrawal status is for {}, asked for {id}",
-                    r.id
+                    "withdrawal status is for {}, asked for {}",
+                    r.id,
+                    id.to_u64()
                 )));
             }
             Ok(Withdrawal {
-                id: r.id,
+                id,
                 owner: Address::from(r.owner),
                 amount: r.amount,
                 solana_destination: r.solana_destination,
@@ -565,8 +566,8 @@ impl InfoClient {
     /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
     /// (also for an answer about another withdrawal or a status this version
     /// does not know) or [`Error::ResponseTooLarge`].
-    pub async fn withdrawal(&self, id: u64) -> Result<Option<Withdrawal>> {
-        let body = serde_json::json!({ "type": "withdrawalStatus", "withdrawalId": id });
+    pub async fn withdrawal(&self, id: WithdrawalId) -> Result<Option<Withdrawal>> {
+        let body = serde_json::json!({ "type": "withdrawalStatus", "withdrawalId": id.to_u64() });
         let env: DataEnvelope = self.post_info(&body).await?;
         withdrawal(&unbase64(&env.data)?, id)
     }
@@ -617,11 +618,14 @@ mod tests {
     fn devnet_withdrawal_decodes_and_binds_its_id() {
         // Captured from devnet `POST /info {withdrawalStatus, withdrawalId: 1}`.
         let bytes = unbase64("lgHcABTMvQ4RzNADzO/MyMylPkLMhsy0HXDMq8z7ZczlzPHMhs8AAAACUYl2GNwAIDHMokg7NV3Ml8yozOLMgg7Ms8y0zJ4/zIwhDAtPXsyozODMoXsTE8ypzJnMj3zM5KdQZW5kaW5nzgBgr8g=").unwrap();
-        let w = withdrawal(&bytes, 1).unwrap().unwrap();
+        let w = withdrawal(&bytes, WithdrawalId::new(1)).unwrap().unwrap();
         assert_eq!(w.status, WithdrawalStatus::Pending);
         assert_eq!(w.amount, 9_957_897_752);
         assert_eq!(w.request_height, 6_336_456);
-        assert!(matches!(withdrawal(&bytes, 2), Err(Error::Decode(_))));
-        assert_eq!(withdrawal(&[0xc0], 7).unwrap(), None);
+        assert!(matches!(
+            withdrawal(&bytes, WithdrawalId::new(2)),
+            Err(Error::Decode(_))
+        ));
+        assert_eq!(withdrawal(&[0xc0], WithdrawalId::new(7)).unwrap(), None);
     }
 }
