@@ -301,7 +301,7 @@ fn limb(l: RawLimb, slot: &LimbKind) -> Result<TriggerLimbStatus> {
     if limb_id == 0 || trigger_price == 0 || client_id.is_some_and(|c| c.0 == 0) {
         return Err(bad("a zero limb id, trigger price or client trigger id"));
     }
-    if !(1..=9_999).contains(&slippage.0) {
+    if !(1..=MAX_TRIGGER_SLIPPAGE_BPS).contains(&slippage.0) {
         return Err(bad("limb slippage outside 1..=9999"));
     }
     let last_evaluation = evaluation
@@ -474,10 +474,19 @@ struct Witness {
     height: u64,
 }
 
+/// The largest slippage a trigger limb may carry, in basis points; the
+/// TypeScript SDK's `MAX_TRIGGER_SLIPPAGE_BPS`.
+const MAX_TRIGGER_SLIPPAGE_BPS: u32 = 9_999;
+
+/// A MessagePack map header: fixmap, map16 or map32.
+fn is_msgpack_map_header(b: &u8) -> bool {
+    matches!(b, 0x80..=0x8f | 0xde | 0xdf)
+}
+
 fn authorized_agents(body: Witnessed, owner: Address) -> Result<AuthorizedAgents> {
     let bad = |what: &str| Error::Decode(format!("authorized agents: {what}"));
     let bytes = unbase64(&body.data)?;
-    if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+    if !bytes.first().is_some_and(is_msgpack_map_header) {
         return Err(bad("not a MessagePack map"));
     }
     let view: WireAgents = decode(&bytes, &AUTHORIZED_AGENTS, "authorized agents")?;
@@ -582,7 +591,7 @@ mod tests {
 
     #[test]
     fn devnet_funding_decodes_with_zeros_as_none() {
-        // Captured from https://api.dev.proof.trade/v1/funding/1 and /99999 (2026-11-16).
+        // Captured from https://api.dev.proof.trade/v1/funding/1 and /99999.
         let bytes =
             unbase64("mQEO0//ICPxTdD2jzwAAAaHiTBeAzwAAAA9S4sOnzwAAAA8jPhKgzgA27oDNAZDOAAI6Ag==")
                 .unwrap();
@@ -603,7 +612,7 @@ mod tests {
 
     #[test]
     fn devnet_withdrawal_decodes_and_binds_its_id() {
-        // Captured from devnet `POST /info {withdrawalStatus, withdrawalId: 1}` (2026-11-16).
+        // Captured from devnet `POST /info {withdrawalStatus, withdrawalId: 1}`.
         let bytes = unbase64("lgHcABTMvQ4RzNADzO/MyMylPkLMhsy0HXDMq8z7ZczlzPHMhs8AAAACUYl2GNwAIDHMokg7NV3Ml8yozOLMgg7Ms8y0zJ4/zIwhDAtPXsyozODMoXsTE8ypzJnMj3zM5KdQZW5kaW5nzgBgr8g=").unwrap();
         let w = withdrawal(&bytes, 1).unwrap().unwrap();
         assert_eq!(w.status, WithdrawalStatus::Pending);
