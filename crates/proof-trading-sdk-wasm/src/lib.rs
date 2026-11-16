@@ -284,7 +284,7 @@ pub fn sign_and_encode(
     secret_key: &[u8],
 ) -> Result<Vec<u8>, JsError> {
     let cid = arr32(chain_id, "chain_id")?;
-    let sk = arr32(secret_key, "secret_key")?;
+    let sk = zeroize::Zeroizing::new(arr32(secret_key, "secret_key")?);
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&sk);
     codec::sign_and_encode_payload(&cid, action_type, payload, seq, &signing_key).map_err(to_js)
 }

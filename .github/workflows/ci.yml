@@ -208,7 +208,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # Pinned so a new clippy lint on `stable` cannot break dev; bump deliberately.
+      - uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: clippy
       # One shared Rust cache namespace across the `rust` and `python` jobs:
       # maturin builds the PyO3 crate into the same `./target`, so Python reuses
       # this job's compiled deps (serde, rmp-serde, the core) instead of
@@ -223,6 +226,8 @@ jobs:
         run: cargo generate-lockfile # Cargo.lock is gitignored (library workspace)
       # Core + derive + the conformance runner (crates/spec). Exclude the PyO3
       # crate — it links libpython and is covered by the `python` job.
+      - name: Clippy (excl. PyO3)
+        run: cargo clippy --workspace --exclude proof-trading-sdk-pyo3 --all-features --all-targets --locked -- -D warnings
       - name: Test workspace (excl. PyO3)
         run: cargo test --workspace --exclude proof-trading-sdk-pyo3 --locked
       # Optional native transport: only task-owned loopback contract fixtures;

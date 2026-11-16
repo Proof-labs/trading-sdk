@@ -113,7 +113,7 @@ impl From<GatewayError> for Error {
             ErrorKind::BodyTooLarge => Error::ResponseTooLarge,
             ErrorKind::HttpStatus(status) => Error::Http {
                 status,
-                body: String::new(),
+                body: e.log.unwrap_or_default(),
             },
             ErrorKind::InvalidResponse => Error::Decode(format!("{:?}", e.operation)),
             ErrorKind::InvalidConfiguration

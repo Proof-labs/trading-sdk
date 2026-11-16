@@ -133,6 +133,22 @@ export function encodePayloadBytes(action: Action): Uint8Array {
   return encodeAnyPayloadBytes(action);
 }
 
+// wasm-bindgen wraps out-of-range integers silently, which would sign a
+// different seq or action type than the caller passed.
+function checkSeq(seq: bigint): bigint {
+  if (typeof seq !== "bigint" || seq < 0n || seq > 0xffff_ffff_ffff_ffffn) {
+    throw new RangeError(`seq must be a u64 bigint, got ${String(seq)}`);
+  }
+  return seq;
+}
+
+function checkActionType(actionType: number): number {
+  if (!Number.isInteger(actionType) || actionType < 0 || actionType > 0xff) {
+    throw new RangeError(`actionType must be a byte, got ${actionType}`);
+  }
+  return actionType;
+}
+
 /**
  * Encode a signed wire envelope from a pre-computed pubkey + signature.
  * Most callers should use `signAndEncode` instead; this exists for paths that
@@ -147,7 +163,13 @@ export function encodeSignedTx(
   const { actionType, fields } = toWasmFields(action);
   const wasm = getWasm();
   const payload = wasm.encode_payload(actionType, fields);
-  return wasm.encode_signed_tx(actionType, payload, seq, pubkey, signature);
+  return wasm.encode_signed_tx(
+    actionType,
+    payload,
+    checkSeq(seq),
+    pubkey,
+    signature,
+  );
 }
 
 /**
@@ -166,7 +188,13 @@ export function signAndEncode(
   const { actionType, fields } = toWasmFields(action);
   const wasm = getWasm();
   const payload = wasm.encode_payload(actionType, fields);
-  return wasm.sign_and_encode(chainId, actionType, payload, seq, privateKey);
+  return wasm.sign_and_encode(
+    chainId,
+    actionType,
+    payload,
+    checkSeq(seq),
+    privateKey,
+  );
 }
 
 /**
@@ -183,9 +211,9 @@ export function signEnvelopeFromPayload(
 ): Uint8Array {
   return getWasm().sign_and_encode(
     chainId,
-    actionType,
+    checkActionType(actionType),
     payloadBytes,
-    seq,
+    checkSeq(seq),
     privateKey,
   );
 }

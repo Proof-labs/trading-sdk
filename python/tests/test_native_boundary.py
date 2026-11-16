@@ -3,7 +3,6 @@
 These are regression checks, not a proof of native heap leak freedom.
 """
 
-import errno
 import gc
 import inspect
 import os
@@ -54,9 +53,10 @@ def test_text_boundary_rejects_invalid_unicode_and_wrong_types():
 
 
 @pytest.mark.parametrize("length", [0, 31, 32])
-def test_fd_is_consumed_on_success_and_failure(length):
-    # Check each transferred descriptor directly: process-wide FD counts can
-    # include unrelated test-runner activity. Never reuse an invalid raw FD.
+def test_fd_stays_with_the_caller_on_success_and_failure(length):
+    # The binding reads through a duplicate, so the caller's fd stays open and
+    # theirs to close. Checked per descriptor: process-wide FD counts include
+    # unrelated test-runner activity.
     for _ in range(32):
         read_fd, write_fd = os.pipe()
         os.write(write_fd, SEED[:length])
@@ -76,15 +76,9 @@ def test_fd_is_consumed_on_success_and_failure(length):
             else:
                 with pytest.raises(ValueError, match="failed to read key from fd"):
                     _native.load_key_from_fd(read_fd)
-            with pytest.raises(OSError) as error:
-                os.fstat(read_fd)
-            assert error.value.errno == errno.EBADF
+            os.fstat(read_fd)
         finally:
-            # Clean up even if a regression leaves ownership with the caller.
-            try:
-                os.close(read_fd)
-            except OSError as error:
-                assert error.errno == errno.EBADF
+            os.close(read_fd)
 
 
 def test_decoded_results_remain_owned_after_source_and_later_calls():

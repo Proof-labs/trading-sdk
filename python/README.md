@@ -9,8 +9,11 @@ This package wraps a shared Rust core (codec + signing) via PyO3. Everything
 else — HTTP transport, WebSocket streams, nonce generation, config — is native
 Python.
 
+Not on PyPI yet (#404). Install from the repository; the build needs a Rust
+toolchain:
+
 ```
-pip install proof-trading-sdk
+pip install "git+https://github.com/Proof-labs/trading-sdk#subdirectory=python"
 ```
 
 ## Quick Start

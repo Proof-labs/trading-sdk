@@ -23,6 +23,8 @@ conformance/
   signing.ndjson    ← (payload, key) → wire envelope; pubkey → owner address
   nonce.ndjson      ← (last, now_ms…) → allocated nonce sequence
   events.ndjson     ← engine event → its ABCI type and attributes
+  errors.ndjson     ← (code, log) → engine error name
+  binary.ndjson     ← Yes/No book orders and reads in No terms
 
 crates/spec/        ← the vector machinery (Rust)
   src/lib.rs            schemas + reference impls (the single source of truth)

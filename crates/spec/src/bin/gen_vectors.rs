@@ -1279,10 +1279,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|code| error_case(&format!("manifest/{code}"), code, None))
         .collect();
 
-    // Transitional code-50 rolling-upgrade family: the canonical DeliverTx log
-    // disambiguates legacy open-interest from current slippage; anything else
-    // stays AmbiguousCode50 (never a guess). Plus a code-51 case proving the
-    // log is ignored once the engine emits the distinct code.
+    // Code 50 is slippage; only a pre-renumbering receipt's log turns it into
+    // open interest. Plus a code-51 case proving its log is ignored.
     errors.push(error_case(
         "code50/oi_log",
         50,
