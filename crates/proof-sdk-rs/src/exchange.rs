@@ -8,7 +8,10 @@ use proof_trading_sdk::gateway::{
     CommittedReceipt, ErrorKind as GatewayErrorKind, MaintenanceMode, PreAdmissionRefusal,
     RetryAfter, SubmissionOutcome, TxHash,
 };
-use proof_trading_sdk::types::{Action, MarketId, OrderId, PlaceOrder, Side};
+use proof_trading_sdk::types::{
+    Action, AtomicBasketLeg, MarketConfig, MarketId, OrderId, PlaceOrder, PositionEpoch, Side,
+    TriggerLimb,
+};
 use proof_trading_sdk::{crypto, sign_action, SignActionError, Signer};
 use proof_trading_sdk::{decode_exec_error_kind, DecodedExecErrorKind, ErrorKind};
 
@@ -711,6 +714,185 @@ impl ExchangeClient {
     pub async fn close_position(&self, market: MarketId) -> Result<Submitted> {
         self.submit(&actions::close_position(self.address(), market))
             .await
+    }
+}
+
+/// Helpers for the actions a bot submits besides orders: No on binary books,
+/// position triggers, agents, sub-accounts, withdrawals and baskets.
+impl ExchangeClient {
+    /// Buy No at `price` on an event's binary book ([`actions::buy_no`]).
+    /// `market` is the book's config, as [`InfoClient::markets`] reads it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] when `market` is not a prediction-binary book,
+    /// or for a price of 0 or `$1` or more, before anything is signed; then
+    /// as [`Self::submit`].
+    pub async fn buy_no(
+        &self,
+        market: &MarketConfig,
+        price: u64,
+        quantity: u64,
+    ) -> Result<Submitted> {
+        let order = actions::buy_no(self.address(), market, price, quantity)?;
+        self.place_order(order).await
+    }
+
+    /// Sell No at `price` on an event's binary book ([`actions::sell_no`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::buy_no`].
+    pub async fn sell_no(
+        &self,
+        market: &MarketConfig,
+        price: u64,
+        quantity: u64,
+    ) -> Result<Submitted> {
+        let order = actions::sell_no(self.address(), market, price, quantity)?;
+        self.place_order(order).await
+    }
+
+    /// Replace the bracket on this account's position generation
+    /// `expected_position_epoch` ([`actions::set_position_triggers`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
+    pub async fn set_position_triggers(
+        &self,
+        market: MarketId,
+        expected_position_epoch: PositionEpoch,
+        stop_loss: Option<TriggerLimb>,
+        take_profit: Option<TriggerLimb>,
+    ) -> Result<Submitted> {
+        self.submit(&actions::set_position_triggers(
+            self.address(),
+            market,
+            expected_position_epoch,
+            stop_loss,
+            take_profit,
+            None,
+        ))
+        .await
+    }
+
+    /// Drop the bracket on that position generation
+    /// ([`actions::cancel_position_triggers`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
+    pub async fn cancel_position_triggers(
+        &self,
+        market: MarketId,
+        expected_position_epoch: PositionEpoch,
+    ) -> Result<Submitted> {
+        self.submit(&actions::cancel_position_triggers(
+            self.address(),
+            market,
+            expected_position_epoch,
+        ))
+        .await
+    }
+
+    /// Let `agent_public_key` trade for this account ([`actions::approve_agent`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
+    pub async fn approve_agent(&self, agent_public_key: [u8; 32]) -> Result<Submitted> {
+        self.submit(&actions::approve_agent(self.address(), agent_public_key))
+            .await
+    }
+
+    /// Withdraw an agent's approval ([`actions::revoke_agent`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
+    pub async fn revoke_agent(&self, agent_public_key: [u8; 32]) -> Result<Submitted> {
+        self.submit(&actions::revoke_agent(self.address(), agent_public_key))
+            .await
+    }
+
+    /// Create sub-account `sub_account_id` of this account
+    /// ([`actions::create_sub_account`]); its address is
+    /// [`actions::sub_account_address`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for a name over 32 bytes, before anything is
+    /// signed; then as [`Self::submit`].
+    pub async fn create_sub_account(
+        &self,
+        sub_account_id: crate::SubAccountId,
+        name: &str,
+    ) -> Result<Submitted> {
+        self.submit(&actions::create_sub_account(
+            self.address(),
+            sub_account_id,
+            name,
+        )?)
+        .await
+    }
+
+    /// Move `amount` micro-USDC between this account and one of its
+    /// sub-accounts ([`actions::sub_account_transfer`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
+    pub async fn sub_account_transfer(
+        &self,
+        from: Address,
+        to: Address,
+        amount: u64,
+    ) -> Result<Submitted> {
+        self.submit(&actions::sub_account_transfer(
+            self.address(),
+            from,
+            to,
+            amount,
+        ))
+        .await
+    }
+
+    /// Request a withdrawal of `amount` micro-USDC to a Solana account
+    /// ([`actions::withdraw_request`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
+    pub async fn withdraw_request(
+        &self,
+        amount: u64,
+        solana_destination: [u8; 32],
+    ) -> Result<Submitted> {
+        self.submit(&actions::withdraw_request(
+            self.address(),
+            amount,
+            solana_destination,
+        ))
+        .await
+    }
+
+    /// Fill every leg in full or none ([`actions::atomic_basket_order`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
+    pub async fn atomic_basket_order(
+        &self,
+        legs: Vec<AtomicBasketLeg>,
+        max_slippage_bps: u32,
+    ) -> Result<Submitted> {
+        self.submit(&actions::atomic_basket_order(
+            self.address(),
+            legs,
+            max_slippage_bps,
+        ))
+        .await
     }
 }
 

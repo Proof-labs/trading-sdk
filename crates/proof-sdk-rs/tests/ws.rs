@@ -194,6 +194,147 @@ async fn another_http_error_at_reconnect_keeps_retrying() {
 }
 
 #[tokio::test]
+async fn an_unanswered_subscribe_reconnects_and_resends() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+
+    let server = tokio::spawn(async move {
+        // First socket swallows the subscribe; the second answers it.
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut silent = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        let first = read_json(&mut silent).await;
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        let second = read_json(&mut ws).await;
+        ws.send(Message::Text(SNAPSHOT.into())).await.unwrap();
+        while let Some(Ok(m)) = ws.next().await {
+            if m.is_close() {
+                break;
+            }
+        }
+        drop(silent);
+        (first, second)
+    });
+
+    let config = WsConfig::new(url)
+        .with_ping_interval(Duration::from_secs(60))
+        .with_pong_timeout(Duration::from_millis(200))
+        .with_max_backoff(Duration::from_millis(20));
+    let (client, mut rx) = WsClient::connect(config).await.unwrap();
+    client.subscribe(Subscription::Orderbook(1)).unwrap();
+
+    let WsMessage::Disconnected { reason } = next(&mut rx).await else {
+        panic!("expected a reconnect")
+    };
+    assert_eq!(reason, "subscribe unanswered");
+    assert!(matches!(next(&mut rx).await, WsMessage::Reconnected));
+    assert!(matches!(
+        next(&mut rx).await,
+        WsMessage::OrderbookSnapshot { market: 1, .. }
+    ));
+    client.close();
+    let (first, second) = server.await.unwrap();
+    assert_eq!(
+        first["params"], second["params"],
+        "the same subscribe, re-sent"
+    );
+}
+
+#[tokio::test]
+async fn a_slow_but_moving_subscribe_queue_does_not_time_out() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+
+    let server = tokio::spawn(async move {
+        // Ack three subscribes one at a time, 150 ms apart: 450 ms in all,
+        // past the 200 ms subscribe timeout, but each within 200 ms of the
+        // last answer.
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            ids.push(read_json(&mut ws).await["id"].clone());
+        }
+        for id in ids {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let ack = serde_json::json!({"type": "subscribed", "id": id});
+            ws.send(Message::Text(ack.to_string().into()))
+                .await
+                .unwrap();
+        }
+        while let Some(Ok(m)) = ws.next().await {
+            if m.is_close() {
+                break;
+            }
+        }
+        timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    });
+
+    let config = WsConfig::new(url)
+        .with_ping_interval(Duration::from_secs(60))
+        .with_subscribe_timeout(Duration::from_millis(200))
+        .with_max_backoff(Duration::from_millis(20));
+    let (client, mut rx) = WsClient::connect(config).await.unwrap();
+    for market in 1..=3 {
+        client.subscribe(Subscription::Orderbook(market)).unwrap();
+    }
+
+    assert!(
+        timeout(Duration::from_millis(900), rx.recv())
+            .await
+            .is_err(),
+        "no reconnect while the gateway is still answering"
+    );
+    client.close();
+    assert!(server.await.unwrap(), "only one connection");
+}
+
+#[tokio::test]
+async fn data_alone_answers_a_subscribe() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+
+    let server = tokio::spawn(async move {
+        // Answer with the snapshot only, no ack, then stay quiet.
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        read_json(&mut ws).await;
+        ws.send(Message::Text(SNAPSHOT.into())).await.unwrap();
+        while let Some(Ok(m)) = ws.next().await {
+            if m.is_close() {
+                break;
+            }
+        }
+        // A reconnect would show up as a second connection.
+        timeout(Duration::from_millis(100), listener.accept())
+            .await
+            .is_err()
+    });
+
+    let config = WsConfig::new(url)
+        .with_ping_interval(Duration::from_secs(60))
+        .with_pong_timeout(Duration::from_millis(200))
+        .with_max_backoff(Duration::from_millis(20));
+    let (client, mut rx) = WsClient::connect(config).await.unwrap();
+    client.subscribe(Subscription::Orderbook(1)).unwrap();
+
+    assert!(matches!(
+        next(&mut rx).await,
+        WsMessage::OrderbookSnapshot { market: 1, .. }
+    ));
+    assert!(
+        timeout(Duration::from_millis(800), rx.recv())
+            .await
+            .is_err(),
+        "no reconnect over several pong timeouts once data arrived"
+    );
+    client.close();
+    assert!(server.await.unwrap(), "only one connection");
+}
+
+#[tokio::test]
 async fn account_subscriptions_carry_a_verifiable_signature() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/ws", listener.local_addr().unwrap());

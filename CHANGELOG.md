@@ -13,6 +13,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Rust (`proof-sdk-rs`), changed results for existing calls:** an account
+  read while a held market has no mark is `Error::MissingMark` instead of a
+  bare `Error::Http { status: 503 }`, and a core `GatewayError` of kind
+  `MissingMark` converts to `Error::MissingMark` instead of `Error::Gateway`.
+  Callers that matched the old variants stop matching; both still compile
+  (`Error` is `#[non_exhaustive]`).
+- **TypeScript:** `CandleHistoryParams` drops `cursor`. The candles and BBO
+  routes page by time window and never read it; the indexer now refuses it.
+- **Python:** `_native.pyi` adds `reject_floats` and `classify_error_name`,
+  and nine decode stubs name their first parameter `bytes`, as the native
+  module does.
 - **Breaking (Rust `proof-sdk-rs`, MAJOR):** `TxStatus::Rejected` is now
   `Rejected { error, log: Option<String> }` (`None` when the engine gave no
   log); `TxStatus` is not `#[non_exhaustive]`, so the next `proof-sdk-rs`
@@ -56,6 +67,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Rust (`proof-sdk-rs`):** typed reads for funding and mark, position
+  triggers, sub-accounts, withdrawal status, authorized agents and the
+  `/v1/history/*` routes (fills, orders, positions, funding payments, account
+  events, resolutions, triggers, candles, BBO), each strictly decoded with
+  cursor paging; and helpers for buying and selling No, position triggers,
+  agents, sub-accounts, withdrawal requests and atomic baskets (#464).
+  History rows are checked against the owner and every filter the query set
+  (market, event, event type, and the block-time window where the indexer
+  applies it); a row that does not decode is `Error::HistoryRow`, which keeps
+  the page's cursor. `buy_no` / `sell_no` take the market's `MarketConfig`
+  and refuse anything but a prediction-binary book before signing. Ids are
+  typed: `TriggerGroupId`, `TriggerLimbId`, `IndexerEventId`, `SubAccountId`
+  (non-zero) and proof-wire's `WithdrawalId`.
 - **Rust `proof-sdk-rs`:** typed resolution events `EventResolved`,
   `PredictionSettled`, `ConditionMet` (with `ConversionFallbackReason`),
   `ConditionNotMet` and `PositionTriggersInvalidated` (with an optional
@@ -227,8 +251,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Rust (`proof-sdk-rs`) WebSocket:** a book update with `orderCount`
+  missing or over u32 is `Malformed` instead of a level with 0 orders, and a
+  subscribe with no ack, refusal or data within the subscribe timeout
+  reconnects and re-sends it instead of leaving the feed silently empty. The
+  timeout counts from the later of the send and the last answer to any
+  request, so a long re-subscribe queue the gateway is still answering does
+  not loop; set it with `WsConfig::with_subscribe_timeout` (default: the pong
+  timeout).
+- **Python:** `decode_tx` refuses bytes after the envelope. It now runs the
+  strict MessagePack preflight first, so it also refuses floats, extension
+  types and duplicate map keys, and a malformed transaction reports
+  `malformed MessagePack` instead of the decoder's own message.
 - The connect-and-trade example no longer prints its generated private key.
-
 - **Preserve structured gateway refusals (Python).** Python raises
   `PreAdmissionRefusal` with `error_code`, `message` and `status_code` for
   admission refusals, instead of treating legacy HTTP 200 refusals as

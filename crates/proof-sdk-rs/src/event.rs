@@ -11,6 +11,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use proof_trading_sdk::gateway::{TxAttribute, TxEvent};
+use proof_trading_sdk::types::ConversionFallbackReason as WireFallbackReason;
 use proof_trading_sdk::types::{EventId, MarketId, OrderId, Outcome, Side, TimeInForce};
 
 use crate::address::Address;
@@ -310,55 +311,38 @@ pub struct ConditionMet {
 
 /// Why a winning conditional position was paid in cash instead of
 /// converting into a perpetual position.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ConversionFallbackReason {
-    /// The account would not meet maintenance margin holding the perpetual.
-    MaintenanceMargin,
-    /// The perpetual would exceed the underlying's `max_position_size`.
-    PositionSizeCap,
-    /// The perpetual would push the underlying's open interest past its cap.
-    OpenInterestCap,
-    /// A price the margin check needs could not be read.
-    CannotPriceOrMargin,
-    /// Netting into the existing perpetual would realize a loss larger than
-    /// the balance.
-    InsufficientBalance,
+    /// A reason the engine's wire names.
+    Known(WireFallbackReason),
     /// A reason this version does not name, as the engine wrote it.
     Other(String),
 }
 
-impl ConversionFallbackReason {
-    /// The engine's name for the reason, e.g. `maintenance_margin`.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::MaintenanceMargin => "maintenance_margin",
-            Self::PositionSizeCap => "position_size_cap",
-            Self::OpenInterestCap => "open_interest_cap",
-            Self::CannotPriceOrMargin => "cannot_price_or_margin",
-            Self::InsufficientBalance => "insufficient_balance",
-            Self::Other(s) => s,
-        }
-    }
-}
-
 impl From<&str> for ConversionFallbackReason {
     fn from(s: &str) -> Self {
-        match s {
-            "maintenance_margin" => Self::MaintenanceMargin,
-            "position_size_cap" => Self::PositionSizeCap,
-            "open_interest_cap" => Self::OpenInterestCap,
-            "cannot_price_or_margin" => Self::CannotPriceOrMargin,
-            "insufficient_balance" => Self::InsufficientBalance,
-            other => Self::Other(other.to_owned()),
-        }
+        use WireFallbackReason as W;
+        // Matched against the wire's own spellings, so the two can't drift.
+        [
+            W::MaintenanceMargin,
+            W::PositionSizeCap,
+            W::OpenInterestCap,
+            W::CannotPriceOrMargin,
+            W::InsufficientBalance,
+        ]
+        .into_iter()
+        .find(|w| w.to_string() == s)
+        .map_or_else(|| Self::Other(s.to_owned()), Self::Known)
     }
 }
 
 impl fmt::Display for ConversionFallbackReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        match self {
+            Self::Known(w) => w.fmt(f),
+            Self::Other(s) => f.write_str(s),
+        }
     }
 }
 
@@ -378,7 +362,7 @@ pub struct PositionTriggersInvalidated {
     pub owner: Address,
     pub market: MarketId,
     pub position_epoch: u64,
-    pub group_id: u64,
+    pub group_id: crate::TriggerGroupId,
     /// `None` when the engine did not state one (code 0, or older events).
     pub reason: Option<TriggerInvalidation>,
 }
@@ -725,7 +709,7 @@ fn position_triggers_invalidated(a: &Attrs<'_>) -> Option<PositionTriggersInvali
         owner: a.address("owner")?,
         market: a.market("market")?,
         position_epoch: a.u64("position_epoch")?,
-        group_id: a.u64("group_id")?,
+        group_id: crate::TriggerGroupId(a.u64("group_id")?),
         reason: TriggerInvalidation::from_code(a.opt("invalidation_reason")?.unwrap_or(0)),
     })
 }
@@ -894,7 +878,9 @@ mod tests {
         assert_eq!((m.realized_pnl, m.converted_size), (4_000_000, 0));
         assert_eq!(
             m.fallback_reason,
-            Some(ConversionFallbackReason::MaintenanceMargin)
+            Some(ConversionFallbackReason::Known(
+                WireFallbackReason::MaintenanceMargin
+            ))
         );
 
         let not_met =
@@ -929,6 +915,25 @@ mod tests {
             panic!()
         };
         assert_eq!(t.reason, None, "an older event without the field");
+    }
+
+    #[test]
+    fn fallback_reasons_use_the_wire_spellings() {
+        for s in [
+            "maintenance_margin",
+            "position_size_cap",
+            "open_interest_cap",
+            "cannot_price_or_margin",
+            "insufficient_balance",
+        ] {
+            let r = ConversionFallbackReason::from(s);
+            assert!(matches!(r, ConversionFallbackReason::Known(_)), "{s}");
+            assert_eq!(r.to_string(), s);
+        }
+        assert_eq!(
+            ConversionFallbackReason::from("new_reason"),
+            ConversionFallbackReason::Other("new_reason".into())
+        );
     }
 
     #[test]

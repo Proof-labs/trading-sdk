@@ -372,7 +372,8 @@ impl InfoClient {
     /// # Errors
     ///
     /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
-    /// or [`Error::ResponseTooLarge`].
+    /// or [`Error::ResponseTooLarge`]; [`Error::MissingMark`] while a held
+    /// market has no mark price.
     pub async fn account(&self, owner: Address) -> Result<AccountInfo> {
         let bytes = self.post_info_data("clearinghouseState", owner).await?;
         decode(&bytes, &reads::ACCOUNT_INFO, "account")
@@ -503,6 +504,11 @@ impl InfoClient {
             }
             body.extend_from_slice(&chunk);
         }
+        if status == StatusCode::SERVICE_UNAVAILABLE {
+            if let Some(message) = missing_mark(&body) {
+                return Err(Error::MissingMark { message });
+            }
+        }
         if status != StatusCode::OK {
             let text = String::from_utf8_lossy(&body);
             return Err(Error::Http {
@@ -514,18 +520,31 @@ impl InfoClient {
     }
 }
 
-#[derive(Deserialize)]
-struct DataEnvelope {
-    data: String,
+/// The gateway's `errorCode=MissingMark` body, by its error text.
+fn missing_mark(body: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Refusal {
+        error_code: Option<String>,
+        #[serde(default)]
+        error: String,
+    }
+    let r: Refusal = serde_json::from_slice(body).ok()?;
+    (r.error_code.as_deref() == Some("MissingMark")).then_some(r.error)
 }
 
-fn unbase64(data: &str) -> Result<Vec<u8>> {
+#[derive(Deserialize)]
+pub(crate) struct DataEnvelope {
+    pub(crate) data: String,
+}
+
+pub(crate) fn unbase64(data: &str) -> Result<Vec<u8>> {
     STANDARD
         .decode(data)
         .map_err(|e| Error::Decode(format!("base64: {e}")))
 }
 
-fn decode<T: DeserializeOwned>(bytes: &[u8], shape: &Shape, what: &str) -> Result<T> {
+pub(crate) fn decode<T: DeserializeOwned>(bytes: &[u8], shape: &Shape, what: &str) -> Result<T> {
     proof_trading_sdk::msgpack::reject_floats(bytes)
         .map_err(|e| Error::Decode(format!("{what}: {e}")))?;
     reads::decode(bytes, shape).map_err(|e| Error::Decode(format!("{what}: {e}")))
@@ -555,7 +574,7 @@ impl<'de> Deserialize<'de> for Dec {
     }
 }
 
-fn de_u64<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error> {
+pub(crate) fn de_u64<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Raw {
@@ -568,11 +587,13 @@ fn de_u64<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error>
     }
 }
 
-fn de_market<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<MarketId, D::Error> {
+pub(crate) fn de_market<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<MarketId, D::Error> {
     MarketId::try_from(de_u64(d)?).map_err(serde::de::Error::custom)
 }
 
-fn de_side<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Side, D::Error> {
+pub(crate) fn de_side<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Side, D::Error> {
     match String::deserialize(d)?.as_str() {
         "buy" | "Buy" => Ok(Side::Buy),
         "sell" | "Sell" => Ok(Side::Sell),

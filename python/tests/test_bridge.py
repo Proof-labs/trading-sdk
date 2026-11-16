@@ -93,6 +93,13 @@ class TestDecodeTx:
         with pytest.raises(ValueError):
             pts.decode_tx(tx[:10])
 
+    def test_rejects_trailing_bytes(self):
+        kp = pts.generate_keypair()
+        cid = pts.chain_id_from_string("test")
+        tx = pts.sign_and_encode(cid, 1, b"", 1, kp["secret_key"])
+        with pytest.raises(ValueError, match="malformed"):
+            pts.decode_tx(tx + b"\x00")
+
 
 class TestVerifySignature:
     def test_valid_sig(self):
