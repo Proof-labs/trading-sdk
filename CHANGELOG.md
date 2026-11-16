@@ -73,6 +73,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   events, resolutions, triggers, candles, BBO), each strictly decoded with
   cursor paging; and helpers for buying and selling No, position triggers,
   agents, sub-accounts, withdrawal requests and atomic baskets (#464).
+  History rows are checked against the owner and every filter the query set
+  (market, event, event type, and the block-time window where the indexer
+  applies it); a row that does not decode is `Error::HistoryRow`, which keeps
+  the page's cursor. `buy_no` / `sell_no` take the market's `MarketConfig`
+  and refuse anything but a prediction-binary book before signing. Ids are
+  typed: `TriggerGroupId`, `TriggerLimbId`, `IndexerEventId`, `SubAccountId`
+  (non-zero) and proof-wire's `WithdrawalId`.
 - **Rust `proof-sdk-rs`:** typed resolution events `EventResolved`,
   `PredictionSettled`, `ConditionMet` (with `ConversionFallbackReason`),
   `ConditionNotMet` and `PositionTriggersInvalidated` (with an optional
@@ -246,8 +253,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Rust (`proof-sdk-rs`) WebSocket:** a book update with `orderCount`
   missing or over u32 is `Malformed` instead of a level with 0 orders, and a
-  subscribe with no ack, refusal or data within the pong timeout reconnects
-  and re-sends it instead of leaving the feed silently empty.
+  subscribe with no ack, refusal or data within the subscribe timeout
+  reconnects and re-sends it instead of leaving the feed silently empty. The
+  timeout counts from the later of the send and the last answer to any
+  request, so a long re-subscribe queue the gateway is still answering does
+  not loop; set it with `WsConfig::with_subscribe_timeout` (default: the pong
+  timeout).
 - **Python:** `decode_tx` refuses bytes after the envelope. It now runs the
   strict MessagePack preflight first, so it also refuses floats, extension
   types and duplicate map keys, and a malformed transaction reports
