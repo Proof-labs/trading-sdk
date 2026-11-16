@@ -144,6 +144,50 @@ async fn a_401_at_reconnect_ends_the_feed() {
 }
 
 #[tokio::test]
+async fn an_unanswered_subscribe_reconnects_and_resends() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/ws", listener.local_addr().unwrap());
+
+    let server = tokio::spawn(async move {
+        // First socket swallows the subscribe; the second answers it.
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut silent = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        let first = read_json(&mut silent).await;
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
+        let second = read_json(&mut ws).await;
+        ws.send(Message::Text(SNAPSHOT.into())).await.unwrap();
+        while let Some(Ok(m)) = ws.next().await {
+            if m.is_close() {
+                break;
+            }
+        }
+        drop(silent);
+        (first, second)
+    });
+
+    let config = WsConfig::new(url)
+        .with_ping_interval(Duration::from_secs(60))
+        .with_pong_timeout(Duration::from_millis(200))
+        .with_max_backoff(Duration::from_millis(20));
+    let (client, mut rx) = WsClient::connect(config).await.unwrap();
+    client.subscribe(Subscription::Orderbook(1)).unwrap();
+
+    let WsMessage::Disconnected { reason } = next(&mut rx).await else {
+        panic!("expected a reconnect")
+    };
+    assert_eq!(reason, "subscribe unanswered");
+    assert!(matches!(next(&mut rx).await, WsMessage::Reconnected));
+    assert!(matches!(
+        next(&mut rx).await,
+        WsMessage::OrderbookSnapshot { market: 1, .. }
+    ));
+    client.close();
+    let (first, second) = server.await.unwrap();
+    assert_eq!(first["params"], second["params"], "the same subscribe, re-sent");
+}
+
+#[tokio::test]
 async fn account_subscriptions_carry_a_verifiable_signature() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}/ws", listener.local_addr().unwrap());

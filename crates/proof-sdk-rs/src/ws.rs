@@ -174,7 +174,8 @@ impl WsConfig {
     }
 
     /// Reconnect if no frame (a pong or anything else) arrives this long
-    /// after a ping. Keep it at least two ping intervals.
+    /// after a ping, or if a subscribe goes this long without an answer.
+    /// Keep it at least two ping intervals.
     #[must_use]
     pub fn with_pong_timeout(mut self, timeout: Duration) -> Self {
         self.pong_timeout = timeout;
@@ -566,7 +567,7 @@ impl Task {
         // Requests awaiting an ack or a refusal, so a refusal can name its
         // subscription. Cleared per session: ids from a dead socket never
         // answer.
-        let mut requests: HashMap<u64, (Subscription, bool)> = HashMap::new();
+        let mut requests: HashMap<u64, Request> = HashMap::new();
         // Each account's latest snapshot height: events at or below it are
         // already in the snapshot.
         let mut snapshot_heights: HashMap<Address, u64> = HashMap::new();
@@ -584,6 +585,11 @@ impl Task {
                     return e;
                 }
             }
+            let unanswered = requests
+                .values()
+                .filter(|r| r.subscribe)
+                .map(|r| r.sent + self.config.pong_timeout)
+                .min();
             // Biased: commands, then queued frames, then timers, so a backlog
             // drains before a deadline can fire on it.
             tokio::select! {
@@ -617,11 +623,11 @@ impl Task {
                                 Parsed::Message(m) => *m,
                                 Parsed::Refused { id, code, message } => {
                                     let request = id.and_then(|id| requests.remove(&id));
-                                    if let Some((s, true)) = request {
-                                        self.subscriptions.remove(&s);
+                                    if let Some(Request { subscription, subscribe: true, .. }) = request {
+                                        self.subscriptions.remove(&subscription);
                                     }
                                     WsMessage::Refused {
-                                        subscription: request.map(|(s, _)| s),
+                                        subscription: request.map(|r| r.subscription),
                                         code,
                                         message,
                                     }
@@ -634,6 +640,10 @@ impl Task {
                                 }
                                 Parsed::Pong | Parsed::Ignore => continue,
                             };
+                            // Data for a subscription answers its subscribe as well as an ack.
+                            if let Some(s) = answered(&message) {
+                                requests.retain(|_, r| !(r.subscribe && r.subscription == s));
+                            }
                             match &message {
                                 WsMessage::AccountSnapshot { owner, height: Some(h), .. } => {
                                     snapshot_heights.insert(*owner, *h);
@@ -672,6 +682,10 @@ impl Task {
                 () = sleep_until(pong_deadline.unwrap_or(next_ping)), if pong_deadline.is_some() => {
                     return End::Dropped("pong timeout".into());
                 },
+                // A subscribe nobody answered would leave the feed silently empty.
+                () = sleep_until(unanswered.unwrap_or(next_ping)), if unanswered.is_some() => {
+                    return End::Dropped("subscribe unanswered".into());
+                },
             }
         }
     }
@@ -683,7 +697,7 @@ impl Task {
         ws: &mut Socket,
         subscription: Subscription,
         subscribe: bool,
-        requests: &mut HashMap<u64, (Subscription, bool)>,
+        requests: &mut HashMap<u64, Request>,
     ) -> Result<(), End> {
         let mut params = match subscription {
             Subscription::Orderbook(market) => json!({ "channel": "orderbook", "market": market }),
@@ -724,10 +738,38 @@ impl Task {
         };
         let id = take_id(&mut self.next_id);
         let frame = json!({ "method": method, "id": id, "params": params }).to_string();
-        requests.insert(id, (subscription, subscribe));
+        requests.insert(
+            id,
+            Request {
+                subscription,
+                subscribe,
+                sent: Instant::now(),
+            },
+        );
         ws.send(Message::Text(frame.into()))
             .await
             .map_err(|e| End::Dropped(e.to_string()))
+    }
+}
+
+/// A subscribe or unsubscribe awaiting its ack or refusal.
+#[derive(Clone, Copy)]
+struct Request {
+    subscription: Subscription,
+    subscribe: bool,
+    sent: Instant,
+}
+
+/// The subscription a data frame belongs to.
+fn answered(message: &WsMessage) -> Option<Subscription> {
+    match message {
+        WsMessage::OrderbookSnapshot { market, .. } | WsMessage::OrderbookUpdate { market, .. } => {
+            Some(Subscription::Orderbook(*market))
+        }
+        WsMessage::Trade(t) => Some(Subscription::Trades(t.market)),
+        WsMessage::AccountSnapshot { owner, .. } => Some(Subscription::AccountEvents(*owner)),
+        WsMessage::AccountEvent(e) => Some(Subscription::AccountEvents(e.owner)),
+        _ => None,
     }
 }
 
@@ -909,22 +951,27 @@ fn orderbook(raw: Raw<'_>) -> Parsed {
                 },
             })
         }
-        Some("update") => match (side(raw.side.as_deref()), raw.price, raw.total_quantity) {
-            (Some(side), Some(price), Some(quantity)) => {
+        Some("update") => match (
+            side(raw.side.as_deref()),
+            raw.price,
+            raw.total_quantity,
+            raw.order_count.and_then(|c| u32::try_from(c).ok()),
+        ) {
+            (Some(side), Some(price), Some(quantity), Some(order_count)) => {
                 Parsed::message(WsMessage::OrderbookUpdate {
                     market,
                     side,
                     level: Level {
                         price,
                         quantity,
-                        order_count: raw
-                            .order_count
-                            .and_then(|c| u32::try_from(c).ok())
-                            .unwrap_or(0),
+                        order_count,
                     },
                 })
             }
-            _ => malformed(this, "orderbook update missing side/price/totalQuantity"),
+            _ => malformed(
+                this,
+                "orderbook update missing side/price/totalQuantity/orderCount",
+            ),
         },
         _ => Parsed::Ignore,
     }
@@ -1156,6 +1203,16 @@ mod tests {
                 ..
             }
         ));
+        // orderCount missing or over u32: malformed, never a count of 0.
+        for count in ["", r#","orderCount":4294967296"#] {
+            let frame = format!(
+                r#"{{"channel":"orderbook","market":1,"price":1,"side":"bid","totalQuantity":1,"type":"update"{count}}}"#
+            );
+            assert!(
+                matches!(message(&frame), WsMessage::Malformed { .. }),
+                "{frame}"
+            );
+        }
         // No height: malformed, never height 0 (which a baseline filter would drop).
         assert!(matches!(
             message(
