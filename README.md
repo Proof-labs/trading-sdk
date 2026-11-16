@@ -155,6 +155,10 @@ const record = await client.queryWithdrawal(id);
 console.log(record?.status);
 ```
 
+Only an account's own key withdraws. A master trades for its sub-accounts but
+cannot withdraw from them (refused with code 20): move the funds to the master
+with `SubAccountTransfer`, then withdraw from the master.
+
 > Reads decode MessagePack through the same WASM core as signing (a strict,
 > type-preserving preflight runs before the value decode), so even a read-only
 > client loads the WASM module on its first read. `await client.ready()`
@@ -755,6 +759,23 @@ hash to reconcile when a refusal is malformed or contradictory.
 long-standing `"<code>: <message>"` format in `error` (so older clients that parse the
 code back out of it keep working), and `log` carries the chain's message verbatim. New
 code should read the structured `code` field: it is authoritative and needs no parsing.
+
+### Order of actions within a block
+
+Every cancel (`CancelOrder`, `CancelClientOrder`, `CancelAllOrders`) in a
+block runs before every order-placing action (`PlaceOrder`, `MarketOrder`,
+`AmendOrder`, `CancelReplaceOrder`, `AtomicBasketOrder`, `ClosePosition`),
+whatever their
+`seq`. A cancel sent in the same block as the order it targets finds nothing
+to cancel; send it after the order lands.
+
+### Basket slippage
+
+`AtomicBasketOrder`'s `maxSlippageBps` bounds the basket's **net** slippage:
+each leg is measured from its own mark just before it fills, adverse slippage
+counts against the budget and price improvement counts for it, weighted by
+notional. A leg that fills better than its mark can't trip the budget, so use
+each leg's limit price to cap how far that leg sweeps.
 
 ## Rate limits
 
