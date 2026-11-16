@@ -18,6 +18,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   WebSocket book update with `orderCount` missing or over u32 is `Malformed`
   instead of a level with 0 orders, and a subscribe with no ack, refusal or
   data within the pong timeout reconnects and re-sends it.
+- **TypeScript:** `CandleHistoryParams` drops `cursor`. The candles and BBO
+  routes page by time window and never read it; the indexer now refuses it.
 - **Python:** `decode_tx` refuses bytes after the envelope. `_native.pyi`
   adds `reject_floats` and `classify_error_name`, and nine decode stubs name
   their first parameter `bytes`, as the native module does.

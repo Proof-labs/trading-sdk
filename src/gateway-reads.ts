@@ -32,7 +32,6 @@ export interface CandleHistoryParams {
   from?: string;
   to?: string;
   limit?: number;
-  cursor?: string;
 }
 /** Newest-first indexed blocks. Treat next_cursor as opaque. */
 export interface ExplorerBlocksParams {
