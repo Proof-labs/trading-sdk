@@ -72,7 +72,8 @@ async fn main() -> AnyResult<()> {
         return Err("empty bid side".into());
     };
     let price = bid.price.saturating_sub(cfg.tick_size.saturating_mul(10));
-    let mut order = client.limit_order(market, Side::Buy, price, cfg.lot_size);
+    // lot_size 0 means any quantity, so order one unit.
+    let mut order = client.limit_order(market, Side::Buy, price, cfg.lot_size.max(1));
     order.post_only = true;
     order.client_order_id = Some(proof_sdk_rs::NonceAllocator::new().next()?);
     let cid = order.client_order_id;

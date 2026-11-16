@@ -373,14 +373,14 @@ holds event positions.
   fee only; the payoff or maximum loss sits in each outcome's equity. At
   resolution the payoff is booked to cash (`prediction_settled`).
 - **Closing a conditional pays no cash.** The realized P&L is issued as a
-  position on the event's binary book (`binary_issued_from_mtm`), which you
-  hold to resolution or sell. A close can leave a small binary position.
+  position on the event's binary book, which you hold to resolution or sell. A
+  close can leave a small binary position.
 - **At resolution** the branch that fires converts into the underlying perp at
   the settlement price (`condition_met`) and the other is removed
   (`condition_not_met`). Both name each position's branch, not the outcome.
 
-Fills alone don't reconcile an event account: also read the
-`binary_issued_from_mtm` and settlement events from the transaction receipts.
+Fills alone don't reconcile an event account: read its positions and balance
+from the account, not by summing fills.
 
 ### Oracle freshness for trading UIs
 
@@ -756,6 +756,21 @@ long-standing `"<code>: <message>"` format in `error` (so older clients that par
 code back out of it keep working), and `log` carries the chain's message verbatim. New
 code should read the structured `code` field: it is authoritative and needs no parsing.
 
+## Rate limits
+
+A request must pass two token buckets. Over either, the gateway answers 429
+with `Retry-After` (and `retryAfterMs` in the body); wait that long.
+
+| Limit       | Applies to                                     | Devnet           |
+| ----------- | ---------------------------------------------- | ---------------- |
+| Per IP      | every request from one IP, all routes together | 150/s, burst 100 |
+| Per account | signed submissions, keyed on the signing key   | 100/s, burst 200 |
+
+Orders and cancels draw on separate per-account buckets, so a burst of
+cancels is not slowed by order traffic. An agent key has its own budget,
+separate from its owner's. On a WebSocket, subscribe and unsubscribe messages
+have a per-connection budget of 64/s, burst 256; pushed data is never limited.
+
 ## WebSocket streams
 
 The SDK exposes the gateway's native multiplexed feed on `/ws`. Account
@@ -763,6 +778,9 @@ events, trades and the orderbook are channels on that one shared connection
 (`subscribeAccount`, `subscribeTrades`, `subscribeOrderbook`). The connection
 auto-reconnects and re-subscribes; every subscription returns an unsubscribe
 function, and `disconnect()` closes the feed.
+
+The gateway pings every 30 s and closes a socket that hasn't answered within
+60 s. The SDK clients answer pings automatically.
 
 The WS base URL defaults to `gatewayUrl` with its scheme swapped to `ws`/`wss`.
 If your local stack serves WebSockets on a separate port, set `wsUrl`
