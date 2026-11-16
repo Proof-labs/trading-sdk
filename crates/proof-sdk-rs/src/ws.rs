@@ -109,6 +109,8 @@ pub struct WsConfig {
     account_auth: Option<AccountAuth>,
     ping_interval: Duration,
     pong_timeout: Duration,
+    /// `None`: the pong timeout.
+    subscribe_timeout: Option<Duration>,
     reconnect: bool,
     max_backoff: Duration,
     buffer: usize,
@@ -128,6 +130,7 @@ impl WsConfig {
             account_auth: None,
             ping_interval: Duration::from_secs(5),
             pong_timeout: Duration::from_secs(10),
+            subscribe_timeout: None,
             reconnect: true,
             max_backoff: Duration::from_secs(10),
             buffer: 4096,
@@ -174,11 +177,22 @@ impl WsConfig {
     }
 
     /// Reconnect if no frame (a pong or anything else) arrives this long
-    /// after a ping, or if a subscribe goes this long without an answer.
-    /// Keep it at least two ping intervals.
+    /// after a ping. Keep it at least two ping intervals. Also the subscribe
+    /// timeout unless [`Self::with_subscribe_timeout`] sets one.
     #[must_use]
     pub fn with_pong_timeout(mut self, timeout: Duration) -> Self {
         self.pong_timeout = timeout;
+        self
+    }
+
+    /// Reconnect and re-send if a subscribe goes this long without an ack,
+    /// a refusal or data, counted from when it was sent or from the last
+    /// answer to any request, whichever is later: the gateway answers
+    /// subscribes one at a time, so a long queue that is still being worked
+    /// through does not time out. Defaults to the pong timeout.
+    #[must_use]
+    pub fn with_subscribe_timeout(mut self, timeout: Duration) -> Self {
+        self.subscribe_timeout = Some(timeout);
         self
     }
 
@@ -220,6 +234,7 @@ impl std::fmt::Debug for WsConfig {
             .field("account_auth", &self.account_auth)
             .field("ping_interval", &self.ping_interval)
             .field("pong_timeout", &self.pong_timeout)
+            .field("subscribe_timeout", &self.subscribe_timeout)
             .field("reconnect", &self.reconnect)
             .finish_non_exhaustive()
     }
@@ -577,6 +592,14 @@ impl Task {
         let mut refill = Instant::now() + Duration::from_secs(1);
         let mut next_ping = Instant::now() + self.config.ping_interval;
         let mut pong_deadline: Option<Instant> = None;
+        // The last ack, refusal or data that answered a request. The gateway
+        // answers subscribes in order, so an answer to one means it is still
+        // working through the rest.
+        let mut last_answer: Option<Instant> = None;
+        let subscribe_timeout = self
+            .config
+            .subscribe_timeout
+            .unwrap_or(self.config.pong_timeout);
         loop {
             while allowance > 0 {
                 let Some(s) = resend.pop_front() else { break };
@@ -588,7 +611,7 @@ impl Task {
             let unanswered = requests
                 .values()
                 .filter(|r| r.subscribe)
-                .map(|r| r.sent + self.config.pong_timeout)
+                .map(|r| last_answer.map_or(r.sent, |a| a.max(r.sent)) + subscribe_timeout)
                 .min();
             // Biased: commands, then queued frames, then timers, so a backlog
             // drains before a deadline can fire on it.
@@ -623,6 +646,9 @@ impl Task {
                                 Parsed::Message(m) => *m,
                                 Parsed::Refused { id, code, message } => {
                                     let request = id.and_then(|id| requests.remove(&id));
+                                    if request.is_some() {
+                                        last_answer = Some(Instant::now());
+                                    }
                                     if let Some(Request { subscription, subscribe: true, .. }) = request {
                                         self.subscriptions.remove(&subscription);
                                     }
@@ -633,8 +659,8 @@ impl Task {
                                     }
                                 }
                                 Parsed::Ack(id) => {
-                                    if let Some(id) = id {
-                                        requests.remove(&id);
+                                    if id.and_then(|id| requests.remove(&id)).is_some() {
+                                        last_answer = Some(Instant::now());
                                     }
                                     continue;
                                 }
@@ -642,7 +668,11 @@ impl Task {
                             };
                             // Data for a subscription answers its subscribe as well as an ack.
                             if let Some(s) = answered(&message) {
+                                let before = requests.len();
                                 requests.retain(|_, r| !(r.subscribe && r.subscription == s));
+                                if requests.len() < before {
+                                    last_answer = Some(Instant::now());
+                                }
                             }
                             match &message {
                                 WsMessage::AccountSnapshot { owner, height: Some(h), .. } => {
