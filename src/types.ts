@@ -113,7 +113,7 @@ export const ActionType = {
   AmendOrder: 0x1b,
   /** Native all-or-revert multi-leg basket order. */
   AtomicBasketOrder: 0x1c,
-  /** Up to 50 limit orders for one account under one signature; each
+  /** Up to 100 limit orders for one account under one signature; each
    *  places or is refused on its own (0x35). */
   BatchPlaceOrders: 0x35,
   /** Signed admin-multisig governance proposal. */
@@ -1017,14 +1017,14 @@ export interface BatchedOrder {
   timeInForce?: TimeInForce;
 }
 
-/** Up to 50 limit orders for one account under one signature and nonce
+/** Up to 100 limit orders for one account under one signature and nonce
  *  (action `0x35`), so a market maker requotes in one round trip. Orders run
  *  in sequence, each exactly as its own `PlaceOrder` would: a refused order
  *  emits `order_rejected` with its code and the rest still place. */
 export interface BatchPlaceOrders {
   /** Account every order is placed for (20 bytes). */
   owner: Address;
-  /** 1 to 50 orders, run in this order. */
+  /** 1 to 100 orders, run in this order. */
   orders: BatchedOrder[];
 }
 

@@ -348,12 +348,12 @@ pub fn batched_order(market: MarketId, side: Side, price: u64, quantity: u64) ->
     }
 }
 
-/// `BatchPlaceOrders`: up to 50 limit orders under one signature, each placed
+/// `BatchPlaceOrders`: up to 100 limit orders under one signature, each placed
 /// or refused on its own, in order.
 ///
 /// # Errors
 ///
-/// [`Error::InvalidInput`] for no orders or more than 50.
+/// [`Error::InvalidInput`] for no orders or more than 100.
 pub fn batch_place_orders(owner: Address, orders: Vec<BatchedOrder>) -> Result<Action> {
     let orders = BatchedOrders::try_from(orders).map_err(|e| Error::InvalidInput(e.to_string()))?;
     Ok(Action::BatchPlaceOrders(BatchPlaceOrders {
@@ -650,7 +650,7 @@ mod tests {
             batch_place_orders(OWNER, Vec::new()),
             Err(Error::InvalidInput(_))
         ));
-        let too_many = vec![batched_order(1, Side::Buy, 1, 1); 51];
+        let too_many = vec![batched_order(1, Side::Buy, 1, 1); 101];
         assert!(matches!(
             batch_place_orders(OWNER, too_many),
             Err(Error::InvalidInput(_))

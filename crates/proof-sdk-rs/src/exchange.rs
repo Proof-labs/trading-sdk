@@ -895,12 +895,12 @@ impl ExchangeClient {
         .await
     }
 
-    /// Place up to 50 limit orders under one signature, each placed or
+    /// Place up to 100 limit orders under one signature, each placed or
     /// refused on its own ([`actions::batch_place_orders`]).
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidInput`] for no orders or more than 50, else as
+    /// [`Error::InvalidInput`] for no orders or more than 100, else as
     /// [`Self::submit`].
     pub async fn batch_place_orders(&self, orders: Vec<BatchedOrder>) -> Result<Submitted> {
         self.submit(&actions::batch_place_orders(self.address(), orders)?)

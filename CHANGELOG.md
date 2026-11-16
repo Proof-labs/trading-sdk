@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `BatchPlaceOrders` (0x35): up to 50 limit orders for one account under one
+- `BatchPlaceOrders` (0x35): up to 100 limit orders for one account under one
   signature, each placed or refused on its own, so a market maker requotes in
   one round trip. TypeScript `{ type: "BatchPlaceOrders" }` with `BatchedOrder`;
   Python `BatchPlaceOrders` / `BatchedOrder`; Rust (`proof-sdk-rs`)

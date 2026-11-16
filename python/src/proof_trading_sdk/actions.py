@@ -597,7 +597,7 @@ class BatchedOrder:
 
 @dataclass
 class BatchPlaceOrders(Action):
-    """Up to 50 limit orders for one account under one signature and nonce,
+    """Up to 100 limit orders for one account under one signature and nonce,
     so a market maker requotes in one round trip. Orders run in sequence,
     each exactly as its own :class:`PlaceOrder` would: a refused order emits
     ``order_rejected`` with its code and the rest still place."""

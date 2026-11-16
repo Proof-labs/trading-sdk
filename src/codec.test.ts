@@ -933,10 +933,10 @@ describe("codec v1 all action types", () => {
       },
     });
 
-    const action = batch(50);
+    const action = batch(100);
     expect(decodeTx(encodeTx(action, 1n)).action).toEqual(action);
     expect(() => encodeTx(batch(0), 1n)).toThrow();
-    expect(() => encodeTx(batch(51), 1n)).toThrow();
+    expect(() => encodeTx(batch(101), 1n)).toThrow();
   });
 
   // Deeper round-trip: field-by-field equality for UpdateMarketFees
