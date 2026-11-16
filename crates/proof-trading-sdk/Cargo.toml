@@ -2,6 +2,8 @@
 name = "proof-trading-sdk"
 version = "4.2.0"
 edition = "2021"
+# `<[T]>::as_chunks` is stable from 1.88.
+rust-version = "1.88"
 license = "Apache-2.0"
 description = "Rust core for the Proof trading SDK: MessagePack codec, Ed25519 signing, and wire types. Hub of the wheel-and-spokes SDK."
 repository = "https://github.com/Proof-labs/trading-sdk"
