@@ -33,6 +33,10 @@ pub enum Error {
     Http { status: u16, body: String },
     /// The response did not decode as the type the route promises.
     Decode(String),
+    /// An account read needs a mark price the engine doesn't have (gateway
+    /// `503 errorCode=MissingMark`), for example a held market left unpriced
+    /// after a resolution. Retry once the market is priced.
+    MissingMark { message: String },
     /// The response exceeded the configured cap
     /// ([`crate::ClientConfig::with_max_read_bytes`]).
     ResponseTooLarge,
@@ -55,8 +59,8 @@ pub enum Error {
     /// A submission got no verdict and may have landed. `tx` is exactly what
     /// was sent; `source` is why no verdict came back.
     Unconfirmed { tx: SignedTx, source: Box<Error> },
-    /// A core transport failure with no closer match above (a missing mark
-    /// price, a hash mismatch, a rejected option), as the core reported it.
+    /// A core transport failure with no closer match above (a hash mismatch,
+    /// a rejected option), as the core reported it.
     Gateway(GatewayError),
 }
 
@@ -68,6 +72,7 @@ impl fmt::Display for Error {
             Error::Transport(e) => write!(f, "transport: {e}"),
             Error::Http { status, body } => write!(f, "HTTP {status}: {body}"),
             Error::Decode(m) => write!(f, "decode: {m}"),
+            Error::MissingMark { message } => write!(f, "mark price unavailable: {message}"),
             Error::ResponseTooLarge => f.write_str("response exceeds max_read_bytes"),
             Error::Encode(m) => write!(f, "encode: {m}"),
             Error::Signer(e) => write!(f, "{e}"),
@@ -116,10 +121,12 @@ impl From<GatewayError> for Error {
                 body: e.log.unwrap_or_default(),
             },
             ErrorKind::InvalidResponse => Error::Decode(format!("{:?}", e.operation)),
-            ErrorKind::InvalidConfiguration
-            | ErrorKind::InvalidInput
-            | ErrorKind::MissingMark
-            | ErrorKind::HashMismatch => Error::Gateway(e),
+            ErrorKind::MissingMark => Error::MissingMark {
+                message: e.log.unwrap_or_default(),
+            },
+            ErrorKind::InvalidConfiguration | ErrorKind::InvalidInput | ErrorKind::HashMismatch => {
+                Error::Gateway(e)
+            }
         }
     }
 }

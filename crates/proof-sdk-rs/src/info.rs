@@ -372,7 +372,8 @@ impl InfoClient {
     /// # Errors
     ///
     /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
-    /// or [`Error::ResponseTooLarge`].
+    /// or [`Error::ResponseTooLarge`]; [`Error::MissingMark`] while a held
+    /// market has no mark price.
     pub async fn account(&self, owner: Address) -> Result<AccountInfo> {
         let bytes = self.post_info_data("clearinghouseState", owner).await?;
         decode(&bytes, &reads::ACCOUNT_INFO, "account")
@@ -503,6 +504,11 @@ impl InfoClient {
             }
             body.extend_from_slice(&chunk);
         }
+        if status == StatusCode::SERVICE_UNAVAILABLE {
+            if let Some(message) = missing_mark(&body) {
+                return Err(Error::MissingMark { message });
+            }
+        }
         if status != StatusCode::OK {
             let text = String::from_utf8_lossy(&body);
             return Err(Error::Http {
@@ -512,6 +518,19 @@ impl InfoClient {
         }
         serde_json::from_slice(&body).map_err(|e| Error::Decode(e.to_string()))
     }
+}
+
+/// The gateway's `errorCode=MissingMark` body, by its error text.
+fn missing_mark(body: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Refusal {
+        error_code: Option<String>,
+        #[serde(default)]
+        error: String,
+    }
+    let r: Refusal = serde_json::from_slice(body).ok()?;
+    (r.error_code.as_deref() == Some("MissingMark")).then_some(r.error)
 }
 
 #[derive(Deserialize)]

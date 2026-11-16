@@ -13,6 +13,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Rust (`proof-sdk-rs`):** an account read while a held market has no mark
+  is `Error::MissingMark` instead of a bare `Error::Http { status: 503 }`. A
+  WebSocket book update with `orderCount` missing or over u32 is `Malformed`
+  instead of a level with 0 orders, and a subscribe with no ack, refusal or
+  data within the pong timeout reconnects and re-sends it.
+- **Python:** `decode_tx` refuses bytes after the envelope. `_native.pyi`
+  adds `reject_floats` and `classify_error_name`, and nine decode stubs name
+  their first parameter `bytes`, as the native module does.
 - **Breaking (Rust, `proof-sdk-rs` / `proof-trading-sdk`):**
   `TxStatus::Rejected` is now `Rejected { error, log }`;
   `DecodedExecErrorKind::AmbiguousCode50` is removed; `GatewayError` gains a

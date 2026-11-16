@@ -184,7 +184,10 @@ async fn an_unanswered_subscribe_reconnects_and_resends() {
     ));
     client.close();
     let (first, second) = server.await.unwrap();
-    assert_eq!(first["params"], second["params"], "the same subscribe, re-sent");
+    assert_eq!(
+        first["params"], second["params"],
+        "the same subscribe, re-sent"
+    );
 }
 
 #[tokio::test]
