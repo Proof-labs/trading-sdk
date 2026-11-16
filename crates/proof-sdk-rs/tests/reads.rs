@@ -667,9 +667,9 @@ async fn resolution_history_types_each_outcome() {
     assert!(matches!(
         r[1].outcome,
         ResolutionOutcome::ConditionMet {
-            conversion: Conversion::Fallback(
-                proof_sdk_rs::ConversionFallbackReason::OpenInterestCap
-            ),
+            conversion: Conversion::Fallback(proof_sdk_rs::ConversionFallbackReason::Known(
+                proof_sdk_rs::core::types::ConversionFallbackReason::OpenInterestCap
+            )),
             ..
         }
     ));

@@ -478,8 +478,8 @@ struct Witness {
     height: u64,
 }
 
-/// The largest slippage a trigger limb may carry, in basis points; the
-/// TypeScript SDK's `MAX_TRIGGER_SLIPPAGE_BPS`.
+/// The widest slippage a stored trigger limb can hold, the engine's
+/// `MAX_TRIGGER_SLIPPAGE_BPS`. New limbs are capped lower, at 1,000.
 const MAX_TRIGGER_SLIPPAGE_BPS: u32 = 9_999;
 
 /// A MessagePack map header: fixmap, map16 or map32.
