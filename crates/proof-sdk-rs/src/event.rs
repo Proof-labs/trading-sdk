@@ -836,6 +836,16 @@ mod tests {
     }
 
     #[test]
+    fn condition_met_reads_the_engine_defaults() {
+        // The engine writes `None` as "" and older events omit `converted_size`.
+        let met = json!({"event_id": "33", "market": "3302", "owner": MAKER, "side": "buy", "size": "4", "entry_price": "74000000000", "settlement_price": "75000000000", "realized_pnl": "4000000", "fallback_reason": ""});
+        let Event::ConditionMet(m) = kind_of("condition_met", &met) else {
+            panic!()
+        };
+        assert_eq!((m.converted_size, m.fallback_reason), (0, None));
+    }
+
+    #[test]
     fn unknown_kinds_are_other_and_bad_known_kinds_are_malformed() {
         let fees = json!({"maker_fee": "172", "maker_owner": MAKER, "market": "105", "taker_fee": "429", "taker_owner": TAKER});
         let Event::Other(raw) = kind_of("fees_collected", &fees) else {
