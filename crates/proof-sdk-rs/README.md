@@ -112,7 +112,7 @@ Beyond orders:
 
 | Helper                                               | Action                                                                          |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `buy_no` / `sell_no(market, price, qty)`             | `PlaceOrder` on the Yes book at `$1 - price`, opposite side; refuses 0 and `$1` |
+| `buy_no` / `sell_no(&market_config, price, qty)`     | `PlaceOrder` on the Yes book at `$1 - price`, opposite side; refuses a market that is not a binary book, 0 and `$1` |
 | `set_position_triggers` / `cancel_position_triggers` | `SetPositionTriggers` / `CancelPositionTriggers` for one position epoch         |
 | `approve_agent` / `revoke_agent(agent_key)`          | `ApproveAgent` / `RevokeAgent`                                                  |
 | `create_sub_account(id, name)`                       | `CreateSubAccount` (address: `actions::sub_account_address`)                    |

@@ -9,7 +9,8 @@ use proof_trading_sdk::gateway::{
     RetryAfter, SubmissionOutcome, TxHash,
 };
 use proof_trading_sdk::types::{
-    Action, AtomicBasketLeg, MarketId, OrderId, PlaceOrder, PositionEpoch, Side, TriggerLimb,
+    Action, AtomicBasketLeg, MarketConfig, MarketId, OrderId, PlaceOrder, PositionEpoch, Side,
+    TriggerLimb,
 };
 use proof_trading_sdk::{crypto, sign_action, SignActionError, Signer};
 use proof_trading_sdk::{decode_exec_error_kind, DecodedExecErrorKind, ErrorKind};
@@ -720,12 +721,19 @@ impl ExchangeClient {
 /// position triggers, agents, sub-accounts, withdrawals and baskets.
 impl ExchangeClient {
     /// Buy No at `price` on an event's binary book ([`actions::buy_no`]).
+    /// `market` is the book's config, as [`InfoClient::markets`] reads it.
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidInput`] for a price of 0 or `$1` or more, before
-    /// anything is signed; then as [`Self::submit`].
-    pub async fn buy_no(&self, market: MarketId, price: u64, quantity: u64) -> Result<Submitted> {
+    /// [`Error::InvalidInput`] when `market` is not a prediction-binary book,
+    /// or for a price of 0 or `$1` or more, before anything is signed; then
+    /// as [`Self::submit`].
+    pub async fn buy_no(
+        &self,
+        market: &MarketConfig,
+        price: u64,
+        quantity: u64,
+    ) -> Result<Submitted> {
         let order = actions::buy_no(self.address(), market, price, quantity)?;
         self.place_order(order).await
     }
@@ -735,7 +743,12 @@ impl ExchangeClient {
     /// # Errors
     ///
     /// As [`Self::buy_no`].
-    pub async fn sell_no(&self, market: MarketId, price: u64, quantity: u64) -> Result<Submitted> {
+    pub async fn sell_no(
+        &self,
+        market: &MarketConfig,
+        price: u64,
+        quantity: u64,
+    ) -> Result<Submitted> {
         let order = actions::sell_no(self.address(), market, price, quantity)?;
         self.place_order(order).await
     }

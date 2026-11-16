@@ -9,9 +9,9 @@ use proof_trading_sdk::binary::{self, NoOrder};
 use proof_trading_sdk::types::{
     Action, AmendOrder, ApproveAgent, AtomicBasketLeg, AtomicBasketOrder, CancelAllOrders,
     CancelClientOrder, CancelOrder, CancelPositionTriggers, CancelReplaceOrder,
-    ClientTriggerGroupId, ClosePosition, CreateSubAccount, MarketId, MarketOrder, OrderId,
-    OwnerAddress, PlaceOrder, PositionEpoch, RevokeAgent, SetPositionTriggers, Side,
-    SubAccountTransfer, TimeInForce, TriggerLimb, WithdrawRequest,
+    ClientTriggerGroupId, ClosePosition, CreateSubAccount, MarketConfig, MarketId, MarketKind,
+    MarketOrder, OrderId, OwnerAddress, PlaceOrder, PositionEpoch, RevokeAgent,
+    SetPositionTriggers, Side, SubAccountTransfer, TimeInForce, TriggerLimb, WithdrawRequest,
 };
 
 use crate::address::Address;
@@ -124,11 +124,19 @@ pub fn close_position(owner: Address, market: MarketId) -> Action {
 /// `reduce_only` before wrapping it in [`Action::PlaceOrder`]; brackets on
 /// the result are in Yes terms (see [`proof_trading_sdk::binary::yes_limb`]).
 ///
+/// Takes the market's config, not its id: a No order on any other kind of
+/// market would sign a real trade at the mirrored price.
+///
 /// # Errors
 ///
-/// [`Error::InvalidInput`] for a price of 0 or `$1` or more, which has no
-/// Yes mirror inside the book.
-pub fn buy_no(owner: Address, market: MarketId, price: u64, quantity: u64) -> Result<PlaceOrder> {
+/// [`Error::InvalidInput`] when `market` is not a prediction-binary book, or
+/// for a price of 0 or `$1` or more, which has no Yes mirror inside the book.
+pub fn buy_no(
+    owner: Address,
+    market: &MarketConfig,
+    price: u64,
+    quantity: u64,
+) -> Result<PlaceOrder> {
     no_order(owner, market, Side::Buy, price, quantity)
 }
 
@@ -139,19 +147,30 @@ pub fn buy_no(owner: Address, market: MarketId, price: u64, quantity: u64) -> Re
 /// # Errors
 ///
 /// As [`buy_no`].
-pub fn sell_no(owner: Address, market: MarketId, price: u64, quantity: u64) -> Result<PlaceOrder> {
+pub fn sell_no(
+    owner: Address,
+    market: &MarketConfig,
+    price: u64,
+    quantity: u64,
+) -> Result<PlaceOrder> {
     no_order(owner, market, Side::Sell, price, quantity)
 }
 
 fn no_order(
     owner: Address,
-    market: MarketId,
+    market: &MarketConfig,
     side: Side,
     price: u64,
     quantity: u64,
 ) -> Result<PlaceOrder> {
+    if !matches!(market.kind, MarketKind::PredictionBinary { .. }) {
+        return Err(Error::InvalidInput(format!(
+            "market {} is not a prediction-binary book",
+            market.market
+        )));
+    }
     binary::yes_order(&NoOrder {
-        market,
+        market: market.market,
         owner: owner.to_bytes(),
         side,
         price,
@@ -364,7 +383,7 @@ mod tests {
     fn no_orders_trade_the_yes_book_at_the_mirrored_price_and_side() {
         // (helper, No price, Yes side, Yes price)
         type Case = (
-            fn(Address, MarketId, u64, u64) -> Result<PlaceOrder>,
+            fn(Address, &MarketConfig, u64, u64) -> Result<PlaceOrder>,
             u64,
             Side,
             u64,
@@ -376,7 +395,7 @@ mod tests {
             (sell_no, 999_999, Side::Buy, 1),
         ];
         for (helper, no_price, side, yes_price) in cases {
-            let o = helper(OWNER, 3300, no_price, 7).unwrap();
+            let o = helper(OWNER, &binary_book(3300), no_price, 7).unwrap();
             assert_eq!(
                 (
                     o.market,
@@ -392,12 +411,54 @@ mod tests {
         }
     }
 
+    fn binary_book(market: MarketId) -> MarketConfig {
+        MarketConfig {
+            market,
+            kind: MarketKind::PredictionBinary {
+                event_id: proof_trading_sdk::types::EventId(33),
+                branch: proof_trading_sdk::types::Branch::Yes,
+            },
+            ..MarketConfig::default()
+        }
+    }
+
+    #[test]
+    fn no_orders_refuse_a_market_that_is_not_a_binary_book() {
+        let perp = MarketConfig {
+            market: 1,
+            ..MarketConfig::default()
+        };
+        let conditional = MarketConfig {
+            market: 3302,
+            kind: MarketKind::ConditionalPerp {
+                event_id: proof_trading_sdk::types::EventId(33),
+                branch: proof_trading_sdk::types::Branch::Yes,
+            },
+            ..MarketConfig::default()
+        };
+        for market in [&perp, &conditional] {
+            for helper in [buy_no, sell_no] {
+                assert!(
+                    matches!(
+                        helper(OWNER, market, 300_000, 1),
+                        Err(Error::InvalidInput(_))
+                    ),
+                    "market {}",
+                    market.market
+                );
+            }
+        }
+    }
+
     #[test]
     fn no_orders_refuse_prices_without_a_yes_mirror() {
         for price in [0, BINARY_PRICE_MAX, BINARY_PRICE_MAX + 1, u64::MAX] {
             for helper in [buy_no, sell_no] {
                 assert!(
-                    matches!(helper(OWNER, 3300, price, 1), Err(Error::InvalidInput(_))),
+                    matches!(
+                        helper(OWNER, &binary_book(3300), price, 1),
+                        Err(Error::InvalidInput(_))
+                    ),
                     "{price}"
                 );
             }
