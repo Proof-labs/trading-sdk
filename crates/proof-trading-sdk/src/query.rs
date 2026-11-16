@@ -3,7 +3,8 @@
 //! drift). Client representation that needs it wraps these.
 
 pub use proof_wire::query::{
-    AccountInfo, AccountStateInfo, BindingScenario, LevelSummary, OrderbookSnapshot, PositionBrief,
+    AccountInfo, AccountStateInfo, BindingScenario, FundingInfo, LevelSummary, OrderbookSnapshot,
+    PositionBrief,
 };
 pub use proof_wire::query_v2::{AuthorizedAgents, AUTHORIZED_AGENTS_LIMIT};
 pub use proof_wire::query_v2::{InsuranceFundDirectory, InsuranceFundLedger, InsuranceFundState};
@@ -68,7 +69,9 @@ pub fn validate_insurance_fund_state(view: &InsuranceFundState) -> Result<(), &'
                 .checked_mul(u128::from(position.size))
                 .zip(10u128.checked_pow(u32::from(position.sz_decimals)))
                 .and_then(|(product, scale)| product.checked_div(scale));
-            if *reference_price == 0 || expected.map(|e| e.to_string()).as_ref() != Some(&notional_micro_usdc.0) {
+            if *reference_price == 0
+                || expected.map(|e| e.to_string()).as_ref() != Some(&notional_micro_usdc.0)
+            {
                 return Err("insurance notional is not the exact canonical floor amount");
             }
         }

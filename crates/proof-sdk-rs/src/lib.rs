@@ -10,7 +10,9 @@
 //! - [`actions`]: the same actions as plain values, for callers that sign and
 //!   send them themselves.
 //! - [`InfoClient`]: typed reads for markets, events, the order book, an
-//!   account, its open orders, the recent trade tape and recent nonces.
+//!   account, its open orders, the recent trade tape, recent nonces, funding,
+//!   position triggers, sub-accounts, withdrawals, agents and the indexed
+//!   history.
 //! - `WsClient` (feature `ws`, on by default): the gateway's `/ws` feed of
 //!   order books, trades and account events, with heartbeat, reconnect and
 //!   signed account subscriptions.
@@ -53,8 +55,10 @@ mod address;
 mod error;
 mod event;
 mod exchange;
+mod history;
 mod info;
 mod nonce;
+mod state;
 #[cfg(feature = "ws")]
 mod ws;
 
@@ -71,11 +75,21 @@ pub use event::{
 pub use exchange::{
     EngineError, ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted, TxStatus,
 };
+pub use history::{
+    AccountEventsQuery, BboCandle, Candle, CandlePage, CandleQuery, CandleResolution, CandleUnit,
+    Conversion, Decimal, FallbackReason, FundingPayment, HistoryEvent, HistoryFill, HistoryPage,
+    HistoryQuery, OrderHistoryQuery, PositionSnapshot, Resolution, ResolutionOutcome,
+    ResolutionsQuery, SnapshotPosition, SortOrder, TriggerHistoryEvent,
+};
 pub use info::{
     AccountState, ChainStatus, ClientConfig, InfoClient, Level, Orderbook, Trade, DEVNET_CHAIN_ID,
     DEVNET_GATEWAY_URL,
 };
 pub use nonce::{NonceAllocator, MAX_CLOCK_LEAD_MS};
+pub use state::{
+    AuthorizedAgents, Funding, PositionTriggers, SubAccount, TriggerAvailability,
+    TriggerEvaluation, TriggerLimbState, TriggerLimbStatus, TriggerOutcomeReason, Withdrawal,
+};
 #[cfg(feature = "ws")]
 pub use ws::{
     AccountAuth, Subscription, WsAccount, WsClient, WsConfig, WsMessage, WsReceiver, WsTrade,
@@ -86,8 +100,9 @@ pub use proof_trading_sdk as core;
 pub use proof_trading_sdk::gateway::{TxAttribute, TxEvent, TxHash};
 pub use proof_trading_sdk::query::{AccountInfo, PositionBrief};
 pub use proof_trading_sdk::types::{
-    Action, CancelReplaceOrder, EventId, EventInfo, MarketConfig, MarketId, MarketOrder, Order,
-    OrderId, Outcome, PlaceOrder, Position, Side, TimeInForce,
+    Action, CancelReplaceOrder, ClientTriggerGroupId, ClientTriggerId, EventId, EventInfo,
+    FundingRate, MarketConfig, MarketId, MarketOrder, Order, OrderId, Outcome, PlaceOrder,
+    Position, PositionEpoch, Side, TimeInForce, TriggerSlippageBps, WithdrawalStatus,
 };
 pub use proof_trading_sdk::ErrorKind;
 pub use proof_trading_sdk::{LocalSigner, Signer, SignerError};
