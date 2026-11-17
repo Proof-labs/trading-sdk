@@ -7,17 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [13.0.0] (Python 5.0.0; Rust core 5.0.0) — 2026-11-13
+## [13.0.0] (Python 5.0.0; Rust core 5.0.0) — 2026-11-17
 
-Prepared for exchange 2.25.0 / proof-wire 12.0.0. npm 13.0.0 is a
+Compatible with exchange 2.25.0 / proof-wire 12.0.0. npm 13.0.0 is a
 MAJOR over published 12.1.0: governance action bytes and proposal hashes change,
 and old fee-update payloads are rejected. Rebuild affected proposals and obtain
 new signatures. Python 5.0.0 includes the breaking refusal and read contracts.
 Rust core 5.0.0 is git-only, not a crates.io publication; its source API and
 re-exported wire enums break compatibility with core 4.x. The Python binding
 crate is also 5.0.0; unchanged helper and WASM package versions are retained.
-These are independent publication gates, not authorization to release.
-If the release date changes, update this heading through dev before promotion.
 
 - Fund directory and position checks are shared in Rust before WASM adaptation;
   invalid caller pool IDs report configuration errors, future display variants
@@ -36,15 +34,17 @@ If the release date changes, update this heading through dev before promotion.
 - **Python:** `_native.pyi` adds `reject_floats` and `classify_error_name`,
   and nine decode stubs name their first parameter `bytes`, as the native
   module does.
-- **Breaking (Rust `proof-sdk-rs`, MAJOR):** `TxStatus::Rejected` is now
-  `Rejected { error, log: Option<String> }` (`None` when the engine gave no
-  log); `TxStatus` is not `#[non_exhaustive]`, so the next `proof-sdk-rs`
-  release is MAJOR. `EventResolved`, `PredictionSettled`, `ConditionMet`,
-  `ConditionNotMet` and `PositionTriggersInvalidated` are typed, so code
-  matching them as `Event::Other` stops matching (compile-compatible: `Event`
-  is `#[non_exhaustive]`). A WebSocket handshake answered with any HTTP error
-  is `Error::Http`, not `Error::WsConnect`, on the first `connect` too; a 401
-  on reconnect ends the feed, other statuses keep retrying.
+- **Rust `proof-sdk-rs`, changed before its 1.0.0 release:**
+  `TxStatus::Rejected` is now `Rejected { error, log: Option<String> }`
+  (`None` when the engine gave no log). `TxStatus` is not
+  `#[non_exhaustive]`; `proof-sdk-rs` is first released as 1.0.0 in this
+  release, so this is part of 1.0.0. `EventResolved`, `PredictionSettled`,
+  `ConditionMet`, `ConditionNotMet` and `PositionTriggersInvalidated` are
+  typed, so code matching them as `Event::Other` stops matching
+  (compile-compatible: `Event` is `#[non_exhaustive]`). A WebSocket handshake
+  answered with any HTTP error is `Error::Http`, not `Error::WsConnect`, on
+  the first `connect` too; a 401 on reconnect ends the feed, other statuses
+  keep retrying.
 - **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `GatewayError` gains a
   public `log` field, so struct literals stop compiling. The crate is already
   MAJOR for proof-wire 12.
@@ -65,7 +65,7 @@ If the release date changes, update this heading through dev before promotion.
   notional; fee updates require the funding dead-band and interest-rate tail.
   Older fee-update payloads are rejected, matching the engine. Rebuild and
   reapprove affected governance proposals against the matching engine; do not
-  reuse old signatures. This source change does not publish or authorize a release.
+  reuse old signatures.
 - **proof-wire 12.0.0 (exchange 2.25.0, protocol 13.0).** The pin moves from
   canonical wire `2a707bc` to the `v12.0.0` release commit `27ac6ac`, still
   pinned by commit, never by tag. Over `2a707bc` the release adds the
