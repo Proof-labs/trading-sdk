@@ -12,7 +12,7 @@ use proof_trading_sdk::types::{
     CancelPositionTriggers, CancelReplaceOrder, ClientTriggerGroupId, ClosePosition,
     CreateSubAccount, MarketConfig, MarketId, MarketKind, MarketOrder, OrderId, OwnerAddress,
     PlaceOrder, PositionEpoch, RevokeAgent, SetPositionTriggers, Side, SubAccountTransfer,
-    TimeInForce, TriggerLimb, WithdrawRequest,
+    TimeInForce, TriggerLimb, WithdrawRequest, MAX_BATCH_PLACE_ORDERS,
 };
 
 use crate::address::Address;
@@ -348,12 +348,12 @@ pub fn batched_order(market: MarketId, side: Side, price: u64, quantity: u64) ->
     }
 }
 
-/// `BatchPlaceOrders`: up to 100 limit orders under one signature, each placed
-/// or refused on its own, in order.
+/// `BatchPlaceOrders`: up to [`MAX_BATCH_PLACE_ORDERS`] limit orders under one
+/// signature, each placed or refused on its own, in order.
 ///
 /// # Errors
 ///
-/// [`Error::InvalidInput`] for no orders or more than 100.
+/// [`Error::InvalidInput`] for no orders or more than [`MAX_BATCH_PLACE_ORDERS`].
 pub fn batch_place_orders(owner: Address, orders: Vec<BatchedOrder>) -> Result<Action> {
     let orders = BatchedOrders::try_from(orders).map_err(|e| Error::InvalidInput(e.to_string()))?;
     Ok(Action::BatchPlaceOrders(BatchPlaceOrders {
@@ -650,7 +650,7 @@ mod tests {
             batch_place_orders(OWNER, Vec::new()),
             Err(Error::InvalidInput(_))
         ));
-        let too_many = vec![batched_order(1, Side::Buy, 1, 1); 101];
+        let too_many = vec![batched_order(1, Side::Buy, 1, 1); MAX_BATCH_PLACE_ORDERS + 1];
         assert!(matches!(
             batch_place_orders(OWNER, too_many),
             Err(Error::InvalidInput(_))

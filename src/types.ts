@@ -113,9 +113,6 @@ export const ActionType = {
   AmendOrder: 0x1b,
   /** Native all-or-revert multi-leg basket order. */
   AtomicBasketOrder: 0x1c,
-  /** Up to 100 limit orders for one account under one signature; each
-   *  places or is refused on its own (0x35). */
-  BatchPlaceOrders: 0x35,
   /** Signed admin-multisig governance proposal. */
   ProposeAdminAction: 0x1e,
   /** Signed admin-multisig governance approval (carries full proposal context). */
@@ -124,6 +121,9 @@ export const ActionType = {
   RejectAdminAction: 0x20,
   /** Signed single-signer emergency action (pause/halt/reduce-only). */
   EmergencyAdminAction: 0x21,
+  /** Up to {@link MAX_BATCH_PLACE_ORDERS} limit orders for one account under
+   *  one signature; each places or is refused on its own. */
+  BatchPlaceOrders: 0x35,
 } as const;
 
 /** Union of all valid action type byte values. */
@@ -1017,14 +1017,17 @@ export interface BatchedOrder {
   timeInForce?: TimeInForce;
 }
 
-/** Up to 100 limit orders for one account under one signature and nonce
+/** Most orders one {@link BatchPlaceOrders} may carry; the wire refuses more. */
+export const MAX_BATCH_PLACE_ORDERS = 100;
+
+/** Up to {@link MAX_BATCH_PLACE_ORDERS} limit orders for one account under one signature and nonce
  *  (action `0x35`), so a market maker requotes in one round trip. Orders run
  *  in sequence, each exactly as its own `PlaceOrder` would: a refused order
  *  emits `order_rejected` with its code and the rest still place. */
 export interface BatchPlaceOrders {
   /** Account every order is placed for (20 bytes). */
   owner: Address;
-  /** 1 to 100 orders, run in this order. */
+  /** 1 to {@link MAX_BATCH_PLACE_ORDERS} orders, run in this order. */
   orders: BatchedOrder[];
 }
 

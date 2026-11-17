@@ -137,3 +137,11 @@ def test_every_published_action_has_a_typed_builder():
     }
     missing = _typescript_action_names() - built
     assert missing == set(), "actions reachable only through RawAction"
+
+
+@pytest.mark.parametrize("count", [0, 101])
+def test_a_batch_out_of_range_does_not_encode(count):
+    order = actions.BatchedOrder(market=1, side="Buy", price=1, quantity=1)
+    batch = actions.BatchPlaceOrders(owner=bytes(20), orders=[order] * count)
+    with pytest.raises(ValueError, match=rf"batch carries {count} orders"):
+        actions.encode_action(batch)

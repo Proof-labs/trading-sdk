@@ -25,11 +25,13 @@ import {
 } from "./crypto.js";
 import {
   ActionType,
+  MAX_BATCH_PLACE_ORDERS,
   Outcome,
   Side,
   TimeInForce,
   type Action,
   type Address,
+  type BatchedOrder,
 } from "./types.js";
 
 const OWNER = new Uint8Array(20).fill(0xaa);
@@ -933,10 +935,34 @@ describe("codec v1 all action types", () => {
       },
     });
 
-    const action = batch(100);
+    const action = batch(MAX_BATCH_PLACE_ORDERS);
     expect(decodeTx(encodeTx(action, 1n)).action).toEqual(action);
     expect(() => encodeTx(batch(0), 1n)).toThrow();
-    expect(() => encodeTx(batch(101), 1n)).toThrow();
+    expect(() => encodeTx(batch(MAX_BATCH_PLACE_ORDERS + 1), 1n)).toThrow();
+  });
+
+  it("encodes a batched order's omitted flags as their defaults", () => {
+    const batch = (order: BatchedOrder): Action => ({
+      type: "BatchPlaceOrders",
+      data: { owner: SIGNER, orders: [order] },
+    });
+    const minimal: BatchedOrder = {
+      market: 1,
+      side: Side.Buy,
+      price: 100n,
+      quantity: 2n,
+    };
+    expect(encodeTx(batch(minimal), 1n)).toEqual(
+      encodeTx(
+        batch({
+          ...minimal,
+          postOnly: false,
+          reduceOnly: false,
+          timeInForce: TimeInForce.Gtc,
+        }),
+        1n,
+      ),
+    );
   });
 
   // Deeper round-trip: field-by-field equality for UpdateMarketFees

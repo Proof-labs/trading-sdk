@@ -529,9 +529,10 @@ newer than this package.
 `SetUserMarketLeverage` has a typed builder, but ordinary-account submission is
 unsupported. See [availability](../README.md#setusermarketleverage-availability).
 
-- **Trading:** `PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder`,
-  `CancelAllOrders`, `CancelReplaceOrder`, `AmendOrder`, `ClosePosition`,
-  `AtomicBasketOrder`, `SetPositionTriggers`, `CancelPositionTriggers`,
+- **Trading:** `PlaceOrder`, `BatchPlaceOrders` (of `BatchedOrder`s),
+  `MarketOrder`, `CancelOrder`, `CancelClientOrder`, `CancelAllOrders`,
+  `CancelReplaceOrder`, `AmendOrder`, `ClosePosition`, `AtomicBasketOrder`,
+  `SetPositionTriggers`, `CancelPositionTriggers`,
   `SetUserMarketLeverage`, `ApproveAgent`, `RevokeAgent`, `CreateSubAccount`,
   `SubAccountTransfer`, `Deposit`, `Withdraw`, `WithdrawRequest`.
 - **Operator (privileged):** `SubmitOracleObservation`, `CreateMarket`, `UpdateMarketFees`,

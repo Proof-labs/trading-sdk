@@ -151,7 +151,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     const CREATE_MARKET: u8 = 0x07;
     const UPDATE_MARKET_FEES: u8 = 0x10;
     const ATOMIC_BASKET_ORDER: u8 = 0x1C;
-    const BATCH_PLACE_ORDERS: u8 = 0x35;
     const PROPOSE_ADMIN_ACTION: u8 = 0x1E;
     const APPROVE_ADMIN_ACTION: u8 = 0x1F;
     const REJECT_ADMIN_ACTION: u8 = 0x20;
@@ -159,6 +158,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     const CONFIRM_WITHDRAWAL_RECEIPT: u8 = 0x22;
     const FAIL_WITHDRAWAL_RECEIPT: u8 = 0x23;
     const AUTHORIZE_WITHDRAWAL: u8 = 0x24;
+    const BATCH_PLACE_ORDERS: u8 = 0x35;
     // Coverage burn-down (issue #69): the 15 previously-unpinned action types.
     // (CONFIRM_DEPOSIT is already declared above.)
     const DEPOSIT: u8 = 0x05;

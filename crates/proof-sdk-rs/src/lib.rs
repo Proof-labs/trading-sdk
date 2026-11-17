@@ -108,7 +108,7 @@ pub use proof_trading_sdk::types::{
     Action, AtomicBasketLeg, BatchedOrder, CancelReplaceOrder, ClientTriggerGroupId,
     ClientTriggerId, EventId, EventInfo, FundingRate, MarketConfig, MarketId, MarketOrder, Order,
     OrderId, Outcome, PlaceOrder, Position, PositionEpoch, Side, TimeInForce, TriggerLimb,
-    TriggerSlippageBps, WithdrawalStatus,
+    TriggerSlippageBps, WithdrawalStatus, MAX_BATCH_PLACE_ORDERS,
 };
 pub use proof_trading_sdk::ErrorKind;
 pub use proof_trading_sdk::{LocalSigner, Signer, SignerError};

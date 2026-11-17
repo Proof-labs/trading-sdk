@@ -95,6 +95,7 @@ export {
   type AtomicBasketOrder,
   type BatchedOrder,
   type BatchPlaceOrders,
+  MAX_BATCH_PLACE_ORDERS,
   type ClosePosition,
   type MarketOrder,
   type MarketsSnapshot,
