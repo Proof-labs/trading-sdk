@@ -76,6 +76,60 @@ crate is also 5.0.0; unchanged helper and WASM package versions are retained.
   rejects: the next `proof-trading-sdk` crate release is MAJOR. The npm
   package and the Python distribution only add names, so this change alone
   is MINOR for them.
+- **Breaking (Python MAJOR):** typed `ProposeAdminAction` and
+  `ApproveAdminAction` reject retired admin actions at construction and before
+  encoding. `is_submittable_admin_action()` checks the kind without enforcing
+  engine admission policy. Raw encoding/signing and historical decoding remain.
+- Historical `SetTriggerMarketConfig` decoding and legacy policy fields in
+  position-trigger reads validate wire fields without enforcing the retired
+  enabled-policy nonzero bounds.
+
+- Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
+  1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
+  still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
+  placement. Existing TP/SL placement, cancellation and history APIs remain.
+
+- **Python `open_orders`** preserves all 14 resting-order fields through the
+  shared Rust decoder (released for TypeScript in 12.0.0).
+
+- Python stream reconnect attempts and backoff reset after a matching subscription
+  acknowledgment or data delivery. Handshakes and refusals alone do not reset them.
+
+- **Breaking (Python MAJOR):** account, orderbook and public trade streams share
+  connection and cleanup handling. At startup, HTTP 401/403 raise
+  `AuthenticationError` and any other non-transient response raises
+  `TransportError`; network errors, timeouts, a connection dropped during the
+  handshake, and HTTP 408/429/5xx from the gateway or a proxy retry. Exhausting
+  `AccountEventStream`'s `reconnect_attempts` budget raises `TransportError`;
+  orderbook and trade streams retry until closed. After a failure or iterator
+  closure, reuse raises `RuntimeError`, even after a later `close()`; `close()`
+  on an open stream leaves iteration empty. Streams accept
+  base URLs or `/ws` endpoints, reject concurrent iterators, close sockets before
+  reconnect waits and cancel waits on `close()`. Backoff caps must be finite and
+  positive. Account auth retries and history recovery remain channel-specific.
+  Reconnect logs omit exception text. These contracts are breaking in Python 5.0.0.
+
+- **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `gateway::CommittedReceipt` gains `log` and
+  `events` (`TxEvent`), read from the `POST /exchange` and `GET /v1/tx/{hash}` responses that already
+  carried them; `SubmissionOutcome::CheckTxRejected` gains `log`. `errors::ErrorKind` is
+  `#[non_exhaustive]` and gains `ErrorKind::from_code` (`None` for the version-dependent code 50).
+  New `sign_action` signs any `Action` through a custody `Signer`.
+
+- Python account-stream reconnect backoff now defaults to a 10-second cap
+  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
+- Python signed account authentication rejects an unconfigured chain ID before
+  signing. Configure the gateway's chain ID explicitly.
+- Python account streams match TypeScript's bounded first-subscription auth
+  retries: signing failures and 401/429/503 frames yield errors and retry up to
+  five times. Exhaustion and 403 frames leave the socket open without further
+  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
+  401/403 refusals raise `AuthenticationError` before the first successful
+  connection; on reconnect they use the configured retry budget and backoff
+  without discarding history recovery state.
+- A Python client with a signer now signs every account subscription, even with
+  an API key configured. Subscribing to another owner's feed, or to any feed
+  with an unconfigured chain ID, now fails with error frames instead of relying
+  on the API key. Use a client with only the API key for those feeds.
 
 ### Added
 
@@ -189,63 +243,6 @@ crate is also 5.0.0; unchanged helper and WASM package versions are retained.
   15 also changes the account and orderbook streams and the `client.py` socket:
   they now honour proxy environment variables such as `HTTPS_PROXY` and inherit
   the library's 20-second keepalive.
-
-### Changed
-
-- **Breaking (Python MAJOR):** typed `ProposeAdminAction` and
-  `ApproveAdminAction` reject retired admin actions at construction and before
-  encoding. `is_submittable_admin_action()` checks the kind without enforcing
-  engine admission policy. Raw encoding/signing and historical decoding remain.
-- Historical `SetTriggerMarketConfig` decoding and legacy policy fields in
-  position-trigger reads validate wire fields without enforcing the retired
-  enabled-policy nonzero bounds.
-
-- Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
-  1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
-  still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
-  placement. Existing TP/SL placement, cancellation and history APIs remain.
-
-- **Python `open_orders`** preserves all 14 resting-order fields through the
-  shared Rust decoder (released for TypeScript in 12.0.0).
-
-- Python stream reconnect attempts and backoff reset after a matching subscription
-  acknowledgment or data delivery. Handshakes and refusals alone do not reset them.
-
-- **Breaking (Python MAJOR):** account, orderbook and public trade streams share
-  connection and cleanup handling. At startup, HTTP 401/403 raise
-  `AuthenticationError` and any other non-transient response raises
-  `TransportError`; network errors, timeouts, a connection dropped during the
-  handshake, and HTTP 408/429/5xx from the gateway or a proxy retry. Exhausting
-  `AccountEventStream`'s `reconnect_attempts` budget raises `TransportError`;
-  orderbook and trade streams retry until closed. After a failure or iterator
-  closure, reuse raises `RuntimeError`, even after a later `close()`; `close()`
-  on an open stream leaves iteration empty. Streams accept
-  base URLs or `/ws` endpoints, reject concurrent iterators, close sockets before
-  reconnect waits and cancel waits on `close()`. Backoff caps must be finite and
-  positive. Account auth retries and history recovery remain channel-specific.
-  Reconnect logs omit exception text. These contracts are breaking in Python 5.0.0.
-
-- **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `gateway::CommittedReceipt` gains `log` and
-  `events` (`TxEvent`), read from the `POST /exchange` and `GET /v1/tx/{hash}` responses that already
-  carried them; `SubmissionOutcome::CheckTxRejected` gains `log`. `errors::ErrorKind` is
-  `#[non_exhaustive]` and gains `ErrorKind::from_code` (`None` for the version-dependent code 50).
-  New `sign_action` signs any `Action` through a custody `Signer`.
-
-- Python account-stream reconnect backoff now defaults to a 10-second cap
-  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
-- Python signed account authentication rejects an unconfigured chain ID before
-  signing. Configure the gateway's chain ID explicitly.
-- Python account streams match TypeScript's bounded first-subscription auth
-  retries: signing failures and 401/429/503 frames yield errors and retry up to
-  five times. Exhaustion and 403 frames leave the socket open without further
-  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
-  401/403 refusals raise `AuthenticationError` before the first successful
-  connection; on reconnect they use the configured retry budget and backoff
-  without discarding history recovery state.
-- A Python client with a signer now signs every account subscription, even with
-  an API key configured. Subscribing to another owner's feed, or to any feed
-  with an unconfigured chain ID, now fails with error frames instead of relying
-  on the API key. Use a client with only the API key for those feeds.
 
 ### Removed
 
