@@ -93,6 +93,13 @@ class TestDecodeTx:
         with pytest.raises(ValueError):
             pts.decode_tx(tx[:10])
 
+    def test_rejects_trailing_bytes(self):
+        kp = pts.generate_keypair()
+        cid = pts.chain_id_from_string("test")
+        tx = pts.sign_and_encode(cid, 1, b"", 1, kp["secret_key"])
+        with pytest.raises(ValueError, match="malformed"):
+            pts.decode_tx(tx + b"\x00")
+
 
 class TestVerifySignature:
     def test_valid_sig(self):
@@ -209,17 +216,23 @@ class TestErrors:
         assert pts.get_error_name(71) == "InvalidAdminRegistry"
         assert pts.EngineError(67, "").name == "EmergencyRateLimited"
 
+    def test_off_curve_withdrawal_destination_code_135(self):
+        # proof-wire 12.0.0: a withdrawal to an off-curve Solana destination.
+        assert pts.get_error_name(135) == "OffCurveWithdrawalDestination"
+        assert pts.EngineError(135, "").name == "OffCurveWithdrawalDestination"
+        assert pts.get_error_name(136) is None
+
     def test_transitional_code_50_uses_delivertx_log(self):
         oi = "open interest limit exceeded on market 7: would be 4, cap 3"
         slip = "atomic basket aggregate slippage 51 bps exceeds budget 50 bps"
         assert pts.get_error_name(50, oi) == "OpenInterestLimitExceeded"
         assert pts.get_error_name(50, slip) == "SlippageExceeded"
-        assert pts.get_error_name(50) == "AmbiguousCode50"
-        assert pts.get_error_name(50, "") == "AmbiguousCode50"
-        assert pts.get_error_name(50, "unknown") == "AmbiguousCode50"
+        assert pts.get_error_name(50) == "SlippageExceeded"
+        assert pts.get_error_name(50, "") == "SlippageExceeded"
+        assert pts.get_error_name(50, "unknown") == "SlippageExceeded"
         assert pts.EngineError(50, oi).name == "OpenInterestLimitExceeded"
         assert pts.EngineError(50, slip).name == "SlippageExceeded"
-        assert pts.EngineError(50, "").name == "AmbiguousCode50"
+        assert pts.EngineError(50, "").name == "SlippageExceeded"
 
     def test_error_manifest_has_distinct_current_codes(self):
         by_code = {

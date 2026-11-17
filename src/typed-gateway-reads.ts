@@ -1,8 +1,19 @@
+import { chainPin } from "./read-values.js";
 import {
   readFinalizedOrderbook,
   type FinalizedOrderbook,
   type FinalizedOrderbookOptions,
 } from "./finalized-orderbook.js";
+import {
+  readFinalizedAuthorizedAgents,
+  type FinalizedAuthorizedAgents,
+} from "./authorized-agents.js";
+import {
+  readFinalizedInsuranceFunds,
+  readFinalizedInsuranceFund,
+  type FinalizedInsuranceFunds,
+  type FinalizedInsuranceFund,
+} from "./insurance-funds.js";
 import {
   readFinalizedOraclePermissions,
   type FinalizedOraclePermissions,
@@ -68,11 +79,42 @@ class ReadClient {
         "chainId",
         `${purpose} requires an explicit pinned chainId`,
       );
-    return Uint8Array.from(this.inventoryChainId);
+    return chainPin(this.inventoryChainId);
   }
 }
 /** Same-view facts. See FinalizedReadWitness for the trust and binding boundary. */
 export class FinalizedReads extends ReadClient {
+  insuranceFunds(
+    options: BoundedReadOptions = {},
+  ): Promise<FinalizedInsuranceFunds> {
+    return readFinalizedInsuranceFunds(
+      this.gatewayUrl,
+      options,
+      this.httpTransport,
+    );
+  }
+  insuranceFund(
+    poolId: number,
+    options: BoundedReadOptions = {},
+  ): Promise<FinalizedInsuranceFund> {
+    return readFinalizedInsuranceFund(
+      this.gatewayUrl,
+      poolId,
+      options,
+      this.httpTransport,
+    );
+  }
+  async authorizedAgents(
+    owner: string,
+    options: BoundedReadOptions = {},
+  ): Promise<FinalizedAuthorizedAgents> {
+    return readFinalizedAuthorizedAgents(
+      this.gatewayUrl,
+      owner,
+      options,
+      this.httpTransport,
+    );
+  }
   async account(
     owner: string,
     options: BoundedReadOptions = {},

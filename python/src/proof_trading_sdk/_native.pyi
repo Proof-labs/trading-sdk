@@ -26,6 +26,7 @@ def generate_keypair(seed: Optional[bytes] = None) -> dict[str, bytes]:
     ...
 
 def load_key_from_fd(fd: int) -> SigningHandle:
+    """Read a 32-byte key from ``fd``. The fd stays open; the caller closes it."""
     ...
 
 def load_key_from_pkcs11(
@@ -98,7 +99,7 @@ MAX_MARKETS_SNAPSHOT_BYTES: int
 
 MAX_OPEN_ORDERS_BYTES: int
 
-def decode_open_orders(body: bytes, owner: bytes) -> list[dict[str, object]]:
+def decode_open_orders(bytes: bytes, owner: bytes) -> list[dict[str, object]]:
     """Decode canonical resting orders; raises ValueError on malformed or foreign rows."""
     ...
 
@@ -148,10 +149,38 @@ def get_action_types() -> list[dict[str, object]]:
 def get_error_code_table() -> list[dict[str, object]]:
     ...
 
-MAX_GOVERNANCE_READ_BYTES: int
+MAX_BOOK_BYTES: int
+MAX_ACCOUNT_STATE_BYTES: int
 
-def decode_authorities(data: bytes) -> dict:
+def decode_account_state(bytes: bytes, owner: bytes) -> dict:
+    """Canonical raw account state with owner binding and strict record widths."""
+    ...
+class FinalizedBindingError(ValueError): ...
+class FinalizedLimitError(ValueError): ...
+
+def decode_finalized_account(bytes: bytes, owner: bytes) -> dict: ...
+def decode_finalized_agent_authorization(bytes: bytes) -> bool: ...
+def decode_finalized_recent_nonces(bytes: bytes) -> list[int]: ...
+def decode_finalized_open_orders(bytes: bytes, owner: bytes, limit: int) -> list[dict]: ...
+
+def decode_finalized_orderbook(bytes: bytes, depth: int) -> dict:
     ...
 
-def decode_liquidation_config(data: bytes) -> tuple:
+MAX_GOVERNANCE_READ_BYTES: int
+
+def decode_authorities(bytes: bytes) -> dict:
+    ...
+
+def decode_liquidation_config(bytes: bytes) -> tuple:
+    ...
+
+def reject_floats(bytes: bytes) -> None:
+    """Raise ValueError unless ``bytes`` is one MessagePack value with no float,
+    extension, non-UTF-8 string, duplicate map key, over-deep nesting or
+    trailing bytes."""
+    ...
+
+def classify_error_name(code: int, log: Optional[str] = None) -> Optional[str]:
+    """The engine error name for ``code``, reading ``log`` where the code alone
+    is ambiguous; ``None`` for a code this build does not know."""
     ...

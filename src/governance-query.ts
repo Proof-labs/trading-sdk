@@ -1,6 +1,6 @@
 import { Encoder } from "@msgpack/msgpack";
 import type {
-  AdminAction,
+  DecodedAdminAction,
   AdminSignerRegistry,
   ExpiryReason,
   ProposalPage,
@@ -240,7 +240,7 @@ function toTupleBetween(
  *  a compile error (`Record` over the closed union), never a silently
  *  inherited neighbour's tag. Mirrors `AdminActionType` in the engine and
  *  `action_type()` in the Rust core — 1/2 are v1, 3/4 are admin-actions v2. */
-export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
+export const ACTION_TAG_BY_KIND: Record<DecodedAdminAction["kind"], number> = {
   CreateMarket: 1,
   UpdateAdminSignerRegistry: 2,
   CreateEvent: 9,
@@ -262,6 +262,7 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
   ScheduleUpgrade: 14,
   CancelUpgrade: 15,
   SetWithdrawalLimit: 19,
+  SetDepositLimit: 28,
   SetLiquidationConfig: 17,
   SetOperatorReceiptRegistry: 20,
 };
@@ -273,7 +274,7 @@ export const ACTION_TAG_BY_KIND: Record<AdminAction["kind"], number> = {
 export function decodeAdminAction(
   value: unknown,
   field = "action",
-): AdminAction {
+): DecodedAdminAction {
   try {
     const wasm = getWasm();
     return adminActionFromWasm(

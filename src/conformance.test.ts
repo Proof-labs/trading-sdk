@@ -8,7 +8,7 @@
 //   - codec vectors: PASS
 //   - signing vectors: PASS (signEnvelopeFromPayload + pubkeyToOwner/ownerToHex)
 //   - errors vectors:  PASS (ExecErrorCode manifest + execErrorName log decoder)
-//   - events vectors:  PASS (decodeLiquidationEvent / decodeVoidSettlementEvent over the engine's attributes)
+//   - events vectors:  PASS (decodeLiquidationEvent / decodeVoidSettlementEvent / decodeResolutionBalanceSnapshotEvent over the engine's attributes)
 //   - nonce vectors:   SKIPPED — nonces are derived from timestamps, not a step function
 
 import { readFileSync } from "node:fs";
@@ -26,7 +26,9 @@ import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
 import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
 import { decodeLiquidationEvent } from "./liquidation-events.js";
+import { decodeMarginOffsetEvent } from "./margin-offsets.js";
 import { decodeVoidSettlementEvent } from "./void-events.js";
+import { decodeResolutionBalanceSnapshotEvent } from "./resolution-balance-events.js";
 import {
   ActionType,
   Outcome,
@@ -724,6 +726,22 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       },
     };
   }
+  if (v.SetMarginOffsetPolicy) {
+    const p = v.SetMarginOffsetPolicy as Record<string, unknown>;
+    return {
+      kind: "SetMarginOffsetPolicy",
+      value: {
+        predecessor: p.predecessor === null ? null : big(p.predecessor),
+        pairs: (p.pairs as Record<string, unknown>[]).map((row) => ({
+          perpetual: row.perpetual as number,
+          conditional: row.conditional as number,
+          settlementReference: row.settlement_reference as number,
+          rate: row.rate as number,
+          resolution: row.resolution as "RemoveOnResolution",
+        })),
+      },
+    };
+  }
   if (v.CancelUpgrade) {
     const cancel = v.CancelUpgrade as Record<string, unknown>;
     return {
@@ -838,6 +856,17 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       value: {
         eventId: e.event_id as number,
         outcome: Outcome[e.outcome as keyof typeof Outcome],
+      },
+    };
+  }
+  if (v.SetDepositLimit) {
+    const d = v.SetDepositLimit as Record<string, unknown>;
+    return {
+      kind: "SetDepositLimit",
+      value: {
+        perDepositMaxMicroUsdc: big(d.per_deposit_max_micro_usdc),
+        windowCapMicroUsdc: big(d.window_cap_micro_usdc),
+        windowSecs: d.window_secs as number,
       },
     };
   }
@@ -1020,12 +1049,27 @@ describe("conformance vectors (TypeScript)", () => {
         attributes: want.attributes.map(([key, value]) => ({ key, value })),
       };
       const decoded =
-        decodeLiquidationEvent(input) ?? decodeVoidSettlementEvent(input);
+        decodeLiquidationEvent(input) ??
+        decodeVoidSettlementEvent(input) ??
+        decodeResolutionBalanceSnapshotEvent(input) ??
+        decodeMarginOffsetEvent(input);
       const [[variant, fields]] = Object.entries(
         c.event as Record<string, unknown>,
       );
       expect(decoded?.type, c.case).toBe(variant);
-      expect(normalise(decoded), c.case).toEqual(normalise(fields));
+      const flat =
+        decoded?.type === "MarginOffsetPairConfigured"
+          ? {
+              sequence: decoded.sequence,
+              index: decoded.index,
+              conditional_market: decoded.pair.conditional,
+              perpetual_market: decoded.pair.perpetual,
+              settlement_reference_market: decoded.pair.settlementReference,
+              rate_bps: decoded.pair.rate,
+              resolution: decoded.pair.resolution,
+            }
+          : decoded;
+      expect(normalise(flat), c.case).toEqual(normalise(fields));
     }
   });
 
@@ -1147,13 +1191,13 @@ describe("conformance vectors (TypeScript)", () => {
     // propose (create-market, the perp-plus-attach batch, the attach
     // singleton, six create-event oracle-source shapes, trigger config,
     // unpause-bridge, enable-sub-accounts, set-liquidation-config,
-    // update-authority-set add and
+    // set-margin-offset-policy, update-authority-set add and
     // remove, cancel-all-for
     // -account scoped and unscoped, four set-oracle-guards shapes, and
     // oracle policy, two schedule-upgrade shapes, cancel-upgrade, and
     // insurance fund and withdraw, void-event, settle-event,
-    // set-market-status), approve, reject, and the PauseMarket emergency arm.
-    expect(govCases.length).toBe(32);
+    // set-deposit-limit, set-market-status), approve, reject, and the PauseMarket emergency arm.
+    expect(govCases.length).toBe(34);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

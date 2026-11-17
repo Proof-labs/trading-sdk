@@ -160,11 +160,18 @@ def test_client_reads_the_open_interest_a_current_engine_serves():
     ]
 
 
-def test_markets_take_the_shape_markets_returns():
+def test_markets_preserve_legacy_fields_and_include_canonical_tail_defaults():
     raw = _engine_bytes("engine-c3253d0c")
     snapshot = decode_markets_snapshot(_body(raw), CHAIN)
     rows = msgpack.unpackb(raw, raw=False)[2]
-    assert snapshot.markets == [ExchangeClient._decode_market_config(r) for r in rows]
+    # The legacy markets() adapter exposes the old fields; the canonical
+    # snapshot additionally retains the newly appended engine fields.
+    legacy = [ExchangeClient._decode_market_config(r) for r in rows]
+    for current, old in zip(snapshot.markets, legacy, strict=True):
+        assert {key: current[key] for key in old} == old
+        assert current["impact_notional"] == 0
+        assert current["funding_dead_band_bps"] is None
+        assert current["funding_interest_rate"] is None
     assert snapshot.markets[3]["kind"] == {"ConditionalPerp": [700, "Yes"]}
     assert "ebn_market" not in snapshot.events[0]
     assert snapshot.events[0]["attached_conditionals"] == [

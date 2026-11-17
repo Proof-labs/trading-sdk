@@ -6,10 +6,11 @@ generates the vectors, and each binding (Rust, Python, TypeScript) must
 reproduce every `expect` byte-for-byte. A divergence is a release blocker — it
 means two SDKs would sign or encode the same logical action differently.
 
-> **Status: codec + signing green in all 3 runners.** The generator emits 7 codec
-> vectors, 3 signing vectors, and 4 nonce vectors. The Rust, Python, and TS
-> runners all pass their active tests. The TS runner skips the nonce family
-> (nonces are timestamp-derived; no standalone step function is needed).
+The shared [codec](codec.ndjson), [signing](signing.ndjson), and
+[nonce](nonce.ndjson) vectors define the cases checked by the Rust, Python,
+and TypeScript runners. The TypeScript runner skips the nonce family because
+it exposes no standalone nonce step function. See [Running the runners](#running-the-runners)
+for commands and the [CI workflow](../.github/workflows/ci.yml) for automation.
 
 ---
 
@@ -22,14 +23,16 @@ conformance/
   signing.ndjson    ← (payload, key) → wire envelope; pubkey → owner address
   nonce.ndjson      ← (last, now_ms…) → allocated nonce sequence
   events.ndjson     ← engine event → its ABCI type and attributes
+  errors.ndjson     ← (code, log) → engine error name
+  binary.ndjson     ← Yes/No book orders and reads in No terms
 
 crates/spec/        ← the vector machinery (Rust)
   src/lib.rs            schemas + reference impls (the single source of truth)
-  src/bin/gen_vectors.rs  generator: writes the three NDJSON files
+  src/bin/gen_vectors.rs  generator: writes the NDJSON files
   tests/runner.rs       Rust runner (regression guard)
 
 python/tests/test_conformance_vectors.py   Python runner
-src/conformance.test.ts                     TS runner (codec + signing green)
+src/conformance.test.ts                     TS runner (codec + signing)
 ```
 
 ### Authority model
@@ -124,7 +127,7 @@ step *separately from the wall clock* so it is vectorable — see
 cargo run -p proof-trading-sdk-conformance --bin gen-vectors
 ```
 
-Writes the three files from the Rust core. **CI must run this and fail if the
+Writes the generated vector files from the Rust core. **CI must run this and fail if the
 tree is dirty:**
 
 ```bash
@@ -134,6 +137,17 @@ git diff --exit-code conformance/      # nonzero ⇒ vectors drifted from core
 
 This makes the vectors a tracked artifact of the core — they cannot silently
 fall out of sync.
+
+### Captured CometBFT vectors
+
+`comet-transaction-roots.json` is not generated from the Rust core. It holds
+real exchange-devnet-1 blocks (CometBFT 0.39), copied verbatim from
+`GET https://api.dev.proof.trade/v1/block?height=<height>`: `block.data.txs`
+and `block.header.data_hash`, for blocks with 0, 1, 3 and 5 transactions
+(3 and 5 exercise the uneven power-of-two split). To regenerate, fetch such
+blocks and replace the file. `src/transactions-root.test.ts`,
+`src/block-results-window.test.ts` and `python/tests/test_chain_evidence.py`
+all load this one file.
 
 ## Running the runners
 
@@ -157,10 +171,10 @@ Ordered by value. Items 1–2 complete the cross-language guarantee; 3+ widen it
 
 ### 1. Full codec coverage (generator)
 
-`crates/spec/src/bin/gen_vectors.rs` emits a seed of 6 action types. Extend to
-**all 27** plus edge cases. Concretely:
+Use `crates/spec/src/bin/gen_vectors.rs` and [codec.ndjson](codec.ndjson) to
+review coverage of the current action set and its edge cases. Concretely:
 
-- [ ] One case per `ActionType` (PlaceOrder…AmendOrder, 0x01–0x1b).
+- [ ] One case per current `ActionType`.
 - [ ] Integer edges: `0`, `u64::MAX` for every price/quantity/id field.
 - [ ] Optional/`None` vs `Some`: `client_order_id`, market-scoped cancels,
       serde-default tails (`CreateMarket.pool_id`).
@@ -228,3 +242,6 @@ against production traffic, for free.
 - **Vectors reflect the core at generation time.** They are only as correct as
   the core. They guard *cross-language agreement*, not spec-correctness — a
   shared bug across all three bindings would pass. Pair with the spec review.
+
+`market-stats.json` pins the exact JSON strings and nullable fields consumed by
+both the TypeScript and Python market-statistics decoders.

@@ -1,3 +1,4 @@
+import { chainPin } from "./read-values.js";
 import {
   asReadError,
   boundedGatewayJson,
@@ -88,7 +89,7 @@ export async function readBlockHeader(
 ): Promise<BlockEvidenceHeader> {
   if (typeof height !== "bigint" || height < 1n || height > I64_MAX)
     invalid("requested block height");
-  const chain = Uint8Array.from(expectedChain);
+  const chain = chainPin(expectedChain);
   const response = await boundedGatewayJson(
     `${gatewayUrl.replace(/\/+$/, "")}/v1/block?height=${height}`,
     transport,
@@ -105,7 +106,7 @@ export async function readFinalizedMarketsSnapshot(
   options: BoundedReadOptions,
   transport: ExchangeHttpTransport,
 ): Promise<FinalizedMarketsSnapshot> {
-  const chain = Uint8Array.from(expectedChain);
+  const chain = chainPin(expectedChain);
   const response = object(
     await boundedGatewayJson(
       `${gatewayUrl.replace(/\/+$/, "")}/v1/markets-snapshot`,

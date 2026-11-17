@@ -51,7 +51,8 @@ export interface FinalizedRecentNonces {
 }
 export interface RawOpenOrder {
   id: bigint;
-  market: MarketId;
+  /** Full wire u32 domain, including market zero. */
+  market: MarketId | 0;
   owner: HexAddress;
   side: "Buy" | "Sell";
   price: bigint;
@@ -246,7 +247,9 @@ export function decodeFinalizedOpenOrders(
   const orders = raw.map((v): RawOpenOrder => {
     const o = row(v, 14, "order tuple");
     const id = uint(o[0], "order id");
-    const market = marketId(Number(uint(o[1], "order market", 0xffff_ffffn)));
+    const marketNumber = Number(uint(o[1], "order market", 0xffff_ffffn));
+    const market: MarketId | 0 =
+      marketNumber === 0 ? 0 : marketId(marketNumber);
     if (id <= previous) fail("order id ordering");
     if (orderOwner(o[2]) !== owner) fail("order owner mismatch", "binding");
     previous = id;

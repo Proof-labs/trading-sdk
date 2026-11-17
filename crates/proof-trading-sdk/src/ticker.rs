@@ -64,14 +64,13 @@ pub fn validate_ticker(ticker: &str) -> Result<(), TickerError> {
     if ticker.len() > MAX_TICKER_LEN {
         return Err(TickerError::TooLong(ticker.len()));
     }
-    let mut chars = ticker.chars();
-    let first = chars.next().ok_or(TickerError::Empty)?;
+    let first = ticker.chars().next().ok_or(TickerError::Empty)?;
     if !first.is_ascii_uppercase() {
         return Err(TickerError::BadStart(first));
     }
-    for (i, c) in chars.enumerate() {
+    for (i, c) in ticker.chars().enumerate().skip(1) {
         if !(c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-') {
-            return Err(TickerError::BadChar(c, i + 1));
+            return Err(TickerError::BadChar(c, i));
         }
     }
     Ok(())

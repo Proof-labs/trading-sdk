@@ -22,7 +22,7 @@ describe("decodeExecError", () => {
     expect(decodeExecError(255)?.name).toBe("InternalError");
   });
 
-  it("names the proof-wire codes 102-116, 123-125 and 128-134", () => {
+  it("names the proof-wire codes 102-116, 123-125 and 128-135", () => {
     for (const [code, name] of [
       [102, "InsuranceFundingReplayed"],
       [103, "InsuranceWithdrawalReplayed"],
@@ -48,6 +48,7 @@ describe("decodeExecError", () => {
       [132, "MarketStatusTransitionRefused"],
       [133, "MarketBacksLiveEvent"],
       [134, "MarketHalted"],
+      [135, "OffCurveWithdrawalDestination"],
     ] as const) {
       expect(decodeExecError(code)?.name).toBe(name);
       expect(execErrorName(code)).toBe(name);
@@ -120,8 +121,8 @@ describe("decodeExecError", () => {
     expect(execErrorName(50, slippageLog)).toBe("SlippageExceeded");
 
     for (const log of [undefined, "", "unknown code 50 diagnostic"]) {
-      expect(decodeExecError(50, log)?.name).toBe("AmbiguousCode50");
-      expect(execErrorName(50, log)).toBe("AmbiguousCode50");
+      expect(decodeExecError(50, log)?.name).toBe("SlippageExceeded");
+      expect(execErrorName(50, log)).toBe("SlippageExceeded");
     }
   });
 

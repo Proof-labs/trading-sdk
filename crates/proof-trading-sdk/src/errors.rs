@@ -1,19 +1,36 @@
 //! Engine result-code classification for clients (SDK representation).
 //!
 //! The wire *contract* (codec, action table, ExecError codes) lives in
-//! `exchange-wire`; this module is the client-side decode of a numeric result
+//! `proof-wire`; this module is the client-side decode of a numeric result
 //! code into a named, human-meaningful kind. Reconciling `ERROR_KINDS` with
 //! `proof_wire::types::ExecError::code()` (single-sourcing the table) is a
 //! follow-up.
 
 macro_rules! define_error_kinds {
     ($($code:literal => $name:ident ~ $meaning:literal),+ $(,)?) => {
-        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        /// A named engine result code. New codes arrive as the engine
+        /// grows, so match with a wildcard arm.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        #[non_exhaustive]
         pub enum ErrorKind {
             $($name,)+
         }
 
         impl ErrorKind {
+            /// The kind with this numeric code, if this SDK knows it. Code 50
+            /// is `None`: its meaning depends on the engine version, so read
+            /// it with [`decode_exec_error_kind`] and the log.
+            #[must_use]
+            pub fn from_code(code: u32) -> Option<Self> {
+                if code == 50 {
+                    return None;
+                }
+                match code {
+                    $($code => Some(Self::$name),)+
+                    _ => None,
+                }
+            }
+
             pub fn code(self) -> u32 {
                 match self {
                     $(Self::$name => $code,)+
@@ -94,7 +111,7 @@ define_error_kinds! {
     52  => AdminGovernanceInactive      ~ "Admin governance action was submitted while no admin signer registry exists on this chain; multisig administration is inactive and every governance path fails closed.",
     53  => NotAdminSigner               ~ "Tx signer does not match the action's declared proposer/approver/rejecter/signer field, or is not a member of the current admin signer registry.",
     // Proposal-lifecycle family (multisig governance). Mirrored from the
-    // engine's `ExecError` (exchange-wire/src/types.rs, codes 54-71) and the
+    // engine's `ExecError` (proof-wire/src/types.rs, codes 54-71) and the
     // frozen exchange/sdk reference table. Decode-only on the SDK side — the
     // client never constructs these, it classifies the result codes.
     54  => ProposalNotFound                 ~ "No admin proposal exists under this id (never created, or pruned from terminal retention).",
@@ -173,13 +190,13 @@ define_error_kinds! {
     132 => MarketStatusTransitionRefused ~ "SetMarketStatus or PauseMarket names a move the market cannot make: any market moves Trading to Halted and back; a perpetual also moves Trading or Halted to ReduceOnly and back, then ReduceOnly to Delisted.",
     133 => MarketBacksLiveEvent ~ "The perpetual backs a Conditional on an unresolved event and cannot wind down until the event resolves.",
     134 => MarketHalted ~ "The market is halted and takes no orders or fills; cancels still work.",
+    135 => OffCurveWithdrawalDestination ~ "Withdrawal destination must be an on-curve Solana wallet owner; no funds were debited.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
-/// Safe classification of an engine result code plus its canonical DeliverTx
-/// log. Upgraded engines use code 50 for slippage and 51 for open interest, but
-/// legacy engines may emit code 50 for open interest during a rolling upgrade.
-/// Callers must not infer the meaning of code 50 from the integer alone.
+/// Classification of an engine result code plus its DeliverTx log. Code 50 is
+/// slippage; only receipts from before the renumbering carry 50 for open
+/// interest, and their log names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodedExecErrorKind {
     Known(ErrorKind),
@@ -187,16 +204,13 @@ pub enum DecodedExecErrorKind {
     /// code-50 decoder.
     SlippageExceeded,
     LegacyOpenInterestLimitExceeded,
-    AmbiguousCode50,
 }
 
 impl DecodedExecErrorKind {
     pub fn code(self) -> u32 {
         match self {
             Self::Known(kind) => kind.code(),
-            Self::SlippageExceeded
-            | Self::LegacyOpenInterestLimitExceeded
-            | Self::AmbiguousCode50 => 50,
+            Self::SlippageExceeded | Self::LegacyOpenInterestLimitExceeded => 50,
         }
     }
 
@@ -205,7 +219,6 @@ impl DecodedExecErrorKind {
             Self::Known(kind) => kind.name(),
             Self::SlippageExceeded => "SlippageExceeded",
             Self::LegacyOpenInterestLimitExceeded => "OpenInterestLimitExceeded",
-            Self::AmbiguousCode50 => "AmbiguousCode50",
         }
     }
 
@@ -218,14 +231,11 @@ impl DecodedExecErrorKind {
             Self::LegacyOpenInterestLimitExceeded => {
                 "A legacy engine reported that a fill would push aggregate market open interest past MarketConfig.max_open_interest."
             }
-            Self::AmbiguousCode50 => {
-                "During the rolling upgrade, engine code 50 may mean legacy OpenInterestLimitExceeded or current SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely."
-            }
         }
     }
 }
 
-/// Decode an engine error without guessing the transitional meaning of code 50.
+/// Decode an engine error; a pre-renumbering code 50 is recognised by its log.
 pub fn decode_exec_error_kind(code: u32, log: Option<&str>) -> Option<DecodedExecErrorKind> {
     if code == 0 {
         return None;
@@ -235,10 +245,7 @@ pub fn decode_exec_error_kind(code: u32, log: Option<&str>) -> Option<DecodedExe
             Some(log) if log.starts_with("open interest limit exceeded on market ") => {
                 DecodedExecErrorKind::LegacyOpenInterestLimitExceeded
             }
-            Some(log) if log.starts_with("atomic basket aggregate slippage ") => {
-                DecodedExecErrorKind::SlippageExceeded
-            }
-            _ => DecodedExecErrorKind::AmbiguousCode50,
+            _ => DecodedExecErrorKind::SlippageExceeded,
         });
     }
     ERROR_KINDS
@@ -306,8 +313,8 @@ mod exec_error_meaning_tests {
 
         for log in [None, Some(""), Some("unknown code 50 diagnostic")] {
             assert_eq!(
-                decode_exec_error_kind(50, log).unwrap().name(),
-                "AmbiguousCode50"
+                decode_exec_error_kind(50, log),
+                Some(DecodedExecErrorKind::SlippageExceeded)
             );
         }
         assert_eq!(decode_exec_error_kind(0, None), None);
@@ -511,6 +518,7 @@ mod exec_error_meaning_tests {
                 event_id: crate::types::EventId(0),
             },
             ExecError::MarketHalted { market: 1 },
+            ExecError::OffCurveWithdrawalDestination,
         ]
     }
 
@@ -582,7 +590,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=134)
+        let expected: Vec<u32> = (1u32..=135)
             .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127))
             .chain(std::iter::once(255))
             .collect();

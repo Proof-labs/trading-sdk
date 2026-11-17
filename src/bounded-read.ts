@@ -1,5 +1,6 @@
 import { GatewayHttpError, GatewayReadError } from "./errors.js";
 import {
+  chainPin,
   hash32,
   I64_MAX,
   MAX_ERROR_BODY_WAIT_MS,
@@ -122,8 +123,9 @@ export function verifyWitness(
       "Witness verification requires an explicit chain pin",
     );
   }
-  const expected =
-    typeof chainId === "string" ? chainIdFromString(chainId) : chainId;
+  const expected = chainPin(
+    typeof chainId === "string" ? chainIdFromString(chainId) : chainId,
+  );
   const bindingFault = (): never => {
     throw new GatewayReadError(
       "binding",

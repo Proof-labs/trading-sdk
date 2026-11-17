@@ -212,6 +212,32 @@ describe("generic finalized raw reads", () => {
     );
     expect(decodeFinalizedRecentNonces(envelope([]), agent).recent).toEqual([]);
   });
+  it.each([0, 1, 0xffff_ffff])(
+    "preserves market %i in orders and positions",
+    async (market) => {
+      const rawOrder = order();
+      rawOrder[1] = market;
+      const orders = client(envelope([rawOrder]));
+      const value = await orders.client.reads().finalized.openOrders(owner);
+      expect(value.orders[0].market).toBe(market);
+      expect(value.complete).toBe(true);
+      const rawAccount = valuedAccount();
+      (rawAccount[1] as unknown[][])[0][1] = market;
+      const positions = client(envelope(rawAccount));
+      expect(
+        (await positions.client.reads().finalized.account(owner)).positions[0]
+          .market,
+      ).toBe(market);
+    },
+  );
+  it.each([-1, true, 0.5, "0", 0x1_0000_0000])(
+    "still refuses invalid order market %s",
+    (market) => {
+      const raw = order();
+      raw[1] = market;
+      expect(() => decodeFinalizedOpenOrders(envelope([raw]), owner)).toThrow();
+    },
+  );
   it("marks a limit-sized order result incomplete and preserves a full 100-order inventory", async () => {
     const c = client(envelope([order()]));
     const value = await c.client

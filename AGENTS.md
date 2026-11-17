@@ -222,7 +222,7 @@ Every action is `{ type: string, data: object }`:
 | Cancel all     | `"CancelAllOrders"`    | Cancel all orders (optionally per-market) |
 | Replace        | `"CancelReplaceOrder"` | Atomically cancel + replace               |
 | Amend          | `"AmendOrder"`         | Change price/quantity on a resting order  |
-| Close position | `"ClosePosition"`      | IOC order at oracle±spread                |
+| Close position | `"ClosePosition"`      | Market order for the whole position       |
 | Basket         | `"AtomicBasketOrder"`  | Multi-leg fill-or-kill                    |
 
 See `src/types.ts` for every action's payload shape.
@@ -296,7 +296,7 @@ read endpoints as follows:
 
 | Endpoint                                                                                                                                                 | Gateway            | Notes                                         |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | --------------------------------------------- |
-| `/v1/markets`, `/v1/orderbook/*`, `/v1/candles/*`, `/v1/trades/*`, `/v1/funding/*`, `/v1/fee-tiers/*`, `/v1/events`, `/v1/event/*`, `/v1/health`, `/v1/oracle/health` | ✅ Proxied to node | Public, no auth                               |
+| `/v1/markets`, `/v1/orderbook/*`, `/v1/history/candles/*`, `/v1/trades/*`, `/v1/funding/*`, `/v1/fee-tiers/*`, `/v1/events`, `/v1/event/*`, `/v1/health`, `/v1/oracle/health` | ✅ Proxied to node | Public, no auth                               |
 | `POST /info`                                                                                                                                             | ✅ Routed          | Structured queries (clearinghouseState, etc.) |
 | `/v1/account/{hex}`                                                                                                                                      | ❌ **Not routed**  | 404s on gateway                               |
 | `/v1/account/{hex}/recent-nonces`, `/v1/nonce/{hex}`                                                                                                     | ✅ Routed          | Diagnostic                                    |
@@ -344,15 +344,15 @@ const health = await client.queryHealth();
 ## Submission modes
 
 ```typescript
-// Fire-and-forget (returns after CheckTx, background polls DeliverTx)
+// The gateway answers with the block's verdict, so both usually return after
+// one round trip. Without a verdict (pending/timeout), submitTx returns and a
+// background verifier polls /tx; submitTxCommit waits for that poll.
 const r1 = await client.submitTx(action);
-
-// Synchronous (polls /tx?hash up to 9s)
 const r2 = await client.submitTxCommit(action);
 
 // TxResult shape:
-// { code: number, hash: string, log: string, height?: number, events?: unknown[] }
-// code === 0 → CheckTx passed
+// { ok: boolean, outcome: "ok" | "engine" | "transport" | "timeout", code, hash, log, height?, events? }
+// ok with a height → executed in that block. See README "Transaction results".
 
 // Collect background DeliverTx results:
 const results: TxResult[] = await client.awaitPendingVerifies();

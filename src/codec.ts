@@ -4,6 +4,9 @@ import {
   ActionType,
   type ActionTypeValue,
   type AdminAction,
+  type DecodedAdminAction,
+  type DecodedAction,
+  type RetiredAdminAction,
 } from "./types.js";
 import { getWasm } from "./wasm-loader.js";
 import {
@@ -83,13 +86,67 @@ export function decodeStrict(bytes: Uint8Array): unknown {
 // Encoding + signing (via WASM)
 // ---------------------------------------------------------------------------
 
+// Every retired admin kind must be listed: a `RetiredAdminAction` arm without
+// an entry here fails to compile, so the guards below cannot silently let a
+// newly retired kind through to `encodeSignedTx`.
+const RETIRED_ADMIN_KINDS: Record<RetiredAdminAction["kind"], true> = {
+  SetTriggerMarketConfig: true,
+};
+
+/** Narrow a decoded admin action (for example `AdminProposalContext.action`)
+ * to the current submittable `AdminAction`, excluding retired kinds. It does
+ * not validate engine admission or the caller's authority. */
+export function isSubmittableAdminAction(
+  action: DecodedAdminAction,
+): action is AdminAction {
+  return !Object.prototype.hasOwnProperty.call(
+    RETIRED_ADMIN_KINDS,
+    action.kind,
+  );
+}
+
+/** Narrow a decoded transaction to the current typed submission surface.
+ * Excludes retired governance actions; it does not validate engine admission
+ * or the caller's authority. Historical decoding and hashing remain available.
+ */
+export function isSubmittableAction(action: DecodedAction): action is Action {
+  return !(
+    (action.type === "ProposeAdminAction" ||
+      action.type === "ApproveAdminAction") &&
+    !isSubmittableAdminAction(action.data.action)
+  );
+}
+
+// One encode path for current and historical actions, so the canonical-bytes
+// check in `decodeSigningMessage` always matches what `encodePayloadBytes`
+// emits. The public signature stays narrow (`Action`).
+function encodeAnyPayloadBytes(action: DecodedAction): Uint8Array {
+  const { actionType, fields } = toWasmFields(action);
+  return getWasm().encode_payload(actionType, fields);
+}
+
 /**
  * Encode just the payload bytes for an action (no signed envelope). The bytes
  * match `rmp-serde` — and therefore the engine — byte-for-byte.
  */
 export function encodePayloadBytes(action: Action): Uint8Array {
-  const { actionType, fields } = toWasmFields(action);
-  return getWasm().encode_payload(actionType, fields);
+  return encodeAnyPayloadBytes(action);
+}
+
+// wasm-bindgen wraps out-of-range integers silently, which would sign a
+// different seq or action type than the caller passed.
+function checkSeq(seq: bigint): bigint {
+  if (typeof seq !== "bigint" || seq < 0n || seq > 0xffff_ffff_ffff_ffffn) {
+    throw new RangeError(`seq must be a u64 bigint, got ${String(seq)}`);
+  }
+  return seq;
+}
+
+function checkActionType(actionType: number): number {
+  if (!Number.isInteger(actionType) || actionType < 0 || actionType > 0xff) {
+    throw new RangeError(`actionType must be a byte, got ${actionType}`);
+  }
+  return actionType;
 }
 
 /**
@@ -106,7 +163,13 @@ export function encodeSignedTx(
   const { actionType, fields } = toWasmFields(action);
   const wasm = getWasm();
   const payload = wasm.encode_payload(actionType, fields);
-  return wasm.encode_signed_tx(actionType, payload, seq, pubkey, signature);
+  return wasm.encode_signed_tx(
+    actionType,
+    payload,
+    checkSeq(seq),
+    pubkey,
+    signature,
+  );
 }
 
 /**
@@ -125,7 +188,13 @@ export function signAndEncode(
   const { actionType, fields } = toWasmFields(action);
   const wasm = getWasm();
   const payload = wasm.encode_payload(actionType, fields);
-  return wasm.sign_and_encode(chainId, actionType, payload, seq, privateKey);
+  return wasm.sign_and_encode(
+    chainId,
+    actionType,
+    payload,
+    checkSeq(seq),
+    privateKey,
+  );
 }
 
 /**
@@ -142,9 +211,9 @@ export function signEnvelopeFromPayload(
 ): Uint8Array {
   return getWasm().sign_and_encode(
     chainId,
-    actionType,
+    checkActionType(actionType),
     payloadBytes,
-    seq,
+    checkSeq(seq),
     privateKey,
   );
 }
@@ -163,7 +232,7 @@ export interface AdminProposalContext {
   createdHeight: bigint;
   createdMs: bigint;
   expiryMs: bigint;
-  action: AdminAction;
+  action: DecodedAdminAction;
 }
 
 /**
@@ -239,7 +308,7 @@ function toBigInt(v: unknown): bigint {
 
 /** Decode wire bytes into an action + sequence number + auth fields. */
 export function decodeTx(bytes: Uint8Array): {
-  action: Action;
+  action: DecodedAction;
   seq: bigint;
   version: number;
   pubkey: Uint8Array;
@@ -295,7 +364,7 @@ export interface DecodedSigningMessage {
   /** Raw payload bytes (a MessagePack positional array). */
   payloadBytes: Uint8Array;
   /** The decoded action, or null when the payload could not be decoded. */
-  action: Action | null;
+  action: DecodedAction | null;
   /** Present exactly when `action` is null — why the payload didn't decode. */
   decodeError: string | null;
 }
@@ -348,7 +417,7 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
   const payloadBytes = msg.slice(offset);
 
   const actionName = ACTION_TYPE_NAMES.get(actionType) ?? null;
-  let action: Action | null = null;
+  let action: DecodedAction | null = null;
   let decodeError: string | null = null;
   if (actionName === null) {
     decodeError = `unknown action type 0x${actionType.toString(16).padStart(2, "0")} — not in this SDK build`;
@@ -362,7 +431,10 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
         actionType as ActionTypeValue,
         getWasm().decode_payload(actionType, payloadBytes),
       );
-      const canonicalPayloadBytes = encodePayloadBytes(decodedAction);
+      // Re-encoding also applies the adapter's structural validation.
+      // Historical actions must still round-trip even when they cannot be
+      // narrowed to the current typed submission surface.
+      const canonicalPayloadBytes = encodeAnyPayloadBytes(decodedAction);
       const isCanonical =
         canonicalPayloadBytes.length === payloadBytes.length &&
         canonicalPayloadBytes.every((byte, i) => byte === payloadBytes[i]);

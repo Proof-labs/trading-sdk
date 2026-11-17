@@ -4,14 +4,14 @@ build-backend = "maturin"
 
 [project]
 name = "proof-trading-sdk"
-version = "4.0.0"
+version = "5.0.0"
 description = "Proof Exchange Trading SDK — Ed25519 signing, MessagePack codec, and gateway client."
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
 dependencies = [
     "httpx>=0.28",
-    "websockets>=14",
+    "websockets>=15",
     "msgpack>=1.1",
 ]
 

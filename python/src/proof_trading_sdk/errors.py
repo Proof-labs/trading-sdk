@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 # Delay imports to avoid circular access during proof_trading_sdk init
 _ERROR_CODES: list[dict[str, object]] = []
@@ -22,11 +22,9 @@ def get_error_name(code: int, message: str | None = None) -> Optional[str]:
 
     E.g. ``get_error_name(21)`` returns ``"InvalidNonce"``.
 
-    Upgraded engines use code 50 for ``SlippageExceeded`` and code 51 for
-    ``OpenInterestLimitExceeded``. During a rolling upgrade, a legacy engine
-    may still emit code 50 for open interest; the canonical non-empty DeliverTx
-    log distinguishes it. Missing or unknown code-50 text returns
-    ``AmbiguousCode50`` rather than guessing. Code 51 never relies on the log.
+    Code 50 is ``SlippageExceeded`` and code 51 ``OpenInterestLimitExceeded``.
+    Receipts from before the renumbering carry 50 for open interest; pass the
+    DeliverTx log and its text classifies them. Code 51 never reads the log.
     """
     _ensure_loaded()
     return _native_error_name(code, message)
@@ -56,6 +54,22 @@ class ProofTradingSdkError(Exception):
 
 class CodecError(ProofTradingSdkError):
     """MessagePack codec encoding or decoding failure."""
+
+
+GatewayReadErrorKind = Literal["configuration", "malformed", "binding", "limit", "deadline"]
+
+
+class GatewayReadError(ProofTradingSdkError):
+    """Bounded read failure, with TypeScript-compatible ``kind`` and ``field``.
+
+    Kinds: ``configuration``, ``malformed``, ``binding``, ``limit``, ``deadline``.
+    HTTP refusals retain the existing SDK transport/auth/rate-limit exceptions.
+    """
+
+    def __init__(self, kind: GatewayReadErrorKind, field: str, message: str | None = None) -> None:
+        self.kind = kind
+        self.field = field
+        super().__init__(message or f"invalid gateway read: {field}")
 
 
 class SigningError(ProofTradingSdkError):

@@ -90,17 +90,15 @@ Each address receives ~10,000 USDC (10,000,000,000 µUSDC) with a 24 h cooldown.
 
 ## Quick Start
 
-```typescript
-import {
-  ExchangeClient,
-  Side,
-  generateKeypair,
-  pubkeyToOwner,
-  ownerToHex,
-} from "@proof-labs/trading-sdk";
+Use the key you funded above, or as a competition participant the key from
+[PAPER-TRADING.md](PAPER-TRADING.md): a fresh key has no balance, and every
+order from it is refused with `InsufficientBalance` (11).
 
-const { publicKey, privateKey } = generateKeypair();
-const address = pubkeyToOwner(publicKey);
+```typescript
+import { ExchangeClient, Side } from "@proof-labs/trading-sdk";
+
+// Continues "Connect to the devnet": `address` and `privateKey` are the
+// funded key's.
 const addressHex = ownerToHex(address);
 
 const client = new ExchangeClient({
@@ -124,8 +122,43 @@ const result = await client.submitTx({
   },
 });
 
-console.log(result); // { code: 0, hash: "…" } on success
+if (result.ok) {
+  console.log(`placed in ${result.hash}`);
+} else {
+  // outcome: "engine" (refused, `code`/`error` say why), "transport", ...
+  console.log(result.outcome, result.code, result.error?.name ?? result.log);
+}
 ```
+
+### Withdraw
+
+A withdrawal is requested on chain, then paid out on Solana by the bridge.
+The request's `withdraw_requested` event carries the id to follow:
+
+```typescript
+const req = await client.submitTxCommit({
+  type: "WithdrawRequest",
+  data: {
+    owner: address,
+    amount: 100_000_000n, // $100
+    solanaDestination, // 32-byte Solana wallet public key
+  },
+});
+const idText = req.events
+  ?.find((e) => e.type === "withdraw_requested")
+  ?.attributes.find((a) => a.key === "withdrawal_id")?.value;
+if (!req.ok || idText === undefined)
+  throw new Error(`not requested: ${req.log}`);
+const id = BigInt(idText);
+
+// "Pending" until the payout lands, then "Completed" (or "Failed", refunded).
+const record = await client.queryWithdrawal(id);
+console.log(record?.status);
+```
+
+Only an account's own key withdraws. A master trades for its sub-accounts but
+cannot withdraw from them (refused with code 20): move the funds to the master
+with `SubAccountTransfer`, then withdraw from the master.
 
 > Reads decode MessagePack through the same WASM core as signing (a strict,
 > type-preserving preflight runs before the value decode), so even a read-only
@@ -183,14 +216,16 @@ class ExchangeClient {
   queryOrderbook(market: number): Promise<Orderbook>;
   queryFunding(market: number): Promise<FundingInfo>;
   queryOpenOrders(addressHex?: string): Promise<OpenOrder[]>;
+  queryOrderStatus(orderId: bigint): Promise<OpenOrder | null>;
   queryMarkets(): Promise<MarketConfig[]>;
+  queryMarketListing(): Promise<MarketListing>; // markets row by row: field counts and refused rows
+  queryEventListing(): Promise<EventListing>; // events row by row, with refused rows
   queryMarketsSnapshot(): Promise<MarketsSnapshot>;
   queryAccount(addressHex?: string): Promise<AccountInfo | null>;
   queryHealth(): Promise<{ status: string; height: number }>;
   queryOraclePermissions(market: number): Promise<OraclePermissions>;
   queryWithdrawal(id: bigint): Promise<WithdrawalRecord | null>;
   queryPositionTriggers(addressHex?: string): Promise<PositionTriggerInfo[]>;
-  queryTriggerMarketConfigs(): Promise<TriggerMarketConfigInfo[]>;
   // Deprecated: GET /v1/triggers/status is deleted upstream; see below.
   queryTriggerStatus(): Promise<TriggerStatus>;
   queryPositionTriggerHistory(addressHex?: string, filters?: PositionTriggerHistoryFilters): Promise<PositionTriggerHistoryPage>;
@@ -245,7 +280,11 @@ are monitoring signals rather than faults. `faults` follows
 ### Resting order fields
 
 `queryOpenOrders(owner)` and Python `open_orders(owner)` read the gateway's
-`POST /info` `openOrders` response through the same Rust decoder. TypeScript
+`POST /info` `openOrders` response through the same Rust decoder.
+`queryOrderStatus(orderId)` reads one order by id (`POST /info` `orderStatus`)
+with the same fields, or `null` when the engine no longer holds it. An
+answer naming another order is refused; the request names no owner, so the
+order's owner is returned, not checked. TypeScript
 returns camelCase fields; Python returns snake_case fields.
 
 | TypeScript                           | Python                                 | Value                                                              |
@@ -322,6 +361,32 @@ mirror and throws `BinaryPriceError` before anything is sent. `yesOrder`,
 reads a short Yes position as No at `$1 − entry`. All of it is pinned against
 the Rust core by `conformance/binary.ndjson`.
 
+### How event positions are valued and booked
+
+Read this before setting risk limits or reconciling cash on an account that
+holds event positions.
+
+- **Equity is per outcome.** Each event the account holds is a Yes/No branch,
+  and margin must hold in every combination. `equity`, `totalMm` and `totalIm`
+  come from the binding outcome (lowest equity to maintenance), named in
+  `bindingScenario`. When the binding outcome changes, equity can step with no
+  trade.
+- **Conditional marks** are the book's impact mid, the median of the last
+  three end-of-block samples. A book too thin or too wide to sample holds its
+  mark and only lets takers reduce until three samples stand again.
+- **Binary positions count in equity, not cash.** A buy moves `balance` by the
+  fee only; the payoff or maximum loss sits in each outcome's equity. At
+  resolution the payoff is booked to cash (`prediction_settled`).
+- **Closing a conditional pays no cash.** The realized P&L is issued as a
+  position on the event's binary book, which you hold to resolution or sell. A
+  close can leave a small binary position.
+- **At resolution** the branch that fires converts into the underlying perp at
+  the settlement price (`condition_met`) and the other is removed
+  (`condition_not_met`). Both name each position's branch, not the outcome.
+
+Fills alone don't reconcile an event account: read its positions and balance
+from the account, not by summing fills.
+
 ### Oracle freshness for trading UIs
 
 ```typescript
@@ -344,6 +409,28 @@ remain in the application; `status: "ok"` alone does not mean fresh data, and
 not trading authorization. Like every other gateway interaction, admin calls
 included, it goes through the SDK
 ([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md)).
+
+### Insurance fund observations
+
+```typescript
+const page = await client
+  .reads()
+  .insuranceFundHistory(
+    { poolId: 2, stream: "balances", limit: 50 },
+    { timeoutMs: 5000 },
+  );
+// Pass page.nextCursor unchanged to fetch an older page. "" means no next page.
+```
+
+Use `stream: "activity"` for funding, withdrawal and takeover event attributes.
+Every request goes through the configured gateway transport, with a bounded
+body and deadline. Values are exact `bigint`s. Balance history is **net cash
+(cash minus debt), not equity or profit**. The coverage bounds name the first
+and last retained observations; they do not prove continuous ingestion, a
+complete lifetime history, or a finalized same-state view. Missing history
+remains an error, and an empty observed page must not be presented as zero
+lifetime activity. This requires the indexer insurance-history projection and
+the gateway history proxy.
 
 ### Indexed Explorer history
 
@@ -414,11 +501,16 @@ validator, and does not prove consensus compatibility or authorize a rollout. Us
 
 ### Optional native Rust gateway transport
 
-Rust `proof-trading-sdk` 3.2.0 exposes `gateway::GatewayClient` with the optional
+Rust `proof-trading-sdk` 4.2.0 exposes `gateway::GatewayClient` with the optional
 `gateway` feature. Default codec/WASM builds do not acquire an HTTP transport.
-The four explicit operations are `chain_identity`, `oracle_permissions`,
-`submit_signed_bytes` and `committed_receipt`; they use only the existing gateway
-routes, with no direct-node fallback, signing, nonce allocation or hidden retry.
+Its six explicit operations are `chain_identity`, `oracle_permissions`,
+`account_valuation`, `submit_signed_bytes`, `submit_signed_bytes_with_evidence`
+and `committed_receipt`. They use only the existing gateway routes, with no
+direct-node fallback, signing, nonce allocation or hidden retry. The crate's own
+[README](crates/proof-trading-sdk/README.md) covers the codec, signing and read
+decoding for Rust integrators. For a trading bot, use the async
+[`proof-sdk-rs`](crates/proof-sdk-rs/README.md) crate on
+top of it: nonces, order helpers, receipts and typed reads.
 
 Configure an HTTPS origin (HTTP requires a URL-normalized loopback IP, not a DNS
 name; numeric IPv4 aliases that normalize to loopback are allowed), a
@@ -490,15 +582,35 @@ bracket, `queryPositionTriggers()` returns its epoch; first attach must use the
 epoch on the canonical account position read and must never guess `1`. Submit
 action `0x25` (`SetPositionTriggers`) or `0x26`
 (`CancelPositionTriggers`). A set replaces the whole bracket atomically,
-requires at least one limb, and each limb carries an explicit `1..=9999` bps
-IOC collar. Owner defaults to the loaded signer; a version-active trading agent
+requires at least one limb, and each limb carries an explicit IOC collar of
+`1..=ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS` (currently 1000) basis points under
+the engine admission rule; clamp to that constant. The SDK wire validators
+retain the wider `1..=9999` range for compatibility; encoding does not guarantee
+engine admission. Owner defaults to the loaded signer; a version-active trading agent
 passes the delegated owner explicitly and the engine verifies the grant.
 
-Before setting a bracket, read `queryTriggerMarketConfigs()`. The current
-policy is the only valid source for `enabled` and the maximum IOC slippage;
-absence means disabled. The optional pending policy is shown with its accepted
-and next-block effective heights. The SDK rejects malformed, empty, unsorted,
-or version-skipping policy state rather than inventing a default.
+The legacy `queryTriggerMarketConfigs()` read and `SetTriggerMarketConfig`
+submission API have been removed. Delete policy lookups and enabled checks before
+placing TP/SL; no replacement availability lookup is needed. Use the current
+position epoch and an explicit per-limb IOC collar. The engine validates the
+request; successful placement does not guarantee a fill.
+
+Historical retired-action (`SetTriggerMarketConfig`) proposal decoding and
+content hashes remain available; the policy-registry decoders for
+`/v1/triggers/markets` are removed. `DecodedAdminAction`
+and `DecodedAction` include retired actions for inspection. Use the exported
+`isSubmittableAction(decoded.action)` guard before passing a decoded transaction
+to a typed submission API. The guard excludes retired governance actions; it
+does not assert engine admission or signing authority. Low-level encoding and
+signing retain the wire contract; the engine rejects retired proposals and approvals.
+Proposal content hashes remain available for historical verification.
+
+Before upgrading, remove retired trigger-policy methods from capability probes
+and read tests. Governance consumers must handle historical
+`SetTriggerMarketConfig` proposals as read-only: retain their detail rendering,
+remove creation and approval paths, and narrow `proposal.action` before assigning
+it to `AdminAction`. The Python removals also require a Python major release;
+update callers of `trigger_market_configs()` and the retired builder together.
 
 `queryTriggerStatus()` is deprecated: `GET /v1/triggers/status` is deleted
 upstream (the node dropped it with its activation gates, exchange#619,
@@ -533,6 +645,17 @@ Trading integrations use `TraderAction` and can type their calls against it to
 keep operator actions out of autocomplete. `submitTx` still accepts the full
 `Action` union.
 
+#### SetUserMarketLeverage availability
+
+SDK encoding support is retained, but ordinary-account submission is unsupported
+in exchange revision `5f172568`: [node admission rejects action `0x16`](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-node/check_tx.go#L466-L492).
+The separate governed [`ExecInsuranceFund` path](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/engine/governance/insurance_action.rs#L21-L70)
+permits it for the pool's insurance account.
+
+The setting affects **initial margin only**: `max(market.im_bps, user_im_bps)`,
+with `0` using the market default. [Maintenance margin and liquidation thresholds are unchanged](https://github.com/Proof-labs/exchange/blob/5f1725688bc4034ddf58547b9fb1ac939048dacb/exchange-core/src/scenario_margin.rs#L168-L181).
+Ordinary-account support remains deferred in [#360](https://github.com/Proof-labs/trading-sdk/issues/360).
+
 #### Operator actions (privileged)
 
 `OperatorAction` covers oracle-feeder / relayer-admin actions — e.g.
@@ -540,6 +663,9 @@ keep operator actions out of autocomplete. `submitTx` still accepts the full
 integration never needs these.** Each is gated by a dedicated engine allowlist
 or the market's oracle policy, so codec availability grants nothing without an
 operator-provisioned key. See [AGENTS.md](AGENTS.md) → "Operator actions".
+Porting a harness off the retired `OracleUpdate`, `OracleUpdateComposite`,
+`RunFundingTick` or `/testing` surfaces: see the
+[operator harness migration guide](docs/operator-harness-migration.md).
 
 #### Governance actions (admin multisig)
 
@@ -635,6 +761,37 @@ long-standing `"<code>: <message>"` format in `error` (so older clients that par
 code back out of it keep working), and `log` carries the chain's message verbatim. New
 code should read the structured `code` field: it is authoritative and needs no parsing.
 
+### Order of actions within a block
+
+Every cancel (`CancelOrder`, `CancelClientOrder`, `CancelAllOrders`) in a
+block runs before every order-placing action (`PlaceOrder`, `MarketOrder`,
+`AmendOrder`, `CancelReplaceOrder`, `AtomicBasketOrder`, `ClosePosition`),
+whatever their `seq`. A cancel sent in the same block as the order it targets
+finds nothing to cancel; send it after the order lands.
+
+### Basket slippage
+
+`AtomicBasketOrder`'s `maxSlippageBps` bounds the basket's **net** slippage:
+each leg is measured from its own mark just before it fills, adverse slippage
+counts against the budget and price improvement counts for it, weighted by
+notional. A leg that fills better than its mark can't trip the budget, so use
+each leg's limit price to cap how far that leg sweeps.
+
+## Rate limits
+
+A request must pass two token buckets. Over either, the gateway answers 429
+with `Retry-After` (and `retryAfterMs` in the body); wait that long.
+
+| Limit       | Applies to                                     | Devnet           |
+| ----------- | ---------------------------------------------- | ---------------- |
+| Per IP      | every request from one IP, all routes together | 150/s, burst 100 |
+| Per account | signed submissions, keyed on the signing key   | 100/s, burst 200 |
+
+Orders and cancels draw on separate per-account buckets, so a burst of
+cancels is not slowed by order traffic. An agent key has its own budget,
+separate from its owner's. On a WebSocket, subscribe and unsubscribe messages
+have a per-connection budget of 64/s, burst 256; pushed data is never limited.
+
 ## WebSocket streams
 
 The SDK exposes the gateway's native multiplexed feed on `/ws`. Account
@@ -642,6 +799,9 @@ events, trades and the orderbook are channels on that one shared connection
 (`subscribeAccount`, `subscribeTrades`, `subscribeOrderbook`). The connection
 auto-reconnects and re-subscribes; every subscription returns an unsubscribe
 function, and `disconnect()` closes the feed.
+
+The gateway pings every 30 s and closes a socket that hasn't answered within
+60 s. The SDK clients answer pings automatically.
 
 The WS base URL defaults to `gatewayUrl` with its scheme swapped to `ws`/`wss`.
 If your local stack serves WebSockets on a separate port, set `wsUrl`
@@ -702,8 +862,8 @@ the SDK uses the gateway's signed subscription auth: with a private key or
 external signer connected it signs the stream-auth message and adds
 `public_key` / `signature` / `timestamp_ms` to the `accountEvents` subscribe
 message automatically, re-signing on every reconnect. Pass `auth: false` for an
-unsigned watch-only subscription. Against an
-unauthenticated gateway (e.g. devnet) the owner alone suffices.
+unsigned watch-only subscription; devnet refuses an unsigned `accountEvents`
+subscribe with 401.
 
 ## Wire Format
 

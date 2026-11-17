@@ -38,6 +38,9 @@ fn market() -> MarketConfig {
         sz_decimals: 5,
         ticker: "BTC".into(),
         max_open_interest: u64::MAX,
+        impact_notional: 1_000_000_000,
+        funding_dead_band_bps: None,
+        funding_interest_rate: None,
     }
 }
 

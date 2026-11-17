@@ -24,6 +24,16 @@ export function invalidRead(
 ): never {
   throw new GatewayReadError(kind, field);
 }
+/** Snapshot an explicit nonzero chain binding before any gateway request. */
+export function chainPin(value: unknown): Uint8Array {
+  if (
+    !(value instanceof Uint8Array) ||
+    value.length !== 32 ||
+    !value.some((byte) => byte !== 0)
+  )
+    invalidRead("chainId", "configuration");
+  return Uint8Array.from(value);
+}
 export function hexAddress(value: unknown, field = "address"): HexAddress {
   if (typeof value !== "string" || !/^[a-f0-9]{40}$/.test(value))
     invalidRead(field);

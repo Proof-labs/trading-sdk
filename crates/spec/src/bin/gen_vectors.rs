@@ -608,6 +608,27 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }}
             }),
         ),
+        // SetMarginOffsetPolicy (inner tag 0x1B): a complete policy replacement.
+        // The predecessor is `Option`, so the first write carries nil; pairs are
+        // positional with a bare-string resolution treatment.
+        codec_case(
+            "propose_admin_action/set_margin_offset_policy",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetMarginOffsetPolicy": {
+                    "predecessor": null,
+                    "pairs": [{
+                        "perpetual": 1u32,
+                        "conditional": 2u32,
+                        "settlement_reference": 1u32,
+                        "rate": 5_000u16,
+                        "resolution": "RemoveOnResolution"
+                    }]
+                }}
+            }),
+        ),
         // UpdateAuthoritySet (inner tag 0x07, exchange#422 / DEC-87,
         // exchange#472): addition/removal of members in one privileged
         // authority allowlist. `domain` is externally tagged as its bare
@@ -719,6 +740,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "proposer": vec![0xA1u8; 20],
                 "registry_version": 1u64,
                 "action": { "SettleEvent": { "event_id": 4u32, "outcome": "No" } }
+            }),
+        ),
+        // SetDepositLimit (inner tag 0x1C), independent single-credit and shared-window caps.
+        codec_case(
+            "propose_admin_action/set_deposit_limit",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetDepositLimit": {
+                    "per_deposit_max_micro_usdc": 10_000_000_000u64,
+                    "window_cap_micro_usdc": 30_000_000_000u64,
+                    "window_secs": 86_400u32
+                } }
             }),
         ),
         // SetMarketStatus (inner tag 0x1F); also lifts a PauseMarket halt.
@@ -877,6 +912,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             json!({ "withdrawal_id": 777u64, "holder": vec![0x05u8; 20],
                     "solana_signature": vec![0x07u8; 64],
                     "last_valid_block_height": 500u64 }),
+        ),
+        // Both integers at u64::MAX and a non-uniform signature (bytes 0..63),
+        // so every binding asserts the same integer width and the signature's
+        // array-of-u8 encoding, not just its own round trip.
+        codec_case(
+            "record_withdrawal_payout/u64_bounds",
+            RECORD_WITHDRAWAL_PAYOUT,
+            json!({ "withdrawal_id": u64::MAX, "holder": vec![0x05u8; 20],
+                    "solana_signature": (0u8..64).collect::<Vec<u8>>(),
+                    "last_valid_block_height": u64::MAX }),
         ),
         // `outcome` is a NUMERIC_ENUM_FIELDS entry in codec-adapter.ts (the
         // integer-vs-name class the markSourceMode regression belonged to);
@@ -1248,10 +1293,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|code| error_case(&format!("manifest/{code}"), code, None))
         .collect();
 
-    // Transitional code-50 rolling-upgrade family: the canonical DeliverTx log
-    // disambiguates legacy open-interest from current slippage; anything else
-    // stays AmbiguousCode50 (never a guess). Plus a code-51 case proving the
-    // log is ignored once the engine emits the distinct code.
+    // Code 50 is slippage; only a pre-renumbering receipt's log turns it into
+    // open interest. Plus a code-51 case proving its log is ignored.
     errors.push(error_case(
         "code50/oi_log",
         50,
@@ -1402,6 +1445,26 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     let event_inputs = vec![
         (
+            "margin_offset_policy_set/basic",
+            json!({"MarginOffsetPolicySet": {
+                "sequence": 1u64,
+                "pair_count": 1,
+                "proposal_id": 42u64,
+            }}),
+        ),
+        (
+            "margin_offset_pair_configured/basic",
+            json!({"MarginOffsetPairConfigured": {
+                "sequence": 1u64,
+                "index": 0,
+                "conditional_market": 2,
+                "perpetual_market": 1,
+                "settlement_reference_market": 1,
+                "rate_bps": 5_000,
+                "resolution": "RemoveOnResolution",
+            }}),
+        ),
+        (
             "position_liquidated/partial",
             position_liquidated(
                 "Partial",
@@ -1421,6 +1484,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "Buy",
                 100,
                 json!([{"event_id": 1, "branch": "No"}]),
+            ),
+        ),
+        // proof-wire 12: no positive equity after a resolution's fund paid,
+        // so the funds take the binaries.
+        (
+            "position_liquidated/resolution",
+            position_liquidated(
+                "Resolution",
+                "Sell",
+                100,
+                json!([{"event_id": 4, "branch": "Yes"}]),
             ),
         ),
         (
@@ -1470,6 +1544,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "settlement_price": 64_000_000u64,
                 "branch_weight": 650_000u64,
                 "realized_pnl": -13_000_000i64,
+            }}),
+        ),
+        // proof-wire 12: cash at the ends of the blocks either side of a
+        // resolution, emitted in `after_height`.
+        (
+            "resolution_balance_snapshot/basic",
+            json!({"ResolutionBalanceSnapshot": {
+                "event_id": 4,
+                "owner": vec![0xABu8; 20],
+                "resolution_height": 1_000u64,
+                "before_height": 999u64,
+                "after_height": 1_001u64,
+                "balance_before": 5_000_000u64,
+                "balance_after": 6_250_000u64,
+                "settlement_balance_before": 5_000_000u64,
+                "settlement_balance_after": 6_000_000u64,
             }}),
         ),
     ];
