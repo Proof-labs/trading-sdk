@@ -87,6 +87,9 @@ BUILDERS = {
     "record_withdrawal_payout/basic": lambda i: actions.RecordWithdrawalPayout(
         **_admin(i, "holder", "solana_signature")
     ),
+    "propose_admin_action/set_deposit_limit": lambda i: actions.ProposeAdminAction(
+        **_admin(i, "proposer")
+    ),
     "propose_admin_action/set_market_status": lambda i: actions.ProposeAdminAction(
         **_admin(i, "proposer")
     ),

@@ -742,6 +742,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": { "SettleEvent": { "event_id": 4u32, "outcome": "No" } }
             }),
         ),
+        // SetDepositLimit (inner tag 0x1C), independent single-credit and shared-window caps.
+        codec_case(
+            "propose_admin_action/set_deposit_limit",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetDepositLimit": {
+                    "per_deposit_max_micro_usdc": 10_000_000_000u64,
+                    "window_cap_micro_usdc": 30_000_000_000u64,
+                    "window_secs": 86_400u32
+                } }
+            }),
+        ),
         // SetMarketStatus (inner tag 0x1F); also lifts a PauseMarket halt.
         codec_case(
             "propose_admin_action/set_market_status",
