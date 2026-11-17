@@ -859,6 +859,17 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       },
     };
   }
+  if (v.SetDepositLimit) {
+    const d = v.SetDepositLimit as Record<string, unknown>;
+    return {
+      kind: "SetDepositLimit",
+      value: {
+        perDepositMaxMicroUsdc: big(d.per_deposit_max_micro_usdc),
+        windowCapMicroUsdc: big(d.window_cap_micro_usdc),
+        windowSecs: d.window_secs as number,
+      },
+    };
+  }
   if (v.SetMarketStatus) {
     const s = v.SetMarketStatus as Record<string, unknown>;
     return {
@@ -1185,8 +1196,8 @@ describe("conformance vectors (TypeScript)", () => {
     // -account scoped and unscoped, four set-oracle-guards shapes, and
     // oracle policy, two schedule-upgrade shapes, cancel-upgrade, and
     // insurance fund and withdraw, void-event, settle-event,
-    // set-market-status), approve, reject, and the PauseMarket emergency arm.
-    expect(govCases.length).toBe(33);
+    // set-deposit-limit, set-market-status), approve, reject, and the PauseMarket emergency arm.
+    expect(govCases.length).toBe(34);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

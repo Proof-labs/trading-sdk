@@ -79,6 +79,11 @@ crate is also 5.0.0; unchanged helper and WASM package versions are retained.
 
 ### Added
 
+- **TypeScript (MINOR):** expose `SetDepositLimit` in the public types and
+  decode tag-28 governance proposals. Existing wire bytes are unchanged.
+  `AdminAction` gains the `SetDepositLimit` variant: an exhaustive `switch`
+  on `action.kind` (one that assigns the remainder to `never`) or a
+  `Record<AdminAction["kind"], …>` table needs a new entry.
 - **Rust (`proof-sdk-rs`):** typed reads for funding and mark, position
   triggers, sub-accounts, withdrawal status, authorized agents and the
   `/v1/history/*` routes (fills, orders, positions, funding payments, account
@@ -262,6 +267,11 @@ crate is also 5.0.0; unchanged helper and WASM package versions are retained.
 
 ### Fixed
 
+- **TypeScript:** a pending `SetDepositLimit` (tag 28) proposal now lists in
+  `decodeProposalPage` and `decodeProposalDisplayInfo` instead of failing the
+  whole page with "actionTag 28 does not match SetDepositLimit tag
+  undefined". The WASM decoder already knew the action; only the tag table
+  lacked it.
 - **Rust (`proof-sdk-rs`) WebSocket:** a book update with `orderCount`
   missing or over u32 is `Malformed` instead of a level with 0 orders, and a
   subscribe with no ack, refusal or data within the subscribe timeout
