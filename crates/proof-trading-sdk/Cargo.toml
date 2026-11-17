@@ -1,6 +1,6 @@
 [package]
 name = "proof-trading-sdk"
-version = "4.2.0"
+version = "5.0.0"
 edition = "2021"
 # `<[T]>::as_chunks` is stable from 1.88.
 rust-version = "1.88"

@@ -7,6 +7,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [13.0.0] (Python 5.0.0; Rust core 5.0.0) — 2026-11-17
+
+Compatible with exchange 2.25.0 / proof-wire 12.0.0. npm 13.0.0 is a
+MAJOR over published 12.1.0: governance action bytes and proposal hashes change,
+and old fee-update payloads are rejected. Rebuild affected proposals and obtain
+new signatures. Python 5.0.0 includes the breaking refusal and read contracts.
+Rust core 5.0.0 is git-only, not a crates.io publication; its source API and
+re-exported wire enums break compatibility with core 4.x. The Python binding
+crate is also 5.0.0; unchanged helper and WASM package versions are retained.
+
 - Fund directory and position checks are shared in Rust before WASM adaptation;
   invalid caller pool IDs report configuration errors, future display variants
   remain explicitly unknown, and fund reads use the query transport budget.
@@ -24,15 +34,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Python:** `_native.pyi` adds `reject_floats` and `classify_error_name`,
   and nine decode stubs name their first parameter `bytes`, as the native
   module does.
-- **Breaking (Rust `proof-sdk-rs`, MAJOR):** `TxStatus::Rejected` is now
-  `Rejected { error, log: Option<String> }` (`None` when the engine gave no
-  log); `TxStatus` is not `#[non_exhaustive]`, so the next `proof-sdk-rs`
-  release is MAJOR. `EventResolved`, `PredictionSettled`, `ConditionMet`,
-  `ConditionNotMet` and `PositionTriggersInvalidated` are typed, so code
-  matching them as `Event::Other` stops matching (compile-compatible: `Event`
-  is `#[non_exhaustive]`). A WebSocket handshake answered with any HTTP error
-  is `Error::Http`, not `Error::WsConnect`, on the first `connect` too; a 401
-  on reconnect ends the feed, other statuses keep retrying.
+- **Rust `proof-sdk-rs`, changed before its 1.0.0 release:**
+  `TxStatus::Rejected` is now `Rejected { error, log: Option<String> }`
+  (`None` when the engine gave no log). `TxStatus` is not
+  `#[non_exhaustive]`; `proof-sdk-rs` is first released as 1.0.0 in this
+  release, so this is part of 1.0.0. `EventResolved`, `PredictionSettled`,
+  `ConditionMet`, `ConditionNotMet` and `PositionTriggersInvalidated` are
+  typed, so code matching them as `Event::Other` stops matching
+  (compile-compatible: `Event` is `#[non_exhaustive]`). A WebSocket handshake
+  answered with any HTTP error is `Error::Http`, not `Error::WsConnect`, on
+  the first `connect` too; a 401 on reconnect ends the feed, other statuses
+  keep retrying.
 - **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `GatewayError` gains a
   public `log` field, so struct literals stop compiling. The crate is already
   MAJOR for proof-wire 12.
@@ -53,7 +65,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   notional; fee updates require the funding dead-band and interest-rate tail.
   Older fee-update payloads are rejected, matching the engine. Rebuild and
   reapprove affected governance proposals against the matching engine; do not
-  reuse old signatures. This source change does not publish or authorize a release.
+  reuse old signatures.
 - **proof-wire 12.0.0 (exchange 2.25.0, protocol 13.0).** The pin moves from
   canonical wire `2a707bc` to the `v12.0.0` release commit `27ac6ac`, still
   pinned by commit, never by tag. Over `2a707bc` the release adds the
@@ -64,6 +76,60 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rejects: the next `proof-trading-sdk` crate release is MAJOR. The npm
   package and the Python distribution only add names, so this change alone
   is MINOR for them.
+- **Breaking (Python MAJOR):** typed `ProposeAdminAction` and
+  `ApproveAdminAction` reject retired admin actions at construction and before
+  encoding. `is_submittable_admin_action()` checks the kind without enforcing
+  engine admission policy. Raw encoding/signing and historical decoding remain.
+- Historical `SetTriggerMarketConfig` decoding and legacy policy fields in
+  position-trigger reads validate wire fields without enforcing the retired
+  enabled-policy nonzero bounds.
+
+- Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
+  1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
+  still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
+  placement. Existing TP/SL placement, cancellation and history APIs remain.
+
+- **Python `open_orders`** preserves all 14 resting-order fields through the
+  shared Rust decoder (released for TypeScript in 12.0.0).
+
+- Python stream reconnect attempts and backoff reset after a matching subscription
+  acknowledgment or data delivery. Handshakes and refusals alone do not reset them.
+
+- **Breaking (Python MAJOR):** account, orderbook and public trade streams share
+  connection and cleanup handling. At startup, HTTP 401/403 raise
+  `AuthenticationError` and any other non-transient response raises
+  `TransportError`; network errors, timeouts, a connection dropped during the
+  handshake, and HTTP 408/429/5xx from the gateway or a proxy retry. Exhausting
+  `AccountEventStream`'s `reconnect_attempts` budget raises `TransportError`;
+  orderbook and trade streams retry until closed. After a failure or iterator
+  closure, reuse raises `RuntimeError`, even after a later `close()`; `close()`
+  on an open stream leaves iteration empty. Streams accept
+  base URLs or `/ws` endpoints, reject concurrent iterators, close sockets before
+  reconnect waits and cancel waits on `close()`. Backoff caps must be finite and
+  positive. Account auth retries and history recovery remain channel-specific.
+  Reconnect logs omit exception text. These contracts are breaking in Python 5.0.0.
+
+- **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `gateway::CommittedReceipt` gains `log` and
+  `events` (`TxEvent`), read from the `POST /exchange` and `GET /v1/tx/{hash}` responses that already
+  carried them; `SubmissionOutcome::CheckTxRejected` gains `log`. `errors::ErrorKind` is
+  `#[non_exhaustive]` and gains `ErrorKind::from_code` (`None` for the version-dependent code 50).
+  New `sign_action` signs any `Action` through a custody `Signer`.
+
+- Python account-stream reconnect backoff now defaults to a 10-second cap
+  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
+- Python signed account authentication rejects an unconfigured chain ID before
+  signing. Configure the gateway's chain ID explicitly.
+- Python account streams match TypeScript's bounded first-subscription auth
+  retries: signing failures and 401/429/503 frames yield errors and retry up to
+  five times. Exhaustion and 403 frames leave the socket open without further
+  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
+  401/403 refusals raise `AuthenticationError` before the first successful
+  connection; on reconnect they use the configured retry budget and backoff
+  without discarding history recovery state.
+- A Python client with a signer now signs every account subscription, even with
+  an API key configured. Subscribing to another owner's feed, or to any feed
+  with an unconfigured chain ID, now fails with error frames instead of relying
+  on the API key. Use a client with only the API key for those feeds.
 
 ### Added
 
@@ -177,64 +243,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   15 also changes the account and orderbook streams and the `client.py` socket:
   they now honour proxy environment variables such as `HTTPS_PROXY` and inherit
   the library's 20-second keepalive.
-
-### Changed
-
-- **Breaking (Python MAJOR):** typed `ProposeAdminAction` and
-  `ApproveAdminAction` reject retired admin actions at construction and before
-  encoding. `is_submittable_admin_action()` checks the kind without enforcing
-  engine admission policy. Raw encoding/signing and historical decoding remain.
-- Historical `SetTriggerMarketConfig` decoding and legacy policy fields in
-  position-trigger reads validate wire fields without enforcing the retired
-  enabled-policy nonzero bounds.
-
-- Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
-  1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
-  still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
-  placement. Existing TP/SL placement, cancellation and history APIs remain.
-
-- **Python `open_orders`** preserves all 14 resting-order fields through the
-  shared Rust decoder (released for TypeScript in 12.0.0).
-
-- Python stream reconnect attempts and backoff reset after a matching subscription
-  acknowledgment or data delivery. Handshakes and refusals alone do not reset them.
-
-- **Breaking (Python MAJOR):** account, orderbook and public trade streams share
-  connection and cleanup handling. At startup, HTTP 401/403 raise
-  `AuthenticationError` and any other non-transient response raises
-  `TransportError`; network errors, timeouts, a connection dropped during the
-  handshake, and HTTP 408/429/5xx from the gateway or a proxy retry. Exhausting
-  `AccountEventStream`'s `reconnect_attempts` budget raises `TransportError`;
-  orderbook and trade streams retry until closed. After a failure or iterator
-  closure, reuse raises `RuntimeError`, even after a later `close()`; `close()`
-  on an open stream leaves iteration empty. Streams accept
-  base URLs or `/ws` endpoints, reject concurrent iterators, close sockets before
-  reconnect waits and cancel waits on `close()`. Backoff caps must be finite and
-  positive. Account auth retries and history recovery remain channel-specific.
-  Reconnect logs omit exception text. These contracts target the next Python
-  MAJOR release, not Python 4.0.0.
-
-- **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `gateway::CommittedReceipt` gains `log` and
-  `events` (`TxEvent`), read from the `POST /exchange` and `GET /v1/tx/{hash}` responses that already
-  carried them; `SubmissionOutcome::CheckTxRejected` gains `log`. `errors::ErrorKind` is
-  `#[non_exhaustive]` and gains `ErrorKind::from_code` (`None` for the version-dependent code 50).
-  New `sign_action` signs any `Action` through a custody `Signer`.
-
-- Python account-stream reconnect backoff now defaults to a 10-second cap
-  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
-- Python signed account authentication rejects an unconfigured chain ID before
-  signing. Configure the gateway's chain ID explicitly.
-- Python account streams match TypeScript's bounded first-subscription auth
-  retries: signing failures and 401/429/503 frames yield errors and retry up to
-  five times. Exhaustion and 403 frames leave the socket open without further
-  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
-  401/403 refusals raise `AuthenticationError` before the first successful
-  connection; on reconnect they use the configured retry budget and backoff
-  without discarding history recovery state.
-- A Python client with a signer now signs every account subscription, even with
-  an API key configured. Subscribing to another owner's feed, or to any feed
-  with an unconfigured chain ID, now fails with error frames instead of relying
-  on the API key. Use a client with only the API key for those feeds.
 
 ### Removed
 
@@ -2491,7 +2499,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.0.0...HEAD
+[13.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.1.0...npm-v13.0.0
 [12.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.0.0...npm-v12.1.0
 [12.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v11.0.0...npm-v12.0.0
 [11.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.1.0...npm-v11.0.0
