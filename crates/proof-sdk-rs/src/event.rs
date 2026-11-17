@@ -11,7 +11,8 @@ use std::fmt;
 use std::str::FromStr;
 
 use proof_trading_sdk::gateway::{TxAttribute, TxEvent};
-use proof_trading_sdk::types::{MarketId, OrderId, Side, TimeInForce};
+use proof_trading_sdk::types::ConversionFallbackReason as WireFallbackReason;
+use proof_trading_sdk::types::{EventId, MarketId, OrderId, Outcome, Side, TimeInForce};
 
 use crate::address::Address;
 use crate::exchange::EngineError;
@@ -41,6 +42,18 @@ pub enum Event {
     FundingSettled(FundingSettled),
     /// `deposited`: collateral arrived.
     Deposited(Deposited),
+    /// `event_resolved`: an event resolved.
+    EventResolved(EventResolved),
+    /// `prediction_settled`: a Yes/No position was paid out in cash.
+    PredictionSettled(PredictionSettled),
+    /// `condition_met`: a conditional position's branch won; it settled.
+    ConditionMet(ConditionMet),
+    /// `condition_not_met`: a conditional position's branch lost; it was
+    /// removed with no cash movement.
+    ConditionNotMet(ConditionNotMet),
+    /// `position_triggers_invalidated`: a position's stop/take-profit pair
+    /// was dropped.
+    PositionTriggersInvalidated(PositionTriggersInvalidated),
     /// An event kind this version does not type, as received.
     Other(TxEvent),
     /// One of the kinds above whose attributes did not read (a required
@@ -194,6 +207,9 @@ pub struct OrderRejected {
     pub owner: Address,
     pub market: MarketId,
     pub client_order_id: Option<u64>,
+    /// Read from the code alone: the event carries no log, so a code 50 is
+    /// always `SlippageExceeded`, including one an engine from before the
+    /// open-interest renumbering wrote.
     pub error: EngineError,
 }
 
@@ -250,6 +266,136 @@ pub struct Deposited {
     pub new_balance: u64,
 }
 
+/// `event_resolved`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EventResolved {
+    pub event_id: EventId,
+    pub outcome: Outcome,
+    pub timestamp_ms: u64,
+}
+
+/// `prediction_settled`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PredictionSettled {
+    pub event_id: EventId,
+    pub market: MarketId,
+    pub owner: Address,
+    pub side: Side,
+    pub size: u64,
+    /// The Yes share's payoff in micro-USDC, whichever side `side` is.
+    pub payoff_per_share: u64,
+    /// micro-USDC; the signed change to this account's balance.
+    pub cash_delta: i64,
+}
+
+/// `condition_met`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConditionMet {
+    pub event_id: EventId,
+    pub market: MarketId,
+    pub owner: Address,
+    pub side: Side,
+    pub size: u64,
+    pub entry_price: u64,
+    /// The underlying's oracle price at settlement.
+    pub settlement_price: u64,
+    /// micro-USDC, paid to this account.
+    pub realized_pnl: i64,
+    /// The size that became a perpetual position at `settlement_price`:
+    /// all of `size`, or 0.
+    pub converted_size: u64,
+    /// Why a winner was paid in cash instead of converting; `None` when it
+    /// converted or lost.
+    pub fallback_reason: Option<ConversionFallbackReason>,
+}
+
+/// Why a winning conditional position was paid in cash instead of
+/// converting into a perpetual position.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ConversionFallbackReason {
+    /// A reason the engine's wire names.
+    Known(WireFallbackReason),
+    /// A reason this version does not name, as the engine wrote it.
+    Other(String),
+}
+
+impl From<&str> for ConversionFallbackReason {
+    fn from(s: &str) -> Self {
+        use WireFallbackReason as W;
+        // Matched against the wire's own spellings, so the two can't drift.
+        [
+            W::MaintenanceMargin,
+            W::PositionSizeCap,
+            W::OpenInterestCap,
+            W::CannotPriceOrMargin,
+            W::InsufficientBalance,
+        ]
+        .into_iter()
+        .find(|w| w.to_string() == s)
+        .map_or_else(|| Self::Other(s.to_owned()), Self::Known)
+    }
+}
+
+impl fmt::Display for ConversionFallbackReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Known(w) => w.fmt(f),
+            Self::Other(s) => f.write_str(s),
+        }
+    }
+}
+
+/// `condition_not_met`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConditionNotMet {
+    pub event_id: EventId,
+    pub market: MarketId,
+    pub owner: Address,
+    pub side: Side,
+    pub size: u64,
+}
+
+/// `position_triggers_invalidated`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PositionTriggersInvalidated {
+    pub owner: Address,
+    pub market: MarketId,
+    pub position_epoch: u64,
+    pub group_id: crate::TriggerGroupId,
+    /// `None` when the engine did not state one (code 0, or older events).
+    pub reason: Option<TriggerInvalidation>,
+}
+
+/// Why a position's triggers were dropped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TriggerInvalidation {
+    /// The position went flat.
+    PositionFlat,
+    /// The position flipped side.
+    SideFlip,
+    /// The position's event resolved.
+    EventResolution,
+    /// A nonzero code this version does not know.
+    Other(u8),
+}
+
+impl TriggerInvalidation {
+    /// The reason for an engine `invalidation_reason` code; `None` for 0,
+    /// which the engine writes when it states no reason.
+    #[must_use]
+    pub fn from_code(code: u8) -> Option<Self> {
+        match code {
+            0 => None,
+            1 => Some(Self::PositionFlat),
+            2 => Some(Self::SideFlip),
+            3 => Some(Self::EventResolution),
+            other => Some(Self::Other(other)),
+        }
+    }
+}
+
 // -- decoding ------------------------------------------------------------------
 
 /// Reads the engine's string attributes.
@@ -282,6 +428,9 @@ impl Attrs<'_> {
     }
     fn market(&self, key: &str) -> Option<MarketId> {
         self.parse(key)
+    }
+    fn event_id(&self, key: &str) -> Option<EventId> {
+        self.parse(key).map(EventId)
     }
     fn side(&self, key: &str) -> Option<Side> {
         side(self.str(key)?)
@@ -371,6 +520,13 @@ fn typed(event_type: &str, a: &Attrs<'_>) -> Option<Option<Event>> {
         "position_closed" => position_closed(a).map(Event::PositionClosed),
         "funding_settled" => funding_settled(a).map(Event::FundingSettled),
         "deposited" => deposited(a).map(Event::Deposited),
+        "event_resolved" => event_resolved(a).map(Event::EventResolved),
+        "prediction_settled" => prediction_settled(a).map(Event::PredictionSettled),
+        "condition_met" => condition_met(a).map(Event::ConditionMet),
+        "condition_not_met" => condition_not_met(a).map(Event::ConditionNotMet),
+        "position_triggers_invalidated" => {
+            position_triggers_invalidated(a).map(Event::PositionTriggersInvalidated)
+        }
         _ => return None,
     })
 }
@@ -496,6 +652,68 @@ fn deposited(a: &Attrs<'_>) -> Option<Deposited> {
     })
 }
 
+fn event_resolved(a: &Attrs<'_>) -> Option<EventResolved> {
+    Some(EventResolved {
+        event_id: a.event_id("event_id")?,
+        outcome: match a.str("outcome")? {
+            "yes" => Outcome::Yes,
+            "no" => Outcome::No,
+            "void" => Outcome::Void,
+            _ => return None,
+        },
+        timestamp_ms: a.u64("timestamp_ms")?,
+    })
+}
+
+fn prediction_settled(a: &Attrs<'_>) -> Option<PredictionSettled> {
+    Some(PredictionSettled {
+        event_id: a.event_id("event_id")?,
+        market: a.market("market")?,
+        owner: a.address("owner")?,
+        side: a.side("side")?,
+        size: a.u64("size")?,
+        payoff_per_share: a.u64("payoff_per_share")?,
+        cash_delta: a.parse("cash_delta")?,
+    })
+}
+
+fn condition_met(a: &Attrs<'_>) -> Option<ConditionMet> {
+    Some(ConditionMet {
+        event_id: a.event_id("event_id")?,
+        market: a.market("market")?,
+        owner: a.address("owner")?,
+        side: a.side("side")?,
+        size: a.u64("size")?,
+        entry_price: a.u64("entry_price")?,
+        settlement_price: a.u64("settlement_price")?,
+        realized_pnl: a.parse("realized_pnl")?,
+        converted_size: a.opt("converted_size")?.unwrap_or(0),
+        fallback_reason: a
+            .text("fallback_reason")
+            .map(|r| ConversionFallbackReason::from(r.as_str())),
+    })
+}
+
+fn condition_not_met(a: &Attrs<'_>) -> Option<ConditionNotMet> {
+    Some(ConditionNotMet {
+        event_id: a.event_id("event_id")?,
+        market: a.market("market")?,
+        owner: a.address("owner")?,
+        side: a.side("side")?,
+        size: a.u64("size")?,
+    })
+}
+
+fn position_triggers_invalidated(a: &Attrs<'_>) -> Option<PositionTriggersInvalidated> {
+    Some(PositionTriggersInvalidated {
+        owner: a.address("owner")?,
+        market: a.market("market")?,
+        position_epoch: a.u64("position_epoch")?,
+        group_id: crate::TriggerGroupId(a.u64("group_id")?),
+        reason: TriggerInvalidation::from_code(a.opt("invalidation_reason")?.unwrap_or(0)),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic)]
@@ -568,6 +786,16 @@ mod tests {
             })
         );
 
+        let slipped = json!({"client_order_id": "", "code": "50", "market": "104", "owner": TAKER});
+        let Event::OrderRejected(r) = kind_of("order_rejected", &slipped) else {
+            panic!()
+        };
+        assert_eq!(
+            r.error,
+            EngineError::Known(proof_trading_sdk::ErrorKind::SlippageExceeded),
+            "a code 50 without a log is slippage"
+        );
+
         let market = json!({"client_order_id": "0", "filled_quantity": "1", "limit_price": "", "market": "1", "order_id": "3211411", "owner": TAKER, "requested_quantity": "1", "side": "sell", "time_in_force": "ioc", "unfilled_reason": ""});
         let Event::MarketOrderProcessed(mo) = kind_of("market_order_processed", &market) else {
             panic!()
@@ -624,6 +852,98 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn a_resolution_decodes_its_settlement_events() {
+        let resolved = json!({"event_id": "33", "outcome": "no", "timestamp_ms": "1794152258902", "signer": ""});
+        let Event::EventResolved(r) = kind_of("event_resolved", &resolved) else {
+            panic!()
+        };
+        assert_eq!((r.event_id, r.outcome), (EventId(33), Outcome::No));
+
+        let settled = json!({"event_id": "33", "market": "3300", "owner": MAKER, "side": "buy", "size": "272", "payoff_per_share": "0", "cash_delta": "-59296000"});
+        let Event::PredictionSettled(p) = kind_of("prediction_settled", &settled) else {
+            panic!()
+        };
+        assert_eq!(
+            (p.side, p.size, p.cash_delta),
+            (Side::Buy, 272, -59_296_000)
+        );
+
+        let met = json!({"event_id": "33", "market": "3302", "owner": MAKER, "side": "sell", "size": "4", "entry_price": "74000000000", "settlement_price": "73000000000", "realized_pnl": "4000000", "converted_size": "0", "fallback_reason": "maintenance_margin"});
+        let Event::ConditionMet(m) = kind_of("condition_met", &met) else {
+            panic!()
+        };
+        assert_eq!((m.realized_pnl, m.converted_size), (4_000_000, 0));
+        assert_eq!(
+            m.fallback_reason,
+            Some(ConversionFallbackReason::Known(
+                WireFallbackReason::MaintenanceMargin
+            ))
+        );
+
+        let not_met =
+            json!({"event_id": "33", "market": "3301", "owner": TAKER, "side": "buy", "size": "4"});
+        assert!(matches!(
+            kind_of("condition_not_met", &not_met),
+            Event::ConditionNotMet(ConditionNotMet { size: 4, .. })
+        ));
+
+        let dropped = json!({"owner": MAKER, "market": "3302", "position_epoch": "7", "group_id": "2", "invalidation_reason": "3"});
+        let Event::PositionTriggersInvalidated(t) =
+            kind_of("position_triggers_invalidated", &dropped)
+        else {
+            panic!()
+        };
+        assert_eq!(t.reason, Some(TriggerInvalidation::EventResolution));
+
+        for (code, reason) in [("0", None), ("9", Some(TriggerInvalidation::Other(9)))] {
+            let dropped = json!({"owner": MAKER, "market": "3302", "position_epoch": "7", "group_id": "2", "invalidation_reason": code});
+            let Event::PositionTriggersInvalidated(t) =
+                kind_of("position_triggers_invalidated", &dropped)
+            else {
+                panic!()
+            };
+            assert_eq!(t.reason, reason, "code {code}");
+        }
+        let unstated =
+            json!({"owner": MAKER, "market": "3302", "position_epoch": "7", "group_id": "2"});
+        let Event::PositionTriggersInvalidated(t) =
+            kind_of("position_triggers_invalidated", &unstated)
+        else {
+            panic!()
+        };
+        assert_eq!(t.reason, None, "an older event without the field");
+    }
+
+    #[test]
+    fn fallback_reasons_use_the_wire_spellings() {
+        for s in [
+            "maintenance_margin",
+            "position_size_cap",
+            "open_interest_cap",
+            "cannot_price_or_margin",
+            "insufficient_balance",
+        ] {
+            let r = ConversionFallbackReason::from(s);
+            assert!(matches!(r, ConversionFallbackReason::Known(_)), "{s}");
+            assert_eq!(r.to_string(), s);
+        }
+        assert_eq!(
+            ConversionFallbackReason::from("new_reason"),
+            ConversionFallbackReason::Other("new_reason".into())
+        );
+    }
+
+    #[test]
+    fn condition_met_reads_the_engine_defaults() {
+        // The engine writes `None` as "" and older events omit `converted_size`.
+        let met = json!({"event_id": "33", "market": "3302", "owner": MAKER, "side": "buy", "size": "4", "entry_price": "74000000000", "settlement_price": "75000000000", "realized_pnl": "4000000", "fallback_reason": ""});
+        let Event::ConditionMet(m) = kind_of("condition_met", &met) else {
+            panic!()
+        };
+        assert_eq!((m.converted_size, m.fallback_reason), (0, None));
     }
 
     #[test]

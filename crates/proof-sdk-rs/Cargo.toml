@@ -2,6 +2,8 @@
 name = "proof-sdk-rs"
 version = "1.0.0"
 edition = "2021"
+# `<[T]>::as_chunks` is stable from 1.88.
+rust-version = "1.88"
 license = "Apache-2.0"
 description = "Async (tokio) trading and read client for the Proof Exchange gateway, built on the proof-trading-sdk core: nonce allocation, signing, order helpers, typed reads, WebSocket feed."
 repository = "https://github.com/Proof-labs/trading-sdk"

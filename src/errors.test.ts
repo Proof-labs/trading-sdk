@@ -121,8 +121,8 @@ describe("decodeExecError", () => {
     expect(execErrorName(50, slippageLog)).toBe("SlippageExceeded");
 
     for (const log of [undefined, "", "unknown code 50 diagnostic"]) {
-      expect(decodeExecError(50, log)?.name).toBe("AmbiguousCode50");
-      expect(execErrorName(50, log)).toBe("AmbiguousCode50");
+      expect(decodeExecError(50, log)?.name).toBe("SlippageExceeded");
+      expect(execErrorName(50, log)).toBe("SlippageExceeded");
     }
   });
 

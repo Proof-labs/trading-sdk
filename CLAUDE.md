@@ -123,9 +123,11 @@ If a user asks you to connect to Proof Exchange and trade, here is the pattern:
 3. **Fund** — The user must have tokens. Call the faucet via
    `POST https://faucet.dev.proof.trade/drip` with an auth token.
 4. **Trade** — `submitTx({ type: "PlaceOrder", data: { ... } })`.
-   Prices are integer **micro-USDC** (6 dp), quantities are integer contracts.
-5. **Check results** — `code === 0` means CheckTx passed. Non-zero codes
-   are error codes (12 = insufficient margin, 21 = nonce collision, etc.).
+   Prices are integer **micro-USDC** (6 dp). Quantities are integer counts of
+   `10^-szDecimals` base units.
+5. **Check results** — `ok` with a `height` means the tx executed in that
+   block. Non-zero codes are engine refusals (12 = insufficient margin,
+   21 = nonce collision, etc.).
 
 Run the example:
 
@@ -221,7 +223,8 @@ internally). See `docs/adr/0001-wasm-core-vs-parallel-types.md`.
 - `seq` is a wall-clock-ms timestamp nonce; the engine validates it against a
   sliding window (no strict sequential ordering).
 - All monetary values (prices, balances, amounts, fees) are `u64` **micro-USDC**
-  (6 dp; `1_000_000` = $1). Quantities are integer contracts. **No floats.**
+  (6 dp; `1_000_000` = $1). Quantities are integer counts of
+  `10^-sz_decimals` base units. **No floats.**
 - New fields go at the **end** as optional so absent fields encode as `nil`
   (backward compatible). The action codec now lives in the **Rust core**, so
   adding an action means: add the struct + `impl_action_encoding!` entry in

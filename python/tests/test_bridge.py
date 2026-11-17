@@ -93,6 +93,13 @@ class TestDecodeTx:
         with pytest.raises(ValueError):
             pts.decode_tx(tx[:10])
 
+    def test_rejects_trailing_bytes(self):
+        kp = pts.generate_keypair()
+        cid = pts.chain_id_from_string("test")
+        tx = pts.sign_and_encode(cid, 1, b"", 1, kp["secret_key"])
+        with pytest.raises(ValueError, match="malformed"):
+            pts.decode_tx(tx + b"\x00")
+
 
 class TestVerifySignature:
     def test_valid_sig(self):
@@ -220,12 +227,12 @@ class TestErrors:
         slip = "atomic basket aggregate slippage 51 bps exceeds budget 50 bps"
         assert pts.get_error_name(50, oi) == "OpenInterestLimitExceeded"
         assert pts.get_error_name(50, slip) == "SlippageExceeded"
-        assert pts.get_error_name(50) == "AmbiguousCode50"
-        assert pts.get_error_name(50, "") == "AmbiguousCode50"
-        assert pts.get_error_name(50, "unknown") == "AmbiguousCode50"
+        assert pts.get_error_name(50) == "SlippageExceeded"
+        assert pts.get_error_name(50, "") == "SlippageExceeded"
+        assert pts.get_error_name(50, "unknown") == "SlippageExceeded"
         assert pts.EngineError(50, oi).name == "OpenInterestLimitExceeded"
         assert pts.EngineError(50, slip).name == "SlippageExceeded"
-        assert pts.EngineError(50, "").name == "AmbiguousCode50"
+        assert pts.EngineError(50, "").name == "SlippageExceeded"
 
     def test_error_manifest_has_distinct_current_codes(self):
         by_code = {

@@ -372,7 +372,8 @@ impl InfoClient {
     /// # Errors
     ///
     /// A read failure: [`Error::Transport`], [`Error::Http`], [`Error::Decode`]
-    /// or [`Error::ResponseTooLarge`].
+    /// or [`Error::ResponseTooLarge`]; [`Error::MissingMark`] while a held
+    /// market has no mark price.
     pub async fn account(&self, owner: Address) -> Result<AccountInfo> {
         let bytes = self.post_info_data("clearinghouseState", owner).await?;
         decode(&bytes, &reads::ACCOUNT_INFO, "account")
@@ -503,6 +504,11 @@ impl InfoClient {
             }
             body.extend_from_slice(&chunk);
         }
+        if status == StatusCode::SERVICE_UNAVAILABLE {
+            if let Some(message) = missing_mark(&body) {
+                return Err(Error::MissingMark { message });
+            }
+        }
         if status != StatusCode::OK {
             let text = String::from_utf8_lossy(&body);
             return Err(Error::Http {
@@ -514,18 +520,31 @@ impl InfoClient {
     }
 }
 
-#[derive(Deserialize)]
-struct DataEnvelope {
-    data: String,
+/// The gateway's `errorCode=MissingMark` body, by its error text.
+fn missing_mark(body: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Refusal {
+        error_code: Option<String>,
+        #[serde(default)]
+        error: String,
+    }
+    let r: Refusal = serde_json::from_slice(body).ok()?;
+    (r.error_code.as_deref() == Some("MissingMark")).then_some(r.error)
 }
 
-fn unbase64(data: &str) -> Result<Vec<u8>> {
+#[derive(Deserialize)]
+pub(crate) struct DataEnvelope {
+    pub(crate) data: String,
+}
+
+pub(crate) fn unbase64(data: &str) -> Result<Vec<u8>> {
     STANDARD
         .decode(data)
         .map_err(|e| Error::Decode(format!("base64: {e}")))
 }
 
-fn decode<T: DeserializeOwned>(bytes: &[u8], shape: &Shape, what: &str) -> Result<T> {
+pub(crate) fn decode<T: DeserializeOwned>(bytes: &[u8], shape: &Shape, what: &str) -> Result<T> {
     proof_trading_sdk::msgpack::reject_floats(bytes)
         .map_err(|e| Error::Decode(format!("{what}: {e}")))?;
     reads::decode(bytes, shape).map_err(|e| Error::Decode(format!("{what}: {e}")))
@@ -555,7 +574,7 @@ impl<'de> Deserialize<'de> for Dec {
     }
 }
 
-fn de_u64<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error> {
+pub(crate) fn de_u64<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Raw {
@@ -568,11 +587,13 @@ fn de_u64<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error>
     }
 }
 
-fn de_market<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<MarketId, D::Error> {
+pub(crate) fn de_market<'de, D: Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<MarketId, D::Error> {
     MarketId::try_from(de_u64(d)?).map_err(serde::de::Error::custom)
 }
 
-fn de_side<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Side, D::Error> {
+pub(crate) fn de_side<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Side, D::Error> {
     match String::deserialize(d)?.as_str() {
         "buy" | "Buy" => Ok(Side::Buy),
         "sell" | "Sell" => Ok(Side::Sell),
@@ -595,19 +616,23 @@ mod tests {
         let prices = |levels: &[Level]| levels.iter().map(|l| l.price).collect::<Vec<_>>();
         let mut book = Orderbook::default();
         // (side, price, quantity, bids after, asks after)
-        let steps: [(Side, u64, u64, &[u64], &[u64]); 8] = [
-            (Side::Buy, 10, 1, &[10], &[]),          // into empty
-            (Side::Buy, 12, 1, &[12, 10], &[]),      // new best
-            (Side::Buy, 11, 1, &[12, 11, 10], &[]),  // between
-            (Side::Buy, 11, 5, &[12, 11, 10], &[]),  // replace
-            (Side::Buy, 12, 0, &[11, 10], &[]),      // remove
-            (Side::Buy, 99, 0, &[11, 10], &[]),      // remove a missing level
+        type Step = (Side, u64, u64, &'static [u64], &'static [u64]);
+        let steps: [Step; 8] = [
+            (Side::Buy, 10, 1, &[10], &[]),         // into empty
+            (Side::Buy, 12, 1, &[12, 10], &[]),     // new best
+            (Side::Buy, 11, 1, &[12, 11, 10], &[]), // between
+            (Side::Buy, 11, 5, &[12, 11, 10], &[]), // replace
+            (Side::Buy, 12, 0, &[11, 10], &[]),     // remove
+            (Side::Buy, 99, 0, &[11, 10], &[]),     // remove a missing level
             (Side::Sell, 14, 1, &[11, 10], &[14]),
             (Side::Sell, 13, 1, &[11, 10], &[13, 14]),
         ];
         for (side, price, quantity, bids, asks) in steps {
             book.apply(side, l(price, quantity));
-            assert_eq!((prices(&book.bids), prices(&book.asks)), (bids.to_vec(), asks.to_vec()));
+            assert_eq!(
+                (prices(&book.bids), prices(&book.asks)),
+                (bids.to_vec(), asks.to_vec())
+            );
         }
         assert_eq!(book.bids[0].quantity, 5, "a replace sets the quantity");
         book.apply(Side::Sell, l(13, 0));

@@ -50,6 +50,7 @@ def test_low_level_codec_defers_policy_to_engine(tag, fields, payload):
     os.write(write_fd, bytes(32))
     os.close(write_fd)
     handle = sdk.load_key_from_fd(read_fd)
+    os.close(read_fd)
     assert sdk.decode_tx(handle.sign_and_encode(bytes(32), tag, payload, 1))['payload'] == payload
 
 
