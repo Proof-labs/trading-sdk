@@ -124,6 +124,7 @@ export {
   type VoidEvent,
   type SettleEvent,
   type SetMarketStatus,
+  type SetDepositLimit,
   type MarketStatus,
   type LiquidationConfig,
   type LiquidationConfigInfo,

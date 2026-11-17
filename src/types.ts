@@ -1156,6 +1156,16 @@ export interface SetWithdrawalLimit {
   windowSecs: number;
 }
 
+/** Protocol-wide limits shared by ConfirmDeposit and Deposit (inner tag 28). */
+export interface SetDepositLimit {
+  /** Maximum single credit in micro-USDC; 0 disables this bound. */
+  perDepositMaxMicroUsdc: bigint;
+  /** Aggregate credit across all accounts per rolling window; 0 disables. */
+  windowCapMicroUsdc: bigint;
+  /** Rolling-window length in seconds; must be at least 1. */
+  windowSecs: number;
+}
+
 /**
  * The operator receipt registry (W28-20, inner tag 20, DEC-112): the
  * operator quorum every custody receipt terminal verifies against. The
@@ -1330,6 +1340,7 @@ export type AdminAction =
   | { kind: "AttachConditional"; value: AttachConditional }
   | { kind: "Batch"; value: AdminBatchItem[] }
   | { kind: "SetWithdrawalLimit"; value: SetWithdrawalLimit }
+  | { kind: "SetDepositLimit"; value: SetDepositLimit }
   | { kind: "SetOperatorReceiptRegistry"; value: SetOperatorReceiptRegistry }
   | { kind: "SetLiquidationConfig"; value: SetLiquidationConfig }
   // Unit variant — no fields; lifts a bridge pause under multisig

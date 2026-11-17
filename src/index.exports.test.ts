@@ -25,6 +25,7 @@ import {
   type ConfigureOraclePolicy,
   type GovernanceAction,
   type AdminAction,
+  type SetDepositLimit,
   type EmergencyAction,
   type UpdateAdminSignerRegistry,
   type ProposeAdminAction,
@@ -171,6 +172,16 @@ describe("public barrel: governance surface", () => {
     // This does not run meaningfully at runtime (types are erased) — its
     // purpose is that `tsc` must resolve every imported type name from the
     // barrel, which fails the build if any stops being exported.
+    const depositLimit: SetDepositLimit = {
+      perDepositMaxMicroUsdc: 100n,
+      windowCapMicroUsdc: 150n,
+      windowSecs: 60,
+    };
+    const depositAction: AdminAction = {
+      kind: "SetDepositLimit",
+      value: depositLimit,
+    };
+    expect(depositAction.value).toBe(depositLimit);
     const registry: UpdateAdminSignerRegistry = {
       newThreshold: 2,
       newMembers: [new Uint8Array(20)],
