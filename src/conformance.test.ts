@@ -864,8 +864,8 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
     return {
       kind: "SetDepositLimit",
       value: {
-        perDepositMaxMicroUsdc: BigInt(d.per_deposit_max_micro_usdc as string),
-        windowCapMicroUsdc: BigInt(d.window_cap_micro_usdc as string),
+        perDepositMaxMicroUsdc: big(d.per_deposit_max_micro_usdc),
+        windowCapMicroUsdc: big(d.window_cap_micro_usdc),
         windowSecs: d.window_secs as number,
       },
     };

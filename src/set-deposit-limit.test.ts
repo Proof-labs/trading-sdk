@@ -102,14 +102,25 @@ describe("SetDepositLimit", () => {
   });
 
   it("rejects malformed wire tuples", () => {
-    expect(() => decodeAdminAction({ SetDepositLimit: [1, 2] })).toThrow();
+    expect(() => decodeAdminAction({ SetDepositLimit: [1, 2] })).toThrow(
+      "expected struct SetDepositLimit with 3 elements",
+    );
   });
 
   it.each([
-    { ...config, perDepositMaxMicroUsdc: -1n },
-    { ...config, windowCapMicroUsdc: 1n << 64n },
-    { ...config, windowSecs: 0x1_0000_0000 },
-  ])("rejects values outside the wire integer ranges", (value) => {
-    expect(() => encodePayloadBytes(propose(value))).toThrow();
-  });
+    [
+      { ...config, perDepositMaxMicroUsdc: -1n },
+      /outside u64::MIN\.\.u64::MAX/,
+    ],
+    [
+      { ...config, windowCapMicroUsdc: 1n << 64n },
+      /outside u64::MIN\.\.u64::MAX/,
+    ],
+    [{ ...config, windowSecs: 0x1_0000_0000 }, /expected u32/],
+  ])(
+    "rejects values outside the wire integer ranges (case %#)",
+    (value, why) => {
+      expect(() => encodePayloadBytes(propose(value))).toThrow(why);
+    },
+  );
 });
