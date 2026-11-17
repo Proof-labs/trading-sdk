@@ -67,6 +67,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **TypeScript (MINOR):** expose `SetDepositLimit` in the public types and
+  decode tag-28 governance proposals. Existing wire bytes are unchanged.
+
 - **Rust (`proof-sdk-rs`):** typed reads for funding and mark, position
   triggers, sub-accounts, withdrawal status, authorized agents and the
   `/v1/history/*` routes (fills, orders, positions, funding payments, account
