@@ -19,11 +19,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `MissingMark` converts to `Error::MissingMark` instead of `Error::Gateway`.
   Callers that matched the old variants stop matching; both still compile
   (`Error` is `#[non_exhaustive]`).
-- **TypeScript:** `CandleHistoryParams` drops `cursor`. The candles and BBO
-  routes page by time window and never read it; the indexer now refuses it.
+
 - **Python:** `_native.pyi` adds `reject_floats` and `classify_error_name`,
   and nine decode stubs name their first parameter `bytes`, as the native
   module does.
+
 - **Breaking (Rust `proof-sdk-rs`, MAJOR):** `TxStatus::Rejected` is now
   `Rejected { error, log: Option<String> }` (`None` when the engine gave no
   log); `TxStatus` is not `#[non_exhaustive]`, so the next `proof-sdk-rs`
@@ -33,27 +33,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is `#[non_exhaustive]`). A WebSocket handshake answered with any HTTP error
   is `Error::Http`, not `Error::WsConnect`, on the first `connect` too; a 401
   on reconnect ends the feed, other statuses keep retrying.
+
 - **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `GatewayError` gains a
   public `log` field, so struct literals stop compiling. The crate is already
   MAJOR for proof-wire 12.
+
 - **Rust minimum version 1.88** for `proof-trading-sdk` and `proof-sdk-rs`,
   now declared as `rust-version` (`<[T]>::as_chunks`).
+
 - **Breaking (Python MAJOR):** `load_key_from_fd` no longer closes the
   caller's fd; close it yourself, or it leaks. A negative fd raises
   `ValueError`.
-- **Breaking (TypeScript, npm MAJOR):** `signAndEncode`, `encodeSignedTx` and
-  `signEnvelopeFromPayload` throw `RangeError` for a `seq` outside u64 or an
-  action type outside a byte, instead of signing a wrapped value.
+
 - **Code 50 is `SlippageExceeded`** in TypeScript, Python and Rust. Only a log
   naming an open-interest refusal (receipts from before the renumbering) still
   reads as `OpenInterestLimitExceeded`. An `order_rejected` event carries no
   log, so a code 50 there is always slippage.
-- **Wire compatibility boundary:** pin canonical wire `2a707bc` (engine
-  `23ee1f0`). Conditional attachment proposal bytes/hashes now include impact
-  notional; fee updates require the funding dead-band and interest-rate tail.
-  Older fee-update payloads are rejected, matching the engine. Rebuild and
-  reapprove affected governance proposals against the matching engine; do not
-  reuse old signatures. This source change does not publish or authorize a release.
+
 - **proof-wire 12.0.0 (exchange 2.25.0, protocol 13.0).** The pin moves from
   canonical wire `2a707bc` to the `v12.0.0` release commit `27ac6ac`, still
   pinned by commit, never by tag. Over `2a707bc` the release adds the
@@ -80,27 +76,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and refuse anything but a prediction-binary book before signing. Ids are
   typed: `TriggerGroupId`, `TriggerLimbId`, `IndexerEventId`, `SubAccountId`
   (non-zero) and proof-wire's `WithdrawalId`.
+
 - **Rust `proof-sdk-rs`:** typed resolution events `EventResolved`,
   `PredictionSettled`, `ConditionMet` (with `ConversionFallbackReason`),
   `ConditionNotMet` and `PositionTriggersInvalidated` (with an optional
   `TriggerInvalidation`), on receipts and the account stream.
+
 - Error code 135 `OffCurveWithdrawalDestination` (proof-wire 12.0.0): the
   withdrawal destination is not an on-curve Solana wallet owner, and no funds
   were debited. Named in Rust, TypeScript and Python.
-- The `resolution` liquidation mode in `LIQUIDATION_MODES`: the funds take
-  an account's prediction binaries when no positive equity is left after a
-  resolution's fund paid (proof-wire 12.0.0).
-- `decodeResolutionBalanceSnapshotEvent()` decodes the engine's
-  `resolution_balance_snapshot` event: one account's exact cash at the ends
-  of the blocks immediately before and after an event's resolution, with the
-  settlement balances that isolate the resolution (proof-wire 12.0.0).
-- Fund reads retain balances and positions when future wire variants are unknown, explicitly reporting unknown sides or valuations; known priced values still require exact validation.
-- `reads().finalized.insuranceFunds()` lists every registered or stored-ledger pool, including marketless funds, with cash, debt and net cash at one witnessed state. `insuranceFund(poolId)` adds bounded positions and engine-settlement notionals, explicitly reporting incomplete lists, unpriced references and unsupported prediction binaries. These display values are not equity, historical profit or execution quotes.
-- `reads().insuranceFundHistory({ poolId, stream, limit, cursor })` reads one bounded page of indexed insurance balances or activity through the gateway. Amounts and chain coordinates remain exact integers; coverage explicitly describes retained observations, never complete history, equity or a finalized-state witness.
-- `reads().finalized.authorizedAgents(owner)` reads up to 100 current stored trading-agent grants with an atomic finalized-state witness and an explicit completeness flag. Grants have no stored expiry or per-action scope; this read does not authorize signing.
+
 - Python `ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS` (`1_000`) mirrors the engine's
   per-limb TP/SL slippage ceiling as an advisory clamp; encoding does not
   enforce it.
+
 - Python typed `market_stats()` preserves exact indexed rolling metrics and
   unavailable values, accepts non-string sequences such as `range`, and uses the
   shared calendar parser to reject impossible dates and hour 24.
@@ -129,6 +118,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   valuation, authorization, payload proofs and validator verification are excluded.
 
 - Python: add typed finalized valued-account, agent-authorization, recent-nonce and open-order reads with bounded witness transport and canonical Rust payload decoding. Existing account/order APIs are unchanged. Python and TypeScript finalized order reads accept market ID zero, matching positions and the wire u32 domain; invalid market values remain errors.
+
 - Python chain-pinned `block_header`, typed header/witness decoders and
   `verify_witness` compare a finalized-read witness with an H+1 app hash.
   Byte, chunk and JSON-depth limits apply; synchronous HTTP cannot guarantee a
@@ -142,6 +132,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `margin_offset_pair_configured` attributes against wire-generated vectors.
   Rust re-exports the margin-offset types. Conformance vectors and content-hash
   constants pin policy encoding across TypeScript, Rust and Python.
+
 - Python typed `authorities()` and `liquidation_config()` reads, backed by
   canonical Rust wire types with strict record/address/range checks. Failed
   reads raise rather than synthesize empty authorities or default configuration.
@@ -179,14 +170,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ApproveAdminAction` reject retired admin actions at construction and before
   encoding. `is_submittable_admin_action()` checks the kind without enforcing
   engine admission policy. Raw encoding/signing and historical decoding remain.
-- Historical `SetTriggerMarketConfig` decoding and legacy policy fields in
-  position-trigger reads validate wire fields without enforcing the retired
-  enabled-policy nonzero bounds.
-
-- Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
-  1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
-  still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
-  placement. Existing TP/SL placement, cancellation and history APIs remain.
 
 - **Python `open_orders`** preserves all 14 resting-order fields through the
   shared Rust decoder (released for TypeScript in 12.0.0).
@@ -217,8 +200,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Python account-stream reconnect backoff now defaults to a 10-second cap
   (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
+
 - Python signed account authentication rejects an unconfigured chain ID before
   signing. Configure the gateway's chain ID explicitly.
+
 - Python account streams match TypeScript's bounded first-subscription auth
   retries: signing failures and 401/429/503 frames yield errors and retry up to
   five times. Exhaustion and 403 frames leave the socket open without further
@@ -226,6 +211,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   401/403 refusals raise `AuthenticationError` before the first successful
   connection; on reconnect they use the configured retry budget and backoff
   without discarding history recovery state.
+
 - A Python client with a signer now signs every account subscription, even with
   an API key configured. Subscribing to another owner's feed, or to any feed
   with an unconfigured chain ID, now fails with error frames instead of relying
@@ -238,11 +224,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Rust `DecodedExecErrorKind` return `SlippageExceeded` for a code 50 without
   an open-interest log; callers that matched the name `AmbiguousCode50` stop
   matching.
+
 - **Breaking (Python 5.0.0):** remove `trigger_market_configs()` and the
   `SetTriggerMarketConfig` builder. Low-level payload encoding, signing and
   historical decoding remain wire-compatible; the engine owns proposal and
   execution refusal for the retired action. Remove legacy-policy prechecks
   before placing TP/SL; no replacement lookup is needed.
+
 - **Breaking (Python 5.0.0):** remove the legacy trigger-policy registry
   decoders: `proof_trading_sdk.trigger_config`
   (`decode_trigger_market_config_infos`, `TriggerMarketConfigInfo`,
@@ -259,11 +247,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   request, so a long re-subscribe queue the gateway is still answering does
   not loop; set it with `WsConfig::with_subscribe_timeout` (default: the pong
   timeout).
+
 - **Python:** `decode_tx` refuses bytes after the envelope. It now runs the
   strict MessagePack preflight first, so it also refuses floats, extension
   types and duplicate map keys, and a malformed transaction reports
   `malformed MessagePack` instead of the decoder's own message.
-- The connect-and-trade example no longer prints its generated private key.
+
 - **Preserve structured gateway refusals (Python).** Python raises
   `PreAdmissionRefusal` with `error_code`, `message` and `status_code` for
   admission refusals, instead of treating legacy HTTP 200 refusals as
@@ -277,11 +266,107 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `rate_limit_state` key, when the gateway omits `X-RateLimit-Bucket` (#395).
 
 - Python submits signed transactions to the gateway in its JSON/base64 envelope.
+
 - Python raises `SubmissionPending` with the original transaction hash on ambiguous submission transport failures and HTTP 5xx responses, where it used to raise `TransportError` or `GatewayError`. Proven refusals are handled separately from ambiguous failures.
+
 - Python raises `TransportError` for malformed or wrong-shaped read responses (a 200 with `null` or `[]` on an object-valued read such as `markets` or `ticker` no longer reads as empty), and raises `SubmissionPending` with the transaction hash when a submission response carries no verdict; only an explicit non-zero `"<code>: <message>"` stays a terminal `EngineError`.
+
 - Python account-event history supports explicit ordering and cursor pagination. The client validates owner addresses and page limits (1–5000) before sending a request. Passing the unsupported `after_id` filter now raises `ValueError`.
+
 - Python reads per-account funding payments and position history with cursor pagination. Passing the unsupported `after_height` filter now raises `ValueError`.
+
 - Python reads deposit and withdrawal history from owner-scoped account events.
+
+## [13.0.0] — 2026-11-17
+
+- Fund directory and position checks are shared in Rust before WASM adaptation;
+  invalid caller pool IDs report configuration errors, future display variants
+  remain explicitly unknown, and fund reads use the query transport budget.
+
+### Changed
+
+- **TypeScript:** `CandleHistoryParams` drops `cursor`. The candles and BBO
+  routes page by time window and never read it; the indexer now refuses it.
+
+- **Breaking (TypeScript, npm MAJOR):** `signAndEncode`, `encodeSignedTx` and
+  `signEnvelopeFromPayload` throw `RangeError` for a `seq` outside u64 or an
+  action type outside a byte, instead of signing a wrapped value.
+
+- **Code 50 is `SlippageExceeded`** in TypeScript, Python and Rust. Only a log
+  naming an open-interest refusal (receipts from before the renumbering) still
+  reads as `OpenInterestLimitExceeded`. An `order_rejected` event carries no
+  log, so a code 50 there is always slippage.
+
+- **Wire compatibility boundary:** pin canonical wire `2a707bc` (engine
+  `23ee1f0`). Conditional attachment proposal bytes/hashes now include impact
+  notional; fee updates require the funding dead-band and interest-rate tail.
+  Older fee-update payloads are rejected, matching the engine. Rebuild and
+  reapprove affected governance proposals against the matching engine; do not
+  reuse old signatures. This source change does not publish or authorize a release.
+
+- **proof-wire 12.0.0 (exchange 2.25.0, protocol 13.0).** The pin moves from
+  canonical wire `2a707bc` to the `v12.0.0` release commit `27ac6ac`, still
+  pinned by commit, never by tag. Over `2a707bc` the release adds the
+  `Resolution` liquidation mode, the `ResolutionBalanceSnapshot` engine event
+  and error code 135; no action bytes change, and `conformance/codec.ndjson`
+  regenerates unchanged. The Rust crate re-exports proof-wire 12 types, whose
+  `Event`, `LiquidationMode` and `ExecError` gain variants an older decoder
+  rejects: the next `proof-trading-sdk` crate release is MAJOR. The npm
+  package and the Python distribution only add names, so this change alone
+  is MINOR for them.
+
+### Added
+
+- Error code 135 `OffCurveWithdrawalDestination` (proof-wire 12.0.0): the
+  withdrawal destination is not an on-curve Solana wallet owner, and no funds
+  were debited. Named in Rust, TypeScript and Python.
+
+- The `resolution` liquidation mode in `LIQUIDATION_MODES`: the funds take
+  an account's prediction binaries when no positive equity is left after a
+  resolution's fund paid (proof-wire 12.0.0).
+
+- `decodeResolutionBalanceSnapshotEvent()` decodes the engine's
+  `resolution_balance_snapshot` event: one account's exact cash at the ends
+  of the blocks immediately before and after an event's resolution, with the
+  settlement balances that isolate the resolution (proof-wire 12.0.0).
+
+- Fund reads retain balances and positions when future wire variants are unknown, explicitly reporting unknown sides or valuations; known priced values still require exact validation.
+
+- `reads().finalized.insuranceFunds()` lists every registered or stored-ledger pool, including marketless funds, with cash, debt and net cash at one witnessed state. `insuranceFund(poolId)` adds bounded positions and engine-settlement notionals, explicitly reporting incomplete lists, unpriced references and unsupported prediction binaries. These display values are not equity, historical profit or execution quotes.
+
+- `reads().insuranceFundHistory({ poolId, stream, limit, cursor })` reads one bounded page of indexed insurance balances or activity through the gateway. Amounts and chain coordinates remain exact integers; coverage explicitly describes retained observations, never complete history, equity or a finalized-state witness.
+
+- `reads().finalized.authorizedAgents(owner)` reads up to 100 current stored trading-agent grants with an atomic finalized-state witness and an explicit completeness flag. Grants have no stored expiry or per-action scope; this read does not authorize signing.
+
+- `validateSetMarginOffsetPolicy` checks policy bounds before encoding and
+  through `decodeAdminAction`.
+  `decodeMarginOffsetEvent` reads the engine's `margin_offset_policy_set`
+  and `margin_offset_pair_configured` attributes against wire-generated vectors.
+  Rust re-exports the margin-offset types. Conformance vectors and content-hash
+  constants pin policy encoding across TypeScript, Rust and Python.
+
+### Changed
+
+- Historical `SetTriggerMarketConfig` decoding and legacy policy fields in
+  position-trigger reads validate wire fields without enforcing the retired
+  enabled-policy nonzero bounds.
+
+- Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
+  1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
+  still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
+  placement. Existing TP/SL placement, cancellation and history APIs remain.
+
+### Removed
+
+- **Breaking (TypeScript npm MAJOR, Python MAJOR, Rust core MAJOR):** the
+  `AmbiguousCode50` classification. `decodeExecError` / `get_error_name` and
+  Rust `DecodedExecErrorKind` return `SlippageExceeded` for a code 50 without
+  an open-interest log; callers that matched the name `AmbiguousCode50` stop
+  matching.
+
+### Fixed
+
+- The connect-and-trade example no longer prints its generated private key.
 
 ## [12.1.0] — 2026-11-12
 
