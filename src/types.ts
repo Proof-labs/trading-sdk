@@ -2082,8 +2082,13 @@ export type ExchangeEvent =
  * - `"timeout"`   — no final chain verdict is available yet (`code === -1`):
  *                   either the gateway returned a hash-only ambiguous response
  *                   or inclusion polling expired. The tx may still land.
+ * - `"unreadable"`: the tx executed with code 0 (`height` set), but its order
+ *                   list event did not read: malformed, missing, or not one
+ *                   entry per order sent (`code === -1`). What each order did
+ *                   is unknown; reconcile by `hash` and never resubmit.
  */
-export type TxOutcome = "ok" | "engine" | "transport" | "timeout";
+export type TxOutcome =
+  "ok" | "engine" | "transport" | "timeout" | "unreadable";
 
 /**
  * The gateway's machine-readable `errorCode` on a refusal (`status:
@@ -2116,7 +2121,8 @@ export interface TxResult {
   /**
    * Status code. `0` on success; the engine `ExecError` code on
    * `outcome === "engine"`; a synthesized HTTP status on `"transport"`; `-1` on
-   * `"timeout"`. Retained for back-compat with `result.code === 0` checks.
+   * `"timeout"` and `"unreadable"`. Retained for back-compat with
+   * `result.code === 0` checks.
    */
   code: number;
   /**

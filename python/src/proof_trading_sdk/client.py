@@ -54,9 +54,10 @@ from proof_trading_sdk.order_lists import (
     ORDERS_PLACED,
     OrderCancellation,
     OrderPlacement,
+    SentList,
+    check_order_result,
     order_cancellations,
     order_placements,
-    single_refusal_code,
 )
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.finalized_markets import (
@@ -188,17 +189,37 @@ def _submission_may_have_been_admitted(exc: TransportError) -> bool:
     return isinstance(cause, httpx.RequestError) and not isinstance(cause, _NOT_SENT)
 
 
-def _raise_single_refusal(action: Action, data: dict[str, t.Any]) -> dict[str, t.Any]:
-    """Raise a single order's refusal as the nonzero code it once returned."""
+def _sent_list(action: Action) -> SentList | None:
+    """What an order action sent as a list; ``None`` for any other action."""
     if isinstance(action, (PlaceOrder, MarketOrder)):
-        event_type = ORDERS_PLACED
-    elif isinstance(action, (CancelOrder, CancelClientOrder)):
-        event_type = ORDERS_CANCELLED
-    else:
+        return SentList(ORDERS_PLACED, 1, True)
+    if isinstance(action, (CancelOrder, CancelClientOrder)):
+        return SentList(ORDERS_CANCELLED, 1, True)
+    if isinstance(action, PlaceOrders):
+        return SentList(ORDERS_PLACED, len(action.orders), False)
+    if isinstance(action, CancelOrders):
+        return SentList(ORDERS_CANCELLED, len(action.order_ids), False)
+    if isinstance(action, CancelClientOrders):
+        return SentList(ORDERS_CANCELLED, len(action.client_order_ids), False)
+    return None
+
+
+def _read_order_result(
+    envelope: bytes, data: dict[str, t.Any], sent: SentList | None
+) -> dict[str, t.Any]:
+    """Check an executed code-0 response's order list (see
+    :func:`check_order_result`); any other response passes through."""
+    code = data.get("code")
+    executed = "height" in data or "events" in data
+    if isinstance(code, bool) or code != 0 or not executed:
+        # A code-less acknowledgement has not executed yet.
         return data
-    code = single_refusal_code(data, event_type)
-    if code:
-        raise EngineError(code, data.get("message") or data.get("log") or data.get("error") or "")
+    check_order_result(
+        hashlib.sha256(envelope).hexdigest().upper(),
+        data.get("events"),
+        sent,
+        log=str(data.get("message") or data.get("log") or data.get("error") or ""),
+    )
     return data
 
 
@@ -677,9 +698,13 @@ class ExchangeClient:
         A refused :class:`PlaceOrder`, :class:`MarketOrder`,
         :class:`CancelOrder` or :class:`CancelClientOrder` raises
         :class:`EngineError` with its code, although the engine reports it as
-        a list of one with code 0.
+        a list of one with code 0. An executed order action whose list event
+        does not read, or is missing, or has the wrong number of entries,
+        raises :class:`OrderResultUnreadable`: reconcile by hash, never
+        re-submit.
         """
-        return _raise_single_refusal(action, self.submit_action(self.sign_action(action)))
+        envelope = self.sign_action(action)
+        return _read_order_result(envelope, self._post_envelope(envelope), _sent_list(action))
 
     def close_position(self, market: int, *, owner: bytes | None = None) -> CloseOutcome:
         """Close the whole position on *market*: a reduce-only market order on
@@ -688,7 +713,8 @@ class ExchangeClient:
 
         A flat account sends nothing and returns :class:`NothingToClose`. A
         refused close raises :class:`EngineError`, including code 35 when the
-        position went flat before the close ran.
+        position went flat before the close ran, and an executed close whose
+        result does not read raises :class:`OrderResultUnreadable`.
         """
         selected_owner = self._own_owner() if owner is None else owner
         position = next(
@@ -713,7 +739,7 @@ class ExchangeClient:
     def _submit_with_signer_revision(self, action: Action, revision: int) -> dict[str, t.Any]:
         action_type, payload = encode_action(action)
         envelope = self._sign_and_encode_action(action_type, payload, expected_revision=revision)
-        return self.submit_action(envelope)
+        return _read_order_result(envelope, self._post_envelope(envelope), _sent_list(action))
 
     def set_position_triggers(
         self,
@@ -774,7 +800,9 @@ class ExchangeClient:
 
         Returns one :class:`OrderPlacement` per order, in order; a refused
         order is ``rejected`` with its code and raises nothing. ``owner``
-        defaults to the signer.
+        defaults to the signer. An executed list whose event does not read,
+        or does not report every order, raises
+        :class:`OrderResultUnreadable`: reconcile by hash, never re-submit.
         """
         with self._signer_lock:
             revision = self._signer_revision
@@ -792,6 +820,7 @@ class ExchangeClient:
 
         Returns one :class:`OrderCancellation` per entry, in order; a cancel
         that removed nothing is ``refused`` with its code and raises nothing.
+        An unreadable result raises as in :meth:`place_orders`.
         """
         with self._signer_lock:
             revision = self._signer_revision
@@ -848,7 +877,15 @@ class ExchangeClient:
                 ``Unavailable``. An ambiguous 5xx is ``SubmissionPending``.
             TransportError: a transport or HTTP failure with no refusal
                 envelope.
+            OrderResultUnreadable: the transaction executed but an order
+                list event in it does not read; reconcile by hash, never
+                re-submit. A list of one whose entry was refused raises its
+                ``EngineError``, as a single order does.
         """
+        return _read_order_result(envelope, self._post_envelope(envelope), None)
+
+    def _post_envelope(self, envelope: bytes) -> dict[str, t.Any]:
+        """``POST /exchange`` the envelope and classify the answer."""
         body = json.dumps({"action": base64.b64encode(envelope).decode("ascii")}).encode()
         try:
             resp = self._post(

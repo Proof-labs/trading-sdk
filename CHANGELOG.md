@@ -37,6 +37,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     and `UnfilledReason` re-exports.
 - An executed entry (done without resting) reports `requested_quantity`,
   `filled_quantity` and the `unfilled` reason in every SDK.
+- An executed order or list whose `orders_placed` / `orders_cancelled` event
+  does not read (malformed, or from a call that knows what it sent, missing or
+  not one entry per order sent) is reported as executed and unreadable, never
+  as success or as a retryable error: TypeScript `outcome: "unreadable"`
+  (`code: -1`, hash and height kept; a list method returns no `orders`),
+  Python `OrderResultUnreadable(tx_hash)`, Rust
+  `Error::OrderResultUnreadable { receipt, reason }`. Reconcile by hash.
+- Python `check_order_result(tx_hash, events)` reads a reconciled
+  transaction's order list (e.g. `transaction_evidence(...).events`) as
+  `submit` does.
 
 ### Changed
 
@@ -47,7 +57,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `cancel_order`, `cancel_order_by_client_id`, `buy_no`, `sell_no` (Rust).
   They send a list of one; when that entry is refused they return or raise
   the same engine error as before, though the transaction itself now
-  succeeds. The single names stay as
+  succeeds. A pending result reconciled later (`waitForDelivery` with or
+  without its action, Python `check_order_result`, Rust `wait_for_receipt`)
+  maps a refused list of one to the same error. The single names stay as
   aliases of the list bytes (`ActionType.PlaceOrder` / `MarketOrder` on 0x35,
   `CancelOrder` on 0x36, `CancelClientOrder` on 0x37).
 - Close position (`closePosition` in TypeScript, `close_position` in Rust,

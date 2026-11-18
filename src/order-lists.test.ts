@@ -65,6 +65,31 @@ function clientAnswering(events: TxEvent[]) {
   return client;
 }
 
+/** A client whose gateway answers pending; the tx then executes with `events`. */
+function clientReconciling(events: TxEvent[]) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      url.endsWith("/exchange")
+        ? new Response(
+            JSON.stringify({ status: "pending", error: "park deadline" }),
+          )
+        : new Response(
+            JSON.stringify({
+              result: { height: "43", tx_result: { code: 0, events } },
+            }),
+          ),
+    ),
+  );
+  const client = new ExchangeClient({
+    gatewayUrl: "",
+    chainId: "exchange-devnet-1",
+  });
+  client.setPrivateKey(key);
+  client.setUnsafeFastSubmit(true);
+  return client;
+}
+
 const order = {
   market: 1,
   side: Side.Buy,
@@ -253,14 +278,103 @@ describe("single-order methods", () => {
     expect(landed).toMatchObject({ ok: true, code: 0 });
   });
 
-  it("ignore another account's list event", async () => {
-    const r = await clientAnswering([
-      placed(
-        '[{"outcome":"rejected","market":"1","client_order_id":"","code":"12"}]',
-        "ab".repeat(20),
-      ),
-    ]).placeOrder(order);
-    expect(r).toMatchObject({ ok: true, code: 0 });
+  it("report an executed single whose result does not read as unreadable", async () => {
+    const twoEntries = `[${rejected(12).slice(1, -1)},${rejected(12).slice(1, -1)}]`;
+    for (const events of [
+      [],
+      [placed("{}")],
+      [placed(twoEntries)],
+      // Another account's list is not this order's result.
+      [placed(rejected(12), "ab".repeat(20))],
+    ]) {
+      const r = await clientAnswering(events).placeOrder(order);
+      expect(r).toMatchObject({
+        ok: false,
+        outcome: "unreadable",
+        code: -1,
+        error: null,
+        height: 42,
+        hash: expect.stringMatching(/^[0-9A-F]{64}$/),
+      });
+      expect(r.log).toContain("reconcile by hash");
+    }
+
+    const cancel = await clientAnswering([
+      cancelled('[{"outcome":"refused","order_id":"10"}]'),
+    ]).cancelOrder(10n);
+    expect(cancel).toMatchObject({ ok: false, outcome: "unreadable" });
+  });
+
+  it("report an unreadable close as unreadable, not closed successfully", async () => {
+    const client = clientAnswering([]);
+    vi.spyOn(client, "queryAccount").mockResolvedValue({
+      positions: [{ market: 9, side: "Buy", size: 3n }],
+    } as unknown as AccountInfo);
+    expect(await client.closePosition(9)).toMatchObject({
+      kind: "closed",
+      tx: { ok: false, outcome: "unreadable", height: 42 },
+    });
+  });
+});
+
+describe("pending results reconciled later", () => {
+  it("map a refused list of one to its engine error without the action", async () => {
+    const client = clientReconciling([placed(rejected(12))]);
+    const pending = await client.placeOrder(order);
+    expect(pending.outcome).toBe("timeout");
+    expect(await client.waitForDelivery(pending)).toMatchObject({
+      ok: false,
+      outcome: "engine",
+      code: 12,
+      height: 43,
+      hash: pending.hash,
+    });
+  });
+
+  it("map a refused cancel of one to its engine error without the action", async () => {
+    const client = clientReconciling([
+      cancelled('[{"outcome":"refused","order_id":"10","code":"2"}]'),
+    ]);
+    const pending = await client.cancelOrder(10n);
+    expect(await client.waitForDelivery(pending)).toMatchObject({
+      outcome: "engine",
+      code: 2,
+    });
+  });
+
+  it("keep the entry when the action says it was a list", async () => {
+    const client = clientReconciling([
+      cancelled('[{"outcome":"refused","order_id":"10","code":"2"}]'),
+    ]);
+    const { tx } = await client.cancelOrders([10n]);
+    const action = {
+      type: "CancelOrders" as const,
+      data: { owner: pubkeyToOwner(getPublicKey(key)), orderIds: [10n] },
+    };
+    expect(await client.waitForDelivery(tx, { action })).toMatchObject({
+      ok: true,
+      outcome: "ok",
+    });
+  });
+
+  it("report an unreadable list as unreadable, never success", async () => {
+    const client = clientReconciling([placed("{}")]);
+    const pending = await client.placeOrder(order);
+    expect(await client.waitForDelivery(pending)).toMatchObject({
+      ok: false,
+      outcome: "unreadable",
+      height: 43,
+      hash: pending.hash,
+    });
+  });
+
+  it("leave a transaction with no list event alone", async () => {
+    const client = clientReconciling([]);
+    const pending = await client.cancelAllOrders();
+    expect(await client.waitForDelivery(pending)).toMatchObject({
+      ok: true,
+      height: 43,
+    });
   });
 });
 
@@ -333,6 +447,21 @@ describe("list methods", () => {
       "refused",
       "refused",
     ]);
+  });
+
+  it("report a list whose result does not read as unreadable with no entries", async () => {
+    for (const events of [[], [placed("{}")], [placed(rejected(12))]]) {
+      const { tx, orders } = await clientAnswering(events).placeOrders([
+        order,
+        order,
+      ]);
+      expect(tx).toMatchObject({
+        ok: false,
+        outcome: "unreadable",
+        height: 42,
+      });
+      expect(orders).toEqual([]);
+    }
   });
 
   it("refuse 0 or 101 entries before signing", async () => {

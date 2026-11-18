@@ -5,7 +5,16 @@ import json
 import httpx
 import pytest
 
-from proof_trading_sdk import Closed, ExchangeClient, EngineError, NothingToClose, Side, TimeInForce
+from proof_trading_sdk import (
+    Closed,
+    EngineError,
+    ExchangeClient,
+    NothingToClose,
+    OrderResultUnreadable,
+    Side,
+    TimeInForce,
+    check_order_result,
+)
 from proof_trading_sdk.actions import (
     AtomicBasketLeg,
     AtomicBasketOrder,
@@ -15,6 +24,7 @@ from proof_trading_sdk.actions import (
     OrderEntry,
     PlaceOrder,
 )
+from proof_trading_sdk.chain_evidence import TransactionEvidenceEvent
 from proof_trading_sdk.client import AccountState
 from proof_trading_sdk.order_lists import OrderCancellation, OrderPlacement, order_placements
 
@@ -27,6 +37,13 @@ def _event(event_type, entries, **attributes):
     attrs += [{"key": k, "value": v} for k, v in attributes.items()]
     attrs.append({"key": "orders", "value": json.dumps(entries)})
     return {"type": event_type, "attributes": attrs}
+
+
+def _raw_placed(orders):
+    """An ``orders_placed`` whose ``orders`` attribute is ``orders`` verbatim."""
+    return {"type": "orders_placed", "attributes": [
+        {"key": "owner", "value": OWNER.hex()}, {"key": "orders", "value": orders},
+    ]}
 
 
 def _placed(*entries):
@@ -152,8 +169,66 @@ def test_cancel_client_orders_reports_each_entry(answer):
     assert refused.refused and refused.client_order_id == 11 and refused.code == 44
 
 
-def test_no_list_event_is_no_results(answer):
-    assert answer().cancel_orders([1]) == []
+PLACE = PlaceOrder(market=1, owner=OWNER, side="Buy", price=1, quantity=1)
+
+
+@pytest.mark.parametrize("action, events", [
+    (PLACE, []),
+    (PLACE, [_raw_placed("{}")]),
+    (PLACE, [_raw_placed("not json")]),
+    (PLACE, [{"type": "orders_placed", "attributes": [{"key": "owner", "value": OWNER.hex()}]}]),
+    (PLACE, [_placed(REJECTED, REJECTED)]),
+    (PLACE, [_placed({"outcome": "rejected", "market": "1"})]),
+    (CancelOrder(order_id=42, owner=OWNER), [_event("orders_cancelled", [REFUSED_ID], reason="self_trade")]),
+    (CancelOrder(order_id=42, owner=OWNER), [_cancelled({"outcome": "refused", "order_id": "42"})]),
+])
+def test_an_executed_single_that_does_not_read_is_unreadable(answer, action, events):
+    with pytest.raises(OrderResultUnreadable) as raised:
+        answer(*events).submit(action)
+    assert len(raised.value.tx_hash) == 64
+    assert "do NOT re-submit" in str(raised.value)
+
+
+def test_an_unreadable_list_raises_instead_of_returning_entries(answer):
+    entry = OrderEntry(market=1, side="Buy", price=100, quantity=5)
+    with pytest.raises(OrderResultUnreadable):
+        answer().cancel_orders([1])
+    with pytest.raises(OrderResultUnreadable):
+        answer(_placed(RESTING)).place_orders([entry, entry])
+    with pytest.raises(OrderResultUnreadable):
+        answer(_placed(RESTING, {"outcome": "lost", "market": "1"})).place_orders([entry, entry])
+
+
+def test_a_refused_list_of_one_sent_as_bytes_raises_its_engine_error(answer):
+    # Without the action, a list of one is read as a single order.
+    client = answer(_placed(REJECTED))
+    with pytest.raises(EngineError) as raised:
+        client.submit_action(client.sign_action(PLACE))
+    assert raised.value.code == 12
+
+
+def _evidence(*events):
+    return tuple(
+        TransactionEvidenceEvent(type=e["type"], attributes=tuple(e["attributes"])) for e in events
+    )
+
+
+def test_a_reconciled_list_of_one_raises_its_engine_error():
+    with pytest.raises(EngineError) as raised:
+        check_order_result("A" * 64, _evidence(_placed(REJECTED)))
+    assert raised.value.code == 12
+    with pytest.raises(EngineError) as raised:
+        check_order_result("A" * 64, _evidence(_cancelled(REFUSED_CLOID)))
+    assert raised.value.code == 44
+
+
+def test_a_reconciled_result_reads_like_the_synchronous_one():
+    check_order_result("A" * 64, _evidence(_placed(RESTING)))
+    check_order_result("A" * 64, _evidence(_placed(REJECTED, RESTING)))
+    check_order_result("A" * 64, _evidence())
+    with pytest.raises(OrderResultUnreadable) as raised:
+        check_order_result("A" * 64, _evidence(_raw_placed("[1]")))
+    assert raised.value.tx_hash == "A" * 64
 
 
 def test_place_orders_takes_market_entries(answer):
@@ -213,6 +288,13 @@ def test_close_position_on_a_flat_account_sends_nothing(answer, monkeypatch):
     client, sent = _closing(answer, monkeypatch, positions)
     assert client.close_position(2, owner=OWNER) == NothingToClose()
     assert sent == []
+
+
+def test_an_unreadable_close_raises_unreadable(answer, monkeypatch):
+    positions = [{"market": 2, "side": "Buy", "size": 4}]
+    client, _ = _closing(answer, monkeypatch, positions)
+    with pytest.raises(OrderResultUnreadable):
+        client.close_position(2, owner=OWNER)
 
 
 @pytest.mark.parametrize("code", [12, 35])

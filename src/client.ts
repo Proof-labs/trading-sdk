@@ -168,7 +168,7 @@ import { yesOrder, type NoOrder } from "./binary.js";
 import {
   orderCancellations,
   orderPlacements,
-  singleEntryRefusal,
+  readOrderLists,
   type CancelOrdersResult,
   type PlaceOrdersResult,
 } from "./order-lists.js";
@@ -818,8 +818,9 @@ export class ExchangeClient {
    * `opts.action` is the action the bytes carry, when the caller knows it.
    * It only labels the transport requests (the submission and its
    * confirmation polls) so a cancellation keeps its `urgent` priority, and
-   * maps a single order's or cancel's refused entry to its engine error as
-   * `submitTx` does; it is never encoded, sent or checked against the bytes.
+   * tells a single order or cancel from a list when the result's order list
+   * is read, as `submitTx` reads it; it is never encoded, sent or checked
+   * against the bytes.
    */
   async submitSignedTx(
     txBytes: Uint8Array,
@@ -845,7 +846,7 @@ export class ExchangeClient {
     const result = this.useGateway
       ? await this.submitViaGateway(txBytes, action)
       : await this.submitViaCometBFT(txBytes, action);
-    return singleEntryRefusal(result, action);
+    return readOrderLists(result, action);
   }
 
   /**
@@ -1085,7 +1086,8 @@ export class ExchangeClient {
     return (
       r.height !== undefined ||
       r.outcome === "engine" ||
-      r.outcome === "transport"
+      r.outcome === "transport" ||
+      r.outcome === "unreadable"
     );
   }
 
@@ -1244,8 +1246,10 @@ export class ExchangeClient {
    * Never resubmits writes. Use setUnsafeFastSubmit(true) to avoid a second poller.
    * `opts.action` labels the confirmation polls with that action's transport
    * priority, as on `submitSignedTx`; it is never checked against the hash.
-   * When it is a single order or cancel, a refused entry returns as its
-   * engine error, as `submitTx` does.
+   * The executed result's order list is read as `submitTx` reads it: a list
+   * of one whose entry was refused returns as its engine error, with or
+   * without `opts.action` (pass a list action to keep the entry instead), and
+   * an unreadable list returns `unreadable`.
    */
   async waitForDelivery(
     sync: TxResult,
@@ -1262,7 +1266,7 @@ export class ExchangeClient {
     opts: { timeoutMs?: number; signal?: AbortSignal },
     action?: Action,
   ): Promise<TxResult> {
-    if (this.isFinalResult(sync)) return singleEntryRefusal(sync, action);
+    if (this.isFinalResult(sync)) return readOrderLists(sync, action);
     if (!sync.hash) throw new Error("submitTx returned no tx hash");
     const timeoutMs = opts.timeoutMs ?? 9_000;
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
@@ -1295,7 +1299,7 @@ export class ExchangeClient {
         if (!res.ok) continue;
         const result = txFromQueryResponse(await res.json(), sync.hash);
         if (!opts.signal?.aborted && result)
-          return singleEntryRefusal(result, action);
+          return readOrderLists(result, action);
       } catch {
         /* Read failures leave the write outcome unknown. */
       } finally {
@@ -1336,7 +1340,10 @@ export class ExchangeClient {
   /**
    * Place a limit order for the loaded signer. `owner` is supplied
    * automatically. Equivalent to
-   * `submitTx({ type: "PlaceOrder", data: { ...params, owner } })`.
+   * `submitTx({ type: "PlaceOrder", data: { ...params, owner } })`. A refused
+   * order returns its engine error; an executed one whose result does not
+   * read returns `unreadable` (reconcile by hash, never resubmit). The other
+   * single-order methods return the same way.
    * Optional `stopLoss`/`takeProfit` limbs attach a pre-fill bracket that
    * installs on the order's first fill (validated client-side here and in
    * the codec path; encoded as the proof-wire 2.1.0 trailing fields).
@@ -1408,6 +1415,8 @@ export class ExchangeClient {
    * stands or is refused on its own: `tx` succeeds and `orders` gives each
    * order's outcome in the order sent. `orders` is empty while `tx` has no executed verdict; read it
    * later with `orderPlacements(await waitForDelivery(tx), owner)`.
+   * An executed `tx` whose list does not read is `unreadable` with no
+   * `orders`: reconcile by hash, never resubmit.
    */
   async placeOrders(orders: OrderEntry[]): Promise<PlaceOrdersResult> {
     const owner = this.requireOwner();
@@ -1415,7 +1424,10 @@ export class ExchangeClient {
       type: "PlaceOrders",
       data: { owner, orders },
     });
-    return { tx, orders: orderPlacements(tx, owner) };
+    return {
+      tx,
+      orders: tx.outcome !== "unreadable" ? orderPlacements(tx, owner) : [],
+    };
   }
 
   /** Cancel 1 to `MAX_LIST_ENTRIES` resting orders by order ID
@@ -1426,7 +1438,10 @@ export class ExchangeClient {
       type: "CancelOrders",
       data: { owner, orderIds },
     });
-    return { tx, orders: orderCancellations(tx, owner) };
+    return {
+      tx,
+      orders: tx.outcome !== "unreadable" ? orderCancellations(tx, owner) : [],
+    };
   }
 
   /** Cancel 1 to `MAX_LIST_ENTRIES` resting orders by client order ID
@@ -1439,7 +1454,10 @@ export class ExchangeClient {
       type: "CancelClientOrders",
       data: { owner, clientOrderIds },
     });
-    return { tx, orders: orderCancellations(tx, owner) };
+    return {
+      tx,
+      orders: tx.outcome !== "unreadable" ? orderCancellations(tx, owner) : [],
+    };
   }
 
   /**

@@ -21,6 +21,11 @@ const action: Action = {
     quantity: 400n,
   },
 };
+// For tests about delivery rather than order results: it reports no list.
+const cancelAll: Action = {
+  type: "CancelAllOrders",
+  data: { owner: pubkeyToOwner(publicKey), market: null },
+};
 const json = (value: unknown, status = 200) =>
   new Response(JSON.stringify(value), { status });
 function external() {
@@ -516,7 +521,7 @@ describe("optional DeliverTx info", () => {
       );
       vi.stubGlobal("fetch", fetch);
       const client = external();
-      const result = await client.submitTxCommit(action);
+      const result = await client.submitTxCommit(cancelAll);
       expect(result).toMatchObject({
         code,
         height: 42,
@@ -587,10 +592,10 @@ describe("delivery polling", () => {
       );
       vi.stubGlobal("fetch", fetch);
       const c = external();
-      const first = await c.submitTx(action);
+      const first = await c.submitTx(cancelAll);
       const direct = await c.waitForDelivery(first);
       c.setUnsafeFastSubmit(false);
-      await c.submitTx(action);
+      await c.submitTx(cancelAll);
       const background = await c.awaitPendingVerifies();
       expect(background[0]).toMatchObject({
         code: direct.code,

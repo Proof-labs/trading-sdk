@@ -688,7 +688,12 @@ const cancels = await client.cancelOrders([42n, 43n]); // or cancelClientOrders
 `PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder` through
 `submitTx`) keep their signatures and send a list of one. When that one entry
 is refused, the result is the same engine error the single action always
-returned. `marketOrder` takes an optional `worstPrice` and `reduceOnly`.
+returned. `waitForDelivery` reads a reconciled result the same way, with or
+without its `action`: a list of one whose entry was refused is that engine
+error (pass a list `action` to keep the entry). An executed result whose list
+event does not read, or does not report one entry per order sent, is
+`outcome: "unreadable"` (`ok: false`, `code: -1`) with its hash and height:
+it executed, so reconcile by hash and never resubmit. `marketOrder` takes an optional `worstPrice` and `reduceOnly`.
 `closePosition(market)` reads the position and sends a reduce-only market
 order on the opposite side for its size, returning `{ kind: "closed", tx }`;
 a refusal is `tx`'s engine error (code 12 when the account cannot afford it).

@@ -230,6 +230,63 @@ async fn a_pending_submission_reconciles_through_its_receipt() {
     assert_eq!(targets[1], format!("GET /v1/tx/{hash}"));
 }
 
+/// A single order sent while pending and reconciled by hash later still
+/// reads its refused entry as the engine error, without the action.
+#[tokio::test]
+async fn a_pending_single_reconciles_to_its_engine_error() {
+    let c = client("http://127.0.0.1:1");
+    let order = c.limit_order(1, Side::Buy, 66_000_000_000, 2);
+    let tx = c.sign(&actions::place_order(order)).unwrap();
+    let hash = tx.hash;
+    let (url, _) = fixture(vec![
+        (200, json!({"status":"pending","txHash":hash.to_string()})),
+        (
+            200,
+            json!({"result":{"hash":hash.to_string(),"height":"7","tx_result":{"code":0,"log":"",
+                "events":[{"type":"orders_placed","attributes":[
+                    {"key":"owner","value":c.address().to_string()},
+                    {"key":"orders","value":r#"[{"outcome":"rejected","market":"1","client_order_id":"","code":"12"}]"#}]}]}}}),
+        ),
+    ])
+    .await;
+    let c2 = client(&url);
+    assert!(c2.send(&tx).await.unwrap().is_pending());
+    let receipt = c2
+        .wait_for_receipt(hash, Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert_eq!(
+        receipt.error,
+        Some(EngineError::Known(ErrorKind::InsufficientMargin))
+    );
+}
+
+/// An executed transaction whose order list does not parse is neither
+/// success nor a plain error: it names the executed transaction to reconcile.
+#[tokio::test]
+async fn an_executed_order_list_that_does_not_parse_is_unreadable() {
+    let c = client("http://127.0.0.1:1");
+    let tx = c.sign(&actions::cancel_order(c.address(), 5)).unwrap();
+    let (url, _) = fixture(vec![(
+        200,
+        json!({"status":"ok","txHash":tx.hash.to_string(),"code":0,"height":42,"log":"",
+               "events":[{"type":"orders_cancelled","attributes":[
+                   {"key":"owner","value":c.address().to_string()},
+                   {"key":"reason","value":"user_requested"},
+                   {"key":"orders","value":"{}"}]}]}),
+    )])
+    .await;
+    match client(&url).send(&tx).await {
+        Err(Error::OrderResultUnreadable { receipt, .. }) => {
+            assert_eq!(
+                (receipt.hash, receipt.height, receipt.error),
+                (tx.hash, 42, None)
+            );
+        }
+        other => panic!("expected OrderResultUnreadable, got {other:?}"),
+    }
+}
+
 /// A submit with no verdict hands back the exact transaction, through the
 /// helpers too, so the caller can reconcile instead of placing again.
 #[tokio::test]

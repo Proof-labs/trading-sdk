@@ -155,7 +155,12 @@ single helpers (`place_order`, `place_entry`, `market_order`, `cancel_order`,
 report its refusal as `receipt.error`, as before lists. `close_position`
 returns `CloseOutcome::Closed(submitted)` with the same refusal reporting, or
 `CloseOutcome::NothingToClose` when the account holds no position on the
-market (nothing is sent). A basket's legs are
+market (nothing is sent). `wait_for_receipt` reads a reconciled receipt the
+same way without knowing what was sent: a list of one whose entry was
+refused is `receipt.error`. An executed transaction whose list event does
+not parse, or (from a helper) does not report one entry per order sent, is
+`Error::OrderResultUnreadable { receipt, reason }`: it executed, so reconcile
+`receipt.hash` and never sign it again. A basket's legs are
 `receipt.placements()` too, in order; a failed basket is `receipt.error` with
 every leg rejected.
 
@@ -184,12 +189,14 @@ rejections and gateway refusals are `TxStatus`, not errors. When a
 submission may have landed without a verdict (transport failure, 5xx,
 unreadable answer), every submitting call, the order helpers included,
 returns `Error::Unconfirmed { tx, source }` with the exact signed transaction.
-Any other `Err` means nothing executed.
+`Error::OrderResultUnreadable` means it executed but its order result did not
+read. Any other `Err` means nothing executed.
 
 ```rust,ignore
 match client.place_order(order).await {
     Ok(s) => { /* verdict */ }
     Err(Error::Unconfirmed { tx, .. }) => { /* wait_for_receipt(tx.hash), or send(&tx) again */ }
+    Err(Error::OrderResultUnreadable { receipt, .. }) => { /* executed: reconcile receipt.hash */ }
     Err(e) => { /* not sent */ }
 }
 ```

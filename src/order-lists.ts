@@ -11,7 +11,7 @@
 import { Attributes, type AbciEventInput } from "./abci-event.js";
 import { bytesToHex } from "./crypto.js";
 import { decodeExecError, type ExecErrorInfo } from "./errors.js";
-import { txEngineError } from "./tx-result.js";
+import { txEngineError, txUnreadable } from "./tx-result.js";
 import {
   Side,
   TimeInForce,
@@ -251,11 +251,16 @@ export function decodeOrderListEvent(
   return null;
 }
 
-function listEvents(tx: TxResult, owner: Address): OrderListEvent[] {
-  const hex = bytesToHex(owner);
+/** The list events of `tx`, only `owner`'s when given; throws on one that
+ *  does not decode. */
+function listEvents(tx: TxResult, owner?: Address): OrderListEvent[] {
+  const hex = owner ? bytesToHex(owner) : null;
   return (tx.events ?? [])
     .map(decodeOrderListEvent)
-    .filter((e): e is OrderListEvent => e !== null && e.owner === hex);
+    .filter(
+      (e): e is OrderListEvent =>
+        e !== null && (hex === null || e.owner === hex),
+    );
 }
 
 /** Each order's outcome from the `orders_placed` event `owner`'s placement
@@ -282,38 +287,108 @@ export function orderCancellations(
   return event?.type === "OrdersCancelled" ? event.orders : [];
 }
 
-/**
- * A single order or cancel is a list of one, and its refusal now arrives as
- * a rejected entry of a successful transaction. Report it as the engine error
- * the single action's transaction always carried, so callers of the single
- * actions see the same result. Every other result passes through.
- */
-export function singleEntryRefusal(tx: TxResult, action?: Action): TxResult {
-  if (!action || tx.outcome !== "ok") return tx;
-  let entries: (OrderPlacement | OrderCancellation)[];
-  try {
-    if (action.type === "PlaceOrder" || action.type === "MarketOrder") {
-      entries = orderPlacements(tx, action.data.owner);
-    } else if (
-      action.type === "CancelOrder" ||
-      action.type === "CancelClientOrder"
-    ) {
-      entries = orderCancellations(tx, action.data.owner);
-    } else {
-      return tx;
-    }
-  } catch {
-    // A committed result is never turned into an exception here.
-    return tx;
+/** What an order-list action sent: the event that reports it, its entry
+ *  count, and whether it is a single order sent as a list of one. */
+interface SentList {
+  event: OrderListEvent["type"];
+  entries: number;
+  single: boolean;
+  owner: Address;
+}
+
+function sentList(action: Action): SentList | null {
+  const single = (event: SentList["event"], owner: Address): SentList => ({
+    event,
+    entries: 1,
+    single: true,
+    owner,
+  });
+  const list = (
+    event: SentList["event"],
+    entries: number,
+    owner: Address,
+  ): SentList => ({ event, entries, single: false, owner });
+  switch (action.type) {
+    case "PlaceOrder":
+    case "MarketOrder":
+      return single("OrdersPlaced", action.data.owner);
+    case "CancelOrder":
+    case "CancelClientOrder":
+      return single("OrdersCancelled", action.data.owner);
+    case "PlaceOrders":
+      return list("OrdersPlaced", action.data.orders.length, action.data.owner);
+    case "CancelOrders":
+      return list(
+        "OrdersCancelled",
+        action.data.orderIds.length,
+        action.data.owner,
+      );
+    case "CancelClientOrders":
+      return list(
+        "OrdersCancelled",
+        action.data.clientOrderIds.length,
+        action.data.owner,
+      );
+    default:
+      return null;
   }
-  const [refused] = entries;
+}
+
+/**
+ * Read an executed code-0 transaction's order list. A single order or cancel
+ * is a list of one whose refusal arrives as a refused entry: report it as the
+ * engine error the single action always carried. The rule reads the receipt,
+ * so a result reconciled without its action gets it too: there a list of one
+ * whose entry was refused is that error (lists of one are how singles are
+ * sent). The transaction's list is its `orders_placed`, else its
+ * user-requested `orders_cancelled`.
+ *
+ * A list event that does not read, or (when `action` says what was sent) a
+ * missing list or one with the wrong number of entries, returns `unreadable`:
+ * the transaction executed, so it is never reported as success and never
+ * resubmitted. Every other result passes through.
+ */
+export function readOrderLists(tx: TxResult, action?: Action): TxResult {
+  // A CheckTx acceptance carries no height or events: nothing executed yet.
   if (
-    entries.length !== 1 ||
-    (refused.outcome !== "rejected" && refused.outcome !== "refused")
+    tx.outcome !== "ok" ||
+    (tx.height === undefined && tx.events === undefined)
   ) {
     return tx;
   }
-  return txEngineError(refused.code, {
+  const sent = action ? sentList(action) : null;
+  let events: OrderListEvent[];
+  try {
+    events = listEvents(tx, sent?.owner);
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    return txUnreadable(
+      tx,
+      `order list unreadable (${why}); reconcile by hash`,
+    );
+  }
+  const placed = events.find((e) => e.type === "OrdersPlaced")?.orders;
+  const cancelled = events.find(
+    (e) => e.type === "OrdersCancelled" && e.reason === "user_requested",
+  )?.orders;
+  let entries: (OrderPlacement | OrderCancellation)[] | undefined =
+    placed ?? cancelled;
+  if (sent) {
+    entries = sent.event === "OrdersPlaced" ? placed : cancelled;
+    if (entries?.length !== sent.entries) {
+      const read = entries ? `${entries.length} reported` : "no list event";
+      return txUnreadable(
+        tx,
+        `order list unreadable (${sent.entries} sent, ${read}); reconcile by hash`,
+      );
+    }
+    if (!sent.single) return tx;
+  }
+  const only = entries?.length === 1 ? entries[0] : undefined;
+  if (!only || (only.outcome !== "rejected" && only.outcome !== "refused")) {
+    return tx;
+  }
+  return txEngineError(only.code, {
     hash: tx.hash,
     height: tx.height,
     log: tx.log,

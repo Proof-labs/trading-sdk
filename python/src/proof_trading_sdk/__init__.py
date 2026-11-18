@@ -109,6 +109,7 @@ from proof_trading_sdk.errors import (
     EngineError,
     GatewayError,
     GatewayReadError,
+    OrderResultUnreadable,
     ProofTradingSdkError,
     PreAdmissionRefusal,
     RateLimited,
@@ -145,6 +146,7 @@ from proof_trading_sdk.client import Closed, CloseOutcome, ExchangeClient, Nothi
 from proof_trading_sdk.order_lists import (  # noqa: F401
     OrderCancellation,
     OrderPlacement,
+    check_order_result,
     order_cancellations,
     order_placements,
 )
@@ -300,6 +302,7 @@ __all__ = [
     "OrderCancellation",
     "order_placements",
     "order_cancellations",
+    "check_order_result",
     "MarketStatsStatus", "MarketStatsOpenInterest", "MarketStats", "MarketStatsResponse",
     "decode_market_stats_response", "OracleMarketHealth", "OracleHealth", "decode_oracle_health",
     "FinalizedAccountState",
@@ -348,6 +351,7 @@ __all__ = [
     "RateLimited",
     "SigningError",
     "SubmissionPending",
+    "OrderResultUnreadable",
     "TransportError",
     "get_error_name",
     "get_error_code_table",
