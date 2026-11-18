@@ -9,11 +9,11 @@ export interface EventVoidedQueryOptions {
   fetch?: typeof globalThis.fetch;
 }
 
-/** The newest indexed `event_voided` record for `eventId`, or `null` when the
- * event has not been voided (or the indexer has not ingested it yet). Reads
- * one page of `GET /v1/history/admin-events?event_type=event_voided`: the
- * route cannot filter by event, and Voids are rare, so the newest 1000 cover
- * every live event. */
+/** The indexed `event_voided` record for `eventId`, or `null` when the event
+ * has not been voided (or the indexer has not ingested it yet). Walks
+ * `GET /v1/history/admin-events?event_type=event_voided` pages via
+ * `next_cursor` until the record is found or history is exhausted: the route
+ * cannot filter by event. */
 export async function queryEventVoided(
   gatewayUrl: string,
   eventId: number,
@@ -23,23 +23,41 @@ export async function queryEventVoided(
     throw new Error("Invalid event id: must be a uint32");
   }
   const { signal } = options;
-  signal?.throwIfAborted();
-  const params = new URLSearchParams({
-    event_type: "event_voided",
-    limit: "1000",
-  });
-  const response = await (options.fetch ?? globalThis.fetch)(
-    `${gatewayUrl.replace(/\/+$/, "")}/v1/history/admin-events?${params}`,
-    { method: "GET", signal },
-  );
-  if (!response.ok) throw new GatewayHttpError(response.status, response);
-  const body: unknown = await response.json();
-  signal?.throwIfAborted();
-  const rows =
-    typeof body === "object" && body !== null
-      ? (body as { admin_events?: unknown }).admin_events
-      : undefined;
-  if (!Array.isArray(rows)) throw new Error("Invalid admin-events page");
+  const base = `${gatewayUrl.replace(/\/+$/, "")}/v1/history/admin-events`;
+  let cursor = "";
+  for (;;) {
+    signal?.throwIfAborted();
+    const params = new URLSearchParams({
+      event_type: "event_voided",
+      limit: "1000",
+    });
+    if (cursor) params.set("cursor", cursor);
+    const response = await (options.fetch ?? globalThis.fetch)(
+      `${base}?${params}`,
+      { method: "GET", signal },
+    );
+    if (!response.ok) throw new GatewayHttpError(response.status, response);
+    const body: unknown = await response.json();
+    signal?.throwIfAborted();
+    const page =
+      typeof body === "object" && body !== null
+        ? (body as { admin_events?: unknown; next_cursor?: unknown })
+        : {};
+    if (!Array.isArray(page.admin_events))
+      throw new Error("Invalid admin-events page");
+    const found = findEventVoided(page.admin_events, eventId);
+    if (found) return found;
+    const next = page.next_cursor;
+    if (typeof next !== "string" || next === "") return null;
+    if (next === cursor) throw new Error("admin-events cursor did not advance");
+    cursor = next;
+  }
+}
+
+function findEventVoided(
+  rows: unknown[],
+  eventId: number,
+): EventVoidedEvent | null {
   for (const row of rows) {
     if (typeof row !== "object" || row === null) continue;
     const { event_type: type, payload } = row as {

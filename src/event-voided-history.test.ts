@@ -72,4 +72,31 @@ describe("queryEventVoided", () => {
       "Invalid event id",
     );
   });
+
+  it("follows next_cursor until the event is found", async () => {
+    const pages = [
+      { admin_events: [voided("12", "100000")], next_cursor: "c1" },
+      { admin_events: [voided("43", "350000")], next_cursor: "c2" },
+    ];
+    const transport = vi.fn(
+      async () => new Response(JSON.stringify(pages.shift())),
+    );
+    const result = await queryEventVoided("https://gateway.test", 43, {
+      fetch: transport,
+    });
+    expect(result?.yesPrice).toBe(350000n);
+    expect(transport).toHaveBeenCalledTimes(2);
+    const [second] = transport.mock.calls[1] as unknown as [string];
+    expect(new URL(second).searchParams.get("cursor")).toBe("c1");
+  });
+
+  it("throws when the cursor does not advance", async () => {
+    const transport = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ admin_events: [], next_cursor: "c1" })),
+    );
+    await expect(
+      queryEventVoided("https://gateway.test", 43, { fetch: transport }),
+    ).rejects.toThrow("cursor did not advance");
+  });
 });
