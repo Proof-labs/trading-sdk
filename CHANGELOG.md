@@ -7,6 +7,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+- `queryEventVoided(gatewayUrl, eventId)` reads the indexed `event_voided`
+  record (the Yes price p a Void settled at) from
+  `GET /v1/history/admin-events`.
+
 ## [13.0.0] (Python 5.0.0; Rust core 5.0.0) — 2026-11-17
 
 Compatible with exchange 2.25.0 / proof-wire 12.0.0. npm 13.0.0 is a
