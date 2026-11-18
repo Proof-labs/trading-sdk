@@ -537,10 +537,6 @@ export {
   type OraclePriceHistoryPage,
   type OraclePriceHistoryOptions,
 } from "./oracle-price-history.js";
-export {
-  queryEventVoided,
-  type EventVoidedQueryOptions,
-} from "./event-voided-history.js";
 
 export {
   queryMarketStats,
