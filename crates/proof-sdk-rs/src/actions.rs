@@ -105,12 +105,14 @@ pub fn market_entry(
     }
 }
 
-/// `PlaceOrders`: 1 to [`MAX_LIST_ENTRIES`](crate::MAX_LIST_ENTRIES) limit or market orders for `owner` under one
-/// signature, each placed or refused on its own, in order.
+/// `PlaceOrders`: 1 to [`MAX_LIST_ENTRIES`](crate::MAX_LIST_ENTRIES) limit or market
+/// orders for `owner` under one signature, each placed or refused on its own,
+/// in order.
 ///
 /// # Errors
 ///
-/// [`Error::InvalidInput`] for no orders or more than [`MAX_LIST_ENTRIES`](crate::MAX_LIST_ENTRIES).
+/// [`Error::InvalidInput`] for no orders or more than
+/// [`MAX_LIST_ENTRIES`](crate::MAX_LIST_ENTRIES).
 pub fn place_orders(owner: Address, orders: Vec<OrderEntry>) -> Result<Action> {
     Ok(Action::PlaceOrders(PlaceOrders {
         owner: owner.to_bytes(),
@@ -118,12 +120,13 @@ pub fn place_orders(owner: Address, orders: Vec<OrderEntry>) -> Result<Action> {
     }))
 }
 
-/// `CancelOrders`: 1 to [`MAX_LIST_ENTRIES`](crate::MAX_LIST_ENTRIES) exchange order ids of `owner`,
-/// each cancelled or refused on its own.
+/// `CancelOrders`: 1 to [`MAX_LIST_ENTRIES`](crate::MAX_LIST_ENTRIES) exchange order ids
+/// of `owner`, each cancelled or refused on its own.
 ///
 /// # Errors
 ///
-/// [`Error::InvalidInput`] for no ids or more than [`MAX_LIST_ENTRIES`](crate::MAX_LIST_ENTRIES).
+/// [`Error::InvalidInput`] for no ids or more than
+/// [`MAX_LIST_ENTRIES`](crate::MAX_LIST_ENTRIES).
 pub fn cancel_orders(owner: Address, order_ids: Vec<OrderId>) -> Result<Action> {
     Ok(Action::CancelOrders(CancelOrders {
         owner: owner.to_bytes(),
@@ -131,12 +134,13 @@ pub fn cancel_orders(owner: Address, order_ids: Vec<OrderId>) -> Result<Action> 
     }))
 }
 
-/// `CancelClientOrders`: 1 to [`MAX_LIST_ENTRIES`](crate::MAX_LIST_ENTRIES) client order ids of
-/// `owner`, each cancelled or refused on its own.
+/// `CancelClientOrders`: 1 to [`MAX_LIST_ENTRIES`](crate::MAX_LIST_ENTRIES) client order
+/// ids of `owner`, each cancelled or refused on its own.
 ///
 /// # Errors
 ///
-/// [`Error::InvalidInput`] for no ids or more than [`MAX_LIST_ENTRIES`](crate::MAX_LIST_ENTRIES).
+/// [`Error::InvalidInput`] for no ids or more than
+/// [`MAX_LIST_ENTRIES`](crate::MAX_LIST_ENTRIES).
 pub fn cancel_client_orders(owner: Address, client_order_ids: Vec<u64>) -> Result<Action> {
     Ok(Action::CancelClientOrders(CancelClientOrders {
         owner: owner.to_bytes(),

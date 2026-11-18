@@ -3,12 +3,12 @@
  * decoded from the string attributes of one ABCI event: `orders_placed`
  * reports every placement outcome (each order of a `PlaceOrders`, each leg of
  * an `AtomicBasketOrder`, a cancel-replace's replacement), `orders_cancelled`
- * every order that left a book (or a requested cancel that removed nothing). The `orders` attribute
- * is a JSON array whose values are all strings. A malformed event throws; an
- * event of another type decodes to `null`.
+ * every order that left a book (or a requested cancel that removed nothing).
+ * The `orders` attribute is a JSON array whose values are all strings. A
+ * malformed event throws; an event of another type decodes to `null`.
  */
 
-import { Attributes, U32_MAX, type AbciEventInput } from "./abci-event.js";
+import { Attributes, type AbciEventInput } from "./abci-event.js";
 import { bytesToHex } from "./crypto.js";
 import { decodeExecError, type ExecErrorInfo } from "./errors.js";
 import { txEngineError } from "./tx-result.js";
@@ -174,7 +174,7 @@ function code(e: Attributes): { code: number; error: ExecErrorInfo | null } {
 }
 
 function placement(e: Attributes): OrderPlacement {
-  const market = Number(e.unsigned("market", U32_MAX));
+  const market = e.u32("market");
   const clientOrderId = optionalId(e, "client_order_id");
   switch (e.oneOf("outcome", ["resting", "executed", "rejected"] as const)) {
     case "resting":

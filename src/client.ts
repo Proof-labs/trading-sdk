@@ -817,8 +817,9 @@ export class ExchangeClient {
    *
    * `opts.action` is the action the bytes carry, when the caller knows it.
    * It only labels the transport requests (the submission and its
-   * confirmation polls) so a cancellation keeps its `urgent` priority; it is
-   * never encoded, sent or checked against the bytes.
+   * confirmation polls) so a cancellation keeps its `urgent` priority, and
+   * maps a single order's or cancel's refused entry to its engine error as
+   * `submitTx` does; it is never encoded, sent or checked against the bytes.
    */
   async submitSignedTx(
     txBytes: Uint8Array,
@@ -1243,6 +1244,8 @@ export class ExchangeClient {
    * Never resubmits writes. Use setUnsafeFastSubmit(true) to avoid a second poller.
    * `opts.action` labels the confirmation polls with that action's transport
    * priority, as on `submitSignedTx`; it is never checked against the hash.
+   * When it is a single order or cancel, a refused entry returns as its
+   * engine error, as `submitTx` does.
    */
   async waitForDelivery(
     sync: TxResult,
@@ -1401,9 +1404,9 @@ export class ExchangeClient {
 
   /**
    * Place 1 to `MAX_LIST_ENTRIES` limit or market orders (`kind: "market"`)
-   * for the loaded signer under one signature (`PlaceOrders`). Each order stands or is refused on
-   * its own: `tx` succeeds and `orders` gives each order's outcome in the
-   * order sent. `orders` is empty while `tx` has no executed verdict; read it
+   * for the loaded signer under one signature (`PlaceOrders`). Each order
+   * stands or is refused on its own: `tx` succeeds and `orders` gives each
+   * order's outcome in the order sent. `orders` is empty while `tx` has no executed verdict; read it
    * later with `orderPlacements(await waitForDelivery(tx), owner)`.
    */
   async placeOrders(orders: OrderEntry[]): Promise<PlaceOrdersResult> {

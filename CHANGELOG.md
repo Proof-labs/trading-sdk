@@ -50,13 +50,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   succeeds. The single names stay as
   aliases of the list bytes (`ActionType.PlaceOrder` / `MarketOrder` on 0x35,
   `CancelOrder` on 0x36, `CancelClientOrder` on 0x37).
-- Close position (`closePosition` in TypeScript, `ExchangeClient.close_position`
-  in Python, `close_position` in Rust) reads the account's position and sends
-  a reduce-only market order on the opposite side for its size. It now returns
-  a close outcome instead of a transaction result: closed with the
-  transaction (TypeScript `{ kind: "closed", tx }`, Python `Closed(tx)`, Rust
-  `CloseOutcome::Closed(submitted)`), or nothing to close on a flat account,
-  sent without a transaction (`{ kind: "nothingToClose" }`,
+- Close position (`closePosition` in TypeScript, `close_position` in Rust,
+  and the new `ExchangeClient.close_position` in Python) reads the account's
+  position and sends a reduce-only market order on the opposite side for its
+  size. It now returns a close outcome instead of a transaction result: closed
+  with the transaction (TypeScript `{ kind: "closed", tx }`, Python
+  `Closed(tx)`, Rust `CloseOutcome::Closed(submitted)`), or nothing to close on
+  a flat account, sent without a transaction (`{ kind: "nothingToClose" }`,
   `NothingToClose()`, `CloseOutcome::NothingToClose`). A refused close is the
   engine error: code 12 when the account cannot afford it, code 35 when the
   position went flat before the close ran.
@@ -73,7 +73,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Action bytes 0x01 (`PlaceOrder`), 0x02 (`CancelOrder`), 0x04
   (`MarketOrder`), 0x17 (`ClosePosition`) and 0x18 (`CancelClientOrder`) are
-  retired by the wire and no longer encode or decode in any SDK.
+  retired by the wire and no longer encode or decode in any SDK; the stale
+  `crates/spec/golden-vectors/place_order.hex` and `cancel_order.hex` go
+  with them.
 - The raw `ClosePosition` action is removed from every SDK; close with
   `closePosition` / `close_position`, or send a reduce-only market order.
   TypeScript drops the `ClosePosition` type; Python drops the `ClosePosition`

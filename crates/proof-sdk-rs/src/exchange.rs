@@ -676,8 +676,8 @@ impl ExchangeClient {
             .map(single_refusal)
     }
 
-    /// Place 1 to 100 limit orders under one signature, each placed or
-    /// refused on its own ([`actions::place_orders`]). The transaction
+    /// Place 1 to 100 limit or market orders under one signature, each placed
+    /// or refused on its own ([`actions::place_orders`]). The transaction
     /// succeeds; [`Receipt::placements`] says what each order did.
     ///
     /// # Errors

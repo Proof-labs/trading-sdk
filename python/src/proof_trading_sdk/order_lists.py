@@ -90,6 +90,20 @@ def _int(entry: dict[str, t.Any], key: str) -> Optional[int]:
         raise CodecError(f"list event entry: {key} is not an integer: {value!r}") from e
 
 
+def _required(entry: dict[str, t.Any], key: str) -> int:
+    value = _int(entry, key)
+    if value is None:
+        raise CodecError(f"list event entry: {key} is missing")
+    return value
+
+
+def _outcome(entry: dict[str, t.Any], known: tuple[str, ...]) -> str:
+    outcome = entry.get("outcome")
+    if outcome not in known:
+        raise CodecError(f"list event entry: unknown outcome {outcome!r}")
+    return t.cast(str, outcome)
+
+
 def _bool(entry: dict[str, t.Any], key: str) -> Optional[bool]:
     value = entry.get(key)
     return None if value is None else value == "true"
@@ -132,8 +146,8 @@ def order_placements(response: dict[str, t.Any]) -> list[OrderPlacement]:
         tif = entry.get("time_in_force")
         placements.append(
             OrderPlacement(
-                outcome=str(entry.get("outcome")),
-                market=_int(entry, "market") or 0,
+                outcome=_outcome(entry, ("resting", "executed", "rejected")),
+                market=_required(entry, "market"),
                 client_order_id=_int(entry, "client_order_id"),
                 order_id=_int(entry, "order_id"),
                 side=_SIDES.get(side) if side is not None else None,
@@ -159,7 +173,7 @@ def order_cancellations(response: dict[str, t.Any]) -> list[OrderCancellation]:
         code, error_name = _code(entry)
         cancellations.append(
             OrderCancellation(
-                outcome=str(entry.get("outcome")),
+                outcome=_outcome(entry, ("cancelled", "refused")),
                 order_id=_int(entry, "order_id"),
                 client_order_id=_int(entry, "client_order_id"),
                 market=_int(entry, "market"),

@@ -196,7 +196,7 @@ export interface CancelClientOrder {
 }
 
 /** Most entries one list action (`PlaceOrders`, `CancelOrders`,
- *  `CancelClientOrders`) carries; the wire refuses 0 or more. */
+ *  `CancelClientOrders`) carries; the wire refuses 0 or more than this. */
 export const MAX_LIST_ENTRIES = 100;
 
 /** A limit entry of a {@link PlaceOrders}: a {@link PlaceOrder} without its
