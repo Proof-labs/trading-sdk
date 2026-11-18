@@ -60,25 +60,6 @@ pub fn place_entry(owner: Address, entry: OrderEntry) -> Action {
     Action::PlaceOrders(PlaceOrders::entry(owner.to_bytes(), entry))
 }
 
-/// `PlaceOrders` of one close of a position on `market` held on
-/// `position_side`: a reduce-only market order on the other side for `size`.
-/// The engine clamps it to the position, and refuses it with code 35 when
-/// there is none.
-#[must_use]
-pub fn close_position(owner: Address, market: MarketId, position_side: Side, size: u64) -> Action {
-    let side = match position_side {
-        Side::Buy => Side::Sell,
-        Side::Sell => Side::Buy,
-    };
-    place_entry(
-        owner,
-        OrderEntry {
-            reduce_only: true,
-            ..market_entry(market, side, size, None)
-        },
-    )
-}
-
 /// `CancelOrders` of one exchange order id.
 #[must_use]
 pub fn cancel_order(owner: Address, order_id: OrderId) -> Action {
@@ -107,7 +88,10 @@ pub fn order_entry(market: MarketId, side: Side, price: u64, quantity: u64) -> O
 
 /// One market order of a [`place_orders`] list: immediate-or-cancel at the
 /// best available prices, sized to what the account can afford.
-/// `worst_price`, when set, stops the fills at that price.
+/// `worst_price`, when set, stops the fills at that price. A close is one with
+/// `reduce_only: true` on the other side for the position's size;
+/// [`ExchangeClient::close_position`](crate::ExchangeClient::close_position)
+/// builds it from the account.
 #[must_use]
 pub fn market_entry(
     market: MarketId,
@@ -750,19 +734,6 @@ mod tests {
             ),
             (1, Side::Sell, 10, Some(8))
         );
-    }
-
-    #[test]
-    fn a_close_is_a_reduce_only_market_entry_on_the_other_side() {
-        for (held, side) in [(Side::Buy, Side::Sell), (Side::Sell, Side::Buy)] {
-            let (owner, entry) = only_entry(&close_position(OWNER, 2, held, 5));
-            assert_eq!(owner, OWNER);
-            assert_eq!(
-                (entry.market, entry.side, entry.quantity, entry.reduce_only),
-                (2, side, 5, true)
-            );
-            assert_eq!(entry.kind, OrderKind::Market { worst_price: None });
-        }
     }
 
     #[test]

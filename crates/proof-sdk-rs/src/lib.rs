@@ -77,7 +77,8 @@ pub use event::{
     PredictionSettled, TriggerInvalidation,
 };
 pub use exchange::{
-    EngineError, ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted, TxStatus,
+    CloseOutcome, EngineError, ExchangeClient, Receipt, RefusalReason, SignedTx, Submitted,
+    TxStatus,
 };
 pub use history::{
     AccountEventsQuery, BboCandle, Candle, CandlePage, CandleQuery, CandleResolution, CandleUnit,

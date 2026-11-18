@@ -293,48 +293,6 @@ class AmendOrder(Action):
         }
 
 
-# Engine code for a reduce-only order with no position on its side.
-REDUCE_ONLY_NO_POSITION_CODE = 35
-
-
-@dataclass
-class ClosePosition(Action):
-    """Close ``owner``'s whole position on ``market``.
-
-    The wire has no close action: a close is a reduce-only market order on the
-    opposite side, sized from the position. :meth:`ExchangeClient.submit`
-    reads the position and sends :meth:`market_order`; a flat account is a
-    no-op success. Encoding it directly raises, since the size is unknown.
-    """
-
-    ACTION_NAME = "ClosePosition"
-    market: int
-    owner: bytes
-
-    @property
-    def action_type(self) -> int:
-        return ActionType.PlaceOrders
-
-    def market_order(self, position: Optional[dict[str, Any]]) -> "MarketOrder":
-        """The reduce-only market order closing *position* (``None`` when
-        flat, which the engine refuses with code 35)."""
-        size = int(position["size"]) if position else 0
-        long = bool(position) and position.get("side") == Side.Buy
-        return MarketOrder(
-            market=self.market,
-            owner=self.owner,
-            side=Side.Sell if long or size == 0 else Side.Buy,
-            quantity=size if size > 0 else 1,
-            reduce_only=True,
-        )
-
-    def fields(self) -> dict[str, Any]:
-        raise ValueError(
-            "ClosePosition needs the position size: submit it through "
-            "ExchangeClient.submit, or send ClosePosition.market_order(position)"
-        )
-
-
 _U64_MAX = (1 << 64) - 1
 _U32_MAX = (1 << 32) - 1
 _U16_MAX = (1 << 16) - 1
@@ -1341,7 +1299,6 @@ __all__ = [
     "MAX_LIST_ENTRIES",
     "ORDER_KIND_LIMIT",
     "ORDER_KIND_MARKET",
-    "REDUCE_ONLY_NO_POSITION_CODE",
     "OrderEntry",
     "PlaceOrders",
     "CancelOrders",
@@ -1349,7 +1306,6 @@ __all__ = [
     "CancelAllOrders",
     "CancelReplaceOrder",
     "AmendOrder",
-    "ClosePosition",
     "TriggerLimb",
     "SetPositionTriggers",
     "CancelPositionTriggers",

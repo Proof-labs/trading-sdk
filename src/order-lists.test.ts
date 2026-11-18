@@ -197,11 +197,16 @@ describe("single-order methods", () => {
     expect(r).toMatchObject({ ok: false, outcome: "engine", code: 12 });
   });
 
-  it("report a close with nothing to close as success", async () => {
+  it("report a close refused because the position went flat as the engine error", async () => {
     const client = clientAnswering([placed(rejected(35))]);
-    vi.spyOn(client, "queryAccount").mockResolvedValue(null);
+    vi.spyOn(client, "queryAccount").mockResolvedValue({
+      positions: [{ market: 9, side: "Sell", size: 3n }],
+    } as unknown as AccountInfo);
     const r = await client.closePosition(9);
-    expect(r).toMatchObject({ ok: true, outcome: "ok", code: 0, height: 42 });
+    expect(r).toMatchObject({
+      kind: "closed",
+      tx: { ok: false, outcome: "engine", code: 35 },
+    });
   });
 
   it("report a close the account cannot afford as the engine error", async () => {
@@ -210,7 +215,10 @@ describe("single-order methods", () => {
       positions: [{ market: 9, side: "Buy", size: 3n }],
     } as unknown as AccountInfo);
     const r = await client.closePosition(9);
-    expect(r).toMatchObject({ ok: false, outcome: "engine", code: 12 });
+    expect(r).toMatchObject({
+      kind: "closed",
+      tx: { ok: false, outcome: "engine", code: 12 },
+    });
   });
 
   it("report refused cancels of either kind as the engine error", async () => {

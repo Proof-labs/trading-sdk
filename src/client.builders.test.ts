@@ -157,7 +157,8 @@ describe("convenience action builders", () => {
         { market: 9, side: "Buy", size: 7n },
       ],
     } as unknown as AccountInfo);
-    await client.closePosition(9);
+    const closed = await client.closePosition(9);
+    expect(closed.kind).toBe("closed");
     expect(spy.mock.calls[0][0]).toEqual({
       type: "MarketOrder",
       data: {
@@ -170,16 +171,16 @@ describe("convenience action builders", () => {
     });
   });
 
-  it("closePosition on a flat account still sends the close", async () => {
+  it("closePosition on a flat account sends nothing", async () => {
     const { client } = clientWithKey();
     const spy = captureSubmit(client);
+    vi.spyOn(client, "queryAccount").mockResolvedValue({
+      positions: [{ market: 4, side: "Sell", size: 2n }],
+    } as unknown as AccountInfo);
+    expect(await client.closePosition(9)).toEqual({ kind: "nothingToClose" });
     vi.spyOn(client, "queryAccount").mockResolvedValue(null);
-    await client.closePosition(9);
-    expect(spy.mock.calls[0][0].data).toMatchObject({
-      market: 9,
-      quantity: 1n,
-      reduceOnly: true,
-    });
+    expect(await client.closePosition(9)).toEqual({ kind: "nothingToClose" });
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it("throws a clear error when no signer key is loaded", async () => {

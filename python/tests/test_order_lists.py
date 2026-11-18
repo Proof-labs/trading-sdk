@@ -5,13 +5,12 @@ import json
 import httpx
 import pytest
 
-from proof_trading_sdk import ExchangeClient, EngineError, Side, TimeInForce
+from proof_trading_sdk import Closed, ExchangeClient, EngineError, NothingToClose, Side, TimeInForce
 from proof_trading_sdk.actions import (
     AtomicBasketLeg,
     AtomicBasketOrder,
     CancelClientOrder,
     CancelOrder,
-    ClosePosition,
     MarketOrder,
     OrderEntry,
     PlaceOrder,
@@ -52,7 +51,7 @@ FILLED = {
     "outcome": "executed", "market": "2", "client_order_id": "", "order_id": "11",
     "requested_quantity": "4", "filled_quantity": "4", "unfilled": "",
 }
-NOTHING_TO_CLOSE = {"outcome": "rejected", "market": "2", "client_order_id": "", "code": "35"}
+REFUSED_CLOSE = {"outcome": "rejected", "market": "2", "client_order_id": "", "code": "12"}
 CANCELLED = {
     "outcome": "cancelled", "order_id": "9", "market": "1", "client_order_id": "",
     "original_quantity": "5", "remaining_quantity": "3", "filled_quantity": "2",
@@ -200,23 +199,28 @@ def test_close_position_sends_a_reduce_only_market_order(answer, monkeypatch, si
         {"market": 2, "side": side, "size": 4},
     ]
     client, sent = _closing(answer, monkeypatch, positions, _placed(FILLED))
-    assert client.submit(ClosePosition(market=2, owner=OWNER))["code"] == 0
+    closed = client.close_position(2, owner=OWNER)
+    assert isinstance(closed, Closed) and closed.tx["code"] == 0
     [order] = sent
     assert isinstance(order, MarketOrder)
-    assert (order.market, order.side, order.quantity, order.reduce_only) == (
-        2, closing_side, 4, True,
+    assert (order.market, order.owner, order.side, order.quantity, order.reduce_only) == (
+        2, OWNER, closing_side, 4, True,
     )
 
 
-def test_close_position_on_a_flat_account_is_a_no_op_success(answer, monkeypatch):
-    client, _ = _closing(answer, monkeypatch, [], _placed(NOTHING_TO_CLOSE))
-    assert client.submit(ClosePosition(market=2, owner=OWNER))["code"] == 0
+def test_close_position_on_a_flat_account_sends_nothing(answer, monkeypatch):
+    positions = [{"market": 1, "side": "Buy", "size": 9}]
+    client, sent = _closing(answer, monkeypatch, positions)
+    assert client.close_position(2, owner=OWNER) == NothingToClose()
+    assert sent == []
 
 
-def test_an_unaffordable_close_raises_its_engine_error(answer, monkeypatch):
+@pytest.mark.parametrize("code", [12, 35])
+def test_a_refused_close_raises_its_engine_error(answer, monkeypatch, code):
+    # 35: the position went flat between the read and the close.
     positions = [{"market": 2, "side": "Buy", "size": 4}]
-    unaffordable = {**NOTHING_TO_CLOSE, "code": "12"}
-    client, _ = _closing(answer, monkeypatch, positions, _placed(unaffordable))
+    refused = {**REFUSED_CLOSE, "code": str(code)}
+    client, _ = _closing(answer, monkeypatch, positions, _placed(refused))
     with pytest.raises(EngineError) as raised:
-        client.submit(ClosePosition(market=2, owner=OWNER))
-    assert raised.value.code == 12
+        client.close_position(2, owner=OWNER)
+    assert raised.value.code == code

@@ -66,7 +66,6 @@ from proof_trading_sdk.actions import (  # noqa: F401
     PlaceOrders,
     CancelOrders,
     CancelClientOrders,
-    ClosePosition,
     TriggerLimb,
     SetPositionTriggers,
     CancelPositionTriggers,
@@ -142,7 +141,7 @@ from proof_trading_sdk.governance_reads import (
     decode_authorities_snapshot,
     decode_liquidation_config_info,
 )
-from proof_trading_sdk.client import ExchangeClient
+from proof_trading_sdk.client import Closed, CloseOutcome, ExchangeClient, NothingToClose
 from proof_trading_sdk.order_lists import (  # noqa: F401
     OrderCancellation,
     OrderPlacement,
@@ -248,7 +247,6 @@ __all__ = [
     "PlaceOrders",
     "CancelOrders",
     "CancelClientOrders",
-    "ClosePosition",
     "TriggerLimb",
     "BINARY_PRICE_MAX",
     "BinaryPositionView",
@@ -295,6 +293,9 @@ __all__ = [
     "decode_action",
     "NonceAllocator",
     "ExchangeClient",
+    "Closed",
+    "CloseOutcome",
+    "NothingToClose",
     "OrderPlacement",
     "OrderCancellation",
     "order_placements",

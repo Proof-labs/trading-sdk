@@ -11,7 +11,7 @@
 import { Attributes, U32_MAX, type AbciEventInput } from "./abci-event.js";
 import { bytesToHex } from "./crypto.js";
 import { decodeExecError, type ExecErrorInfo } from "./errors.js";
-import { txEngineError, txOk } from "./tx-result.js";
+import { txEngineError } from "./tx-result.js";
 import {
   Side,
   TimeInForce,
@@ -314,25 +314,6 @@ export function singleEntryRefusal(tx: TxResult, action?: Action): TxResult {
     return tx;
   }
   return txEngineError(refused.code, {
-    hash: tx.hash,
-    height: tx.height,
-    log: tx.log,
-    info: tx.info,
-    events: tx.events,
-  });
-}
-
-/** Code 35: a reduce-only order with no position (or on its side). */
-const REDUCE_ONLY_REFUSED = 35;
-
-/**
- * A close is a reduce-only market order; on a flat account the engine
- * refuses it with code 35. Report that as the successful no-op a close of a
- * flat position always was. Every other result passes through.
- */
-export function closeNothingToClose(tx: TxResult): TxResult {
-  if (tx.outcome !== "engine" || tx.code !== REDUCE_ONLY_REFUSED) return tx;
-  return txOk({
     hash: tx.hash,
     height: tx.height,
     log: tx.log,

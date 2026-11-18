@@ -532,7 +532,7 @@ unsupported. See [availability](../README.md#setusermarketleverage-availability)
 - **Trading:** `PlaceOrder`, `PlaceOrders` (of `OrderEntry`s), `MarketOrder`,
   `CancelOrder`, `CancelOrders`, `CancelClientOrder`, `CancelClientOrders`,
   `CancelAllOrders`,
-  `CancelReplaceOrder`, `AmendOrder`, `ClosePosition`, `AtomicBasketOrder`,
+  `CancelReplaceOrder`, `AmendOrder`, `AtomicBasketOrder`,
   `SetPositionTriggers`, `CancelPositionTriggers`,
   `SetUserMarketLeverage`, `ApproveAgent`, `RevokeAgent`, `CreateSubAccount`,
   `SubAccountTransfer`, `Deposit`, `Withdraw`, `WithdrawRequest`.
@@ -589,10 +589,12 @@ client.cancel_client_orders([7, 8])
 A single `PlaceOrder`, `MarketOrder`, `CancelOrder` or `CancelClientOrder` is
 sent as a list of one, and `client.submit` still raises `EngineError` with its
 code when that one entry is refused. `MarketOrder` takes an optional
-`worst_price` and `reduce_only`. `client.submit(ClosePosition(market, owner))`
-reads the position and sends a reduce-only market order on the opposite side
-for its size; on a flat account it returns success, as before. Entries out of
-range raise `ValueError` before signing.
+`worst_price` and `reduce_only`. `client.close_position(market)` reads the
+position and sends a reduce-only market order on the opposite side for its
+size, returning `Closed(tx)`; a refused close raises `EngineError`. On a flat
+account it sends nothing and returns `NothingToClose()`. There is no close
+action: to close by hand, send a `MarketOrder` with `reduce_only=True`.
+Entries out of range raise `ValueError` before signing.
 
 An `AtomicBasketOrder` reports its legs in `orders_placed` too:
 `order_placements(client.submit(basket))` gives one placement per leg.

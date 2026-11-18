@@ -175,23 +175,27 @@ fn single_refusal(mut submitted: Submitted) -> Submitted {
     submitted
 }
 
-/// A close of `held` (side and size), or of nothing when flat: the engine
-/// answers a flat close with code 35, which [`nothing_to_close`] reads.
-fn close_action(owner: Address, market: MarketId, held: Option<(Side, u64)>) -> Action {
-    let (side, size) = held.unwrap_or((Side::Buy, 1));
-    actions::close_position(owner, market, side, size)
+/// The reduce-only market entry flattening a position held on `side` for
+/// `size`.
+fn close_entry(market: MarketId, side: Side, size: u64) -> OrderEntry {
+    let side = match side {
+        Side::Buy => Side::Sell,
+        Side::Sell => Side::Buy,
+    };
+    OrderEntry {
+        reduce_only: true,
+        ..actions::market_entry(market, side, size, None)
+    }
 }
 
-/// A close with no position to reduce is a success with nothing done; every
-/// other refusal stays the receipt's error.
-fn nothing_to_close(submitted: Submitted) -> Submitted {
-    let mut submitted = single_refusal(submitted);
-    if let TxStatus::Committed(receipt) = &mut submitted.status {
-        if receipt.error == Some(EngineError::Known(ErrorKind::ReduceOnlyWouldIncrease)) {
-            receipt.error = None;
-        }
-    }
-    submitted
+/// What [`ExchangeClient::close_position`] did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use]
+pub enum CloseOutcome {
+    /// The close was sent; check it as any [`Submitted`].
+    Closed(Submitted),
+    /// The account held no position on the market, so nothing was sent.
+    NothingToClose,
 }
 
 impl From<CommittedReceipt> for Receipt {
@@ -841,23 +845,29 @@ impl ExchangeClient {
     }
 
     /// Flatten this account's position on `market`: reads the position, then
-    /// sends a reduce-only market order on the other side for its size
-    /// ([`actions::close_position`]). Nothing to close is a success.
+    /// sends a reduce-only market entry on the other side for its size
+    /// ([`actions::market_entry`]). A flat account sends nothing and returns
+    /// [`CloseOutcome::NothingToClose`]. A refusal is the receipt's error,
+    /// including code 35 when the position went flat before the close ran.
     ///
     /// # Errors
     ///
     /// A failed account read (as [`InfoClient::account`]), then as
     /// [`Self::submit`].
-    pub async fn close_position(&self, market: MarketId) -> Result<Submitted> {
+    pub async fn close_position(&self, market: MarketId) -> Result<CloseOutcome> {
         let account = self.info().account(self.address()).await?;
-        let held = account
+        let Some(held) = account
             .positions
             .iter()
             .find(|p| p.market == market && p.size > 0)
-            .map(|p| (p.side, p.size));
-        self.submit(&close_action(self.address(), market, held))
+        else {
+            return Ok(CloseOutcome::NothingToClose);
+        };
+        let entry = close_entry(market, held.side, held.size);
+        self.submit(&actions::place_entry(self.address(), entry))
             .await
-            .map(nothing_to_close)
+            .map(single_refusal)
+            .map(CloseOutcome::Closed)
     }
 }
 
@@ -1150,22 +1160,12 @@ mod tests {
     }
 
     #[test]
-    fn a_close_reads_the_position_and_a_flat_close_succeeds() {
-        let c = client();
-        for (held, side, size) in [
-            (Some((Side::Buy, 7)), Side::Sell, 7),
-            (Some((Side::Sell, 3)), Side::Buy, 3),
-            (None, Side::Sell, 1),
-        ] {
-            let Action::PlaceOrders(p) = close_action(c.address(), 2, held) else {
-                panic!("{held:?}")
-            };
-            let [e] = p.orders.as_slice() else {
-                panic!("{p:?}")
-            };
+    fn a_close_is_a_reduce_only_market_entry_on_the_other_side() {
+        for (held, side) in [(Side::Buy, Side::Sell), (Side::Sell, Side::Buy)] {
+            let e = close_entry(2, held, 7);
             assert_eq!(
                 (e.market, e.side, e.quantity, e.reduce_only),
-                (2, side, size, true)
+                (2, side, 7, true)
             );
             assert_eq!(
                 e.kind,
@@ -1173,18 +1173,10 @@ mod tests {
             );
         }
 
-        let flat = PlacementOutcome::Rejected(EngineError::new(35, None));
-        let closed = nothing_to_close(committed(vec![placed(&[flat])]));
-        assert!(closed.is_success());
-        assert_eq!(closed.receipt().unwrap().placements().len(), 1);
-
-        let margin = EngineError::new(12, None);
-        let unaffordable =
-            nothing_to_close(committed(vec![placed(&[PlacementOutcome::Rejected(
-                margin,
-            )])]));
-        assert_eq!(unaffordable.error(), Some(margin));
-        assert!(nothing_to_close(committed(vec![placed(&[executed(5)])])).is_success());
+        // A position gone flat before the close ran is a genuine refusal.
+        let gone = EngineError::new(35, None);
+        let refused = single_refusal(committed(vec![placed(&[PlacementOutcome::Rejected(gone)])]));
+        assert_eq!(refused.error(), Some(gone));
     }
 
     #[test]

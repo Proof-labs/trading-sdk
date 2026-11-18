@@ -299,19 +299,6 @@ def test_an_entry_is_a_limit_or_a_market_order():
         actions.OrderEntry(market=1, side="Buy", price=1, quantity=1, kind="stop")
 
 
-def test_close_position_is_sized_from_the_position():
-    close = actions.ClosePosition(market=2, owner=bytes(20))
-    long = close.market_order({"market": 2, "side": "Buy", "size": 5})
-    assert (long.side, long.quantity, long.reduce_only) == ("Sell", 5, True)
-    short = close.market_order({"market": 2, "side": "Sell", "size": 3})
-    assert (short.side, short.quantity, short.reduce_only) == ("Buy", 3, True)
-    # Flat: the engine refuses it with code 35, which submit reports as success.
-    flat = close.market_order(None)
-    assert (flat.quantity, flat.reduce_only) == (1, True)
-    with pytest.raises(ValueError, match="needs the position size"):
-        actions.encode_action(close)
-
-
 def test_a_list_of_one_encodes_as_the_single_order():
     single = actions.PlaceOrder(
         market=1, owner=bytes(20), side="Buy", price=100, quantity=10

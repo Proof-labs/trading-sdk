@@ -101,7 +101,7 @@ On devnet, fund a new address with the faucet first:
 | `amend_order(order_id, new_price, new_qty)`     | `AmendOrder` (same-price size cuts keep priority)                         |
 | `cancel_replace_order(order_id, order)`         | `CancelReplaceOrder`                                                      |
 | `cancel_replace_order_by_client_id(cid, order)` | `CancelReplaceOrder`, cancelling by client id                             |
-| `close_position(market)`                        | reads the position, then a reduce-only market entry on the other side for its size; nothing to close is a success |
+| `close_position(market)`                        | reads the position, then a reduce-only market entry on the other side for its size; `CloseOutcome::NothingToClose` without sending when flat |
 | `submit(&action)`                               | sign with the next nonce, `POST /exchange` once                           |
 | `submit_and_wait(&action, timeout)`             | `submit`, then wait if the verdict is pending                             |
 | `sign(&action)` / `send(&signed_tx)`            | the two halves, for pre-signing on a hot path                             |
@@ -153,7 +153,9 @@ with its `requested_quantity`, `filled_quantity` and `unfilled` reason. The
 single helpers (`place_order`, `place_entry`, `market_order`, `cancel_order`,
 `cancel_order_by_client_id`, `buy_no`, `sell_no`) send a list of one and
 report its refusal as `receipt.error`, as before lists. `close_position`
-reports a close with no position (code 35) as a success. A basket's legs are
+returns `CloseOutcome::Closed(submitted)` with the same refusal reporting, or
+`CloseOutcome::NothingToClose` when the account holds no position on the
+market (nothing is sent). A basket's legs are
 `receipt.placements()` too, in order; a failed basket is `receipt.error` with
 every leg rejected.
 

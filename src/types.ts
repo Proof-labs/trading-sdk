@@ -1007,16 +1007,6 @@ export interface SetUserMarketLeverage {
   userImBps: number;
 }
 
-/** @deprecated Retired action (0x17), no longer signable: a close is a
- *  reduce-only market order. Use `ExchangeClient.closePosition(market)`. */
-export interface ClosePosition {
-  /** Market identifier to close the position on. */
-  market: number;
-  /** Account address of the position owner (20 bytes). Must equal the
-   *  envelope signer's derived address. */
-  owner: Address;
-}
-
 /** One leg of a native all-or-revert basket. The engine executes every leg as
  *  a fill-or-kill limit order; if any leg cannot fully fill at `price` or
  *  better, the whole transaction rolls back. */
@@ -2158,6 +2148,12 @@ export interface TxResult {
   /** ABCI events emitted by the transaction. */
   events?: TxEvent[];
 }
+
+/** What `ExchangeClient.closePosition` did: `closed` carries the sent
+ *  close's result; `nothingToClose` means the account held no position on the
+ *  market, so nothing was sent. */
+export type CloseOutcome =
+  { kind: "closed"; tx: TxResult } | { kind: "nothingToClose" };
 
 /** A single ABCI event with key-value attributes. */
 export interface TxEvent {

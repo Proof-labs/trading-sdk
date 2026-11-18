@@ -41,12 +41,10 @@ from proof_trading_sdk.actions import (
     CancelOrder,
     CancelOrders,
     CancelPositionTriggers,
-    ClosePosition,
     MarketOrder,
     OrderEntry,
     PlaceOrder,
     PlaceOrders,
-    REDUCE_ONLY_NO_POSITION_CODE,
     SetPositionTriggers,
     TriggerLimb,
     encode_action,
@@ -295,6 +293,23 @@ class RateLimitState:
     reset: int = 0
     tier: str = ""
     bucket: str = ""
+
+
+@dataclass(frozen=True)
+class Closed:
+    """:meth:`ExchangeClient.close_position` sent the close; ``tx`` is its
+    ``/exchange`` response."""
+
+    tx: dict[str, t.Any]
+
+
+@dataclass(frozen=True)
+class NothingToClose:
+    """:meth:`ExchangeClient.close_position` found no position, so sent
+    nothing."""
+
+
+CloseOutcome = Closed | NothingToClose
 
 
 # ── Client ───────────────────────────────────────────────────────────────────
@@ -662,29 +677,38 @@ class ExchangeClient:
         A refused :class:`PlaceOrder`, :class:`MarketOrder`,
         :class:`CancelOrder` or :class:`CancelClientOrder` raises
         :class:`EngineError` with its code, although the engine reports it as
-        a list of one with code 0. A :class:`ClosePosition` reads the
-        position and sends its reduce-only market order; on a flat account
-        it is a no-op success.
+        a list of one with code 0.
         """
-        if isinstance(action, ClosePosition):
-            return self._close_position(action)
         return _raise_single_refusal(action, self.submit_action(self.sign_action(action)))
 
-    def _close_position(self, close: ClosePosition) -> dict[str, t.Any]:
+    def close_position(self, market: int, *, owner: bytes | None = None) -> CloseOutcome:
+        """Close the whole position on *market*: a reduce-only market order on
+        the opposite side for the position's size, read first with
+        :meth:`account`. ``owner`` defaults to the signer.
+
+        A flat account sends nothing and returns :class:`NothingToClose`. A
+        refused close raises :class:`EngineError`, including code 35 when the
+        position went flat before the close ran.
+        """
+        selected_owner = self._own_owner() if owner is None else owner
         position = next(
             (
                 p
-                for p in self.account(close.owner).positions
-                if p["market"] == close.market and p["size"] > 0
+                for p in self.account(selected_owner).positions
+                if p["market"] == market and p["size"] > 0
             ),
             None,
         )
-        order = close.market_order(position)
-        data = self.submit_action(self.sign_action(order))
-        # Nothing to close: the success the close action always returned.
-        if single_refusal_code(data, ORDERS_PLACED) == REDUCE_ONLY_NO_POSITION_CODE:
-            return data
-        return _raise_single_refusal(order, data)
+        if position is None:
+            return NothingToClose()
+        order = MarketOrder(
+            market=market,
+            owner=selected_owner,
+            side="Sell" if position["side"] == "Buy" else "Buy",
+            quantity=int(position["size"]),
+            reduce_only=True,
+        )
+        return Closed(tx=self.submit(order))
 
     def _submit_with_signer_revision(self, action: Action, revision: int) -> dict[str, t.Any]:
         action_type, payload = encode_action(action)

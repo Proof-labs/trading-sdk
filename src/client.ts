@@ -105,6 +105,7 @@ import type {
   Action,
   TxEvent,
   TxResult,
+  CloseOutcome,
   PlaceOrder,
   OrderEntry,
   MarketOrder,
@@ -165,7 +166,6 @@ import {
 } from "./http-transport.js";
 import { yesOrder, type NoOrder } from "./binary.js";
 import {
-  closeNothingToClose,
   orderCancellations,
   orderPlacements,
   singleEntryRefusal,
@@ -1488,28 +1488,28 @@ export class ExchangeClient {
   /**
    * Close the loaded signer's entire position on `market`: a reduce-only
    * market order on the opposite side for the position's size, read first
-   * with {@link ExchangeClient.queryAccount}. Idempotent on an already-flat
-   * position: the engine refuses that close with code 35, reported here as
-   * success.
+   * with {@link ExchangeClient.queryAccount}. A flat account sends nothing
+   * and returns `nothingToClose`. A refusal is the engine error, including
+   * code 35 when the position went flat before the close ran.
    */
-  async closePosition(market: number): Promise<TxResult> {
+  async closePosition(market: number): Promise<CloseOutcome> {
     const owner = this.requireOwner();
     const account = await this.queryAccount();
     const position = account?.positions.find(
       (p) => p.market === market && p.size > 0n,
     );
-    // A flat account still sends the close, so it gets a hash as before.
-    const result = await this.submitTx({
+    if (!position) return { kind: "nothingToClose" };
+    const tx = await this.submitTx({
       type: "MarketOrder",
       data: {
         market,
         owner,
-        side: position?.side === "Buy" ? Side.Sell : Side.Buy,
-        quantity: position?.size ?? 1n,
+        side: position.side === "Buy" ? Side.Sell : Side.Buy,
+        quantity: position.size,
         reduceOnly: true,
       },
     });
-    return closeNothingToClose(result);
+    return { kind: "closed", tx };
   }
 
   /** Atomically replace a complete SL/TP bracket. When `owner` is omitted,
