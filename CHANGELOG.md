@@ -7,6 +7,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **TypeScript:** `client.reads().marketsSnapshotView()` reads the node's
+  version 2 markets snapshot (`GET /v2/markets-snapshot`), bound to the pinned
+  chain like `queryMarketsSnapshot()`: every market with its status, every
+  event and each market's open interest, from one read at one height
+  (`MarketsSnapshotView`, `MarketView`, `EventView`). A market's `status` is
+  the engine's `MarketStatus`, or `"Unknown"` (`MarketStatusReading`) for a
+  status this SDK does not name; never read `"Unknown"` as trading. The read
+  carries no witness and needs a gateway that serves `/v2/markets-snapshot`.
+  `queryMarkets()`, `queryMarketListing()` and `queryMarketsSnapshot()` are
+  unchanged.
+- **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
+  `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
+  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
+  not a map keyed by field name, or a name that is not a string (a status
+  sent as the integer 0, for example), refuses the whole read.
+
 ## [13.0.0] (Python 5.0.0; Rust core 5.0.0) — 2026-11-17
 
 Compatible with exchange 2.25.0 / proof-wire 12.0.0. npm 13.0.0 is a

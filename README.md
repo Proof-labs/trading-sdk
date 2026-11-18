@@ -410,6 +410,19 @@ not trading authorization. Like every other gateway interaction, admin calls
 included, it goes through the SDK
 ([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md)).
 
+### Markets with their status
+
+```typescript
+const snapshot = await client.reads().marketsSnapshotView();
+const halted = snapshot.markets.filter((market) => market.status === "Halted");
+```
+
+One read of `GET /v2/markets-snapshot` at one height, bound to the configured
+`chainId`: every market with its status (`"Trading"`, `"ReduceOnly"`,
+`"Halted"`, `"Delisted"`, or `"Unknown"`, which must never be read as
+trading), every event and each market's open interest. It carries no witness.
+See [docs/market-snapshot.md](docs/market-snapshot.md).
+
 ### Insurance fund observations
 
 ```typescript
