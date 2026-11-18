@@ -16,9 +16,10 @@ use super::{ChainBinding, Envelope, SnapshotError, MAX_SNAPSHOT_BYTES, MAX_SNAPS
 /// Decode a complete `GET /v2/markets-snapshot` response body bound to
 /// `expected_chain`. Another chain, an uncommitted height, a market or event
 /// named twice, open interest out of market order, an `error` field, floats,
-/// repeated map keys, trailing bytes and a record that is not a map keyed by
-/// field name all refuse the whole read. A status, kind or other name this SDK
-/// does not know decodes as the view's `Unknown`.
+/// repeated map keys, trailing bytes, a record that is not a map keyed by
+/// field name and a name that is not a string all refuse the whole read. A
+/// status, kind or other name this SDK does not know decodes as the view's
+/// `Unknown`.
 pub fn decode_snapshot_view(
     body: &[u8],
     expected_chain: ChainBinding,
@@ -81,16 +82,22 @@ pub fn decode_snapshot_view(
 /// each open interest row. rmp_serde also reads a record written as an array
 /// of its fields, by position, so a producer that wrote one positionally
 /// after a field was added or moved would have its fields read from the wrong
-/// slots. Keys this SDK does not know are skipped.
+/// slots. Refuse, too, a name that is not a string (see [`name`]): a market's
+/// status, its kind's type and branch, its mark's source, an event's status
+/// and outcome, and its resolution source's type and comparison. Keys this
+/// SDK does not know are skipped.
 fn check_shape(raw: &Value) -> Result<(), SnapshotError> {
     let view = record(raw)?;
     for market in list(view, "markets")? {
         let market = record(market)?;
+        name(field(market, "status"))?;
         if let Some(kind) = field(market, "kind") {
-            record(kind)?;
+            let kind = record(kind)?;
+            name(field(kind, "type"))?;
+            name(field(kind, "branch"))?;
         }
         if let Some(mark) = field(market, "mark").filter(|mark| !mark.is_nil()) {
-            record(mark)?;
+            name(field(record(mark)?, "source"))?;
         }
         for tier in list(market, "fee_tiers")? {
             record(tier)?;
@@ -98,8 +105,12 @@ fn check_shape(raw: &Value) -> Result<(), SnapshotError> {
     }
     for event in list(view, "events")? {
         let event = record(event)?;
+        name(field(event, "status"))?;
+        name(field(event, "outcome").filter(|outcome| !outcome.is_nil()))?;
         if let Some(source) = field(event, "resolution_source") {
-            record(source)?;
+            let source = record(source)?;
+            name(field(source, "type"))?;
+            name(field(source, "comparison"))?;
         }
         for conditional in list(event, "attached_conditionals")? {
             record(conditional)?;
@@ -137,6 +148,18 @@ fn list<'a>(record: &'a Entries, key: &str) -> Result<&'a [Value], SnapshotError
     match field(record, key) {
         None => Ok(&[]),
         Some(Value::Array(items)) => Ok(items.as_slice()),
+        Some(_) => Err(SnapshotError::Malformed),
+    }
+}
+
+/// Refuse a name that is not a string. rmp_serde reads an integer as a
+/// variant's index, so a status sent as 0 would read as `trading`, and a
+/// one-entry map as the variant it names: neither is a name the view sends,
+/// and a value this SDK does not know must read as `Unknown`. A missing name
+/// is left to the typed decode, which refuses one the view requires.
+fn name(value: Option<&Value>) -> Result<(), SnapshotError> {
+    match value {
+        None | Some(Value::String(_)) => Ok(()),
         Some(_) => Err(SnapshotError::Malformed),
     }
 }
@@ -312,6 +335,41 @@ mod tests {
             decode(&encoded(&unordered)).unwrap_err(),
             SnapshotError::UnorderedOpenInterest
         );
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_string_is_refused() {
+        // rmp_serde reads an integer as a variant's index, and a one-entry map
+        // as the variant it names. Inside a kind or a resolution source serde
+        // refuses the integer, so those two fields take the map.
+        let one_entry = |name: &str| Value::Map(vec![(Value::from(name), Value::Nil)]);
+        let named = tree(&example());
+        for (path, value, reading) in [
+            ("markets/3/status", Value::from(0), "trading"),
+            ("markets/3/kind/type", Value::from(0), "perpetual"),
+            ("markets/3/kind/branch", one_entry("no"), "no"),
+            ("markets/0/mark/source", Value::from(1), "median"),
+            ("events/0/status", Value::from(2), "resolved"),
+            ("events/0/outcome", Value::from(0), "yes"),
+            (
+                "events/0/resolution_source/type",
+                Value::from(1),
+                "relayer_attested",
+            ),
+            (
+                "events/0/resolution_source/comparison",
+                one_entry("less_than"),
+                "less_than",
+            ),
+        ] {
+            let mut edited = named.clone();
+            *at(&mut edited, path) = value;
+            assert_eq!(
+                decode(&tree_body(&edited)).unwrap_err(),
+                SnapshotError::Malformed,
+                "{path}, which rmp_serde reads as {reading}"
+            );
+        }
     }
 
     #[test]
