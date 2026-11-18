@@ -245,6 +245,23 @@ pub fn decode_markets_snapshot(body: &[u8], chain_id: &[u8]) -> Result<JsValue, 
     to_bigint_js(&snapshot)
 }
 
+/// Decode a complete `GET /v2/markets-snapshot` HTTP body bound to
+/// `chain_id`, via the core's `market_snapshot::decode_snapshot_view`.
+#[wasm_bindgen]
+pub fn decode_markets_snapshot_view(body: &[u8], chain_id: &[u8]) -> Result<JsValue, JsError> {
+    let chain = core_sdk::market_snapshot::ChainBinding::new(arr32(chain_id, "chain_id")?)
+        .ok_or_else(|| JsError::new("chain_id must name a chain, not the zero binding"))?;
+    let snapshot = core_sdk::market_snapshot::decode_snapshot_view(body, chain).map_err(|e| {
+        use core_sdk::market_snapshot::SnapshotError;
+        JsError::new(match e {
+            SnapshotError::WrongChain => "market snapshot: wrong chain",
+            SnapshotError::Uncommitted => "market snapshot: uncommitted height",
+            _ => "market snapshot: malformed complete response",
+        })
+    })?;
+    to_bigint_js(&snapshot)
+}
+
 /// Build the deterministic signing message
 /// (`DOMAIN_PREFIX || chain_id || action_type || seq_be || payload`).
 #[wasm_bindgen]

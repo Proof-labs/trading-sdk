@@ -23,6 +23,27 @@ at `events`: every SDK then reports open interest as not served (`undefined` in
 TypeScript, `None` in Rust and Python), never as an empty list. A repeated or
 out-of-order market refuses the whole read.
 
+## Each market's status: the version 2 snapshot
+
+`client.reads().marketsSnapshotView()` reads `GET /v2/markets-snapshot`, the
+node's version 2 view of the same inventory from one read at one height, in
+which every market carries its governed status. It is bound to the configured
+chain like `queryMarketsSnapshot()` and decoded in the Rust core
+(`market_snapshot::decode_snapshot_view`). A market's `status` is the engine's
+`MarketStatus` (`"Trading"`, `"ReduceOnly"`, `"Halted"`, `"Delisted"`), the
+type a `SetMarketStatus` action takes, or `"Unknown"` for a status this SDK
+does not name. Never read `"Unknown"` as trading. Kinds, mark sources, event
+statuses, outcomes and resolution sources also use the engine's names, with
+`"Unknown"` for a name this SDK does not know, and a value a market does not
+have is `null`. The read carries no witness; the node refuses one on this
+route. `queryMarkets()`, `queryMarketListing()` and `queryMarketsSnapshot()`
+are unchanged.
+
+`gateway-v2-markets-snapshot.json`, next to the engine fixtures below, is a
+byte-identical copy of the gateway's frozen example: BTC trading, ETH
+reduce-only, TEST delisted and the prediction binary of event 7 halted. The
+Rust and TypeScript tests decode it.
+
 ## TypeScript
 
 ```typescript

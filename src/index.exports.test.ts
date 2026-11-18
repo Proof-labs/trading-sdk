@@ -55,8 +55,38 @@ import {
   type PendingTriggerDiscardReason,
   type TriggerHistoryLimbKind,
   type TriggerExecutionResult,
+  type MarketStatus,
+  type MarketStatusReading,
+  type MarketView,
+  type EventView,
+  type MarketsSnapshotView,
 } from "./index.js";
 import type { OpenLabel } from "./types.js";
+
+it("exports the version 2 markets snapshot types", () => {
+  const listed: Pick<MarketView, "market" | "status"> = {
+    market: 100,
+    status: "Halted",
+  };
+  const unread: MarketStatusReading = "Unknown";
+  // A status the engine names is also a `SetMarketStatus` target.
+  const target: MarketStatus | undefined =
+    listed.status === "Unknown" ? undefined : listed.status;
+  const event: Pick<EventView, "eventId" | "outcome"> = {
+    eventId: 7,
+    outcome: null,
+  };
+  const empty: Pick<MarketsSnapshotView, "markets" | "openInterest"> = {
+    markets: [],
+    openInterest: [],
+  };
+  expect([target, unread, event.outcome, empty.markets]).toEqual([
+    "Halted",
+    "Unknown",
+    null,
+    [],
+  ]);
+});
 
 it("exports current market-grid and oracle payload types for operator harnesses", () => {
   const signer = new Uint8Array(20).fill(3);
@@ -131,6 +161,7 @@ it("exposes typed reads on the existing read surface", async () => {
   expect(rangeSelection.fromHeight).toBe(1n);
   expect(reads.finalized.orderbook).toBeTypeOf("function");
   expect(reads.tradeHistoryPage).toBeTypeOf("function");
+  expect(reads.marketsSnapshotView).toBeTypeOf("function");
   expect(sdk.verifyWitness).toBeTypeOf("function");
 });
 

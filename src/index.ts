@@ -11,6 +11,12 @@ export {
 export { GatewayReadError } from "./errors.js";
 export type { FinalizedAuthorizedAgents } from "./authorized-agents.js";
 export type {
+  EventView,
+  MarketStatusReading,
+  MarketView,
+  MarketsSnapshotView,
+} from "./markets-snapshot-view.js";
+export type {
   FinalizedInsuranceFunds,
   FinalizedInsuranceFund,
   InsuranceFundLedger,
