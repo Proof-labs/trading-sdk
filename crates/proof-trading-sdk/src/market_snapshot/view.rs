@@ -434,7 +434,14 @@ mod tests {
             ("trailing bytes", body(&trailing)),
             ("a positional snapshot", body(&positional)),
             ("an error field", with_error),
-            ("a float height", with_float_height(&data)),
+            (
+                "a float under a key the view does not have",
+                with_unknown(&[("extra", Value::F64(1.5))]),
+            ),
+            (
+                "a key the view does not have, twice",
+                with_unknown(&[("extra", Value::from(1)), ("extra", Value::from(2))]),
+            ),
             ("not base64", br#"{"data":"not base64"}"#.to_vec()),
             ("no data", br#"{}"#.to_vec()),
         ] {
@@ -450,16 +457,19 @@ mod tests {
         );
     }
 
-    /// The example with its height, a `u32` the encoder wrote as `0xce` and
-    /// four bytes, rewritten as a float 32 of the same width.
-    fn with_float_height(data: &[u8]) -> Vec<u8> {
-        let key = b"\xa6height\xce";
-        let at = data
-            .windows(key.len())
-            .position(|window| window == key)
-            .expect("the example's height is a u32");
-        let mut floated = data.to_vec();
-        floated[at + key.len() - 1] = 0xca;
-        body(&floated)
+    /// The example with `entries` added to its top-level map, under keys the
+    /// view does not have. rmp_serde skips such a key whatever it holds, so
+    /// only the preflight can refuse a float or a repeated key there.
+    fn with_unknown(entries: &[(&str, Value)]) -> Vec<u8> {
+        let mut snapshot = tree(&example());
+        let Value::Map(top) = &mut snapshot else {
+            panic!("the view is a map");
+        };
+        top.extend(
+            entries
+                .iter()
+                .map(|(key, value)| (Value::from(*key), value.clone())),
+        );
+        tree_body(&snapshot)
     }
 }
