@@ -5,17 +5,20 @@
 
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
+use std::io::Cursor;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use proof_wire::query_v2::MarketsSnapshot as MarketsSnapshotView;
+use rmpv::Value;
 
 use super::{ChainBinding, Envelope, SnapshotError, MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_ROWS};
 
 /// Decode a complete `GET /v2/markets-snapshot` response body bound to
 /// `expected_chain`. Another chain, an uncommitted height, a market or event
 /// named twice, open interest out of market order, an `error` field, floats,
-/// repeated map keys and trailing bytes all refuse the whole read. A status,
-/// kind or other name this SDK does not know decodes as the view's `Unknown`.
+/// repeated map keys, trailing bytes and a record that is not a map keyed by
+/// field name all refuse the whole read. A status, kind or other name this SDK
+/// does not know decodes as the view's `Unknown`.
 pub fn decode_snapshot_view(
     body: &[u8],
     expected_chain: ChainBinding,
@@ -31,10 +34,12 @@ pub fn decode_snapshot_view(
         .decode(envelope.data)
         .map_err(|_| SnapshotError::Malformed)?;
     crate::msgpack::reject_floats(&bytes).map_err(|_| SnapshotError::Malformed)?;
-    // The view is a map keyed by field name, never the positional snapshot.
-    if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
-        return Err(SnapshotError::Malformed);
-    }
+    let raw = rmpv::decode::read_value_with_max_depth(
+        &mut Cursor::new(bytes.as_slice()),
+        crate::msgpack::MAX_DEPTH,
+    )
+    .map_err(|_| SnapshotError::Malformed)?;
+    check_shape(&raw)?;
     let snapshot: MarketsSnapshotView =
         rmp_serde::from_slice(&bytes).map_err(|_| SnapshotError::Malformed)?;
     if snapshot.chain_id.0 != expected_chain.bytes() {
@@ -70,6 +75,72 @@ pub fn decode_snapshot_view(
     Ok(snapshot)
 }
 
+/// Refuse a view whose records are not all maps keyed by field name, at every
+/// level this SDK reads: the snapshot, each market with its kind, mark and fee
+/// tiers, each event with its resolution source and attached conditionals, and
+/// each open interest row. rmp_serde also reads a record written as an array
+/// of its fields, by position, so a producer that wrote one positionally
+/// after a field was added or moved would have its fields read from the wrong
+/// slots. Keys this SDK does not know are skipped.
+fn check_shape(raw: &Value) -> Result<(), SnapshotError> {
+    let view = record(raw)?;
+    for market in list(view, "markets")? {
+        let market = record(market)?;
+        if let Some(kind) = field(market, "kind") {
+            record(kind)?;
+        }
+        if let Some(mark) = field(market, "mark").filter(|mark| !mark.is_nil()) {
+            record(mark)?;
+        }
+        for tier in list(market, "fee_tiers")? {
+            record(tier)?;
+        }
+    }
+    for event in list(view, "events")? {
+        let event = record(event)?;
+        if let Some(source) = field(event, "resolution_source") {
+            record(source)?;
+        }
+        for conditional in list(event, "attached_conditionals")? {
+            record(conditional)?;
+        }
+    }
+    for row in list(view, "open_interest")? {
+        record(row)?;
+    }
+    Ok(())
+}
+
+/// A record's entries. The preflight has refused a key that is not a string
+/// and a key named twice, so a field has at most one entry.
+type Entries = [(Value, Value)];
+
+/// `value` as a record: a map keyed by field name.
+fn record(value: &Value) -> Result<&Entries, SnapshotError> {
+    match value {
+        Value::Map(entries) => Ok(entries.as_slice()),
+        _ => Err(SnapshotError::Malformed),
+    }
+}
+
+/// The value of `record`'s field `key`, if it has one.
+fn field<'a>(record: &'a Entries, key: &str) -> Option<&'a Value> {
+    record
+        .iter()
+        .find(|(name, _)| name.as_str() == Some(key))
+        .map(|(_, value)| value)
+}
+
+/// The items of `record`'s list `key`. A missing list is left to the typed
+/// decode, which refuses it.
+fn list<'a>(record: &'a Entries, key: &str) -> Result<&'a [Value], SnapshotError> {
+    match field(record, key) {
+        None => Ok(&[]),
+        Some(Value::Array(items)) => Ok(items.as_slice()),
+        Some(_) => Err(SnapshotError::Malformed),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -81,6 +152,7 @@ mod tests {
 
     use super::*;
     use proof_wire::query_v2::{self as view, MarketStatus};
+    use serde::Serialize;
 
     /// Byte-identical copy of the API gateway's frozen example (api-gateway
     /// `tests/fixtures/v2-markets-snapshot.json`): BTC trading, ETH
@@ -124,6 +196,42 @@ mod tests {
             .unwrap_or_else(|| panic!("the example names {from}"));
         data[at..at + to.len()].copy_from_slice(to.as_bytes());
         body(&data)
+    }
+
+    /// `snapshot`'s MessagePack as a tree of values, to change one value in.
+    fn tree(snapshot: &MarketsSnapshotView) -> Value {
+        rmpv::decode::read_value(&mut view::encode(snapshot).unwrap().as_slice()).unwrap()
+    }
+
+    /// The gateway's answer for `tree`.
+    fn tree_body(tree: &Value) -> Vec<u8> {
+        let mut data = Vec::new();
+        rmpv::encode::write_value(&mut data, tree).unwrap();
+        body(&data)
+    }
+
+    /// The value at `path` in `tree`: field names and list positions from the
+    /// top, separated by `/`.
+    fn at<'a>(mut tree: &'a mut Value, path: &str) -> &'a mut Value {
+        for step in path.split('/') {
+            tree = match tree {
+                Value::Array(items) => &mut items[step.parse::<usize>().unwrap()],
+                Value::Map(entries) => {
+                    &mut entries
+                        .iter_mut()
+                        .find(|(key, _)| key.as_str() == Some(step))
+                        .unwrap_or_else(|| panic!("the example has no {path}"))
+                        .1
+                }
+                other => panic!("{path} passes through {other}"),
+            };
+        }
+        tree
+    }
+
+    /// `record` as rmp_serde writes it by position: an array of its fields.
+    fn by_position(record: &impl Serialize) -> Value {
+        rmpv::decode::read_value(&mut rmp_serde::to_vec(record).unwrap().as_slice()).unwrap()
     }
 
     #[test]
@@ -204,6 +312,52 @@ mod tests {
             decode(&encoded(&unordered)).unwrap_err(),
             SnapshotError::UnorderedOpenInterest
         );
+    }
+
+    #[test]
+    fn a_record_written_by_position_is_refused() {
+        let mut snapshot = example();
+        // A fee tier and an attached conditional, so that every list the view
+        // reads holds a record.
+        snapshot.markets[0].fee_tiers.push(view::FeeTier {
+            min_30d_volume_micro_usdc: 1_000_000_000,
+            maker_fee_tenth_bps: -1,
+            taker_fee_tenth_bps: 4,
+        });
+        snapshot.events[0]
+            .attached_conditionals
+            .push(view::AttachedConditional {
+                underlying_market: 1,
+                yes_market: 101,
+                no_market: 102,
+            });
+        let named = tree(&snapshot);
+        decode(&tree_body(&named)).expect("every record keyed by field name decodes");
+        let (market, event) = (&snapshot.markets[0], &snapshot.events[0]);
+        for (path, positional) in [
+            ("markets/0", by_position(market)),
+            ("markets/3/kind", by_position(&snapshot.markets[3].kind)),
+            ("markets/0/mark", by_position(&market.mark)),
+            ("markets/0/fee_tiers/0", by_position(&market.fee_tiers[0])),
+            ("events/0", by_position(event)),
+            (
+                "events/0/resolution_source",
+                by_position(&event.resolution_source),
+            ),
+            (
+                "events/0/attached_conditionals/0",
+                by_position(&event.attached_conditionals[0]),
+            ),
+            ("open_interest/0", by_position(&snapshot.open_interest[0])),
+        ] {
+            let mut edited = named.clone();
+            *at(&mut edited, path) = positional;
+            assert_eq!(
+                decode(&tree_body(&edited)).unwrap_err(),
+                SnapshotError::Malformed,
+                "{path} by position"
+            );
+        }
     }
 
     #[test]

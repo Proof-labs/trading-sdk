@@ -21,7 +21,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unchanged.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
-  `query_v2` view (`market_snapshot::MarketsSnapshotView`).
+  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
+  not a map keyed by field name refuses the whole read.
 
 ## [13.0.0] (Python 5.0.0; Rust core 5.0.0) — 2026-11-17
 
