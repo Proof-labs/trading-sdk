@@ -739,7 +739,10 @@ class ExchangeClient:
     def _submit_with_signer_revision(self, action: Action, revision: int) -> dict[str, t.Any]:
         action_type, payload = encode_action(action)
         envelope = self._sign_and_encode_action(action_type, payload, expected_revision=revision)
-        return _read_order_result(envelope, self._post_envelope(envelope), _sent_list(action))
+        sent = _sent_list(action)
+        if sent is None:
+            return self.submit_action(envelope)
+        return _read_order_result(envelope, self._post_envelope(envelope), sent)
 
     def set_position_triggers(
         self,
