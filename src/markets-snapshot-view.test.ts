@@ -3,6 +3,7 @@
 // event and each market's open interest, bound to the pinned chain.
 
 import { readFileSync } from "node:fs";
+import { decode, encode } from "@msgpack/msgpack";
 import { describe, expect, it, vi } from "vitest";
 import { ExchangeClient } from "./client.js";
 import { GatewayHttpError, GatewayReadError } from "./errors.js";
@@ -42,6 +43,19 @@ function renamed(from: string, to: string): string {
   expect(to.length).toBe(from.length);
   data.write(to, at);
   return JSON.stringify({ data: data.toString("base64") });
+}
+
+/** `value` with every map written as the array of its values, in order: a
+ *  record written by position, as the version 1 snapshot writes them. */
+function byPosition(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(byPosition);
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    value instanceof Uint8Array
+  )
+    return value;
+  return Object.values(value).map(byPosition);
 }
 
 describe("reads().marketsSnapshotView", () => {
@@ -160,8 +174,13 @@ describe("reads().marketsSnapshotView", () => {
       .marketsSnapshotView()
       .catch((e: unknown) => e);
     expect(witnessRefused).toBeInstanceOf(GatewayHttpError);
-    // The version 1 snapshot is positional; this read needs the map.
-    const positional = JSON.stringify({ data: "lAEC" });
+    // The version 1 snapshot is positional; this read needs the map. The
+    // example, complete, with every record written by position: well-formed
+    // MessagePack that only the map rule refuses.
+    const named = Buffer.from(JSON.parse(EXAMPLE).data, "base64");
+    const positional = JSON.stringify({
+      data: Buffer.from(encode(byPosition(decode(named)))).toString("base64"),
+    });
     await expect(
       clientServing(positional).client.reads().marketsSnapshotView(),
     ).rejects.toMatchObject({ kind: "malformed" });
