@@ -7,12 +7,12 @@
 
 use proof_trading_sdk::binary::{self, NoOrder};
 use proof_trading_sdk::types::{
-    Action, AmendOrder, ApproveAgent, AtomicBasketLeg, AtomicBasketOrder, BatchPlaceOrders,
-    BatchedOrder, BatchedOrders, CancelAllOrders, CancelClientOrder, CancelOrder,
-    CancelPositionTriggers, CancelReplaceOrder, ClientTriggerGroupId, ClosePosition,
-    CreateSubAccount, MarketConfig, MarketId, MarketKind, MarketOrder, OrderId, OwnerAddress,
-    PlaceOrder, PositionEpoch, RevokeAgent, SetPositionTriggers, Side, SubAccountTransfer,
-    TimeInForce, TriggerLimb, WithdrawRequest, MAX_BATCH_PLACE_ORDERS,
+    Action, AmendOrder, ApproveAgent, AtomicBasketLeg, AtomicBasketOrder, CancelAllOrders,
+    CancelClientOrder, CancelClientOrders, CancelOrder, CancelOrders, CancelPositionTriggers,
+    CancelReplaceOrder, ClientTriggerGroupId, ClosePosition, CreateSubAccount, EntryList,
+    MarketConfig, MarketId, MarketKind, MarketOrder, OrderEntry, OrderId, OwnerAddress, PlaceOrder,
+    PlaceOrders, PositionEpoch, RevokeAgent, SetPositionTriggers, Side, SubAccountTransfer,
+    TimeInForce, TriggerLimb, WithdrawRequest, MAX_LIST_ENTRIES,
 };
 
 use crate::address::Address;
@@ -20,7 +20,7 @@ use crate::error::{Error, Result};
 use crate::ids::SubAccountId;
 
 /// A GTC limit order. Adjust the fields (`post_only`, `client_order_id`,
-/// `time_in_force`, brackets) before wrapping it in [`Action::PlaceOrder`].
+/// `time_in_force`, brackets) before [`place_order`].
 #[must_use]
 pub fn limit_order(
     owner: Address,
@@ -54,22 +54,85 @@ pub fn market_order(owner: Address, market: MarketId, side: Side, quantity: u64)
     }
 }
 
-/// `CancelOrder` by exchange order id.
+/// `PlaceOrders` of one order, as `order.owner`. Signs the same bytes a
+/// single `PlaceOrder` always did.
 #[must_use]
-pub fn cancel_order(owner: Address, order_id: OrderId) -> Action {
-    Action::CancelOrder(CancelOrder {
-        order_id,
-        owner: owner.to_bytes(),
-    })
+pub fn place_order(order: PlaceOrder) -> Action {
+    Action::PlaceOrders(PlaceOrders::one(order))
 }
 
-/// `CancelClientOrder` by client order id.
+/// `CancelOrders` of one exchange order id.
+#[must_use]
+pub fn cancel_order(owner: Address, order_id: OrderId) -> Action {
+    Action::CancelOrders(CancelOrders::one(CancelOrder {
+        order_id,
+        owner: owner.to_bytes(),
+    }))
+}
+
+/// `CancelClientOrders` of one client order id.
 #[must_use]
 pub fn cancel_order_by_client_id(owner: Address, client_order_id: u64) -> Action {
-    Action::CancelClientOrder(CancelClientOrder {
+    Action::CancelClientOrders(CancelClientOrders::one(CancelClientOrder {
         owner: owner.to_bytes(),
         client_order_id,
-    })
+    }))
+}
+
+/// One limit order of a [`place_orders`] list, GTC. Set `client_order_id`,
+/// `post_only`, `reduce_only`, `time_in_force` or brackets on it as needed.
+#[must_use]
+pub fn order_entry(market: MarketId, side: Side, price: u64, quantity: u64) -> OrderEntry {
+    OrderEntry {
+        market,
+        side,
+        price,
+        quantity,
+        ..OrderEntry::default()
+    }
+}
+
+/// `PlaceOrders`: 1 to [`MAX_LIST_ENTRIES`] limit orders for `owner` under one
+/// signature, each placed or refused on its own, in order.
+///
+/// # Errors
+///
+/// [`Error::InvalidInput`] for no orders or more than [`MAX_LIST_ENTRIES`].
+pub fn place_orders(owner: Address, orders: Vec<OrderEntry>) -> Result<Action> {
+    Ok(Action::PlaceOrders(PlaceOrders {
+        owner: owner.to_bytes(),
+        orders: entries(orders)?,
+    }))
+}
+
+/// `CancelOrders`: 1 to [`MAX_LIST_ENTRIES`] exchange order ids of `owner`,
+/// each cancelled or refused on its own.
+///
+/// # Errors
+///
+/// [`Error::InvalidInput`] for no ids or more than [`MAX_LIST_ENTRIES`].
+pub fn cancel_orders(owner: Address, order_ids: Vec<OrderId>) -> Result<Action> {
+    Ok(Action::CancelOrders(CancelOrders {
+        owner: owner.to_bytes(),
+        order_ids: entries(order_ids)?,
+    }))
+}
+
+/// `CancelClientOrders`: 1 to [`MAX_LIST_ENTRIES`] client order ids of
+/// `owner`, each cancelled or refused on its own.
+///
+/// # Errors
+///
+/// [`Error::InvalidInput`] for no ids or more than [`MAX_LIST_ENTRIES`].
+pub fn cancel_client_orders(owner: Address, client_order_ids: Vec<u64>) -> Result<Action> {
+    Ok(Action::CancelClientOrders(CancelClientOrders {
+        owner: owner.to_bytes(),
+        client_order_ids: entries(client_order_ids)?,
+    }))
+}
+
+fn entries<T>(list: Vec<T>) -> Result<EntryList<T>> {
+    EntryList::try_from(list).map_err(|e| Error::InvalidInput(e.to_string()))
 }
 
 /// `CancelAllOrders`: every resting order, or only those on `market`.
@@ -123,7 +186,7 @@ pub fn close_position(owner: Address, market: MarketId) -> Action {
 
 /// Buy No at `price` on an event's binary book (`EventInfo::eby_market`):
 /// a Yes sell at `$1 - price`. Adjust `post_only`, `client_order_id` or
-/// `reduce_only` before wrapping it in [`Action::PlaceOrder`]; brackets on
+/// `reduce_only` before [`place_order`]; brackets on
 /// the result are in Yes terms (see [`proof_trading_sdk::binary::yes_limb`]).
 ///
 /// Takes the market's config, not its id: a No order on any other kind of
@@ -334,34 +397,6 @@ pub fn atomic_basket_order(
     })
 }
 
-/// One resting limit order of a [`batch_place_orders`]. Set
-/// `client_order_id`, `post_only`, `reduce_only` or `time_in_force` on it as
-/// needed.
-#[must_use]
-pub fn batched_order(market: MarketId, side: Side, price: u64, quantity: u64) -> BatchedOrder {
-    BatchedOrder {
-        market,
-        side,
-        price,
-        quantity,
-        ..BatchedOrder::default()
-    }
-}
-
-/// `BatchPlaceOrders`: up to [`MAX_BATCH_PLACE_ORDERS`] limit orders under one
-/// signature, each placed or refused on its own, in order.
-///
-/// # Errors
-///
-/// [`Error::InvalidInput`] for no orders or more than [`MAX_BATCH_PLACE_ORDERS`].
-pub fn batch_place_orders(owner: Address, orders: Vec<BatchedOrder>) -> Result<Action> {
-    let orders = BatchedOrders::try_from(orders).map_err(|e| Error::InvalidInput(e.to_string()))?;
-    Ok(Action::BatchPlaceOrders(BatchPlaceOrders {
-        owner: owner.to_bytes(),
-        orders,
-    }))
-}
-
 fn replace(
     cancel_order_id: Option<OrderId>,
     cancel_client_order_id: Option<u64>,
@@ -447,7 +482,7 @@ mod tests {
                 (3300, OWNER, side, yes_price, 7)
             );
             assert!(!o.post_only && !o.reduce_only && o.time_in_force == TimeInForce::Gtc);
-            on_the_wire(&Action::PlaceOrder(o));
+            on_the_wire(&place_order(o));
         }
     }
 
@@ -624,18 +659,48 @@ mod tests {
     }
 
     #[test]
-    fn a_batch_carries_every_order_and_refuses_a_bad_size() {
-        let mut ask = batched_order(3303, Side::Sell, 75_000_000, 2);
+    fn a_single_order_or_cancel_signs_the_single_payload() {
+        let order = limit_order(OWNER, 7, Side::Buy, 100, 10);
+        let raw = |action: &Action| {
+            let chain = crypto::chain_id_from_string("exchange-devnet-1");
+            let bytes = sign_action(&LocalSigner::from_bytes(&[3; 32]), &chain, action, 1).unwrap();
+            codec::decode_tx_raw(&bytes).unwrap().payload
+        };
+        assert_eq!(
+            raw(&on_the_wire(&place_order(order.clone()))),
+            rmp_serde::to_vec(&order).unwrap()
+        );
+        assert_eq!(
+            raw(&cancel_order(OWNER, 42)),
+            rmp_serde::to_vec(&CancelOrder {
+                order_id: 42,
+                owner: OWNER.to_bytes()
+            })
+            .unwrap()
+        );
+        assert_eq!(
+            raw(&cancel_order_by_client_id(OWNER, 9)),
+            rmp_serde::to_vec(&CancelClientOrder {
+                owner: OWNER.to_bytes(),
+                client_order_id: 9
+            })
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn lists_carry_every_entry_and_refuse_a_bad_size() {
+        let mut ask = order_entry(3303, Side::Sell, 75_000_000, 2);
         ask.client_order_id = Some(8);
         ask.post_only = true;
-        let orders = vec![batched_order(3302, Side::Buy, 80_000_000, 2), ask];
-        let Action::BatchPlaceOrders(b) =
-            on_the_wire(&batch_place_orders(OWNER, orders).expect("two orders are in range"))
+        let orders = vec![order_entry(3302, Side::Buy, 80_000_000, 2), ask];
+        let Action::PlaceOrders(p) =
+            on_the_wire(&place_orders(OWNER, orders).expect("two orders are in range"))
         else {
             panic!()
         };
-        assert_eq!(b.owner, OWNER.to_bytes());
-        let ask = &b.orders.as_slice()[1];
+        assert_eq!(p.owner, OWNER.to_bytes());
+        let ask = &p.orders.as_slice()[1];
         assert_eq!(
             (
                 ask.market,
@@ -646,15 +711,29 @@ mod tests {
             ),
             (3303, Side::Sell, 75_000_000, Some(8), true)
         );
-        assert!(matches!(
-            batch_place_orders(OWNER, Vec::new()),
-            Err(Error::InvalidInput(_))
-        ));
-        let too_many = vec![batched_order(1, Side::Buy, 1, 1); MAX_BATCH_PLACE_ORDERS + 1];
-        assert!(matches!(
-            batch_place_orders(OWNER, too_many),
-            Err(Error::InvalidInput(_))
-        ));
+        let Action::CancelOrders(c) = on_the_wire(&cancel_orders(OWNER, vec![4, 5]).unwrap())
+        else {
+            panic!()
+        };
+        assert_eq!(c.order_ids.as_slice(), &[4, 5]);
+        let Action::CancelClientOrders(c) =
+            on_the_wire(&cancel_client_orders(OWNER, vec![6, 7]).unwrap())
+        else {
+            panic!()
+        };
+        assert_eq!(c.client_order_ids.as_slice(), &[6, 7]);
+
+        let over = MAX_LIST_ENTRIES + 1;
+        for refused in [
+            place_orders(OWNER, Vec::new()),
+            place_orders(OWNER, vec![order_entry(1, Side::Buy, 1, 1); over]),
+            cancel_orders(OWNER, Vec::new()),
+            cancel_orders(OWNER, vec![1; over]),
+            cancel_client_orders(OWNER, Vec::new()),
+            cancel_client_orders(OWNER, vec![1; over]),
+        ] {
+            assert!(matches!(refused, Err(Error::InvalidInput(_))));
+        }
     }
 
     #[test]

@@ -106,6 +106,7 @@ import type {
   TxEvent,
   TxResult,
   PlaceOrder,
+  OrderEntry,
   MarketOrder,
   AccountInfo,
   HistoryCashFlow,
@@ -163,6 +164,13 @@ import {
   type ExchangeHttpTransport,
 } from "./http-transport.js";
 import { yesOrder, type NoOrder } from "./binary.js";
+import {
+  orderCancellations,
+  orderPlacements,
+  singleEntryRefusal,
+  type CancelOrdersResult,
+  type PlaceOrdersResult,
+} from "./order-lists.js";
 import { Side } from "./types.js";
 import type { MarketsSnapshot } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -832,9 +840,10 @@ export class ExchangeClient {
     txBytes: Uint8Array,
     action?: Action,
   ): Promise<TxResult> {
-    return this.useGateway
-      ? this.submitViaGateway(txBytes, action)
-      : this.submitViaCometBFT(txBytes, action);
+    const result = this.useGateway
+      ? await this.submitViaGateway(txBytes, action)
+      : await this.submitViaCometBFT(txBytes, action);
+    return singleEntryRefusal(result, action);
   }
 
   /**
@@ -1249,7 +1258,7 @@ export class ExchangeClient {
     opts: { timeoutMs?: number; signal?: AbortSignal },
     action?: Action,
   ): Promise<TxResult> {
-    if (this.isFinalResult(sync)) return sync;
+    if (this.isFinalResult(sync)) return singleEntryRefusal(sync, action);
     if (!sync.hash) throw new Error("submitTx returned no tx hash");
     const timeoutMs = opts.timeoutMs ?? 9_000;
     if (!Number.isFinite(timeoutMs) || timeoutMs < 0)
@@ -1281,7 +1290,8 @@ export class ExchangeClient {
         );
         if (!res.ok) continue;
         const result = txFromQueryResponse(await res.json(), sync.hash);
-        if (!opts.signal?.aborted && result) return result;
+        if (!opts.signal?.aborted && result)
+          return singleEntryRefusal(result, action);
       } catch {
         /* Read failures leave the write outcome unknown. */
       } finally {
@@ -1383,6 +1393,46 @@ export class ExchangeClient {
       type: "CancelClientOrder",
       data: { clientOrderId, owner: this.requireOwner() },
     });
+  }
+
+  /**
+   * Place 1 to `MAX_LIST_ENTRIES` limit orders for the loaded signer
+   * under one signature (`PlaceOrders`). Each order stands or is refused on
+   * its own: `tx` succeeds and `orders` gives each order's outcome in the
+   * order sent. `orders` is empty while `tx` has no executed verdict; read it
+   * later with `orderPlacements(await waitForDelivery(tx), owner)`.
+   */
+  async placeOrders(orders: OrderEntry[]): Promise<PlaceOrdersResult> {
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
+      type: "PlaceOrders",
+      data: { owner, orders },
+    });
+    return { tx, orders: orderPlacements(tx, owner) };
+  }
+
+  /** Cancel 1 to `MAX_LIST_ENTRIES` resting orders by order ID
+   *  (`CancelOrders`); `orders` gives each entry's outcome in order. */
+  async cancelOrders(orderIds: bigint[]): Promise<CancelOrdersResult> {
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
+      type: "CancelOrders",
+      data: { owner, orderIds },
+    });
+    return { tx, orders: orderCancellations(tx, owner) };
+  }
+
+  /** Cancel 1 to `MAX_LIST_ENTRIES` resting orders by client order ID
+   *  (`CancelClientOrders`); `orders` gives each entry's outcome in order. */
+  async cancelClientOrders(
+    clientOrderIds: bigint[],
+  ): Promise<CancelOrdersResult> {
+    const owner = this.requireOwner();
+    const tx = await this.submitTx({
+      type: "CancelClientOrders",
+      data: { owner, clientOrderIds },
+    });
+    return { tx, orders: orderCancellations(tx, owner) };
   }
 
   /**

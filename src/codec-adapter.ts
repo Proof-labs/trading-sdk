@@ -13,6 +13,7 @@
 
 import {
   ActionType,
+  MAX_LIST_ENTRIES,
   Outcome,
   Side,
   TimeInForce,
@@ -327,6 +328,16 @@ function validateCreateMarketTickers(action: DecodedAction): void {
   }
 }
 
+/** The wire refuses a list action with no entries or more than the cap; say
+ *  so here, by count, rather than as an untagged-enum mismatch. */
+function validateListSize(entries: number): void {
+  if (entries < 1 || entries > MAX_LIST_ENTRIES) {
+    throw new Error(
+      `list carries ${entries} entries, must carry 1..=${MAX_LIST_ENTRIES}`,
+    );
+  }
+}
+
 /**
  * Translate a current or historical action for canonical wire encoding.
  * This internal adapter does not decide whether an action is submittable.
@@ -347,6 +358,13 @@ export function toWasmFields(action: DecodedAction): {
     // Pre-fill SL/TP limbs on order actions: same client-side parity as the
     // 0x25/0x26 validators above (absent limbs pass — no bracket requested).
     validateOrderTriggers(action.data);
+  } else if (action.type === "PlaceOrders") {
+    validateListSize(action.data.orders.length);
+    action.data.orders.forEach(validateOrderTriggers);
+  } else if (action.type === "CancelOrders") {
+    validateListSize(action.data.orderIds.length);
+  } else if (action.type === "CancelClientOrders") {
+    validateListSize(action.data.clientOrderIds.length);
   }
   validateCreateMarketTickers(action);
   const actionType = ActionType[action.type] as ActionTypeValue;
@@ -373,7 +391,8 @@ export function toWasmFields(action: DecodedAction): {
 // Decode direction: WASM `decode_payload` output → TS `Action`
 // ---------------------------------------------------------------------------
 
-/** action_type byte → `Action["type"]` name (inverse of `ActionType`). */
+/** action_type byte → `Action["type"]` name (inverse of `ActionType`). The
+ *  list bytes resolve per payload in `fromWasmFields`. */
 const ACTION_TYPE_NAMES = Object.fromEntries(
   Object.entries(ActionType).map(([name, byte]) => [byte, name]),
 ) as Record<number, DecodedAction["type"]>;
@@ -603,10 +622,46 @@ export function fromWasmFields(
 ): DecodedAction {
   const type = ACTION_TYPE_NAMES[actionType];
   if (!type) throw new Error(`unknown action_type: ${actionType}`);
-  return {
+  const data = fromWasmObject(fields as Record<string, unknown>);
+  return (fromListFields(actionType, data) ?? {
     type,
-    data: fromWasmObject(fields as Record<string, unknown>),
-  } as unknown as DecodedAction;
+    data,
+  }) as unknown as DecodedAction;
+}
+
+/** A list of one reads back as the single action that encodes to the same
+ *  bytes, so a single order round-trips unchanged; two or more read as the
+ *  list action. Null for every other byte. */
+function fromListFields(
+  actionType: ActionTypeValue,
+  data: Record<string, unknown>,
+): { type: DecodedAction["type"]; data: unknown } | null {
+  const { owner } = data;
+  switch (actionType) {
+    case ActionType.PlaceOrders: {
+      const orders = data.orders as Record<string, unknown>[];
+      return orders.length === 1
+        ? { type: "PlaceOrder", data: { ...orders[0], owner } }
+        : { type: "PlaceOrders", data };
+    }
+    case ActionType.CancelOrders: {
+      const orderIds = data.orderIds as bigint[];
+      return orderIds.length === 1
+        ? { type: "CancelOrder", data: { orderId: orderIds[0], owner } }
+        : { type: "CancelOrders", data };
+    }
+    case ActionType.CancelClientOrders: {
+      const clientOrderIds = data.clientOrderIds as bigint[];
+      return clientOrderIds.length === 1
+        ? {
+            type: "CancelClientOrder",
+            data: { owner, clientOrderId: clientOrderIds[0] },
+          }
+        : { type: "CancelClientOrders", data };
+    }
+    default:
+      return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

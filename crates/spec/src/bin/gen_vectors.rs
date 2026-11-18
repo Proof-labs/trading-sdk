@@ -158,7 +158,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     const CONFIRM_WITHDRAWAL_RECEIPT: u8 = 0x22;
     const FAIL_WITHDRAWAL_RECEIPT: u8 = 0x23;
     const AUTHORIZE_WITHDRAWAL: u8 = 0x24;
-    const BATCH_PLACE_ORDERS: u8 = 0x35;
     // Coverage burn-down (issue #69): the 15 previously-unpinned action types.
     // (CONFIRM_DEPOSIT is already declared above.)
     const DEPOSIT: u8 = 0x05;
@@ -368,22 +367,54 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "max_slippage_bps": 50
             }),
         ),
-        // BatchPlaceOrders (0x35) — two orders with every field varied, so
-        // each binding's per-order field order is pinned.
+        // List actions: two entries take the list shape, and one entry
+        // written as a list encodes the single payload byte for byte.
         codec_case(
-            "batch_place_orders/two_orders",
-            BATCH_PLACE_ORDERS,
+            "place_orders/two_orders",
+            PLACE_ORDER,
             json!({
                 "owner": owner,
                 "orders": [
                     { "market": 1, "side": "Buy", "price": 6675000u64, "quantity": 3,
                       "client_order_id": 77u64, "post_only": true, "reduce_only": false,
-                      "time_in_force": "Gtc" },
+                      "time_in_force": "Gtc", "stop_loss": null, "take_profit": null },
                     { "market": 2, "side": "Sell", "price": 250000u64, "quantity": 5,
                       "client_order_id": null, "post_only": false, "reduce_only": true,
-                      "time_in_force": "Ioc" }
+                      "time_in_force": "Ioc", "stop_loss": null, "take_profit": null }
                 ]
             }),
+        ),
+        codec_case(
+            "place_orders/one_in_list_shape",
+            PLACE_ORDER,
+            json!({
+                "owner": owner,
+                "orders": [
+                    { "market": 1, "side": "Buy", "price": 100, "quantity": 10,
+                      "client_order_id": null, "post_only": false, "reduce_only": false,
+                      "time_in_force": "Gtc", "stop_loss": null, "take_profit": null }
+                ]
+            }),
+        ),
+        codec_case(
+            "cancel_orders/two_orders",
+            CANCEL_ORDER,
+            json!({ "owner": vec![0x02u8; 20], "order_ids": [42, 43] }),
+        ),
+        codec_case(
+            "cancel_orders/one_in_list_shape",
+            CANCEL_ORDER,
+            json!({ "owner": vec![0x02u8; 20], "order_ids": [42] }),
+        ),
+        codec_case(
+            "cancel_client_orders/two_orders",
+            CANCEL_CLIENT_ORDER,
+            json!({ "owner": owner, "client_order_ids": [99u64, 100u64] }),
+        ),
+        codec_case(
+            "cancel_client_orders/one_in_list_shape",
+            CANCEL_CLIENT_ORDER,
+            json!({ "owner": owner, "client_order_ids": [99u64] }),
         ),
         // Admin-multisig governance (tags 0x1E–0x21). The nested
         // `action` is an externally-tagged `AdminAction`/`EmergencyAction`
@@ -1578,6 +1609,40 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "balance_after": 6_250_000u64,
                 "settlement_balance_before": 5_000_000u64,
                 "settlement_balance_after": 6_000_000u64,
+            }}),
+        ),
+        // List events: every placement outcome and both cancel entries.
+        (
+            "orders_placed/every_outcome",
+            json!({"OrdersPlaced": {
+                "owner": vec![0xA1u8; 20],
+                "orders": [
+                    {"market": 7, "client_order_id": 3001u64, "outcome": {"Resting": {
+                        "order_id": 2001u64, "side": "Buy", "price": 100_000_000u64,
+                        "quantity": 5u64, "time_in_force": "Gtc", "post_only": true,
+                        "reduce_only": false,
+                    }}},
+                    {"market": 7, "client_order_id": null,
+                     "outcome": {"Executed": {"order_id": 2002u64}}},
+                    {"market": 7, "client_order_id": 3003u64,
+                     "outcome": {"Rejected": {"code": 22}}},
+                ],
+            }}),
+        ),
+        (
+            "orders_cancelled/user_requested",
+            json!({"OrdersCancelled": {
+                "owner": vec![0xA1u8; 20],
+                "reason": "UserRequested",
+                "orders": [
+                    {"Cancelled": {
+                        "order_id": 2001u64, "market": 7, "client_order_id": null,
+                        "original_quantity": 5u64, "remaining_quantity": 3u64,
+                        "filled_quantity": 2u64,
+                    }},
+                    {"Refused": {"target": {"OrderId": 2004u64}, "code": 2}},
+                    {"Refused": {"target": {"ClientOrderId": 3005u64}, "code": 44}},
+                ],
             }}),
         ),
     ];

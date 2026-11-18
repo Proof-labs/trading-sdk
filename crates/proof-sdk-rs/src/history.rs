@@ -69,7 +69,7 @@ pub enum SortOrder {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountEventsQuery {
     pub order: SortOrder,
-    /// Only this engine event kind (`order_placed`, `funding_settled`, ...).
+    /// Only this engine event kind (`orders_placed`, `funding_settled`, ...).
     pub event_type: Option<String>,
     pub from_ms: Option<u64>,
     pub to_ms: Option<u64>,

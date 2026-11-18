@@ -61,8 +61,11 @@ from proof_trading_sdk.actions import (  # noqa: F401
     CancelAllOrders,
     CancelReplaceOrder,
     AmendOrder,
-    BatchedOrder,
-    BatchPlaceOrders,
+    MAX_LIST_ENTRIES,
+    OrderEntry,
+    PlaceOrders,
+    CancelOrders,
+    CancelClientOrders,
     ClosePosition,
     TriggerLimb,
     SetPositionTriggers,
@@ -140,6 +143,7 @@ from proof_trading_sdk.governance_reads import (
     decode_liquidation_config_info,
 )
 from proof_trading_sdk.client import ExchangeClient
+from proof_trading_sdk.order_lists import OrderCancellation, OrderPlacement  # noqa: F401
 from proof_trading_sdk.candle_history import CandleHistoryPage, CandleHistoryTime, HistoryCandle
 from proof_trading_sdk.streams import (
     AccountEventStream,
@@ -234,8 +238,11 @@ __all__ = [
     "CancelAllOrders",
     "CancelReplaceOrder",
     "AmendOrder",
-    "BatchedOrder",
-    "BatchPlaceOrders",
+    "MAX_LIST_ENTRIES",
+    "OrderEntry",
+    "PlaceOrders",
+    "CancelOrders",
+    "CancelClientOrders",
     "ClosePosition",
     "TriggerLimb",
     "BINARY_PRICE_MAX",
@@ -283,6 +290,8 @@ __all__ = [
     "decode_action",
     "NonceAllocator",
     "ExchangeClient",
+    "OrderPlacement",
+    "OrderCancellation",
     "MarketStatsStatus", "MarketStatsOpenInterest", "MarketStats", "MarketStatsResponse",
     "decode_market_stats_response", "OracleMarketHealth", "OracleHealth", "decode_oracle_health",
     "FinalizedAccountState",

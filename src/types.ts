@@ -1,4 +1,5 @@
 import type { ExecErrorInfo } from "./errors.js";
+import type { OrdersCancelledEvent, OrdersPlacedEvent } from "./order-lists.js";
 
 /** 20-byte account address (derived from Ed25519 public key). */
 export type Address = Uint8Array;
@@ -36,9 +37,13 @@ export enum TimeInForce {
  * 0x14 `OracleUpdateComposite`.
  */
 export const ActionType = {
-  /** Place a limit order on the order book. */
+  /** Place 1 to {@link MAX_LIST_ENTRIES} limit orders for one account. */
+  PlaceOrders: 0x01,
+  /** One limit order: a `PlaceOrders` of one, on the same byte. */
   PlaceOrder: 0x01,
-  /** Cancel an existing resting order. */
+  /** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by order ID. */
+  CancelOrders: 0x02,
+  /** One cancel by order ID: a `CancelOrders` of one, on the same byte. */
   CancelOrder: 0x02,
   /** Oracle-policy source observation relayed by the feeder. */
   SubmitOracleObservation: 0x2d,
@@ -103,7 +108,9 @@ export const ActionType = {
   /** Close an entire position by placing an opposite-side IOC order at
    *  oracle±spread. Idempotent on already-closed positions. User-signed. */
   ClosePosition: 0x17,
-  /** Cancel a resting order by owner-scoped client order id. */
+  /** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by client order ID. */
+  CancelClientOrders: 0x18,
+  /** One cancel by client order ID: a `CancelClientOrders` of one. */
   CancelClientOrder: 0x18,
   /** Cancel all resting orders for an owner, optionally market-scoped. */
   CancelAllOrders: 0x19,
@@ -121,9 +128,6 @@ export const ActionType = {
   RejectAdminAction: 0x20,
   /** Signed single-signer emergency action (pause/halt/reduce-only). */
   EmergencyAdminAction: 0x21,
-  /** Up to {@link MAX_BATCH_PLACE_ORDERS} limit orders for one account under
-   *  one signature; each places or is refused on its own. */
-  BatchPlaceOrders: 0x35,
 } as const;
 
 /** Union of all valid action type byte values. */
@@ -188,6 +192,42 @@ export interface CancelClientOrder {
   owner: Address;
   /** Client-assigned order ID to cancel. */
   clientOrderId: bigint;
+}
+
+/** Most entries one list action (`PlaceOrders`, `CancelOrders`,
+ *  `CancelClientOrders`) carries; the wire refuses 0 or more. */
+export const MAX_LIST_ENTRIES = 100;
+
+/** One order of a {@link PlaceOrders}: a {@link PlaceOrder} without its owner. */
+export type OrderEntry = Omit<PlaceOrder, "owner">;
+
+/** 1 to {@link MAX_LIST_ENTRIES} limit orders for one account under one
+ *  signature and nonce (action `0x01`). Each runs in turn exactly as its own
+ *  `PlaceOrder` would and stands or is refused on its own; the transaction
+ *  succeeds and `orders_placed` reports every order. */
+export interface PlaceOrders {
+  /** Account every order is placed for (20 bytes). */
+  owner: Address;
+  /** The orders, run in this order. */
+  orders: OrderEntry[];
+}
+
+/** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by order ID (action
+ *  `0x02`); each cancel stands or is refused on its own. */
+export interface CancelOrders {
+  /** Account address of the orders' owner (20 bytes). */
+  owner: Address;
+  /** Engine-assigned order IDs to cancel, in order. */
+  orderIds: bigint[];
+}
+
+/** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by client order ID
+ *  (action `0x18`); each cancel stands or is refused on its own. */
+export interface CancelClientOrders {
+  /** Account address of the orders' owner (20 bytes). */
+  owner: Address;
+  /** Client-assigned order IDs to cancel, in order. */
+  clientOrderIds: bigint[];
 }
 
 /** Cancel all resting orders for an account, optionally scoped to one market. */
@@ -995,42 +1035,6 @@ export interface AtomicBasketOrder {
   maxSlippageBps?: number;
 }
 
-/** One order of a {@link BatchPlaceOrders}: a {@link PlaceOrder} whose owner
- *  is the batch's, without stop-loss / take-profit limbs. */
-export interface BatchedOrder {
-  /** Market identifier. */
-  market: number;
-  /** Order side: Buy or Sell. */
-  side: Side;
-  /** Limit price in micro-USDC. */
-  price: bigint;
-  /** Order quantity in contracts (integer lots). */
-  quantity: bigint;
-  /** Optional client-assigned order ID; how a refused order is matched to
-   *  its `order_rejected` event. */
-  clientOrderId?: bigint | null;
-  /** Reject instead of taking if the order would cross. Defaults to false. */
-  postOnly?: boolean;
-  /** Only reduce an existing position. Defaults to false. */
-  reduceOnly?: boolean;
-  /** Time-in-force policy. Defaults to `TimeInForce.Gtc`. */
-  timeInForce?: TimeInForce;
-}
-
-/** Most orders one {@link BatchPlaceOrders} may carry; the wire refuses more. */
-export const MAX_BATCH_PLACE_ORDERS = 100;
-
-/** Up to {@link MAX_BATCH_PLACE_ORDERS} limit orders for one account under one signature and nonce
- *  (action `0x35`), so a market maker requotes in one round trip. Orders run
- *  in sequence, each exactly as its own `PlaceOrder` would: a refused order
- *  emits `order_rejected` with its code and the rest still place. */
-export interface BatchPlaceOrders {
-  /** Account every order is placed for (20 bytes). */
-  owner: Address;
-  /** 1 to {@link MAX_BATCH_PLACE_ORDERS} orders, run in this order. */
-  orders: BatchedOrder[];
-}
-
 /**
  * Trading actions — the surface a normal integration (market maker, bot,
  * trader) uses. User-signed: each is authorized by the account that owns the
@@ -1040,11 +1044,13 @@ export type TraderAction =
   | { type: "PlaceOrder"; data: PlaceOrder }
   | { type: "CancelOrder"; data: CancelOrder }
   | { type: "CancelClientOrder"; data: CancelClientOrder }
+  | { type: "PlaceOrders"; data: PlaceOrders }
+  | { type: "CancelOrders"; data: CancelOrders }
+  | { type: "CancelClientOrders"; data: CancelClientOrders }
   | { type: "CancelAllOrders"; data: CancelAllOrders }
   | { type: "CancelReplaceOrder"; data: CancelReplaceOrder }
   | { type: "AmendOrder"; data: AmendOrder }
   | { type: "AtomicBasketOrder"; data: AtomicBasketOrder }
-  | { type: "BatchPlaceOrders"; data: BatchPlaceOrders }
   | { type: "MarketOrder"; data: MarketOrder }
   | { type: "WithdrawRequest"; data: WithdrawRequest }
   | { type: "ApproveAgent"; data: ApproveAgent }
@@ -1651,7 +1657,9 @@ export interface ProposalPage {
 // Event types (emitted by engine, delivered via ABCI/WebSocket)
 // ---------------------------------------------------------------------------
 
-/** Emitted when a limit order is placed on the order book. All string fields are stringified numbers. */
+/** Retired: no longer emitted, replaced by `orders_placed`
+ *  ({@link OrdersPlacedEvent}); kept so stored history reads. All string
+ *  fields are stringified numbers. */
 export interface OrderPlacedEvent {
   type: "OrderPlaced";
   /** Engine-assigned order ID. */
@@ -1670,7 +1678,8 @@ export interface OrderPlacedEvent {
   clientOrderId: string;
 }
 
-/** Emitted when an order is cancelled. */
+/** Retired: no longer emitted, replaced by `orders_cancelled`
+ *  ({@link OrdersCancelledEvent}); kept so stored history reads. */
 export interface OrderCancelledEvent {
   type: "OrderCancelled";
   /** Engine-assigned order ID. */
@@ -2033,6 +2042,8 @@ export interface OrderbookLevelUpdatedEvent {
 
 /** Union of all exchange events. */
 export type ExchangeEvent =
+  | OrdersPlacedEvent
+  | OrdersCancelledEvent
   | OrderPlacedEvent
   | OrderCancelledEvent
   | TradeExecutedEvent

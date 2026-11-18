@@ -9,7 +9,7 @@ use proof_trading_sdk::gateway::{
     RetryAfter, SubmissionOutcome, TxHash,
 };
 use proof_trading_sdk::types::{
-    Action, AtomicBasketLeg, BatchedOrder, MarketConfig, MarketId, OrderId, PlaceOrder,
+    Action, AtomicBasketLeg, MarketConfig, MarketId, OrderEntry, OrderId, PlaceOrder,
     PositionEpoch, Side, TriggerLimb,
 };
 use proof_trading_sdk::{crypto, sign_action, SignActionError, Signer};
@@ -18,7 +18,7 @@ use proof_trading_sdk::{decode_exec_error_kind, DecodedExecErrorKind, ErrorKind}
 use crate::actions;
 use crate::address::Address;
 use crate::error::{Error, Result};
-use crate::event::Event;
+use crate::event::{CancelReason, Event, OrderCancellation, OrderPlacement, PlacementOutcome};
 use crate::info::{ClientConfig, InfoClient};
 use crate::nonce::NonceAllocator;
 
@@ -111,11 +111,10 @@ pub struct Receipt {
     pub error: Option<EngineError>,
     /// The engine's log, unchanged.
     pub log: String,
-    /// What the transaction did, in emission order: [`Event::OrderPlaced`],
-    /// [`Event::Fill`], [`Event::OrderCancelled`], ... One transaction can
-    /// emit several of each (a basket, a cancel-replace). An order that fully
-    /// fills on arrival emits fills and no `OrderPlaced`; an IOC remainder or
-    /// a refused post-only emits neither.
+    /// What the transaction did, in emission order: [`Event::OrdersPlaced`],
+    /// [`Event::Fill`], [`Event::OrdersCancelled`], ... One transaction can
+    /// emit several fills and position updates. `OrdersPlaced` reports every
+    /// order of a placement, rested, executed or rejected.
     pub events: Vec<Event>,
 }
 
@@ -124,6 +123,56 @@ impl Receipt {
     pub fn is_success(&self) -> bool {
         self.error.is_none()
     }
+
+    /// What each order of a `PlaceOrders` did, in the order sent; empty when
+    /// the transaction placed none.
+    #[must_use]
+    pub fn placements(&self) -> &[OrderPlacement] {
+        self.events
+            .iter()
+            .find_map(|e| match e {
+                Event::OrdersPlaced(p) => Some(p.orders.as_slice()),
+                _ => None,
+            })
+            .unwrap_or(&[])
+    }
+
+    /// What each entry of a `CancelOrders` or `CancelClientOrders` did, in
+    /// the order sent; empty when the transaction requested no cancel.
+    #[must_use]
+    pub fn cancellations(&self) -> &[OrderCancellation] {
+        self.events
+            .iter()
+            .find_map(|e| match e {
+                Event::OrdersCancelled(c) if c.reason == CancelReason::UserRequested => {
+                    Some(c.orders.as_slice())
+                }
+                _ => None,
+            })
+            .unwrap_or(&[])
+    }
+}
+
+/// A list of one reports its refusal in its list event with code 0; surface
+/// it as the transaction's error, as the single-order actions always did.
+fn single_refusal(mut submitted: Submitted) -> Submitted {
+    if let TxStatus::Committed(receipt) = &mut submitted.status {
+        if receipt.error.is_none() {
+            let refused = match (receipt.placements(), receipt.cancellations()) {
+                (
+                    [OrderPlacement {
+                        outcome: PlacementOutcome::Rejected(error),
+                        ..
+                    }],
+                    _,
+                )
+                | (_, [OrderCancellation::Refused { error, .. }]) => Some(*error),
+                _ => None,
+            };
+            receipt.error = refused.map(|e| EngineError::new(e.code(), Some(&receipt.log)));
+        }
+    }
+    submitted
 }
 
 impl From<CommittedReceipt> for Receipt {
@@ -592,13 +641,58 @@ impl ExchangeClient {
         actions::limit_order(self.address(), market, side, price, quantity)
     }
 
-    /// Place a limit order (`PlaceOrder`).
+    /// Place one limit order ([`actions::place_order`]). A refused order is
+    /// the receipt's error, as for any refused transaction.
     ///
     /// # Errors
     ///
     /// As [`Self::submit`].
     pub async fn place_order(&self, order: PlaceOrder) -> Result<Submitted> {
-        self.submit(&Action::PlaceOrder(order)).await
+        self.submit(&actions::place_order(order))
+            .await
+            .map(single_refusal)
+    }
+
+    /// Place 1 to 100 limit orders under one signature, each placed or
+    /// refused on its own ([`actions::place_orders`]). The transaction
+    /// succeeds; [`Receipt::placements`] says what each order did.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for no orders or more than 100, else as
+    /// [`Self::submit`].
+    pub async fn place_orders(&self, orders: Vec<OrderEntry>) -> Result<Submitted> {
+        self.submit(&actions::place_orders(self.address(), orders)?)
+            .await
+    }
+
+    /// Cancel 1 to 100 orders by exchange order id, each on its own
+    /// ([`actions::cancel_orders`]); [`Receipt::cancellations`] says what
+    /// each did.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for no ids or more than 100, else as
+    /// [`Self::submit`].
+    pub async fn cancel_orders(&self, order_ids: Vec<OrderId>) -> Result<Submitted> {
+        self.submit(&actions::cancel_orders(self.address(), order_ids)?)
+            .await
+    }
+
+    /// Cancel 1 to 100 orders by client order id, each on its own
+    /// ([`actions::cancel_client_orders`]); [`Receipt::cancellations`] says
+    /// what each did.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for no ids or more than 100, else as
+    /// [`Self::submit`].
+    pub async fn cancel_client_orders(&self, client_order_ids: Vec<u64>) -> Result<Submitted> {
+        self.submit(&actions::cancel_client_orders(
+            self.address(),
+            client_order_ids,
+        )?)
+        .await
     }
 
     /// Immediate-or-cancel at the best available prices
@@ -625,6 +719,7 @@ impl ExchangeClient {
     pub async fn cancel_order(&self, order_id: OrderId) -> Result<Submitted> {
         self.submit(&actions::cancel_order(self.address(), order_id))
             .await
+            .map(single_refusal)
     }
 
     /// Cancel by client order id ([`actions::cancel_order_by_client_id`]).
@@ -638,6 +733,7 @@ impl ExchangeClient {
             client_order_id,
         ))
         .await
+        .map(single_refusal)
     }
 
     /// Cancel every resting order, or only those on `market`
@@ -894,18 +990,6 @@ impl ExchangeClient {
         ))
         .await
     }
-
-    /// Place up to 100 limit orders under one signature, each placed or
-    /// refused on its own ([`actions::batch_place_orders`]).
-    ///
-    /// # Errors
-    ///
-    /// [`Error::InvalidInput`] for no orders or more than 100, else as
-    /// [`Self::submit`].
-    pub async fn batch_place_orders(&self, orders: Vec<BatchedOrder>) -> Result<Submitted> {
-        self.submit(&actions::batch_place_orders(self.address(), orders)?)
-            .await
-    }
 }
 
 #[cfg(test)]
@@ -952,10 +1036,76 @@ mod tests {
     fn debug_never_prints_signed_bytes() {
         let c = client();
         let tx = c
-            .sign(&Action::PlaceOrder(c.limit_order(1, Side::Buy, 1, 1)))
+            .sign(&actions::place_order(c.limit_order(1, Side::Buy, 1, 1)))
             .unwrap();
         let shown = format!("{tx:?}");
         assert!(shown.contains("hash") && !shown.contains("bytes"));
+    }
+
+    fn committed(events: Vec<Event>) -> Submitted {
+        let c = client();
+        Submitted {
+            tx: c
+                .sign(&actions::cancel_all_orders(c.address(), None))
+                .unwrap(),
+            status: TxStatus::Committed(Receipt {
+                hash: TxHash::of_signed_bytes(&[1]),
+                height: 9,
+                error: None,
+                log: String::new(),
+                events,
+            }),
+            retry_after: None,
+        }
+    }
+
+    fn placed(outcomes: &[PlacementOutcome]) -> Event {
+        Event::OrdersPlaced(crate::event::OrdersPlaced {
+            owner: Address([1; 20]),
+            orders: outcomes
+                .iter()
+                .map(|&outcome| OrderPlacement {
+                    market: 1,
+                    client_order_id: None,
+                    outcome,
+                })
+                .collect(),
+        })
+    }
+
+    #[test]
+    fn a_refused_single_is_the_error_it_always_was() {
+        let margin = EngineError::new(12, None);
+        let refused = single_refusal(committed(vec![placed(&[PlacementOutcome::Rejected(
+            margin,
+        )])]));
+        assert_eq!(refused.error(), Some(margin));
+        assert!(!refused.is_success());
+
+        let not_found = EngineError::new(2, None);
+        let cancel = Event::OrdersCancelled(crate::event::OrdersCancelled {
+            owner: Address([1; 20]),
+            reason: CancelReason::UserRequested,
+            orders: vec![OrderCancellation::Refused {
+                target: proof_trading_sdk::types::CancelTarget::OrderId(5),
+                error: not_found,
+            }],
+        });
+        let refused = single_refusal(committed(vec![cancel]));
+        assert!(refused.error().is_some_and(EngineError::is_order_not_found));
+
+        let rested = single_refusal(committed(vec![placed(&[PlacementOutcome::Executed {
+            order_id: 3,
+        }])]));
+        assert!(rested.is_success());
+        // A list keeps code 0 whatever its entries did.
+        let list = committed(vec![placed(&[
+            PlacementOutcome::Rejected(margin),
+            PlacementOutcome::Executed { order_id: 3 },
+        ])]);
+        assert!(list.is_success());
+        assert_eq!(list.receipt().unwrap().placements().len(), 2);
+        assert!(single_refusal(list).is_success());
     }
 
     #[test]

@@ -317,6 +317,21 @@ def test_a_backfilled_order_rejection_is_typed_as_an_order_update(monkeypatch) -
     ]
 
 
+def test_backfilled_list_events_are_typed_as_order_updates(monkeypatch) -> None:
+    placed = ev(11, "RR", 0, "orders_placed")
+    cancelled = ev(11, "RR", 1, "orders_cancelled")
+    first = RecoverySocket([snap(10), live_frame(A)])
+    second = RecoverySocket([snap(12)])
+    frames, _, _ = run_stream(
+        monkeypatch, [first, second], [indexed(12), page(A, placed, cancelled, D)], 6
+    )
+    assert [(f["eventType"], f["type"]) for f in frames if f.get("backfilled")] == [
+        ("orders_placed", "orderUpdate"),
+        ("orders_cancelled", "orderUpdate"),
+        ("fees_collected", "accountEvent"),
+    ]
+
+
 def test_reconnect_retries_until_history_indexes_the_snapshot_height(monkeypatch) -> None:
     # No live frame arrives to show the lag: only the snapshot height does.
     first = RecoverySocket([snap(10), live_frame(A)])

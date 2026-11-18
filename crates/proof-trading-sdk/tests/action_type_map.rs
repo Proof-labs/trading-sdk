@@ -31,6 +31,14 @@ const NOT_IN_THE_MAIN_ENTRY: &[(&str, &str)] = &[
     ),
 ];
 
+/// Single-order names the TypeScript map keeps beside the core's list action
+/// on the same byte, so existing callers keep compiling.
+const SINGLE_ORDER_NAMES: &[(&str, &str)] = &[
+    ("PlaceOrder", "PlaceOrders"),
+    ("CancelOrder", "CancelOrders"),
+    ("CancelClientOrder", "CancelClientOrders"),
+];
+
 /// `Name: 0x1a,` entries of `export const <name> = { … } as const;`.
 fn ts_map(src: &str, name: &str) -> BTreeMap<String, u8> {
     let start = format!("export const {name} = {{");
@@ -72,11 +80,17 @@ fn the_typescript_action_map_matches_the_core() {
     );
 
     let excluded: BTreeMap<&str, &str> = NOT_IN_THE_MAIN_ENTRY.iter().copied().collect();
-    let expected: BTreeMap<String, u8> = core
+    let mut expected: BTreeMap<String, u8> = core
         .iter()
         .filter(|(name, _)| !excluded.contains_key(name.as_str()))
         .map(|(name, byte)| (name.clone(), *byte))
         .collect();
+    for (single, list) in SINGLE_ORDER_NAMES {
+        let byte = *core
+            .get(*list)
+            .unwrap_or_else(|| panic!("`{list}` is no longer in the core"));
+        expected.insert((*single).to_string(), byte);
+    }
     assert_eq!(
         main, expected,
         "src/types.ts `ActionType` and the core disagree (left: TypeScript, right: core)"

@@ -36,10 +36,26 @@ from proof_trading_sdk._native import (
 from proof_trading_sdk.external_signer import ExternalSigner
 from proof_trading_sdk.actions import (
     Action,
+    CancelClientOrder,
+    CancelClientOrders,
+    CancelOrder,
+    CancelOrders,
     CancelPositionTriggers,
+    OrderEntry,
+    PlaceOrder,
+    PlaceOrders,
     SetPositionTriggers,
     TriggerLimb,
     encode_action,
+)
+from proof_trading_sdk.order_lists import (
+    ORDERS_CANCELLED,
+    ORDERS_PLACED,
+    OrderCancellation,
+    OrderPlacement,
+    order_cancellations,
+    order_placements,
+    single_refusal_code,
 )
 from proof_trading_sdk.config import SdkConfig, load_config
 from proof_trading_sdk.finalized_markets import (
@@ -169,6 +185,20 @@ def _submission_may_have_been_admitted(exc: TransportError) -> bool:
         return True
     cause = exc.__cause__
     return isinstance(cause, httpx.RequestError) and not isinstance(cause, _NOT_SENT)
+
+
+def _raise_single_refusal(action: Action, data: dict[str, t.Any]) -> dict[str, t.Any]:
+    """Raise a single order's refusal as the nonzero code it once returned."""
+    if isinstance(action, PlaceOrder):
+        event_type = ORDERS_PLACED
+    elif isinstance(action, (CancelOrder, CancelClientOrder)):
+        event_type = ORDERS_CANCELLED
+    else:
+        return data
+    code = single_refusal_code(data, event_type)
+    if code:
+        raise EngineError(code, data.get("message") or data.get("log") or data.get("error") or "")
+    return data
 
 
 def _to_hex(owner: bytes | str) -> str:
@@ -624,8 +654,13 @@ class ExchangeClient:
         return self.sign_and_encode_action(action_type, payload)
 
     def submit(self, action: Action) -> dict[str, t.Any]:
-        """Encode + sign + submit a typed action in one call."""
-        return self.submit_action(self.sign_action(action))
+        """Encode + sign + submit a typed action in one call.
+
+        A refused :class:`PlaceOrder`, :class:`CancelOrder` or
+        :class:`CancelClientOrder` raises :class:`EngineError` with its code,
+        although the engine reports it as a list of one with code 0.
+        """
+        return _raise_single_refusal(action, self.submit_action(self.sign_action(action)))
 
     def _submit_with_signer_revision(self, action: Action, revision: int) -> dict[str, t.Any]:
         action_type, payload = encode_action(action)
@@ -681,6 +716,60 @@ class ExchangeClient:
                 expected_position_epoch=expected_position_epoch,
             ),
             revision,
+        )
+
+    def place_orders(
+        self, orders: t.Sequence[OrderEntry], *, owner: bytes | None = None
+    ) -> list[OrderPlacement]:
+        """Place 1 to 100 limit orders under one signature, each on its own.
+
+        Returns one :class:`OrderPlacement` per order, in order; a refused
+        order is ``rejected`` with its code and raises nothing. ``owner``
+        defaults to the signer.
+        """
+        with self._signer_lock:
+            revision = self._signer_revision
+            selected_owner = self._own_owner() if owner is None else owner
+        return order_placements(
+            self._submit_with_signer_revision(
+                PlaceOrders(owner=selected_owner, orders=list(orders)), revision
+            )
+        )
+
+    def cancel_orders(
+        self, order_ids: t.Sequence[int], *, owner: bytes | None = None
+    ) -> list[OrderCancellation]:
+        """Cancel 1 to 100 resting orders by order id, each on its own.
+
+        Returns one :class:`OrderCancellation` per entry, in order; a cancel
+        that removed nothing is ``refused`` with its code and raises nothing.
+        """
+        with self._signer_lock:
+            revision = self._signer_revision
+            selected_owner = self._own_owner() if owner is None else owner
+        return order_cancellations(
+            self._submit_with_signer_revision(
+                CancelOrders(owner=selected_owner, order_ids=list(order_ids)), revision
+            )
+        )
+
+    def cancel_client_orders(
+        self, client_order_ids: t.Sequence[int], *, owner: bytes | None = None
+    ) -> list[OrderCancellation]:
+        """Cancel 1 to 100 resting orders by client order id, each on its own.
+
+        Results as :meth:`cancel_orders`.
+        """
+        with self._signer_lock:
+            revision = self._signer_revision
+            selected_owner = self._own_owner() if owner is None else owner
+        return order_cancellations(
+            self._submit_with_signer_revision(
+                CancelClientOrders(
+                    owner=selected_owner, client_order_ids=list(client_order_ids)
+                ),
+                revision,
+            )
         )
 
     # ── Write action ─────────────────────────────────────────────────────

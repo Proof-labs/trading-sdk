@@ -9,12 +9,39 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- `BatchPlaceOrders` (0x35): up to 100 limit orders for one account under one
-  signature, each placed or refused on its own, so a market maker requotes in
-  one round trip. TypeScript `{ type: "BatchPlaceOrders" }` with `BatchedOrder`;
-  Python `BatchPlaceOrders` / `BatchedOrder`; Rust (`proof-sdk-rs`)
-  `actions::batch_place_orders` / `batched_order` and
-  `ExchangeClient::batch_place_orders`. Needs the wire of exchange#1508.
+- Order placement and cancels as lists (exchange#1513): `PlaceOrders` (0x01),
+  `CancelOrders` (0x02) and `CancelClientOrders` (0x18) carry 1 to 100 entries
+  for one account under one signature, each placed or cancelled on its own; the
+  transaction succeeds and one `orders_placed` / `orders_cancelled` event
+  reports every entry, refused ones with their code. TypeScript
+  `client.placeOrders` / `cancelOrders` / `cancelClientOrders` return
+  `{ tx, orders }` per entry, with `OrderEntry`, `MAX_LIST_ENTRIES`,
+  `decodeOrderListEvent`, `orderPlacements` and `orderCancellations`. Python
+  `PlaceOrders` / `CancelOrders` / `CancelClientOrders` / `OrderEntry` and
+  `ExchangeClient.place_orders` / `cancel_orders` / `cancel_client_orders`
+  returning `OrderPlacement` / `OrderCancellation` lists. Rust (`proof-sdk-rs`)
+  `actions::place_orders` / `cancel_orders` / `cancel_client_orders` /
+  `order_entry`, the matching `ExchangeClient` methods, `Receipt::placements`
+  / `cancellations` and `Event::OrdersPlaced` / `OrdersCancelled`.
+
+### Changed
+
+- `placeOrder`, `cancelOrder`, `cancelClientOrder` (TypeScript), `submit` of a
+  `PlaceOrder` / `CancelOrder` / `CancelClientOrder` (Python) and
+  `place_order`, `cancel_order`, `cancel_order_by_client_id`, `buy_no`,
+  `sell_no` (Rust) keep their signatures and send a list of one in the same
+  bytes as before. When that entry is refused they return or raise the same
+  engine error as before, though the transaction itself now succeeds. The
+  single names stay on the list bytes (`ActionType.PlaceOrder` and the Python
+  aliases); single-order bytes still decode as the single action.
+- Account streams treat `orders_placed` / `orders_cancelled` as order updates.
+  `order_placed` and `order_cancelled` are no longer emitted and still decode
+  from stored history.
+- Rust: the wire renamed `Action::PlaceOrder` / `CancelOrder` /
+  `CancelClientOrder` to `Action::PlaceOrders` / `CancelOrders` /
+  `CancelClientOrders`; build a single order with `actions::place_order(order)`
+  or `PlaceOrders::one(order)`.
+- Needs the wire of exchange#1513 (proof-wire pinned to its head).
 
 ## [13.0.0] (Python 5.0.0; Rust core 5.0.0) — 2026-11-17
 

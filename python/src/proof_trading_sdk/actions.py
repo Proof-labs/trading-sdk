@@ -43,12 +43,22 @@ class TimeInForce(StrEnum):
 # ── Action-type byte map (generated from the Rust core) ──────────────────────
 
 
+_SINGLE_ACTION_NAMES = {
+    "PlaceOrder": "PlaceOrders",
+    "CancelOrder": "CancelOrders",
+    "CancelClientOrder": "CancelClientOrders",
+}
+
+
 class _ActionTypeMap:
     """``ActionType.PlaceOrder`` → the wire byte, generated from the core."""
 
     def __init__(self) -> None:
         for entry in _native.get_action_types():
             setattr(self, entry["name"], entry["code"])
+        # The single-order names keep working: a single order is a list of one.
+        for single, listed in _SINGLE_ACTION_NAMES.items():
+            setattr(self, single, getattr(self, listed))
 
     def __getitem__(self, name: str) -> int:
         return getattr(self, name)
@@ -567,11 +577,22 @@ class AtomicBasketOrder(Action):
         }
 
 
+MAX_LIST_ENTRIES = 100
+"""Most entries one :class:`PlaceOrders`, :class:`CancelOrders` or
+:class:`CancelClientOrders` carries; the wire refuses more."""
+
+
+def _check_list_size(entries: list[Any]) -> None:
+    if not 1 <= len(entries) <= MAX_LIST_ENTRIES:
+        raise ValueError(
+            f"list carries {len(entries)} entries, must carry 1..={MAX_LIST_ENTRIES}"
+        )
+
+
 @dataclass
-class BatchedOrder:
-    """One order of a :class:`BatchPlaceOrders`: a :class:`PlaceOrder` whose
-    owner is the batch's, without stop-loss / take-profit limbs. Not an
-    action on its own."""
+class OrderEntry:
+    """One order of a :class:`PlaceOrders`: a :class:`PlaceOrder` without its
+    owner, with the same defaults. Not an action on its own."""
 
     market: int
     side: str
@@ -581,6 +602,13 @@ class BatchedOrder:
     post_only: bool = False
     reduce_only: bool = False
     time_in_force: str = TimeInForce.Gtc
+    stop_loss: Optional[TriggerLimb] = None
+    take_profit: Optional[TriggerLimb] = None
+
+    def __post_init__(self) -> None:
+        _validate_order_triggers(
+            self.stop_loss, self.take_profit, reduce_only=self.reduce_only
+        )
 
     def as_wire(self) -> dict[str, Any]:
         return {
@@ -592,25 +620,55 @@ class BatchedOrder:
             "post_only": self.post_only,
             "reduce_only": self.reduce_only,
             "time_in_force": self.time_in_force,
+            "stop_loss": _limb_wire(self.stop_loss),
+            "take_profit": _limb_wire(self.take_profit),
         }
 
 
 @dataclass
-class BatchPlaceOrders(Action):
-    """Up to 100 limit orders for one account under one signature and nonce,
-    so a market maker requotes in one round trip. Orders run in sequence,
-    each exactly as its own :class:`PlaceOrder` would: a refused order emits
-    ``order_rejected`` with its code and the rest still place."""
+class PlaceOrders(Action):
+    """1 to 100 limit orders for one account under one signature. Each order
+    runs as its own :class:`PlaceOrder` would and stands or is refused on its
+    own; the transaction succeeds and ``orders_placed`` reports every order."""
 
-    ACTION_NAME = "BatchPlaceOrders"
+    ACTION_NAME = "PlaceOrders"
     owner: bytes
-    orders: list[BatchedOrder]
+    orders: list[OrderEntry]
 
     def fields(self) -> dict[str, Any]:
+        _check_list_size(self.orders)
         return {
             "owner": self.owner,
             "orders": [order.as_wire() for order in self.orders],
         }
+
+
+@dataclass
+class CancelOrders(Action):
+    """Cancel 1 to 100 resting orders by order id, each on its own;
+    ``orders_cancelled`` reports every entry."""
+
+    ACTION_NAME = "CancelOrders"
+    owner: bytes
+    order_ids: list[int]
+
+    def fields(self) -> dict[str, Any]:
+        _check_list_size(self.order_ids)
+        return {"owner": self.owner, "order_ids": list(self.order_ids)}
+
+
+@dataclass
+class CancelClientOrders(Action):
+    """Cancel 1 to 100 resting orders by client order id, each on its own;
+    ``orders_cancelled`` reports every entry."""
+
+    ACTION_NAME = "CancelClientOrders"
+    owner: bytes
+    client_order_ids: list[int]
+
+    def fields(self) -> dict[str, Any]:
+        _check_list_size(self.client_order_ids)
+        return {"owner": self.owner, "client_order_ids": list(self.client_order_ids)}
 
 
 @dataclass
@@ -1175,6 +1233,11 @@ __all__ = [
     "MarketOrder",
     "CancelOrder",
     "CancelClientOrder",
+    "MAX_LIST_ENTRIES",
+    "OrderEntry",
+    "PlaceOrders",
+    "CancelOrders",
+    "CancelClientOrders",
     "CancelAllOrders",
     "CancelReplaceOrder",
     "AmendOrder",

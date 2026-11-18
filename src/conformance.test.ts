@@ -26,6 +26,7 @@ import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
 import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
 import { decodeLiquidationEvent } from "./liquidation-events.js";
+import { decodeOrderListEvent, type OrderListEvent } from "./order-lists.js";
 import { decodeMarginOffsetEvent } from "./margin-offsets.js";
 import { decodeVoidSettlementEvent } from "./void-events.js";
 import { decodeResolutionBalanceSnapshotEvent } from "./resolution-balance-events.js";
@@ -85,6 +86,62 @@ const PRICE_CMP: Record<string, PriceComparison> = {
 };
 
 /** Vector limb dict (snake_case) → the SDK's camelCase `TriggerLimb`. */
+/** A decoded list event in the engine's serde shape, so the events vectors
+ *  compare it field by field. */
+function orderListAsEngine(event: OrderListEvent): unknown {
+  if (event.type === "OrdersPlaced") {
+    return {
+      owner: event.owner,
+      orders: event.orders.map((o) => ({
+        market: o.market,
+        client_order_id: o.clientOrderId,
+        outcome:
+          o.outcome === "resting"
+            ? {
+                Resting: {
+                  order_id: o.orderId,
+                  side: Side[o.side],
+                  price: o.price,
+                  quantity: o.quantity,
+                  time_in_force: TimeInForce[o.timeInForce],
+                  post_only: o.postOnly,
+                  reduce_only: o.reduceOnly,
+                },
+              }
+            : o.outcome === "executed"
+              ? { Executed: { order_id: o.orderId } }
+              : { Rejected: { code: o.code } },
+      })),
+    };
+  }
+  return {
+    owner: event.owner,
+    reason: event.reason,
+    orders: event.orders.map((o) =>
+      o.outcome === "cancelled"
+        ? {
+            Cancelled: {
+              order_id: o.orderId,
+              market: o.market,
+              client_order_id: o.clientOrderId,
+              original_quantity: o.originalQuantity,
+              remaining_quantity: o.remainingQuantity,
+              filled_quantity: o.filledQuantity,
+            },
+          }
+        : {
+            Refused: {
+              code: o.code,
+              target:
+                "orderId" in o.target
+                  ? { OrderId: o.target.orderId }
+                  : { ClientOrderId: o.target.clientOrderId },
+            },
+          },
+    ),
+  };
+}
+
 function limb(v: unknown): TriggerLimb | null {
   if (v === null || v === undefined) return null;
   const l = v as Record<string, unknown>;
@@ -131,7 +188,27 @@ function toAction(
           signer: bytes(input.signer),
         },
       };
-    case ActionType.PlaceOrder:
+    case ActionType.PlaceOrders:
+      // A list vector carries `orders`; a single one the order's own fields.
+      if (Array.isArray(input.orders))
+        return {
+          type: "PlaceOrders",
+          data: {
+            owner: bytes(input.owner),
+            orders: (input.orders as any[]).map((order) => ({
+              market: order.market as number,
+              side: SIDE[order.side as string],
+              price: big(order.price),
+              quantity: big(order.quantity),
+              clientOrderId: bigOrNull(order.client_order_id),
+              postOnly: order.post_only as boolean,
+              reduceOnly: order.reduce_only as boolean,
+              timeInForce: TIF[order.time_in_force as string],
+              stopLoss: limb(order.stop_loss),
+              takeProfit: limb(order.take_profit),
+            })),
+          },
+        };
       return {
         type: "PlaceOrder",
         data: {
@@ -148,12 +225,28 @@ function toAction(
           takeProfit: limb(input.take_profit),
         },
       };
-    case ActionType.CancelOrder:
+    case ActionType.CancelOrders:
+      if (Array.isArray(input.order_ids))
+        return {
+          type: "CancelOrders",
+          data: {
+            owner: bytes(input.owner),
+            orderIds: (input.order_ids as unknown[]).map(big),
+          },
+        };
       return {
         type: "CancelOrder",
         data: { orderId: big(input.order_id), owner: bytes(input.owner) },
       };
-    case ActionType.CancelClientOrder:
+    case ActionType.CancelClientOrders:
+      if (Array.isArray(input.client_order_ids))
+        return {
+          type: "CancelClientOrders",
+          data: {
+            owner: bytes(input.owner),
+            clientOrderIds: (input.client_order_ids as unknown[]).map(big),
+          },
+        };
       return {
         type: "CancelClientOrder",
         data: {
@@ -428,23 +521,6 @@ function toAction(
             input.max_slippage_bps == null
               ? 0
               : Number(big(input.max_slippage_bps)),
-        },
-      };
-    case ActionType.BatchPlaceOrders:
-      return {
-        type: "BatchPlaceOrders",
-        data: {
-          owner: bytes(input.owner),
-          orders: (input.orders as unknown[]).map((order: any) => ({
-            market: order.market as number,
-            side: SIDE[order.side as string],
-            price: big(order.price),
-            quantity: big(order.quantity),
-            clientOrderId: bigOrNull(order.client_order_id),
-            postOnly: order.post_only === true,
-            reduceOnly: order.reduce_only === true,
-            timeInForce: TIF[order.time_in_force as string],
-          })),
         },
       };
     case ActionType.ProposeAdminAction:
@@ -1069,23 +1145,26 @@ describe("conformance vectors (TypeScript)", () => {
         decodeLiquidationEvent(input) ??
         decodeVoidSettlementEvent(input) ??
         decodeResolutionBalanceSnapshotEvent(input) ??
-        decodeMarginOffsetEvent(input);
+        decodeMarginOffsetEvent(input) ??
+        decodeOrderListEvent(input);
       const [[variant, fields]] = Object.entries(
         c.event as Record<string, unknown>,
       );
       expect(decoded?.type, c.case).toBe(variant);
       const flat =
-        decoded?.type === "MarginOffsetPairConfigured"
-          ? {
-              sequence: decoded.sequence,
-              index: decoded.index,
-              conditional_market: decoded.pair.conditional,
-              perpetual_market: decoded.pair.perpetual,
-              settlement_reference_market: decoded.pair.settlementReference,
-              rate_bps: decoded.pair.rate,
-              resolution: decoded.pair.resolution,
-            }
-          : decoded;
+        decoded?.type === "OrdersPlaced" || decoded?.type === "OrdersCancelled"
+          ? orderListAsEngine(decoded)
+          : decoded?.type === "MarginOffsetPairConfigured"
+            ? {
+                sequence: decoded.sequence,
+                index: decoded.index,
+                conditional_market: decoded.pair.conditional,
+                perpetual_market: decoded.pair.perpetual,
+                settlement_reference_market: decoded.pair.settlementReference,
+                rate_bps: decoded.pair.rate,
+                resolution: decoded.pair.resolution,
+              }
+            : decoded;
       expect(normalise(flat), c.case).toEqual(normalise(fields));
     }
   });

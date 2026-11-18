@@ -416,7 +416,7 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
   offset += 8;
   const payloadBytes = msg.slice(offset);
 
-  const actionName = ACTION_TYPE_NAMES.get(actionType) ?? null;
+  let actionName = ACTION_TYPE_NAMES.get(actionType) ?? null;
   let action: DecodedAction | null = null;
   let decodeError: string | null = null;
   if (actionName === null) {
@@ -444,6 +444,8 @@ export function decodeSigningMessage(msg: Uint8Array): DecodedSigningMessage {
         );
       }
       action = decodedAction;
+      // A list byte names its single or list form by entry count.
+      actionName = decodedAction.type;
     } catch (e) {
       decodeError = e instanceof Error ? e.message : String(e);
     }

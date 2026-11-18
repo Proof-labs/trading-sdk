@@ -6,9 +6,9 @@
 //!
 //! - [`ExchangeClient`]: timestamp-nonce allocation, signing through any
 //!   [`Signer`], one-shot submission, receipt waiting, and helpers for
-//!   orders (place, cancel, amend, cancel-replace, market, close, No on a
-//!   binary book), position triggers, agents, sub-accounts, withdrawals and
-//!   baskets.
+//!   orders (place and cancel, one or a list of up to 100, amend,
+//!   cancel-replace, market, close, No on a binary book), position triggers,
+//!   agents, sub-accounts, withdrawals and baskets.
 //! - [`actions`]: the same actions as plain values, for callers that sign and
 //!   send them themselves.
 //! - [`InfoClient`]: typed reads for markets, events, the order book, an
@@ -71,8 +71,9 @@ pub use address::Address;
 pub use error::{Error, Result};
 pub use event::{
     CancelReason, ConditionMet, ConditionNotMet, ConversionFallbackReason, Deposited, Event,
-    EventResolved, Fill, FundingSettled, MarketOrderProcessed, OrderAmended, OrderCancelled,
-    OrderPlaced, OrderRejected, PositionClosed, PositionTriggersInvalidated, PositionUpdated,
+    EventResolved, Fill, FundingSettled, MarketOrderProcessed, OrderAmended, OrderCancellation,
+    OrderCancelled, OrderPlaced, OrderPlacement, OrderRejected, OrdersCancelled, OrdersPlaced,
+    PlacementOutcome, PositionClosed, PositionTriggersInvalidated, PositionUpdated,
     PredictionSettled, TriggerInvalidation,
 };
 pub use exchange::{
@@ -105,10 +106,11 @@ pub use proof_trading_sdk::bridge::WithdrawalId;
 pub use proof_trading_sdk::gateway::{TxAttribute, TxEvent, TxHash};
 pub use proof_trading_sdk::query::{AccountInfo, PositionBrief};
 pub use proof_trading_sdk::types::{
-    Action, AtomicBasketLeg, BatchedOrder, CancelReplaceOrder, ClientTriggerGroupId,
-    ClientTriggerId, EventId, EventInfo, FundingRate, MarketConfig, MarketId, MarketOrder, Order,
-    OrderId, Outcome, PlaceOrder, Position, PositionEpoch, Side, TimeInForce, TriggerLimb,
-    TriggerSlippageBps, WithdrawalStatus, MAX_BATCH_PLACE_ORDERS,
+    Action, AtomicBasketLeg, CancelClientOrders, CancelOrders, CancelReplaceOrder, CancelTarget,
+    ClientTriggerGroupId, ClientTriggerId, EventId, EventInfo, FundingRate, MarketConfig, MarketId,
+    MarketOrder, Order, OrderEntry, OrderId, Outcome, PlaceOrder, PlaceOrders, Position,
+    PositionEpoch, Side, TimeInForce, TriggerLimb, TriggerSlippageBps, WithdrawalStatus,
+    MAX_LIST_ENTRIES,
 };
 pub use proof_trading_sdk::ErrorKind;
 pub use proof_trading_sdk::{LocalSigner, Signer, SignerError};

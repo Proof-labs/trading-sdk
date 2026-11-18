@@ -529,8 +529,9 @@ newer than this package.
 `SetUserMarketLeverage` has a typed builder, but ordinary-account submission is
 unsupported. See [availability](../README.md#setusermarketleverage-availability).
 
-- **Trading:** `PlaceOrder`, `BatchPlaceOrders` (of `BatchedOrder`s),
-  `MarketOrder`, `CancelOrder`, `CancelClientOrder`, `CancelAllOrders`,
+- **Trading:** `PlaceOrder`, `PlaceOrders` (of `OrderEntry`s), `MarketOrder`,
+  `CancelOrder`, `CancelOrders`, `CancelClientOrder`, `CancelClientOrders`,
+  `CancelAllOrders`,
   `CancelReplaceOrder`, `AmendOrder`, `ClosePosition`, `AtomicBasketOrder`,
   `SetPositionTriggers`, `CancelPositionTriggers`,
   `SetUserMarketLeverage`, `ApproveAgent`, `RevokeAgent`, `CreateSubAccount`,
@@ -552,6 +553,37 @@ propose = actions.ProposeAdminAction(
 )
 action_type, payload = actions.encode_action(propose)
 ```
+
+## Order lists
+
+`PlaceOrders`, `CancelOrders` and `CancelClientOrders` carry 1 to 100 entries
+under one signature, like Hyperliquid's `order` and `cancel`. Each entry runs on
+its own: the transaction succeeds and its `orders_placed` or `orders_cancelled`
+event reports every entry. The client methods return those per-entry results
+and raise nothing for a refused entry:
+
+```python
+from proof_trading_sdk import OrderEntry
+
+placements = client.place_orders([
+    OrderEntry(market=1, side="Buy", price=66_740_000_000, quantity=50, post_only=True),
+    OrderEntry(market=1, side="Sell", price=66_760_000_000, quantity=50, post_only=True),
+])
+for p in placements:
+    if p.rejected:
+        print(p.market, p.code, p.error_name)
+    else:
+        print(p.outcome, p.order_id)  # "resting" or "executed"
+
+for c in client.cancel_orders([order_id_a, order_id_b]):
+    print(c.outcome, c.order_id, c.code)  # "cancelled", or "refused" with a code
+client.cancel_client_orders([7, 8])
+```
+
+A single `PlaceOrder`, `CancelOrder` or `CancelClientOrder` is a list of one with
+the same bytes as before, and `client.submit` still raises `EngineError` with
+its code when that one entry is refused. Entries out of range raise `ValueError`
+before signing.
 
 ## Position stop-loss / take-profit
 

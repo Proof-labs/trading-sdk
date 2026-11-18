@@ -633,7 +633,9 @@ type Action = TraderAction | OperatorAction | GovernanceAction;
 
 type TraderAction =
   | { type: "PlaceOrder"; data: PlaceOrder }
+  | { type: "PlaceOrders"; data: PlaceOrders }
   | { type: "CancelOrder"; data: CancelOrder }
+  | { type: "CancelOrders"; data: CancelOrders }
   | { type: "CancelAllOrders"; data: CancelAllOrders }
   | { type: "CancelReplaceOrder"; data: CancelReplaceOrder }
   | { type: "MarketOrder"; data: MarketOrder }
@@ -644,6 +646,47 @@ type TraderAction =
 Trading integrations use `TraderAction` and can type their calls against it to
 keep operator actions out of autocomplete. `submitTx` still accepts the full
 `Action` union.
+
+#### Order and cancel lists
+
+`PlaceOrders`, `CancelOrders` and `CancelClientOrders` carry 1 to
+`MAX_LIST_ENTRIES` (100) entries for one account under one signature, like
+Hyperliquid's `order` and `cancel`. Each entry runs on its own: the transaction
+succeeds and its `orders_placed` or `orders_cancelled` event reports every
+entry, including a refused one with its engine code.
+
+```typescript
+const { tx, orders } = await client.placeOrders([
+  {
+    market: 1,
+    side: Side.Buy,
+    price: 66_740_000_000n,
+    quantity: 50n,
+    postOnly: true,
+  },
+  {
+    market: 1,
+    side: Side.Sell,
+    price: 66_760_000_000n,
+    quantity: 50n,
+    postOnly: true,
+  },
+]);
+for (const o of orders) {
+  if (o.outcome === "rejected")
+    console.log(o.clientOrderId, o.code, o.error?.name);
+}
+const cancels = await client.cancelOrders([42n, 43n]); // or cancelClientOrders
+```
+
+`placeOrder`, `cancelOrder` and `cancelClientOrder` (and `PlaceOrder`,
+`CancelOrder`, `CancelClientOrder` through `submitTx`) send a list of one, whose
+bytes are the single order's. When that one entry is refused, the result is the
+same engine error the single action always returned. `orders` is empty while
+`tx` has no executed verdict; read it later with
+`orderPlacements(await client.waitForDelivery(tx), owner)` or
+`orderCancellations(...)`. `decodeOrderListEvent` decodes either event from
+its ABCI attributes.
 
 #### SetUserMarketLeverage availability
 
@@ -763,10 +806,10 @@ code should read the structured `code` field: it is authoritative and needs no p
 
 ### Order of actions within a block
 
-Every cancel (`CancelOrder`, `CancelClientOrder`, `CancelAllOrders`) in a
-block runs before every order-placing action (`PlaceOrder`, `BatchPlaceOrders`,
-`MarketOrder`, `AmendOrder`, `CancelReplaceOrder`, `AtomicBasketOrder`,
-`ClosePosition`), whatever their `seq`. A cancel sent in the same block as the order it targets
+Every cancel (`CancelOrders`, `CancelClientOrders`, `CancelAllOrders`) in a
+block runs before every order-placing action (`PlaceOrders`, `MarketOrder`,
+`AmendOrder`, `CancelReplaceOrder`, `AtomicBasketOrder`, `ClosePosition`),
+whatever their `seq`. A cancel sent in the same block as the order it targets
 finds nothing to cancel; send it after the order lands.
 
 ### Basket slippage

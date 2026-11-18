@@ -61,6 +61,24 @@ def _admin(i: dict, *byte_keys: str) -> dict:
     return {k: _b(v) if k in byte_keys else v for k, v in i.items()}
 
 
+def _limb(limb: dict | None) -> actions.TriggerLimb | None:
+    return None if limb is None else actions.TriggerLimb(**limb)
+
+
+def _place_orders(i: dict) -> actions.PlaceOrders:
+    orders = [
+        actions.OrderEntry(
+            **{
+                **order,
+                "stop_loss": _limb(order.get("stop_loss")),
+                "take_profit": _limb(order.get("take_profit")),
+            }
+        )
+        for order in i["orders"]
+    ]
+    return actions.PlaceOrders(owner=_b(i["owner"]), orders=orders)
+
+
 BUILDERS = {
     "create_market/full": lambda i: actions.CreateMarket(**_admin(i, "signer")),
     "authorize_withdrawal/operator": lambda i: actions.AuthorizeWithdrawal(
@@ -93,9 +111,19 @@ BUILDERS = {
     "propose_admin_action/set_market_status": lambda i: actions.ProposeAdminAction(
         **_admin(i, "proposer")
     ),
-    "batch_place_orders/two_orders": lambda i: actions.BatchPlaceOrders(
-        owner=_b(i["owner"]),
-        orders=[actions.BatchedOrder(**order) for order in i["orders"]],
+    "place_orders/two_orders": lambda i: _place_orders(i),
+    "place_orders/one_in_list_shape": lambda i: _place_orders(i),
+    "cancel_orders/two_orders": lambda i: actions.CancelOrders(
+        owner=_b(i["owner"]), order_ids=i["order_ids"]
+    ),
+    "cancel_orders/one_in_list_shape": lambda i: actions.CancelOrders(
+        owner=_b(i["owner"]), order_ids=i["order_ids"]
+    ),
+    "cancel_client_orders/two_orders": lambda i: actions.CancelClientOrders(
+        owner=_b(i["owner"]), client_order_ids=i["client_order_ids"]
+    ),
+    "cancel_client_orders/one_in_list_shape": lambda i: actions.CancelClientOrders(
+        owner=_b(i["owner"]), client_order_ids=i["client_order_ids"]
     ),
 }
 
@@ -139,9 +167,45 @@ def test_every_published_action_has_a_typed_builder():
     assert missing == set(), "actions reachable only through RawAction"
 
 
+_ENTRY = actions.OrderEntry(market=1, side="Buy", price=1, quantity=1)
+_LISTS = {
+    "place": lambda n: actions.PlaceOrders(owner=bytes(20), orders=[_ENTRY] * n),
+    "cancel": lambda n: actions.CancelOrders(owner=bytes(20), order_ids=[1] * n),
+    "cancel_client": lambda n: actions.CancelClientOrders(
+        owner=bytes(20), client_order_ids=[1] * n
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_LISTS))
 @pytest.mark.parametrize("count", [0, 101])
-def test_a_batch_out_of_range_does_not_encode(count):
-    order = actions.BatchedOrder(market=1, side="Buy", price=1, quantity=1)
-    batch = actions.BatchPlaceOrders(owner=bytes(20), orders=[order] * count)
-    with pytest.raises(ValueError, match=rf"batch carries {count} orders"):
-        actions.encode_action(batch)
+def test_a_list_out_of_range_does_not_encode(kind, count):
+    with pytest.raises(ValueError, match=rf"list carries {count} entries"):
+        actions.encode_action(_LISTS[kind](count))
+
+
+@pytest.mark.parametrize("kind", sorted(_LISTS))
+def test_a_full_list_encodes(kind):
+    action_type, _ = actions.encode_action(_LISTS[kind](actions.MAX_LIST_ENTRIES))
+    assert action_type == _LISTS[kind](1).action_type
+
+
+def test_single_names_share_the_list_bytes():
+    assert actions.ActionType.PlaceOrder == actions.ActionType.PlaceOrders == 0x01
+    assert actions.ActionType.CancelOrder == actions.ActionType.CancelOrders == 0x02
+    assert (
+        actions.ActionType.CancelClientOrder
+        == actions.ActionType.CancelClientOrders
+        == 0x18
+    )
+
+
+def test_a_list_of_one_encodes_as_the_single_order():
+    single = actions.PlaceOrder(
+        market=1, owner=bytes(20), side="Buy", price=100, quantity=10
+    )
+    listed = actions.PlaceOrders(
+        owner=bytes(20),
+        orders=[actions.OrderEntry(market=1, side="Buy", price=100, quantity=10)],
+    )
+    assert actions.encode_action(listed) == actions.encode_action(single)
