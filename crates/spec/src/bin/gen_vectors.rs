@@ -191,7 +191,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Action-type bytes (kept inline; the runners read action_type from the
     // vectors, and Python/TS map names→bytes via the core's get_action_types).
-    const PLACE_ORDERS: u8 = 0x35;
+    const PLACE_ORDERS: u8 = cv::PLACE_ORDERS;
     const CANCEL_ORDERS: u8 = 0x36;
     const CANCEL_CLIENT_ORDERS: u8 = 0x37;
     // Retired bytes, kept only to sign the frozen envelopes below.
