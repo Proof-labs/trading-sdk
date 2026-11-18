@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { ExchangeClient } from "./client.js";
 import { generateKeypair, pubkeyToOwner } from "./crypto.js";
-import { Side, type Action, type TxResult } from "./types.js";
+import { Side, type AccountInfo, type Action, type TxResult } from "./types.js";
 
 function clientWithKey() {
   const { privateKey, publicKey } = generateKeypair();
@@ -136,13 +136,49 @@ describe("convenience action builders", () => {
     });
   });
 
-  it("closePosition maps market + owner", async () => {
+  it("marketOrder passes a worst price through", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+    await client.marketOrder({
+      market: 3,
+      side: Side.Buy,
+      quantity: 5n,
+      worstPrice: 101_000n,
+    });
+    expect(spy.mock.calls[0][0].data).toMatchObject({ worstPrice: 101_000n });
+  });
+
+  it("closePosition sends a reduce-only market order against the position", async () => {
     const { client, owner } = clientWithKey();
     const spy = captureSubmit(client);
+    vi.spyOn(client, "queryAccount").mockResolvedValue({
+      positions: [
+        { market: 4, side: "Sell", size: 2n },
+        { market: 9, side: "Buy", size: 7n },
+      ],
+    } as unknown as AccountInfo);
     await client.closePosition(9);
     expect(spy.mock.calls[0][0]).toEqual({
-      type: "ClosePosition",
-      data: { market: 9, owner },
+      type: "MarketOrder",
+      data: {
+        market: 9,
+        owner,
+        side: Side.Sell,
+        quantity: 7n,
+        reduceOnly: true,
+      },
+    });
+  });
+
+  it("closePosition on a flat account still sends the close", async () => {
+    const { client } = clientWithKey();
+    const spy = captureSubmit(client);
+    vi.spyOn(client, "queryAccount").mockResolvedValue(null);
+    await client.closePosition(9);
+    expect(spy.mock.calls[0][0].data).toMatchObject({
+      market: 9,
+      quantity: 1n,
+      reduceOnly: true,
     });
   });
 

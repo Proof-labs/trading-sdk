@@ -217,14 +217,13 @@ Every action is `{ type: string, data: object }`:
 | Action         | Type string            | What it does                              |
 | -------------- | ---------------------- | ----------------------------------------- |
 | Limit order    | `"PlaceOrder"`         | Place a resting limit order               |
-| Limit orders   | `"PlaceOrders"`        | 1 to 100 orders, each placed on its own   |
+| Orders         | `"PlaceOrders"`        | 1 to 100 limit or market orders           |
 | Market order   | `"MarketOrder"`        | Cross the book immediately                |
 | Cancel         | `"CancelOrder"`        | Cancel by engine order ID                 |
 | Cancels        | `"CancelOrders"`       | 1 to 100 cancels by order ID              |
 | Cancel all     | `"CancelAllOrders"`    | Cancel all orders (optionally per-market) |
 | Replace        | `"CancelReplaceOrder"` | Atomically cancel + replace               |
 | Amend          | `"AmendOrder"`         | Change price/quantity on a resting order  |
-| Close position | `"ClosePosition"`      | Market order for the whole position       |
 | Basket         | `"AtomicBasketOrder"`  | Multi-leg fill-or-kill                    |
 
 See `src/types.ts` for every action's payload shape.

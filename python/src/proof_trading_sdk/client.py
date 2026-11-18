@@ -41,9 +41,12 @@ from proof_trading_sdk.actions import (
     CancelOrder,
     CancelOrders,
     CancelPositionTriggers,
+    ClosePosition,
+    MarketOrder,
     OrderEntry,
     PlaceOrder,
     PlaceOrders,
+    REDUCE_ONLY_NO_POSITION_CODE,
     SetPositionTriggers,
     TriggerLimb,
     encode_action,
@@ -189,7 +192,7 @@ def _submission_may_have_been_admitted(exc: TransportError) -> bool:
 
 def _raise_single_refusal(action: Action, data: dict[str, t.Any]) -> dict[str, t.Any]:
     """Raise a single order's refusal as the nonzero code it once returned."""
-    if isinstance(action, PlaceOrder):
+    if isinstance(action, (PlaceOrder, MarketOrder)):
         event_type = ORDERS_PLACED
     elif isinstance(action, (CancelOrder, CancelClientOrder)):
         event_type = ORDERS_CANCELLED
@@ -656,11 +659,32 @@ class ExchangeClient:
     def submit(self, action: Action) -> dict[str, t.Any]:
         """Encode + sign + submit a typed action in one call.
 
-        A refused :class:`PlaceOrder`, :class:`CancelOrder` or
-        :class:`CancelClientOrder` raises :class:`EngineError` with its code,
-        although the engine reports it as a list of one with code 0.
+        A refused :class:`PlaceOrder`, :class:`MarketOrder`,
+        :class:`CancelOrder` or :class:`CancelClientOrder` raises
+        :class:`EngineError` with its code, although the engine reports it as
+        a list of one with code 0. A :class:`ClosePosition` reads the
+        position and sends its reduce-only market order; on a flat account
+        it is a no-op success.
         """
+        if isinstance(action, ClosePosition):
+            return self._close_position(action)
         return _raise_single_refusal(action, self.submit_action(self.sign_action(action)))
+
+    def _close_position(self, close: ClosePosition) -> dict[str, t.Any]:
+        position = next(
+            (
+                p
+                for p in self.account(close.owner).positions
+                if p["market"] == close.market and p["size"] > 0
+            ),
+            None,
+        )
+        order = close.market_order(position)
+        data = self.submit_action(self.sign_action(order))
+        # Nothing to close: the success the close action always returned.
+        if single_refusal_code(data, ORDERS_PLACED) == REDUCE_ONLY_NO_POSITION_CODE:
+            return data
+        return _raise_single_refusal(order, data)
 
     def _submit_with_signer_revision(self, action: Action, revision: int) -> dict[str, t.Any]:
         action_type, payload = encode_action(action)
@@ -721,7 +745,8 @@ class ExchangeClient:
     def place_orders(
         self, orders: t.Sequence[OrderEntry], *, owner: bytes | None = None
     ) -> list[OrderPlacement]:
-        """Place 1 to 100 limit orders under one signature, each on its own.
+        """Place 1 to 100 limit or market orders under one signature, each on
+        its own (market entries via :meth:`OrderEntry.market_order`).
 
         Returns one :class:`OrderPlacement` per order, in order; a refused
         order is ``rejected`` with its code and raises nothing. ``owner``

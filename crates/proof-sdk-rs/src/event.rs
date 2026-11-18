@@ -13,7 +13,7 @@ use std::str::FromStr;
 use proof_trading_sdk::gateway::{TxAttribute, TxEvent};
 use proof_trading_sdk::types::ConversionFallbackReason as WireFallbackReason;
 use proof_trading_sdk::types::{
-    CancelTarget, EventId, MarketId, OrderId, Outcome, Side, TimeInForce,
+    CancelTarget, EventId, MarketId, OrderId, Outcome, Side, TimeInForce, UnfilledReason,
 };
 
 use crate::address::Address;
@@ -25,8 +25,9 @@ use crate::exchange::EngineError;
 pub enum Event {
     /// `trade_executed`: a fill.
     Fill(Fill),
-    /// `orders_placed`: what each order of one `PlaceOrders` (or a
-    /// cancel-replace's replacement) did: rested, executed or rejected.
+    /// `orders_placed`: what each order of one `PlaceOrders`, each leg of a
+    /// basket, or a cancel-replace's replacement did: rested, executed or
+    /// rejected.
     OrdersPlaced(OrdersPlaced),
     /// `orders_cancelled`: resting orders that left one owner's book for one
     /// reason, and for a cancel action, each entry it refused.
@@ -39,11 +40,12 @@ pub enum Event {
     OrderCancelled(OrderCancelled),
     /// `order_amended`: a resting order's price or size changed in place.
     OrderAmended(OrderAmended),
-    /// `order_rejected`: the engine refused an order of a market order,
-    /// close, cancel-replace or basket. `PlaceOrders` reports refusals in
-    /// [`Event::OrdersPlaced`] instead.
+    /// `order_rejected`: no longer emitted (a refusal is a
+    /// [`PlacementOutcome::Rejected`] entry of [`Event::OrdersPlaced`]); read
+    /// for stored history.
     OrderRejected(OrderRejected),
-    /// `market_order_processed`: an immediate order finished.
+    /// `market_order_processed`: no longer emitted (see
+    /// [`PlacementOutcome::Executed`]); read for stored history.
     MarketOrderProcessed(MarketOrderProcessed),
     /// `position_updated`: a position's size or entry changed.
     PositionUpdated(PositionUpdated),
@@ -129,9 +131,15 @@ pub enum PlacementOutcome {
         post_only: bool,
         reduce_only: bool,
     },
-    /// Accepted and done without resting: filled in full, or an IOC or FOK
-    /// whose remainder was dropped.
-    Executed { order_id: OrderId },
+    /// Accepted and done without resting: filled in full, or an IOC or
+    /// market order whose remainder was dropped. `filled_quantity` may be 0;
+    /// `unfilled` says why less than `requested_quantity` filled.
+    Executed {
+        order_id: OrderId,
+        requested_quantity: u64,
+        filled_quantity: u64,
+        unfilled: Option<UnfilledReason>,
+    },
     /// Refused; it wrote nothing. Read from the code alone, as
     /// [`OrderRejected::error`] is.
     Rejected(EngineError),
@@ -275,7 +283,7 @@ pub struct OrderAmended {
     pub queue_priority_reset: bool,
 }
 
-/// `order_rejected`.
+/// `order_rejected` (stored history only).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrderRejected {
     pub owner: Address,
@@ -287,7 +295,7 @@ pub struct OrderRejected {
     pub error: EngineError,
 }
 
-/// `market_order_processed`.
+/// `market_order_processed` (stored history only).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MarketOrderProcessed {
     pub owner: Address,
@@ -666,6 +674,12 @@ fn placement(a: &Attrs<'_>) -> Option<OrderPlacement> {
         },
         "executed" => PlacementOutcome::Executed {
             order_id: a.u64("order_id")?,
+            requested_quantity: a.u64("requested_quantity")?,
+            filled_quantity: a.u64("filled_quantity")?,
+            unfilled: match a.str("unfilled") {
+                None | Some("") => None,
+                Some(reason) => Some(unfilled_reason(reason)?),
+            },
         },
         "rejected" => PlacementOutcome::Rejected(EngineError::new(a.parse("code")?, None)),
         _ => return None,
@@ -675,6 +689,14 @@ fn placement(a: &Attrs<'_>) -> Option<OrderPlacement> {
         client_order_id: a.client_order_id("client_order_id")?,
         outcome,
     })
+}
+
+/// Matched against the wire's own spellings, so the two can't drift.
+fn unfilled_reason(s: &str) -> Option<UnfilledReason> {
+    use UnfilledReason as U;
+    [U::ReduceOnlyCap, U::SelfTrade, U::NoLiquidity, U::MarginCap]
+        .into_iter()
+        .find(|u| u.to_string() == s)
 }
 
 fn orders_cancelled(a: &Attrs<'_>) -> Option<OrdersCancelled> {
@@ -908,6 +930,7 @@ mod tests {
 
     #[test]
     fn order_lifecycle() {
+        // Retired kinds below the amend still decode from stored history.
         let placed = json!({"client_order_id": "1794152258902232", "market": "1", "order_id": "3211393", "owner": MAKER, "post_only": "true", "price": "74587000000", "quantity": "260", "reduce_only": "false", "side": "sell", "time_in_force": "gtc"});
         let Event::OrderPlaced(o) = kind_of("order_placed", &placed) else {
             panic!()
@@ -969,7 +992,7 @@ mod tests {
     // Display writes them.
     #[test]
     fn list_events_read_every_entry() {
-        let placed = json!({"owner": MAKER, "orders": r#"[{"outcome":"resting","market":"1","client_order_id":"4","order_id":"9","side":"buy","price":"100","quantity":"5","time_in_force":"gtc","post_only":"true","reduce_only":"false"},{"outcome":"executed","market":"1","client_order_id":"","order_id":"10"},{"outcome":"rejected","market":"2","client_order_id":"","code":"22"}]"#});
+        let placed = json!({"owner": MAKER, "orders": r#"[{"outcome":"resting","market":"1","client_order_id":"4","order_id":"9","side":"buy","price":"100","quantity":"5","time_in_force":"gtc","post_only":"true","reduce_only":"false"},{"outcome":"executed","market":"1","client_order_id":"","order_id":"10","requested_quantity":"6","filled_quantity":"4","unfilled":"no_liquidity"},{"outcome":"executed","market":"1","client_order_id":"5","order_id":"11","requested_quantity":"2","filled_quantity":"2","unfilled":""},{"outcome":"rejected","market":"2","client_order_id":"","code":"35"}]"#});
         let Event::OrdersPlaced(p) = kind_of("orders_placed", &placed) else {
             panic!()
         };
@@ -993,12 +1016,27 @@ mod tests {
                 OrderPlacement {
                     market: 1,
                     client_order_id: None,
-                    outcome: PlacementOutcome::Executed { order_id: 10 },
+                    outcome: PlacementOutcome::Executed {
+                        order_id: 10,
+                        requested_quantity: 6,
+                        filled_quantity: 4,
+                        unfilled: Some(UnfilledReason::NoLiquidity),
+                    },
+                },
+                OrderPlacement {
+                    market: 1,
+                    client_order_id: Some(5),
+                    outcome: PlacementOutcome::Executed {
+                        order_id: 11,
+                        requested_quantity: 2,
+                        filled_quantity: 2,
+                        unfilled: None,
+                    },
                 },
                 OrderPlacement {
                     market: 2,
                     client_order_id: None,
-                    outcome: PlacementOutcome::Rejected(EngineError::new(22, None)),
+                    outcome: PlacementOutcome::Rejected(EngineError::new(35, None)),
                 },
             ]
         );
@@ -1040,7 +1078,9 @@ mod tests {
         for bad in [
             r#"[{"outcome":"resting","market":"1","client_order_id":""}]"#,
             r#"[{"outcome":"queued","market":"1","client_order_id":""}]"#,
-            r#"[{"outcome":"executed","market":1,"client_order_id":"","order_id":"10"}]"#,
+            r#"[{"outcome":"executed","market":1,"client_order_id":"","order_id":"10","requested_quantity":"1","filled_quantity":"1","unfilled":""}]"#,
+            r#"[{"outcome":"executed","market":"1","client_order_id":"","order_id":"10"}]"#,
+            r#"[{"outcome":"executed","market":"1","client_order_id":"","order_id":"10","requested_quantity":"1","filled_quantity":"0","unfilled":"queue_full"}]"#,
             "not json",
         ] {
             let placed = json!({"owner": MAKER, "orders": bad});

@@ -638,8 +638,7 @@ type TraderAction =
   | { type: "CancelOrders"; data: CancelOrders }
   | { type: "CancelAllOrders"; data: CancelAllOrders }
   | { type: "CancelReplaceOrder"; data: CancelReplaceOrder }
-  | { type: "MarketOrder"; data: MarketOrder }
-  | { type: "ClosePosition"; data: ClosePosition };
+  | { type: "MarketOrder"; data: MarketOrder };
 // … more trader actions — see src/types.ts
 ```
 
@@ -649,11 +648,15 @@ keep operator actions out of autocomplete. `submitTx` still accepts the full
 
 #### Order and cancel lists
 
-`PlaceOrders`, `CancelOrders` and `CancelClientOrders` carry 1 to
-`MAX_LIST_ENTRIES` (100) entries for one account under one signature, like
-Hyperliquid's `order` and `cancel`. Each entry runs on its own: the transaction
-succeeds and its `orders_placed` or `orders_cancelled` event reports every
-entry, including a refused one with its engine code.
+`PlaceOrders` (0x35), `CancelOrders` (0x36) and `CancelClientOrders` (0x37)
+carry 1 to `MAX_LIST_ENTRIES` (100) entries for one account under one
+signature, like Hyperliquid's `order` and `cancel`. A `PlaceOrders` entry is a
+limit order, or a market order with `kind: "market"` (optional `worstPrice`
+stops the walk through the book at that price). Each entry runs on its own:
+the transaction succeeds and its `orders_placed` or `orders_cancelled` event
+reports every entry: `resting`, `executed` (with `requestedQuantity`,
+`filledQuantity` and the `unfilled` reason) or `rejected` with its engine
+code.
 
 ```typescript
 const { tx, orders } = await client.placeOrders([
@@ -665,28 +668,38 @@ const { tx, orders } = await client.placeOrders([
     postOnly: true,
   },
   {
+    kind: "market",
     market: 1,
     side: Side.Sell,
-    price: 66_760_000_000n,
     quantity: 50n,
-    postOnly: true,
+    worstPrice: 66_500_000_000n,
   },
 ]);
 for (const o of orders) {
   if (o.outcome === "rejected")
     console.log(o.clientOrderId, o.code, o.error?.name);
+  if (o.outcome === "executed")
+    console.log(o.filledQuantity, "of", o.requestedQuantity, o.unfilled);
 }
 const cancels = await client.cancelOrders([42n, 43n]); // or cancelClientOrders
 ```
 
-`placeOrder`, `cancelOrder` and `cancelClientOrder` (and `PlaceOrder`,
-`CancelOrder`, `CancelClientOrder` through `submitTx`) send a list of one, whose
-bytes are the single order's. When that one entry is refused, the result is the
-same engine error the single action always returned. `orders` is empty while
-`tx` has no executed verdict; read it later with
+`placeOrder`, `marketOrder`, `cancelOrder` and `cancelClientOrder` (and
+`PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder` through
+`submitTx`) keep their signatures and send a list of one. When that one entry
+is refused, the result is the same engine error the single action always
+returned. `marketOrder` takes an optional `worstPrice` and `reduceOnly`.
+`closePosition(market)` reads the position and sends a reduce-only market
+order on the opposite side for its size; on a flat account the engine refuses
+it with code 35, which `closePosition` reports as the successful no-op it
+always was. A close the account cannot afford is code 12. `orders` is empty
+while `tx` has no executed verdict; read it later with
 `orderPlacements(await client.waitForDelivery(tx), owner)` or
-`orderCancellations(...)`. `decodeOrderListEvent` decodes either event from
-its ABCI attributes.
+`orderCancellations(...)`. `orderPlacements` reads an `AtomicBasketOrder`'s
+legs the same way. `decodeOrderListEvent` decodes either event from its ABCI
+attributes; the retired `order_placed`, `order_cancelled`, `order_rejected`
+and `market_order_processed` are no longer emitted but still read from
+history.
 
 #### SetUserMarketLeverage availability
 
@@ -807,8 +820,8 @@ code should read the structured `code` field: it is authoritative and needs no p
 ### Order of actions within a block
 
 Every cancel (`CancelOrders`, `CancelClientOrders`, `CancelAllOrders`) in a
-block runs before every order-placing action (`PlaceOrders`, `MarketOrder`,
-`AmendOrder`, `CancelReplaceOrder`, `AtomicBasketOrder`, `ClosePosition`),
+block runs before every order-placing action (`PlaceOrders`, `AmendOrder`,
+`CancelReplaceOrder`, `AtomicBasketOrder`),
 whatever their `seq`. A cancel sent in the same block as the order it targets
 finds nothing to cancel; send it after the order lands.
 

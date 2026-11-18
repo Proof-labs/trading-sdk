@@ -33,6 +33,9 @@ import {
   type RetiredTriggerMarketConfig,
   type DecodedAdminAction,
   type DecodedAction,
+  type LimitOrderEntry,
+  type MarketOrderEntry,
+  type OrderEntry,
   type SetOracleGuards,
   type FundInsuranceFund,
   type WithdrawInsuranceFund,
@@ -338,6 +341,76 @@ function validateListSize(entries: number): void {
   }
 }
 
+/** One limit or market order as its `PlaceOrders` wire entry. Every
+ *  non-optional field is set: the entry has no serde defaults. */
+function orderEntryToWasm(entry: OrderEntry): Record<string, unknown> {
+  const kind =
+    entry.kind === "market"
+      ? { Market: { worst_price: entry.worstPrice ?? null } }
+      : {
+          Limit: {
+            price: entry.price,
+            time_in_force: convertValue(
+              "timeInForce",
+              entry.timeInForce ?? TimeInForce.Gtc,
+            ),
+            post_only: entry.postOnly ?? false,
+          },
+        };
+  return {
+    ...convertObject({
+      market: entry.market,
+      side: entry.side,
+      quantity: entry.quantity,
+      clientOrderId: entry.clientOrderId,
+      stopLoss: entry.stopLoss,
+      takeProfit: entry.takeProfit,
+    }),
+    kind,
+    reduce_only: entry.reduceOnly ?? false,
+  };
+}
+
+/** The order actions as the list action they encode as: a single order or
+ *  cancel is a list of one. Null for every other action. */
+function listFieldsToWasm(
+  action: DecodedAction,
+): Record<string, unknown> | null {
+  switch (action.type) {
+    case "PlaceOrder":
+    case "MarketOrder":
+    case "PlaceOrders": {
+      const orders: OrderEntry[] =
+        action.type === "PlaceOrders"
+          ? action.data.orders
+          : action.type === "MarketOrder"
+            ? [{ ...action.data, kind: "market" }]
+            : [action.data];
+      validateListSize(orders.length);
+      orders.forEach(validateOrderTriggers);
+      return { owner: action.data.owner, orders: orders.map(orderEntryToWasm) };
+    }
+    case "CancelOrder":
+      return { owner: action.data.owner, order_ids: [action.data.orderId] };
+    case "CancelOrders":
+      validateListSize(action.data.orderIds.length);
+      return { owner: action.data.owner, order_ids: action.data.orderIds };
+    case "CancelClientOrder":
+      return {
+        owner: action.data.owner,
+        client_order_ids: [action.data.clientOrderId],
+      };
+    case "CancelClientOrders":
+      validateListSize(action.data.clientOrderIds.length);
+      return {
+        owner: action.data.owner,
+        client_order_ids: action.data.clientOrderIds,
+      };
+    default:
+      return null;
+  }
+}
+
 /**
  * Translate a current or historical action for canonical wire encoding.
  * This internal adapter does not decide whether an action is submittable.
@@ -350,27 +423,16 @@ export function toWasmFields(action: DecodedAction): {
     validateSetPositionTriggers(action.data);
   } else if (action.type === "CancelPositionTriggers") {
     validateCancelPositionTriggers(action.data);
-  } else if (
-    action.type === "PlaceOrder" ||
-    action.type === "MarketOrder" ||
-    action.type === "CancelReplaceOrder"
-  ) {
+  } else if (action.type === "CancelReplaceOrder") {
     // Pre-fill SL/TP limbs on order actions: same client-side parity as the
     // 0x25/0x26 validators above (absent limbs pass — no bracket requested).
     validateOrderTriggers(action.data);
-  } else if (action.type === "PlaceOrders") {
-    validateListSize(action.data.orders.length);
-    action.data.orders.forEach(validateOrderTriggers);
-  } else if (action.type === "CancelOrders") {
-    validateListSize(action.data.orderIds.length);
-  } else if (action.type === "CancelClientOrders") {
-    validateListSize(action.data.clientOrderIds.length);
   }
   validateCreateMarketTickers(action);
   const actionType = ActionType[action.type] as ActionTypeValue;
-  const fields = convertObject(
-    action.data as unknown as Record<string, unknown>,
-  );
+  const fields =
+    listFieldsToWasm(action) ??
+    convertObject(action.data as unknown as Record<string, unknown>);
 
   // `CreateMarket.max_open_interest` is a non-optional u64 in the Rust/WASM
   // core. The public TS input intentionally accepts omission/null as the
@@ -391,10 +453,13 @@ export function toWasmFields(action: DecodedAction): {
 // Decode direction: WASM `decode_payload` output → TS `Action`
 // ---------------------------------------------------------------------------
 
-/** action_type byte → `Action["type"]` name (inverse of `ActionType`). The
- *  list bytes resolve per payload in `fromWasmFields`. */
+/** action_type byte → `Action["type"]` name (inverse of `ActionType`; the
+ *  list name wins over its single aliases). The list bytes resolve per
+ *  payload in `fromWasmFields`. */
 const ACTION_TYPE_NAMES = Object.fromEntries(
-  Object.entries(ActionType).map(([name, byte]) => [byte, name]),
+  Object.entries(ActionType)
+    .reverse()
+    .map(([name, byte]) => [byte, name]),
 ) as Record<number, DecodedAction["type"]>;
 
 /** snake_case override → camelCase (inverse of `FIELD_OVERRIDES`). */
@@ -629,9 +694,30 @@ export function fromWasmFields(
   }) as unknown as DecodedAction;
 }
 
+/** A decoded `PlaceOrders` entry: a limit entry has no `kind`, a market
+ *  entry drops its unset `worstPrice` and `reduceOnly` so a single market
+ *  order reads back as it was written. */
+function orderEntryFromWasm(entry: Record<string, unknown>): OrderEntry {
+  const { kind, ...shared } = entry;
+  const variant = kind as Record<string, Record<string, unknown>>;
+  if (variant.Limit) return { ...shared, ...variant.Limit } as LimitOrderEntry;
+  if (!variant.Market) {
+    throw new Error(
+      `unknown order kind: ${JSON.stringify(Object.keys(variant))}`,
+    );
+  }
+  const market: Record<string, unknown> = { ...shared, kind: "market" };
+  if (market.reduceOnly === false) delete market.reduceOnly;
+  if (variant.Market.worstPrice != null) {
+    market.worstPrice = variant.Market.worstPrice;
+  }
+  return market as unknown as MarketOrderEntry;
+}
+
 /** A list of one reads back as the single action that encodes to the same
- *  bytes, so a single order round-trips unchanged; two or more read as the
- *  list action. Null for every other byte. */
+ *  bytes (`PlaceOrder`, `MarketOrder`, `CancelOrder`, `CancelClientOrder`),
+ *  so a single order round-trips unchanged; two or more read as the list
+ *  action. Null for every other byte. */
 function fromListFields(
   actionType: ActionTypeValue,
   data: Record<string, unknown>,
@@ -639,10 +725,18 @@ function fromListFields(
   const { owner } = data;
   switch (actionType) {
     case ActionType.PlaceOrders: {
-      const orders = data.orders as Record<string, unknown>[];
-      return orders.length === 1
-        ? { type: "PlaceOrder", data: { ...orders[0], owner } }
-        : { type: "PlaceOrders", data };
+      const orders = (data.orders as Record<string, unknown>[]).map(
+        orderEntryFromWasm,
+      );
+      if (orders.length !== 1) {
+        return { type: "PlaceOrders", data: { owner, orders } };
+      }
+      const [order] = orders;
+      if (order.kind === "market") {
+        const { kind: _market, ...single } = order;
+        return { type: "MarketOrder", data: { ...single, owner } };
+      }
+      return { type: "PlaceOrder", data: { ...order, owner } };
     }
     case ActionType.CancelOrders: {
       const orderIds = data.orderIds as bigint[];

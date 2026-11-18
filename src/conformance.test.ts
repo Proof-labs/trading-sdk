@@ -38,6 +38,8 @@ import {
   TimeInForce,
   type Action,
   type ActionTypeValue,
+  type OrderEntry,
+  type PlaceOrder,
   type TriggerLimb,
 } from "./types.js";
 
@@ -85,7 +87,14 @@ const PRICE_CMP: Record<string, PriceComparison> = {
   LessThanOrEqual: "LessThanOrEqual",
 };
 
-/** Vector limb dict (snake_case) → the SDK's camelCase `TriggerLimb`. */
+/** `UnfilledReason`'s attribute value → its serde variant name. */
+const UNFILLED: Record<string, string> = {
+  reduce_only_cap: "ReduceOnlyCap",
+  self_trade: "SelfTrade",
+  no_liquidity: "NoLiquidity",
+  margin_cap: "MarginCap",
+};
+
 /** A decoded list event in the engine's serde shape, so the events vectors
  *  compare it field by field. */
 function orderListAsEngine(event: OrderListEvent): unknown {
@@ -109,7 +118,14 @@ function orderListAsEngine(event: OrderListEvent): unknown {
                 },
               }
             : o.outcome === "executed"
-              ? { Executed: { order_id: o.orderId } }
+              ? {
+                  Executed: {
+                    order_id: o.orderId,
+                    requested_quantity: o.requestedQuantity,
+                    filled_quantity: o.filledQuantity,
+                    unfilled: o.unfilled === null ? null : UNFILLED[o.unfilled],
+                  },
+                }
               : { Rejected: { code: o.code } },
       })),
     };
@@ -168,6 +184,50 @@ function bigOrNull(v: unknown): bigint | null {
   return BigInt(v as number | string);
 }
 
+/** A single limit order's snake_case field dict (the binary vectors). */
+function singleOrder(input: Record<string, unknown>): PlaceOrder {
+  return {
+    market: input.market as number,
+    owner: bytes(input.owner),
+    side: SIDE[input.side as string],
+    price: big(input.price),
+    quantity: big(input.quantity),
+    clientOrderId: bigOrNull(input.client_order_id),
+    postOnly: input.post_only as boolean,
+    reduceOnly: input.reduce_only as boolean,
+    timeInForce: TIF[input.time_in_force as string],
+    stopLoss: limb(input.stop_loss),
+    takeProfit: limb(input.take_profit),
+  };
+}
+
+/** A `PlaceOrders` entry in the engine's serde form → an {@link OrderEntry}. */
+function orderEntry(entry: Record<string, unknown>): OrderEntry {
+  const kind = entry.kind as Record<string, Record<string, unknown>>;
+  const shared = {
+    market: entry.market as number,
+    side: SIDE[entry.side as string],
+    quantity: big(entry.quantity),
+    reduceOnly: entry.reduce_only as boolean,
+    clientOrderId: bigOrNull(entry.client_order_id),
+    stopLoss: limb(entry.stop_loss),
+    takeProfit: limb(entry.take_profit),
+  };
+  if (kind.Market) {
+    return {
+      ...shared,
+      kind: "market",
+      worstPrice: bigOrNull(kind.Market.worst_price),
+    };
+  }
+  return {
+    ...shared,
+    price: big(kind.Limit.price),
+    timeInForce: TIF[kind.Limit.time_in_force as string],
+    postOnly: kind.Limit.post_only as boolean,
+  };
+}
+
 /** Adapter: core snake_case `input` dict → this SDK's `Action` union. */
 function toAction(
   actionType: ActionTypeValue,
@@ -189,69 +249,31 @@ function toAction(
         },
       };
     case ActionType.PlaceOrders:
-      // A list vector carries `orders`; a single one the order's own fields.
-      if (Array.isArray(input.orders))
-        return {
-          type: "PlaceOrders",
-          data: {
-            owner: bytes(input.owner),
-            orders: (input.orders as any[]).map((order) => ({
-              market: order.market as number,
-              side: SIDE[order.side as string],
-              price: big(order.price),
-              quantity: big(order.quantity),
-              clientOrderId: bigOrNull(order.client_order_id),
-              postOnly: order.post_only as boolean,
-              reduceOnly: order.reduce_only as boolean,
-              timeInForce: TIF[order.time_in_force as string],
-              stopLoss: limb(order.stop_loss),
-              takeProfit: limb(order.take_profit),
-            })),
-          },
-        };
+      // A binary vector carries one order's own fields; a codec vector the
+      // list.
+      if (!Array.isArray(input.orders))
+        return { type: "PlaceOrder", data: singleOrder(input) };
       return {
-        type: "PlaceOrder",
+        type: "PlaceOrders",
         data: {
-          market: input.market as number,
           owner: bytes(input.owner),
-          side: SIDE[input.side as string],
-          price: big(input.price),
-          quantity: big(input.quantity),
-          clientOrderId: bigOrNull(input.client_order_id),
-          postOnly: input.post_only as boolean,
-          reduceOnly: input.reduce_only as boolean,
-          timeInForce: TIF[input.time_in_force as string],
-          stopLoss: limb(input.stop_loss),
-          takeProfit: limb(input.take_profit),
+          orders: (input.orders as Record<string, unknown>[]).map(orderEntry),
         },
       };
     case ActionType.CancelOrders:
-      if (Array.isArray(input.order_ids))
-        return {
-          type: "CancelOrders",
-          data: {
-            owner: bytes(input.owner),
-            orderIds: (input.order_ids as unknown[]).map(big),
-          },
-        };
       return {
-        type: "CancelOrder",
-        data: { orderId: big(input.order_id), owner: bytes(input.owner) },
-      };
-    case ActionType.CancelClientOrders:
-      if (Array.isArray(input.client_order_ids))
-        return {
-          type: "CancelClientOrders",
-          data: {
-            owner: bytes(input.owner),
-            clientOrderIds: (input.client_order_ids as unknown[]).map(big),
-          },
-        };
-      return {
-        type: "CancelClientOrder",
+        type: "CancelOrders",
         data: {
           owner: bytes(input.owner),
-          clientOrderId: big(input.client_order_id),
+          orderIds: (input.order_ids as unknown[]).map(big),
+        },
+      };
+    case ActionType.CancelClientOrders:
+      return {
+        type: "CancelClientOrders",
+        data: {
+          owner: bytes(input.owner),
+          clientOrderIds: (input.client_order_ids as unknown[]).map(big),
         },
       };
     case ActionType.CancelAllOrders:
@@ -289,19 +311,6 @@ function toAction(
           orderId: big(input.order_id),
           newPrice: bigOrNull(input.new_price),
           newQuantity: bigOrNull(input.new_quantity),
-        },
-      };
-    case ActionType.MarketOrder:
-      return {
-        type: "MarketOrder",
-        data: {
-          market: input.market as number,
-          owner: bytes(input.owner),
-          side: SIDE[input.side as string],
-          quantity: big(input.quantity),
-          clientOrderId: bigOrNull(input.client_order_id),
-          stopLoss: limb(input.stop_loss),
-          takeProfit: limb(input.take_profit),
         },
       };
     case ActionType.Deposit:
@@ -498,11 +507,6 @@ function toAction(
           market: input.market as number,
           userImBps: input.user_im_bps as number,
         },
-      };
-    case ActionType.ClosePosition:
-      return {
-        type: "ClosePosition",
-        data: { market: input.market as number, owner: bytes(input.owner) },
       };
     case ActionType.AtomicBasketOrder:
       return {
@@ -1216,6 +1220,68 @@ describe("conformance vectors (TypeScript)", () => {
       expect(action.type, `vector ${c.case as string}`).toBe(
         caseNameActionOverrides[c.case as string] ??
           pascal((c.case as string).split("/")[0]),
+      );
+    }
+  });
+
+  it("codec: single-order actions encode as the list-of-one vectors", () => {
+    const hexOf = (name: string) =>
+      (
+        cases("codec.ndjson").find((c) => c.case === name)!.expect as {
+          payload_hex: string;
+        }
+      ).payload_hex;
+    const owner = new Uint8Array(20).fill(1);
+    const singles: [string, Action][] = [
+      [
+        "place_orders/limit_min",
+        {
+          type: "PlaceOrder",
+          data: {
+            market: 1,
+            owner,
+            side: Side.Buy,
+            price: 100n,
+            quantity: 10n,
+          },
+        },
+      ],
+      [
+        "place_orders/market_basic",
+        {
+          type: "MarketOrder",
+          data: { market: 3, owner, side: Side.Buy, quantity: 250n },
+        },
+      ],
+      [
+        "place_orders/close",
+        {
+          type: "MarketOrder",
+          data: {
+            market: 2,
+            owner,
+            side: Side.Sell,
+            quantity: 5n,
+            reduceOnly: true,
+          },
+        },
+      ],
+      [
+        "cancel_orders/one",
+        {
+          type: "CancelOrder",
+          data: { orderId: 42n, owner: new Uint8Array(20).fill(2) },
+        },
+      ],
+      [
+        "cancel_client_orders/one",
+        { type: "CancelClientOrder", data: { owner, clientOrderId: 99n } },
+      ],
+    ];
+    for (const [name, action] of singles) {
+      expect(bytesToHex(encodePayloadBytes(action)), name).toBe(hexOf(name));
+      expect(ActionType[action.type], name).toBe(
+        cases("codec.ndjson").find((c) => c.case === name)!.action_type,
       );
     }
   });

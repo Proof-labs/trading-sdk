@@ -90,8 +90,9 @@ On devnet, fund a new address with the faucet first:
 | `new(&config, signer)`                          | no request; signs for the config's chain id                               |
 | `limit_order(market, side, price, qty)`         | builds a GTC order for this account                                       |
 | `place_order(order)`                            | `PlaceOrders` of one; a refused order is the receipt's error              |
-| `place_orders(Vec<OrderEntry>)`                 | `PlaceOrders`: 1 to 100 orders, one signature, each placed or refused on its own (entries from `actions::order_entry`) |
-| `market_order(market, side, qty)`               | `MarketOrder` (IOC)                                                       |
+| `place_orders(Vec<OrderEntry>)`                 | `PlaceOrders`: 1 to 100 limit or market orders, one signature, each placed or refused on its own (entries from `actions::order_entry` / `actions::market_entry`) |
+| `market_order(market, side, qty)`               | `PlaceOrders` of one market entry (IOC); a refused order is the receipt's error |
+| `place_entry(entry)`                            | `PlaceOrders` of one entry of any kind, e.g. `actions::market_entry(market, side, qty, Some(worst_price))` |
 | `cancel_order(order_id)`                        | `CancelOrders` of one; nothing to cancel is the receipt's error           |
 | `cancel_order_by_client_id(client_order_id)`    | `CancelClientOrders` of one, same                                         |
 | `cancel_orders(Vec<OrderId>)`                   | `CancelOrders`: 1 to 100 order ids, each cancelled or refused on its own  |
@@ -100,7 +101,7 @@ On devnet, fund a new address with the faucet first:
 | `amend_order(order_id, new_price, new_qty)`     | `AmendOrder` (same-price size cuts keep priority)                         |
 | `cancel_replace_order(order_id, order)`         | `CancelReplaceOrder`                                                      |
 | `cancel_replace_order_by_client_id(cid, order)` | `CancelReplaceOrder`, cancelling by client id                             |
-| `close_position(market)`                        | `ClosePosition`                                                           |
+| `close_position(market)`                        | reads the position, then a reduce-only market entry on the other side for its size; nothing to close is a success |
 | `submit(&action)`                               | sign with the next nonce, `POST /exchange` once                           |
 | `submit_and_wait(&action, timeout)`             | `submit`, then wait if the verdict is pending                             |
 | `sign(&action)` / `send(&signed_tx)`            | the two halves, for pre-signing on a hot path                             |
@@ -147,9 +148,14 @@ computed hash, a `TxStatus`, and `retry_after: Option<Duration>`:
 A list (`place_orders`, `cancel_orders`, `cancel_client_orders`) commits with
 no error whatever its entries did: `receipt.placements()` and
 `receipt.cancellations()` say what each entry did, in the order sent, with
-the code of each one refused. The single helpers (`place_order`,
-`cancel_order`, `cancel_order_by_client_id`, `buy_no`, `sell_no`) send a list
-of one and report its refusal as `receipt.error`, as before lists.
+the code of each one refused. An order done without resting is `Executed`
+with its `requested_quantity`, `filled_quantity` and `unfilled` reason. The
+single helpers (`place_order`, `place_entry`, `market_order`, `cancel_order`,
+`cancel_order_by_client_id`, `buy_no`, `sell_no`) send a list of one and
+report its refusal as `receipt.error`, as before lists. `close_position`
+reports a close with no position (code 35) as a success. A basket's legs are
+`receipt.placements()` too, in order; a failed basket is `receipt.error` with
+every leg rejected.
 
 `TxStatus` is exhaustive, so a `match` decides every case. Only `Committed`
 executed; `Pending` may still.
@@ -296,12 +302,12 @@ while let Some(msg) = rx.recv().await {                      // or use it as a `
   ported). Reconcile through `InfoClient::open_orders` / `account_state` (balance
   and positions at a block height) if a missed fill matters.
 - **Account events are typed** with the same `Event` as receipts: `Fill`,
-  `OrdersPlaced`, `OrdersCancelled`, `OrderAmended`, `OrderRejected`,
-  `MarketOrderProcessed`, `PositionUpdated`, `PositionClosed`,
-  `FundingSettled`, `Deposited`, and at resolution `EventResolved`,
-  `PredictionSettled`, `ConditionMet`, `ConditionNotMet` and
-  `PositionTriggersInvalidated`. `OrderPlaced` and `OrderCancelled` are no
-  longer emitted and still decode from stored history. Any other kind is `Event::Other`, and a known
+  `OrdersPlaced`, `OrdersCancelled`, `OrderAmended`, `PositionUpdated`,
+  `PositionClosed`, `FundingSettled`, `Deposited`, and at resolution
+  `EventResolved`, `PredictionSettled`, `ConditionMet`, `ConditionNotMet` and
+  `PositionTriggersInvalidated`. `OrderPlaced`, `OrderCancelled`,
+  `OrderRejected` and `MarketOrderProcessed` are no longer emitted and still
+  decode from stored history. Any other kind is `Event::Other`, and a known
   kind whose payload does not read is `Event::Malformed`; both carry the
   engine event name and raw attributes. `tx_hash` is the causing
   transaction's `TxHash`, `None` for block events (funding, expiry);

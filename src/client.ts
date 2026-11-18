@@ -165,6 +165,7 @@ import {
 } from "./http-transport.js";
 import { yesOrder, type NoOrder } from "./binary.js";
 import {
+  closeNothingToClose,
   orderCancellations,
   orderPlacements,
   singleEntryRefusal,
@@ -1346,9 +1347,12 @@ export class ExchangeClient {
   }
 
   /**
-   * Place a market order (crosses immediately) for the loaded signer.
+   * Place a market order (crosses immediately) for the loaded signer: a
+   * `PlaceOrders` of one market entry. Optional `worstPrice` stops the walk
+   * through the book at that price; `reduceOnly` only reduces the position.
    * Optional `stopLoss`/`takeProfit` limbs are validated like
-   * {@link ExchangeClient.placeOrder}.
+   * {@link ExchangeClient.placeOrder}. A refused order returns the engine
+   * error, as before.
    */
   async marketOrder(params: Omit<MarketOrder, "owner">): Promise<TxResult> {
     validateOrderTriggers(params);
@@ -1396,8 +1400,8 @@ export class ExchangeClient {
   }
 
   /**
-   * Place 1 to `MAX_LIST_ENTRIES` limit orders for the loaded signer
-   * under one signature (`PlaceOrders`). Each order stands or is refused on
+   * Place 1 to `MAX_LIST_ENTRIES` limit or market orders (`kind: "market"`)
+   * for the loaded signer under one signature (`PlaceOrders`). Each order stands or is refused on
    * its own: `tx` succeeds and `orders` gives each order's outcome in the
    * order sent. `orders` is empty while `tx` has no executed verdict; read it
    * later with `orderPlacements(await waitForDelivery(tx), owner)`.
@@ -1482,15 +1486,30 @@ export class ExchangeClient {
   }
 
   /**
-   * Close the loaded signer's entire position on `market` via an
-   * opposite-side IOC order at oracle±spread. Idempotent on an already-flat
-   * position.
+   * Close the loaded signer's entire position on `market`: a reduce-only
+   * market order on the opposite side for the position's size, read first
+   * with {@link ExchangeClient.queryAccount}. Idempotent on an already-flat
+   * position: the engine refuses that close with code 35, reported here as
+   * success.
    */
   async closePosition(market: number): Promise<TxResult> {
-    return this.submitTx({
-      type: "ClosePosition",
-      data: { market, owner: this.requireOwner() },
+    const owner = this.requireOwner();
+    const account = await this.queryAccount();
+    const position = account?.positions.find(
+      (p) => p.market === market && p.size > 0n,
+    );
+    // A flat account still sends the close, so it gets a hash as before.
+    const result = await this.submitTx({
+      type: "MarketOrder",
+      data: {
+        market,
+        owner,
+        side: position?.side === "Buy" ? Side.Sell : Side.Buy,
+        quantity: position?.size ?? 1n,
+        reduceOnly: true,
+      },
     });
+    return closeNothingToClose(result);
   }
 
   /** Atomically replace a complete SL/TP bracket. When `owner` is omitted,

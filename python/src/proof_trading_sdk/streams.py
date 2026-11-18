@@ -34,10 +34,10 @@ _FAMILIES = {
     "trade_executed": "fill",
     "orders_placed": "orderUpdate",
     "orders_cancelled": "orderUpdate",
+    "order_amended": "orderUpdate",
     # Retired per-order events, still in stored history.
     "order_placed": "orderUpdate",
     "order_cancelled": "orderUpdate",
-    "order_amended": "orderUpdate",
     "market_order_processed": "orderUpdate",
     "order_rejected": "orderUpdate",
     "position_updated": "positionUpdate",

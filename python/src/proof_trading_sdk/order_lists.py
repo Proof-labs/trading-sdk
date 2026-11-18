@@ -1,7 +1,8 @@
 """Per-entry results of the list actions, read from their list events.
 
-``PlaceOrders`` emits one ``orders_placed`` and ``CancelOrders`` /
-``CancelClientOrders`` one ``orders_cancelled``. Each carries an ``orders``
+``PlaceOrders`` emits one ``orders_placed`` (as does an ``AtomicBasketOrder``,
+one entry per leg) and ``CancelOrders`` / ``CancelClientOrders`` one
+``orders_cancelled``. Each carries an ``orders``
 attribute: a JSON array with one object of string values per entry, in the
 order sent.
 """
@@ -28,8 +29,11 @@ class OrderPlacement:
     """What became of one order of a ``PlaceOrders``.
 
     ``outcome`` is ``"resting"`` (``quantity`` is the resting remainder),
-    ``"executed"`` (filled in full, or an IOC/FOK whose remainder was
-    dropped) or ``"rejected"`` (``code`` and ``error_name`` say why).
+    ``"executed"`` (done without resting: filled in full, or an IOC or market
+    order whose remainder was dropped; ``filled_quantity`` of
+    ``requested_quantity`` filled, may be 0, and ``unfilled`` says why less
+    filled: ``reduce_only_cap``, ``self_trade``, ``no_liquidity`` or
+    ``margin_cap``) or ``"rejected"`` (``code`` and ``error_name`` say why).
     """
 
     outcome: str
@@ -44,6 +48,9 @@ class OrderPlacement:
     reduce_only: Optional[bool] = None
     code: Optional[int] = None
     error_name: Optional[str] = None
+    requested_quantity: Optional[int] = None
+    filled_quantity: Optional[int] = None
+    unfilled: Optional[str] = None
 
     @property
     def rejected(self) -> bool:
@@ -116,7 +123,8 @@ def _entries(events: t.Any, event_type: str) -> list[dict[str, t.Any]]:
 
 
 def order_placements(response: dict[str, t.Any]) -> list[OrderPlacement]:
-    """Every order of the response's ``orders_placed`` event, in order."""
+    """Every order of the response's ``orders_placed`` event, in order: the
+    entries of a ``PlaceOrders`` or the legs of an ``AtomicBasketOrder``."""
     placements = []
     for entry in _entries(response.get("events"), ORDERS_PLACED):
         code, error_name = _code(entry)
@@ -136,6 +144,9 @@ def order_placements(response: dict[str, t.Any]) -> list[OrderPlacement]:
                 reduce_only=_bool(entry, "reduce_only"),
                 code=code,
                 error_name=error_name,
+                requested_quantity=_int(entry, "requested_quantity"),
+                filled_quantity=_int(entry, "filled_quantity"),
+                unfilled=entry.get("unfilled") or None,
             )
         )
     return placements

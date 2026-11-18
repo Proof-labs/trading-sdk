@@ -45,6 +45,7 @@ class TimeInForce(StrEnum):
 
 _SINGLE_ACTION_NAMES = {
     "PlaceOrder": "PlaceOrders",
+    "MarketOrder": "PlaceOrders",
     "CancelOrder": "CancelOrders",
     "CancelClientOrder": "CancelClientOrders",
 }
@@ -132,20 +133,24 @@ class PlaceOrder(Action):
             self.stop_loss, self.take_profit, reduce_only=self.reduce_only
         )
 
+    def entry(self) -> "OrderEntry":
+        """This order as one :class:`PlaceOrders` entry."""
+        return OrderEntry(
+            market=self.market,
+            side=self.side,
+            price=self.price,
+            quantity=self.quantity,
+            client_order_id=self.client_order_id,
+            post_only=self.post_only,
+            reduce_only=self.reduce_only,
+            time_in_force=self.time_in_force,
+            stop_loss=self.stop_loss,
+            take_profit=self.take_profit,
+        )
+
     def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "owner": self.owner,
-            "side": self.side,
-            "price": self.price,
-            "quantity": self.quantity,
-            "client_order_id": self.client_order_id,
-            "post_only": self.post_only,
-            "reduce_only": self.reduce_only,
-            "time_in_force": self.time_in_force,
-            "stop_loss": _limb_wire(self.stop_loss),
-            "take_profit": _limb_wire(self.take_profit),
-        }
+        # A single order is a PlaceOrders list of one.
+        return {"owner": self.owner, "orders": [self.entry().as_wire()]}
 
 
 @dataclass
@@ -165,22 +170,31 @@ class MarketOrder(Action):
     client_order_id: Optional[int] = None
     stop_loss: Optional[TriggerLimb] = None
     take_profit: Optional[TriggerLimb] = None
+    # Stops the walk at this price; bounds fills, not admission.
+    worst_price: Optional[int] = None
+    reduce_only: bool = False
 
     def __post_init__(self) -> None:
         _validate_order_triggers(
-            self.stop_loss, self.take_profit, reduce_only=False
+            self.stop_loss, self.take_profit, reduce_only=self.reduce_only
+        )
+
+    def entry(self) -> "OrderEntry":
+        """This order as one :class:`PlaceOrders` market entry."""
+        return OrderEntry.market_order(
+            self.market,
+            self.side,
+            self.quantity,
+            worst_price=self.worst_price,
+            reduce_only=self.reduce_only,
+            client_order_id=self.client_order_id,
+            stop_loss=self.stop_loss,
+            take_profit=self.take_profit,
         )
 
     def fields(self) -> dict[str, Any]:
-        return {
-            "market": self.market,
-            "owner": self.owner,
-            "side": self.side,
-            "quantity": self.quantity,
-            "client_order_id": self.client_order_id,
-            "stop_loss": _limb_wire(self.stop_loss),
-            "take_profit": _limb_wire(self.take_profit),
-        }
+        # A market order is a PlaceOrders list of one market entry.
+        return {"owner": self.owner, "orders": [self.entry().as_wire()]}
 
 
 @dataclass
@@ -190,7 +204,8 @@ class CancelOrder(Action):
     owner: bytes
 
     def fields(self) -> dict[str, Any]:
-        return {"order_id": self.order_id, "owner": self.owner}
+        # A single cancel is a CancelOrders list of one.
+        return {"owner": self.owner, "order_ids": [self.order_id]}
 
 
 @dataclass
@@ -200,7 +215,8 @@ class CancelClientOrder(Action):
     client_order_id: int
 
     def fields(self) -> dict[str, Any]:
-        return {"owner": self.owner, "client_order_id": self.client_order_id}
+        # A single cancel is a CancelClientOrders list of one.
+        return {"owner": self.owner, "client_order_ids": [self.client_order_id]}
 
 
 @dataclass
@@ -277,14 +293,46 @@ class AmendOrder(Action):
         }
 
 
+# Engine code for a reduce-only order with no position on its side.
+REDUCE_ONLY_NO_POSITION_CODE = 35
+
+
 @dataclass
 class ClosePosition(Action):
+    """Close ``owner``'s whole position on ``market``.
+
+    The wire has no close action: a close is a reduce-only market order on the
+    opposite side, sized from the position. :meth:`ExchangeClient.submit`
+    reads the position and sends :meth:`market_order`; a flat account is a
+    no-op success. Encoding it directly raises, since the size is unknown.
+    """
+
     ACTION_NAME = "ClosePosition"
     market: int
     owner: bytes
 
+    @property
+    def action_type(self) -> int:
+        return ActionType.PlaceOrders
+
+    def market_order(self, position: Optional[dict[str, Any]]) -> "MarketOrder":
+        """The reduce-only market order closing *position* (``None`` when
+        flat, which the engine refuses with code 35)."""
+        size = int(position["size"]) if position else 0
+        long = bool(position) and position.get("side") == Side.Buy
+        return MarketOrder(
+            market=self.market,
+            owner=self.owner,
+            side=Side.Sell if long or size == 0 else Side.Buy,
+            quantity=size if size > 0 else 1,
+            reduce_only=True,
+        )
+
     def fields(self) -> dict[str, Any]:
-        return {"market": self.market, "owner": self.owner}
+        raise ValueError(
+            "ClosePosition needs the position size: submit it through "
+            "ExchangeClient.submit, or send ClosePosition.market_order(position)"
+        )
 
 
 _U64_MAX = (1 << 64) - 1
@@ -331,7 +379,7 @@ def _validate_order_triggers(
     *,
     reduce_only: bool,
 ) -> None:
-    """Shared placement-time SL/TP parity for the order actions (0x01/0x04/0x1A).
+    """Shared placement-time SL/TP parity for the order actions (0x35/0x1A).
 
     Per-limb bounds are enforced by :class:`TriggerLimb.__post_init__`; this
     adds the order-level rules: a reduce-only order cannot carry limbs
@@ -589,14 +637,24 @@ def _check_list_size(entries: list[Any]) -> None:
         )
 
 
+ORDER_KIND_LIMIT = "limit"
+ORDER_KIND_MARKET = "market"
+
+
 @dataclass
 class OrderEntry:
-    """One order of a :class:`PlaceOrders`: a :class:`PlaceOrder` without its
-    owner, with the same defaults. Not an action on its own."""
+    """One order of a :class:`PlaceOrders`. Not an action on its own.
+
+    A limit entry (the default ``kind``) has the fields of a
+    :class:`PlaceOrder` without its owner. A market entry
+    (:meth:`market_order`) has no ``price``, ``post_only`` or
+    ``time_in_force``; ``worst_price``, when set, stops its walk at that
+    price.
+    """
 
     market: int
     side: str
-    price: int
+    price: Optional[int]
     quantity: int
     client_order_id: Optional[int] = None
     post_only: bool = False
@@ -604,22 +662,69 @@ class OrderEntry:
     time_in_force: str = TimeInForce.Gtc
     stop_loss: Optional[TriggerLimb] = None
     take_profit: Optional[TriggerLimb] = None
+    kind: str = ORDER_KIND_LIMIT
+    worst_price: Optional[int] = None
 
     def __post_init__(self) -> None:
+        if self.kind == ORDER_KIND_LIMIT:
+            if self.price is None:
+                raise ValueError("a limit entry needs a price")
+            if self.worst_price is not None:
+                raise ValueError("worst_price is for market entries; a limit entry has price")
+        elif self.kind == ORDER_KIND_MARKET:
+            if self.price is not None:
+                raise ValueError("a market entry has no price; bound it with worst_price")
+        else:
+            raise ValueError(f"unknown order kind {self.kind!r}")
         _validate_order_triggers(
             self.stop_loss, self.take_profit, reduce_only=self.reduce_only
         )
 
+    @classmethod
+    def market_order(
+        cls,
+        market: int,
+        side: str,
+        quantity: int,
+        *,
+        worst_price: Optional[int] = None,
+        reduce_only: bool = False,
+        client_order_id: Optional[int] = None,
+        stop_loss: Optional[TriggerLimb] = None,
+        take_profit: Optional[TriggerLimb] = None,
+    ) -> "OrderEntry":
+        """A market entry: immediate-or-cancel at the best prices."""
+        return cls(
+            market=market,
+            side=side,
+            price=None,
+            quantity=quantity,
+            client_order_id=client_order_id,
+            reduce_only=reduce_only,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            kind=ORDER_KIND_MARKET,
+            worst_price=worst_price,
+        )
+
     def as_wire(self) -> dict[str, Any]:
+        if self.kind == ORDER_KIND_MARKET:
+            kind: dict[str, Any] = {"Market": {"worst_price": self.worst_price}}
+        else:
+            kind = {
+                "Limit": {
+                    "price": self.price,
+                    "time_in_force": self.time_in_force,
+                    "post_only": self.post_only,
+                }
+            }
         return {
             "market": self.market,
             "side": self.side,
-            "price": self.price,
             "quantity": self.quantity,
-            "client_order_id": self.client_order_id,
-            "post_only": self.post_only,
+            "kind": kind,
             "reduce_only": self.reduce_only,
-            "time_in_force": self.time_in_force,
+            "client_order_id": self.client_order_id,
             "stop_loss": _limb_wire(self.stop_loss),
             "take_profit": _limb_wire(self.take_profit),
         }
@@ -627,9 +732,9 @@ class OrderEntry:
 
 @dataclass
 class PlaceOrders(Action):
-    """1 to 100 limit orders for one account under one signature. Each order
-    runs as its own :class:`PlaceOrder` would and stands or is refused on its
-    own; the transaction succeeds and ``orders_placed`` reports every order."""
+    """1 to 100 limit or market orders for one account under one signature.
+    Each order runs in turn and stands or is refused on its own; the
+    transaction succeeds and ``orders_placed`` reports every order."""
 
     ACTION_NAME = "PlaceOrders"
     owner: bytes
@@ -1234,6 +1339,9 @@ __all__ = [
     "CancelOrder",
     "CancelClientOrder",
     "MAX_LIST_ENTRIES",
+    "ORDER_KIND_LIMIT",
+    "ORDER_KIND_MARKET",
+    "REDUCE_ONLY_NO_POSITION_CODE",
     "OrderEntry",
     "PlaceOrders",
     "CancelOrders",

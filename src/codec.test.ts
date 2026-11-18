@@ -1013,9 +1013,75 @@ describe("codec v1 all action types", () => {
     });
 
     it("keeps the single names on the list bytes", () => {
+      expect(ActionType.PlaceOrders).toBe(0x35);
+      expect(ActionType.CancelOrders).toBe(0x36);
+      expect(ActionType.CancelClientOrders).toBe(0x37);
       expect(ActionType.PlaceOrder).toBe(ActionType.PlaceOrders);
+      expect(ActionType.MarketOrder).toBe(ActionType.PlaceOrders);
       expect(ActionType.CancelOrder).toBe(ActionType.CancelOrders);
       expect(ActionType.CancelClientOrder).toBe(ActionType.CancelClientOrders);
+    });
+
+    it("round-trips a list mixing limit and market entries", () => {
+      const action: Action = {
+        type: "PlaceOrders",
+        data: {
+          owner: SIGNER,
+          orders: [
+            entry(100n),
+            {
+              kind: "market",
+              market: 2,
+              side: Side.Sell,
+              quantity: 3n,
+              worstPrice: 90n,
+              reduceOnly: true,
+              clientOrderId: null,
+              stopLoss: null,
+              takeProfit: null,
+            },
+          ],
+        },
+      };
+      expect(decodeTx(encodeTx(action, 1n)).action).toEqual(action);
+    });
+
+    it("encodes a market order as a list of one market entry and reads it back", () => {
+      const plain: Action = {
+        type: "MarketOrder",
+        data: { market: 1, owner: SIGNER, side: Side.Sell, quantity: 5n },
+      };
+      const bounded: Action = {
+        type: "MarketOrder",
+        data: {
+          market: 1,
+          owner: SIGNER,
+          side: Side.Buy,
+          quantity: 5n,
+          worstPrice: 101n,
+          reduceOnly: true,
+        },
+      };
+      expect(peekActionType(encodeTx(plain, 1n))).toBe(ActionType.PlaceOrders);
+      expect(decodeTx(encodeTx(plain, 1n)).action).toMatchObject(plain);
+      expect(decodeTx(encodeTx(bounded, 1n)).action).toMatchObject(bounded);
+      const listOfOne: Action = {
+        type: "PlaceOrders",
+        data: {
+          owner: SIGNER,
+          orders: [
+            {
+              kind: "market",
+              market: 1,
+              side: Side.Buy,
+              quantity: 5n,
+              worstPrice: 101n,
+              reduceOnly: true,
+            },
+          ],
+        },
+      };
+      expect(encodeTx(listOfOne, 1n)).toEqual(encodeTx(bounded, 1n));
     });
   });
 
@@ -1963,24 +2029,18 @@ describe("legacy short-payload decode compatibility", () => {
     ]);
   };
 
-  it("decodes a pre-TIF 6-field PlaceOrder, defaulting the appended flags", () => {
-    // [market, owner, side, price, quantity, client_order_id] — no post_only /
-    // reduce_only / time_in_force (the shape older SDKs emitted).
-    const bytes = envelope(ActionType.PlaceOrder, [
-      1,
-      OWNER,
-      "Buy",
-      66_750_000_000n,
-      5n,
-      null,
-    ]);
-    const { action } = decodeTx(bytes);
-    expect(action.type).toBe("PlaceOrder");
-    if (action.type === "PlaceOrder") {
-      expect(action.data.price).toBe(66_750_000_000n);
-      expect(action.data.postOnly).toBe(false);
-      expect(action.data.reduceOnly).toBe(false);
-      expect(action.data.timeInForce).toBe(TimeInForce.Gtc);
+  it("refuses the retired single-order bytes", () => {
+    // 0x01 PlaceOrder, 0x02 CancelOrder, 0x04 MarketOrder, 0x17
+    // ClosePosition and 0x18 CancelClientOrder no longer decode.
+    const retired: [number, unknown[]][] = [
+      [0x01, [1, OWNER, "Buy", 100n, 5n, null, false, false, "Gtc"]],
+      [0x02, [42n, OWNER]],
+      [0x04, [1, OWNER, "Buy", 5n, null, null, null]],
+      [0x17, [1, OWNER]],
+      [0x18, [OWNER, 9n]],
+    ];
+    for (const [byte, fields] of retired) {
+      expect(() => decodeTx(envelope(byte, fields)), `0x${byte}`).toThrow();
     }
   });
 
@@ -2009,25 +2069,6 @@ describe("legacy short-payload decode compatibility", () => {
       expect(action.data.maxOpenInterest).toBe(1_000_000n);
       expect(action.data.tickSize).toBe(0n);
       expect(action.data.lotSize).toBe(0n);
-    }
-  });
-
-  it("decodes an 8-field PlaceOrder missing only time_in_force", () => {
-    const bytes = envelope(ActionType.PlaceOrder, [
-      1,
-      OWNER,
-      "Sell",
-      100n,
-      2n,
-      7n,
-      true,
-      false,
-    ]);
-    const { action } = decodeTx(bytes);
-    expect(action.type).toBe("PlaceOrder");
-    if (action.type === "PlaceOrder") {
-      expect(action.data.postOnly).toBe(true);
-      expect(action.data.timeInForce).toBe(TimeInForce.Gtc);
     }
   });
 

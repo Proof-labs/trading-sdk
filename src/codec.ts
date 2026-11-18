@@ -342,8 +342,11 @@ export function decodeTx(bytes: Uint8Array): {
 // Signing-preimage decode (signer-side review)
 // ---------------------------------------------------------------------------
 
+// The list name wins over its single aliases on the same byte.
 const ACTION_TYPE_NAMES: ReadonlyMap<number, string> = new Map(
-  Object.entries(ActionType).map(([name, byte]) => [byte, name]),
+  Object.entries(ActionType)
+    .reverse()
+    .map(([name, byte]) => [byte, name]),
 );
 
 /**

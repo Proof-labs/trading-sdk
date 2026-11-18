@@ -32,11 +32,13 @@ const NOT_IN_THE_MAIN_ENTRY: &[(&str, &str)] = &[
 ];
 
 /// Single-order names the TypeScript map keeps beside the core's list action
-/// on the same byte, so existing callers keep compiling.
+/// on the same byte, so existing callers keep compiling. A market order is a
+/// `PlaceOrders` market entry.
 const SINGLE_ORDER_NAMES: &[(&str, &str)] = &[
     ("PlaceOrder", "PlaceOrders"),
     ("CancelOrder", "CancelOrders"),
     ("CancelClientOrder", "CancelClientOrders"),
+    ("MarketOrder", "PlaceOrders"),
 ];
 
 /// `Name: 0x1a,` entries of `export const <name> = { … } as const;`.

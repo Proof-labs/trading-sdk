@@ -9,10 +9,10 @@ use proof_trading_sdk::binary::{self, NoOrder};
 use proof_trading_sdk::types::{
     Action, AmendOrder, ApproveAgent, AtomicBasketLeg, AtomicBasketOrder, CancelAllOrders,
     CancelClientOrder, CancelClientOrders, CancelOrder, CancelOrders, CancelPositionTriggers,
-    CancelReplaceOrder, ClientTriggerGroupId, ClosePosition, CreateSubAccount, EntryList,
-    MarketConfig, MarketId, MarketKind, MarketOrder, OrderEntry, OrderId, OwnerAddress, PlaceOrder,
-    PlaceOrders, PositionEpoch, RevokeAgent, SetPositionTriggers, Side, SubAccountTransfer,
-    TimeInForce, TriggerLimb, WithdrawRequest, MAX_LIST_ENTRIES,
+    CancelReplaceOrder, ClientTriggerGroupId, CreateSubAccount, EntryList, MarketConfig, MarketId,
+    MarketKind, OrderEntry, OrderId, OrderKind, OwnerAddress, PlaceOrder, PlaceOrders,
+    PositionEpoch, RevokeAgent, SetPositionTriggers, Side, SubAccountTransfer, TimeInForce,
+    TriggerLimb, WithdrawRequest, MAX_LIST_ENTRIES,
 };
 
 use crate::address::Address;
@@ -39,26 +39,44 @@ pub fn limit_order(
     }
 }
 
-/// Immediate-or-cancel at the best available prices. Set `client_order_id` or
-/// brackets before wrapping it in [`Action::MarketOrder`].
+/// `PlaceOrders` of one market order for `owner`: immediate-or-cancel at the
+/// best available prices, no worst price. For a client order id, brackets or
+/// a worst price, build it with [`market_entry`] and send it with
+/// [`place_entry`].
 #[must_use]
-pub fn market_order(owner: Address, market: MarketId, side: Side, quantity: u64) -> MarketOrder {
-    MarketOrder {
-        market,
-        owner: owner.to_bytes(),
-        side,
-        quantity,
-        client_order_id: None,
-        stop_loss: None,
-        take_profit: None,
-    }
+pub fn market_order(owner: Address, market: MarketId, side: Side, quantity: u64) -> Action {
+    place_entry(owner, market_entry(market, side, quantity, None))
 }
 
-/// `PlaceOrders` of one order, as `order.owner`. Signs the same bytes a
-/// single `PlaceOrder` always did.
+/// `PlaceOrders` of one limit order, as `order.owner`.
 #[must_use]
 pub fn place_order(order: PlaceOrder) -> Action {
     Action::PlaceOrders(PlaceOrders::one(order))
+}
+
+/// `PlaceOrders` of one entry of any kind for `owner`.
+#[must_use]
+pub fn place_entry(owner: Address, entry: OrderEntry) -> Action {
+    Action::PlaceOrders(PlaceOrders::entry(owner.to_bytes(), entry))
+}
+
+/// `PlaceOrders` of one close of a position on `market` held on
+/// `position_side`: a reduce-only market order on the other side for `size`.
+/// The engine clamps it to the position, and refuses it with code 35 when
+/// there is none.
+#[must_use]
+pub fn close_position(owner: Address, market: MarketId, position_side: Side, size: u64) -> Action {
+    let side = match position_side {
+        Side::Buy => Side::Sell,
+        Side::Sell => Side::Buy,
+    };
+    place_entry(
+        owner,
+        OrderEntry {
+            reduce_only: true,
+            ..market_entry(market, side, size, None)
+        },
+    )
 }
 
 /// `CancelOrders` of one exchange order id.
@@ -80,19 +98,30 @@ pub fn cancel_order_by_client_id(owner: Address, client_order_id: u64) -> Action
 }
 
 /// One limit order of a [`place_orders`] list, GTC. Set `client_order_id`,
-/// `post_only`, `reduce_only`, `time_in_force` or brackets on it as needed.
+/// `reduce_only` or brackets on it, or `kind` for `post_only` and
+/// `time_in_force`, as needed.
 #[must_use]
 pub fn order_entry(market: MarketId, side: Side, price: u64, quantity: u64) -> OrderEntry {
+    OrderEntry::limit(market, side, price, quantity)
+}
+
+/// One market order of a [`place_orders`] list: immediate-or-cancel at the
+/// best available prices, sized to what the account can afford.
+/// `worst_price`, when set, stops the fills at that price.
+#[must_use]
+pub fn market_entry(
+    market: MarketId,
+    side: Side,
+    quantity: u64,
+    worst_price: Option<u64>,
+) -> OrderEntry {
     OrderEntry {
-        market,
-        side,
-        price,
-        quantity,
-        ..OrderEntry::default()
+        kind: OrderKind::Market { worst_price },
+        ..OrderEntry::market(market, side, quantity)
     }
 }
 
-/// `PlaceOrders`: 1 to [`MAX_LIST_ENTRIES`] limit orders for `owner` under one
+/// `PlaceOrders`: 1 to [`MAX_LIST_ENTRIES`] limit or market orders for `owner` under one
 /// signature, each placed or refused on its own, in order.
 ///
 /// # Errors
@@ -173,15 +202,6 @@ pub fn cancel_replace_order(order_id: OrderId, order: PlaceOrder) -> Action {
 #[must_use]
 pub fn cancel_replace_order_by_client_id(client_order_id: u64, order: PlaceOrder) -> Action {
     Action::CancelReplaceOrder(replace(None, Some(client_order_id), order))
-}
-
-/// `ClosePosition`: flatten `owner`'s position on `market`.
-#[must_use]
-pub fn close_position(owner: Address, market: MarketId) -> Action {
-    Action::ClosePosition(ClosePosition {
-        market,
-        owner: owner.to_bytes(),
-    })
 }
 
 /// Buy No at `price` on an event's binary book (`EventInfo::eby_market`):
@@ -658,58 +678,118 @@ mod tests {
         );
     }
 
+    /// The one entry of a `PlaceOrders` as the engine reads it.
+    fn only_entry(action: &Action) -> (Address, OrderEntry) {
+        let Action::PlaceOrders(p) = on_the_wire(action) else {
+            panic!("{action:?}")
+        };
+        let [entry] = p.orders.as_slice() else {
+            panic!("{p:?}")
+        };
+        (Address::from(p.owner), entry.clone())
+    }
+
     #[test]
-    fn a_single_order_or_cancel_signs_the_single_payload() {
-        let order = limit_order(OWNER, 7, Side::Buy, 100, 10);
-        let raw = |action: &Action| {
-            let chain = crypto::chain_id_from_string("exchange-devnet-1");
-            let bytes = sign_action(&LocalSigner::from_bytes(&[3; 32]), &chain, action, 1).unwrap();
-            codec::decode_tx_raw(&bytes).unwrap().payload
+    fn a_single_order_or_cancel_is_a_list_of_one() {
+        let mut order = limit_order(OWNER, 7, Side::Buy, 100, 10);
+        order.client_order_id = Some(4);
+        order.post_only = true;
+        let (owner, entry) = only_entry(&place_order(order.clone()));
+        assert_eq!(owner, OWNER);
+        assert_eq!(entry, OrderEntry::from(order));
+        assert_eq!(
+            entry.kind,
+            OrderKind::Limit {
+                price: 100,
+                time_in_force: TimeInForce::Gtc,
+                post_only: true
+            }
+        );
+
+        let Action::CancelOrders(c) = on_the_wire(&cancel_order(OWNER, 42)) else {
+            panic!()
         };
         assert_eq!(
-            raw(&on_the_wire(&place_order(order.clone()))),
-            rmp_serde::to_vec(&order).unwrap()
+            (c.owner, c.order_ids.as_slice()),
+            (OWNER.to_bytes(), &[42][..])
+        );
+        let Action::CancelClientOrders(c) = on_the_wire(&cancel_order_by_client_id(OWNER, 9))
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (c.owner, c.client_order_ids.as_slice()),
+            (OWNER.to_bytes(), &[9][..])
+        );
+    }
+
+    #[test]
+    fn a_market_order_is_a_market_entry_with_an_optional_worst_price() {
+        let (owner, entry) = only_entry(&market_order(OWNER, 3, Side::Buy, 250));
+        assert_eq!(owner, OWNER);
+        assert_eq!(entry, OrderEntry::market(3, Side::Buy, 250));
+        assert_eq!(entry.kind, OrderKind::Market { worst_price: None });
+        assert!(!entry.reduce_only);
+
+        let mut bounded = market_entry(1, Side::Sell, 10, Some(95_000));
+        bounded.client_order_id = Some(8);
+        let (_, entry) = only_entry(&place_entry(OWNER, bounded));
+        assert_eq!(
+            entry.kind,
+            OrderKind::Market {
+                worst_price: Some(95_000)
+            }
         );
         assert_eq!(
-            raw(&cancel_order(OWNER, 42)),
-            rmp_serde::to_vec(&CancelOrder {
-                order_id: 42,
-                owner: OWNER.to_bytes()
-            })
-            .unwrap()
+            (
+                entry.market,
+                entry.side,
+                entry.quantity,
+                entry.client_order_id
+            ),
+            (1, Side::Sell, 10, Some(8))
         );
-        assert_eq!(
-            raw(&cancel_order_by_client_id(OWNER, 9)),
-            rmp_serde::to_vec(&CancelClientOrder {
-                owner: OWNER.to_bytes(),
-                client_order_id: 9
-            })
-            .unwrap()
-        );
+    }
+
+    #[test]
+    fn a_close_is_a_reduce_only_market_entry_on_the_other_side() {
+        for (held, side) in [(Side::Buy, Side::Sell), (Side::Sell, Side::Buy)] {
+            let (owner, entry) = only_entry(&close_position(OWNER, 2, held, 5));
+            assert_eq!(owner, OWNER);
+            assert_eq!(
+                (entry.market, entry.side, entry.quantity, entry.reduce_only),
+                (2, side, 5, true)
+            );
+            assert_eq!(entry.kind, OrderKind::Market { worst_price: None });
+        }
     }
 
     #[test]
     fn lists_carry_every_entry_and_refuse_a_bad_size() {
         let mut ask = order_entry(3303, Side::Sell, 75_000_000, 2);
         ask.client_order_id = Some(8);
-        ask.post_only = true;
-        let orders = vec![order_entry(3302, Side::Buy, 80_000_000, 2), ask];
+        ask.kind = OrderKind::Limit {
+            price: 75_000_000,
+            time_in_force: TimeInForce::Gtc,
+            post_only: true,
+        };
+        let orders = vec![
+            order_entry(3302, Side::Buy, 80_000_000, 2),
+            ask.clone(),
+            market_entry(3302, Side::Sell, 1, Some(70_000_000)),
+        ];
         let Action::PlaceOrders(p) =
-            on_the_wire(&place_orders(OWNER, orders).expect("two orders are in range"))
+            on_the_wire(&place_orders(OWNER, orders).expect("three orders are in range"))
         else {
             panic!()
         };
         assert_eq!(p.owner, OWNER.to_bytes());
-        let ask = &p.orders.as_slice()[1];
+        assert_eq!(p.orders.as_slice()[1], ask);
         assert_eq!(
-            (
-                ask.market,
-                ask.side,
-                ask.price,
-                ask.client_order_id,
-                ask.post_only
-            ),
-            (3303, Side::Sell, 75_000_000, Some(8), true)
+            p.orders.as_slice()[2].kind,
+            OrderKind::Market {
+                worst_price: Some(70_000_000)
+            }
         );
         let Action::CancelOrders(c) = on_the_wire(&cancel_orders(OWNER, vec![4, 5]).unwrap())
         else {

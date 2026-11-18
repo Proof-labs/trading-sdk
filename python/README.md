@@ -557,10 +557,12 @@ action_type, payload = actions.encode_action(propose)
 ## Order lists
 
 `PlaceOrders`, `CancelOrders` and `CancelClientOrders` carry 1 to 100 entries
-under one signature, like Hyperliquid's `order` and `cancel`. Each entry runs on
-its own: the transaction succeeds and its `orders_placed` or `orders_cancelled`
-event reports every entry. The client methods return those per-entry results
-and raise nothing for a refused entry:
+under one signature, like Hyperliquid's `order` and `cancel`. A `PlaceOrders`
+entry is a limit order (`OrderEntry(...)`) or a market order
+(`OrderEntry.market_order(...)`, with an optional `worst_price` that stops its
+walk at that price). Each entry runs on its own: the transaction succeeds and
+its `orders_placed` or `orders_cancelled` event reports every entry. The client
+methods return those per-entry results and raise nothing for a refused entry:
 
 ```python
 from proof_trading_sdk import OrderEntry
@@ -568,22 +570,32 @@ from proof_trading_sdk import OrderEntry
 placements = client.place_orders([
     OrderEntry(market=1, side="Buy", price=66_740_000_000, quantity=50, post_only=True),
     OrderEntry(market=1, side="Sell", price=66_760_000_000, quantity=50, post_only=True),
+    OrderEntry.market_order(2, "Buy", 10, worst_price=1_510_000_000),
 ])
 for p in placements:
     if p.rejected:
         print(p.market, p.code, p.error_name)
+    elif p.outcome == "executed":
+        # Done without resting; `unfilled` says why less than requested filled.
+        print(p.order_id, p.filled_quantity, p.requested_quantity, p.unfilled)
     else:
-        print(p.outcome, p.order_id)  # "resting" or "executed"
+        print(p.order_id, p.quantity)  # resting remainder
 
 for c in client.cancel_orders([order_id_a, order_id_b]):
     print(c.outcome, c.order_id, c.code)  # "cancelled", or "refused" with a code
 client.cancel_client_orders([7, 8])
 ```
 
-A single `PlaceOrder`, `CancelOrder` or `CancelClientOrder` is a list of one with
-the same bytes as before, and `client.submit` still raises `EngineError` with
-its code when that one entry is refused. Entries out of range raise `ValueError`
-before signing.
+A single `PlaceOrder`, `MarketOrder`, `CancelOrder` or `CancelClientOrder` is
+sent as a list of one, and `client.submit` still raises `EngineError` with its
+code when that one entry is refused. `MarketOrder` takes an optional
+`worst_price` and `reduce_only`. `client.submit(ClosePosition(market, owner))`
+reads the position and sends a reduce-only market order on the opposite side
+for its size; on a flat account it returns success, as before. Entries out of
+range raise `ValueError` before signing.
+
+An `AtomicBasketOrder` reports its legs in `orders_placed` too:
+`order_placements(client.submit(basket))` gives one placement per leg.
 
 ## Position stop-loss / take-profit
 

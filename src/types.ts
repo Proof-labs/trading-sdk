@@ -33,22 +33,30 @@ export enum TimeInForce {
 
 /**
  * Wire-format action type identifiers. Each value is a single byte.
- * Retired, never reassigned: 0x03 `OracleUpdate`, 0x12 `RunFundingTick`,
- * 0x14 `OracleUpdateComposite`.
+ * Retired, never reassigned: 0x01 `PlaceOrder`, 0x02 `CancelOrder`,
+ * 0x03 `OracleUpdate`, 0x04 `MarketOrder`, 0x12 `RunFundingTick`,
+ * 0x14 `OracleUpdateComposite`, 0x17 `ClosePosition`, 0x18
+ * `CancelClientOrder`. The single-order names stay as aliases of the list
+ * byte they now encode on.
  */
 export const ActionType = {
-  /** Place 1 to {@link MAX_LIST_ENTRIES} limit orders for one account. */
-  PlaceOrders: 0x01,
-  /** One limit order: a `PlaceOrders` of one, on the same byte. */
-  PlaceOrder: 0x01,
+  /** Place 1 to {@link MAX_LIST_ENTRIES} limit or market orders for one
+   *  account. */
+  PlaceOrders: 0x35,
+  /** One limit order: a `PlaceOrders` of one. */
+  PlaceOrder: 0x35,
+  /** One market order: a `PlaceOrders` of one market entry. */
+  MarketOrder: 0x35,
   /** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by order ID. */
-  CancelOrders: 0x02,
-  /** One cancel by order ID: a `CancelOrders` of one, on the same byte. */
-  CancelOrder: 0x02,
+  CancelOrders: 0x36,
+  /** One cancel by order ID: a `CancelOrders` of one. */
+  CancelOrder: 0x36,
+  /** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by client order ID. */
+  CancelClientOrders: 0x37,
+  /** One cancel by client order ID: a `CancelClientOrders` of one. */
+  CancelClientOrder: 0x37,
   /** Oracle-policy source observation relayed by the feeder. */
   SubmitOracleObservation: 0x2d,
-  /** Place a market order that crosses immediately. */
-  MarketOrder: 0x04,
   /** Credit USDC to an account (legacy, prefer ConfirmDeposit). */
   Deposit: 0x05,
   /** Debit USDC from an account (direct withdraw, checks margin). */
@@ -105,13 +113,6 @@ export const ActionType = {
    *  Engine takes max(market.im_bps, user_im_bps) on every IM check.
    *  BE-16. */
   SetUserMarketLeverage: 0x16,
-  /** Close an entire position by placing an opposite-side IOC order at
-   *  oracle±spread. Idempotent on already-closed positions. User-signed. */
-  ClosePosition: 0x17,
-  /** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by client order ID. */
-  CancelClientOrders: 0x18,
-  /** One cancel by client order ID: a `CancelClientOrders` of one. */
-  CancelClientOrder: 0x18,
   /** Cancel all resting orders for an owner, optionally market-scoped. */
   CancelAllOrders: 0x19,
   /** Atomically cancel one resting order and place its replacement. */
@@ -198,12 +199,20 @@ export interface CancelClientOrder {
  *  `CancelClientOrders`) carries; the wire refuses 0 or more. */
 export const MAX_LIST_ENTRIES = 100;
 
-/** One order of a {@link PlaceOrders}: a {@link PlaceOrder} without its owner. */
-export type OrderEntry = Omit<PlaceOrder, "owner">;
+/** A limit entry of a {@link PlaceOrders}: a {@link PlaceOrder} without its
+ *  owner. `kind` may be omitted. */
+export type LimitOrderEntry = Omit<PlaceOrder, "owner"> & { kind?: "limit" };
 
-/** 1 to {@link MAX_LIST_ENTRIES} limit orders for one account under one
- *  signature and nonce (action `0x01`). Each runs in turn exactly as its own
- *  `PlaceOrder` would and stands or is refused on its own; the transaction
+/** A market entry of a {@link PlaceOrders}: a {@link MarketOrder} without its
+ *  owner. */
+export type MarketOrderEntry = Omit<MarketOrder, "owner"> & { kind: "market" };
+
+/** One order of a {@link PlaceOrders}, limit or market. */
+export type OrderEntry = LimitOrderEntry | MarketOrderEntry;
+
+/** 1 to {@link MAX_LIST_ENTRIES} limit or market orders for one account
+ *  under one signature and nonce (action `0x35`). Each runs in turn as its
+ *  own order would and stands or is refused on its own; the transaction
  *  succeeds and `orders_placed` reports every order. */
 export interface PlaceOrders {
   /** Account every order is placed for (20 bytes). */
@@ -213,7 +222,7 @@ export interface PlaceOrders {
 }
 
 /** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by order ID (action
- *  `0x02`); each cancel stands or is refused on its own. */
+ *  `0x36`); each cancel stands or is refused on its own. */
 export interface CancelOrders {
   /** Account address of the orders' owner (20 bytes). */
   owner: Address;
@@ -222,7 +231,7 @@ export interface CancelOrders {
 }
 
 /** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by client order ID
- *  (action `0x18`); each cancel stands or is refused on its own. */
+ *  (action `0x37`); each cancel stands or is refused on its own. */
 export interface CancelClientOrders {
   /** Account address of the orders' owner (20 bytes). */
   owner: Address;
@@ -285,7 +294,8 @@ export interface AmendOrder {
   newQuantity?: bigint | null;
 }
 
-/** Place a market order that crosses immediately against resting orders. */
+/** Place a market order that crosses immediately against resting orders:
+ *  immediate-or-cancel, sized level by level to what the account can afford. */
 export interface MarketOrder {
   /** Market identifier. */
   market: number;
@@ -306,6 +316,12 @@ export interface MarketOrder {
   stopLoss?: TriggerLimb | null;
   /** Optional take-profit limb; see {@link MarketOrder.stopLoss}. */
   takeProfit?: TriggerLimb | null;
+  /** Optional worst price: stops the walk through the book at this price.
+   *  Bounds fills, not admission. */
+  worstPrice?: bigint | null;
+  /** When true, only reduces the position: refused with no position or on
+   *  its side (code 35), clamped to the position's size. Defaults to false. */
+  reduceOnly?: boolean;
 }
 
 /**
@@ -991,9 +1007,8 @@ export interface SetUserMarketLeverage {
   userImBps: number;
 }
 
-/** Close an entire position on a market by placing an opposite-side IOC
- *  order at oracle±spread. Idempotent: returns code=0 without events if
- *  no position exists. User-signed (signer == owner). S49. */
+/** @deprecated Retired action (0x17), no longer signable: a close is a
+ *  reduce-only market order. Use `ExchangeClient.closePosition(market)`. */
 export interface ClosePosition {
   /** Market identifier to close the position on. */
   market: number;
@@ -1056,7 +1071,6 @@ export type TraderAction =
   | { type: "ApproveAgent"; data: ApproveAgent }
   | { type: "RevokeAgent"; data: RevokeAgent }
   | { type: "SetUserMarketLeverage"; data: SetUserMarketLeverage }
-  | { type: "ClosePosition"; data: ClosePosition }
   | { type: "SetPositionTriggers"; data: SetPositionTriggers }
   | { type: "CancelPositionTriggers"; data: CancelPositionTriggers }
   | { type: "CreateSubAccount"; data: CreateSubAccount }
@@ -1997,18 +2011,9 @@ export interface AgentRevokedEvent {
 }
 
 /**
- * Emitted exactly once at the end of every market-order tx that passes
- * envelope checks, regardless of how many fills happened.
- *
- * This is the authoritative "did my market order do anything?" signal:
- *   - `filledQuantity == requestedQuantity`  → fully filled
- *   - `0 < filledQuantity < requestedQuantity` → partial fill, IOC remainder dropped
- *   - `filledQuantity == 0` → no counterparty (or all counterparties were
- *      the taker themselves and got rejected by self-match prevention)
- *
- * Without this event, callers would have to count downstream `TradeExecuted`
- * events and could not distinguish "no counterparty" from "trade events
- * arrived in a different stream view".
+ * Retired: no longer emitted. An order that never rests is an `executed`
+ * entry of `orders_placed` ({@link OrdersPlacedEvent}) with the same
+ * requested and filled quantity; kept so stored history reads.
  */
 export interface MarketOrderProcessedEvent {
   type: "MarketOrderProcessed";

@@ -7,12 +7,17 @@ import pytest
 
 from proof_trading_sdk import ExchangeClient, EngineError, Side, TimeInForce
 from proof_trading_sdk.actions import (
+    AtomicBasketLeg,
+    AtomicBasketOrder,
     CancelClientOrder,
     CancelOrder,
+    ClosePosition,
+    MarketOrder,
     OrderEntry,
     PlaceOrder,
 )
-from proof_trading_sdk.order_lists import OrderCancellation, OrderPlacement
+from proof_trading_sdk.client import AccountState
+from proof_trading_sdk.order_lists import OrderCancellation, OrderPlacement, order_placements
 
 SEED = bytes([7]) * 32
 OWNER = bytes([1]) * 20
@@ -39,7 +44,15 @@ RESTING = {
     "side": "buy", "price": "100", "quantity": "5", "time_in_force": "gtc",
     "post_only": "true", "reduce_only": "false",
 }
-EXECUTED = {"outcome": "executed", "market": "2", "client_order_id": "3", "order_id": "10"}
+EXECUTED = {
+    "outcome": "executed", "market": "2", "client_order_id": "3", "order_id": "10",
+    "requested_quantity": "5", "filled_quantity": "2", "unfilled": "no_liquidity",
+}
+FILLED = {
+    "outcome": "executed", "market": "2", "client_order_id": "", "order_id": "11",
+    "requested_quantity": "4", "filled_quantity": "4", "unfilled": "",
+}
+NOTHING_TO_CLOSE = {"outcome": "rejected", "market": "2", "client_order_id": "", "code": "35"}
 CANCELLED = {
     "outcome": "cancelled", "order_id": "9", "market": "1", "client_order_id": "",
     "original_quantity": "5", "remaining_quantity": "3", "filled_quantity": "2",
@@ -72,6 +85,7 @@ def answer():
 
 @pytest.mark.parametrize("action, event, code", [
     (PlaceOrder(market=1, owner=OWNER, side="Buy", price=1, quantity=1), _placed(REJECTED), 12),
+    (MarketOrder(market=1, owner=OWNER, side="Buy", quantity=1), _placed(REJECTED), 12),
     (CancelOrder(order_id=42, owner=OWNER), _cancelled(REFUSED_ID), 2),
     (CancelClientOrder(owner=OWNER, client_order_id=11), _cancelled(REFUSED_CLOID), 44),
 ])
@@ -83,6 +97,7 @@ def test_a_refused_single_raises_its_old_engine_error(answer, action, event, cod
 
 @pytest.mark.parametrize("action, event", [
     (PlaceOrder(market=1, owner=OWNER, side="Buy", price=1, quantity=1), _placed(RESTING)),
+    (MarketOrder(market=2, owner=OWNER, side="Buy", quantity=5), _placed(EXECUTED)),
     (CancelOrder(order_id=9, owner=OWNER), _cancelled(CANCELLED)),
 ])
 def test_an_accepted_single_returns_the_response(answer, action, event):
@@ -105,7 +120,10 @@ def test_place_orders_reports_each_order_without_raising(answer):
             outcome="resting", market=1, order_id=9, side=Side.Buy, price=100,
             quantity=5, time_in_force=TimeInForce.Gtc, post_only=True, reduce_only=False,
         ),
-        OrderPlacement(outcome="executed", market=2, client_order_id=3, order_id=10),
+        OrderPlacement(
+            outcome="executed", market=2, client_order_id=3, order_id=10,
+            requested_quantity=5, filled_quantity=2, unfilled="no_liquidity",
+        ),
         OrderPlacement(
             outcome="rejected", market=1, client_order_id=7, code=12,
             error_name=placements[2].error_name,
@@ -137,3 +155,68 @@ def test_cancel_client_orders_reports_each_entry(answer):
 
 def test_no_list_event_is_no_results(answer):
     assert answer().cancel_orders([1]) == []
+
+
+def test_place_orders_takes_market_entries(answer):
+    entries = [
+        OrderEntry(market=1, side="Buy", price=100, quantity=5),
+        OrderEntry.market_order(2, "Sell", 4, worst_price=90),
+    ]
+    _, filled = answer(_placed(RESTING, FILLED)).place_orders(entries)
+    assert (filled.outcome, filled.filled_quantity, filled.requested_quantity) == (
+        "executed", 4, 4,
+    )
+    assert filled.unfilled is None
+
+
+def test_basket_legs_read_from_orders_placed(answer):
+    basket = AtomicBasketOrder(
+        owner=OWNER,
+        legs=[AtomicBasketLeg(market=2, side="Buy", price=100, quantity=4)],
+        max_slippage_bps=50,
+    )
+    [leg] = order_placements(answer(_placed(FILLED)).submit(basket))
+    assert leg.outcome == "executed" and leg.filled_quantity == 4
+
+
+def _closing(answer, monkeypatch, positions, *events):
+    client = answer(*events)
+    monkeypatch.setattr(client, "account", lambda owner=None: AccountState(positions=positions))
+    sent = []
+    sign = client.sign_action
+
+    def spy(action):
+        sent.append(action)
+        return sign(action)
+
+    monkeypatch.setattr(client, "sign_action", spy)
+    return client, sent
+
+
+@pytest.mark.parametrize("side, closing_side", [("Buy", "Sell"), ("Sell", "Buy")])
+def test_close_position_sends_a_reduce_only_market_order(answer, monkeypatch, side, closing_side):
+    positions = [
+        {"market": 1, "side": "Buy", "size": 9},
+        {"market": 2, "side": side, "size": 4},
+    ]
+    client, sent = _closing(answer, monkeypatch, positions, _placed(FILLED))
+    assert client.submit(ClosePosition(market=2, owner=OWNER))["code"] == 0
+    [order] = sent
+    assert isinstance(order, MarketOrder)
+    assert (order.market, order.side, order.quantity, order.reduce_only) == (
+        2, closing_side, 4, True,
+    )
+
+
+def test_close_position_on_a_flat_account_is_a_no_op_success(answer, monkeypatch):
+    client, _ = _closing(answer, monkeypatch, [], _placed(NOTHING_TO_CLOSE))
+    assert client.submit(ClosePosition(market=2, owner=OWNER))["code"] == 0
+
+
+def test_an_unaffordable_close_raises_its_engine_error(answer, monkeypatch):
+    positions = [{"market": 2, "side": "Buy", "size": 4}]
+    unaffordable = {**NOTHING_TO_CLOSE, "code": "12"}
+    client, _ = _closing(answer, monkeypatch, positions, _placed(unaffordable))
+    with pytest.raises(EngineError) as raised:
+        client.submit(ClosePosition(market=2, owner=OWNER))
+    assert raised.value.code == 12

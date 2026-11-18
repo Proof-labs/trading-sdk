@@ -95,8 +95,7 @@ export function validateCancelPositionTriggers(
 }
 
 /**
- * Order fields the placement-time SL/TP validation reads. `reduceOnly` is
- * absent on `MarketOrder`: the wire struct carries no such field.
+ * Order fields the placement-time SL/TP validation reads.
  */
 export interface OrderTriggerFields {
   stopLoss?: TriggerLimb | null;
@@ -106,7 +105,8 @@ export interface OrderTriggerFields {
 
 /**
  * Validate the placement-time SL/TP limbs carried on an order action
- * (`PlaceOrder` 0x01, `MarketOrder` 0x04, `CancelReplaceOrder` 0x1A).
+ * (each `PlaceOrders` 0x35 entry, limit or market, and `CancelReplaceOrder`
+ * 0x1A).
  * Mirrors `validateSetPositionTriggers`' limb parity (`triggerPrice > 0`,
  * structural bps in `1..=9999` (engine admission caps at 1000), distinct
  * limb client ids) plus the engine's reduce-only

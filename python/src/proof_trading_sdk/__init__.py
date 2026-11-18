@@ -143,7 +143,12 @@ from proof_trading_sdk.governance_reads import (
     decode_liquidation_config_info,
 )
 from proof_trading_sdk.client import ExchangeClient
-from proof_trading_sdk.order_lists import OrderCancellation, OrderPlacement  # noqa: F401
+from proof_trading_sdk.order_lists import (  # noqa: F401
+    OrderCancellation,
+    OrderPlacement,
+    order_cancellations,
+    order_placements,
+)
 from proof_trading_sdk.candle_history import CandleHistoryPage, CandleHistoryTime, HistoryCandle
 from proof_trading_sdk.streams import (
     AccountEventStream,
@@ -292,6 +297,8 @@ __all__ = [
     "ExchangeClient",
     "OrderPlacement",
     "OrderCancellation",
+    "order_placements",
+    "order_cancellations",
     "MarketStatsStatus", "MarketStatsOpenInterest", "MarketStats", "MarketStatsResponse",
     "decode_market_stats_response", "OracleMarketHealth", "OracleHealth", "decode_oracle_health",
     "FinalizedAccountState",

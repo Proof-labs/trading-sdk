@@ -175,6 +175,25 @@ fn single_refusal(mut submitted: Submitted) -> Submitted {
     submitted
 }
 
+/// A close of `held` (side and size), or of nothing when flat: the engine
+/// answers a flat close with code 35, which [`nothing_to_close`] reads.
+fn close_action(owner: Address, market: MarketId, held: Option<(Side, u64)>) -> Action {
+    let (side, size) = held.unwrap_or((Side::Buy, 1));
+    actions::close_position(owner, market, side, size)
+}
+
+/// A close with no position to reduce is a success with nothing done; every
+/// other refusal stays the receipt's error.
+fn nothing_to_close(submitted: Submitted) -> Submitted {
+    let mut submitted = single_refusal(submitted);
+    if let TxStatus::Committed(receipt) = &mut submitted.status {
+        if receipt.error == Some(EngineError::Known(ErrorKind::ReduceOnlyWouldIncrease)) {
+            receipt.error = None;
+        }
+    }
+    submitted
+}
+
 impl From<CommittedReceipt> for Receipt {
     fn from(r: CommittedReceipt) -> Self {
         Self {
@@ -696,7 +715,9 @@ impl ExchangeClient {
     }
 
     /// Immediate-or-cancel at the best available prices
-    /// ([`actions::market_order`]).
+    /// ([`actions::market_order`]). A refused order is the receipt's error.
+    /// For a worst price, use [`Self::place_entry`] with
+    /// [`actions::market_entry`].
     ///
     /// # Errors
     ///
@@ -707,8 +728,26 @@ impl ExchangeClient {
         side: Side,
         quantity: u64,
     ) -> Result<Submitted> {
-        let order = actions::market_order(self.address(), market, side, quantity);
-        self.submit(&Action::MarketOrder(order)).await
+        self.submit(&actions::market_order(
+            self.address(),
+            market,
+            side,
+            quantity,
+        ))
+        .await
+        .map(single_refusal)
+    }
+
+    /// Place one order of any kind, limit or market
+    /// ([`actions::place_entry`]). A refused order is the receipt's error.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`].
+    pub async fn place_entry(&self, entry: OrderEntry) -> Result<Submitted> {
+        self.submit(&actions::place_entry(self.address(), entry))
+            .await
+            .map(single_refusal)
     }
 
     /// Cancel by exchange order id ([`actions::cancel_order`]).
@@ -801,15 +840,24 @@ impl ExchangeClient {
         .await
     }
 
-    /// Flatten this account's position on `market`
-    /// ([`actions::close_position`]).
+    /// Flatten this account's position on `market`: reads the position, then
+    /// sends a reduce-only market order on the other side for its size
+    /// ([`actions::close_position`]). Nothing to close is a success.
     ///
     /// # Errors
     ///
-    /// As [`Self::submit`].
+    /// A failed account read (as [`InfoClient::account`]), then as
+    /// [`Self::submit`].
     pub async fn close_position(&self, market: MarketId) -> Result<Submitted> {
-        self.submit(&actions::close_position(self.address(), market))
+        let account = self.info().account(self.address()).await?;
+        let held = account
+            .positions
+            .iter()
+            .find(|p| p.market == market && p.size > 0)
+            .map(|p| (p.side, p.size));
+        self.submit(&close_action(self.address(), market, held))
             .await
+            .map(nothing_to_close)
     }
 }
 
@@ -974,6 +1022,8 @@ impl ExchangeClient {
     }
 
     /// Fill every leg in full or none ([`actions::atomic_basket_order`]).
+    /// [`Receipt::placements`] says what each leg did, in order; a failed
+    /// basket is the receipt's error with every leg rejected.
     ///
     /// # Errors
     ///
@@ -994,7 +1044,7 @@ impl ExchangeClient {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::panic)]
     use super::*;
     use proof_trading_sdk::{codec, LocalSigner};
 
@@ -1073,6 +1123,97 @@ mod tests {
         })
     }
 
+    fn executed(order_id: OrderId) -> PlacementOutcome {
+        PlacementOutcome::Executed {
+            order_id,
+            requested_quantity: 5,
+            filled_quantity: 5,
+            unfilled: None,
+        }
+    }
+
+    #[test]
+    fn a_refused_market_order_is_the_error_it_always_was() {
+        let no_liquidity = PlacementOutcome::Executed {
+            order_id: 4,
+            requested_quantity: 5,
+            filled_quantity: 0,
+            unfilled: Some(proof_trading_sdk::types::UnfilledReason::NoLiquidity),
+        };
+        // Nothing filled is still an executed order, not an error.
+        assert!(single_refusal(committed(vec![placed(&[no_liquidity])])).is_success());
+        let margin = EngineError::new(12, None);
+        let refused = single_refusal(committed(vec![placed(&[PlacementOutcome::Rejected(
+            margin,
+        )])]));
+        assert_eq!(refused.error(), Some(margin));
+    }
+
+    #[test]
+    fn a_close_reads_the_position_and_a_flat_close_succeeds() {
+        let c = client();
+        for (held, side, size) in [
+            (Some((Side::Buy, 7)), Side::Sell, 7),
+            (Some((Side::Sell, 3)), Side::Buy, 3),
+            (None, Side::Sell, 1),
+        ] {
+            let Action::PlaceOrders(p) = close_action(c.address(), 2, held) else {
+                panic!("{held:?}")
+            };
+            let [e] = p.orders.as_slice() else {
+                panic!("{p:?}")
+            };
+            assert_eq!(
+                (e.market, e.side, e.quantity, e.reduce_only),
+                (2, side, size, true)
+            );
+            assert_eq!(
+                e.kind,
+                proof_trading_sdk::types::OrderKind::Market { worst_price: None }
+            );
+        }
+
+        let flat = PlacementOutcome::Rejected(EngineError::new(35, None));
+        let closed = nothing_to_close(committed(vec![placed(&[flat])]));
+        assert!(closed.is_success());
+        assert_eq!(closed.receipt().unwrap().placements().len(), 1);
+
+        let margin = EngineError::new(12, None);
+        let unaffordable =
+            nothing_to_close(committed(vec![placed(&[PlacementOutcome::Rejected(
+                margin,
+            )])]));
+        assert_eq!(unaffordable.error(), Some(margin));
+        assert!(nothing_to_close(committed(vec![placed(&[executed(5)])])).is_success());
+    }
+
+    #[test]
+    fn basket_legs_read_from_orders_placed() {
+        let legs = committed(vec![placed(&[executed(3), executed(4)])]);
+        let receipt = legs.receipt().unwrap();
+        assert!(receipt.is_success());
+        assert_eq!(
+            receipt
+                .placements()
+                .iter()
+                .map(|p| p.outcome)
+                .collect::<Vec<_>>(),
+            [executed(3), executed(4)]
+        );
+
+        // A failed basket fails the transaction and reports each leg with it.
+        let slipped = EngineError::new(50, None);
+        let mut failed = committed(vec![placed(&[
+            PlacementOutcome::Rejected(slipped),
+            PlacementOutcome::Rejected(slipped),
+        ])]);
+        if let TxStatus::Committed(r) = &mut failed.status {
+            r.error = Some(slipped);
+        }
+        assert_eq!(failed.error(), Some(slipped));
+        assert_eq!(failed.receipt().unwrap().placements().len(), 2);
+    }
+
     #[test]
     fn a_refused_single_is_the_error_it_always_was() {
         let margin = EngineError::new(12, None);
@@ -1094,14 +1235,12 @@ mod tests {
         let refused = single_refusal(committed(vec![cancel]));
         assert!(refused.error().is_some_and(EngineError::is_order_not_found));
 
-        let rested = single_refusal(committed(vec![placed(&[PlacementOutcome::Executed {
-            order_id: 3,
-        }])]));
+        let rested = single_refusal(committed(vec![placed(&[executed(3)])]));
         assert!(rested.is_success());
         // A list keeps code 0 whatever its entries did.
         let list = committed(vec![placed(&[
             PlacementOutcome::Rejected(margin),
-            PlacementOutcome::Executed { order_id: 3 },
+            executed(3),
         ])]);
         assert!(list.is_success());
         assert_eq!(list.receipt().unwrap().placements().len(), 2);

@@ -108,9 +108,9 @@ pub use proof_trading_sdk::query::{AccountInfo, PositionBrief};
 pub use proof_trading_sdk::types::{
     Action, AtomicBasketLeg, CancelClientOrders, CancelOrders, CancelReplaceOrder, CancelTarget,
     ClientTriggerGroupId, ClientTriggerId, EventId, EventInfo, FundingRate, MarketConfig, MarketId,
-    MarketOrder, Order, OrderEntry, OrderId, Outcome, PlaceOrder, PlaceOrders, Position,
-    PositionEpoch, Side, TimeInForce, TriggerLimb, TriggerSlippageBps, WithdrawalStatus,
-    MAX_LIST_ENTRIES,
+    Order, OrderEntry, OrderId, OrderKind, Outcome, PlaceOrder, PlaceOrders, Position,
+    PositionEpoch, Side, TimeInForce, TriggerLimb, TriggerSlippageBps, UnfilledReason,
+    WithdrawalStatus, MAX_LIST_ENTRIES,
 };
 pub use proof_trading_sdk::ErrorKind;
 pub use proof_trading_sdk::{LocalSigner, Signer, SignerError};

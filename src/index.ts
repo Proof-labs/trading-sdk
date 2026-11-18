@@ -92,6 +92,8 @@ export {
   type CancelOrders,
   type CancelClientOrders,
   type OrderEntry,
+  type LimitOrderEntry,
+  type MarketOrderEntry,
   MAX_LIST_ENTRIES,
   type CancelAllOrders,
   type CancelReplaceOrder,
@@ -339,6 +341,7 @@ export {
   type OrdersCancelledEvent,
   type OrdersPlacedEvent,
   type PlaceOrdersResult,
+  type UnfilledReason,
 } from "./order-lists.js";
 export {
   decodeVoidSettlementEvent,

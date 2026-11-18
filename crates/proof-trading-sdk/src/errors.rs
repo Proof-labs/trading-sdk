@@ -611,13 +611,14 @@ mod exec_error_meaning_tests {
 pub mod prelude {
     pub use crate::types::{
         AccountFeeOverride, Action, AmendOrder, ApproveAgent, AttachConditional,
-        AttachedConditional, Branch, CancelAllOrders, CancelClientOrder, CancelOrder, CancelReason,
-        CancelReplaceOrder, ClosePosition, ConfirmDeposit, ConfirmWithdrawal, CreateEvent,
-        CreateMarket, Deposit, Event, EventId, EventInfo, EventOracleSource, EventStatus,
-        ExecError, FailDepositReason, FailWithdrawal, FillId, MarkSourceMode, MarketConfig,
-        MarketId, MarketKind, MarketOrder, Order, OrderId, Outcome, PlaceOrder, Position,
-        ResolveEvent, RevokeAgent, SetUserMarketLeverage, Side, TimeInForce, UpdateMarketFees,
-        Withdraw, WithdrawRequest, WithdrawalStatus, BINARY_PRICE_MAX,
-        DEFAULT_CEX_COMPOSITE_STALENESS_MS, DEFAULT_MAX_MARK_SPREAD_BPS,
+        AttachedConditional, Branch, CancelAllOrders, CancelClientOrder, CancelClientOrders,
+        CancelOrder, CancelOrders, CancelReason, CancelReplaceOrder, ConfirmDeposit,
+        ConfirmWithdrawal, CreateEvent, CreateMarket, Deposit, Event, EventId, EventInfo,
+        EventOracleSource, EventStatus, ExecError, FailDepositReason, FailWithdrawal, FillId,
+        MarkSourceMode, MarketConfig, MarketId, MarketKind, Order, OrderEntry, OrderId, OrderKind,
+        Outcome, PlaceOrder, PlaceOrders, Position, ResolveEvent, RevokeAgent,
+        SetUserMarketLeverage, Side, TimeInForce, UpdateMarketFees, Withdraw, WithdrawRequest,
+        WithdrawalStatus, BINARY_PRICE_MAX, DEFAULT_CEX_COMPOSITE_STALENESS_MS,
+        DEFAULT_MAX_MARK_SPREAD_BPS,
     };
 }

@@ -1,8 +1,9 @@
 /**
  * The list events of `PlaceOrders`, `CancelOrders` and `CancelClientOrders`,
  * decoded from the string attributes of one ABCI event: `orders_placed`
- * reports every order of a placement, `orders_cancelled` every order that left
- * a book (or a requested cancel that removed nothing). The `orders` attribute
+ * reports every placement outcome (each order of a `PlaceOrders`, each leg of
+ * an `AtomicBasketOrder`, a cancel-replace's replacement), `orders_cancelled`
+ * every order that left a book (or a requested cancel that removed nothing). The `orders` attribute
  * is a JSON array whose values are all strings. A malformed event throws; an
  * event of another type decodes to `null`.
  */
@@ -10,7 +11,7 @@
 import { Attributes, U32_MAX, type AbciEventInput } from "./abci-event.js";
 import { bytesToHex } from "./crypto.js";
 import { decodeExecError, type ExecErrorInfo } from "./errors.js";
-import { txEngineError } from "./tx-result.js";
+import { txEngineError, txOk } from "./tx-result.js";
 import {
   Side,
   TimeInForce,
@@ -20,7 +21,16 @@ import {
   type TxResult,
 } from "./types.js";
 
-/** How one order of a `PlaceOrders` ended. */
+/** Why an order that never rested filled less than it requested; a later
+ *  engine may add reasons. */
+export type UnfilledReason =
+  | "reduce_only_cap"
+  | "self_trade"
+  | "no_liquidity"
+  | "margin_cap"
+  | (string & {});
+
+/** How one order of a `PlaceOrders` (or basket leg) ended. */
 export type OrderPlacement =
   | {
       /** Accepted, with `quantity` left resting on the book. */
@@ -38,11 +48,16 @@ export type OrderPlacement =
     }
   | {
       /** Accepted and done without resting: filled in full, or an IOC or
-       *  FOK whose remainder was dropped. */
+       *  market order whose remainder was dropped. */
       outcome: "executed";
       market: number;
       clientOrderId: bigint | null;
       orderId: bigint;
+      requestedQuantity: bigint;
+      /** May be 0. */
+      filledQuantity: bigint;
+      /** Why less than requested filled; null when it all filled. */
+      unfilled: UnfilledReason | null;
     }
   | {
       /** Refused for a trading reason; it wrote nothing. */
@@ -184,6 +199,9 @@ function placement(e: Attributes): OrderPlacement {
         market,
         clientOrderId,
         orderId: e.u64("order_id"),
+        requestedQuantity: e.u64("requested_quantity"),
+        filledQuantity: e.u64("filled_quantity"),
+        unfilled: e.text("unfilled") === "" ? null : e.label("unfilled"),
       };
     case "rejected":
       return { outcome: "rejected", market, clientOrderId, ...code(e) };
@@ -241,7 +259,9 @@ function listEvents(tx: TxResult, owner: Address): OrderListEvent[] {
 }
 
 /** Each order's outcome from the `orders_placed` event `owner`'s placement
- *  emitted in `tx`; empty when `tx` carries none. */
+ *  emitted in `tx`, in the order sent; empty when `tx` carries none. Reads an
+ *  `AtomicBasketOrder`'s legs the same way, also when the basket failed (each
+ *  leg `rejected` with the transaction's code). */
 export function orderPlacements(
   tx: TxResult,
   owner: Address,
@@ -272,7 +292,7 @@ export function singleEntryRefusal(tx: TxResult, action?: Action): TxResult {
   if (!action || tx.outcome !== "ok") return tx;
   let entries: (OrderPlacement | OrderCancellation)[];
   try {
-    if (action.type === "PlaceOrder") {
+    if (action.type === "PlaceOrder" || action.type === "MarketOrder") {
       entries = orderPlacements(tx, action.data.owner);
     } else if (
       action.type === "CancelOrder" ||
@@ -294,6 +314,25 @@ export function singleEntryRefusal(tx: TxResult, action?: Action): TxResult {
     return tx;
   }
   return txEngineError(refused.code, {
+    hash: tx.hash,
+    height: tx.height,
+    log: tx.log,
+    info: tx.info,
+    events: tx.events,
+  });
+}
+
+/** Code 35: a reduce-only order with no position (or on its side). */
+const REDUCE_ONLY_REFUSED = 35;
+
+/**
+ * A close is a reduce-only market order; on a flat account the engine
+ * refuses it with code 35. Report that as the successful no-op a close of a
+ * flat position always was. Every other result passes through.
+ */
+export function closeNothingToClose(tx: TxResult): TxResult {
+  if (tx.outcome !== "engine" || tx.code !== REDUCE_ONLY_REFUSED) return tx;
+  return txOk({
     hash: tx.hash,
     height: tx.height,
     log: tx.log,

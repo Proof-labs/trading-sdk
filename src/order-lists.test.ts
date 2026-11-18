@@ -7,7 +7,9 @@ import {
   bytesToHex,
   decodeOrderListEvent,
   getPublicKey,
+  orderPlacements,
   pubkeyToOwner,
+  type AccountInfo,
   type TxEvent,
 } from "./index.js";
 
@@ -17,6 +19,10 @@ const owner = bytesToHex(pubkeyToOwner(getPublicKey(key)));
 // The exchange's own rendering of each list (exchange-wire order_lists_tests).
 const PLACED =
   '[{"outcome":"resting","market":"1","client_order_id":"4","order_id":"9","side":"buy","price":"100","quantity":"5","time_in_force":"gtc","post_only":"true","reduce_only":"false"},{"outcome":"rejected","market":"2","client_order_id":"","code":"22"}]';
+const EXECUTED =
+  '[{"outcome":"executed","market":"3","client_order_id":"","order_id":"12","requested_quantity":"10","filled_quantity":"4","unfilled":"no_liquidity"},{"outcome":"executed","market":"3","client_order_id":"5","order_id":"13","requested_quantity":"6","filled_quantity":"6","unfilled":""}]';
+const rejected = (code: number) =>
+  `[{"outcome":"rejected","market":"9","client_order_id":"","code":"${code}"}]`;
 const CANCELLED =
   '[{"outcome":"cancelled","order_id":"9","market":"1","client_order_id":"","original_quantity":"5","remaining_quantity":"3","filled_quantity":"2"},{"outcome":"refused","order_id":"10","code":"2"},{"outcome":"refused","client_order_id":"11","code":"60"}]';
 
@@ -100,6 +106,29 @@ describe("list events", () => {
     });
   });
 
+  it("decode executed orders with their fill and unfilled reason", () => {
+    expect(decodeOrderListEvent(placed(EXECUTED))?.orders).toEqual([
+      {
+        outcome: "executed",
+        market: 3,
+        clientOrderId: null,
+        orderId: 12n,
+        requestedQuantity: 10n,
+        filledQuantity: 4n,
+        unfilled: "no_liquidity",
+      },
+      {
+        outcome: "executed",
+        market: 3,
+        clientOrderId: 5n,
+        orderId: 13n,
+        requestedQuantity: 6n,
+        filledQuantity: 6n,
+        unfilled: null,
+      },
+    ]);
+  });
+
   it("decode every cancel entry", () => {
     const event = decodeOrderListEvent(cancelled(CANCELLED));
     expect(event?.type).toBe("OrdersCancelled");
@@ -158,6 +187,32 @@ describe("single-order methods", () => {
     expect(r.error).not.toBeNull();
   });
 
+  it("report a refused market order as the engine error", async () => {
+    const r = await clientAnswering([placed(rejected(12))]).marketOrder({
+      market: 9,
+      side: Side.Buy,
+      quantity: 5n,
+      worstPrice: 101n,
+    });
+    expect(r).toMatchObject({ ok: false, outcome: "engine", code: 12 });
+  });
+
+  it("report a close with nothing to close as success", async () => {
+    const client = clientAnswering([placed(rejected(35))]);
+    vi.spyOn(client, "queryAccount").mockResolvedValue(null);
+    const r = await client.closePosition(9);
+    expect(r).toMatchObject({ ok: true, outcome: "ok", code: 0, height: 42 });
+  });
+
+  it("report a close the account cannot afford as the engine error", async () => {
+    const client = clientAnswering([placed(rejected(12))]);
+    vi.spyOn(client, "queryAccount").mockResolvedValue({
+      positions: [{ market: 9, side: "Buy", size: 3n }],
+    } as unknown as AccountInfo);
+    const r = await client.closePosition(9);
+    expect(r).toMatchObject({ ok: false, outcome: "engine", code: 12 });
+  });
+
   it("report refused cancels of either kind as the engine error", async () => {
     const byId = await clientAnswering([
       cancelled('[{"outcome":"refused","order_id":"10","code":"2"}]'),
@@ -209,6 +264,46 @@ describe("list methods", () => {
     ]);
     expect(tx).toMatchObject({ ok: true, code: 0 });
     expect(orders.map((o) => o.outcome)).toEqual(["resting", "rejected"]);
+  });
+
+  it("place market entries and report what they filled", async () => {
+    const { orders } = await clientAnswering([placed(EXECUTED)]).placeOrders([
+      { kind: "market", market: 3, side: Side.Buy, quantity: 10n },
+      {
+        kind: "market",
+        market: 3,
+        side: Side.Sell,
+        quantity: 6n,
+        worstPrice: 90n,
+        clientOrderId: 5n,
+      },
+    ]);
+    expect(orders).toMatchObject([
+      { outcome: "executed", filledQuantity: 4n, unfilled: "no_liquidity" },
+      { outcome: "executed", filledQuantity: 6n, unfilled: null },
+    ]);
+  });
+
+  it("read a failed basket's legs from orders_placed", () => {
+    const legs = orderPlacements(
+      {
+        ok: false,
+        outcome: "engine",
+        code: 47,
+        error: null,
+        hash: "",
+        events: [
+          placed(
+            '[{"outcome":"rejected","market":"1","client_order_id":"","code":"47"},{"outcome":"rejected","market":"2","client_order_id":"","code":"47"}]',
+          ),
+        ],
+      },
+      pubkeyToOwner(getPublicKey(key)),
+    );
+    expect(legs.map((l) => [l.outcome, l.market])).toEqual([
+      ["rejected", 1],
+      ["rejected", 2],
+    ]);
   });
 
   it("keep a refused list of one as an entry, not a transaction error", async () => {
