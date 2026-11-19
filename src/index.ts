@@ -1,4 +1,4 @@
-export { verifyWitness } from "./bounded-read.js";
+export { decodeFinalizedReadWitness, verifyWitness } from "./bounded-read.js";
 export {
   decodeInsuranceFundHistory,
   type InsuranceFundHistoryParams,
