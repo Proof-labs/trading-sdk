@@ -60,6 +60,7 @@ import {
   type MarketView,
   type EventView,
   type MarketsSnapshotView,
+  MAX_RETRY_AFTER_MS,
   type DepositAddress,
   type DepositAddressErrorCode,
   type DepositAddressPending,
@@ -82,6 +83,7 @@ it("exports the deposit address types", () => {
   const code: DepositAddressErrorCode = "SubAccount";
   expect(answers.map((a) => a.status)).toEqual(["ready", "pending"]);
   expect(code).toBe("SubAccount");
+  expect(MAX_RETRY_AFTER_MS).toBe(300_000);
 });
 
 it("exports the version 2 markets snapshot types", () => {

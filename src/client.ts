@@ -53,7 +53,7 @@ import {
   type RecentTrade,
   type RecentTradesOptions,
 } from "./recent-trades.js";
-import { boundedGatewayJson } from "./bounded-read.js";
+import { boundedGatewayJson, type BoundedReadOptions } from "./bounded-read.js";
 import {
   decodeLiquidationHistoryPage,
   liquidationHistorySearchParams,
@@ -164,7 +164,8 @@ import {
 } from "./http-transport.js";
 import { yesOrder, type NoOrder } from "./binary.js";
 import {
-  readDepositAddressAnswer,
+  depositAccount,
+  queryDepositAddressAnswer,
   type DepositAddress,
 } from "./deposit-address.js";
 import { Side } from "./types.js";
@@ -2239,28 +2240,33 @@ export class ExchangeClient {
   /**
    * The account's USDC deposit address on Solana
    * (`GET /v1/deposit-address/{account}`), from the gateway even in internal
-   * node mode: only the gateway serves it. `account` is `0x` followed by 40
-   * hex digits; anything else is sent as is and the gateway refuses it with
-   * `InvalidAccount`.
+   * node mode: only the gateway serves it. `account` is 40 hex digits, with
+   * or without `0x`, in either case; it is sent as `0x` and lowercase.
+   * Anything else throws `GatewayReadError` (kind `"configuration"`, field
+   * `account`) before any request.
    *
    * Resolves `ready` with `address`, the deposit authority a wallet sends
    * USDC to (not the token account), or `pending` (HTTP 202) while the
-   * address is being created: ask again after `retryAfterMs`. A refusal
-   * throws `DepositAddressError`, a `GatewayHttpError` that keeps the
-   * gateway's `errorCode` (`DepositAddressErrorCode`) and, for
-   * `RateLimited`, `retryAfterMs`.
+   * address is being created: ask again after `retryAfterMs`. Times out after
+   * `opts.timeoutMs` (default 5 seconds) with `GatewayReadError` kind
+   * `"deadline"`; a malformed answer throws `GatewayReadError` kind
+   * `"malformed"` naming the field; an abort rejects with the signal's
+   * reason. A refusal throws `DepositAddressError`, a `GatewayHttpError`
+   * that keeps the gateway's `errorCode` (`DepositAddressErrorCode`) and,
+   * on any error whose answer says when to try again, `retryAfterMs`.
    */
   async queryDepositAddress(
     account: string,
-    opts: { signal?: AbortSignal } = {},
+    opts: BoundedReadOptions = {},
   ): Promise<DepositAddress> {
-    const url = `${this.gatewayUrl}/v1/deposit-address/${encodeURIComponent(account)}`;
-    const res = await this.httpTransport(
-      url,
-      { signal: opts.signal },
-      readContext(url, "account"),
+    const captured = { ...opts };
+    captured.signal?.throwIfAborted();
+    const canonical = depositAccount(account);
+    return queryDepositAddressAnswer(
+      `${this.gatewayUrl}/v1/deposit-address/${canonical}`,
+      this.httpTransport,
+      captured,
     );
-    return readDepositAddressAnswer(res);
   }
 
   /** One newest-first gateway page of a market's indexed `price_updated`

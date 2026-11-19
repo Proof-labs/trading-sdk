@@ -749,8 +749,9 @@ export class GatewayHttpError extends Error {
  * A refused `GET /v1/deposit-address/{account}`. `errorCode` is the gateway's
  * own code; the deposit address service answers with one of
  * `DepositAddressErrorCode` (check with `isDepositAddressErrorCode`).
- * `retryAfterMs` is set when the answer says when to try again: the body's
- * `retryAfterMs`, or else the `Retry-After` header in milliseconds.
+ * `retryAfterMs` is set on any refusal whose answer says when to try again:
+ * the body's `retryAfterMs`, or else the `Retry-After` header (seconds or an
+ * HTTP-date), in milliseconds clamped to 0..300000.
  */
 export class DepositAddressError extends GatewayHttpError {
   constructor(

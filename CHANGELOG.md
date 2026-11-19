@@ -9,18 +9,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **TypeScript:** `client.queryDepositAddress(account)` reads an account's
-  USDC deposit address on Solana (`GET /v1/deposit-address/{account}`,
-  served by the gateway from the deposit address service), always from the
-  gateway. It resolves a `DepositAddress`: `ready` with `address`,
-  `tokenAccount` and `createdAt` (Unix seconds or `null`), or `pending`
-  (HTTP 202) with `retryAfterMs`. `address` is the deposit authority, the
-  address a wallet sends USDC to, not the token account. A refusal throws
+- **TypeScript:** `client.queryDepositAddress(account, opts?)` reads an
+  account's USDC deposit address on Solana
+  (`GET /v1/deposit-address/{account}`, served by the gateway from the deposit
+  address service), always from the gateway. `account` is 40 hex digits, with
+  or without `0x`, in either case; anything else throws `GatewayReadError`
+  (kind `"configuration"`) before any request. The read takes
+  `{ signal, timeoutMs }` (default 5 seconds) and a 1 MiB body cap. It
+  resolves a `DepositAddress`: `ready` with `address`, `tokenAccount` and
+  `createdAt` (Unix seconds or `null`), or `pending` (HTTP 202) with
+  `retryAfterMs`. `address` is the deposit authority, the address a wallet
+  sends USDC to, not the token account. A malformed answer throws
+  `GatewayReadError` (kind `"malformed"`) naming the field. A refusal throws
   `DepositAddressError`, a `GatewayHttpError` that keeps the gateway's
   `errorCode` (`DepositAddressErrorCode`: `InvalidAccount`, `SubAccount`,
-  `RateLimited`, `Unavailable`; `isDepositAddressErrorCode`) and, when the
-  answer says, `retryAfterMs`. `conformance/deposit-address.json` (frozen
-  example F2) pins the service's answers.
+  `RateLimited`, `Unavailable`; `isDepositAddressErrorCode`) and, on any
+  error whose answer gives one, `retryAfterMs`: the body's value, or else the
+  `Retry-After` header in seconds or as an HTTP-date. Every `retryAfterMs` is
+  clamped to 0..300000 (`MAX_RETRY_AFTER_MS`, five minutes).
+  `conformance/deposit-address.json` (frozen example F2) pins the service's
+  answers.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is

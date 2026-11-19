@@ -540,6 +540,7 @@ export type {
 } from "./portfolio-history.js";
 export {
   DEPOSIT_ADDRESS_ERROR_CODES,
+  MAX_RETRY_AFTER_MS,
   isDepositAddressErrorCode,
   type DepositAddress,
   type DepositAddressErrorCode,

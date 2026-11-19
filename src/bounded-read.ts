@@ -208,6 +208,9 @@ export interface BoundedReadRequest {
   /** Success-body byte cap; defaults to `MAX_READ_BYTES` (1 MiB). A larger
    * cap raises the chunk limit in proportion. Error bodies keep 1 MiB. */
   maxBytes?: number;
+  /** Builds the error for a non-2xx answer from its status and an unread,
+   * bounded copy of the response; defaults to a plain `GatewayHttpError`. */
+  refusal?: (status: number, copy: Response) => Promise<Error>;
 }
 function concat(chunks: Uint8Array[], size: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(size);
@@ -219,10 +222,10 @@ function concat(chunks: Uint8Array[], size: number): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 /** Retain a bounded, readable error body after cancelling the upstream. */
-function httpError(
+function boundedCopy(
   response: Response,
   bytes: Uint8Array<ArrayBuffer>,
-): GatewayHttpError {
+): Response {
   const body = bytes.length ? bytes : null;
   let copy: Response;
   try {
@@ -236,7 +239,7 @@ function httpError(
     // Response constructor refuses; the real status stays on the error.
     copy = new Response(body, { headers: response.headers });
   }
-  return new GatewayHttpError(response.status, copy);
+  return copy;
 }
 /** Internal one-shot SDK read. No retry, alternate endpoint or cached fallback. */
 export async function boundedGatewayJson(
@@ -245,6 +248,15 @@ export async function boundedGatewayJson(
   options: BoundedReadOptions,
   request: BoundedReadRequest = {},
 ): Promise<unknown> {
+  return (await boundedGatewayRead(url, transport, options, request)).body;
+}
+/** `boundedGatewayJson`, also returning the 2xx status the body came with. */
+export async function boundedGatewayRead(
+  url: string,
+  transport: ExchangeHttpTransport,
+  options: BoundedReadOptions,
+  request: BoundedReadRequest = {},
+): Promise<{ status: number; body: unknown }> {
   const { timeoutMs } = readDeadline(options);
   const maxBytes = request.maxBytes ?? MAX_READ_BYTES;
   const maxChunks =
@@ -347,7 +359,10 @@ export async function boundedGatewayJson(
           clearTimeout(budgetTimer);
         }
       }
-      throw httpError(response, concat(chunks, size));
+      const copy = boundedCopy(response, concat(chunks, size));
+      throw request.refusal
+        ? await request.refusal(response.status, copy)
+        : new GatewayHttpError(response.status, copy);
     }
     const length = response.headers.get("content-length");
     if (
@@ -410,7 +425,7 @@ export async function boundedGatewayJson(
       );
     }
     checkDeadline();
-    return parsed;
+    return { status: response.status, body: parsed };
   } finally {
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", abort);
