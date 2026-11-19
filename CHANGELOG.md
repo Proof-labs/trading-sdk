@@ -37,6 +37,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
   not a map keyed by field name, or a name that is not a string (a status
   sent as the integer 0, for example), refuses the whole read.
+- **TypeScript:** `queryEventVoided(gatewayUrl, eventId, { signal?, fetch?, maxPages? })`
+  reads the indexed `event_voided` record (the Yes price a Void settled at)
+  from `GET /v1/history/admin-events`, following `next_cursor`; `null` when the
+  event is not voided or not yet indexed. A malformed page, a repeated cursor
+  or more than `maxPages` pages (default 100) fails with `GatewayReadError`.
 
 ## [13.1.0] — 2026-11-19
 
