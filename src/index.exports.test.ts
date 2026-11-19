@@ -525,3 +525,25 @@ function decodedAdminActionsNarrowWithoutCasts(
   }
 }
 void decodedAdminActionsNarrowWithoutCasts;
+
+describe("public barrel: deposit address errors", () => {
+  it("carries the retry time on GatewayHttpError, with no subclass", () => {
+    const options: barrel.GatewayHttpErrorOptions = { retryAfterMs: 1500 };
+    const e = new barrel.GatewayHttpError(
+      429,
+      new Response(null, { status: 429 }),
+      "RateLimited",
+      undefined,
+      options,
+    );
+    expect(e.retryAfterMs).toBe(1500);
+    expect(e.errorCode).toBe("RateLimited");
+    expect(
+      new barrel.GatewayHttpError(503, new Response(null, { status: 503 }))
+        .retryAfterMs,
+    ).toBeUndefined();
+    expect("DepositAddressError" in barrel).toBe(false);
+    expect(barrel.DEPOSIT_ADDRESS_ERROR_CODES).toHaveLength(4);
+    expect(barrel.isDepositAddressErrorCode("Unavailable")).toBe(true);
+  });
+});

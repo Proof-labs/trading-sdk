@@ -246,8 +246,8 @@ against production traffic, for free.
 `market-stats.json` pins the exact JSON strings and nullable fields consumed by
 both the TypeScript and Python market-statistics decoders.
 
-`deposit-address.json` (frozen example F2) pins the
-`GET /v1/deposit-address/{account}` answers (status, headers and body, byte for
+`deposit-address.json` pins the `GET /v1/deposit-address/{account}` answers
+(ready, pending, sub-account and rate-limited) (status, headers and body, byte for
 byte) that Proof-labs/deposit-address-service `tests/routes.rs` asserts and
 api-gateway passes through. It is identical to api-gateway's
 `tests/fixtures/deposit-address.json`; the TypeScript runner is

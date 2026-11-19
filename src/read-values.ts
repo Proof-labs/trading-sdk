@@ -17,6 +17,8 @@ export const MAX_READ_CHUNKS = 4096;
 /** Longest an HTTP failure waits for its body. The status is the diagnosis,
  * so a stalled error body must not cost the caller the whole read deadline. */
 export const MAX_ERROR_BODY_WAIT_MS = 250;
+/** Longest retry wait the SDK reports, so a huge value cannot overflow a timer. */
+export const MAX_RETRY_AFTER_MS = 300_000;
 
 export function invalidRead(
   field: string,

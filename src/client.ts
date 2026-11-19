@@ -53,7 +53,11 @@ import {
   type RecentTrade,
   type RecentTradesOptions,
 } from "./recent-trades.js";
-import { boundedGatewayJson, type BoundedReadOptions } from "./bounded-read.js";
+import {
+  boundedGatewayJson,
+  gatewayHttpErrorFrom,
+  type BoundedReadOptions,
+} from "./bounded-read.js";
 import {
   decodeLiquidationHistoryPage,
   liquidationHistorySearchParams,
@@ -2251,8 +2255,8 @@ export class ExchangeClient {
    * `opts.timeoutMs` (default 5 seconds) with `GatewayReadError` kind
    * `"deadline"`; a malformed answer throws `GatewayReadError` kind
    * `"malformed"` naming the field; an abort rejects with the signal's
-   * reason. A refusal throws `DepositAddressError`, a `GatewayHttpError`
-   * that keeps the gateway's `errorCode` (`DepositAddressErrorCode`) and,
+   * reason. A refusal throws `GatewayHttpError`, which keeps the gateway's
+   * `errorCode` (`DepositAddressErrorCode`) and,
    * on any error whose answer says when to try again, `retryAfterMs`.
    */
   async queryDepositAddress(
@@ -2824,21 +2828,16 @@ async function postInfoJson(
     },
     context,
   );
+  if (!res.ok) throw await gatewayHttpErrorFrom(res);
   // The error keeps an unread copy, so callers can still read the body.
   const unread = res.clone();
-  let parsed: unknown;
-  try {
-    parsed = await res.json();
-  } catch (error) {
-    if (!res.ok) throw new GatewayHttpError(res.status, unread);
-    throw error;
-  }
-  // A JSON `null` or scalar body has no fields; it must not hide the status.
+  const parsed: unknown = await res.json();
+  // A JSON `null` or scalar body has no fields.
   const json: Record<string, unknown> =
     parsed !== null && typeof parsed === "object"
       ? (parsed as Record<string, unknown>)
       : {};
-  if (!res.ok || json.error) {
+  if (json.error) {
     const errorCode =
       typeof json.errorCode === "string" ? json.errorCode : undefined;
     const detail = typeof json.error === "string" ? json.error : undefined;

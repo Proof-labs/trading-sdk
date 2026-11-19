@@ -6,6 +6,7 @@ import {
   MAX_ERROR_BODY_WAIT_MS,
   MAX_READ_BYTES,
   MAX_READ_CHUNKS,
+  MAX_RETRY_AFTER_MS,
   readDeadline,
   type Hash32Hex,
 } from "./read-values.js";
@@ -208,9 +209,10 @@ export interface BoundedReadRequest {
   /** Success-body byte cap; defaults to `MAX_READ_BYTES` (1 MiB). A larger
    * cap raises the chunk limit in proportion. Error bodies keep 1 MiB. */
   maxBytes?: number;
-  /** Builds the error for a non-2xx answer from its status and an unread,
-   * bounded copy of the response; defaults to a plain `GatewayHttpError`. */
-  refusal?: (status: number, copy: Response) => Promise<Error>;
+  /** Decode the gateway's `errorCode`, `error` and retry time from a non-2xx
+   * answer, as `gatewayHttpErrorFrom` does; by default the error carries the
+   * status alone. */
+  decodeRefusal?: boolean;
 }
 function concat(chunks: Uint8Array[], size: number): Uint8Array<ArrayBuffer> {
   const bytes = new Uint8Array(size);
@@ -240,6 +242,108 @@ function boundedCopy(
     copy = new Response(body, { headers: response.headers });
   }
   return copy;
+}
+/** At most `MAX_READ_BYTES` of a refused answer's body. The status is the
+ * diagnosis: a body that is oversized, fragmented, empty-chunked or slower
+ * than `MAX_ERROR_BODY_WAIT_MS` is truncated to what arrived in bounds; it
+ * never replaces the HTTP status or holds the caller for the whole deadline.
+ * Caller cancellation (`cancelled`, `signal`) wins. Cancels the body after. */
+async function readErrorBody(
+  response: Response,
+  read: {
+    deadline?: number;
+    cancelled?: Promise<never>;
+    signal?: AbortSignal;
+  } = {},
+): Promise<Uint8Array<ArrayBuffer>> {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  if (!response.body) return concat(chunks, size);
+  const reader = response.body.getReader();
+  const bodyDeadline = Math.min(
+    read.deadline ?? Infinity,
+    performance.now() + MAX_ERROR_BODY_WAIT_MS,
+  );
+  let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+  const budgetSpent = new Promise<"budget">((resolve) => {
+    budgetTimer = setTimeout(
+      () => resolve("budget"),
+      Math.max(0, bodyDeadline - performance.now()),
+    );
+  });
+  const racers = read.cancelled ? [budgetSpent, read.cancelled] : [budgetSpent];
+  try {
+    while (chunks.length < MAX_READ_CHUNKS && size < MAX_READ_BYTES) {
+      const part = await Promise.race([reader.read(), ...racers]);
+      if (part === "budget" || part.done || part.value.length === 0) break;
+      const kept = part.value.subarray(0, MAX_READ_BYTES - size);
+      chunks.push(kept);
+      size += kept.length;
+      if (performance.now() >= bodyDeadline) break;
+    }
+  } catch (error) {
+    if (read.signal?.aborted) throw error;
+  } finally {
+    clearTimeout(budgetTimer);
+    // Do not wait on an uncooperative custom stream's cancellation hook.
+    void reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+  return concat(chunks, size);
+}
+const isWholeNumber = (v: unknown): v is number =>
+  Number.isSafeInteger(v) && (v as number) >= 0;
+const clampRetry = (ms: number): number => Math.min(ms, MAX_RETRY_AFTER_MS);
+/** When to try again, in milliseconds from now, clamped to
+ * `0..MAX_RETRY_AFTER_MS`. The body's `retryAfterMs` is exact and wins; else
+ * the `Retry-After` header (RFC 9110 section 10.2.3), either whole seconds or
+ * an HTTP-date, which counts from the local clock and is 0 once past. */
+export function retryAfterMs(
+  bodyValue: unknown,
+  header: string | null,
+  now: number = Date.now(),
+): number | undefined {
+  if (isWholeNumber(bodyValue)) return clampRetry(bodyValue);
+  const value = header?.trim();
+  if (!value) return undefined;
+  if (/^\d+$/.test(value)) return clampRetry(Number(value) * 1000);
+  // An HTTP-date starts with the day name, which keeps Date.parse from
+  // reading other text as a date. All three forms are GMT; the obsolete
+  // asctime form does not say so, so say it for Date.parse.
+  if (!/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,? /.test(value)) return undefined;
+  const at = Date.parse(/GMT$/.test(value) ? value : `${value} GMT`);
+  if (!Number.isFinite(at)) return undefined;
+  return clampRetry(Math.max(0, Math.ceil(at - now)));
+}
+/** Read a non-2xx gateway answer into a `GatewayHttpError` that keeps the
+ * gateway's `errorCode`, `error` text and retry time (the body's
+ * `retryAfterMs`, else the `Retry-After` header), with an unread copy of the
+ * body bounded like every SDK error body (1 MiB, 250 ms). */
+export async function gatewayHttpErrorFrom(
+  response: Response,
+  read: Parameters<typeof readErrorBody>[1] = {},
+): Promise<GatewayHttpError> {
+  const bytes = await readErrorBody(response, read);
+  let fields: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (parsed !== null && typeof parsed === "object")
+      fields = parsed as Record<string, unknown>;
+  } catch {
+    // Not JSON (a proxy's HTML page, say): the status alone is the answer.
+  }
+  return new GatewayHttpError(
+    response.status,
+    boundedCopy(response, bytes),
+    typeof fields.errorCode === "string" ? fields.errorCode : undefined,
+    typeof fields.error === "string" ? fields.error : undefined,
+    {
+      retryAfterMs: retryAfterMs(
+        fields.retryAfterMs,
+        response.headers.get("retry-after"),
+      ),
+    },
+  );
 }
 /** Internal one-shot SDK read. No retry, alternate endpoint or cached fallback. */
 export async function boundedGatewayJson(
@@ -320,49 +424,11 @@ export async function boundedGatewayRead(
     response = await Promise.race([pending, cancelled]);
     checkDeadline();
     if (!response.ok) {
-      // The status is the diagnosis. An error body that is oversized,
-      // fragmented, empty-chunked or slower than MAX_ERROR_BODY_WAIT_MS is
-      // truncated to what arrived in bounds; it never replaces the HTTP status
-      // or holds the caller for the whole deadline. Caller cancellation wins.
-      const chunks: Uint8Array[] = [];
-      let size = 0;
-      if (response.body) {
-        reader = response.body.getReader();
-        const bodyDeadline = Math.min(
-          deadline,
-          performance.now() + MAX_ERROR_BODY_WAIT_MS,
-        );
-        let budgetTimer: ReturnType<typeof setTimeout> | undefined;
-        const budgetSpent = new Promise<"budget">((resolve) => {
-          budgetTimer = setTimeout(
-            () => resolve("budget"),
-            Math.max(0, bodyDeadline - performance.now()),
-          );
-        });
-        try {
-          while (chunks.length < MAX_READ_CHUNKS && size < MAX_READ_BYTES) {
-            const part = await Promise.race([
-              reader.read(),
-              budgetSpent,
-              cancelled,
-            ]);
-            if (part === "budget" || part.done || part.value.length === 0)
-              break;
-            const kept = part.value.subarray(0, MAX_READ_BYTES - size);
-            chunks.push(kept);
-            size += kept.length;
-            if (performance.now() >= bodyDeadline) break;
-          }
-        } catch (error) {
-          if (options.signal?.aborted) throw error;
-        } finally {
-          clearTimeout(budgetTimer);
-        }
-      }
-      const copy = boundedCopy(response, concat(chunks, size));
-      throw request.refusal
-        ? await request.refusal(response.status, copy)
-        : new GatewayHttpError(response.status, copy);
+      const read = { deadline, cancelled, signal: options.signal };
+      if (request.decodeRefusal)
+        throw await gatewayHttpErrorFrom(response, read);
+      const bytes = await readErrorBody(response, read);
+      throw new GatewayHttpError(response.status, boundedCopy(response, bytes));
     }
     const length = response.headers.get("content-length");
     if (

@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEPOSIT_ADDRESS_ERROR_CODES,
-  DepositAddressError,
   ExchangeClient,
   GatewayHttpError,
   GatewayReadError,
@@ -16,7 +15,7 @@ interface FixtureCase {
   headers: Record<string, string>;
   body: string;
 }
-// Frozen example F2: the deposit address service's answers, byte for byte.
+// The deposit address service's answers, byte for byte.
 const fixture = JSON.parse(
   readFileSync(
     new URL("../conformance/deposit-address.json", import.meta.url),
@@ -59,7 +58,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("queryDepositAddress — frozen example F2", () => {
+describe("queryDepositAddress — the service's pinned answers", () => {
   it("decodes the ready answer with the deposit authority as address", async () => {
     const { client, transport } = clientAnswering(answer(fixtureCase("ready")));
     const got: DepositAddress = await client.queryDepositAddress(account);
@@ -86,8 +85,7 @@ describe("queryDepositAddress — frozen example F2", () => {
     const { client } = clientAnswering(answer(fixtureCase("subAccount")));
     const error = await rejection(client.queryDepositAddress(account));
     expect(error).toBeInstanceOf(GatewayHttpError);
-    expect(error).toBeInstanceOf(DepositAddressError);
-    const e = error as DepositAddressError;
+    const e = error as GatewayHttpError;
     expect(e.status).toBe(403);
     expect(e.errorCode).toBe("SubAccount");
     expect(e.retryAfterMs).toBeUndefined();
@@ -102,7 +100,7 @@ describe("queryDepositAddress — frozen example F2", () => {
     const { client } = clientAnswering(answer(fixtureCase("rateLimited")));
     const e = (await rejection(
       client.queryDepositAddress(account),
-    )) as DepositAddressError;
+    )) as GatewayHttpError;
     expect(e).toBeInstanceOf(GatewayHttpError);
     expect(e.status).toBe(429);
     expect(e.errorCode).toBe("RateLimited");
@@ -149,8 +147,8 @@ describe("queryDepositAddress — other answers", () => {
     const { client } = clientAnswering(answer({ httpStatus, body }));
     const e = (await rejection(
       client.queryDepositAddress(account),
-    )) as DepositAddressError;
-    expect(e).toBeInstanceOf(DepositAddressError);
+    )) as GatewayHttpError;
+    expect(e).toBeInstanceOf(GatewayHttpError);
     expect(e.status).toBe(httpStatus);
     expect(e.errorCode).toBe(code);
     expect(isDepositAddressErrorCode(e.errorCode)).toBe(true);
@@ -166,7 +164,7 @@ describe("queryDepositAddress — other answers", () => {
     );
     const e = (await rejection(
       client.queryDepositAddress(account),
-    )) as DepositAddressError;
+    )) as GatewayHttpError;
     expect(e.retryAfterMs).toBe(2000);
   });
 
@@ -176,8 +174,8 @@ describe("queryDepositAddress — other answers", () => {
     );
     const e = (await rejection(
       client.queryDepositAddress(account),
-    )) as DepositAddressError;
-    expect(e).toBeInstanceOf(DepositAddressError);
+    )) as GatewayHttpError;
+    expect(e).toBeInstanceOf(GatewayHttpError);
     expect(e.status).toBe(502);
     expect(e.errorCode).toBeUndefined();
     await expect(e.response.text()).resolves.toBe("<html>bad gateway</html>");
@@ -192,7 +190,7 @@ describe("queryDepositAddress — other answers", () => {
     );
     const e = (await rejection(
       client.queryDepositAddress(account),
-    )) as DepositAddressError;
+    )) as GatewayHttpError;
     expect(e.errorCode).toBe("NotFound");
     expect(isDepositAddressErrorCode(e.errorCode)).toBe(false);
   });
@@ -284,7 +282,7 @@ describe("queryDepositAddress — other answers", () => {
     });
     const e = (await rejection(
       client.queryDepositAddress(account),
-    )) as DepositAddressError;
+    )) as GatewayHttpError;
     expect(e.retryAfterMs).toBe(expected);
   });
 
@@ -298,7 +296,7 @@ describe("queryDepositAddress — other answers", () => {
     );
     const e = (await rejection(
       client.queryDepositAddress(account),
-    )) as DepositAddressError;
+    )) as GatewayHttpError;
     expect(e.retryAfterMs).toBe(300_000);
   });
 
@@ -315,7 +313,7 @@ describe("queryDepositAddress — other answers", () => {
       const { client } = clientAnswering(res);
       const e = (await rejection(
         client.queryDepositAddress(account),
-      )) as DepositAddressError;
+      )) as GatewayHttpError;
       expect(e.errorCode).toBe("Unavailable");
       return e.retryAfterMs;
     }

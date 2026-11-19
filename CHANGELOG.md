@@ -21,14 +21,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `retryAfterMs`. `address` is the deposit authority, the address a wallet
   sends USDC to, not the token account. A malformed answer throws
   `GatewayReadError` (kind `"malformed"`) naming the field. A refusal throws
-  `DepositAddressError`, a `GatewayHttpError` that keeps the gateway's
-  `errorCode` (`DepositAddressErrorCode`: `InvalidAccount`, `SubAccount`,
+  `GatewayHttpError`, which keeps the gateway's `errorCode` (`DepositAddressErrorCode`: `InvalidAccount`, `SubAccount`,
   `RateLimited`, `Unavailable`; `isDepositAddressErrorCode`) and, on any
   error whose answer gives one, `retryAfterMs`: the body's value, or else the
   `Retry-After` header in seconds or as an HTTP-date. Every `retryAfterMs` is
   clamped to 0..300000 (`MAX_RETRY_AFTER_MS`, five minutes).
-  `conformance/deposit-address.json` (frozen example F2) pins the service's
-  answers.
+  `conformance/deposit-address.json` pins the service's ready, pending,
+  sub-account and rate-limited answers.
+- **TypeScript:** `GatewayHttpError.retryAfterMs`, set through a new
+  options argument (`GatewayHttpErrorOptions`), on every refusal the SDK
+  reads the gateway's error body for (`queryDepositAddress` and the `/info`
+  reads): the body's `retryAfterMs`, or else the `Retry-After` header.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
