@@ -15,19 +15,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   address service), always from the gateway. `account` is 40 hex digits, with
   or without `0x`, in either case; anything else throws `GatewayReadError`
   (kind `"configuration"`) before any request. The read takes
-  `{ signal, timeoutMs }` (default 5 seconds) and a 1 MiB body cap. It
-  resolves a `DepositAddress`: `ready` with `address`, `tokenAccount` and
-  `createdAt` (Unix seconds or `null`), or `pending` (HTTP 202) with
-  `retryAfterMs`. `address` is the deposit authority, the address a wallet
-  sends USDC to, not the token account. A malformed answer throws
-  `GatewayReadError` (kind `"malformed"`) naming the field. A refusal throws
-  `GatewayHttpError`, which keeps the gateway's `errorCode` (`DepositAddressErrorCode`: `InvalidAccount`, `SubAccount`,
-  `RateLimited`, `Unavailable`; `isDepositAddressErrorCode`) and, on any
+  `{ signal, timeoutMs }` and a 1 MiB body cap. The gateway answers once the
+  address exists, creating it first when needed (about a second, at most
+  about ten; the gateway's own limit is 15 seconds), so the default deadline
+  is 20 seconds (`DEPOSIT_ADDRESS_TIMEOUT_MS`) rather than the usual 5. It
+  resolves a `DepositAddressReady` (`status: "ready"`) with `address`,
+  `tokenAccount` and `createdAt` (Unix seconds or `null`). `address` is the
+  deposit authority, the address a wallet sends USDC to, not the token
+  account. Any other answer, a 202 included, throws `GatewayReadError` (kind
+  `"malformed"`) naming the field. A refusal throws `GatewayHttpError`, which
+  keeps the gateway's `errorCode` (`DepositAddressErrorCode`:
+  `InvalidAccount`, `SubAccount`, `RateLimited`, `Paused` while deposits are
+  paused, `Unavailable`; `isDepositAddressErrorCode`) and, on any
   error whose answer gives one, `retryAfterMs`: the body's value, or else the
   `Retry-After` header in seconds or as an HTTP-date. Every `retryAfterMs` is
   clamped to 0..300000 (`MAX_RETRY_AFTER_MS`, five minutes).
-  `conformance/deposit-address.json` pins the service's ready, pending,
-  sub-account and rate-limited answers.
+  `conformance/deposit-address.json` pins the service's ready, sub-account,
+  rate-limited, paused and unavailable answers.
 - **TypeScript:** `GatewayHttpError.retryAfterMs`, set through a new
   options argument (`GatewayHttpErrorOptions`), on every refusal the SDK
   reads the gateway's error body for (`queryDepositAddress` and the `/info`
