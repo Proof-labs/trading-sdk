@@ -242,6 +242,18 @@ describe("queryDepositAddress — other answers", () => {
       "tokenAccount",
     ],
     [
+      "all-zero address (the System Program id)",
+      200,
+      `{"status":"ready","address":"${"1".repeat(32)}","tokenAccount":"${TOKEN_ACCOUNT}","createdAt":null}`,
+      "address",
+    ],
+    [
+      "all-zero tokenAccount (the System Program id)",
+      200,
+      `{"status":"ready","address":"${AUTHORITY}","tokenAccount":"${"1".repeat(32)}","createdAt":null}`,
+      "tokenAccount",
+    ],
+    [
       "missing tokenAccount",
       200,
       `{"status":"ready","address":"${AUTHORITY}","createdAt":null}`,

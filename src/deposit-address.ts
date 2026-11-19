@@ -63,14 +63,17 @@ const BASE58_PUBKEY = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const BASE58_ALPHABET =
   "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-/** True when `value` is base58 that decodes to exactly 32 bytes. */
+/** True when `value` is base58 that decodes to exactly 32 bytes, not all
+ * zero: the all-zero key is the System Program id, never a deposit address
+ * or token account. */
 function isSolanaPublicKey(value: unknown): value is string {
   if (typeof value !== "string" || !BASE58_PUBKEY.test(value)) return false;
   let n = 0n;
   for (const char of value) n = n * 58n + BigInt(BASE58_ALPHABET.indexOf(char));
+  if (n === 0n) return false;
   // Each leading "1" is one zero byte; the rest is the number's bytes.
   const zeros = /^1*/.exec(value)![0].length;
-  const bytes = n === 0n ? 0 : Math.ceil(n.toString(16).length / 2);
+  const bytes = Math.ceil(n.toString(16).length / 2);
   return zeros + bytes === 32;
 }
 
