@@ -318,7 +318,8 @@ export function retryAfterMs(
 /** Read a non-2xx gateway answer into a `GatewayHttpError` that keeps the
  * gateway's `errorCode`, `error` text and retry time (the body's
  * `retryAfterMs`, else the `Retry-After` header), with an unread copy of the
- * body bounded like every SDK error body (1 MiB, 250 ms). */
+ * body bounded like every bounded read's error body (1 MiB, 250 ms). The
+ * `/info` reads do not use it: they read their error bodies in full. */
 export async function gatewayHttpErrorFrom(
   response: Response,
   read: Parameters<typeof readErrorBody>[1] = {},

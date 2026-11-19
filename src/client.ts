@@ -55,7 +55,7 @@ import {
 } from "./recent-trades.js";
 import {
   boundedGatewayJson,
-  gatewayHttpErrorFrom,
+  retryAfterMs,
   type BoundedReadOptions,
 } from "./bounded-read.js";
 import {
@@ -2831,20 +2831,31 @@ async function postInfoJson(
     },
     context,
   );
-  if (!res.ok) throw await gatewayHttpErrorFrom(res);
   // The error keeps an unread copy, so callers can still read the body.
   const unread = res.clone();
-  const parsed: unknown = await res.json();
-  // A JSON `null` or scalar body has no fields.
+  const retryHeader = res.headers.get("retry-after");
+  let parsed: unknown;
+  try {
+    parsed = await res.json();
+  } catch (error) {
+    if (!res.ok)
+      throw new GatewayHttpError(res.status, unread, undefined, undefined, {
+        retryAfterMs: retryAfterMs(undefined, retryHeader),
+      });
+    throw error;
+  }
+  // A JSON `null` or scalar body has no fields; it must not hide the status.
   const json: Record<string, unknown> =
     parsed !== null && typeof parsed === "object"
       ? (parsed as Record<string, unknown>)
       : {};
-  if (json.error) {
+  if (!res.ok || json.error) {
     const errorCode =
       typeof json.errorCode === "string" ? json.errorCode : undefined;
     const detail = typeof json.error === "string" ? json.error : undefined;
-    throw new GatewayHttpError(res.status, unread, errorCode, detail);
+    throw new GatewayHttpError(res.status, unread, errorCode, detail, {
+      retryAfterMs: retryAfterMs(json.retryAfterMs, retryHeader),
+    });
   }
   return json;
 }

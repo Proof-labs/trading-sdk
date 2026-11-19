@@ -19,6 +19,8 @@ import {
 } from "./errors.js";
 import { Side, type Action } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 
 /**
  * Tests for timestamp-nonce submission. The strategy: stub global fetch to
@@ -2132,6 +2134,58 @@ describe("gateway owner-read failures", () => {
     expect((error as GatewayHttpError).status).toBe(502);
     expect(await (error as GatewayHttpError).response.text()).toBe(
       "<html>bad gateway</html>",
+    );
+  });
+
+  it("reads a slow MissingMark body in full and keeps the original response", async () => {
+    // Headers first, the body 400 ms later: longer than the bounded reads'
+    // 250 ms error-body wait, which the /info reads do not use.
+    const body = JSON.stringify({
+      error: "query failed: MissingMark: mark unavailable",
+      errorCode: "MissingMark",
+      retryAfterMs: 1000,
+    });
+    const server = createServer((_req, res) => {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.flushHeaders();
+      setTimeout(() => res.end(body), 400);
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const { port } = server.address() as AddressInfo;
+    const gatewayUrl = `http://127.0.0.1:${port}`;
+    try {
+      const error = await new ExchangeClient({ gatewayUrl, chainId: "c" })
+        .queryAccount("a".repeat(40))
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(GatewayHttpError);
+      const http = error as GatewayHttpError;
+      expect(http.status).toBe(503);
+      expect(http.errorCode).toBe("MissingMark");
+      expect(isMissingMark(error)).toBe(true);
+      expect(http.retryAfterMs).toBe(1000);
+      expect(http.response.url).toBe(`${gatewayUrl}/info`);
+      expect(await http.response.text()).toBe(body);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("takes retryAfterMs from the Retry-After header of a non-JSON failure", async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response("<html>busy</html>", {
+          status: 503,
+          headers: { "retry-after": "3" },
+        }),
+    ) as unknown as typeof fetch;
+    const error = await failedRead();
+    expect(error).toBeInstanceOf(GatewayHttpError);
+    expect((error as GatewayHttpError).retryAfterMs).toBe(3000);
+    expect(await (error as GatewayHttpError).response.text()).toBe(
+      "<html>busy</html>",
     );
   });
 
