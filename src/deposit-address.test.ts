@@ -499,6 +499,102 @@ describe("queryDepositAddress — other answers", () => {
     }
   });
 
+  it("waits past 20 seconds when timeoutMs raises the deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = vi.fn(() => new Promise<Response>(() => {}));
+      const client = new ExchangeClient({
+        gatewayUrl: "https://gateway.test",
+        httpTransport: transport,
+      });
+      let settled: unknown = "waiting";
+      const read = client
+        .queryDepositAddress(account, { timeoutMs: 30_000 })
+        .then(
+          () => (settled = "resolved"),
+          (error: unknown) => (settled = error),
+        );
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(settled).toBe("waiting");
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(settled).toBe("waiting");
+      await vi.advanceTimersByTimeAsync(1);
+      await read;
+      expect(settled).toMatchObject({ kind: "deadline" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  describe("a refusal whose body is slow near the deadline", () => {
+    // Headers 100 ms before the deadline, the Paused body `bodyAfterMs` later.
+    const slowRefusal = (bodyAfterMs: number) => {
+      const paused = fixtureCase("paused");
+      const transport = vi.fn(
+        () =>
+          new Promise<Response>((resolve) =>
+            setTimeout(() => {
+              const body = new ReadableStream<Uint8Array>({
+                start(c) {
+                  setTimeout(() => {
+                    c.enqueue(new TextEncoder().encode(paused.body));
+                    c.close();
+                  }, bodyAfterMs);
+                },
+              });
+              resolve(
+                new Response(body, {
+                  status: paused.httpStatus,
+                  headers: paused.headers,
+                }),
+              );
+            }, 900),
+          ),
+      );
+      const client = new ExchangeClient({
+        gatewayUrl: "https://gateway.test",
+        httpTransport: transport,
+      });
+      let settled: unknown = "waiting";
+      const read = client
+        .queryDepositAddress(account, { timeoutMs: 1_000 })
+        .then(
+          () => (settled = "resolved"),
+          (error: unknown) => (settled = error),
+        );
+      return { read, settled: () => settled };
+    };
+
+    it("keeps errorCode Paused when the body lands before the deadline", async () => {
+      vi.useFakeTimers();
+      try {
+        const { read, settled } = slowRefusal(50);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await read;
+        expect(settled()).toBeInstanceOf(GatewayHttpError);
+        expect(settled()).toMatchObject({ status: 503, errorCode: "Paused" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("throws the status, not a deadline error, when the body misses it", async () => {
+      vi.useFakeTimers();
+      try {
+        const { read, settled } = slowRefusal(500);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await read;
+        const error = settled() as GatewayHttpError;
+        expect(error).toBeInstanceOf(GatewayHttpError);
+        expect(error.status).toBe(503);
+        expect(error.errorCode).toBeUndefined();
+        expect(await error.response.text()).toBe("");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("times out after timeoutMs with a deadline GatewayReadError", async () => {
     const transport = vi.fn(() => new Promise<Response>(() => {}));
     const client = new ExchangeClient({
