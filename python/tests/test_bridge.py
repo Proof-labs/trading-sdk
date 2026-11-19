@@ -220,7 +220,23 @@ class TestErrors:
         # proof-wire 12.0.0: a withdrawal to an off-curve Solana destination.
         assert pts.get_error_name(135) == "OffCurveWithdrawalDestination"
         assert pts.EngineError(135, "").name == "OffCurveWithdrawalDestination"
-        assert pts.get_error_name(136) is None
+
+    def test_reduce_only_refused_and_codes_136_142(self):
+        # proof-wire 12.1.0: code 35 covers both reduce-only refusals, and
+        # 136-142 name the trigger, position and capacity refusals.
+        assert pts.get_error_name(35) == "ReduceOnlyRefused"
+        for code, name in [
+            (136, "PositionEpochMismatch"),
+            (137, "TriggerBracketNotFound"),
+            (138, "TriggerAlreadyCrossed"),
+            (139, "PositionNotFound"),
+            (140, "AccountPositionCapReached"),
+            (141, "SubAccountCapReached"),
+            (142, "WorkCapReached"),
+        ]:
+            assert pts.get_error_name(code) == name
+            assert pts.EngineError(code, "").name == name
+        assert pts.get_error_name(143) is None
 
     def test_transitional_code_50_uses_delivertx_log(self):
         oi = "open interest limit exceeded on market 7: would be 4, cap 3"

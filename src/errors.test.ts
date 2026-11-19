@@ -49,6 +49,14 @@ describe("decodeExecError", () => {
       [133, "MarketBacksLiveEvent"],
       [134, "MarketHalted"],
       [135, "OffCurveWithdrawalDestination"],
+      [35, "ReduceOnlyRefused"],
+      [136, "PositionEpochMismatch"],
+      [137, "TriggerBracketNotFound"],
+      [138, "TriggerAlreadyCrossed"],
+      [139, "PositionNotFound"],
+      [140, "AccountPositionCapReached"],
+      [141, "SubAccountCapReached"],
+      [142, "WorkCapReached"],
     ] as const) {
       expect(decodeExecError(code)?.name).toBe(name);
       expect(execErrorName(code)).toBe(name);
