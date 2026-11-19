@@ -1,4 +1,4 @@
-export { verifyWitness } from "./bounded-read.js";
+export { decodeFinalizedReadWitness, verifyWitness } from "./bounded-read.js";
 export {
   decodeInsuranceFundHistory,
   type InsuranceFundHistoryParams,
@@ -10,6 +10,12 @@ export {
 } from "./insurance-fund-history.js";
 export { GatewayReadError } from "./errors.js";
 export type { FinalizedAuthorizedAgents } from "./authorized-agents.js";
+export type {
+  EventView,
+  MarketStatusReading,
+  MarketView,
+  MarketsSnapshotView,
+} from "./markets-snapshot-view.js";
 export type {
   FinalizedInsuranceFunds,
   FinalizedInsuranceFund,
@@ -537,6 +543,10 @@ export {
   type OraclePriceHistoryPage,
   type OraclePriceHistoryOptions,
 } from "./oracle-price-history.js";
+export {
+  queryEventVoided,
+  type EventVoidedQueryOptions,
+} from "./event-voided-history.js";
 
 export {
   queryMarketStats,

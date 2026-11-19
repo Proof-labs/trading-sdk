@@ -1,0 +1,193 @@
+import { describe, expect, it, vi } from "vitest";
+import { queryEventVoided } from "./event-voided-history.js";
+import { GatewayHttpError, GatewayReadError } from "./errors.js";
+
+const voided = (eventId: string, yesPrice: string) => ({
+  event_id: 9,
+  block_height: 100,
+  block_time: "2026-11-18T00:00:00Z",
+  tx_hash: "ab",
+  event_type: "event_voided",
+  signer: "",
+  payload: {
+    event_id: eventId,
+    yes_price: yesPrice,
+    timestamp_ms: "1794960000000",
+    proposal_id: "3",
+  },
+});
+
+const transportFor = (body: unknown, status = 200) =>
+  vi.fn(async () => new Response(JSON.stringify(body), { status }));
+
+describe("queryEventVoided", () => {
+  it("returns the decoded record for the event", async () => {
+    const transport = transportFor({
+      admin_events: [voided("12", "x"), voided("43", "400000")],
+      next_cursor: "",
+    });
+    const result = await queryEventVoided("https://gateway.test/", 43, {
+      fetch: transport,
+    });
+    expect(result).toEqual({
+      type: "EventVoided",
+      eventId: 43,
+      yesPrice: 400000n,
+      timestampMs: 1794960000000n,
+      proposalId: 3n,
+    });
+    const [input, init] = transport.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    const url = new URL(input);
+    expect(url.origin + url.pathname).toBe(
+      "https://gateway.test/v1/history/admin-events",
+    );
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      event_type: "event_voided",
+      limit: "1000",
+    });
+    expect(init.method).toBe("GET");
+  });
+
+  it("returns null when the event was not voided", async () => {
+    const transport = transportFor({ admin_events: [], next_cursor: "" });
+    await expect(
+      queryEventVoided("https://gateway.test", 43, { fetch: transport }),
+    ).resolves.toBeNull();
+  });
+
+  it("throws on an HTTP error, a malformed page or a bad event id", async () => {
+    const refused = queryEventVoided("https://gateway.test", 43, {
+      fetch: transportFor({ error: "x" }, 502),
+    });
+    await expect(refused).rejects.toBeInstanceOf(GatewayHttpError);
+    await expect(refused).rejects.toMatchObject({ status: 502 });
+    await expect(
+      queryEventVoided("https://gateway.test", 43, {
+        fetch: transportFor({ nope: [] }),
+      }),
+    ).rejects.toThrow("Invalid admin-events page");
+    await expect(queryEventVoided("https://gateway.test", -1)).rejects.toThrow(
+      "Invalid event id",
+    );
+    await expect(
+      queryEventVoided("https://gateway.test", -1),
+    ).rejects.toMatchObject({ kind: "configuration", field: "eventId" });
+    await expect(
+      queryEventVoided("https://gateway.test", 43, {
+        fetch: transportFor({ nope: [] }),
+      }),
+    ).rejects.toBeInstanceOf(GatewayReadError);
+  });
+
+  it("rejects a page whose next_cursor is missing or not a string", async () => {
+    for (const page of [
+      { admin_events: [] },
+      { admin_events: [], next_cursor: 7 },
+      { admin_events: [], next_cursor: null },
+    ]) {
+      await expect(
+        queryEventVoided("https://gateway.test", 43, {
+          fetch: transportFor(page),
+        }),
+      ).rejects.toMatchObject({ kind: "malformed", field: "next_cursor" });
+    }
+  });
+
+  it("rejects an already-aborted signal before calling fetch", async () => {
+    const transport = transportFor({ admin_events: [], next_cursor: "" });
+    const controller = new AbortController();
+    const reason = new Error("caller gave up");
+    controller.abort(reason);
+    await expect(
+      queryEventVoided("https://gateway.test", 43, {
+        fetch: transport,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it("follows next_cursor until the event is found", async () => {
+    const pages = [
+      { admin_events: [voided("12", "100000")], next_cursor: "c1" },
+      { admin_events: [voided("43", "350000")], next_cursor: "c2" },
+    ];
+    const transport = vi.fn(
+      async () => new Response(JSON.stringify(pages.shift())),
+    );
+    const result = await queryEventVoided("https://gateway.test", 43, {
+      fetch: transport,
+    });
+    expect(result?.yesPrice).toBe(350000n);
+    expect(transport).toHaveBeenCalledTimes(2);
+    const [second] = transport.mock.calls[1] as unknown as [string];
+    expect(new URL(second).searchParams.get("cursor")).toBe("c1");
+  });
+
+  it("throws when the cursor does not advance", async () => {
+    const transport = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ admin_events: [], next_cursor: "c1" })),
+    );
+    await expect(
+      queryEventVoided("https://gateway.test", 43, { fetch: transport }),
+    ).rejects.toMatchObject({ kind: "limit", field: "next_cursor" });
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws when the cursor cycles back to one it already followed", async () => {
+    const cursors = ["c1", "c2", "c1", "c2"];
+    const transport = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ admin_events: [], next_cursor: cursors.shift() }),
+        ),
+    );
+    await expect(
+      queryEventVoided("https://gateway.test", 43, { fetch: transport }),
+    ).rejects.toThrow("cursor repeated");
+    expect(transport).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops after maxPages pages of fresh cursors", async () => {
+    let n = 0;
+    const transport = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ admin_events: [], next_cursor: `c${++n}` }),
+        ),
+    );
+    await expect(
+      queryEventVoided("https://gateway.test", 43, {
+        fetch: transport,
+        maxPages: 3,
+      }),
+    ).rejects.toMatchObject({ kind: "limit", field: "next_cursor" });
+    expect(transport).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops after 100 pages by default", async () => {
+    let n = 0;
+    const transport = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ admin_events: [], next_cursor: `c${++n}` }),
+        ),
+    );
+    await expect(
+      queryEventVoided("https://gateway.test", 43, { fetch: transport }),
+    ).rejects.toThrow("more than 100 pages");
+    expect(transport).toHaveBeenCalledTimes(100);
+  });
+
+  it("rejects a maxPages that is not a positive integer", async () => {
+    for (const maxPages of [0, -1, 1.5, Number.NaN]) {
+      await expect(
+        queryEventVoided("https://gateway.test", 43, { maxPages }),
+      ).rejects.toMatchObject({ kind: "configuration", field: "maxPages" });
+    }
+  });
+});

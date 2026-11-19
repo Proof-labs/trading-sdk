@@ -32,6 +32,12 @@ export interface FinalizedReadWitness {
   finalizedBlockTimeMs: bigint;
   appHash: Hash32Hex;
 }
+/** Decode the `witness` object of a gateway answer. Throws a malformed
+ * `GatewayReadError` for anything but a version 1 witness with canonical
+ * decimal height and block time, a node id and a 32-byte app hash; with
+ * `expectedHeight` or `expectedTimeMs`, also for a witness at another height
+ * or time. It checks shape only: equal witnesses mean the gateway answered
+ * from one finalized state, and `verifyWitness` binds that state to H+1. */
 export function decodeFinalizedReadWitness(
   value: unknown,
   expectedHeight?: bigint,

@@ -7,6 +7,43 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
+  `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
+  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
+  not a map keyed by field name, or a name that is not a string (a status
+  sent as the integer 0, for example), refuses the whole read.
+- **TypeScript:** `queryEventVoided(gatewayUrl, eventId, { signal?, fetch?, maxPages? })`
+  reads the indexed `event_voided` record (the Yes price a Void settled at)
+  from `GET /v1/history/admin-events`, following `next_cursor`; `null` when the
+  event is not voided or not yet indexed. A malformed page, a repeated cursor
+  or more than `maxPages` pages (default 100) fails with `GatewayReadError`.
+
+## [13.1.0] — 2026-11-19
+
+npm only: a MINOR with two TypeScript additions on the same wire as 13.0.0
+(proof-wire 12.0.0) and no change to existing behaviour. The Rust core entry
+above stays under [Unreleased].
+
+### Added
+
+- **TypeScript:** `decodeFinalizedReadWitness` is exported from the package
+  root, so a caller can decode the `witness` object of a raw gateway answer
+  (for example, in its own `ExchangeHttpTransport`) with the SDK's decoder
+  instead of parsing it itself. It was already used by every witnessed read;
+  its behaviour is unchanged.
+- **TypeScript:** `client.reads().marketsSnapshotView()` reads the node's
+  version 2 markets snapshot (`GET /v2/markets-snapshot`), bound to the pinned
+  chain like `queryMarketsSnapshot()`: every market with its status, every
+  event and each market's open interest, from one read at one height
+  (`MarketsSnapshotView`, `MarketView`, `EventView`). A market's `status` is
+  the engine's `MarketStatus`, or `"Unknown"` (`MarketStatusReading`) for a
+  status this SDK does not name; never read `"Unknown"` as trading. The read
+  carries no witness and needs a gateway that serves `/v2/markets-snapshot`.
+  `queryMarkets()`, `queryMarketListing()` and `queryMarketsSnapshot()` are
+  unchanged.
+
 ## [13.0.0] (Python 5.0.0; Rust core 5.0.0) — 2026-11-17
 
 Compatible with exchange 2.25.0 / proof-wire 12.0.0. npm 13.0.0 is a
@@ -2499,7 +2536,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.1.0...HEAD
+[13.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.0.0...npm-v13.1.0
 [13.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.1.0...npm-v13.0.0
 [12.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.0.0...npm-v12.1.0
 [12.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v11.0.0...npm-v12.0.0

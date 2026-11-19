@@ -34,6 +34,11 @@ strings are not committed by its results hash. These SDK reads also do not
 check execution codes against H+1 `last_results_hash`. Keep the gateway trusted for
 event truth and check node identity, same-view witnesses and freshness separately.
 
+`decodeFinalizedReadWitness(value)` decodes the `witness` object of a raw gateway
+answer, for a caller that compares answers through its own `ExchangeHttpTransport`
+(for example, to check that several answers come from one finalized state). It
+checks shape only and throws a malformed `GatewayReadError` otherwise.
+
 Use `verifyWitness` for financial/account reads before treating them as bound to
 a chain. An H+1 timestamp is not H's timestamp. The helper does not compare them.
 Genesis can have `parentHash: null` and `appHash: null`, never a fabricated hash.
