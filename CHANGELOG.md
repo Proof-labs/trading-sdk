@@ -9,6 +9,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **TypeScript:** `decodeFinalizedReadWitness` is exported from the package
+  root, so a caller can decode the `witness` object of a raw gateway answer
+  (for example, in its own `ExchangeHttpTransport`) with the SDK's decoder
+  instead of parsing it itself. It was already used by every witnessed read;
+  its behaviour is unchanged.
 - **TypeScript:** `client.reads().marketsSnapshotView()` reads the node's
   version 2 markets snapshot (`GET /v2/markets-snapshot`), bound to the pinned
   chain like `queryMarketsSnapshot()`: every market with its status, every

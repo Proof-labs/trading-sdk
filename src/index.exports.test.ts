@@ -163,6 +163,18 @@ it("exposes typed reads on the existing read surface", async () => {
   expect(reads.tradeHistoryPage).toBeTypeOf("function");
   expect(reads.marketsSnapshotView).toBeTypeOf("function");
   expect(sdk.verifyWitness).toBeTypeOf("function");
+  const witness = sdk.decodeFinalizedReadWitness({
+    version: 1,
+    nodeId: "ab".repeat(20),
+    height: "12",
+    finalizedBlockTimeMs: "1700000000000",
+    appHash: "cd".repeat(32),
+  });
+  expect(witness.height).toBe(12n);
+  expect(witness.finalizedBlockTimeMs).toBe(1700000000000n);
+  expect(() => sdk.decodeFinalizedReadWitness({ version: 2 })).toThrow(
+    sdk.GatewayReadError,
+  );
 });
 
 describe("public barrel: governance surface", () => {
