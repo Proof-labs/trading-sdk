@@ -53,10 +53,18 @@ export async function queryEventVoided(
         "admin_events",
         "Invalid admin-events page",
       );
+    // A page without a string cursor is malformed, never the end of history:
+    // reading it as "no more pages" would report a voided event as not voided.
+    const next = page.next_cursor;
+    if (typeof next !== "string")
+      throw new GatewayReadError(
+        "malformed",
+        "next_cursor",
+        "Invalid admin-events page: next_cursor is not a string",
+      );
     const found = findEventVoided(page.admin_events, eventId);
     if (found) return found;
-    const next = page.next_cursor;
-    if (typeof next !== "string" || next === "") return null;
+    if (next === "") return null;
     if (next === cursor)
       throw new GatewayReadError(
         "limit",

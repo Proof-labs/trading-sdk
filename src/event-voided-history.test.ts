@@ -82,6 +82,20 @@ describe("queryEventVoided", () => {
     ).rejects.toBeInstanceOf(GatewayReadError);
   });
 
+  it("rejects a page whose next_cursor is missing or not a string", async () => {
+    for (const page of [
+      { admin_events: [] },
+      { admin_events: [], next_cursor: 7 },
+      { admin_events: [], next_cursor: null },
+    ]) {
+      await expect(
+        queryEventVoided("https://gateway.test", 43, {
+          fetch: transportFor(page),
+        }),
+      ).rejects.toMatchObject({ kind: "malformed", field: "next_cursor" });
+    }
+  });
+
   it("follows next_cursor until the event is found", async () => {
     const pages = [
       { admin_events: [voided("12", "100000")], next_cursor: "c1" },
