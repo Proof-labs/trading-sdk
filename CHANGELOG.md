@@ -20,23 +20,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `DEPOSIT_ADDRESS_TIMEOUT_MS` rather than the usual 5 seconds. It resolves a
   `DepositAddressReady` (`status: "ready"`) with `address`, `tokenAccount`
   and `createdAt` (Unix seconds or `null`). `address` is the deposit
-  authority, the address a wallet sends USDC to, not the token account. Only
-  a 200 `ready` answer is a success; any other 2xx throws `GatewayReadError`
-  (kind `"malformed"`) naming the field. A refusal throws `GatewayHttpError`, which
-  keeps the gateway's `errorCode` (`DepositAddressErrorCode`:
-  `InvalidAccount`, `SubAccount`, `RateLimited`, `Paused` while deposits are
-  paused, `Unavailable`; `isDepositAddressErrorCode`) and, on any
-  error whose answer gives one, `retryAfterMs`: the body's value, or else the
-  `Retry-After` header in seconds or as an HTTP-date. Every `retryAfterMs` is
-  clamped to 0..300000 (`MAX_RETRY_AFTER_MS`, five minutes).
-  `conformance/deposit-address.json` pins the service's ready, sub-account,
-  rate-limited, paused and unavailable answers.
-- **TypeScript:** `GatewayHttpError.retryAfterMs`, set through a new
-  options argument (`GatewayHttpErrorOptions`), on every refusal the SDK
-  reads the gateway's error body for (`queryDepositAddress` and the `/info`
-  reads): the body's `retryAfterMs`, or else the `Retry-After` header. The
-  `/info` reads are otherwise unchanged: they still read the whole error
-  body and keep the original response.
+  authority, the address a wallet sends USDC to, not the token account. The
+  gateway passes the service's status and body through without checking
+  them, so the SDK decides success itself: only an HTTP 200 with
+  `status: "ready"` and both addresses present resolves; any other 2xx throws
+  `GatewayReadError` (kind `"malformed"`) naming the field. A refusal throws
+  `GatewayHttpError` with an unread copy of the response, and `errorCode`
+  when the body's code is a `DepositAddressErrorCode` (`InvalidAccount`,
+  `SubAccount`, `RateLimited`, `Paused` while deposits are paused,
+  `Unavailable`; `isDepositAddressErrorCode`). As on the submission path, the
+  retry time is the body's own `retryAfterMs`; the SDK does not read the
+  `Retry-After` header. `conformance/deposit-address.json` pins the
+  service's ready, sub-account, rate-limited, paused and unavailable answers.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is

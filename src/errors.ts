@@ -721,29 +721,18 @@ export function execErrorName(code: number, log?: string): string {
   return decodeExecError(code, log)?.name ?? "UnknownError";
 }
 
-/** Optional facts a gateway refusal carries beside its status and code. */
-export interface GatewayHttpErrorOptions {
-  /** When to try again, in milliseconds from when the answer was read. */
-  retryAfterMs?: number;
-}
-
 /**
  * Non-success gateway HTTP response; its unconsumed body remains available to
  * callers. `detail` is the gateway's own error text, when the caller already
  * read it; the message carries it in place of the bare `errorCode`.
- * `retryAfterMs` is set when the SDK read an answer that says when to try
- * again: the body's `retryAfterMs`, or else the `Retry-After` header (seconds
- * or an HTTP-date), clamped to 0..`MAX_RETRY_AFTER_MS` (five minutes).
  */
 export class GatewayHttpError extends Error {
   public readonly errorCode: string | undefined;
-  public readonly retryAfterMs: number | undefined;
   constructor(
     public readonly status: number,
     public readonly response: Response,
     errorCode?: string,
     detail?: string,
-    options: GatewayHttpErrorOptions = {},
   ) {
     const reason = detail ?? errorCode;
     super(
@@ -753,7 +742,6 @@ export class GatewayHttpError extends Error {
     );
     this.name = "GatewayHttpError";
     this.errorCode = errorCode;
-    this.retryAfterMs = options.retryAfterMs;
   }
 }
 

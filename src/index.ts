@@ -27,7 +27,6 @@ export {
   hexAddress,
   hash32,
   marketId,
-  MAX_RETRY_AFTER_MS,
   type HexAddress,
   type Hash32Hex,
   type MarketId,
@@ -428,7 +427,6 @@ export {
 export {
   FeedSubscriptionError,
   GatewayHttpError,
-  type GatewayHttpErrorOptions,
   isMissingMark,
   type ExecErrorInfo,
   ExecErrorCode,

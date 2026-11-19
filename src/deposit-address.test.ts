@@ -81,7 +81,6 @@ describe("queryDepositAddress — the service's pinned answers", () => {
     const e = error as GatewayHttpError;
     expect(e.status).toBe(403);
     expect(e.errorCode).toBe("SubAccount");
-    expect(e.retryAfterMs).toBeUndefined();
     expect(e.message).toContain("this is a sub-account");
     // The error keeps an unread copy of the response.
     await expect(e.response.json()).resolves.toMatchObject({
@@ -89,7 +88,7 @@ describe("queryDepositAddress — the service's pinned answers", () => {
     });
   });
 
-  it("keeps errorCode RateLimited and the body's retryAfterMs", async () => {
+  it("keeps errorCode RateLimited and the body's retryAfterMs in the body", async () => {
     const { client } = clientAnswering(answer(fixtureCase("rateLimited")));
     const e = (await rejection(
       client.queryDepositAddress(account),
@@ -97,8 +96,12 @@ describe("queryDepositAddress — the service's pinned answers", () => {
     expect(e).toBeInstanceOf(GatewayHttpError);
     expect(e.status).toBe(429);
     expect(e.errorCode).toBe("RateLimited");
-    // The body's milliseconds win over the header's rounded-up seconds.
-    expect(e.retryAfterMs).toBe(1500);
+    // As on the submission path, the retry time is the body's own field;
+    // the Retry-After header is not read.
+    expect("retryAfterMs" in e).toBe(false);
+    await expect(e.response.json()).resolves.toMatchObject({
+      retryAfterMs: 1500,
+    });
   });
 
   it.each([
@@ -115,7 +118,6 @@ describe("queryDepositAddress — the service's pinned answers", () => {
       expect(e.status).toBe(503);
       expect(e.errorCode).toBe(code);
       expect(isDepositAddressErrorCode(e.errorCode)).toBe(true);
-      expect(e.retryAfterMs).toBeUndefined();
       expect(e.message).toContain(text);
     },
   );
@@ -161,20 +163,6 @@ describe("queryDepositAddress — other answers", () => {
     expect(isDepositAddressErrorCode(e.errorCode)).toBe(true);
   });
 
-  it("falls back to the Retry-After header when the body has no retryAfterMs", async () => {
-    const { client } = clientAnswering(
-      answer({
-        httpStatus: 429,
-        headers: { "retry-after": "2" },
-        body: '{"status":"error","error":"rate limited","errorCode":"RateLimited"}',
-      }),
-    );
-    const e = (await rejection(
-      client.queryDepositAddress(account),
-    )) as GatewayHttpError;
-    expect(e.retryAfterMs).toBe(2000);
-  });
-
   it("raises a GatewayHttpError without errorCode for a non-JSON error body", async () => {
     const { client } = clientAnswering(
       answer({ httpStatus: 502, body: "<html>bad gateway</html>" }),
@@ -188,7 +176,7 @@ describe("queryDepositAddress — other answers", () => {
     await expect(e.response.text()).resolves.toBe("<html>bad gateway</html>");
   });
 
-  it("keeps a gateway errorCode outside the five as a plain string", async () => {
+  it("leaves errorCode unset for a code outside the five", async () => {
     const { client } = clientAnswering(
       answer({
         httpStatus: 404,
@@ -198,13 +186,22 @@ describe("queryDepositAddress — other answers", () => {
     const e = (await rejection(
       client.queryDepositAddress(account),
     )) as GatewayHttpError;
-    expect(e.errorCode).toBe("NotFound");
-    expect(isDepositAddressErrorCode(e.errorCode)).toBe(false);
+    expect(e.status).toBe(404);
+    expect(e.errorCode).toBeUndefined();
+    expect(e.message).toContain("not found");
   });
 
   it.each([
     // The gateway answers only once the address exists, so a 202 is malformed.
     ["ready on 202", 202, fixtureCase("ready").body, "status"],
+    ["ready on 201", 201, fixtureCase("ready").body, "status"],
+    ["refusal body on 200", 200, fixtureCase("paused").body, "status"],
+    [
+      "numeric address",
+      200,
+      `{"status":"ready","address":1,"tokenAccount":"${TOKEN_ACCOUNT}","createdAt":null}`,
+      "address",
+    ],
     [
       "pending on 202",
       202,
@@ -292,90 +289,6 @@ describe("queryDepositAddress — other answers", () => {
       expect(error).toMatchObject({ kind: "malformed", field });
     },
   );
-
-  it.each([
-    ["0", 0, 0],
-    ["huge", Number.MAX_SAFE_INTEGER, 300_000],
-  ])("clamps a %s retryAfterMs to 0..300000", async (_name, sent, expected) => {
-    const { client } = clientAnswering(
-      answer({
-        httpStatus: 429,
-        body: `{"status":"error","error":"rate limited","errorCode":"RateLimited","retryAfterMs":${sent}}`,
-      }),
-    );
-    const e = (await rejection(
-      client.queryDepositAddress(account),
-    )) as GatewayHttpError;
-    expect(e.retryAfterMs).toBe(expected);
-  });
-
-  it("clamps a huge Retry-After header", async () => {
-    const { client } = clientAnswering(
-      answer({
-        httpStatus: 503,
-        headers: { "retry-after": "99999999999999999999" },
-        body: '{"status":"error","error":"down","errorCode":"Unavailable"}',
-      }),
-    );
-    const e = (await rejection(
-      client.queryDepositAddress(account),
-    )) as GatewayHttpError;
-    expect(e.retryAfterMs).toBe(300_000);
-  });
-
-  describe("an HTTP-date Retry-After", () => {
-    const NOW = Date.parse("2026-11-19T04:00:00Z");
-    const refused = (retryAfter: string, body = "") =>
-      answer({
-        httpStatus: 503,
-        headers: { "retry-after": retryAfter },
-        body: `{"status":"error","error":"down","errorCode":"Unavailable"${body}}`,
-      });
-    async function retryAfterFor(res: Response) {
-      vi.spyOn(Date, "now").mockReturnValue(NOW);
-      const { client } = clientAnswering(res);
-      const e = (await rejection(
-        client.queryDepositAddress(account),
-      )) as GatewayHttpError;
-      expect(e.errorCode).toBe("Unavailable");
-      return e.retryAfterMs;
-    }
-
-    it("counts down to a future date", async () => {
-      await expect(
-        retryAfterFor(refused("Thu, 19 Nov 2026 04:02:00 GMT")),
-      ).resolves.toBe(120_000);
-    });
-    it("reads the obsolete RFC 850 and asctime forms as GMT", async () => {
-      await expect(
-        retryAfterFor(refused("Thursday, 19-Nov-26 04:00:30 GMT")),
-      ).resolves.toBe(30_000);
-      await expect(
-        retryAfterFor(refused("Thu Nov 19 04:00:45 2026")),
-      ).resolves.toBe(45_000);
-    });
-    it("is 0 for a past date", async () => {
-      await expect(
-        retryAfterFor(refused("Thu, 19 Nov 2026 03:00:00 GMT")),
-      ).resolves.toBe(0);
-    });
-    it.each([
-      "soon",
-      "Thu, 99 Nov 2026 04:02:00 GMT",
-      "1.5",
-      "-3",
-      "2026-11-19",
-    ])("ignores an invalid value: %s", async (header) => {
-      await expect(retryAfterFor(refused(header))).resolves.toBeUndefined();
-    });
-    it("loses to the body's retryAfterMs", async () => {
-      await expect(
-        retryAfterFor(
-          refused("Thu, 19 Nov 2026 04:02:00 GMT", ',"retryAfterMs":700'),
-        ),
-      ).resolves.toBe(700);
-    });
-  });
 
   it("reads from the gateway even on the internal direct-node path", async () => {
     const transport = vi.fn().mockResolvedValue(answer(fixtureCase("ready")));

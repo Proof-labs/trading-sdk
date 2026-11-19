@@ -6,7 +6,8 @@
 // The gateway answers once the address exists; the read waits up to
 // `DEPOSIT_ADDRESS_TIMEOUT_MS` by default.
 
-import { boundedGatewayRead, type BoundedReadOptions } from "./bounded-read.js";
+import { boundedGatewayJson, type BoundedReadOptions } from "./bounded-read.js";
+import { GatewayHttpError } from "./errors.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
 import { invalidRead, type HexAddress } from "./read-values.js";
 
@@ -37,7 +38,7 @@ export const DEPOSIT_ADDRESS_ERROR_CODES = [
   "InvalidAccount",
   /** 403: the account is a sub-account; deposits go to its main account. */
   "SubAccount",
-  /** 429: too many requests; see `GatewayHttpError.retryAfterMs`. */
+  /** 429: too many requests; the body's `retryAfterMs` says when to retry. */
   "RateLimited",
   /** 503: deposits are paused (the bridge or address creation is paused). */
   "Paused",
@@ -94,45 +95,78 @@ export function depositAccount(account: unknown): HexAddress {
 /**
  * Read `GET /v1/deposit-address/{account}` within one deadline
  * (`options.timeoutMs`, default `DEPOSIT_ADDRESS_TIMEOUT_MS`) and a 1 MiB
- * body cap. Only a 200 `ready` answer is a success; any other 2xx throws
- * `GatewayReadError` with kind `"malformed"` and the offending field. A
- * non-2xx answer throws
- * `GatewayHttpError` with the gateway's `errorCode`, `retryAfterMs` and an
- * unread copy of the response.
+ * body cap. The gateway passes the service's status and body through without
+ * checking them, so success is decided here: only an HTTP 200 whose body is
+ * `status: "ready"` with both addresses present resolves. Any other 2xx
+ * throws `GatewayReadError` with kind `"malformed"` and the offending field.
+ * A non-2xx answer throws `GatewayHttpError` with an unread copy of the
+ * response, and `errorCode` when the body's code is one of
+ * `DEPOSIT_ADDRESS_ERROR_CODES`. As on the submission path, `retryAfterMs`
+ * stays in the body.
  */
 export async function queryDepositAddressAnswer(
   url: string,
   transport: ExchangeHttpTransport,
   options: BoundedReadOptions,
 ): Promise<DepositAddressReady> {
-  const { status, body } = await boundedGatewayRead(
-    url,
-    transport,
-    { ...options, timeoutMs: options.timeoutMs ?? DEPOSIT_ADDRESS_TIMEOUT_MS },
-    {
-      purpose: "account",
-      decodeRefusal: true,
-    },
-  );
+  // boundedGatewayJson returns the body alone; record the status beside it.
+  let status = 0;
+  const recording: ExchangeHttpTransport = async (input, init, context) => {
+    const response = await transport(input, init, context);
+    status = response.status;
+    return response;
+  };
+  let body: unknown;
+  try {
+    body = await boundedGatewayJson(
+      url,
+      recording,
+      {
+        ...options,
+        timeoutMs: options.timeoutMs ?? DEPOSIT_ADDRESS_TIMEOUT_MS,
+      },
+      { purpose: "account" },
+    );
+  } catch (error) {
+    if (error instanceof GatewayHttpError) throw await refusal(error);
+    throw error;
+  }
   const answer = decodeDepositAddress(status, body);
   options.signal?.throwIfAborted();
   return answer;
+}
+
+/** The refusal with the service's `errorCode` (when it is one of
+ * `DEPOSIT_ADDRESS_ERROR_CODES`) and `error` text, read from the bounded
+ * copy of the body; the copy on the new error stays unread. */
+async function refusal(error: GatewayHttpError): Promise<GatewayHttpError> {
+  let fields: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(await error.response.clone().text());
+    if (parsed !== null && typeof parsed === "object")
+      fields = parsed as Record<string, unknown>;
+  } catch {
+    // Not JSON (a proxy's HTML page, say): the status alone is the answer.
+  }
+  return new GatewayHttpError(
+    error.status,
+    error.response,
+    isDepositAddressErrorCode(fields.errorCode) ? fields.errorCode : undefined,
+    typeof fields.error === "string" ? fields.error : undefined,
+  );
 }
 
 function decodeDepositAddress(
   status: number,
   body: unknown,
 ): DepositAddressReady {
-  // boundedGatewayRead only returns JSON objects.
+  // boundedGatewayJson only returns JSON objects.
   const fields = body as Record<string, unknown>;
-  if (status === 200 && fields.status === "ready") {
-    const { address, tokenAccount, createdAt } = fields;
-    if (!isSolanaPublicKey(address)) invalidRead("address");
-    if (!isSolanaPublicKey(tokenAccount) || tokenAccount === address)
-      invalidRead("tokenAccount");
-    if (createdAt !== null && !isWholeNumber(createdAt))
-      invalidRead("createdAt");
-    return { status: "ready", address, tokenAccount, createdAt };
-  }
-  return invalidRead("status");
+  if (status !== 200 || fields.status !== "ready") return invalidRead("status");
+  const { address, tokenAccount, createdAt } = fields;
+  if (!isSolanaPublicKey(address)) invalidRead("address");
+  if (!isSolanaPublicKey(tokenAccount) || tokenAccount === address)
+    invalidRead("tokenAccount");
+  if (createdAt !== null && !isWholeNumber(createdAt)) invalidRead("createdAt");
+  return { status: "ready", address, tokenAccount, createdAt };
 }

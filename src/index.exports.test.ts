@@ -60,7 +60,6 @@ import {
   type MarketView,
   type EventView,
   type MarketsSnapshotView,
-  MAX_RETRY_AFTER_MS,
   DEPOSIT_ADDRESS_TIMEOUT_MS,
   type DepositAddressErrorCode,
   type DepositAddressReady,
@@ -77,7 +76,6 @@ it("exports the deposit address types", () => {
   const code: DepositAddressErrorCode = "Paused";
   expect(ready.status).toBe("ready");
   expect(code).toBe("Paused");
-  expect(MAX_RETRY_AFTER_MS).toBe(300_000);
   expect(DEPOSIT_ADDRESS_TIMEOUT_MS).toBe(20_000);
 });
 
@@ -522,21 +520,15 @@ function decodedAdminActionsNarrowWithoutCasts(
 void decodedAdminActionsNarrowWithoutCasts;
 
 describe("public barrel: deposit address errors", () => {
-  it("carries the retry time on GatewayHttpError, with no subclass", () => {
-    const options: barrel.GatewayHttpErrorOptions = { retryAfterMs: 1500 };
+  it("keeps GatewayHttpError as on dev, with no subclass or retry option", () => {
     const e = new barrel.GatewayHttpError(
       429,
       new Response(null, { status: 429 }),
       "RateLimited",
-      undefined,
-      options,
     );
-    expect(e.retryAfterMs).toBe(1500);
     expect(e.errorCode).toBe("RateLimited");
-    expect(
-      new barrel.GatewayHttpError(503, new Response(null, { status: 503 }))
-        .retryAfterMs,
-    ).toBeUndefined();
+    expect("retryAfterMs" in e).toBe(false);
+    expect("MAX_RETRY_AFTER_MS" in barrel).toBe(false);
     expect("DepositAddressError" in barrel).toBe(false);
     expect(barrel.DEPOSIT_ADDRESS_ERROR_CODES).toHaveLength(5);
     expect(barrel.isDepositAddressErrorCode("Unavailable")).toBe(true);

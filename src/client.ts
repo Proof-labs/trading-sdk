@@ -53,11 +53,7 @@ import {
   type RecentTrade,
   type RecentTradesOptions,
 } from "./recent-trades.js";
-import {
-  boundedGatewayJson,
-  retryAfterMs,
-  type BoundedReadOptions,
-} from "./bounded-read.js";
+import { boundedGatewayJson, type BoundedReadOptions } from "./bounded-read.js";
 import {
   decodeLiquidationHistoryPage,
   liquidationHistorySearchParams,
@@ -2253,12 +2249,14 @@ export class ExchangeClient {
    * needed. Resolves `ready` with `address`, the deposit authority a wallet
    * sends USDC to (not the token account). Times out after `opts.timeoutMs`
    * (default `DEPOSIT_ADDRESS_TIMEOUT_MS`) with `GatewayReadError` kind
-   * `"deadline"`. Only a 200 `ready` answer is a success; any other 2xx
-   * throws `GatewayReadError` kind `"malformed"` naming the field; an abort rejects with the signal's
-   * reason. A refusal throws `GatewayHttpError`, which keeps the gateway's
-   * `errorCode` (`DepositAddressErrorCode`: `Paused` while deposits are
-   * paused) and, on any error whose answer says when to try again,
-   * `retryAfterMs`.
+   * `"deadline"`. The gateway passes the service's answer through
+   * unchecked, so only an HTTP 200 `ready` answer is a success; any other
+   * 2xx throws `GatewayReadError` kind `"malformed"` naming the field; an
+   * abort rejects with the signal's reason. A refusal throws
+   * `GatewayHttpError` with `errorCode` set when the body's code is a
+   * `DepositAddressErrorCode` (`Paused` while deposits are paused). The
+   * body's `retryAfterMs` stays in `error.response`, as on the submission
+   * path.
    */
   async queryDepositAddress(
     account: string,
@@ -2831,15 +2829,11 @@ async function postInfoJson(
   );
   // The error keeps an unread copy, so callers can still read the body.
   const unread = res.clone();
-  const retryHeader = res.headers.get("retry-after");
   let parsed: unknown;
   try {
     parsed = await res.json();
   } catch (error) {
-    if (!res.ok)
-      throw new GatewayHttpError(res.status, unread, undefined, undefined, {
-        retryAfterMs: retryAfterMs(undefined, retryHeader),
-      });
+    if (!res.ok) throw new GatewayHttpError(res.status, unread);
     throw error;
   }
   // A JSON `null` or scalar body has no fields; it must not hide the status.
@@ -2851,9 +2845,7 @@ async function postInfoJson(
     const errorCode =
       typeof json.errorCode === "string" ? json.errorCode : undefined;
     const detail = typeof json.error === "string" ? json.error : undefined;
-    throw new GatewayHttpError(res.status, unread, errorCode, detail, {
-      retryAfterMs: retryAfterMs(json.retryAfterMs, retryHeader),
-    });
+    throw new GatewayHttpError(res.status, unread, errorCode, detail);
   }
   return json;
 }
