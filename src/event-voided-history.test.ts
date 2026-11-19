@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { queryEventVoided } from "./event-voided-history.js";
-import { GatewayReadError } from "./errors.js";
+import { GatewayHttpError, GatewayReadError } from "./errors.js";
 
 const voided = (eventId: string, yesPrice: string) => ({
   event_id: 9,
@@ -59,11 +59,11 @@ describe("queryEventVoided", () => {
   });
 
   it("throws on an HTTP error, a malformed page or a bad event id", async () => {
-    await expect(
-      queryEventVoided("https://gateway.test", 43, {
-        fetch: transportFor({ error: "x" }, 502),
-      }),
-    ).rejects.toThrow();
+    const refused = queryEventVoided("https://gateway.test", 43, {
+      fetch: transportFor({ error: "x" }, 502),
+    });
+    await expect(refused).rejects.toBeInstanceOf(GatewayHttpError);
+    await expect(refused).rejects.toMatchObject({ status: 502 });
     await expect(
       queryEventVoided("https://gateway.test", 43, {
         fetch: transportFor({ nope: [] }),
@@ -94,6 +94,20 @@ describe("queryEventVoided", () => {
         }),
       ).rejects.toMatchObject({ kind: "malformed", field: "next_cursor" });
     }
+  });
+
+  it("rejects an already-aborted signal before calling fetch", async () => {
+    const transport = transportFor({ admin_events: [], next_cursor: "" });
+    const controller = new AbortController();
+    const reason = new Error("caller gave up");
+    controller.abort(reason);
+    await expect(
+      queryEventVoided("https://gateway.test", 43, {
+        fetch: transport,
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(transport).not.toHaveBeenCalled();
   });
 
   it("follows next_cursor until the event is found", async () => {
