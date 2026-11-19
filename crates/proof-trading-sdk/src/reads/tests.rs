@@ -202,6 +202,10 @@ fn appended(value: &Value) -> Value {
 #[test]
 fn a_market_list_with_appended_fields_decodes_as_the_pinned_rows() {
     let mut row = value(MARKET);
+    // Pin the current wire-13 tail fields before testing future appended data.
+    fields(&mut row)[24] = Value::from(1_000_000_000u64);
+    fields(&mut row)[25] = Value::from(10);
+    fields(&mut row)[26] = Value::from(-12_500);
     fields(&mut row)[13] = Value::Array(vec![Value::Array(vec![
         Value::from(0),
         Value::from(-7),
@@ -216,6 +220,9 @@ fn a_market_list_with_appended_fields_decodes_as_the_pinned_rows() {
 
     let expected: Vec<MarketConfig> = rmp_serde::from_slice(&bytes(&pinned)).unwrap();
     let decoded: Vec<MarketConfig> = decode(&bytes(&later), &Shape::List(&MARKET_CONFIG)).unwrap();
+    assert_eq!(decoded[0].impact_notional, 1_000_000_000);
+    assert_eq!(decoded[0].funding_dead_band_bps.unwrap().0, 10);
+    assert_eq!(decoded[0].funding_interest_rate.unwrap().0, -12_500);
     assert_eq!(
         rmp_serde::to_vec(&decoded).unwrap(),
         rmp_serde::to_vec(&expected).unwrap()
@@ -317,7 +324,12 @@ fn a_market_listing_keeps_the_rows_it_decodes_and_reports_the_rest() {
     let mut wrong_type = good.clone();
     fields(&mut wrong_type)[0] = Value::from(8);
     fields(&mut wrong_type)[1] = Value::from("3334");
-    let longer = appended(&good);
+    // Append beyond the current canonical shape, not into a newly added field
+    // of the historical 24-field fixture.
+    let current: MarketConfig = rmp_serde::from_slice(&bytes(&good)).unwrap();
+    let current =
+        rmpv::decode::read_value(&mut Cursor::new(rmp_serde::to_vec(&current).unwrap())).unwrap();
+    let longer = appended(&current);
     let listing = Value::Array(vec![good.clone(), unknown_kind, longer, wrong_type]);
 
     let decoded = decode_market_listing(&bytes(&listing)).unwrap();
@@ -329,13 +341,13 @@ fn a_market_listing_keeps_the_rows_it_decodes_and_reports_the_rest() {
             rmp_serde::to_vec(&expected).unwrap()
         );
     }
-    assert_eq!(decoded.row_field_counts, vec![24, 25]);
+    assert_eq!(decoded.row_field_counts, vec![27, 28]);
     let refused: Vec<(u32, u32, u32)> = decoded
         .refused_rows
         .iter()
         .map(|row| (row.index, row.market, row.field_count))
         .collect();
-    assert_eq!(refused, vec![(1, 7, 24), (3, 8, 24)]);
+    assert_eq!(refused, vec![(1, 7, 27), (3, 8, 27)]);
     assert!(decoded.refused_rows[0].error.contains("Spot"));
 }
 

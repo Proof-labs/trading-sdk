@@ -90,17 +90,15 @@ Each address receives ~10,000 USDC (10,000,000,000 µUSDC) with a 24 h cooldown.
 
 ## Quick Start
 
-```typescript
-import {
-  ExchangeClient,
-  Side,
-  generateKeypair,
-  pubkeyToOwner,
-  ownerToHex,
-} from "@proof-labs/trading-sdk";
+Use the key you funded above, or as a competition participant the key from
+[PAPER-TRADING.md](PAPER-TRADING.md): a fresh key has no balance, and every
+order from it is refused with `InsufficientBalance` (11).
 
-const { publicKey, privateKey } = generateKeypair();
-const address = pubkeyToOwner(publicKey);
+```typescript
+import { ExchangeClient, Side } from "@proof-labs/trading-sdk";
+
+// Continues "Connect to the devnet": `address` and `privateKey` are the
+// funded key's.
 const addressHex = ownerToHex(address);
 
 const client = new ExchangeClient({
@@ -124,8 +122,43 @@ const result = await client.submitTx({
   },
 });
 
-console.log(result); // { code: 0, hash: "…" } on success
+if (result.ok) {
+  console.log(`placed in ${result.hash}`);
+} else {
+  // outcome: "engine" (refused, `code`/`error` say why), "transport", ...
+  console.log(result.outcome, result.code, result.error?.name ?? result.log);
+}
 ```
+
+### Withdraw
+
+A withdrawal is requested on chain, then paid out on Solana by the bridge.
+The request's `withdraw_requested` event carries the id to follow:
+
+```typescript
+const req = await client.submitTxCommit({
+  type: "WithdrawRequest",
+  data: {
+    owner: address,
+    amount: 100_000_000n, // $100
+    solanaDestination, // 32-byte Solana wallet public key
+  },
+});
+const idText = req.events
+  ?.find((e) => e.type === "withdraw_requested")
+  ?.attributes.find((a) => a.key === "withdrawal_id")?.value;
+if (!req.ok || idText === undefined)
+  throw new Error(`not requested: ${req.log}`);
+const id = BigInt(idText);
+
+// "Pending" until the payout lands, then "Completed" (or "Failed", refunded).
+const record = await client.queryWithdrawal(id);
+console.log(record?.status);
+```
+
+Only an account's own key withdraws. A master trades for its sub-accounts but
+cannot withdraw from them (refused with code 20): move the funds to the master
+with `SubAccountTransfer`, then withdraw from the master.
 
 > Reads decode MessagePack through the same WASM core as signing (a strict,
 > type-preserving preflight runs before the value decode), so even a read-only
@@ -328,6 +361,32 @@ mirror and throws `BinaryPriceError` before anything is sent. `yesOrder`,
 reads a short Yes position as No at `$1 − entry`. All of it is pinned against
 the Rust core by `conformance/binary.ndjson`.
 
+### How event positions are valued and booked
+
+Read this before setting risk limits or reconciling cash on an account that
+holds event positions.
+
+- **Equity is per outcome.** Each event the account holds is a Yes/No branch,
+  and margin must hold in every combination. `equity`, `totalMm` and `totalIm`
+  come from the binding outcome (lowest equity to maintenance), named in
+  `bindingScenario`. When the binding outcome changes, equity can step with no
+  trade.
+- **Conditional marks** are the book's impact mid, the median of the last
+  three end-of-block samples. A book too thin or too wide to sample holds its
+  mark and only lets takers reduce until three samples stand again.
+- **Binary positions count in equity, not cash.** A buy moves `balance` by the
+  fee only; the payoff or maximum loss sits in each outcome's equity. At
+  resolution the payoff is booked to cash (`prediction_settled`).
+- **Closing a conditional pays no cash.** The realized P&L is issued as a
+  position on the event's binary book, which you hold to resolution or sell. A
+  close can leave a small binary position.
+- **At resolution** the branch that fires converts into the underlying perp at
+  the settlement price (`condition_met`) and the other is removed
+  (`condition_not_met`). Both name each position's branch, not the outcome.
+
+Fills alone don't reconcile an event account: read its positions and balance
+from the account, not by summing fills.
+
 ### Oracle freshness for trading UIs
 
 ```typescript
@@ -350,6 +409,41 @@ remain in the application; `status: "ok"` alone does not mean fresh data, and
 not trading authorization. Like every other gateway interaction, admin calls
 included, it goes through the SDK
 ([ADR 0003](docs/adr/0003-every-gateway-interaction-through-the-sdk.md)).
+
+### Markets with their status
+
+```typescript
+const snapshot = await client.reads().marketsSnapshotView();
+const halted = snapshot.markets.filter((market) => market.status === "Halted");
+```
+
+One read of `GET /v2/markets-snapshot` at one height, bound to the configured
+`chainId`: every market with its status (`"Trading"`, `"ReduceOnly"`,
+`"Halted"`, `"Delisted"`, or `"Unknown"`, which must never be read as
+trading), every event and each market's open interest. It carries no witness.
+See [docs/market-snapshot.md](docs/market-snapshot.md).
+
+### Insurance fund observations
+
+```typescript
+const page = await client
+  .reads()
+  .insuranceFundHistory(
+    { poolId: 2, stream: "balances", limit: 50 },
+    { timeoutMs: 5000 },
+  );
+// Pass page.nextCursor unchanged to fetch an older page. "" means no next page.
+```
+
+Use `stream: "activity"` for funding, withdrawal and takeover event attributes.
+Every request goes through the configured gateway transport, with a bounded
+body and deadline. Values are exact `bigint`s. Balance history is **net cash
+(cash minus debt), not equity or profit**. The coverage bounds name the first
+and last retained observations; they do not prove continuous ingestion, a
+complete lifetime history, or a finalized same-state view. Missing history
+remains an error, and an empty observed page must not be presented as zero
+lifetime activity. This requires the indexer insurance-history projection and
+the gateway history proxy.
 
 ### Indexed Explorer history
 
@@ -680,6 +774,37 @@ long-standing `"<code>: <message>"` format in `error` (so older clients that par
 code back out of it keep working), and `log` carries the chain's message verbatim. New
 code should read the structured `code` field: it is authoritative and needs no parsing.
 
+### Order of actions within a block
+
+Every cancel (`CancelOrder`, `CancelClientOrder`, `CancelAllOrders`) in a
+block runs before every order-placing action (`PlaceOrder`, `MarketOrder`,
+`AmendOrder`, `CancelReplaceOrder`, `AtomicBasketOrder`, `ClosePosition`),
+whatever their `seq`. A cancel sent in the same block as the order it targets
+finds nothing to cancel; send it after the order lands.
+
+### Basket slippage
+
+`AtomicBasketOrder`'s `maxSlippageBps` bounds the basket's **net** slippage:
+each leg is measured from its own mark just before it fills, adverse slippage
+counts against the budget and price improvement counts for it, weighted by
+notional. A leg that fills better than its mark can't trip the budget, so use
+each leg's limit price to cap how far that leg sweeps.
+
+## Rate limits
+
+A request must pass two token buckets. Over either, the gateway answers 429
+with `Retry-After` (and `retryAfterMs` in the body); wait that long.
+
+| Limit       | Applies to                                     | Devnet           |
+| ----------- | ---------------------------------------------- | ---------------- |
+| Per IP      | every request from one IP, all routes together | 150/s, burst 100 |
+| Per account | signed submissions, keyed on the signing key   | 100/s, burst 200 |
+
+Orders and cancels draw on separate per-account buckets, so a burst of
+cancels is not slowed by order traffic. An agent key has its own budget,
+separate from its owner's. On a WebSocket, subscribe and unsubscribe messages
+have a per-connection budget of 64/s, burst 256; pushed data is never limited.
+
 ## WebSocket streams
 
 The SDK exposes the gateway's native multiplexed feed on `/ws`. Account
@@ -687,6 +812,9 @@ events, trades and the orderbook are channels on that one shared connection
 (`subscribeAccount`, `subscribeTrades`, `subscribeOrderbook`). The connection
 auto-reconnects and re-subscribes; every subscription returns an unsubscribe
 function, and `disconnect()` closes the feed.
+
+The gateway pings every 30 s and closes a socket that hasn't answered within
+60 s. The SDK clients answer pings automatically.
 
 The WS base URL defaults to `gatewayUrl` with its scheme swapped to `ws`/`wss`.
 If your local stack serves WebSockets on a separate port, set `wsUrl`
@@ -747,8 +875,8 @@ the SDK uses the gateway's signed subscription auth: with a private key or
 external signer connected it signs the stream-auth message and adds
 `public_key` / `signature` / `timestamp_ms` to the `accountEvents` subscribe
 message automatically, re-signing on every reconnect. Pass `auth: false` for an
-unsigned watch-only subscription. Against an
-unauthenticated gateway (e.g. devnet) the owner alone suffices.
+unsigned watch-only subscription; devnet refuses an unsigned `accountEvents`
+subscribe with 401.
 
 ## Wire Format
 

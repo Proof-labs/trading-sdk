@@ -139,7 +139,10 @@ async fn a_checktx_rejection_surfaces_a_typed_engine_error() {
     );
     assert_eq!(
         s.status,
-        TxStatus::Rejected(EngineError::Known(ErrorKind::InsufficientMargin))
+        TxStatus::Rejected {
+            error: EngineError::Known(ErrorKind::InsufficientMargin),
+            log: None,
+        }
     );
     assert_eq!(
         c.send(&tx).await.unwrap().error(),
@@ -227,6 +230,19 @@ async fn a_submit_without_a_verdict_returns_the_transaction() {
             assert!(matches!(*source, Error::Http { status: 502, .. }));
             assert_eq!(tx.hash, proof_sdk_rs::TxHash::of_signed_bytes(&tx.bytes));
         }
+        other => panic!("expected Unconfirmed, got {other:?}"),
+    }
+    // The gateway's own reason survives a non-success answer.
+    let (url, _) = fixture(vec![(
+        500,
+        json!({"status":"error","code":1,"log":"internal encoding error"}),
+    )])
+    .await;
+    match client(&url).cancel_all_orders(None).await {
+        Err(Error::Unconfirmed { source, .. }) => assert!(
+            matches!(&*source, Error::Http { status: 500, body } if body == "internal encoding error"),
+            "{source:?}"
+        ),
         other => panic!("expected Unconfirmed, got {other:?}"),
     }
     let c = client("http://127.0.0.1:1");
@@ -411,4 +427,27 @@ async fn receipt_wait_reports_a_rate_limit_instead_of_timing_out() {
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Http { status: 429, .. }), "{err:?}");
+}
+
+#[tokio::test]
+async fn an_unpriced_account_read_is_missing_mark_not_a_bare_503() {
+    let body = json!({
+        "error": "query failed: MissingMark: required account valuation mark unavailable (rc=-2)",
+        "errorCode": "MissingMark",
+    });
+    let (url, _) = fixture(vec![(503, body), (503, json!({"error": "maintenance"}))]).await;
+    let info = proof_sdk_rs::InfoClient::new(&ClientConfig::new(url)).unwrap();
+    let owner = Address::from_public_key(&[7; 32]);
+    let Err(err) = info.account(owner).await else {
+        panic!("expected an error")
+    };
+    assert!(
+        matches!(&err, Error::MissingMark { message } if message.contains("valuation mark")),
+        "{err:?}"
+    );
+    // Any other 503 stays an HTTP error.
+    let Err(err) = info.account(owner).await else {
+        panic!("expected an error")
+    };
+    assert!(matches!(err, Error::Http { status: 503, .. }), "{err:?}");
 }

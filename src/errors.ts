@@ -96,11 +96,9 @@ export enum ExecErrorCode {
   InvalidCancelReplaceTarget = 48,
   AmendBelowFilled = 49,
   /**
-   * New engines use code 50 for AtomicBasketOrder `SlippageExceeded`. During
-   * the rolling upgrade, legacy engines may still emit code 50 for
-   * `OpenInterestLimitExceeded`, so pass the canonical DeliverTx log to
-   * {@link decodeExecError}. Without a recognized log the decoder returns
-   * `AmbiguousCode50`, never a guessed classification.
+   * AtomicBasketOrder `SlippageExceeded`. Receipts from before the
+   * renumbering used 50 for `OpenInterestLimitExceeded`; pass the DeliverTx
+   * log to {@link decodeExecError} to read those correctly.
    */
   SlippageExceeded = 50,
   /** Distinct open-interest-cap rejection emitted by upgraded engines. */
@@ -199,20 +197,21 @@ export enum ExecErrorCode {
   MarketHalted = 134,
   /** The bridge is paused by the admin quorum; claims, payout reports and
    *  bridge votes refuse until UnpauseBridge clears the flag. */
-  BridgePaused = 135,
+  BridgePaused = 136,
   /** A bridge vote conflicts with the votes already recorded for its item:
    *  a different registry epoch, or a different observation for a transfer
    *  that already has votes. */
-  BridgeVoteConflict = 136,
+  BridgeVoteConflict = 137,
   /** A bridge vote failed verification: bad signature, or a vote naming a
    *  non-current registry epoch. */
-  BridgeVoteInvalid = 137,
+  BridgeVoteInvalid = 138,
   /** The submitter is not a member of the operator receipt registry's
    *  owner roster. */
-  BridgeUnauthorizedOperator = 138,
+  BridgeUnauthorizedOperator = 139,
   /** A payout report failed its binding checks: wrong vault, non-current
    *  epoch, or the lease does not name the submitter. */
-  BridgePayoutReportInvalid = 139,
+  BridgePayoutReportInvalid = 140,
+  OffCurveWithdrawalDestination = 135,
   InternalError = 255,
 }
 
@@ -687,26 +686,31 @@ const TABLE: Record<number, ExecErrorInfo> = {
       "The market is halted and takes no orders or fills; cancels still work.",
   },
   135: {
+    name: "OffCurveWithdrawalDestination",
+    description:
+      "Withdrawal destination must be an on-curve Solana wallet owner; no funds were debited.",
+  },
+  136: {
     name: "BridgePaused",
     description:
       "The bridge is paused by the admin quorum; claims, payout reports and bridge votes refuse until UnpauseBridge clears the flag.",
   },
-  136: {
+  137: {
     name: "BridgeVoteConflict",
     description:
       "A bridge vote conflicts with the votes already recorded for its item: a different registry epoch, or a different observation for a transfer that already has votes.",
   },
-  137: {
+  138: {
     name: "BridgeVoteInvalid",
     description:
       "A bridge vote failed verification: bad signature, or a vote naming a non-current registry epoch.",
   },
-  138: {
+  139: {
     name: "BridgeUnauthorizedOperator",
     description:
       "The submitter is not a member of the operator receipt registry's owner roster.",
   },
-  139: {
+  140: {
     name: "BridgePayoutReportInvalid",
     description:
       "A payout report failed its binding checks: wrong vault, non-current epoch, or the lease does not name the submitter.",
@@ -727,13 +731,6 @@ const TABLE: Record<number, ExecErrorInfo> = {
  *   }
  */
 const OPEN_INTEREST_LOG_PREFIX = "open interest limit exceeded on market ";
-const SLIPPAGE_LOG_PREFIX = "atomic basket aggregate slippage ";
-
-const AMBIGUOUS_CODE_50: ExecErrorInfo = {
-  name: "AmbiguousCode50",
-  description:
-    "during the rolling upgrade, engine code 50 may mean legacy OpenInterestLimitExceeded or current SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely",
-};
 
 export function decodeExecError(
   code: number,
@@ -744,10 +741,7 @@ export function decodeExecError(
     if (log?.startsWith(OPEN_INTEREST_LOG_PREFIX)) {
       return OPEN_INTEREST_LIMIT_EXCEEDED;
     }
-    if (log?.startsWith(SLIPPAGE_LOG_PREFIX)) {
-      return SLIPPAGE_EXCEEDED;
-    }
-    return AMBIGUOUS_CODE_50;
+    return SLIPPAGE_EXCEEDED;
   }
   return TABLE[code] ?? null;
 }

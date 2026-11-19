@@ -267,87 +267,10 @@ impl<'de> Deserialize<'de> for SolanaSignature {
     }
 }
 
-/// Pre-allocation hint cap for the untrusted variable-length sequences in
-/// the retired receipt-proof decode path. Kept as the generic bound for any
-/// future untrusted byte-sequence field.
-const PROOF_SEQ_HINT_CAP: usize = 64;
-
-/// Decode a `Vec<u8>` wire field without trusting the declared msgpack
-/// sequence length as a pre-allocation size — the same fuzz-caught OOM
-/// rationale as `SolanaSignature::deserialize`. Dual-form like the byte
-/// newtypes: msgpack seq-of-u8 or a byte scalar. Length is *not* validated;
-/// strictness stays identical to the engine's bare `Vec<u8>`.
-/// #[allow(dead_code)] — the receipt actions that decoded through it retired
-/// with wire 12; the helper stays for the next untrusted-sequence field.
-#[allow(dead_code)]
-pub(crate) fn hint_capped_bytes<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
-    struct V;
-    impl<'de> Visitor<'de> for V {
-        type Value = Vec<u8>;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a byte string or sequence of u8")
-        }
-
-        fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<Vec<u8>, E> {
-            Ok(v.to_vec())
-        }
-
-        fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Vec<u8>, E> {
-            Ok(v)
-        }
-
-        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<u8>, A::Error> {
-            let cap = seq.size_hint().unwrap_or(0).min(PROOF_SEQ_HINT_CAP);
-            let mut out = Vec::with_capacity(cap);
-            while let Some(b) = seq.next_element::<u8>()? {
-                out.push(b);
-            }
-            Ok(out)
-        }
-    }
-    d.deserialize_any(V)
-}
-
-/// Decode a `Vec<Vec<u8>>` signature list with the same hint-capped
-/// discipline at both nesting levels.
-#[allow(dead_code)]
-pub(crate) fn hint_capped_byte_seqs<'de, D: Deserializer<'de>>(
-    d: D,
-) -> Result<Vec<Vec<u8>>, D::Error> {
-    /// Element wrapper so the outer loop reuses `hint_capped_bytes`.
-    struct Inner(Vec<u8>);
-    impl<'de> Deserialize<'de> for Inner {
-        fn deserialize<D2: Deserializer<'de>>(d: D2) -> Result<Self, D2::Error> {
-            hint_capped_bytes(d).map(Inner)
-        }
-    }
-
-    struct V;
-    impl<'de> Visitor<'de> for V {
-        type Value = Vec<Vec<u8>>;
-
-        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("a sequence of byte sequences")
-        }
-
-        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<Vec<u8>>, A::Error> {
-            let cap = seq.size_hint().unwrap_or(0).min(PROOF_SEQ_HINT_CAP);
-            let mut out = Vec::with_capacity(cap);
-            while let Some(Inner(sig)) = seq.next_element::<Inner>()? {
-                out.push(sig);
-            }
-            Ok(out)
-        }
-    }
-    d.deserialize_seq(V)
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
-    use proof_wire::types::ExecError;
 
     #[test]
     fn address_wire_identical_to_bare_array() {

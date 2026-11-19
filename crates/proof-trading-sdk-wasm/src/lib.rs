@@ -93,15 +93,21 @@ pub enum ReadKind {
     /// One `AdminAction`, as stored on a proposal.
     AdminAction = 4,
     /// The bridge's governance state (`/v2/bridge/status`).
-    BridgeStatus = 5,
+    BridgeStatus = 8,
     /// The operator registry at one epoch (`/v2/bridge/registry[/{epoch}]`).
-    BridgeRegistry = 6,
+    BridgeRegistry = 9,
     /// One page of pending withdrawals with their leases, payout reports
     /// and Paid votes (`/v2/bridge/pending-withdrawals`).
-    PendingWithdrawals = 7,
+    PendingWithdrawals = 10,
     /// One page of pending deposits with their voted readings
     /// (`/v2/bridge/pending-deposits`).
-    PendingDeposits = 8,
+    PendingDeposits = 11,
+    /// `query_v2::AuthorizedAgents`, a current bounded map-encoded grant list.
+    AuthorizedAgents = 5,
+    /// `query_v2::InsuranceFundDirectory` (`GET /v2/insurance-funds?witness=1`).
+    InsuranceFundDirectory = 6,
+    /// `query_v2::InsuranceFundState` (`GET /v2/insurance-fund/{pool}?witness=1`).
+    InsuranceFundState = 7,
 }
 
 fn decode_as<T: serde::de::DeserializeOwned + serde::Serialize>(
@@ -159,6 +165,34 @@ pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
             decode_as::<core_sdk::query_v2::PendingWithdrawalPage>(bytes)
         }
         ReadKind::PendingDeposits => decode_as::<core_sdk::query_v2::PendingDepositPage>(bytes),
+        ReadKind::AuthorizedAgents => {
+            if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+                return Err(JsError::new("authorized agents must be a MessagePack map"));
+            }
+            decode_as::<core_sdk::query::AuthorizedAgents>(bytes)
+        }
+        ReadKind::InsuranceFundDirectory => {
+            if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+                return Err(JsError::new(
+                    "insurance fund directory must be a MessagePack map",
+                ));
+            }
+            let view: core_sdk::query::InsuranceFundDirectory =
+                rmp_serde::from_slice(bytes).map_err(|error| JsError::new(&error.to_string()))?;
+            core_sdk::query::validate_insurance_fund_directory(&view).map_err(JsError::new)?;
+            to_bigint_js(&view)
+        }
+        ReadKind::InsuranceFundState => {
+            if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
+                return Err(JsError::new(
+                    "insurance fund state must be a MessagePack map",
+                ));
+            }
+            let view: core_sdk::query::InsuranceFundState =
+                rmp_serde::from_slice(bytes).map_err(|error| JsError::new(&error.to_string()))?;
+            core_sdk::query::validate_insurance_fund_state(&view).map_err(JsError::new)?;
+            to_bigint_js(&view)
+        }
     }
 }
 
@@ -230,6 +264,23 @@ pub fn decode_markets_snapshot(body: &[u8], chain_id: &[u8]) -> Result<JsValue, 
     to_bigint_js(&snapshot)
 }
 
+/// Decode a complete `GET /v2/markets-snapshot` HTTP body bound to
+/// `chain_id`, via the core's `market_snapshot::decode_snapshot_view`.
+#[wasm_bindgen]
+pub fn decode_markets_snapshot_view(body: &[u8], chain_id: &[u8]) -> Result<JsValue, JsError> {
+    let chain = core_sdk::market_snapshot::ChainBinding::new(arr32(chain_id, "chain_id")?)
+        .ok_or_else(|| JsError::new("chain_id must name a chain, not the zero binding"))?;
+    let snapshot = core_sdk::market_snapshot::decode_snapshot_view(body, chain).map_err(|e| {
+        use core_sdk::market_snapshot::SnapshotError;
+        JsError::new(match e {
+            SnapshotError::WrongChain => "market snapshot: wrong chain",
+            SnapshotError::Uncommitted => "market snapshot: uncommitted height",
+            _ => "market snapshot: malformed complete response",
+        })
+    })?;
+    to_bigint_js(&snapshot)
+}
+
 /// Build the deterministic signing message
 /// (`DOMAIN_PREFIX || chain_id || action_type || seq_be || payload`).
 #[wasm_bindgen]
@@ -269,7 +320,7 @@ pub fn sign_and_encode(
     secret_key: &[u8],
 ) -> Result<Vec<u8>, JsError> {
     let cid = arr32(chain_id, "chain_id")?;
-    let sk = arr32(secret_key, "secret_key")?;
+    let sk = zeroize::Zeroizing::new(arr32(secret_key, "secret_key")?);
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&sk);
     codec::sign_and_encode_payload(&cid, action_type, payload, seq, &signing_key).map_err(to_js)
 }

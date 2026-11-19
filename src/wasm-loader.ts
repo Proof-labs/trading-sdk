@@ -38,6 +38,9 @@ export interface WasmCore {
     readonly BridgeRegistry: number;
     readonly PendingWithdrawals: number;
     readonly PendingDeposits: number;
+    readonly AuthorizedAgents: number;
+    readonly InsuranceFundDirectory: number;
+    readonly InsuranceFundState: number;
   };
   /** Strictly decode a node read response as its wire type (serde-shaped JS). */
   decode_read(kind: number, bytes: Uint8Array): unknown;
@@ -53,6 +56,8 @@ export interface WasmCore {
   market_config_fields(): number;
   /** Decode a complete `/v1/markets-snapshot` HTTP body bound to `chainId`. */
   decode_markets_snapshot(body: Uint8Array, chainId: Uint8Array): unknown;
+  /** Decode a complete `/v2/markets-snapshot` HTTP body bound to `chainId`. */
+  decode_markets_snapshot_view(body: Uint8Array, chainId: Uint8Array): unknown;
   signing_message(
     chainId: Uint8Array,
     actionType: number,

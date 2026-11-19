@@ -406,9 +406,8 @@ pub fn error_manifest_name(code: u32) -> Option<&'static str> {
         .map(|kind| kind.name())
 }
 
-/// Safe log-aware classification name — the decoder the SDKs expose. Code 50
-/// resolves to slippage/open-interest only via its canonical log; a bare or
-/// unrecognized code 50 stays `AmbiguousCode50`.
+/// Log-aware classification name, the decoder the SDKs expose. Code 50 is
+/// slippage unless its log names a pre-renumbering open-interest refusal.
 pub fn error_classify_name(code: u32, log: Option<&str>) -> Option<&'static str> {
     proof_trading_sdk::errors::decode_exec_error_kind(code, log).map(|kind| kind.name())
 }

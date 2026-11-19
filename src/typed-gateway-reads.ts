@@ -5,6 +5,16 @@ import {
   type FinalizedOrderbookOptions,
 } from "./finalized-orderbook.js";
 import {
+  readFinalizedAuthorizedAgents,
+  type FinalizedAuthorizedAgents,
+} from "./authorized-agents.js";
+import {
+  readFinalizedInsuranceFunds,
+  readFinalizedInsuranceFund,
+  type FinalizedInsuranceFunds,
+  type FinalizedInsuranceFund,
+} from "./insurance-funds.js";
+import {
   readFinalizedOraclePermissions,
   type FinalizedOraclePermissions,
 } from "./finalized-oracle-read.js";
@@ -31,6 +41,10 @@ import {
 } from "./finalized-state-reads.js";
 import type { BlockEvidenceHeader } from "./block-header.js";
 import {
+  readMarketsSnapshotView,
+  type MarketsSnapshotView,
+} from "./markets-snapshot-view.js";
+import {
   readTransactionEvidence,
   type TransactionEvidence,
   type TransactionEvidenceSelection,
@@ -56,6 +70,20 @@ import {
 import { GatewayReadError } from "./errors.js";
 import type { FinancialStateSelection } from "./financial-state.js";
 
+/** The chain a read is bound to; a read that needs one and has none is
+ * refused before any request. */
+function pinnedChain(
+  chain: Uint8Array | undefined,
+  purpose: string,
+): Uint8Array {
+  if (!chain)
+    throw new GatewayReadError(
+      "configuration",
+      "chainId",
+      `${purpose} requires an explicit pinned chainId`,
+    );
+  return chainPin(chain);
+}
 class ReadClient {
   constructor(
     protected readonly gatewayUrl: string,
@@ -63,17 +91,42 @@ class ReadClient {
     protected readonly inventoryChainId?: Uint8Array,
   ) {}
   protected requirePinnedChain(purpose: string): Uint8Array {
-    if (!this.inventoryChainId)
-      throw new GatewayReadError(
-        "configuration",
-        "chainId",
-        `${purpose} requires an explicit pinned chainId`,
-      );
-    return chainPin(this.inventoryChainId);
+    return pinnedChain(this.inventoryChainId, purpose);
   }
 }
 /** Same-view facts. See FinalizedReadWitness for the trust and binding boundary. */
 export class FinalizedReads extends ReadClient {
+  insuranceFunds(
+    options: BoundedReadOptions = {},
+  ): Promise<FinalizedInsuranceFunds> {
+    return readFinalizedInsuranceFunds(
+      this.gatewayUrl,
+      options,
+      this.httpTransport,
+    );
+  }
+  insuranceFund(
+    poolId: number,
+    options: BoundedReadOptions = {},
+  ): Promise<FinalizedInsuranceFund> {
+    return readFinalizedInsuranceFund(
+      this.gatewayUrl,
+      poolId,
+      options,
+      this.httpTransport,
+    );
+  }
+  async authorizedAgents(
+    owner: string,
+    options: BoundedReadOptions = {},
+  ): Promise<FinalizedAuthorizedAgents> {
+    return readFinalizedAuthorizedAgents(
+      this.gatewayUrl,
+      owner,
+      options,
+      this.httpTransport,
+    );
+  }
   async account(
     owner: string,
     options: BoundedReadOptions = {},
@@ -239,6 +292,7 @@ export class EvidenceReads extends ReadClient {
 export class TypedGatewayReads extends GatewayReads {
   readonly finalized: FinalizedReads;
   readonly evidence: EvidenceReads;
+  private readonly pin: Uint8Array | undefined;
   constructor(
     private readonly gatewayUrl: string,
     private readonly httpTransport: ExchangeHttpTransport,
@@ -248,8 +302,25 @@ export class TypedGatewayReads extends GatewayReads {
       httpTransport(url, init, gatewayReadContext(url, init)),
     );
     const pin = chain ? Uint8Array.from(chain) : undefined;
+    this.pin = pin;
     this.finalized = new FinalizedReads(gatewayUrl, httpTransport, pin);
     this.evidence = new EvidenceReads(gatewayUrl, httpTransport, pin);
+  }
+  /** The node's version 2 markets snapshot (`GET /v2/markets-snapshot`):
+   * every market with its status, every event and each market's open
+   * interest, from one read at one height of the pinned chain. It carries no
+   * witness; `finalized.marketsSnapshot` is the witnessed version 1
+   * inventory. Defaults to `MARKETS_SNAPSHOT_TIMEOUT_MS` (10 seconds); an
+   * explicit `timeoutMs` still wins. */
+  async marketsSnapshotView(
+    options: BoundedReadOptions = {},
+  ): Promise<MarketsSnapshotView> {
+    return readMarketsSnapshotView(
+      this.gatewayUrl,
+      pinnedChain(this.pin, "marketsSnapshotView"),
+      options,
+      this.httpTransport,
+    );
   }
   async tradeHistoryPage(
     market: number,

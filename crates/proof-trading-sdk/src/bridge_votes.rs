@@ -112,14 +112,9 @@ mod tests {
     fn withdrawal_vote_signature_verifies_over_the_wire_preimage() {
         let seed = [0x42u8; 32];
         let key = ed25519_dalek::SigningKey::from_bytes(&seed);
-        let vote = sign_vote_withdrawal_paid(
-            &LocalSigner::from_bytes(&seed),
-            777,
-            DEPLOYMENT,
-            CHAIN,
-            3,
-        )
-        .unwrap();
+        let vote =
+            sign_vote_withdrawal_paid(&LocalSigner::from_bytes(&seed), 777, DEPLOYMENT, CHAIN, 3)
+                .unwrap();
 
         assert_eq!(vote.signature.len(), 64);
         // The signature verifies against the signer's key over exactly the
@@ -132,9 +127,10 @@ mod tests {
         .vote_message();
         assert!(key
             .verifying_key()
-            .verify(&message, &ed25519_dalek::Signature::from_bytes(
-                &vote.signature.try_into().unwrap()
-            ))
+            .verify(
+                &message,
+                &ed25519_dalek::Signature::from_bytes(&vote.signature.try_into().unwrap())
+            )
             .is_ok());
 
         // The preimage is the documented layout: domain || kind(0x01) ||
@@ -191,9 +187,10 @@ mod tests {
 
         assert!(key
             .verifying_key()
-            .verify(&expected, &ed25519_dalek::Signature::from_bytes(
-                &vote.signature.try_into().unwrap()
-            ))
+            .verify(
+                &expected,
+                &ed25519_dalek::Signature::from_bytes(&vote.signature.try_into().unwrap())
+            )
             .is_ok());
     }
 
@@ -237,14 +234,8 @@ mod tests {
         let signer = LocalSigner::from_bytes(&seed);
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
 
-        let withdrawal = sign_vote_withdrawal_paid(
-            &signer,
-            u64::MAX,
-            DEPLOYMENT,
-            CHAIN,
-            u64::MAX,
-        )
-        .unwrap();
+        let withdrawal =
+            sign_vote_withdrawal_paid(&signer, u64::MAX, DEPLOYMENT, CHAIN, u64::MAX).unwrap();
         let wire = codec::sign_and_encode_with_chain(
             &CHAIN,
             &crate::types::Action::VoteWithdrawalPaid(withdrawal.clone()),
@@ -258,11 +249,13 @@ mod tests {
         let canonical = |a: &crate::types::Action| rmp_serde::to_vec(a).unwrap();
         assert_eq!(
             canonical(&decoded.action),
-            canonical(&crate::types::Action::VoteWithdrawalPaid(withdrawal.clone()))
+            canonical(&crate::types::Action::VoteWithdrawalPaid(
+                withdrawal.clone()
+            ))
         );
         // Deterministic: the same key and item sign identical bytes.
-        let again = sign_vote_withdrawal_paid(&signer, u64::MAX, DEPLOYMENT, CHAIN, u64::MAX)
-            .unwrap();
+        let again =
+            sign_vote_withdrawal_paid(&signer, u64::MAX, DEPLOYMENT, CHAIN, u64::MAX).unwrap();
         assert_eq!(again.signature, withdrawal.signature);
         // …and a different withdrawal id cannot reuse them.
         let other = sign_vote_withdrawal_paid(&signer, 1, DEPLOYMENT, CHAIN, u64::MAX).unwrap();

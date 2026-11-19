@@ -262,6 +262,7 @@ export const ACTION_TAG_BY_KIND: Record<DecodedAdminAction["kind"], number> = {
   ScheduleUpgrade: 14,
   CancelUpgrade: 15,
   SetWithdrawalLimit: 19,
+  SetDepositLimit: 28,
   SetLiquidationConfig: 17,
   SetOperatorReceiptRegistry: 20,
 };

@@ -148,7 +148,7 @@ fn hex_array_with<const N: usize>(text: &str, accepted: impl Fn(&u8) -> bool) ->
         return None;
     }
     let mut result = [0; N];
-    for (out, pair) in result.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
+    for (out, pair) in result.iter_mut().zip(text.as_bytes().as_chunks::<2>().0) {
         *out = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
     }
     Some(result)

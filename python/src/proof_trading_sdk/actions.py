@@ -701,8 +701,8 @@ class VoteDeposit(Action):
 
 @dataclass
 class ResolveEvent(Action):
-    """Resolve an event (0x27) to YES or NO; the engine rejects ``Void`` and
-    refuses an event that still carries attached conditionals."""
+    """Resolve an event (0x27) to YES or NO; the engine rejects ``Void``.
+    The binary book and every attached conditional settle in the same block."""
 
     ACTION_NAME = "ResolveEvent"
     event_id: int

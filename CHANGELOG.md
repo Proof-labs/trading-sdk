@@ -9,6 +9,203 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
+  `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
+  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
+  not a map keyed by field name, or a name that is not a string (a status
+  sent as the integer 0, for example), refuses the whole read.
+- **TypeScript:** `queryEventVoided(gatewayUrl, eventId, { signal?, fetch?, maxPages? })`
+  reads the indexed `event_voided` record (the Yes price a Void settled at)
+  from `GET /v1/history/admin-events`, following `next_cursor`; `null` when the
+  event is not voided or not yet indexed. A malformed page, a repeated cursor
+  or more than `maxPages` pages (default 100) fails with `GatewayReadError`.
+
+## [13.1.0] — 2026-11-19
+
+npm only: a MINOR with two TypeScript additions on the same wire as 13.0.0
+(proof-wire 12.0.0) and no change to existing behaviour. The Rust core entry
+above stays under [Unreleased].
+
+### Added
+
+- **TypeScript:** `decodeFinalizedReadWitness` is exported from the package
+  root, so a caller can decode the `witness` object of a raw gateway answer
+  (for example, in its own `ExchangeHttpTransport`) with the SDK's decoder
+  instead of parsing it itself. It was already used by every witnessed read;
+  its behaviour is unchanged.
+- **TypeScript:** `client.reads().marketsSnapshotView()` reads the node's
+  version 2 markets snapshot (`GET /v2/markets-snapshot`), bound to the pinned
+  chain like `queryMarketsSnapshot()`: every market with its status, every
+  event and each market's open interest, from one read at one height
+  (`MarketsSnapshotView`, `MarketView`, `EventView`). A market's `status` is
+  the engine's `MarketStatus`, or `"Unknown"` (`MarketStatusReading`) for a
+  status this SDK does not name; never read `"Unknown"` as trading. The read
+  carries no witness and needs a gateway that serves `/v2/markets-snapshot`.
+  `queryMarkets()`, `queryMarketListing()` and `queryMarketsSnapshot()` are
+  unchanged.
+
+## [13.0.0] (Python 5.0.0; Rust core 5.0.0) — 2026-11-17
+
+Compatible with exchange 2.25.0 / proof-wire 12.0.0. npm 13.0.0 is a
+MAJOR over published 12.1.0: governance action bytes and proposal hashes change,
+and old fee-update payloads are rejected. Rebuild affected proposals and obtain
+new signatures. Python 5.0.0 includes the breaking refusal and read contracts.
+Rust core 5.0.0 is git-only, not a crates.io publication; its source API and
+re-exported wire enums break compatibility with core 4.x. The Python binding
+crate is also 5.0.0; unchanged helper and WASM package versions are retained.
+
+- Fund directory and position checks are shared in Rust before WASM adaptation;
+  invalid caller pool IDs report configuration errors, future display variants
+  remain explicitly unknown, and fund reads use the query transport budget.
+
+### Changed
+
+- **Rust (`proof-sdk-rs`), changed results for existing calls:** an account
+  read while a held market has no mark is `Error::MissingMark` instead of a
+  bare `Error::Http { status: 503 }`, and a core `GatewayError` of kind
+  `MissingMark` converts to `Error::MissingMark` instead of `Error::Gateway`.
+  Callers that matched the old variants stop matching; both still compile
+  (`Error` is `#[non_exhaustive]`).
+- **TypeScript:** `CandleHistoryParams` drops `cursor`. The candles and BBO
+  routes page by time window and never read it; the indexer now refuses it.
+- **Python:** `_native.pyi` adds `reject_floats` and `classify_error_name`,
+  and nine decode stubs name their first parameter `bytes`, as the native
+  module does.
+- **Rust `proof-sdk-rs`, changed before its 1.0.0 release:**
+  `TxStatus::Rejected` is now `Rejected { error, log: Option<String> }`
+  (`None` when the engine gave no log). `TxStatus` is not
+  `#[non_exhaustive]`; `proof-sdk-rs` is first released as 1.0.0 in this
+  release, so this is part of 1.0.0. `EventResolved`, `PredictionSettled`,
+  `ConditionMet`, `ConditionNotMet` and `PositionTriggersInvalidated` are
+  typed, so code matching them as `Event::Other` stops matching
+  (compile-compatible: `Event` is `#[non_exhaustive]`). A WebSocket handshake
+  answered with any HTTP error is `Error::Http`, not `Error::WsConnect`, on
+  the first `connect` too; a 401 on reconnect ends the feed, other statuses
+  keep retrying.
+- **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `GatewayError` gains a
+  public `log` field, so struct literals stop compiling. The crate is already
+  MAJOR for proof-wire 12.
+- **Rust minimum version 1.88** for `proof-trading-sdk` and `proof-sdk-rs`,
+  now declared as `rust-version` (`<[T]>::as_chunks`).
+- **Breaking (Python MAJOR):** `load_key_from_fd` no longer closes the
+  caller's fd; close it yourself, or it leaks. A negative fd raises
+  `ValueError`.
+- **Breaking (TypeScript, npm MAJOR):** `signAndEncode`, `encodeSignedTx` and
+  `signEnvelopeFromPayload` throw `RangeError` for a `seq` outside u64 or an
+  action type outside a byte, instead of signing a wrapped value.
+- **Code 50 is `SlippageExceeded`** in TypeScript, Python and Rust. Only a log
+  naming an open-interest refusal (receipts from before the renumbering) still
+  reads as `OpenInterestLimitExceeded`. An `order_rejected` event carries no
+  log, so a code 50 there is always slippage.
+- **Wire compatibility boundary:** pin canonical wire `2a707bc` (engine
+  `23ee1f0`). Conditional attachment proposal bytes/hashes now include impact
+  notional; fee updates require the funding dead-band and interest-rate tail.
+  Older fee-update payloads are rejected, matching the engine. Rebuild and
+  reapprove affected governance proposals against the matching engine; do not
+  reuse old signatures.
+- **proof-wire 12.0.0 (exchange 2.25.0, protocol 13.0).** The pin moves from
+  canonical wire `2a707bc` to the `v12.0.0` release commit `27ac6ac`, still
+  pinned by commit, never by tag. Over `2a707bc` the release adds the
+  `Resolution` liquidation mode, the `ResolutionBalanceSnapshot` engine event
+  and error code 135; no action bytes change, and `conformance/codec.ndjson`
+  regenerates unchanged. The Rust crate re-exports proof-wire 12 types, whose
+  `Event`, `LiquidationMode` and `ExecError` gain variants an older decoder
+  rejects: the next `proof-trading-sdk` crate release is MAJOR. The npm
+  package and the Python distribution only add names, so this change alone
+  is MINOR for them.
+- **Breaking (Python MAJOR):** typed `ProposeAdminAction` and
+  `ApproveAdminAction` reject retired admin actions at construction and before
+  encoding. `is_submittable_admin_action()` checks the kind without enforcing
+  engine admission policy. Raw encoding/signing and historical decoding remain.
+- Historical `SetTriggerMarketConfig` decoding and legacy policy fields in
+  position-trigger reads validate wire fields without enforcing the retired
+  enabled-policy nonzero bounds.
+
+- Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
+  1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
+  still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
+  placement. Existing TP/SL placement, cancellation and history APIs remain.
+
+- **Python `open_orders`** preserves all 14 resting-order fields through the
+  shared Rust decoder (released for TypeScript in 12.0.0).
+
+- Python stream reconnect attempts and backoff reset after a matching subscription
+  acknowledgment or data delivery. Handshakes and refusals alone do not reset them.
+
+- **Breaking (Python MAJOR):** account, orderbook and public trade streams share
+  connection and cleanup handling. At startup, HTTP 401/403 raise
+  `AuthenticationError` and any other non-transient response raises
+  `TransportError`; network errors, timeouts, a connection dropped during the
+  handshake, and HTTP 408/429/5xx from the gateway or a proxy retry. Exhausting
+  `AccountEventStream`'s `reconnect_attempts` budget raises `TransportError`;
+  orderbook and trade streams retry until closed. After a failure or iterator
+  closure, reuse raises `RuntimeError`, even after a later `close()`; `close()`
+  on an open stream leaves iteration empty. Streams accept
+  base URLs or `/ws` endpoints, reject concurrent iterators, close sockets before
+  reconnect waits and cancel waits on `close()`. Backoff caps must be finite and
+  positive. Account auth retries and history recovery remain channel-specific.
+  Reconnect logs omit exception text. These contracts are breaking in Python 5.0.0.
+
+- **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `gateway::CommittedReceipt` gains `log` and
+  `events` (`TxEvent`), read from the `POST /exchange` and `GET /v1/tx/{hash}` responses that already
+  carried them; `SubmissionOutcome::CheckTxRejected` gains `log`. `errors::ErrorKind` is
+  `#[non_exhaustive]` and gains `ErrorKind::from_code` (`None` for the version-dependent code 50).
+  New `sign_action` signs any `Action` through a custody `Signer`.
+
+- Python account-stream reconnect backoff now defaults to a 10-second cap
+  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
+- Python signed account authentication rejects an unconfigured chain ID before
+  signing. Configure the gateway's chain ID explicitly.
+- Python account streams match TypeScript's bounded first-subscription auth
+  retries: signing failures and 401/429/503 frames yield errors and retry up to
+  five times. Exhaustion and 403 frames leave the socket open without further
+  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
+  401/403 refusals raise `AuthenticationError` before the first successful
+  connection; on reconnect they use the configured retry budget and backoff
+  without discarding history recovery state.
+- A Python client with a signer now signs every account subscription, even with
+  an API key configured. Subscribing to another owner's feed, or to any feed
+  with an unconfigured chain ID, now fails with error frames instead of relying
+  on the API key. Use a client with only the API key for those feeds.
+
+### Added
+
+- **TypeScript (MINOR):** expose `SetDepositLimit` in the public types and
+  decode tag-28 governance proposals. Existing wire bytes are unchanged.
+  `AdminAction` gains the `SetDepositLimit` variant: an exhaustive `switch`
+  on `action.kind` (one that assigns the remainder to `never`) or a
+  `Record<AdminAction["kind"], …>` table needs a new entry.
+- **Rust (`proof-sdk-rs`):** typed reads for funding and mark, position
+  triggers, sub-accounts, withdrawal status, authorized agents and the
+  `/v1/history/*` routes (fills, orders, positions, funding payments, account
+  events, resolutions, triggers, candles, BBO), each strictly decoded with
+  cursor paging; and helpers for buying and selling No, position triggers,
+  agents, sub-accounts, withdrawal requests and atomic baskets (#464).
+  History rows are checked against the owner and every filter the query set
+  (market, event, event type, and the block-time window where the indexer
+  applies it); a row that does not decode is `Error::HistoryRow`, which keeps
+  the page's cursor. `buy_no` / `sell_no` take the market's `MarketConfig`
+  and refuse anything but a prediction-binary book before signing. Ids are
+  typed: `TriggerGroupId`, `TriggerLimbId`, `IndexerEventId`, `SubAccountId`
+  (non-zero) and proof-wire's `WithdrawalId`.
+- **Rust `proof-sdk-rs`:** typed resolution events `EventResolved`,
+  `PredictionSettled`, `ConditionMet` (with `ConversionFallbackReason`),
+  `ConditionNotMet` and `PositionTriggersInvalidated` (with an optional
+  `TriggerInvalidation`), on receipts and the account stream.
+- Error code 135 `OffCurveWithdrawalDestination` (proof-wire 12.0.0): the
+  withdrawal destination is not an on-curve Solana wallet owner, and no funds
+  were debited. Named in Rust, TypeScript and Python.
+- The `resolution` liquidation mode in `LIQUIDATION_MODES`: the funds take
+  an account's prediction binaries when no positive equity is left after a
+  resolution's fund paid (proof-wire 12.0.0).
+- `decodeResolutionBalanceSnapshotEvent()` decodes the engine's
+  `resolution_balance_snapshot` event: one account's exact cash at the ends
+  of the blocks immediately before and after an event's resolution, with the
+  settlement balances that isolate the resolution (proof-wire 12.0.0).
+- Fund reads retain balances and positions when future wire variants are unknown, explicitly reporting unknown sides or valuations; known priced values still require exact validation.
+- `reads().finalized.insuranceFunds()` lists every registered or stored-ledger pool, including marketless funds, with cash, debt and net cash at one witnessed state. `insuranceFund(poolId)` adds bounded positions and engine-settlement notionals, explicitly reporting incomplete lists, unpriced references and unsupported prediction binaries. These display values are not equity, historical profit or execution quotes.
+- `reads().insuranceFundHistory({ poolId, stream, limit, cursor })` reads one bounded page of indexed insurance balances or activity through the gateway. Amounts and chain coordinates remain exact integers; coverage explicitly describes retained observations, never complete history, equity or a finalized-state witness.
+- `reads().finalized.authorizedAgents(owner)` reads up to 100 current stored trading-agent grants with an atomic finalized-state witness and an explicit completeness flag. Grants have no stored expiry or per-action scope; this read does not authorize signing.
 - Python `ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS` (`1_000`) mirrors the engine's
   per-limb TP/SL slippage ceiling as an advisory clamp; encoding does not
   enforce it.
@@ -47,6 +244,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   heights/timestamps are preserved; validator signatures and payload proofs
   are not verified. Whole-block responses over 1 MiB remain unsupported.
 
+- `validateSetMarginOffsetPolicy` checks policy bounds before encoding and
+  through `decodeAdminAction`.
+  `decodeMarginOffsetEvent` reads the engine's `margin_offset_policy_set`
+  and `margin_offset_pair_configured` attributes against wire-generated vectors.
+  Rust re-exports the margin-offset types. Conformance vectors and content-hash
+  constants pin policy encoding across TypeScript, Rust and Python.
 - Python typed `authorities()` and `liquidation_config()` reads, backed by
   canonical Rust wire types with strict record/address/range checks. Failed
   reads raise rather than synthesize empty authorities or default configuration.
@@ -78,116 +281,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   they now honour proxy environment variables such as `HTTPS_PROXY` and inherit
   the library's 20-second keepalive.
 
-- **The wire-12 vote actions and bridge reads.** `VoteWithdrawalPaid` (0x30)
-  and `VoteDeposit` (0x32) settle withdrawals and credit deposits by operator
-  quorum: each registry member signs the canonical vote preimage
-  (`PROOF_BRIDGE_VOTE_V1 || kind || …`) with its operator ed25519 key — a
-  vote carries its own signature, never the envelope signing convention — and
-  submits on its own; the engine aggregates distinct signatures to the
-  roster's threshold. The Rust core adds `bridge_votes::sign_vote_withdrawal_paid`
-  / `sign_vote_deposit` over the custody-neutral `Signer` seam; Python adds
-  `VoteWithdrawalPaid` / `VoteDeposit` builders with `Vote*.sign` and the
-  `vote_*_message` preimage helpers; TypeScript types the actions and submits
-  them through `submitTx`. Cross-language codec vectors pin the payloads, and
-  Rust unit tests pin the preimage bytes against the wire's own
-  `vote_message()`. The four `/v2/bridge` reads arrive beside
-  `queryWithdrawal` (`queryBridgeStatus`, `queryBridgeRegistry`,
-  `queryPendingWithdrawals`, `queryPendingDeposits` in TypeScript, `bridge_status`,
-  `bridge_registry`, `pending_withdrawals`, `pending_deposits` in Python);
-  the withdrawals cursor is a u64, the deposits cursor is the opaque
-  hex-encoded store key, and the views decode in the WASM core
-  (`ReadKind.BridgeStatus` / `BridgeRegistry` / `PendingWithdrawals` /
-  `PendingDeposits`).
-- Error codes 135-139: `BridgePaused`, `BridgeVoteConflict`,
-  `BridgeVoteInvalid`, `BridgeUnauthorizedOperator`, `BridgePayoutReportInvalid`.
-
 ### Removed
 
-- **The receipt-era bridge actions** (`ConfirmWithdrawalReceipt` 0x22,
-  `FailWithdrawalReceipt` 0x23, `AuthorizeWithdrawal` 0x24), which wire 12
-  retires in favour of the votes. The TypeScript client methods
-  (`authorizeWithdrawal`, `confirmWithdrawalReceipt`, `failWithdrawalReceipt`),
-  the `BridgeWithdrawalReceipt` / `OperatorReceiptProof` types, the Python
-  dataclasses, and the `encodeBridgeReceipt` / `signOperatorReceipt` /
-  `encode_bridge_receipt` helpers are gone; the pure canonical
-  `WithdrawalAuthorizationV1` encoders stay. Breaking for code that names the
-  retired surfaces (MAJOR).
-- **`RecordWithdrawalPayout` is reshaped** (wire 12 repurposed 0x31): the
-  payload is now `{withdrawal_id, holder, vault (32 bytes),
-squads_transaction_index, registry_epoch}` and no longer carries a Solana
-  signature or a block height. Pre-12 payloads no longer decode anywhere.
-- Error codes 73 and 74 (`BridgeReceiptInvalid`, `BridgeReceiptMismatch`)
-  are retired-never-produced and no longer classify in TypeScript or the Rust
-  manifest; the codes are never reassigned.
-
-### Changed
-
-- **proof-wire 12 (exchange wire 12).** The Rust crate pins proof-wire to the
-  engine branch carrying wire 12 (commit `8ca683d3`) until the public wire.git
-  mirror publishes it, then moves to the mirror rev and the v12 tag. The
-  operator registry gains `operator_owners` (parallel to `operator_keys`;
-  pre-12 registry rows decode with an empty, fail-closed roster), and
-  `MarketConfig` / `AttachConditional` / `UpdateMarketFees` gain DEC-293's
-  impact notional and the funding dead-band/interest levers.
-
-- **Breaking (Python MAJOR):** typed `ProposeAdminAction` and
-  `ApproveAdminAction` reject retired admin actions at construction and before
-  encoding. `is_submittable_admin_action()` checks the kind without enforcing
-  engine admission policy. Raw encoding/signing and historical decoding remain.
-- Historical `SetTriggerMarketConfig` decoding and legacy policy fields in
-  position-trigger reads validate wire fields without enforcing the retired
-  enabled-policy nonzero bounds.
-
-- Engine note, no SDK change: engine admission caps TP/SL per-limb slippage at
-  1000 basis points (`ENGINE_TRIGGER_SLIPPAGE_CEILING_BPS`); SDK wire validation
-  still accepts 1 to 9999. Empty or disabled legacy policy rows do not gate
-  placement. Existing TP/SL placement, cancellation and history APIs remain.
-
-- **Python `open_orders`** preserves all 14 resting-order fields through the
-  shared Rust decoder (released for TypeScript in 12.0.0).
-
-- Python stream reconnect attempts and backoff reset after a matching subscription
-  acknowledgment or data delivery. Handshakes and refusals alone do not reset them.
-
-- **Breaking (Python MAJOR):** account, orderbook and public trade streams share
-  connection and cleanup handling. At startup, HTTP 401/403 raise
-  `AuthenticationError` and any other non-transient response raises
-  `TransportError`; network errors, timeouts, a connection dropped during the
-  handshake, and HTTP 408/429/5xx from the gateway or a proxy retry. Exhausting
-  `AccountEventStream`'s `reconnect_attempts` budget raises `TransportError`;
-  orderbook and trade streams retry until closed. After a failure or iterator
-  closure, reuse raises `RuntimeError`, even after a later `close()`; `close()`
-  on an open stream leaves iteration empty. Streams accept
-  base URLs or `/ws` endpoints, reject concurrent iterators, close sockets before
-  reconnect waits and cancel waits on `close()`. Backoff caps must be finite and
-  positive. Account auth retries and history recovery remain channel-specific.
-  Reconnect logs omit exception text. These contracts target the next Python
-  MAJOR release, not Python 4.0.0.
-
-- **Breaking (Rust core `proof-trading-sdk`, MAJOR):** `gateway::CommittedReceipt` gains `log` and
-  `events` (`TxEvent`), read from the `POST /exchange` and `GET /v1/tx/{hash}` responses that already
-  carried them; `SubmissionOutcome::CheckTxRejected` gains `log`. `errors::ErrorKind` is
-  `#[non_exhaustive]` and gains `ErrorKind::from_code` (`None` for the version-dependent code 50).
-  New `sign_action` signs any `Action` through a custody `Signer`.
-
-- Python account-stream reconnect backoff now defaults to a 10-second cap
-  (previously 30 seconds), matching TypeScript. Orderbook streams remain at 30 seconds.
-- Python signed account authentication rejects an unconfigured chain ID before
-  signing. Configure the gateway's chain ID explicitly.
-- Python account streams match TypeScript's bounded first-subscription auth
-  retries: signing failures and 401/429/503 frames yield errors and retry up to
-  five times. Exhaustion and 403 frames leave the socket open without further
-  retries; confirmed subscriptions keep delivering live frames. HTTP upgrade
-  401/403 refusals raise `AuthenticationError` before the first successful
-  connection; on reconnect they use the configured retry budget and backoff
-  without discarding history recovery state.
-- A Python client with a signer now signs every account subscription, even with
-  an API key configured. Subscribing to another owner's feed, or to any feed
-  with an unconfigured chain ID, now fails with error frames instead of relying
-  on the API key. Use a client with only the API key for those feeds.
-
-### Removed
-
+- **Breaking (TypeScript npm MAJOR, Python MAJOR, Rust core MAJOR):** the
+  `AmbiguousCode50` classification. `decodeExecError` / `get_error_name` and
+  Rust `DecodedExecErrorKind` return `SlippageExceeded` for a code 50 without
+  an open-interest log; callers that matched the name `AmbiguousCode50` stop
+  matching.
 - **Breaking (Python 5.0.0):** remove `trigger_market_configs()` and the
   `SetTriggerMarketConfig` builder. Low-level payload encoding, signing and
   historical decoding remain wire-compatible; the engine owns proposal and
@@ -201,6 +301,24 @@ squads_transaction_index, registry_epoch}` and no longer carries a Solana
 
 ### Fixed
 
+- **TypeScript:** a pending `SetDepositLimit` (tag 28) proposal now lists in
+  `decodeProposalPage` and `decodeProposalDisplayInfo` instead of failing the
+  whole page with "actionTag 28 does not match SetDepositLimit tag
+  undefined". The WASM decoder already knew the action; only the tag table
+  lacked it.
+- **Rust (`proof-sdk-rs`) WebSocket:** a book update with `orderCount`
+  missing or over u32 is `Malformed` instead of a level with 0 orders, and a
+  subscribe with no ack, refusal or data within the subscribe timeout
+  reconnects and re-sends it instead of leaving the feed silently empty. The
+  timeout counts from the later of the send and the last answer to any
+  request, so a long re-subscribe queue the gateway is still answering does
+  not loop; set it with `WsConfig::with_subscribe_timeout` (default: the pong
+  timeout).
+- **Python:** `decode_tx` refuses bytes after the envelope. It now runs the
+  strict MessagePack preflight first, so it also refuses floats, extension
+  types and duplicate map keys, and a malformed transaction reports
+  `malformed MessagePack` instead of the decoder's own message.
+- The connect-and-trade example no longer prints its generated private key.
 - **Preserve structured gateway refusals (Python).** Python raises
   `PreAdmissionRefusal` with `error_code`, `message` and `status_code` for
   admission refusals, instead of treating legacy HTTP 200 refusals as
@@ -2418,7 +2536,9 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.1.0...HEAD
+[13.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.0.0...npm-v13.1.0
+[13.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.1.0...npm-v13.0.0
 [12.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.0.0...npm-v12.1.0
 [12.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v11.0.0...npm-v12.0.0
 [11.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v10.1.0...npm-v11.0.0

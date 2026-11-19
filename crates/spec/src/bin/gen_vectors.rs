@@ -708,6 +708,20 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "action": { "SettleEvent": { "event_id": 4u32, "outcome": "No" } }
             }),
         ),
+        // SetDepositLimit (inner tag 0x1C), independent single-credit and shared-window caps.
+        codec_case(
+            "propose_admin_action/set_deposit_limit",
+            PROPOSE_ADMIN_ACTION,
+            json!({
+                "proposer": vec![0xA1u8; 20],
+                "registry_version": 1u64,
+                "action": { "SetDepositLimit": {
+                    "per_deposit_max_micro_usdc": 10_000_000_000u64,
+                    "window_cap_micro_usdc": 30_000_000_000u64,
+                    "window_secs": 86_400u32
+                } }
+            }),
+        ),
         // SetMarketStatus (inner tag 0x1F); also lifts a PauseMarket halt.
         codec_case(
             "propose_admin_action/set_market_status",
@@ -1273,10 +1287,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         .map(|code| error_case(&format!("manifest/{code}"), code, None))
         .collect();
 
-    // Transitional code-50 rolling-upgrade family: the canonical DeliverTx log
-    // disambiguates legacy open-interest from current slippage; anything else
-    // stays AmbiguousCode50 (never a guess). Plus a code-51 case proving the
-    // log is ignored once the engine emits the distinct code.
+    // Code 50 is slippage; only a pre-renumbering receipt's log turns it into
+    // open interest. Plus a code-51 case proving its log is ignored.
     errors.push(error_case(
         "code50/oi_log",
         50,
@@ -1468,6 +1480,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 json!([{"event_id": 1, "branch": "No"}]),
             ),
         ),
+        // proof-wire 12: no positive equity after a resolution's fund paid,
+        // so the funds take the binaries.
+        (
+            "position_liquidated/resolution",
+            position_liquidated(
+                "Resolution",
+                "Sell",
+                100,
+                json!([{"event_id": 4, "branch": "Yes"}]),
+            ),
+        ),
         (
             "liquidation_failed/position_mismatch",
             liquidation_failed(111, json!("PositionMismatch")),
@@ -1515,6 +1538,22 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "settlement_price": 64_000_000u64,
                 "branch_weight": 650_000u64,
                 "realized_pnl": -13_000_000i64,
+            }}),
+        ),
+        // proof-wire 12: cash at the ends of the blocks either side of a
+        // resolution, emitted in `after_height`.
+        (
+            "resolution_balance_snapshot/basic",
+            json!({"ResolutionBalanceSnapshot": {
+                "event_id": 4,
+                "owner": vec![0xABu8; 20],
+                "resolution_height": 1_000u64,
+                "before_height": 999u64,
+                "after_height": 1_001u64,
+                "balance_before": 5_000_000u64,
+                "balance_after": 6_250_000u64,
+                "settlement_balance_before": 5_000_000u64,
+                "settlement_balance_after": 6_000_000u64,
             }}),
         ),
     ];

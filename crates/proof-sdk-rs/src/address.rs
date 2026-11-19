@@ -68,11 +68,12 @@ impl FromStr for Address {
             .or_else(|| s.strip_prefix("0X"))
             .unwrap_or(s);
         let invalid = || Error::InvalidInput(format!("address must be 40 hex digits, got {s:?}"));
-        if hex.len() != 40 {
+        // `from_str_radix` alone would take "+f" as a byte.
+        if hex.len() != 40 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(invalid());
         }
         let mut out = [0u8; 20];
-        for (byte, pair) in out.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+        for (byte, pair) in out.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0) {
             let pair = std::str::from_utf8(pair).map_err(|_| invalid())?;
             *byte = u8::from_str_radix(pair, 16).map_err(|_| invalid())?;
         }
@@ -109,7 +110,14 @@ mod tests {
 
     #[test]
     fn rejects_bad_input() {
-        for s in ["", "0x12", &"g".repeat(40), &"a".repeat(41), "éé"] {
+        for s in [
+            "",
+            "0x12",
+            &"g".repeat(40),
+            &"a".repeat(41),
+            "éé",
+            &"+f".repeat(20),
+        ] {
             assert!(s.parse::<Address>().is_err(), "{s:?}");
         }
     }

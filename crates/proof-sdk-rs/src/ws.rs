@@ -29,7 +29,7 @@ use tokio::sync::{mpsc, Notify};
 use tokio::time::{sleep_until, Instant};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use crate::account_event::AccountEvent;
@@ -109,6 +109,8 @@ pub struct WsConfig {
     account_auth: Option<AccountAuth>,
     ping_interval: Duration,
     pong_timeout: Duration,
+    /// `None`: the pong timeout.
+    subscribe_timeout: Option<Duration>,
     reconnect: bool,
     max_backoff: Duration,
     buffer: usize,
@@ -128,6 +130,7 @@ impl WsConfig {
             account_auth: None,
             ping_interval: Duration::from_secs(5),
             pong_timeout: Duration::from_secs(10),
+            subscribe_timeout: None,
             reconnect: true,
             max_backoff: Duration::from_secs(10),
             buffer: 4096,
@@ -174,10 +177,22 @@ impl WsConfig {
     }
 
     /// Reconnect if no frame (a pong or anything else) arrives this long
-    /// after a ping. Keep it at least two ping intervals.
+    /// after a ping. Keep it at least two ping intervals. Also the subscribe
+    /// timeout unless [`Self::with_subscribe_timeout`] sets one.
     #[must_use]
     pub fn with_pong_timeout(mut self, timeout: Duration) -> Self {
         self.pong_timeout = timeout;
+        self
+    }
+
+    /// Reconnect and re-send if a subscribe goes this long without an ack,
+    /// a refusal or data, counted from when it was sent or from the last
+    /// answer to any request, whichever is later: the gateway answers
+    /// subscribes one at a time, so a long queue that is still being worked
+    /// through does not time out. Defaults to the pong timeout.
+    #[must_use]
+    pub fn with_subscribe_timeout(mut self, timeout: Duration) -> Self {
+        self.subscribe_timeout = Some(timeout);
         self
     }
 
@@ -219,6 +234,7 @@ impl std::fmt::Debug for WsConfig {
             .field("account_auth", &self.account_auth)
             .field("ping_interval", &self.ping_interval)
             .field("pong_timeout", &self.pong_timeout)
+            .field("subscribe_timeout", &self.subscribe_timeout)
             .field("reconnect", &self.reconnect)
             .finish_non_exhaustive()
     }
@@ -316,7 +332,8 @@ pub enum WsMessage {
     /// not replayed; reconcile through `InfoClient` if they matter.
     Reconnected,
     /// The socket dropped, or a reconnect attempt failed. With `reconnect` on,
-    /// another attempt follows after the backoff.
+    /// another attempt follows after the backoff, except after a 401
+    /// at the handshake, which ends the feed.
     Disconnected { reason: String },
     /// A frame this client could not read, and the subscription it belongs
     /// to when that much was readable. The connection carries on;
@@ -395,8 +412,9 @@ impl WsClient {
     ///
     /// # Errors
     ///
-    /// [`Error::Config`] for a bad URL or API key, [`Error::WsConnect`] if the
-    /// handshake fails or times out.
+    /// [`Error::Config`] for a bad URL or API key, [`Error::Http`] if the
+    /// gateway answers the handshake with an HTTP error status, and
+    /// [`Error::WsConnect`] if it fails otherwise or times out.
     pub async fn connect(config: WsConfig) -> Result<(Self, WsReceiver)> {
         let socket = open(&config).await?;
         let (commands, command_rx) = mpsc::unbounded_channel();
@@ -463,6 +481,10 @@ async fn open(config: &WsConfig) -> Result<Socket> {
     let connect = tokio_tungstenite::connect_async(request);
     match tokio::time::timeout(Duration::from_secs(10), connect).await {
         Ok(Ok((socket, _))) => Ok(socket),
+        Ok(Err(WsError::Http(response))) => Err(Error::Http {
+            status: response.status().as_u16(),
+            body: String::from_utf8_lossy(response.body().as_deref().unwrap_or_default()).into(),
+        }),
         Ok(Err(e)) => Err(Error::WsConnect(e.to_string())),
         Err(_) => Err(Error::WsConnect("timed out".into())),
     }
@@ -529,6 +551,12 @@ impl Task {
             };
             match opened {
                 Ok(socket) => return Some(socket),
+                // Retrying cannot change an auth refusal: end the feed.
+                Err(e @ Error::Http { status: 401, .. }) => {
+                    let reason = format!("reconnect refused, not retrying: {e}");
+                    let _ = self.deliver(WsMessage::Disconnected { reason }).await;
+                    return None;
+                }
                 Err(e) => {
                     let reason = format!("reconnect failed: {e}");
                     if !self.deliver(WsMessage::Disconnected { reason }).await {
@@ -554,7 +582,7 @@ impl Task {
         // Requests awaiting an ack or a refusal, so a refusal can name its
         // subscription. Cleared per session: ids from a dead socket never
         // answer.
-        let mut requests: HashMap<u64, (Subscription, bool)> = HashMap::new();
+        let mut requests: HashMap<u64, Request> = HashMap::new();
         // Each account's latest snapshot height: events at or below it are
         // already in the snapshot.
         let mut snapshot_heights: HashMap<Address, u64> = HashMap::new();
@@ -564,6 +592,14 @@ impl Task {
         let mut refill = Instant::now() + Duration::from_secs(1);
         let mut next_ping = Instant::now() + self.config.ping_interval;
         let mut pong_deadline: Option<Instant> = None;
+        // The last ack, refusal or data that answered a request. The gateway
+        // answers subscribes in order, so an answer to one means it is still
+        // working through the rest.
+        let mut last_answer: Option<Instant> = None;
+        let subscribe_timeout = self
+            .config
+            .subscribe_timeout
+            .unwrap_or(self.config.pong_timeout);
         loop {
             while allowance > 0 {
                 let Some(s) = resend.pop_front() else { break };
@@ -572,6 +608,11 @@ impl Task {
                     return e;
                 }
             }
+            let unanswered = requests
+                .values()
+                .filter(|r| r.subscribe)
+                .map(|r| last_answer.map_or(r.sent, |a| a.max(r.sent)) + subscribe_timeout)
+                .min();
             // Biased: commands, then queued frames, then timers, so a backlog
             // drains before a deadline can fire on it.
             tokio::select! {
@@ -605,23 +646,34 @@ impl Task {
                                 Parsed::Message(m) => *m,
                                 Parsed::Refused { id, code, message } => {
                                     let request = id.and_then(|id| requests.remove(&id));
-                                    if let Some((s, true)) = request {
-                                        self.subscriptions.remove(&s);
+                                    if request.is_some() {
+                                        last_answer = Some(Instant::now());
+                                    }
+                                    if let Some(Request { subscription, subscribe: true, .. }) = request {
+                                        self.subscriptions.remove(&subscription);
                                     }
                                     WsMessage::Refused {
-                                        subscription: request.map(|(s, _)| s),
+                                        subscription: request.map(|r| r.subscription),
                                         code,
                                         message,
                                     }
                                 }
                                 Parsed::Ack(id) => {
-                                    if let Some(id) = id {
-                                        requests.remove(&id);
+                                    if id.and_then(|id| requests.remove(&id)).is_some() {
+                                        last_answer = Some(Instant::now());
                                     }
                                     continue;
                                 }
                                 Parsed::Pong | Parsed::Ignore => continue,
                             };
+                            // Data for a subscription answers its subscribe as well as an ack.
+                            if let Some(s) = answered(&message) {
+                                let before = requests.len();
+                                requests.retain(|_, r| !(r.subscribe && r.subscription == s));
+                                if requests.len() < before {
+                                    last_answer = Some(Instant::now());
+                                }
+                            }
                             match &message {
                                 WsMessage::AccountSnapshot { owner, height: Some(h), .. } => {
                                     snapshot_heights.insert(*owner, *h);
@@ -660,6 +712,10 @@ impl Task {
                 () = sleep_until(pong_deadline.unwrap_or(next_ping)), if pong_deadline.is_some() => {
                     return End::Dropped("pong timeout".into());
                 },
+                // A subscribe nobody answered would leave the feed silently empty.
+                () = sleep_until(unanswered.unwrap_or(next_ping)), if unanswered.is_some() => {
+                    return End::Dropped("subscribe unanswered".into());
+                },
             }
         }
     }
@@ -671,7 +727,7 @@ impl Task {
         ws: &mut Socket,
         subscription: Subscription,
         subscribe: bool,
-        requests: &mut HashMap<u64, (Subscription, bool)>,
+        requests: &mut HashMap<u64, Request>,
     ) -> Result<(), End> {
         let mut params = match subscription {
             Subscription::Orderbook(market) => json!({ "channel": "orderbook", "market": market }),
@@ -712,10 +768,38 @@ impl Task {
         };
         let id = take_id(&mut self.next_id);
         let frame = json!({ "method": method, "id": id, "params": params }).to_string();
-        requests.insert(id, (subscription, subscribe));
+        requests.insert(
+            id,
+            Request {
+                subscription,
+                subscribe,
+                sent: Instant::now(),
+            },
+        );
         ws.send(Message::Text(frame.into()))
             .await
             .map_err(|e| End::Dropped(e.to_string()))
+    }
+}
+
+/// A subscribe or unsubscribe awaiting its ack or refusal.
+#[derive(Clone, Copy)]
+struct Request {
+    subscription: Subscription,
+    subscribe: bool,
+    sent: Instant,
+}
+
+/// The subscription a data frame belongs to.
+fn answered(message: &WsMessage) -> Option<Subscription> {
+    match message {
+        WsMessage::OrderbookSnapshot { market, .. } | WsMessage::OrderbookUpdate { market, .. } => {
+            Some(Subscription::Orderbook(*market))
+        }
+        WsMessage::Trade(t) => Some(Subscription::Trades(t.market)),
+        WsMessage::AccountSnapshot { owner, .. } => Some(Subscription::AccountEvents(*owner)),
+        WsMessage::AccountEvent(e) => Some(Subscription::AccountEvents(e.owner)),
+        _ => None,
     }
 }
 
@@ -897,22 +981,27 @@ fn orderbook(raw: Raw<'_>) -> Parsed {
                 },
             })
         }
-        Some("update") => match (side(raw.side.as_deref()), raw.price, raw.total_quantity) {
-            (Some(side), Some(price), Some(quantity)) => {
+        Some("update") => match (
+            side(raw.side.as_deref()),
+            raw.price,
+            raw.total_quantity,
+            raw.order_count.and_then(|c| u32::try_from(c).ok()),
+        ) {
+            (Some(side), Some(price), Some(quantity), Some(order_count)) => {
                 Parsed::message(WsMessage::OrderbookUpdate {
                     market,
                     side,
                     level: Level {
                         price,
                         quantity,
-                        order_count: raw
-                            .order_count
-                            .and_then(|c| u32::try_from(c).ok())
-                            .unwrap_or(0),
+                        order_count,
                     },
                 })
             }
-            _ => malformed(this, "orderbook update missing side/price/totalQuantity"),
+            _ => malformed(
+                this,
+                "orderbook update missing side/price/totalQuantity/orderCount",
+            ),
         },
         _ => Parsed::Ignore,
     }
@@ -1144,6 +1233,16 @@ mod tests {
                 ..
             }
         ));
+        // orderCount missing or over u32: malformed, never a count of 0.
+        for count in ["", r#","orderCount":4294967296"#] {
+            let frame = format!(
+                r#"{{"channel":"orderbook","market":1,"price":1,"side":"bid","totalQuantity":1,"type":"update"{count}}}"#
+            );
+            assert!(
+                matches!(message(&frame), WsMessage::Malformed { .. }),
+                "{frame}"
+            );
+        }
         // No height: malformed, never height 0 (which a baseline filter would drop).
         assert!(matches!(
             message(

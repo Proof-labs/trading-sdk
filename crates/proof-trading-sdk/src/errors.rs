@@ -192,20 +192,20 @@ define_error_kinds! {
     132 => MarketStatusTransitionRefused ~ "SetMarketStatus or PauseMarket names a move the market cannot make: any market moves Trading to Halted and back; a perpetual also moves Trading or Halted to ReduceOnly and back, then ReduceOnly to Delisted.",
     133 => MarketBacksLiveEvent ~ "The perpetual backs a Conditional on an unresolved event and cannot wind down until the event resolves.",
     134 => MarketHalted ~ "The market is halted and takes no orders or fills; cancels still work.",
-    // Bridge vote model (wire 12): the quorum's halt flag, vote aggregation,
+    // Bridge vote model (wire 13): the quorum's halt flag, vote aggregation,
     // the owner-roster gate, and the payout-report bindings.
-    135 => BridgePaused                ~ "The bridge is paused by the admin quorum; claims, payout reports and bridge votes refuse until UnpauseBridge clears the flag.",
-    136 => BridgeVoteConflict          ~ "A bridge vote conflicts with the votes already recorded for its item: a different registry epoch, or a different observation for a transfer that already has votes.",
-    137 => BridgeVoteInvalid           ~ "A bridge vote failed verification: bad signature, or a vote naming a non-current registry epoch.",
-    138 => BridgeUnauthorizedOperator  ~ "The submitter is not a member of the operator receipt registry's owner roster.",
-    139 => BridgePayoutReportInvalid   ~ "A payout report failed its binding checks: wrong vault, non-current epoch, or the lease does not name the submitter.",
+    136 => BridgePaused                ~ "The bridge is paused by the admin quorum; claims, payout reports and bridge votes refuse until UnpauseBridge clears the flag.",
+    137 => BridgeVoteConflict          ~ "A bridge vote conflicts with the votes already recorded for its item: a different registry epoch, or a different observation for a transfer that already has votes.",
+    138 => BridgeVoteInvalid           ~ "A bridge vote failed verification: bad signature, or a vote naming a non-current registry epoch.",
+    139 => BridgeUnauthorizedOperator  ~ "The submitter is not a member of the operator receipt registry's owner roster.",
+    140 => BridgePayoutReportInvalid   ~ "A payout report failed its binding checks: wrong vault, non-current epoch, or the lease does not name the submitter.",
+    135 => OffCurveWithdrawalDestination ~ "Withdrawal destination must be an on-curve Solana wallet owner; no funds were debited.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
-/// Safe classification of an engine result code plus its canonical DeliverTx
-/// log. Upgraded engines use code 50 for slippage and 51 for open interest, but
-/// legacy engines may emit code 50 for open interest during a rolling upgrade.
-/// Callers must not infer the meaning of code 50 from the integer alone.
+/// Classification of an engine result code plus its DeliverTx log. Code 50 is
+/// slippage; only receipts from before the renumbering carry 50 for open
+/// interest, and their log names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecodedExecErrorKind {
     Known(ErrorKind),
@@ -213,16 +213,13 @@ pub enum DecodedExecErrorKind {
     /// code-50 decoder.
     SlippageExceeded,
     LegacyOpenInterestLimitExceeded,
-    AmbiguousCode50,
 }
 
 impl DecodedExecErrorKind {
     pub fn code(self) -> u32 {
         match self {
             Self::Known(kind) => kind.code(),
-            Self::SlippageExceeded
-            | Self::LegacyOpenInterestLimitExceeded
-            | Self::AmbiguousCode50 => 50,
+            Self::SlippageExceeded | Self::LegacyOpenInterestLimitExceeded => 50,
         }
     }
 
@@ -231,7 +228,6 @@ impl DecodedExecErrorKind {
             Self::Known(kind) => kind.name(),
             Self::SlippageExceeded => "SlippageExceeded",
             Self::LegacyOpenInterestLimitExceeded => "OpenInterestLimitExceeded",
-            Self::AmbiguousCode50 => "AmbiguousCode50",
         }
     }
 
@@ -244,14 +240,11 @@ impl DecodedExecErrorKind {
             Self::LegacyOpenInterestLimitExceeded => {
                 "A legacy engine reported that a fill would push aggregate market open interest past MarketConfig.max_open_interest."
             }
-            Self::AmbiguousCode50 => {
-                "During the rolling upgrade, engine code 50 may mean legacy OpenInterestLimitExceeded or current SlippageExceeded; a canonical non-empty DeliverTx log is required to classify it safely."
-            }
         }
     }
 }
 
-/// Decode an engine error without guessing the transitional meaning of code 50.
+/// Decode an engine error; a pre-renumbering code 50 is recognised by its log.
 pub fn decode_exec_error_kind(code: u32, log: Option<&str>) -> Option<DecodedExecErrorKind> {
     if code == 0 {
         return None;
@@ -261,10 +254,7 @@ pub fn decode_exec_error_kind(code: u32, log: Option<&str>) -> Option<DecodedExe
             Some(log) if log.starts_with("open interest limit exceeded on market ") => {
                 DecodedExecErrorKind::LegacyOpenInterestLimitExceeded
             }
-            Some(log) if log.starts_with("atomic basket aggregate slippage ") => {
-                DecodedExecErrorKind::SlippageExceeded
-            }
-            _ => DecodedExecErrorKind::AmbiguousCode50,
+            _ => DecodedExecErrorKind::SlippageExceeded,
         });
     }
     ERROR_KINDS
@@ -332,8 +322,8 @@ mod exec_error_meaning_tests {
 
         for log in [None, Some(""), Some("unknown code 50 diagnostic")] {
             assert_eq!(
-                decode_exec_error_kind(50, log).unwrap().name(),
-                "AmbiguousCode50"
+                decode_exec_error_kind(50, log),
+                Some(DecodedExecErrorKind::SlippageExceeded)
             );
         }
         assert_eq!(decode_exec_error_kind(0, None), None);
@@ -542,6 +532,7 @@ mod exec_error_meaning_tests {
             ExecError::BridgeVoteInvalid("e".into()),
             ExecError::BridgeUnauthorizedOperator,
             ExecError::BridgePayoutReportInvalid("e".into()),
+            ExecError::OffCurveWithdrawalDestination,
         ]
     }
 
@@ -614,7 +605,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=139)
+        let expected: Vec<u32> = (1u32..=140)
             .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 73 | 74 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127))
             .chain(std::iter::once(255))
             .collect();

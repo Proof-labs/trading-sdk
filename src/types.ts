@@ -326,8 +326,8 @@ export interface CreateMarket {
   poolId?: number;
   /**
    * Published size scale: order/position `quantity` is in units of
-   * 10^-szDecimals of the base asset (display/metadata only — the engine
-   * never reads it). MANDATORY: the engine struct has no `serde(default)`
+   * 10^-szDecimals of the base asset; the engine divides notional, fees and
+   * margin by 10^szDecimals. MANDATORY: the engine struct has no `serde(default)`
    * for this field, so a payload that omits it is rejected at decode. The
    * scale is fixed at creation and immutable thereafter. Use 0 for
    * integer-unit sizing.
@@ -716,12 +716,14 @@ export interface AttachConditional {
   takerFeeBps: number;
   makerFeeBps: number;
   signer: Address;
-  /** Open-interest cap for each of the two conditional books, in the
-   *  underlying's size scale; `undefined` or `0n` = uncapped (encodes as 0). */
+  /** Open-interest cap for each conditional book, in the underlying's size
+   * scale. The current engine requires a nonzero value. */
   maxOpenInterest?: bigint;
   /** Q, in microUSDC: each conditional book marks at the average of the
    *  prices to buy and to sell this notional against its book (DEC-293);
    *  `undefined` or `0n` marks at the underlying (encodes as 0). */
+  /** Impact notional for each conditional book, in micro-USDC. The current
+   * engine requires a nonzero value; omission encodes the wire default 0. */
   impactNotional?: bigint;
 }
 
@@ -1027,20 +1029,13 @@ export interface UpdateMarketFees {
    */
   maxOpenInterest?: bigint | null;
   /**
-   * New impact notional Q in microUSDC for a conditional book (DEC-293).
-   * Omit to leave unchanged; 0 marks at the underlying.
+   * New impact notional Q in micro-USDC for a conditional book. Omit to leave
+   * unchanged; 0 marks at the underlying.
    */
   impactNotional?: bigint | null;
-  /**
-   * New funding dead-band half-width in bps (at most 3,000). Omit to leave
-   * unchanged. Required on the wire (an older, shorter payload cannot
-   * decode), so omission encodes as nil rather than a shifted field.
-   */
+  /** Funding dead-band half-width in basis points (at most 3,000). */
   fundingDeadBandBps?: number | null;
-  /**
-   * New funding interest leg per 8h, in units of 1e-8 (1 bps = 10,000;
-   * may be negative). Omit to leave unchanged.
-   */
+  /** Signed funding interest rate per 8h in units of 1e-8 (1 bps = 10,000). */
   fundingInterestRate?: number | null;
 }
 
@@ -1278,6 +1273,16 @@ export interface SetWithdrawalLimit {
   windowSecs: number;
 }
 
+/** Protocol-wide limits shared by ConfirmDeposit and Deposit (inner tag 28). */
+export interface SetDepositLimit {
+  /** Maximum single credit in micro-USDC; 0 disables this bound. */
+  perDepositMaxMicroUsdc: bigint;
+  /** Aggregate credit across all accounts per rolling window; 0 disables. */
+  windowCapMicroUsdc: bigint;
+  /** Rolling-window length in seconds; must be at least 1. */
+  windowSecs: number;
+}
+
 /**
  * The operator receipt registry (inner tag 20, DEC-112): the epoch-pinned
  * named operator set the vote-model payout gates and votes verify against.
@@ -1457,6 +1462,7 @@ export type AdminAction =
   | { kind: "AttachConditional"; value: AttachConditional }
   | { kind: "Batch"; value: AdminBatchItem[] }
   | { kind: "SetWithdrawalLimit"; value: SetWithdrawalLimit }
+  | { kind: "SetDepositLimit"; value: SetDepositLimit }
   | { kind: "SetOperatorReceiptRegistry"; value: SetOperatorReceiptRegistry }
   | { kind: "SetLiquidationConfig"; value: SetLiquidationConfig }
   // Unit variant — no fields; lifts a bridge pause under multisig

@@ -1,5 +1,28 @@
-export { verifyWitness } from "./bounded-read.js";
+export { decodeFinalizedReadWitness, verifyWitness } from "./bounded-read.js";
+export {
+  decodeInsuranceFundHistory,
+  type InsuranceFundHistoryParams,
+  type InsuranceFundHistoryPage,
+  type InsuranceHistoryCoordinate,
+  type InsuranceHistoryEvent,
+  type InsuranceHistoryPhase,
+  type InsuranceHistoryStream,
+} from "./insurance-fund-history.js";
 export { GatewayReadError } from "./errors.js";
+export type { FinalizedAuthorizedAgents } from "./authorized-agents.js";
+export type {
+  EventView,
+  MarketStatusReading,
+  MarketView,
+  MarketsSnapshotView,
+} from "./markets-snapshot-view.js";
+export type {
+  FinalizedInsuranceFunds,
+  FinalizedInsuranceFund,
+  InsuranceFundLedger,
+  InsuranceFundPosition,
+  InsurancePositionNotional,
+} from "./insurance-funds.js";
 export {
   hexAddress,
   hash32,
@@ -106,6 +129,7 @@ export {
   type VoidEvent,
   type SettleEvent,
   type SetMarketStatus,
+  type SetDepositLimit,
   type MarketStatus,
   type LiquidationConfig,
   type LiquidationConfigInfo,
@@ -320,6 +344,10 @@ export {
   type VoidSettlementEvent,
 } from "./void-events.js";
 export {
+  decodeResolutionBalanceSnapshotEvent,
+  type ResolutionBalanceSnapshotEvent,
+} from "./resolution-balance-events.js";
+export {
   LIQUIDATION_HISTORY_EVENT_TYPES,
   decodeLiquidationHistoryPage,
   liquidationHistorySearchParams,
@@ -521,6 +549,10 @@ export {
   type OraclePriceHistoryPage,
   type OraclePriceHistoryOptions,
 } from "./oracle-price-history.js";
+export {
+  queryEventVoided,
+  type EventVoidedQueryOptions,
+} from "./event-voided-history.js";
 
 export {
   queryMarketStats,

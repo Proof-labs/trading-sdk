@@ -91,6 +91,7 @@ def engine_v2_attach() -> dict:
         "event_id": 91,
         "underlying_market": 15,
         "child_market_base": 9_100,
+        "impact_notional": 1_000_000_000,
         "im_bps": 3334,
         "mm_bps": 1667,
         "taker_fee_bps": 5,

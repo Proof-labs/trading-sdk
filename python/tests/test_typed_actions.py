@@ -90,6 +90,9 @@ BUILDERS = {
     "record_withdrawal_payout/u64_bounds": lambda i: actions.RecordWithdrawalPayout(
         **_admin(i, "holder", "vault")
     ),
+    "propose_admin_action/set_deposit_limit": lambda i: actions.ProposeAdminAction(
+        **_admin(i, "proposer")
+    ),
     "propose_admin_action/set_market_status": lambda i: actions.ProposeAdminAction(
         **_admin(i, "proposer")
     ),

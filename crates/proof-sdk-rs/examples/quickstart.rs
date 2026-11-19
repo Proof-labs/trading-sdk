@@ -103,7 +103,7 @@ fn parse_seed(hex: &str) -> AnyResult<zeroize::Zeroizing<[u8; 32]>> {
         return Err("PROOF_PRIVATE_KEY_HEX must be 64 hex digits".into());
     }
     let mut seed = zeroize::Zeroizing::new([0u8; 32]);
-    for (byte, pair) in seed.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+    for (byte, pair) in seed.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0) {
         *byte = u8::from_str_radix(std::str::from_utf8(pair)?, 16)?;
     }
     Ok(seed)
