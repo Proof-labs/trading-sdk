@@ -163,6 +163,10 @@ import {
   type ExchangeHttpTransport,
 } from "./http-transport.js";
 import { yesOrder, type NoOrder } from "./binary.js";
+import {
+  readDepositAddressAnswer,
+  type DepositAddress,
+} from "./deposit-address.js";
 import { Side } from "./types.js";
 import type { MarketsSnapshot } from "./types.js";
 import { sha256 } from "@noble/hashes/sha2.js";
@@ -2230,6 +2234,33 @@ export class ExchangeClient {
     const page: unknown = await res.json();
     opts.signal?.throwIfAborted();
     return decodePortfolioHistoryPage(page, canonicalOwner, opts);
+  }
+
+  /**
+   * The account's USDC deposit address on Solana
+   * (`GET /v1/deposit-address/{account}`), from the gateway even in internal
+   * node mode: only the gateway serves it. `account` is `0x` followed by 40
+   * hex digits; anything else is sent as is and the gateway refuses it with
+   * `InvalidAccount`.
+   *
+   * Resolves `ready` with `address`, the deposit authority a wallet sends
+   * USDC to (not the token account), or `pending` (HTTP 202) while the
+   * address is being created: ask again after `retryAfterMs`. A refusal
+   * throws `DepositAddressError`, a `GatewayHttpError` that keeps the
+   * gateway's `errorCode` (`DepositAddressErrorCode`) and, for
+   * `RateLimited`, `retryAfterMs`.
+   */
+  async queryDepositAddress(
+    account: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<DepositAddress> {
+    const url = `${this.gatewayUrl}/v1/deposit-address/${encodeURIComponent(account)}`;
+    const res = await this.httpTransport(
+      url,
+      { signal: opts.signal },
+      readContext(url, "account"),
+    );
+    return readDepositAddressAnswer(res);
   }
 
   /** One newest-first gateway page of a market's indexed `price_updated`

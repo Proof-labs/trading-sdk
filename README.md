@@ -231,6 +231,9 @@ class ExchangeClient {
   queryPositionTriggerHistory(addressHex?: string, filters?: PositionTriggerHistoryFilters): Promise<PositionTriggerHistoryPage>;
   queryTriggerMarketHistory(market: number, filters?: TriggerMarketHistoryFilters): Promise<TriggerMarketHistoryPage>;
   queryLiquidationConfig(): Promise<LiquidationConfigInfo>;
+  // USDC deposit address on Solana: `ready` (address = deposit authority) or
+  // `pending`; refusals throw DepositAddressError with the gateway's errorCode.
+  queryDepositAddress(account: string): Promise<DepositAddress>;
 
   // Owner defaults to signer; version-active agents pass delegated owner.
   setPositionTriggers(params: Omit<SetPositionTriggers, "owner"> & { owner?: Uint8Array }): Promise<TxResult>;

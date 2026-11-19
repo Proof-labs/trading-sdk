@@ -60,8 +60,29 @@ import {
   type MarketView,
   type EventView,
   type MarketsSnapshotView,
+  type DepositAddress,
+  type DepositAddressErrorCode,
+  type DepositAddressPending,
+  type DepositAddressReady,
 } from "./index.js";
 import type { OpenLabel } from "./types.js";
+
+it("exports the deposit address types", () => {
+  const ready: DepositAddressReady = {
+    status: "ready",
+    address: "9DEvTpg7J8BsrESCVrpP9FnBEEKXpC8MauxarCApCAyz",
+    tokenAccount: "8MJF87ivAaBfc7yHkBztbGWyBgaAYTMFPrUdfcFfPQk6",
+    createdAt: null,
+  };
+  const pending: DepositAddressPending = {
+    status: "pending",
+    retryAfterMs: 2000,
+  };
+  const answers: DepositAddress[] = [ready, pending];
+  const code: DepositAddressErrorCode = "SubAccount";
+  expect(answers.map((a) => a.status)).toEqual(["ready", "pending"]);
+  expect(code).toBe("SubAccount");
+});
 
 it("exports the version 2 markets snapshot types", () => {
   const listed: Pick<MarketView, "market" | "status"> = {

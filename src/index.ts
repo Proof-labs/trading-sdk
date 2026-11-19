@@ -425,6 +425,7 @@ export {
 
 // Errors
 export {
+  DepositAddressError,
   FeedSubscriptionError,
   GatewayHttpError,
   isMissingMark,
@@ -537,6 +538,14 @@ export type {
   PortfolioHistoryOptions,
   PortfolioHistoryPage,
 } from "./portfolio-history.js";
+export {
+  DEPOSIT_ADDRESS_ERROR_CODES,
+  isDepositAddressErrorCode,
+  type DepositAddress,
+  type DepositAddressErrorCode,
+  type DepositAddressPending,
+  type DepositAddressReady,
+} from "./deposit-address.js";
 export {
   queryOraclePriceHistoryPage,
   type OraclePriceHistoryPoint,

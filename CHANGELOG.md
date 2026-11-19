@@ -9,6 +9,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **TypeScript:** `client.queryDepositAddress(account)` reads an account's
+  USDC deposit address on Solana (`GET /v1/deposit-address/{account}`,
+  served by the gateway from the deposit address service), always from the
+  gateway. It resolves a `DepositAddress`: `ready` with `address`,
+  `tokenAccount` and `createdAt` (Unix seconds or `null`), or `pending`
+  (HTTP 202) with `retryAfterMs`. `address` is the deposit authority, the
+  address a wallet sends USDC to, not the token account. A refusal throws
+  `DepositAddressError`, a `GatewayHttpError` that keeps the gateway's
+  `errorCode` (`DepositAddressErrorCode`: `InvalidAccount`, `SubAccount`,
+  `RateLimited`, `Unavailable`; `isDepositAddressErrorCode`) and, when the
+  answer says, `retryAfterMs`. `conformance/deposit-address.json` (frozen
+  example F2) pins the service's answers.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is

@@ -746,6 +746,26 @@ export class GatewayHttpError extends Error {
 }
 
 /**
+ * A refused `GET /v1/deposit-address/{account}`. `errorCode` is the gateway's
+ * own code; the deposit address service answers with one of
+ * `DepositAddressErrorCode` (check with `isDepositAddressErrorCode`).
+ * `retryAfterMs` is set when the answer says when to try again: the body's
+ * `retryAfterMs`, or else the `Retry-After` header in milliseconds.
+ */
+export class DepositAddressError extends GatewayHttpError {
+  constructor(
+    status: number,
+    response: Response,
+    errorCode?: string,
+    detail?: string,
+    public readonly retryAfterMs?: number,
+  ) {
+    super(status, response, errorCode, detail);
+    this.name = "DepositAddressError";
+  }
+}
+
+/**
  * The gateway refused a `/ws` subscription with an `error` frame (for example
  * an unknown market). `code` and `gatewayMessage` are the frame's own fields.
  */
