@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { queryEventVoided } from "./event-voided-history.js";
+import { GatewayReadError } from "./errors.js";
 
 const voided = (eventId: string, yesPrice: string) => ({
   event_id: 9,
@@ -71,6 +72,14 @@ describe("queryEventVoided", () => {
     await expect(queryEventVoided("https://gateway.test", -1)).rejects.toThrow(
       "Invalid event id",
     );
+    await expect(
+      queryEventVoided("https://gateway.test", -1),
+    ).rejects.toMatchObject({ kind: "configuration", field: "eventId" });
+    await expect(
+      queryEventVoided("https://gateway.test", 43, {
+        fetch: transportFor({ nope: [] }),
+      }),
+    ).rejects.toBeInstanceOf(GatewayReadError);
   });
 
   it("follows next_cursor until the event is found", async () => {

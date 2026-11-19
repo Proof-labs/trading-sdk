@@ -1,4 +1,4 @@
-import { GatewayHttpError } from "./errors.js";
+import { GatewayHttpError, GatewayReadError } from "./errors.js";
 import {
   decodeVoidSettlementEvent,
   type EventVoidedEvent,
@@ -20,7 +20,11 @@ export async function queryEventVoided(
   options: EventVoidedQueryOptions = {},
 ): Promise<EventVoidedEvent | null> {
   if (!Number.isSafeInteger(eventId) || eventId < 0 || eventId > 0xffff_ffff) {
-    throw new Error("Invalid event id: must be a uint32");
+    throw new GatewayReadError(
+      "configuration",
+      "eventId",
+      "Invalid event id: must be a uint32",
+    );
   }
   const { signal } = options;
   const base = `${gatewayUrl.replace(/\/+$/, "")}/v1/history/admin-events`;
@@ -44,12 +48,21 @@ export async function queryEventVoided(
         ? (body as { admin_events?: unknown; next_cursor?: unknown })
         : {};
     if (!Array.isArray(page.admin_events))
-      throw new Error("Invalid admin-events page");
+      throw new GatewayReadError(
+        "malformed",
+        "admin_events",
+        "Invalid admin-events page",
+      );
     const found = findEventVoided(page.admin_events, eventId);
     if (found) return found;
     const next = page.next_cursor;
     if (typeof next !== "string" || next === "") return null;
-    if (next === cursor) throw new Error("admin-events cursor did not advance");
+    if (next === cursor)
+      throw new GatewayReadError(
+        "limit",
+        "next_cursor",
+        "admin-events cursor did not advance",
+      );
     cursor = next;
   }
 }
