@@ -1071,7 +1071,7 @@ class ExchangeClient:
         resp = self._get(f"/v1/nonce/{_to_hex(owner)}")
         return _response_object(resp)
 
-    # ── Bridge custody reads (`/v2/bridge/*`, the wire-12 vote model) ────
+    # ── Bridge custody reads (`/v2/bridge/*`, wire 13) ────
 
     @staticmethod
     def _bridge_bytes(value: t.Any, size: int, name: str) -> bytes:
@@ -1088,6 +1088,12 @@ class ExchangeClient:
             raise CodecError(f"bridge decode: {name} must be a u64")
         return int(value)
 
+    @staticmethod
+    def _bridge_bool(value: t.Any, name: str) -> bool:
+        if not isinstance(value, bool):
+            raise CodecError(f"bridge decode: {name} must be a boolean")
+        return value
+
     def _bridge_view(self, path: str, params: dict[str, t.Any] | None = None) -> dict[str, t.Any]:
         raw = self._get_data(path, params=params)
         if not isinstance(raw, dict):
@@ -1100,21 +1106,22 @@ class ExchangeClient:
         return {
             "voter": self._bridge_bytes(value.get("voter"), 32, "voter"),
             "signature": self._bridge_bytes(value.get("signature"), 64, "signature"),
+            "registry_epoch": self._bridge_uint(value.get("registry_epoch"), "registry_epoch"),
+            "dead": self._bridge_bool(value.get("dead"), "dead"),
+            "vault": self._bridge_bytes(value.get("vault"), 32, "vault"),
+            "squads_transaction_index": self._bridge_uint(
+                value.get("squads_transaction_index"), "squads_transaction_index"
+            ),
         }
 
-    def bridge_status(self) -> dict[str, t.Any]:
+    def bridge_status(self) -> str:
         """The bridge's governance state (`/v2/bridge/status`): the quorum's
         halt flag, the governed payout vault and the current operator-roster
         facts. Payout fields are ``None`` while unset."""
-        raw = self._bridge_view("/v2/bridge/status")
-        out: dict[str, t.Any] = {"halted": bool(raw.get("halted"))}
-        for name, size in (("payout_multisig", 32), ("ops_wallet", 32)):
-            value = raw.get(name)
-            out[name] = None if value is None else self._bridge_bytes(value, size, name)
-        for name in ("registry_epoch", "registry_threshold", "operator_count"):
-            value = raw.get(name)
-            out[name] = None if value is None else self._bridge_uint(value, name)
-        return out
+        raw = self._get_data("/v2/bridge/status")
+        if raw not in ("Active", "Paused", "WithdrawalsFull"):
+            raise CodecError(f"bridge decode: status (unknown variant {raw!r})")
+        return raw
 
     def bridge_registry(self, epoch: int | None = None) -> dict[str, t.Any]:
         """The operator receipt registry — the roster every payout gate and
@@ -1148,7 +1155,7 @@ class ExchangeClient:
         self, cursor: int | None = None, limit: int | None = None
     ) -> dict[str, t.Any]:
         """One page of pending withdrawals (`/v2/bridge/pending-withdrawals`)
-        with their live leases, reported payout proposals and Paid votes so
+        with their live leases, recorded payout and member votes so
         far. ``cursor`` is the previous page's ``next_cursor`` (the last
         row's withdrawal id; 0/``None`` = start).
         """
@@ -1168,6 +1175,9 @@ class ExchangeClient:
             withdrawal = row.get("withdrawal")
             if not isinstance(withdrawal, dict):
                 raise CodecError("bridge decode: withdrawal (expected a field map)")
+            status = withdrawal.get("status")
+            if status not in ("pending", "completed", "failed", "unknown"):
+                raise CodecError(f"bridge decode: unknown withdrawal status {status!r}")
             decoded: dict[str, t.Any] = {
                 "withdrawal": {
                     "withdrawal_id": self._bridge_uint(
@@ -1178,12 +1188,12 @@ class ExchangeClient:
                     "solana_destination": self._bridge_bytes(
                         withdrawal.get("solana_destination"), 32, "solana_destination"
                     ),
-                    "status": withdrawal.get("status"),
+                    "status": status,
                     "request_height": self._bridge_uint(
                         withdrawal.get("request_height"), "request_height"
                     ),
                 },
-                "payout_reports": [],
+                "votes": [],
             }
             lease = row.get("lease")
             if lease is not None:
@@ -1198,38 +1208,24 @@ class ExchangeClient:
                         lease.get("expires_at_height"), "expires_at_height"
                     ),
                 }
-            reports = row.get("payout_reports")
-            if not isinstance(reports, list):
-                raise CodecError("bridge decode: payout_reports (expected a list)")
-            for report in reports:
-                if not isinstance(report, dict):
-                    raise CodecError("bridge decode: payout report (expected a field map)")
-                decoded["payout_reports"].append(
-                    {
-                        "holder": self._bridge_bytes(report.get("holder"), 20, "holder"),
-                        "vault": self._bridge_bytes(report.get("vault"), 32, "vault"),
-                        "squads_transaction_index": self._bridge_uint(
-                            report.get("squads_transaction_index"),
-                            "squads_transaction_index",
-                        ),
-                        "registry_epoch": self._bridge_uint(
-                            report.get("registry_epoch"), "registry_epoch"
-                        ),
-                    }
-                )
-            votes = row.get("votes")
-            if votes is not None:
-                if not isinstance(votes, dict):
-                    raise CodecError("bridge decode: votes (expected a field map)")
-                vote_rows = votes.get("votes")
-                if not isinstance(vote_rows, list):
-                    raise CodecError("bridge decode: votes.votes (expected a list)")
-                decoded["votes"] = {
-                    "registry_epoch": self._bridge_uint(
-                        votes.get("registry_epoch"), "registry_epoch"
+            payout = row.get("payout")
+            if payout is not None:
+                if not isinstance(payout, dict):
+                    raise CodecError("bridge decode: payout (expected a field map)")
+                decoded["payout"] = {
+                    "holder": self._bridge_bytes(payout.get("holder"), 20, "holder"),
+                    "vault": self._bridge_bytes(payout.get("vault"), 32, "vault"),
+                    "squads_transaction_index": self._bridge_uint(
+                        payout.get("squads_transaction_index"), "squads_transaction_index"
                     ),
-                    "votes": [self._bridge_vote(v) for v in vote_rows],
+                    "registry_epoch": self._bridge_uint(
+                        payout.get("registry_epoch"), "registry_epoch"
+                    ),
                 }
+            vote_rows = row.get("votes")
+            if not isinstance(vote_rows, list):
+                raise CodecError("bridge decode: votes (expected a list)")
+            decoded["votes"] = [self._bridge_vote(v) for v in vote_rows]
             rows.append(decoded)
         next_cursor = raw.get("next_cursor")
         return {
@@ -1241,7 +1237,7 @@ class ExchangeClient:
         self, cursor: str | None = None, limit: int | None = None
     ) -> dict[str, t.Any]:
         """One page of pending deposits (`/v2/bridge/pending-deposits`) with
-        their voted readings. ``cursor`` is the previous page's
+        their member votes. ``cursor`` is the previous page's
         ``next_cursor`` — an OPAQUE token the route hands back (the
         hex-encoded store key); pass it back verbatim, never parse it.
         """
@@ -1259,42 +1255,34 @@ class ExchangeClient:
             if not isinstance(row, dict):
                 raise CodecError("bridge decode: deposit row (expected a field map)")
             locator = row.get("locator")
-            if not isinstance(locator, dict):
-                raise CodecError("bridge decode: locator (expected a field map)")
-            observations_raw = row.get("observations")
-            if not isinstance(observations_raw, list):
-                raise CodecError("bridge decode: observations (expected a list)")
-            observations: list[dict[str, t.Any]] = []
-            for observation in observations_raw:
-                if not isinstance(observation, dict):
-                    raise CodecError("bridge decode: observation (expected a field map)")
-                vote_rows = observation.get("votes")
-                if not isinstance(vote_rows, list):
-                    raise CodecError("bridge decode: observation.votes (expected a list)")
-                observations.append(
-                    {
-                        "owner": self._bridge_bytes(observation.get("owner"), 20, "owner"),
-                        "amount_micro_usdc": self._bridge_uint(
-                            observation.get("amount_micro_usdc"), "amount_micro_usdc"
-                        ),
-                        "votes": [self._bridge_vote(v) for v in vote_rows],
-                    }
-                )
+            if locator is not None and not isinstance(locator, dict):
+                raise CodecError("bridge decode: locator (expected a field map or null)")
+            vote_rows = row.get("votes")
+            if not isinstance(vote_rows, list):
+                raise CodecError("bridge decode: votes (expected a list)")
+            votes: list[dict[str, t.Any]] = []
+            for vote in vote_rows:
+                if not isinstance(vote, dict):
+                    raise CodecError("bridge decode: deposit vote (expected a field map)")
+                votes.append({
+                    "voter": self._bridge_bytes(vote.get("voter"), 32, "voter"),
+                    "registry_epoch": self._bridge_uint(vote.get("registry_epoch"), "registry_epoch"),
+                    "owner": self._bridge_bytes(vote.get("owner"), 20, "owner"),
+                    "amount_micro_usdc": self._bridge_uint(vote.get("amount_micro_usdc"), "amount_micro_usdc"),
+                    "signature": self._bridge_bytes(vote.get("signature"), 64, "signature"),
+                })
             rows.append(
                 {
                     "solana_tx_sig": self._bridge_bytes(
                         row.get("solana_tx_sig"), 64, "solana_tx_sig"
                     ),
-                    "locator": {
+                    "locator": None if locator is None else {
                         "top_index": self._bridge_uint(locator.get("top_index"), "top_index"),
                         "inner_index": None
                         if locator.get("inner_index") is None
                         else self._bridge_uint(locator.get("inner_index"), "inner_index"),
                     },
-                    "registry_epoch": self._bridge_uint(
-                        row.get("registry_epoch"), "registry_epoch"
-                    ),
-                    "observations": observations,
+                    "votes": votes,
                 }
             )
         # The raw store-key bytes, hex-encoded exactly as the route serves

@@ -156,7 +156,7 @@ pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
         ),
         ReadKind::Account => decode_records::<core_sdk::query::AccountInfo>(bytes, &ACCOUNT_INFO),
         ReadKind::AdminAction => decode_as::<governance::AdminAction>(bytes),
-        // The wire-12 bridge views are v2 named-map encodes
+        // The bridge views are v2 named-map encodes
         // (`query_v2::encode`), so a field a later engine appends is skipped
         // by the map decode — no shape cut needed.
         ReadKind::BridgeStatus => decode_as::<core_sdk::query_v2::BridgeStatus>(bytes),
@@ -294,6 +294,93 @@ pub fn signing_message(
     Ok(crypto::signing_message(&cid, action_type, seq, payload))
 }
 
+/// Canonical registry-member signature preimage for a Paid withdrawal vote.
+#[wasm_bindgen]
+pub fn vote_withdrawal_paid_message(
+    withdrawal_id: u64,
+    vault: &[u8],
+    squads_transaction_index: u32,
+    deployment_id: &[u8],
+    chain_id: &[u8],
+    registry_epoch: u64,
+) -> Result<Vec<u8>, JsError> {
+    let vote = core_sdk::types::VoteWithdrawalPaid {
+        withdrawal_id,
+        vault: arr32(vault, "vault")?,
+        squads_transaction_index,
+        deployment_id: arr32(deployment_id, "deployment_id")?,
+        chain_id: arr32(chain_id, "chain_id")?,
+        registry_epoch,
+        signature: Vec::new(),
+    };
+    Ok(vote.vote_message())
+}
+
+/// Canonical registry-member signature preimage for a dead-payout vote.
+#[wasm_bindgen]
+pub fn vote_withdrawal_payout_dead_message(
+    withdrawal_id: u64,
+    vault: &[u8],
+    squads_transaction_index: u32,
+    deployment_id: &[u8],
+    chain_id: &[u8],
+    registry_epoch: u64,
+) -> Result<Vec<u8>, JsError> {
+    let vote = core_sdk::types::VoteWithdrawalPayoutDead {
+        withdrawal_id,
+        vault: arr32(vault, "vault")?,
+        squads_transaction_index,
+        deployment_id: arr32(deployment_id, "deployment_id")?,
+        chain_id: arr32(chain_id, "chain_id")?,
+        registry_epoch,
+        signature: Vec::new(),
+    };
+    Ok(vote.vote_message())
+}
+
+/// Canonical registry-member signature preimage for an observed deposit vote.
+#[wasm_bindgen]
+pub fn vote_deposit_message(
+    owner: &[u8],
+    amount_micro_usdc: u64,
+    solana_tx_sig: &[u8],
+    top_index: u16,
+    inner_index: i32,
+    deployment_id: &[u8],
+    chain_id: &[u8],
+    registry_epoch: u64,
+) -> Result<Vec<u8>, JsError> {
+    let locator = if inner_index == -1 && top_index == 0 {
+        None
+    } else if inner_index == -1 {
+        Some(core_sdk::types::DepositLocator {
+            top_index,
+            inner_index: None,
+        })
+    } else if (0..=u16::MAX as i32).contains(&inner_index) {
+        Some(core_sdk::types::DepositLocator {
+            top_index,
+            inner_index: Some(inner_index as u16),
+        })
+    } else {
+        return Err(JsError::new("inner_index must be -1 or a u16"));
+    };
+    let signature = arr64(solana_tx_sig, "solana_tx_sig")?;
+    let vote = core_sdk::types::VoteDeposit {
+        owner: owner
+            .try_into()
+            .map_err(|_| JsError::new("owner must be exactly 20 bytes"))?,
+        amount_micro_usdc,
+        solana_tx_sig: signature.to_vec(),
+        locator,
+        deployment_id: arr32(deployment_id, "deployment_id")?,
+        chain_id: arr32(chain_id, "chain_id")?,
+        registry_epoch,
+        signature: Vec::new(),
+    };
+    Ok(vote.vote_message())
+}
+
 /// Assemble a signed wire envelope from a pre-computed pubkey + signature.
 #[wasm_bindgen]
 pub fn encode_signed_tx(
@@ -386,7 +473,7 @@ pub fn chain_id_from_string(chain_id: &str) -> Vec<u8> {
 // withdrawal. Calling its `encode()` makes the bytes the engine's by
 // construction; `src/bridge.test.ts` pins the marshalling with frozen
 // vectors. (The receipt-era `encode_bridge_receipt` binding retired with
-// wire 12: registry members now sign the canonical vote message from the
+// wire 13: registry members now sign the canonical vote message from the
 // core's `bridge_votes` helpers, and no action carries receipt bytes.)
 
 use proof_trading_sdk::bridge::{

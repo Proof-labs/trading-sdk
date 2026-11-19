@@ -7,7 +7,7 @@
  * compile, so the SDK hashes exactly the bytes the engine binds. The frozen
  * vectors in `bridge.test.ts` pin the marshalling.
  *
- * The wire-12 vote model retired the receipt-era surfaces this module used to
+ * The wire-13 vote model retired the receipt-era surfaces this module used to
  * carry (`encodeBridgeReceipt`, `signOperatorReceipt`, the terminal/quorum
  * wire-byte constants): registry members now vote
  * `VoteWithdrawalPaid` / `VoteDeposit` and sign the canonical vote message
@@ -16,6 +16,56 @@
  */
 
 import { getWasm } from "./wasm-loader.js";
+import type { DepositLocator, VoteDeposit, VoteWithdrawalPaid, VoteWithdrawalPayoutDead } from "./types.js";
+
+/** Signer callback for an operator vote. It signs the exact core-produced preimage. */
+export type BridgeVoteSigner = (message: Uint8Array) => Uint8Array;
+
+function checkedSignature(signer: BridgeVoteSigner, message: Uint8Array): Uint8Array {
+  const signature = signer(message);
+  if (!(signature instanceof Uint8Array) || signature.length !== 64) {
+    throw new Error("bridge vote signer must return exactly 64 signature bytes");
+  }
+  return signature;
+}
+
+/** Build and sign a Paid withdrawal vote against the current payout identity. */
+export function signVoteWithdrawalPaid(
+  signer: BridgeVoteSigner,
+  fields: Omit<VoteWithdrawalPaid, "signature">,
+): VoteWithdrawalPaid {
+  const signature = checkedSignature(signer, getWasm().vote_withdrawal_paid_message(
+    fields.withdrawalId, fields.vault, fields.squadsTransactionIndex,
+    fields.deploymentId, fields.chainId, fields.registryEpoch,
+  ));
+  return { ...fields, signature };
+}
+
+/** Build and sign a vote clearing the currently recorded dead payout. */
+export function signVoteWithdrawalPayoutDead(
+  signer: BridgeVoteSigner,
+  fields: Omit<VoteWithdrawalPayoutDead, "signature">,
+): VoteWithdrawalPayoutDead {
+  const signature = checkedSignature(signer, getWasm().vote_withdrawal_payout_dead_message(
+    fields.withdrawalId, fields.vault, fields.squadsTransactionIndex,
+    fields.deploymentId, fields.chainId, fields.registryEpoch,
+  ));
+  return { ...fields, signature };
+}
+
+/** Build and sign one registry vote for an observed Solana deposit. */
+export function signVoteDeposit(
+  signer: BridgeVoteSigner,
+  fields: Omit<VoteDeposit, "signature">,
+): VoteDeposit {
+  const locator: DepositLocator | null = fields.locator ?? null;
+  const signature = checkedSignature(signer, getWasm().vote_deposit_message(
+    fields.owner, fields.amountMicroUsdc, fields.solanaTxSig,
+    locator?.topIndex ?? 0, locator?.innerIndex ?? -1,
+    fields.deploymentId, fields.chainId, fields.registryEpoch,
+  ));
+  return { ...fields, signature };
+}
 
 /** Total length of a canonical `WithdrawalAuthorizationV1`. Fixed by construction. */
 export const WITHDRAWAL_AUTHORIZATION_LEN = 221;

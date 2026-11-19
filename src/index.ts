@@ -114,6 +114,7 @@ export {
   type ConfirmWithdrawal,
   type FailWithdrawal,
   type VoteWithdrawalPaid,
+  type VoteWithdrawalPayoutDead,
   type VoteDeposit,
   type TriggerLimb,
   type SetPositionTriggers,
@@ -417,7 +418,7 @@ export { fetchChainId } from "./client.js";
 // Bridge custody: canonical bridge-core v1 payload encoders — the bytes the
 // engine's withdrawal authorization binds. (The receipt-era surfaces
 // `encodeBridgeReceipt` / `signOperatorReceipt` and the terminal/quorum wire
-// bytes retired with wire 12; registry members now sign the canonical vote
+// bytes retired with wire 13; registry members now sign the canonical vote
 // message — see the `bridge_votes` helpers in the Rust core.)
 export {
   VAULT_TIER_COLD,
@@ -426,6 +427,10 @@ export {
   WITHDRAWAL_AUTHORIZATION_LEN,
   encodeWithdrawalAuthorization,
   withdrawalAuthorizationDigest,
+  signVoteWithdrawalPaid,
+  signVoteWithdrawalPayoutDead,
+  signVoteDeposit,
+  type BridgeVoteSigner,
   type WithdrawalAuthorizationV1,
 } from "./bridge.js";
 

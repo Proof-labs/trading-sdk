@@ -414,10 +414,24 @@ describe("codec v1 all action types", () => {
       type: "VoteWithdrawalPaid",
       data: {
         withdrawalId: 777n,
+        vault: new Uint8Array(32).fill(0xb2),
+        squadsTransactionIndex: 11,
         deploymentId: new Uint8Array(32).fill(0xa1),
         chainId: new Uint8Array(32).fill(0xc7),
         registryEpoch: 3n,
         signature: new Uint8Array(64).fill(0x5c),
+      },
+    },
+    {
+      type: "VoteWithdrawalPayoutDead",
+      data: {
+        withdrawalId: 8n,
+        vault: new Uint8Array(32).fill(0xb2),
+        squadsTransactionIndex: 13,
+        deploymentId: new Uint8Array(32).fill(0xa1),
+        chainId: new Uint8Array(32).fill(0xc7),
+        registryEpoch: 4n,
+        signature: new Uint8Array(64).fill(0x51),
       },
     },
     {
@@ -461,10 +475,24 @@ describe("codec v1 all action types", () => {
         type: "VoteWithdrawalPaid",
         data: {
           withdrawalId: 777n,
+          vault: new Uint8Array(32).fill(0xb2),
+          squadsTransactionIndex: 11,
           deploymentId: new Uint8Array(32).fill(0xa1),
           chainId: new Uint8Array(32).fill(0xc7),
           registryEpoch: 3n,
           signature: new Uint8Array(64).fill(0x5c),
+        },
+      },
+      {
+        type: "VoteWithdrawalPayoutDead",
+        data: {
+          withdrawalId: 8n,
+          vault: new Uint8Array(32).fill(0xb2),
+          squadsTransactionIndex: 13,
+          deploymentId: new Uint8Array(32).fill(0xa1),
+          chainId: new Uint8Array(32).fill(0xc7),
+          registryEpoch: 4n,
+          signature: new Uint8Array(64).fill(0x51),
         },
       },
       {

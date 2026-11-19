@@ -254,6 +254,16 @@ function validateSetOperatorReceiptRegistry(
       `setOperatorReceiptRegistry operatorOwners length ${registry.operatorOwners.length} must equal operatorKeys length ${n}`,
     );
   }
+  const seenOwners = new Set<string>();
+  for (const [index, owner] of registry.operatorOwners.entries()) {
+    const key = Array.from(owner, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (seenOwners.has(key)) {
+      throw new Error(
+        `setOperatorReceiptRegistry operatorOwners[${index}] duplicates an earlier owner`,
+      );
+    }
+    seenOwners.add(key);
+  }
   const zero = registry.operatorOwners.findIndex(
     (owner) => !owner.some((byte) => byte !== 0),
   );
@@ -446,6 +456,7 @@ const BYTE_FIELDS = new Set([
   "signer",
   "solanaDestination",
   "solanaTxSig",
+  "vault",
   // Governance signer/commitment fields (20- or 32-byte).
   "proposer",
   "approver",
@@ -826,7 +837,7 @@ export function marketsSnapshotFromWasm(v: unknown): MarketsSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// Bridge custody reads (wire 12, `/v2/bridge/*`): the Rust core has decoded
+// Bridge custody reads (wire 13, `/v2/bridge/*`): the Rust core has decoded
 // the `query_v2` views; these only rename fields and lift `Option`s.
 // ---------------------------------------------------------------------------
 
@@ -835,18 +846,8 @@ const optionalBytes = (v: unknown): Uint8Array | undefined =>
 
 /** The `/v2/bridge/status` governance view. */
 export function bridgeStatusFromWasm(v: unknown): BridgeStatus {
-  const s = v as WasmRecord;
-  const status: BridgeStatus = { halted: s.halted as boolean };
-  const payoutMultisig = optionalBytes(s.payout_multisig);
-  if (payoutMultisig) status.payoutMultisig = payoutMultisig;
-  const opsWallet = optionalBytes(s.ops_wallet);
-  if (opsWallet) status.opsWallet = opsWallet;
-  if (s.registry_epoch != null) {
-    status.registryEpoch = s.registry_epoch as bigint;
-    status.registryThreshold = s.registry_threshold as number;
-    status.operatorCount = s.operator_count as number;
-  }
-  return status;
+  if (v === "Active" || v === "Paused" || v === "WithdrawalsFull") return v;
+  throw new Error(`unknown bridge status: ${String(v)}`);
 }
 
 function memberFromWasm(m: WasmRecord): OperatorMember {
@@ -868,7 +869,14 @@ export function bridgeRegistryFromWasm(v: unknown): OperatorRegistry {
 }
 
 function bridgeVoteFromWasm(v: WasmRecord): BridgeVote {
-  return { voter: bytesOf(v.voter), signature: bytesOf(v.signature) };
+  return {
+    voter: bytesOf(v.voter),
+    signature: bytesOf(v.signature),
+    registryEpoch: v.registry_epoch as bigint,
+    dead: v.dead as boolean,
+    vault: bytesOf(v.vault),
+    squadsTransactionIndex: v.squads_transaction_index as number,
+  };
 }
 
 /// The v2 views spell the withdrawal status in snake_case (`"pending"`),
@@ -882,6 +890,8 @@ function withdrawalStatusFromWasm(v: unknown): WithdrawalRecord["status"] {
       return "Completed";
     case "failed":
       return "Failed";
+    case "unknown":
+      return "Unknown";
     default:
       throw new Error(`unknown withdrawal status: ${JSON.stringify(v)}`);
   }
@@ -910,7 +920,7 @@ function payoutReportFromWasm(r: WasmRecord): WithdrawalPayoutReport {
 function pendingWithdrawalFromWasm(w: WasmRecord): PendingWithdrawal {
   const row: PendingWithdrawal = {
     withdrawal: withdrawalFromWasm(w.withdrawal as WasmRecord),
-    payoutReports: (w.payout_reports as WasmRecord[]).map(payoutReportFromWasm),
+    votes: (w.votes as WasmRecord[]).map(bridgeVoteFromWasm),
   };
   if (w.lease != null) {
     const l = w.lease as WasmRecord;
@@ -920,12 +930,8 @@ function pendingWithdrawalFromWasm(w: WasmRecord): PendingWithdrawal {
       expiresAtHeight: l.expires_at_height as bigint,
     };
   }
-  if (w.votes != null) {
-    const votes = w.votes as WasmRecord;
-    row.votes = {
-      registryEpoch: votes.registry_epoch as bigint,
-      votes: (votes.votes as WasmRecord[]).map(bridgeVoteFromWasm),
-    };
+  if (w.payout != null) {
+    row.payout = payoutReportFromWasm(w.payout as WasmRecord);
   }
   return row;
 }
@@ -943,16 +949,16 @@ export function pendingWithdrawalsFromWasm(v: unknown): PendingWithdrawalPage {
 function pendingDepositFromWasm(d: WasmRecord): PendingDeposit {
   return {
     solanaTxSig: bytesOf(d.solana_tx_sig),
-    locator: {
+    locator: d.locator == null ? null : {
       topIndex: (d.locator as WasmRecord).top_index as number,
-      innerIndex:
-        ((d.locator as WasmRecord).inner_index as number | undefined) ?? null,
+      innerIndex: ((d.locator as WasmRecord).inner_index as number | undefined) ?? null,
     },
-    registryEpoch: d.registry_epoch as bigint,
-    observations: (d.observations as WasmRecord[]).map((o) => ({
-      owner: bytesOf(o.owner),
-      amountMicroUsdc: o.amount_micro_usdc as bigint,
-      votes: (o.votes as WasmRecord[]).map(bridgeVoteFromWasm),
+    votes: (d.votes as WasmRecord[]).map((raw) => ({
+      voter: bytesOf(raw.voter),
+      registryEpoch: raw.registry_epoch as bigint,
+      owner: bytesOf(raw.owner),
+      amountMicroUsdc: raw.amount_micro_usdc as bigint,
+      signature: bytesOf(raw.signature),
     })),
   };
 }

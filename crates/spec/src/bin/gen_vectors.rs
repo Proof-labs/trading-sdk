@@ -135,6 +135,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     const RECORD_WITHDRAWAL_PAYOUT: u8 = 0x31;
     const VOTE_WITHDRAWAL_PAID: u8 = 0x30;
     const VOTE_DEPOSIT: u8 = 0x32;
+    const VOTE_WITHDRAWAL_PAYOUT_DEAD: u8 = 0x34;
     const SET_USER_MARKET_LEVERAGE: u8 = 0x16;
     const CANCEL_CLIENT_ORDER: u8 = 0x18;
     const CANCEL_ALL_ORDERS: u8 = 0x19;
@@ -859,7 +860,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "squads_transaction_index": u32::MAX,
                     "registry_epoch": u64::MAX }),
         ),
-        // Wire-12 operator votes (0x30 / 0x32): one registry member's
+        // Wire-13 operator votes: one registry member's
         // signature over the canonical vote preimage, carried as a 64-byte
         // array. Two items per action: a plain vote and a u64-bounds vote
         // with a non-uniform signature, so every binding pins the widths and
@@ -868,6 +869,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             "vote_withdrawal_paid/basic",
             VOTE_WITHDRAWAL_PAID,
             json!({ "withdrawal_id": 777u64,
+                    "vault": vec![0xB2u8; 32],
+                    "squads_transaction_index": 11u32,
                     "deployment_id": vec![0xA1u8; 32],
                     "chain_id": vec![0xC7u8; 32],
                     "registry_epoch": 3u64,
@@ -877,10 +880,20 @@ fn main() -> Result<(), Box<dyn Error>> {
             "vote_withdrawal_paid/u64_bounds",
             VOTE_WITHDRAWAL_PAID,
             json!({ "withdrawal_id": u64::MAX,
+                    "vault": (0u8..32).collect::<Vec<u8>>(),
+                    "squads_transaction_index": u32::MAX,
                     "deployment_id": (1u8..33).collect::<Vec<u8>>(),
                     "chain_id": (2u8..34).collect::<Vec<u8>>(),
                     "registry_epoch": u64::MAX,
                     "signature": (0u8..64).collect::<Vec<u8>>() }),
+        ),
+        codec_case(
+            "vote_withdrawal_payout_dead/basic",
+            VOTE_WITHDRAWAL_PAYOUT_DEAD,
+            json!({ "withdrawal_id": 8u64, "vault": vec![0xB2u8; 32],
+                    "squads_transaction_index": 13u32,
+                    "deployment_id": vec![0xA1u8; 32], "chain_id": vec![0xC7u8; 32],
+                    "registry_epoch": 4u64, "signature": vec![0x51u8; 64] }),
         ),
         codec_case(
             "vote_deposit/basic",
@@ -1105,6 +1118,57 @@ fn main() -> Result<(), Box<dyn Error>> {
         ),
     ];
     write_ndjson(&dir.join(cv::CODEC_FILE), &codec)?;
+
+    // The operator's Ed25519 vote preimages are a cross-language contract,
+    // separate from the MessagePack payload vectors. Derive the expected
+    // bytes through the same proof-wire methods the engine verifies.
+    let preimage_paid = proof_trading_sdk::types::VoteWithdrawalPaid {
+        withdrawal_id: 777,
+        vault: [0xB2; 32],
+        squads_transaction_index: 11,
+        deployment_id: [0xA1; 32],
+        chain_id: [0xC7; 32],
+        registry_epoch: 3,
+        signature: Vec::new(),
+    };
+    let preimage_dead = proof_trading_sdk::types::VoteWithdrawalPayoutDead {
+        withdrawal_id: 8,
+        vault: [0xB2; 32],
+        squads_transaction_index: 13,
+        deployment_id: [0xA1; 32],
+        chain_id: [0xC7; 32],
+        registry_epoch: 4,
+        signature: Vec::new(),
+    };
+    let preimage_deposit = proof_trading_sdk::types::VoteDeposit {
+        owner: [0x11; 20],
+        amount_micro_usdc: 1_000_000,
+        solana_tx_sig: vec![0x22; 64],
+        locator: Some(proof_trading_sdk::types::DepositLocator {
+            top_index: 2,
+            inner_index: Some(5),
+        }),
+        deployment_id: [0xA1; 32],
+        chain_id: [0xC7; 32],
+        registry_epoch: 9,
+        signature: Vec::new(),
+    };
+    let vote_preimages = vec![
+        json!({ "case": "withdrawal_paid", "withdrawal_id": 777,
+            "vault": hex::encode([0xB2; 32]), "squads_transaction_index": 11,
+            "deployment_id": hex::encode([0xA1; 32]), "chain_id": hex::encode([0xC7; 32]),
+            "registry_epoch": 3, "preimage_hex": hex::encode(preimage_paid.vote_message()) }),
+        json!({ "case": "withdrawal_payout_dead", "withdrawal_id": 8,
+            "vault": hex::encode([0xB2; 32]), "squads_transaction_index": 13,
+            "deployment_id": hex::encode([0xA1; 32]), "chain_id": hex::encode([0xC7; 32]),
+            "registry_epoch": 4, "preimage_hex": hex::encode(preimage_dead.vote_message()) }),
+        json!({ "case": "deposit", "owner": hex::encode([0x11; 20]),
+            "amount_micro_usdc": 1_000_000, "solana_tx_sig": hex::encode([0x22; 64]),
+            "top_index": 2, "inner_index": 5, "deployment_id": hex::encode([0xA1; 32]),
+            "chain_id": hex::encode([0xC7; 32]), "registry_epoch": 9,
+            "preimage_hex": hex::encode(preimage_deposit.vote_message()) }),
+    ];
+    write_ndjson(&dir.join("vote-preimages.ndjson"), &vote_preimages)?;
 
     // ── signing family ───────────────────────────────────────────────────
     let unbound = [0u8; 32];

@@ -35,7 +35,7 @@ export enum TimeInForce {
  * Retired, never reassigned: 0x03 `OracleUpdate`, 0x12 `RunFundingTick`,
  * 0x14 `OracleUpdateComposite`, and 0x22 `ConfirmWithdrawalReceipt` /
  * 0x23 `FailWithdrawalReceipt` / 0x24 `AuthorizeWithdrawal` — the
- * receipt-era bridge actions that wire 12 replaced with the operator
+ * receipt-era bridge actions that wire 13 replaced with the operator
  * votes (`VoteWithdrawalPaid` / `VoteDeposit`).
  */
 export const ActionType = {
@@ -89,6 +89,8 @@ export const ActionType = {
   /** One operator-registry member's vote to credit one observed Solana
    *  deposit (0x32). Aggregated and settled like `VoteWithdrawalPaid`. */
   VoteDeposit: 0x32,
+  /** Clear a recorded payout after the registry quorum votes it dead (0x34). */
+  VoteWithdrawalPayoutDead: 0x34,
   /** Update a subset of `MarketConfig` tunables on a live market (admin).
    *  Fee tiering, funding-rate cap tightening, position-limit updates
    *  without a chain rebase. */
@@ -413,7 +415,7 @@ export interface ConfirmWithdrawal {
 
 /** Lifecycle status of a withdrawal record. Title-case strings are
  *  serde's default for unit variants — wire format is locked. */
-export type WithdrawalStatus = "Pending" | "Completed" | "Failed";
+export type WithdrawalStatus = "Pending" | "Completed" | "Failed" | "Unknown";
 
 /** On-chain withdrawal record returned by `queryWithdrawal`. Mirrors
  *  `exchange-core::types::WithdrawalRecord` field-for-field. */
@@ -433,26 +435,12 @@ export interface WithdrawalRecord {
 }
 
 // ---------------------------------------------------------------------------
-// Bridge custody reads (`/v2/bridge/*` — the wire-12 vote model views)
+// Bridge custody reads (`/v2/bridge/*` — wire 13)
 // ---------------------------------------------------------------------------
 
 /** The bridge's governance state (`/v2/bridge/status`). Payout
  *  configuration fields are absent while unset. */
-export interface BridgeStatus {
-  /** True while the admin quorum's halt flag is set: claims, payout
-   *  reports and bridge votes refuse until it clears. */
-  halted: boolean;
-  /** The Squads v4 vault withdrawals pay from (32 bytes), once governed. */
-  payoutMultisig?: Uint8Array;
-  /** The vault's rent-refund collector (32 bytes), once governed. */
-  opsWallet?: Uint8Array;
-  /** The current operator-registry epoch, once a registry exists. */
-  registryEpoch?: bigint;
-  /** *m* — distinct operator members required, once a registry exists. */
-  registryThreshold?: number;
-  /** *n* — the roster's operator count, once a registry exists. */
-  operatorCount?: number;
-}
+export type BridgeStatus = "Active" | "Paused" | "WithdrawalsFull";
 
 /** One operator-registry member: its ed25519 verification key and the
  *  engine address it controls. `owner` is absent on a roster stored before
@@ -486,6 +474,10 @@ export interface BridgeVote {
   voter: Uint8Array;
   /** The member's 64-byte signature over the canonical vote message. */
   signature: Uint8Array;
+  registryEpoch: bigint;
+  dead: boolean;
+  vault: Uint8Array;
+  squadsTransactionIndex: number;
 }
 
 /** The Paid votes on one pending withdrawal: the binding epoch and one
@@ -526,11 +518,10 @@ export interface PendingWithdrawal {
   withdrawal: WithdrawalRecord;
   /** The live payout lease, if one is held. */
   lease?: WithdrawalPayoutLease;
-  /** Every distinct (vault, index) payout report, retained until
-   *  settlement. */
-  payoutReports: WithdrawalPayoutReport[];
-  /** The aggregated Paid votes, if any member has voted. */
-  votes?: WithdrawalVotes;
+  /** The currently recorded Squads payout, if any. */
+  payout?: WithdrawalPayoutReport;
+  /** Votes on the current payout, both Paid and payout-dead. */
+  votes: BridgeVote[];
 }
 
 /** One page of the pending-withdrawals read. `nextCursor` is the id to
@@ -553,6 +544,15 @@ export interface PendingDepositObservation {
   votes: BridgeVote[];
 }
 
+/** One member vote recorded for a pending deposit transfer. */
+export interface PendingDepositVote {
+  voter: Uint8Array;
+  registryEpoch: bigint;
+  owner: Address;
+  amountMicroUsdc: bigint;
+  signature: Uint8Array;
+}
+
 /** A pending deposit: the voted readings of one transfer identity and the
  *  aggregation so far (`/v2/bridge/pending-deposits`). Usually exactly one
  *  observation; more means members currently disagree, and the first
@@ -561,13 +561,10 @@ export interface PendingDeposit {
   /** The transfer's Solana signature (64 bytes) — half of the dedup
    *  identity; the other half rides the store key this row was read from. */
   solanaTxSig: Uint8Array;
-  /** Always present: the identity rides the store key, so every row
-   *  carries one. The LEGACY reading decodes with no inner index. */
-  locator: DepositLocator;
-  /** The registry epoch the votes are bound to. */
-  registryEpoch: bigint;
-  /** One entry per distinct (owner, amount) reading, in first-vote order. */
-  observations: PendingDepositObservation[];
+  /** Transfer instruction locator; absent represents the legacy identity. */
+  locator?: DepositLocator | null;
+  /** Member votes recorded for this transfer identity. */
+  votes: PendingDepositVote[];
 }
 
 /** One page of the pending-deposits read. `nextCursor` is an opaque
@@ -793,6 +790,10 @@ export interface RecordWithdrawalPayout {
 export interface VoteWithdrawalPaid {
   /** Engine-assigned withdrawal ID. */
   withdrawalId: bigint;
+  /** Payout vault bound by the vote (32 bytes). */
+  vault: Uint8Array;
+  /** Squads transaction index bound by the vote. */
+  squadsTransactionIndex: number;
   /** The bridge deployment the withdrawal belongs to (32 bytes); rides the
    *  signed message, so a captured vote cannot settle on another
    *  deployment. */
@@ -805,6 +806,17 @@ export interface VoteWithdrawalPaid {
   registryEpoch: bigint;
   /** 64-byte ed25519 signature over the canonical vote message; any other
    *  length does not decode. */
+  signature: Uint8Array;
+}
+
+/** One registry member's vote to clear a payout rejected by Squads (0x33). */
+export interface VoteWithdrawalPayoutDead {
+  withdrawalId: bigint;
+  vault: Uint8Array;
+  squadsTransactionIndex: number;
+  deploymentId: Uint8Array;
+  chainId: Uint8Array;
+  registryEpoch: bigint;
   signature: Uint8Array;
 }
 
@@ -1156,6 +1168,7 @@ export type OperatorAction =
   | { type: "VoteWithdrawalPaid"; data: VoteWithdrawalPaid }
   | { type: "RecordWithdrawalPayout"; data: RecordWithdrawalPayout }
   | { type: "VoteDeposit"; data: VoteDeposit }
+  | { type: "VoteWithdrawalPayoutDead"; data: VoteWithdrawalPayoutDead }
   | { type: "UpdateMarketFees"; data: UpdateMarketFees };
 
 /**

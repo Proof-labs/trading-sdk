@@ -2,6 +2,7 @@
 // vector is `rmp_serde::to_vec` of the wire type, as the engine serves it.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { encode } from "@msgpack/msgpack";
 import { ExchangeClient } from "./client.js";
 import { decodeSigningMessage, encodePayloadBytes } from "./codec.js";
 import { signingMessage } from "./crypto.js";
@@ -251,58 +252,60 @@ describe("SetOperatorReceiptRegistry operatorKeys + operatorOwners", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Wire-12 bridge custody reads (`/v2/bridge/*`). Each fixture is
-// `query_v2::encode` (rmp-serde named maps) of the pinned wire view,
-// generated from the Rust core.
-// ---------------------------------------------------------------------------
-
-/** `BridgeStatus`: halted, both payout addresses set, epoch 3, 2-of-2. */
-const BRIDGE_STATUS =
-  "86a668616c746564c3af7061796f75745f6d756c7469736967c420a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2aa6f70735f77616c6c6574c420b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3ae72656769737472795f65706f636803b272656769737472795f7468726573686f6c6402ae6f70657261746f725f636f756e7402";
-/** `BridgeStatus`: nothing governed yet — every `Option` decodes absent. */
-const BRIDGE_STATUS_MINIMAL =
-  "86a668616c746564c2af7061796f75745f6d756c7469736967c0aa6f70735f77616c6c6574c0ae72656769737472795f65706f6368c0b272656769737472795f7468726573686f6c64c0ae6f70657261746f725f636f756e74c0";
-/** `OperatorRegistry` at epoch 3: two members, the second stored pre-12
- *  (no owner). */
-const BRIDGE_REGISTRY =
-  "84ad6465706c6f796d656e745f6964c420a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a565706f636803a97468726573686f6c6402a76d656d626572739282a36b6579c4201111111111111111111111111111111111111111111111111111111111111111a56f776e6572c414555555555555555555555555555555555555555582a36b6579c4202222222222222222222222222222222222222222222222222222222222222222a56f776e6572c0";
-/** One `PendingWithdrawal` (id 103, pending) with lease, payout report and
- *  two Paid votes; `next_cursor` 104. */
-const PENDING_WITHDRAWALS =
-  "82a4726f77739184aa7769746864726177616c86ad7769746864726177616c5f696467a56f776e6572c414ababababababababababababababababababababa6616d6f756e74ce004c4b40b2736f6c616e615f64657374696e6174696f6ec420cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcda6737461747573a770656e64696e67ae726571756573745f6865696768742aa56c6561736583a6686f6c646572c4145555555555555555555555555555555555555555af61637175697265645f6865696768742bb1657870697265735f61745f686569676874cc8fae7061796f75745f7265706f7274739184a6686f6c646572c4145555555555555555555555555555555555555555a57661756c74c420a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2b87371756164735f7472616e73616374696f6e5f696e64657807ae72656769737472795f65706f636803a5766f74657382ae72656769737472795f65706f636803a5766f7465739282a5766f746572c4201111111111111111111111111111111111111111111111111111111111111111a97369676e6174757265c4407777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777782a5766f746572c4202222222222222222222222222222222222222222222222222222222222222222a97369676e6174757265c44088888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888ab6e6578745f637572736f7268";
-/** The exhausted withdrawals page: no rows, `next_cursor` nil. */
-const PENDING_WITHDRAWALS_EXHAUSTED =
-  "82a4726f777390ab6e6578745f637572736f72c0";
-/** One `PendingDeposit` (one observation, one vote, populated locator);
- *  `next_cursor` is the opaque store-key bytes deadbeef. */
-const PENDING_DEPOSITS =
-  "82a4726f77739184ad736f6c616e615f74785f736967c44099999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999a76c6f6361746f7282a9746f705f696e64657802ab696e6e65725f696e64657805ae72656769737472795f65706f636803ac6f62736572766174696f6e739183a56f776e6572c4146666666666666666666666666666666666666666b1616d6f756e745f6d6963726f5f75736463ce000f4240a5766f7465739182a5766f746572c4201111111111111111111111111111111111111111111111111111111111111111a97369676e6174757265c44077777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777777ab6e6578745f637572736f7294ccdeccadccbeccef";
-/** The exhausted deposits page. */
-const PENDING_DEPOSITS_EXHAUSTED = "82a4726f777390ab6e6578745f637572736f72c0";
+// Wire-13 bridge custody reads (`/v2/bridge/*`), serialized from the current
+// query_v2 view shapes.
+const wire = (value: unknown) => Buffer.from(encode(value, { useBigInt64: true })).toString("hex");
+const BRIDGE_STATUS = wire("Paused");
+const BRIDGE_STATUS_MINIMAL = wire("Active");
+const BRIDGE_REGISTRY = wire({
+  deployment_id: new Uint8Array(32).fill(0xa1), epoch: 3n, threshold: 2,
+  members: [
+    { key: new Uint8Array(32).fill(0x11), owner: new Uint8Array(20).fill(0x55) },
+    { key: new Uint8Array(32).fill(0x22), owner: null },
+  ],
+});
+const WITHDRAW_VOTE_1 = {
+  voter: new Uint8Array(32).fill(0x11), registry_epoch: 3n, dead: false,
+  vault: new Uint8Array(32).fill(0xa2), squads_transaction_index: 7,
+  signature: new Uint8Array(64).fill(0x77),
+};
+const WITHDRAW_VOTE_2 = {
+  ...WITHDRAW_VOTE_1, voter: new Uint8Array(32).fill(0x22), dead: true,
+  signature: new Uint8Array(64).fill(0x88),
+};
+const PENDING_WITHDRAWALS = wire({
+  rows: [{
+    withdrawal: {
+      withdrawal_id: 103n, owner: new Uint8Array(20).fill(0xab), amount: 5_000_000n,
+      solana_destination: new Uint8Array(32).fill(0xcd), status: "pending", request_height: 42n,
+    },
+    lease: { holder: new Uint8Array(20).fill(0x55), acquired_height: 43n, expires_at_height: 143n },
+    payout: { holder: new Uint8Array(20).fill(0x55), vault: new Uint8Array(32).fill(0xa2),
+      squads_transaction_index: 7, registry_epoch: 3n },
+    votes: [WITHDRAW_VOTE_1, WITHDRAW_VOTE_2],
+  }], next_cursor: 104n,
+});
+const PENDING_WITHDRAWALS_EXHAUSTED = wire({ rows: [], next_cursor: null });
+const PENDING_DEPOSITS = wire({
+  rows: [{
+    solana_tx_sig: new Uint8Array(64).fill(0x99),
+    locator: { top_index: 2, inner_index: 5 },
+    votes: [{ voter: new Uint8Array(32).fill(0x11), registry_epoch: 3n,
+      owner: new Uint8Array(20).fill(0x66), amount_micro_usdc: 1_000_000n,
+      signature: new Uint8Array(64).fill(0x77) }],
+  }], next_cursor: new Uint8Array([0xde, 0xad, 0xbe, 0xef]),
+});
+const PENDING_DEPOSITS_EXHAUSTED = wire({ rows: [], next_cursor: null });
 
 describe("queryBridgeStatus", () => {
   it("decodes the governance view", async () => {
     serve(BRIDGE_STATUS);
-    expect(await client().queryBridgeStatus()).toEqual({
-      halted: true,
-      payoutMultisig: new Uint8Array(32).fill(0xa2),
-      opsWallet: new Uint8Array(32).fill(0xb3),
-      registryEpoch: 3n,
-      registryThreshold: 2,
-      operatorCount: 2,
-    });
+    expect(await client().queryBridgeStatus()).toBe("Paused");
   });
 
   it("leaves ungoverned fields absent", async () => {
     serve(BRIDGE_STATUS_MINIMAL);
-    expect(await client().queryBridgeStatus()).toEqual({
-      halted: false,
-      payoutMultisig: undefined,
-      opsWallet: undefined,
-      registryEpoch: undefined,
-      registryThreshold: undefined,
-      operatorCount: undefined,
-    });
+    expect(await client().queryBridgeStatus()).toBe("Active");
   });
 });
 
@@ -343,27 +346,18 @@ describe("queryPendingWithdrawals", () => {
             acquiredHeight: 43n,
             expiresAtHeight: 143n,
           },
-          payoutReports: [
-            {
-              holder: new Uint8Array(20).fill(0x55),
-              vault: new Uint8Array(32).fill(0xa2),
-              squadsTransactionIndex: 7,
-              registryEpoch: 3n,
-            },
-          ],
-          votes: {
+          payout: {
+            holder: new Uint8Array(20).fill(0x55),
+            vault: new Uint8Array(32).fill(0xa2),
+            squadsTransactionIndex: 7,
             registryEpoch: 3n,
-            votes: [
-              {
-                voter: new Uint8Array(32).fill(0x11),
-                signature: new Uint8Array(64).fill(0x77),
-              },
-              {
-                voter: new Uint8Array(32).fill(0x22),
-                signature: new Uint8Array(64).fill(0x88),
-              },
-            ],
           },
+          votes: [
+            { voter: new Uint8Array(32).fill(0x11), signature: new Uint8Array(64).fill(0x77),
+              registryEpoch: 3n, dead: false, vault: new Uint8Array(32).fill(0xa2), squadsTransactionIndex: 7 },
+            { voter: new Uint8Array(32).fill(0x22), signature: new Uint8Array(64).fill(0x88),
+              registryEpoch: 3n, dead: true, vault: new Uint8Array(32).fill(0xa2), squadsTransactionIndex: 7 },
+          ],
         },
       ],
       nextCursor: 104n,
@@ -387,17 +381,13 @@ describe("queryPendingDeposits", () => {
         {
           solanaTxSig: new Uint8Array(64).fill(0x99),
           locator: { topIndex: 2, innerIndex: 5 },
-          registryEpoch: 3n,
-          observations: [
+          votes: [
             {
+              voter: new Uint8Array(32).fill(0x11),
+              registryEpoch: 3n,
               owner: new Uint8Array(20).fill(0x66),
               amountMicroUsdc: 1_000_000n,
-              votes: [
-                {
-                  voter: new Uint8Array(32).fill(0x11),
-                  signature: new Uint8Array(64).fill(0x77),
-                },
-              ],
+              signature: new Uint8Array(64).fill(0x77),
             },
           ],
         },

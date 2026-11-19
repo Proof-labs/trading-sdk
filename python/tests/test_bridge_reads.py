@@ -1,4 +1,4 @@
-"""The wire-12 `/v2/bridge/*` reads: routing, page decode, cursors, and the
+"""The wire-13 `/v2/bridge/*` reads: routing, page decode, cursors, and the
 exhausted page. Mirrors the TS `wire-reads.test.ts` bridge sections.
 """
 
@@ -26,48 +26,31 @@ def _view(payload) -> httpx.Response:
     return httpx.Response(200, json={"data": data})
 
 
-VOTE_A = {"voter": b"\x11" * 32, "signature": b"\x77" * 64}
-VOTE_B = {"voter": b"\x22" * 32, "signature": b"\x88" * 64}
+VOTE_A = {"voter": b"\x11" * 32, "signature": b"\x77" * 64,
+          "registry_epoch": 3, "dead": False, "vault": b"\xa2" * 32,
+          "squads_transaction_index": 7}
+VOTE_B = {"voter": b"\x22" * 32, "signature": b"\x88" * 64,
+          "registry_epoch": 3, "dead": True, "vault": b"\xa2" * 32,
+          "squads_transaction_index": 7}
 
 
 class TestBridgeStatus:
-    def test_decodes_the_governance_view(self):
+    def test_decodes_the_bridge_status_enum(self):
         def handler(request: httpx.Request) -> httpx.Response:
             assert request.url.path == "/v2/bridge/status"
-            return _view(
-                {
-                    "halted": True,
-                    "payout_multisig": b"\xa2" * 32,
-                    "ops_wallet": b"\xb3" * 32,
-                    "registry_epoch": 3,
-                    "registry_threshold": 2,
-                    "operator_count": 2,
-                }
-            )
+            return _view("Paused")
 
         status = _client(handler).bridge_status()
-        assert status == {
-            "halted": True,
-            "payout_multisig": b"\xa2" * 32,
-            "ops_wallet": b"\xb3" * 32,
-            "registry_epoch": 3,
-            "registry_threshold": 2,
-            "operator_count": 2,
-        }
+        assert status == "Paused"
 
-    def test_leaves_ungoverned_fields_none(self):
+    def test_rejects_unknown_status_variant(self):
         def handler(request: httpx.Request) -> httpx.Response:
-            return _view({"halted": False})
+            return _view("UnknownStatus")
 
-        status = _client(handler).bridge_status()
-        assert status == {
-            "halted": False,
-            "payout_multisig": None,
-            "ops_wallet": None,
-            "registry_epoch": None,
-            "registry_threshold": None,
-            "operator_count": None,
-        }
+        import pytest
+
+        with pytest.raises(CodecError, match="unknown variant"):
+            _client(handler).bridge_status()
 
 
 class TestBridgeRegistry:
@@ -130,18 +113,13 @@ class TestPendingWithdrawals:
                         "acquired_height": 43,
                         "expires_at_height": 143,
                     },
-                    "payout_reports": [
-                        {
+                    "payout": {
                             "holder": b"\x55" * 20,
                             "vault": b"\xa2" * 32,
                             "squads_transaction_index": 7,
                             "registry_epoch": 3,
-                        }
-                    ],
-                    "votes": {
-                        "registry_epoch": 3,
-                        "votes": [VOTE_A, VOTE_B],
-                    },
+                        },
+                    "votes": [VOTE_A, VOTE_B],
                 }
             ],
             "next_cursor": 104,
@@ -166,8 +144,8 @@ class TestPendingWithdrawals:
             "request_height": 42,
         }
         assert row["lease"]["expires_at_height"] == 143
-        assert row["payout_reports"][0]["vault"] == b"\xa2" * 32
-        assert row["votes"]["votes"] == [VOTE_A, VOTE_B]
+        assert row["payout"]["vault"] == b"\xa2" * 32
+        assert row["votes"] == [VOTE_A, VOTE_B]
         assert page["next_cursor"] == 104
 
     def test_decodes_the_exhausted_page(self):
@@ -176,6 +154,18 @@ class TestPendingWithdrawals:
 
         page = _client(handler).pending_withdrawals()
         assert page == {"rows": [], "next_cursor": None}
+
+    def test_rejects_an_unknown_withdrawal_status(self):
+        payload = self._page()
+        payload["rows"][0]["withdrawal"]["status"] = "mystery"
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _view(payload)
+
+        import pytest
+
+        with pytest.raises(CodecError, match="unknown withdrawal status"):
+            _client(handler).pending_withdrawals()
 
 
 class TestPendingDeposits:
@@ -188,14 +178,11 @@ class TestPendingDeposits:
                         {
                             "solana_tx_sig": b"\x99" * 64,
                             "locator": {"top_index": 2, "inner_index": 5},
-                            "registry_epoch": 3,
-                            "observations": [
-                                {
-                                    "owner": b"\x66" * 20,
-                                    "amount_micro_usdc": 1_000_000,
-                                    "votes": [VOTE_A],
-                                }
-                            ],
+                            "votes": [{
+                                "voter": b"\x11" * 32, "registry_epoch": 3,
+                                "owner": b"\x66" * 20, "amount_micro_usdc": 1_000_000,
+                                "signature": b"\x77" * 64,
+                            }],
                         }
                     ],
                     "next_cursor": b"\xde\xad\xbe\xef",
@@ -206,7 +193,7 @@ class TestPendingDeposits:
         row = page["rows"][0]
         assert row["solana_tx_sig"] == b"\x99" * 64
         assert row["locator"] == {"top_index": 2, "inner_index": 5}
-        assert row["observations"][0]["amount_micro_usdc"] == 1_000_000
+        assert row["votes"][0]["amount_micro_usdc"] == 1_000_000
         # The raw store-key bytes, hex-encoded exactly as the route serves
         # them — an opaque token to pass back verbatim.
         assert page["next_cursor"] == "deadbeef"
@@ -228,8 +215,7 @@ class TestPendingDeposits:
                         {
                             "solana_tx_sig": b"\x99" * 63,
                             "locator": {"top_index": 0, "inner_index": None},
-                            "registry_epoch": 1,
-                            "observations": [],
+                            "votes": [],
                         }
                     ],
                     "next_cursor": None,

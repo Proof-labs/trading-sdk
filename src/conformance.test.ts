@@ -25,6 +25,7 @@ import {
 import { bytesToHex, pubkeyToOwner, ownerToHex } from "./crypto.js";
 import { ExecErrorCode, execErrorName } from "./errors.js";
 import { BinaryPriceError, binaryPositionView, yesOrder } from "./binary.js";
+import { signVoteDeposit, signVoteWithdrawalPaid, signVoteWithdrawalPayoutDead } from "./bridge.js";
 import { decodeLiquidationEvent } from "./liquidation-events.js";
 import { decodeMarginOffsetEvent } from "./margin-offsets.js";
 import { decodeVoidSettlementEvent } from "./void-events.js";
@@ -481,6 +482,21 @@ function toAction(
         type: "VoteWithdrawalPaid",
         data: {
           withdrawalId: big(input.withdrawal_id),
+          vault: bytes(input.vault),
+          squadsTransactionIndex: input.squads_transaction_index as number,
+          deploymentId: bytes(input.deployment_id),
+          chainId: bytes(input.chain_id),
+          registryEpoch: big(input.registry_epoch),
+          signature: bytes(input.signature),
+        },
+      };
+    case ActionType.VoteWithdrawalPayoutDead:
+      return {
+        type: "VoteWithdrawalPayoutDead",
+        data: {
+          withdrawalId: big(input.withdrawal_id),
+          vault: bytes(input.vault),
+          squadsTransactionIndex: input.squads_transaction_index as number,
           deploymentId: bytes(input.deployment_id),
           chainId: bytes(input.chain_id),
           registryEpoch: big(input.registry_epoch),
@@ -1232,6 +1248,39 @@ describe("conformance vectors (TypeScript)", () => {
       if (decoded.type !== "CreateMarket") throw new Error("type narrowing");
       expect(decoded.data.maxOpenInterest).toBe(0n);
     }
+  });
+
+  it("operator vote preimages match the engine-generated shared vectors", () => {
+    const rows = readFileSync(join(VECTORS, "vote-preimages.ndjson"), "utf8")
+      .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    const actual: Uint8Array[] = [];
+    const signer = (message: Uint8Array) => { actual.push(message); return new Uint8Array(64); };
+    for (const row of rows) {
+      if (row.case === "withdrawal_paid") {
+        signVoteWithdrawalPaid(signer, {
+          withdrawalId: BigInt(row.withdrawal_id as number), vault: new Uint8Array(Buffer.from(row.vault as string, "hex")),
+          squadsTransactionIndex: row.squads_transaction_index as number,
+          deploymentId: new Uint8Array(Buffer.from(row.deployment_id as string, "hex")), chainId: new Uint8Array(Buffer.from(row.chain_id as string, "hex")),
+          registryEpoch: BigInt(row.registry_epoch as number),
+        });
+      } else if (row.case === "withdrawal_payout_dead") {
+        signVoteWithdrawalPayoutDead(signer, {
+          withdrawalId: BigInt(row.withdrawal_id as number), vault: new Uint8Array(Buffer.from(row.vault as string, "hex")),
+          squadsTransactionIndex: row.squads_transaction_index as number,
+          deploymentId: new Uint8Array(Buffer.from(row.deployment_id as string, "hex")), chainId: new Uint8Array(Buffer.from(row.chain_id as string, "hex")),
+          registryEpoch: BigInt(row.registry_epoch as number),
+        });
+      } else if (row.case === "deposit") {
+        signVoteDeposit(signer, {
+          owner: new Uint8Array(Buffer.from(row.owner as string, "hex")), amountMicroUsdc: BigInt(row.amount_micro_usdc as number),
+          solanaTxSig: new Uint8Array(Buffer.from(row.solana_tx_sig as string, "hex")),
+          locator: { topIndex: row.top_index as number, innerIndex: row.inner_index as number },
+          deploymentId: new Uint8Array(Buffer.from(row.deployment_id as string, "hex")), chainId: new Uint8Array(Buffer.from(row.chain_id as string, "hex")),
+          registryEpoch: BigInt(row.registry_epoch as number),
+        });
+      } else throw new Error(`unknown vote vector ${String(row.case)}`);
+    }
+    expect(actual.map(bytesToHex)).toEqual(rows.map((row) => row.preimage_hex as string));
   });
 });
 

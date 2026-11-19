@@ -1956,7 +1956,7 @@ export class ExchangeClient {
   }
 
   // -------------------------------------------------------------------------
-  // Bridge custody reads (`/v2/bridge/*` — the wire-12 vote model views).
+  // Bridge custody reads (`/v2/bridge/*` — wire 13 views).
   // Responses decode in the WASM core (`query_v2` views); these methods only
   // page the route and rename fields.
   // -------------------------------------------------------------------------

@@ -123,6 +123,20 @@ describe("decode side of the two arms", () => {
     ).toThrow(/operatorOwners\[0\] is the zero address/);
   });
 
+  it("refuses duplicate owners in the roster", () => {
+    expect(() =>
+      decodeAdminAction({
+        SetOperatorReceiptRegistry: [
+          Array(32).fill(0x11),
+          2n,
+          2,
+          [Array(32).fill(0x01), Array(32).fill(0x02)],
+          [Array(20).fill(0x03), Array(20).fill(0x03)],
+        ],
+      }),
+    ).toThrow(/operatorOwners\[1\] duplicates an earlier owner/);
+  });
+
   it("fails closed on a malformed rotation tuple", () => {
     expect(() =>
       decodeAdminAction({

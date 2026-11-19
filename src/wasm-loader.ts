@@ -64,6 +64,19 @@ export interface WasmCore {
     seq: bigint,
     payload: Uint8Array,
   ): Uint8Array;
+  vote_withdrawal_paid_message(
+    withdrawalId: bigint, vault: Uint8Array, squadsTransactionIndex: number,
+    deploymentId: Uint8Array, chainId: Uint8Array, registryEpoch: bigint,
+  ): Uint8Array;
+  vote_withdrawal_payout_dead_message(
+    withdrawalId: bigint, vault: Uint8Array, squadsTransactionIndex: number,
+    deploymentId: Uint8Array, chainId: Uint8Array, registryEpoch: bigint,
+  ): Uint8Array;
+  vote_deposit_message(
+    owner: Uint8Array, amountMicroUsdc: bigint, solanaTxSig: Uint8Array,
+    topIndex: number, innerIndex: number, deploymentId: Uint8Array,
+    chainId: Uint8Array, registryEpoch: bigint,
+  ): Uint8Array;
   encode_signed_tx(
     actionType: number,
     payload: Uint8Array,

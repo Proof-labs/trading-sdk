@@ -108,6 +108,17 @@ impl SigningHandle {
         Ok(PyBytes::new(py, &encoded))
     }
 
+    /// Sign an operator bridge-vote preimage without exposing the secret key.
+    fn sign_raw<'py>(&self, py: Python<'py>, message: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+        let signature = self.signer.try_sign(message).map_err(map_signer_err)?;
+        Ok(PyBytes::new(py, &signature))
+    }
+
+    /// Alias used by typed Python action builders.
+    fn sign<'py>(&self, py: Python<'py>, message: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+        self.sign_raw(py, message)
+    }
+
     /// Redacted repr — never leak key material via `str()`/logging.
     fn __repr__(&self) -> String {
         let mut pk = String::with_capacity(64);

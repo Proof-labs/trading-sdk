@@ -515,7 +515,7 @@ class RecordWithdrawalPayout(Action):
 
 
 BRIDGE_VOTE_DOMAIN = b"PROOF_BRIDGE_VOTE_V1"
-"""Domain separator absorbed into every bridge vote message (wire 12)."""
+"""Domain separator absorbed into every bridge vote message (wire 13)."""
 
 BRIDGE_VOTE_KIND_WITHDRAWAL_PAID = 1
 """Vote-message kind byte: settle one withdrawal as ``Paid``."""
@@ -523,16 +523,22 @@ BRIDGE_VOTE_KIND_WITHDRAWAL_PAID = 1
 BRIDGE_VOTE_KIND_DEPOSIT_CREDIT = 2
 """Vote-message kind byte: credit one observed deposit."""
 
+BRIDGE_VOTE_KIND_PAYOUT_DEAD = 4
+"""Vote-message kind byte: clear a recorded payout after it is rejected."""
+
 
 def vote_withdrawal_paid_message(
     withdrawal_id: int,
+    vault: bytes,
+    squads_transaction_index: int,
     deployment_id: bytes,
     chain_id: bytes,
     registry_epoch: int,
 ) -> bytes:
     """The canonical bytes every registry member signs for one
     :class:`VoteWithdrawalPaid` — domain, kind 0x01, withdrawal id (8 BE),
-    deployment id (32), chain id (32), registry epoch (8 BE). Byte-identical
+    payout vault (32), Squads transaction index (4 BE), deployment id (32),
+    chain id (32), registry epoch (8 BE). Byte-identical
     to the wire contract's ``VoteWithdrawalPaid::vote_message``, which the
     engine re-derives before verifying each member's signature. Sign these
     raw bytes with the operator ed25519 key — a vote carries its own
@@ -541,6 +547,29 @@ def vote_withdrawal_paid_message(
         BRIDGE_VOTE_DOMAIN
         + bytes([BRIDGE_VOTE_KIND_WITHDRAWAL_PAID])
         + int(withdrawal_id).to_bytes(8, "big")
+        + vault
+        + int(squads_transaction_index).to_bytes(4, "big")
+        + deployment_id
+        + chain_id
+        + int(registry_epoch).to_bytes(8, "big")
+    )
+
+
+def vote_withdrawal_payout_dead_message(
+    withdrawal_id: int,
+    vault: bytes,
+    squads_transaction_index: int,
+    deployment_id: bytes,
+    chain_id: bytes,
+    registry_epoch: int,
+) -> bytes:
+    """Canonical kind-4 preimage for a member's vote to clear a dead payout."""
+    return (
+        BRIDGE_VOTE_DOMAIN
+        + bytes([BRIDGE_VOTE_KIND_PAYOUT_DEAD])
+        + int(withdrawal_id).to_bytes(8, "big")
+        + vault
+        + int(squads_transaction_index).to_bytes(4, "big")
         + deployment_id
         + chain_id
         + int(registry_epoch).to_bytes(8, "big")
@@ -595,6 +624,8 @@ class VoteWithdrawalPaid(Action):
 
     ACTION_NAME = "VoteWithdrawalPaid"
     withdrawal_id: int
+    vault: bytes
+    squads_transaction_index: int
     deployment_id: bytes
     chain_id: bytes
     registry_epoch: int
@@ -603,6 +634,8 @@ class VoteWithdrawalPaid(Action):
     def fields(self) -> dict[str, Any]:
         return {
             "withdrawal_id": self.withdrawal_id,
+            "vault": self.vault,
+            "squads_transaction_index": self.squads_transaction_index,
             "deployment_id": self.deployment_id,
             "chain_id": self.chain_id,
             "registry_epoch": self.registry_epoch,
@@ -614,6 +647,8 @@ class VoteWithdrawalPaid(Action):
         cls,
         signer: Any,
         withdrawal_id: int,
+        vault: bytes,
+        squads_transaction_index: int,
         deployment_id: bytes,
         chain_id: bytes,
         registry_epoch: int,
@@ -623,14 +658,54 @@ class VoteWithdrawalPaid(Action):
         the signature is over :func:`vote_withdrawal_paid_message` of the
         same fields."""
         message = vote_withdrawal_paid_message(
-            withdrawal_id, deployment_id, chain_id, registry_epoch
+            withdrawal_id, vault, squads_transaction_index, deployment_id, chain_id, registry_epoch
         )
         return cls(
             withdrawal_id=withdrawal_id,
+            vault=vault,
+            squads_transaction_index=squads_transaction_index,
             deployment_id=deployment_id,
             chain_id=chain_id,
             registry_epoch=registry_epoch,
             signature=signer.sign(message),
+        )
+
+
+@dataclass
+class VoteWithdrawalPayoutDead(Action):
+    """Registry vote that clears the currently recorded, rejected Squads payout."""
+
+    ACTION_NAME = "VoteWithdrawalPayoutDead"
+    withdrawal_id: int
+    vault: bytes
+    squads_transaction_index: int
+    deployment_id: bytes
+    chain_id: bytes
+    registry_epoch: int
+    signature: bytes
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "withdrawal_id": self.withdrawal_id,
+            "vault": self.vault,
+            "squads_transaction_index": self.squads_transaction_index,
+            "deployment_id": self.deployment_id,
+            "chain_id": self.chain_id,
+            "registry_epoch": self.registry_epoch,
+            "signature": self.signature,
+        }
+
+    @classmethod
+    def sign(
+        cls, signer: Any, withdrawal_id: int, vault: bytes, squads_transaction_index: int,
+        deployment_id: bytes, chain_id: bytes, registry_epoch: int,
+    ) -> "VoteWithdrawalPayoutDead":
+        message = vote_withdrawal_payout_dead_message(
+            withdrawal_id, vault, squads_transaction_index, deployment_id, chain_id, registry_epoch
+        )
+        return cls(
+            withdrawal_id, vault, squads_transaction_index, deployment_id, chain_id,
+            registry_epoch, signer.sign(message),
         )
 
 
@@ -1239,11 +1314,14 @@ __all__ = [
     "ConfirmWithdrawal",
     "FailWithdrawal",
     "VoteWithdrawalPaid",
+    "VoteWithdrawalPayoutDead",
     "VoteDeposit",
     "BRIDGE_VOTE_DOMAIN",
     "BRIDGE_VOTE_KIND_WITHDRAWAL_PAID",
     "BRIDGE_VOTE_KIND_DEPOSIT_CREDIT",
+    "BRIDGE_VOTE_KIND_PAYOUT_DEAD",
     "vote_withdrawal_paid_message",
+    "vote_withdrawal_payout_dead_message",
     "vote_deposit_message",
     "CreateMarket",
     "SetUserMarketLeverage",

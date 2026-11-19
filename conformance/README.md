@@ -6,9 +6,11 @@ generates the vectors, and each binding (Rust, Python, TypeScript) must
 reproduce every `expect` byte-for-byte. A divergence is a release blocker — it
 means two SDKs would sign or encode the same logical action differently.
 
-The shared [codec](codec.ndjson), [signing](signing.ndjson), and
+The shared [codec](codec.ndjson), [signing](signing.ndjson), [vote preimage](vote-preimages.ndjson), and
 [nonce](nonce.ndjson) vectors define the cases checked by the Rust, Python,
-and TypeScript runners. The TypeScript runner skips the nonce family because
+and TypeScript runners. Vote preimages are derived from the wire contract's
+`vote_message` methods and pin each member-signature message independently of
+the envelope payload. The TypeScript runner skips the nonce family because
 it exposes no standalone nonce step function. See [Running the runners](#running-the-runners)
 for commands and the [CI workflow](../.github/workflows/ci.yml) for automation.
 
@@ -22,6 +24,7 @@ conformance/
   codec.ndjson      ← action fields → exact MessagePack payload bytes
   signing.ndjson    ← (payload, key) → wire envelope; pubkey → owner address
   nonce.ndjson      ← (last, now_ms…) → allocated nonce sequence
+  vote-preimages.ndjson ← bridge vote identity → exact Ed25519 preimage
   events.ndjson     ← engine event → its ABCI type and attributes
   errors.ndjson     ← (code, log) → engine error name
   binary.ndjson     ← Yes/No book orders and reads in No terms
