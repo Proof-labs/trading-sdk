@@ -4,9 +4,16 @@ import {
   type EventVoidedEvent,
 } from "./void-events.js";
 
+/** Pages of 1000 `event_voided` records read before giving up: 100,000 Voids. */
+const DEFAULT_MAX_PAGES = 100;
+const PAGE_SIZE = 1000;
+
 export interface EventVoidedQueryOptions {
   signal?: AbortSignal;
   fetch?: typeof globalThis.fetch;
+  /** Admin-events pages read before the walk fails with a `limit`
+   *  `GatewayReadError`; default 100 (100,000 Voids). */
+  maxPages?: number;
 }
 
 /** The indexed `event_voided` record for `eventId`, or `null` when the event
@@ -27,13 +34,28 @@ export async function queryEventVoided(
     );
   }
   const { signal } = options;
+  const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
+  if (!Number.isSafeInteger(maxPages) || maxPages < 1) {
+    throw new GatewayReadError(
+      "configuration",
+      "maxPages",
+      "Invalid maxPages: must be a positive integer",
+    );
+  }
   const base = `${gatewayUrl.replace(/\/+$/, "")}/v1/history/admin-events`;
   let cursor = "";
-  for (;;) {
+  const seen = new Set<string>();
+  for (let pageIndex = 0; ; pageIndex++) {
+    if (pageIndex >= maxPages)
+      throw new GatewayReadError(
+        "limit",
+        "next_cursor",
+        `admin-events history holds more than ${maxPages} pages`,
+      );
     signal?.throwIfAborted();
     const params = new URLSearchParams({
       event_type: "event_voided",
-      limit: "1000",
+      limit: String(PAGE_SIZE),
     });
     if (cursor) params.set("cursor", cursor);
     const response = await (options.fetch ?? globalThis.fetch)(
@@ -65,12 +87,15 @@ export async function queryEventVoided(
     const found = findEventVoided(page.admin_events, eventId);
     if (found) return found;
     if (next === "") return null;
-    if (next === cursor)
+    // A cursor seen before means the upstream is cycling; following it would
+    // never end.
+    if (seen.has(next))
       throw new GatewayReadError(
         "limit",
         "next_cursor",
-        "admin-events cursor did not advance",
+        "admin-events cursor repeated",
       );
+    seen.add(next);
     cursor = next;
   }
 }

@@ -120,6 +120,60 @@ describe("queryEventVoided", () => {
     );
     await expect(
       queryEventVoided("https://gateway.test", 43, { fetch: transport }),
-    ).rejects.toThrow("cursor did not advance");
+    ).rejects.toMatchObject({ kind: "limit", field: "next_cursor" });
+    expect(transport).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws when the cursor cycles back to one it already followed", async () => {
+    const cursors = ["c1", "c2", "c1", "c2"];
+    const transport = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ admin_events: [], next_cursor: cursors.shift() }),
+        ),
+    );
+    await expect(
+      queryEventVoided("https://gateway.test", 43, { fetch: transport }),
+    ).rejects.toThrow("cursor repeated");
+    expect(transport).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops after maxPages pages of fresh cursors", async () => {
+    let n = 0;
+    const transport = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ admin_events: [], next_cursor: `c${++n}` }),
+        ),
+    );
+    await expect(
+      queryEventVoided("https://gateway.test", 43, {
+        fetch: transport,
+        maxPages: 3,
+      }),
+    ).rejects.toMatchObject({ kind: "limit", field: "next_cursor" });
+    expect(transport).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops after 100 pages by default", async () => {
+    let n = 0;
+    const transport = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ admin_events: [], next_cursor: `c${++n}` }),
+        ),
+    );
+    await expect(
+      queryEventVoided("https://gateway.test", 43, { fetch: transport }),
+    ).rejects.toThrow("more than 100 pages");
+    expect(transport).toHaveBeenCalledTimes(100);
+  });
+
+  it("rejects a maxPages that is not a positive integer", async () => {
+    for (const maxPages of [0, -1, 1.5, Number.NaN]) {
+      await expect(
+        queryEventVoided("https://gateway.test", 43, { maxPages }),
+      ).rejects.toMatchObject({ kind: "configuration", field: "maxPages" });
+    }
   });
 });
