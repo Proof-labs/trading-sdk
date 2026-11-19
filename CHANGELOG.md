@@ -19,24 +19,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from `GET /v1/history/admin-events`, following `next_cursor`; `null` when the
   event is not voided or not yet indexed. A malformed page, a repeated cursor
   or more than `maxPages` pages (default 100) fails with `GatewayReadError`.
-- Error codes 136-142 (proof-wire 12.1.0), named in Rust, TypeScript and
-  Python: 136 `PositionEpochMismatch`, 137 `TriggerBracketNotFound`, 138
+- Error codes 136-142 (the unreleased proof-wire after 12.1.0), named in
+  Rust, TypeScript and Python: 136 `PositionEpochMismatch`, 137 `TriggerBracketNotFound`, 138
   `TriggerAlreadyCrossed`, 139 `PositionNotFound`, 140
   `AccountPositionCapReached`, 141 `SubAccountCapReached` and 142
   `WorkCapReached`, each with the engine's meaning text.
 
 ### Changed
 
-- **Breaking — Rust, TypeScript, Python:** error code 35 is renamed from
+- **Breaking (TypeScript npm MAJOR, Python MAJOR, Rust core MAJOR,
+  `proof-sdk-rs` MAJOR):** error code 35 is renamed from
   `ReduceOnlyWouldIncrease` to `ReduceOnlyRefused` (`ErrorKind::ReduceOnlyRefused`,
-  `ExecErrorCode.ReduceOnlyRefused`, and the name `get_error_name(35)` returns).
+  also re-exported by `proof-sdk-rs`, `ExecErrorCode.ReduceOnlyRefused`, and
+  the name `get_error_name(35)` returns).
   The engine now refuses a reduce-only order with code 35 both when it would
   increase exposure (`ExecError::ReduceOnlyWouldIncrease`) and when the account
   holds no position on the market (`ExecError::ReduceOnlyNoPosition`); the log
   names which. The trigger outcome reason `ReduceOnlyWouldIncrease` keeps its
   name.
-- The Rust core pins proof-wire 12.1.0 (wire commit `014be80`, mirroring
-  exchange-wire at `77e5d0060`). No bytes change.
+- The Rust core pins the pre-release proof-wire commit `014be80`, which
+  mirrors exchange-wire at `77e5d0060` and adds codes 136-142 and
+  `ReduceOnlyNoPosition` on top of the published `v12.1.0` tag. It is
+  repinned to the released proof-wire (expected 12.2.0) before release. No
+  bytes change.
   `PositionUpdated.realizedPnl` now also carries the gross PnL of a partial
   close and of an insurance-fund takeover netting; its closed funding debt
   stays in `FundingSettled`. Do not add it to PnL derived from

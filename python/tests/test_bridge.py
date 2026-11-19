@@ -222,7 +222,7 @@ class TestErrors:
         assert pts.EngineError(135, "").name == "OffCurveWithdrawalDestination"
 
     def test_reduce_only_refused_and_codes_136_142(self):
-        # proof-wire 12.1.0: code 35 covers both reduce-only refusals, and
+        # proof-wire after 12.1.0: code 35 covers both reduce-only refusals, and
         # 136-142 name the trigger, position and capacity refusals.
         assert pts.get_error_name(35) == "ReduceOnlyRefused"
         for code, name in [
