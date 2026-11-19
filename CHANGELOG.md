@@ -9,6 +9,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **TypeScript:** `client.queryDepositAddress(account, opts?)` reads an
+  account's USDC deposit address on Solana
+  (`GET /v1/deposit-address/{account}`, served by the gateway from the deposit
+  address service), always from the gateway. `account` is 40 hex digits, with
+  or without `0x`, in either case; anything else throws `GatewayReadError`
+  (kind `"configuration"`) before any request. The read takes
+  `{ signal, timeoutMs }` and a 1 MiB body cap. The gateway answers once the
+  address exists, creating it first when needed; the default deadline is
+  `DEPOSIT_ADDRESS_TIMEOUT_MS` rather than the usual 5 seconds. It resolves a
+  `DepositAddressReady` (`status: "ready"`) with `address`, `tokenAccount`
+  and `createdAt` (Unix seconds or `null`). `address` is the deposit
+  authority, the address a wallet sends USDC to, not the token account. The
+  gateway passes the service's status and body through without checking
+  them, so the SDK decides success itself: only an HTTP 200 with
+  `status: "ready"` and both addresses present resolves; any other 2xx throws
+  `GatewayReadError` (kind `"malformed"`) naming the field. A refusal throws
+  `GatewayHttpError` with an unread copy of the response, and `errorCode`
+  when the body's code is a `DepositAddressErrorCode` (`InvalidAccount`,
+  `SubAccount`, `RateLimited`, `Paused` while deposits are paused,
+  `Unavailable`; `isDepositAddressErrorCode`). As on the submission path, the
+  retry time is the body's own `retryAfterMs`; the SDK does not read the
+  `Retry-After` header. `conformance/deposit-address.json` pins the
+  service's ready, sub-account, rate-limited, paused and unavailable answers.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
