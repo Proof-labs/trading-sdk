@@ -20,7 +20,9 @@ export interface EventVoidedQueryOptions {
  * has not been voided (or the indexer has not ingested it yet). Walks
  * `GET /v1/history/admin-events?event_type=event_voided` pages via
  * `next_cursor` until the record is found or history is exhausted: the route
- * cannot filter by event. */
+ * cannot filter by event. A `null` therefore costs a full scan, one request
+ * per 1000 indexed Voids (ceil(total Voids / 1000) sequential requests), and
+ * polling an event the indexer has not reached repeats that scan every time. */
 export async function queryEventVoided(
   gatewayUrl: string,
   eventId: number,
