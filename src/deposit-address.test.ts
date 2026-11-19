@@ -5,8 +5,9 @@ import {
   ExchangeClient,
   GatewayHttpError,
   GatewayReadError,
+  DEPOSIT_ADDRESS_TIMEOUT_MS,
   isDepositAddressErrorCode,
-  type DepositAddress,
+  type DepositAddressReady,
 } from "./index.js";
 
 interface FixtureCase {
@@ -61,7 +62,7 @@ afterEach(() => {
 describe("queryDepositAddress — the service's pinned answers", () => {
   it("decodes the ready answer with the deposit authority as address", async () => {
     const { client, transport } = clientAnswering(answer(fixtureCase("ready")));
-    const got: DepositAddress = await client.queryDepositAddress(account);
+    const got: DepositAddressReady = await client.queryDepositAddress(account);
     expect(got).toEqual({
       status: "ready",
       address: AUTHORITY,
@@ -71,14 +72,6 @@ describe("queryDepositAddress — the service's pinned answers", () => {
     expect(transport.mock.calls[0][0]).toBe(
       `https://gateway.test/v1/deposit-address/${account}`,
     );
-  });
-
-  it("decodes the pending answer (202) as a success, not an error", async () => {
-    const { client } = clientAnswering(answer(fixtureCase("pending")));
-    await expect(client.queryDepositAddress(account)).resolves.toEqual({
-      status: "pending",
-      retryAfterMs: 2000,
-    });
   });
 
   it("keeps errorCode SubAccount on a GatewayHttpError", async () => {
@@ -108,12 +101,32 @@ describe("queryDepositAddress — the service's pinned answers", () => {
     expect(e.retryAfterMs).toBe(1500);
   });
 
+  it.each([
+    ["paused", "Paused", "deposits are paused"],
+    ["unavailable", "Unavailable", "deposit addresses are unavailable"],
+  ])(
+    "keeps the %s answer's errorCode on a 503 GatewayHttpError",
+    async (name, code, text) => {
+      const { client } = clientAnswering(answer(fixtureCase(name)));
+      const e = (await rejection(
+        client.queryDepositAddress(account),
+      )) as GatewayHttpError;
+      expect(e).toBeInstanceOf(GatewayHttpError);
+      expect(e.status).toBe(503);
+      expect(e.errorCode).toBe(code);
+      expect(isDepositAddressErrorCode(e.errorCode)).toBe(true);
+      expect(e.retryAfterMs).toBeUndefined();
+      expect(e.message).toContain(text);
+    },
+  );
+
   it("covers every fixture case", () => {
     expect(fixture.cases.map((c) => c.name)).toEqual([
       "ready",
-      "pending",
       "subAccount",
       "rateLimited",
+      "paused",
+      "unavailable",
     ]);
   });
 });
@@ -132,25 +145,19 @@ describe("queryDepositAddress — other answers", () => {
     });
   });
 
-  it.each([
-    [
-      400,
-      "InvalidAccount",
-      '{"status":"error","error":"account must be 0x followed by 40 hex digits","errorCode":"InvalidAccount"}',
-    ],
-    [
-      503,
-      "Unavailable",
-      '{"status":"error","error":"deposit addresses are unavailable, try again later","errorCode":"Unavailable"}',
-    ],
-  ])("keeps errorCode on %i %s", async (httpStatus, code, body) => {
-    const { client } = clientAnswering(answer({ httpStatus, body }));
+  it("keeps errorCode on 400 InvalidAccount", async () => {
+    const { client } = clientAnswering(
+      answer({
+        httpStatus: 400,
+        body: '{"status":"error","error":"account must be 0x followed by 40 hex digits","errorCode":"InvalidAccount"}',
+      }),
+    );
     const e = (await rejection(
       client.queryDepositAddress(account),
     )) as GatewayHttpError;
     expect(e).toBeInstanceOf(GatewayHttpError);
-    expect(e.status).toBe(httpStatus);
-    expect(e.errorCode).toBe(code);
+    expect(e.status).toBe(400);
+    expect(e.errorCode).toBe("InvalidAccount");
     expect(isDepositAddressErrorCode(e.errorCode)).toBe(true);
   });
 
@@ -181,7 +188,7 @@ describe("queryDepositAddress — other answers", () => {
     await expect(e.response.text()).resolves.toBe("<html>bad gateway</html>");
   });
 
-  it("keeps a gateway errorCode outside the four as a plain string", async () => {
+  it("keeps a gateway errorCode outside the five as a plain string", async () => {
     const { client } = clientAnswering(
       answer({
         httpStatus: 404,
@@ -196,8 +203,20 @@ describe("queryDepositAddress — other answers", () => {
   });
 
   it.each([
+    // The gateway answers only once the address exists, so a 202 is malformed.
     ["ready on 202", 202, fixtureCase("ready").body, "status"],
-    ["pending on 200", 200, fixtureCase("pending").body, "status"],
+    [
+      "pending on 202",
+      202,
+      '{"status":"pending","retryAfterMs":2000}',
+      "status",
+    ],
+    [
+      "pending on 200",
+      200,
+      '{"status":"pending","retryAfterMs":2000}',
+      "status",
+    ],
     [
       "missing address",
       200,
@@ -246,18 +265,6 @@ describe("queryDepositAddress — other answers", () => {
       `{"status":"ready","address":"${AUTHORITY}","tokenAccount":"${TOKEN_ACCOUNT}","createdAt":"1763520000"}`,
       "createdAt",
     ],
-    [
-      "fractional retryAfterMs",
-      202,
-      '{"status":"pending","retryAfterMs":1.5}',
-      "retryAfterMs",
-    ],
-    [
-      "negative retryAfterMs",
-      202,
-      '{"status":"pending","retryAfterMs":-1}',
-      "retryAfterMs",
-    ],
     ["unknown status", 200, '{"status":"done"}', "status"],
     ["JSON null", 200, "null", "envelope"],
     ["not JSON", 200, "ready", "json"],
@@ -280,18 +287,10 @@ describe("queryDepositAddress — other answers", () => {
   ])("clamps a %s retryAfterMs to 0..300000", async (_name, sent, expected) => {
     const { client } = clientAnswering(
       answer({
-        httpStatus: 202,
-        body: `{"status":"pending","retryAfterMs":${sent}}`,
-      }),
-      answer({
         httpStatus: 429,
         body: `{"status":"error","error":"rate limited","errorCode":"RateLimited","retryAfterMs":${sent}}`,
       }),
     );
-    await expect(client.queryDepositAddress(account)).resolves.toEqual({
-      status: "pending",
-      retryAfterMs: expected,
-    });
     const e = (await rejection(
       client.queryDepositAddress(account),
     )) as GatewayHttpError;
@@ -367,7 +366,7 @@ describe("queryDepositAddress — other answers", () => {
   });
 
   it("reads from the gateway even on the internal direct-node path", async () => {
-    const transport = vi.fn().mockResolvedValue(answer(fixtureCase("pending")));
+    const transport = vi.fn().mockResolvedValue(answer(fixtureCase("ready")));
     const client = new ExchangeClient({
       gatewayUrl: "https://gateway.test",
       useGateway: false,
@@ -386,9 +385,7 @@ describe("queryDepositAddress — other answers", () => {
     "0xzbb6311de00a522f6569087d6e6b5fd674018d32",
     "",
   ])("refuses account %j before any request", async (bad) => {
-    const { client, transport } = clientAnswering(
-      answer(fixtureCase("pending")),
-    );
+    const { client, transport } = clientAnswering(answer(fixtureCase("ready")));
     const error = await rejection(client.queryDepositAddress(bad));
     expect(error).toBeInstanceOf(GatewayReadError);
     expect(error).toMatchObject({ kind: "configuration", field: "account" });
@@ -400,9 +397,7 @@ describe("queryDepositAddress — other answers", () => {
     "0XdBb6311de00a522f6569087d6e6b5fd674018d32",
     "dbb6311de00a522f6569087d6e6b5fd674018d32",
   ])("sends %s as 0x and lowercase", async (given) => {
-    const { client, transport } = clientAnswering(
-      answer(fixtureCase("pending")),
-    );
+    const { client, transport } = clientAnswering(answer(fixtureCase("ready")));
     await client.queryDepositAddress(given);
     expect(transport.mock.calls[0][0]).toBe(
       `https://gateway.test/v1/deposit-address/${account}`,
@@ -410,9 +405,7 @@ describe("queryDepositAddress — other answers", () => {
   });
 
   it("labels the read as owner-scoped and passes on the caller's abort", async () => {
-    const { client, transport } = clientAnswering(
-      answer(fixtureCase("pending")),
-    );
+    const { client, transport } = clientAnswering(answer(fixtureCase("ready")));
     const controller = new AbortController();
     await client.queryDepositAddress(account, { signal: controller.signal });
     const [, init, context] = transport.mock.calls[0];
@@ -422,9 +415,7 @@ describe("queryDepositAddress — other answers", () => {
   });
 
   it("rejects with the caller's reason when aborted before the request", async () => {
-    const { client, transport } = clientAnswering(
-      answer(fixtureCase("pending")),
-    );
+    const { client, transport } = clientAnswering(answer(fixtureCase("ready")));
     const controller = new AbortController();
     controller.abort();
     const error = await rejection(
@@ -441,13 +432,13 @@ describe("queryDepositAddress — other answers", () => {
     );
     const body = new ReadableStream<Uint8Array>({
       start(c) {
-        c.enqueue(new TextEncoder().encode('{"status":"pen'));
+        c.enqueue(new TextEncoder().encode('{"status":"rea'));
       },
       pull(c) {
         c.error(aborted);
       },
     });
-    const { client } = clientAnswering(new Response(body, { status: 202 }));
+    const { client } = clientAnswering(new Response(body, { status: 200 }));
     const error = await rejection(client.queryDepositAddress(account));
     expect(error).toBe(aborted);
   });
@@ -456,19 +447,44 @@ describe("queryDepositAddress — other answers", () => {
     const controller = new AbortController();
     const body = new ReadableStream<Uint8Array>({
       start(c) {
-        c.enqueue(new TextEncoder().encode('{"status":"pen'));
+        c.enqueue(new TextEncoder().encode('{"status":"rea'));
       },
       pull() {
         controller.abort();
         return new Promise(() => {});
       },
     });
-    const { client } = clientAnswering(new Response(body, { status: 202 }));
+    const { client } = clientAnswering(new Response(body, { status: 200 }));
     const error = await rejection(
       client.queryDepositAddress(account, { signal: controller.signal }),
     );
     expect(error).toMatchObject({ name: "AbortError" });
     expect(error).not.toBeInstanceOf(GatewayReadError);
+  });
+
+  it("waits 20 seconds by default, past the gateway's 15-second limit", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = vi.fn(() => new Promise<Response>(() => {}));
+      const client = new ExchangeClient({
+        gatewayUrl: "https://gateway.test",
+        httpTransport: transport,
+      });
+      let settled: unknown = "waiting";
+      const read = client.queryDepositAddress(account).then(
+        () => (settled = "resolved"),
+        (error: unknown) => (settled = error),
+      );
+      await vi.advanceTimersByTimeAsync(DEPOSIT_ADDRESS_TIMEOUT_MS - 1);
+      expect(settled).toBe("waiting");
+      await vi.advanceTimersByTimeAsync(1);
+      await read;
+      expect(settled).toBeInstanceOf(GatewayReadError);
+      expect(settled).toMatchObject({ kind: "deadline" });
+      expect(DEPOSIT_ADDRESS_TIMEOUT_MS).toBe(20_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("times out after timeoutMs with a deadline GatewayReadError", async () => {
@@ -487,8 +503,8 @@ describe("queryDepositAddress — other answers", () => {
   it("refuses a success body over 1 MiB", async () => {
     const { client } = clientAnswering(
       answer({
-        httpStatus: 202,
-        body: `{"status":"pending","retryAfterMs":1,"pad":"${"x".repeat(1024 * 1024)}"}`,
+        httpStatus: 200,
+        body: `{"status":"ready","address":"${AUTHORITY}","tokenAccount":"${TOKEN_ACCOUNT}","createdAt":null,"pad":"${"x".repeat(1024 * 1024)}"}`,
       }),
     );
     const error = await rejection(client.queryDepositAddress(account));
@@ -497,11 +513,12 @@ describe("queryDepositAddress — other answers", () => {
 });
 
 describe("deposit address error codes", () => {
-  it("names exactly the four codes the service answers with", () => {
+  it("names exactly the five codes the service answers with", () => {
     expect([...DEPOSIT_ADDRESS_ERROR_CODES]).toEqual([
       "InvalidAccount",
       "SubAccount",
       "RateLimited",
+      "Paused",
       "Unavailable",
     ]);
     expect(isDepositAddressErrorCode("SubAccount")).toBe(true);

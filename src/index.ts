@@ -541,10 +541,9 @@ export type {
 } from "./portfolio-history.js";
 export {
   DEPOSIT_ADDRESS_ERROR_CODES,
+  DEPOSIT_ADDRESS_TIMEOUT_MS,
   isDepositAddressErrorCode,
-  type DepositAddress,
   type DepositAddressErrorCode,
-  type DepositAddressPending,
   type DepositAddressReady,
 } from "./deposit-address.js";
 export {

@@ -2,17 +2,22 @@
 // deposits go to. api-gateway passes the deposit address service's answer
 // through unchanged; Proof-labs/deposit-address-service `tests/routes.rs`
 // pins every body, and `conformance/deposit-address.json` is the shared copy
-// of those answers (ready, pending, sub-account and rate-limited).
+// of those answers (ready, sub-account, rate-limited, paused and unavailable).
+// The gateway answers once the address exists (about a second, at most about
+// ten); there is no pending answer.
 
 import { boundedGatewayRead, type BoundedReadOptions } from "./bounded-read.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
-import {
-  invalidRead,
-  MAX_RETRY_AFTER_MS,
-  type HexAddress,
-} from "./read-values.js";
+import { invalidRead, type HexAddress } from "./read-values.js";
 
-/** The account's deposit address exists on Solana. */
+/** Default deadline for `queryDepositAddress`, in milliseconds. The gateway
+ * answers once the address is created (about a second, at most about ten,
+ * and its own client gives up after 15 seconds), so the SDK waits longer
+ * than the shared 5-second read default. */
+export const DEPOSIT_ADDRESS_TIMEOUT_MS = 20_000;
+
+/** The answer to `ExchangeClient.queryDepositAddress`: the account's deposit
+ * address exists on Solana. */
 export interface DepositAddressReady {
   status: "ready";
   /**
@@ -26,19 +31,6 @@ export interface DepositAddressReady {
   createdAt: number | null;
 }
 
-/**
- * The service is still creating the deposit address. Ask again after
- * `retryAfterMs` milliseconds (0 to `MAX_RETRY_AFTER_MS`, five minutes). The
- * gateway answers this with HTTP 202.
- */
-export interface DepositAddressPending {
-  status: "pending";
-  retryAfterMs: number;
-}
-
-/** The answer to `ExchangeClient.queryDepositAddress`. */
-export type DepositAddress = DepositAddressReady | DepositAddressPending;
-
 /** The error codes the deposit address service answers with. */
 export const DEPOSIT_ADDRESS_ERROR_CODES = [
   /** 400: the account is not `0x` followed by 40 hex digits. */
@@ -47,6 +39,8 @@ export const DEPOSIT_ADDRESS_ERROR_CODES = [
   "SubAccount",
   /** 429: too many requests; see `GatewayHttpError.retryAfterMs`. */
   "RateLimited",
+  /** 503: deposits are paused (the bridge or address creation is paused). */
+  "Paused",
   /** 503: deposit addresses are unavailable; try again later. */
   "Unavailable",
 ] as const;
@@ -96,9 +90,10 @@ export function depositAccount(account: unknown): HexAddress {
 
 /**
  * Read `GET /v1/deposit-address/{account}` within one deadline
- * (`options.timeoutMs`, default 5 seconds) and a 1 MiB body cap. 200 must be
- * `ready` and 202 `pending`; any other success throws `GatewayReadError`
- * with kind `"malformed"` and the offending field. A non-2xx answer throws
+ * (`options.timeoutMs`, default `DEPOSIT_ADDRESS_TIMEOUT_MS`, 20 seconds) and
+ * a 1 MiB body cap. Only a 200 `ready` answer is a success; any other 2xx
+ * (a 202 included) throws `GatewayReadError` with kind `"malformed"` and the
+ * offending field. A non-2xx answer throws
  * `GatewayHttpError` with the gateway's `errorCode`, `retryAfterMs` and an
  * unread copy of the response.
  */
@@ -106,17 +101,25 @@ export async function queryDepositAddressAnswer(
   url: string,
   transport: ExchangeHttpTransport,
   options: BoundedReadOptions,
-): Promise<DepositAddress> {
-  const { status, body } = await boundedGatewayRead(url, transport, options, {
-    purpose: "account",
-    decodeRefusal: true,
-  });
+): Promise<DepositAddressReady> {
+  const { status, body } = await boundedGatewayRead(
+    url,
+    transport,
+    { ...options, timeoutMs: options.timeoutMs ?? DEPOSIT_ADDRESS_TIMEOUT_MS },
+    {
+      purpose: "account",
+      decodeRefusal: true,
+    },
+  );
   const answer = decodeDepositAddress(status, body);
   options.signal?.throwIfAborted();
   return answer;
 }
 
-function decodeDepositAddress(status: number, body: unknown): DepositAddress {
+function decodeDepositAddress(
+  status: number,
+  body: unknown,
+): DepositAddressReady {
   // boundedGatewayRead only returns JSON objects.
   const fields = body as Record<string, unknown>;
   if (status === 200 && fields.status === "ready") {
@@ -127,13 +130,6 @@ function decodeDepositAddress(status: number, body: unknown): DepositAddress {
     if (createdAt !== null && !isWholeNumber(createdAt))
       invalidRead("createdAt");
     return { status: "ready", address, tokenAccount, createdAt };
-  }
-  if (status === 202 && fields.status === "pending") {
-    if (!isWholeNumber(fields.retryAfterMs)) invalidRead("retryAfterMs");
-    return {
-      status: "pending",
-      retryAfterMs: Math.min(fields.retryAfterMs, MAX_RETRY_AFTER_MS),
-    };
   }
   return invalidRead("status");
 }

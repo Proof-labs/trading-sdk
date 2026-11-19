@@ -61,9 +61,8 @@ import {
   type EventView,
   type MarketsSnapshotView,
   MAX_RETRY_AFTER_MS,
-  type DepositAddress,
+  DEPOSIT_ADDRESS_TIMEOUT_MS,
   type DepositAddressErrorCode,
-  type DepositAddressPending,
   type DepositAddressReady,
 } from "./index.js";
 import type { OpenLabel } from "./types.js";
@@ -75,15 +74,11 @@ it("exports the deposit address types", () => {
     tokenAccount: "8MJF87ivAaBfc7yHkBztbGWyBgaAYTMFPrUdfcFfPQk6",
     createdAt: null,
   };
-  const pending: DepositAddressPending = {
-    status: "pending",
-    retryAfterMs: 2000,
-  };
-  const answers: DepositAddress[] = [ready, pending];
-  const code: DepositAddressErrorCode = "SubAccount";
-  expect(answers.map((a) => a.status)).toEqual(["ready", "pending"]);
-  expect(code).toBe("SubAccount");
+  const code: DepositAddressErrorCode = "Paused";
+  expect(ready.status).toBe("ready");
+  expect(code).toBe("Paused");
   expect(MAX_RETRY_AFTER_MS).toBe(300_000);
+  expect(DEPOSIT_ADDRESS_TIMEOUT_MS).toBe(20_000);
 });
 
 it("exports the version 2 markets snapshot types", () => {
@@ -543,7 +538,8 @@ describe("public barrel: deposit address errors", () => {
         .retryAfterMs,
     ).toBeUndefined();
     expect("DepositAddressError" in barrel).toBe(false);
-    expect(barrel.DEPOSIT_ADDRESS_ERROR_CODES).toHaveLength(4);
+    expect(barrel.DEPOSIT_ADDRESS_ERROR_CODES).toHaveLength(5);
     expect(barrel.isDepositAddressErrorCode("Unavailable")).toBe(true);
+    expect(barrel.isDepositAddressErrorCode("Paused")).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 {
-  "description": "Frozen example F2: GET /v1/deposit-address/{account} answers, byte for byte as Proof-labs/deposit-address-service tests/routes.rs pins them. api-gateway passes them through unchanged; keep this file identical to api-gateway tests/fixtures/deposit-address.json.",
+  "description": "GET /v1/deposit-address/{account} answers, byte for byte as Proof-labs/deposit-address-service tests/routes.rs pins them. api-gateway passes them through unchanged. The same file is in api-gateway tests/fixtures/deposit-address.json and trading-sdk conformance/deposit-address.json.",
   "account": "0xdbb6311de00a522f6569087d6e6b5fd674018d32",
   "cases": [
     {
@@ -7,12 +7,6 @@
       "httpStatus": 200,
       "headers": {},
       "body": "{\"status\":\"ready\",\"address\":\"9DEvTpg7J8BsrESCVrpP9FnBEEKXpC8MauxarCApCAyz\",\"tokenAccount\":\"8MJF87ivAaBfc7yHkBztbGWyBgaAYTMFPrUdfcFfPQk6\",\"createdAt\":1763520000}"
-    },
-    {
-      "name": "pending",
-      "httpStatus": 202,
-      "headers": {},
-      "body": "{\"status\":\"pending\",\"retryAfterMs\":2000}"
     },
     {
       "name": "subAccount",
@@ -25,6 +19,18 @@
       "httpStatus": 429,
       "headers": { "retry-after": "2" },
       "body": "{\"status\":\"error\",\"error\":\"rate limited\",\"errorCode\":\"RateLimited\",\"retryAfterMs\":1500}"
+    },
+    {
+      "name": "paused",
+      "httpStatus": 503,
+      "headers": {},
+      "body": "{\"status\":\"error\",\"error\":\"deposits are paused\",\"errorCode\":\"Paused\"}"
+    },
+    {
+      "name": "unavailable",
+      "httpStatus": 503,
+      "headers": {},
+      "body": "{\"status\":\"error\",\"error\":\"deposit addresses are unavailable, try again later\",\"errorCode\":\"Unavailable\"}"
     }
   ]
 }

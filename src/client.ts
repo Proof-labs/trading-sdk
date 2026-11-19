@@ -170,7 +170,7 @@ import { yesOrder, type NoOrder } from "./binary.js";
 import {
   depositAccount,
   queryDepositAddressAnswer,
-  type DepositAddress,
+  type DepositAddressReady,
 } from "./deposit-address.js";
 import { Side } from "./types.js";
 import type { MarketsSnapshot } from "./types.js";
@@ -2249,20 +2249,23 @@ export class ExchangeClient {
    * Anything else throws `GatewayReadError` (kind `"configuration"`, field
    * `account`) before any request.
    *
+   * The gateway answers once the address exists: at once when it already
+   * does, otherwise after creating it (about a second, at most about ten).
    * Resolves `ready` with `address`, the deposit authority a wallet sends
-   * USDC to (not the token account), or `pending` (HTTP 202) while the
-   * address is being created: ask again after `retryAfterMs`. Times out after
-   * `opts.timeoutMs` (default 5 seconds) with `GatewayReadError` kind
-   * `"deadline"`; a malformed answer throws `GatewayReadError` kind
-   * `"malformed"` naming the field; an abort rejects with the signal's
+   * USDC to (not the token account). Times out after `opts.timeoutMs`
+   * (default `DEPOSIT_ADDRESS_TIMEOUT_MS`, 20 seconds, above the gateway's
+   * own 15-second limit) with `GatewayReadError` kind `"deadline"`; any
+   * answer but a 200 `ready` body (a 202 included) throws `GatewayReadError`
+   * kind `"malformed"` naming the field; an abort rejects with the signal's
    * reason. A refusal throws `GatewayHttpError`, which keeps the gateway's
-   * `errorCode` (`DepositAddressErrorCode`) and,
-   * on any error whose answer says when to try again, `retryAfterMs`.
+   * `errorCode` (`DepositAddressErrorCode`: `Paused` while deposits are
+   * paused) and, on any error whose answer says when to try again,
+   * `retryAfterMs`.
    */
   async queryDepositAddress(
     account: string,
     opts: BoundedReadOptions = {},
-  ): Promise<DepositAddress> {
+  ): Promise<DepositAddressReady> {
     const captured = { ...opts };
     captured.signal?.throwIfAborted();
     const canonical = depositAccount(account);
