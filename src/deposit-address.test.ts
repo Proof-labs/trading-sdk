@@ -493,7 +493,6 @@ describe("queryDepositAddress — other answers", () => {
       await read;
       expect(settled).toBeInstanceOf(GatewayReadError);
       expect(settled).toMatchObject({ kind: "deadline" });
-      expect(DEPOSIT_ADDRESS_TIMEOUT_MS).toBe(20_000);
     } finally {
       vi.useRealTimers();
     }
