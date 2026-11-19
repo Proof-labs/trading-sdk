@@ -211,6 +211,18 @@ describe("queryDepositAddress — other answers", () => {
       "address",
     ],
     [
+      "address decoding to 33 bytes",
+      200,
+      `{"status":"ready","address":"${"z".repeat(44)}","tokenAccount":"${TOKEN_ACCOUNT}","createdAt":null}`,
+      "address",
+    ],
+    [
+      "tokenAccount decoding to 23 bytes",
+      200,
+      `{"status":"ready","address":"${AUTHORITY}","tokenAccount":"${"2".repeat(32)}","createdAt":null}`,
+      "tokenAccount",
+    ],
+    [
       "missing tokenAccount",
       200,
       `{"status":"ready","address":"${AUTHORITY}","createdAt":null}`,

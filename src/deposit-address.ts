@@ -66,6 +66,19 @@ export function isDepositAddressErrorCode(
 
 // A Solana public key in base58: 32 bytes encode to 32-44 characters.
 const BASE58_PUBKEY = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const BASE58_ALPHABET =
+  "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+/** True when `value` is base58 that decodes to exactly 32 bytes. */
+function isSolanaPublicKey(value: unknown): value is string {
+  if (typeof value !== "string" || !BASE58_PUBKEY.test(value)) return false;
+  let n = 0n;
+  for (const char of value) n = n * 58n + BigInt(BASE58_ALPHABET.indexOf(char));
+  // Each leading "1" is one zero byte; the rest is the number's bytes.
+  const zeros = /^1*/.exec(value)![0].length;
+  const bytes = n === 0n ? 0 : Math.ceil(n.toString(16).length / 2);
+  return zeros + bytes === 32;
+}
 
 const isWholeNumber = (v: unknown): v is number =>
   Number.isSafeInteger(v) && (v as number) >= 0;
@@ -108,13 +121,8 @@ function decodeDepositAddress(status: number, body: unknown): DepositAddress {
   const fields = body as Record<string, unknown>;
   if (status === 200 && fields.status === "ready") {
     const { address, tokenAccount, createdAt } = fields;
-    if (typeof address !== "string" || !BASE58_PUBKEY.test(address))
-      invalidRead("address");
-    if (
-      typeof tokenAccount !== "string" ||
-      !BASE58_PUBKEY.test(tokenAccount) ||
-      tokenAccount === address
-    )
+    if (!isSolanaPublicKey(address)) invalidRead("address");
+    if (!isSolanaPublicKey(tokenAccount) || tokenAccount === address)
       invalidRead("tokenAccount");
     if (createdAt !== null && !isWholeNumber(createdAt))
       invalidRead("createdAt");
