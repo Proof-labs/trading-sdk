@@ -2249,14 +2249,12 @@ export class ExchangeClient {
    * Anything else throws `GatewayReadError` (kind `"configuration"`, field
    * `account`) before any request.
    *
-   * The gateway answers once the address exists: at once when it already
-   * does, otherwise after creating it (about a second, at most about ten).
-   * Resolves `ready` with `address`, the deposit authority a wallet sends
-   * USDC to (not the token account). Times out after `opts.timeoutMs`
-   * (default `DEPOSIT_ADDRESS_TIMEOUT_MS`, 20 seconds, above the gateway's
-   * own 15-second limit) with `GatewayReadError` kind `"deadline"`; any
-   * answer but a 200 `ready` body (a 202 included) throws `GatewayReadError`
-   * kind `"malformed"` naming the field; an abort rejects with the signal's
+   * The gateway answers once the address exists, creating it first when
+   * needed. Resolves `ready` with `address`, the deposit authority a wallet
+   * sends USDC to (not the token account). Times out after `opts.timeoutMs`
+   * (default `DEPOSIT_ADDRESS_TIMEOUT_MS`) with `GatewayReadError` kind
+   * `"deadline"`. Only a 200 `ready` answer is a success; any other 2xx
+   * throws `GatewayReadError` kind `"malformed"` naming the field; an abort rejects with the signal's
    * reason. A refusal throws `GatewayHttpError`, which keeps the gateway's
    * `errorCode` (`DepositAddressErrorCode`: `Paused` while deposits are
    * paused) and, on any error whose answer says when to try again,

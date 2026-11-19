@@ -232,8 +232,8 @@ class ExchangeClient {
   queryTriggerMarketHistory(market: number, filters?: TriggerMarketHistoryFilters): Promise<TriggerMarketHistoryPage>;
   queryLiquidationConfig(): Promise<LiquidationConfigInfo>;
   // USDC deposit address on Solana (address = deposit authority). The gateway
-  // answers once the address exists (about 1 s, at most about 10 s), so the
-  // default deadline is 20 s (DEPOSIT_ADDRESS_TIMEOUT_MS). Refusals throw
+  // answers once the address exists; default deadline
+  // DEPOSIT_ADDRESS_TIMEOUT_MS. Refusals throw
   // GatewayHttpError with the gateway's errorCode (Paused while deposits are
   // paused) and retryAfterMs (0..300000) when the answer gives one.
   queryDepositAddress(account: string, opts?: { signal?: AbortSignal; timeoutMs?: number }): Promise<DepositAddressReady>;

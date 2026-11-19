@@ -16,14 +16,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or without `0x`, in either case; anything else throws `GatewayReadError`
   (kind `"configuration"`) before any request. The read takes
   `{ signal, timeoutMs }` and a 1 MiB body cap. The gateway answers once the
-  address exists, creating it first when needed (about a second, at most
-  about ten; the gateway's own limit is 15 seconds), so the default deadline
-  is 20 seconds (`DEPOSIT_ADDRESS_TIMEOUT_MS`) rather than the usual 5. It
-  resolves a `DepositAddressReady` (`status: "ready"`) with `address`,
-  `tokenAccount` and `createdAt` (Unix seconds or `null`). `address` is the
-  deposit authority, the address a wallet sends USDC to, not the token
-  account. Any other answer, a 202 included, throws `GatewayReadError` (kind
-  `"malformed"`) naming the field. A refusal throws `GatewayHttpError`, which
+  address exists, creating it first when needed; the default deadline is
+  `DEPOSIT_ADDRESS_TIMEOUT_MS` rather than the usual 5 seconds. It resolves a
+  `DepositAddressReady` (`status: "ready"`) with `address`, `tokenAccount`
+  and `createdAt` (Unix seconds or `null`). `address` is the deposit
+  authority, the address a wallet sends USDC to, not the token account. Only
+  a 200 `ready` answer is a success; any other 2xx throws `GatewayReadError`
+  (kind `"malformed"`) naming the field. A refusal throws `GatewayHttpError`, which
   keeps the gateway's `errorCode` (`DepositAddressErrorCode`:
   `InvalidAccount`, `SubAccount`, `RateLimited`, `Paused` while deposits are
   paused, `Unavailable`; `isDepositAddressErrorCode`) and, on any
@@ -35,7 +34,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **TypeScript:** `GatewayHttpError.retryAfterMs`, set through a new
   options argument (`GatewayHttpErrorOptions`), on every refusal the SDK
   reads the gateway's error body for (`queryDepositAddress` and the `/info`
-  reads): the body's `retryAfterMs`, or else the `Retry-After` header.
+  reads): the body's `retryAfterMs`, or else the `Retry-After` header. The
+  `/info` reads are otherwise unchanged: they still read the whole error
+  body and keep the original response.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is

@@ -3,8 +3,8 @@
 // through unchanged; Proof-labs/deposit-address-service `tests/routes.rs`
 // pins every body, and `conformance/deposit-address.json` is the shared copy
 // of those answers (ready, sub-account, rate-limited, paused and unavailable).
-// The gateway answers once the address exists (about a second, at most about
-// ten); there is no pending answer.
+// The gateway answers once the address exists; the read waits up to
+// `DEPOSIT_ADDRESS_TIMEOUT_MS` by default.
 
 import { boundedGatewayRead, type BoundedReadOptions } from "./bounded-read.js";
 import type { ExchangeHttpTransport } from "./http-transport.js";
@@ -93,10 +93,10 @@ export function depositAccount(account: unknown): HexAddress {
 
 /**
  * Read `GET /v1/deposit-address/{account}` within one deadline
- * (`options.timeoutMs`, default `DEPOSIT_ADDRESS_TIMEOUT_MS`, 20 seconds) and
- * a 1 MiB body cap. Only a 200 `ready` answer is a success; any other 2xx
- * (a 202 included) throws `GatewayReadError` with kind `"malformed"` and the
- * offending field. A non-2xx answer throws
+ * (`options.timeoutMs`, default `DEPOSIT_ADDRESS_TIMEOUT_MS`) and a 1 MiB
+ * body cap. Only a 200 `ready` answer is a success; any other 2xx throws
+ * `GatewayReadError` with kind `"malformed"` and the offending field. A
+ * non-2xx answer throws
  * `GatewayHttpError` with the gateway's `errorCode`, `retryAfterMs` and an
  * unread copy of the response.
  */
