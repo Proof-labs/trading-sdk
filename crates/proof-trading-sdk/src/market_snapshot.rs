@@ -440,6 +440,13 @@ impl MarketsSnapshotClient {
 mod values;
 pub use values::{Address, AppHash, BlockHeight, ChainBinding, MarketId, MicroUsdc, NodeId};
 
+mod view;
+/// The node's version 2 markets snapshot (`GET /v2/markets-snapshot`), as
+/// proof-wire's `query_v2` names it: every market with its status, every
+/// event and each market's open interest.
+pub use proof_wire::query_v2::MarketsSnapshot as MarketsSnapshotView;
+pub use view::decode_snapshot_view;
+
 #[cfg(feature = "gateway")]
 mod chain;
 #[cfg(feature = "gateway")]
