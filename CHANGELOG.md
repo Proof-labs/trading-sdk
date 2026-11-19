@@ -9,6 +9,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
+  `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
+  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
+  not a map keyed by field name, or a name that is not a string (a status
+  sent as the integer 0, for example), refuses the whole read.
+
+## [13.1.0] — 2026-11-19
+
+npm only: a MINOR with two TypeScript additions on the same wire as 13.0.0
+(proof-wire 12.0.0) and no change to existing behaviour. The Rust core entry
+above stays under [Unreleased].
+
+### Added
+
 - **TypeScript:** `decodeFinalizedReadWitness` is exported from the package
   root, so a caller can decode the `witness` object of a raw gateway answer
   (for example, in its own `ExchangeHttpTransport`) with the SDK's decoder
@@ -24,11 +38,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   carries no witness and needs a gateway that serves `/v2/markets-snapshot`.
   `queryMarkets()`, `queryMarketListing()` and `queryMarketsSnapshot()` are
   unchanged.
-- **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
-  `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
-  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
-  not a map keyed by field name, or a name that is not a string (a status
-  sent as the integer 0, for example), refuses the whole read.
 
 ## [13.0.0] (Python 5.0.0; Rust core 5.0.0) — 2026-11-17
 
@@ -2522,7 +2531,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.0.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.1.0...HEAD
+[13.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.0.0...npm-v13.1.0
 [13.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.1.0...npm-v13.0.0
 [12.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.0.0...npm-v12.1.0
 [12.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v11.0.0...npm-v12.0.0
