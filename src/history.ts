@@ -76,14 +76,19 @@ export function historySearchParams(opts: {
 }
 
 /** A positions-history bucket width: a positive count and one unit, `s`, `m`,
- * `h` or `d` (`15m`, `1h`, `1d`). The values `/v1/portfolio` takes. */
+ * `h` or `d` (`15m`, `1h`, `1d`), at most 365 days. */
 export function historyInterval(value: string): string {
   if (
     typeof value !== "string" ||
-    !/^\d+[smhd]$/.test(value) ||
+    !/^[0-9]+[smhd]$/.test(value) ||
+    value.trim() !== value ||
     !/[1-9]/.test(value)
   )
     throw new Error("Invalid history interval");
+  const units = { s: 1, m: 60, h: 3600, d: 86400 };
+  const unit = value.slice(-1) as keyof typeof units;
+  const seconds = Number(value.slice(0, -1)) * units[unit];
+  if (seconds > 365 * 86400) throw new Error("Invalid history interval");
   return value;
 }
 

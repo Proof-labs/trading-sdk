@@ -11,22 +11,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Positions history `interval`, all three SDKs:** a bucket width for
   `GET /v1/history/positions` (indexer `/v1/positions?interval=`, the values
-  `/v1/portfolio` takes: a positive count and `s`, `m`, `h` or `d`, e.g.
-  `15m`). With it the indexer serves, per market, the last snapshot in each
-  epoch-aligned bucket of `[from, to)`; rows, order and cursor are unchanged.
-  Without `from`/`to` a bucketed read covers the 24 hours before now, not all
-  history; the indexer refuses an interval over 365 days or a window of more
-  than 5,000 buckets (`invalid_interval`). Omitted, the query string is
-  unchanged. Needs an indexer with Proof-labs/indexer#449; an older one refuses
-  the parameter.
+  `/v1/portfolio` takes: a positive count and `s`, `m`, `h` or `d`, up to
+  365 days, e.g. `15m`). With it the indexer serves, per market, the last snapshot in each
+  epoch-aligned bucket of `[from, to)`; row shape and ordering are unchanged.
+  The interval read defaults to the last 24 hours and permits at most
+  5,000 whole bucket widths. Keep the interval and filters with each cursor;
+  use explicit bounds for a stable window across pages.
+  Omitted, the query string is unchanged. Needs an indexer with
+  Proof-labs/indexer#449; an older one refuses the parameter.
   - **TypeScript:** `interval?: string` on `queryHistoryPositionsPage` and
     `queryHistoryPositions`; a malformed value throws before fetching.
-  - **Rust (`proof-sdk-rs`):**
-    `InfoClient::position_history_by_interval(owner, &q, interval)` with `HistoryInterval` (`count` of `IntervalUnit`;
-    `FIFTEEN_MINUTES`, `ONE_HOUR`, `ONE_DAY`; a zero count is
-    `Error::InvalidInput`).
-  - **Python:** keyword `interval` on `ExchangeClient.history_positions`; a
-    malformed value raises `ValueError` before fetching.
+  - **Rust (`proof-sdk-rs`):** `InfoClient::position_history_by_interval` with
+    `HistoryInterval` (`count` of `IntervalUnit`; `FIFTEEN_MINUTES`,
+    `ONE_HOUR`, `ONE_DAY`). Zero or widths above 365 days are
+    `Error::InvalidInput`.
+  - **Python:** keywords `interval`, `from_ms`, `to_ms` and `market` on
+    `ExchangeClient.history_positions`; invalid inputs raise `ValueError`
+    before fetching.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is

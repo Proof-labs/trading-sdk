@@ -1620,16 +1620,22 @@ class ExchangeClient:
         *,
         cursor: str | None = None,
         interval: str | None = None,
+        from_ms: int | None = None,
+        to_ms: int | None = None,
+        market: int | None = None,
     ) -> CursorPage:
         """Position history for this account, newest first. Continue with next_cursor until None.
 
         ``interval`` (``"15m"``, ``"1h"``, ``"1d"``, ...: the values ``/v1/portfolio``
         takes) serves, per market, the last snapshot in each epoch-aligned bucket; a
-        bucket in which a market has no snapshot has no row for it. Rows, order and
-        cursor are unchanged; pass the same ``interval`` with every page. A bucketed
-        read is always windowed, and this method sends no ``from``/``to``, so it covers
-        the 24 hours before now, not all history. The indexer refuses an interval over 365 days, or a window
-        of more than 5,000 buckets, with ``invalid_interval``.
+        bucket in which a market has no snapshot has no row for it. Widths are at
+        most 365 days. Times are epoch milliseconds, ``from_ms`` inclusive and
+        ``to_ms`` exclusive. With an interval, ``to_ms`` defaults to now and
+        ``from_ms`` to 24 hours earlier; the raw read has no default window.
+        The server rejects more than 5,000 whole bucket widths as ``invalid_interval``.
+        Keep interval and filters with each cursor; explicit bounds prevent the
+        default window moving between pages. The cursor pins the first page's
+        snapshot height. Rows remain dictionaries with decimal strings and nulls.
         """
         owner_hex = canonical_owner(owner)
         if interval is not None and (
@@ -1638,9 +1644,22 @@ class ExchangeClient:
             or not interval[:-1].strip("0")
         ):
             raise ValueError("interval must be a positive count and one unit: s, m, h or d")
+        if interval is not None:
+            count = interval[:-1].lstrip("0")
+            units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+            if len(count) > 8 or int(count) * units[interval[-1]] > 365 * 86400:
+                raise ValueError("interval must be at most 365 days")
+        for name, value in (("from_ms", from_ms), ("to_ms", to_ms)):
+            if value is not None and (type(value) is not int or not 0 <= value <= (1 << 63) - 1):
+                raise ValueError(f"{name} must be nonnegative epoch milliseconds")
+        if from_ms is not None and to_ms is not None and from_ms >= to_ms:
+            raise ValueError("from_ms must be before to_ms")
+        if market is not None and (type(market) is not int or not 0 <= market <= (1 << 31) - 1):
+            raise ValueError("market must be a nonnegative int32")
         return self._account_history_rows(
             "/v1/history/positions", "positions", owner_hex,
-            {"owner": owner_hex, "limit": limit, "interval": interval, "cursor": cursor},
+            {"owner": owner_hex, "limit": limit, "interval": interval, "cursor": cursor,
+             "from": from_ms, "to": to_ms, "market": market},
             after_height, max_limit=5000,
         )
 

@@ -185,7 +185,7 @@ impl fmt::Display for CandleResolution {
 
 /// A positions-history bucket width: `count` of `unit`, e.g. 15 minutes; the
 /// widths `/v1/portfolio` takes. Build it with [`HistoryInterval::new`], which
-/// refuses a zero count.
+/// refuses zero or a width above 365 days.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct HistoryInterval {
     count: u32,
@@ -222,11 +222,17 @@ impl HistoryInterval {
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidInput`] for a zero count, which the indexer refuses.
+    /// [`Error::InvalidInput`] for zero or a width above 365 days.
     pub fn new(count: u32, unit: IntervalUnit) -> Result<Self> {
-        if count == 0 {
+        let seconds_per_unit = match unit {
+            IntervalUnit::Second => 1_u64,
+            IntervalUnit::Minute => 60,
+            IntervalUnit::Hour => 3600,
+            IntervalUnit::Day => 86400,
+        };
+        if count == 0 || u64::from(count) * seconds_per_unit > 365 * 86400 {
             return Err(Error::InvalidInput(
-                "history interval count must be at least 1".into(),
+                "history interval must be between 1 second and 365 days".into(),
             ));
         }
         Ok(Self { count, unit })
@@ -992,15 +998,17 @@ impl InfoClient {
     /// [`position_history`](Self::position_history) at `interval`: per
     /// market, the last snapshot in each epoch-aligned bucket of
     /// `[from_ms, to_ms)`. A bucket in which a market has no snapshot has no
-    /// row for it. Rows, order and cursor are as without it; continue with the
-    /// same `interval`. Without `from_ms`/`to_ms` the window is the 24 hours
-    /// before now, not all history.
+    /// row for it. With an interval, `to_ms` defaults to now and `from_ms` to
+    /// 24 hours before it; the raw read has no default window. The server
+    /// rejects more than 5,000 whole bucket widths with `invalid_interval`.
+    /// Keep the interval and filters with each cursor; explicit bounds prevent
+    /// the default window moving between pages. The cursor pins the first
+    /// page's snapshot height. Row shape and newest-first order are unchanged.
     ///
     /// # Errors
     ///
-    /// As [`position_history`](Self::position_history); an interval over 365
-    /// days, or a window of more than 5,000 buckets, is [`Error::Http`]
-    /// carrying `invalid_interval`.
+    /// As [`position_history`](Self::position_history); an interval the
+    /// indexer refuses is [`Error::Http`] carrying `invalid_interval`.
     pub async fn position_history_by_interval(
         &self,
         owner: Address,
@@ -1439,6 +1447,27 @@ mod tests {
             HistoryInterval::new(0, IntervalUnit::Hour),
             Err(Error::InvalidInput(_))
         ));
+    }
+
+    #[test]
+    fn history_interval_limits_match_the_indexer_in_every_unit() {
+        for (unit, cap) in [
+            (IntervalUnit::Second, 31_536_000),
+            (IntervalUnit::Minute, 525_600),
+            (IntervalUnit::Hour, 8_760),
+            (IntervalUnit::Day, 365),
+        ] {
+            assert!(HistoryInterval::new(1, unit).is_ok());
+            assert!(HistoryInterval::new(cap, unit).is_ok());
+            assert!(matches!(
+                HistoryInterval::new(cap + 1, unit),
+                Err(Error::InvalidInput(_))
+            ));
+            assert!(matches!(
+                HistoryInterval::new(u32::MAX, unit),
+                Err(Error::InvalidInput(_))
+            ));
+        }
     }
 
     #[test]

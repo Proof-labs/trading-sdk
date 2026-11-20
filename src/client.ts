@@ -2321,10 +2321,12 @@ export class ExchangeClient {
    * `interval` (`15m`, `1h`, `1d`, ...: the values `/v1/portfolio` takes)
    * serves, per market, the last snapshot in each epoch-aligned bucket of
    * `[fromMs, toMs)`; a bucket in which a market has no snapshot has no row for
-   * it. Rows, order and cursor are unchanged. Without `fromMs`/`toMs` the window
-   * is the 24 hours before now, not all history. A malformed value throws
-   * before fetching; the indexer refuses an interval over 365 days, or a window
-   * of more than 5,000 buckets, with its `invalid_interval` error. */
+   * it. Widths are at most 365 days. With an interval, `toMs` defaults to now
+   * and `fromMs` to 24 hours before it; without one there is no default window.
+   * The server rejects more than 5,000 whole bucket widths with `invalid_interval`.
+   * Keep the interval and filters with each cursor; explicit bounds prevent
+   * the default window moving between pages. The cursor pins the first page's
+   * snapshot height. Row shape and newest-first ordering are unchanged. */
   async queryHistoryPositionsPage(
     addressHex?: string,
     opts: {
