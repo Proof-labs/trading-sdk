@@ -24,6 +24,54 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `Error::InvalidInput`).
   - **Python:** keyword `interval` on `ExchangeClient.history_positions`; a
     malformed value raises `ValueError` before fetching.
+- **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
+  `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
+  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
+  not a map keyed by field name, or a name that is not a string (a status
+  sent as the integer 0, for example), refuses the whole read.
+
+## [14.0.0] — 2026-11-20
+
+npm only: a MAJOR for exchange 2.27.0 (proof-wire 12.2.0). Code 35 is renamed
+`ReduceOnlyRefused` and codes 136-142 are named. The Rust core entry above
+stays under [Unreleased].
+
+### Added
+
+- Error codes 136-142 (proof-wire 12.2.0), named in
+  Rust, TypeScript and Python: 136 `PositionEpochMismatch`, 137 `TriggerBracketNotFound`, 138
+  `TriggerAlreadyCrossed`, 139 `PositionNotFound`, 140
+  `AccountPositionCapReached`, 141 `SubAccountCapReached` and 142
+  `WorkCapReached`, each with the engine's meaning text.
+
+### Changed
+
+- **Breaking (TypeScript npm MAJOR, Python MAJOR, Rust core MAJOR,
+  `proof-sdk-rs` MAJOR):** error code 35 is renamed from
+  `ReduceOnlyWouldIncrease` to `ReduceOnlyRefused` (`ErrorKind::ReduceOnlyRefused`,
+  also re-exported by `proof-sdk-rs`, `ExecErrorCode.ReduceOnlyRefused`, and
+  the name `get_error_name(35)` returns).
+  The engine now refuses a reduce-only order with code 35 both when it would
+  increase exposure (`ExecError::ReduceOnlyWouldIncrease`) and when the account
+  holds no position on the market (`ExecError::ReduceOnlyNoPosition`); the log
+  names which. The trigger outcome reason `ReduceOnlyWouldIncrease` keeps its
+  name.
+- The Rust core pins proof-wire 12.2.0 (tag `v12.2.0`), the wire of exchange
+  2.27.0, which adds codes 136-142 and `ReduceOnlyNoPosition`. No bytes
+  change.
+  `PositionUpdated.realizedPnl` now also carries the gross PnL of a partial
+  close and of an insurance-fund takeover netting; its closed funding debt
+  stays in `FundingSettled`. Do not add it to PnL derived from
+  `TradeExecuted`.
+
+## [13.2.0] — 2026-11-20
+
+npm only: a MINOR with one TypeScript addition on the same wire as 13.1.0
+(proof-wire 12.0.0) and no change to existing behaviour. The Rust core entry
+above stays under [Unreleased].
+
+### Added
+
 - **TypeScript:** `client.queryDepositAddress(account, opts?)` reads an
   account's USDC deposit address on Solana
   (`GET /v1/deposit-address/{account}`, served by the gateway from the deposit
@@ -47,25 +95,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   retry time is the body's own `retryAfterMs`; the SDK does not read the
   `Retry-After` header. `conformance/deposit-address.json` pins the
   service's ready, sub-account, rate-limited, paused and unavailable answers.
-- **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
-  `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
-  `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
-  not a map keyed by field name, or a name that is not a string (a status
-  sent as the integer 0, for example), refuses the whole read.
-- **TypeScript:** `queryEventVoided(gatewayUrl, eventId, { signal?, fetch?, maxPages? })`
-  reads the indexed `event_voided` record (the Yes price a Void settled at)
-  from `GET /v1/history/admin-events`, following `next_cursor`; `null` when the
-  event is not voided or not yet indexed. A malformed page, a repeated cursor
-  or more than `maxPages` pages (default 100) fails with `GatewayReadError`.
 
 ## [13.1.0] — 2026-11-19
 
-npm only: a MINOR with two TypeScript additions on the same wire as 13.0.0
+npm only: a MINOR with three TypeScript additions on the same wire as 13.0.0
 (proof-wire 12.0.0) and no change to existing behaviour. The Rust core entry
 above stays under [Unreleased].
 
 ### Added
 
+- **TypeScript:** `queryEventVoided(gatewayUrl, eventId, { signal?, fetch?, maxPages? })`
+  reads the indexed `event_voided` record (the Yes price a Void settled at)
+  from `GET /v1/history/admin-events`, following `next_cursor`; `null` when the
+  event is not voided or not yet indexed. A malformed page, a repeated cursor
+  or more than `maxPages` pages (default 100) fails with `GatewayReadError`.
 - **TypeScript:** `decodeFinalizedReadWitness` is exported from the package
   root, so a caller can decode the `witness` object of a raw gateway answer
   (for example, in its own `ExchangeHttpTransport`) with the SDK's decoder
@@ -2574,7 +2617,8 @@ Initial public release.
 - Wire envelope v2 with the `ProofExchange-v3` signing domain and 32-byte
   `chain_id` binding.
 
-[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.1.0...HEAD
+[Unreleased]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.2.0...HEAD
+[13.2.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.1.0...npm-v13.2.0
 [13.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v13.0.0...npm-v13.1.0
 [13.0.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.1.0...npm-v13.0.0
 [12.1.0]: https://github.com/Proof-labs/trading-sdk/compare/npm-v12.0.0...npm-v12.1.0

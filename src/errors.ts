@@ -79,7 +79,7 @@ export enum ExecErrorCode {
   SettlementPriceMismatch = 32,
   OracleNotApplicable = 33,
   PostOnlyWouldCross = 34,
-  ReduceOnlyWouldIncrease = 35,
+  ReduceOnlyRefused = 35,
   // 36 was TestActionRejected, retired with RunFundingTick; never reassigned.
   // 37, 77, 82 and 97 are the wire's `Unpriced`, one code per reason.
   UnpricedStale = 37,
@@ -194,6 +194,13 @@ export enum ExecErrorCode {
   MarketBacksLiveEvent = 133,
   MarketHalted = 134,
   OffCurveWithdrawalDestination = 135,
+  PositionEpochMismatch = 136,
+  TriggerBracketNotFound = 137,
+  TriggerAlreadyCrossed = 138,
+  PositionNotFound = 139,
+  AccountPositionCapReached = 140,
+  SubAccountCapReached = 141,
+  WorkCapReached = 142,
   InternalError = 255,
 }
 
@@ -297,9 +304,9 @@ const TABLE: Record<number, ExecErrorInfo> = {
       "post-only order would have crossed the book — rejected to preserve maker semantics",
   },
   35: {
-    name: "ReduceOnlyWouldIncrease",
+    name: "ReduceOnlyRefused",
     description:
-      "reduce-only order would have increased the position rather than reducing it",
+      "A reduce-only order has nothing to reduce: the account holds no position on the market, or the order is on the position's side and would increase exposure. The log names which.",
   },
   37: {
     name: "UnpricedStale",
@@ -679,6 +686,41 @@ const TABLE: Record<number, ExecErrorInfo> = {
     name: "OffCurveWithdrawalDestination",
     description:
       "Withdrawal destination must be an on-curve Solana wallet owner; no funds were debited.",
+  },
+  136: {
+    name: "PositionEpochMismatch",
+    description:
+      "expected_position_epoch is not the position's current epoch: the position was reopened or flipped since it was read (a now-flat position is refused with 139 on set and 137 on cancel). Re-read the position and resubmit.",
+  },
+  137: {
+    name: "TriggerBracketNotFound",
+    description:
+      "The account has no stop-loss/take-profit bracket on this market, so there is nothing to cancel.",
+  },
+  138: {
+    name: "TriggerAlreadyCrossed",
+    description:
+      "A stop-loss or take-profit price is already crossed at placement and would fire at once: a long's stop must sit below the reference price and its take-profit above, a short's the reverse.",
+  },
+  139: {
+    name: "PositionNotFound",
+    description:
+      "The account holds no position on this market. A position opened by an order in the same block does not exist yet when triggers run; resubmit in a later block.",
+  },
+  140: {
+    name: "AccountPositionCapReached",
+    description:
+      "The account already holds positions on the maximum number of markets; close one before opening another.",
+  },
+  141: {
+    name: "SubAccountCapReached",
+    description:
+      "The master already owns the maximum number of sub-accounts; no sub-account was created.",
+  },
+  142: {
+    name: "WorkCapReached",
+    description:
+      "A chain-wide bound on consensus work is full (resting orders, live positions, markets or sub-accounts); the log names which. Retry once capacity frees.",
   },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
