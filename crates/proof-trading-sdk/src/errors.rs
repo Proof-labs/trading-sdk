@@ -198,6 +198,9 @@ define_error_kinds! {
     140 => AccountPositionCapReached ~ "The account already holds positions on the maximum number of markets; close one before opening another.",
     141 => SubAccountCapReached ~ "The master already owns the maximum number of sub-accounts; no sub-account was created.",
     142 => WorkCapReached ~ "A chain-wide bound on consensus work is full (resting orders, live positions, markets or sub-accounts); the log names which. Retry once capacity frees.",
+    // 143 (UserImAboveNotional) is not named yet; 144-154 are reserved on
+    // the wire for the bridge vote errors.
+    155 => MarketSettingsChanged ~ "A quorum UpdateMarketFees names a settings sequence its market is not at, as when the settings changed after the proposal was made. Re-read the market's settings_sequence and propose the change again.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -270,6 +273,7 @@ pub fn error_code_manifest() -> &'static [ErrorKind] {
 #[cfg(test)]
 mod exec_error_meaning_tests {
     use super::*;
+    use proof_wire::market_settings::MarketSettingsSequence;
     use proof_wire::types::{ExecError, UnpricedReason};
 
     #[test]
@@ -544,6 +548,11 @@ mod exec_error_meaning_tests {
                 resource: crate::types::WorkCap::RestingOrdersGlobal,
                 limit: 1,
             },
+            ExecError::MarketSettingsChanged {
+                market: 1,
+                predecessor: MarketSettingsSequence(0),
+                stored: MarketSettingsSequence(1),
+            },
         ]
     }
 
@@ -574,10 +583,11 @@ mod exec_error_meaning_tests {
         }
     }
 
-    /// Both reduce-only refusals decode to code 35, and codes 136-142 decode
-    /// to their own kinds; each kind carries the wire's code and meaning.
+    /// Both reduce-only refusals decode to code 35, and codes 136-142 and 155
+    /// decode to their own kinds; each kind carries the wire's code and
+    /// meaning.
     #[test]
-    fn reduce_only_refusals_and_codes_136_to_142_match_the_wire() {
+    fn reduce_only_refusals_and_codes_136_to_142_and_155_match_the_wire() {
         let pairs = [
             (
                 ExecError::ReduceOnlyWouldIncrease,
@@ -625,13 +635,26 @@ mod exec_error_meaning_tests {
                 },
                 ErrorKind::WorkCapReached,
             ),
+            (
+                ExecError::MarketSettingsChanged {
+                    market: 1,
+                    predecessor: MarketSettingsSequence(0),
+                    stored: MarketSettingsSequence(1),
+                },
+                ErrorKind::MarketSettingsChanged,
+            ),
         ];
         for (e, kind) in pairs {
             assert_eq!(ErrorKind::from_code(e.code()), Some(kind));
+            assert_eq!(
+                decode_exec_error_kind(e.code(), None),
+                Some(DecodedExecErrorKind::Known(kind))
+            );
             assert_eq!(kind.meaning(), e.meaning());
         }
         assert_eq!(ErrorKind::ReduceOnlyRefused.code(), 35);
         assert_eq!(ErrorKind::WorkCapReached.code(), 142);
+        assert_eq!(ErrorKind::MarketSettingsChanged.code(), 155);
         assert_eq!(ErrorKind::from_code(143), None);
     }
 
@@ -668,7 +691,9 @@ mod exec_error_meaning_tests {
     /// RunFundingTick), 78-81 (reserved for oracle errors), 90 (the retired
     /// sub-account switch), 101 (unassigned), 112 (the retired PLP
     /// configuration), 117-122 and 126-127 (claimed elsewhere, unassigned on the
-    /// wire).
+    /// wire). Above 142 it names 155 (`MarketSettingsChanged`) and 255: the
+    /// wire's 143 (`UserImAboveNotional`) is not named yet, and 144-154 are
+    /// reserved for the bridge vote errors.
     /// Catches the case where a code is reserved by the mirrored engine error
     /// enum but no SDK classification maps to it.
     #[test]
@@ -678,7 +703,7 @@ mod exec_error_meaning_tests {
         codes.dedup();
         let expected: Vec<u32> = (1u32..=142)
             .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127))
-            .chain(std::iter::once(255))
+            .chain([155, 255])
             .collect();
         assert_eq!(
             codes, expected,

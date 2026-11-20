@@ -33,6 +33,39 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is
   not a map keyed by field name, or a name that is not a string (a status
   sent as the integer 0, for example), refuses the whole read.
+- **All SDKs:** the admin quorum's `UpdateMarketFees` (inner tag 35), which
+  changes a live market's settings. A `ProposeAdminAction` carries
+  `QuorumUpdateMarketFees`: `predecessor`, the market's settings sequence
+  (`MarketSettingsSequence`) when proposed, and `change`, a
+  `MarketSettingsChange` (the `UpdateMarketFees` fields without `signer`).
+  The engine refuses the proposal with code 155 unless `predecessor` is the
+  market's current sequence, and fails it with 155 at execution if another
+  settings change landed in between.
+  - TypeScript (MINOR): `AdminAction` gains the `UpdateMarketFees` variant,
+    with the `QuorumUpdateMarketFees` and `MarketSettingsChange` types, and a
+    tag-35 proposal reads back under that kind in `decodeAdminAction`,
+    `decodeProposalDisplayInfo` and `decodeProposalPage`. An exhaustive
+    `switch` on `action.kind` (one that assigns the remainder to `never`) or
+    a `Record<AdminAction["kind"], …>` table needs a new entry.
+  - Rust: the crate re-exports proof-wire's `market_settings`, and
+    `governance` re-exports `QuorumUpdateMarketFees`, `MarketSettingsChange`
+    and `MarketSettingsSequence`.
+  - Python: `ProposeAdminAction` takes it in the wire form,
+    `{"UpdateMarketFees": {"predecessor": 0, "change": {"market": 1, …}}}`.
+  - Every SDK builds the engine's frozen proposal
+    (`crates/spec/golden-vectors/propose_update_market_fees.hex`, DevNet BTC's
+    open-interest cap to 35,000 at sequence 0) byte for byte and decodes it
+    back.
+- **TypeScript:** `MarketView.settingsSequence`, the version 2 `Market`
+  view's `settings_sequence`: the settings changes recorded for the market,
+  and the `predecessor` a quorum `UpdateMarketFees` names. It reads 0 for a
+  market with none, and from a node that does not serve the field. In Rust it
+  is `settings_sequence` on proof-wire's `query_v2::Market`. `MarketView`
+  gains it as a required field, which breaks code that builds a `MarketView`
+  by hand (a mock or fixture): it must add the field.
+- Error code 155 `MarketSettingsChanged` (proof-wire 12.2.0): a quorum
+  `UpdateMarketFees` names a settings sequence its market is not at. Named in
+  Rust, TypeScript and Python.
 
 ## [14.0.0] — 2026-11-20
 

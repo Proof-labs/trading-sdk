@@ -361,42 +361,11 @@ function toAction(
           signer: bytes(input.signer),
         },
       };
-    case ActionType.UpdateMarketFees: {
-      const optNum = (v: unknown): number | null =>
-        v === null || v === undefined ? null : Number(big(v));
-      const optBig = (v: unknown): bigint | null =>
-        v === null || v === undefined ? null : big(v);
-      const optBool = (v: unknown): boolean | null =>
-        v === null || v === undefined ? null : Boolean(v);
-      const optBytes = (v: unknown): Uint8Array | null =>
-        v === null || v === undefined ? null : bytes(v);
-      const msMode = optNum(input.mark_source_mode);
+    case ActionType.UpdateMarketFees:
       return {
         type: "UpdateMarketFees",
-        data: {
-          market: input.market as number,
-          signer: bytes(input.signer),
-          takerFeeBps: optNum(input.taker_fee_bps),
-          makerFeeBps: optNum(input.maker_fee_bps),
-          maxFundingRateBps: optNum(input.max_funding_rate_bps),
-          fundingIntervalMs: optBig(input.funding_interval_ms),
-          maxPositionSize: optBig(input.max_position_size),
-          defaultTtlMs: optBig(input.default_ttl_ms),
-          netDeltaMargin: optBool(input.net_delta_margin),
-          tickSize: optBig(input.tick_size),
-          lotSize: optBig(input.lot_size),
-          primaryOracleSigner: optBytes(input.primary_oracle_signer),
-          oracleStalenessMs: optBig(input.oracle_staleness_ms),
-          markSourceMode: msMode === 0 || msMode === 1 ? msMode : null,
-          maxMarkSpreadBps: optNum(input.max_mark_spread_bps),
-          cexCompositeStalenessMs: optBig(input.cex_composite_staleness_ms),
-          feeTiers: input.fee_tiers == null ? null : (input.fee_tiers as any),
-          imBps: optNum(input.im_bps),
-          mmBps: optNum(input.mm_bps),
-          maxOpenInterest: optBig(input.max_open_interest),
-        },
+        data: { ...toMarketSettingsChange(input), signer: bytes(input.signer) },
       };
-    }
     case ActionType.SetUserMarketLeverage:
       return {
         type: "SetUserMarketLeverage",
@@ -673,6 +642,53 @@ function toInsuranceAllocations(
   }));
 }
 
+const MARK_SOURCE_MODES: Record<string, 0 | 1> = { OracleOnly: 0, Median: 1 };
+
+/** A quorum `UpdateMarketFees` change from the vector's serde map form. */
+function toMarketSettingsChange(
+  raw: unknown,
+): import("./types.js").MarketSettingsChange {
+  const c = raw as Record<string, unknown>;
+  const num = (v: unknown): number | null => (v == null ? null : (v as number));
+  const mode = c.mark_source_mode;
+  if (mode != null && MARK_SOURCE_MODES[mode as string] === undefined) {
+    throw new Error(`toMarketSettingsChange: unknown mark source ${mode}`);
+  }
+  return {
+    market: c.market as number,
+    takerFeeBps: num(c.taker_fee_bps),
+    makerFeeBps: num(c.maker_fee_bps),
+    maxFundingRateBps: num(c.max_funding_rate_bps),
+    fundingIntervalMs: bigOrNull(c.funding_interval_ms),
+    maxPositionSize: bigOrNull(c.max_position_size),
+    defaultTtlMs: bigOrNull(c.default_ttl_ms),
+    netDeltaMargin:
+      c.net_delta_margin == null ? null : (c.net_delta_margin as boolean),
+    tickSize: bigOrNull(c.tick_size),
+    lotSize: bigOrNull(c.lot_size),
+    primaryOracleSigner:
+      c.primary_oracle_signer == null ? null : bytes(c.primary_oracle_signer),
+    oracleStalenessMs: bigOrNull(c.oracle_staleness_ms),
+    markSourceMode: mode == null ? null : MARK_SOURCE_MODES[mode as string],
+    maxMarkSpreadBps: num(c.max_mark_spread_bps),
+    cexCompositeStalenessMs: bigOrNull(c.cex_composite_staleness_ms),
+    feeTiers:
+      c.fee_tiers == null
+        ? null
+        : (c.fee_tiers as Record<string, unknown>[]).map((t) => ({
+            min30dVolumeMicroUsdc: big(t.min_30d_volume_micro_usdc),
+            makerFeeTenthBps: t.maker_fee_tenth_bps as number,
+            takerFeeTenthBps: t.taker_fee_tenth_bps as number,
+          })),
+    imBps: num(c.im_bps),
+    mmBps: num(c.mm_bps),
+    maxOpenInterest: bigOrNull(c.max_open_interest),
+    impactNotional: bigOrNull(c.impact_notional),
+    fundingDeadBandBps: num(c.funding_dead_band_bps),
+    fundingInterestRate: num(c.funding_interest_rate),
+  };
+}
+
 /** Reconstruct a TS `AdminAction` from the vector's serde map form. Throws
  *  on an unknown variant rather than falling through — a vector this suite
  *  cannot name must fail the run, not mis-parse as a registry update. */
@@ -877,6 +893,16 @@ function toAdminAction(input: unknown): import("./types.js").AdminAction {
       value: {
         market: s.market as number,
         status: s.status as import("./types.js").MarketStatus,
+      },
+    };
+  }
+  if (v.UpdateMarketFees) {
+    const q = v.UpdateMarketFees as Record<string, unknown>;
+    return {
+      kind: "UpdateMarketFees",
+      value: {
+        predecessor: big(q.predecessor),
+        change: toMarketSettingsChange(q.change),
       },
     };
   }
@@ -1196,8 +1222,9 @@ describe("conformance vectors (TypeScript)", () => {
     // -account scoped and unscoped, four set-oracle-guards shapes, and
     // oracle policy, two schedule-upgrade shapes, cancel-upgrade, and
     // insurance fund and withdraw, void-event, settle-event,
-    // set-deposit-limit, set-market-status), approve, reject, and the PauseMarket emergency arm.
-    expect(govCases.length).toBe(34);
+    // set-deposit-limit, set-market-status, update-market-fees), approve,
+    // reject, and the PauseMarket emergency arm.
+    expect(govCases.length).toBe(35);
     for (const c of govCases) {
       // No try/catch: a missing toAction case or a byte mismatch fails loudly.
       const action = toAction(

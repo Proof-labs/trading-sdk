@@ -131,6 +131,8 @@ export {
   type SettleEvent,
   type SetMarketStatus,
   type SetDepositLimit,
+  type QuorumUpdateMarketFees,
+  type MarketSettingsChange,
   type MarketStatus,
   type LiquidationConfig,
   type LiquidationConfigInfo,

@@ -93,6 +93,9 @@ BUILDERS = {
     "propose_admin_action/set_market_status": lambda i: actions.ProposeAdminAction(
         **_admin(i, "proposer")
     ),
+    "propose_admin_action/update_market_fees": lambda i: actions.ProposeAdminAction(
+        **_admin(i, "proposer")
+    ),
 }
 
 

@@ -13,6 +13,7 @@ The Rust golden vectors are generated with the signing key ``[0x42; 32]``,
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import msgpack
@@ -66,6 +67,46 @@ class TestGoldenVectors:
         action_type, payload = actions.encode_action(act)
         envelope = _sign(action_type, payload, 2)
         assert envelope.hex() == _golden("cancel_order.hex")
+
+    def test_propose_update_market_fees_matches_engine_golden(self):
+        # propose_update_market_fees.hex is proof-wire's frozen admin quorum
+        # proposal: DevNet BTC (market 1) raises its open-interest cap to
+        # 35,000 at settings sequence 0, every other setting left as it is.
+        act = actions.ProposeAdminAction(
+            proposer=bytes([0xA1] * 20),
+            registry_version=1,
+            action={
+                "UpdateMarketFees": {
+                    "predecessor": 0,
+                    "change": {"market": 1, "max_open_interest": 35_000},
+                }
+            },
+        )
+        action_type, payload = actions.encode_action(act)
+        frozen = _golden("propose_update_market_fees.hex")
+        assert _sign(action_type, payload, 400).hex() == frozen
+
+        envelope = pts.decode_tx(bytes.fromhex(frozen))
+        assert (envelope["action_type"], envelope["seq"]) == (action_type, 400)
+        decoded = actions.decode_action(action_type, envelope["payload"])
+        assert decoded["proposer"] == bytes([0xA1] * 20)
+        assert decoded["registry_version"] == 1
+        quorum = decoded["action"]["UpdateMarketFees"]
+        assert quorum["predecessor"] == 0
+        change = quorum["change"]
+        codec = Path(__file__).resolve().parents[2] / "conformance" / "codec.ndjson"
+        every_field = next(
+            json.loads(line)
+            for line in codec.read_text().splitlines()
+            if '"case":"propose_admin_action/update_market_fees"' in line
+        )
+        assert set(change) == set(
+            every_field["input"]["action"]["UpdateMarketFees"]["change"]
+        ), "every MarketSettingsChange field decodes, the unset ones as None"
+        assert {k: v for k, v in change.items() if v is not None} == {
+            "market": 1,
+            "max_open_interest": 35_000,
+        }
 
     def test_retired_action_bytes_do_not_codec(self):
         # OracleUpdate, RunLiquidationSweep, RunFundingTick, OracleUpdateComposite.

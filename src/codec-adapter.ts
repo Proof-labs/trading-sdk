@@ -897,6 +897,7 @@ function marketViewFromWasm(v: unknown): MarketView {
     status: viewName(VIEW_MARKET_STATUSES, m.status),
     fundingDeadBandBps: viewOptional(m.funding_dead_band_bps),
     fundingInterestRate: viewOptional(m.funding_interest_rate),
+    settingsSequence: m.settings_sequence as bigint,
   };
 }
 
