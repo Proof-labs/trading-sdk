@@ -174,6 +174,7 @@ mod tests {
     )]
 
     use super::*;
+    use proof_wire::market_settings::MarketSettingsSequence;
     use proof_wire::query_v2::{self as view, MarketStatus};
     use serde::Serialize;
 
@@ -291,6 +292,26 @@ mod tests {
         assert_eq!(snapshot.markets[3].status, MarketStatus::Unknown);
         let snapshot = decode(&renamed("perpetual", "perpetuum")).expect("an unknown kind decodes");
         assert_eq!(snapshot.markets[0].kind, view::MarketKind::Unknown);
+    }
+
+    #[test]
+    fn each_market_reads_its_settings_sequence_and_zero_without_one() {
+        // The gateway's example carries no settings_sequence.
+        assert!(example()
+            .markets
+            .iter()
+            .all(|m| m.settings_sequence == MarketSettingsSequence(0)));
+        let mut named = tree(&example());
+        *at(&mut named, "markets/1/settings_sequence") = Value::from(3);
+        let snapshot = decode(&tree_body(&named)).expect("a settings sequence decodes");
+        assert_eq!(
+            snapshot
+                .markets
+                .iter()
+                .map(|m| m.settings_sequence)
+                .collect::<Vec<_>>(),
+            [0, 3, 0, 0].map(MarketSettingsSequence)
+        );
     }
 
     #[test]

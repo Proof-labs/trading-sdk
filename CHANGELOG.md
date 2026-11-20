@@ -37,6 +37,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     (`crates/spec/golden-vectors/propose_update_market_fees.hex`, DevNet BTC's
     open-interest cap to 35,000 at sequence 0) byte for byte and decodes it
     back.
+- **TypeScript (MINOR):** `MarketView.settingsSequence`, the version 2
+  `Market` view's `settings_sequence`: the settings changes recorded for the
+  market, and the `predecessor` a quorum `UpdateMarketFees` names. It reads 0
+  for a market with none, and from a node that does not serve the field. In
+  Rust it is `settings_sequence` on proof-wire's `query_v2::Market`.
 
 ### Changed
 

@@ -247,7 +247,13 @@ describe("public barrel: governance surface", () => {
       market: 1,
       maxOpenInterest: 35_000n,
     };
-    const quorum: QuorumUpdateMarketFees = { predecessor: 0n, change };
+    const listed: Pick<MarketView, "settingsSequence"> = {
+      settingsSequence: 0n,
+    };
+    const quorum: QuorumUpdateMarketFees = {
+      predecessor: listed.settingsSequence,
+      change,
+    };
     const settingsAction: AdminAction = {
       kind: "UpdateMarketFees",
       value: quorum,

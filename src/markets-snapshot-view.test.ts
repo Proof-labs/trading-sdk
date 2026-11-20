@@ -101,6 +101,7 @@ describe("reads().marketsSnapshotView", () => {
       status: "Trading",
       fundingDeadBandBps: 5,
       fundingInterestRate: 0,
+      settingsSequence: 0n,
     });
     expect(snapshot.markets[3]).toMatchObject({
       kind: { type: "PredictionBinary", eventId: 7, branch: "Yes" },
@@ -132,6 +133,31 @@ describe("reads().marketsSnapshotView", () => {
       { market: 1, long: 30_000n, short: 30_000n },
       { market: 2, long: 1_200n, short: 1_150n },
       { market: 100, long: 36_900n, short: 41_600n },
+    ]);
+  });
+
+  it("reads each market's settings sequence, 0 for a market served without one", async () => {
+    // The gateway's example carries no settings_sequence; serve one for ETH.
+    const view = decode(Buffer.from(JSON.parse(EXAMPLE).data, "base64")) as {
+      markets: Record<string, unknown>[];
+    };
+    view.markets[1].settings_sequence = 3;
+    const body = JSON.stringify({
+      data: Buffer.from(encode(view)).toString("base64"),
+    });
+    const snapshot = await clientServing(body)
+      .client.reads()
+      .marketsSnapshotView();
+    expect(
+      snapshot.markets.map(({ market, settingsSequence }) => [
+        market,
+        settingsSequence,
+      ]),
+    ).toEqual([
+      [1, 0n],
+      [2, 3n],
+      [3, 0n],
+      [100, 0n],
     ]);
   });
 

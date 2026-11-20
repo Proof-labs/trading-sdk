@@ -66,6 +66,10 @@ export interface MarketView {
   /** Effective funding interest leg per 8 hours, in units of 1e-8; `null`
    *  when the market pays no funding. */
   fundingInterestRate: number | null;
+  /** The market's `MarketSettingsSequence`: the settings changes recorded
+   *  for it, 0 when none (and from a node that does not serve the field).
+   *  A quorum `UpdateMarketFees` names it as its `predecessor`. */
+  settingsSequence: bigint;
 }
 
 /** An event as the node's version 2 markets snapshot lists it (proof-wire
