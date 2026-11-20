@@ -98,3 +98,30 @@ def test_account_history_limit_bounds(client, method, max_limit):
     for limit in (True, 0, max_limit + 1):
         with pytest.raises(ValueError, match=f"between 1 and {max_limit}"):
             getattr(client, method)(OWNER, limit=limit)
+
+
+def test_history_positions_sends_interval_only_when_set(client):
+    seen = []
+
+    def handler(request):
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json={"positions": [], "next_cursor": ""})
+
+    client._http.close()
+    client._http = httpx.Client(transport=httpx.MockTransport(handler))
+    client.history_positions(OWNER, limit=10, interval="15m", cursor="next")
+    client.history_positions(OWNER, limit=10)
+    assert seen == [
+        {"owner": OWNER, "limit": "10", "interval": "15m", "cursor": "next"},
+        {"owner": OWNER, "limit": "10"},
+    ]
+
+
+@pytest.mark.parametrize("interval", ["", "0m", "00h", "15", "1w", "1.5h", "-1h", " 1h", "1h\n", 15])
+def test_history_positions_rejects_a_malformed_interval(client, interval):
+    client._http.close()
+    client._http = httpx.Client(transport=httpx.MockTransport(
+        lambda _: pytest.fail("invalid interval reached gateway")
+    ))
+    with pytest.raises(ValueError, match="interval"):
+        client.history_positions(OWNER, interval=interval)

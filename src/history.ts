@@ -75,6 +75,18 @@ export function historySearchParams(opts: {
   return params;
 }
 
+/** A positions-history bucket width: a positive count and one unit, `s`, `m`,
+ * `h` or `d` (`15m`, `1h`, `1d`). The values `/v1/portfolio` takes. */
+export function historyInterval(value: string): string {
+  if (
+    typeof value !== "string" ||
+    !/^\d+[smhd]$/.test(value) ||
+    !/[1-9]/.test(value)
+  )
+    throw new Error("Invalid history interval");
+  return value;
+}
+
 /** Current indexer page. Closed positions have no side or entry price. */
 export function decodeHistoryPositionsPage(
   value: unknown,

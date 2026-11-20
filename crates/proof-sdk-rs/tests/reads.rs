@@ -8,9 +8,10 @@ use std::sync::{Arc, Mutex};
 use base64::Engine as _;
 use proof_sdk_rs::{
     AccountEventsQuery, Address, CandleQuery, CandleResolution, ClientConfig, ClientTriggerId,
-    Conversion, Error, Event, EventId, HistoryQuery, InfoClient, OrderHistoryQuery, PositionEpoch,
-    ResolutionOutcome, ResolutionsQuery, Side, SnapshotPosition, SortOrder, TriggerAvailability,
-    TriggerLimbState, TriggerOutcomeReason, TriggerSlippageBps, WithdrawalStatus,
+    Conversion, Error, Event, EventId, HistoryInterval, HistoryQuery, InfoClient,
+    OrderHistoryQuery, PositionEpoch, ResolutionOutcome, ResolutionsQuery, Side, SnapshotPosition,
+    SortOrder, TriggerAvailability, TriggerLimbState, TriggerOutcomeReason, TriggerSlippageBps,
+    WithdrawalStatus,
 };
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -573,6 +574,31 @@ async fn position_history_reads_open_and_flat_snapshots() {
     assert_eq!(
         requests(&log)[0].0,
         format!("GET /v1/history/positions/{MM}?market=1")
+    );
+}
+
+#[tokio::test]
+async fn position_history_by_interval_sends_the_bucket_width() {
+    let empty = json!({"next_cursor":"","positions":[]});
+    let (info, log) = fixture(vec![(200, empty.clone()), (200, empty)]).await;
+    let q = HistoryQuery {
+        from_ms: Some(1_000),
+        to_ms: Some(3_000),
+        cursor: Some("next".into()),
+        ..HistoryQuery::default()
+    };
+    info.position_history_by_interval(mm(), &q, HistoryInterval::FIFTEEN_MINUTES)
+        .await
+        .unwrap();
+    info.position_history(mm(), &q).await.unwrap();
+    let sent = requests(&log);
+    assert_eq!(
+        sent[0].0,
+        format!("GET /v1/history/positions/{MM}?from=1000&to=3000&interval=15m&cursor=next")
+    );
+    assert_eq!(
+        sent[1].0,
+        format!("GET /v1/history/positions/{MM}?from=1000&to=3000&cursor=next")
     );
 }
 

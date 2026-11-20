@@ -1619,12 +1619,26 @@ class ExchangeClient:
         limit: int = 100,
         *,
         cursor: str | None = None,
+        interval: str | None = None,
     ) -> CursorPage:
-        """Position history for this account. Continue with next_cursor until None."""
+        """Position history for this account, newest first. Continue with next_cursor until None.
+
+        ``interval`` (``"15m"``, ``"1h"``, ``"1d"``, ...: the values ``/v1/portfolio``
+        takes) serves, per market, the last snapshot in each epoch-aligned bucket; a
+        bucket in which a market has no snapshot has no row for it. Rows, order and
+        cursor are unchanged; pass the same ``interval`` with every page.
+        """
         owner_hex = canonical_owner(owner)
+        if interval is not None and (
+            type(interval) is not str
+            or not re.fullmatch(r"[0-9]+[smhd]", interval)
+            or not interval[:-1].strip("0")
+        ):
+            raise ValueError("interval must be a positive count and one unit: s, m, h or d")
         return self._account_history_rows(
             "/v1/history/positions", "positions", owner_hex,
-            {"owner": owner_hex, "limit": limit, "cursor": cursor}, after_height, max_limit=5000,
+            {"owner": owner_hex, "limit": limit, "interval": interval, "cursor": cursor},
+            after_height, max_limit=5000,
         )
 
     def _account_history_rows(

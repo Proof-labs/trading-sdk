@@ -162,11 +162,45 @@ describe("position history pages", () => {
     );
   });
 
+  it("sends interval only when set, keeping the other filters", async () => {
+    const fetch = vi
+      .fn()
+      .mockImplementation(async () => json({ positions: [], next_cursor: "" }));
+    vi.stubGlobal("fetch", fetch);
+    const c = client();
+    await c.queryHistoryPositionsPage(owner, {
+      fromMs: 1000,
+      toMs: 3000,
+      interval: "15m",
+      cursor: "next",
+    });
+    await c.queryHistoryPositions(owner, { interval: "1d" });
+    await c.queryHistoryPositionsPage(owner, { fromMs: 1000 });
+    const [bucketed, array, raw] = fetch.mock.calls.map(
+      ([u]) => new URL(u as string),
+    );
+    expect(Object.fromEntries(bucketed.searchParams)).toEqual({
+      from: "1000",
+      to: "3000",
+      interval: "15m",
+      cursor: "next",
+    });
+    expect(array.searchParams.get("interval")).toBe("1d");
+    expect(raw.searchParams.has("interval")).toBe(false);
+    expect(raw.search).toBe("?from=1000");
+  });
+
   it.each([
     { limit: 0 },
     { limit: 5001 },
     { market: -1 },
     { fromMs: 2, toMs: 1 },
+    { interval: "" },
+    { interval: "0m" },
+    { interval: "15" },
+    { interval: "1w" },
+    { interval: "1.5h" },
+    { interval: "-1h" },
   ])("rejects invalid filters before fetching", async (opts) => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);

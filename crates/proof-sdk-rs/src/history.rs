@@ -183,6 +183,78 @@ impl fmt::Display for CandleResolution {
     }
 }
 
+/// A positions-history bucket width: `count` of `unit`, e.g. 15 minutes; the
+/// widths `/v1/portfolio` takes. Build it with [`HistoryInterval::new`], which
+/// refuses a zero count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct HistoryInterval {
+    count: u32,
+    unit: IntervalUnit,
+}
+
+/// The unit of a [`HistoryInterval`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum IntervalUnit {
+    Second,
+    Minute,
+    Hour,
+    Day,
+}
+
+impl HistoryInterval {
+    /// `15m`.
+    pub const FIFTEEN_MINUTES: Self = Self {
+        count: 15,
+        unit: IntervalUnit::Minute,
+    };
+    /// `1h`.
+    pub const ONE_HOUR: Self = Self {
+        count: 1,
+        unit: IntervalUnit::Hour,
+    };
+    /// `1d`.
+    pub const ONE_DAY: Self = Self {
+        count: 1,
+        unit: IntervalUnit::Day,
+    };
+
+    /// `count` of `unit`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidInput`] for a zero count, which the indexer refuses.
+    pub fn new(count: u32, unit: IntervalUnit) -> Result<Self> {
+        if count == 0 {
+            return Err(Error::InvalidInput(
+                "history interval count must be at least 1".into(),
+            ));
+        }
+        Ok(Self { count, unit })
+    }
+
+    #[must_use]
+    pub const fn count(self) -> u32 {
+        self.count
+    }
+
+    #[must_use]
+    pub const fn unit(self) -> IntervalUnit {
+        self.unit
+    }
+}
+
+impl fmt::Display for HistoryInterval {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let unit = match self.unit {
+            IntervalUnit::Second => 's',
+            IntervalUnit::Minute => 'm',
+            IntervalUnit::Hour => 'h',
+            IntervalUnit::Day => 'd',
+        };
+        write!(f, "{}{unit}", self.count)
+    }
+}
+
 /// Filters for the candle and BBO history. Without a window the gateway
 /// returns its default recent window.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -823,6 +895,10 @@ fn window(
 
 impl HistoryQuery {
     fn path(&self, base: &str) -> String {
+        self.path_with(base, None)
+    }
+
+    fn path_with(&self, base: &str, interval: Option<HistoryInterval>) -> String {
         let [from, to, limit] = window(self.from_ms, self.to_ms, self.limit);
         query(
             base,
@@ -831,6 +907,7 @@ impl HistoryQuery {
                 from,
                 to,
                 limit,
+                ("interval", interval.map(|i| i.to_string())),
                 ("cursor", self.cursor.clone()),
             ],
         )
@@ -909,8 +986,36 @@ impl InfoClient {
         owner: Address,
         q: &HistoryQuery,
     ) -> Result<HistoryPage<PositionSnapshot>> {
+        self.position_snapshots(owner, q, None).await
+    }
+
+    /// [`position_history`](Self::position_history) at `interval`: per
+    /// market, the last snapshot in each epoch-aligned bucket of
+    /// `[from_ms, to_ms)`. A bucket in which a market has no snapshot has no
+    /// row for it. Rows, order and cursor are as without it; continue with the
+    /// same `interval`.
+    ///
+    /// # Errors
+    ///
+    /// As [`position_history`](Self::position_history); an interval the
+    /// indexer refuses is [`Error::Http`] carrying `invalid_interval`.
+    pub async fn position_history_by_interval(
+        &self,
+        owner: Address,
+        q: &HistoryQuery,
+        interval: HistoryInterval,
+    ) -> Result<HistoryPage<PositionSnapshot>> {
+        self.position_snapshots(owner, q, Some(interval)).await
+    }
+
+    async fn position_snapshots(
+        &self,
+        owner: Address,
+        q: &HistoryQuery,
+        interval: Option<HistoryInterval>,
+    ) -> Result<HistoryPage<PositionSnapshot>> {
         let body: Json = self
-            .get_json(&q.path(&format!("/v1/history/positions/{owner}")))
+            .get_json(&q.path_with(&format!("/v1/history/positions/{owner}"), interval))
             .await?;
         page(
             body,
@@ -1315,6 +1420,23 @@ mod tests {
         for bad in ["1.5", "1.", ".0", "-1", "", "1e3", "+1"] {
             assert_eq!(whole(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn history_interval_renders_as_the_indexer_names_it() {
+        assert_eq!(HistoryInterval::FIFTEEN_MINUTES.to_string(), "15m");
+        assert_eq!(HistoryInterval::ONE_HOUR.to_string(), "1h");
+        assert_eq!(HistoryInterval::ONE_DAY.to_string(), "1d");
+        assert_eq!(
+            HistoryInterval::new(30, IntervalUnit::Second)
+                .unwrap()
+                .to_string(),
+            "30s"
+        );
+        assert!(matches!(
+            HistoryInterval::new(0, IntervalUnit::Hour),
+            Err(Error::InvalidInput(_))
+        ));
     }
 
     #[test]
