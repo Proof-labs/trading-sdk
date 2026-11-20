@@ -21,8 +21,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the parameter.
   - **TypeScript:** `interval?: string` on `queryHistoryPositionsPage` and
     `queryHistoryPositions`; a malformed value throws before fetching.
-  - **Rust (`proof-sdk-rs`):** `InfoClient::position_history_by_interval(owner,
-    &q, interval)` with `HistoryInterval` (`count` of `IntervalUnit`;
+  - **Rust (`proof-sdk-rs`):**
+    `InfoClient::position_history_by_interval(owner, &q, interval)` with `HistoryInterval` (`count` of `IntervalUnit`;
     `FIFTEEN_MINUTES`, `ONE_HOUR`, `ONE_DAY`; a zero count is
     `Error::InvalidInput`).
   - **Python:** keyword `interval` on `ExchangeClient.history_positions`; a
