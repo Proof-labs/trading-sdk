@@ -1013,9 +1013,9 @@ describe("codec v1 all action types", () => {
     });
 
     it("keeps the single names on the list bytes", () => {
-      expect(ActionType.PlaceOrders).toBe(0x35);
-      expect(ActionType.CancelOrders).toBe(0x36);
-      expect(ActionType.CancelClientOrders).toBe(0x37);
+      expect(ActionType.PlaceOrders).toBe(0x01);
+      expect(ActionType.CancelOrders).toBe(0x02);
+      expect(ActionType.CancelClientOrders).toBe(0x18);
       expect(ActionType.PlaceOrder).toBe(ActionType.PlaceOrders);
       expect(ActionType.MarketOrder).toBe(ActionType.PlaceOrders);
       expect(ActionType.CancelOrder).toBe(ActionType.CancelOrders);

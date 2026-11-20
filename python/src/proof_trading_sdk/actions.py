@@ -337,7 +337,7 @@ def _validate_order_triggers(
     *,
     reduce_only: bool,
 ) -> None:
-    """Shared placement-time SL/TP parity for the order actions (0x35/0x1A).
+    """Shared placement-time SL/TP parity for the order actions (0x01/0x1A).
 
     Per-limb bounds are enforced by :class:`TriggerLimb.__post_init__`; this
     adds the order-level rules: a reduce-only order cannot carry limbs

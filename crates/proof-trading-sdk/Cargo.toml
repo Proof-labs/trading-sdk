@@ -28,9 +28,9 @@ rmpv = { version = "1.3.1", features = ["with-serde"] }
 # the compatible proof-wire major. The rev stays a commit sha, never a tag
 # name, so the pin cannot move (#123).
 # In-progress pin: the unreleased wire of Proof-labs/exchange#1513 and #1514
-# (order lists on 0x35-0x37, market orders and closes as list entries). Swaps
+# (order lists on 0x01, 0x02 and 0x18, market orders and closes as list entries). Swaps
 # back to a Proof-labs/wire tag once it is released.
-proof-wire = { version = "12", git = "https://github.com/Proof-labs/exchange.git", rev = "86fb563181312392edd05f62fb121deb44cef175", features = ["bridge"] }
+proof-wire = { version = "12", git = "https://github.com/Proof-labs/exchange.git", rev = "9691912e748f43e1bd7ffc00cd111f5b79a7e5ab", features = ["bridge"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
 # SHA-256 for the admin-proposal content hash (§2.4) — must match exchange-core.
 sha2 = "0.11"

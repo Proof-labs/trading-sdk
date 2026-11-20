@@ -185,7 +185,7 @@ pub enum PositionViewExpect {
 
 /// Encode an action payload via the shared core (the same path PyO3/WASM use).
 /// The `PlaceOrders` action byte.
-pub const PLACE_ORDERS: u8 = 0x35;
+pub const PLACE_ORDERS: u8 = 0x01;
 
 pub fn codec_payload(action_type: u8, fields: &serde_json::Value) -> Result<Vec<u8>, String> {
     proof_trading_sdk::codec::encode_payload_dyn(action_type, fields.clone())

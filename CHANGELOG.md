@@ -10,7 +10,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Order placement and cancels as lists (exchange#1513, #1514): `PlaceOrders`
-  (0x35), `CancelOrders` (0x36) and `CancelClientOrders` (0x37) carry 1 to 100
+  (0x01), `CancelOrders` (0x02) and `CancelClientOrders` (0x18) carry 1 to 100
   entries for one account under one signature, each placed or cancelled on its
   own; the transaction succeeds and one `orders_placed` / `orders_cancelled`
   event reports every entry. A `PlaceOrders` entry is a limit or a market
@@ -60,8 +60,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   succeeds. A pending result reconciled later (`waitForDelivery` with or
   without its action, Python `check_order_result`, Rust `wait_for_receipt`)
   maps a refused list of one to the same error. The single names stay as
-  aliases of the list bytes (`ActionType.PlaceOrder` / `MarketOrder` on 0x35,
-  `CancelOrder` on 0x36, `CancelClientOrder` on 0x37).
+  aliases of the list bytes (`ActionType.PlaceOrder` / `MarketOrder` on 0x01,
+  `CancelOrder` on 0x02, `CancelClientOrder` on 0x18).
 - Close position (`closePosition` in TypeScript, `close_position` in Rust,
   and the new `ExchangeClient.close_position` in Python) reads the account's
   position and sends a reduce-only market order on the opposite side for its

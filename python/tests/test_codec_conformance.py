@@ -22,7 +22,7 @@ class TestGoldenVectors:
                 actions.PlaceOrder(
                     market=1, owner=owner, side=actions.Side.Buy, price=100, quantity=10
                 ),
-                0x35,
+                0x01,
                 "92dc00140101010101010101010101010101010101010101919801a3427579"
                 "0a81a54c696d69749364a3477463c2c2c0c0c0",
             ),
@@ -30,18 +30,18 @@ class TestGoldenVectors:
                 actions.MarketOrder(
                     market=3, owner=owner, side=actions.Side.Buy, quantity=250
                 ),
-                0x35,
+                0x01,
                 "92dc00140101010101010101010101010101010101010101919803a3427579ccfa"
                 "81a64d61726b657491c0c2c0c0c0",
             ),
             (
                 actions.CancelOrder(order_id=42, owner=bytes([0x02] * 20)),
-                0x36,
+                0x02,
                 "92dc00140202020202020202020202020202020202020202912a",
             ),
             (
                 actions.CancelClientOrder(owner=owner, client_order_id=99),
-                0x37,
+                0x18,
                 "92dc001401010101010101010101010101010101010101019163",
             ),
         ]
@@ -49,9 +49,9 @@ class TestGoldenVectors:
             assert actions.encode_action(action) == (action_type, bytes.fromhex(payload_hex))
 
     def test_retired_action_bytes_do_not_codec(self):
-        # PlaceOrder, CancelOrder, OracleUpdate, MarketOrder, RunLiquidationSweep,
-        # RunFundingTick, OracleUpdateComposite, ClosePosition, CancelClientOrder.
-        for byte in (0x01, 0x02, 0x03, 0x04, 0x11, 0x12, 0x14, 0x17, 0x18):
+        # OracleUpdate, MarketOrder, RunLiquidationSweep, RunFundingTick,
+        # OracleUpdateComposite, ClosePosition.
+        for byte in (0x03, 0x04, 0x11, 0x12, 0x14, 0x17):
             with pytest.raises(ValueError, match="unknown action_type"):
                 actions.encode_action(
                     actions.RawAction(byte, {"market": 1, "signer": bytes(20)})

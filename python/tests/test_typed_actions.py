@@ -278,13 +278,13 @@ def test_a_full_list_encodes(kind):
 
 
 def test_single_names_share_the_list_bytes():
-    assert actions.ActionType.PlaceOrder == actions.ActionType.PlaceOrders == 0x35
+    assert actions.ActionType.PlaceOrder == actions.ActionType.PlaceOrders == 0x01
     assert actions.ActionType.MarketOrder == actions.ActionType.PlaceOrders
-    assert actions.ActionType.CancelOrder == actions.ActionType.CancelOrders == 0x36
+    assert actions.ActionType.CancelOrder == actions.ActionType.CancelOrders == 0x02
     assert (
         actions.ActionType.CancelClientOrder
         == actions.ActionType.CancelClientOrders
-        == 0x37
+        == 0x18
     )
 
 

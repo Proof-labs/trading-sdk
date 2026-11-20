@@ -33,28 +33,27 @@ export enum TimeInForce {
 
 /**
  * Wire-format action type identifiers. Each value is a single byte.
- * Retired, never reassigned: 0x01 `PlaceOrder`, 0x02 `CancelOrder`,
- * 0x03 `OracleUpdate`, 0x04 `MarketOrder`, 0x12 `RunFundingTick`,
- * 0x14 `OracleUpdateComposite`, 0x17 `ClosePosition`, 0x18
- * `CancelClientOrder`. The single-order names stay as aliases of the list
- * byte they now encode on.
+ * Retired, never reassigned: 0x03 `OracleUpdate`, 0x04 `MarketOrder`,
+ * 0x12 `RunFundingTick`, 0x14 `OracleUpdateComposite`, 0x17
+ * `ClosePosition`. 0x01, 0x02 and 0x18 now carry the order lists; the
+ * single-order names stay as aliases of the list byte they encode on.
  */
 export const ActionType = {
   /** Place 1 to {@link MAX_LIST_ENTRIES} limit or market orders for one
    *  account. */
-  PlaceOrders: 0x35,
+  PlaceOrders: 0x01,
   /** One limit order: a `PlaceOrders` of one. */
-  PlaceOrder: 0x35,
+  PlaceOrder: 0x01,
   /** One market order: a `PlaceOrders` of one market entry. */
-  MarketOrder: 0x35,
+  MarketOrder: 0x01,
   /** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by order ID. */
-  CancelOrders: 0x36,
+  CancelOrders: 0x02,
   /** One cancel by order ID: a `CancelOrders` of one. */
-  CancelOrder: 0x36,
+  CancelOrder: 0x02,
   /** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by client order ID. */
-  CancelClientOrders: 0x37,
+  CancelClientOrders: 0x18,
   /** One cancel by client order ID: a `CancelClientOrders` of one. */
-  CancelClientOrder: 0x37,
+  CancelClientOrder: 0x18,
   /** Oracle-policy source observation relayed by the feeder. */
   SubmitOracleObservation: 0x2d,
   /** Credit USDC to an account (legacy, prefer ConfirmDeposit). */
@@ -211,7 +210,7 @@ export type MarketOrderEntry = Omit<MarketOrder, "owner"> & { kind: "market" };
 export type OrderEntry = LimitOrderEntry | MarketOrderEntry;
 
 /** 1 to {@link MAX_LIST_ENTRIES} limit or market orders for one account
- *  under one signature and nonce (action `0x35`). Each runs in turn as its
+ *  under one signature and nonce (action `0x01`). Each runs in turn as its
  *  own order would and stands or is refused on its own; the transaction
  *  succeeds and `orders_placed` reports every order. */
 export interface PlaceOrders {
@@ -222,7 +221,7 @@ export interface PlaceOrders {
 }
 
 /** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by order ID (action
- *  `0x36`); each cancel stands or is refused on its own. */
+ *  `0x02`); each cancel stands or is refused on its own. */
 export interface CancelOrders {
   /** Account address of the orders' owner (20 bytes). */
   owner: Address;
@@ -231,7 +230,7 @@ export interface CancelOrders {
 }
 
 /** Cancel 1 to {@link MAX_LIST_ENTRIES} resting orders by client order ID
- *  (action `0x37`); each cancel stands or is refused on its own. */
+ *  (action `0x18`); each cancel stands or is refused on its own. */
 export interface CancelClientOrders {
   /** Account address of the orders' owner (20 bytes). */
   owner: Address;

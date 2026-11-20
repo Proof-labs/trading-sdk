@@ -648,7 +648,7 @@ keep operator actions out of autocomplete. `submitTx` still accepts the full
 
 #### Order and cancel lists
 
-`PlaceOrders` (0x35), `CancelOrders` (0x36) and `CancelClientOrders` (0x37)
+`PlaceOrders` (0x01), `CancelOrders` (0x02) and `CancelClientOrders` (0x18)
 carry 1 to `MAX_LIST_ENTRIES` (100) entries for one account under one
 signature, like Hyperliquid's `order` and `cancel`. A `PlaceOrders` entry is a
 limit order, or a market order with `kind: "market"` (optional `worstPrice`
