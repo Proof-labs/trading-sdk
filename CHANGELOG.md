@@ -49,16 +49,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **proof-wire pin.** It moves from the `v12.0.0` release commit `27ac6ac` to
-  wire `dev` at `b5e2121`, proof-wire 12.1.0 as mirrored from exchange `dev`
-  at `b459eccd1`, still pinned by commit. No release tag carries that commit
-  yet; the pin moves to the tag of the exchange release that publishes it.
+  the `v12.2.0` release commit `1f42398`, published with exchange 2.27.0.
   No existing action bytes change, and every existing row of
   `conformance/codec.ndjson` regenerates unchanged. The commit also carries
   wire changes the SDK does not name yet: error codes 136 to 143, the
   `ReduceOnlyNoPosition` refusal on code 35, the `WorkCap` enum, the
   `UserMarketLeverage` view and the wider meaning of
-  `PositionUpdated.realized_pnl`. The Rust crate re-exports proof-wire 12.1.0
-  types: `AdminAction` and `ExecError` gain variants, and `query_v2::Market`
+  `PositionUpdated.realized_pnl`, and the `oracle_price_certified`,
+  `oracle_price_uncertified` and `oracle_policy_activated` events. The Rust
+  crate re-exports proof-wire 12.2.0 types: `AdminAction`, `ExecError` and
+  `Event` gain variants, and `query_v2::Market`
   gains a field, so an exhaustive `match` or a struct literal of them no
   longer compiles. The next `proof-trading-sdk` crate release is MAJOR; the
   npm package and the Python distribution only add names, so this change
