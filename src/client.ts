@@ -33,6 +33,7 @@ import { FeedSubscriptionError, GatewayHttpError } from "./errors.js";
 import {
   decodeCashFlowEvents,
   decodeHistoryPositionsPage,
+  historyInterval,
   historyOwner,
   historySearchParams,
 } from "./history.js";
@@ -2299,6 +2300,7 @@ export class ExchangeClient {
       fromMs?: number;
       toMs?: number;
       limit?: number;
+      interval?: string;
     },
   ): Promise<HistoryPositionSnapshot[]> {
     const page = await this.queryHistoryPositionsPage(addressHex, opts);
@@ -2314,7 +2316,17 @@ export class ExchangeClient {
   }
 
   /** Gateway/indexer snapshots, newest first. Preserve filters when passing an
-   * opaque nextCursor back in opts.cursor. Null close fields stay null. */
+   * opaque nextCursor back in opts.cursor. Null close fields stay null.
+   *
+   * `interval` (`15m`, `1h`, `1d`, ...: the values `/v1/portfolio` takes)
+   * serves, per market, the last snapshot in each epoch-aligned bucket of
+   * `[fromMs, toMs)`; a bucket in which a market has no snapshot has no row for
+   * it. Widths are at most 365 days. With an interval, `toMs` defaults to now
+   * and `fromMs` to 24 hours before it; without one there is no default window.
+   * The server rejects more than 5,000 whole bucket widths with `invalid_interval`.
+   * Keep the interval and filters with each cursor; explicit bounds prevent
+   * the default window moving between pages. The cursor pins the first page's
+   * snapshot height. Row shape and newest-first ordering are unchanged. */
   async queryHistoryPositionsPage(
     addressHex?: string,
     opts: {
@@ -2323,6 +2335,7 @@ export class ExchangeClient {
       toMs?: number;
       limit?: number;
       cursor?: string;
+      interval?: string;
     } = {},
   ): Promise<HistoryPositionsPage> {
     const hex = addressHex ?? this.addressHex;
@@ -2338,6 +2351,8 @@ export class ExchangeClient {
         throw new Error("Invalid history market");
       params.set("market", String(opts.market));
     }
+    if (opts.interval !== undefined)
+      params.set("interval", historyInterval(opts.interval));
     const query = params.toString();
     const json = await this.apiJson(
       `${this.gatewayUrl}/v1/history/positions/${owner}${query ? `?${query}` : ""}`,
