@@ -303,26 +303,6 @@ mod exec_error_meaning_tests {
         assert_eq!(ExecError::NotAdminSigner.code(), 53);
     }
 
-    /// A quorum `UpdateMarketFees` whose market's settings sequence moved:
-    /// the code, name and meaning the wire gives it.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn market_settings_changed_code_155_decodes_as_the_wire_names_it() {
-        let refusal = ExecError::MarketSettingsChanged {
-            market: 1,
-            predecessor: MarketSettingsSequence(0),
-            stored: MarketSettingsSequence(1),
-        };
-        assert_eq!(refusal.code(), 155);
-        let kind = decode_exec_error_kind(155, None).unwrap();
-        assert_eq!(
-            kind,
-            DecodedExecErrorKind::Known(ErrorKind::MarketSettingsChanged)
-        );
-        assert_eq!(kind.name(), "MarketSettingsChanged");
-        assert_eq!(kind.meaning(), refusal.meaning());
-    }
-
     #[test]
     #[allow(clippy::unwrap_used)]
     fn transitional_code_50_requires_the_canonical_log() {
@@ -603,10 +583,11 @@ mod exec_error_meaning_tests {
         }
     }
 
-    /// Both reduce-only refusals decode to code 35, and codes 136-142 decode
-    /// to their own kinds; each kind carries the wire's code and meaning.
+    /// Both reduce-only refusals decode to code 35, and codes 136-142 and 155
+    /// decode to their own kinds; each kind carries the wire's code and
+    /// meaning.
     #[test]
-    fn reduce_only_refusals_and_codes_136_to_142_match_the_wire() {
+    fn reduce_only_refusals_and_codes_136_to_142_and_155_match_the_wire() {
         let pairs = [
             (
                 ExecError::ReduceOnlyWouldIncrease,
@@ -654,13 +635,26 @@ mod exec_error_meaning_tests {
                 },
                 ErrorKind::WorkCapReached,
             ),
+            (
+                ExecError::MarketSettingsChanged {
+                    market: 1,
+                    predecessor: MarketSettingsSequence(0),
+                    stored: MarketSettingsSequence(1),
+                },
+                ErrorKind::MarketSettingsChanged,
+            ),
         ];
         for (e, kind) in pairs {
             assert_eq!(ErrorKind::from_code(e.code()), Some(kind));
+            assert_eq!(
+                decode_exec_error_kind(e.code(), None),
+                Some(DecodedExecErrorKind::Known(kind))
+            );
             assert_eq!(kind.meaning(), e.meaning());
         }
         assert_eq!(ErrorKind::ReduceOnlyRefused.code(), 35);
         assert_eq!(ErrorKind::WorkCapReached.code(), 142);
+        assert_eq!(ErrorKind::MarketSettingsChanged.code(), 155);
         assert_eq!(ErrorKind::from_code(143), None);
     }
 
