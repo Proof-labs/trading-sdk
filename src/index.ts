@@ -538,6 +538,13 @@ export type {
   PortfolioHistoryPage,
 } from "./portfolio-history.js";
 export {
+  DEPOSIT_ADDRESS_ERROR_CODES,
+  DEPOSIT_ADDRESS_TIMEOUT_MS,
+  isDepositAddressErrorCode,
+  type DepositAddressErrorCode,
+  type DepositAddressReady,
+} from "./deposit-address.js";
+export {
   queryOraclePriceHistoryPage,
   type OraclePriceHistoryPoint,
   type OraclePriceHistoryPage,

@@ -60,8 +60,24 @@ import {
   type MarketView,
   type EventView,
   type MarketsSnapshotView,
+  DEPOSIT_ADDRESS_TIMEOUT_MS,
+  type DepositAddressErrorCode,
+  type DepositAddressReady,
 } from "./index.js";
 import type { OpenLabel } from "./types.js";
+
+it("exports the deposit address types", () => {
+  const ready: DepositAddressReady = {
+    status: "ready",
+    address: "9DEvTpg7J8BsrESCVrpP9FnBEEKXpC8MauxarCApCAyz",
+    tokenAccount: "8MJF87ivAaBfc7yHkBztbGWyBgaAYTMFPrUdfcFfPQk6",
+    createdAt: null,
+  };
+  const code: DepositAddressErrorCode = "Paused";
+  expect(ready.status).toBe("ready");
+  expect(code).toBe("Paused");
+  expect(DEPOSIT_ADDRESS_TIMEOUT_MS).toBe(20_000);
+});
 
 it("exports the version 2 markets snapshot types", () => {
   const listed: Pick<MarketView, "market" | "status"> = {
@@ -502,3 +518,20 @@ function decodedAdminActionsNarrowWithoutCasts(
   }
 }
 void decodedAdminActionsNarrowWithoutCasts;
+
+describe("public barrel: deposit address errors", () => {
+  it("keeps GatewayHttpError as on dev, with no subclass or retry option", () => {
+    const e = new barrel.GatewayHttpError(
+      429,
+      new Response(null, { status: 429 }),
+      "RateLimited",
+    );
+    expect(e.errorCode).toBe("RateLimited");
+    expect("retryAfterMs" in e).toBe(false);
+    expect("MAX_RETRY_AFTER_MS" in barrel).toBe(false);
+    expect("DepositAddressError" in barrel).toBe(false);
+    expect(barrel.DEPOSIT_ADDRESS_ERROR_CODES).toHaveLength(5);
+    expect(barrel.isDepositAddressErrorCode("Unavailable")).toBe(true);
+    expect(barrel.isDepositAddressErrorCode("Paused")).toBe(true);
+  });
+});
