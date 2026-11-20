@@ -1626,7 +1626,10 @@ class ExchangeClient:
         ``interval`` (``"15m"``, ``"1h"``, ``"1d"``, ...: the values ``/v1/portfolio``
         takes) serves, per market, the last snapshot in each epoch-aligned bucket; a
         bucket in which a market has no snapshot has no row for it. Rows, order and
-        cursor are unchanged; pass the same ``interval`` with every page.
+        cursor are unchanged; pass the same ``interval`` with every page. A bucketed
+        read is always windowed, and this method sends no ``from``/``to``, so it covers
+        the 24 hours before now, not all history. The indexer refuses an interval over 365 days, or a window
+        of more than 5,000 buckets, with ``invalid_interval``.
         """
         owner_hex = canonical_owner(owner)
         if interval is not None and (

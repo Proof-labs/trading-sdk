@@ -993,12 +993,14 @@ impl InfoClient {
     /// market, the last snapshot in each epoch-aligned bucket of
     /// `[from_ms, to_ms)`. A bucket in which a market has no snapshot has no
     /// row for it. Rows, order and cursor are as without it; continue with the
-    /// same `interval`.
+    /// same `interval`. Without `from_ms`/`to_ms` the window is the 24 hours
+    /// before now, not all history.
     ///
     /// # Errors
     ///
-    /// As [`position_history`](Self::position_history); an interval the
-    /// indexer refuses is [`Error::Http`] carrying `invalid_interval`.
+    /// As [`position_history`](Self::position_history); an interval over 365
+    /// days, or a window of more than 5,000 buckets, is [`Error::Http`]
+    /// carrying `invalid_interval`.
     pub async fn position_history_by_interval(
         &self,
         owner: Address,

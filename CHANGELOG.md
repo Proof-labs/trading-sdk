@@ -14,12 +14,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `/v1/portfolio` takes: a positive count and `s`, `m`, `h` or `d`, e.g.
   `15m`). With it the indexer serves, per market, the last snapshot in each
   epoch-aligned bucket of `[from, to)`; rows, order and cursor are unchanged.
-  Omitted, the query string is unchanged. Needs an indexer with
-  Proof-labs/indexer#449; an older one refuses the parameter.
+  Without `from`/`to` a bucketed read covers the 24 hours before now, not all
+  history; the indexer refuses an interval over 365 days or a window of more
+  than 5,000 buckets (`invalid_interval`). Omitted, the query string is
+  unchanged. Needs an indexer with Proof-labs/indexer#449; an older one refuses
+  the parameter.
   - **TypeScript:** `interval?: string` on `queryHistoryPositionsPage` and
     `queryHistoryPositions`; a malformed value throws before fetching.
   - **Rust (`proof-sdk-rs`):** `InfoClient::position_history_by_interval(owner,
-&q, interval)` with `HistoryInterval` (`count` of `IntervalUnit`;
+    &q, interval)` with `HistoryInterval` (`count` of `IntervalUnit`;
     `FIFTEEN_MINUTES`, `ONE_HOUR`, `ONE_DAY`; a zero count is
     `Error::InvalidInput`).
   - **Python:** keyword `interval` on `ExchangeClient.history_positions`; a
