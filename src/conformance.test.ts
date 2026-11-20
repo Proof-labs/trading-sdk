@@ -361,42 +361,11 @@ function toAction(
           signer: bytes(input.signer),
         },
       };
-    case ActionType.UpdateMarketFees: {
-      const optNum = (v: unknown): number | null =>
-        v === null || v === undefined ? null : Number(big(v));
-      const optBig = (v: unknown): bigint | null =>
-        v === null || v === undefined ? null : big(v);
-      const optBool = (v: unknown): boolean | null =>
-        v === null || v === undefined ? null : Boolean(v);
-      const optBytes = (v: unknown): Uint8Array | null =>
-        v === null || v === undefined ? null : bytes(v);
-      const msMode = optNum(input.mark_source_mode);
+    case ActionType.UpdateMarketFees:
       return {
         type: "UpdateMarketFees",
-        data: {
-          market: input.market as number,
-          signer: bytes(input.signer),
-          takerFeeBps: optNum(input.taker_fee_bps),
-          makerFeeBps: optNum(input.maker_fee_bps),
-          maxFundingRateBps: optNum(input.max_funding_rate_bps),
-          fundingIntervalMs: optBig(input.funding_interval_ms),
-          maxPositionSize: optBig(input.max_position_size),
-          defaultTtlMs: optBig(input.default_ttl_ms),
-          netDeltaMargin: optBool(input.net_delta_margin),
-          tickSize: optBig(input.tick_size),
-          lotSize: optBig(input.lot_size),
-          primaryOracleSigner: optBytes(input.primary_oracle_signer),
-          oracleStalenessMs: optBig(input.oracle_staleness_ms),
-          markSourceMode: msMode === 0 || msMode === 1 ? msMode : null,
-          maxMarkSpreadBps: optNum(input.max_mark_spread_bps),
-          cexCompositeStalenessMs: optBig(input.cex_composite_staleness_ms),
-          feeTiers: input.fee_tiers == null ? null : (input.fee_tiers as any),
-          imBps: optNum(input.im_bps),
-          mmBps: optNum(input.mm_bps),
-          maxOpenInterest: optBig(input.max_open_interest),
-        },
+        data: { ...toMarketSettingsChange(input), signer: bytes(input.signer) },
       };
-    }
     case ActionType.SetUserMarketLeverage:
       return {
         type: "SetUserMarketLeverage",

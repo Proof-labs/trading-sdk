@@ -13,6 +13,7 @@ The Rust golden vectors are generated with the signing key ``[0x42; 32]``,
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import msgpack
@@ -93,7 +94,15 @@ class TestGoldenVectors:
         quorum = decoded["action"]["UpdateMarketFees"]
         assert quorum["predecessor"] == 0
         change = quorum["change"]
-        assert len(change) == 22
+        codec = Path(__file__).resolve().parents[2] / "conformance" / "codec.ndjson"
+        every_field = next(
+            json.loads(line)
+            for line in codec.read_text().splitlines()
+            if '"case":"propose_admin_action/update_market_fees"' in line
+        )
+        assert set(change) == set(
+            every_field["input"]["action"]["UpdateMarketFees"]["change"]
+        ), "every MarketSettingsChange field decodes, the unset ones as None"
         assert {k: v for k, v in change.items() if v is not None} == {
             "market": 1,
             "max_open_interest": 35_000,
