@@ -1276,8 +1276,9 @@ export type MarketSettingsChange = Omit<UpdateMarketFees, "signer">;
  *  proposed, and fails it with 155 at execution if another settings change
  *  landed in between. */
 export interface QuorumUpdateMarketFees {
-  /** The market's `MarketSettingsSequence` when proposed: `settingsSequence`
-   *  in the version 2 markets snapshot (`MarketView`). */
+  /** The market's settings sequence when proposed (`MarketSettingsSequence`
+   *  in proof-wire): `settingsSequence` in the version 2 markets snapshot
+   *  (`MarketView`). */
   predecessor: bigint;
   change: MarketSettingsChange;
 }
