@@ -252,3 +252,12 @@ body, byte for byte) that Proof-labs/deposit-address-service `tests/routes.rs` a
 api-gateway passes through. It is identical to api-gateway's
 `tests/fixtures/deposit-address.json`; the TypeScript runner is
 `src/deposit-address.test.ts`.
+
+`positions-history.json` is a synthetic two-page bucketed answer of
+`GET /v1/history/positions` (`interval=1h`): two markets tied on one block, a
+closed position with null side and entry price, an entry price above 2^53 and
+an opaque cursor. Its rows use the column set and `block_time DESC,
+block_height DESC, market DESC` order of Proof-labs/indexer
+`crates/server/src/positions.rs`. The TypeScript, Rust and Python runners are
+`src/client.history.test.ts`, `crates/proof-sdk-rs/tests/reads.rs` and
+`python/tests/test_history_rows.py`.
