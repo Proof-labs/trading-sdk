@@ -75,6 +75,23 @@ export function historySearchParams(opts: {
   return params;
 }
 
+/** A positions-history bucket width: a positive count and one unit, `s`, `m`,
+ * `h` or `d` (`15m`, `1h`, `1d`), at most 365 days. */
+export function historyInterval(value: string): string {
+  if (
+    typeof value !== "string" ||
+    !/^[0-9]+[smhd]$/.test(value) ||
+    value.trim() !== value ||
+    !/[1-9]/.test(value)
+  )
+    throw new Error("Invalid history interval");
+  const units = { s: 1, m: 60, h: 3600, d: 86400 };
+  const unit = value.slice(-1) as keyof typeof units;
+  const seconds = Number(value.slice(0, -1)) * units[unit];
+  if (seconds > 365 * 86400) throw new Error("Invalid history interval");
+  return value;
+}
+
 /** Current indexer page. Closed positions have no side or entry price. */
 export function decodeHistoryPositionsPage(
   value: unknown,
