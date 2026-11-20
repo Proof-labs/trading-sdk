@@ -90,7 +90,7 @@ define_error_kinds! {
     32  => SettlementPriceMismatch      ~ "Net-delta margin grouping found legs with disagreeing settle prices (data corruption across same underlying_market_id).",
     33  => OracleNotApplicable          ~ "The oracle action targets a conditional or prediction-binary book, which marks off its own trades and has no oracle layer.",
     34  => PostOnlyWouldCross           ~ "PlaceOrder with post_only=true would have crossed the book. Rejected so makers retain maker-side fills.",
-    35  => ReduceOnlyWouldIncrease      ~ "PlaceOrder/MarketOrder with reduce_only=true was same-side as the existing position (would increase exposure) or no position existed.",
+    35  => ReduceOnlyRefused            ~ "A reduce-only order has nothing to reduce: the account holds no position on the market, or the order is on the position's side and would increase exposure. The log names which.",
     // 36 was TestActionRejected, retired with RunFundingTick; never reassigned.
     // 37, 77, 82 and 97 are `ExecError::Unpriced`, one code per reason.
     37  => UnpricedStale                ~ "Oracle price is stale for this market; refresh the oracle before placing orders, reading margin, or liquidating.",
@@ -191,8 +191,15 @@ define_error_kinds! {
     133 => MarketBacksLiveEvent ~ "The perpetual backs a Conditional on an unresolved event and cannot wind down until the event resolves.",
     134 => MarketHalted ~ "The market is halted and takes no orders or fills; cancels still work.",
     135 => OffCurveWithdrawalDestination ~ "Withdrawal destination must be an on-curve Solana wallet owner; no funds were debited.",
+    136 => PositionEpochMismatch ~ "expected_position_epoch is not the position's current epoch: the position was reopened or flipped since it was read (a now-flat position is refused with 139 on set and 137 on cancel). Re-read the position and resubmit.",
+    137 => TriggerBracketNotFound ~ "The account has no stop-loss/take-profit bracket on this market, so there is nothing to cancel.",
+    138 => TriggerAlreadyCrossed ~ "A stop-loss or take-profit price is already crossed at placement and would fire at once: a long's stop must sit below the reference price and its take-profit above, a short's the reverse.",
+    139 => PositionNotFound ~ "The account holds no position on this market. A position opened by an order in the same block does not exist yet when triggers run; resubmit in a later block.",
+    140 => AccountPositionCapReached ~ "The account already holds positions on the maximum number of markets; close one before opening another.",
+    141 => SubAccountCapReached ~ "The master already owns the maximum number of sub-accounts; no sub-account was created.",
+    142 => WorkCapReached ~ "A chain-wide bound on consensus work is full (resting orders, live positions, markets or sub-accounts); the log names which. Retry once capacity frees.",
     155 => MarketSettingsChanged ~ "A quorum UpdateMarketFees names a settings sequence its market is not at, as when the settings changed after the proposal was made. Re-read the market's settings_sequence and propose the change again.",
-    255 => InternalError               ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
+    255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
 /// Classification of an engine result code plus its DeliverTx log. Code 50 is
@@ -400,6 +407,7 @@ mod exec_error_meaning_tests {
             ExecError::OracleNotApplicable { market: 0 },
             ExecError::PostOnlyWouldCross,
             ExecError::ReduceOnlyWouldIncrease,
+            ExecError::ReduceOnlyNoPosition,
             ExecError::FeeBpsOutOfRange { bps: 0 },
             ExecError::FeeOverrideStaleSeq {
                 cmd_seq: 0,
@@ -541,6 +549,23 @@ mod exec_error_meaning_tests {
             },
             ExecError::MarketHalted { market: 1 },
             ExecError::OffCurveWithdrawalDestination,
+            ExecError::PositionEpochMismatch {
+                market: 1,
+                expected: crate::types::PositionEpoch(1),
+                current: crate::types::PositionEpoch(2),
+            },
+            ExecError::TriggerBracketNotFound { market: 1 },
+            ExecError::TriggerAlreadyCrossed {
+                trigger_price: 1,
+                reference: 2,
+            },
+            ExecError::PositionNotFound { market: 1 },
+            ExecError::AccountPositionCapReached { max: 1 },
+            ExecError::SubAccountCapReached { max: 1 },
+            ExecError::WorkCapReached {
+                resource: crate::types::WorkCap::RestingOrdersGlobal,
+                limit: 1,
+            },
             ExecError::MarketSettingsChanged {
                 market: 1,
                 predecessor: MarketSettingsSequence(0),
@@ -574,6 +599,67 @@ mod exec_error_meaning_tests {
             );
             assert_eq!(kind.meaning(), e.meaning());
         }
+    }
+
+    /// Both reduce-only refusals decode to code 35, and codes 136-142 decode
+    /// to their own kinds; each kind carries the wire's code and meaning.
+    #[test]
+    fn reduce_only_refusals_and_codes_136_to_142_match_the_wire() {
+        let pairs = [
+            (
+                ExecError::ReduceOnlyWouldIncrease,
+                ErrorKind::ReduceOnlyRefused,
+            ),
+            (
+                ExecError::ReduceOnlyNoPosition,
+                ErrorKind::ReduceOnlyRefused,
+            ),
+            (
+                ExecError::PositionEpochMismatch {
+                    market: 1,
+                    expected: crate::types::PositionEpoch(1),
+                    current: crate::types::PositionEpoch(2),
+                },
+                ErrorKind::PositionEpochMismatch,
+            ),
+            (
+                ExecError::TriggerBracketNotFound { market: 1 },
+                ErrorKind::TriggerBracketNotFound,
+            ),
+            (
+                ExecError::TriggerAlreadyCrossed {
+                    trigger_price: 1,
+                    reference: 2,
+                },
+                ErrorKind::TriggerAlreadyCrossed,
+            ),
+            (
+                ExecError::PositionNotFound { market: 1 },
+                ErrorKind::PositionNotFound,
+            ),
+            (
+                ExecError::AccountPositionCapReached { max: 1 },
+                ErrorKind::AccountPositionCapReached,
+            ),
+            (
+                ExecError::SubAccountCapReached { max: 1 },
+                ErrorKind::SubAccountCapReached,
+            ),
+            (
+                ExecError::WorkCapReached {
+                    resource: crate::types::WorkCap::LivePositionRows,
+                    limit: 1,
+                },
+                ErrorKind::WorkCapReached,
+            ),
+        ];
+        for (e, kind) in pairs {
+            assert_eq!(ErrorKind::from_code(e.code()), Some(kind));
+            assert_eq!(kind.meaning(), e.meaning());
+        }
+        assert_eq!(ErrorKind::ReduceOnlyRefused.code(), 35);
+        assert_eq!(ErrorKind::WorkCapReached.code(), 142);
+        assert_eq!(ErrorKind::from_code(143), None);
     }
 
     /// Every code returned by `code()` must have a non-empty `meaning()`.
@@ -617,7 +703,7 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=135)
+        let expected: Vec<u32> = (1u32..=142)
             .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127))
             .chain([155, 255])
             .collect();

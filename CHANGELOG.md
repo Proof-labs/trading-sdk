@@ -42,27 +42,42 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   market, and the `predecessor` a quorum `UpdateMarketFees` names. It reads 0
   for a market with none, and from a node that does not serve the field. In
   Rust it is `settings_sequence` on proof-wire's `query_v2::Market`.
-- Error code 155 `MarketSettingsChanged` (proof-wire 12.1.0): a quorum
+- Error code 155 `MarketSettingsChanged` (proof-wire 12.2.0): a quorum
   `UpdateMarketFees` names a settings sequence its market is not at. Named in
   Rust, TypeScript and Python.
+- Error codes 136-142 (proof-wire 12.2.0), named in
+  Rust, TypeScript and Python: 136 `PositionEpochMismatch`, 137 `TriggerBracketNotFound`, 138
+  `TriggerAlreadyCrossed`, 139 `PositionNotFound`, 140
+  `AccountPositionCapReached`, 141 `SubAccountCapReached` and 142
+  `WorkCapReached`, each with the engine's meaning text.
 
 ### Changed
 
-- **proof-wire pin.** It moves from the `v12.0.0` release commit `27ac6ac` to
-  the `v12.2.0` release commit `1f42398`, published with exchange 2.27.0.
-  No existing action bytes change, and every existing row of
-  `conformance/codec.ndjson` regenerates unchanged. The commit also carries
-  wire changes the SDK does not name yet: error codes 136 to 143, the
-  `ReduceOnlyNoPosition` refusal on code 35, the `WorkCap` enum, the
-  `UserMarketLeverage` view and the wider meaning of
-  `PositionUpdated.realized_pnl`, and the `oracle_price_certified`,
-  `oracle_price_uncertified` and `oracle_policy_activated` events. The Rust
-  crate re-exports proof-wire 12.2.0 types: `AdminAction`, `ExecError` and
-  `Event` gain variants, and `query_v2::Market`
-  gains a field, so an exhaustive `match` or a struct literal of them no
-  longer compiles. The next `proof-trading-sdk` crate release is MAJOR; the
-  npm package and the Python distribution only add names, so this change
-  alone is MINOR for them.
+- **Breaking (TypeScript npm MAJOR, Python MAJOR, Rust core MAJOR,
+  `proof-sdk-rs` MAJOR):** error code 35 is renamed from
+  `ReduceOnlyWouldIncrease` to `ReduceOnlyRefused` (`ErrorKind::ReduceOnlyRefused`,
+  also re-exported by `proof-sdk-rs`, `ExecErrorCode.ReduceOnlyRefused`, and
+  the name `get_error_name(35)` returns).
+  The engine now refuses a reduce-only order with code 35 both when it would
+  increase exposure (`ExecError::ReduceOnlyWouldIncrease`) and when the account
+  holds no position on the market (`ExecError::ReduceOnlyNoPosition`); the log
+  names which. The trigger outcome reason `ReduceOnlyWouldIncrease` keeps its
+  name.
+- The Rust core pins proof-wire 12.2.0 (tag `v12.2.0`), the wire of exchange
+  2.27.0. Besides codes 136-142, `ReduceOnlyNoPosition` and the admin
+  quorum's `UpdateMarketFees` above, it carries wire changes the SDK does not
+  name yet: error code 143, the `UserMarketLeverage` view, and the
+  `oracle_price_certified`, `oracle_price_uncertified` and
+  `oracle_policy_activated` events. No existing bytes change, and every
+  existing row of `conformance/codec.ndjson` regenerates unchanged. The Rust
+  crate re-exports proof-wire's types: `AdminAction`, `ExecError` and `Event`
+  gain variants and `query_v2::Market` gains a field, so an exhaustive `match`
+  or a struct literal of them no longer compiles, and the next
+  `proof-trading-sdk` crate release is MAJOR.
+  `PositionUpdated.realizedPnl` now also carries the gross PnL of a partial
+  close and of an insurance-fund takeover netting; its closed funding debt
+  stays in `FundingSettled`. Do not add it to PnL derived from
+  `TradeExecuted`.
 
 ## [13.2.0] — 2026-11-20
 
