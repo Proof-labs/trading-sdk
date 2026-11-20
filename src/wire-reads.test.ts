@@ -2,6 +2,7 @@
 // vector is `rmp_serde::to_vec` of the wire type, as the engine serves it.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { encode } from "@msgpack/msgpack";
 import { ExchangeClient } from "./client.js";
 import { decodeSigningMessage, encodePayloadBytes } from "./codec.js";
 import { signingMessage } from "./crypto.js";
@@ -172,16 +173,18 @@ describe("queryAccount", () => {
   });
 });
 
-describe("SetOperatorReceiptRegistry operatorKeys", () => {
+describe("SetOperatorReceiptRegistry operatorKeys + operatorOwners", () => {
   const value = {
     deploymentId: new Uint8Array(32).fill(0xcd),
     epoch: 1n,
     threshold: 1,
     operatorKeys: [new Uint8Array(32).fill(0xb8)],
+    operatorOwners: [new Uint8Array(20).fill(0x77)],
   };
 
   it("decodes on the proposal read", () => {
     const keys = Array.from(value.operatorKeys[0]);
+    const owners = Array.from(value.operatorOwners[0]);
     expect(
       decodeAdminAction({
         SetOperatorReceiptRegistry: [
@@ -189,6 +192,7 @@ describe("SetOperatorReceiptRegistry operatorKeys", () => {
           1,
           1,
           [keys],
+          [owners],
         ],
       }),
     ).toEqual({ kind: "SetOperatorReceiptRegistry", value });
@@ -196,6 +200,7 @@ describe("SetOperatorReceiptRegistry operatorKeys", () => {
 
   it("refuses an unreachable threshold on read and encode", () => {
     const keys = Array.from(value.operatorKeys[0]);
+    const owners = Array.from(value.operatorOwners[0]);
     expect(() =>
       decodeAdminAction({
         SetOperatorReceiptRegistry: [
@@ -203,6 +208,7 @@ describe("SetOperatorReceiptRegistry operatorKeys", () => {
           1,
           0,
           [keys],
+          [owners],
         ],
       }),
     ).toThrow(/threshold 0 is outside 1..=1/);
@@ -241,6 +247,162 @@ describe("SetOperatorReceiptRegistry operatorKeys", () => {
     expect(decoded.decodeError).toBeNull();
     expect(decoded.action?.data).toMatchObject({
       action: { kind: "SetOperatorReceiptRegistry", value },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Wire-13 bridge custody reads (`/v2/bridge/*`), serialized from the current
+// query_v2 view shapes.
+const wire = (value: unknown) => Buffer.from(encode(value, { useBigInt64: true })).toString("hex");
+const BRIDGE_STATUS = wire("Paused");
+const BRIDGE_STATUS_MINIMAL = wire("Active");
+const BRIDGE_REGISTRY = wire({
+  deployment_id: new Uint8Array(32).fill(0xa1), epoch: 3n, threshold: 2,
+  members: [
+    { key: new Uint8Array(32).fill(0x11), owner: new Uint8Array(20).fill(0x55) },
+    { key: new Uint8Array(32).fill(0x22), owner: null },
+  ],
+});
+const WITHDRAW_VOTE_1 = {
+  voter: new Uint8Array(32).fill(0x11), registry_epoch: 3n, dead: false,
+  vault: new Uint8Array(32).fill(0xa2), squads_transaction_index: 7,
+  signature: new Uint8Array(64).fill(0x77),
+};
+const WITHDRAW_VOTE_2 = {
+  ...WITHDRAW_VOTE_1, voter: new Uint8Array(32).fill(0x22), dead: true,
+  signature: new Uint8Array(64).fill(0x88),
+};
+const PENDING_WITHDRAWALS = wire({
+  rows: [{
+    withdrawal: {
+      withdrawal_id: 103n, owner: new Uint8Array(20).fill(0xab), amount: 5_000_000n,
+      solana_destination: new Uint8Array(32).fill(0xcd), status: "pending", request_height: 42n,
+    },
+    lease: { holder: new Uint8Array(20).fill(0x55), acquired_height: 43n, expires_at_height: 143n },
+    payout: { holder: new Uint8Array(20).fill(0x55), vault: new Uint8Array(32).fill(0xa2),
+      squads_transaction_index: 7, registry_epoch: 3n },
+    votes: [WITHDRAW_VOTE_1, WITHDRAW_VOTE_2],
+  }], next_cursor: 104n,
+});
+const PENDING_WITHDRAWALS_EXHAUSTED = wire({ rows: [], next_cursor: null });
+const PENDING_DEPOSITS = wire({
+  rows: [{
+    solana_tx_sig: new Uint8Array(64).fill(0x99),
+    locator: { top_index: 2, inner_index: 5 },
+    votes: [{ voter: new Uint8Array(32).fill(0x11), registry_epoch: 3n,
+      owner: new Uint8Array(20).fill(0x66), amount_micro_usdc: 1_000_000n,
+      signature: new Uint8Array(64).fill(0x77) }],
+  }], next_cursor: new Uint8Array([0xde, 0xad, 0xbe, 0xef]),
+});
+const PENDING_DEPOSITS_EXHAUSTED = wire({ rows: [], next_cursor: null });
+
+describe("queryBridgeStatus", () => {
+  it("decodes the governance view", async () => {
+    serve(BRIDGE_STATUS);
+    expect(await client().queryBridgeStatus()).toBe("Paused");
+  });
+
+  it("leaves ungoverned fields absent", async () => {
+    serve(BRIDGE_STATUS_MINIMAL);
+    expect(await client().queryBridgeStatus()).toBe("Active");
+  });
+});
+
+describe("queryBridgeRegistry", () => {
+  it("decodes the roster, tolerating a pre-12 member with no owner", async () => {
+    serve(BRIDGE_REGISTRY);
+    expect(await client().queryBridgeRegistry()).toEqual({
+      deploymentId: new Uint8Array(32).fill(0xa1),
+      epoch: 3n,
+      threshold: 2,
+      members: [
+        {
+          key: new Uint8Array(32).fill(0x11),
+          owner: new Uint8Array(20).fill(0x55),
+        },
+        { key: new Uint8Array(32).fill(0x22), owner: undefined },
+      ],
+    });
+  });
+});
+
+describe("queryPendingWithdrawals", () => {
+  it("decodes one page with lease, payout report and votes", async () => {
+    serve(PENDING_WITHDRAWALS);
+    expect(await client().queryPendingWithdrawals()).toEqual({
+      rows: [
+        {
+          withdrawal: {
+            id: 103n,
+            owner: new Uint8Array(20).fill(0xab),
+            amount: 5_000_000n,
+            solanaDestination: new Uint8Array(32).fill(0xcd),
+            status: "Pending",
+            requestHeight: 42n,
+          },
+          lease: {
+            holder: new Uint8Array(20).fill(0x55),
+            acquiredHeight: 43n,
+            expiresAtHeight: 143n,
+          },
+          payout: {
+            holder: new Uint8Array(20).fill(0x55),
+            vault: new Uint8Array(32).fill(0xa2),
+            squadsTransactionIndex: 7,
+            registryEpoch: 3n,
+          },
+          votes: [
+            { voter: new Uint8Array(32).fill(0x11), signature: new Uint8Array(64).fill(0x77),
+              registryEpoch: 3n, dead: false, vault: new Uint8Array(32).fill(0xa2), squadsTransactionIndex: 7 },
+            { voter: new Uint8Array(32).fill(0x22), signature: new Uint8Array(64).fill(0x88),
+              registryEpoch: 3n, dead: true, vault: new Uint8Array(32).fill(0xa2), squadsTransactionIndex: 7 },
+          ],
+        },
+      ],
+      nextCursor: 104n,
+    });
+  });
+
+  it("decodes the exhausted page", async () => {
+    serve(PENDING_WITHDRAWALS_EXHAUSTED);
+    expect(await client().queryPendingWithdrawals()).toEqual({
+      rows: [],
+      nextCursor: null,
+    });
+  });
+});
+
+describe("queryPendingDeposits", () => {
+  it("decodes one page and surfaces the opaque cursor as hex", async () => {
+    serve(PENDING_DEPOSITS);
+    expect(await client().queryPendingDeposits()).toEqual({
+      rows: [
+        {
+          solanaTxSig: new Uint8Array(64).fill(0x99),
+          locator: { topIndex: 2, innerIndex: 5 },
+          votes: [
+            {
+              voter: new Uint8Array(32).fill(0x11),
+              registryEpoch: 3n,
+              owner: new Uint8Array(20).fill(0x66),
+              amountMicroUsdc: 1_000_000n,
+              signature: new Uint8Array(64).fill(0x77),
+            },
+          ],
+        },
+      ],
+      // The raw store-key bytes, hex-encoded exactly as the route serves
+      // them — an opaque token to pass back verbatim.
+      nextCursor: "deadbeef",
+    });
+  });
+
+  it("decodes the exhausted page", async () => {
+    serve(PENDING_DEPOSITS_EXHAUSTED);
+    expect(await client().queryPendingDeposits()).toEqual({
+      rows: [],
+      nextCursor: null,
     });
   });
 });

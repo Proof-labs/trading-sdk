@@ -84,8 +84,9 @@ def engine_default_create_market() -> dict:
 
 
 def engine_v2_attach() -> dict:
-    """Mirrors the engine's attach fixture: event 91's conditional on perp 15,
-    books from 9100, the open-interest trailer at its zero default."""
+    """Mirrors the engine's attach fixture (the wire's v2 golden vectors):
+    event 91's conditional on perp 15, books from 9100, the open-interest
+    trailer at its zero default and DEC-293's impact notional at 1e6 µUSDC."""
     return {
         "event_id": 91,
         "underlying_market": 15,
@@ -97,6 +98,7 @@ def engine_v2_attach() -> dict:
         "maker_fee_bps": 2,
         "signer": bytes(20),
         "max_open_interest": 0,
+        "impact_notional": 1_000_000_000,
     }
 
 

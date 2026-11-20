@@ -10,8 +10,9 @@ import {
 const report: RecordWithdrawalPayout = {
   withdrawalId: (1n << 64n) - 1n,
   holder: new Uint8Array(20).fill(5),
-  solanaSignature: Uint8Array.from({ length: 64 }, (_, i) => i),
-  lastValidBlockHeight: (1n << 64n) - 1n,
+  vault: Uint8Array.from({ length: 32 }, (_, i) => i),
+  squadsTransactionIndex: 4294967295,
+  registryEpoch: (1n << 64n) - 1n,
 };
 
 // Pinned once in conformance/codec.ndjson, shared with Rust and Python.
@@ -43,32 +44,21 @@ describe("RecordWithdrawalPayout contract", () => {
     expect(peekActionType(signed)).toBe(0x31);
   });
 
-  it.each([63, 65])("refuses a %i-byte signature", (length) => {
+  it.each([31, 33])("refuses a %i-byte vault", (length) => {
     expect(() =>
       encodePayloadBytes({
         type: "RecordWithdrawalPayout",
-        data: { ...report, solanaSignature: new Uint8Array(length) },
+        data: { ...report, vault: new Uint8Array(length) },
       }),
-    ).toThrow(/expected 64 raw Solana signature bytes/);
+    ).toThrow(/32 bytes/);
   });
 
-  it.each([null, undefined])("requires the transfer expiry (%s)", (expiry) => {
+  it.each([null, undefined])("requires the registry epoch (%s)", (epoch) => {
     expect(() =>
       encodePayloadBytes({
         type: "RecordWithdrawalPayout",
-        data: { ...report, lastValidBlockHeight: expiry as unknown as bigint },
+        data: { ...report, registryEpoch: epoch as unknown as bigint },
       }),
-    ).toThrow(/last_valid_block_height|u64/);
-  });
-
-  // The wire field is NonZeroU64: an expiry of 0 would make the transfer look
-  // expired at once to peer watchers.
-  it("refuses a zero transfer expiry", () => {
-    expect(() =>
-      encodePayloadBytes({
-        type: "RecordWithdrawalPayout",
-        data: { ...report, lastValidBlockHeight: 0n },
-      }),
-    ).toThrow(/nonzero/);
+    ).toThrow(/registry_epoch|u64/);
   });
 });

@@ -217,10 +217,14 @@ class TestErrors:
         assert pts.EngineError(67, "").name == "EmergencyRateLimited"
 
     def test_off_curve_withdrawal_destination_code_135(self):
-        # proof-wire 12.0.0: a withdrawal to an off-curve Solana destination.
+        # proof-wire 13.0.0: a withdrawal to an off-curve Solana destination.
         assert pts.get_error_name(135) == "OffCurveWithdrawalDestination"
         assert pts.EngineError(135, "").name == "OffCurveWithdrawalDestination"
-        assert pts.get_error_name(136) is None
+        assert pts.get_error_name(136) == "PositionEpochMismatch"
+        assert pts.get_error_name(143) == "UserImAboveNotional"
+        assert pts.get_error_name(144) == "BridgePaused"
+        assert pts.get_error_name(154) == "PayoutRecordedForAnotherWithdrawal"
+        assert pts.get_error_name(155) is None
 
     def test_transitional_code_50_uses_delivertx_log(self):
         oi = "open interest limit exceeded on market 7: would be 4, cap 3"

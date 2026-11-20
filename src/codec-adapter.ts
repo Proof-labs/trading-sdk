@@ -21,12 +21,22 @@ import {
   type ActionTypeValue,
   type AdminAction,
   type EmergencyAction,
+  type BridgeStatus,
+  type BridgeVote,
+  type DepositLocator,
   type EventInfo,
   type EventOracleSource,
   type EventStatus,
   type MarketConfig,
   type MarketKind,
   type MarketsSnapshot,
+  type OperatorMember,
+  type OperatorRegistry,
+  type PendingDeposit,
+  type PendingDepositObservation,
+  type PendingDepositPage,
+  type PendingWithdrawal,
+  type PendingWithdrawalPage,
   type PositionInfo,
   type PriceComparison,
   type RetiredTriggerMarketConfig,
@@ -40,6 +50,8 @@ import {
   type SetOperatorReceiptRegistry,
   type SettleEvent,
   type VoidEvent,
+  type WithdrawalPayoutReport,
+  type WithdrawalRecord,
 } from "./types.js";
 import {
   validateFundInsuranceFund,
@@ -225,7 +237,9 @@ function validateVoidEvent(action: VoidEvent): void {
   }
 }
 
-/** The quorum must be reachable: `1..=operatorKeys.length`. */
+/** The quorum must be reachable and every owner a real address: threshold
+ *  in `1..=operatorKeys.length`, `operatorOwners` the same length as
+ *  `operatorKeys` (index-for-index) and all non-zero. */
 function validateSetOperatorReceiptRegistry(
   registry: SetOperatorReceiptRegistry,
 ): void {
@@ -233,6 +247,29 @@ function validateSetOperatorReceiptRegistry(
   if (registry.threshold < 1 || registry.threshold > n) {
     throw new Error(
       `setOperatorReceiptRegistry threshold ${registry.threshold} is outside 1..=${n}`,
+    );
+  }
+  if (registry.operatorOwners.length !== n) {
+    throw new Error(
+      `setOperatorReceiptRegistry operatorOwners length ${registry.operatorOwners.length} must equal operatorKeys length ${n}`,
+    );
+  }
+  const seenOwners = new Set<string>();
+  for (const [index, owner] of registry.operatorOwners.entries()) {
+    const key = Array.from(owner, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (seenOwners.has(key)) {
+      throw new Error(
+        `setOperatorReceiptRegistry operatorOwners[${index}] duplicates an earlier owner`,
+      );
+    }
+    seenOwners.add(key);
+  }
+  const zero = registry.operatorOwners.findIndex(
+    (owner) => !owner.some((byte) => byte !== 0),
+  );
+  if (zero !== -1) {
+    throw new Error(
+      `setOperatorReceiptRegistry operatorOwners[${zero}] is the zero address`,
     );
   }
 }
@@ -419,20 +456,18 @@ const BYTE_FIELDS = new Set([
   "signer",
   "solanaDestination",
   "solanaTxSig",
+  "vault",
   // Governance signer/commitment fields (20- or 32-byte).
   "proposer",
   "approver",
   "rejecter",
   "contentHash",
-  // Receipt-proof bitmap (raw `Vec<u8>` on the wire → number[] on decode).
-  // The receipt's own byte fields decode as `Uint8Array` (newtype
-  // serialize_bytes) and hit the early `instanceof Uint8Array` return, so only
-  // the bare-Vec bitmap needs naming here; `signatures` (a Vec of byte arrays)
-  // has its own special case below.
-  "signerBitmap",
-  // AuthorizeWithdrawal's 221-byte `WithdrawalAuthorizationV1` bytes — the
-  // same bare-Vec class as the bitmap.
-  "authorization",
+  // Vote-action byte fields (VoteWithdrawalPaid.deploymentId/chainId and
+  // VoteDeposit.deploymentId/chainId ride the same names).
+  "deploymentId",
+  "chainId",
+  // Vote signatures (raw Vec<u8> on the wire → number[] on decode).
+  "signature",
   "evidenceDigest",
   "bundle",
 ]);
@@ -519,14 +554,16 @@ function fromWasmValue(camelKey: string, value: unknown): unknown {
     return governanceActionFromWasm(value);
   }
   // `newMembers` (UpdateAdminSignerRegistry), `add`/`remove`
-  // (UpdateAuthoritySet) and `operatorKeys` (SetOperatorReceiptRegistry) are
-  // each a list of fixed-width byte strings; convert every element to a
-  // Uint8Array, unlike the single-value BYTE_FIELDS above.
+  // (UpdateAuthoritySet), `operatorKeys` and `operatorOwners`
+  // (SetOperatorReceiptRegistry) are each a list of fixed-width byte
+  // strings; convert every element to a Uint8Array, unlike the
+  // single-value BYTE_FIELDS above.
   if (
     (camelKey === "newMembers" ||
       camelKey === "add" ||
       camelKey === "remove" ||
-      camelKey === "operatorKeys") &&
+      camelKey === "operatorKeys" ||
+      camelKey === "operatorOwners") &&
     Array.isArray(value)
   ) {
     return value.map((m) =>
@@ -799,6 +836,145 @@ export function marketsSnapshotFromWasm(v: unknown): MarketsSnapshot {
   return snapshot;
 }
 
+// ---------------------------------------------------------------------------
+// Bridge custody reads (wire 13, `/v2/bridge/*`): the Rust core has decoded
+// the `query_v2` views; these only rename fields and lift `Option`s.
+// ---------------------------------------------------------------------------
+
+const optionalBytes = (v: unknown): Uint8Array | undefined =>
+  v == null ? undefined : bytesOf(v);
+
+/** The `/v2/bridge/status` governance view. */
+export function bridgeStatusFromWasm(v: unknown): BridgeStatus {
+  if (v === "Active" || v === "Paused" || v === "WithdrawalsFull") return v;
+  throw new Error(`unknown bridge status: ${String(v)}`);
+}
+
+function memberFromWasm(m: WasmRecord): OperatorMember {
+  const member: OperatorMember = { key: bytesOf(m.key) };
+  const owner = optionalBytes(m.owner);
+  if (owner) member.owner = owner;
+  return member;
+}
+
+/** The `/v2/bridge/registry[/{epoch}]` roster. */
+export function bridgeRegistryFromWasm(v: unknown): OperatorRegistry {
+  const s = v as WasmRecord;
+  return {
+    deploymentId: bytesOf(s.deployment_id),
+    epoch: s.epoch as bigint,
+    threshold: s.threshold as number,
+    members: (s.members as WasmRecord[]).map(memberFromWasm),
+  };
+}
+
+function bridgeVoteFromWasm(v: WasmRecord): BridgeVote {
+  return {
+    voter: bytesOf(v.voter),
+    signature: bytesOf(v.signature),
+    registryEpoch: v.registry_epoch as bigint,
+    dead: v.dead as boolean,
+    vault: bytesOf(v.vault),
+    squadsTransactionIndex: v.squads_transaction_index as number,
+  };
+}
+
+/// The v2 views spell the withdrawal status in snake_case (`"pending"`),
+/// unlike the v1 record's title-case serde default; map it onto the shared
+/// TS union, loudly.
+function withdrawalStatusFromWasm(v: unknown): WithdrawalRecord["status"] {
+  switch (v) {
+    case "pending":
+      return "Pending";
+    case "completed":
+      return "Completed";
+    case "failed":
+      return "Failed";
+    case "unknown":
+      return "Unknown";
+    default:
+      throw new Error(`unknown withdrawal status: ${JSON.stringify(v)}`);
+  }
+}
+
+function withdrawalFromWasm(w: WasmRecord): WithdrawalRecord {
+  return {
+    id: w.withdrawal_id as bigint,
+    owner: bytesOf(w.owner),
+    amount: w.amount as bigint,
+    solanaDestination: bytesOf(w.solana_destination),
+    status: withdrawalStatusFromWasm(w.status),
+    requestHeight: w.request_height as bigint,
+  };
+}
+
+function payoutReportFromWasm(r: WasmRecord): WithdrawalPayoutReport {
+  return {
+    holder: bytesOf(r.holder),
+    vault: bytesOf(r.vault),
+    squadsTransactionIndex: r.squads_transaction_index as number,
+    registryEpoch: r.registry_epoch as bigint,
+  };
+}
+
+function pendingWithdrawalFromWasm(w: WasmRecord): PendingWithdrawal {
+  const row: PendingWithdrawal = {
+    withdrawal: withdrawalFromWasm(w.withdrawal as WasmRecord),
+    votes: (w.votes as WasmRecord[]).map(bridgeVoteFromWasm),
+  };
+  if (w.lease != null) {
+    const l = w.lease as WasmRecord;
+    row.lease = {
+      holder: bytesOf(l.holder),
+      acquiredHeight: l.acquired_height as bigint,
+      expiresAtHeight: l.expires_at_height as bigint,
+    };
+  }
+  if (w.payout != null) {
+    row.payout = payoutReportFromWasm(w.payout as WasmRecord);
+  }
+  return row;
+}
+
+/** One `/v2/bridge/pending-withdrawals` page; `next_cursor` is a u64
+ *  (absent once exhausted). */
+export function pendingWithdrawalsFromWasm(v: unknown): PendingWithdrawalPage {
+  const p = v as WasmRecord;
+  return {
+    rows: (p.rows as WasmRecord[]).map(pendingWithdrawalFromWasm),
+    nextCursor: (p.next_cursor as bigint | undefined) ?? null,
+  };
+}
+
+function pendingDepositFromWasm(d: WasmRecord): PendingDeposit {
+  return {
+    solanaTxSig: bytesOf(d.solana_tx_sig),
+    locator: d.locator == null ? null : {
+      topIndex: (d.locator as WasmRecord).top_index as number,
+      innerIndex: ((d.locator as WasmRecord).inner_index as number | undefined) ?? null,
+    },
+    votes: (d.votes as WasmRecord[]).map((raw) => ({
+      voter: bytesOf(raw.voter),
+      registryEpoch: raw.registry_epoch as bigint,
+      owner: bytesOf(raw.owner),
+      amountMicroUsdc: raw.amount_micro_usdc as bigint,
+      signature: bytesOf(raw.signature),
+    })),
+  };
+}
+
+/** One `/v2/bridge/pending-deposits` page; `next_cursor` is the OPAQUE
+ *  resumption token the route hands back (hex-encoded store key) — pass it
+ *  back verbatim, never parse it. */
+export function pendingDepositsFromWasm(v: unknown): PendingDepositPage {
+  const p = v as WasmRecord;
+  return {
+    rows: (p.rows as WasmRecord[]).map(pendingDepositFromWasm),
+    nextCursor: (p.next_cursor as unknown[] | undefined)
+      ? bytesToHex(bytesOf(p.next_cursor))
+      : null,
+  };
+}
 /** The engine's names, keyed by the version 2 view's spelling of them. */
 const VIEW_MARKET_STATUSES: ReadonlyMap<unknown, MarketStatus> = new Map([
   ["trading", "Trading"],

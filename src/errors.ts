@@ -129,8 +129,10 @@ export enum ExecErrorCode {
   AdminActionRequiresProposal = 70,
   InvalidAdminRegistry = 71,
   BridgeReceiptRegistryInactive = 72,
-  BridgeReceiptInvalid = 73,
-  BridgeReceiptMismatch = 74,
+  // 73 and 74 were BridgeReceiptInvalid / BridgeReceiptMismatch, retired
+  // with the receipt actions in wire 12 (registry members vote
+  // VoteWithdrawalPaid / VoteDeposit instead of assembling a quorum
+  // proof); never reassigned.
   WithdrawalBelowMinimum = 75,
   WithdrawalTerminalGated = 76,
   /** The block has no certified oracle-policy verdict for the market, so a
@@ -194,6 +196,36 @@ export enum ExecErrorCode {
   MarketBacksLiveEvent = 133,
   MarketHalted = 134,
   OffCurveWithdrawalDestination = 135,
+  PositionEpochMismatch = 136,
+  TriggerBracketNotFound = 137,
+  TriggerAlreadyCrossed = 138,
+  PositionNotFound = 139,
+  AccountPositionCapReached = 140,
+  SubAccountCapReached = 141,
+  WorkCapReached = 142,
+  UserImAboveNotional = 143,
+  /** The bridge is paused by the admin quorum; claims, payout reports and
+   *  bridge votes refuse until UnpauseBridge clears the flag. */
+  BridgePaused = 144,
+  /** A bridge vote conflicts with the votes already recorded for its item:
+   *  a different registry epoch, or a different observation for a transfer
+   *  that already has votes. */
+  BridgeVoteConflict = 145,
+  /** A bridge vote failed verification: bad signature, or a vote naming a
+   *  non-current registry epoch. */
+  BridgeVoteInvalid = 146,
+  /** The submitter is not a member of the operator receipt registry's
+   *  owner roster. */
+  BridgeUnauthorizedOperator = 147,
+  /** A payout report failed its binding checks: wrong vault, non-current
+   *  epoch, or the lease does not name the submitter. */
+  BridgePayoutReportInvalid = 148,
+  PendingWithdrawalsFull = 149,
+  WithdrawalPayoutSlotOccupied = 150,
+  DepositReceiptLimitExceeded = 151,
+  PayoutLeaseLimitReached = 152,
+  OwnerPendingWithdrawalsFull = 153,
+  PayoutRecordedForAnotherWithdrawal = 154,
   InternalError = 255,
 }
 
@@ -461,16 +493,8 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "receipt-gated withdrawal action while no operator receipt registry exists; the path fails closed",
   },
-  73: {
-    name: "BridgeReceiptInvalid",
-    description:
-      "operator quorum proof failed verification (structure, member count or signature)",
-  },
-  74: {
-    name: "BridgeReceiptMismatch",
-    description:
-      "signed receipt does not bind to this withdrawal or deployment; the log names the field",
-  },
+  // 73 and 74 were BridgeReceiptInvalid / BridgeReceiptMismatch, retired
+  // with the receipt actions in wire 12; never reassigned.
   75: {
     name: "WithdrawalBelowMinimum",
     description:
@@ -680,6 +704,45 @@ const TABLE: Record<number, ExecErrorInfo> = {
     description:
       "Withdrawal destination must be an on-curve Solana wallet owner; no funds were debited.",
   },
+  136: { name: "PositionEpochMismatch", description: "position epoch changed; re-read before retrying" },
+  137: { name: "TriggerBracketNotFound", description: "no trigger bracket exists on this market" },
+  138: { name: "TriggerAlreadyCrossed", description: "trigger price is already crossed" },
+  139: { name: "PositionNotFound", description: "account has no position on this market" },
+  140: { name: "AccountPositionCapReached", description: "account position-market cap reached" },
+  141: { name: "SubAccountCapReached", description: "master sub-account cap reached" },
+  142: { name: "WorkCapReached", description: "consensus work capacity reached" },
+  143: { name: "UserImAboveNotional", description: "user initial margin exceeds 10000 bps" },
+  144: {
+    name: "BridgePaused",
+    description:
+      "The bridge is paused by the admin quorum; claims, payout reports and bridge votes refuse until UnpauseBridge clears the flag.",
+  },
+  145: {
+    name: "BridgeVoteConflict",
+    description:
+      "A bridge vote conflicts with the votes already recorded for its item: a different registry epoch, or a different observation for a transfer that already has votes.",
+  },
+  146: {
+    name: "BridgeVoteInvalid",
+    description:
+      "A bridge vote failed verification: bad signature, or a vote naming a non-current registry epoch.",
+  },
+  147: {
+    name: "BridgeUnauthorizedOperator",
+    description:
+      "The submitter is not a member of the operator receipt registry's owner roster.",
+  },
+  148: {
+    name: "BridgePayoutReportInvalid",
+    description:
+      "A payout report failed its binding checks: wrong vault, non-current epoch, or the lease does not name the submitter.",
+  },
+  149: { name: "PendingWithdrawalsFull", description: "pending withdrawal capacity reached" },
+  150: { name: "WithdrawalPayoutSlotOccupied", description: "withdrawal already has an unsettled payout" },
+  151: { name: "DepositReceiptLimitExceeded", description: "deposit vote exceeds the receipt limit" },
+  152: { name: "PayoutLeaseLimitReached", description: "holder payout lease capacity reached" },
+  153: { name: "OwnerPendingWithdrawalsFull", description: "owner pending withdrawal capacity reached" },
+  154: { name: "PayoutRecordedForAnotherWithdrawal", description: "payout is bound to another withdrawal" },
   255: { name: "InternalError", description: "unexpected runtime failure" },
 };
 

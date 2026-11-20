@@ -92,6 +92,16 @@ pub enum ReadKind {
     Account = 3,
     /// One `AdminAction`, as stored on a proposal.
     AdminAction = 4,
+    /// The bridge's governance state (`/v2/bridge/status`).
+    BridgeStatus = 8,
+    /// The operator registry at one epoch (`/v2/bridge/registry[/{epoch}]`).
+    BridgeRegistry = 9,
+    /// One page of pending withdrawals with their leases, payout reports
+    /// and Paid votes (`/v2/bridge/pending-withdrawals`).
+    PendingWithdrawals = 10,
+    /// One page of pending deposits with their voted readings
+    /// (`/v2/bridge/pending-deposits`).
+    PendingDeposits = 11,
     /// `query_v2::AuthorizedAgents`, a current bounded map-encoded grant list.
     AuthorizedAgents = 5,
     /// `query_v2::InsuranceFundDirectory` (`GET /v2/insurance-funds?witness=1`).
@@ -146,6 +156,15 @@ pub fn decode_read(kind: ReadKind, bytes: &[u8]) -> Result<JsValue, JsError> {
         ),
         ReadKind::Account => decode_records::<core_sdk::query::AccountInfo>(bytes, &ACCOUNT_INFO),
         ReadKind::AdminAction => decode_as::<governance::AdminAction>(bytes),
+        // The bridge views are v2 named-map encodes
+        // (`query_v2::encode`), so a field a later engine appends is skipped
+        // by the map decode — no shape cut needed.
+        ReadKind::BridgeStatus => decode_as::<core_sdk::query_v2::BridgeStatus>(bytes),
+        ReadKind::BridgeRegistry => decode_as::<core_sdk::query_v2::OperatorRegistry>(bytes),
+        ReadKind::PendingWithdrawals => {
+            decode_as::<core_sdk::query_v2::PendingWithdrawalPage>(bytes)
+        }
+        ReadKind::PendingDeposits => decode_as::<core_sdk::query_v2::PendingDepositPage>(bytes),
         ReadKind::AuthorizedAgents => {
             if !matches!(bytes.first(), Some(0x80..=0x8f | 0xde | 0xdf)) {
                 return Err(JsError::new("authorized agents must be a MessagePack map"));
@@ -275,6 +294,93 @@ pub fn signing_message(
     Ok(crypto::signing_message(&cid, action_type, seq, payload))
 }
 
+/// Canonical registry-member signature preimage for a Paid withdrawal vote.
+#[wasm_bindgen]
+pub fn vote_withdrawal_paid_message(
+    withdrawal_id: u64,
+    vault: &[u8],
+    squads_transaction_index: u32,
+    deployment_id: &[u8],
+    chain_id: &[u8],
+    registry_epoch: u64,
+) -> Result<Vec<u8>, JsError> {
+    let vote = core_sdk::types::VoteWithdrawalPaid {
+        withdrawal_id,
+        vault: arr32(vault, "vault")?,
+        squads_transaction_index,
+        deployment_id: arr32(deployment_id, "deployment_id")?,
+        chain_id: arr32(chain_id, "chain_id")?,
+        registry_epoch,
+        signature: Vec::new(),
+    };
+    Ok(vote.vote_message())
+}
+
+/// Canonical registry-member signature preimage for a dead-payout vote.
+#[wasm_bindgen]
+pub fn vote_withdrawal_payout_dead_message(
+    withdrawal_id: u64,
+    vault: &[u8],
+    squads_transaction_index: u32,
+    deployment_id: &[u8],
+    chain_id: &[u8],
+    registry_epoch: u64,
+) -> Result<Vec<u8>, JsError> {
+    let vote = core_sdk::types::VoteWithdrawalPayoutDead {
+        withdrawal_id,
+        vault: arr32(vault, "vault")?,
+        squads_transaction_index,
+        deployment_id: arr32(deployment_id, "deployment_id")?,
+        chain_id: arr32(chain_id, "chain_id")?,
+        registry_epoch,
+        signature: Vec::new(),
+    };
+    Ok(vote.vote_message())
+}
+
+/// Canonical registry-member signature preimage for an observed deposit vote.
+#[wasm_bindgen]
+pub fn vote_deposit_message(
+    owner: &[u8],
+    amount_micro_usdc: u64,
+    solana_tx_sig: &[u8],
+    top_index: u16,
+    inner_index: i32,
+    deployment_id: &[u8],
+    chain_id: &[u8],
+    registry_epoch: u64,
+) -> Result<Vec<u8>, JsError> {
+    let locator = if inner_index == -1 && top_index == 0 {
+        None
+    } else if inner_index == -1 {
+        Some(core_sdk::types::DepositLocator {
+            top_index,
+            inner_index: None,
+        })
+    } else if (0..=u16::MAX as i32).contains(&inner_index) {
+        Some(core_sdk::types::DepositLocator {
+            top_index,
+            inner_index: Some(inner_index as u16),
+        })
+    } else {
+        return Err(JsError::new("inner_index must be -1 or a u16"));
+    };
+    let signature = arr64(solana_tx_sig, "solana_tx_sig")?;
+    let vote = core_sdk::types::VoteDeposit {
+        owner: owner
+            .try_into()
+            .map_err(|_| JsError::new("owner must be exactly 20 bytes"))?,
+        amount_micro_usdc,
+        solana_tx_sig: signature.to_vec(),
+        locator,
+        deployment_id: arr32(deployment_id, "deployment_id")?,
+        chain_id: arr32(chain_id, "chain_id")?,
+        registry_epoch,
+        signature: Vec::new(),
+    };
+    Ok(vote.vote_message())
+}
+
 /// Assemble a signed wire envelope from a pre-computed pubkey + signature.
 #[wasm_bindgen]
 pub fn encode_signed_tx(
@@ -361,18 +467,18 @@ pub fn chain_id_from_string(chain_id: &str) -> Vec<u8> {
 
 // --- bridge canonical custody payloads --------------------------------------
 //
-// The deposit/withdrawal custody path signs fixed-layout payloads from the
-// wire contract's `bridge` module (`proof_wire::bridge`): a 221-byte
+// The withdrawal authorization signs a fixed-layout payload from the wire
+// contract's `bridge` module (`proof_wire::bridge`): a 221-byte
 // `WithdrawalAuthorizationV1` whose SHA-256 the engine binds to the
-// withdrawal, and a 327-byte `BridgeReceiptV1` the operator quorum signs and
-// the engine re-encodes before verifying that quorum. Calling its `encode()`
-// makes the bytes the engine's by construction; `src/bridge.test.ts` pins
-// the marshalling with frozen vectors.
+// withdrawal. Calling its `encode()` makes the bytes the engine's by
+// construction; `src/bridge.test.ts` pins the marshalling with frozen
+// vectors. (The receipt-era `encode_bridge_receipt` binding retired with
+// wire 13: registry members now sign the canonical vote message from the
+// core's `bridge_votes` helpers, and no action carries receipt bytes.)
 
 use proof_trading_sdk::bridge::{
-    BridgeReceiptV1, DeploymentId, MicroUsdc, ProofOwner, ReceiptQuorumKind, RegistryEpoch,
-    RustCrypto, Slot, SolanaPubkey, TerminalState, TxSignature, UnixSeconds, VaultTier,
-    WithdrawalAuthorizationV1, WithdrawalId,
+    DeploymentId, MicroUsdc, ProofOwner, RegistryEpoch, RustCrypto, Slot, SolanaPubkey,
+    UnixSeconds, VaultTier, WithdrawalAuthorizationV1, WithdrawalId,
 };
 use serde::Deserialize;
 
@@ -386,15 +492,6 @@ fn arr20(bytes: &[u8], what: &str) -> Result<[u8; 20], JsError> {
 /// must not encode here.
 fn vault_tier(wire: u8) -> Result<VaultTier, JsError> {
     VaultTier::from_wire(wire).map_err(|e| JsError::new(&format!("vaultTier: {e:?}")))
-}
-
-fn terminal_state(wire: u8) -> Result<TerminalState, JsError> {
-    TerminalState::from_wire(wire).map_err(|e| JsError::new(&format!("terminalState: {e:?}")))
-}
-
-fn receipt_quorum_kind(wire: u8) -> Result<ReceiptQuorumKind, JsError> {
-    ReceiptQuorumKind::from_wire(wire)
-        .map_err(|e| JsError::new(&format!("receiptQuorumKind: {e:?}")))
 }
 
 /// JS-side field names (camelCase) so an error names the field the caller
@@ -455,75 +552,10 @@ pub fn encode_withdrawal_authorization(fields: JsValue) -> Result<Vec<u8>, JsErr
 }
 
 /// `SHA256(canonical bytes)` — the authorization identity the engine binds
-/// to a withdrawal and every terminal receipt must repeat. Same input shape
-/// as [`encode_withdrawal_authorization`].
+/// to a withdrawal. Same input shape as [`encode_withdrawal_authorization`].
 #[wasm_bindgen]
 pub fn withdrawal_authorization_digest(fields: JsValue) -> Result<Vec<u8>, JsError> {
     let input: WithdrawalAuthorizationInput = serde_wasm_bindgen::from_value(fields)?;
     let auth = WithdrawalAuthorizationV1::try_from(input)?;
     Ok(auth.digest::<RustCrypto>().to_vec())
-}
-
-/// JS-side mirror of the wire `BridgeWithdrawalReceipt` (camelCase).
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct BridgeReceiptInput {
-    deployment_id: Vec<u8>,
-    authorization_digest: Vec<u8>,
-    withdrawal_id: u64,
-    terminal_state: u8,
-    vault_tier: u8,
-    proof_owner: Vec<u8>,
-    destination_owner: Vec<u8>,
-    destination_token_acct: Vec<u8>,
-    amount_micro_usdc: u64,
-    fee_micro_usdc: u64,
-    authorization_signer_epoch: u64,
-    solana_tx_signature: Vec<u8>,
-    finalized_slot: u64,
-    finalized_blockhash: Vec<u8>,
-    receipt_quorum_kind: u8,
-    receipt_authority_epoch: u64,
-}
-
-impl TryFrom<BridgeReceiptInput> for BridgeReceiptV1 {
-    type Error = JsError;
-
-    fn try_from(i: BridgeReceiptInput) -> Result<Self, Self::Error> {
-        Ok(Self {
-            deployment_id: DeploymentId::new(arr32(&i.deployment_id, "deploymentId")?),
-            authorization_digest: arr32(&i.authorization_digest, "authorizationDigest")?,
-            withdrawal_id: WithdrawalId::new(i.withdrawal_id),
-            terminal_state: terminal_state(i.terminal_state)?,
-            vault_tier: vault_tier(i.vault_tier)?,
-            proof_owner: ProofOwner::new(arr20(&i.proof_owner, "proofOwner")?),
-            destination_owner: SolanaPubkey::new(arr32(&i.destination_owner, "destinationOwner")?),
-            destination_token_acct: SolanaPubkey::new(arr32(
-                &i.destination_token_acct,
-                "destinationTokenAcct",
-            )?),
-            amount_micro_usdc: MicroUsdc::new(i.amount_micro_usdc),
-            fee_micro_usdc: MicroUsdc::new(i.fee_micro_usdc),
-            authorization_signer_epoch: RegistryEpoch::new(i.authorization_signer_epoch),
-            solana_tx_signature: TxSignature::new(arr64(
-                &i.solana_tx_signature,
-                "solanaTxSignature",
-            )?),
-            finalized_slot: Slot::new(i.finalized_slot),
-            finalized_blockhash: arr32(&i.finalized_blockhash, "finalizedBlockhash")?,
-            receipt_quorum_kind: receipt_quorum_kind(i.receipt_quorum_kind)?,
-            receipt_authority_epoch: RegistryEpoch::new(i.receipt_authority_epoch),
-        })
-    }
-}
-
-/// The canonical 327-byte `BridgeReceiptV1` — the message the operator
-/// quorum signs and the engine re-encodes from the submitted fields before
-/// verifying that quorum. `fields` is a JS object with the camelCase field
-/// names of the TS `BridgeWithdrawalReceipt`.
-#[wasm_bindgen]
-pub fn encode_bridge_receipt(fields: JsValue) -> Result<Vec<u8>, JsError> {
-    let input: BridgeReceiptInput = serde_wasm_bindgen::from_value(fields)?;
-    let receipt = BridgeReceiptV1::try_from(input)?;
-    Ok(receipt.encode().to_vec())
 }

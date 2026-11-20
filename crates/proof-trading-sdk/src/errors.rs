@@ -134,8 +134,10 @@ define_error_kinds! {
     71  => InvalidAdminRegistry             ~ "Proposed signer roster violates the registry invariants (threshold bounds, sorted unique members, roster size, version headroom).",
     // Operator-custody withdrawals (receipt-gated terminals).
     72  => BridgeReceiptRegistryInactive    ~ "A receipt-gated withdrawal action was submitted while no operator receipt registry exists on this chain; the operator custody phase is inactive and the path fails closed.",
-    73  => BridgeReceiptInvalid             ~ "The operator quorum proof failed verification: bad structure, fewer distinct members than the threshold, or an invalid signature.",
-    74  => BridgeReceiptMismatch            ~ "The signed receipt does not bind to this withdrawal or deployment (id, owner, amount, destination, epoch or terminal state differs); the log names the field.",
+    // 73 and 74 were BridgeReceiptInvalid / BridgeReceiptMismatch, retired
+    // with the receipt actions in wire 12 (registry members vote
+    // VoteWithdrawalPaid / VoteDeposit instead of assembling a quorum
+    // proof); never reassigned.
     75  => WithdrawalBelowMinimum           ~ "The net withdrawal amount is below the effective minimum (the configured minimum, floored at the flat fee): the payout would be worth less than it costs to settle.",
     76  => WithdrawalTerminalGated          ~ "A retired legacy relayer terminal (ConfirmWithdrawal / FailWithdrawal) was submitted at or above the receipt cutover; rejected as a normal failed action.",
     77  => UnpricedNoVerdict                ~ "The oracle policy has no certified verdict for this market in this block (stale, unpriceable, or not yet committed); mark-dependent actions are refused until a later block certifies a price.",
@@ -153,7 +155,6 @@ define_error_kinds! {
     // (sub-accounts are always on); never reassigned.
     91  => WithdrawalPayoutLeaseActive      ~ "A live Solana payout lease on this withdrawal is held by a different watcher, so this ClaimWithdrawalPayout is rejected; the rejected claimer must not sign a payout.",
     128 => WithdrawalPayoutLeaseNotHeld     ~ "The withdrawal's payout lease is not held by the submitter, so the payout-signature report is rejected; acquire the lease with a payout claim first.",
-    129 => WithdrawalPayoutRecordLimitReached ~ "The withdrawal's payout-signature record limit is reached; the rejected payout must not be broadcast.",
     // Events and attached conditionals.
     92  => EventAlreadyExists               ~ "CreateEvent for an event id already in the registry.",
     93  => EventNotFound                    ~ "No event exists under this id: nothing can attach to it, resolve it or read it.",
@@ -191,6 +192,25 @@ define_error_kinds! {
     133 => MarketBacksLiveEvent ~ "The perpetual backs a Conditional on an unresolved event and cannot wind down until the event resolves.",
     134 => MarketHalted ~ "The market is halted and takes no orders or fills; cancels still work.",
     135 => OffCurveWithdrawalDestination ~ "Withdrawal destination must be an on-curve Solana wallet owner; no funds were debited.",
+    136 => PositionEpochMismatch       ~ "Expected position epoch is not the position's current epoch; re-read the position and resubmit.",
+    137 => TriggerBracketNotFound      ~ "The account has no stop-loss/take-profit bracket on this market, so there is nothing to cancel.",
+    138 => TriggerAlreadyCrossed       ~ "A stop-loss or take-profit price is already crossed at placement and would fire at once.",
+    139 => PositionNotFound            ~ "The account holds no position on this market; a position opened in this block is not available to trigger management until a later block.",
+    140 => AccountPositionCapReached   ~ "The account already holds positions on the maximum number of markets; close one before opening another.",
+    141 => SubAccountCapReached         ~ "The master already owns the maximum number of sub-accounts; no sub-account was created.",
+    142 => WorkCapReached               ~ "A chain-wide bound on consensus work is full; the log names the resource. Retry once capacity frees.",
+    143 => UserImAboveNotional          ~ "User-selected initial margin is above 10000 bps (below 1x leverage).",
+    144 => BridgePaused                 ~ "The bridge is paused by the admin quorum; claims, payout reports and bridge votes refuse until UnpauseBridge clears the flag.",
+    145 => BridgeVoteConflict           ~ "A bridge vote conflicts with the votes already recorded for its item: a different registry epoch, or a different observation for a transfer that already has votes.",
+    146 => BridgeVoteInvalid            ~ "A bridge vote failed verification: bad signature, or a vote naming a non-current registry epoch.",
+    147 => BridgeUnauthorizedOperator   ~ "The submitter is not a member of the operator receipt registry's owner roster.",
+    148 => BridgePayoutReportInvalid    ~ "A payout report failed its binding checks: wrong vault, non-current epoch, or the lease does not name the submitter.",
+    149 => PendingWithdrawalsFull       ~ "The pending withdrawal set is full; the request was refused before any debit.",
+    150 => WithdrawalPayoutSlotOccupied ~ "The withdrawal already has a recorded payout; a new one needs the recorded payout voted dead first.",
+    151 => DepositReceiptLimitExceeded  ~ "The vote-credited deposit exceeds the per-deposit or rolling-window limit; it remains pending until capacity returns.",
+    152 => PayoutLeaseLimitReached      ~ "The claimer already holds the maximum number of open payout leases; settle or release one first.",
+    153 => OwnerPendingWithdrawalsFull  ~ "The owner already holds the maximum number of pending withdrawals; retry once one settles.",
+    154 => PayoutRecordedForAnotherWithdrawal ~ "The Squads payout is already recorded for another withdrawal; one payout settles one withdrawal.",
     255 => InternalError                ~ "Catch-all for unexpected runtime failures (panics caught by the FFI boundary, etc.). Treat as a server bug.",
 }
 
@@ -505,7 +525,6 @@ mod exec_error_meaning_tests {
                 budget: 1,
             },
             ExecError::WithdrawalPayoutLeaseNotHeld,
-            ExecError::WithdrawalPayoutRecordLimitReached,
             ExecError::MarketReduceOnly { market: 1 },
             ExecError::MarketDelisted { market: 1 },
             ExecError::MarketStatusTransitionRefused {
@@ -518,6 +537,11 @@ mod exec_error_meaning_tests {
                 event_id: crate::types::EventId(0),
             },
             ExecError::MarketHalted { market: 1 },
+            ExecError::BridgePaused,
+            ExecError::BridgeVoteConflict("e".into()),
+            ExecError::BridgeVoteInvalid("e".into()),
+            ExecError::BridgeUnauthorizedOperator,
+            ExecError::BridgePayoutReportInvalid("e".into()),
             ExecError::OffCurveWithdrawalDestination,
         ]
     }
@@ -579,10 +603,10 @@ mod exec_error_meaning_tests {
     /// Every engine code must be covered by the public error manifest, with
     /// the holes the wire itself carries: 24, 25 and 31 (the retired
     /// impact-market family), 30, 36 and 41 (retired with OracleUpdate and
-    /// RunFundingTick), 78-81 (reserved for oracle errors), 90 (the retired
+    /// RunFundingTick), 73 and 74 (retired with the receipt actions in wire
+    /// 13), 78-81 (reserved for oracle errors), 90 (the retired
     /// sub-account switch), 101 (unassigned), 112 (the retired PLP
-    /// configuration), 117-122 and 126-127 (claimed elsewhere, unassigned on the
-    /// wire).
+    /// configuration), 117-122, 126-127 and 129 (unassigned on the wire).
     /// Catches the case where a code is reserved by the mirrored engine error
     /// enum but no SDK classification maps to it.
     #[test]
@@ -590,8 +614,8 @@ mod exec_error_meaning_tests {
         let mut codes: Vec<u32> = ERROR_KINDS.iter().map(|kind| kind.code()).collect();
         codes.sort();
         codes.dedup();
-        let expected: Vec<u32> = (1u32..=135)
-            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127))
+        let expected: Vec<u32> = (1u32..=154)
+            .filter(|c| !matches!(c, 24 | 25 | 30 | 31 | 36 | 41 | 73 | 74 | 78..=81 | 90 | 101 | 112 | 117..=122 | 126..=127 | 129))
             .chain(std::iter::once(255))
             .collect();
         assert_eq!(

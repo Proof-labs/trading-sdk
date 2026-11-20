@@ -308,9 +308,7 @@ pub enum SubmissionOutcome<R = ()> {
         log: String,
     },
     /// Broadcast or possibly in flight with no verdict yet; reconcile by hash.
-    Pending {
-        hash: TxHash,
-    },
+    Pending { hash: TxHash },
     /// The gateway refused this attempt before admitting it.
     ///
     /// This covers this attempt only. It does not prove that an earlier
@@ -318,10 +316,7 @@ pub enum SubmissionOutcome<R = ()> {
     /// `committed_receipt` before re-signing. With
     /// `submit_signed_bytes_with_evidence` the cause is a classified
     /// [`PreAdmissionRefusal`].
-    RejectedBeforeAdmission {
-        hash: TxHash,
-        refusal: R,
-    },
+    RejectedBeforeAdmission { hash: TxHash, refusal: R },
 }
 /// The result of one `POST /exchange`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -780,7 +775,12 @@ impl GatewayClient {
             };
             let has_hash = read.tx_hash.is_some();
             let SubmitRead {
-                status, code, height, log, events, ..
+                status,
+                code,
+                height,
+                log,
+                events,
+                ..
             } = read;
             let outcome = match (status.as_str(), code, height) {
                 ("refused", None, None) if !has_hash => match R::classify(&body.bytes) {

@@ -34,6 +34,10 @@ export interface WasmCore {
     readonly Event: number;
     readonly Account: number;
     readonly AdminAction: number;
+    readonly BridgeStatus: number;
+    readonly BridgeRegistry: number;
+    readonly PendingWithdrawals: number;
+    readonly PendingDeposits: number;
     readonly AuthorizedAgents: number;
     readonly InsuranceFundDirectory: number;
     readonly InsuranceFundState: number;
@@ -59,6 +63,19 @@ export interface WasmCore {
     actionType: number,
     seq: bigint,
     payload: Uint8Array,
+  ): Uint8Array;
+  vote_withdrawal_paid_message(
+    withdrawalId: bigint, vault: Uint8Array, squadsTransactionIndex: number,
+    deploymentId: Uint8Array, chainId: Uint8Array, registryEpoch: bigint,
+  ): Uint8Array;
+  vote_withdrawal_payout_dead_message(
+    withdrawalId: bigint, vault: Uint8Array, squadsTransactionIndex: number,
+    deploymentId: Uint8Array, chainId: Uint8Array, registryEpoch: bigint,
+  ): Uint8Array;
+  vote_deposit_message(
+    owner: Uint8Array, amountMicroUsdc: bigint, solanaTxSig: Uint8Array,
+    topIndex: number, innerIndex: number, deploymentId: Uint8Array,
+    chainId: Uint8Array, registryEpoch: bigint,
   ): Uint8Array;
   encode_signed_tx(
     actionType: number,
@@ -91,8 +108,6 @@ export interface WasmCore {
   encode_withdrawal_authorization(fields: unknown): Uint8Array;
   /** Bridge v1 `SHA256(canonical authorization)` — the identity the engine binds. */
   withdrawal_authorization_digest(fields: unknown): Uint8Array;
-  /** Bridge v1 canonical 327-byte `BridgeReceiptV1` — the operator-quorum signed message. */
-  encode_bridge_receipt(fields: unknown): Uint8Array;
 }
 
 let cached: WasmCore | null = null;

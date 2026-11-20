@@ -365,6 +365,8 @@ describe("decodeAdminAction", () => {
         makerFeeBps: 2,
         signer: new Uint8Array(20),
         maxOpenInterest: 0n,
+        // The wire-12 tail, at its serde default in the frozen bytes.
+        impactNotional: 1_000_000_000n,
       },
     });
   });

@@ -43,6 +43,74 @@ fn codec_vectors() {
 }
 
 #[test]
+fn bridge_vote_preimages_match_shared_vectors() {
+    for line in lines("vote-preimages.ndjson") {
+        let row: serde_json::Value = serde_json::from_str(&line).expect("parse vote preimage");
+        let hex_field = |name: &str| -> Vec<u8> {
+            hex::decode(row[name].as_str().expect("hex string field"))
+                .expect("valid vote preimage hex")
+        };
+        let message = match row["case"].as_str().expect("case string") {
+            "withdrawal_paid" => proof_trading_sdk::types::VoteWithdrawalPaid {
+                withdrawal_id: row["withdrawal_id"].as_u64().expect("withdrawal id"),
+                vault: hex_field("vault").try_into().expect("vault is 32 bytes"),
+                squads_transaction_index: row["squads_transaction_index"]
+                    .as_u64()
+                    .expect("transaction index") as u32,
+                deployment_id: hex_field("deployment_id")
+                    .try_into()
+                    .expect("deployment id is 32 bytes"),
+                chain_id: hex_field("chain_id")
+                    .try_into()
+                    .expect("chain id is 32 bytes"),
+                registry_epoch: row["registry_epoch"].as_u64().expect("registry epoch"),
+                signature: Vec::new(),
+            }
+            .vote_message(),
+            "withdrawal_payout_dead" => proof_trading_sdk::types::VoteWithdrawalPayoutDead {
+                withdrawal_id: row["withdrawal_id"].as_u64().expect("withdrawal id"),
+                vault: hex_field("vault").try_into().expect("vault is 32 bytes"),
+                squads_transaction_index: row["squads_transaction_index"]
+                    .as_u64()
+                    .expect("transaction index") as u32,
+                deployment_id: hex_field("deployment_id")
+                    .try_into()
+                    .expect("deployment id is 32 bytes"),
+                chain_id: hex_field("chain_id")
+                    .try_into()
+                    .expect("chain id is 32 bytes"),
+                registry_epoch: row["registry_epoch"].as_u64().expect("registry epoch"),
+                signature: Vec::new(),
+            }
+            .vote_message(),
+            "deposit" => proof_trading_sdk::types::VoteDeposit {
+                owner: hex_field("owner").try_into().expect("owner is 20 bytes"),
+                amount_micro_usdc: row["amount_micro_usdc"].as_u64().expect("amount"),
+                solana_tx_sig: hex_field("solana_tx_sig"),
+                locator: Some(proof_trading_sdk::types::DepositLocator {
+                    top_index: row["top_index"].as_u64().expect("top index") as u16,
+                    inner_index: Some(row["inner_index"].as_u64().expect("inner index") as u16),
+                }),
+                deployment_id: hex_field("deployment_id")
+                    .try_into()
+                    .expect("deployment id is 32 bytes"),
+                chain_id: hex_field("chain_id")
+                    .try_into()
+                    .expect("chain id is 32 bytes"),
+                registry_epoch: row["registry_epoch"].as_u64().expect("registry epoch"),
+                signature: Vec::new(),
+            }
+            .vote_message(),
+            other => panic!("unknown vote preimage case {other}"),
+        };
+        assert_eq!(
+            hex::encode(message),
+            row["preimage_hex"].as_str().expect("expected hex")
+        );
+    }
+}
+
+#[test]
 fn signing_vectors() {
     let cases = lines(cv::SIGNING_FILE);
     assert!(!cases.is_empty(), "no signing vectors");

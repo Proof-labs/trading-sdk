@@ -9,6 +9,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Bridge vote SDK (wire 13):** paid-withdrawal votes now bind the recorded
+  Squads vault and transaction index; `VoteWithdrawalPayoutDead` is supported
+  alongside deposit votes. Rust, TypeScript/WASM and Python expose canonical
+  preimage signing, with shared engine-generated vectors.
+- **Bridge reads (wire 13):** status decoding is the strict
+  `Active | Paused | WithdrawalsFull` enum, and paginated withdrawal/deposit
+  rows match the current exchange query types rather than the earlier grouped
+  payout/observation shape.
+- **Error mappings:** preserve `OffCurveWithdrawalDestination` at 135, retain
+  current `dev` assignments 136–143, and place bridge/withdrawal errors at
+  144–154 to match exchange and wire.
 - **Rust core:** `market_snapshot::decode_snapshot_view` decodes a complete
   `GET /v2/markets-snapshot` body, bound to a chain, into proof-wire's
   `query_v2` view (`market_snapshot::MarketsSnapshotView`). A record that is

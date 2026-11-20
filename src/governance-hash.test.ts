@@ -41,6 +41,10 @@ function engineDefaultCreateMarket(): AdminAction {
   };
 }
 
+/** Mirrors the engine's attach fixture (`admin_proposal_content_hash_v2_golden_vectors`
+ *  in the wire's codec.rs): event 91's conditional on perp 15, books from
+ *  9100, the open-interest trailer at its zero default and DEC-293's impact
+ *  notional at 1e6 µUSDC. */
 /** Mirrors the engine's attach fixture (`admin_action_attach_and_batch_wire_vectors_frozen`
  *  in `codec.rs`): event 91's conditional on perp 15, books from 9100, the
  *  open-interest trailer at zero and impact notional at 1,000,000,000. */
@@ -58,6 +62,7 @@ function engineV2Attach(): AdminAction {
       makerFeeBps: 2,
       signer: new Uint8Array(20),
       maxOpenInterest: 0n,
+      impactNotional: 1_000_000_000n,
     },
   };
 }

@@ -168,8 +168,11 @@ fn open_orders_reject_duplicate_ids_empty_orders_and_trailing_bytes() {
     );
 }
 
-/// One `MarketConfig` row as `rmp_serde::to_vec` writes it (no fee tiers).
-const MARKET: &str = "dc001801cd03e8cd01f40502ce0036ee8064a4506572700000c200cd7530906401c000aa4f7261636c654f6e6c79000005a3425443cfffffffffffffffff";
+/// One wire-12 `MarketConfig` row as `rmp_serde::to_vec` writes it (27
+/// fields, no fee tiers; `impact_notional` 1_000_000, a populated funding
+/// dead band and a negative interest leg, so the tail decodes as more than
+/// defaults).
+const MARKET: &str = "dc001b01cd03e8cd01f40502ce0036ee8064a4506572700000c200cd7530906401c000aa4f7261636c654f6e6c79000005a3425443cfffffffffffffffffce000f424014fb";
 /// `AccountInfo` with one position and every trailing field.
 const ACCOUNT: &str = "9acf0020000000000001919edc0014ccabccabccabccabccabccabccabccabccabccabccabccabccabccabccabccabccabccabccabccab07a453656c6ccf0000000f8a9c2b8003fbd1fc18cd07d0cd0fa0d1fc18000c00cf0020000000000001d0d6cd07d0cd0fa0009192cd02bca24e6ffdcfffffffffffffffff05";
 
@@ -199,12 +202,10 @@ fn appended(value: &Value) -> Value {
 #[test]
 fn a_market_list_with_appended_fields_decodes_as_the_pinned_rows() {
     let mut row = value(MARKET);
-    // Retain all three current tail fields before trimming only future data.
-    fields(&mut row).extend([
-        Value::from(1_000_000_000u64),
-        Value::from(10),
-        Value::from(-12_500),
-    ]);
+    // Pin the current wire-13 tail fields before testing future appended data.
+    fields(&mut row)[24] = Value::from(1_000_000_000u64);
+    fields(&mut row)[25] = Value::from(10);
+    fields(&mut row)[26] = Value::from(-12_500);
     fields(&mut row)[13] = Value::Array(vec![Value::Array(vec![
         Value::from(0),
         Value::from(-7),
@@ -340,13 +341,13 @@ fn a_market_listing_keeps_the_rows_it_decodes_and_reports_the_rest() {
             rmp_serde::to_vec(&expected).unwrap()
         );
     }
-    assert_eq!(decoded.row_field_counts, vec![24, 28]);
+    assert_eq!(decoded.row_field_counts, vec![27, 28]);
     let refused: Vec<(u32, u32, u32)> = decoded
         .refused_rows
         .iter()
         .map(|row| (row.index, row.market, row.field_count))
         .collect();
-    assert_eq!(refused, vec![(1, 7, 24), (3, 8, 24)]);
+    assert_eq!(refused, vec![(1, 7, 27), (3, 8, 27)]);
     assert!(decoded.refused_rows[0].error.contains("Spot"));
 }
 
